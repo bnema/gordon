@@ -24,8 +24,9 @@ func (r *Renderer) Render(data any) (string, error) {
 
 	buf := new(bytes.Buffer)
 
-	if err := r.Template.ExecuteTemplate(buf, "index", data); err {
-		return "", err
+	err := r.Template.Execute(buf, data)
+	if err != nil {
+		return "", errors.New("failed to execute template: " + err.Error())
 	}
 
 	return buf.String(), nil
