@@ -7,24 +7,24 @@ import (
 )
 
 type Renderer struct {
-	template   *template.Template
-	parseError error
+	Template   *template.Template
+	ParseError error
 }
 
 // Render executes the template with the specified data as the dot object
 // and returns the result as plain string.
 func (r *Renderer) Render(data any) (string, error) {
-	if r.parseError != nil {
-		return "", r.parseError
+	if r.ParseError != nil {
+		return "", r.ParseError
 	}
 
-	if r.template == nil {
+	if r.Template == nil {
 		return "", errors.New("invalid or nil template")
 	}
 
 	buf := new(bytes.Buffer)
 
-	if err := r.template.Execute(buf, data); err != nil {
+	if err := r.Template.ExecuteTemplate(buf, "index", data); err {
 		return "", err
 	}
 
