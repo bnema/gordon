@@ -18,24 +18,25 @@ type App struct {
 	Template *template.Template
 	// Define the app renderer
 	Renderer *utils.Renderer
+	// Define the app router
 }
 
 func NewApp() (*App, error) {
 	app := &App{}
 
 	// Initialize the general application logger
-	appLogger, err := initializeAppLogger()
+	AppLogger, err := initializeAppLogger()
 	if err != nil {
 		return nil, err
 	}
-	app.APPLogger = &utils.Logger{Logger: appLogger}
+	app.APPLogger = &utils.Logger{Logger: AppLogger}
 
 	// Initialize the HTTP logger
-	httpLogger, err := initializeHTTPLogger()
+	HttpLogger, err := initializeHTTPLogger()
 	if err != nil {
 		return nil, err
 	}
-	app.HTTPLogger = &utils.Logger{Logger: httpLogger}
+	app.HTTPLogger = &utils.Logger{Logger: HttpLogger}
 
 	return app, nil
 }

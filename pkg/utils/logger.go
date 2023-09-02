@@ -9,7 +9,7 @@ import (
 
 const (
 	App LoggerType = iota
-	HTTP
+	Access
 	Database
 	Admin
 	User
@@ -48,8 +48,8 @@ func (l *Logger) GetTypeLogger(loggerType LoggerType) *Logger {
 	switch loggerType {
 	case App:
 		return &Logger{l.With().Str("type", "app").Logger()}
-	case HTTP:
-		return &Logger{l.With().Str("type", "http").Logger()}
+	case Access:
+		return &Logger{l.With().Str("type", "access").Logger()}
 	case Database:
 		return &Logger{l.With().Str("type", "database").Logger()}
 	case Admin:
@@ -97,7 +97,7 @@ func GetLogFileForType(loggerType LoggerType) string {
 	switch loggerType {
 	case App, Database, Utils, Render:
 		return "logs/app.log"
-	case HTTP, Admin, User, Auth:
+	case Access, Admin, User, Auth:
 		return "logs/http.log"
 	default:
 		return "logs/undefined.log"
@@ -119,7 +119,7 @@ func GetLogLevel(loggerType LoggerType) zerolog.Level {
 	switch loggerType {
 	case App, Database, Utils, Render:
 		return zerolog.InfoLevel
-	case HTTP, Admin, User, Auth:
+	case Access, Admin, User, Auth:
 		return zerolog.DebugLevel
 	default:
 		return zerolog.DebugLevel

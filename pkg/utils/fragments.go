@@ -9,9 +9,9 @@ import (
 
 // GetHTMLFragmentByID returns the HTML fragment with the specified id
 func GetHTMLFragmentByID(id string) (string, error) {
-	data, err := ui.TemplateFS.Open("components.html")
+	data, err := ui.TemplateFS.Open("components.gohtmlll")
 	if err != nil {
-		return "", fmt.Errorf("failed to open components.html: %w", err)
+		return "", fmt.Errorf("failed to open components: %w", err)
 	}
 	defer data.Close()
 
