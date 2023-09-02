@@ -9,7 +9,6 @@ import (
 
 const (
 	App LoggerType = iota
-	APP
 	HTTP
 	Database
 	Admin
@@ -28,14 +27,16 @@ type LogFileManager struct {
 	mu    sync.Mutex
 }
 
+// NewLogger returns a new logger instance
 func NewLogger() *Logger {
-	writer := zerolog.ConsoleWriter{Out: os.Stdout} // changed to os.Stdout
+	writer := zerolog.ConsoleWriter{Out: os.Stdout}
 
 	// Create a new logger
 	zl := zerolog.New(writer).With().Timestamp().Logger()
 	return &Logger{zl}
 }
 
+// NewLogFileManager returns a new log file manager
 func NewLogFileManager() *LogFileManager {
 	return &LogFileManager{
 		files: make(map[LoggerType]*os.File),

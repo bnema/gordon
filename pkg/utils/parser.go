@@ -29,6 +29,7 @@ func LoadDataFromYAML() (Data, error) {
 
 	// Open the YAML file inside the ui/components directory
 	file, err := ui.TemplateFS.Open("strings.yaml")
+	fmt.Println(file)
 	if err != nil {
 		return data, fmt.Errorf("failed to open strings.yaml: %w", err)
 	}
