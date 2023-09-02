@@ -63,4 +63,21 @@ func ReadDataFromYAML() (YamlData, error) {
 	return data, nil
 }
 
+// PopulateDataFromYAML retrieves the data from the YAML file and sets the appropriate language data
+func PopulateDataFromYAML(currentLang string) (YamlData, error) {
+	data, err := ReadDataFromYAML()
+	if err != nil {
+		return data, err
+	}
+
+	switch currentLang {
+	case "fr":
+		data.CurrentLang = data.FR
+	default: // default to English if no match
+		data.CurrentLang = data.EN
+	}
+
+	return data, nil
+}
+
 // Json Parser

@@ -3,37 +3,21 @@ package routes
 import (
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/labstack/echo/v4"
+	"gogs.bnema.dev/gordon-echo/internal/http/middlewares"
 	"gogs.bnema.dev/gordon-echo/internal/ui"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
-func getPreferredLanguage(c echo.Context) string {
-	header := c.Request().Header.Get("Accept-Language")
-	// Check the header value, parse it and determine the primary language.
-	// For this example, let's assume English and French only.
-	if strings.Contains(header, "fr") {
-		return "fr"
-	}
-	return "en" // Default to English
-}
-
 func AdminRoute(c echo.Context) error {
-	staticData, err := utils.ReadDataFromYAML()
-	if err != nil {
-		return err
-	}
-
-	lang := getPreferredLanguage(c)
+	// Retrieve the current language from the context
+	lang := c.Get(middlewares.LangKey).(string)
 	fmt.Println(lang)
 
-	switch lang {
-	case "fr":
-		staticData.CurrentLang = staticData.FR
-	default: // default to English if no match
-		staticData.CurrentLang = staticData.EN
+	staticData, err := utils.PopulateDataFromYAML(lang)
+	if err != nil {
+		return err
 	}
 
 	renderer, err := utils.GetRenderer("index.gohtml", ui.PublicFS, utils.NewLogger())

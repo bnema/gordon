@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/PuerkitoBio/goquery"
@@ -8,19 +9,25 @@ import (
 )
 
 // GetHTMLFragmentByID returns the HTML fragment with the specified id
-func GetHTMLFragmentByID(id string) (string, error) {
-	data, err := ui.TemplateFS.Open("components.gohtmlll")
+func GetHTMLFragmentByID(id string, data interface{}) (string, error) {
+	// 1. Render the template
+	renderer, err := GetRenderer("components.gohtml", ui.TemplateFS, NewLogger().GetTypeLogger(App))
 	if err != nil {
-		return "", fmt.Errorf("failed to open components: %w", err)
+		return "", fmt.Errorf("failed to get renderer: %w", err)
 	}
-	defer data.Close()
 
-	doc, err := goquery.NewDocumentFromReader(data)
+	renderedHTML, err := renderer.Render(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to render template: %w", err)
+	}
+
+	// 2. Parse the rendered HTML with goquery
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(renderedHTML)))
 	if err != nil {
 		return "", fmt.Errorf("failed to parse HTML document: %w", err)
 	}
 
-	// Find the div with the specified id
+	// 3. Find the div with the specified id
 	fragmentContent, err := doc.Find("#" + id).Html()
 	if err != nil {
 		return "", fmt.Errorf("failed to extract HTML for id %s: %w", id, err)
