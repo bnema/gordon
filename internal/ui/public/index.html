@@ -1,18 +1,34 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{.website.title}}</title>
+    <!-- Custom CSS from assets/css -->
+    <link rel="stylesheet" href="assets/css/custom.css" />
+    <!-- Alpine -->
+    <script src="libs/alpine.min.js"></script>
     <!-- HTMX min js  -->
     <script src="libs/htmx.min.js"></script>
-    <!-- UnoCSS -->
+    <!-- UnoCSS (need to embed locally) -->
     <script src="https://cdn.jsdelivr.net/npm/@unocss/runtime"></script>
-    
-</head>
+    <!-- Custom JS from assets/js -->
+    <script src="assets/js/custom.js"></script>
+  </head>
 
-<body id="app" hx-get="/htmx" hx-headers='{"X-Fragment": "hello"}' hx-trigger="load"></body>
+  <header
+    id="header"
+    hx-get="/htmx"
+    hx-headers='{"X-Fragment": "header"}'
+    hx-trigger="load"
+    hx-swap="innerHTML"
+  ></header>
 
-
+  <body
+    id="app"
+    hx-get="/htmx"
+    hx-headers='{"X-Fragment": "hello"}'
+    hx-trigger="load"
+    hx-swap="innerHTML"
+  ></body>
 </html>

@@ -83,62 +83,93 @@ func bindStaticAdminUI(e *echo.Echo) error {
 		return echo.StaticDirectoryHandler(ui.PublicFS, false)(c)
 	})
 
-	// // 404 handler
-	// e.HTTPErrorHandler = func(err error, c echo.Context) {
-	// 	if he, ok := err.(*echo.HTTPError); ok {
-	// 		if he.Code == http.StatusNotFound {
-	// 			// 404.html
-	// 			renderer, err := getRenderer("404.html", ui.TemplateFS)
-	// 			if err != nil {
-	// 				c.String(http.StatusInternalServerError, fmt.Sprintf("Failed to render template: %v", err))
-	// 			}
+	// 404 handler
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		if he, ok := err.(*echo.HTTPError); ok {
+			if he.Code == http.StatusNotFound {
+				// 404.html
+				renderer, err := getRenderer("404.html", ui.PublicFS)
+				if err != nil {
+					c.String(http.StatusInternalServerError, fmt.Sprintf("Failed to render template: %v", err))
+				}
 
-	// 			data := map[string]interface{}{
-	// 				"website": map[string]interface{}{
-	// 					"title": "Page Not Found",
-	// 				},
-	// 			}
+				data := map[string]interface{}{
+					"website": map[string]interface{}{
+						"title": "Page Not Found",
+					},
+				}
 
-	// 			html, err := renderer.Render(data)
-	// 			if err != nil {
-	// 				c.String(http.StatusInternalServerError, fmt.Sprintf("Failed to render template: %v", err))
-	// 			}
+				html, err := renderer.Render(data)
+				if err != nil {
+					c.String(http.StatusInternalServerError, fmt.Sprintf("Failed to render template: %v", err))
+				}
 
-	// 			c.HTML(http.StatusNotFound, html)
-	// 			return
-	// 		}
-	// 	}
+				c.HTML(http.StatusNotFound, html)
+				return
+			}
+		}
 
-	// 	e.DefaultHTTPErrorHandler(err, c)
-	// }
+		e.DefaultHTTPErrorHandler(err, c)
+	}
 
 	return nil
 
 }
 
 func main() {
-	logger := zerolog.New(os.Stdout)
+	err := utils.CreateLogsDir()
+	if err != nil {
+		panic(err)
+	}
+
+	// Setup App Logger
+	appLogFile, err := os.OpenFile("logs/app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		panic(err)
+	}
+	defer appLogFile.Close()
+
+	appConsoleWriter := zerolog.ConsoleWriter{Out: os.Stdout}
+	appMulti := zerolog.MultiLevelWriter(appLogFile, appConsoleWriter)
+	appLogger := zerolog.New(appMulti).With().Timestamp().Str("type", "app").Logger()
+
+	// Setup Echo Logger
+	httpLogFile, err := os.OpenFile("logs/http.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		panic(err)
+	}
+	defer httpLogFile.Close()
+
+	httpConsoleWriter := zerolog.ConsoleWriter{Out: os.Stdout}
+	httpMulti := zerolog.MultiLevelWriter(httpLogFile, httpConsoleWriter)
+	echoLogger := zerolog.New(httpMulti).With().Timestamp().Logger()
+
 	e := echo.New()
 
+	// Use zerolog for Echo's requests
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogURI:    true,
 		LogStatus: true,
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
-			logger.Info().
+			echoLogger.Info().
+				Str("type", "http").
+				Str("remote_ip", c.RealIP()).
+				Str("method", c.Request().Method).
 				Str("URI", v.URI).
 				Int("status", v.Status).
 				Msg("request")
-
 			return nil
 		},
 	}))
-
-	// use func bindStaticAdminUI to serve the static admin UI
 	bindStaticAdminUI(e)
+
+	// Will crash in case of error
 	if err := bindStaticAdminUI(e); err != nil {
 		e.Logger.Fatal(err)
 	}
 
-	e.Logger.Fatal(e.Start(":1323"))
+	if err := e.Start(":1323"); err != nil {
+		appLogger.Error().Err(err).Msg("Failed to start the server")
+	}
 
 }
