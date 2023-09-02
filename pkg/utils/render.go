@@ -11,9 +11,8 @@ type Renderer struct {
 	ParseError error
 }
 
-// Render executes the template with the specified data as the dot object
-// and returns the result as plain string.
-func (r *Renderer) Render(data any) (string, error) {
+// Render function renders the template with the given data
+func (r *Renderer) Render(data interface{}) (string, error) {
 	if r.ParseError != nil {
 		return "", r.ParseError
 	}
@@ -23,10 +22,9 @@ func (r *Renderer) Render(data any) (string, error) {
 	}
 
 	buf := new(bytes.Buffer)
-
 	err := r.Template.Execute(buf, data)
 	if err != nil {
-		return "", errors.New("failed to execute template: " + err.Error())
+		return "", err
 	}
 
 	return buf.String(), nil
