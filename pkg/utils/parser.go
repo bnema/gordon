@@ -8,28 +8,42 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Data struct {
-	EN          StaticData `yaml:"en"`
-	FR          StaticData `yaml:"fr"`
-	CurrentLang StaticData `yaml:"-"`
-	Website     struct {
-		Title string `yaml:"title"`
-		User  string `yaml:"user"`
-	} `yaml:"website"`
+// Yaml Parser
+type Meta struct {
+	Title       string `yaml:"title"`
+	Description string `yaml:"description"`
+	Keywords    string `yaml:"keywords"`
 }
 
-type StaticData struct {
-	Title string `yaml:"title"`
-	User  string `yaml:"user"`
+type Header struct {
+	Meta       Meta   `yaml:"meta"`
+	HelloWorld string `yaml:"helloworld"`
 }
 
-// LoadDataFromYAML loads the data from the given YAML file
-func LoadDataFromYAML() (Data, error) {
-	var data Data
+type Body struct {
+	Header Header `yaml:"header"`
+	Div    struct {
+		Hello string `yaml:"hello"`
+	} `yaml:"div"`
+}
+
+type LangData struct {
+	Header Header `yaml:"header"`
+	Body   Body   `yaml:"body"`
+}
+
+type YamlData struct {
+	EN          LangData `yaml:"en"`
+	FR          LangData `yaml:"fr"`
+	CurrentLang LangData
+}
+
+// ReadDataFromYAML loads the data from the given YAML file
+func ReadDataFromYAML() (YamlData, error) {
+	var data YamlData
 
 	// Open the YAML file inside the ui/components directory
 	file, err := ui.TemplateFS.Open("strings.yaml")
-	fmt.Println(file)
 	if err != nil {
 		return data, fmt.Errorf("failed to open strings.yaml: %w", err)
 	}
@@ -48,3 +62,5 @@ func LoadDataFromYAML() (Data, error) {
 
 	return data, nil
 }
+
+// Json Parser

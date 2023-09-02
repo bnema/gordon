@@ -47,8 +47,8 @@ type (
 )
 
 // GetRequest extracts HTMX data from the request
-func GetRequest(ctx echo.Context) Request {
-	return Request{
+func GetRequest(ctx echo.Context) (Request, error) {
+	request := Request{
 		Enabled:     ctx.Request().Header.Get(HeaderRequest) == "true",
 		Boosted:     ctx.Request().Header.Get(HeaderBoosted) == "true",
 		Trigger:     ctx.Request().Header.Get(HeaderTrigger),
@@ -56,10 +56,12 @@ func GetRequest(ctx echo.Context) Request {
 		Target:      ctx.Request().Header.Get(HeaderTarget),
 		Prompt:      ctx.Request().Header.Get(HeaderPrompt),
 	}
+
+	return request, nil
 }
 
 // Apply applies data from a Response to a server response
-func (r Response) Apply(ctx echo.Context) {
+func (r Response) Apply(ctx echo.Context) error {
 	if r.Push != "" {
 		ctx.Response().Header().Set(HeaderPush, r.Push)
 	}
@@ -81,4 +83,6 @@ func (r Response) Apply(ctx echo.Context) {
 	if r.NoContent {
 		ctx.Response().Status = http.StatusNoContent
 	}
+
+	return nil
 }
