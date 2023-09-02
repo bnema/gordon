@@ -17,7 +17,6 @@ type Renderer struct {
 func (r *Renderer) Render(data interface{}) (string, error) {
 	if r.ParseError != nil {
 		r.Logger.Error().Err(r.ParseError).Msg("Parse error")
-
 		return "", r.ParseError
 	}
 

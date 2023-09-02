@@ -2,16 +2,16 @@ package routes
 
 import (
 	"github.com/labstack/echo/v4"
-	"github.com/rs/zerolog"
+	"gogs.bnema.dev/gordon-echo/internal/app"
 	"gogs.bnema.dev/gordon-echo/internal/http/handlers"
 	"gogs.bnema.dev/gordon-echo/internal/http/middlewares"
 )
 
-func NewRouter(appLogger, echoLogger zerolog.Logger) *echo.Echo {
+func NewRouter(app *app.App) *echo.Echo {
 	e := echo.New()
 
 	// Register middlewares
-	e.Use(middlewares.NewRequestLoggerMiddleware(echoLogger))
+	e.Use(middlewares.NewRequestLoggerMiddleware(app.HTTPLogger.Logger))
 
 	// Register routes
 	e = bindStaticAdminUI(e)

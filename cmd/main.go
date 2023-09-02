@@ -15,11 +15,12 @@ func main() {
 	}
 
 	// Initialize echo server with routes and middlewares
-	e := routes.NewRouter(gordon.APPLogger.Logger, gordon.HTTPLogger.Logger)
+	e := routes.NewRouter(gordon) // Pass the entire 'App' instance
 
 	if err := e.Start(":1323"); err != nil {
 		gordon.APPLogger.Error().Err(err).Msg("Failed to start the server")
 	}
+
 	// Graceful shutdown
 	gordon.APPLogger.Info().Msg("Server is shutting down...")
 }
