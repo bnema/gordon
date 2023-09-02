@@ -10,7 +10,7 @@ import (
 )
 
 func DefaultHTTPErrorHandler(err error, c echo.Context) {
-	renderer, err := utils.GetRenderer("500.gohtml", ui.PublicFS)
+	renderer, err := utils.GetRenderer("500.gohtml", ui.PublicFS, utils.NewLogger())
 	if err != nil {
 		c.String(http.StatusInternalServerError, fmt.Sprintf("%v", err))
 	}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -8,13 +9,18 @@ import (
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
+var logger = utils.NewLogger()
+
 func HTMXHandler(c echo.Context) error {
 	// Detect and extract HTMX data from the request
-	htmxRequest := htmx.GetRequest(c)
+	htmxRequest, err := htmx.GetRequest(c)
+	if err != nil {
+		return logger.Debug().GetCtx().Err()
+	}
 
 	// If the request is not an HTMX request, return an error
 	if !htmxRequest.Enabled {
-		return c.String(http.StatusBadRequest, "Non-HTMX request")
+		return logger.Error().GetCtx().Err()
 	}
 
 	// If it's a GET request, handle the fragment
@@ -29,6 +35,7 @@ func HTMXHandler(c echo.Context) error {
 
 func HTMXFragmentHandler(c echo.Context) error {
 	fragment := c.Request().Header.Get("X-Fragment")
+	fmt.Println(fragment)
 	if fragment == "" {
 		return c.String(http.StatusBadRequest, "Missing fragment header")
 	}

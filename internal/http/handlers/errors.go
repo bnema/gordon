@@ -9,10 +9,16 @@ import (
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
-func Custom404Handler(err error, c echo.Context) {
+type ErrorHandler struct {
+	Err         error
+	C           echo.Context
+	ErrorNumber int
+}
+
+func Error404Handler(err error, c echo.Context) {
 	if he, ok := err.(*echo.HTTPError); ok {
 		if he.Code == http.StatusNotFound {
-			renderer, err := utils.GetRenderer("404.gohtml", ui.PublicFS)
+			renderer, err := utils.GetRenderer("404.gohtml", ui.PublicFS, utils.NewLogger())
 			if err != nil {
 				c.String(http.StatusInternalServerError, fmt.Sprintf("%v", err))
 			}
@@ -33,5 +39,18 @@ func Custom404Handler(err error, c echo.Context) {
 		}
 	}
 
-	DefaultHTTPErrorHandler(err, c)
+}
+
+func Error200Handler(err error, c echo.Context) {
+	// Just print the error for now
+	fmt.Println(err)
+}
+
+func Error403Handler(err error, c echo.Context) {
+	// Just print the error for now
+	fmt.Println(err)
+}
+
+func ErrorNumberHandler(err error, c echo.Context) {
+	// For Each Error Code, we can have a different handler
 }
