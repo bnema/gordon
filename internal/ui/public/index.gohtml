@@ -1,9 +1,13 @@
+<!-- @format -->
+
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{ .Header.Meta.Title }}</title>
+    <meta name="description" content="{{ .Header.Meta.Description }}" />
+    <meta name="keywords" content="{{ .Header.Meta.Keywords }}" />
     <!-- Custom CSS from assets/css -->
     <link rel="stylesheet" href="assets/css/custom.css" />
     <!-- Alpine -->
@@ -12,23 +16,28 @@
     <script src="libs/htmx.min.js"></script>
     <!-- UnoCSS (need to embed locally) -->
     <script src="https://cdn.jsdelivr.net/npm/@unocss/runtime"></script>
+    <!-- color -->
     <!-- Custom JS from assets/js -->
     <script src="assets/js/custom.js"></script>
   </head>
 
-  <header
-    id="header"
-    hx-get="/htmx"
-    hx-headers='{"X-Fragment": "header"}'
-    hx-trigger="load"
-    hx-swap="innerHTML"
-  ></header>
+  <body class="bg-gray-100 flex flex-col min-h-screen">
+    <!-- Header Fragment -->
+    <div
+      id="header"
+      hx-get="/htmx"
+      hx-headers='{"HX-Fragment": "header"}'
+      hx-trigger="load"
+      hx-swap="outerHTML"
+    ></div>
 
-  <body
-    id="app"
-    hx-get="/htmx"
-    hx-headers='{"X-Fragment": "hello"}'
-    hx-trigger="load"
-    hx-swap="innerHTML"
-  ></body>
+    <!-- App Fragment -->
+    <div
+      id="app"
+      hx-get="/htmx"
+      hx-headers='{"HX-Fragment": "hello"}'
+      hx-trigger="load"
+      hx-swap="outerHTML"
+    ></div>
+  </body>
 </html>
