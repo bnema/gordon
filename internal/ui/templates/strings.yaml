@@ -1,0 +1,9 @@
+en:
+  website:
+    title: Admin Dashboard
+    user: John Doe
+
+fr:
+  website:
+    title: Tableau de bord administrateur
+    user: Jean Dupont
