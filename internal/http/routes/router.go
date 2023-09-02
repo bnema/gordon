@@ -12,6 +12,7 @@ func NewRouter(app *app.App) *echo.Echo {
 
 	// Register middlewares
 	e.Use(middlewares.NewRequestLoggerMiddleware(app.HTTPLogger.Logger))
+	e.Use(middlewares.LanguageDetectionMiddleware)
 
 	// Register routes
 	e = bindStaticAdminUI(e)

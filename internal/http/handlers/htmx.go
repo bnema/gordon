@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
+	"gogs.bnema.dev/gordon-echo/internal/http/middlewares"
 	"gogs.bnema.dev/gordon-echo/pkg/htmx"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
@@ -34,12 +35,19 @@ func HTMXHandler(c echo.Context) error {
 }
 
 func htmxFragmentHandler(c echo.Context, logger *utils.Logger) error {
-	fragment := c.Request().Header.Get("X-Fragment")
+	fragment := c.Request().Header.Get("HX-Fragment")
 	if fragment == "" {
 		logger.Error().Msg("Missing fragment header")
 		return c.String(http.StatusBadRequest, "Missing fragment header")
 	}
-	content, err := utils.GetHTMLFragmentByID(fragment)
+
+	lang := c.Get(middlewares.LangKey).(string)
+	staticData, err := utils.PopulateDataFromYAML(lang)
+	if err != nil {
+		return err
+	}
+
+	content, err := utils.GetHTMLFragmentByID(fragment, staticData.CurrentLang)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to get fragment")
 		return c.String(http.StatusInternalServerError, err.Error())
