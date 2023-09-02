@@ -20,10 +20,9 @@ func NewRouter(appLogger, echoLogger zerolog.Logger) *echo.Echo {
 }
 
 func bindStaticAdminUI(e *echo.Echo) *echo.Echo {
-	e.GET("/admin/:lang", AdminRoute)
+	e.GET("/admin", AdminRoute)
 	e.GET("/htmx", handlers.HTMXHandler)
 	e.GET("/*", StaticRoute)
-	e.HTTPErrorHandler = handlers.Custom404Handler
-	e.HTTPErrorHandler = handlers.DefaultHTTPErrorHandler
+	e.HTTPErrorHandler = handlers.ErrorNumberHandler
 	return e
 }
