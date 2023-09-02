@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"html/template"
+	"io/fs"
 )
 
 type Renderer struct {
@@ -28,4 +29,15 @@ func (r *Renderer) Render(data interface{}) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// GetRenderer function returns a new Renderer instance
+func GetRenderer(filename string, fs fs.FS) (*Renderer, error) {
+	tmpl, err := template.New(filename).ParseFS(fs, filename)
+	if err != nil {
+		return nil, err
+	}
+	return &Renderer{
+		Template: tmpl,
+	}, nil
 }
