@@ -37,7 +37,6 @@ func ReadDataFromYAML() (YamlData, error) {
 	if err := yaml.Unmarshal(content, &data); err != nil {
 		return data, fmt.Errorf("failed to unmarshal strings.yaml: %w", err)
 	}
-	fmt.Println(data)
 
 	return data, nil
 }

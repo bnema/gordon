@@ -15,3 +15,19 @@
     {{ .body.div.hello }}
   </h1>
 </div>
+<div
+  id="header"
+  hx-get="/htmx"
+  hx-headers='{"HX-Fragment": "header"}'
+  hx-trigger="load"
+  hx-swap="outerHTML"
+></div>
+
+<!-- App Fragment -->
+<div
+  id="app"
+  hx-get="/htmx"
+  hx-headers='{"HX-Fragment": "hello"}'
+  hx-trigger="load"
+  hx-swap="outerHTML"
+></div>
