@@ -11,7 +11,7 @@ import (
 
 func HTMXHandler(c echo.Context) error {
 	// Get the logger instance
-	logger := utils.NewLogger().GetTypeLogger(utils.App)
+	logger := utils.NewLogger()
 	// Detect and extract HTMX data from the request
 	htmxRequest, err := htmx.GetRequest(c)
 	if err != nil {
