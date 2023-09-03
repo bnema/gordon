@@ -5,7 +5,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{{ .Header.Meta.Title }}</title>
+    <title>{{ .header.meta.title }}</title>
     <meta name="description" content="{{ .Header.Meta.Description }}" />
     <meta name="keywords" content="{{ .Header.Meta.Keywords }}" />
     <!-- Custom CSS from assets/css -->
@@ -20,24 +20,59 @@
     <!-- Custom JS from assets/js -->
     <script src="assets/js/custom.js"></script>
   </head>
+<body class="bg-zinc-200 md:p-8 flex">
 
-  <body class="bg-gray-100 flex flex-col min-h-screen">
-    <!-- Header Fragment -->
-    <div
-      id="header"
-      hx-get="/htmx"
-      hx-headers='{"HX-Fragment": "header"}'
-      hx-trigger="load"
-      hx-swap="outerHTML"
-    ></div>
+<!-- Left Menu (Navigation) -->
+<div class="w-1/5 flex flex-col space-evenly">
 
-    <!-- App Fragment -->
-    <div
-      id="app"
-      hx-get="/htmx"
-      hx-headers='{"HX-Fragment": "hello"}'
-      hx-trigger="load"
-      hx-swap="outerHTML"
-    ></div>
-  </body>
+<!-- Logo -->
+<div id="logo-mascot-leftnav" class="flex justify-center h-30 mb-4">
+    <div class="circle-shadow flex justify-center sd:hidden">
+        <img src="assets/imgs/gordon-mascot-hq-trsp.png" alt="logo" class="">
+    </div>
+</div>
+  <div class="p-4 flex flex-col bg-white rounded-3 shadow space-y-4">
+    <div class="w-full h-24 bg-gray-300 rounded-2 "></div> <!-- Mock menu item -->
+    <div class="w-full h-24 bg-gray-300 rounded-2 "></div> <!-- Mock menu item -->
+        <div class="w-full h-24 bg-gray-300 rounded-2 "></div> <!-- Mock menu item -->
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="flex-1 flex flex-col md:pt-10 space-y-4 ml-4">
+    <!-- Search Nav within the main content -->
+    <div class="bg-white p-4 rounded-3 shadow mb-4 flex justify-between">
+        <div class="w-24 h-8 bg-gray-300 rounded-2 "></div> <!-- Mock search or other element -->
+    </div>
+    
+    <!-- Cards section -->
+    <div class="flex space-x-4 flex-grow">
+        <!-- Main Card on the Left -->
+        <div class="w-4/6 bg-white p-4 rounded-3 shadow mb-4">
+            <div class="w-full rounded-2 bg-gray-300"></div> <!-- Mock main card -->
+        </div>
+
+        <!-- Two Cards on the Right -->
+        <div class="w-2/6 flex flex-col flex-justify-start">
+            <div class="bg-white p-4 rounded-3 shadow mb-4">
+                <div class="w-full h-44 rounded-2 bg-gray-300"></div> <!-- Mock card -->
+            </div>
+            <div class="bg-white p-4 rounded-3 shadow mb-4">
+                <div class="w-full h-44 rounded-2 bg-gray-300"></div> <!-- Mock card -->
+            </div>
+                <div class="bg-white p-4 rounded-3 shadow mb-4">
+                <div class="w-full h-44 rounded-2 bg-gray-300"></div> <!-- Mock card -->
+            </div>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
+
+
+
+
+</html>
+
 </html>

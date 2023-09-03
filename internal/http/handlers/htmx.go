@@ -44,6 +44,7 @@ func htmxFragmentHandler(c echo.Context, logger *utils.Logger) error {
 	lang := c.Get(middlewares.LangKey).(string)
 	staticData, err := utils.PopulateDataFromYAML(lang)
 	if err != nil {
+		logger.Error().Err(err).Msg("Failed to populate data from YAML")
 		return err
 	}
 
