@@ -9,29 +9,7 @@ import (
 )
 
 // Yaml Parser
-type Meta struct {
-	Title       string `yaml:"title"`
-	Description string `yaml:"description"`
-	Keywords    string `yaml:"keywords"`
-}
-
-type Header struct {
-	Meta       Meta   `yaml:"meta"`
-	HelloWorld string `yaml:"helloworld"`
-}
-
-type Body struct {
-	Header Header `yaml:"header"`
-	Div    struct {
-		Hello string `yaml:"hello"`
-	} `yaml:"div"`
-}
-
-type LangData struct {
-	Header Header `yaml:"header"`
-	Body   Body   `yaml:"body"`
-}
-
+type LangData map[string]interface{}
 type YamlData struct {
 	EN          LangData `yaml:"en"`
 	FR          LangData `yaml:"fr"`
@@ -59,6 +37,7 @@ func ReadDataFromYAML() (YamlData, error) {
 	if err := yaml.Unmarshal(content, &data); err != nil {
 		return data, fmt.Errorf("failed to unmarshal strings.yaml: %w", err)
 	}
+	fmt.Println(data)
 
 	return data, nil
 }
