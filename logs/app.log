@@ -47,3 +47,4 @@
 {"level":"warn","time":"2023-09-04T14:51:10+02:00","message":"Graceful shutdown initiated"}
 {"level":"warn","time":"2023-09-04T14:51:10+02:00","message":"Server will shutdown in 5 seconds press ENTER to cancel"}
 {"level":"info","time":"2023-09-04T14:51:15+02:00","message":"Server shutdown"}
+{"level":"info","time":"2023-09-04T17:18:16+02:00","message":"Server is listening on port 1323"}
