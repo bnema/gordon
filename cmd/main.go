@@ -25,7 +25,7 @@ func main() {
 		return
 	}
 
-	docker.ListDocker() // List docker containers
+	docker.CreateImageFromDockerfile()
 
 	e := echo.New()
 	e.HideBanner = true
@@ -38,4 +38,5 @@ func main() {
 		return e.Start(":" + port)
 	}
 	utils.RunAppCatchSIGINT(startFunc, &gordon.APPLogger.Logger)
+
 }
