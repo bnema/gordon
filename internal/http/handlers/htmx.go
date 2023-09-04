@@ -10,8 +10,11 @@ import (
 )
 
 func HTMXHandler(c echo.Context) error {
-	// Get the logger instance
-	logger := utils.NewLogger()
+	logger, ok := c.Get("logger").(*utils.Logger)
+	if !ok {
+		logger.Error().Msg("Failed to get logger from context")
+		return c.String(http.StatusInternalServerError, "Failed to get logger from context")
+	}
 	// Detect and extract HTMX data from the request
 	htmxRequest, err := htmx.GetRequest(c)
 	if err != nil {
