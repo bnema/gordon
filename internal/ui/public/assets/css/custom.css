@@ -13,14 +13,14 @@
 /* Import IBM Plex Fonts */
 @font-face {
   font-family: "IBMPlexSans-Bold";
-  src: url("assets/fonts/IBMPlex/IBMPlexSans-Bold.woff2") format("woff2");
+  src: url("/assets/fonts/IBMPlex/IBMPlexSans-Bold.woff2") format("woff2");
   font-weight: bold;
   font-style: normal;
 }
 
 @font-face {
   font-family: "IBMPlexSans-Regular";
-  src: url("assets/fonts/IBMPlex/IBMPlexSans-Regular.woff2") format("woff2");
+  src: url("/assets/fonts/IBMPlex/IBMPlexSans-Regular.woff2") format("woff2");
   font-weight: normal;
   font-style: normal;
 }
@@ -28,7 +28,7 @@
 /* Import Jetbrains Mono Nerd Font */
 @font-face {
   font-family: "JetBrainsMono-Nerd-Font-Regular";
-  src: url("assets/fonts/JetBrainsMonoNerd/JetBrainsMonoNerdFontMono-Regular.woff2")
+  src: url("/assets/fonts/JetBrainsMonoNerd/JetBrainsMonoNerdFontMono-Regular.woff2")
     format("woff2");
   font-weight: normal;
   font-style: normal;
@@ -36,7 +36,7 @@
 
 @font-face {
   font-family: "LilitaOne-Regular";
-  src: url("assets/fonts/LilitaOne/LilitaOne-Regular.woff2") format("woff2");
+  src: url("/assets/fonts/LilitaOne/LilitaOne-Regular.ttf") format("truetype");
   font-weight: normal;
   font-style: normal;
 }
@@ -83,31 +83,14 @@
   animation: 420ms cubic-bezier(0, 0, 0.2, 1) 90ms both fade-in,
     600ms cubic-bezier(0.4, 0, 0.2, 1) both slide-from-right;
 }
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  font-family: "IBMPlexSans-Bold", sans-serif;
-  font-style: normal;
-  color: #000000;
-  margin: 0;
-  padding: 0;
-}
+
 .gordon-title {
   font-family: "LilitaOne-Regular", sans-serif;
-  font-style: normal;
-  color: #000000;
-  margin: 0;
-  padding: 0;
+
 }
-.gordon-v-subtitle {
+
+.IBMPlexSans {
   font-family: "IBMPlexSans-Regular", sans-serif;
-  font-style: normal;
-  color: #000000;
-  margin: 0;
-  padding: 0;
 }
 
 .circle-shadow {
