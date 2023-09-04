@@ -7,8 +7,8 @@ import (
 	"gogs.bnema.dev/gordon-echo/internal/http/middlewares"
 )
 
-func NewRouter(app *app.App) *echo.Echo {
-	e := echo.New()
+func ConfigureRouter(e *echo.Echo, app *app.App) *echo.Echo {
+	// The logger is already set in main.go, so we don't need to set it again here.
 
 	// Register middlewares
 	e.Use(middlewares.NewRequestLoggerMiddleware(app.HTTPLogger.Logger))
@@ -19,7 +19,6 @@ func NewRouter(app *app.App) *echo.Echo {
 
 	return e
 }
-
 func bindStaticAdminUI(e *echo.Echo) *echo.Echo {
 	e.GET("/admin", AdminRoute)
 	e.GET("/htmx", handlers.HTMXHandler)
