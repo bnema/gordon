@@ -11,7 +11,7 @@ func ConfigureRouter(e *echo.Echo, app *app.App) *echo.Echo {
 	// The logger is already set in main.go, so we don't need to set it again here.
 
 	// Register middlewares
-	e.Use(middlewares.NewRequestLogger(app.HTTPLogger.Logger))
+	e.Use(middlewares.NewRequestLogger(app.HttpLogger.Logger))
 	e.Use(middlewares.LanguageDetection)
 	e.Use(middlewares.ColorSchemeDetection)
 	//e.Use(middlewares.SecureMiddleware()) // Uncomment this line to enable the secure middleware

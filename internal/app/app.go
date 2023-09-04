@@ -22,8 +22,8 @@ const (
 )
 
 type App struct {
-	APPLogger  *utils.Logger
-	HTTPLogger *utils.Logger
+	AppLogger  *utils.Logger
+	HttpLogger *utils.Logger
 	Template   *template.Template
 }
 type Config struct {
@@ -34,7 +34,7 @@ type Config struct {
 func loadConfig() Config {
 	// Get the environment variable
 	env := os.Getenv(EnvVarName)
-	// If the environment variable is empty, set it to "dev" (/tmp)
+	// If the environment variable is empty, considere it is dev -> (/tmp)
 	buildDir := os.Getenv(BuildDirEnvVarName)
 	if buildDir == "" {
 		buildDir = DefaultBuildDir
@@ -65,9 +65,9 @@ func NewApp() (*App, error) {
 	app := &App{}
 
 	// Initialize the general application logger
-	app.APPLogger = utils.NewLogger().SetOutput(initializeLoggerOutput("app.log"))
+	app.AppLogger = utils.NewLogger().SetOutput(initializeLoggerOutput("app.log"))
 	// Initialize the HTTP logger
-	app.HTTPLogger = utils.NewLogger().SetOutput(initializeLoggerOutput("http.log"))
+	app.HttpLogger = utils.NewLogger().SetOutput(initializeLoggerOutput("http.log"))
 
 	return app, nil
 }
@@ -91,7 +91,7 @@ func initializeLoggerOutput(logFile string) io.Writer {
 }
 
 func SetupLogging() {
-	err := utils.CreateLogsDir(cfg.LogDir) // Assuming you adjust CreateLogsDir to take a directory path.
+	err := utils.CreateLogsDir(cfg.LogDir)
 	if err != nil {
 		panic(err)
 	}

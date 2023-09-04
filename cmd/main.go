@@ -20,21 +20,21 @@ func main() {
 	gordon, err := app.NewApp()
 	if err != nil {
 		// Handle initialization error and exit
-		gordon.APPLogger.Error().Err(err).Msg("Failed to initialize app")
+		gordon.AppLogger.Error().Err(err).Msg("Failed to initialize app")
 		return
 	}
-	utils.CaptureSTDOUT(gordon.APPLogger)
+	utils.CaptureSTDOUT(gordon.AppLogger)
 
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
-	e.Logger = utils.NewEchoLoggerWrapper(gordon.APPLogger)
+	e.Logger = utils.NewEchoLoggerWrapper(gordon.AppLogger)
 	e = routes.ConfigureRouter(e, gordon)
 
 	startFunc := func() error {
-		gordon.APPLogger.Info().Msgf("Server is listening on port %s", port)
+		gordon.AppLogger.Info().Msgf("Server is listening on port %s", port)
 		return e.Start(":" + port)
 	}
-	utils.RunAppCatchSIGINT(startFunc, &gordon.APPLogger.Logger)
+	utils.RunAppCatchSIGINT(startFunc, &gordon.AppLogger.Logger)
 
 }
