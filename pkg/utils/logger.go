@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -8,8 +9,6 @@ import (
 	"github.com/labstack/gommon/log"
 	"github.com/rs/zerolog"
 )
-
-type LogLevel string
 
 const (
 	DEBUG LogLevel = "debug"
@@ -20,14 +19,22 @@ const (
 	PANIC LogLevel = "panic"
 )
 
+type LogLevel string
 type Logger struct {
 	zerolog.Logger
+}
+
+type stdoutCapture struct {
+	logger *Logger
 }
 
 type EchoLoggerWrapper struct {
 	*Logger
 	output io.Writer
 }
+
+// LogFunc is a function that logs a message with optional context.
+type LogFunc func() *zerolog.Event
 
 // Map log levels to zerolog log functions
 func (l *Logger) getLogFunc(level LogLevel) LogFunc {
@@ -49,9 +56,6 @@ func (l *Logger) getLogFunc(level LogLevel) LogFunc {
 	}
 }
 
-// LogFunc is a function that logs a message with optional context.
-type LogFunc func() *zerolog.Event
-
 func (l *Logger) Log(level LogLevel, i ...interface{}) {
 	logFunc := l.getLogFunc(level)
 	logFunc().Msg(fmt.Sprint(i...))
@@ -61,6 +65,28 @@ func NewLogger() *Logger {
 	writer := zerolog.ConsoleWriter{Out: os.Stdout}
 	zl := zerolog.New(writer).With().Timestamp().Logger()
 	return &Logger{zl}
+}
+
+func (s *stdoutCapture) Write(p []byte) (n int, err error) {
+	s.logger.Info().Str("type", "app").Msg(string(p))
+	return len(p), nil
+}
+
+func CaptureSTDOUT(logger *Logger) {
+	// Create a reading and writing pipe
+	reader, writer, _ := os.Pipe()
+
+	// Replace os.Stdout with the writer end of the pipe
+	os.Stdout = writer
+
+	// Start a goroutine to read from the pipe
+	go func() {
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			text := scanner.Text()
+			logger.Debug().Str("type", "app").Msg(text)
+		}
+	}()
 }
 
 func NewEchoLoggerWrapper(l *Logger) *EchoLoggerWrapper {

@@ -22,6 +22,7 @@ func ConfigureRouter(e *echo.Echo, app *app.App) *echo.Echo {
 }
 func bindStaticAdminUI(e *echo.Echo) *echo.Echo {
 	e.GET("/admin", AdminRoute)
+	e.GET("/admin/install", InstallRoute)
 	e.GET("/htmx", handlers.HTMXHandler)
 	e.GET("/*", StaticRoute)
 	e.HTTPErrorHandler = handlers.ErrorNumberHandler
