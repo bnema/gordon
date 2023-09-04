@@ -1,17 +1,19 @@
-package utils
+package templating
 
 import (
 	"bytes"
 	"errors"
 	"io/fs"
 	"text/template"
+
+	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
 type TXTRenderer struct {
 	Models     *template.Template
 	Format     string
 	ParseError error
-	Logger     *Logger
+	Logger     *utils.Logger
 }
 
 // Render function renders the template with the given data
@@ -39,7 +41,7 @@ func (r *TXTRenderer) TXTRender(data interface{}) (string, error) {
 }
 
 // GetRenderer function returns a new Renderer instance
-func GetTXTRenderer(filename string, fs fs.FS, logger *Logger) (*TXTRenderer, error) {
+func GetTXTRenderer(filename string, fs fs.FS, logger *utils.Logger) (*TXTRenderer, error) {
 	mdls, err := template.New(filename).ParseFS(fs, filename)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to parse template")
