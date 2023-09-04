@@ -1,5 +1,4 @@
 .env
 node_modules/
-tmp/
-logs/
-*.log
+tmp/*
+logs/*
