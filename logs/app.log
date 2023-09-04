@@ -67,3 +67,7 @@
 {"level":"info","time":"2023-09-04T18:36:13+02:00","message":"Server is listening on port 1323"}
 {"level":"info","time":"2023-09-04T18:36:13+02:00","message":"Server is listening on port 1323"}
 {"level":"fatal","error":"listen tcp :1323: bind: address already in use","time":"2023-09-04T18:36:13+02:00","message":"Failed to start the server"}
+{"level":"info","time":"2023-09-04T21:21:23+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T21:23:19+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T21:23:38+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T21:30:52+02:00","message":"Server is listening on port 1323"}
