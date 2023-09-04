@@ -1,87 +1,101 @@
 package utils
 
 import (
+	"fmt"
+	"io"
 	"os"
-	"sync"
 
+	"github.com/labstack/gommon/log"
 	"github.com/rs/zerolog"
 )
 
+type LogLevel string
+
 const (
-	App LoggerType = iota
-	Access
-	Database
-	Admin
-	User
-	Auth
-	Utils
-	Render
+	DEBUG LogLevel = "debug"
+	INFO  LogLevel = "info"
+	WARN  LogLevel = "warn"
+	ERROR LogLevel = "error"
+	FATAL LogLevel = "fatal"
+	PANIC LogLevel = "panic"
 )
 
-type LoggerType int
 type Logger struct {
 	zerolog.Logger
 }
-type LogFileManager struct {
-	files map[LoggerType]*os.File
-	mu    sync.Mutex
+
+type EchoLoggerWrapper struct {
+	*Logger
+	output io.Writer
 }
 
-// NewLogger returns a new logger instance
+// Map log levels to zerolog log functions
+func (l *Logger) getLogFunc(level LogLevel) LogFunc {
+	switch level {
+	case DEBUG:
+		return func() *zerolog.Event { return l.Logger.Debug() }
+	case INFO:
+		return func() *zerolog.Event { return l.Logger.Info() }
+	case WARN:
+		return func() *zerolog.Event { return l.Logger.Warn() }
+	case ERROR:
+		return func() *zerolog.Event { return l.Logger.Error() }
+	case FATAL:
+		return func() *zerolog.Event { return l.Logger.Fatal() }
+	case PANIC:
+		return func() *zerolog.Event { return l.Logger.Panic() }
+	default:
+		return func() *zerolog.Event { return l.Logger.Info() } // default to INFO if unknown level
+	}
+}
+
+// LogFunc is a function that logs a message with optional context.
+type LogFunc func() *zerolog.Event
+
+func (l *Logger) Log(level LogLevel, i ...interface{}) {
+	logFunc := l.getLogFunc(level)
+	logFunc().Msg(fmt.Sprint(i...))
+}
+
 func NewLogger() *Logger {
 	writer := zerolog.ConsoleWriter{Out: os.Stdout}
-
-	// Create a new logger
 	zl := zerolog.New(writer).With().Timestamp().Logger()
 	return &Logger{zl}
 }
 
-// NewLogFileManager returns a new log file manager
-func NewLogFileManager() *LogFileManager {
-	return &LogFileManager{
-		files: make(map[LoggerType]*os.File),
-	}
+func NewEchoLoggerWrapper(l *Logger) *EchoLoggerWrapper {
+	return &EchoLoggerWrapper{Logger: l, output: os.Stdout}
 }
 
-// GetTypeLogger returns a logger with the specified type
-func (l *Logger) GetTypeLogger(loggerType LoggerType) *Logger {
-	switch loggerType {
-	case App:
-		return &Logger{l.With().Str("type", "app").Logger()}
-	case Access:
-		return &Logger{l.With().Str("type", "access").Logger()}
-	case Database:
-		return &Logger{l.With().Str("type", "database").Logger()}
-	case Admin:
-		return &Logger{l.With().Str("type", "admin").Logger()}
-	case User:
-		return &Logger{l.With().Str("type", "user").Logger()}
-	case Auth:
-		return &Logger{l.With().Str("type", "auth").Logger()}
+func (l *Logger) SetOutput(w io.Writer) *Logger {
+	l.Logger = l.Logger.Output(w)
+	return l
+}
+
+func (l *Logger) SetLevel(level LogLevel) *Logger {
+	l.Logger = l.Logger.Level(getZerologLevel(level))
+	return l
+}
+
+func getZerologLevel(level LogLevel) zerolog.Level {
+	switch level {
+	case DEBUG:
+		return zerolog.DebugLevel
+	case INFO:
+		return zerolog.InfoLevel
+	case WARN:
+		return zerolog.WarnLevel
+	case ERROR:
+		return zerolog.ErrorLevel
+	case FATAL:
+		return zerolog.FatalLevel
+	case PANIC:
+		return zerolog.PanicLevel
 	default:
-		return &Logger{l.With().Str("type", "undefined").Logger()}
+		return zerolog.InfoLevel // default to INFO if unknown level
 	}
 }
 
-// GetTypeLogger returns a logger with the specified type
-func (m *LogFileManager) OpenLogFile(loggerType LoggerType) (*os.File, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if file, exists := m.files[loggerType]; exists {
-		return file, nil
-	}
-
-	logFilePath := GetLogFileForType(loggerType)
-	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil, err
-	}
-	m.files[loggerType] = logFile
-	return logFile, nil
-}
-
-// CreateLogsDir creates the logs directory if it doesn't exist
 func CreateLogsDir() error {
 	if _, err := os.Stat("logs"); os.IsNotExist(err) {
 		err := os.Mkdir("logs", 0755)
@@ -92,51 +106,150 @@ func CreateLogsDir() error {
 	return nil
 }
 
-// GetLogFileForType returns the log file for the specified logger type
-func GetLogFileForType(loggerType LoggerType) string {
-	switch loggerType {
-	case App, Database, Utils, Render:
-		return "logs/app.log"
-	case Access, Admin, User, Auth:
-		return "logs/http.log"
-	default:
-		return "logs/undefined.log"
-	}
+func (l *EchoLoggerWrapper) Output() io.Writer {
+	return l.output
 }
 
-// CreateLogFile creates a log file for each logger type
-func CreateLogFile(loggerType LoggerType) (*os.File, error) {
-	logFilePath := GetLogFileForType(loggerType)
-	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil, err
-	}
-	return logFile, nil
+func (l *EchoLoggerWrapper) SetOutput(w io.Writer) {
+	l.output = w
 }
 
-// GetLogLevel returns the log level for the specified logger type
-func GetLogLevel(loggerType LoggerType) zerolog.Level {
-	switch loggerType {
-	case App, Database, Utils, Render:
-		return zerolog.InfoLevel
-	case Access, Admin, User, Auth:
-		return zerolog.DebugLevel
-	default:
-		return zerolog.DebugLevel
-	}
+func (l *EchoLoggerWrapper) Prefix() string {
+	return ""
 }
 
-// CloseLogFile closes the log file for the specified logger type
-func (m *LogFileManager) CloseLogFile(loggerType LoggerType) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (l *EchoLoggerWrapper) SetPrefix(p string) {
+	// do nothing
+}
 
-	if file, exists := m.files[loggerType]; exists {
-		err := file.Close()
-		if err != nil {
-			return err
-		}
-		delete(m.files, loggerType)
-	}
-	return nil
+func (l *EchoLoggerWrapper) Level() log.Lvl {
+	return log.Lvl(l.Logger.GetLevel())
+}
+
+// SetHeader
+func (l *EchoLoggerWrapper) SetHeader(h string) {
+	// do nothing
+}
+
+func (l *EchoLoggerWrapper) SetLevel(log.Lvl) {
+	// do nothing
+}
+
+// SetEvent creates a new event with the given level and message.
+func (l *EchoLoggerWrapper) SetEvent(level zerolog.Level, msg string) *zerolog.Event {
+	//cannot use utils.NewEchoLoggerWrapper(app.HTTPLogger) (value of type *utils.EchoLoggerWrapper) as echo.Logger value in assignment: *utils.EchoLoggerWrapper does not implement echo.Logger (wrong type for method Error)
+	return l.Logger.WithLevel(level).Str("message", msg)
+}
+
+func (l *EchoLoggerWrapper) OutputStdout() bool {
+	return true
+}
+
+// Helper function for methods that accept variadic slice of interfaces
+func (l *EchoLoggerWrapper) LogWithArgs(level LogLevel, i ...interface{}) {
+	l.Logger.Log(level, i...)
+}
+
+// Helper function for methods that accept a format string and arguments
+func (l *EchoLoggerWrapper) LogWithFormat(level LogLevel, format string, args ...interface{}) {
+	l.Logger.Log(level, fmt.Sprintf(format, args...))
+}
+
+// Helper function for methods that accept a log.JSON object
+func (l *EchoLoggerWrapper) LogWithJSON(level LogLevel, j log.JSON) {
+	l.Logger.Log(level, j)
+}
+
+// Debug
+func (l *EchoLoggerWrapper) Debug(i ...interface{}) {
+	l.LogWithArgs(DEBUG, i...)
+}
+
+func (l *EchoLoggerWrapper) Debugf(format string, args ...interface{}) {
+	l.LogWithFormat(DEBUG, format, args...)
+}
+
+func (l *EchoLoggerWrapper) Debugj(j log.JSON) {
+	l.LogWithJSON(DEBUG, j)
+}
+
+// Info
+func (l *EchoLoggerWrapper) Info(i ...interface{}) {
+	l.LogWithArgs(INFO, i...)
+}
+
+func (l *EchoLoggerWrapper) Infof(format string, args ...interface{}) {
+	l.LogWithFormat(INFO, format, args...)
+}
+
+func (l *EchoLoggerWrapper) Infoj(j log.JSON) {
+	l.LogWithJSON(INFO, j)
+}
+
+// Warn
+
+func (l *EchoLoggerWrapper) Warn(i ...interface{}) {
+	l.LogWithArgs(WARN, i...)
+}
+
+func (l *EchoLoggerWrapper) Warnf(format string, args ...interface{}) {
+	l.LogWithFormat(WARN, format, args...)
+}
+
+func (l *EchoLoggerWrapper) Warnj(j log.JSON) {
+	l.LogWithJSON(WARN, j)
+}
+
+// Error
+func (l *EchoLoggerWrapper) Error(i ...interface{}) {
+	l.LogWithArgs(ERROR, i...)
+}
+
+func (l *EchoLoggerWrapper) Errorf(format string, args ...interface{}) {
+	l.LogWithFormat(ERROR, format, args...)
+}
+
+func (l *EchoLoggerWrapper) Errorj(j log.JSON) {
+	l.LogWithJSON(ERROR, j)
+}
+
+// Fatal
+func (l *EchoLoggerWrapper) Fatal(i ...interface{}) {
+	l.LogWithArgs(FATAL, i...)
+}
+
+func (l *EchoLoggerWrapper) Fatalf(format string, args ...interface{}) {
+	l.LogWithFormat(FATAL, format, args...)
+}
+
+func (l *EchoLoggerWrapper) Fatalj(j log.JSON) {
+	l.LogWithJSON(FATAL, j)
+}
+
+// Panic
+
+func (l *EchoLoggerWrapper) Panic(i ...interface{}) {
+	l.LogWithArgs(PANIC, i...)
+}
+
+func (l *EchoLoggerWrapper) Panicf(format string, args ...interface{}) {
+	l.LogWithFormat(PANIC, format, args...)
+}
+
+func (l *EchoLoggerWrapper) Panicj(j log.JSON) {
+	l.LogWithJSON(PANIC, j)
+}
+
+// Print
+
+func (l *EchoLoggerWrapper) Print(i ...interface{}) {
+	l.LogWithArgs(INFO, i...)
+}
+
+func (l *EchoLoggerWrapper) Printf(format string, args ...interface{}) {
+	l.LogWithFormat(INFO, format, args...)
+}
+
+func (l *EchoLoggerWrapper) Printj(j log.JSON) {
+	l.LogWithJSON(INFO, j)
 }

@@ -1,0 +1,30 @@
+{"level":"info","time":"2023-09-04T11:58:38+02:00","message":"Logger initialized directly after setup in app.go"}
+{"level":"info","time":"2023-09-04T11:58:38+02:00","message":"Middlewares have been registered!"}
+{"level":"info","time":"2023-09-04T12:03:03+02:00","message":"Logger initialized directly after setup in app.go"}
+{"level":"info","time":"2023-09-04T12:03:03+02:00","message":"Middlewares have been registered!"}
+{"level":"info","time":"2023-09-04T12:06:57+02:00","message":"Middlewares have been registered!"}
+{"level":"info","time":"2023-09-04T12:06:57+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T12:12:05+02:00","message":"Middlewares have been registered!"}
+{"level":"info","time":"2023-09-04T12:12:05+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T12:16:03+02:00","message":"Middlewares have been registered!"}
+{"level":"info","time":"2023-09-04T12:16:03+02:00","message":"Server is listening on port 1323"}
+{"level":"warn","time":"2023-09-04T12:16:41+02:00","message":"Graceful shutdown initiated, server will shutdown in 5 seconds"}
+{"level":"info","time":"2023-09-04T12:16:46+02:00","message":"Server shutdown"}
+{"level":"info","time":"2023-09-04T12:19:53+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T12:19:54+02:00","message":"Graceful shutdown initiated"}
+{"level":"warn","time":"2023-09-04T12:19:54+02:00","message":"Server will shutdown in 5 seconds press any key to cancel"}
+{"level":"info","time":"2023-09-04T12:19:59+02:00","message":"Server shutdown"}
+{"level":"info","time":"2023-09-04T12:21:28+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T12:21:31+02:00","message":"Graceful shutdown initiated"}
+{"level":"warn","time":"2023-09-04T12:21:31+02:00","message":"Server will shutdown in 5 seconds press any key to cancel"}
+{"level":"info","time":"2023-09-04T12:21:36+02:00","message":"Server shutdown"}
+{"level":"info","time":"2023-09-04T12:23:49+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T12:23:51+02:00","message":"Graceful shutdown initiated"}
+{"level":"warn","time":"2023-09-04T12:23:51+02:00","message":"Server will shutdown in 5 seconds press any key to cancel"}
+{"level":"info","time":"2023-09-04T12:23:54+02:00","message":"Shutdown cancelled by user"}
+{"level":"info","time":"2023-09-04T12:24:40+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T12:39:06+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-04T12:40:11+02:00","message":"Server is listening on port 1323"}
+{"level":"warn","time":"2023-09-04T12:40:12+02:00","message":"Graceful shutdown initiated"}
+{"level":"warn","time":"2023-09-04T12:40:12+02:00","message":"Server will shutdown in 5 seconds press ENTER to cancel"}
+{"level":"info","time":"2023-09-04T12:40:17+02:00","message":"Server shutdown"}
