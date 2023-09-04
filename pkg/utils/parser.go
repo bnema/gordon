@@ -3,7 +3,9 @@ package utils
 import (
 	"fmt"
 	"io"
+	"os"
 
+	"github.com/tidwall/gjson"
 	"gogs.bnema.dev/gordon-echo/internal/ui"
 	"gopkg.in/yaml.v3"
 )
@@ -59,3 +61,22 @@ func PopulateDataFromYAML(currentLang string) (YamlData, error) {
 }
 
 // Json Parser
+
+// ReadDataFromJSONFile loads the data from the given JSON file
+func ReadDataFromJSONFile(filePath string) (string, error) {
+	bytes, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
+}
+
+// QueryJSON queries the provided JSON content based on the given gjson query and returns the results as a slice of strings
+func QueryJSON(jsonContent, query string) []string {
+	results := gjson.GetMany(jsonContent, query)
+	var values []string
+	for _, result := range results {
+		values = append(values, result.String())
+	}
+	return values
+}
