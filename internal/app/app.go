@@ -4,9 +4,21 @@ import (
 	"html/template"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/rs/zerolog"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
+)
+
+var cfg = loadConfig()
+
+const (
+	DefaultBuildDir    = "tmp"
+	DefaultLogDir      = "logs"
+	EnvVarName         = "ENV"
+	ProdEnvValue       = "prod"
+	BuildDirEnvVarName = "BUILD_DIR"
+	LogDirEnvVarName   = "LOG_DIR"
 )
 
 type App struct {
@@ -14,38 +26,72 @@ type App struct {
 	HTTPLogger *utils.Logger
 	Template   *template.Template
 }
+type Config struct {
+	BuildDir string
+	LogDir   string
+}
 
+func loadConfig() Config {
+	// Get the environment variable
+	env := os.Getenv(EnvVarName)
+	// If the environment variable is empty, set it to "dev" (/tmp)
+	buildDir := os.Getenv(BuildDirEnvVarName)
+	if buildDir == "" {
+		buildDir = DefaultBuildDir
+	}
+	logDir := os.Getenv(LogDirEnvVarName)
+	if logDir == "" {
+		logDir = DefaultLogDir
+	}
+
+	switch env {
+	case ProdEnvValue:
+		// If it is prod we want everything at the same level of the binary
+		buildDir = "."
+		logDir = "./" + logDir
+	default:
+		// If it is dev we want everything in /tmp
+		buildDir = "./" + buildDir
+		logDir = filepath.Join(buildDir, logDir)
+	}
+
+	return Config{
+		BuildDir: buildDir,
+		LogDir:   logDir,
+	}
+}
 func NewApp() (*App, error) {
+	SetupLogging()
 	app := &App{}
 
 	// Initialize the general application logger
-	app.APPLogger = utils.NewLogger().SetOutput(initializeAppLoggerOutput())
+	app.APPLogger = utils.NewLogger().SetOutput(initializeLoggerOutput("app.log"))
 	// Initialize the HTTP logger
-	app.HTTPLogger = utils.NewLogger().SetOutput(initializeHTTPLoggerOutput())
+	app.HTTPLogger = utils.NewLogger().SetOutput(initializeLoggerOutput("http.log"))
 
 	return app, nil
 }
 
-func initializeAppLoggerOutput() io.Writer {
-	appLogFile, err := os.OpenFile("logs/app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		panic(err)
-	}
-	appConsoleWriter := zerolog.ConsoleWriter{Out: os.Stdout}
-	return zerolog.MultiLevelWriter(appLogFile, appConsoleWriter)
-}
+func initializeLoggerOutput(logFile string) io.Writer {
+	logPath := filepath.Join(cfg.LogDir, logFile)
 
-func initializeHTTPLoggerOutput() io.Writer {
-	httpLogFile, err := os.OpenFile("logs/http.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	dir := filepath.Dir(logPath)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if mkdirErr := os.MkdirAll(dir, 0755); mkdirErr != nil {
+			panic(mkdirErr)
+		}
+	}
+
+	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		panic(err)
 	}
-	httpConsoleWriter := zerolog.ConsoleWriter{Out: os.Stdout}
-	return zerolog.MultiLevelWriter(httpLogFile, httpConsoleWriter)
+	consoleWriter := zerolog.ConsoleWriter{Out: os.Stdout}
+	return zerolog.MultiLevelWriter(file, consoleWriter)
 }
 
 func SetupLogging() {
-	err := utils.CreateLogsDir()
+	err := utils.CreateLogsDir(cfg.LogDir) // Assuming you adjust CreateLogsDir to take a directory path.
 	if err != nil {
 		panic(err)
 	}
