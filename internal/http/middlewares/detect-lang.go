@@ -21,8 +21,13 @@ func LanguageDetectionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 func detectCurrentLanguage(c echo.Context) string {
 	// Check if the lang key is set in the session storage
-	sess, _ := session.Get("session", c) // Assuming you have a session named "session"
-	if langValue, ok := sess.Values["lang"]; ok {
+	sess, err := session.Get("session", c)
+	if err != nil {
+		// If session storage is not available, proceed with "Accept-Language" header detection
+		return "en"
+	}
+
+	if langValue, ok := sess.Values["lang"]; ok && langValue != nil {
 		return langValue.(string) // Return the lang value from the session storage
 	}
 

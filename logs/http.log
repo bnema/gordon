@@ -7,3 +7,13 @@
 {"level":"info","type":"http","remote_ip":"::1","method":"GET","URI":"/assets/imgs/gordon-mascot-hq-trsp.png","status":200,"time":"2023-09-04T17:22:23+02:00","message":"request"}
 {"level":"info","type":"http","remote_ip":"::1","method":"GET","URI":"/assets/fonts/LilitaOne/LilitaOne-Regular.ttf","status":200,"time":"2023-09-04T17:22:23+02:00","message":"request"}
 {"level":"info","type":"http","remote_ip":"::1","method":"GET","URI":"/assets/fonts/IBMPlex/IBMPlexSans-Regular.woff2","status":200,"time":"2023-09-04T17:22:23+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/admin","status":200,"time":"2023-09-05T03:56:03+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/assets/js/custom.js","status":404,"time":"2023-09-05T03:56:03+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/assets/css/tailwind.css","status":200,"time":"2023-09-05T03:56:03+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/libs/alpine.min.js","status":200,"time":"2023-09-05T03:56:03+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/libs/htmx.min.js","status":200,"time":"2023-09-05T03:56:03+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/libs/iconoir.css","status":200,"time":"2023-09-05T03:56:03+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/assets/imgs/gordon-mascot-hq-trsp.png","status":200,"time":"2023-09-05T03:56:03+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/favicon.ico","status":200,"time":"2023-09-05T03:56:03+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/assets/fonts/LilitaOne/LilitaOne-Regular.ttf","status":200,"time":"2023-09-05T03:56:03+02:00","message":"request"}
+{"level":"info","type":"http","remote_ip":"127.0.0.1","method":"GET","URI":"/assets/fonts/IBMPlex/IBMPlexSans-Regular.woff2","status":200,"time":"2023-09-05T03:56:03+02:00","message":"request"}
