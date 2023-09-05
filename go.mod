@@ -26,6 +26,9 @@ require (
 	github.com/gorilla/sessions v1.2.1 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.25 // indirect
+	github.com/gorilla/securecookie v1.1.1 // indirect
+	github.com/gorilla/sessions v1.2.1 // indirect
+	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/moby/patternmatcher v0.6.0 // indirect
 	github.com/moby/sys/sequential v0.5.0 // indirect
 	github.com/moby/term v0.5.0 // indirect
