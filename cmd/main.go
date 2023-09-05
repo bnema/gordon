@@ -6,7 +6,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"gogs.bnema.dev/gordon-echo/internal/app"
 	"gogs.bnema.dev/gordon-echo/internal/http/routes"
-	"gogs.bnema.dev/gordon-echo/pkg/docker"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
@@ -24,8 +23,6 @@ func main() {
 		gordon.APPLogger.Error().Err(err).Msg("Failed to initialize app")
 		return
 	}
-
-	docker.CreateImageFromDockerfile()
 
 	e := echo.New()
 	e.HideBanner = true

@@ -13,7 +13,7 @@ func ConfigureRouter(e *echo.Echo, app *app.App) *echo.Echo {
 	// Register middlewares
 	e.Use(middlewares.NewRequestLoggerMiddleware(app.HTTPLogger.Logger))
 	e.Use(middlewares.LanguageDetectionMiddleware)
-
+	// e.Use(middlewares.SecureMiddleware()) // Uncomment this line to enable the secure middleware
 	// Register routes
 	e = bindStaticAdminUI(e)
 
