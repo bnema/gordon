@@ -13,7 +13,6 @@ type App struct {
 	APPLogger  *utils.Logger
 	HTTPLogger *utils.Logger
 	Template   *template.Template
-	Renderer   *utils.Renderer
 }
 
 func NewApp() (*App, error) {
