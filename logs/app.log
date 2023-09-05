@@ -56,3 +56,5 @@
 {"level":"fatal","error":"listen tcp :1323: bind: address already in use","time":"2023-09-05T03:55:45+02:00","message":"Failed to start the server"}
 {"level":"info","time":"2023-09-05T03:55:58+02:00","message":"Server is listening on port 1323"}
 {"level":"info","time":"2023-09-05T03:56:40+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-05T06:50:58+02:00","message":"Server is listening on port 1323"}
+{"level":"info","time":"2023-09-05T06:52:00+02:00","message":"Server is listening on port 1323"}

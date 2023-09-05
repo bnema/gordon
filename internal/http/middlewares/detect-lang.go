@@ -10,8 +10,8 @@ import (
 // LangKey is a key for setting and getting the language from the context
 const LangKey = "CurrentLang"
 
-// LanguageDetectionMiddleware detects the current language and sets it in the context
-func LanguageDetectionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+// LanguageDetectiondetects the current language and sets it in the context
+func LanguageDetection(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		lang := detectCurrentLanguage(c)
 		c.Set(LangKey, lang)
