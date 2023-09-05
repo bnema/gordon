@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/tidwall/gjson"
-	"gogs.bnema.dev/gordon-echo/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,11 +18,11 @@ type YamlData struct {
 }
 
 // ReadDataFromYAML loads the data from the given YAML file
-func ReadDataFromYAML() (YamlData, error) {
+func (a *AppConfig) ReadDataFromYAML() (YamlData, error) {
 	var data YamlData
 
 	// Open the YAML file inside the ui/components directory
-	file, err := ui.TemplateFS.Open("strings.yaml")
+	file, err := a.Config.GetTemplateFS().Open("strings.yaml")
 	if err != nil {
 		return data, fmt.Errorf("failed to open strings.yaml: %w", err)
 	}
@@ -44,8 +43,8 @@ func ReadDataFromYAML() (YamlData, error) {
 }
 
 // PopulateDataFromYAML retrieves the data from the YAML file and sets the appropriate language data
-func PopulateDataFromYAML(currentLang string) (YamlData, error) {
-	data, err := ReadDataFromYAML()
+func (a *AppConfig) PopulateDataFromYAML(currentLang string) (YamlData, error) {
+	data, err := a.ReadDataFromYAML()
 	if err != nil {
 		return data, err
 	}

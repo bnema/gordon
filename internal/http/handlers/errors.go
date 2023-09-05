@@ -5,20 +5,18 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
-	"gogs.bnema.dev/gordon-echo/internal/ui"
+	"gogs.bnema.dev/gordon-echo/internal/app"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
-type ErrorHandler struct {
-	Err         error
-	C           echo.Context
-	ErrorNumber int
+type AppConfig struct {
+	*app.Config
 }
 
-func Error404Handler(err error, c echo.Context) {
+func (a *AppConfig) Error404Handler(err error, c echo.Context) {
 	if he, ok := err.(*echo.HTTPError); ok {
 		if he.Code == http.StatusNotFound {
-			renderer, err := utils.GetRenderer("404.gohtml", ui.PublicFS, utils.NewLogger())
+			renderer, err := utils.GetRenderer("404.gohtml", a.Config.PublicFS, utils.NewLogger())
 			if err != nil {
 				c.String(http.StatusInternalServerError, fmt.Sprintf("%v", err))
 			}

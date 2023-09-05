@@ -39,6 +39,13 @@ func (r *Renderer) Render(data interface{}) (string, error) {
 
 // GetRenderer function returns a new Renderer instance
 func GetRenderer(filename string, fs fs.FS, logger *Logger) (*Renderer, error) {
+	// Check if the file exists in the provided fs.FS using fs.Open
+	file, err := fs.Open(filename)
+	if err != nil {
+		logger.Error().Err(err).Msg("Template or model '%s' not found" + filename)
+		return nil, err
+	}
+	file.Close() // Close the file after checking
 	tmpl, err := template.New(filename).ParseFS(fs, filename)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to parse template")

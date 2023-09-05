@@ -5,12 +5,16 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
+	"gogs.bnema.dev/gordon-echo/config"
 	"gogs.bnema.dev/gordon-echo/internal/http/middlewares"
-	"gogs.bnema.dev/gordon-echo/internal/ui"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
-func AdminRoute(c echo.Context) error {
+type AppConfig struct {
+	Config config.Provider
+}
+
+func (a *AppConfig) AdminRoute(c echo.Context) error {
 	// Check if it's the first launch of the app
 	if utils.IsConfigFilePresent() {
 		fmt.Println("Fresh installation detected, redirecting to /admin/install")
@@ -20,12 +24,12 @@ func AdminRoute(c echo.Context) error {
 	// Retrieve the current language from the context
 	lang := c.Get(middlewares.LangKey).(string)
 
-	staticData, err := utils.PopulateDataFromYAML(lang)
+	staticData, err := a.PopulateDataFromYAML(lang)
 	if err != nil {
 		return err
 	}
 
-	renderer, err := utils.GetRenderer("index.gohtml", ui.PublicFS, utils.NewLogger())
+	renderer, err := utils.GetRenderer("index.gohtml", a.Config.GetPublicFS(), utils.NewLogger())
 	if err != nil {
 		return err
 	}
@@ -40,7 +44,7 @@ func AdminRoute(c echo.Context) error {
 	return c.HTML(http.StatusOK, html)
 }
 
-func InstallRoute(c echo.Context) error {
+func (a *AppConfig) InstallRoute(c echo.Context) error {
 	// Check if it's the first launch of the app
 	if !utils.IsConfigFilePresent() {
 		fmt.Println("Config file already present, redirecting to /admin")
@@ -50,12 +54,12 @@ func InstallRoute(c echo.Context) error {
 	// Retrieve the current language from the context
 	lang := c.Get(middlewares.LangKey).(string)
 
-	staticData, err := utils.PopulateDataFromYAML(lang)
+	staticData, err := a.PopulateDataFromYAML(lang)
 	if err != nil {
 		return err
 	}
 
-	renderer, err := utils.GetRenderer("install.gohtml", ui.TemplateFS, utils.NewLogger())
+	renderer, err := utils.GetRenderer("install.gohtml", a.Config.GetTemplateFS(), utils.NewLogger())
 	if err != nil {
 		return err
 	}

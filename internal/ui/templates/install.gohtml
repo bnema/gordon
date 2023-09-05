@@ -59,9 +59,10 @@
             <div class="w-full md:w-1/2 p-4">
               <form
                 id="install-traefik-form"
-                action="/install/traefik"
+                action="/admin/install/traefik"
                 method="POST"
-                hx-post="/install/traefik"
+                hx-post="/admin/install/traefik"
+                hx-swap="outerHTML"
               >
                 <h2 class="">1.1 - Set your top domain name</h2>
                 <input
