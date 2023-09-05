@@ -123,9 +123,9 @@ func getZerologLevel(level LogLevel) zerolog.Level {
 	}
 }
 
-func CreateLogsDir() error {
-	if _, err := os.Stat("logs"); os.IsNotExist(err) {
-		err := os.Mkdir("logs", 0755)
+func CreateLogsDir(logDir string) error {
+	if _, err := os.Stat(logDir); os.IsNotExist(err) {
+		err := os.MkdirAll(logDir, 0755)
 		if err != nil {
 			return err
 		}

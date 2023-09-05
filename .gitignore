@@ -1,5 +1,9 @@
 .env
 node_modules/
 tmp/*
-logs/*
+logs/
+logs/app.log
+logs/error.log
+logs/http.log
+logs/docker.log
 gordon.yml
