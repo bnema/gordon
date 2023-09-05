@@ -20,6 +20,7 @@ const (
 )
 
 type LogLevel string
+
 type Logger struct {
 	zerolog.Logger
 }

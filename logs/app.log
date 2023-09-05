@@ -647,3 +647,52 @@
 {"level":"info","time":"2023-09-05T10:22:47+02:00","message":"Server is listening on port 1323"}
 {"level":"info","time":"2023-09-05T10:22:47+02:00","message":"Server is listening on port 1323"}
 {"level":"fatal","error":"listen tcp :1323: bind: address already in use","time":"2023-09-05T10:22:47+02:00","message":"Failed to start the server"}
+{"level":"info","time":"2023-09-05T10:41:25+02:00","message":"Server is listening on port 1323"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:26+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:27+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:29+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:31+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:32+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:33+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:34+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:35+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:35+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:35+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:35+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:36+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:37+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:37+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:39+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:40+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:43+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:45+02:00","message":"Color scheme detected: light"}
+{"level":"debug","type":"app","time":"2023-09-05T10:41:46+02:00","message":"Color scheme detected: light"}
+{"level":"info","time":"2023-09-05T10:41:47+02:00","message":"Server is listening on port 1323"}
