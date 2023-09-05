@@ -1,9 +1,11 @@
 package main
 
 import (
+	"embed"
 	"os"
 
 	"github.com/labstack/echo/v4"
+	root "gogs.bnema.dev/gordon-echo"
 	"gogs.bnema.dev/gordon-echo/internal/app"
 	"gogs.bnema.dev/gordon-echo/internal/http/routes"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
@@ -16,8 +18,13 @@ func main() {
 		port = "1323"
 	}
 
+	config := app.Config{
+		TemplateFS: root.TemplateFS.(embed.FS),
+		PublicFS:   root.PublicFS.(embed.FS),
+		ModelFS:    root.ModelFS,
+	}
 	// Initialize Gordon
-	gordon, err := app.NewApp()
+	gordon, err := app.NewApp(&config)
 	if err != nil {
 		// Handle initialization error and exit
 		gordon.AppLogger.Error().Err(err).Msg("Failed to initialize app")

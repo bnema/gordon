@@ -38,8 +38,16 @@ func (r *TXTRenderer) TXTRender(data interface{}) (string, error) {
 	return buf.String(), nil
 }
 
-// GetRenderer function returns a new Renderer instance
+// GetTXTRenderer function returns a new Renderer instance
 func GetTXTRenderer(filename string, fs fs.FS, logger *Logger) (*TXTRenderer, error) {
+	// Check if the file exists in the provided fs.FS using fs.Open
+	file, err := fs.Open(filename)
+	if err != nil {
+		logger.Error().Err(err).Msg("Template or model '%s' not found" + filename)
+		return nil, err
+	}
+	file.Close() // Close the file after checking
+
 	mdls, err := template.New(filename).ParseFS(fs, filename)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to parse template")

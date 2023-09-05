@@ -1,16 +1,15 @@
 package app
 
 import (
-	"html/template"
+	"embed"
 	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/rs/zerolog"
+	"gogs.bnema.dev/gordon-echo/config"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
-
-var cfg = loadConfig()
 
 const (
 	DefaultBuildDir    = "tmp"
@@ -24,14 +23,30 @@ const (
 type App struct {
 	AppLogger  *utils.Logger
 	HttpLogger *utils.Logger
-	Template   *template.Template
 }
 type Config struct {
-	BuildDir string
-	LogDir   string
+	BuildDir   string
+	LogDir     string
+	TemplateFS embed.FS
+	PublicFS   embed.FS
+	ModelFS    embed.FS
 }
 
-func loadConfig() Config {
+func (c *Config) GetTemplateFS() embed.FS {
+	return c.TemplateFS
+}
+
+func (c *Config) GetPublicFS() embed.FS {
+	return c.PublicFS
+}
+
+func (c *Config) GetModelFS() embed.FS {
+	return c.ModelFS
+}
+
+var _ config.Provider = &Config{}
+
+func loadConfig(templateFS, publicFS, modelFS embed.FS) Config {
 	// Get the environment variable
 	env := os.Getenv(EnvVarName)
 	// If the environment variable is empty, considere it is dev -> (/tmp)
@@ -56,25 +71,24 @@ func loadConfig() Config {
 	}
 
 	return Config{
-		BuildDir: buildDir,
-		LogDir:   logDir,
+		BuildDir:   buildDir,
+		LogDir:     logDir,
+		TemplateFS: templateFS,
+		PublicFS:   publicFS,
+		ModelFS:    modelFS,
 	}
 }
-func NewApp() (*App, error) {
-	SetupLogging()
-	app := &App{}
-
-	// Initialize the general application logger
-	app.AppLogger = utils.NewLogger().SetOutput(initializeLoggerOutput("app.log"))
-	// Initialize the HTTP logger
-	app.HttpLogger = utils.NewLogger().SetOutput(initializeLoggerOutput("http.log"))
-
+func NewApp(config *Config) (*App, error) {
+	SetupLogging(config)
+	app := &App{
+		AppLogger:  utils.NewLogger().SetOutput(initializeLoggerOutput(config, "app.log")),
+		HttpLogger: utils.NewLogger().SetOutput(initializeLoggerOutput(config, "http.log")),
+	}
 	return app, nil
 }
 
-func initializeLoggerOutput(logFile string) io.Writer {
+func initializeLoggerOutput(cfg *Config, logFile string) io.Writer {
 	logPath := filepath.Join(cfg.LogDir, logFile)
-
 	dir := filepath.Dir(logPath)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		if mkdirErr := os.MkdirAll(dir, 0755); mkdirErr != nil {
@@ -90,7 +104,7 @@ func initializeLoggerOutput(logFile string) io.Writer {
 	return zerolog.MultiLevelWriter(file, consoleWriter)
 }
 
-func SetupLogging() {
+func SetupLogging(cfg *Config) {
 	err := utils.CreateLogsDir(cfg.LogDir)
 	if err != nil {
 		panic(err)
