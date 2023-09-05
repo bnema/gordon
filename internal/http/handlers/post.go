@@ -25,11 +25,6 @@ func RejectPOSTPolicy(c echo.Context) error {
 		return fmt.Errorf("missing user agent")
 	}
 
-	// Check for suspicious content types, e.g., "application/x-www-form-urlencoded"
-	if c.Request().Header.Get("Content-Type") != "application/json" {
-		return fmt.Errorf("invalid content type")
-	}
-
 	// If all checks pass
 	return nil
 }

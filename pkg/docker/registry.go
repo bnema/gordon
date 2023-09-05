@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/stdcopy"
+	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
 func DockertPullImageTest() {
@@ -124,4 +126,15 @@ func CreateImageFromDockerfile() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func RunCommand(command string, arg string, logger *utils.Logger) error {
+	cmd := exec.Command(command, arg)
+	cmd.Stdout = logger
+	cmd.Stderr = logger
+	err := cmd.Run()
+	if err != nil {
+		return err
+	}
+	return nil
 }

@@ -5,13 +5,17 @@ import (
 	"fmt"
 
 	"github.com/PuerkitoBio/goquery"
-	"gogs.bnema.dev/gordon-echo/internal/ui"
+	"gogs.bnema.dev/gordon-echo/config"
 )
 
+type AppConfig struct {
+	Config config.Provider
+}
+
 // GetHTMLFragmentByID returns the HTML fragment with the specified id
-func GetHTMLFragmentByID(id string, data interface{}) (string, error) {
+func (a *AppConfig) GetHTMLFragmentByID(id string, data interface{}) (string, error) {
 	// 1. Render the template
-	renderer, err := GetRenderer("components.gohtml", ui.TemplateFS, NewLogger())
+	renderer, err := GetRenderer("components.gohtml", a.Config.GetTemplateFS(), NewLogger())
 	if err != nil {
 		return "", fmt.Errorf("failed to get renderer: %w", err)
 	}
