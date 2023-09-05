@@ -1,0 +1,26 @@
+api:
+  dashboard: true
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+
+certificatesResolvers:
+  myresolver:
+    acme:
+      email: {{ admin.email }}
+      storage: acme.json
+      httpChallenge:
+        entryPoint: web
+
+log:
+  level: "DEBUG" # Set the desired log level: DEBUG, INFO, WARN, ERROR, FATAL, PANIC
+
+accessLog: {}
