@@ -6,7 +6,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func NewRequestLoggerMiddleware(logger zerolog.Logger) echo.MiddlewareFunc {
+func NewRequestLogger(logger zerolog.Logger) echo.MiddlewareFunc {
 	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogURI:    true,
 		LogStatus: true,
