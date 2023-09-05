@@ -23,6 +23,7 @@ func main() {
 		gordon.APPLogger.Error().Err(err).Msg("Failed to initialize app")
 		return
 	}
+	utils.CaptureSTDOUT(gordon.APPLogger)
 
 	e := echo.New()
 	e.HideBanner = true

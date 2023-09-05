@@ -1,8 +1,6 @@
 package middlewares
 
 import (
-	"fmt"
-
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
@@ -14,7 +12,6 @@ const ColorSchemeKey = "CurrentColorScheme"
 func ColorSchemeDetection(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		colorScheme := detectCurrentColorScheme(c)
-		fmt.Println("Color scheme detected:", colorScheme)
 		c.Set(ColorSchemeKey, colorScheme)
 		return next(c)
 	}
