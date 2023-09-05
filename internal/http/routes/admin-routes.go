@@ -55,7 +55,7 @@ func InstallRoute(c echo.Context) error {
 		return err
 	}
 
-	renderer, err := utils.GetRenderer("install.gohtml", ui.PublicFS, utils.NewLogger())
+	renderer, err := utils.GetRenderer("install.gohtml", ui.TemplateFS, utils.NewLogger())
 	if err != nil {
 		return err
 	}
