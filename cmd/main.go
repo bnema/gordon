@@ -1,7 +1,6 @@
 package main
 
 import (
-	"embed"
 	"os"
 
 	"github.com/labstack/echo/v4"
@@ -17,14 +16,14 @@ func main() {
 	if port == "" {
 		port = "1323"
 	}
-
-	config := app.Config{
-		TemplateFS: root.TemplateFS.(embed.FS),
-		PublicFS:   root.PublicFS.(embed.FS),
-		ModelFS:    root.ModelFS,
-	}
 	// Initialize Gordon
-	gordon, err := app.NewApp(&config)
+	gordon, err := app.NewApp(
+		&app.Config{
+			TemplateFS: root.TemplateFS,
+			PublicFS:   root.PublicFS,
+			ModelFS:    root.ModelFS,
+		},
+	)
 	if err != nil {
 		// Handle initialization error and exit
 		gordon.AppLogger.Error().Err(err).Msg("Failed to initialize app")

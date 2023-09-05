@@ -6,6 +6,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.8.1
 	github.com/docker/docker v24.0.5+incompatible
 	github.com/labstack/echo/v4 v4.11.1
+	github.com/microcosm-cc/bluemonday v1.0.25
 	github.com/tidwall/gjson v1.16.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -22,10 +23,6 @@ require (
 	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
 	github.com/gorilla/context v1.1.1 // indirect
 	github.com/gorilla/css v1.0.0 // indirect
-	github.com/gorilla/securecookie v1.1.1 // indirect
-	github.com/gorilla/sessions v1.2.1 // indirect
-	github.com/klauspost/compress v1.16.7 // indirect
-	github.com/microcosm-cc/bluemonday v1.0.25 // indirect
 	github.com/gorilla/securecookie v1.1.1 // indirect
 	github.com/gorilla/sessions v1.2.1 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
@@ -47,7 +44,6 @@ require (
 )
 
 require (
-	github.com/google/safehtml v0.1.0
 	github.com/labstack/echo-contrib v0.15.0
 	github.com/labstack/gommon v0.4.0
 	github.com/mattn/go-colorable v0.1.13 // indirect

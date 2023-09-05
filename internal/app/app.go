@@ -1,8 +1,9 @@
 package app
 
 import (
-	"embed"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -23,33 +24,33 @@ const (
 type App struct {
 	AppLogger  *utils.Logger
 	HttpLogger *utils.Logger
+	Config     *Config
 }
 type Config struct {
 	BuildDir   string
 	LogDir     string
-	TemplateFS embed.FS
-	PublicFS   embed.FS
-	ModelFS    embed.FS
+	TemplateFS fs.FS
+	PublicFS   fs.FS
+	ModelFS    fs.FS
 }
 
-func (c *Config) GetTemplateFS() embed.FS {
+func (c *Config) GetTemplateFS() fs.FS {
 	return c.TemplateFS
 }
-
-func (c *Config) GetPublicFS() embed.FS {
+func (c *Config) GetPublicFS() fs.FS {
 	return c.PublicFS
 }
 
-func (c *Config) GetModelFS() embed.FS {
+func (c *Config) GetModelFS() fs.FS {
 	return c.ModelFS
 }
 
 var _ config.Provider = &Config{}
 
-func loadConfig(templateFS, publicFS, modelFS embed.FS) Config {
+func defineEnv(config *Config) {
 	// Get the environment variable
 	env := os.Getenv(EnvVarName)
-	// If the environment variable is empty, considere it is dev -> (/tmp)
+	// If the environment variable is empty, consider it is dev -> (/tmp)
 	buildDir := os.Getenv(BuildDirEnvVarName)
 	if buildDir == "" {
 		buildDir = DefaultBuildDir
@@ -69,20 +70,17 @@ func loadConfig(templateFS, publicFS, modelFS embed.FS) Config {
 		buildDir = "./" + buildDir
 		logDir = filepath.Join(buildDir, logDir)
 	}
-
-	return Config{
-		BuildDir:   buildDir,
-		LogDir:     logDir,
-		TemplateFS: templateFS,
-		PublicFS:   publicFS,
-		ModelFS:    modelFS,
-	}
+	config.BuildDir = buildDir
+	config.LogDir = logDir
 }
+
 func NewApp(config *Config) (*App, error) {
+	defineEnv(config)
 	SetupLogging(config)
 	app := &App{
 		AppLogger:  utils.NewLogger().SetOutput(initializeLoggerOutput(config, "app.log")),
 		HttpLogger: utils.NewLogger().SetOutput(initializeLoggerOutput(config, "http.log")),
+		Config:     config,
 	}
 	return app, nil
 }
@@ -103,10 +101,13 @@ func initializeLoggerOutput(cfg *Config, logFile string) io.Writer {
 	consoleWriter := zerolog.ConsoleWriter{Out: os.Stdout}
 	return zerolog.MultiLevelWriter(file, consoleWriter)
 }
-
-func SetupLogging(cfg *Config) {
-	err := utils.CreateLogsDir(cfg.LogDir)
-	if err != nil {
-		panic(err)
+func SetupLogging(config *Config) {
+	// Check if the log directory exists
+	if _, err := os.Stat(config.LogDir); os.IsNotExist(err) {
+		// If not, create it
+		err := os.MkdirAll(config.LogDir, 0755)
+		if err != nil {
+			panic(fmt.Sprintf("Failed to create log directory at path: %s, error: %s", config.LogDir, err))
+		}
 	}
 }
