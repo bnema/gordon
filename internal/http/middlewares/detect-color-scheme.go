@@ -10,8 +10,8 @@ import (
 // ColorSchemeKey is a key for setting and getting the color scheme from the context
 const ColorSchemeKey = "CurrentColorScheme"
 
-// ColorSchemeDetectionMiddleware detects the current color scheme and sets it in the context
-func ColorSchemeDetectionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+// ColorSchemeDetection detects the current color scheme and sets it in the context
+func ColorSchemeDetection(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		colorScheme := detectCurrentColorScheme(c)
 		fmt.Println("Color scheme detected:", colorScheme)
