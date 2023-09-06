@@ -7,10 +7,17 @@ import (
 
 	root "gogs.bnema.dev/gordon-echo"
 	"gogs.bnema.dev/gordon-echo/internal/app"
+	"gogs.bnema.dev/gordon-echo/pkg/docker"
 	"gogs.bnema.dev/gordon-echo/pkg/templating"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
+func ensureDirExists(dir string) error {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return os.Mkdir(dir, 0755)
+	}
+	return nil
+}
 func CreateYAMLFiles(topDomain, adminEmail string, logger *utils.Logger) error {
 	path := app.GetBuildDir() + "/"
 	modelFS := root.ModelFS
@@ -19,11 +26,12 @@ func CreateYAMLFiles(topDomain, adminEmail string, logger *utils.Logger) error {
 	}
 
 	// Check if directory traefik exists, if not create it
-	if _, err := os.Stat(path + "traefik"); os.IsNotExist(err) {
-		err = os.Mkdir(path+"traefik", 0755)
-		if err != nil {
-			return err
-		}
+	if err := ensureDirExists(path + "traefik"); err != nil {
+		return err
+	}
+	// Check if directory traefik/volume exists, if not create it
+	if err := ensureDirExists(path + "traefik/volume"); err != nil {
+		return err
 	}
 
 	// Setup the TXT renderer for traefik-compose.goyml
@@ -42,7 +50,7 @@ func CreateYAMLFiles(topDomain, adminEmail string, logger *utils.Logger) error {
 		return err
 	}
 	// Save the rendered content to a file at the env path
-	err = os.WriteFile(path+"docker-compose.yml", []byte(composeContent), 0644)
+	err = os.WriteFile(path+"traefik/docker-compose.yml", []byte(composeContent), 0644)
 	if err != nil {
 		return err
 	}
@@ -53,7 +61,7 @@ func CreateYAMLFiles(topDomain, adminEmail string, logger *utils.Logger) error {
 		return err
 	}
 
-	// Render the traefik.goyml with payload data
+	// Render the traefik.goyml with payload
 	traefikContent, err := rendererTraefik.TXTRender(map[string]string{
 		"admin.email": adminEmail,
 	})
@@ -67,6 +75,21 @@ func CreateYAMLFiles(topDomain, adminEmail string, logger *utils.Logger) error {
 		return err
 	}
 
-	return nil
+	// Now that we have the YAML files, we can launch the containers
+	// Create acme.json with permissions 600
+	if f, err := os.Create(path + "traefik/volume/acme.json"); err != nil {
+		return err
+	} else if err = f.Chmod(0600); err != nil {
+		return err
+	} else {
+		f.Close() // Schedule closing of the file when function exits
+	}
+
+	// Create the network "exposed" if it doesn't exist
+	// Ensure that the network "exposed" exists if not create it
+	exists, err := docker.NetworkExists("exposed")
+	if err != nil {
+		// handle the error
+	}
 
 }
