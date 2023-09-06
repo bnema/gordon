@@ -1,5 +1,5 @@
 api:
-  dashboard: true
+  dashboard: false
 
 entryPoints:
   web:
@@ -22,5 +22,9 @@ certificatesResolvers:
 
 log:
   level: "DEBUG" # Set the desired log level: DEBUG, INFO, WARN, ERROR, FATAL, PANIC
+  filePath: "/var/log/traefik/traefik.log"
 
 accessLog: {}
+
+ping:
+  entryPoint: web 
