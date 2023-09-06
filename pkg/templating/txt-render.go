@@ -3,6 +3,7 @@ package templating
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"text/template"
 
@@ -24,7 +25,7 @@ func (r *TXTRenderer) TXTRender(data interface{}) (string, error) {
 	}
 
 	if r.Models == nil {
-		err := errors.New("invalid or nil template")
+		err := errors.New("invalid or nil model")
 		r.Logger.Error().Err(r.ParseError).Msg("Parse error")
 
 		return "", err
@@ -42,6 +43,14 @@ func (r *TXTRenderer) TXTRender(data interface{}) (string, error) {
 
 // GetRenderer function returns a new Renderer instance
 func GetTXTRenderer(filename string, fs fs.FS, logger *utils.Logger) (*TXTRenderer, error) {
+	fmt.Println(filename)
+	// Check if the file exists in the provided fs.FS using fs.Open
+	file, err := fs.Open(filename)
+	if err != nil {
+		logger.Error().Err(err).Msg("Template or model '%s' not found" + filename)
+		return nil, err
+	}
+	file.Close() // Close the file after checking
 	mdls, err := template.New(filename).ParseFS(fs, filename)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to parse template")
