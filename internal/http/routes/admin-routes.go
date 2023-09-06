@@ -10,11 +10,7 @@ import (
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
-type AppConfig struct {
-	Config config.Provider
-}
-
-func (a *AppConfig) AdminRoute(c echo.Context) error {
+func AdminRoute(c echo.Context, provider config.Provider) error {
 	// Check if it's the first launch of the app
 	if utils.IsConfigFilePresent() {
 		fmt.Println("Fresh installation detected, redirecting to /admin/install")
@@ -24,17 +20,19 @@ func (a *AppConfig) AdminRoute(c echo.Context) error {
 	// Retrieve the current language from the context
 	lang := c.Get(middlewares.LangKey).(string)
 
-	staticData, err := a.PopulateDataFromYAML(lang)
+	// Assuming the filename is "strings.yml"
+	var data utils.StringsYamlData
+	err := utils.PopulateDataFromYAML(lang, provider.GetTemplateFS(), "strings.yml", &data)
 	if err != nil {
 		return err
 	}
 
-	renderer, err := utils.GetRenderer("index.gohtml", a.Config.GetPublicFS(), utils.NewLogger())
+	renderer, err := utils.GetRenderer("index.gohtml", provider.GetPublicFS(), utils.NewLogger())
 	if err != nil {
 		return err
 	}
 
-	html, err := renderer.Render(staticData.CurrentLang)
+	html, err := renderer.Render(data.CurrentLang)
 	if err != nil {
 		// Return the error into NewLogger() to log it
 		utils.NewLogger().Error()
@@ -44,7 +42,7 @@ func (a *AppConfig) AdminRoute(c echo.Context) error {
 	return c.HTML(http.StatusOK, html)
 }
 
-func (a *AppConfig) InstallRoute(c echo.Context) error {
+func InstallRoute(c echo.Context, provider config.Provider) error {
 	// Check if it's the first launch of the app
 	if !utils.IsConfigFilePresent() {
 		fmt.Println("Config file already present, redirecting to /admin")
@@ -54,17 +52,19 @@ func (a *AppConfig) InstallRoute(c echo.Context) error {
 	// Retrieve the current language from the context
 	lang := c.Get(middlewares.LangKey).(string)
 
-	staticData, err := a.PopulateDataFromYAML(lang)
+	var data utils.StringsYamlData
+	err := utils.PopulateDataFromYAML(lang, provider.GetTemplateFS(), "strings.yml", &data)
+	if err != nil {
+		return fmt.Errorf("failed to populate data from YAML: %w", err)
+	}
+
+	renderer, err := utils.GetRenderer("install.gohtml", provider.GetTemplateFS(), utils.NewLogger())
+	fmt.Println(renderer)
 	if err != nil {
 		return err
 	}
 
-	renderer, err := utils.GetRenderer("install.gohtml", a.Config.GetTemplateFS(), utils.NewLogger())
-	if err != nil {
-		return err
-	}
-
-	html, err := renderer.Render(staticData.CurrentLang)
+	html, err := renderer.Render(data.CurrentLang)
 	if err != nil {
 		// Return the error into NewLogger() to log it
 		utils.NewLogger().Error()

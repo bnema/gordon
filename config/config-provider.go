@@ -1,9 +1,9 @@
 package config
 
-import "embed"
+import "io/fs"
 
 type Provider interface {
-	GetTemplateFS() embed.FS
-	GetPublicFS() embed.FS
-	GetModelFS() embed.FS
+	GetTemplateFS() fs.FS
+	GetPublicFS() fs.FS
+	GetModelFS() fs.FS
 }
