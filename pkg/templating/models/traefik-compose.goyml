@@ -10,9 +10,9 @@ services:
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik.yml:/etc/traefik/traefik.yml
-      - traefik/volume/acme.json:/acme.json
-      - traefik/volume/traefik.log:/var/log/traefik/traefik.log
+      - ./traefik.yml:/etc/traefik/traefik.yml
+      - ./traefik/volume/acme.json:/acme.json
+      - ./traefik.log:/var/log/traefik/traefik.log
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.api.rule=Host(`traefik.{{ .topdomain }}`)"
