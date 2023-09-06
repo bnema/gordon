@@ -36,7 +36,6 @@ func CreateYAMLFiles(topDomain, adminEmail string, logger *utils.Logger) error {
 
 	// Setup the TXT renderer for traefik-compose.goyml
 	rendererCompose, err := templating.GetTXTRenderer("traefik-compose.goyml", modelFS, logger)
-	fmt.Println("rendererCompose=", rendererCompose)
 	if err != nil {
 		return err
 	}
@@ -45,7 +44,6 @@ func CreateYAMLFiles(topDomain, adminEmail string, logger *utils.Logger) error {
 	composeContent, err := rendererCompose.TXTRender(map[string]string{
 		"topdomain": topDomain,
 	})
-	fmt.Println("composeContent=", composeContent)
 	if err != nil {
 		return err
 	}
@@ -89,7 +87,26 @@ func CreateYAMLFiles(topDomain, adminEmail string, logger *utils.Logger) error {
 	// Ensure that the network "exposed" exists if not create it
 	exists, err := docker.NetworkExists("exposed")
 	if err != nil {
-		// handle the error
+		return err
 	}
+	if exists {
+		fmt.Println("Network Exposed found")
+	} else {
+		fmt.Println("Network Exposed not found, creating it")
+		if err := docker.CreateNetwork("exposed"); err != nil {
+			return err
+		}
+	}
+
+	fmt.Println("Network created successfully")
+
+	// Create the containers with CreateContainerFromComposeFile
+	if err := docker.CreateContainerFromComposeFile(path+"traefik/docker-compose.yml", logger); err != nil {
+		return err
+	}
+
+	fmt.Println("Containers created successfully")
+
+	return nil
 
 }
