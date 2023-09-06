@@ -111,3 +111,15 @@ func SetupLogging(config *Config) {
 		}
 	}
 }
+
+func GetBuildDir() string {
+	env := os.Getenv(EnvVarName)
+	buildDir := os.Getenv(BuildDirEnvVarName)
+	if buildDir == "" {
+		buildDir = DefaultBuildDir
+	}
+	if env == ProdEnvValue {
+		return "."
+	}
+	return "./" + buildDir
+}

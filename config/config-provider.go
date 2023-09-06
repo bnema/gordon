@@ -7,3 +7,13 @@ type Provider interface {
 	GetPublicFS() fs.FS
 	GetModelFS() fs.FS
 }
+
+type Config struct {
+	TemplateFS fs.FS
+	PublicFS   fs.FS
+	ModelFS    fs.FS
+}
+
+func GetConfig() *Config {
+	return &Config{}
+}

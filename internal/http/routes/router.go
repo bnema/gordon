@@ -9,6 +9,7 @@ import (
 )
 
 func ConfigureRouter(e *echo.Echo, app *app.App) *echo.Echo {
+
 	// SetLogger is a middleware that sets the logger in the context
 	e.Use(middlewares.SetLogger(app.HttpLogger))
 	// HTTPAccessLogger is a middleware that logs HTTP requests

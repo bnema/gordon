@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"fmt"
-
 	"github.com/labstack/echo/v4"
 	"gogs.bnema.dev/gordon-echo/pkg/scripts"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
@@ -10,8 +8,8 @@ import (
 
 // TraefikInstallerHandler handles the installation of Traefik
 func TraefikInstallerHandler(c echo.Context) error {
-	// Retrieve the logger from the context
 	logger := c.Get("logger").(*utils.Logger)
+	// Retrieve the logger from the context
 	// Reject POST requests if they are not allowed with the RejectPOSTPolicy function
 	if err := RejectPOSTPolicy(c); err != nil {
 		logger.Error().Err(err).Msg("POST request rejected")
@@ -29,8 +27,6 @@ func TraefikInstallerHandler(c echo.Context) error {
 		logger.Error().Err(err).Msg("Failed to sanitize user input")
 		return err
 	}
-
-	fmt.Println("POST request PAYLOAD=", topDomain, adminEmail)
 
 	// Call to create the YAML files
 	err = scripts.CreateYAMLFiles(topDomain, adminEmail, logger)
