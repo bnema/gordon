@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/stdcopy"
-	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
 func DockertPullImageTest() {
@@ -128,13 +126,45 @@ func CreateImageFromDockerfile() {
 	}
 }
 
-func RunCommand(command string, arg string, logger *utils.Logger) error {
-	cmd := exec.Command(command, arg)
-	cmd.Stdout = logger
-	cmd.Stderr = logger
-	err := cmd.Run()
+// Check if a network exists
+func NetworkExists(name string) (bool, error) {
+	fmt.Println("Initialized Docker client.")
+	ctx := context.Background()
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		return err
+		panic(err)
 	}
-	return nil
+	defer cli.Close()
+
+	fmt.Println("Checking if network exists...")
+	networks, err := cli.NetworkList(ctx, types.NetworkListOptions{})
+	if err != nil {
+		panic(err)
+	}
+
+	for _, network := range networks {
+		if network.Name == name {
+			return true
+		}
+	}
+
+	return false, nil
+}
+
+// Create network as a bridge
+func CreateNetwork(name string) error
+	ctx := context.Background()
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		panic(err)
+	}
+	defer cli.Close()
+
+	fmt.Println("Creating network...")
+	_, err = cli.NetworkCreate(ctx, name, types.NetworkCreate{
+		Driver: "bridge",
+	})
+	if err != nil {
+		panic(err)
+	}
 }
