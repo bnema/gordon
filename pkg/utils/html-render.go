@@ -3,6 +3,7 @@ package utils
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 )
@@ -39,6 +40,7 @@ func (r *Renderer) Render(data interface{}) (string, error) {
 
 // GetRenderer function returns a new Renderer instance
 func GetRenderer(filename string, fs fs.FS, logger *Logger) (*Renderer, error) {
+	fmt.Println(filename)
 	// Check if the file exists in the provided fs.FS using fs.Open
 	file, err := fs.Open(filename)
 	if err != nil {
