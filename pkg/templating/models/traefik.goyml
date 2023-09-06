@@ -15,7 +15,7 @@ providers:
 certificatesResolvers:
   myresolver:
     acme:
-      email: {{ admin.email }}
+      email: {{ .admin.email }}
       storage: acme.json
       httpChallenge:
         entryPoint: web

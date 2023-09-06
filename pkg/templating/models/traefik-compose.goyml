@@ -14,7 +14,7 @@ services:
       - /home/brice/traefik/data/acme.json:/acme.json
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`traefik.{{ topdomain }}`)"
+      - "traefik.http.routers.api.rule=Host(`traefik.{{ .topdomain }}`)"
       - "traefik.http.routers.api.service=api@internal"
       - "traefik.http.routers.api.entrypoints=websecure"
       - "traefik.http.routers.api.tls.certresolver=myresolver"
