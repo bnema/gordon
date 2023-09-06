@@ -4,18 +4,14 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
-	"gogs.bnema.dev/gordon-echo/config"
+	"gogs.bnema.dev/gordon-echo/internal/app"
 	"gogs.bnema.dev/gordon-echo/internal/http/middlewares"
 	"gogs.bnema.dev/gordon-echo/pkg/htmx"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
-func HTMXHandler(c echo.Context) error {
-	logger, ok := c.Get("logger").(*utils.Logger)
-	if !ok {
-		return c.String(http.StatusInternalServerError, "Failed to get logger from context")
-	}
-
+func HTMXHandler(c echo.Context, a *app.App, ac *app.Config) error {
+	logger := a.AppLogger
 	// Detect and extract HTMX data from the request
 	htmxRequest, err := htmx.GetRequest(c)
 	if err != nil {
@@ -31,19 +27,15 @@ func HTMXHandler(c echo.Context) error {
 
 	// If it's a GET request, handle the fragment
 	if c.Request().Method == http.MethodGet {
-		cfg, ok := c.Get("config").(config.Provider)
-		if !ok {
-			logger.Error().Msg("Failed to get config provider from context")
-			return c.String(http.StatusInternalServerError, "Failed to get config provider from context")
-		}
-		return htmxFragmentHandler(c, logger, cfg)
+		return htmxFragmentHandler(c, a, ac)
 	}
 
 	// For other HTTP methods, return an error
 	return c.String(http.StatusBadRequest, "Invalid request method")
 }
 
-func htmxFragmentHandler(c echo.Context, logger *utils.Logger, fs config.Provider) error {
+func htmxFragmentHandler(c echo.Context, a *app.App, ac *app.Config) error {
+	logger := a.AppLogger
 	fragment := c.Request().Header.Get("HX-Fragment")
 	if fragment == "" {
 		logger.Error().Msg("Missing fragment header")
@@ -52,13 +44,13 @@ func htmxFragmentHandler(c echo.Context, logger *utils.Logger, fs config.Provide
 
 	lang := c.Get(middlewares.LangKey).(string)
 	var data utils.StringsYamlData
-	err := utils.PopulateDataFromYAML(lang, fs.GetTemplateFS(), "strings.yml", &data)
+	err := utils.PopulateDataFromYAML(lang, ac.GetTemplateFS(), "strings.yml", &data)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to populate data from YAML")
 		return err
 	}
 
-	content, err := utils.GetHTMLFragmentByID(fragment, data.CurrentLang, fs)
+	content, err := htmx.GetHTMLFragmentByID(fragment, data.CurrentLang, a, ac)
 	if err != nil { // <-- This check was missing
 		logger.Error().Err(err).Msg("Failed to get fragment")
 		return c.String(http.StatusInternalServerError, err.Error())

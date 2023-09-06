@@ -6,10 +6,10 @@ import (
 	"os"
 
 	"github.com/labstack/echo/v4"
-	"gogs.bnema.dev/gordon-echo/config"
+	"gogs.bnema.dev/gordon-echo/internal/app"
 )
 
-func StaticRoute(c echo.Context, config config.Provider) error {
+func StaticRoute(c echo.Context, config *app.Config) error {
 
 	// Set the cache-control header based on PROD environment variable
 	if os.Getenv("PROD") == "true" {

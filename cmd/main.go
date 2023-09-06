@@ -35,7 +35,7 @@ func main() {
 	e.HideBanner = true
 	e.HidePort = true
 	e.Logger = utils.NewEchoLoggerWrapper(gordon.AppLogger)
-	e = routes.ConfigureRouter(e, gordon)
+	e = routes.ConfigureRouter(e, gordon, gordon.Config)
 
 	startFunc := func() error {
 		gordon.AppLogger.Info().Msgf("Server is listening on port %s", port)
