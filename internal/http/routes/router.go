@@ -36,6 +36,9 @@ func bindAdminRoutes(e *echo.Echo, a *app.App, ac *app.Config) *echo.Echo {
 	e.POST("/admin/install/traefik", func(c echo.Context) error {
 		return handlers.TraefikInstallerHandler(c, a)
 	})
+	e.GET("/admin/install/traefik/sse", func(c echo.Context) error {
+		return handlers.TraefikInstallerSSEHandler(c, a)
+	})
 	return e
 }
 
