@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/rs/zerolog"
-	"gogs.bnema.dev/gordon-echo/config"
 	"gogs.bnema.dev/gordon-echo/pkg/utils"
 )
 
@@ -44,8 +43,6 @@ func (c *Config) GetPublicFS() fs.FS {
 func (c *Config) GetModelFS() fs.FS {
 	return c.ModelFS
 }
-
-var _ config.Provider = &Config{}
 
 func defineEnv(config *Config) {
 	// Get the environment variable

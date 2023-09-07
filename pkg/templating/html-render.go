@@ -1,37 +1,33 @@
-package utils
+package templating
 
 import (
 	"bytes"
-	"errors"
-	"fmt"
 	"html/template"
 	"io/fs"
+
+	"gogs.bnema.dev/gordon-echo/internal/app"
 )
 
 type Renderer struct {
 	Template   *template.Template
 	ParseError error
-	Logger     *Logger
 }
 
 // Render function renders the template with the given data
-func (r *Renderer) Render(data interface{}) (string, error) {
+func (r *Renderer) Render(data interface{}, a *app.App) (string, error) {
 	if r.ParseError != nil {
-		r.Logger.Error().Err(r.ParseError).Msg("Parse error")
+		a.AppLogger.Error().Err(r.ParseError).Msg("Failed to parse template")
 		return "", r.ParseError
 	}
-
 	if r.Template == nil {
-		err := errors.New("invalid or nil template")
-		r.Logger.Error().Err(r.ParseError).Msg("Parse error")
-
-		return "", err
+		a.AppLogger.Error().Msg("Template is nil")
+		return "", r.ParseError
 	}
 
 	buf := new(bytes.Buffer)
 	err := r.Template.Execute(buf, data)
 	if err != nil {
-		r.Logger.Error().Err(err).Msg("Render error")
+		a.AppLogger.Error().Err(err).Msg("Failed to execute template")
 		return "", err
 	}
 
@@ -39,22 +35,20 @@ func (r *Renderer) Render(data interface{}) (string, error) {
 }
 
 // GetRenderer function returns a new Renderer instance
-func GetRenderer(filename string, fs fs.FS, logger *Logger) (*Renderer, error) {
-	fmt.Println(filename)
+func GetHTMLRenderer(filename string, fs fs.FS, a *app.App) (*Renderer, error) {
 	// Check if the file exists in the provided fs.FS using fs.Open
 	file, err := fs.Open(filename)
 	if err != nil {
-		logger.Error().Err(err).Msg("Template or model '%s' not found" + filename)
+		a.AppLogger.Error().Err(err).Msg("Failed to open file")
 		return nil, err
 	}
 	file.Close() // Close the file after checking
 	tmpl, err := template.New(filename).ParseFS(fs, filename)
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to parse template")
+		a.AppLogger.Error().Err(err).Msg("Failed to parse template")
 		return nil, err
 	}
 	return &Renderer{
 		Template: tmpl,
-		Logger:   logger,
 	}, nil
 }
