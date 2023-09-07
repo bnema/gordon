@@ -3,6 +3,7 @@ package docker
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -174,26 +175,61 @@ func CreateNetwork(name string) error {
 	return nil
 }
 
+// Check if a container exists
+func ContainerExists(name string) (bool, error) {
+	ctx := context.Background()
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return false, errors.New("failed to initialize Docker client")
+	}
+	defer cli.Close()
+
+	fmt.Println("Checking if container exists...")
+	containers, err := cli.ContainerList(ctx, types.ContainerListOptions{})
+	if err != nil {
+		return false, errors.New("failed to list containers")
+	}
+
+	for _, container := range containers {
+		for _, containerName := range container.Names {
+			if containerName == "/"+name {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+func CheckDockerRunning() (bool, error) {
+	fmt.Println("Checking if Docker is running...")
+	cmd := exec.Command("docker", "info")
+	if err := cmd.Run(); err != nil {
+		return true, errors.New("docker is not running")
+	}
+	return false, nil
+}
+
 // CreateContainerFromComposeFile creates containers using docker compose based on the provided compose file.
-func CreateContainerFromComposeFile(composeFilePath string, logger *utils.Logger) error {
+func CreateContainerFromComposeFile(composeFilePath string, logger *utils.Logger) (bool, error) {
 	fmt.Println("Executing CreateContainerFromComposeFile()")
 
 	// Create and start containers using docker compose in the foreground
-	cmd := exec.Command("docker", "compose", "-f", composeFilePath, "up")
+	cmd := exec.Command("docker", "compose", "-f", composeFilePath, "up", "-d")
 
 	// Get stdout and stderr pipes
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("failed to get stdout pipe: %v", err)
+		return false, fmt.Errorf("failed to get stdout pipe: %v", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("failed to get stderr pipe: %v", err)
+		return false, fmt.Errorf("failed to get stderr pipe: %v", err)
 	}
 
 	// Start the command
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start docker compose: %v", err)
+		return false, fmt.Errorf("failed to start docker compose: %v", err)
 	}
 
 	// Stream stdout to logger with INFO level
@@ -203,11 +239,10 @@ func CreateContainerFromComposeFile(composeFilePath string, logger *utils.Logger
 
 	// Wait for the command to finish
 	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("docker compose command finished with error: %v", err)
+		return false, fmt.Errorf("docker compose command finished with error: %v", err)
 	}
 
-	fmt.Println("Containers started successfully using docker compose")
-	return nil
+	return true, nil
 }
 
 func streamToLogger(r io.Reader, logger *utils.Logger, level utils.LogLevel) {
