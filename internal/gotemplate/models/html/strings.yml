@@ -1,0 +1,23 @@
+en:
+  header:
+    meta:
+      title: Gordon - Admin Dashboard
+      description: Admin dashboard for Gordon
+      keywords: gordon, admin, dashboard
+  body:
+    header:
+      helloworld: Hello World!
+    div:
+      hello: Hello component loaded from a template!
+
+fr:
+  header:
+    meta:
+      title: Gordon - Tableau de bord administrateur
+      description: Tableau de bord administrateur pour Gordon
+      keywords: gordon, admin, dashboard
+  body:
+    header:
+      helloworld: Bonjour le monde!
+    div:
+      hello: Composant de salut chargé à partir d'un modèle!
