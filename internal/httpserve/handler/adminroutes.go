@@ -13,24 +13,22 @@ import (
 // Handle the admin route to display index.gohtml from the templateFS with the data from strings.yml
 func AdminRoute(c echo.Context, a *app.App) error {
 	lang := c.Get(middleware.LangKey).(string)
-	fmt.Println(lang)
-	data := webui.StringsYamlData{}
-	err := webui.ReadStringsDataFromYAML(lang, a.TemplateFS, "strings.yml", &data)
+	yamlData := webui.StringsYamlData{}
+	err := webui.ReadStringsDataFromYAML(lang, a.TemplateFS, "strings.yml", &yamlData)
 	if err != nil {
-		return fmt.Errorf("failed to read strings data from YAML: %w", err)
+		return err
 	}
 
 	// Navigate inside the fs.FS to get the template
-
-	rendererData, err := render.GetHTMLRenderer("html/admin/index.gohtml", a.TemplateFS, a)
+	path := "html/admin"
+	rendererData, err := render.GetHTMLRenderer(path, "index.gohtml", a.TemplateFS, a)
 	if err != nil {
-		return fmt.Errorf("failed to get renderer: %w", err)
+		return err
 	}
 
-	renderedHTML, err := rendererData.Render(data, a)
-	fmt.Println(renderedHTML)
+	renderedHTML, err := rendererData.Render(yamlData.CurrentLang, a)
 	if err != nil {
-		return fmt.Errorf("failed to render template: %w", err)
+		return err
 	}
 
 	return c.HTML(200, renderedHTML)
