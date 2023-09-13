@@ -11,4 +11,4 @@ import (
 //go:embed public/*
 var public embed.FS
 
-var PublicFS = echo.MustSubFS(public, "internal/webui/public")
+var PublicFS = echo.MustSubFS(public, "public")

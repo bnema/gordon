@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"io/fs"
 
 	"github.com/bnema/gordon/internal/gotemplate"
@@ -11,6 +10,11 @@ import (
 const (
 	BuildVersion = "0.0.2"
 	BuildDir     = "tmp"
+	// Those configs should be read from a config file
+	HttpPort  = 1323
+	TopDomain = "example.com"
+	SubDomain = "gordon"
+	AdminPath = "/admin"
 )
 
 type App struct {
@@ -18,22 +22,10 @@ type App struct {
 	PublicFS     fs.FS
 	BuildVersion string
 	BuildDir     string
-}
-
-func (*App) GetTemplateFS() fs.FS {
-	return gotemplate.TemplateFS
-}
-
-func (*App) GetPublicFS() fs.FS {
-	return webui.PublicFS
-}
-
-func (*App) GetBuildVersion() string {
-	return BuildVersion
-}
-
-func (*App) GetBuildDir() string {
-	return BuildDir
+	TopDomain    string
+	SubDomain    string
+	AdminPath    string
+	HttpPort     int16
 }
 
 func NewApp() *App {
@@ -42,20 +34,9 @@ func NewApp() *App {
 		PublicFS:     webui.PublicFS,
 		BuildVersion: BuildVersion,
 		BuildDir:     BuildDir,
-	}
-}
-
-func (a *App) Start() {
-	fmt.Println("Starting app")
-
-	// LS in the template directory
-	entries, err := fs.ReadDir(a.TemplateFS, ".") // List the root directory
-	if err != nil {
-		fmt.Println("Error reading directory:", err)
-		return
-	}
-
-	for _, entry := range entries {
-		fmt.Println(entry.Name())
+		TopDomain:    TopDomain,
+		SubDomain:    SubDomain,
+		AdminPath:    AdminPath,
+		HttpPort:     HttpPort,
 	}
 }
