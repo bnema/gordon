@@ -8,7 +8,7 @@ import (
 // createUserTable creates the 'user' table in the provided SQLite database.
 func CreateUserTable(db *sql.DB) error {
 	createTableSQL := `
-	CREATE TABLE user (
+	CREATE TABLE users (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username TEXT NOT NULL,
 		password TEXT NOT NULL,  -- This should be hashed and salted in a real-world scenario.

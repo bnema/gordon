@@ -1,8 +1,12 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
-	"log/slog"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/labstack/echo/v4"
 
@@ -10,24 +14,42 @@ import (
 	"github.com/bnema/gordon/internal/httpserve"
 )
 
+func cleanup(a *app.App, memDb *sql.DB) {
+	if err := app.CloseAndBackupDB(a, memDb); err != nil {
+		log.Fatal("Failed to close and backup database:", err)
+	}
+}
+
 func main() {
 	a := app.NewApp()
 
 	// Initialize database
-	db, err := app.InitializeDB(a)
+	memDb, err := app.InitializeDB(a)
 	if err != nil {
-		slog.Error("Failed to load database", err)
-	} else {
-		slog.Info("Database loaded")
+		log.Fatal(err)
 	}
 
-	fmt.Println(db)
+	// Pass memDb to the app with the rest of the configs
+	a.DB = memDb
+
+	// Setup a channel to capture termination signals
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigs
+		log.Println("Received signal:", sig)
+		cleanup(a, memDb) // <- Call the cleanup function
+		os.Exit(0)
+	}()
 
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
 	e = httpserve.RegisterRoutes(e, a)
-	slog.Info("Starting server", "port", a.HttpPort)
-	slog.Error("Server error", e.Start(fmt.Sprintf(":%d", a.HttpPort)))
 
+	log.Println("Starting server on port", a.HttpPort)
+	if err := e.Start(fmt.Sprintf(":%d", a.HttpPort)); err != nil {
+		log.Fatal("Server error:", err)
+	}
 }
