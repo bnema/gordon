@@ -40,12 +40,15 @@ func InitializeDB(a *App) (*sql.DB, error) {
 			return nil, fmt.Errorf("failed to bootstrap DB: %w", err)
 		}
 	}
-
 	memDb, err := loadDBToMemory(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load DB to memory: %w", err)
 	}
-
+	// Here we can generate the initial checksum
+	a.InitialChecksum, err = GenerateDBChecksum(memDb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate initial checksum: %w", err)
+	}
 	return memDb, nil
 }
 
