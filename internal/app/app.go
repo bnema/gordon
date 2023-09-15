@@ -1,8 +1,8 @@
 package app
 
 import (
+	"database/sql"
 	"io/fs"
-	"path/filepath"
 
 	"github.com/bnema/gordon/internal/gotemplate"
 	"github.com/bnema/gordon/internal/webui"
@@ -11,8 +11,6 @@ import (
 const (
 	BuildVersion = "0.0.2"
 	BuildDir     = "tmp"
-	DBDir        = "tmp/data"
-	DBFilename   = "sqlite.db"
 	// Those configs should be read from a config file
 	HttpPort   = 1323
 	TopDomain  = "example.com"
@@ -25,20 +23,22 @@ const (
 )
 
 type App struct {
-	TemplateFS   fs.FS
-	PublicFS     fs.FS
-	DB           interface{}
-	BuildVersion string
-	BuildDir     string
-	DBDir        string
-	DBFilename   string
-	TopDomain    string
-	SubDomain    string
-	AdminPath    string
-	DockerSock   string
-	PodmanEnable bool
-	PodmanSock   string
-	HttpPort     int16
+	TemplateFS      fs.FS
+	PublicFS        fs.FS
+	BuildVersion    string
+	BuildDir        string
+	DBDir           string
+	DBFilename      string
+	DBPath          string
+	InitialChecksum string
+	DB              *sql.DB
+	TopDomain       string
+	SubDomain       string
+	AdminPath       string
+	DockerSock      string
+	PodmanEnable    bool
+	PodmanSock      string
+	HttpPort        int16
 }
 
 func NewApp() *App {
@@ -62,7 +62,4 @@ func NewDockerClient() *App {
 		PodmanEnable: PodmanEnable,
 		PodmanSock:   PodmanSock,
 	}
-}
-func (a *App) GetDBFilePath() string {
-	return filepath.Join(a.DBDir, a.DBFilename)
 }

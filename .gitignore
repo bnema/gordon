@@ -1,7 +1,7 @@
 .env
 node_modules/
+*tmp/
 tmp/*
 gordon.yml
 bun.lockb
 *.log
-
