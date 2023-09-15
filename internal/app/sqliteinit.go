@@ -83,6 +83,12 @@ func bootstrapDB(dbPath string) error {
 	if err := migrate.CreateUserTable(db); err != nil {
 		return err
 	}
+	if err := migrate.CreateAccountTable(db); err != nil {
+		return err
+	}
+	if err := migrate.CreateSessionTable(db); err != nil {
+		return err
+	}
 
 	return nil
 }
