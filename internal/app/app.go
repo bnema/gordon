@@ -27,6 +27,7 @@ const (
 type App struct {
 	TemplateFS   fs.FS
 	PublicFS     fs.FS
+	DB           interface{}
 	BuildVersion string
 	BuildDir     string
 	DBDir        string
