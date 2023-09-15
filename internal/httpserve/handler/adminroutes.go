@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"fmt"
-
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/gotemplate/render"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
