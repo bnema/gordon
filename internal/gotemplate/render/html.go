@@ -3,15 +3,17 @@ package render
 import (
 	"bytes"
 	"fmt"
-	"github.com/bnema/gordon/internal/app"
 	"html/template"
 	"io/fs"
 	"path"
+
+	"github.com/bnema/gordon/internal/app"
 )
 
 type Renderer struct {
-	Template   *template.Template
-	ParseError error
+	Template     *template.Template
+	ParseError   error
+	BuildVersion string
 }
 
 // Render function renders the template with the given data
@@ -23,9 +25,16 @@ func (r *Renderer) Render(data interface{}, a *app.App) (string, error) {
 	if r.Template == nil {
 		return "", fmt.Errorf("template is nil")
 	}
+	// Type assert data to map[string]interface{} to add BuildVersion
+	dataMap, ok := data.(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("data is not a map[string]interface{}")
+	}
 
+	// Automatically add BuildVersion to the data map
+	dataMap["BuildVersion"] = r.BuildVersion
 	buf := new(bytes.Buffer)
-	err := r.Template.Execute(buf, data)
+	err := r.Template.Execute(buf, dataMap)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute template: %w", err)
 	}
@@ -48,6 +57,7 @@ func GetHTMLRenderer(pathStr string, filename string, fs fs.FS, a *app.App) (*Re
 		return nil, fmt.Errorf("failed to parse %s: %w", filename, err)
 	}
 	return &Renderer{
-		Template: tmpl,
+		Template:     tmpl,
+		BuildVersion: a.BuildVersion,
 	}, nil
 }

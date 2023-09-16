@@ -15,8 +15,8 @@ import (
 // RegisterRoutes registers all routes for the application
 func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
 	AdminPath := a.AdminPath
+	e.Use(middleware.SetCommonDataMiddleware(a))
 	e.Use(middleware.ErrorHandler)
-	// Use session middleware
 	// Add session middleware
 	e.Use(session.Middleware(sessions.NewCookieStore([]byte(os.Getenv("SECRET")))))
 	e.Use(middleware.ColorSchemeDetection)

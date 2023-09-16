@@ -24,7 +24,13 @@ func AdminRoute(c echo.Context, a *app.App) error {
 		return err
 	}
 
-	renderedHTML, err := rendererData.Render(yamlData.CurrentLang, a)
+	// Create a data map to pass to the renderer
+	data := map[string]interface{}{
+		"CurrentLang": yamlData.CurrentLang,
+		// "BuildVersion" will be automatically added in the renderer
+	}
+
+	renderedHTML, err := rendererData.Render(data, a)
 	if err != nil {
 		return err
 	}
