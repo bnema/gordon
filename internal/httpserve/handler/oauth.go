@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"net/http"
+	"os"
+
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/gotemplate/render"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
@@ -11,8 +14,6 @@ import (
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/github"
-	"net/http"
-	"os"
 )
 
 var providerNames []string
@@ -35,7 +36,6 @@ func RenderLoginPage(c echo.Context, a *app.App) error {
 	if err != nil {
 		return err
 	}
-
 	// Navigate inside the fs.FS to get the template
 	path := "html/login"
 	rendererData, err := render.GetHTMLRenderer(path, "index.gohtml", a.TemplateFS, a)
@@ -43,7 +43,13 @@ func RenderLoginPage(c echo.Context, a *app.App) error {
 		return err
 	}
 
-	renderedHTML, err := rendererData.Render(yamlData.CurrentLang, a)
+	// Create a data map to pass to the renderer
+	data := map[string]interface{}{
+		"CurrentLang": yamlData.CurrentLang,
+		// "BuildVersion" will be automatically added in the renderer
+	}
+
+	renderedHTML, err := rendererData.Render(data, a)
 	if err != nil {
 		return err
 	}
