@@ -19,32 +19,17 @@ func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
 	// Use session middleware
 	// Add session middleware
 	e.Use(session.Middleware(sessions.NewCookieStore([]byte(os.Getenv("SECRET")))))
-	// e.Use(middleware.SecureRoutes())
 	e.Use(middleware.ColorSchemeDetection)
 	e.Use(middleware.LanguageDetection)
 
 	// Register routes
-
-	// Serve admin routes
 	bindAdminRoute(e, a, AdminPath)
-	// Serve static files
 	bindStaticRoute(e, a, "/*")
+	bindLoginRoute(e, a, AdminPath)
+
 	// Protect the root path with a 403
 	e.GET("/", func(c echo.Context) error {
 		return c.String(403, "403 Forbidden")
-	})
-
-	e.GET(a.AdminPath+"/login", func(c echo.Context) error {
-		return handler.RenderLoginPage(c, a)
-	})
-	e.GET(a.AdminPath+"/login/:provider", func(c echo.Context) error {
-		return handler.StartOAuth(c, a)
-	})
-	e.GET(a.OauthCallbackURL, func(c echo.Context) error {
-		return handler.OAuthCallback(c, a)
-	})
-	e.GET(a.AdminPath+"/logout", func(c echo.Context) error {
-		return handler.Logout(c, a)
 	})
 
 	return e
@@ -59,5 +44,20 @@ func bindStaticRoute(e *echo.Echo, a *app.App, path string) {
 func bindAdminRoute(e *echo.Echo, a *app.App, path string) {
 	e.GET(path, func(c echo.Context) error {
 		return handler.AdminRoute(c, a)
+	})
+}
+
+func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
+	e.GET(adminPath+"/login", func(c echo.Context) error {
+		return handler.RenderLoginPage(c, a)
+	})
+	e.GET(adminPath+"/login/:provider", func(c echo.Context) error {
+		return handler.StartOAuth(c, a)
+	})
+	e.GET(a.OauthCallbackURL, func(c echo.Context) error {
+		return handler.OAuthCallback(c, a)
+	})
+	e.GET(adminPath+"/logout", func(c echo.Context) error {
+		return handler.Logout(c, a)
 	})
 }

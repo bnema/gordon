@@ -12,6 +12,7 @@ import (
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/github"
 	"net/http"
+	"os"
 )
 
 var providerNames []string
