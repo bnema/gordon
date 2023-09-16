@@ -20,7 +20,7 @@ const (
 	// If enabled replace all docker commands by podman
 	PodmanEnable     = false
 	PodmanSock       = "/run/user/1000/podman/podman.sock"
-	OauthCallbackURL = "http://localhost:1323/oauth/callback"
+	OauthCallbackURL = "http://localhost:1323/admin/login/oauth/callback"
 )
 
 type App struct {

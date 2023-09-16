@@ -21,7 +21,7 @@
   <script src="/assets/js/custom.js"></script>
 </head>
 
-<body class="IBMPlexSans bg-zinc-200 md:p-8 flex flex-col items-center" hx-boost="true">
+<body class="IBMPlexSans bg-zinc-200 md:p-8 flex flex-col items-center">
   <!-- Logo and Title -->
   <div id="logo-mascot" class="flex flex-col justify-center items-center p-4 mb-4">
     <div class="circle-shadow flex justify-center w-100">
@@ -41,7 +41,7 @@
         <h2 class="text-2xl font-semibold text-gray-800">Login</h2>
         <!-- GitHub OAuth -->
         <div class="mt-4 p-2 bg-gordonmascot-hblue text-white rounded-md flex justify-left">
-          <a href="{{ .AdminPath }}/login/github" class="flex items-center">
+          <a href="login/oauth/github" class="flex items-center">
             <img src="/assets/imgs/github/github-mark-white.png" alt="logo github" class="h-8 xl:h-12" />
             <span class="w-full p-2  text-white ">Login with GitHub</span>
           </a>

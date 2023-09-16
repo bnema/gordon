@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/bnema/gordon/internal/app"
@@ -11,22 +14,8 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
-	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
-	"github.com/markbates/goth/providers/github"
 )
-
-var providerNames []string
-
-func init() {
-	goth.UseProviders(
-		github.New(os.Getenv("GITHUB_KEY"), os.Getenv("GITHUB_SECRET"), app.OauthCallbackURL),
-	)
-	for _, provider := range goth.GetProviders() {
-		// Append the provider's name to the slice
-		providerNames = append(providerNames, provider.Name())
-	}
-}
 
 // RenderLoginPage renders the login.html template
 func RenderLoginPage(c echo.Context, a *app.App) error {
@@ -57,37 +46,83 @@ func RenderLoginPage(c echo.Context, a *app.App) error {
 	return c.HTML(200, renderedHTML)
 }
 
-// StartOAuth initiates OAuth process
-func StartOAuth(c echo.Context, a *app.App) error {
-	provider := c.Param("provider")
-	if provider == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Missing provider")
-	}
+func StartOAuthGithub(c echo.Context, a *app.App) error {
+	clientID := os.Getenv("GITHUB_CLIENTID")
+	redirectURI := a.OauthCallbackURL // Make sure this URL is registered in your GitHub OAuth App
+	fmt.Print(a.OauthCallbackURL)
+	// Define the scopes you need; for example, "repo" and "admin:repo_hook" for repository and webhook actions
+	scopes := "repo,admin:repo_hook"
 
-	// Get the current session from echo-contrib/session
-	sess, _ := session.Get("session", c)
-
-	// Set the provider in the session
-	sess.Values["provider"] = provider
-	sess.Save(c.Request(), c.Response())
-
-	gothic.BeginAuthHandler(c.Response(), c.Request())
-	return nil
+	// Redirect to GitHub's OAuth page
+	oauthURL := fmt.Sprintf(
+		"https://github.com/login/oauth/authorize?client_id=%s&redirect_uri=%s&scope=%s",
+		clientID,
+		redirectURI,
+		scopes,
+	)
+	return c.Redirect(http.StatusFound, oauthURL)
 }
 
-// OAuthCallback handles OAuth callback from provider
 func OAuthCallback(c echo.Context, a *app.App) error {
-	_, err := gothic.CompleteUserAuth(c.Response(), c.Request())
-	if err != nil {
-		return c.JSON(http.StatusUnauthorized, "Authentication failed")
+	clientID := os.Getenv("GITHUB_CLIENTID")
+	clientSecret := os.Getenv("GITHUB_TOKEN")
+	code := c.QueryParam("code")
+
+	if code == "" {
+		return c.JSON(http.StatusBadRequest, "Missing code")
 	}
-	// TODO: Add your logic here, like creating a session, etc.
-	return c.Redirect(http.StatusMovedPermanently, "/success")
+
+	// Create POST request to exchange code for access token
+	payload := url.Values{}
+	payload.Set("client_id", clientID)
+	payload.Set("client_secret", clientSecret)
+	payload.Set("code", code)
+
+	resp, err := http.PostForm("https://github.com/login/oauth/access_token", payload)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, "Failed to get access token")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return c.JSON(http.StatusInternalServerError, "Received non-200 status code")
+	}
+
+	// Parse the response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, "Failed to read access token")
+	}
+
+	// Parse the access token from the response body
+	accessToken := string(body)
+
+	parsedQuery, err := url.ParseQuery(accessToken)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, "Failed to parse access token")
+	}
+
+	actualToken := parsedQuery.Get("access_token")
+	fmt.Println("Received access token:", actualToken)
+
+	// Get the current session from echo-contrib/session
+	sess, err := session.Get("session", c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Could not get session")
+	}
+
+	// Set the user as authenticated
+	sess.Values["authenticated"] = true
+	if err = sess.Save(c.Request(), c.Response()); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Could not save session")
+	}
+
+	return c.Redirect(http.StatusFound, "/admin")
+
 }
 
 // Logout handles user logout and clears session
 func Logout(c echo.Context, a *app.App) error {
 	gothic.Logout(c.Response(), c.Request())
-	// TODO: Add your logout logic here, like clearing session, etc.
 	return c.Redirect(http.StatusMovedPermanently, "/")
 }

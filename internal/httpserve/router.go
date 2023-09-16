@@ -18,7 +18,7 @@ func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
 	e.Use(middleware.SetCommonDataMiddleware(a))
 	e.Use(middleware.ErrorHandler)
 	// Add session middleware
-	e.Use(session.Middleware(sessions.NewCookieStore([]byte(os.Getenv("SECRET")))))
+	e.Use(session.Middleware(sessions.NewCookieStore([]byte(os.Getenv("SESSION_SECRET")))))
 	e.Use(middleware.ColorSchemeDetection)
 	e.Use(middleware.LanguageDetection)
 
@@ -44,17 +44,17 @@ func bindStaticRoute(e *echo.Echo, a *app.App, path string) {
 func bindAdminRoute(e *echo.Echo, a *app.App, path string) {
 	e.GET(path, func(c echo.Context) error {
 		return handler.AdminRoute(c, a)
-	})
+	}, middleware.RequireLogin) // Require login
 }
 
 func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
 	e.GET(adminPath+"/login", func(c echo.Context) error {
 		return handler.RenderLoginPage(c, a)
 	})
-	e.GET(adminPath+"/login/:provider", func(c echo.Context) error {
-		return handler.StartOAuth(c, a)
+	e.GET(adminPath+"/login/oauth/github", func(c echo.Context) error {
+		return handler.StartOAuthGithub(c, a)
 	})
-	e.GET(a.OauthCallbackURL, func(c echo.Context) error {
+	e.GET(adminPath+"/login/oauth/callback", func(c echo.Context) error {
 		return handler.OAuthCallback(c, a)
 	})
 	e.GET(adminPath+"/logout", func(c echo.Context) error {
