@@ -4,8 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 
+	"github.com/bnema/gordon/internal/gotemplate"
+	"github.com/bnema/gordon/internal/webui"
 	"github.com/bnema/gordon/pkg/utils/docker"
 	"github.com/bnema/gordon/pkg/utils/parser"
 )
@@ -32,19 +35,30 @@ type App struct {
 	DB              *sql.DB
 	Config          AppConfig
 }
-
 type AppConfig struct {
-	RunEnv           string `yaml:"runEnv"`
-	BuildVersion     string `yaml:"buildVersion"`
-	HttpPort         int    `yaml:"httpPort"`
-	TopDomain        string `yaml:"topDomain"`
-	SubDomain        string `yaml:"subDomain"`
-	AdminPath        string `yaml:"adminPath"`
-	DockerSock       string `yaml:"dockerSock"`
-	PodmanEnable     bool   `yaml:"podmanEnable"`
-	PodmanSock       string `yaml:"podmanSock"`
-	OauthCallbackURL string `yaml:"oauthCallbackURL"`
-	BuildDir         string `yaml:"buildDir"`
+	General GeneralConfig `yaml:"general"`
+	Http    HttpConfig    `yaml:"http"`
+	Admin   AdminConfig   `yaml:"admin"`
+	Docker  DockerConfig  `yaml:"docker"`
+}
+
+type GeneralConfig struct {
+	RunEnv       string `yaml:"runEnv"`
+	BuildVersion string `yaml:"buildVersion"`
+}
+
+type HttpConfig struct {
+	Port      int    `yaml:"port"`
+	TopDomain string `yaml:"topDomain"`
+	SubDomain string `yaml:"subDomain"`
+}
+
+type AdminConfig struct {
+	Path string `yaml:"path"`
+}
+
+type DockerConfig struct {
+	Sock string `yaml:"sock"`
 }
 
 func InitializeEnvironment() {
@@ -53,6 +67,7 @@ func InitializeEnvironment() {
 		fmt.Errorf("Error initializing environment: %s", err)
 	}
 	OauthCallbackURL = GenerateOauthCallbackURL(config)
+
 }
 
 func LoadConfig() (AppConfig, error) {
@@ -60,6 +75,28 @@ func LoadConfig() (AppConfig, error) {
 	buildDir, configFile := getEnvPaths()
 	err := parser.OpenYamlFile(os.DirFS(buildDir), configFile, &config, buildDir) // Replace `nil` with your actual filesystem
 	return config, err
+}
+
+func NewApp() *App {
+	// Initialize AppConfig
+	config, err := LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Initialize App
+	a := &App{
+		TemplateFS: gotemplate.TemplateFS,
+		PublicFS:   webui.PublicFS,
+		DBDir:      DBDir,
+		DBFilename: DBFilename,
+		Config:     config,
+	}
+
+	// If you have any other initializations like generating OAuth URL, do them here
+	OauthCallbackURL = GenerateOauthCallbackURL(config)
+
+	return a
 }
 
 // NewDockerConfig creates and returns a new Docker client configuration based on AppConfig.
@@ -91,8 +128,11 @@ func GenerateOauthCallbackURL(config AppConfig) string {
 }
 
 func getEnvPaths() (string, string) {
+	wd, _ := os.Getwd()
+	fmt.Println("Current Working Directory:", wd)
+
 	if appEnv == "dev" {
-		return "tmp/", "config.yml"
+		return "/tmp/", "config.yml"
 	}
 	return "./", "config.yml"
 }
