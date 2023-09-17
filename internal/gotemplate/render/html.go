@@ -17,7 +17,7 @@ type Renderer struct {
 }
 
 // Render function renders the template with the given data
-func (r *Renderer) Render(data interface{}, a *app.App) (string, error) {
+func (r *Renderer) Render(data interface{}, a *app.AppConfig) (string, error) {
 	if r.ParseError != nil {
 		return "", fmt.Errorf("failed to parse template: %w", r.ParseError)
 
