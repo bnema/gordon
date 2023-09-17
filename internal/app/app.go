@@ -2,67 +2,97 @@ package app
 
 import (
 	"database/sql"
+	"fmt"
 	"io/fs"
+	"os"
 
-	"github.com/bnema/gordon/internal/gotemplate"
-	"github.com/bnema/gordon/internal/webui"
+	"github.com/bnema/gordon/pkg/utils/docker"
+	"github.com/bnema/gordon/pkg/utils/parser"
 )
 
-const (
-	BuildVersion = "0.0.2"
-	BuildDir     = "tmp"
-	// Those configs should be read from a config file
-	HttpPort   = 1323
-	TopDomain  = "example.com"
-	SubDomain  = "gordon"
-	AdminPath  = "/admin"
-	DockerSock = "/var/run/docker.sock"
-	// If enabled replace all docker commands by podman
-	PodmanEnable     = false
-	PodmanSock       = "/run/user/1000/podman/podman.sock"
-	OauthCallbackURL = "http://localhost:1323/admin/login/oauth/callback"
+var (
+	OauthCallbackURL string
+	appEnv           string
 )
+
+func init() {
+	appEnv = os.Getenv("APP_ENV")
+	if appEnv == "" {
+		appEnv = "prod" // Default to "prod" if APP_ENV is not set
+	}
+}
 
 type App struct {
-	TemplateFS       fs.FS
-	PublicFS         fs.FS
-	BuildVersion     string
-	BuildDir         string
-	DBDir            string
-	DBFilename       string
-	DBPath           string
-	InitialChecksum  string
-	DB               *sql.DB
-	TopDomain        string
-	SubDomain        string
-	AdminPath        string
-	DockerSock       string
-	PodmanEnable     bool
-	PodmanSock       string
-	OauthCallbackURL string
-	HttpPort         int16
+	TemplateFS      fs.FS
+	PublicFS        fs.FS
+	DBDir           string
+	DBFilename      string
+	DBPath          string
+	InitialChecksum string
+	DB              *sql.DB
+	Config          AppConfig
 }
 
-func NewApp() *App {
-	return &App{
-		TemplateFS:       gotemplate.TemplateFS,
-		PublicFS:         webui.PublicFS,
-		BuildVersion:     BuildVersion,
-		BuildDir:         BuildDir,
-		DBDir:            DBDir,
-		DBFilename:       DBFilename,
-		TopDomain:        TopDomain,
-		SubDomain:        SubDomain,
-		AdminPath:        AdminPath,
-		OauthCallbackURL: OauthCallbackURL,
-		HttpPort:         HttpPort,
+type AppConfig struct {
+	RunEnv           string `yaml:"runEnv"`
+	BuildVersion     string `yaml:"buildVersion"`
+	HttpPort         int    `yaml:"httpPort"`
+	TopDomain        string `yaml:"topDomain"`
+	SubDomain        string `yaml:"subDomain"`
+	AdminPath        string `yaml:"adminPath"`
+	DockerSock       string `yaml:"dockerSock"`
+	PodmanEnable     bool   `yaml:"podmanEnable"`
+	PodmanSock       string `yaml:"podmanSock"`
+	OauthCallbackURL string `yaml:"oauthCallbackURL"`
+	BuildDir         string `yaml:"buildDir"`
+}
+
+func InitializeEnvironment() {
+	config, err := LoadConfig()
+	if err != nil {
+		fmt.Errorf("Error initializing environment: %s", err)
+	}
+	OauthCallbackURL = GenerateOauthCallbackURL(config)
+}
+
+func LoadConfig() (AppConfig, error) {
+	var config AppConfig
+	buildDir, configFile := getEnvPaths()
+	err := parser.OpenYamlFile(os.DirFS(buildDir), configFile, &config, buildDir) // Replace `nil` with your actual filesystem
+	return config, err
+}
+
+// NewDockerConfig creates and returns a new Docker client configuration based on AppConfig.
+func (config *AppConfig) NewDockerConfig() *docker.Config {
+	return &docker.Config{
+		DockerSock:   config.DockerSock,
+		PodmanEnable: config.PodmanEnable,
+		PodmanSock:   config.PodmanSock,
 	}
 }
 
-func NewDockerClient() *App {
-	return &App{
-		DockerSock:   DockerSock,
-		PodmanEnable: PodmanEnable,
-		PodmanSock:   PodmanSock,
+func GenerateOauthCallbackURL(config AppConfig) string {
+	var scheme, port string
+
+	if config.RunEnv == "dev" {
+		scheme = "http"
+		port = fmt.Sprintf(":%d", config.HttpPort)
+	} else { // Assuming "prod"
+		scheme = "https"
+		port = "" // Assuming that HTTPS will run on the default port 443
 	}
+
+	domain := config.TopDomain
+	if config.SubDomain != "" {
+		domain = fmt.Sprintf("%s.%s", config.SubDomain, config.TopDomain)
+	}
+
+	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.AdminPath)
+}
+
+func getEnvPaths() (string, string) {
+	if appEnv == "dev" {
+		return "tmp/", "config.yml"
+	}
+	return "./", "config.yml"
 }

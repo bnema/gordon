@@ -1,29 +1,25 @@
 package docker
 
 import (
-	"context"
 	"fmt"
 	"log"
 
-	"github.com/bnema/gordon/internal/app"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/archive"
 )
+
+type Config struct {
+	DockerSock   string
+	PodmanEnable bool
+	PodmanSock   string
+}
 
 var dockerClient *client.Client
 
-func init() {
-	// Get Docker configuration from App
-	appInstance := app.NewDockerClient()
-	dockerSocket := appInstance.DockerSock
-	podmanEnable := appInstance.PodmanEnable
-	podmanSocket := appInstance.PodmanSock
-
+func InitializeDockerClient(config *Config) {
 	// Based on configuration, decide whether to use Docker or Podman
-	socketPath := dockerSocket
-	if podmanEnable {
-		socketPath = podmanSocket
+	socketPath := config.DockerSock
+	if config.PodmanEnable {
+		socketPath = config.PodmanSock
 	}
 
 	// Initialize Docker client

@@ -1,11 +1,11 @@
 package handler
 
 import (
+	"encoding/base64"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"os"
+	"strings"
 
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/gotemplate/render"
@@ -47,65 +47,43 @@ func RenderLoginPage(c echo.Context, a *app.App) error {
 }
 
 func StartOAuthGithub(c echo.Context, a *app.App) error {
-	clientID := os.Getenv("GITHUB_CLIENTID")
-	redirectURI := a.OauthCallbackURL // Make sure this URL is registered in your GitHub OAuth App
-	fmt.Print(a.OauthCallbackURL)
-	// Define the scopes you need; for example, "repo" and "admin:repo_hook" for repository and webhook actions
-	scopes := "repo,admin:repo_hook"
-
-	// Redirect to GitHub's OAuth page
+	clientID := os.Getenv("GITHUB_APP_ID")
+	redirectDomain := a.OauthCallbackURL
+	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
+	fmt.Print("redirectDomain:", redirectDomain)
+	fmt.Print("encoded state :", encodedState)
+	// Redirect to Gordon's Proxy to grab the oauth access
 	oauthURL := fmt.Sprintf(
-		"https://github.com/login/oauth/authorize?client_id=%s&redirect_uri=%s&scope=%s",
+		"https://gordon.bnema.dev/github-proxy/authorize?client_id=%s&redirect_uri=%s&state=%s",
 		clientID,
-		redirectURI,
-		scopes,
+		redirectDomain,
+		encodedState,
 	)
 	return c.Redirect(http.StatusFound, oauthURL)
 }
 
 func OAuthCallback(c echo.Context, a *app.App) error {
-	clientID := os.Getenv("GITHUB_CLIENTID")
-	clientSecret := os.Getenv("GITHUB_TOKEN")
-	code := c.QueryParam("code")
+	accessToken := c.QueryParam("access_token")
+	encodedState := c.QueryParam("state")
 
-	if code == "" {
-		return c.JSON(http.StatusBadRequest, "Missing code")
-	}
-
-	// Create POST request to exchange code for access token
-	payload := url.Values{}
-	payload.Set("client_id", clientID)
-	payload.Set("client_secret", clientSecret)
-	payload.Set("code", code)
-
-	resp, err := http.PostForm("https://github.com/login/oauth/access_token", payload)
+	// Decode the state parameter to get the original redirectDomain
+	decodedState, err := base64.StdEncoding.DecodeString(encodedState)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, "Failed to get access token")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return c.JSON(http.StatusInternalServerError, "Received non-200 status code")
+		return c.String(http.StatusBadRequest, "Invalid state parameter")
 	}
 
-	// Parse the response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, "Failed to read access token")
+	state := string(decodedState)
+	parts := strings.SplitN(state, ":", 2)
+	if len(parts) != 2 || parts[0] != "redirectDomain" {
+		return c.String(http.StatusBadRequest, "Invalid state format")
 	}
 
-	// Parse the access token from the response body
-	accessToken := string(body)
+	// Retrieve the original redirectDomain
+	redirectDomain := parts[1]
+	fmt.Print(redirectDomain)
+	// Now, you can use accessToken for whatever you need in your application
 
-	parsedQuery, err := url.ParseQuery(accessToken)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, "Failed to parse access token")
-	}
-
-	actualToken := parsedQuery.Get("access_token")
-	fmt.Println("Received access token:", actualToken)
-
-	// Get the current session from echo-contrib/session
+	// Also, you can save the authentication state in the session
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Could not get session")
@@ -113,12 +91,12 @@ func OAuthCallback(c echo.Context, a *app.App) error {
 
 	// Set the user as authenticated
 	sess.Values["authenticated"] = true
+	sess.Values["access_token"] = accessToken
 	if err = sess.Save(c.Request(), c.Response()); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Could not save session")
 	}
 
 	return c.Redirect(http.StatusFound, "/admin")
-
 }
 
 // Logout handles user logout and clears session
