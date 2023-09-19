@@ -36,7 +36,6 @@ import (
 func OpenYamlFile(fs fs.FS, filename string, out interface{}, dir ...string) error {
 	// Construct the full path of the YAML file
 	fullPath := filename
-	fmt.Println("Trying to open file at:", fullPath)
 	if len(dir) > 0 {
 		fullPath = filepath.Join(dir[0], filename)
 	}
