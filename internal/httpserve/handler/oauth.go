@@ -48,7 +48,8 @@ func RenderLoginPage(c echo.Context, a *app.App) error {
 
 func StartOAuthGithub(c echo.Context, a *app.App) error {
 	clientID := os.Getenv("GITHUB_APP_ID")
-	redirectDomain := a.Config.OauthCallbackURL
+	redirectDomain := app.GenerateOauthCallbackURL(a.Config)
+	fmt.Print(redirectDomain)
 	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
 	fmt.Print("redirectDomain:", redirectDomain)
 	fmt.Print("encoded state :", encodedState)
