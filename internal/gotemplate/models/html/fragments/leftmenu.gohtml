@@ -1,0 +1,32 @@
+<div class="w-full md:w-1/5 flex flex-col space-evenly p-4 md:p-0">
+  <div class="hidden md:flex justify-center p-4">
+    <img src="/assets/imgs/gordon-mascot-hq-trsp.png" alt="logo" class="h-32" />
+  </div>
+  <div class="p-4 flex flex-col bg-gordonmascot-lblue rounded-lg shadow space-y-4">
+    <div class="w-full flex justify-center">
+      <h1 class="gordon-title text-4xl xl:text-5xl text-gordonmascot-hblue tracking-tighter">Gordon</h1>
+      <span class="text-gordonmascot-mblue text-sm">{{ .BuildVersion }}</span>
+    </div>
+    <div class="w-full">
+      <ul
+        class="flex flex-wrap md:flex-col md:space-y-6 md:py-8 font-semibold text-gray-100 text-lg md:text-2xl md:pl-4 min-w-fit">
+        <li class="flex items-center w-1/2 md:w-full">
+          <i class="iconoir-dashboard-speed mr-2 md:text-3xl"></i>
+          <a href="#">Dashboard</a>
+        </li>
+        <li class="flex items-center w-1/2 md:w-full">
+          <i class="iconoir-server mr-2 md:text-3xl"></i>
+          <a href="#manager">Manager</a>
+        </li>
+        <li class="flex items-center w-1/2 md:w-full">
+          <i class="iconoir-community mr-2 md:text-3xl"></i>
+          <a href="#users">Users</a>
+        </li>
+        <li class="flex items-center w-1/2 md:w-full">
+          <i class="iconoir-database-settings mr-2 md:text-3xl"></i>
+          <a href="#gordon-settings">Settings</a>
+        </li>
+      </ul>
+    </div>
+  </div>
+</div>
