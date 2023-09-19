@@ -1,20 +1,42 @@
 <!-- manager.gohtml -->
-{{template "header.gohtml" .}}
 <!DOCTYPE html>
 <html lang="en">
+
+{{template "header.gohtml" .}}
 
 <body class="bg-zinc-200 flex flex-col md:flex-row p-4 md:p-8 p-0">
   {{template "leftmenu.gohtml" .}}
   <!-- Main content here -->
-  <div class="flex-1 flex flex-col md:pt-10 space-y-4 p-4 md:ml-4">
-    <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow">
+  <!-- This div will contain the error message when something goes wrong -->
+  <div id="container-images-error" style="display:none;">
+    Something went wrong. </div>
+  <div class="flex-1 flex flex-col space-y-4 p-4 md:ml-4">
+    <div class="flex flex-col md:flex-row w-full flex-grow md:mt-24">
       <div class="flex-grow bg-white p-4 rounded-md shadow mb-4">
-        <h1>hello world</h1>
+        <h1>Container Manager</h1>
+        <!-- List all the images on load with HTMX -->
+        <div id="container-images" hx-get="/image-manager" hx-trigger="load" hx-swap="innerHTML" hx-swap-oob="true"
+          hx-target-error="container-images-error">
+          {{range .Images}}
+          <div class="image-info">
+            <p>ID: {{.ID}}</p>
+            <p>Repository: {{.Repository}}</p>
+            <p>Tag: {{.Tag}}</p>
+            <p>Created: {{.Created}}</p>
+            <p>Size: {{.Size}}</p>
+          </div>
+          {{else}}
+          <p>No images found.</p>
+          {{end}}
+        </div>
+
+
       </div>
     </div>
+  </div>
 
-    <!-- footer -->
-    {{template "footer.gohtml" .}}
+  <!-- footer -->
+  {{template "footer.gohtml" .}}
 </body>
 
 </html>

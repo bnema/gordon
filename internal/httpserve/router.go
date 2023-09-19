@@ -26,7 +26,7 @@ func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
 	bindAdminRoute(e, a, AdminPath)
 	bindStaticRoute(e, a, "/*")
 	bindLoginRoute(e, a, AdminPath)
-
+	e.GET("/image-manager", handler.ImageManagerHandler)
 	// Protect the root path with a 403
 	e.GET("/", func(c echo.Context) error {
 		return c.String(403, "403 Forbidden")
