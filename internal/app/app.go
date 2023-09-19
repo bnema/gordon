@@ -36,10 +36,10 @@ type App struct {
 	Config          AppConfig
 }
 type AppConfig struct {
-	General GeneralConfig `yaml:"general"`
-	Http    HttpConfig    `yaml:"http"`
-	Admin   AdminConfig   `yaml:"admin"`
-	Docker  DockerConfig  `yaml:"docker"`
+	General         GeneralConfig         `yaml:"General"`
+	Http            HttpConfig            `yaml:"Http"`
+	Admin           AdminConfig           `yaml:"Admin"`
+	ContainerEngine ContainerEngineConfig `yaml:"ContainerEngine"`
 }
 
 type GeneralConfig struct {
@@ -57,8 +57,9 @@ type AdminConfig struct {
 	Path string `yaml:"path"`
 }
 
-type DockerConfig struct {
-	Sock string `yaml:"sock"`
+type ContainerEngineConfig struct {
+	Sock         string `yaml:"sock"`
+	PodmanEnable bool   `yaml:"podman"`
 }
 
 func InitializeEnvironment() {
@@ -72,8 +73,9 @@ func InitializeEnvironment() {
 
 func LoadConfig() (AppConfig, error) {
 	var config AppConfig
-	buildDir, configFile := getEnvPaths()
-	err := parser.OpenYamlFile(os.DirFS(buildDir), configFile, &config, buildDir) // Replace `nil` with your actual filesystem
+	configDir, configFile := getConfigFile()
+	fsys := os.DirFS(configDir)                           // Use directory path here
+	err := parser.OpenYamlFile(fsys, configFile, &config) // Assuming it doesn't need the last argument
 	return config, err
 }
 
@@ -102,37 +104,29 @@ func NewApp() *App {
 // NewDockerConfig creates and returns a new Docker client configuration based on AppConfig.
 func (config *AppConfig) NewDockerConfig() *docker.Config {
 	return &docker.Config{
-		DockerSock:   config.DockerSock,
-		PodmanEnable: config.PodmanEnable,
-		PodmanSock:   config.PodmanSock,
-	}
+		Sock:         config.ContainerEngine.Sock,
+		PodmanEnable: config.ContainerEngine.PodmanEnable}
 }
 
 func GenerateOauthCallbackURL(config AppConfig) string {
 	var scheme, port string
 
-	if config.RunEnv == "dev" {
+	if config.General.RunEnv == "dev" {
 		scheme = "http"
-		port = fmt.Sprintf(":%d", config.HttpPort)
+		port = fmt.Sprintf(":%d", config.Http.Port)
 	} else { // Assuming "prod"
 		scheme = "https"
 		port = "" // Assuming that HTTPS will run on the default port 443
 	}
 
-	domain := config.TopDomain
-	if config.SubDomain != "" {
-		domain = fmt.Sprintf("%s.%s", config.SubDomain, config.TopDomain)
+	domain := config.Http.TopDomain
+	if config.Http.SubDomain != "" {
+		domain = fmt.Sprintf("%s.%s", config.Http.SubDomain, config.Http.TopDomain)
 	}
 
-	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.AdminPath)
+	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.Admin.Path)
 }
 
-func getEnvPaths() (string, string) {
-	wd, _ := os.Getwd()
-	fmt.Println("Current Working Directory:", wd)
-
-	if appEnv == "dev" {
-		return "/tmp/", "config.yml"
-	}
-	return "./", "config.yml"
+func getConfigFile() (string, string) {
+	return "tmp/", "config.yml" // assuming the file is in the current directory
 }

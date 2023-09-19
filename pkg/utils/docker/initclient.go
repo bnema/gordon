@@ -1,31 +1,42 @@
 package docker
 
 import (
-	"fmt"
 	"log"
-
-	"github.com/docker/docker/client"
 )
 
+type ContainerEngineClient interface {
+	InitializeClient(*Config) error
+	// Add other methods that both Docker and Podman should implement
+}
 type Config struct {
-	DockerSock   string
+	Sock         string
 	PodmanEnable bool
-	PodmanSock   string
 }
 
-var dockerClient *client.Client
+var engineClient ContainerEngineClient
 
-func InitializeDockerClient(config *Config) {
-	// Based on configuration, decide whether to use Docker or Podman
-	socketPath := config.DockerSock
+// DockerClient implements the ContainerEngineClient interface for Docker
+type DockerClient struct{}
+
+func (d *DockerClient) InitializeClient(config *Config) error {
+	// Initialize Docker client here
+	return nil // Return an error if something goes wrong
+}
+
+// PodmanClient implements the ContainerEngineClient interface for Podman
+type PodmanClient struct{}
+
+func (p *PodmanClient) InitializeClient(config *Config) error {
+	// Initialize Podman client here
+	return nil // Return an error if something goes wrong
+}
+func InitializeEngineClient(config *Config) {
 	if config.PodmanEnable {
-		socketPath = config.PodmanSock
+		engineClient = &PodmanClient{}
+	} else {
+		engineClient = &DockerClient{}
 	}
-
-	// Initialize Docker client
-	var err error
-	dockerClient, err = client.NewClientWithOpts(client.WithHost(fmt.Sprintf("unix://%s", socketPath)), client.WithAPIVersionNegotiation())
-	if err != nil {
-		log.Fatalf("Error initializing Docker client: %v", err)
+	if err := engineClient.InitializeClient(config); err != nil {
+		log.Fatalf("Error initializing container engine client: %v", err)
 	}
 }
