@@ -48,8 +48,8 @@ func main() {
 	e.HidePort = true
 	e = httpserve.RegisterRoutes(e, a)
 
-	log.Println("Starting server on port", a.Config.HttpPort)
-	if err := e.Start(fmt.Sprintf(":%d", a.Config.HttpPort)); err != nil {
+	log.Println("Starting server on port", a.Config.Http.Port)
+	if err := e.Start(fmt.Sprintf(":%d", a.Config.Http.Port)); err != nil {
 		log.Fatal("Server error:", err)
 	}
 }

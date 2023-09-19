@@ -58,6 +58,6 @@ func GetHTMLRenderer(pathStr string, filename string, fs fs.FS, a *app.App) (*Re
 	}
 	return &Renderer{
 		Template:     tmpl,
-		BuildVersion: a.Config.BuildVersion,
+		BuildVersion: a.Config.General.BuildVersion,
 	}, nil
 }
