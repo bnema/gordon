@@ -12,6 +12,7 @@ import (
 
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/httpserve"
+	"github.com/bnema/gordon/pkg/utils/docker"
 )
 
 func cleanup(a *app.App, memDb *sql.DB) {
@@ -31,6 +32,11 @@ func main() {
 	// Pass memDb to the app with the rest of the configs
 	a.DB = memDb
 
+	dockerClient := &docker.DockerClient{}
+	err = dockerClient.InitializeClient(a.Config.NewDockerConfig())
+	if err != nil {
+		log.Fatalf("Error initializing Docker client: %s", err)
+	}
 	// Setup a channel to capture termination signals
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)

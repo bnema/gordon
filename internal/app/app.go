@@ -16,13 +16,14 @@ import (
 var (
 	OauthCallbackURL string
 	appEnv           string
+	BuildVersion     = "0.0.2"
 )
 
 func init() {
 	appEnv = os.Getenv("APP_ENV")
 	if appEnv == "" {
 		appEnv = "prod" // Default to "prod" if APP_ENV is not set
-			}
+	}
 }
 
 type App struct {
@@ -44,7 +45,7 @@ type AppConfig struct {
 
 type GeneralConfig struct {
 	RunEnv       string `yaml:"runEnv"`
-	BuildVersion string `yaml:"buildVersion"`
+	BuildVersion string
 }
 
 type HttpConfig struct {
@@ -68,13 +69,13 @@ func InitializeEnvironment() {
 		fmt.Errorf("Error initializing environment: %s", err)
 	}
 	OauthCallbackURL = GenerateOauthCallbackURL(config)
-
 }
 
 func LoadConfig() (AppConfig, error) {
 	var config AppConfig
 	configDir, configFile := getConfigFile()
-	fsys := os.DirFS(configDir)                           // Use directory path here
+	fsys := os.DirFS(configDir)
+	BuildVersion = config.General.BuildVersion            // Use directory path here
 	err := parser.OpenYamlFile(fsys, configFile, &config) // Assuming it doesn't need the last argument
 	return config, err
 }

@@ -12,7 +12,7 @@ import (
 // GetHTMLFragmentByID returns the HTML fragment with the specified id
 func GetHTMLFragmentByID(id string, data interface{}, a *app.App) (string, error) {
 	// 1. Render the template
-	renderer, err := render.GetHTMLRenderer("components.gohtml", a.TemplateFS, a)
+	renderer, err := render.GetHTMLRenderer("html/fragments", "components.gohtml", a.TemplateFS, a)
 	if err != nil {
 		return "", fmt.Errorf("failed to get renderer: %w", err)
 	}
