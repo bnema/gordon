@@ -7,7 +7,7 @@ import (
 	"github.com/docker/docker/api/types"
 )
 
-func ListContainerImages() ([]ContainerImage, error) {
+func ListContainerImages() ([]types.ImageSummary, error) {
 	// Check if the Docker client has been initialized
 	if dockerCli == nil {
 		return nil, fmt.Errorf("Docker client has not been initialized")
@@ -19,23 +19,7 @@ func ListContainerImages() ([]ContainerImage, error) {
 		return nil, err
 	}
 
-	// Populate the ContainerImage slice
-	var containerImages []ContainerImage
-	for _, image := range images {
-		containerImages = append(containerImages, ContainerImage{
-			ID:          image.ID,
-			ParentID:    image.ParentID,
-			RepoTags:    image.RepoTags,
-			RepoDigests: image.RepoDigests,
-			Created:     image.Created,
-			Size:        image.Size,
-			SharedSize:  image.SharedSize,
-			Labels:      image.Labels,
-			Containers:  image.Containers,
-		})
-	}
-
-	return containerImages, nil
+	return images, nil
 }
 func DeleteContainerImage(imageID string) error {
 	// Check if the Docker client has been initialized
