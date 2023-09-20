@@ -28,7 +28,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	// Pass memDb to the app with the rest of the configs
 	a.DB = memDb
 
