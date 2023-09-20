@@ -1,52 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{{ .header.meta.title }}</title>
-  <link rel="stylesheet" href="/assets/css/tailwind.css" />
-  <link rel="stylesheet" href="/libs/iconoir.css" />
-  <script src="/libs/alpine.min.js"></script>
-  <script src="/libs/htmx.min.js"></script>
-  <script src="/libs/htmx-sse.js"></script>
-  <script src="assets/js/custom.js"></script>
-</head>
+{{template "header.gohtml" .}}
 
 <body class="bg-zinc-200 flex flex-col md:flex-row p-4 md:p-8 p-0">
-  <div class="w-full md:w-1/5 flex flex-col space-evenly p-4 md:p-0">
-    <div class="hidden md:flex justify-center p-4">
-      <img src="/assets/imgs/gordon-mascot-hq-trsp.png" alt="logo" class="h-32" />
-    </div>
-    <div class="p-4 flex flex-col bg-gordonmascot-lblue rounded-lg shadow space-y-4">
-      <div class="w-full flex justify-center">
-        <h1 class="gordon-title text-4xl xl:text-5xl text-gordonmascot-hblue tracking-tighter">Gordon</h1>
-        <span class="text-gordonmascot-mblue text-sm">{{ .BuildVersion }}</span>
-      </div>
-      <div class="w-full">
-        <ul
-          class="flex flex-wrap md:flex-col md:space-y-6 md:py-8 font-semibold text-gray-100 text-lg md:text-2xl md:pl-4 min-w-fit">
-          <li class="flex items-center w-1/2 md:w-full">
-            <i class="iconoir-dashboard-speed mr-2 md:text-3xl"></i>
-            <a href="#">Dashboard</a>
-          </li>
-          <li class="flex items-center w-1/2 md:w-full">
-            <i class="iconoir-server mr-2 md:text-3xl"></i>
-            <a href="#manager">Manager</a>
-          </li>
-          <li class="flex items-center w-1/2 md:w-full">
-            <i class="iconoir-community mr-2 md:text-3xl"></i>
-            <a href="#users">Users</a>
-          </li>
-          <li class="flex items-center w-1/2 md:w-full">
-            <i class="iconoir-database-settings mr-2 md:text-3xl"></i>
-            <a href="#gordon-settings">Settings</a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
 
+  {{template "leftmenu.gohtml" .}}
   <div class="flex-1 flex flex-col md:pt-10 space-y-4 p-4 md:ml-4">
     <div class="hidden md:flex mb-4 justify-end">
       <div class="w-72 h-10 bg-gray-300 rounded-lg">
@@ -58,7 +17,7 @@
     </div>
     <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow">
       <div class="flex-grow bg-white p-4 rounded-md shadow mb-4">
-        <div class="w-full rounded-sm bg-gray-300"></div>
+        <h2>Dashboard</h2>
       </div>
       <div class="w-full md:w-2/6 flex flex-col space-y-4">
         <div class="bg-white p-4 rounded-md shadow mb-4">
@@ -73,6 +32,9 @@
       </div>
     </div>
   </div>
+  <!-- footer -->
+  {{template "footer.gohtml" .}}
+
 </body>
 
 </html>
