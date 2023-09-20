@@ -41,10 +41,14 @@ func bindStaticRoute(e *echo.Echo, a *app.App, path string) {
 	})
 }
 
-func bindAdminRoute(e *echo.Echo, a *app.App, path string) {
-	e.GET(path, func(c echo.Context) error {
+func bindAdminRoute(e *echo.Echo, a *app.App, adminPath string) {
+	e.GET(adminPath, func(c echo.Context) error {
 		return handler.AdminRoute(c, a)
 	}, middleware.RequireLogin) // Require login
+
+	e.GET(adminPath+"/manager", func(c echo.Context) error {
+		return handler.AdminManagerRoute(c, a)
+	})
 }
 
 func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {

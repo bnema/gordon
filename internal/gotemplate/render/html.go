@@ -42,20 +42,33 @@ func (r *Renderer) Render(data interface{}, a *app.App) (string, error) {
 	return buf.String(), nil
 }
 
-// GetRenderer function returns a new Renderer instance
-func GetHTMLRenderer(pathStr string, filename string, fs fs.FS, a *app.App) (*Renderer, error) {
-	// Join path and filename
-	fullPath := path.Join(pathStr, filename)
+// GetHTMLRenderer function returns a new Renderer instance
+func GetHTMLRenderer(mainPath string, filename string, fs fs.FS, a *app.App, fragmentsPath ...string) (*Renderer, error) {
+	// Full path to the main template
+	fullPath := path.Join(mainPath, filename)
 	// Check if the file exists in the provided fs.FS using fs.Open
 	file, err := fs.Open(fullPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open %s: %w", filename, err)
 	}
-	file.Close() // Close the file after checking
+	file.Close()
+
+	// Parse the main template
 	tmpl, err := template.New(filename).ParseFS(fs, fullPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse %s: %w", filename, err)
 	}
+
+	// If a fragments path is provided, parse the fragment templates
+	if len(fragmentsPath) > 0 && fragmentsPath[0] != "" {
+		fragmentsGlob := path.Join(fragmentsPath[0], "*.gohtml")
+		_, err = tmpl.ParseFS(fs, fragmentsGlob)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse fragments: %w", err)
+		}
+	}
+
+	// Return the Renderer instance
 	return &Renderer{
 		Template:     tmpl,
 		BuildVersion: a.Config.General.BuildVersion,
