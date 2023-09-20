@@ -22,7 +22,7 @@ func init() {
 	appEnv = os.Getenv("APP_ENV")
 	if appEnv == "" {
 		appEnv = "prod" // Default to "prod" if APP_ENV is not set
-	}
+			}
 }
 
 type App struct {
