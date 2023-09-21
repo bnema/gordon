@@ -8,8 +8,6 @@ import (
 	"github.com/bnema/gordon/internal/gotemplate/render"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
 	"github.com/bnema/gordon/internal/webui"
-	"github.com/bnema/gordon/pkg/utils/docker"
-	"github.com/bnema/gordon/pkg/utils/sanitize"
 	"github.com/labstack/echo/v4"
 )
 
@@ -61,22 +59,8 @@ func AdminManagerRoute(c echo.Context, a *app.App) error {
 	if err != nil {
 		return err
 	}
-
-	images, err := docker.ListContainerImages()
-	if err != nil {
-		rawErrHTML := `<div id="container-images">Error: ` + err.Error() + `</div>`
-		sanitizedHTML, err := sanitize.SanitizeHTML(rawErrHTML)
-		if err != nil {
-			// Handle the sanitization error
-			return c.String(http.StatusInternalServerError, "An error occurred during sanitization")
-		}
-		return c.HTML(http.StatusInternalServerError, sanitizedHTML)
-	}
-
-	// Create a data map to pass to the renderer
 	data := map[string]interface{}{
 		"CurrentLang": yamlData.CurrentLang,
-		"Images":      images,
 	}
 
 	renderedHTML, err := rendererData.Render(data, a)

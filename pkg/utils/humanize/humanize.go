@@ -42,7 +42,13 @@ func TimeAgo(t time.Time) string {
 		return fmt.Sprintf("%d minutes ago", int(duration.Minutes()))
 	case duration < time.Hour*24:
 		return fmt.Sprintf("%d hours ago", int(duration.Hours()))
-	default:
+	case duration < time.Hour*24*7:
 		return fmt.Sprintf("%d days ago", int(duration.Hours()/24))
+	case duration < time.Hour*24*30:
+		return fmt.Sprintf("%d weeks ago", int(duration.Hours()/(24*7)))
+	case duration < time.Hour*24*365:
+		return fmt.Sprintf("%d months ago", int(duration.Hours()/(24*30)))
+	default:
+		return fmt.Sprintf("%d years ago", int(duration.Hours()/(24*365)))
 	}
 }

@@ -11,19 +11,28 @@
       <div class="flex flex-col md:flex-row w-full flex-grow md:mt-24">
         <div class="flex-grow bg-white p-4 rounded-md shadow mb-4">
           <h1 class="text-lg md:text-2xl font-bold">Container Manager</h1>
-          <!-- List all the images on load with HTMX -->
+          <!-- List all the containers -->
           <div
-            id="container-images"
-            hx-get="/htmx/image-manager"
+            id="container-manager"
+            hx-get="/htmx/container-manager"
             hx-trigger="load"
             hx-swap="innerHTML"
             hx-swap-oob="true"
-            hx-target-error="container-list-images-error"
+            hx-target-error="container-manager-error"
           ></div>
-          <div id="container-list-images-error" style="display: none"></div>
+          <div id="container-manager-error" style="display: none"></div>
+        <!-- List all the images  -->
+        <div
+          id="image-manager"
+          hx-get="/htmx/image-manager"
+          hx-trigger="load"
+          hx-swap="innerHTML"
+          hx-swap-oob="true"
+          hx-target-error="image-manager-error"
+        ></div>
+        <div id="image-manager-error" style="display: none"></div>
         </div>
       </div>
-    </div>
 
     <!-- footer -->
     {{template "footer.gohtml" .}}
