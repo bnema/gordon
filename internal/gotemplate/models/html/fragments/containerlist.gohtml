@@ -1,0 +1,46 @@
+<div class="flex flex-col p-4">
+  <h1 class="text-lg md:text-xl font-bold">Running containers</h1>
+  <div class="flex font-bold border-t-2 align-baseline py-2">
+    <div class="w-1/6">Name</div>
+    <div class="w-1/6">Command</div>
+    <div class="w-1/6">Created</div>
+    <div class="w-1/6">Status</div>
+    <div class="w-1/6">Port</div>
+    <div class="w-1/6">State</div>
+    <div class="w-1/4">Action</div>
+  </div>
+  {{ range.Containers }}
+  <div id="{{.ID}}" class="flex py-2 align-baseline justify-center">
+    <div class="w-1/6">{{ range.Names }}{{.}}<br />{{ end }}</div>
+    <div class="w-1/6" style="text-decoration: underline">{{.Command}}</div>
+    <div class="w-1/6">{{.CreatedStr}}</div>
+    <div class="w-1/6">{{.Status}} (Up since {{.UpSince}})</div>
+    <div class="w-1/6">{{ range.Ports }}{{.}}<br />{{ end }}</div>
+    <div class="w-1/6" style="color: {{.StateColor}};">{{.State}}</div>
+    <div class="w-1/4">
+      <div x-data="{ success: false, loading: false }">
+        <button
+          id="remove-button-{{.ShortID}}"
+          x-bind:class="{ 'bg-green-500': success, 'bg-red-500': !success, 'text-white': true, 'px-2': true, 'py-1': true, 'rounded': true }"
+          @click="loading = true"
+          hx-trigger="click"
+          hx-delete="/htmx/container-manager/delete/{{.ShortID}}"
+          hx-swap="outerHTML swap:outerHTML"
+          hx-target-error="container-delete-images-error"
+          x-on:htmx:afterSwap="if ($event.detail.status === 200 && $event.detail.xhr.response === 'Success') { success = true; loading = false; setTimeout(() => location.reload(), 3000); }"
+        >
+          <span x-show="!loading && !success">Remove</span>
+          <span x-show="success">Success</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  {{ else }}
+  <div class="mt-2">No Running containers.</div>
+  {{ end }}
+  <div
+    id="container-delete-error"
+    style="display: none"
+    class="mt-2 text-red-800 text-lg"
+  ></div>
+</div>
