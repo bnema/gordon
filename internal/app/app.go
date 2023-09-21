@@ -59,8 +59,9 @@ type AdminConfig struct {
 }
 
 type ContainerEngineConfig struct {
-	Sock         string `yaml:"sock"`
-	PodmanEnable bool   `yaml:"podman"`
+	Sock       string `yaml:"dockersock"`
+	PodmanSock string `yaml:"podmansock"`
+	Podman     bool   `yaml:"podman"`
 }
 
 func InitializeEnvironment() {
@@ -104,9 +105,16 @@ func NewApp() *App {
 
 // NewDockerConfig creates and returns a new Docker client configuration based on AppConfig.
 func (config *AppConfig) NewDockerConfig() *docker.Config {
+	if config.ContainerEngine.Podman {
+		return &docker.Config{
+			Sock:         config.ContainerEngine.PodmanSock,
+			PodmanEnable: true,
+		}
+	}
 	return &docker.Config{
 		Sock:         config.ContainerEngine.Sock,
-		PodmanEnable: config.ContainerEngine.PodmanEnable}
+		PodmanEnable: false,
+	}
 }
 
 func GenerateOauthCallbackURL(config AppConfig) string {
