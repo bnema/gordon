@@ -13,7 +13,7 @@ Gordon is a tool based on Golang that aims to simplify the deployment of your co
 
 ## **Key Features**
 
-- **Quick Deployment**: Deploy container images effortlessly using the command **`gordon ipush <image:version>`**
+- **Quick Deployment**: Deploy container images effortlessly using the command **`gordon deploy <image:version> -p 8080 -t gordon.sld.tld`**
 - **Self-Hosted**: Operates within your existing self-hosted environment.
 - **Web UI**: Provides a simple web UI to manage your deployments, domains, exposed ports, and more.
 - **Automated Routing**: Collaborates with Traefik to automatically route your application to your desired domain or subdomain.
