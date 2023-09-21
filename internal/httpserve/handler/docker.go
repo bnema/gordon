@@ -10,13 +10,14 @@ import (
 	"github.com/bnema/gordon/pkg/utils/docker"
 	"github.com/bnema/gordon/pkg/utils/humanize"
 	"github.com/bnema/gordon/pkg/utils/sanitize"
+	"github.com/docker/docker/api/types"
 	"github.com/labstack/echo/v4"
 )
 
 var idMap = make(map[string]string)
 
 type HumanReadableContainerImage struct {
-	docker.ContainerImage
+	*types.ImageSummary
 	ShortID    string
 	CreatedStr string
 	SizeStr    string
@@ -44,10 +45,10 @@ func ImageManagerHandler(c echo.Context, a *app.App) error {
 		sizeStr := humanize.BytesToReadableSize(image.Size)
 
 		humanReadableImages = append(humanReadableImages, HumanReadableContainerImage{
-			ShortID:        ShortID,
-			ContainerImage: image,
-			CreatedStr:     createdStr,
-			SizeStr:        sizeStr,
+			ShortID:      ShortID,
+			ImageSummary: &image,
+			CreatedStr:   createdStr,
+			SizeStr:      sizeStr,
 		})
 	}
 	data := map[string]interface{}{
