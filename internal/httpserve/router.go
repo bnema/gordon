@@ -26,7 +26,7 @@ func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
 	bindAdminRoute(e, a, AdminPath)
 	bindStaticRoute(e, a, "/*")
 	bindLoginRoute(e, a, AdminPath)
-	e.GET("/image-manager", handler.ImageManagerHandler)
+	bindHTMXEndpoints(e, a)
 	// Protect the root path with a 403
 	e.GET("/", func(c echo.Context) error {
 		return c.String(403, "403 Forbidden")
@@ -63,5 +63,14 @@ func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
 	})
 	e.GET(adminPath+"/logout", func(c echo.Context) error {
 		return handler.Logout(c, a)
+	})
+}
+
+func bindHTMXEndpoints(e *echo.Echo, a *app.App) {
+	e.GET("/htmx/image-manager", func(c echo.Context) error {
+		return handler.ImageManagerHandler(c, a)
+	})
+	e.DELETE("/htmx/image-manager/delete/:ShortID", func(c echo.Context) error {
+		return handler.ImageManagerDeleteHandler(c, a)
 	})
 }
