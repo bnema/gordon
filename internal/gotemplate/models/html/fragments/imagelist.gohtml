@@ -1,0 +1,56 @@
+<div class="flex flex-col p-4">
+  <h1 class="text-lg md:text-xl font-bold">Images</h1>
+  <div class="flex font-bold border-t-2 align-baseline py-2">
+    <div class="w-2/4">Name</div>
+    <div class="w-2/4">Created</div>
+    <div class="w-1/6">Size</div>
+    <div class="w-1/4">Action</div>
+  </div>
+  {{ range.Images }}
+  <div
+    x-data="{ success: false, loading: false, showError: false, errorMessage: '' }"
+  >
+    <div
+      id="img-{{.ShortImgID}}"
+      class="flex py-2 align-baseline justify-center"
+      hx-boost="true"
+    >
+      <div class="w-2/4">
+        <span title="{{.ImageSummary.ID}}">{{.Name}}</span>
+      </div>
+      <div class="w-2/4">{{.CreatedStr}}</div>
+      <div class="w-1/6">{{.SizeStr}}</div>
+
+      <button
+        id="remove-button-img-{{.ShortImgID}}"
+        x-bind:class="{ 'bg-green-500': success, 'bg-red-500': !success, 'text-white': true, 'px-2': true, 'py-1': true, 'rounded': true }"
+        @click="loading = true"
+        hx-trigger="click"
+        hx-delete="/htmx/image-manager/delete/{{.ShortImgID}}"
+        hx-swap="outerHTML swap:outerHTML"
+        hx-target="#img-{{.ShortImgID}}"
+        hx-confirm="Are you sure you want to delete this image?"
+        hx-select="button"
+        hx-boost="true"
+        x-on:htmx:after-swap="success = true; loading = false; error = false"
+        x-on:htmx:responseError="showError = true; errorMessage = (event.detail && event.detail.xhr && event.detail.xhr.responseText) ? event.detail.xhr.responseText : 'An unknown error occurred.'"
+      >
+        <span x-show="!loading && !success">Remove</span>
+        <span x-show="loading">Loading...</span>
+        <span x-show="success">Success</span>
+      </button>
+    </div>
+
+    <div
+      x-show="showError"
+      data-error-type="image"
+      class="error-display-div bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative"
+    >
+      <p x-text="errorMessage"></p>
+    </div>
+  </div>
+
+  {{ else }}
+  <div class="mt-2">No images found.</div>
+  {{ end }}
+</div>

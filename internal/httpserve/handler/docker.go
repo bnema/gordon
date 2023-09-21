@@ -18,9 +18,18 @@ var idMap = make(map[string]string)
 
 type HumanReadableContainerImage struct {
 	*types.ImageSummary
-	ShortID    string
+	Name       string
+	ShortImgID string
 	CreatedStr string
 	SizeStr    string
+}
+
+type HumanReadableContainer struct {
+	*types.Container
+	CreatedStr string // Human-readable Created time
+	SizeStr    string // Human-readable Size
+	UpSince    string // Human-readable time elapsed since the container was started
+	StateColor string // Color of the state badge
 }
 
 // ImageManagerHandler handles the /image-manager route
@@ -38,24 +47,26 @@ func ImageManagerHandler(c echo.Context, a *app.App) error {
 	var humanReadableImages []HumanReadableContainerImage
 
 	for _, image := range images {
-		ShortID := image.ID[7:19]
-		idMap[ShortID] = image.ID
+		ShortImgID := image.ID[7:19]
+		idMap[ShortImgID] = image.ID
 		createdTime := time.Unix(image.Created, 0)
 		createdStr := humanize.TimeAgo(createdTime)
 		sizeStr := humanize.BytesToReadableSize(image.Size)
-
-		humanReadableImages = append(humanReadableImages, HumanReadableContainerImage{
-			ShortID:      ShortID,
-			ImageSummary: &image,
-			CreatedStr:   createdStr,
-			SizeStr:      sizeStr,
-		})
+		for _, repoTag := range image.RepoTags {
+			humanReadableImages = append(humanReadableImages, HumanReadableContainerImage{
+				ShortImgID:   ShortImgID,
+				ImageSummary: &image,
+				CreatedStr:   createdStr,
+				SizeStr:      sizeStr,
+				Name:         repoTag,
+			})
+		}
 	}
 	data := map[string]interface{}{
 		"Images": humanReadableImages,
 	}
 
-	rendererData, err := render.GetHTMLRenderer("html/fragments", "image_list.gohtml", a.TemplateFS, a)
+	rendererData, err := render.GetHTMLRenderer("html/fragments", "imagelist.gohtml", a.TemplateFS, a)
 	if err != nil {
 		return err
 	}
@@ -68,16 +79,65 @@ func ImageManagerHandler(c echo.Context, a *app.App) error {
 
 // ImageManagerDeleteHandler handles the /image-manager/delete route
 func ImageManagerDeleteHandler(c echo.Context, a *app.App) error {
+	// Get the ShortImgID from the URL
+	ShortImgID := c.Param("ShortImgID")
+	fmt.Println("ShortImgID:", ShortImgID)
+	// Check if the ShortImgID exists in the idMap
+	imageID, exists := idMap[ShortImgID]
+	fmt.Println("ImageID:", imageID)
+	if !exists {
+		return c.String(http.StatusBadRequest, "Invalid ShortImgID")
+	}
+	err := docker.DeleteContainerImage(imageID)
+	if err != nil {
+		c.Response().Header().Set("X-Error-Type", "image")
+		return c.String(http.StatusInternalServerError, err.Error())
+
+	}
+
+	// Since it is HTMX we return a html div with the message "Removed"
+	return c.HTML(http.StatusOK, `<div>Removed</div>`)
+}
+
+// ContainerManagerHandler handles the /container-manager route
+func ContainerManagerHandler(c echo.Context, a *app.App) error {
+	containers, err := docker.ListRunningContainers()
+	if err != nil {
+		rawErrHTML := `<div>Error: ` + err.Error() + `</div>`
+		sanitizedHTML, err := sanitize.SanitizeHTML(rawErrHTML)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, "An error occurred during sanitization")
+		}
+		return c.HTML(http.StatusInternalServerError, sanitizedHTML)
+	}
+
+	data := map[string]interface{}{
+		"Containers": containers,
+	}
+
+	rendererData, err := render.GetHTMLRenderer("html/fragments", "containerlist.gohtml", a.TemplateFS, a)
+	if err != nil {
+		return err
+	}
+	renderedHTML, err := rendererData.Render(data, a)
+	if err != nil {
+		return err
+	}
+	return c.HTML(200, renderedHTML)
+}
+
+// ContainerManagerDeleteHandler handles the /container-manager/delete route
+func ContainerManagerDeleteHandler(c echo.Context, a *app.App) error {
 	// Get the ShortID from the URL
 	ShortID := c.Param("ShortID")
 	// Check if the shortID exists in the idMap
-	imageID, exists := idMap[ShortID]
+	containerID, exists := idMap[ShortID]
 	if !exists {
 		return c.String(http.StatusBadRequest, "Invalid shortID")
 	}
-	fmt.Println("ShortID:", ShortID, "ImageID:", imageID)
+	fmt.Println("ShortID:", ShortID, "ContainerID:", containerID)
 
-	err := docker.DeleteContainerImage(imageID)
+	err := docker.DeleteContainer(containerID)
 	if err != nil {
 		rawErrHTML := `<div>Error: ` + err.Error() + `</div>`
 		sanitizedHTML, err := sanitize.SanitizeHTML(rawErrHTML)
@@ -88,5 +148,5 @@ func ImageManagerDeleteHandler(c echo.Context, a *app.App) error {
 		return c.HTML(http.StatusInternalServerError, sanitizedHTML)
 	}
 	// Since it is HTMX we return a html div with the message "Removed"
-	return c.HTML(http.StatusOK, `<div>Removed</div>`)
+	return c.HTML(http.StatusOK, `Success`)
 }
