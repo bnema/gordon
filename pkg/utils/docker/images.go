@@ -2,16 +2,13 @@ package docker
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/docker/docker/api/types"
 )
 
 func ListContainerImages() ([]types.ImageSummary, error) {
 	// Check if the Docker client has been initialized
-	if dockerCli == nil {
-		return nil, fmt.Errorf("Docker client has not been initialized")
-	}
+	CheckIfInitialized()
 
 	// List images using the Docker client
 	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
@@ -23,9 +20,7 @@ func ListContainerImages() ([]types.ImageSummary, error) {
 }
 func DeleteContainerImage(imageID string) error {
 	// Check if the Docker client has been initialized
-	if dockerCli == nil {
-		return fmt.Errorf("Docker client has not been initialized")
-	}
+	CheckIfInitialized()
 
 	// Delete the image using the Docker client
 	_, err := dockerCli.ImageRemove(context.Background(), imageID, types.ImageRemoveOptions{})

@@ -37,3 +37,11 @@ func (d *DockerClient) InitializeClient(config *Config) error {
 	dockerCli = cli
 	return nil
 }
+
+func CheckIfInitialized() error {
+	if dockerCli == nil {
+		return fmt.Errorf("Docker client is not initialized")
+	}
+
+	return nil
+}
