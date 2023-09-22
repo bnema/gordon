@@ -27,7 +27,7 @@ func main() {
 	// Initialize database
 	memDb, err := app.InitializeDB(a)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to initialize database:", err)
 	}
 	// Pass memDb to the app with the rest of the configs
 	a.DB = memDb
@@ -35,7 +35,7 @@ func main() {
 	dockerClient := &docker.DockerClient{}
 	err = dockerClient.InitializeClient(a.Config.NewDockerConfig())
 	if err != nil {
-		log.Printf("Error from DockerClient: %s", err)
+		log.Printf("Error: %s", err)
 	}
 	// Setup a channel to capture termination signals
 	sigs := make(chan os.Signal, 1)
