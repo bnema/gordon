@@ -70,14 +70,18 @@ func bindHTMXEndpoints(e *echo.Echo, a *app.App) {
 	e.GET("/htmx/image-manager", func(c echo.Context) error {
 		return handler.ImageManagerHandler(c, a)
 	})
-	e.DELETE("/htmx/image-manager/delete/:ShortImgID", func(c echo.Context) error {
+	e.DELETE("/htmx/image-manager/delete/:ID", func(c echo.Context) error {
 		return handler.ImageManagerDeleteHandler(c, a)
 	})
 
 	e.GET("/htmx/container-manager", func(c echo.Context) error {
 		return handler.ContainerManagerHandler(c, a)
 	})
-	e.DELETE("/htmx/container-manager/delete/:ShortID", func(c echo.Context) error {
+	e.POST("/htmx/container-manager/stop/:ID", func(c echo.Context) error {
+		return handler.ContainerManagerStopHandler(c, a)
+	})
+
+	e.DELETE("/htmx/container-manager/delete/:ID", func(c echo.Context) error {
 		return handler.ContainerManagerDeleteHandler(c, a)
 	})
 }

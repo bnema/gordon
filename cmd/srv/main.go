@@ -35,7 +35,7 @@ func main() {
 	dockerClient := &docker.DockerClient{}
 	err = dockerClient.InitializeClient(a.Config.NewDockerConfig())
 	if err != nil {
-		log.Fatalf("Error initializing Docker client: %s", err)
+		log.Printf("Error from DockerClient: %s", err)
 	}
 	// Setup a channel to capture termination signals
 	sigs := make(chan os.Signal, 1)
