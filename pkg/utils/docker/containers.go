@@ -7,6 +7,9 @@ import (
 	"github.com/docker/docker/api/types"
 )
 
+func init() {
+}
+
 func ListRunningContainers() ([]types.Container, error) {
 	// Check if the Docker client has been initialized
 	CheckIfInitialized()
@@ -22,8 +25,6 @@ func ListRunningContainers() ([]types.Container, error) {
 // StopContainer attempts to stop a container gracefully with a timeout
 // If it doesn't stop, it sets a flag that can be checked to prompt the user.
 func StopContainerGracefully(containerID string, timeoutDuration time.Duration) (bool, error) {
-	// Check if the Docker client has been initialized
-	CheckIfInitialized()
 
 	// Start by sending a SIGTERM
 	err := dockerCli.ContainerKill(context.Background(), containerID, "SIGTERM")
@@ -66,8 +67,6 @@ func StopContainerRagefully(containerID string) error {
 }
 
 func DeleteContainer(containerID string) error {
-	// Check if the Docker client has been initialized
-	CheckIfInitialized()
 
 	// Delete container using the Docker client
 	err := dockerCli.ContainerRemove(context.Background(), containerID, types.ContainerRemoveOptions{})
