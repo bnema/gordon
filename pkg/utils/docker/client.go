@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/docker/docker/client"
 )
@@ -26,6 +27,11 @@ func (d *DockerClient) InitializeClient(config *Config) error {
 	// Validate if the Sock field is not empty
 	if config.Sock == "" {
 		return fmt.Errorf("Sock field in Config is empty")
+	}
+
+	// Check if the socket file exists if not return an error
+	if _, err := os.Stat(config.Sock); os.IsNotExist(err) {
+		return fmt.Errorf("Sock file does not exist: %s", config.Sock)
 	}
 
 	// Initialize Docker client
