@@ -1,32 +1,52 @@
-<div class="flex flex-col p-4" hx-ext="response-targets">
+<div class="flex flex-col p-4">
   <h1 class="text-lg md:text-xl font-bold">Images</h1>
-  <div class="flex font-bold border-t-2 align-baseline py-2">
-    <div class="w-2/4">Name</div>
-    <div class="w-2/4">Created</div>
-    <div class="w-1/6">Size</div>
-    <div class="w-1/4">Action</div>
-  </div>
-  {{ range.Images }}
-  <div id="img-{{.ShortImgID}}" class="flex py-2 align-baseline justify-center">
-    <div class="w-2/4">
-      <span title="{{.ImageSummary.ID}}">{{.Name}}</span>
-    </div>
-    <div class="w-2/4">{{.CreatedStr}}</div>
-    <div class="w-1/6">{{.SizeStr}}</div>
-    <button
-      id="remove-button-img-{{.ShortImgID}}"
-      hx-delete="/htmx/image-manager/delete/{{.ShortImgID}}"
-      hx-target="#img-{{.ShortImgID}}"
-      hx-target-*="#error-message-img"
-      hx-swap="innerHTML"
-      hx-confirm="Are you sure you want to delete this container image?"
-      class="w-1/4 bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md"
-    >
-      Delete
-    </button>
-  </div>
-  <div id="error-message-img" class="mt-2 text-red-500" display="none"></div>
-  {{ else }}
-  <div class="mt-2">No images found.</div>
-  {{ end }}
+  <table class="p-4 border-t-2">
+    <!-- <thead>
+      <tr>
+        <th>Name</th>
+        <th>Created</th>
+        <th>Size</th>
+        <th>Action</th>
+      </tr>
+    </thead> -->
+    <tbody>
+      {{
+        range.Images
+      }}
+      <tr id="img-{{.ID}}" hx-ext="response-targets">
+        <td>
+          <span title="{{.ImageSummary.ID}}">{{.Name}}</span>
+        </td>
+        <td>
+          <span title="Image creation date">{{.CreatedStr}}</span>
+        </td>
+        <td>{{.SizeStr}}</td>
+        <td align="right">
+          <button
+            id="remove-button-img-{{.ID}}"
+            hx-delete="/htmx/image-manager/delete/{{.ID}}"
+            hx-target="#img-{{.ID}}"
+            hx-target-*="#error-message-div-{{.ID}}"
+            hx-swap="innerHTML"
+            hx-confirm="Are you sure you want to delete this container image?"
+            class="py-2 px-4"
+          >
+            <span class="iconoir-trash text-xl text-red-600 font-bold"></span>
+          </button>
+        </td>
+      </tr>
+      <t>
+        <td colspan="4">
+          <div id="error-message-div-{{.ID}}" class="text-red-500"></div>
+        </td>
+      </tr>
+      {{ else }}
+      <tr>
+        <td colspan="4" class="mt-2">No images found.</td>
+      </tr>
+      {{
+        end
+      }}
+    </tbody>
+  </table>
 </div>

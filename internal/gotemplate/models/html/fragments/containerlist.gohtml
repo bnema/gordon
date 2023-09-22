@@ -1,46 +1,83 @@
 <div class="flex flex-col p-4">
   <h1 class="text-lg md:text-xl font-bold">Running containers</h1>
-  <div class="flex font-bold border-t-2 align-baseline py-2">
-    <div class="w-1/6">Name</div>
-    <div class="w-1/6">Command</div>
-    <div class="w-1/6">Created</div>
-    <div class="w-1/6">Status</div>
-    <div class="w-1/6">Port</div>
-    <div class="w-1/6">State</div>
-    <div class="w-1/4">Action</div>
-  </div>
-  {{ range.Containers }}
-  <div id="{{.ID}}" class="flex py-2 align-baseline justify-center">
-    <div class="w-1/6">{{ range.Names }}{{.}}<br />{{ end }}</div>
-    <div class="w-1/6" style="text-decoration: underline">{{.Command}}</div>
-    <div class="w-1/6">{{.CreatedStr}}</div>
-    <div class="w-1/6">{{.Status}} (Up since {{.UpSince}})</div>
-    <div class="w-1/6">{{ range.Ports }}{{.}}<br />{{ end }}</div>
-    <div class="w-1/6" style="color: {{.StateColor}};">{{.State}}</div>
-    <div class="w-1/4">
-      <div x-data="{ success: false, loading: false }">
-        <button
-          id="remove-button-{{.ShortID}}"
-          x-bind:class="{ 'bg-green-500': success, 'bg-red-500': !success, 'text-white': true, 'px-2': true, 'py-1': true, 'rounded': true }"
-          @click="loading = true"
-          hx-trigger="click"
-          hx-delete="/htmx/container-manager/delete/{{.ShortID}}"
-          hx-swap="outerHTML swap:outerHTML"
-          hx-target-error="container-delete-images-error"
-          x-on:htmx:afterSwap="if ($event.detail.status === 200 && $event.detail.xhr.response === 'Success') { success = true; loading = false; setTimeout(() => location.reload(), 3000); }"
-        >
-          <span x-show="!loading && !success">Remove</span>
-          <span x-show="success">Success</span>
-        </button>
-      </div>
-    </div>
-  </div>
-  {{ else }}
-  <div class="mt-2">No Running containers.</div>
-  {{ end }}
-  <div
-    id="container-delete-error"
-    style="display: none"
-    class="mt-2 text-red-800 text-lg"
-  ></div>
+  <table class="p-4 border-t-2" hx-ext="response-targets">
+    <!-- <thead>
+      <tr>
+        <th>Name</th>
+        <th>Command</th>
+        <th>Created</th>
+        <th>Status</th>
+        <th>Port</th>
+        <th>State</th>
+        <th>Action</th>
+      </tr>
+    </thead> -->
+    <tbody>
+      {{
+        range.containers
+      }}
+      <tr id="container-{{.ID}}">
+        <td>
+          <span title="{{.Container.ID}}">{{.Name}}</span>
+        </td>
+        <td class="command-container" style="text-decoration: underline">
+          <span title="{{.Command}}">{{.Command}}</span>
+        </td>
+        <td>{{.CreatedStr}}</td>
+        <td class="port-container">{{ .Ports }}</td>
+        <td class="status-container">{{.Status}} (Up since {{.UpSince}})</td>
+        <td style="color: {{.StateColor}};">{{.State}}</td>
+        <td align="right">
+          <!-- iconoir start -->
+          <button
+            id="start-button-{{.ID}}"
+            hx-post="/htmx/container-manager/start/{{.ID}}"
+            hx-target="#container-{{.ID}}"
+            hx-target-*="#error-message-{{.ID}}"
+            hx-swap="innerHTML"
+            class="py-2 px-4"
+          >
+            <span class="iconoir-play text-xl font-bold"></span>
+          </button>
+          <!-- stop -->
+          <button
+            id="stop-button-{{.ID}}"
+            hx-post="/htmx/container-manager/stop/{{.ID}}"
+            hx-target="#container-{{.ID}}"
+            hx-target-*="#error-message-{{.ID}}"
+            hx-swap="innerHTML"
+            hx-confirm="Are you sure you want to stop this container?"
+            class="py-2 px-4"
+          >
+            <span class="iconoir-system-shut text-xl font-bold"></span>
+          </button>
+          <!-- REMOVE -->
+          <button
+            id="remove-button-img-{{.ID}}"
+            hx-delete="/htmx/container-manager/delete/{{.ID}}"
+            hx-target="#container-{{.ID}}"
+            hx-target-*="#error-message-{{.ID}}"
+            hx-swap="innerHTML"
+            hx-confirm="Are you sure you want to delete this container image?"
+            class="py-2 px-4"
+          >
+            <!-- iconoir trash -->
+            <span class="iconoir-trash text-xl text-red-600 font-bold"></span>
+          </button>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="7">
+          <div id="error-message-{{.ID}}" class="text-red-500"></div>
+        </td>
+      </tr>
+      {{ else }}
+      <tr>
+        <td colspan="7" class="mt-2">No Running containers.</td>
+      </tr>
+      {{
+        end
+      }}
+    </tbody>
+  </table>
 </div>

@@ -20,7 +20,6 @@ func ListContainerImages() ([]types.ImageSummary, error) {
 }
 func DeleteContainerImage(imageID string) error {
 	// Check if the Docker client has been initialized
-	CheckIfInitialized()
 
 	// Delete the image using the Docker client
 	_, err := dockerCli.ImageRemove(context.Background(), imageID, types.ImageRemoveOptions{})

@@ -1,7 +1,9 @@
 package docker
 
 import (
+	"context"
 	"fmt"
+	"log"
 
 	"github.com/docker/docker/client"
 )
@@ -32,7 +34,8 @@ func (d *DockerClient) InitializeClient(config *Config) error {
 		client.WithHost("unix://"+config.Sock), // Prepend "unix://" to the Unix socket path
 	)
 	if err != nil {
-		return fmt.Errorf("Error from DockerClient: %s", err)
+		log.Printf("Error initializing Docker client: %s", err)
+		return err
 	}
 	dockerCli = cli
 	return nil
@@ -42,6 +45,10 @@ func CheckIfInitialized() error {
 	if dockerCli == nil {
 		return fmt.Errorf("Docker client is not initialized")
 	}
-
+	// ping the Docker daemon to check if it's running
+	_, err := dockerCli.Ping(context.Background())
+	if err != nil {
+		return fmt.Errorf("Docker client is not initialized")
+	}
 	return nil
 }
