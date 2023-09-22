@@ -19,13 +19,6 @@ var (
 	BuildVersion     = "0.0.2"
 )
 
-func init() {
-	appEnv = os.Getenv("APP_ENV")
-	if appEnv == "" {
-		appEnv = "prod" // Default to "prod" if APP_ENV is not set
-	}
-}
-
 type App struct {
 	TemplateFS      fs.FS
 	PublicFS        fs.FS
@@ -76,9 +69,15 @@ func LoadConfig() (AppConfig, error) {
 	var config AppConfig
 	configDir, configFile := getConfigFile()
 	fsys := os.DirFS(configDir)
-	BuildVersion = config.General.BuildVersion            // Use directory path here
-	err := parser.OpenYamlFile(fsys, configFile, &config) // Assuming it doesn't need the last argument
-	return config, err
+	err := parser.OpenYamlFile(fsys, configFile, &config)
+	if err != nil {
+		return config, err
+	}
+
+	// Set the BuildVersion from the global BuildVersion
+	config.General.BuildVersion = BuildVersion
+
+	return config, nil
 }
 
 func NewApp() *App {
