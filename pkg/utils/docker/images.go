@@ -2,11 +2,8 @@ package docker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"strings"
 
 	"github.com/docker/docker/api/types"
 )
@@ -35,7 +32,9 @@ func DeleteContainerImage(imageID string) error {
 	return nil
 }
 
-func LoadImage(imagePath string) (string, error) {
+func ImportImageToEngine(imagePath string) (string, error) {
+	fmt.Println("Importing image to Docker engine")
+	fmt.Println(imagePath)
 	// Check if the Docker client has been initialized
 	CheckIfInitialized()
 
@@ -46,38 +45,34 @@ func LoadImage(imagePath string) (string, error) {
 	}
 	defer imageFile.Close()
 
-	// Load the image using the Docker client
-	resp, err := dockerCli.ImageLoad(context.Background(), imageFile, false)
+	// Import the image into Docker
+	_, err = dockerCli.ImageLoad(context.Background(), imageFile, false)
 	if err != nil {
 		return "", err
 	}
 
-	defer resp.Body.Close()
+	// List all images
+	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
+	if err != nil {
+		return "", err
+	}
 
-	// Read the JSON response to get the image ID
-	decoder := json.NewDecoder(resp.Body)
-
+	// Search for the image we just loaded
 	var imageID string
-	for {
-		var jm map[string]interface{}
-		if err := decoder.Decode(&jm); err == io.EOF {
-			break
-		} else if err != nil {
-			return "", fmt.Errorf("could not decode response: %v", err)
-		}
-
-		if id, exists := jm["stream"]; exists {
-			if strID, ok := id.(string); ok {
-				// Extract image ID from the stream.
-				// This is a naive example; you may need to adjust this part
-				// to correctly parse your specific Docker version's output.
-				imageID = strings.TrimSpace(strID)
+	for _, image := range images {
+		for _, tag := range image.RepoTags {
+			if tag == "alpine:latest" {
+				imageID = image.ID
+				break
 			}
+		}
+		if imageID != "" {
+			break
 		}
 	}
 
 	if imageID == "" {
-		return "", fmt.Errorf("could not find image ID in response")
+		return "", fmt.Errorf("could not find the loaded image")
 	}
 
 	return imageID, nil
