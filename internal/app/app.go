@@ -38,6 +38,7 @@ type AppConfig struct {
 
 type GeneralConfig struct {
 	RunEnv       string `yaml:"runEnv"`
+	StorageDir   string `yaml:"storageDir"`
 	BuildVersion string
 }
 
@@ -98,7 +99,6 @@ func NewApp() *App {
 
 	// If you have any other initializations like generating OAuth URL, do them here
 	OauthCallbackURL = GenerateOauthCallbackURL(config)
-
 	return a
 }
 
