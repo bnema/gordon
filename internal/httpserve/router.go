@@ -73,15 +73,19 @@ func bindHTMXEndpoints(e *echo.Echo, a *app.App) {
 	e.DELETE("/htmx/image-manager/delete/:ID", func(c echo.Context) error {
 		return handler.ImageManagerDeleteHandler(c, a)
 	})
-
 	e.GET("/htmx/container-manager", func(c echo.Context) error {
 		return handler.ContainerManagerHandler(c, a)
 	})
 	e.POST("/htmx/container-manager/stop/:ID", func(c echo.Context) error {
 		return handler.ContainerManagerStopHandler(c, a)
 	})
-
 	e.DELETE("/htmx/container-manager/delete/:ID", func(c echo.Context) error {
 		return handler.ContainerManagerDeleteHandler(c, a)
+	})
+	e.GET("/htmx/upload-image", func(c echo.Context) error {
+		return handler.UploadImageGETHandler(c, a)
+	})
+	e.POST("/htmx/upload-image", func(c echo.Context) error {
+		return handler.UploadImagePOSTHandler(c, a)
 	})
 }
