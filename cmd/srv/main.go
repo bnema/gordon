@@ -23,6 +23,7 @@ func cleanup(a *app.App, memDb *sql.DB) {
 
 func main() {
 	a := app.NewApp()
+	fmt.Println(a)
 
 	// Initialize database
 	memDb, err := app.InitializeDB(a)
@@ -37,6 +38,7 @@ func main() {
 	if err != nil {
 		log.Printf("Error: %s", err)
 	}
+
 	// Setup a channel to capture termination signals
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)

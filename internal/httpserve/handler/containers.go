@@ -30,13 +30,13 @@ type HumanReadableContainer struct {
 	Name       string
 	Ports      []string
 	ShortID    string
-	CreatedStr string // Human-readable Created time
-	SizeStr    string // Human-readable Size
-	UpSince    string // Human-readable time elapsed since the container was started
-	StateColor string // Color of the state badge
+	CreatedStr string
+	SizeStr    string
+	UpSince    string
+	StateColor string
 }
 
-// ImageManagerHandler handles the /image-manager route
+// ImageManagerHandler handles the /image-manager route (HTMX route)
 func ImageManagerHandler(c echo.Context, a *app.App) error {
 	images, err := docker.ListContainerImages()
 	if err != nil {
@@ -113,7 +113,7 @@ func ContainerManagerHandler(c echo.Context, a *app.App) error {
 	if err != nil {
 		return sendError(c, err)
 	}
-	// We need Name / Command / Created / Status / Ports / State
+
 	var humanReadableContainers []HumanReadableContainer
 
 	for _, container := range containers {
@@ -123,7 +123,7 @@ func ContainerManagerHandler(c echo.Context, a *app.App) error {
 		createdStr := humanize.TimeAgo(createdTime)
 		sizeStr := humanize.BytesToReadableSize(container.SizeRw)
 		stateColor := "green"
-		// If the container is exited, set the state color to red
+
 		if container.State == "exited" {
 			stateColor = "red"
 		}
@@ -169,14 +169,13 @@ func ContainerManagerDeleteHandler(c echo.Context, a *app.App) error {
 	if err != nil {
 		return sendError(c, err)
 	}
-	// Since it is HTMX we return a html div with the message "Removed"
 	return c.HTML(http.StatusOK, `Success`)
 }
 
 // ContainerManagerStopHandler handles the /container-manager/stop route
 func ContainerManagerStopHandler(c echo.Context, a *app.App) error {
 	ID := c.Param("ID")
-	// Stop the container gracefully with a timeout of 10 seconds
+	// Stop the container gracefully with a timeout
 	stopped, err := docker.StopContainerGracefully(ID, 3*time.Second)
 	if err != nil {
 		return sendError(c, err)
