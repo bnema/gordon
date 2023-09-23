@@ -23,8 +23,6 @@ func cleanup(a *app.App, memDb *sql.DB) {
 
 func main() {
 	a := app.NewApp()
-	fmt.Println(a)
-
 	// Initialize database
 	memDb, err := app.InitializeDB(a)
 	if err != nil {
