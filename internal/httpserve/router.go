@@ -89,6 +89,9 @@ func bindHTMXEndpoints(e *echo.Echo, a *app.App) {
 		return handler.UploadImagePOSTHandler(c, a)
 	})
 	e.GET("htmx/create-container/:ID", func(c echo.Context) error {
-		return handler.CreateContainerGETHandler(c, a)
+		return handler.CreateContainerGET(c, a)
+	})
+	e.POST("htmx/create-container/:ID", func(c echo.Context) error {
+		return handler.CreateContainerPOST(c, a)
 	})
 }

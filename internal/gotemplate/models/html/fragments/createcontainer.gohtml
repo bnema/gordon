@@ -8,11 +8,22 @@
     <div class="text-red-500">{{.ErrorMessage}}</div>
     {{ end }}
     <form
-      action="/create-container"
+      action="/create-container/{{.ShortID}}"
       method="post"
-      hx-post="/htmx/create-container"
+      hx-post="/htmx/create-container/{{.ShortID}}"
       hx-swap="innerHTML"
     >
+      <!-- Image Name -->
+      <div class="mb-4">
+        <label class="block">Image name</label>
+        <input
+          type="text"
+          name="image_name"
+          class="w-full p-4 rounded-md bg-gray-100 border-gray-300 border-2"
+          value="{{.ImageName}}"
+          readonly
+        />
+      </div>
       <!-- Container Name -->
       <div class="mb-4">
         <label class="block">Container name</label>
@@ -31,18 +42,6 @@
           name="container_name"
           class="w-full p-4 rounded-md"
           value="{{.ContainerDomain}}"
-        />
-      </div>
-
-      <!-- Image Name -->
-      <div class="mb-4">
-        <label class="block">Image name</label>
-        <input
-          type="text"
-          name="image_name"
-          class="w-full p-4 rounded-md bg-gray-100 border-gray-300 border-2"
-          value="{{.ImageName}}"
-          readonly
         />
       </div>
 
