@@ -13,8 +13,8 @@ func init() {
 func ListRunningContainers() ([]types.Container, error) {
 	// Check if the Docker client has been initialized
 	CheckIfInitialized()
-	// List containers using the Docker client
-	containers, err := dockerCli.ContainerList(context.Background(), types.ContainerListOptions{})
+	// List containers using the Docker client:
+	containers, err := dockerCli.ContainerList(context.Background(), types.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, err
 	}
