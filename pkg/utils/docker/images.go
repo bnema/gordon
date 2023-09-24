@@ -2,7 +2,6 @@ package docker
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/docker/docker/api/types"
@@ -20,10 +19,9 @@ func ListContainerImages() ([]types.ImageSummary, error) {
 
 	return images, nil
 }
-func DeleteContainerImage(imageID string) error {
-	// Check if the Docker client has been initialized
 
-	// Delete the image using the Docker client
+// DeleteContainerImage deletes an image from the Docker engine
+func DeleteContainerImage(imageID string) error {
 	_, err := dockerCli.ImageRemove(context.Background(), imageID, types.ImageRemoveOptions{})
 	if err != nil {
 		return err
@@ -32,22 +30,20 @@ func DeleteContainerImage(imageID string) error {
 	return nil
 }
 
+// ImportImageToEngine imports an image to the Docker engine
 func ImportImageToEngine(imagePath string) (string, error) {
-	// Check if the Docker client has been initialized
-	CheckIfInitialized()
-
 	// Open the image file
 	imageFile, err := os.Open(imagePath)
 	if err != nil {
 		return "", err
 	}
-	defer imageFile.Close()
 
-	// Import the image into Docker
 	_, err = dockerCli.ImageLoad(context.Background(), imageFile, false)
 	if err != nil {
 		return "", err
 	}
+	// Close the image file
+	imageFile.Close()
 
 	// List all images
 	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
@@ -59,18 +55,14 @@ func ImportImageToEngine(imagePath string) (string, error) {
 	var imageID string
 	for _, image := range images {
 		for _, tag := range image.RepoTags {
-			if tag == "alpine:latest" {
+			if tag == "<none>:<none>" {
 				imageID = image.ID
-				break
 			}
-		}
-		if imageID != "" {
-			break
 		}
 	}
 
 	if imageID == "" {
-		return "", fmt.Errorf("could not find the loaded image")
+		return "", err
 	}
 
 	return imageID, nil
