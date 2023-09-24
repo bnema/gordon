@@ -6,6 +6,7 @@ import (
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/gotemplate/render"
 	"github.com/bnema/gordon/pkg/utils/docker"
+	"github.com/bnema/gordon/pkg/utils/sanitize"
 	"github.com/labstack/echo/v4"
 )
 
@@ -96,6 +97,28 @@ func CreateContainerPOST(c echo.Context, a *app.App) error {
 		return sendError(c, err)
 	}
 
-	// Redirect to the container manager
-	return c.Redirect(302, "/htmx/container-manager")
+	// Retrieve all form parameters
+	formParams, err := c.FormParams()
+	if err != nil {
+		return sendError(c, err)
+	}
+
+	// Initialize a map to store sanitized values
+	sanitizedParams := make(map[string]string)
+
+	// Iterate over all form parameters and sanitize them
+	for k, v := range formParams {
+		if len(v) > 0 {
+			sanitized, err := sanitize.SanitizeHTML(v[0])
+			if err != nil {
+				return sendError(c, err)
+			}
+			sanitizedParams[k] = sanitized
+		}
+	}
+
+	// Print the form values
+	fmt.Printf("Form values: %v\n", sanitizedParams)
+
+	return c.String(200, "OK")
 }
