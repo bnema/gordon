@@ -1,7 +1,8 @@
 package handler
 
 import (
-	"fmt"
+	"bytes"
+	"io"
 	"net/http"
 
 	"github.com/bnema/gordon/internal/app"
@@ -37,23 +38,27 @@ func UploadImagePOSTHandler(c echo.Context, a *app.App) error {
 	if err := c.Request().ParseMultipartForm(MaxUploadSize); err != nil {
 		return c.String(http.StatusRequestEntityTooLarge, "File size exceeded")
 	}
+
 	// Get the file from the form
 	file, header, err := c.Request().FormFile("file")
 	if err != nil {
 		return sendError(c, err)
 	}
-	defer file.Close()
 
-	// Get the filename
-	filename := header.Filename
-	fmt.Println("Uploaded file:", filename)
-
-	// Save the image to the storage directory
-	imageId, err := store.SaveImageToStorage(&a.Config, filename, file)
+	// Get the file size
+	buf := new(bytes.Buffer)
+	_, err = io.Copy(buf, file)
 	if err != nil {
 		return sendError(c, err)
 	}
-	// Just print for now but add to the database later
-	fmt.Println(imageId)
+
+	// Get the filename
+	filename := header.Filename
+
+	// Save the image to the storage directory
+	_, err = store.SaveImageToStorage(&a.Config, filename, buf)
+	if err != nil {
+		return sendError(c, err)
+	}
 	return c.HTML(http.StatusOK, "Success")
 }

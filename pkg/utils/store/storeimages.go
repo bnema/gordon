@@ -3,7 +3,6 @@ package store
 import (
 	"fmt"
 	"io"
-	"mime/multipart"
 	"os"
 	"path/filepath"
 
@@ -24,7 +23,7 @@ func NewStorageConfig(config *app.AppConfig) *StorageConfig {
 	}
 }
 
-func SaveImageToStorage(config *app.AppConfig, filename string, file multipart.File) (string, error) {
+func SaveImageToStorage(config *app.AppConfig, filename string, buf io.Reader) (string, error) {
 	// Check if the folder exist if not create it
 	if _, err := os.Stat(config.General.StorageDir); os.IsNotExist(err) {
 		err := os.MkdirAll(config.General.StorageDir, 0755)
@@ -41,18 +40,22 @@ func SaveImageToStorage(config *app.AppConfig, filename string, file multipart.F
 	if err != nil {
 		return "", fmt.Errorf("failed to open file: %v", err)
 	}
-	defer outFile.Close()
 
 	// Write the uploaded file's content to the outFile
-	_, err = io.Copy(outFile, file)
+	_, err = io.Copy(outFile, buf)
 	if err != nil {
 		return "", fmt.Errorf("failed to write file: %v", err)
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(saveInPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("file does not exist: %v", err)
 	}
 
 	// Import the image into Docker
 	imageId, err := docker.ImportImageToEngine(saveInPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to save image to storage directory: %v", err)
+		return "", fmt.Errorf("failed to import image to Docker: %v", err)
 	}
 
 	return imageId, nil
