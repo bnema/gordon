@@ -6,3 +6,4 @@ gordon.yml
 bun.lockb
 *.log
 *.txt
+*sync-conflict*
