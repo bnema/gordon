@@ -33,8 +33,6 @@ func DeleteContainerImage(imageID string) error {
 }
 
 func ImportImageToEngine(imagePath string) (string, error) {
-	fmt.Println("Importing image to Docker engine")
-	fmt.Println(imagePath)
 	// Check if the Docker client has been initialized
 	CheckIfInitialized()
 
@@ -76,4 +74,15 @@ func ImportImageToEngine(imagePath string) (string, error) {
 	}
 
 	return imageID, nil
+}
+
+// From an ID, get the all the information about the image
+func GetImageInfo(imageID string) (*types.ImageInspect, error) {
+	// Get the image information using the Docker client
+	imageInfo, _, err := dockerCli.ImageInspectWithRaw(context.Background(), imageID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &imageInfo, nil
 }
