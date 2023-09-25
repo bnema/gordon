@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"net/http"
+	"fmt"
 
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/gotemplate/render"
@@ -21,31 +21,46 @@ type CreateContainer struct {
 	Network       string
 }
 
-// CreateContainerRoute is the route for creating a new container
-func CreateContainerGETHandler(c echo.Context, a *app.App) error {
-	// Retreive the image ID from the URL
-	ShortID := c.Param("ID")
+// FromShortIDToImageID converts a short image ID to a full image ID
+func FromShortIDToImageID(ShortID string) (string, error) {
 	idMapMutex.Lock()
 	// Check if the ShortImgID exists in the idMap
 	imageID, exists := idMap[ShortID]
 	idMapMutex.Unlock()
 
+	if !exists {
+		return "", fmt.Errorf("Invalid ShortImgID")
+	}
+
+	return imageID, nil
+}
+
+// CreateContainerRoute is the route for creating a new container
+func CreateContainerGET(c echo.Context, a *app.App) error {
+	// Retreive the ShortID of the image from the URL
+	ShortID := c.Param("ID")
+
+	// Convert the ShortID to a full image ID
+	imageID, err := FromShortIDToImageID(ShortID)
+	if err != nil {
+		return sendError(c, err)
+	}
+
+	// Get the image info
 	imageInfo, err := docker.GetImageInfo(imageID)
 	if err != nil {
 		return sendError(c, err)
 	}
+
 	// Extract image name
 	var imageName string
 	if len(imageInfo.RepoTags) > 0 {
 		imageName = imageInfo.RepoTags[0] // Using the first tag as the image name
 	}
 
-	if !exists {
-		return c.String(http.StatusBadRequest, "Invalid ShortImgID")
-	}
-
 	data := map[string]interface{}{
 		"Title":     "Create a new container",
+		"ShortID":   ShortID,
 		"ImageName": imageName,
 	}
 
@@ -63,4 +78,24 @@ func CreateContainerGETHandler(c echo.Context, a *app.App) error {
 
 	return c.HTML(200, renderedHTML)
 
+}
+
+func CreateContainerPOST(c echo.Context, a *app.App) error {
+	// Retreive the ShortID of the image from the URL
+	ShortID := c.Param("ID")
+
+	// Convert the ShortID to a full image ID
+	imageID, err := FromShortIDToImageID(ShortID)
+	if err != nil {
+		return sendError(c, err)
+	}
+
+	// Get the image info
+	_, err = docker.GetImageInfo(imageID)
+	if err != nil {
+		return sendError(c, err)
+	}
+
+	// Redirect to the container manager
+	return c.Redirect(302, "/htmx/container-manager")
 }
