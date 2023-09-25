@@ -1,10 +1,10 @@
-<!-- Form to upload a container image (.tar.gz format) -->
+<!-- Form to upload a container image (.tar format) -->
 <div
   class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow"
   hx-ext="response-targets"
   hx-boost="true"
 >
-  <div class="flex-grow bg-white p-4 rounded-md shadow mb-4">
+  <div class="flex-grow bg-slate-100 p-4 rounded-md">
     <h2>Upload Image Containers</h2>
     <!-- Upload Form -->
     <form
@@ -17,7 +17,7 @@
       hx-target-*="#error-message-div"
     >
       <div
-        class="upload-zone w-full h-44 bg-gray-300 rounded-md shadow mb-4"
+        class="upload-zone w-full h-44 bg-slate-200 rounded-md p-4"
         hx-drop="true"
       >
         Drag & Drop your file here or

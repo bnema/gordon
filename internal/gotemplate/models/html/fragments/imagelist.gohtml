@@ -35,6 +35,18 @@
         </td>
         <td>{{.SizeStr}}</td>
         <td align="right">
+        
+          <button
+            id="add-button-img-{{.ID}}"
+            hx-get="/htmx/create-container/{{.ID}}"
+            hx-target="#create-container"
+            hx-target-*="#error-message-div-{{.ID}}"
+            hx-swap="outerHTML"
+            class="py-2 px-4"
+          >
+            <span title="Deploy a container using this image" class="iconoir-add-circle text-xl text-blue-800 font-bold"></span>
+          </button>
+
           <button
             id="remove-button-img-{{.ID}}"
             hx-delete="/htmx/image-manager/delete/{{.ID}}"
@@ -44,7 +56,7 @@
             hx-confirm="Are you sure you want to delete this container image?"
             class="py-2 px-4"
           >
-            <span class="iconoir-trash text-xl text-red-600 font-bold"></span>
+            <span title="Remove this image" class="iconoir-trash text-xl text-red-600 font-bold"></span>
           </button>
         </td>
       </tr>
@@ -63,4 +75,5 @@
     </tbody>
   </table>
   <div id="upload-image"></div>
+  <div id="create-container"></div>
 </div>
