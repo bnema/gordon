@@ -1,15 +1,24 @@
-<div class="w-full md:w-1/5 flex flex-col space-evenly p-4 md:p-0">
+<div
+  class="w-full md:w-1/5 flex flex-col space-evenly md:p-0 max-w-fit min-w-fit"
+>
   <div class="hidden md:flex justify-center p-4">
     <img src="/assets/imgs/gordon-mascot-hq-trsp.png" alt="logo" class="h-32" />
   </div>
-  <div class="p-4 flex flex-col bg-gordonmascot-lblue rounded-lg shadow space-y-4">
+  <div
+    class="p-4 xl:p-8 flex flex-col bg-gordonmascot-lblue rounded-lg shadow space-y-4"
+  >
     <div class="w-full flex justify-center">
-      <h1 class="gordon-title text-4xl xl:text-5xl text-gordonmascot-hblue tracking-tighter">Gordon</h1>
+      <h1
+        class="gordon-title text-4xl xl:text-5xl text-gordonmascot-hblue tracking-tighter"
+      >
+        Gordon
+      </h1>
       <span class="text-gordonmascot-mblue text-sm">{{ .BuildVersion }}</span>
     </div>
     <div class="w-full">
       <ul
-        class="flex flex-wrap md:flex-col md:space-y-6 md:py-8 font-semibold text-gray-100 text-lg md:text-2xl md:pl-4 min-w-fit">
+        class="flex flex-wrap md:flex-col md:space-y-6 md:py-8 font-semibold text-gray-100 text-lg md:text-2xl min-w-fit justify-center"
+      >
         <li class="flex items-center w-1/2 md:w-full">
           <i class="iconoir-dashboard-speed mr-2 md:text-3xl"></i>
           <a href="/admin">Dashboard</a>
@@ -18,15 +27,30 @@
           <i class="iconoir-server mr-2 md:text-3xl"></i>
           <a href="/admin/manager">Manager</a>
         </li>
-        <li class="flex items-center w-1/2 md:w-full">
+        <li class="flex items-center w-1/2 md:w-full text-gray-600">
           <i class="iconoir-community mr-2 md:text-3xl"></i>
-          <a href="/admin/users">Users</a>
+          <a title="Disabled" href="#">Users</a>
         </li>
-        <li class="flex items-center w-1/2 md:w-full">
+        <li class="flex items-center w-1/2 md:w-full text-gray-600">
           <i class="iconoir-database-settings mr-2 md:text-3xl"></i>
-          <a href="/admin/settings">Settings</a>
+          <a title="Disabled" href="#">Settings</a>
         </li>
       </ul>
+    </div>
+    <!-- Settings / Logout on the same line -->
+    <div class="w-full flex justify-center space-x-4">
+      <a
+        href="/admin/settings"
+        title="User settings"
+        class="iconoir-settings text-gordonmascot-mblue text-lg md:text-2xl"
+      >
+      </a>
+      <a
+        href="/admin/logout"
+        title="Logout"
+        class="iconoir-log-out text-gordonmascot-mblue text-lg md:text-2xl"
+      >
+      </a>
     </div>
   </div>
 </div>
