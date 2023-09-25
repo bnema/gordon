@@ -1,0 +1,82 @@
+<div
+  class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow"
+>
+  <!-- Left Side: Docker Run Options -->
+  <div class="flex-grow bg-slate-100 p-4 rounded-md">
+    <h2 class="font-bold pb-4">Deploy a container based on {{.ImageName}}</h2>
+    {{if .ErrorMessage}}
+    <div class="text-red-500">{{.ErrorMessage}}</div>
+    {{ end }}
+    <form
+      action="/create-container"
+      method="post"
+      hx-post="/htmx/create-container"
+      hx-swap="innerHTML"
+    >
+      <!-- Container Name -->
+      <div class="mb-4">
+        <label class="block">Container name</label>
+        <input
+          type="text"
+          name="container_name"
+          class="w-full p-4 rounded-md"
+          value="{{.ContainerName}}"
+        />
+      </div>
+      <!-- Domain/Subdomain -->
+      <div class="mb-4">
+        <label class="block">Domain/Subdomain</label>
+        <input
+          type="text"
+          name="container_name"
+          class="w-full p-4 rounded-md"
+          value="{{.ContainerDomain}}"
+        />
+      </div>
+
+      <!-- Image Name -->
+      <div class="mb-4">
+        <label class="block">Image name</label>
+        <input
+          type="text"
+          name="image_name"
+          class="w-full p-4 rounded-md bg-gray-100 border-gray-300 border-2"
+          value="{{.ImageName}}"
+          readonly
+        />
+      </div>
+
+      <!-- Ports -->
+      <div class="mb-4">
+        <label class="block">Ports</label>
+        <span class="text-gray-500"
+          >e.g. 80:80 (left is host, right is container)</span
+        >
+        <input
+          type="text"
+          name="ports"
+          class="w-full p-4 rounded-md"
+          value="{{.Ports}}"
+        />
+      </div>
+
+      <!-- Volumes -->
+      <div class="mb-4">
+        <label class="block">Volumes</label>
+        <span class="text-gray-500">e.g. ./data:/container/data </span>
+        <input
+          type="text"
+          name="volumes"
+          class="w-full p-4 rounded-md"
+          value="{{.Volumes}}"
+        />
+      </div>
+
+      <input
+        type="submit"
+        value="Create"
+        class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+      />
+    </form>
+  </div>
+</div>

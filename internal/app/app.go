@@ -56,6 +56,7 @@ type ContainerEngineConfig struct {
 	Sock       string `yaml:"dockersock"`
 	PodmanSock string `yaml:"podmansock"`
 	Podman     bool   `yaml:"podman"`
+	Network    string `yaml:"network"`
 }
 
 func InitializeEnvironment() {
