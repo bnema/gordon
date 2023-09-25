@@ -5,6 +5,7 @@ document.body.addEventListener("htmx:afterOnLoad", function(event) {
   ) {
     setTimeout(function() {
       location.reload();
-    }, 3000);
+    }, 2000);
   }
 });
+
