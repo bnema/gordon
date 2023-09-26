@@ -1,5 +1,5 @@
 <div
-  class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow"
+  class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow" hx-ext="response-targets"
 >
   <!-- Left Side: Docker Run Options -->
   <div class="flex-grow bg-slate-100 p-4 rounded-md">
@@ -12,20 +12,35 @@
       method="post"
       hx-post="/htmx/create-container/{{.ShortID}}"
       hx-swap="innerHTML"
+      hx-target-*="#error-message-create-container-{{.ShortID}}"
     >
       <!-- Image Name -->
-      <div class="mb-4">
-        <label class="block">Image name</label>
-        <input
-          type="text"
-          name="image_name"
-          class="w-full p-4 rounded-md bg-gray-100 border-gray-300 border-2"
-          value="{{.ImageName}}"
-          readonly
-        />
+      <div class="flex space-x-4 pb-4">
+        <div class="w-1/3">
+          <label class="block">Image name</label>
+          <input
+            type="text"
+            name="image_name"
+            class="w-full p-4 rounded-md bg-gray-100 border-gray-300 border-2"
+            value="{{.ImageName}}"
+            readonly
+          />
+        </div>
+
+        <div class="w-2/3">
+          <label class="block">Image ID</label>
+          <input
+            type="text"
+            name="image_id"
+            class="w-full p-4 rounded-md bg-gray-100 border-gray-300 border-2"
+            value="{{.ImageID}}"
+            readonly
+          />
+        </div>
       </div>
+
       <!-- Container Name -->
-      <div class="mb-4">
+      <div class="pb-4">
         <label class="block">Container name</label>
         <input
           type="text"
@@ -34,19 +49,41 @@
           value="{{.ContainerName}}"
         />
       </div>
-      <!-- Domain/Subdomain -->
-      <div class="mb-4">
-        <label class="block">Domain/Subdomain</label>
-        <input
-          type="text"
-          name="container_domain"
-          class="w-full p-4 rounded-md"
-          value="{{.ContainerDomain}}"
-        />
+      <!-- Http(s) / Subdomain / Domain -->
+      <div class="flex pb-4 space-x-4">
+        <!-- Protocol -->
+        <div class="w-1/4">
+          <label class="block">Protocol</label>
+          <select name="container_protocol" class="w-full p-4 rounded-md border-2 bg-slate-200 border-gray-300">
+            <option value="https" {{if eq .ContainerProtocol "https"}}selected{{end}}>https</option>
+            <option value="http" {{if eq .ContainerProtocol "http"}}selected{{end}}>http</option>
+          </select>
+        </div>
+        
+        <!-- Subdomain -->
+        <div class="w-1/3">
+          <label class="block">Subdomain</label>
+          <input
+            type="text"
+            name="container_subdomain"
+            class="w-full p-4 rounded-md"
+            value="{{.ContainerSubdomain}}"
+          />
+        </div>
+        
+        <!-- Domain -->
+        <div class="w-5/12">
+          <label class="block">Domain</label>
+          <input
+            type="text"
+            name="container_domain"
+            class="w-full p-4 rounded-md"
+            value="{{.ContainerDomain}}"
+          />
+        </div>
       </div>
-
       <!-- Ports -->
-      <div class="mb-4">
+      <div class="pb-4">
         <label class="block">Ports</label>
         <span class="text-gray-500"
           >e.g. 80:80 (left is host, right is container)</span
@@ -60,7 +97,7 @@
       </div>
 
       <!-- Volumes -->
-      <div class="mb-4">
+      <div class="pb-4">
         <label class="block">Volumes</label>
         <span class="text-gray-500">e.g. ./data:/container/data </span>
         <input
@@ -71,11 +108,37 @@
         />
       </div>
 
+      <!-- Environment Variables -->
+      <div class="pb-4">
+        <label class="block">Environment variables</label>
+        <span class="text-gray-500">e.g. KEY=VALUE </span>
+        <input
+          type="text"
+          name="environment_variables"
+          class="w-full p-4 rounded-md"
+          value="{{.EnvironmentVariables}}"
+        />
+
+      <!-- Restart: always/on-failure/only when stopped/never -->
+      <div class="pb-4">
+        <label class="block">Restart</label>
+        <select
+          name="restart"
+          class="w-full p-4 rounded-md border-2 bg-gray-100 border-gray-300"
+        >
+          <option value="always">Always</option>
+          <option value="on-failure">On failure</option>
+          <option value="unless-stopped">Unless stopped</option>
+          <option value="never">Never</option>
+        </select>
+      </div>
+
       <input
         type="submit"
         value="Create"
         class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
       />
     </form>
+    <div id="error-message-create-container-{{.ShortID}}" class="text-red-500"></div>
   </div>
 </div>
