@@ -1,0 +1,17 @@
+<div id="editor">
+  <form method="post" action="/htmx/container-manager/edit/{{.ID}}">
+    <textarea
+      name="container_config"
+      id="container_config"
+      class="w-full p-4 rounded-md bg-slate-100 border-gray-300 border-2"
+      oninput="this.style.height = '';this.style.height = this.scrollHeight + 'px'"
+      >{{.ContainerInfo}}</textarea
+    >
+
+    <input
+      type="submit"
+      value="Save"
+      class="bg-gordonmascot-mblue text-white px-4 py-2 rounded-md md:text-xl hover:bg-gordonmascot-hblue"
+    />
+  </form>
+</div>

@@ -51,6 +51,18 @@
           >
             <span class="iconoir-system-shut text-xl font-bold"></span>
           </button>
+          <!-- EDIT -->
+          <button
+            id="edit-button-{{.ID}}"
+            hx-get="/htmx/container-manager/edit/{{.ID}}"
+            hx-target="#edit-container-{{.ID}}"
+            hx-target-*="#error-message-{{.ID}}"
+            hx-swap="innerHTML"
+            class="py-2 px-4"
+            data-active="false"
+          >
+            <span class="iconoir-edit text-xl text-blue-600 font-bold"></span>
+          </button>
           <!-- REMOVE -->
           <button
             id="remove-button-img-{{.ID}}"
@@ -64,6 +76,11 @@
             <!-- iconoir trash -->
             <span class="iconoir-trash text-xl text-red-600 font-bold"></span>
           </button>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="7">
+          <div id="edit-container-{{.ID}}"></div>
         </td>
       </tr>
       <tr>

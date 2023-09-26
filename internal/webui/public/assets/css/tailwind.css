@@ -822,6 +822,11 @@ video {
   background-color: rgb(228 228 231 / var(--tw-bg-opacity));
 }
 
+.bg-gordonmascot-mblue {
+  --tw-bg-opacity: 1;
+  background-color: rgb(0 82 147 / var(--tw-bg-opacity));
+}
+
 .p-0 {
   padding: 0px;
 }
@@ -852,6 +857,11 @@ video {
 .py-2 {
   padding-top: 0.5rem;
   padding-bottom: 0.5rem;
+}
+
+.py-4 {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
 }
 
 .pb-4 {
@@ -957,6 +967,16 @@ video {
 .text-white {
   --tw-text-opacity: 1;
   color: rgb(255 255 255 / var(--tw-text-opacity));
+}
+
+.text-blue-600 {
+  --tw-text-opacity: 1;
+  color: rgb(37 99 235 / var(--tw-text-opacity));
+}
+
+.text-black {
+  --tw-text-opacity: 1;
+  color: rgb(0 0 0 / var(--tw-text-opacity));
 }
 
 .underline {
@@ -1097,6 +1117,11 @@ video {
 .hover\:bg-blue-700:hover {
   --tw-bg-opacity: 1;
   background-color: rgb(29 78 216 / var(--tw-bg-opacity));
+}
+
+.hover\:bg-gordonmascot-hblue:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(1 30 92 / var(--tw-bg-opacity));
 }
 
 @media (min-width: 640px) {
