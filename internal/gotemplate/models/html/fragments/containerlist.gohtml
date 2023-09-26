@@ -34,7 +34,7 @@
             hx-post="/htmx/container-manager/start/{{.ID}}"
             hx-target="#container-{{.ID}}"
             hx-target-*="#error-message-{{.ID}}"
-            hx-swap="innerHTML"
+            hx-swap="outerHTML"
             class="py-2 px-4"
           >
             <span class="iconoir-play text-xl font-bold"></span>
