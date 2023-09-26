@@ -36,10 +36,9 @@ function toggleButtonState(event) {
   }
 }
 
-
 // Attach event listeners to buttons
 document.body.addEventListener("htmx:afterSwap", function (event) {
-  const buttons = document.querySelectorAll('[id^="start-button-"], [id^="stop-button-"], [id^="edit-button-"], [id^="remove-button-img-"]');
+  const buttons = document.querySelectorAll('[id^="start-button-"], [id^="stop-button-"], [id^="edit-button-"], [id^="remove-button-img-"], [id^="add-button-img-"]');
   buttons.forEach(button => {
     console.log("button: ", button);
     button.addEventListener('click', toggleButtonState);
