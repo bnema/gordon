@@ -67,30 +67,45 @@ func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
 }
 
 func bindHTMXEndpoints(e *echo.Echo, a *app.App) {
+	// List all images component
 	e.GET("/htmx/image-manager", func(c echo.Context) error {
-		return handler.ImageManagerHandler(c, a)
+		return handler.ImageManagerComponent(c, a)
 	})
+	// Delete an image
 	e.DELETE("/htmx/image-manager/delete/:ID", func(c echo.Context) error {
-		return handler.ImageManagerDeleteHandler(c, a)
+		return handler.ImageManagerDelete(c, a)
 	})
+
+	// List all containers
 	e.GET("/htmx/container-manager", func(c echo.Context) error {
-		return handler.ContainerManagerHandler(c, a)
+		return handler.ContainerManagerComponent(c, a)
 	})
+	// Stop a container
 	e.POST("/htmx/container-manager/stop/:ID", func(c echo.Context) error {
-		return handler.ContainerManagerStopHandler(c, a)
+		return handler.ContainerManagerStop(c, a)
 	})
+	// Delete a container
 	e.DELETE("/htmx/container-manager/delete/:ID", func(c echo.Context) error {
-		return handler.ContainerManagerDeleteHandler(c, a)
+		return handler.ContainerManagerDelete(c, a)
 	})
+	// Start a container
+	e.POST("/htmx/container-manager/start/:ID", func(c echo.Context) error {
+		return handler.ContainerManagerStart(c, a)
+	})
+
+	// Display upload-image component
 	e.GET("/htmx/upload-image", func(c echo.Context) error {
 		return handler.UploadImageGETHandler(c, a)
 	})
+	// Upload image
 	e.POST("/htmx/upload-image", func(c echo.Context) error {
 		return handler.UploadImagePOSTHandler(c, a)
 	})
+	// Display create-container component
 	e.GET("htmx/create-container/:ID", func(c echo.Context) error {
 		return handler.CreateContainerGET(c, a)
 	})
+	// Create container
 	e.POST("htmx/create-container/:ID", func(c echo.Context) error {
 		return handler.CreateContainerPOST(c, a)
 	})

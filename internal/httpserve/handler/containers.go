@@ -36,8 +36,8 @@ type HumanReadableContainer struct {
 	StateColor string
 }
 
-// ImageManagerHandler handles the /image-manager route (HTMX route)
-func ImageManagerHandler(c echo.Context, a *app.App) error {
+// ImageManagerComponent handles the /image-manager route (HTMX route)
+func ImageManagerComponent(c echo.Context, a *app.App) error {
 	images, err := docker.ListContainerImages()
 	if err != nil {
 		return sendError(c, err)
@@ -78,8 +78,8 @@ func ImageManagerHandler(c echo.Context, a *app.App) error {
 	return c.HTML(200, renderedHTML)
 }
 
-// ImageManagerDeleteHandler handles the /image-manager/delete route
-func ImageManagerDeleteHandler(c echo.Context, a *app.App) error {
+// ImageManagerDelete handles the /image-manager/delete route
+func ImageManagerDelete(c echo.Context, a *app.App) error {
 	// Get the ShortImgID from the URL
 	ShortID := c.Param("ID")
 
@@ -107,8 +107,8 @@ func ImageManagerDeleteHandler(c echo.Context, a *app.App) error {
 	return c.HTML(http.StatusOK, `<div>Removed</div>`)
 }
 
-// ContainerManagerHandler handles the /container-manager route
-func ContainerManagerHandler(c echo.Context, a *app.App) error {
+// ContainerManagerComponent handles the /container-manager route
+func ContainerManagerComponent(c echo.Context, a *app.App) error {
 	containers, err := docker.ListRunningContainers()
 	if err != nil {
 		return sendError(c, err)
@@ -117,8 +117,7 @@ func ContainerManagerHandler(c echo.Context, a *app.App) error {
 	var humanReadableContainers []HumanReadableContainer
 
 	for _, container := range containers {
-		ShortID := container.ID[0:12]
-		idMap[ShortID] = container.ID
+		localContainer := container // Make a local copy
 		createdTime := time.Unix(container.Created, 0)
 		createdStr := humanize.TimeAgo(createdTime)
 		sizeStr := humanize.BytesToReadableSize(container.SizeRw)
@@ -136,13 +135,12 @@ func ContainerManagerHandler(c echo.Context, a *app.App) error {
 		for _, name := range container.Names {
 			name = name[1:]
 			humanReadableContainers = append(humanReadableContainers, HumanReadableContainer{
-				Container:  &container,
+				Container:  &localContainer,
 				CreatedStr: createdStr,
 				SizeStr:    sizeStr,
 				UpSince:    humanize.TimeAgo(time.Unix(container.Created, 0)),
 				StateColor: stateColor,
 				Name:       name,
-				ShortID:    ShortID,
 				Ports:      ports,
 			})
 		}
@@ -162,8 +160,8 @@ func ContainerManagerHandler(c echo.Context, a *app.App) error {
 	return c.HTML(200, renderedHTML)
 }
 
-// ContainerManagerDeleteHandler handles the /container-manager/delete route
-func ContainerManagerDeleteHandler(c echo.Context, a *app.App) error {
+// ContainerManagerDelete handles the /container-manager/delete route
+func ContainerManagerDelete(c echo.Context, a *app.App) error {
 	ID := c.Param("ID")
 	err := docker.DeleteContainer(ID)
 	if err != nil {
@@ -172,8 +170,8 @@ func ContainerManagerDeleteHandler(c echo.Context, a *app.App) error {
 	return c.HTML(http.StatusOK, `Success`)
 }
 
-// ContainerManagerStopHandler handles the /container-manager/stop route
-func ContainerManagerStopHandler(c echo.Context, a *app.App) error {
+// ContainerManagerStop handles the /container-manager/stop route
+func ContainerManagerStop(c echo.Context, a *app.App) error {
 	ID := c.Param("ID")
 	// Stop the container gracefully with a timeout
 	stopped, err := docker.StopContainerGracefully(ID, 3*time.Second)
@@ -190,5 +188,15 @@ func ContainerManagerStopHandler(c echo.Context, a *app.App) error {
 		return sendError(c, err)
 	}
 
+	return c.HTML(http.StatusOK, `Success`)
+}
+
+// ContainerManagerStart handles the /container-manager/start route
+func ContainerManagerStart(c echo.Context, a *app.App) error {
+	ID := c.Param("ID")
+	err := docker.StartContainer(ID)
+	if err != nil {
+		return sendError(c, err)
+	}
 	return c.HTML(http.StatusOK, `Success`)
 }
