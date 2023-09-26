@@ -22,7 +22,7 @@ type ContainerCommandParams struct {
 	ImageName     string
 	ImageID       string
 	Ports         string
-	Volumes       string
+	Volumes       []string
 	Labels        []string
 	Network       string
 	Restart       string
@@ -140,7 +140,7 @@ func CreateContainer(cmdParams ContainerCommandParams) error {
 		},
 		&container.HostConfig{
 			PortBindings: portBindings,
-			Binds:        []string{cmdParams.Volumes},
+			Binds:        cmdParams.Volumes,
 			RestartPolicy: container.RestartPolicy{
 				Name: cmdParams.Restart,
 			},
