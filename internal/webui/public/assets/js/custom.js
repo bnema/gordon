@@ -36,12 +36,22 @@ function toggleButtonState(event) {
   }
 }
 
-// Attach event listeners to buttons
+// Attach event listeners to buttons that needs to toggle state
 document.body.addEventListener("htmx:afterSwap", function (event) {
-  const buttons = document.querySelectorAll('[id^="start-button-"], [id^="stop-button-"], [id^="edit-button-"], [id^="remove-button-img-"], [id^="add-button-img-"]');
+  const buttons = document.querySelectorAll('[id^="edit-button-"], [id^="add-button-img-"]', '[id^="upload-button"]');
   buttons.forEach(button => {
-    console.log("button: ", button);
     button.addEventListener('click', toggleButtonState);
   });
 });
 
+// Attach event listeners to buttons that needs to set a full location reload 
+document.body.addEventListener("htmx:afterOnLoad", function (event) {
+ const buttons = document.querySelectorAll('[id^="start-button-"], [id^="stop-button-"], [id^="remove-button-img-"], [id^="create-container-submit"], [id^="save-button-"]');
+   buttons.forEach(button => {
+    button.addEventListener('click', function(event) {
+      setTimeout(function() {
+      location.reload();
+      }, 5000);
+    });
+  });
+});
