@@ -8,7 +8,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
 )
 
@@ -16,13 +16,14 @@ type ContainerCommandParams struct {
 	ContainerName string
 	ContainerHost string
 	Domain        string
-	Https         bool
+	ServiceName   string
+	IsSSL         bool
 	EnvVar        string
 	ImageName     string
 	ImageID       string
 	Ports         string
-	Data          string
-	TraefikLabels []string
+	Volumes       string
+	Labels        []string
 	Network       string
 	Restart       string
 }
@@ -109,26 +110,24 @@ func StartContainer(containerID string) error {
 
 // CreateContainer creates a container with the given parameters
 func CreateContainer(cmdParams ContainerCommandParams) error {
-	// Initialize Docker client
-	dockerCli, err := client.NewClientWithOpts(client.FromEnv)
-	if err != nil {
-		return err
-	}
+	// Check if the Docker client has been initialized
+	CheckIfInitialized()
 
-	// Prepare container port bindings
+	// Prepare port bindings
 	portBindings := nat.PortMap{}
-	hostConfig := &container.HostConfig{
-		PortBindings: portBindings,
-		RestartPolicy: container.RestartPolicy{
-			Name: cmdParams.Restart,
-		},
-	}
-
-	// Define port mapping
 	parts := strings.Split(cmdParams.Ports, ":")
 	if len(parts) == 2 {
 		portBindings[nat.Port(parts[1])] = []nat.PortBinding{
 			{HostIP: "0.0.0.0", HostPort: parts[0]},
+		}
+	}
+
+	// Prepare labels for Traefik
+	labels := map[string]string{}
+	for _, label := range cmdParams.Labels {
+		keyValue := strings.Split(label, "=")
+		if len(keyValue) == 2 {
+			labels[keyValue[0]] = keyValue[1]
 		}
 	}
 
@@ -137,18 +136,33 @@ func CreateContainer(cmdParams ContainerCommandParams) error {
 		context.Background(),
 		&container.Config{
 			Image:  cmdParams.ImageName,
-			Labels: map[string]string{},
+			Labels: labels,
 		},
-		hostConfig,
-		nil, nil,
+		&container.HostConfig{
+			PortBindings: portBindings,
+			Binds:        []string{cmdParams.Volumes},
+			RestartPolicy: container.RestartPolicy{
+				Name: cmdParams.Restart,
+			},
+		},
+		&network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{
+				cmdParams.Network: {},
+			},
+		},
+		nil,
 		cmdParams.ContainerName,
 	)
 	if err != nil {
 		return err
 	}
 
-	// Start container
-	err = dockerCli.ContainerStart(context.Background(), resp.ID, types.ContainerStartOptions{})
+	// Start the container
+	err = dockerCli.ContainerStart(
+		context.Background(),
+		resp.ID,
+		types.ContainerStartOptions{},
+	)
 	if err != nil {
 		return err
 	}
