@@ -62,6 +62,7 @@ func CreateContainerGET(c echo.Context, a *app.App) error {
 	data := map[string]interface{}{
 		"Title":     "Create a new container",
 		"ShortID":   ShortID,
+		"ImageID":   imageID,
 		"ImageName": imageName,
 	}
 
@@ -104,7 +105,7 @@ func CreateContainerPOST(c echo.Context, a *app.App) error {
 	}
 
 	// Initialize a map to store sanitized values
-	sanitizedParams := make(map[string]string)
+	sanitizedInputs := make(map[string]string)
 
 	// Iterate over all form parameters and sanitize them
 	for k, v := range formParams {
@@ -113,12 +114,22 @@ func CreateContainerPOST(c echo.Context, a *app.App) error {
 			if err != nil {
 				return sendError(c, err)
 			}
-			sanitizedParams[k] = sanitized
+			sanitizedInputs[k] = sanitized
 		}
 	}
 
-	// Print the form values
-	fmt.Printf("Form values: %v\n", sanitizedParams)
+	// Result : Form values: map[container_domain:gogs.localhost container_name:gogs image_id:sha256:5d92d8ae733d93dc4af5b32bb353539eeff660fc2136c6902abcdf3aafe4cef1 image_name:gogs/gogs:latest ports:8888:80 restart:unless-stopped volumes:/home/data/test:/data]
+	// With those values we can use gotemplate/txt to create a custom docker run command
+	cmdParams, err := render.FromInputsToCmdParams(sanitizedInputs) // Make sure cmdParams is of type render.ContainerCommandParams
+	if err != nil {
+		return sendError(c, err)
+	}
 
-	return c.String(200, "OK")
+	// Create the container
+	err = docker.CreateContainer(cmdParams)
+	if err != nil {
+		return sendError(c, err)
+	}
+
+	return c.String(200, "Container created")
 }
