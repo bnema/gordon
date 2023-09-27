@@ -10,18 +10,6 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-type CreateContainer struct {
-	ContainerName string
-	ContainerHost string
-	Environment   string
-	ImageName     string
-	ImageID       string
-	Ports         string
-	Volumes       string
-	TraefikLabels []string
-	Network       string
-}
-
 // FromShortIDToImageID converts a short image ID to a full image ID
 func FromShortIDToImageID(ShortID string) (string, error) {
 	idMapMutex.Lock()
@@ -118,9 +106,7 @@ func CreateContainerPOST(c echo.Context, a *app.App) error {
 		}
 	}
 
-	// Result : Form values: map[container_domain:gogs.localhost container_name:gogs image_id:sha256:5d92d8ae733d93dc4af5b32bb353539eeff660fc2136c6902abcdf3aafe4cef1 image_name:gogs/gogs:latest ports:8888:80 restart:unless-stopped volumes:/home/data/test:/data]
-	// With those values we can use gotemplate/txt to create a custom docker run command
-	cmdParams, err := render.FromInputsToCmdParams(sanitizedInputs) // Make sure cmdParams is of type render.ContainerCommandParams
+	cmdParams, err := render.FromInputsToCmdParams(sanitizedInputs)
 	if err != nil {
 		return sendError(c, err)
 	}
