@@ -46,13 +46,3 @@ document.body.addEventListener("htmx:afterSwap", function (event) {
   });
 });
 
-  document.body.addEventListener("htmx:afterSwap", function (event) {
-    const textarea = document.getElementById("container_config");
-    if (textarea) {
-      console.log("Textarea found, adjusting height.");
-      textarea.style.height = ""; // Reset the height
-      textarea.style.height = textarea.scrollHeight + "px";
-    } else {
-      console.log("Textarea not found.");
-    }
-  });
