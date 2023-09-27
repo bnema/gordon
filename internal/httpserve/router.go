@@ -92,6 +92,14 @@ func bindHTMXEndpoints(e *echo.Echo, a *app.App) {
 	e.POST("/htmx/container-manager/start/:ID", func(c echo.Context) error {
 		return handler.ContainerManagerStart(c, a)
 	})
+	// Edit a container view
+	e.GET("/htmx/container-manager/edit/:ID", func(c echo.Context) error {
+		return handler.ContainerManagerEditGET(c, a)
+	})
+	// Edit a container action
+	e.POST("/htmx/container-manager/edit/:ID", func(c echo.Context) error {
+		return handler.ContainerManagerEditPOST(c, a)
+	})
 
 	// Display upload-image component
 	e.GET("/htmx/upload-image", func(c echo.Context) error {

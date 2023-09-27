@@ -182,6 +182,41 @@ func GetContainerInfo(containerID string) (types.ContainerJSON, error) {
 	return containerInfo, nil
 }
 
+// UpdateContainerConfig updates the configuration of an existing container.
+func UpdateContainerConfig(containerID string, newConfig *container.Config) error {
+	ctx := context.Background()
+	// 1. Gracefully stop the existing container
+	_, err := StopContainerGracefully(containerID, 3*time.Second)
+	if err != nil {
+		return err
+	}
+
+	// 2. Remove the old container
+	if err := dockerCli.ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{}); err != nil {
+		return err
+	}
+
+	// 3. Create a new container with the new configuration
+	resp, err := dockerCli.ContainerCreate(
+		ctx,
+		newConfig,
+		&container.HostConfig{},
+		&network.NetworkingConfig{},
+		nil,
+		"",
+	)
+	if err != nil {
+		return err
+	}
+
+	// 4. Start the new container
+	if err := dockerCli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // GetContainerLogs returns the logs of a container
 func GetContainerLogs(containerID string) (string, error) {
 
