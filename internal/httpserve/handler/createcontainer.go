@@ -73,6 +73,7 @@ func CreateContainerGET(c echo.Context, a *app.App) error {
 func CreateContainerPOST(c echo.Context, a *app.App) error {
 	// Retreive the ShortID of the image from the URL
 	ShortID := c.Param("ID")
+	fmt.Println(ShortID)
 
 	// Convert the ShortID to a full image ID
 	imageID, err := FromShortIDToImageID(ShortID)
