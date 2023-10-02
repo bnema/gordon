@@ -23,7 +23,7 @@ type StringsYamlData struct {
 // ReadStringsDataFromYAML reads the strings.yaml file and unmarshals it into the out interface
 func ReadStringsDataFromYAML(lang string, fs fs.FS, filename string, out interface{}) error {
 
-	err := parser.OpenYamlFile(fs, filename, out)
+	err := parser.ParseYAMLFile(fs, filename, out)
 	if err != nil {
 		return err
 	}

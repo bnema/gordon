@@ -10,13 +10,13 @@ import (
 	"github.com/bnema/gordon/internal/gotemplate"
 	"github.com/bnema/gordon/internal/webui"
 	"github.com/bnema/gordon/pkg/utils/docker"
-	"github.com/bnema/gordon/pkg/utils/parser"
+	_ "github.com/joho/godotenv/autoload"
+	"gopkg.in/yaml.v3"
 )
 
 var (
 	OauthCallbackURL string
-	appEnv           string
-	BuildVersion     = "0.0.2"
+	config           AppConfig
 )
 
 type App struct {
@@ -37,9 +37,10 @@ type AppConfig struct {
 }
 
 type GeneralConfig struct {
-	RunEnv       string `yaml:"runEnv"`
-	StorageDir   string `yaml:"storageDir"`
+	RunEnv       string
+	BuildDir     string
 	BuildVersion string
+	StorageDir   string `yaml:"storageDir"`
 }
 
 type HttpConfig struct {
@@ -59,25 +60,32 @@ type ContainerEngineConfig struct {
 	Network    string `yaml:"network"`
 }
 
-func InitializeEnvironment() {
-	config, err := LoadConfig()
-	if err != nil {
-		fmt.Errorf("Error initializing environment: %s", err)
-	}
-	OauthCallbackURL = GenerateOauthCallbackURL(config)
-}
-
 func LoadConfig() (AppConfig, error) {
-	var config AppConfig
-	configDir, configFile := getConfigFile()
-	fsys := os.DirFS(configDir)
-	err := parser.OpenYamlFile(fsys, configFile, &config)
+	// Load env elements
+	config.General.BuildVersion = os.Getenv("BUILD_VERSION")
+	config.General.RunEnv = os.Getenv("RUN_ENV")
+	config.General.BuildDir = os.Getenv("BUILD_DIR")
+
+	// if RUN_ENV is not set, assume "prod" and config dir is the current dir
+	if config.General.RunEnv == "" {
+		config.General.RunEnv = "prod"
+		config.General.BuildDir = "."
+	}
+
+	fmt.Printf("RUN_ENV: %s\n", config.General.RunEnv)
+	fmt.Printf("BUILD_DIR: %s\n", config.General.BuildDir)
+
+	// Load config file
+	configFile := fmt.Sprintf("%s/config.yml", config.General.BuildDir)
+	configData, err := os.ReadFile(configFile)
 	if err != nil {
 		return config, err
 	}
 
-	// Set the BuildVersion from the global BuildVersion
-	config.General.BuildVersion = BuildVersion
+	err = yaml.Unmarshal(configData, &config)
+	if err != nil {
+		return config, err
+	}
 
 	return config, nil
 }
@@ -98,12 +106,11 @@ func NewApp() *App {
 		Config:     config,
 	}
 
-	// If you have any other initializations like generating OAuth URL, do them here
-	OauthCallbackURL = GenerateOauthCallbackURL(config)
+	OauthCallbackURL = config.GenerateOauthCallbackURL()
 	return a
 }
 
-// NewDockerConfig creates and returns a new Docker client configuration based on AppConfig.
+// NewDockerConfig creates and returns a new Docker client configuration
 func (config *AppConfig) NewDockerConfig() *docker.Config {
 	if config.ContainerEngine.Podman {
 		return &docker.Config{
@@ -117,7 +124,8 @@ func (config *AppConfig) NewDockerConfig() *docker.Config {
 	}
 }
 
-func GenerateOauthCallbackURL(config AppConfig) string {
+// GenerateOauthCallbackURL generates the OAuth callback URL
+func (config *AppConfig) GenerateOauthCallbackURL() string {
 	var scheme, port string
 
 	if config.General.RunEnv == "dev" {
@@ -125,7 +133,7 @@ func GenerateOauthCallbackURL(config AppConfig) string {
 		port = fmt.Sprintf(":%d", config.Http.Port)
 	} else { // Assuming "prod"
 		scheme = "https"
-		port = "" // Assuming that HTTPS will run on the default port 443
+		port = ""
 	}
 
 	domain := config.Http.TopDomain
@@ -134,8 +142,4 @@ func GenerateOauthCallbackURL(config AppConfig) string {
 	}
 
 	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.Admin.Path)
-}
-
-func getConfigFile() (string, string) {
-	return "tmp/", "config.yml" // assuming the file is in the current directory
 }
