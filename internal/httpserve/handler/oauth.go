@@ -47,12 +47,15 @@ func RenderLoginPage(c echo.Context, a *app.App) error {
 }
 
 func StartOAuthGithub(c echo.Context, a *app.App) error {
+	// Clear the session in case it is already set or corrupted
+	err := ResetSession(c)
+	if err != nil {
+		return err
+	}
+	//Initiate the Github OAuth flow
 	clientID := os.Getenv("GITHUB_APP_ID")
 	redirectDomain := app.GenerateOauthCallbackURL(a.Config)
-	fmt.Print(redirectDomain)
 	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
-	fmt.Print("redirectDomain:", redirectDomain)
-	fmt.Print("encoded state :", encodedState)
 	// Redirect to Gordon's Proxy to grab the oauth access
 	oauthURL := fmt.Sprintf(
 		"https://gordon.bnema.dev/github-proxy/authorize?client_id=%s&redirect_uri=%s&state=%s",
