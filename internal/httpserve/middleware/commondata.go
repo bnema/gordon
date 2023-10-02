@@ -8,7 +8,7 @@ import (
 func SetCommonDataMiddleware(a *app.App) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// Add more common data if needed
+			// Will pass data to the renderer
 			return next(c)
 		}
 	}
