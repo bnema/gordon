@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	"github.com/bnema/gordon/internal/app"
-	"github.com/bnema/gordon/internal/gotemplate/render"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
+	"github.com/bnema/gordon/internal/templates/render"
 	"github.com/bnema/gordon/internal/webui"
 	"github.com/labstack/echo/v4"
 )

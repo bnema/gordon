@@ -6,8 +6,8 @@ import (
 	"net/http"
 
 	"github.com/bnema/gordon/internal/app"
-	"github.com/bnema/gordon/internal/gotemplate/render"
-	"github.com/bnema/gordon/pkg/utils/store"
+	"github.com/bnema/gordon/internal/templates/render"
+	"github.com/bnema/gordon/pkg/store"
 	"github.com/labstack/echo/v4"
 )
 

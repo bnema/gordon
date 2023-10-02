@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/bnema/gordon/internal/app"
-	"github.com/bnema/gordon/pkg/utils/docker"
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/docker/docker/api/types"
 )
 

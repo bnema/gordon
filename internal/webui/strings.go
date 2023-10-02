@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/bnema/gordon/pkg/utils/parser"
+	"github.com/bnema/gordon/pkg/parser"
 )
 
 type LangData map[string]interface{}

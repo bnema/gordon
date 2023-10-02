@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/bnema/gordon/internal/app"
-	"github.com/bnema/gordon/internal/gotemplate/render"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
+	"github.com/bnema/gordon/internal/templates/render"
 	"github.com/bnema/gordon/internal/webui"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"

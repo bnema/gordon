@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/app"
-	"github.com/bnema/gordon/internal/gotemplate/render"
-	"github.com/bnema/gordon/pkg/utils/docker"
-	"github.com/bnema/gordon/pkg/utils/humanize"
+	"github.com/bnema/gordon/internal/templates/render"
+	"github.com/bnema/gordon/pkg/docker"
+	"github.com/bnema/gordon/pkg/humanize"
 	"github.com/docker/docker/api/types"
 	"github.com/labstack/echo/v4"
 )
