@@ -5,7 +5,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// ColorSchemeDetection detects the current color scheme and sets it in the context
+// ColorSchemeDetection detects the current color scheme and sets it in the context based on the "Sec-CH-Prefers-Color-Scheme" header
 func ColorSchemeDetection(next echo.HandlerFunc) echo.HandlerFunc {
 	ColorSchemeKey := "CurrentColorScheme"
 	return func(c echo.Context) error {
