@@ -1,23 +1,55 @@
 en:
-  header:
+  common:
+    meta:
+      description: Admin interface for Gordon
+      keywords: gordon, admin, interface
+    header:
+      someKey: Hello World!
+    navmenu:
+      dashboard: Dashboard
+      manager: Manager
+      settings: Settings
+      logout: Logout
+  dashboard:
     meta:
       title: Gordon - Admin Dashboard
-      description: Admin dashboard for Gordon
-      keywords: gordon, admin, dashboard
-  body:
-    header:
-      helloworld: Hello World!
-    div:
-      hello: Hello component loaded from a template!
+    content:
+      title: Dashboard
+  manager:
+    meta:
+      title: Gordon - Container Engine Manager
+    content:
+      title: Container Engine Manager
+  settings:
+    meta:
+      title: Gordon - Settings
+    content:
+      title: Settings
 
 fr:
-  header:
+  common:
     meta:
-      title: Gordon - Tableau de bord administrateur
-      description: Tableau de bord administrateur pour Gordon
-      keywords: gordon, admin, dashboard
-  body:
+      description: Interface d'administration pour Gordon
+      keywords: gordon, admin, interface
     header:
-      helloworld: Bonjour le monde!
-    div:
-      hello: Composant de salut chargé à partir d'un modèle!
+      someKey: Bonjour le monde!
+    navmenu:
+      dashboard: Tableau de bord
+      manager: Gestionnaire
+      settings: Paramètres
+      logout: Déconnexion
+  dashboard:
+    meta:
+      title: Gordon - Tableau de bord
+    content:
+      title: Tableau de bord
+  manager:
+    meta:
+      title: Gordon - Gestionnaire de moteur de conteneur
+    content:
+      title: Gestionnaire de moteur de conteneur
+  settings:
+    meta:
+      title: Gordon - Paramètres
+    content:
+      title: Paramètres
