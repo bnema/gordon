@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// BytesToReadableSize converts a number of bytes to a human-readable size
 func BytesToReadableSize(size int64) string {
 	var unit string
 	var converted float64
@@ -26,6 +27,7 @@ func BytesToReadableSize(size int64) string {
 	return fmt.Sprintf("%.2f%s", converted, unit)
 }
 
+// TimeAgo returns a string representing the time elapsed since t
 func TimeAgo(t time.Time) string {
 	var duration time.Duration
 	now := time.Now()

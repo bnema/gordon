@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"github.com/bnema/gordon/pkg/utils/sanitize"
+	"github.com/bnema/gordon/pkg/sanitize"
 	"github.com/labstack/echo/v4"
 )
 
