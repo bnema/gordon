@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bnema/gordon/pkg/utils/docker"
+	"github.com/bnema/gordon/pkg/docker"
 )
 
 // FromInputsToCmdParams transforms the inputs map into a ContainerCommandParams struct

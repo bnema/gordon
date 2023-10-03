@@ -12,7 +12,7 @@ import (
 
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/httpserve"
-	"github.com/bnema/gordon/pkg/utils/docker"
+	"github.com/bnema/gordon/pkg/docker"
 )
 
 func cleanup(a *app.App, memDb *sql.DB) {
