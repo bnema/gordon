@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )

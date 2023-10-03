@@ -54,7 +54,7 @@ func StartOAuthGithub(c echo.Context, a *app.App) error {
 	}
 	//Initiate the Github OAuth flow
 	clientID := os.Getenv("GITHUB_APP_ID")
-	redirectDomain := app.GenerateOauthCallbackURL(a.Config)
+	redirectDomain := a.Config.GenerateOauthCallbackURL()
 	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
 	// Redirect to Gordon's Proxy to grab the oauth access
 	oauthURL := fmt.Sprintf(
