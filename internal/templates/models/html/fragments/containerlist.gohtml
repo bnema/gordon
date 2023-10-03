@@ -1,33 +1,34 @@
 <div class="flex flex-col p-4" hx-boost="true">
-  <h1 class="text-lg md:text-xl font-bold">Containers</h1>
-  <table class="p-4 border-t-2" hx-ext="response-targets">
-    <!-- <thead>
-      <tr>
-        <th>Name</th>
-        <th>Command</th>
-        <th>Created</th>
-        <th>Status</th>
-        <th>Port</th>
-        <th>State</th>
-        <th>Action</th>
+  <h1 class="text-lg md:text-xl font-bold">
+    {{index .Lang "manager" "content" "h1-containers"}}
+  </h1>
+  <table class="p-4 border-t-2 table-auto" hx-ext="response-targets">
+    <thead>
+      <tr class="text-center text-gray-400">
+        <th>{{index .Lang "manager" "content" "thName"}}</th>
+        <th>{{index .Lang "manager" "content" "thPorts"}}</th>
+        <th>{{index .Lang "manager" "content" "thStatus"}}</th>
+        <th>{{index .Lang "manager" "content" "thState"}}</th>
+        <th>{{index .Lang "manager" "content" "thActions"}}</th>
       </tr>
-    </thead> -->
+    </thead>
     <tbody>
+      {{ $Lang := .Lang }}  
       {{
         range.containers
       }}
-      <tr id="container-{{.ID}}">
+      <tr id="container-{{.ID}}" class="text-center">
         <td>
-          <span title="{{.Container.ID}}">{{.Name}}</span>
+          <span
+            title="{{.Container.ID}}"
+            class="font-bold"
+            >{{.Name}}</span
+          >
         </td>
-        <td class="command-container" style="text-decoration: underline">
-          <span title="{{.Command}}">{{.Command}}</span>
-        </td>
-        <td>{{.CreatedStr}}</td>
         <td class="port-container">{{ .Ports }}</td>
         <td class="status-container">{{.Status}} (Up since {{.UpSince}})</td>
         <td style="color: {{.StateColor}};">{{.State}}</td>
-        <td align="right">
+        <td>
           <!-- iconoir start -->
           <button
             id="start-button-{{.ID}}"
@@ -46,7 +47,7 @@
             hx-target="#container-{{.ID}}"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="innerHTML"
-            hx-confirm="Are you sure you want to stop this container?"
+            hx-confirm="{{index $Lang "manager" "content" "confirm-container-stop"}}"
             class="py-2 px-4"
           >
             <span class="iconoir-system-shut text-xl font-bold"></span>
@@ -70,7 +71,7 @@
             hx-target="#container-{{.ID}}"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="innerHTML"
-            hx-confirm="Are you sure you want to delete this container image?"
+            hx-confirm="{{index $Lang "manager" "content" "confirm-delete"}}"
             class="py-2 px-4"
           >
             <!-- iconoir trash -->
@@ -90,7 +91,7 @@
       </tr>
       {{ else }}
       <tr>
-        <td colspan="7" class="mt-2">No available containers.</td>
+        <td colspan="7" class="mt-2">{{index $Lang "manager" "content" "no-containers"}}.</td>
       </tr>
       {{
         end
