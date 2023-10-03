@@ -2,7 +2,7 @@
 module.exports = {
   content: [
     "./internal/webui/**/*.{gohtml,go}",
-    "./internal/gotemplate/models/html/**/*.{gohtml, go}"
+    "./internal/templates/models/html/**/*.{gohtml, go}"
   ],
   theme: {
     extend: {

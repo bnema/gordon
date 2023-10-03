@@ -3,10 +3,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ .header.meta.title }}</title>
   <link rel="stylesheet" href="/assets/css/tailwind.css" />
-  <link rel="stylesheet" href="/libs/iconoir.css" />
+
   <script src="/libs/htmx.min.js"></script>
   <script src="/libs/htmx-response-targets.js"></script>
   <script src="/libs/htmx-debug.js"></script>
   <script src="/libs/htmx-sse.js"></script>
+  <script defer src="https://unpkg.com/hyperscript.org@0.9.11"></script>
   <script defer src="/assets/js/custom.js"></script>
+  <!-- script wait for the page to be loaded and insert  <link rel="stylesheet" href="/libs/iconoir.css" /> -->
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      var linkElement = document.createElement("link");
+      linkElement.setAttribute("rel", "stylesheet");
+      linkElement.setAttribute("href", "/libs/iconoir.css");
+      document.head.appendChild(linkElement);
+    });
+  </script>
 </head>

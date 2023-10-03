@@ -100,7 +100,7 @@ func NewApp() *App {
 	}
 
 	// Open the strings.yml file containing the strings for the current language
-	file, err := templates.TemplateFS.Open("strings.yml")
+	file, err := templates.TemplateFS.Open("locstrings.yml")
 	if err != nil {
 		log.Fatalf("Failed to open strings.yml: %v", err)
 	}
