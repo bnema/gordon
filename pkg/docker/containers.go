@@ -26,6 +26,7 @@ type ContainerCommandParams struct {
 	Labels        []string
 	Network       string
 	Restart       string
+	Environment   []string
 }
 
 // ListRunningContainers lists all running containers
@@ -131,12 +132,16 @@ func CreateContainer(cmdParams ContainerCommandParams) error {
 		}
 	}
 
+	// Prepare environment variables
+	envVars := append([]string{}, cmdParams.Environment...)
+
 	// Create container
 	resp, err := dockerCli.ContainerCreate(
 		context.Background(),
 		&container.Config{
 			Image:  cmdParams.ImageName,
 			Labels: labels,
+			Env:    envVars,
 		},
 		&container.HostConfig{
 			PortBindings: portBindings,
