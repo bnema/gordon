@@ -1,4 +1,4 @@
-package gotemplate
+package templates
 
 import (
 	"embed"

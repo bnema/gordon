@@ -7,9 +7,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/bnema/gordon/internal/gotemplate"
+	"github.com/bnema/gordon/internal/templates"
 	"github.com/bnema/gordon/internal/webui"
-	"github.com/bnema/gordon/pkg/utils/docker"
+	"github.com/bnema/gordon/pkg/docker"
 	_ "github.com/joho/godotenv/autoload"
 	"gopkg.in/yaml.v3"
 )
@@ -99,7 +99,7 @@ func NewApp() *App {
 
 	// Initialize App
 	a := &App{
-		TemplateFS: gotemplate.TemplateFS,
+		TemplateFS: templates.TemplateFS,
 		PublicFS:   webui.PublicFS,
 		DBDir:      DBDir,
 		DBFilename: DBFilename,
