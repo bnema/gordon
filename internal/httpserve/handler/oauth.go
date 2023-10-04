@@ -8,9 +8,7 @@ import (
 	"strings"
 
 	"github.com/bnema/gordon/internal/app"
-	"github.com/bnema/gordon/internal/httpserve/middleware"
 	"github.com/bnema/gordon/internal/templates/render"
-	"github.com/bnema/gordon/internal/webui"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
@@ -19,23 +17,16 @@ import (
 
 // RenderLoginPage renders the login.html template
 func RenderLoginPage(c echo.Context, a *app.App) error {
-	lang := c.Get(middleware.LangKey).(string)
-	yamlData := webui.StringsYamlData{}
-	err := webui.ReadStringsDataFromYAML(lang, a.TemplateFS, "strings.yml", &yamlData)
+	data, err := GetLocalizedData(c, a)
 	if err != nil {
 		return err
 	}
+
 	// Navigate inside the fs.FS to get the template
 	path := "html/login"
 	rendererData, err := render.GetHTMLRenderer(path, "index.gohtml", a.TemplateFS, a)
 	if err != nil {
 		return err
-	}
-
-	// Create a data map to pass to the renderer
-	data := map[string]interface{}{
-		"CurrentLang": yamlData.CurrentLang,
-		// "BuildVersion" will be automatically added in the renderer
 	}
 
 	renderedHTML, err := rendererData.Render(data, a)

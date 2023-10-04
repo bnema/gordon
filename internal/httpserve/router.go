@@ -38,12 +38,14 @@ func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
 	return e
 }
 
+// bindStaticRoute bind static path
 func bindStaticRoute(e *echo.Echo, a *app.App, path string) {
 	e.GET(path, func(c echo.Context) error {
 		return handler.StaticRoute(c, a)
 	})
 }
 
+// bindAdminRoute binds all admin routes
 func bindAdminRoute(e *echo.Echo, a *app.App, adminPath string) {
 	e.GET(adminPath, func(c echo.Context) error {
 		return handler.AdminRoute(c, a)
@@ -54,6 +56,7 @@ func bindAdminRoute(e *echo.Echo, a *app.App, adminPath string) {
 	})
 }
 
+// bindLoginRoute binds all login routes
 func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
 	e.GET(adminPath+"/login", func(c echo.Context) error {
 		return handler.RenderLoginPage(c, a)
@@ -69,6 +72,7 @@ func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
 	})
 }
 
+// bindHTMXEndpoints binds all HTMX endpoints
 func bindHTMXEndpoints(e *echo.Echo, a *app.App) {
 	// Create a  group for /htmx endpoints
 	htmxGroup := e.Group("/htmx")

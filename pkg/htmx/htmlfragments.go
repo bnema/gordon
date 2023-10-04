@@ -6,7 +6,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/bnema/gordon/internal/app"
-	"github.com/bnema/gordon/internal/gotemplate/render"
+	"github.com/bnema/gordon/internal/templates/render"
 )
 
 // GetHTMLFragmentByID returns the HTML fragment with the specified id

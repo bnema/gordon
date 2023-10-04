@@ -3,6 +3,7 @@ package app
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -22,6 +23,7 @@ var (
 type App struct {
 	TemplateFS      fs.FS
 	PublicFS        fs.FS
+	StringsYML      []byte // strings.yml contains the strings for the current language
 	DBDir           string
 	DBFilename      string
 	DBPath          string
@@ -97,10 +99,25 @@ func NewApp() *App {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
+	// Open the strings.yml file containing the strings for the current language
+	file, err := templates.TemplateFS.Open("strings.yml")
+	if err != nil {
+		log.Fatalf("Failed to open strings.yml: %v", err)
+	}
+
+	// Read the file content into a byte slice
+	bytes, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("Failed to read strings.yml: %v", err)
+	}
+
+	file.Close()
+
 	// Initialize App
 	a := &App{
 		TemplateFS: templates.TemplateFS,
 		PublicFS:   webui.PublicFS,
+		StringsYML: bytes,
 		DBDir:      DBDir,
 		DBFilename: DBFilename,
 		Config:     config,
