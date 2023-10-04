@@ -118,8 +118,6 @@ func ContainerManagerComponent(c echo.Context, a *app.App) error {
 
 	for _, container := range containers {
 		localContainer := container // Make a local copy
-		createdTime := time.Unix(container.Created, 0)
-		createdStr := humanize.TimeAgo(createdTime)
 		sizeStr := humanize.BytesToReadableSize(container.SizeRw)
 		stateColor := "green"
 
@@ -136,7 +134,6 @@ func ContainerManagerComponent(c echo.Context, a *app.App) error {
 			name = name[1:]
 			humanReadableContainers = append(humanReadableContainers, HumanReadableContainer{
 				Container:  &localContainer,
-				CreatedStr: createdStr,
 				SizeStr:    sizeStr,
 				UpSince:    humanize.TimeAgo(time.Unix(container.Created, 0)),
 				StateColor: stateColor,
@@ -145,7 +142,12 @@ func ContainerManagerComponent(c echo.Context, a *app.App) error {
 			})
 		}
 	}
+	yamlData, err := GetLocalizedData(c, a)
+	if err != nil {
+		return err
+	}
 	data := map[string]interface{}{
+		"Lang":       yamlData["Lang"],
 		"containers": humanReadableContainers,
 	}
 
