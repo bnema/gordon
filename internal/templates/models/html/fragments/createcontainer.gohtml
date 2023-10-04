@@ -1,5 +1,6 @@
 <div
-  class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow" hx-ext="response-targets"
+  class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow"
+  hx-ext="response-targets"
 >
   <!-- Left Side: Docker Run Options -->
   <div class="flex-grow bg-slate-100 p-4 rounded-md">
@@ -54,12 +55,15 @@
         <!-- Protocol -->
         <div class="w-1/4">
           <label class="block">Protocol</label>
-          <select name="container_protocol" class="w-full p-4 rounded-md border-2 bg-slate-200 border-gray-300">
-            <option value="https" {{if eq .ContainerProtocol "https"}}selected{{end}}>https</option>
-            <option value="http" {{if eq .ContainerProtocol "http"}}selected{{end}}>http</option>
+          <select
+            name="container_protocol"
+            class="w-full p-4 rounded-md border-2 bg-slate-200 border-gray-300"
+          >
+            <option value="https">https</option>
+            <option value="http">http</option>
           </select>
         </div>
-        
+
         <!-- Subdomain -->
         <div class="w-1/3">
           <label class="block">Subdomain</label>
@@ -70,7 +74,7 @@
             value="{{.ContainerSubdomain}}"
           />
         </div>
-        
+
         <!-- Domain -->
         <div class="w-5/12">
           <label class="block">Domain</label>
@@ -108,17 +112,16 @@
         />
       </div>
 
-      <!-- Environment Variables
       <div class="pb-4">
         <label class="block">Environment variables</label>
         <span class="text-gray-500">e.g. KEY=VALUE </span>
-        <input
-          type="text"
+        <textarea
           name="environment_variables"
           class="w-full p-4 rounded-md"
-          value="{{.EnvironmentVariables}}"
-        /> -->
-
+          rows="4"
+          >{{.EnvironmentVariables}}</textarea
+        >
+      </div>
       <!-- Restart: always/on-failure/only when stopped/never -->
       <div class="pb-4">
         <label class="block">Restart</label>
@@ -140,6 +143,9 @@
         class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
       />
     </form>
-    <div id="error-message-create-container-{{.ShortID}}" class="text-red-500"></div>
+    <div
+      id="error-message-create-container-{{.ShortID}}"
+      class="text-red-500"
+    ></div>
   </div>
 </div>

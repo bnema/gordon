@@ -13,6 +13,12 @@ func FromInputsToCmdParams(inputs map[string]string) (docker.ContainerCommandPar
 	volumeStr := inputs["volumes"]
 	volumeSlice := strings.Split(volumeStr, ",")
 
+	// Retreive the content of the textarea environment_variables and create a slice of strings
+	environmentStr := inputs["environment_variables"]
+	environmentSlice := strings.Split(environmentStr, "\n")
+
+	fmt.Println("environmentSlice", environmentSlice)
+
 	params := docker.ContainerCommandParams{
 		IsSSL:         inputs["container_protocol"] == "https",
 		ContainerName: inputs["container_name"],
@@ -23,6 +29,7 @@ func FromInputsToCmdParams(inputs map[string]string) (docker.ContainerCommandPar
 		Ports:         inputs["ports"],
 		Restart:       inputs["restart"],
 		Volumes:       volumeSlice,
+		Environment:   environmentSlice,
 		Network:       ("traefik"),
 	}
 
