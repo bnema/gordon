@@ -165,7 +165,7 @@ func ContainerManagerComponent(c echo.Context, a *app.App) error {
 // ContainerManagerDelete handles the /container-manager/delete route
 func ContainerManagerDelete(c echo.Context, a *app.App) error {
 	ID := c.Param("ID")
-	err := docker.DeleteContainer(ID)
+	err := docker.RemoveContainer(ID)
 	if err != nil {
 		return sendError(c, err)
 	}

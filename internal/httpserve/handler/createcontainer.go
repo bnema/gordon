@@ -18,7 +18,7 @@ func FromShortIDToImageID(ShortID string) (string, error) {
 	idMapMutex.Unlock()
 
 	if !exists {
-		return "", fmt.Errorf("Invalid ShortImgID")
+		return "", fmt.Errorf("image ID not found")
 	}
 
 	return imageID, nil
@@ -73,7 +73,6 @@ func CreateContainerGET(c echo.Context, a *app.App) error {
 func CreateContainerPOST(c echo.Context, a *app.App) error {
 	// Retreive the ShortID of the image from the URL
 	ShortID := c.Param("ID")
-	fmt.Println(ShortID)
 
 	// Convert the ShortID to a full image ID
 	imageID, err := FromShortIDToImageID(ShortID)
@@ -113,7 +112,7 @@ func CreateContainerPOST(c echo.Context, a *app.App) error {
 	}
 
 	// Create the container
-	err = docker.CreateContainer(cmdParams)
+	_, err = docker.CreateContainer(cmdParams)
 	if err != nil {
 		return sendError(c, err)
 	}

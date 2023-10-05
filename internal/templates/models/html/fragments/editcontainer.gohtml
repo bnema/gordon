@@ -1,6 +1,16 @@
-<div id="edit-container-{{.ID}}" class="h-fit-content">
+<div
+  id="edit-container-{{.ID}}"
+  class="h-fit-content"
+  hx-ext="response-targets"
+>
   <div id="editor">
-    <form method="post" action="/htmx/container-manager/edit/{{.ID}}">
+    <form
+      method="post"
+      action="/htmx/container-manager/edit/{{.ID}}"
+      hx-post="/htmx/container-manager/edit/{{.ID}}"
+      hx-swap="innerHTML"
+      hx-target-*="#error-message-edit-container-{{.ID}}"
+    >
       <textarea
         name="container_config"
         id="container_config"
@@ -12,8 +22,9 @@
         type="submit"
         value="Save"
         id="save-button-{{.ID}}"
-        class="bg-gordonmascot-mblue text-white px-4 py-2 rounded-md md:text-xl hover:bg-gordonmascot-hblue"
+        class="bg-gordonmascot-lblue text-white font-bold px-8 py-1 rounded-md hover:bg-gordonmascot-mblue cursor-pointer"
       />
     </form>
+    <div id="error-message-edit-container-{{.ID}}" class="text-red-500"></div>
   </div>
 </div>
