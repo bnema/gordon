@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -21,12 +22,23 @@ type ContainerCommandParams struct {
 	EnvVar        string
 	ImageName     string
 	ImageID       string
-	Ports         string
+	Ports         []string
 	Volumes       []string
 	Labels        []string
 	Network       string
 	Restart       string
 	Environment   []string
+}
+
+func ContainerCommandParamsToConfig(cmdParams ContainerCommandParams) (*container.Config, error) {
+	return &container.Config{
+		Image:        cmdParams.ImageName,
+		Hostname:     cmdParams.ContainerHost,
+		ExposedPorts: map[nat.Port]struct{}{},
+		Env:          cmdParams.Environment,
+		Labels:       map[string]string{},
+		Volumes:      map[string]struct{}{},
+	}, nil
 }
 
 // ListRunningContainers lists all running containers
@@ -39,6 +51,13 @@ func ListRunningContainers() ([]types.Container, error) {
 		return nil, err
 	}
 	return containers, nil
+}
+
+// StopContainer try to stop a container gracefully, if it fails, it will stop it forcefully
+func StopContainer(containerID string) error {
+	StopContainerGracefully(containerID, 3*time.Second)
+	StopContainerRagefully(containerID)
+	return nil
 }
 
 // StopContainerGracefully stops a container by sending a SIGTERM and waiting for it to stop
@@ -85,10 +104,19 @@ func StopContainerRagefully(containerID string) error {
 	return nil
 }
 
-// DeleteContainer deletes a container
-func DeleteContainer(containerID string) error {
+// RenameContainer renames a container with the given name
+func RenameContainer(containerID string, newName string) error {
+	// Rename container using the Docker client
+	err := dockerCli.ContainerRename(context.Background(), containerID, newName)
+	if err != nil {
+		return err
+	}
 
-	// Delete container using the Docker client
+	return nil
+}
+
+// RemoveContainer
+func RemoveContainer(containerID string) error {
 	err := dockerCli.ContainerRemove(context.Background(), containerID, types.ContainerRemoveOptions{})
 	if err != nil {
 		return err
@@ -99,29 +127,32 @@ func DeleteContainer(containerID string) error {
 
 // StartContainer starts a container
 func StartContainer(containerID string) error {
+	fmt.Println("Starting container", containerID)
+	// Check if the container is not already in a running state
+	containerInfo, err := GetContainerInfo(containerID)
+	if err != nil {
+		return fmt.Errorf("could not get container info: %v", err)
+	}
+
+	if containerInfo.State.Running {
+		return fmt.Errorf("container is already running")
+	}
 
 	// Start container using the Docker client
-	err := dockerCli.ContainerStart(context.Background(), containerID, types.ContainerStartOptions{})
+	err = dockerCli.ContainerStart(context.Background(), containerID, types.ContainerStartOptions{})
 	if err != nil {
-		return err
+		return fmt.Errorf("could not start container: %v", err)
 	}
 
 	return nil
 }
 
 // CreateContainer creates a container with the given parameters
-func CreateContainer(cmdParams ContainerCommandParams) error {
+func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 	// Check if the Docker client has been initialized
 	CheckIfInitialized()
 
-	// Prepare port bindings
-	portBindings := nat.PortMap{}
-	parts := strings.Split(cmdParams.Ports, ":")
-	if len(parts) == 2 {
-		portBindings[nat.Port(parts[1])] = []nat.PortBinding{
-			{HostIP: "0.0.0.0", HostPort: parts[0]},
-		}
-	}
+	portBindings := map[nat.Port][]nat.PortBinding{}
 
 	// Prepare labels for Traefik
 	labels := map[string]string{}
@@ -159,20 +190,10 @@ func CreateContainer(cmdParams ContainerCommandParams) error {
 		cmdParams.ContainerName,
 	)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	// Start the container
-	err = dockerCli.ContainerStart(
-		context.Background(),
-		resp.ID,
-		types.ContainerStartOptions{},
-	)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return resp.ID, nil
 }
 
 // GetContainerInfo returns information about a container
@@ -188,7 +209,7 @@ func GetContainerInfo(containerID string) (types.ContainerJSON, error) {
 }
 
 // UpdateContainerConfig updates the configuration of an existing container.
-func UpdateContainerConfig(containerID string, newConfig *container.Config) error {
+func UpdateContainerConfig(containerID string, newConfig *container.Config, newHostConfig *container.HostConfig, newNetworkingConfig *network.NetworkingConfig) error {
 	ctx := context.Background()
 	// 1. Gracefully stop the existing container
 	_, err := StopContainerGracefully(containerID, 3*time.Second)
@@ -237,4 +258,25 @@ func GetContainerLogs(containerID string) (string, error) {
 	containerLogsString := buf.String()
 
 	return containerLogsString, nil
+}
+
+// CheckContainerStatus checks if a container with the given name exists and is running
+func CheckContainerStatus(containerName string) (bool, bool, error) {
+
+	// List all containers
+	containers, err := ListRunningContainers()
+	if err != nil {
+		return false, false, err
+	}
+
+	// Check if a container with the given name exists and is running
+	for _, container := range containers {
+		for _, name := range container.Names {
+			if strings.TrimLeft(name, "/") == containerName {
+				return true, container.State == "running", nil
+			}
+		}
+	}
+
+	return false, false, nil
 }

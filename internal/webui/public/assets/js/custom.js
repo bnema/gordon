@@ -44,14 +44,24 @@ document.body.addEventListener("htmx:afterSwap", function (event) {
   });
 });
 
-// Attach event listeners to buttons that needs to set a full location reload 
-document.body.addEventListener("htmx:afterOnLoad", function (event) {
- const buttons = document.querySelectorAll('[id^="start-button-"], [id^="stop-button-"], [id^="remove-button-img-"], [id^="create-container-submit"], [id^="save-button-"]');
-   buttons.forEach(button => {
-    button.addEventListener('click', function(event) {
-      setTimeout(function() {
-      location.reload();
-      }, 5000);
-    });
-  });
-});
+// // Attach event listeners to buttons that needs to set a full location reload 
+// document.body.addEventListener("htmx:afterSwap", function (event) {
+//   const xhr = event.detail.xhr;
+//   const statusCode = xhr.status;
+
+//   // Check for 500 status code
+//   if (statusCode >= 500 && statusCode < 600) {
+//     // Handle the error (e.g., log it or show an alert)
+//     console.error("Server returned error: ", statusCode);
+//     return; // Do not reload the page
+//   }
+
+//   const buttons = document.querySelectorAll('[id^="start-button-"], [id^="stop-button-"], [id^="remove-button-img-"], [id^="create-container-submit"], [id^="save-button-"]');
+//   buttons.forEach(button => {
+//     button.addEventListener('click', function(event) {
+//       setTimeout(function() {
+//         location.reload();
+//       }, 5000);
+//     });
+//   });
+// });
