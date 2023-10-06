@@ -30,6 +30,33 @@ func DeleteContainerImage(imageID string) error {
 	return nil
 }
 
+func GetImageID(imageName string) (string, error) {
+	// Check if the Docker client has been initialized
+	CheckIfInitialized()
+
+	// List all images
+	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	// Search for the image we just loaded
+	var imageID string
+	for _, image := range images {
+		for _, tag := range image.RepoTags {
+			if tag == imageName {
+				imageID = image.ID
+			}
+		}
+	}
+
+	if imageID == "" {
+		return "", err
+	}
+
+	return imageID, nil
+}
+
 // ImportImageToEngine imports an image to the Docker engine
 func ImportImageToEngine(imagePath string) (string, error) {
 	// Open the image file
