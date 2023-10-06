@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/bnema/gordon/internal/app"
@@ -35,8 +36,6 @@ func generateOrderedYAML(infoMap map[string]interface{}) (string, error) {
 // ContainerManagerEditGET displays the edit container view
 func ContainerManagerEditGET(c echo.Context, a *app.App) error {
 	containerID := c.Param("ID")
-
-	fmt.Println(containerID)
 
 	// Get the container info
 	containerInfo, err := docker.GetContainerInfo(containerID)
@@ -89,6 +88,7 @@ func ContainerManagerEditGET(c echo.Context, a *app.App) error {
 	// Pass the containerInfo to the data map
 	data := map[string]interface{}{
 		"Title":         "Edit container",
+		"ID":            containerID,
 		"ContainerInfo": yamlString,
 	}
 
@@ -107,16 +107,196 @@ func ContainerManagerEditGET(c echo.Context, a *app.App) error {
 	return c.HTML(200, renderedHTML)
 }
 
-// ContainerManagerEditPOST is the route action for editing a container
-func ContainerManagerEditPOST(c echo.Context, a *app.App) error {
-	containerID := c.Param("ID")
-	fmt.Println(containerID)
+type TransactionStep func() error
+type RollbackStep func() error
 
-	// Get the new config
-	newConfig := c.FormValue("container_config")
+type TransactionQueue struct {
+	NewContainerID    string
+	NewContainerName  string
+	TempContainerName string
+	OldContainerID    string
+	OldContainerName  string
+	steps             []TransactionStep
+	rollbacks         []RollbackStep
+}
 
-	fmt.Println(newConfig)
+func (tq *TransactionQueue) Add(step TransactionStep, rollback RollbackStep) {
+	tq.steps = append(tq.steps, step)
+	tq.rollbacks = append(tq.rollbacks, rollback)
+}
 
+func (tq *TransactionQueue) Execute() error {
+	var transactionErrors []error
+	var rollbackErrors []error
+	for i, step := range tq.steps {
+		err := step()
+		if err != nil {
+			log.Printf("Error occurred at step index %d: %v", i, err)
+			transactionErrors = append(transactionErrors, err)
+			for j := i - 1; j >= 0; j-- {
+				rollback := tq.rollbacks[j]
+				if rollback != nil {
+					if rollbackErr := rollback(); rollbackErr != nil {
+						log.Printf("Failed to execute rollback at index %d: %v", j, rollbackErr)
+						rollbackErrors = append(rollbackErrors, rollbackErr)
+					}
+				}
+			}
+			return fmt.Errorf("transaction failed: %v; rollback errors: %v", transactionErrors, rollbackErrors)
+		}
+	}
 	return nil
+}
 
+// ContainerManagerEditPOST handles the edit container form submission
+func ContainerManagerEditPOST(c echo.Context, a *app.App) error {
+	tq := &TransactionQueue{}
+	oldContainerID := c.Param("ID")
+
+	oldContainerInfo, err := docker.GetContainerInfo(oldContainerID)
+	if err != nil {
+		return sendError(c, fmt.Errorf("getting old container info failed: %w", err))
+	}
+
+	containerConfig := c.FormValue("container_config")
+	var containerParams render.YAMLContainerParams
+	err = yaml.Unmarshal([]byte(containerConfig), &containerParams)
+	if err != nil {
+		return sendError(c, fmt.Errorf("YAML unmarshal failed: %w", err))
+	}
+
+	// Use render.FromYAMLStructToCmdParams to convert YAMLContainerParams to ContainerCommandParams
+	cmdParams, err := render.FromYAMLStructToCmdParams(containerParams)
+	if err != nil {
+		return fmt.Errorf("failed to convert YAML: %w", err)
+	}
+
+	tq.OldContainerID = oldContainerID
+	tq.OldContainerName = strings.TrimPrefix(oldContainerInfo.Name, "/")
+	tq.NewContainerName = cmdParams.ContainerName
+	tq.TempContainerName = fmt.Sprintf("%s-temp", tq.NewContainerName)
+
+	// 1. Create a new container with the new configuration with a temporary name if old container name and new container name are different
+	cmdParams.ContainerName = tq.TempContainerName
+
+	tq.Add(CreateNewContainerStep(tq, cmdParams), RemoveNewContainerRollback(tq))
+
+	// 2. Start the new container
+	tq.Add(StartNewContainerStep(tq), StopNewContainerRollback(tq))
+
+	// 3. Stop the old container
+	tq.Add(StopOldContainerStep(tq), StartOldContainerRollback(tq))
+
+	// 4. Remove the old container
+	tq.Add(RemoveOldContainerStep(tq), nil)
+
+	// 5. Rename the new container to the original name
+	tq.Add(RenameNewContainerStep(tq), RenameNewContainerRollback(tq))
+
+	err = tq.Execute()
+	if err != nil {
+		return sendError(c, fmt.Errorf("transaction failed: %w", err))
+	}
+
+	return c.HTML(200, fmt.Sprintf("Successfully edited container %s", tq.NewContainerName))
+}
+
+// CreateNewContainerStep creates a new container with the given parameters
+func CreateNewContainerStep(tq *TransactionQueue, cmdParams docker.ContainerCommandParams) TransactionStep {
+	return func() error {
+		var err error
+		tq.NewContainerID, err = docker.CreateContainer(cmdParams)
+		if err != nil {
+			return fmt.Errorf("creating new container failed: %w", err)
+		}
+		return nil
+	}
+}
+
+// StartNewContainerStep starts the new container
+func StartNewContainerStep(tq *TransactionQueue) TransactionStep {
+	return func() error {
+		err := docker.StartContainer(tq.NewContainerID)
+		if err != nil {
+			return fmt.Errorf("starting new container failed: %w", err)
+		}
+		return nil
+	}
+}
+
+// StopOldContainerStep stops the old container
+func StopOldContainerStep(tq *TransactionQueue) TransactionStep {
+	return func() error {
+		err := docker.StopContainer(tq.OldContainerID)
+		if err != nil {
+			return fmt.Errorf("stopping old container failed: %w", err)
+		}
+		return nil
+	}
+}
+
+// RemoveOldContainerStep removes the old container
+func RemoveOldContainerStep(tq *TransactionQueue) TransactionStep {
+	return func() error {
+		err := docker.RemoveContainer(tq.OldContainerID)
+		if err != nil {
+			return fmt.Errorf("removing old container failed: %w", err)
+		}
+		return nil
+	}
+}
+
+// RemoveNewContainerRollback removes the new container if the transaction fails
+func RemoveNewContainerRollback(tq *TransactionQueue) RollbackStep {
+	return func() error {
+		err := docker.RemoveContainer(tq.NewContainerID)
+		if err != nil {
+			return fmt.Errorf("rollback: removing new container failed: %w", err)
+		}
+		return nil
+	}
+}
+
+// StopNewContainerRollback stops the new container if the transaction fails
+func StopNewContainerRollback(tq *TransactionQueue) RollbackStep {
+	return func() error {
+		err := docker.StopContainer(tq.NewContainerID)
+		if err != nil {
+			return fmt.Errorf("rollback: stopping new container failed: %w", err)
+		}
+		return nil
+	}
+}
+
+// StartOldContainerRollback starts the old container if the transaction fails
+func StartOldContainerRollback(tq *TransactionQueue) RollbackStep {
+	return func() error {
+		err := docker.StartContainer(tq.OldContainerID)
+		if err != nil {
+			return fmt.Errorf("rollback: starting old container failed: %w", err)
+		}
+		return nil
+	}
+}
+
+// RenameNewContainerStep renames the new temporary container to the original name
+func RenameNewContainerStep(tq *TransactionQueue) TransactionStep {
+	return func() error {
+		err := docker.RenameContainer(tq.NewContainerID, tq.NewContainerName)
+		if err != nil {
+			return fmt.Errorf("renaming new container failed: %w", err)
+		}
+		return nil
+	}
+}
+
+// RenameNewContainerRollback renames the new container back to the temporary name if it fails
+func RenameNewContainerRollback(tq *TransactionQueue) RollbackStep {
+	return func() error {
+		err := docker.RenameContainer(tq.NewContainerID, tq.TempContainerName)
+		if err != nil {
+			return fmt.Errorf("rollback: renaming new container back failed: %w", err)
+		}
+		return nil
+	}
 }
