@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,12 +23,56 @@ type ContainerCommandParams struct {
 	EnvVar        string
 	ImageName     string
 	ImageID       string
-	Ports         []string
+	PortMappings  []PortMapping
 	Volumes       []string
 	Labels        []string
 	Network       string
 	Restart       string
 	Environment   []string
+}
+
+type PortMapping struct {
+	HostPort    string
+	ExposedPort string
+	Protocol    string
+}
+
+// ParsePortsSpecs receives a slice of strings in the format "hostPort:containerPort/Protocol" and returns a slice of PortMapping structs
+func ParsePortsSpecs(portsSpecs []string) ([]PortMapping, error) {
+	portMappings := make([]PortMapping, 0, len(portsSpecs))
+
+	for _, portSpec := range portsSpecs {
+		parts := strings.Split(portSpec, ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid port specification: %s. Format should be hostPort:containerPort[/Protocol]", portSpec)
+		}
+
+		// Validate hostPort and exposedPort are numbers
+		hostPort := parts[0]
+		if _, err := strconv.Atoi(hostPort); err != nil {
+			return nil, fmt.Errorf("invalid host port: %s. Must be a number", hostPort)
+		}
+
+		exposedParts := strings.Split(parts[1], "/")
+		exposedPort := exposedParts[0]
+		if _, err := strconv.Atoi(exposedPort); err != nil {
+			return nil, fmt.Errorf("invalid exposed port: %s. Must be a number", exposedPort)
+		}
+
+		// Default protocol is tcp
+		protocol := "tcp"
+		if len(exposedParts) > 1 {
+			protocol = exposedParts[1]
+		}
+
+		portMappings = append(portMappings, PortMapping{
+			HostPort:    hostPort,
+			ExposedPort: exposedPort,
+			Protocol:    protocol,
+		})
+	}
+
+	return portMappings, nil
 }
 
 func ContainerCommandParamsToConfig(cmdParams ContainerCommandParams) (*container.Config, error) {
@@ -152,7 +197,18 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 	// Check if the Docker client has been initialized
 	CheckIfInitialized()
 
-	portBindings := map[nat.Port][]nat.PortBinding{}
+	// Prepare port bindings
+	portBindings := nat.PortMap{}
+	for _, portMapping := range cmdParams.PortMappings {
+		key := fmt.Sprintf("%s/%s", portMapping.ExposedPort, portMapping.Protocol)
+		portBindings[nat.Port(key)] = []nat.PortBinding{
+			{
+				HostIP:   "0.0.0.0",
+				HostPort: portMapping.HostPort,
+			},
+		}
+
+	}
 
 	// Prepare labels for Traefik
 	labels := map[string]string{}
