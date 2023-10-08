@@ -200,14 +200,14 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 	// Prepare port bindings
 	portBindings := nat.PortMap{}
 	for _, portMapping := range cmdParams.PortMappings {
-		key := fmt.Sprintf("%s/%s", portMapping.ExposedPort, portMapping.Protocol)
-		portBindings[nat.Port(key)] = []nat.PortBinding{
+		// Prepare exposed port
+		exposedPort := nat.Port(portMapping.ExposedPort + "/" + portMapping.Protocol)
+		portBindings[exposedPort] = []nat.PortBinding{
 			{
 				HostIP:   "0.0.0.0",
 				HostPort: portMapping.HostPort,
 			},
 		}
-
 	}
 
 	// Prepare labels for Traefik
