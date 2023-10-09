@@ -17,13 +17,12 @@ import (
 
 var (
 	OauthCallbackURL string
-	config           AppConfig
 )
 
 type App struct {
 	TemplateFS      fs.FS
 	PublicFS        fs.FS
-	StringsYML      []byte // strings.yml contains the strings for the current language
+	LocYML          []byte // strings.yml contains the strings for the current language
 	DBDir           string
 	DBFilename      string
 	DBPath          string
@@ -62,7 +61,7 @@ type ContainerEngineConfig struct {
 	Network    string `yaml:"network"`
 }
 
-func LoadConfig() (AppConfig, error) {
+func LoadConfig(config AppConfig) (AppConfig, error) {
 	// Load env elements
 	config.General.BuildVersion = os.Getenv("BUILD_VERSION")
 	config.General.RunEnv = os.Getenv("RUN_ENV")
@@ -94,7 +93,8 @@ func LoadConfig() (AppConfig, error) {
 
 func NewApp() *App {
 	// Initialize AppConfig
-	config, err := LoadConfig()
+	config, err := LoadConfig(AppConfig{})
+	fmt.Printf("Config: %+v\n", config)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
@@ -117,7 +117,7 @@ func NewApp() *App {
 	a := &App{
 		TemplateFS: templates.TemplateFS,
 		PublicFS:   webui.PublicFS,
-		StringsYML: bytes,
+		LocYML:     bytes,
 		DBDir:      DBDir,
 		DBFilename: DBFilename,
 		Config:     config,
