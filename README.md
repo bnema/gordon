@@ -9,11 +9,11 @@
 <h4 align="center">Minimalist self-hosted containerized app deployment tool.</h4>
 
 
-Gordon is a tool based on Golang that aims to simplify the deployment of your containerized applications. It automates the process of integrating your locally built image into your self-hosted setup. Additionally, Gordon coordinates domain routing through Traefik, which needs to be pre-installed. This eliminates the need for manual configuration and streamlines the development process.
+Gordon is a tool written in Go that aims to simplify the deployment of your containerized web applications. It automates the process of integrating your locally built image into your self-hosted setup. Additionally, Gordon coordinates domain routing through Traefik, which needs to be pre-installed. This eliminates the need for manual configuration and streamlines the development process.
 
 ## **Key Features**
 
-- **Quick Deployment**: Deploy container images effortlessly using the command **`gordon deploy <image:version> -p 8080 -t gordon.sld.tld`**
+- **Quick Deployment**: Deploy container images effortlessly using the command **`gordon deploy <image:version> -p 8080:80 -t gordon.sld.tld`**
 - **Self-Hosted**: Operates within your existing self-hosted environment.
 - **Web UI**: Provides a simple web UI to manage your deployments, domains, exposed ports, and more.
 - **Automated Routing**: Collaborates with Traefik to automatically route your application to your desired domain or subdomain.
@@ -27,6 +27,15 @@ I found myself spending excessive time manually deploying my containerized appli
 ## **Development Status**
 
 🛠️ **Note**: This project is currently under heavy development. A 0.1 release with basic features will be available soon.
+
+## **TODO for 0.1 release**
+
+- [x] Basic web UI for managing deployments
+- [x] CRUD operations with the container engine
+- [ ] Improve authentication security
+- [ ] Interaction with the database
+- [ ] New version update mechanism (backup, rollback etc.)
+- [ ] Basic CLI to push images to the container engine
 
 ## **License**
 
