@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/pkg/docker"
 )
 
 // FromInputsToCmdParams transforms the inputs map into a ContainerCommandParams struct
-func FromInputsToCmdParams(inputs map[string]string) (docker.ContainerCommandParams, error) {
+func FromInputsToCmdParams(inputs map[string]string, a *app.App) (docker.ContainerCommandParams, error) {
 
 	volumeStr := inputs["volumes"]
 	volumeSlice := strings.Split(volumeStr, ",")
@@ -45,7 +46,7 @@ func FromInputsToCmdParams(inputs map[string]string) (docker.ContainerCommandPar
 		Restart:       inputs["restart"],
 		Volumes:       volumeSlice,
 		Environment:   environmentSlice,
-		Network:       ("traefik"),
+		Network:       a.Config.ContainerEngine.Network,
 		PortMappings:  portMappings,
 	}
 
