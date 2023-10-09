@@ -28,9 +28,17 @@
 /* Import Jetbrains Mono Nerd Font */
 @font-face {
   font-family: "JetBrainsMono-Nerd-Font-Regular";
-  src: url("/assets/fonts/JetBrainsMonoNerd/JetBrainsMonoNerdFontMono-Regular.woff2")
+  src: url("/assets/fonts/JetBrainsMonoNerd/JetBrainsMonoNerdFont-Regular.woff2")
     format("woff2");
   font-weight: normal;
+  font-style: normal;
+}
+
+/* Import Jetbrains Mono Nerd Font Bold */
+@font-face {
+  font-family: "JetBrainsMono-Nerd-Font-Bold";
+  src: url("/assets/fonts/JetBrainsMonoNerd/JetBrainsMonoNerdFont-Bold.woff2") format("woff2");
+  font-weight: bold;
   font-style: normal;
 }
 
@@ -93,24 +101,10 @@
   font-family: "IBMPlexSans-Regular", sans-serif;
 }
 
-.circle-shadow {
-  width: 100%;
-  position: relative;
+.JetBrainsMonoNF {
+  font-family: "JetBrainsMono-Nerd-Font-Regular", sans-serif;
 }
 
-.circle-shadow::after {
-  position: absolute;
-  width: 50%;
-  height: 0.4rem;
-  margin: auto;
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 50%;
-  z-index: -1;
-  bottom: 2%;
-  content: "";
-  box-shadow: 0 0 1px 0.3rem rgba(0, 0, 0, 0.1);
-}
-
-.iconoir {
-  margin-right: 8px;
+.JetBrainsMonoBoldNF {
+  font-family: "JetBrainsMono-Nerd-Font-Bold", sans-serif;
 }
