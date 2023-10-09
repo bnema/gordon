@@ -94,7 +94,6 @@ func LoadConfig(config AppConfig) (AppConfig, error) {
 func NewApp() *App {
 	// Initialize AppConfig
 	config, err := LoadConfig(AppConfig{})
-	fmt.Printf("Config: %+v\n", config)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
