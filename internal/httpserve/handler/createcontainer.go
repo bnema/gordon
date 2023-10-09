@@ -106,7 +106,7 @@ func CreateContainerPOST(c echo.Context, a *app.App) error {
 		}
 	}
 
-	cmdParams, err := render.FromInputsToCmdParams(sanitizedInputs)
+	cmdParams, err := render.FromInputsToCmdParams(sanitizedInputs, a)
 	if err != nil {
 		return sendError(c, err)
 	}

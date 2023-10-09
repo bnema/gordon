@@ -41,7 +41,7 @@ func GetLocalization(lang string, a *app.App) (map[string]interface{}, error) {
 func getLocalizations(a *app.App) (Localizations, error) {
 	var loc Localizations
 
-	err := yaml.Unmarshal(a.StringsYML, &loc)
+	err := yaml.Unmarshal(a.LocYML, &loc)
 	if err != nil {
 		return loc, fmt.Errorf("failed to unmarshal strings.yml: %w", err)
 	}
