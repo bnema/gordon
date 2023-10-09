@@ -32,9 +32,9 @@ type ContainerCommandParams struct {
 }
 
 type PortMapping struct {
-	HostPort    string
-	ExposedPort string
-	Protocol    string
+	HostPort      string
+	ContainerPort string
+	Protocol      string
 }
 
 // ParsePortsSpecs receives a slice of strings in the format "hostPort:containerPort/Protocol" and returns a slice of PortMapping structs
@@ -47,28 +47,28 @@ func ParsePortsSpecs(portsSpecs []string) ([]PortMapping, error) {
 			return nil, fmt.Errorf("invalid port specification: %s. Format should be hostPort:containerPort[/Protocol]", portSpec)
 		}
 
-		// Validate hostPort and exposedPort are numbers
+		// Validate hostPort and containerPort
 		hostPort := parts[0]
 		if _, err := strconv.Atoi(hostPort); err != nil {
 			return nil, fmt.Errorf("invalid host port: %s. Must be a number", hostPort)
 		}
 
-		exposedParts := strings.Split(parts[1], "/")
-		exposedPort := exposedParts[0]
-		if _, err := strconv.Atoi(exposedPort); err != nil {
-			return nil, fmt.Errorf("invalid exposed port: %s. Must be a number", exposedPort)
+		containerParts := strings.Split(parts[1], "/")
+		containerPort := containerParts[0]
+		if _, err := strconv.Atoi(containerPort); err != nil {
+			return nil, fmt.Errorf("invalid exposed port: %s. Must be a number", containerPort)
 		}
 
 		// Default protocol is tcp
 		protocol := "tcp"
-		if len(exposedParts) > 1 {
-			protocol = exposedParts[1]
+		if len(containerParts) > 1 {
+			protocol = containerParts[1]
 		}
 
 		portMappings = append(portMappings, PortMapping{
-			HostPort:    hostPort,
-			ExposedPort: exposedPort,
-			Protocol:    protocol,
+			HostPort:      hostPort,
+			ContainerPort: containerPort,
+			Protocol:      protocol,
 		})
 	}
 
@@ -77,12 +77,11 @@ func ParsePortsSpecs(portsSpecs []string) ([]PortMapping, error) {
 
 func ContainerCommandParamsToConfig(cmdParams ContainerCommandParams) (*container.Config, error) {
 	return &container.Config{
-		Image:        cmdParams.ImageName,
-		Hostname:     cmdParams.ContainerHost,
-		ExposedPorts: map[nat.Port]struct{}{},
-		Env:          cmdParams.Environment,
-		Labels:       map[string]string{},
-		Volumes:      map[string]struct{}{},
+		Image:    cmdParams.ImageName,
+		Hostname: cmdParams.ContainerHost,
+		Env:      cmdParams.Environment,
+		Labels:   map[string]string{},
+		Volumes:  map[string]struct{}{},
 	}, nil
 }
 
@@ -201,7 +200,7 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 	portBindings := nat.PortMap{}
 	for _, portMapping := range cmdParams.PortMappings {
 		// Prepare exposed port
-		exposedPort := nat.Port(portMapping.ExposedPort + "/" + portMapping.Protocol)
+		exposedPort := nat.Port(portMapping.ContainerPort + "/" + portMapping.Protocol)
 		portBindings[exposedPort] = []nat.PortBinding{
 			{
 				HostIP:   "0.0.0.0",
