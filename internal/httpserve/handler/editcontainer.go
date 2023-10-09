@@ -51,14 +51,14 @@ func ContainerManagerEditGET(c echo.Context, a *app.App) error {
 		networkNames = append(networkNames, networkName)
 	}
 
-	// Prepare Ports
+	// Prepare Ports while using the containerInfo.Config.ExposedPorts
 	portMappings := make([]string, 0)
-	for port, binding := range containerInfo.NetworkSettings.Ports {
-		for _, b := range binding {
-			portMappings = append(portMappings, fmt.Sprintf("%s:%s->%s", b.HostIP, b.HostPort, port))
-		}
+	for exposedPort := range containerInfo.Config.ExposedPorts {
+		// Here you might want to check your lastKnownPortMappings to find out what this exposedPort is mapped to on the host.
+		hostPort := "" // Fetch this from lastKnownPortMappings or set a default
+		portMapping := fmt.Sprintf("0.0.0.0:%s->%s", hostPort, exposedPort)
+		portMappings = append(portMappings, portMapping)
 	}
-
 	// Prepare Volumes (Mounts)
 	volumeMappings := make([]string, 0)
 	for _, mount := range containerInfo.Mounts {
