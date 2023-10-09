@@ -111,6 +111,8 @@ func CreateContainerPOST(c echo.Context, a *app.App) error {
 		return sendError(c, err)
 	}
 
+	fmt.Println(cmdParams.PortMappings)
+
 	// Create the container
 	_, err = docker.CreateContainer(cmdParams)
 	if err != nil {
