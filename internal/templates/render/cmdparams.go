@@ -34,7 +34,7 @@ func FromInputsToCmdParams(inputs map[string]string, a *app.App) (docker.Contain
 	}
 
 	// Get the exposed port for traefik labels
-	exposedPort := portMappings[0].ExposedPort
+	exposedPort := portMappings[0].ContainerPort
 
 	params := docker.ContainerCommandParams{
 		IsSSL:         inputs["container_protocol"] == "https",
@@ -80,9 +80,8 @@ type YAMLContainerParams struct {
 	Volumes     []string          `yaml:"Volumes"`
 	Environment []string          `yaml:"Environment"`
 	Labels      map[string]string `yaml:"Labels"`
-	// Network is a slice of strings in the textarea
-	Network []string `yaml:"Network"`
-	Restart string   `yaml:"Restart"`
+	Network     []string          `yaml:"Network"`
+	Restart     string            `yaml:"Restart"`
 }
 
 // FromYAMLStructToCmdParams converts a YAMLContainerParams struct to a ContainerCommandParams struct
@@ -100,6 +99,12 @@ func FromYAMLStructToCmdParams(yamlParams YAMLContainerParams) (docker.Container
 		labels = append(labels, fmt.Sprintf("%s=%s", k, v))
 	}
 
+	// Ports input parsing
+	portMappings, err := docker.ParsePortsSpecs(yamlParams.Ports)
+	if err != nil {
+		return docker.ContainerCommandParams{}, err
+	}
+
 	// Convert the slice of strings to a comma separated string
 	network := strings.Join(yamlParams.Network, ",")
 
@@ -112,6 +117,7 @@ func FromYAMLStructToCmdParams(yamlParams YAMLContainerParams) (docker.Container
 		Labels:        labels,
 		Network:       network,
 		Restart:       yamlParams.Restart,
+		PortMappings:  portMappings,
 	}
 
 	return params, nil

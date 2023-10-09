@@ -51,23 +51,12 @@ func ContainerManagerEditGET(c echo.Context, a *app.App) error {
 		networkNames = append(networkNames, networkName)
 	}
 
-	// Prepare Ports (PortBindings and ExposedPorts)
+	// Prepare Ports
 	portMappings := make([]string, 0)
 	for port, bindings := range containerInfo.HostConfig.PortBindings {
 		for _, binding := range bindings {
-			portMappings = append(portMappings, fmt.Sprintf("%s:%s", binding.HostPort, port.Port()))
+			portMappings = append(portMappings, fmt.Sprintf("%s:%s/%s", binding.HostPort, port.Port(), port.Proto()))
 		}
-	}
-
-	exposedPorts := make([]string, 0)
-	for port := range containerInfo.Config.ExposedPorts {
-		exposedPorts = append(exposedPorts, port.Port())
-	}
-
-	// Prepare Ports while using the containerInfo.Config.ExposedPorts
-
-	for port := range containerInfo.Config.ExposedPorts {
-		fmt.Println(port)
 	}
 
 	// Prepare Volumes (Mounts)
@@ -187,21 +176,21 @@ func ContainerManagerEditPOST(c echo.Context, a *app.App) error {
 	tq.NewContainerName = cmdParams.ContainerName
 	tq.TempContainerName = fmt.Sprintf("%s-temp", tq.NewContainerName)
 
-	// 1. Create a new container with the new configuration with a temporary name if old container name and new container name are different
 	cmdParams.ContainerName = tq.TempContainerName
 
-	tq.Add(CreateNewContainerStep(tq, cmdParams), RemoveNewContainerRollback(tq))
-
-	// 2. Start the new container
-	tq.Add(StartNewContainerStep(tq), StopNewContainerRollback(tq))
-
-	// 3. Stop the old container
+	// 1. Stop the old container
 	tq.Add(StopOldContainerStep(tq), StartOldContainerRollback(tq))
 
-	// 4. Remove the old container
+	// 2. Create the new container
+	tq.Add(CreateNewContainerStep(tq, cmdParams), RemoveNewContainerRollback(tq))
+
+	// 3. Start the new container
+	tq.Add(StartNewContainerStep(tq), StopNewContainerRollback(tq))
+
+	// 4. Rename the new container to the original name
 	tq.Add(RemoveOldContainerStep(tq), nil)
 
-	// 5. Rename the new container to the original name
+	// 5. Remove the old container
 	tq.Add(RenameNewContainerStep(tq), RenameNewContainerRollback(tq))
 
 	err = tq.Execute()
