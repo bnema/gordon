@@ -17,9 +17,23 @@ func FromInputsToCmdParams(inputs map[string]string) (docker.ContainerCommandPar
 	environmentStr := inputs["environment_variables"]
 	environmentSlice := strings.Split(environmentStr, "\n")
 
-	fmt.Println("environmentSlice", environmentSlice)
+	// Ports input parsing
+	portMappingsStr := inputs["ports"]
+	portMappingsSliceRaw := strings.Split(portMappingsStr, ",")
 
-	portsStr := inputs["ports"]
+	// Trim whitespace from each port mapping string
+	portMappingsSlice := make([]string, len(portMappingsSliceRaw))
+	for i, spec := range portMappingsSliceRaw {
+		portMappingsSlice[i] = strings.TrimSpace(spec)
+	}
+
+	portMappings, err := docker.ParsePortsSpecs(portMappingsSlice)
+	if err != nil {
+		return docker.ContainerCommandParams{}, err
+	}
+
+	// Get the exposed port for traefik labels
+	exposedPort := portMappings[0].ExposedPort
 
 	params := docker.ContainerCommandParams{
 		IsSSL:         inputs["container_protocol"] == "https",
@@ -28,15 +42,12 @@ func FromInputsToCmdParams(inputs map[string]string) (docker.ContainerCommandPar
 		Domain:        inputs["container_domain"],
 		ImageName:     inputs["image_name"],
 		ImageID:       inputs["image_id"],
-		Ports:         strings.Split(portsStr, ","),
 		Restart:       inputs["restart"],
 		Volumes:       volumeSlice,
 		Environment:   environmentSlice,
 		Network:       ("traefik"),
+		PortMappings:  portMappings,
 	}
-
-	// Retain the port number for the container host for the load balancer
-	exposedPort := strings.Split(params.Ports[0], ":")[0]
 
 	entryPoint := "web"
 	if params.IsSSL {
@@ -95,7 +106,6 @@ func FromYAMLStructToCmdParams(yamlParams YAMLContainerParams) (docker.Container
 		ContainerName: yamlParams.Name,
 		ImageName:     yamlParams.Image,
 		ImageID:       imageID,
-		Ports:         yamlParams.Ports,
 		Volumes:       yamlParams.Volumes,
 		Environment:   yamlParams.Environment,
 		Labels:        labels,
