@@ -6,21 +6,23 @@
   <body class="bg-zinc-200 flex flex-col lg:flex-row p-0">
     {{template "menu.gohtml" .}}
     <!-- Main content here -->
-    <div class="flex-1 flex flex-col space-y-4 p-4 md:ml-4">
-      <div class="flex flex-col md:flex-row w-full flex-grow md:mt-24">
-        <div class="flex-grow bg-white p-4 rounded-md shadow mb-4">
-          <h1 class="text-lg md:text-2xl font-bold">{{index .Lang "manager" "content" "title"}}</h1>
-          <!-- List all the containers -->
-          <div
-            id="container-manager"
-            hx-get="/htmx/container-manager"
-            hx-trigger="load"
-            hx-swap="innerHTML"
-            hx-swap-oob="true"
-            hx-target-error="container-manager-error"
-            hx-poll="5s"  
-          ></div>
-          <div id="container-manager-error" hidden></div>
+    <div class="flex-1 flex flex-col space-y-4 pt-16 md:pt-32 md:px-6">
+    <div class="flex flex-col md:flex-row w-full flex-grow">
+      <div class="flex-grow bg-white p-4 md:rounded-md md:shadow mb-4">
+        <h1 class="text-lg md:text-2xl font-bold text-gray-400 IBMPlexSans justify-center text-center">
+          {{index .Lang "manager" "content" "title"}}
+        </h1>
+        <!-- List all the containers -->
+        <div
+          id="container-manager"
+          hx-get="/htmx/container-manager"
+          hx-trigger="load"
+          hx-swap="innerHTML"
+          hx-swap-oob="true"
+          hx-target-error="container-manager-error"
+          hx-poll="5s"
+        ></div>
+        <div id="container-manager-error" hidden></div>
         <!-- List all the images  -->
         <div
           id="image-manager"
@@ -29,11 +31,11 @@
           hx-swap="innerHTML"
           hx-swap-oob="true"
           hx-target-error="image-manager-error"
-          hx-poll="5s" 
+          hx-poll="5s"
         ></div>
         <div id="image-manager-error" hidden></div>
-        </div>
       </div>
+    </div>
 
     <!-- footer -->
     {{template "footer.gohtml" .}}

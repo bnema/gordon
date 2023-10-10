@@ -1,60 +1,51 @@
-<div id="menubar" class="lg:w-64 w-full">
-  <div class="hidden lg:flex justify-center p-4">
-    <img src="/assets/imgs/gordon-mascot-hq-trsp.png" alt="logo" class="h-32" />
+<div
+  id="menubar"
+  class="w-full h-12 md:h-16 fixed top-0 left-0 bg-gordonmascot-lblue flex flex-row justify-evenly items-center px-4 IBMPlexSans"
+>
+  <div class="w-full flex justify-start">
+    <h1
+      class="gordon-title text-3xl md:text-4xl text-gordonmascot-hblue tracking-tighter"
+    >
+      Gordon
+    </h1>
+    <span
+      class="text-gordonmascot-mblue text-xs md:text-sm"
+      >{{ .BuildVersion }}</span
+    >
   </div>
-  <div
-    class="p-4 xl:p-8 flex flex-col bg-gordonmascot-lblue rounded-lg shadow space-y-4"
-  >
-    <div class="w-full flex justify-center">
-      <h1
-        class="gordon-title text-5xl text-gordonmascot-hblue tracking-tighter"
-      >
-        Gordon
-      </h1>
-      <span class="text-gordonmascot-mblue text-sm">{{ .BuildVersion }}</span>
-    </div>
-    <div class="w-full">
-      <ul
-        class="flex flex-wrap lg:flex-col lg:space-y-6 lg:py-8 font-semibold text-gray-100 text-lg min-w-fit justify-center"
-      >
-        <li class="flex items-center lg:justify-start w-1/2 lg:w-full">
-          <i class="iconoir-dashboard-speed mr-2 text-3xl"></i>
-          <a href="/admin">Dashboard</a>
-        </li>
-        <li class="flex items-center lg:justify-start w-1/2 lg:w-full">
-          <i class="iconoir-server mr-2 text-3xl"></i>
-          <a href="/admin/manager">Manager</a>
-        </li>
-        <li
-          class="flex items-center w-1/2 lg:w-full text-gray-600"
-          style="display: none"
-        >
-          <i class="iconoir-community mr-2 text-3xl"></i>
-          <a title="Disabled" href="#">Users</a>
-        </li>
-        <li
-          class="flex items-center w-1/2 lg:w-full text-gray-600"
-          style="display: none"
-        >
-          <i class="iconoir-database-settings mr-2 text-3xl"></i>
-          <a title="Disabled" href="#">Settings</a>
-        </li>
-      </ul>
-    </div>
-    <!-- Settings / Logout on the same line -->
-    <div class="w-full flex justify-center space-x-4">
-      <a
-        href="/admin/settings"
-        title="User settings"
-        class="iconoir-settings text-gordonmascot-mblue text-lg md:text-2xl"
-      >
-      </a>
-      <a
-        href="/admin/logout"
-        title="Logout"
-        class="iconoir-log-out text-gordonmascot-mblue text-lg md:text-2xl"
-      >
-      </a>
-    </div>
+  <div class="w-full">
+    <ul
+      class="flex flex-row space-y-6 font-semibold text-gray-100 text-lg md:text-xl justify-center"
+    >
+      <li class="">
+        <span class="JetBrainsMonoBoldNF pr-1"> </span>
+        <a href="/admin/manager">Manager</a>
+      </li>
+    </ul>
+  </div>
+  <div class="w-full flex space-x-4 justify-end">
+    <a
+      href="/admin/settings"
+      title="User settings"
+      class="iconoir-settings text-gordonmascot-mblue text-lg md:text-2xl"
+    ></a>
+    <a
+      href="/admin/logout"
+      title="Logout"
+      class="iconoir-log-out text-gordonmascot-mblue text-lg md:text-2xl"
+    ></a>
   </div>
 </div>
+
+<!-- <li class="" hidden>
+        <i class="iconoir-dashboard-speed mr-2 text-3xl"></i>
+        <a href="/admin">Dashboard</a>
+      </li>
+      <li class="flex items-center justify-start w-full text-gray-600" hidden>
+        <i class="iconoir-community mr-2 text-3xl"></i>
+        <a title="Disabled" href="#">Users</a>
+      </li>
+      <li class="flex items-center justify-start w-full text-gray-600" hidden>
+        <i class="iconoir-database-settings mr-2 text-3xl"></i>
+        <a title="Disabled" href="#">Settings</a>
+      </li> -->
