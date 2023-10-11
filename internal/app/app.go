@@ -41,7 +41,7 @@ type GeneralConfig struct {
 	RunEnv       string // come from env
 	BuildDir     string // come from env
 	BuildVersion string // come from env
-	StorageDir   string `yaml:"storageDir"`
+	StorageDir   string `yaml:"storageDir"` // = buildir/storage
 	GordonToken  string `yaml:"gordonToken"`
 }
 
@@ -95,6 +95,8 @@ func NewApp() *App {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+	// Append build dir to storage dir
+	config.General.StorageDir = fmt.Sprintf("%s/%s", config.General.BuildDir, config.General.StorageDir)
 
 	// Open the strings.yml file containing the strings for the current language
 	file, err := templates.TemplateFS.Open("locstrings.yml")
@@ -156,4 +158,21 @@ func (config *Config) GenerateOauthCallbackURL() string {
 	}
 
 	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.Admin.Path)
+}
+
+// UpdateConfig updates the config file
+func (config *Config) UpdateConfig() error {
+	// Marshal the config struct into YAML
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %v", err)
+	}
+
+	// Write the data to the config file (located in the build directory)
+	err = os.WriteFile(fmt.Sprintf("%s/config.yml", config.General.BuildDir), data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write to config file: %v", err)
+	}
+
+	return nil
 }
