@@ -11,10 +11,7 @@ func CreateUserTable(db *sql.DB) error {
 	CREATE TABLE users (
 		id VARCHAR(255) PRIMARY KEY,
 		name VARCHAR(255) UNIQUE NOT NULL,
-		email VARCHAR(255) UNIQUE NOT NULL,
-		email_verified DATETIME,
-		image VARCHAR(255),
-		is_admin BOOLEAN DEFAULT FALSE
+		email VARCHAR(255) UNIQUE NOT NULL
 	);`
 
 	_, err := db.Exec(createTableSQL)
