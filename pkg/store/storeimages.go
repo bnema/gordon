@@ -17,13 +17,13 @@ type StorageConfig struct {
 	Images     []types.ImageSummary
 }
 
-func NewStorageConfig(config *app.AppConfig) *StorageConfig {
+func NewStorageConfig(config *app.Config) *StorageConfig {
 	return &StorageConfig{
 		StorageDir: config.General.StorageDir,
 	}
 }
 
-func SaveImageToStorage(config *app.AppConfig, filename string, buf io.Reader) (string, error) {
+func SaveImageToStorage(config *app.Config, filename string, buf io.Reader) (string, error) {
 	// Check if the folder exist if not create it
 	if _, err := os.Stat(config.General.StorageDir); os.IsNotExist(err) {
 		err := os.MkdirAll(config.General.StorageDir, 0755)
