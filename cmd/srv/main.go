@@ -31,6 +31,8 @@ func main() {
 	// Pass memDb to the app with the rest of the configs
 	a.DB = memDb
 
+	a.HandleNewTokenInitialization()
+
 	dockerClient := &docker.DockerClient{}
 	err = dockerClient.InitializeClient(a.Config.NewDockerConfig())
 	if err != nil {
