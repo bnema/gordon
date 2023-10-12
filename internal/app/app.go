@@ -28,9 +28,9 @@ type App struct {
 	DBPath          string
 	InitialChecksum string
 	DB              *sql.DB
-	Config          AppConfig
+	Config          Config
 }
-type AppConfig struct {
+type Config struct {
 	General         GeneralConfig         `yaml:"General"`
 	Http            HttpConfig            `yaml:"Http"`
 	Admin           AdminConfig           `yaml:"Admin"`
@@ -38,10 +38,11 @@ type AppConfig struct {
 }
 
 type GeneralConfig struct {
-	RunEnv       string
-	BuildDir     string
-	BuildVersion string
+	RunEnv       string // come from env
+	BuildDir     string // come from env
+	BuildVersion string // come from env
 	StorageDir   string `yaml:"storageDir"`
+	GordonToken  string `yaml:"gordonToken"`
 }
 
 type HttpConfig struct {
@@ -61,7 +62,7 @@ type ContainerEngineConfig struct {
 	Network    string `yaml:"network"`
 }
 
-func LoadConfig(config AppConfig) (AppConfig, error) {
+func LoadConfig(config *Config) (*Config, error) {
 	// Load env elements
 	config.General.BuildVersion = os.Getenv("BUILD_VERSION")
 	config.General.RunEnv = os.Getenv("RUN_ENV")
@@ -72,10 +73,6 @@ func LoadConfig(config AppConfig) (AppConfig, error) {
 		config.General.RunEnv = "prod"
 		config.General.BuildDir = "."
 	}
-
-	fmt.Printf("RUN_ENV: %s\n", config.General.RunEnv)
-	fmt.Printf("BUILD_DIR: %s\n", config.General.BuildDir)
-
 	// Load config file
 	configFile := fmt.Sprintf("%s/config.yml", config.General.BuildDir)
 	configData, err := os.ReadFile(configFile)
@@ -93,7 +90,8 @@ func LoadConfig(config AppConfig) (AppConfig, error) {
 
 func NewApp() *App {
 	// Initialize AppConfig
-	config, err := LoadConfig(AppConfig{})
+	config := &Config{}
+	_, err := LoadConfig(config)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
@@ -119,7 +117,7 @@ func NewApp() *App {
 		LocYML:     bytes,
 		DBDir:      DBDir,
 		DBFilename: DBFilename,
-		Config:     config,
+		Config:     *config,
 	}
 
 	OauthCallbackURL = config.GenerateOauthCallbackURL()
@@ -127,7 +125,7 @@ func NewApp() *App {
 }
 
 // NewDockerConfig creates and returns a new Docker client configuration
-func (config *AppConfig) NewDockerConfig() *docker.Config {
+func (config *Config) NewDockerConfig() *docker.Config {
 	if config.ContainerEngine.Podman {
 		return &docker.Config{
 			Sock:         config.ContainerEngine.PodmanSock,
@@ -141,7 +139,7 @@ func (config *AppConfig) NewDockerConfig() *docker.Config {
 }
 
 // GenerateOauthCallbackURL generates the OAuth callback URL
-func (config *AppConfig) GenerateOauthCallbackURL() string {
+func (config *Config) GenerateOauthCallbackURL() string {
 	var scheme, port string
 
 	if config.General.RunEnv == "dev" {
