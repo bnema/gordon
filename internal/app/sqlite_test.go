@@ -1,9 +1,11 @@
-package app
+package app_test
 
 import (
 	"database/sql"
 	"os"
 	"testing"
+
+	"github.com/bnema/gordon/internal/app"
 )
 
 // test for CloseAndBackupDB with database modifications (checksum should be different and backup file should be created)
@@ -21,8 +23,9 @@ func TestCloseAndBackupDBWithModifications(t *testing.T) {
 	}
 	tempFile.Close()
 
-	app := &App{
+	app := &app.App{
 		DBFilename: tempFile.Name(),
+		DBTables:   app.DBTables{},
 	}
 
 	// Initialize in-memory database
@@ -30,6 +33,9 @@ func TestCloseAndBackupDBWithModifications(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open in-memory database: %v", err)
 	}
+
+	// Initialize the DB field in the App struct
+	app.DB = memDb
 	defer memDb.Close()
 
 	// Create table and insert some data
@@ -43,13 +49,13 @@ func TestCloseAndBackupDBWithModifications(t *testing.T) {
 	}
 
 	// Generate initial checksum
-	initialChecksum, err := GenerateDBChecksum(memDb)
+	initialChecksum, err := app.GenerateDBChecksum(memDb, app)
 	if err != nil {
 		t.Fatalf("Failed to generate initial checksum: %v", err)
 	}
 
 	// Validate: Checksum should remain the same
-	finalChecksum, err := GenerateDBChecksum(memDb)
+	finalChecksum, err := GenerateDBChecksum(memDb, app)
 	if err != nil {
 		t.Fatalf("Failed to generate final checksum: %v", err)
 	}
@@ -64,7 +70,7 @@ func TestCloseAndBackupDBWithModifications(t *testing.T) {
 	}
 
 	// Validate: Checksum should be different
-	finalChecksum, err = GenerateDBChecksum(memDb)
+	finalChecksum, err = GenerateDBChecksum(memDb, app)
 	if err != nil {
 		t.Fatalf("Failed to generate final checksum: %v", err)
 	}
@@ -117,13 +123,13 @@ func TestCloseAndBackupDBWithNoModifications(t *testing.T) {
 	}
 
 	// Generate initial checksum
-	initialChecksum, err := GenerateDBChecksum(memDb)
+	initialChecksum, err := GenerateDBChecksum(memDb, app)
 	if err != nil {
 		t.Fatalf("Failed to generate initial checksum: %v", err)
 	}
 
 	// Validate: Checksum should remain the same
-	finalChecksum, err := GenerateDBChecksum(memDb)
+	finalChecksum, err := GenerateDBChecksum(memDb, app)
 	if err != nil {
 		t.Fatalf("Failed to generate final checksum: %v", err)
 	}
