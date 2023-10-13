@@ -65,10 +65,10 @@ type ContainerEngineConfig struct {
 }
 
 type DBTables struct {
-	User     db.User
-	Account  db.Account
-	Session  db.Session
-	Provider db.Provider
+	User     db.User     `sql:"user"`
+	Account  db.Account  `sql:"account"`
+	Sessions db.Sessions `sql:"sessions"`
+	Provider db.Provider `sql:"provider"`
 }
 
 func LoadConfig(config *Config) (*Config, error) {
@@ -130,6 +130,12 @@ func NewApp() *App {
 		DBFilename: DBFilename,
 		Config:     *config,
 	}
+
+	// DBTables: DBTables{
+	// 	User:     db.User{},
+	// 	Account:  db.Account{},
+	// 	Sessions: db.Sessions{},
+	// 	Provider: db.Provider{},
 
 	OauthCallbackURL = config.GenerateOauthCallbackURL()
 	return a

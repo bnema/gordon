@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bnema/gordon/internal/db/migrate"
+	pkgsqlite "github.com/bnema/gordon/pkg/sqlite"
 	"github.com/mattn/go-sqlite3"
 )
 
@@ -37,7 +37,7 @@ func InitializeDB(a *App) (*sql.DB, error) {
 	}
 
 	if !dbExists {
-		if err := bootstrapDB(dbPath); err != nil {
+		if err := bootstrapDB(dbPath, a); err != nil {
 			return nil, fmt.Errorf("failed to bootstrap DB: %w", err)
 		}
 	}
@@ -46,7 +46,7 @@ func InitializeDB(a *App) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to load DB to memory: %w", err)
 	}
 	// Here we can generate the initial checksum
-	a.InitialChecksum, err = GenerateDBChecksum(memDb)
+	a.InitialChecksum, err = GenerateDBChecksum(memDb, a)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate initial checksum: %w", err)
 	}
@@ -76,25 +76,25 @@ func (a *App) checkDBFile(dbPath string) (bool, error) {
 	return true, nil
 }
 
-// bootstrapDB executes the SQL statements to create the database tables.
-func bootstrapDB(dbPath string) error {
+func bootstrapDB(dbPath string, app *App) error {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	if err := migrate.CreateUserTable(db); err != nil {
-		return err
-	}
-	if err := migrate.CreateAccountTable(db); err != nil {
-		return err
-	}
-	if err := migrate.CreateSessionTable(db); err != nil {
-		return err
-	}
+	tables := app.DBTables
 
-	if err := migrate.CreateProviderTable(db); err != nil {
+	if err := pkgsqlite.CreateTable(db, tables.User, "user"); err != nil {
+		return err
+	}
+	if err := pkgsqlite.CreateTable(db, tables.Account, "account"); err != nil {
+		return err
+	}
+	if err := pkgsqlite.CreateTable(db, tables.Sessions, "sessions"); err != nil {
+		return err
+	}
+	if err := pkgsqlite.CreateTable(db, tables.Provider, "provider"); err != nil {
 		return err
 	}
 
@@ -165,12 +165,8 @@ func loadDBToMemory(dbPath string) (*sql.DB, error) {
 }
 
 // GenerateDBChecksum generates a checksum of the database.
-func GenerateDBChecksum(db *sql.DB) (string, error) {
-	tables, err := GetTableNames(db)
-	if err != nil {
-		return "", err
-	}
-
+func GenerateDBChecksum(db *sql.DB, a *App) (string, error) {
+	tables := getTableNames(a)
 	var finalChecksum []byte
 
 	for _, table := range tables {
