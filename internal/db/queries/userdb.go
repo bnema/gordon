@@ -1,9 +1,8 @@
 package queries
 
 import (
-	"database/sql"
-
 	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/db"
 )
 
 // Pseudo-code for all queries that will be needed on the user database
@@ -13,7 +12,8 @@ import (
 // 1. Create a user (one only, if id=1 then it's the admin)
 // This happens when the user logs in for the first time
 // TODO: prevent anyone from creating another user
-func CreateUser(a *app.App, db *sql.DB) error {
+func CreateUser(a *app.App) error {
+
 	// To create a user i need to :
 	// 1. check if gordontoken == gordontoken inside the yaml config file
 	// 2. check if user already exists
@@ -23,4 +23,14 @@ func CreateUser(a *app.App, db *sql.DB) error {
 	// 6. create the session in the database
 	// 7. return the user informations (id, name, email, image, is_admin)
 	return nil
+}
+
+// GetUserInformations gets the user informations based on the access token of the oauth provider
+func GetUserInformations(a *app.App, accessToken string) (db.User, error) {
+
+	InspectInMemoryDB(a)
+
+	user := db.User{}
+
+	return user, nil
 }
