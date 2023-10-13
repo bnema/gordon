@@ -9,7 +9,7 @@ import (
 // HandleNewInitialization checks if an admin user exists in db, and if not, generates a token for the initial login and stores it in the config file
 func (a *App) HandleNewTokenInitialization() (string, error) {
 	// Query to check if a user with id=1 exists
-	query := `SELECT COUNT(id) FROM users WHERE id = "1"`
+	query := `SELECT COUNT(id) FROM user WHERE id = "1"`
 	var count int
 	err := a.DB.QueryRow(query).Scan(&count)
 	if err != nil {
@@ -27,7 +27,9 @@ func (a *App) HandleNewTokenInitialization() (string, error) {
 		return "", fmt.Errorf("failed to generate token: %v", err)
 	}
 
-	fmt.Printf("Initial login token: %s\n", token)
+	// url = config.Http.SubDomain + config.Http.TopDomain + config.Http.Port + config.Admin.Path
+
+	fmt.Printf("Login with the new token: %s\n", token)
 
 	// Store the token in the config file
 	a.Config.General.GordonToken = token

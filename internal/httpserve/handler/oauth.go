@@ -3,16 +3,16 @@ package handler
 import (
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/db/queries"
 	"github.com/bnema/gordon/internal/templates/render"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
-	"github.com/markbates/goth/gothic"
 )
 
 // compareGordonToken compares the token from the URL query parameter with the one from the config.yml
@@ -28,7 +28,7 @@ func compareGordonToken(c echo.Context, a *app.App) error {
 // Check if there is already a user in the db which means that the admin is already setup
 func checkAdmin(a *app.App) (bool, error) {
 	var count int
-	err := a.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	err := a.DB.QueryRow("SELECT COUNT(*) FROM user").Scan(&count)
 	if err != nil {
 		return false, err
 	}
@@ -94,25 +94,28 @@ func StartOAuthGithub(c echo.Context, a *app.App) error {
 }
 
 func OAuthCallback(c echo.Context, a *app.App) error {
+
 	accessToken := c.QueryParam("access_token")
 	encodedState := c.QueryParam("state")
 
 	// Decode the state parameter to get the original redirectDomain
-	decodedState, err := base64.StdEncoding.DecodeString(encodedState)
+	_, err := base64.StdEncoding.DecodeString(encodedState)
 	if err != nil {
 		return c.String(http.StatusBadRequest, "Invalid state parameter")
 	}
 
-	state := string(decodedState)
-	parts := strings.SplitN(state, ":", 2)
-	if len(parts) != 2 || parts[0] != "redirectDomain" {
-		return c.String(http.StatusBadRequest, "Invalid state format")
+	// Get the user information from the OAuth provider
+	userInfo, err := queries.GetUserInformations(a, accessToken)
+	if err != nil {
+		log.Printf("Failed to get user information: %v\n", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user information")
 	}
 
-	// Retrieve the original redirectDomain
-	redirectDomain := parts[1]
-	fmt.Print(redirectDomain)
-	// Now, you can use accessToken for whatever you need in your application
+	fmt.Printf("User info: %+v\n", userInfo)
+
+	// If the user does not exist, create it
+
+	// If the user exists, update the access_token for this provider
 
 	// Also, you can save the authentication state in the session
 	sess, err := session.Get("session", c)
@@ -128,10 +131,4 @@ func OAuthCallback(c echo.Context, a *app.App) error {
 	}
 
 	return c.Redirect(http.StatusFound, "/admin")
-}
-
-// Logout handles user logout and clears session
-func Logout(c echo.Context, a *app.App) error {
-	gothic.Logout(c.Response(), c.Request())
-	return c.Redirect(http.StatusMovedPermanently, "/")
 }
