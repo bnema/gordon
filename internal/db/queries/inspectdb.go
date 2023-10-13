@@ -1,12 +1,14 @@
 package queries
 
 import (
-	"database/sql"
 	"fmt"
+
+	"github.com/bnema/gordon/internal/app"
 )
 
 // InspectInMemoryDB inspects the in-memory database. (for debug purpose)
-func InspectInMemoryDB(memDb *sql.DB) error {
+func InspectInMemoryDB(a *app.App) error {
+	memDb := a.DB
 	// Query the sqlite_master table to get a list of all tables
 	rows, err := memDb.Query("SELECT name FROM sqlite_master WHERE type='table'")
 	fmt.Println("rows", rows)
@@ -33,15 +35,14 @@ func InspectInMemoryDB(memDb *sql.DB) error {
 	for _, table := range tables {
 		fmt.Println(table)
 	}
-
-	// If you want to see the content of a specific table (e.g., users):
-	userRows, err := memDb.Query("SELECT * FROM users")
+	// Print the content of the users table
+	userRows, err := memDb.Query("SELECT * FROM user")
 	if err != nil {
 		return err
 	}
 	defer userRows.Close()
 
-	fmt.Println("\nContent of the 'users' table:")
+	fmt.Println("\nContent of the 'user' table:")
 	for userRows.Next() {
 		// Assuming users table has columns: id, name
 		var id int
@@ -50,6 +51,24 @@ func InspectInMemoryDB(memDb *sql.DB) error {
 			return err
 		}
 		fmt.Printf("ID: %d, Name: %s\n", id, name)
+	}
+
+	// Print the content of accounts table
+	accountRows, err := memDb.Query("SELECT * FROM account")
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("\nContent of the 'account' table:")
+	for accountRows.Next() {
+		// Assuming accounts table has columns: id, name, user_id
+		var id int
+		var name string
+		var userID int
+		if err := accountRows.Scan(&id, &name, &userID); err != nil {
+			return err
+		}
+		fmt.Printf("ID: %d, Name: %s, UserID: %d\n", id, name, userID)
 	}
 
 	return nil

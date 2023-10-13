@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/bnema/gordon/internal/db"
 	"github.com/bnema/gordon/internal/templates"
 	"github.com/bnema/gordon/internal/webui"
 	"github.com/bnema/gordon/pkg/docker"
@@ -27,8 +28,9 @@ type App struct {
 	DBFilename      string
 	DBPath          string
 	InitialChecksum string
-	DB              *sql.DB
 	Config          Config
+	DB              *sql.DB
+	DBTables        DBTables
 }
 type Config struct {
 	General         GeneralConfig         `yaml:"General"`
@@ -60,6 +62,13 @@ type ContainerEngineConfig struct {
 	PodmanSock string `yaml:"podmansock"`
 	Podman     bool   `yaml:"podman"`
 	Network    string `yaml:"network"`
+}
+
+type DBTables struct {
+	User     db.User
+	Account  db.Account
+	Session  db.Session
+	Provider db.Provider
 }
 
 func LoadConfig(config *Config) (*Config, error) {
