@@ -68,7 +68,7 @@ func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
 		return handler.OAuthCallback(c, a)
 	})
 	e.GET(adminPath+"/logout", func(c echo.Context) error {
-		return handler.Logout(c, a)
+		return c.HTML(200, "<h1>Logout</h1>")
 	})
 }
 

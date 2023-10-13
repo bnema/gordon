@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/md5"
 	"database/sql"
 	"encoding/hex"
@@ -8,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bnema/gordon/internal/database/migrate"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/bnema/gordon/internal/db/migrate"
+	"github.com/mattn/go-sqlite3"
 )
 
 const (
@@ -49,6 +50,9 @@ func InitializeDB(a *App) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate initial checksum: %w", err)
 	}
+	// Initialize the DB field in the App struct
+	a.DB = memDb
+
 	return memDb, nil
 }
 
@@ -90,6 +94,10 @@ func bootstrapDB(dbPath string) error {
 		return err
 	}
 
+	if err := migrate.CreateProviderTable(db); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -100,17 +108,55 @@ func loadDBToMemory(dbPath string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	_, err = memDb.Exec("ATTACH DATABASE '" + dbPath + "' AS diskdb")
+	diskDb, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, err
 	}
+	defer diskDb.Close()
 
-	_, err = memDb.Exec("CREATE TABLE users AS SELECT * FROM diskdb.users")
+	// Get a single connection from each *sql.DB
+	memConn, err := memDb.Conn(context.Background())
 	if err != nil {
 		return nil, err
 	}
+	defer memConn.Close()
 
-	_, err = memDb.Exec("DETACH DATABASE diskdb")
+	diskConn, err := diskDb.Conn(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer diskConn.Close()
+
+	err = memConn.Raw(func(driverConn interface{}) error {
+		memSqliteConn, ok := driverConn.(*sqlite3.SQLiteConn)
+		if !ok {
+			return fmt.Errorf("failed to cast to *sqlite3.SQLiteConn")
+		}
+
+		return diskConn.Raw(func(driverConn interface{}) error {
+			diskSqliteConn, ok := driverConn.(*sqlite3.SQLiteConn)
+			if !ok {
+				return fmt.Errorf("failed to cast to *sqlite3.SQLiteConn")
+			}
+
+			backup, err := memSqliteConn.Backup("main", diskSqliteConn, "main")
+			if err != nil {
+				return err
+			}
+			defer backup.Close()
+
+			done, err := backup.Step(-1)
+			if err != nil {
+				return err
+			}
+			if !done {
+				return fmt.Errorf("backup not fully completed")
+			}
+
+			return backup.Finish()
+		})
+	})
+
 	if err != nil {
 		return nil, err
 	}
