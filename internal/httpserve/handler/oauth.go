@@ -3,11 +3,11 @@ package handler
 import (
 	"encoding/base64"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 
 	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/db"
 	"github.com/bnema/gordon/internal/db/queries"
 	"github.com/bnema/gordon/internal/templates/render"
 	_ "github.com/joho/godotenv/autoload"
@@ -28,7 +28,7 @@ func compareGordonToken(c echo.Context, a *app.App) error {
 // Check if there is already a user in the db which means that the admin is already setup
 func checkAdmin(a *app.App) (bool, error) {
 	var count int
-	err := a.DB.QueryRow("SELECT COUNT(*) FROM user").Scan(&count)
+	err := a.DB.QueryRow("SELECT COUNT(*) FROM user WHERE id IS NOT NULL AND name != '' AND email != ''").Scan(&count)
 	if err != nil {
 		return false, err
 	}
@@ -93,42 +93,58 @@ func StartOAuthGithub(c echo.Context, a *app.App) error {
 	return c.Redirect(http.StatusFound, oauthURL)
 }
 
+type Sessions struct {
+	*db.Sessions
+}
+
 func OAuthCallback(c echo.Context, a *app.App) error {
 
 	accessToken := c.QueryParam("access_token")
 	encodedState := c.QueryParam("state")
 
-	// Decode the state parameter to get the original redirectDomain
+	// Decode the state parameter to validate the original redirectDomain
 	_, err := base64.StdEncoding.DecodeString(encodedState)
 	if err != nil {
 		return c.String(http.StatusBadRequest, "Invalid state parameter")
 	}
 
-	// Get the user information from the OAuth provider
-	userInfo, err := queries.GetUserInformations(a, accessToken)
-	if err != nil {
-		log.Printf("Failed to get user information: %v\n", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user information")
-	}
-
-	fmt.Printf("User info: %+v\n", userInfo)
-
-	// If the user does not exist, create it
-
-	// If the user exists, update the access_token for this provider
-
-	// Also, you can save the authentication state in the session
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Could not get session")
 	}
-
 	// Set the user as authenticated
 	sess.Values["authenticated"] = true
 	sess.Values["access_token"] = accessToken
+	sess.Values["expires"] = 604800
 	if err = sess.Save(c.Request(), c.Response()); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Could not save session")
 	}
 
+	browserInfo := c.Request().UserAgent()
+
+	// Check if the user already exists in the database
+	userExists, err := queries.UserExists(a)
+	if err != nil {
+		return err
+	}
+
+	// If the user does not exist, create it
+	if !userExists {
+		err := queries.CreateUser(a, accessToken, browserInfo)
+		if err != nil {
+			return err
+		}
+	} else {
+		// If the user exists, update acccessToken and then create or update the session
+		err := queries.UpdateAccessToken(a, accessToken)
+		if err != nil {
+			return err
+		}
+
+		err = queries.CreateOrUpdateSession(a, accessToken, browserInfo)
+		if err != nil {
+			return err
+		}
+	}
 	return c.Redirect(http.StatusFound, "/admin")
 }
