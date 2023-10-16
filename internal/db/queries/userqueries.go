@@ -6,7 +6,12 @@ import (
 
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/db"
+	"github.com/google/uuid"
 )
+
+func generateUUID() string {
+	return uuid.New().String()
+}
 
 // CreateUser creates a new user along with the associated account, provider, and session.
 func CreateUser(a *app.App, accessToken string, browserInfo string) error {
@@ -23,23 +28,19 @@ func CreateUser(a *app.App, accessToken string, browserInfo string) error {
 
 	user := db.User{}
 	account := db.Account{}
-	// Step 1: Create an entry in the user table
-	// TODO : obtain the user name and email from the GitHub API
-	result, err := a.DB.Exec("INSERT INTO user (name, email) VALUES (?, ?)", "admin", "admin@gordon")
+
+	// Step 1: Create a user
+	newUUID := generateUUID()
+	user.ID = newUUID
+	user.Name = "Test User"
+	user.Email = "admin@gordon.cul"
+
+	_, err = a.DB.Exec("INSERT INTO user (id ,name, email) VALUES (?, ?, ?)", user.ID, user.Name, user.Email)
 	if err != nil {
 		return err
 	}
 
-	// Get the last insert ID from the result of the INSERT operation
-	user.ID, err = result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("error while fetching LastInsertId: %w", err)
-	}
-
-	fmt.Printf("User ID: %d\n", user.ID)
-
 	a.DBTables.User.ID = user.ID
-
 	// Step 2: Create an account for the user with the user ID
 	account.ID, err = createAccount(a)
 	if err != nil {
@@ -58,35 +59,38 @@ func CreateUser(a *app.App, accessToken string, browserInfo string) error {
 	return nil
 }
 
-func createAccount(a *app.App) (int64, error) {
-	fmt.Println("Whats the value of a.DBTables.User.ID?", a.DBTables.User.ID)
+func createAccount(a *app.App) (string, error) {
 	account := a.DBTables.Account
-	queryInsertAccount := "INSERT INTO account (user_id) VALUES (?) RETURNING id"
-	// Execute the INSERT operation
-	result, err := a.DB.Exec(queryInsertAccount, a.DBTables.User.ID)
-	if err != nil {
-		return 0, fmt.Errorf("error while inserting into account: %w", err)
-	}
+	// Generate a new UUID for the account
+	account.ID = generateUUID()
 
-	// Get the last inserted ID
-	account.ID, err = result.LastInsertId()
+	// Insert the account into the database
+	_, err := a.DB.Exec("INSERT INTO account (id, user_id) VALUES (?, ?)", account.ID, a.DBTables.User.ID)
 	if err != nil {
-		return 0, fmt.Errorf("error while fetching LastInsertId for account: %w", err)
+		return "", err
 	}
-
+	a.DBTables.Account.ID = account.ID
 	return account.ID, nil
 }
 
 func createProvider(a *app.App, accessToken string) error {
-	queryInsertProvider := "INSERT INTO provider (account_id, name, access_token, refresh_token, expires) VALUES (?, ?, ?, ?, ?)"
-	_, err := a.DB.Exec(queryInsertProvider, a.DBTables.Account.ID, "GitHub", accessToken, "refreshToken", time.Now().Add(time.Hour*24).Format(time.RFC3339))
+	provider := a.DBTables.Provider
+	provider.ID = generateUUID()
+
+	queryInsertProvider := "INSERT INTO provider (id, account_id, name, access_token, refresh_token, expires) VALUES (?, ?, ?, ?, ?, ?)"
+	_, err := a.DB.Exec(queryInsertProvider, provider.ID, a.DBTables.Account.ID, "GitHub", accessToken, "refreshToken", time.Now().Add(time.Hour*24).Format(time.RFC3339))
 	return err
 }
 
 // createSession creates a session for the user.
 func createSession(a *app.App, browserInfo string) error {
-	queryInsertSession := "INSERT INTO sessions (account_id, browser_info, expires, is_online) VALUES (?, ?, ?, ?)"
-	_, err := a.DB.Exec(queryInsertSession, a.DBTables.Account.ID, browserInfo, time.Now().Add(time.Hour*24).Format(time.RFC3339), true)
+	sessions := a.DBTables.Sessions
+	sessions.ID = generateUUID()
+
+	queryInsertSession := "INSERT INTO sessions (id, account_id, browser_info, expires, is_online) VALUES (?, ?, ?, ?, ?)"
+	_, err := a.DB.Exec(queryInsertSession, sessions.ID, a.DBTables.Account.ID, browserInfo, time.Now().Add(time.Hour*24).Format(time.RFC3339), true)
+
+	a.DBTables.Sessions.ID = sessions.ID
 	return err
 }
 
@@ -102,7 +106,7 @@ func CreateOrUpdateSession(a *app.App, accessToken string, browserInfo string) e
 	// Calculate the new expiry time
 	newExpiryTime := time.Now().Add(time.Hour * 24).Format(time.RFC3339)
 
-	if existingSessionID > 0 {
+	if existingSessionID != "" {
 		// Update the session if it exists
 		_, err = a.DB.Exec("UPDATE sessions SET expires = ?, is_online = ? WHERE id = ?", newExpiryTime, true, existingSessionID)
 		if err != nil {
