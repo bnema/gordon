@@ -30,7 +30,7 @@ func main() {
 
 	_, err = app.HandleNewTokenInitialization(a)
 	if err != nil {
-		log.Fatal("Failed to initialize new token:", err)
+		log.Print(err)
 	}
 
 	dockerClient := &docker.DockerClient{}

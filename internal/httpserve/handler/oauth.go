@@ -122,6 +122,9 @@ func OAuthCallback(c echo.Context, a *app.App) error {
 
 	browserInfo := c.Request().UserAgent()
 
+	sessStr := fmt.Sprintf("%v", sess)
+	fmt.Println(sessStr)
+
 	// Check if the user already exists in the database
 	userExists, err := queries.UserExists(a)
 	if err != nil {

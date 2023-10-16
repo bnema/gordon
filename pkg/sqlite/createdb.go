@@ -26,9 +26,8 @@ func CreateTable(db *sql.DB, table interface{}, tableName string) error {
 		constraint := ""
 
 		for _, part := range parts[1:] {
-			fmt.Println("Inspecting part:", part)
 			if part == "primary_key" {
-				constraint = "INTEGER PRIMARY KEY AUTOINCREMENT"
+				constraint = "PRIMARY KEY"
 			} else if strings.HasPrefix(strings.TrimSpace(part), "foreign_key=") {
 				fkParts := strings.Split(part, "=")
 				refTableAndField := strings.Split(fkParts[1], ".")
@@ -37,7 +36,6 @@ func CreateTable(db *sql.DB, table interface{}, tableName string) error {
 				} else if len(refTableAndField) == 2 {
 					foreignKeys = append(foreignKeys, fmt.Sprintf("FOREIGN KEY (%s) REFERENCES %s(%s)", sqlName, refTableAndField[0], refTableAndField[1]))
 				}
-				fmt.Println("Entered foreign_key block")
 			}
 		}
 
@@ -52,7 +50,6 @@ func CreateTable(db *sql.DB, table interface{}, tableName string) error {
 	createTableSQL := fmt.Sprintf("CREATE TABLE %s (%s", tableName, strings.Join(fields, ", "))
 	if len(foreignKeys) > 0 {
 		createTableSQL += ", " + strings.Join(foreignKeys, ", ")
-		fmt.Printf("Table %s linked with: %s\n", tableName, strings.Join(foreignKeys, ", "))
 	}
 	createTableSQL += ");"
 
@@ -69,7 +66,7 @@ func convertGoTypeToSQLType(goType string) string {
 	case "int64":
 		return "INTEGER"
 	case "string":
-		return "TEXT NOT NULL"
+		return "TEXT"
 	case "bool":
 		return "BOOLEAN"
 	default:

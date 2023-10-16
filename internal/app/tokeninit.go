@@ -18,7 +18,7 @@ func HandleNewTokenInitialization(a *App) (string, error) {
 
 	// If count is greater than 0, it means there is at least one user in the database
 	if count > 0 {
-		return "", fmt.Errorf("admin user already exists")
+		return "", fmt.Errorf("user already present, skipping token initialization")
 	}
 
 	// If we reach here, it means admin does not exist, so we generate a token
