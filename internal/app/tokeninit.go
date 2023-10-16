@@ -6,19 +6,19 @@ import (
 	"fmt"
 )
 
-// HandleNewInitialization checks if an admin user exists in db, and if not, generates a token for the initial login and stores it in the config file
-func (a *App) HandleNewTokenInitialization() (string, error) {
-	// Query to check if a user with id=1 exists
-	query := `SELECT COUNT(id) FROM user WHERE id = "1"`
+// HandleNewInitialization checks if there is ANY user in the database.
+func HandleNewTokenInitialization(a *App) (string, error) {
+	// Check if there is any user in the database
+	query := "SELECT COUNT(*) FROM user"
 	var count int
 	err := a.DB.QueryRow(query).Scan(&count)
 	if err != nil {
 		return "", fmt.Errorf("failed to check for admin user: %v", err)
 	}
 
-	// If count is 1, it means admin user already exists
-	if count == 1 {
-		return "", nil
+	// If count is greater than 0, it means there is at least one user in the database
+	if count > 0 {
+		return "", fmt.Errorf("admin user already exists")
 	}
 
 	// If we reach here, it means admin does not exist, so we generate a token

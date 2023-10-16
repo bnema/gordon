@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -15,23 +14,24 @@ import (
 	"github.com/bnema/gordon/pkg/docker"
 )
 
-func cleanup(a *app.App, memDb *sql.DB) {
-	if err := app.CloseAndBackupDB(a, memDb); err != nil {
+func cleanup(a *app.App) {
+	if err := app.CloseDB(a); err != nil {
 		log.Fatal("Failed to close and backup database:", err)
 	}
 }
 
 func main() {
 	a := app.NewApp()
-	// Initialize database
-	memDb, err := app.InitializeDB(a)
+
+	_, err := app.InitializeDB(a)
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
-	// Pass memDb to the app with the rest of the configs
-	a.DB = memDb
 
-	a.HandleNewTokenInitialization()
+	_, err = app.HandleNewTokenInitialization(a)
+	if err != nil {
+		log.Fatal("Failed to initialize new token:", err)
+	}
 
 	dockerClient := &docker.DockerClient{}
 	err = dockerClient.InitializeClient(a.Config.NewDockerConfig())
@@ -46,7 +46,7 @@ func main() {
 	go func() {
 		sig := <-sigs
 		log.Println("Received signal:", sig)
-		cleanup(a, memDb) // <- Call the cleanup function
+		cleanup(a) // <- Call the cleanup function
 		os.Exit(0)
 	}()
 
