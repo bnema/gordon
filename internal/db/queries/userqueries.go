@@ -1,6 +1,7 @@
 package queries
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -13,88 +14,95 @@ func generateUUID() string {
 	return uuid.New().String()
 }
 
-// CreateUser creates a new user along with the associated account, provider, and session.
-func CreateUser(a *app.App, accessToken string, browserInfo string) error {
-
-	// !! Additionnal security check !!
-	// Check if a user already exists. If so, return an error.
-	userExists, err := UserExists(a)
-	if err != nil {
-		return err
-	}
-	if userExists {
-		return fmt.Errorf("user already exists")
-	}
-
-	user := db.User{}
-	account := db.Account{}
-
-	// Step 1: Create a user
-	newUUID := generateUUID()
-	user.ID = newUUID
-	user.Name = "Test User"
-	user.Email = "admin@gordon.cul"
-
-	_, err = a.DB.Exec("INSERT INTO user (id ,name, email) VALUES (?, ?, ?)", user.ID, user.Name, user.Email)
-	if err != nil {
-		return err
-	}
-
-	a.DBTables.User.ID = user.ID
-	// Step 2: Create an account for the user with the user ID
-	account.ID, err = createAccount(a)
-	if err != nil {
-		return err
-	}
-	// Step 3: Create a provider for the user
-	if err := createProvider(a, accessToken); err != nil {
-		return err
-	}
-
-	// Step 4: Create a session for the user
-	if err := createSession(a, browserInfo); err != nil {
-		return err
-	}
-
-	return nil
+// UserInfo holds the essential information for a Github user.
+type GithubUserInfo struct {
+	Login      string `json:"login"`
+	AvatarURL  string `json:"avatar_url"`
+	ProfileURL string `json:"html_url"`
+	Emails     []string
 }
 
-func createAccount(a *app.App) (string, error) {
-	account := a.DBTables.Account
-	// Generate a new UUID for the account
-	account.ID = generateUUID()
+// CreateUser creates a new user along with the associated account, provider, and session.
+func CreateUser(a *app.App, accessToken string, browserInfo string, userInfo *GithubUserInfo) error {
+	// Check if a user already exists. If so, return an error.
+	if exists, err := CheckDBUserExists(a); err != nil || exists {
+		return fmt.Errorf("error checking user or user already exists: %v", err)
+	}
 
-	// Insert the account into the database
-	_, err := a.DB.Exec("INSERT INTO account (id, user_id) VALUES (?, ?)", account.ID, a.DBTables.User.ID)
+	user, err := createDBUser(a, userInfo)
 	if err != nil {
-		return "", err
+		return err
+	}
+	a.DBTables.User.ID = user.ID
+
+	account, err := createDBAccount(a)
+	if err != nil {
+		return err
 	}
 	a.DBTables.Account.ID = account.ID
-	return account.ID, nil
+
+	err = createDBGitHubProvider(a, accessToken, userInfo)
+	if err != nil {
+		return err
+	}
+
+	return createDBSession(a, browserInfo)
 }
 
-func createProvider(a *app.App, accessToken string) error {
-	provider := a.DBTables.Provider
-	provider.ID = generateUUID()
+func createDBUser(a *app.App, userInfo *GithubUserInfo) (*db.User, error) {
+	user := &db.User{
+		ID:    generateUUID(),
+		Name:  userInfo.Login,
+		Email: userInfo.Emails[0],
+	}
 
-	queryInsertProvider := "INSERT INTO provider (id, account_id, name, access_token, refresh_token, expires) VALUES (?, ?, ?, ?, ?, ?)"
-	_, err := a.DB.Exec(queryInsertProvider, provider.ID, a.DBTables.Account.ID, "GitHub", accessToken, "refreshToken", time.Now().Add(time.Hour*24).Format(time.RFC3339))
+	_, err := a.DB.Exec(
+		"INSERT INTO user (id, name, email) VALUES (?, ?, ?)",
+		user.ID, user.Name, user.Email,
+	)
+	return user, err
+}
+
+func createDBAccount(a *app.App) (*db.Account, error) {
+	account := &db.Account{
+		ID: generateUUID(),
+	}
+
+	_, err := a.DB.Exec(
+		"INSERT INTO account (id, user_id) VALUES (?, ?)",
+		account.ID, a.DBTables.User.ID,
+	)
+	return account, err
+}
+
+func createDBGitHubProvider(a *app.App, accessToken string, userInfo *GithubUserInfo) error {
+	provider := &db.Provider{
+		ID:          generateUUID(),
+		AccessToken: accessToken,
+		Email:       userInfo.Emails[0],
+		Login:       userInfo.Login,
+		AvatarURL:   userInfo.AvatarURL,
+		ProfileURL:  userInfo.ProfileURL,
+	}
+
+	query := "INSERT INTO provider (id, account_id, name, access_token, login, avatar_url, profile_url, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+	_, err := a.DB.Exec(query, provider.ID, a.DBTables.Account.ID, "GitHub", provider.AccessToken, provider.Login, provider.AvatarURL, provider.ProfileURL, provider.Email)
 	return err
 }
 
 // createSession creates a session for the user.
-func createSession(a *app.App, browserInfo string) error {
-	sessions := a.DBTables.Sessions
-	sessions.ID = generateUUID()
+func createDBSession(a *app.App, browserInfo string) error {
+	sessions := &db.Sessions{
+		ID: generateUUID(),
+	}
 
-	queryInsertSession := "INSERT INTO sessions (id, account_id, browser_info, expires, is_online) VALUES (?, ?, ?, ?, ?)"
-	_, err := a.DB.Exec(queryInsertSession, sessions.ID, a.DBTables.Account.ID, browserInfo, time.Now().Add(time.Hour*24).Format(time.RFC3339), true)
-
+	query := "INSERT INTO sessions (id, account_id, browser_info, expires, is_online) VALUES (?, ?, ?, ?, ?)"
+	_, err := a.DB.Exec(query, sessions.ID, a.DBTables.Account.ID, browserInfo, time.Now().Add(time.Hour*24).Format(time.RFC3339), true)
 	a.DBTables.Sessions.ID = sessions.ID
 	return err
 }
 
-func CreateOrUpdateSession(a *app.App, accessToken string, browserInfo string) error {
+func CreateOrUpdateDBSession(a *app.App, accessToken string, browserInfo string) error {
 	existingSessionID := a.DBTables.Sessions.ID
 
 	queryFindExistingSession := "SELECT id FROM sessions WHERE account_id = ? AND browser_info = ?"
@@ -124,19 +132,33 @@ func CreateOrUpdateSession(a *app.App, accessToken string, browserInfo string) e
 	return nil
 }
 
-func UserExists(a *app.App) (bool, error) {
-	var count int
-	err := a.DB.QueryRow("SELECT COUNT(*) FROM user").Scan(&count)
+func CheckDBAccountAccessToken(a *app.App, accessToken string) (bool, error) {
+	var existingAccessToken string
+	err := a.DB.QueryRow("SELECT access_token FROM provider WHERE name = ?", "GitHub").Scan(&existingAccessToken)
 	if err != nil {
 		return false, err
 	}
-	if count > 0 {
+
+	if existingAccessToken == accessToken {
 		return true, nil
 	}
+
 	return false, nil
 }
 
-func UpdateAccessToken(a *app.App, accessToken string) error {
-	_, err := a.DB.Exec("UPDATE provider SET access_token = ? WHERE name = ?", accessToken, "GitHub")
-	return err
+func CheckDBUserExists(a *app.App) (bool, error) {
+	var userID string
+	err := a.DB.QueryRow("SELECT id FROM user").Scan(&userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+
+	if userID != "" {
+		return true, nil
+	}
+
+	return false, nil
 }

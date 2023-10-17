@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -25,34 +27,11 @@ func compareGordonToken(c echo.Context, a *app.App) error {
 	return nil
 }
 
-// Check if there is already a user in the db which means that the admin is already setup
-func checkAdmin(a *app.App) (bool, error) {
-	var count int
-	err := a.DB.QueryRow("SELECT COUNT(*) FROM user WHERE id IS NOT NULL AND name != '' AND email != ''").Scan(&count)
-	if err != nil {
-		return false, err
-	}
-	if count > 0 {
-		return true, nil
-	}
-	return false, nil
-}
-
 // RenderLoginPage renders the login.html template
 func RenderLoginPage(c echo.Context, a *app.App) error {
 
 	// Compare the token
 	compareGordonToken(c, a)
-
-	// Check if there is already an admin in the db we cannot add another one so we redirect to the login page with a message
-	adminExists, err := checkAdmin(a)
-	if err != nil {
-		return err
-	}
-
-	if adminExists {
-		return c.HTML(http.StatusOK, "<h1>User already exists</h1>")
-	}
 
 	data := map[string]interface{}{
 		"Title": "Login",
@@ -121,33 +100,82 @@ func OAuthCallback(c echo.Context, a *app.App) error {
 	}
 
 	browserInfo := c.Request().UserAgent()
-
-	sessStr := fmt.Sprintf("%v", sess)
-	fmt.Println(sessStr)
-
-	// Check if the user already exists in the database
-	userExists, err := queries.UserExists(a)
+	// print github user info
+	userInfo, err := githubGetUserDetails(c, a)
 	if err != nil {
 		return err
 	}
 
+	// Check if the user exists
+	// if not, create it
+	// if yes, update the access token and create or update the session
 	// If the user does not exist, create it
+	userExists, err := queries.CheckDBUserExists(a)
+	if err != nil {
+		return fmt.Errorf("could not check if user exists: %w", err)
+	}
 	if !userExists {
-		err := queries.CreateUser(a, accessToken, browserInfo)
+		err := queries.CreateUser(a, accessToken, browserInfo, userInfo)
 		if err != nil {
-			return err
+			return fmt.Errorf("could not create user: %w", err)
 		}
 	} else {
-		// If the user exists, update acccessToken and then create or update the session
-		err := queries.UpdateAccessToken(a, accessToken)
-		if err != nil {
-			return err
-		}
 
-		err = queries.CreateOrUpdateSession(a, accessToken, browserInfo)
-		if err != nil {
-			return err
-		}
 	}
 	return c.Redirect(http.StatusFound, "/admin")
+}
+func fetchGithubAPI(url string, authHeader string, result interface{}) error {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", authHeader)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("got status code %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(body, &result)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func githubGetUserDetails(c echo.Context, a *app.App) (userInfo *queries.GithubUserInfo, err error) {
+	accessToken := c.QueryParam("access_token")
+
+	// Fetch user info
+	err = fetchGithubAPI("https://api.github.com/user", "Bearer "+accessToken, &userInfo)
+	if err != nil {
+		return nil, err
+	}
+	// Fetch user emails
+	var emailObjects []struct {
+		Email string `json:"email"`
+	}
+	err = fetchGithubAPI("https://api.github.com/user/emails", "Bearer "+accessToken, &emailObjects)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract emails and populate the Emails field in userInfo
+	for _, emailObj := range emailObjects {
+		userInfo.Emails = append(userInfo.Emails, emailObj.Email)
+	}
+
+	return userInfo, nil
 }
