@@ -23,10 +23,12 @@ type Sessions struct {
 }
 
 type Provider struct {
-	ID           string `sql:"id, primary_key"`
-	AccountID    string `sql:"account_id, foreign_key=account.id"`
-	Name         string `sql:"name"`
-	AccessToken  string `sql:"access_token"`
-	RefreshToken string `sql:"refresh_token"`
-	Expires      string `sql:"expires"`
+	ID          string `sql:"id, primary_key"`
+	AccountID   string `sql:"account_id, foreign_key=account.id"`
+	Name        string `sql:"name"`
+	AccessToken string `sql:"access_token"`
+	Login       string `sql:"login"`
+	AvatarURL   string `sql:"avatar_url"`
+	ProfileURL  string `sql:"profile_url"`
+	Email       string `sql:"email"`
 }
