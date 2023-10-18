@@ -32,8 +32,8 @@ I found myself spending excessive time manually deploying my containerized appli
 
 - [x] Basic web UI for managing deployments
 - [x] CRUD operations with the container engine
-- [ ] Improve authentication security
-- [ ] Interaction with the database
+- [x] Improve authentication security
+- [x] Interaction with the database
 - [ ] New version update mechanism (backup, rollback etc.)
 - [ ] Basic CLI to push images to the container engine
 
