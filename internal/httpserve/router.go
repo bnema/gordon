@@ -45,17 +45,6 @@ func bindStaticRoute(e *echo.Echo, a *app.App, path string) {
 	})
 }
 
-// bindAdminRoute binds all admin routes
-func bindAdminRoute(e *echo.Echo, a *app.App, adminPath string) {
-	e.GET(adminPath, func(c echo.Context) error {
-		return handler.AdminRoute(c, a)
-	}, middleware.RequireLogin) // Require login
-
-	e.GET(adminPath+"/manager", func(c echo.Context) error {
-		return handler.AdminManagerRoute(c, a)
-	})
-}
-
 // bindLoginRoute binds all login routes
 func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
 	e.GET(adminPath+"/login", func(c echo.Context) error {
@@ -72,13 +61,26 @@ func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
 	})
 }
 
+// bindAdminRoute binds all admin routes
+func bindAdminRoute(e *echo.Echo, a *app.App, adminPath string) {
+	adminGroup := e.Group(adminPath)
+	// Since login is behind the admin path, we cannot use group middleware
+	adminGroup.GET("", func(c echo.Context) error {
+		return c.Redirect(302, adminPath+"/manager")
+	}, middleware.RequireLogin(a))
+
+	adminGroup.GET("/manager", func(c echo.Context) error {
+		return handler.AdminManagerRoute(c, a)
+	}, middleware.RequireLogin(a))
+}
+
 // bindHTMXEndpoints binds all HTMX endpoints
 func bindHTMXEndpoints(e *echo.Echo, a *app.App) {
 	// Create a  group for /htmx endpoints
 	htmxGroup := e.Group("/htmx")
 
 	// Apply middleware to the group, so all endpoints are protected
-	htmxGroup.Use(middleware.RequireLogin)
+	htmxGroup.Use(middleware.RequireLogin(a))
 
 	// List all images component
 	htmxGroup.GET("/image-manager", func(c echo.Context) error {

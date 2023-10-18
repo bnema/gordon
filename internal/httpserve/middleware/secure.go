@@ -30,7 +30,7 @@ func InitSessionMiddleware() echo.MiddlewareFunc {
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
-		MaxAge:   86400 * 7,
+		MaxAge:   86400,
 	}
 	return session.Middleware(store)
 }
