@@ -12,27 +12,27 @@ import (
 	"github.com/bnema/gordon/internal/db"
 	"github.com/bnema/gordon/internal/db/queries"
 	"github.com/bnema/gordon/internal/templates/render"
+	"github.com/gorilla/sessions"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
 
+var urlToken string
+
 // compareGordonToken compares the token from the URL query parameter with the one from the config.yml
 func compareGordonToken(c echo.Context, a *app.App) error {
-	urlToken := c.QueryParam("token")
 	configToken := a.Config.General.GordonToken
 	if urlToken != configToken {
-		return c.Redirect(http.StatusMovedPermanently, "/")
+		// if token is not present or does not match the one from the config.yml
+		return fmt.Errorf("token is not valid")
 	}
 	return nil
 }
 
 // RenderLoginPage renders the login.html template
 func RenderLoginPage(c echo.Context, a *app.App) error {
-
-	// Compare the token
-	compareGordonToken(c, a)
-
+	urlToken = c.QueryParam("token")
 	data := map[string]interface{}{
 		"Title": "Login",
 	}
@@ -58,6 +58,7 @@ func StartOAuthGithub(c echo.Context, a *app.App) error {
 	if err != nil {
 		return err
 	}
+
 	//Initiate the Github OAuth flow
 	clientID := os.Getenv("GITHUB_APP_ID")
 	redirectDomain := a.Config.GenerateOauthCallbackURL()
@@ -77,53 +78,135 @@ type Sessions struct {
 }
 
 func OAuthCallback(c echo.Context, a *app.App) error {
+	redirectPath := a.Config.Admin.Path
 
-	accessToken := c.QueryParam("access_token")
-	encodedState := c.QueryParam("state")
-
-	// Decode the state parameter to validate the original redirectDomain
-	_, err := base64.StdEncoding.DecodeString(encodedState)
+	accessToken, encodedState, err := parseQueryParams(c)
 	if err != nil {
-		return c.String(http.StatusBadRequest, "Invalid state parameter")
+		return c.String(http.StatusBadRequest, err.Error())
 	}
 
-	sess, err := session.Get("session", c)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Could not get session")
+	// update the struct with the new access token
+	a.DBTables.Sessions.AccessToken = accessToken
+
+	// Compare the state parameter with the redirect domain
+	redirectDomain := a.Config.GenerateOauthCallbackURL()
+	encodedRedirectDomain := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
+	if encodedState != encodedRedirectDomain {
+		return c.String(http.StatusBadRequest, "invalid state parameter")
 	}
-	// Set the user as authenticated
-	sess.Values["authenticated"] = true
-	sess.Values["access_token"] = accessToken
-	sess.Values["expires"] = 604800
-	if err = sess.Save(c.Request(), c.Response()); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Could not save session")
+
+	sess, err := getSession(c)
+	if err != nil {
+		return err
 	}
 
 	browserInfo := c.Request().UserAgent()
-	// print github user info
 	userInfo, err := githubGetUserDetails(c, a)
 	if err != nil {
 		return err
 	}
 
-	// Check if the user exists
-	// if not, create it
-	// if yes, update the access token and create or update the session
-	// If the user does not exist, create it
+	user, err := handleUser(c, a, accessToken, browserInfo, userInfo)
+	if err != nil {
+		return err
+	}
+
+	err = setSessionValues(c, sess, user, a.DBTables.Account.ID, a.DBTables.Sessions.Expires, a.DBTables.Sessions.ID)
+	if err != nil {
+		return err
+	}
+
+	return c.Redirect(http.StatusFound, redirectPath)
+}
+
+func parseQueryParams(c echo.Context) (string, string, error) {
+	accessToken := c.QueryParam("access_token")
+	encodedState := c.QueryParam("state")
+
+	_, err := base64.StdEncoding.DecodeString(encodedState)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid state parameter")
+	}
+
+	return accessToken, encodedState, nil
+}
+
+func getSession(c echo.Context) (*sessions.Session, error) {
+	sess, err := session.Get("session", c)
+	if err != nil {
+		return nil, echo.NewHTTPError(http.StatusInternalServerError, "Could not get session")
+	}
+	return sess, nil
+}
+
+func handleUser(c echo.Context, a *app.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
 	userExists, err := queries.CheckDBUserExists(a)
 	if err != nil {
-		return fmt.Errorf("could not check if user exists: %w", err)
+		return nil, fmt.Errorf("could not check if user exists: %w", err)
 	}
-	if !userExists {
-		err := queries.CreateUser(a, accessToken, browserInfo, userInfo)
-		if err != nil {
-			return fmt.Errorf("could not create user: %w", err)
-		}
-	} else {
 
+	if !userExists {
+		// if it is a new user creation we compare the gordon token
+		err := compareGordonToken(c, a)
+		if err != nil {
+			return nil, echo.NewHTTPError(http.StatusUnauthorized, "Token is empty or not valid")
+		}
+
+		return createUser(a, accessToken, browserInfo, userInfo)
 	}
-	return c.Redirect(http.StatusFound, "/admin")
+
+	if userExists {
+		// if it is an existing user we compare the login and email to see if it is the same user
+		isGoodUser, err := queries.CheckDBUserIsGood(a, userInfo)
+		if err != nil {
+			return nil, fmt.Errorf("could not check if user is good: %w", err)
+		}
+
+		if !isGoodUser {
+			return nil, echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+		}
+
+		if isGoodUser {
+			// Update the user
+			updatedUser, err := updateUser(a, accessToken, browserInfo, userInfo)
+			if err != nil {
+				return nil, fmt.Errorf("could not update user: %w", err)
+			}
+			return updatedUser, nil
+		}
+	}
+
+	return nil, fmt.Errorf("could not handle user")
 }
+
+func createUser(a *app.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
+	err := queries.CreateUser(a, accessToken, browserInfo, userInfo)
+	if err != nil {
+		return nil, fmt.Errorf("could not create user: %w", err)
+	}
+	return &a.DBTables.User, nil
+}
+
+func updateUser(a *app.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
+	user, err := queries.UpdateUser(a, accessToken, browserInfo, userInfo)
+	if err != nil {
+		return nil, fmt.Errorf("could not update user: %w", err)
+	}
+	return user, nil
+}
+
+func setSessionValues(c echo.Context, sess *sessions.Session, user *db.User, accountID string, expires string, sessionID string) error {
+	sess.Values["authenticated"] = true
+	sess.Values["accountID"] = accountID
+	sess.Values["expires"] = expires
+	sess.Values["sessionID"] = sessionID
+
+	if err := sess.Save(c.Request(), c.Response()); err != nil {
+		return fmt.Errorf("could not save session: %w", err)
+	}
+	return nil
+}
+
 func fetchGithubAPI(url string, authHeader string, result interface{}) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
