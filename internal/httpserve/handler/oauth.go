@@ -11,7 +11,7 @@ import (
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/db"
 	"github.com/bnema/gordon/internal/db/queries"
-	"github.com/bnema/gordon/internal/templates/render"
+	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/gorilla/sessions"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
