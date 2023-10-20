@@ -15,10 +15,39 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+type MapOperation string
+
 var (
 	idMap      = make(map[string]string)
 	idMapMutex sync.Mutex
 )
+
+const (
+	Fetch  MapOperation = "Fetch"
+	Update MapOperation = "Update"
+	Delete MapOperation = "Delete"
+)
+
+func safelyInteractWithIDMap(op MapOperation, key string, value ...string) (string, bool) {
+	idMapMutex.Lock()
+	defer idMapMutex.Unlock()
+
+	switch op {
+	case Fetch:
+		val, exists := idMap[key]
+		return val, exists
+	case Update:
+		if len(value) > 0 {
+			idMap[key] = value[0]
+		}
+		return "", true
+	case Delete:
+		delete(idMap, key)
+		return "", true
+	default:
+		return "", false
+	}
+}
 
 type HumanReadableContainerImage struct {
 	*types.ImageSummary
@@ -39,6 +68,20 @@ type HumanReadableContainer struct {
 	StateColor string
 }
 
+// renderHTML is a generalized function to render HTML
+func renderHTML(c echo.Context, a *app.App, path, templateName string, data map[string]interface{}) error {
+	rendererData, err := render.GetHTMLRenderer(path, templateName, a.TemplateFS, a)
+	if err != nil {
+		return err
+	}
+	renderedHTML, err := rendererData.Render(data, a)
+	if err != nil {
+		return err
+	}
+	return c.HTML(http.StatusOK, renderedHTML)
+}
+
+// ActionSuccess returns the success HTML fragment
 func ActionSuccess(a *app.App) string {
 	successFragment, err := load.Fragment(a, "success")
 	if err != nil {
@@ -58,10 +101,10 @@ func ImageManagerComponent(c echo.Context, a *app.App) error {
 	var humanReadableImages []HumanReadableContainerImage
 
 	for _, image := range images {
+		// We need to shorten the ID because it breaks the HTML
 		ShortID := image.ID[7:19]
-		idMapMutex.Lock()
-		idMap[ShortID] = image.ID
-		idMapMutex.Unlock()
+		// And we store both the ShortID and the full ID in a map so we can retrieve the full ID later
+		safelyInteractWithIDMap(Update, ShortID, image.ID)
 		createdTime := time.Unix(image.Created, 0)
 		createdStr := humanize.TimeAgo(createdTime)
 		sizeStr := humanize.BytesToReadableSize(image.Size)
@@ -80,26 +123,15 @@ func ImageManagerComponent(c echo.Context, a *app.App) error {
 		"Images": humanReadableImages,
 	}
 
-	rendererData, err := render.GetHTMLRenderer("html/fragments", "imagelist.gohtml", a.TemplateFS, a)
-	if err != nil {
-		return err
-	}
-	renderedHTML, err := rendererData.Render(data, a)
-	if err != nil {
-		return err
-	}
-	return c.HTML(200, renderedHTML)
+	return renderHTML(c, a, "html/fragments", "imagelist.gohtml", data)
 }
 
 // ImageManagerDelete handles the /image-manager/delete route
 func ImageManagerDelete(c echo.Context, a *app.App) error {
-	// Get the ShortImgID from the URL
+	//
 	ShortID := c.Param("ID")
 
-	idMapMutex.Lock()
-	// Check if the ShortImgID exists in the idMap
-	imageID, exists := idMap[ShortID]
-	idMapMutex.Unlock()
+	imageID, exists := safelyInteractWithIDMap(Fetch, ShortID)
 
 	if !exists {
 		return c.String(http.StatusBadRequest, "Invalid ShortImgID")
@@ -111,10 +143,7 @@ func ImageManagerDelete(c echo.Context, a *app.App) error {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
 
-	// Remove the entry from idMap
-	idMapMutex.Lock()
-	delete(idMap, ShortID)
-	idMapMutex.Unlock()
+	safelyInteractWithIDMap(Delete, ShortID)
 
 	return c.String(http.StatusOK, ActionSuccess(a))
 }
@@ -163,21 +192,12 @@ func ContainerManagerComponent(c echo.Context, a *app.App) error {
 		"containers": humanReadableContainers,
 	}
 
-	rendererData, err := render.GetHTMLRenderer("html/fragments", "containerlist.gohtml", a.TemplateFS, a)
-	if err != nil {
-		return err
-	}
-	renderedHTML, err := rendererData.Render(data, a)
-	if err != nil {
-		return err
-	}
-	return c.HTML(200, renderedHTML)
+	return renderHTML(c, a, "html/fragments", "containerlist.gohtml", data)
 }
 
 // ContainerManagerDelete handles the /container-manager/delete route
 func ContainerManagerDelete(c echo.Context, a *app.App) error {
-	ID := c.Param("ID")
-	err := docker.RemoveContainer(ID)
+	err := docker.RemoveContainer(c.Param("ID"))
 	if err != nil {
 		return sendError(c, err)
 	}
@@ -186,9 +206,8 @@ func ContainerManagerDelete(c echo.Context, a *app.App) error {
 
 // ContainerManagerStop handles the /container-manager/stop route
 func ContainerManagerStop(c echo.Context, a *app.App) error {
-	ID := c.Param("ID")
 	// Stop the container gracefully with a timeout
-	stopped, err := docker.StopContainerGracefully(ID, 3*time.Second)
+	stopped, err := docker.StopContainerGracefully(c.Param("ID"), 3*time.Second)
 	if err != nil {
 		return sendError(c, err)
 	}
@@ -197,7 +216,7 @@ func ContainerManagerStop(c echo.Context, a *app.App) error {
 		return c.HTML(http.StatusOK, ActionSuccess(a))
 	}
 	// If stopped is false, the container was not stopped gracefully we force stop it
-	err = docker.StopContainerRagefully(ID)
+	err = docker.StopContainerRagefully(c.Param("ID"))
 	if err != nil {
 		return sendError(c, err)
 	}
@@ -207,8 +226,7 @@ func ContainerManagerStop(c echo.Context, a *app.App) error {
 
 // ContainerManagerStart handles the /container-manager/start route
 func ContainerManagerStart(c echo.Context, a *app.App) error {
-	ID := c.Param("ID")
-	err := docker.StartContainer(ID)
+	err := docker.StartContainer(c.Param("ID"))
 	if err != nil {
 		return sendError(c, err)
 	}

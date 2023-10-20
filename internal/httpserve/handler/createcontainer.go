@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"net/http"
 
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/templating/render"
@@ -12,16 +13,11 @@ import (
 
 // FromShortIDToImageID converts a short image ID to a full image ID
 func FromShortIDToImageID(ShortID string) (string, error) {
-	idMapMutex.Lock()
-	// Check if the ShortImgID exists in the idMap
-	imageID, exists := idMap[ShortID]
-	idMapMutex.Unlock()
-
-	if !exists {
-		return "", fmt.Errorf("image ID not found")
+	imageID, exists := safelyInteractWithIDMap(Fetch, ShortID)
+	if exists {
+		return imageID, nil
 	}
-
-	return imageID, nil
+	return "", fmt.Errorf("image ID not found")
 }
 
 // CreateContainerRoute is the route for creating a new container
@@ -44,7 +40,7 @@ func CreateContainerGET(c echo.Context, a *app.App) error {
 	// Extract image name
 	var imageName string
 	if len(imageInfo.RepoTags) > 0 {
-		imageName = imageInfo.RepoTags[0] // Using the first tag as the image name
+		imageName = imageInfo.RepoTags[0]
 	}
 
 	data := map[string]interface{}{
@@ -70,6 +66,7 @@ func CreateContainerGET(c echo.Context, a *app.App) error {
 
 }
 
+// CreateContainerPOST handles the create container form submission
 func CreateContainerPOST(c echo.Context, a *app.App) error {
 	// Retreive the ShortID of the image from the URL
 	ShortID := c.Param("ID")
@@ -111,13 +108,11 @@ func CreateContainerPOST(c echo.Context, a *app.App) error {
 		return sendError(c, err)
 	}
 
-	fmt.Println(cmdParams.PortMappings)
-
 	// Create the container
 	_, err = docker.CreateContainer(cmdParams)
 	if err != nil {
 		return sendError(c, err)
 	}
 
-	return c.String(200, "Container created")
+	return c.HTML(http.StatusOK, ActionSuccess(a))
 }
