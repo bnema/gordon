@@ -45,7 +45,7 @@ func ContainerManagerEditGET(c echo.Context, a *app.App) error {
 
 	// Trim the slash from the container name
 	containerInfo.Name = strings.TrimPrefix(containerInfo.Name, "/")
-	// Get just the network names
+	// Get the network names
 	networkNames := make([]string, 0, len(containerInfo.NetworkSettings.Networks))
 	for networkName := range containerInfo.NetworkSettings.Networks {
 		networkNames = append(networkNames, networkName)
@@ -65,7 +65,7 @@ func ContainerManagerEditGET(c echo.Context, a *app.App) error {
 		volumeMappings = append(volumeMappings, fmt.Sprintf("%s:%s", mount.Source, mount.Destination))
 	}
 
-	// Initialize a map to store the information you want to display
+	// Initialize a map to store the information from the container
 	infoMap := make(map[string]interface{})
 
 	// Populate the map with container details
@@ -198,7 +198,7 @@ func ContainerManagerEditPOST(c echo.Context, a *app.App) error {
 		return sendError(c, fmt.Errorf("transaction failed: %w", err))
 	}
 
-	return c.HTML(200, fmt.Sprintf("Successfully edited container %s", tq.NewContainerName))
+	return c.HTML(200, ActionSuccess(a))
 }
 
 // CreateNewContainerStep creates a new container with the given parameters
