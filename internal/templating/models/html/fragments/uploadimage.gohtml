@@ -2,8 +2,7 @@
 <div
   class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow"
   hx-ext="response-targets"
-  hx-boost="true"
->
+  hx-boost="true">
   <div class="flex-grow bg-slate-100 p-4 rounded-md">
     <h2>Upload Image Containers</h2>
     <!-- Upload Form -->
@@ -14,25 +13,22 @@
       hx-post="/htmx/upload-image"
       hx-swap="innerHTML"
       hx-target="#image-manager"
-      hx-target-*="#error-message-div"
-    >
+      hx-target-*="#error-message-div">
       <div
         class="upload-zone w-full h-44 bg-slate-200 rounded-md p-4"
-        hx-drop="true"
-      >
+        hx-drop="true">
         Drag & Drop your file here or
         <input
           type="file"
           name="file"
           accept=".tar"
-          class="bg-transparent outline-none"
-        />
+          class="bg-transparent outline-none" />
       </div>
       <input
         type="submit"
         value="Upload"
-        class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
-      />
+        _="on click toggle @disabled until htmx:afterOnLoad"
+        class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded" />
     </form>
     <div id="error-message-div" class="text-red-500"></div>
   </div>

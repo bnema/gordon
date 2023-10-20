@@ -2,7 +2,7 @@
 module.exports = {
   content: [
     "./internal/webui/**/*.{gohtml,go}",
-    "./internal/templates/models/html/**/*.{gohtml, go}"
+    "./internal/templating/models/html/**/*.{gohtml, go}",
   ],
   theme: {
     extend: {
@@ -10,12 +10,12 @@ module.exports = {
         gordonmascot: {
           lblue: "#007BC0",
           mblue: "#005293",
-          hblue: '#011E5C',
+          hblue: "#011E5C",
           lbeige: "#FFDCB3",
-          mbeige: '#D7B49F',
+          mbeige: "#D7B49F",
         },
       },
     },
   },
   plugins: [require("@catppuccin/tailwindcss")],
-}
+};

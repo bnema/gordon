@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/templating/load"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/humanize"
@@ -14,8 +15,10 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-var idMap = make(map[string]string)
-var idMapMutex sync.Mutex
+var (
+	idMap      = make(map[string]string)
+	idMapMutex sync.Mutex
+)
 
 type HumanReadableContainerImage struct {
 	*types.ImageSummary
@@ -34,6 +37,16 @@ type HumanReadableContainer struct {
 	SizeStr    string
 	UpSince    string
 	StateColor string
+}
+
+func ActionSuccess(a *app.App) string {
+	successFragment, err := load.Fragment(a, "success")
+	if err != nil {
+		fmt.Println(err)
+		return ""
+	}
+
+	return successFragment
 }
 
 // ImageManagerComponent handles the /image-manager route (HTMX route)
@@ -103,8 +116,7 @@ func ImageManagerDelete(c echo.Context, a *app.App) error {
 	delete(idMap, ShortID)
 	idMapMutex.Unlock()
 
-	// Since it is HTMX we return a HTML div with the message "Removed"
-	return c.HTML(http.StatusOK, `<div>Removed</div>`)
+	return c.String(http.StatusOK, ActionSuccess(a))
 }
 
 // ContainerManagerComponent handles the /container-manager route
@@ -169,7 +181,7 @@ func ContainerManagerDelete(c echo.Context, a *app.App) error {
 	if err != nil {
 		return sendError(c, err)
 	}
-	return c.HTML(http.StatusOK, `Success`)
+	return c.HTML(http.StatusOK, ActionSuccess(a))
 }
 
 // ContainerManagerStop handles the /container-manager/stop route
@@ -182,7 +194,7 @@ func ContainerManagerStop(c echo.Context, a *app.App) error {
 	}
 	// if stopped is true, the container was stopped gracefully
 	if stopped {
-		return c.HTML(http.StatusOK, `Success`)
+		return c.HTML(http.StatusOK, ActionSuccess(a))
 	}
 	// If stopped is false, the container was not stopped gracefully we force stop it
 	err = docker.StopContainerRagefully(ID)
@@ -190,7 +202,7 @@ func ContainerManagerStop(c echo.Context, a *app.App) error {
 		return sendError(c, err)
 	}
 
-	return c.HTML(http.StatusOK, `Success`)
+	return c.HTML(http.StatusOK, ActionSuccess(a))
 }
 
 // ContainerManagerStart handles the /container-manager/start route
@@ -200,5 +212,5 @@ func ContainerManagerStart(c echo.Context, a *app.App) error {
 	if err != nil {
 		return sendError(c, err)
 	}
-	return c.HTML(http.StatusOK, `Success`)
+	return c.HTML(http.StatusOK, ActionSuccess(a))
 }
