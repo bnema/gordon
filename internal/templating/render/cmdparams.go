@@ -13,9 +13,19 @@ func FromInputsToCmdParams(inputs map[string]string, a *app.App) (docker.Contain
 	volumeStr := inputs["volumes"]
 	volumeSlice := strings.Split(volumeStr, ",")
 
+	// If there is no volume value we just resturn an empty strings ""
+	if len(volumeSlice) == 1 && volumeSlice[0] == "" {
+		volumeSlice = []string{}
+	}
+
 	// Retreive the content of the textarea environment_variables and create a slice of strings
 	environmentStr := inputs["environment_variables"]
 	environmentSlice := strings.Split(environmentStr, "\n")
+
+	// If there is no environment value we just resturn an empty strings ""
+	if len(environmentSlice) == 1 && environmentSlice[0] == "" {
+		environmentSlice = []string{}
+	}
 
 	// Ports input parsing
 	portMappingsStr := inputs["ports"]
