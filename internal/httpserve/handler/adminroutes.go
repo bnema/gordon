@@ -5,7 +5,7 @@ import (
 
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
-	"github.com/bnema/gordon/internal/templates/render"
+	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/labstack/echo/v4"
 )
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/bnema/gordon/internal/app"
-	"github.com/bnema/gordon/internal/templates/render"
+	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/sanitize"
 	"github.com/labstack/echo/v4"

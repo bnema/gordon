@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/bnema/gordon/internal/app"
-	"github.com/bnema/gordon/internal/templates/render"
+	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/labstack/echo/v4"
 	"gopkg.in/yaml.v3"

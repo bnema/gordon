@@ -10,7 +10,6 @@ import (
 
 // FromInputsToCmdParams transforms the inputs map into a ContainerCommandParams struct
 func FromInputsToCmdParams(inputs map[string]string, a *app.App) (docker.ContainerCommandParams, error) {
-
 	volumeStr := inputs["volumes"]
 	volumeSlice := strings.Split(volumeStr, ",")
 
@@ -86,7 +85,6 @@ type YAMLContainerParams struct {
 
 // FromYAMLStructToCmdParams converts a YAMLContainerParams struct to a ContainerCommandParams struct
 func FromYAMLStructToCmdParams(yamlParams YAMLContainerParams) (docker.ContainerCommandParams, error) {
-
 	// with the image name find the image id
 	imageID, err := docker.GetImageID(yamlParams.Image)
 	if err != nil {

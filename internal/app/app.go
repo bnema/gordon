@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/bnema/gordon/internal/db"
-	"github.com/bnema/gordon/internal/templates"
+	"github.com/bnema/gordon/internal/templating"
 	"github.com/bnema/gordon/internal/webui"
 	"github.com/bnema/gordon/pkg/docker"
 	_ "github.com/joho/godotenv/autoload"
@@ -108,7 +108,7 @@ func NewApp() *App {
 	config.General.StorageDir = fmt.Sprintf("%s/%s", config.General.BuildDir, config.General.StorageDir)
 
 	// Open the strings.yml file containing the strings for the current language
-	file, err := templates.TemplateFS.Open("locstrings.yml")
+	file, err := templating.TemplateFS.Open("locstrings.yml")
 	if err != nil {
 		log.Fatalf("Failed to open strings.yml: %v", err)
 	}
@@ -123,7 +123,7 @@ func NewApp() *App {
 
 	// Initialize App
 	a := &App{
-		TemplateFS: templates.TemplateFS,
+		TemplateFS: templating.TemplateFS,
 		PublicFS:   webui.PublicFS,
 		LocYML:     bytes,
 		DBDir:      DBDir,
