@@ -1,3 +1,5 @@
+<div id="actionResponse"></div>
+
 <div class="flex flex-col p-4" hx-boost="true">
   <h1 class="text-lg md:text-xl font-bold text-gordonmascot-hblue">
     {{index .Lang "manager" "content" "h1-containers"}}
@@ -33,7 +35,7 @@
           <button
             id="start-button-{{.ID}}"
             hx-post="/htmx/container-manager/start/{{.ID}}"
-            hx-target="#container-{{.ID}}"
+            hx-target="#actionResponse"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="outerHTML"
             class="py-2 px-4"
@@ -44,7 +46,7 @@
           <button
             id="edit-button-{{.ID}}"
             hx-get="/htmx/container-manager/edit/{{.ID}}"
-            hx-target="#edit-container-{{.ID}}"
+            hx-target="#actionResponse"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="innerHTML"
             class="py-2 px-4"
@@ -56,7 +58,7 @@
           <button
             id="stop-button-{{.ID}}"
             hx-post="/htmx/container-manager/stop/{{.ID}}"
-            hx-target="#container-{{.ID}}"
+            hx-target="#actionResponse"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="innerHTML"
             hx-confirm="{{index $Lang "manager" "content" "confirm-container-stop"}}"
@@ -68,7 +70,7 @@
           <button
             id="remove-button-img-{{.ID}}"
             hx-delete="/htmx/container-manager/delete/{{.ID}}"
-            hx-target="#container-{{.ID}}"
+            hx-target="#actionResponse"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="innerHTML"
             hx-confirm="{{index $Lang "manager" "content" "confirm-delete"}}"

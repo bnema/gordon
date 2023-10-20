@@ -3,13 +3,14 @@
   <div class="flex justify-between items-center mb-1"> 
     <h1 class="text-lg md:text-xl font-bold text-gordonmascot-hblue">Images</h1>
     <button
+      class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
       id="upload-button"
       hx-get="/htmx/upload-image"
       hx-target="#upload-image"
       hx-swap="innerHTML"
-      data-active="false"
-      class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
+      _="on click toggle between .visible and .hidden on #upload-image then add .hidden to #create-container"
     >
+
       <span class="iconoir-upload text-xl align-middle"></span>
       Upload
     </button>
@@ -36,6 +37,7 @@
             hx-target-*="#error-message-div-{{.ID}}"
             hx-swap="innerHTML"
             class="py-2 px-4"
+            _="on click toggle between .visible and .hidden on #create-container then add .hidden to #upload-image"
           >
             <span title="Deploy a container using this image" class="iconoir-add-circle text-xl text-blue-800 font-bold"></span>
           </button>
@@ -70,26 +72,3 @@
   <div id="upload-image"></div>
   <div id="create-container"></div>
 </div>
-
-<script>
-  // Hide upload form if add button is clicked
-  document.querySelectorAll('[id^="add-button-img-"]').forEach((button) => {
-    button.addEventListener("click", () => {
-      document.getElementById("upload-image").innerHTML = "";
-    });
-  });
-
-  // Hide create container form if upload button is clicke
-  document.getElementById("upload-button").addEventListener("click", () => {
-    document.getElementById("create-container").innerHTML = "";
-  });
-
-  // Remove image from list if remove button is clicked (after confirmation)
-  document.querySelectorAll('[id^="remove-button-img-"]').forEach((button) => {
-    button.addEventListener("click", () => {
-      const id = button.id.split("-")[3];
-      const tr = document.getElementById(`img-${id}`);
-      tr.style.display = "none";
-    });
-  });
-</script>

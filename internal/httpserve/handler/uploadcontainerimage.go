@@ -60,5 +60,5 @@ func UploadImagePOSTHandler(c echo.Context, a *app.App) error {
 	if err != nil {
 		return sendError(c, err)
 	}
-	return c.HTML(http.StatusOK, "Success")
+	return c.HTML(http.StatusOK, ActionSuccess(a))
 }

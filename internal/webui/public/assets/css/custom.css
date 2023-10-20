@@ -37,7 +37,8 @@
 /* Import Jetbrains Mono Nerd Font Bold */
 @font-face {
   font-family: "JetBrainsMono-Nerd-Font-Bold";
-  src: url("/assets/fonts/JetBrainsMonoNerd/JetBrainsMonoNerdFont-Bold.woff2") format("woff2");
+  src: url("/assets/fonts/JetBrainsMonoNerd/JetBrainsMonoNerdFont-Bold.woff2")
+    format("woff2");
   font-weight: bold;
   font-style: normal;
 }
@@ -84,17 +85,18 @@
 }
 
 ::view-transition-old(slide-it) {
-  animation: 180ms cubic-bezier(0.4, 0, 1, 1) both fade-out,
+  animation:
+    180ms cubic-bezier(0.4, 0, 1, 1) both fade-out,
     600ms cubic-bezier(0.4, 0, 0.2, 1) both slide-to-left;
 }
 ::view-transition-new(slide-it) {
-  animation: 420ms cubic-bezier(0, 0, 0.2, 1) 90ms both fade-in,
+  animation:
+    420ms cubic-bezier(0, 0, 0.2, 1) 90ms both fade-in,
     600ms cubic-bezier(0.4, 0, 0.2, 1) both slide-from-right;
 }
 
 .gordon-title {
   font-family: "LilitaOne-Regular", sans-serif;
-
 }
 
 .IBMPlexSans {
