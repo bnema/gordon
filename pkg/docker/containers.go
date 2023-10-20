@@ -88,11 +88,18 @@ func ContainerCommandParamsToConfig(cmdParams ContainerCommandParams) (*containe
 // ListRunningContainers lists all running containers
 func ListRunningContainers() ([]types.Container, error) {
 	// Check if the Docker client has been initialized
-	CheckIfInitialized()
+	err := CheckIfInitialized()
+	if err != nil {
+		return nil, err
+	}
 	// List containers using the Docker client:
 	containers, err := dockerCli.ContainerList(context.Background(), types.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, err
+	}
+	// Check if the list is empty
+	if len(containers) == 0 {
+		return nil, fmt.Errorf("No containers found")
 	}
 	return containers, nil
 }
@@ -106,7 +113,6 @@ func StopContainer(containerID string) error {
 
 // StopContainerGracefully stops a container by sending a SIGTERM and waiting for it to stop
 func StopContainerGracefully(containerID string, timeoutDuration time.Duration) (bool, error) {
-
 	// Start by sending a SIGTERM
 	err := dockerCli.ContainerKill(context.Background(), containerID, "SIGTERM")
 	if err != nil {
@@ -253,7 +259,6 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 
 // GetContainerInfo returns information about a container
 func GetContainerInfo(containerID string) (types.ContainerJSON, error) {
-
 	// Get container info using the Docker client
 	containerInfo, err := dockerCli.ContainerInspect(context.Background(), containerID)
 	if err != nil {
@@ -300,7 +305,6 @@ func UpdateContainerConfig(containerID string, newConfig *container.Config, newH
 
 // GetContainerLogs returns the logs of a container
 func GetContainerLogs(containerID string) (string, error) {
-
 	// Get container logs using the Docker client
 	containerLogs, err := dockerCli.ContainerLogs(context.Background(), containerID, types.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {
@@ -317,7 +321,6 @@ func GetContainerLogs(containerID string) (string, error) {
 
 // CheckContainerStatus checks if a container with the given name exists and is running
 func CheckContainerStatus(containerName string) (bool, bool, error) {
-
 	// List all containers
 	containers, err := ListRunningContainers()
 	if err != nil {
