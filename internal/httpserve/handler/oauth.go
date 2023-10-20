@@ -52,6 +52,7 @@ func RenderLoginPage(c echo.Context, a *app.App) error {
 	return c.HTML(200, renderedHTML)
 }
 
+// StartOAuthGithub starts the Github OAuth flow
 func StartOAuthGithub(c echo.Context, a *app.App) error {
 	// Clear the session in case it is already set or corrupted
 	err := ResetSession(c)
@@ -77,6 +78,7 @@ type Sessions struct {
 	*db.Sessions
 }
 
+// OAuthCallback handles the callback response from Github OAuth
 func OAuthCallback(c echo.Context, a *app.App) error {
 	redirectPath := a.Config.Admin.Path
 
@@ -119,6 +121,7 @@ func OAuthCallback(c echo.Context, a *app.App) error {
 	return c.Redirect(http.StatusFound, redirectPath)
 }
 
+// parseQueryParams parses the query parameters from the callback URL
 func parseQueryParams(c echo.Context) (string, string, error) {
 	accessToken := c.QueryParam("access_token")
 	encodedState := c.QueryParam("state")
@@ -131,6 +134,7 @@ func parseQueryParams(c echo.Context) (string, string, error) {
 	return accessToken, encodedState, nil
 }
 
+// getSession gets the session from the context
 func getSession(c echo.Context) (*sessions.Session, error) {
 	sess, err := session.Get("session", c)
 	if err != nil {
@@ -139,6 +143,7 @@ func getSession(c echo.Context) (*sessions.Session, error) {
 	return sess, nil
 }
 
+// handleUser handles the user creation or update
 func handleUser(c echo.Context, a *app.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
 	userExists, err := queries.CheckDBUserExists(a)
 	if err != nil {
@@ -179,6 +184,7 @@ func handleUser(c echo.Context, a *app.App, accessToken, browserInfo string, use
 	return nil, fmt.Errorf("could not handle user")
 }
 
+// createUser creates a new user in the database
 func createUser(a *app.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
 	err := queries.CreateUser(a, accessToken, browserInfo, userInfo)
 	if err != nil {
@@ -187,6 +193,7 @@ func createUser(a *app.App, accessToken, browserInfo string, userInfo *queries.G
 	return &a.DBTables.User, nil
 }
 
+// updateUser updates an existing user in the database
 func updateUser(a *app.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
 	user, err := queries.UpdateUser(a, accessToken, browserInfo, userInfo)
 	if err != nil {
@@ -195,6 +202,7 @@ func updateUser(a *app.App, accessToken, browserInfo string, userInfo *queries.G
 	return user, nil
 }
 
+// setSessionValues sets the session values for the user
 func setSessionValues(c echo.Context, sess *sessions.Session, user *db.User, accountID string, expires string, sessionID string) error {
 	sess.Values["authenticated"] = true
 	sess.Values["accountID"] = accountID
@@ -207,6 +215,7 @@ func setSessionValues(c echo.Context, sess *sessions.Session, user *db.User, acc
 	return nil
 }
 
+// fetchGithubAPI fetches the Github API
 func fetchGithubAPI(url string, authHeader string, result interface{}) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -238,6 +247,7 @@ func fetchGithubAPI(url string, authHeader string, result interface{}) error {
 	return nil
 }
 
+// githubGetUserDetails gets the user details from the Github API using the access token
 func githubGetUserDetails(c echo.Context, a *app.App) (userInfo *queries.GithubUserInfo, err error) {
 	accessToken := c.QueryParam("access_token")
 
