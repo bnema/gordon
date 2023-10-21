@@ -1,14 +1,13 @@
 package middleware
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/db/queries"
-	"github.com/labstack/echo-contrib/session"
+	// "github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
 
@@ -25,32 +24,32 @@ func RequireLogin(a *app.App) echo.MiddlewareFunc {
 }
 
 func validateSessionAndUser(c echo.Context, a *app.App) error {
-	sess, err := session.Get("session", c)
-	if err != nil {
-		return err
-	}
+	// sess, err := session.Get("session", c)
+	// if err != nil {
+	// 	return err
+	// }
 
-	if cookieExpired, err := isCookieExpired(c); err != nil || cookieExpired {
-		return err
-	}
+	// if cookieExpired, err := isCookieExpired(c); err != nil || cookieExpired {
+	// 	return err
+	// }
 
-	accountID, ok := sess.Values["accountID"].(string)
-	if !ok {
-		return fmt.Errorf("invalid account ID type")
-	}
+	// accountID, ok := sess.Values["accountID"].(string)
+	// if !ok {
+	// 	return fmt.Errorf("invalid account ID type")
+	// }
 
-	sessionID, ok := sess.Values["sessionID"].(string)
-	if !ok {
-		return fmt.Errorf("invalid session ID type")
-	}
+	// sessionID, ok := sess.Values["sessionID"].(string)
+	// if !ok {
+	// 	return fmt.Errorf("invalid session ID type")
+	// }
 
-	if accountCheck, err := isAccountIDInDB(a, accountID); err != nil || !accountCheck {
-		return err
-	}
+	// if accountCheck, err := isAccountIDInDB(a, accountID); err != nil || !accountCheck {
+	// 	return err
+	// }
 
-	if sessionExpired, err := isSessionExpiredInDB(a, accountID, sessionID); err != nil || sessionExpired {
-		return err
-	}
+	// if sessionExpired, err := isSessionExpiredInDB(a, accountID, sessionID); err != nil || sessionExpired {
+	// 	return err
+	// }
 
 	return nil
 }

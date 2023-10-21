@@ -103,10 +103,10 @@
   font-family: "IBMPlexSans-Regular", sans-serif;
 }
 
-.JetBrainsMonoNF {
+.JetBrainsMonoNF, .iconf{
   font-family: "JetBrainsMono-Nerd-Font-Regular", sans-serif;
 }
 
-.JetBrainsMonoBoldNF {
+.JetBrainsMonoBoldNF, .iconfb{
   font-family: "JetBrainsMono-Nerd-Font-Bold", sans-serif;
 }
