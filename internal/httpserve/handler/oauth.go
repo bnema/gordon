@@ -54,10 +54,16 @@ func RenderLoginPage(c echo.Context, a *app.App) error {
 
 // StartOAuthGithub starts the Github OAuth flow
 func StartOAuthGithub(c echo.Context, a *app.App) error {
-	// Clear the session in case it is already set or corrupted
-	err := ResetSession(c)
+	// Check if the session is already here and valid before going for the oauth flow
+	sess, err := getSession(c)
 	if err != nil {
 		return err
+	}
+
+	// Check if the session values are valid
+	accountID, ok := sess.Values["accountID"].(string)
+	if ok && accountID != "" {
+		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path) // StatusSeeOther is HTTP 303
 	}
 
 	//Initiate the Github OAuth flow
