@@ -11,14 +11,14 @@ import (
 // RegisterRoutes registers all routes for the application
 func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
 	AdminPath := a.Config.Admin.Path
-	// Use middlewares
-	e.Use(middleware.SecureRoutes())
 	// SetCommonDataMiddleware will pass data to the renderer
 	e.Use(middleware.SetCommonDataMiddleware(a))
 	// Error handler middleware
 	e.Use(middleware.ErrorHandler)
 	// Initiate the session middleware
 	e.Use(middleware.InitSessionMiddleware())
+	// Use middlewares
+	e.Use(middleware.SecureRoutes())
 
 	// Color scheme detection for dark/light mode
 	e.Use(middleware.ColorSchemeDetection)
