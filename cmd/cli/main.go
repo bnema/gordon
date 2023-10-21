@@ -1,8 +1,10 @@
 package main
 
-import "fmt"
+import (
+	"github.com/bnema/gordon/internal/cli"
+)
 
 func main() {
-	fmt.Println("Hello World")
+	cli.InitCli()
 
 }
