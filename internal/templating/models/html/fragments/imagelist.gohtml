@@ -8,10 +8,11 @@
       hx-get="/htmx/upload-image"
       hx-target="#upload-image"
       hx-swap="innerHTML"
+      title="Manually upload a .tar container image"
       _="on click toggle between .visible and .hidden on #upload-image then add .hidden to #create-container"
     >
 
-      <span class="iconoir-upload text-xl align-middle"></span>
+      <span class="iconf text-xl align-middle">󰭾 </span>
       Upload
     </button>
   </div>
@@ -39,7 +40,7 @@
             class="py-2 px-4"
             _="on click toggle between .visible and .hidden on #create-container then add .hidden to #upload-image"
           >
-            <span title="Deploy a container using this image" class="iconoir-add-circle text-xl text-blue-800 font-bold"></span>
+            <span title="Deploy a container using this image" class="iconf text-xl text-blue-600 hover:text-gordonmascot-hblue"></span>
           </button>
 
           <button
@@ -51,7 +52,7 @@
             hx-confirm="Are you sure you want to delete this container image?"
             class="py-2 px-4"
           >
-            <span title="Remove this image" class="iconoir-trash text-xl text-red-600 font-bold"></span>
+            <span title="Remove this image" class="iconf text-xl text-red-600 hover:text-red-900"></span>
           </button>
         </td>
       </tr>
