@@ -46,9 +46,10 @@ type GeneralConfig struct {
 }
 
 type HttpConfig struct {
-	Port      int    `yaml:"port"`
-	TopDomain string `yaml:"topDomain"`
-	SubDomain string `yaml:"subDomain"`
+	Port       int    `yaml:"port"`
+	TopDomain  string `yaml:"topDomain"`
+	SubDomain  string `yaml:"subDomain"`
+	BackendURL string `yaml:"backendURL"`
 }
 
 type AdminConfig struct {

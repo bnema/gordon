@@ -6,6 +6,6 @@ import (
 )
 
 func main() {
-	a := app.NewServerApp()
+	a := app.NewClientApp()
 	cli.Execute(a)
 }

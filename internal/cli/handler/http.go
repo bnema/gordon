@@ -11,12 +11,6 @@ import (
 	"github.com/bnema/gordon/internal/common"
 )
 
-// GenerateAPIURL creates the API URL
-func GenerateAPIURL(a *app.App) string {
-	fmt.Println("Generating API URL:", a.Config.GenerateAPIURL())
-	return a.Config.GenerateAPIURL()
-}
-
 // PrepareJSONPayload marshals the payload into JSON
 func PrepareJSONPayload(payload common.Payload) ([]byte, error) {
 	return json.Marshal(payload)
@@ -24,6 +18,7 @@ func PrepareJSONPayload(payload common.Payload) ([]byte, error) {
 
 // CreateNewRequest creates a new HTTP request
 func CreateNewRequest(method, url string, body []byte) (*http.Request, error) {
+
 	return http.NewRequest(method, url, bytes.NewBuffer(body))
 }
 
@@ -45,8 +40,7 @@ type Response struct {
 
 // SendHTTPRequest sends the HTTP request
 func SendHTTPRequest(a *app.App, rp *common.RequestPayload, endpoint string) (*Response, error) {
-	apiUrl := GenerateAPIURL(a)
-
+	apiUrl := a.Config.Http.BackendURL + "/api"
 	token := a.Config.General.GordonToken
 
 	// Prepare the entire RequestPayload, not just the inner Payload
@@ -54,7 +48,6 @@ func SendHTTPRequest(a *app.App, rp *common.RequestPayload, endpoint string) (*R
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
-
 	// Create a new request
 	req, err := CreateNewRequest("GET", apiUrl+endpoint, jsonPayload)
 	if err != nil {
