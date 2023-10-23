@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"time"
 
 	"github.com/bnema/gordon/internal/db"
 	"github.com/bnema/gordon/pkg/docker"
@@ -27,6 +28,7 @@ type App struct {
 	Config          Config
 	DB              *sql.DB
 	DBTables        DBTables
+	StartTime       time.Time
 }
 type Config struct {
 	General         GeneralConfig         `yaml:"General"`
@@ -171,4 +173,14 @@ func (config *Config) GetToken() (string, error) {
 
 	return token, nil
 
+}
+
+func (a *App) GetUptime() string {
+	uptime := time.Since(a.StartTime)
+	return uptime.String()
+}
+
+// GetVersion returns the version of the app
+func (config *Config) GetVersion() string {
+	return config.General.BuildVersion
 }
