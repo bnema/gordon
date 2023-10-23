@@ -21,7 +21,7 @@ import (
 var urlToken string
 
 // compareGordonToken compares the token from the URL query parameter with the one from the config.yml
-func compareGordonToken(c echo.Context, a *app.App) error {
+func CompareGordonToken(c echo.Context, a *app.App) error {
 	configToken := a.Config.General.GordonToken
 	if urlToken != configToken {
 		// if token is not present or does not match the one from the config.yml
@@ -158,7 +158,7 @@ func handleUser(c echo.Context, a *app.App, accessToken, browserInfo string, use
 
 	if !userExists {
 		// if it is a new user creation we compare the gordon token
-		err := compareGordonToken(c, a)
+		err := CompareGordonToken(c, a)
 		if err != nil {
 			return nil, echo.NewHTTPError(http.StatusUnauthorized, "Token is empty or not valid")
 		}

@@ -10,11 +10,14 @@ import (
 
 // RegisterRoutes registers all routes for the application
 func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
+	// --- Register API endpoints --- //
+	bindAPIEndpoints(e, a)
 	AdminPath := a.Config.Admin.Path
 	// SetCommonDataMiddleware will pass data to the renderer
 	e.Use(middleware.SetCommonDataMiddleware(a))
 	// Error handler middleware
 	e.Use(middleware.ErrorHandler)
+
 	// Initiate the session middleware
 	e.Use(middleware.InitSessionMiddleware())
 	// Use middlewares
@@ -36,6 +39,15 @@ func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
 	})
 
 	return e
+}
+
+// bindAPIEndpoints expose /api endpoints and speaks only JSON
+func bindAPIEndpoints(e *echo.Echo, a *app.App) {
+	apiGroup := e.Group("/api")
+	apiGroup.Use(middleware.RequireToken(a))
+	apiGroup.GET("/hello", func(c echo.Context) error {
+		return handler.GetHello(c, a)
+	})
 }
 
 // bindStaticRoute bind static path

@@ -3,14 +3,10 @@ package app
 import (
 	"database/sql"
 	"fmt"
-	"io"
 	"io/fs"
-	"log"
 	"os"
 
 	"github.com/bnema/gordon/internal/db"
-	"github.com/bnema/gordon/internal/templating"
-	"github.com/bnema/gordon/internal/webui"
 	"github.com/bnema/gordon/pkg/docker"
 	_ "github.com/joho/godotenv/autoload"
 	"gopkg.in/yaml.v3"
@@ -97,50 +93,6 @@ func LoadConfig(config *Config) (*Config, error) {
 	return config, nil
 }
 
-func NewApp() *App {
-	// Initialize AppConfig
-	config := &Config{}
-	_, err := LoadConfig(config)
-	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
-	}
-	// Append build dir to storage dir
-	config.General.StorageDir = fmt.Sprintf("%s/%s", config.General.BuildDir, config.General.StorageDir)
-
-	// Open the strings.yml file containing the strings for the current language
-	file, err := templating.TemplateFS.Open("locstrings.yml")
-	if err != nil {
-		log.Fatalf("Failed to open strings.yml: %v", err)
-	}
-
-	// Read the file content into a byte slice
-	bytes, err := io.ReadAll(file)
-	if err != nil {
-		log.Fatalf("Failed to read strings.yml: %v", err)
-	}
-
-	file.Close()
-
-	// Initialize App
-	a := &App{
-		TemplateFS: templating.TemplateFS,
-		PublicFS:   webui.PublicFS,
-		LocYML:     bytes,
-		DBDir:      DBDir,
-		DBFilename: DBFilename,
-		Config:     *config,
-	}
-
-	// DBTables: DBTables{
-	// 	User:     db.User{},
-	// 	Account:  db.Account{},
-	// 	Sessions: db.Sessions{},
-	// 	Provider: db.Provider{},
-
-	OauthCallbackURL = config.GenerateOauthCallbackURL()
-	return a
-}
-
 // NewDockerConfig creates and returns a new Docker client configuration
 func (config *Config) NewDockerConfig() *docker.Config {
 	if config.ContainerEngine.Podman {
@@ -175,6 +127,25 @@ func (config *Config) GenerateOauthCallbackURL() string {
 	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.Admin.Path)
 }
 
+func (config *Config) GenerateAPIURL() string {
+	var scheme, port string
+
+	if config.General.RunEnv == "dev" {
+		scheme = "http"
+		port = fmt.Sprintf(":%d", config.Http.Port)
+	} else { // Assuming "prod"
+		scheme = "https"
+		port = ""
+	}
+
+	domain := config.Http.TopDomain
+	if config.Http.SubDomain != "" {
+		domain = fmt.Sprintf("%s.%s", config.Http.SubDomain, config.Http.TopDomain)
+	}
+
+	return fmt.Sprintf("%s://%s%s/api", scheme, domain, port)
+}
+
 // UpdateConfig updates the config file
 func (config *Config) UpdateConfig() error {
 	// Marshal the config struct into YAML
@@ -190,4 +161,14 @@ func (config *Config) UpdateConfig() error {
 	}
 
 	return nil
+}
+
+func (config *Config) GetToken() (string, error) {
+	token := config.General.GordonToken
+	if token == "" {
+		return "", fmt.Errorf("no token found in config.yml")
+	}
+
+	return token, nil
+
 }
