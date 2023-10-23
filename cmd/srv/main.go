@@ -21,7 +21,7 @@ func cleanup(a *app.App) {
 }
 
 func main() {
-	a := app.NewApp()
+	a := app.NewServerApp()
 
 	_, err := app.InitializeDB(a)
 	if err != nil {
