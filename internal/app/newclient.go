@@ -11,118 +11,105 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func NewClientApp() *App {
-	// Initialize AppConfig
+// NewClientApp initializes a new App with configuration.
+func NewClientApp() (*App, error) {
 	config := &Config{}
 	config, err := config.LoadClientConfig()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
-
-	// Initialize App
-	a := &App{
-		Config: *config,
-	}
-	return a
+	return &App{Config: *config}, nil
 }
 
-func (config *Config) LoadClientConfig() (*Config, error) {
-	configFileName := "config.yml"
+// getConfigDir returns the configuration directory based on the operating system.
+func getConfigDir() (string, error) {
 	usr, err := user.Current()
 	if err != nil {
-		return nil, fmt.Errorf("error getting user's home directory: %w", err)
+		return "", fmt.Errorf("error getting user's home directory: %w", err)
 	}
 
 	var configDir string
-
 	if runtime.GOOS == "windows" {
 		configDir = filepath.Join(usr.HomeDir, "AppData", "Roaming", "Gordon")
 	} else {
 		configDir = filepath.Join(usr.HomeDir, ".config", "Gordon")
 	}
+	return configDir, nil
+}
+
+// configPath returns the path of the configuration directory and file.
+func configPath() (string, string) {
+	configDir, err := getConfigDir()
+	if err != nil {
+		log.Fatalf("error getting configuration directory: %v", err)
+	}
+	configFilePath := filepath.Join(configDir, "config.yml")
+	return configDir, configFilePath
+}
+
+// SaveConfig saves the current configuration to a file.
+func (config *Config) SaveConfig() error {
+	configDir, err := getConfigDir()
+	if err != nil {
+		return err
+	}
+	configFilePath := filepath.Join(configDir, "config.yml")
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %v", err)
+	}
+	if err := os.WriteFile(configFilePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write to config file: %v", err)
+	}
+	return nil
+}
+
+// readAndUnmarshalConfig reads the config file and unmarshals it into the given config.
+func readAndUnmarshalConfig(filePath string, config *Config) error {
+	configData, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("error reading configuration file: %w", err)
+	}
+	return yaml.Unmarshal(configData, config)
+}
+
+// LoadClientConfig loads the client configuration.
+func (config *Config) LoadClientConfig() (*Config, error) {
+	configDir, configFilePath := configPath()
 
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return nil, fmt.Errorf("error creating configuration directory: %w", err)
 	}
 
-	configFilePath := filepath.Join(configDir, configFileName)
-
+	// Check if the file exists
 	if _, err := os.Stat(configFilePath); os.IsNotExist(err) {
 		fmt.Printf("Config file not found, creating it at %s\n", configFilePath)
-		defaultConfig := []byte("some: default\ndata: here\n")
-		if err := os.WriteFile(configFilePath, defaultConfig, 0666); err != nil {
-			return nil, fmt.Errorf("error writing default configuration: %w", err)
+
+		// Prompt user for initial settings
+		config.Http.BackendURL = readUserInput("Enter the backend URL:")
+		config.General.GordonToken = readUserInput("Enter the Gordon token:")
+
+		// Save the new configuration
+		if err := config.SaveConfig(); err != nil {
+			return nil, fmt.Errorf("error saving new configuration: %w", err)
 		}
 	} else if err != nil {
+		// Some other error occurred while checking the file
 		return nil, fmt.Errorf("error checking configuration file: %w", err)
-	}
-
-	// Read and unmarshal the config file
-	configData, err := os.ReadFile(configFilePath)
-	if err != nil {
-		return nil, fmt.Errorf("error reading configuration file: %w", err)
-	}
-
-	err = yaml.Unmarshal(configData, &config)
-	if err != nil {
-		return nil, fmt.Errorf("error unmarshalling configuration file: %w", err)
-	}
-
-	// New logic for backend URL and token
-	needsSave := false
-
-	if config.Http.BackendURL == "" {
-		fmt.Println("Please enter the backend URL:")
-		var backendURL string
-		fmt.Scanln(&backendURL)
-		config.Http.BackendURL = backendURL
-		needsSave = true
-	}
-
-	if config.General.GordonToken == "" {
-		fmt.Println("Please enter the token:")
-		var token string
-		fmt.Scanln(&token)
-		config.General.GordonToken = token
-		needsSave = true
-	}
-
-	if needsSave {
-		err := config.SaveConfig() // Assuming SaveConfig is a method that saves the config to file
-		if err != nil {
-			return nil, fmt.Errorf("error saving configuration file: %w", err)
+	} else {
+		// File exists, read and unmarshal it
+		if err := readAndUnmarshalConfig(configFilePath, config); err != nil {
+			return nil, err
 		}
 	}
 
 	return config, nil
 }
 
-func (config *Config) SaveConfig() error {
-	usr, err := user.Current()
-	if err != nil {
-		return fmt.Errorf("error getting user's home directory: %w", err)
-	}
-
-	var configDir string
-	if runtime.GOOS == "windows" {
-		configDir = filepath.Join(usr.HomeDir, "AppData", "Roaming", "Gordon")
-	} else {
-		configDir = filepath.Join(usr.HomeDir, ".config", "Gordon")
-	}
-
-	configFilePath := filepath.Join(configDir, "config.yml")
-
-	// Marshal the config struct into YAML
-	data, err := yaml.Marshal(config)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %v", err)
-	}
-
-	// Write the data to the config file
-	err = os.WriteFile(configFilePath, data, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write to config file: %v", err)
-	}
-
-	return nil
+// readUserInput reads a string input from the user with a prompt.
+func readUserInput(prompt string) string {
+	fmt.Println(prompt)
+	var input string
+	fmt.Scanln(&input)
+	return input
 }
