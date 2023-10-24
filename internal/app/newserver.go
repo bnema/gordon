@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"time"
 
 	"github.com/bnema/gordon/internal/templating"
 	"github.com/bnema/gordon/internal/webui"
@@ -41,6 +42,7 @@ func NewServerApp() *App {
 		DBDir:      DBDir,
 		DBFilename: DBFilename,
 		Config:     *config,
+		StartTime:  time.Now(),
 	}
 
 	OauthCallbackURL = config.GenerateOauthCallbackURL()

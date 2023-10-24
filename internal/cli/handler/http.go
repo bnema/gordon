@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/bnema/gordon/internal/app"
@@ -38,33 +39,42 @@ func SendRequest(req *http.Request) (*http.Response, error) {
 	return client.Do(req)
 }
 
+type Response struct {
+	Body []byte
+}
+
 // SendHTTPRequest sends the HTTP request
-func SendHTTPRequest(a *app.App, payload common.Payload) {
+func SendHTTPRequest(a *app.App, rp *common.RequestPayload, endpoint string) (*Response, error) {
 	apiUrl := GenerateAPIURL(a)
-	fmt.Println("Sending request to:", apiUrl)
 
 	token := a.Config.General.GordonToken
 
-	jsonPayload, err := PrepareJSONPayload(payload)
+	// Prepare the entire RequestPayload, not just the inner Payload
+	jsonPayload, err := json.Marshal(rp)
 	if err != nil {
-		fmt.Println("Error preparing JSON payload:", err)
-		return
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	req, err := CreateNewRequest("POST", apiUrl, jsonPayload)
+	// Create a new request
+	req, err := CreateNewRequest("GET", apiUrl+endpoint, jsonPayload)
 	if err != nil {
-		fmt.Println("Error creating new HTTP request:", err)
-		return
+		return nil, fmt.Errorf("failed to create new request: %w", err)
 	}
 
+	// Set the request headers
 	SetRequestHeaders(req, token)
 
+	// Send the request
 	resp, err := SendRequest(req)
 	if err != nil {
-		fmt.Println("Error sending HTTP request:", err)
-		return
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	fmt.Println("Response Status:", resp.Status)
+	// Read the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	return &Response{Body: body}, nil
 }
