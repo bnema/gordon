@@ -2,7 +2,7 @@
 node_modules/
 *tmp/
 tmp/*
-gordon.yml
+config.yml
 bun.lockb
 *.log
 *.txt

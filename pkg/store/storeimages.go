@@ -6,8 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bnema/gordon/internal/server"
-	"github.com/bnema/gordon/pkg/docker"
+	"github.com/bnema/gordon/internal/common"
 	"github.com/docker/docker/api/types"
 )
 
@@ -17,13 +16,13 @@ type StorageConfig struct {
 	Images     []types.ImageSummary
 }
 
-func NewStorageConfig(config *server.Config) *StorageConfig {
+func NewStorageConfig(config *common.Config) *StorageConfig {
 	return &StorageConfig{
 		StorageDir: config.General.StorageDir,
 	}
 }
 
-func SaveImageToStorage(config *server.Config, filename string, buf io.Reader) (string, error) {
+func SaveImageToStorage(config *common.Config, filename string, buf io.Reader) (string, error) {
 	// Check if the folder exist if not create it
 	if _, err := os.Stat(config.General.StorageDir); os.IsNotExist(err) {
 		err := os.MkdirAll(config.General.StorageDir, 0755)
@@ -52,13 +51,7 @@ func SaveImageToStorage(config *server.Config, filename string, buf io.Reader) (
 		return "", fmt.Errorf("file does not exist: %v", err)
 	}
 
-	// Import the image into Docker
-	imageId, err := docker.ImportImageToEngine(saveInPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to import image to Docker: %v", err)
-	}
-
-	return imageId, nil
+	return saveInPath, nil
 }
 
 func (sc *StorageConfig) DeleteImageFromStorage(imageId string) error {

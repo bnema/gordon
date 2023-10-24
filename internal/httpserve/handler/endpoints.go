@@ -8,6 +8,7 @@ import (
 
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/pkg/store"
 	"github.com/labstack/echo/v4"
 )
 
@@ -23,14 +24,12 @@ type InfoResponse struct {
 
 func (info *InfoResponse) Populate(a *server.App) {
 	info.Uptime = a.GetUptime()
-	info.Version = a.Config.GetVersion()
+	info.Version = a.GetVersionstring()
 }
 
 // Handle GET on /api/ping endpoint
 func GetInfos(c echo.Context, a *server.App) error {
-	fmt.Println("GET /api/ping")
 	body, _ := io.ReadAll(c.Request().Body)
-	fmt.Println("Request Body:", string(body))
 	c.Request().Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
 
 	payload := new(common.RequestPayload)
@@ -57,4 +56,60 @@ func GetInfos(c echo.Context, a *server.App) error {
 
 	return c.JSON(http.StatusOK, info)
 
+}
+
+func PostPush(c echo.Context, a *server.App) error {
+	body, _ := io.ReadAll(c.Request().Body)
+	c.Request().Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
+
+	payload := new(common.RequestPayload)
+	if err := c.Bind(payload); err != nil {
+		fmt.Println("Bind Error:", err)
+		return c.JSON(http.StatusBadRequest, err.Error())
+	}
+
+	if payload.Type != "push" {
+		return c.JSON(http.StatusBadRequest, "Invalid payload type")
+	}
+
+	pushPayload, ok := payload.Payload.(common.PushPayload)
+	if !ok {
+		return c.JSON(http.StatusBadRequest, "Invalid payload type")
+	}
+
+	// Push payload contains Ports as a string, Image as string (image:tag), and the .tar image as a byte array
+	// Validate the ports
+	ports := pushPayload.Ports
+	if ports == "" {
+		return c.JSON(http.StatusBadRequest, "Ports cannot be empty")
+	}
+
+	// Validate the target domain
+	domain := pushPayload.TargetDomain
+	if domain == "" {
+		return c.JSON(http.StatusBadRequest, "Image cannot be empty")
+	}
+
+	// Validate the image tar
+	imageTar := pushPayload.Data
+	if imageTar == nil {
+		return c.JSON(http.StatusBadRequest, "Image tar cannot be empty")
+	}
+
+	imageName := pushPayload.ImageName
+	if imageName == "" {
+		return c.JSON(http.StatusBadRequest, "Image name cannot be empty")
+	}
+
+	// 1 - Import the image tar
+	imageId, err := store.SaveImageToStorage(&a.Config, imageName, bytes.NewBuffer(imageTar))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, err.Error())
+	}
+	// 2 - Create the container with traefik labels
+	fmt.Println("Image ID:", imageId)
+	// 3 - Start the container
+	// 4 - Return :
+
+	return c.JSON(http.StatusOK, "OK")
 }
