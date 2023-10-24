@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/server"
 )
 
 // LoadFragment loads a specific HTML fragment from the app's TemplateFS
-func Fragment(a *app.App, fragmentName string) (string, error) {
+func Fragment(a *server.App, fragmentName string) (string, error) {
 	filePath := fmt.Sprintf("html/fragments/%s.gohtml", fragmentName)
 
 	// Open the file

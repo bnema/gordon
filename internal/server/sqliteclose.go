@@ -1,4 +1,4 @@
-package app
+package server
 
 // CloseAndSaveDB closes the in-memory database and backup the database file if there is any modification.
 func CloseDB(a *App) error {

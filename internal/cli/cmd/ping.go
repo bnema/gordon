@@ -3,13 +3,14 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
 	"github.com/bnema/gordon/internal/common"
+
 	"github.com/spf13/cobra"
 )
 
-func NewPingCommand(a *app.App) *cobra.Command {
+func NewPingCommand(a *cli.App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "ping",
 		Short: "Send a ping request to the backend",

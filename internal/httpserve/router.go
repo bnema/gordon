@@ -1,15 +1,15 @@
 package httpserve
 
 import (
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/httpserve/handler"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
+	"github.com/bnema/gordon/internal/server"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo/v4"
 )
 
 // RegisterRoutes registers all routes for the application
-func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
+func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 	// --- Register API endpoints --- //
 	bindAPIEndpoints(e, a)
 	AdminPath := a.Config.Admin.Path
@@ -42,7 +42,7 @@ func RegisterRoutes(e *echo.Echo, a *app.App) *echo.Echo {
 }
 
 // bindAPIEndpoints expose /api endpoints and speaks only JSON
-func bindAPIEndpoints(e *echo.Echo, a *app.App) {
+func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 	apiGroup := e.Group("/api")
 	apiGroup.Use(middleware.RequireToken(a))
 	apiGroup.GET("/hello", func(c echo.Context) error {
@@ -54,14 +54,14 @@ func bindAPIEndpoints(e *echo.Echo, a *app.App) {
 }
 
 // bindStaticRoute bind static path
-func bindStaticRoute(e *echo.Echo, a *app.App, path string) {
+func bindStaticRoute(e *echo.Echo, a *server.App, path string) {
 	e.GET(path, func(c echo.Context) error {
 		return handler.StaticRoute(c, a)
 	})
 }
 
 // bindLoginRoute binds all login routes
-func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
+func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
 	e.GET(adminPath+"/login", func(c echo.Context) error {
 		return handler.RenderLoginPage(c, a)
 	})
@@ -77,7 +77,7 @@ func bindLoginRoute(e *echo.Echo, a *app.App, adminPath string) {
 }
 
 // bindAdminRoute binds all admin routes
-func bindAdminRoute(e *echo.Echo, a *app.App, adminPath string) {
+func bindAdminRoute(e *echo.Echo, a *server.App, adminPath string) {
 	adminGroup := e.Group(adminPath)
 	// Since login is behind the admin path, we cannot use group middleware
 	adminGroup.GET("", func(c echo.Context) error {
@@ -90,7 +90,7 @@ func bindAdminRoute(e *echo.Echo, a *app.App, adminPath string) {
 }
 
 // bindHTMXEndpoints binds all HTMX endpoints
-func bindHTMXEndpoints(e *echo.Echo, a *app.App) {
+func bindHTMXEndpoints(e *echo.Echo, a *server.App) {
 	// Create a  group for /htmx endpoints
 	htmxGroup := e.Group("/htmx")
 

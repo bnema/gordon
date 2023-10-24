@@ -5,12 +5,12 @@ import (
 	"fmt"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/render"
 )
 
 // GetHTMLFragmentByID returns the HTML fragment with the specified id
-func GetHTMLFragmentByID(id string, data interface{}, a *app.App) (string, error) {
+func GetHTMLFragmentByID(id string, data interface{}, a *server.App) (string, error) {
 	// 1. Render the template
 	renderer, err := render.GetHTMLRenderer("html/fragments", "components.gohtml", a.TemplateFS, a)
 	if err != nil {

@@ -6,15 +6,15 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/db/queries"
+	"github.com/bnema/gordon/internal/server"
 
 	// "github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
 
-func RequireLogin(a *app.App) echo.MiddlewareFunc {
+func RequireLogin(a *server.App) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if err := validateSessionAndUser(c, a); err != nil {
@@ -26,7 +26,7 @@ func RequireLogin(a *app.App) echo.MiddlewareFunc {
 	}
 }
 
-func validateSessionAndUser(c echo.Context, a *app.App) error {
+func validateSessionAndUser(c echo.Context, a *server.App) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return err
@@ -59,7 +59,7 @@ func validateSessionAndUser(c echo.Context, a *app.App) error {
 	return nil
 }
 
-func redirectToLogin(c echo.Context, a *app.App) error {
+func redirectToLogin(c echo.Context, a *server.App) error {
 	return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login")
 }
 
@@ -74,7 +74,7 @@ func isCookieExpired(c echo.Context) (bool, error) {
 	return time.Now().After(cookie.Expires), nil
 }
 
-func isSessionExpiredInDB(a *app.App, userID string, sessionID string) (bool, error) {
+func isSessionExpiredInDB(a *server.App, userID string, sessionID string) (bool, error) {
 	currentTime := time.Now()
 	expirationTime, err := queries.GetSessionExpiration(a, userID, sessionID, currentTime)
 	if err != nil {
@@ -84,7 +84,7 @@ func isSessionExpiredInDB(a *app.App, userID string, sessionID string) (bool, er
 	return currentTime.After(expirationTime), nil
 }
 
-func isAccountIDInDB(a *app.App, accountID string) (bool, error) {
+func isAccountIDInDB(a *server.App, accountID string) (bool, error) {
 	accountExists, err := queries.CheckDBAccountExists(a, accountID)
 	if err != nil {
 		return false, err

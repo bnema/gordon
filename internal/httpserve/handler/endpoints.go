@@ -6,13 +6,13 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/common"
+	"github.com/bnema/gordon/internal/server"
 	"github.com/labstack/echo/v4"
 )
 
 // Handle GET on /api/hello endpoint
-func GetHello(c echo.Context, a *app.App) error {
+func GetHello(c echo.Context, a *server.App) error {
 	return c.JSON(http.StatusOK, "Hello, World!")
 }
 
@@ -21,13 +21,13 @@ type InfoResponse struct {
 	Version string `json:"version"`
 }
 
-func (info *InfoResponse) Populate(a *app.App) {
+func (info *InfoResponse) Populate(a *server.App) {
 	info.Uptime = a.GetUptime()
 	info.Version = a.Config.GetVersion()
 }
 
 // Handle GET on /api/ping endpoint
-func GetInfos(c echo.Context, a *app.App) error {
+func GetInfos(c echo.Context, a *server.App) error {
 	fmt.Println("GET /api/ping")
 	body, _ := io.ReadAll(c.Request().Body)
 	fmt.Println("Request Body:", string(body))
