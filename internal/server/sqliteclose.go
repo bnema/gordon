@@ -11,5 +11,11 @@ func CloseDB(a *App) error {
 
 func saveDB(a *App) error {
 	// TODO: Backup the database file if there is any modification.
+	backupDBFile(a)
+	return nil
+}
+
+// TODO
+func backupDBFile(a *App) error {
 	return nil
 }
