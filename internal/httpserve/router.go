@@ -48,6 +48,9 @@ func bindAPIEndpoints(e *echo.Echo, a *app.App) {
 	apiGroup.GET("/hello", func(c echo.Context) error {
 		return handler.GetHello(c, a)
 	})
+	apiGroup.GET("/ping", func(c echo.Context) error {
+		return handler.GetInfos(c, a)
+	})
 }
 
 // bindStaticRoute bind static path
