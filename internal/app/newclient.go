@@ -73,34 +73,36 @@ func readAndUnmarshalConfig(filePath string, config *Config) error {
 	return yaml.Unmarshal(configData, config)
 }
 
-// LoadClientConfig loads the client configuration.
 func (config *Config) LoadClientConfig() (*Config, error) {
 	configDir, configFilePath := configPath()
 
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	err := os.MkdirAll(configDir, 0755)
+	if err != nil {
 		return nil, fmt.Errorf("error creating configuration directory: %w", err)
 	}
 
-	// Check if the file exists
-	if _, err := os.Stat(configFilePath); os.IsNotExist(err) {
+	_, err = os.Stat(configFilePath)
+	if os.IsNotExist(err) {
 		fmt.Printf("Config file not found, creating it at %s\n", configFilePath)
 
-		// Prompt user for initial settings
-		config.Http.BackendURL = readUserInput("Enter the backend URL:")
-		config.General.GordonToken = readUserInput("Enter the Gordon token:")
+		config.Http.BackendURL = readUserInput("Enter the backend URL (e.g. https://gordon.mydomain.com):")
+		config.General.GordonToken = readUserInput("Enter the token (check your backend config.yml):")
 
-		// Save the new configuration
-		if err := config.SaveConfig(); err != nil {
+		err = config.SaveConfig()
+		if err != nil {
 			return nil, fmt.Errorf("error saving new configuration: %w", err)
 		}
-	} else if err != nil {
-		// Some other error occurred while checking the file
+
+		return config, nil
+	}
+
+	if err != nil {
 		return nil, fmt.Errorf("error checking configuration file: %w", err)
-	} else {
-		// File exists, read and unmarshal it
-		if err := readAndUnmarshalConfig(configFilePath, config); err != nil {
-			return nil, err
-		}
+	}
+
+	err = readAndUnmarshalConfig(configFilePath, config)
+	if err != nil {
+		return nil, err
 	}
 
 	return config, nil
