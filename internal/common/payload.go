@@ -50,10 +50,6 @@ func (p PingPayload) GetType() string {
 	return "ping"
 }
 
-type PushPayload struct {
-	Data []byte `json:"data"`
-}
-
 func (p PushPayload) GetType() string {
 	return "push"
 }
@@ -64,4 +60,16 @@ func NewPingPayload(data map[string]interface{}) (PingPayload, error) {
 		return PingPayload{}, fmt.Errorf("invalid data for message")
 	}
 	return PingPayload{Message: message}, nil
+}
+
+// What do we need inside the push payload :
+// the ports as a string (80:80/tcp, 443:443/tcp)
+// the image+tag as a string (nginx:latest)
+// the .tar container image as a byte array
+
+type PushPayload struct {
+	Ports        string `json:"ports"`
+	TargetDomain string `json:"targetdomain"`
+	ImageName    string `json:"imagename"`
+	Data         []byte `json:"data"`
 }

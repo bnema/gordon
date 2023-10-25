@@ -6,14 +6,15 @@ import (
 	"log"
 	"time"
 
+	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/templating"
 	"github.com/bnema/gordon/internal/webui"
 )
 
 func NewServerApp() (*App, error) {
 	// Initialize AppConfig
-	config := &Config{}
-	_, err := LoadConfig(config)
+	config := common.Config{}
+	_, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
@@ -42,10 +43,10 @@ func NewServerApp() (*App, error) {
 		LocYML:     bytes,
 		DBDir:      DBDir,
 		DBFilename: DBFilename,
-		Config:     *config,
+		Config:     config,
 		StartTime:  time.Now(),
 	}
 
-	OauthCallbackURL = config.GenerateOauthCallbackURL()
+	OauthCallbackURL = a.GenerateOauthCallbackURL()
 	return a, nil
 }
