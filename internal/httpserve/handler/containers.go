@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/load"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
@@ -69,7 +69,7 @@ type HumanReadableContainer struct {
 }
 
 // renderHTML is a generalized function to render HTML
-func renderHTML(c echo.Context, a *app.App, path, templateName string, data map[string]interface{}) error {
+func renderHTML(c echo.Context, a *server.App, path, templateName string, data map[string]interface{}) error {
 	rendererData, err := render.GetHTMLRenderer(path, templateName, a.TemplateFS, a)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func renderHTML(c echo.Context, a *app.App, path, templateName string, data map[
 }
 
 // ActionSuccess returns the success HTML fragment
-func ActionSuccess(a *app.App) string {
+func ActionSuccess(a *server.App) string {
 	successFragment, err := load.Fragment(a, "success")
 	if err != nil {
 		fmt.Println(err)
@@ -93,7 +93,7 @@ func ActionSuccess(a *app.App) string {
 }
 
 // ImageManagerComponent handles the /image-manager route (HTMX route)
-func ImageManagerComponent(c echo.Context, a *app.App) error {
+func ImageManagerComponent(c echo.Context, a *server.App) error {
 	images, err := docker.ListContainerImages()
 	if err != nil {
 		return sendError(c, err)
@@ -127,7 +127,7 @@ func ImageManagerComponent(c echo.Context, a *app.App) error {
 }
 
 // ImageManagerDelete handles the /image-manager/delete route
-func ImageManagerDelete(c echo.Context, a *app.App) error {
+func ImageManagerDelete(c echo.Context, a *server.App) error {
 	//
 	ShortID := c.Param("ID")
 
@@ -149,7 +149,7 @@ func ImageManagerDelete(c echo.Context, a *app.App) error {
 }
 
 // ContainerManagerComponent handles the /container-manager route
-func ContainerManagerComponent(c echo.Context, a *app.App) error {
+func ContainerManagerComponent(c echo.Context, a *server.App) error {
 	containers, err := docker.ListRunningContainers()
 	if err != nil {
 		return sendError(c, err)
@@ -196,7 +196,7 @@ func ContainerManagerComponent(c echo.Context, a *app.App) error {
 }
 
 // ContainerManagerDelete handles the /container-manager/delete route
-func ContainerManagerDelete(c echo.Context, a *app.App) error {
+func ContainerManagerDelete(c echo.Context, a *server.App) error {
 	err := docker.RemoveContainer(c.Param("ID"))
 	if err != nil {
 		return sendError(c, err)
@@ -205,7 +205,7 @@ func ContainerManagerDelete(c echo.Context, a *app.App) error {
 }
 
 // ContainerManagerStop handles the /container-manager/stop route
-func ContainerManagerStop(c echo.Context, a *app.App) error {
+func ContainerManagerStop(c echo.Context, a *server.App) error {
 	// Stop the container gracefully with a timeout
 	stopped, err := docker.StopContainerGracefully(c.Param("ID"), 3*time.Second)
 	if err != nil {
@@ -225,7 +225,7 @@ func ContainerManagerStop(c echo.Context, a *app.App) error {
 }
 
 // ContainerManagerStart handles the /container-manager/start route
-func ContainerManagerStart(c echo.Context, a *app.App) error {
+func ContainerManagerStart(c echo.Context, a *server.App) error {
 	err := docker.StartContainer(c.Param("ID"))
 	if err != nil {
 		return sendError(c, err)

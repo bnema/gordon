@@ -1,4 +1,4 @@
-package app
+package server
 
 import (
 	"database/sql"
@@ -42,7 +42,7 @@ type GeneralConfig struct {
 	BuildDir     string // come from env
 	BuildVersion string // come from env
 	StorageDir   string `yaml:"storageDir"` // = buildir/storage
-	GordonToken  string `yaml:"gordonToken"`
+	Token        string `yaml:"token"`
 }
 
 type HttpConfig struct {
@@ -167,7 +167,7 @@ func (config *Config) UpdateConfig() error {
 }
 
 func (config *Config) GetToken() (string, error) {
-	token := config.General.GordonToken
+	token := config.General.Token
 	if token == "" {
 		return "", fmt.Errorf("no token found in config.yml")
 	}

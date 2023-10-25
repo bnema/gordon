@@ -9,26 +9,26 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/httpserve"
+	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
 )
 
-func cleanup(a *app.App) {
-	if err := app.CloseDB(a); err != nil {
+func cleanup(a *server.App) {
+	if err := server.CloseDB(a); err != nil {
 		log.Fatal("Failed to close and backup database:", err)
 	}
 }
 
 func main() {
-	a := app.NewServerApp()
+	a := server.NewServerApp()
 
-	_, err := app.InitializeDB(a)
+	_, err := server.InitializeDB(a)
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
 
-	_, err = app.HandleNewTokenInitialization(a)
+	_, err = server.HandleNewTokenInitialization(a)
 	if err != nil {
 		log.Print(err)
 	}

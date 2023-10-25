@@ -1,4 +1,4 @@
-package app
+package cli
 
 import (
 	"fmt"
@@ -86,7 +86,7 @@ func (config *Config) LoadClientConfig() (*Config, error) {
 		fmt.Printf("Config file not found, creating it at %s\n", configFilePath)
 
 		config.Http.BackendURL = readUserInput("Enter the backend URL (e.g. https://gordon.mydomain.com):")
-		config.General.GordonToken = readUserInput("Enter the token (check your backend config.yml):")
+		config.General.Token = readUserInput("Enter the token (check your backend config.yml):")
 
 		err = config.SaveConfig()
 		if err != nil {

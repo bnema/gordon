@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/common"
 )
 
@@ -39,9 +39,9 @@ type Response struct {
 }
 
 // SendHTTPRequest sends the HTTP request
-func SendHTTPRequest(a *app.App, rp *common.RequestPayload, endpoint string) (*Response, error) {
+func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, endpoint string) (*Response, error) {
 	apiUrl := a.Config.Http.BackendURL + "/api"
-	token := a.Config.General.GordonToken
+	token := a.Config.General.Token
 
 	// Prepare the entire RequestPayload, not just the inner Payload
 	jsonPayload, err := json.Marshal(rp)

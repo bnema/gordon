@@ -3,14 +3,14 @@
 package cmd
 
 import (
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/cli/handler"
+	"github.com/bnema/gordon/internal/server"
 	"github.com/spf13/cobra"
 )
 
 // execute cmd/srv/main.go main function
 
-func NewServeCommand(a *app.App) *cobra.Command {
+func NewServeCommand(a *server.App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
 		Short: "Start the gordon server",

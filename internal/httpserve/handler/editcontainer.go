@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/labstack/echo/v4"
@@ -34,7 +34,7 @@ func generateOrderedYAML(infoMap map[string]interface{}) (string, error) {
 }
 
 // ContainerManagerEditGET displays the edit container view
-func ContainerManagerEditGET(c echo.Context, a *app.App) error {
+func ContainerManagerEditGET(c echo.Context, a *server.App) error {
 	containerID := c.Param("ID")
 
 	// Get the container info
@@ -149,7 +149,7 @@ func (tq *TransactionQueue) Execute() error {
 }
 
 // ContainerManagerEditPOST handles the edit container form submission
-func ContainerManagerEditPOST(c echo.Context, a *app.App) error {
+func ContainerManagerEditPOST(c echo.Context, a *server.App) error {
 	tq := &TransactionQueue{}
 	oldContainerID := c.Param("ID")
 

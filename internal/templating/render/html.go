@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"path"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/server"
 )
 
 type Renderer struct {
@@ -17,7 +17,7 @@ type Renderer struct {
 }
 
 // Render function renders the template with the given data
-func (r *Renderer) Render(data interface{}, a *app.App) (string, error) {
+func (r *Renderer) Render(data interface{}, a *server.App) (string, error) {
 	if r.ParseError != nil {
 		return "", fmt.Errorf("failed to parse template: %w", r.ParseError)
 
@@ -43,7 +43,7 @@ func (r *Renderer) Render(data interface{}, a *app.App) (string, error) {
 }
 
 // GetHTMLRenderer function returns a new Renderer instance
-func GetHTMLRenderer(mainPath string, filename string, fs fs.FS, a *app.App, fragmentsPath ...string) (*Renderer, error) {
+func GetHTMLRenderer(mainPath string, filename string, fs fs.FS, a *server.App, fragmentsPath ...string) (*Renderer, error) {
 	// Full path to the main template
 	fullPath := path.Join(mainPath, filename)
 	// Check if the file exists in the provided fs.FS using fs.Open

@@ -3,14 +3,14 @@ package render
 import (
 	"fmt"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/server"
 	"gopkg.in/yaml.v3"
 )
 
 type Localizations map[string]map[string]map[string]interface{}
 
 // GetLocalization function returns the localization for the given language
-func GetLocalization(lang string, a *app.App) (map[string]interface{}, error) {
+func GetLocalization(lang string, a *server.App) (map[string]interface{}, error) {
 	// 1. Check if the language is supported
 	supportedLanguages := []string{"en", "fr"} // Add more languages here
 	if !contains(supportedLanguages, lang) {
@@ -38,7 +38,7 @@ func GetLocalization(lang string, a *app.App) (map[string]interface{}, error) {
 }
 
 // getLocalizations function returns the localizations from the strings.yml file
-func getLocalizations(a *app.App) (Localizations, error) {
+func getLocalizations(a *server.App) (Localizations, error) {
 	var loc Localizations
 
 	err := yaml.Unmarshal(a.LocYML, &loc)
