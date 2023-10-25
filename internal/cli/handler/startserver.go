@@ -40,9 +40,9 @@ func StartServer(a *server.App, port string) error {
 	e.HidePort = true
 	e = httpserve.RegisterRoutes(e, a)
 
-	log.Println("Starting server on port", port)
-	if err := e.Start(fmt.Sprintf(":%s", port)); err != nil {
-		log.Fatal("Server error:", err)
+	log.Println("Starting server on port", a.Config.Http.Port)
+	if err := e.Start(fmt.Sprintf(":%s", a.Config.Http.Port)); err != nil {
+		log.Fatal(err)
 	}
 
 	return nil
