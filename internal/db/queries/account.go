@@ -1,11 +1,11 @@
 package queries
 
 import (
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/db"
+	"github.com/bnema/gordon/internal/server"
 )
 
-func createDBAccount(a *app.App) (*db.Account, error) {
+func createDBAccount(a *server.App) (*db.Account, error) {
 	account := &db.Account{
 		ID: generateUUID(),
 	}
@@ -17,7 +17,7 @@ func createDBAccount(a *app.App) (*db.Account, error) {
 	return account, err
 }
 
-func CheckDBAccountExists(a *app.App, accountID string) (bool, error) {
+func CheckDBAccountExists(a *server.App, accountID string) (bool, error) {
 	var exists bool
 	err := a.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM account WHERE id = ?)", accountID).Scan(&exists)
 	if err != nil {
@@ -26,7 +26,7 @@ func CheckDBAccountExists(a *app.App, accountID string) (bool, error) {
 	return exists, nil
 }
 
-func PopulateAccountFromDB(a *app.App) error {
+func PopulateAccountFromDB(a *server.App) error {
 	rows, err := a.DB.Query("SELECT id, user_id FROM account")
 	if err != nil {
 		return err
