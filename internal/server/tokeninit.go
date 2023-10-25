@@ -33,7 +33,7 @@ func HandleNewTokenInitialization(a *App) (string, error) {
 
 	// Store the token in the config file
 	a.Config.General.Token = token
-	err = a.Config.UpdateConfig()
+	err = a.Config.SaveConfig()
 	if err != nil {
 		return "", fmt.Errorf("failed to save config: %v", err)
 	}
