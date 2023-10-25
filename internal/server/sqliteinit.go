@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	DBDir      = "tmp/data"
 	DBFilename = "sqlite.db"
 )
 
