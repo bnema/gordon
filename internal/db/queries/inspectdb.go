@@ -3,11 +3,11 @@ package queries
 import (
 	"fmt"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/server"
 )
 
 // InspectInMemoryDB inspects the in-memory database. (for debug purpose)
-func InspectInMemoryDB(a *app.App) error {
+func InspectInMemoryDB(a *server.App) error {
 	memDb := a.DB
 	// Query the sqlite_master table to get a list of all tables
 	rows, err := memDb.Query("SELECT name FROM sqlite_master WHERE type='table'")

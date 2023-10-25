@@ -4,12 +4,12 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/server"
 	"github.com/labstack/echo/v4"
 )
 
 // StaticRoute serves static files from the embedded filesystem
-func StaticRoute(c echo.Context, a *app.App) error {
+func StaticRoute(c echo.Context, a *server.App) error {
 	// Set the cache-control header based on PROD environment variable
 	if os.Getenv("PROD") == "true" {
 		c.Response().Header().Set("Cache-Control", "public, max-age=86400")

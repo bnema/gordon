@@ -1,4 +1,4 @@
-package app
+package server
 
 import (
 	"fmt"
@@ -17,6 +17,7 @@ func NewServerApp() *App {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+
 	// Append build dir to storage dir
 	config.General.StorageDir = fmt.Sprintf("%s/%s", config.General.BuildDir, config.General.StorageDir)
 

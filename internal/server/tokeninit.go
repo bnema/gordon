@@ -1,4 +1,4 @@
-package app
+package server
 
 import (
 	"crypto/rand"
@@ -32,7 +32,7 @@ func HandleNewTokenInitialization(a *App) (string, error) {
 	fmt.Printf("Login with the new token: %s\n", token)
 
 	// Store the token in the config file
-	a.Config.General.GordonToken = token
+	a.Config.General.Token = token
 	err = a.Config.UpdateConfig()
 	if err != nil {
 		return "", fmt.Errorf("failed to save config: %v", err)

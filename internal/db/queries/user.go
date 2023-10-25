@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/db"
+	"github.com/bnema/gordon/internal/server"
 	"github.com/google/uuid"
 )
 
@@ -22,7 +22,7 @@ type GithubUserInfo struct {
 }
 
 // CreateUser creates a new user along with the associated account, provider, and session.
-func CreateUser(a *app.App, accessToken string, browserInfo string, userInfo *GithubUserInfo) error {
+func CreateUser(a *server.App, accessToken string, browserInfo string, userInfo *GithubUserInfo) error {
 	// Check if a user already exists. If so, return an error.
 	if exists, err := CheckDBUserExists(a); err != nil || exists {
 		return fmt.Errorf("error checking user or user already exists: %v", err)
@@ -57,7 +57,7 @@ func CreateUser(a *app.App, accessToken string, browserInfo string, userInfo *Gi
 	return createDBSession(a, browserInfo, accessToken, account.ID)
 }
 
-func createDBUser(a *app.App, userInfo *GithubUserInfo) (*db.User, error) {
+func createDBUser(a *server.App, userInfo *GithubUserInfo) (*db.User, error) {
 	user := &db.User{
 		ID:    generateUUID(),
 		Name:  userInfo.Login,
@@ -71,7 +71,7 @@ func createDBUser(a *app.App, userInfo *GithubUserInfo) (*db.User, error) {
 	return user, err
 }
 
-func CheckDBUserExists(a *app.App) (bool, error) {
+func CheckDBUserExists(a *server.App) (bool, error) {
 	var userID string
 	err := a.DB.QueryRow("SELECT id FROM user").Scan(&userID)
 	if err != nil {
@@ -89,7 +89,7 @@ func CheckDBUserExists(a *app.App) (bool, error) {
 }
 
 // If there is already a user, we compare the login and email to see if it is the same user
-func CheckDBUserIsGood(a *app.App, userInfo *GithubUserInfo) (bool, error) {
+func CheckDBUserIsGood(a *server.App, userInfo *GithubUserInfo) (bool, error) {
 	login := userInfo.Login
 	email := userInfo.Emails[0]
 
@@ -110,7 +110,7 @@ func CheckDBUserIsGood(a *app.App, userInfo *GithubUserInfo) (bool, error) {
 	return false, nil
 }
 
-func UpdateUser(a *app.App, accessToken string, browserInfo string, userInfo *GithubUserInfo) (*db.User, error) {
+func UpdateUser(a *server.App, accessToken string, browserInfo string, userInfo *GithubUserInfo) (*db.User, error) {
 
 	err := CreateOrUpdateDBSession(a, accessToken, browserInfo)
 	if err != nil {
@@ -129,7 +129,7 @@ func UpdateUser(a *app.App, accessToken string, browserInfo string, userInfo *Gi
 
 }
 
-func GetAccountCount(a *app.App) (int, error) {
+func GetAccountCount(a *server.App) (int, error) {
 	var count int
 	err := a.DB.QueryRow("SELECT COUNT(*) FROM account").Scan(&count)
 	if err != nil {

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/docker/docker/api/types"
 )
@@ -17,13 +17,13 @@ type StorageConfig struct {
 	Images     []types.ImageSummary
 }
 
-func NewStorageConfig(config *app.Config) *StorageConfig {
+func NewStorageConfig(config *server.Config) *StorageConfig {
 	return &StorageConfig{
 		StorageDir: config.General.StorageDir,
 	}
 }
 
-func SaveImageToStorage(config *app.Config, filename string, buf io.Reader) (string, error) {
+func SaveImageToStorage(config *server.Config, filename string, buf io.Reader) (string, error) {
 	// Check if the folder exist if not create it
 	if _, err := os.Stat(config.General.StorageDir); os.IsNotExist(err) {
 		err := os.MkdirAll(config.General.StorageDir, 0755)
