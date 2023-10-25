@@ -10,7 +10,7 @@ import (
 	"github.com/bnema/gordon/internal/webui"
 )
 
-func NewServerApp() *App {
+func NewServerApp() (*App, error) {
 	// Initialize AppConfig
 	config := &Config{}
 	_, err := LoadConfig(config)
@@ -47,5 +47,5 @@ func NewServerApp() *App {
 	}
 
 	OauthCallbackURL = config.GenerateOauthCallbackURL()
-	return a
+	return a, nil
 }

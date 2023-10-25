@@ -21,9 +21,12 @@ func cleanup(a *server.App) {
 }
 
 func main() {
-	a := server.NewServerApp()
+	a, err := server.NewServerApp()
+	if err != nil {
+		log.Fatal("Failed to initialize app:", err)
+	}
 
-	_, err := server.InitializeDB(a)
+	_, err = server.InitializeDB(a)
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
