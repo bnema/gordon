@@ -28,6 +28,8 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 	var port string
 	var targetDomain string
 
+	handler.FieldCheck(a)
+
 	pushCmd := &cobra.Command{
 		Use:   "push [image:tag]",
 		Short: "Push an image to the server, if no tag is specified, latest is used",
