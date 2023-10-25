@@ -72,7 +72,7 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 
 	//Initiate the Github OAuth flow
 	clientID := os.Getenv("GITHUB_APP_ID")
-	redirectDomain := a.Config.GenerateOauthCallbackURL()
+	redirectDomain := a.GenerateOauthCallbackURL()
 	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
 	// Redirect to Gordon's Proxy to grab the oauth access
 	oauthURL := fmt.Sprintf(
@@ -101,7 +101,7 @@ func OAuthCallback(c echo.Context, a *server.App) error {
 	a.DBTables.Sessions.AccessToken = accessToken
 
 	// Compare the state parameter with the redirect domain
-	redirectDomain := a.Config.GenerateOauthCallbackURL()
+	redirectDomain := a.GenerateOauthCallbackURL()
 	encodedRedirectDomain := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
 	if encodedState != encodedRedirectDomain {
 		return c.String(http.StatusBadRequest, "invalid state parameter")

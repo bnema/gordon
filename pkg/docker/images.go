@@ -1,7 +1,9 @@
 package docker
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 
 	"github.com/docker/docker/api/types"
@@ -93,6 +95,29 @@ func ImportImageToEngine(imagePath string) (string, error) {
 	}
 
 	return imageID, nil
+}
+
+// ExportImageFromEngine exports an image from the Docker engine and returns it as a byte array
+func ExportImageFromEngine(imageName string) ([]byte, error) {
+	// we check if the image exists
+	_, err := GetImageID(imageName)
+	if err != nil {
+		return nil, err
+	}
+
+	image, err := dockerCli.ImageSave(context.Background(), []string{imageName})
+	if err != nil {
+		return nil, err
+	}
+	defer image.Close()
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, image)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
 
 // From an ID, get the all the information about the image

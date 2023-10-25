@@ -2,11 +2,13 @@ package handler
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/render"
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/store"
 	"github.com/labstack/echo/v4"
 )
@@ -56,9 +58,18 @@ func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
 	filename := header.Filename
 
 	// Save the image to the storage directory
-	_, err = store.SaveImageToStorage(&a.Config, filename, buf)
+	saveInPath, err := store.SaveImageToStorage(&a.Config, filename, buf)
 	if err != nil {
 		return sendError(c, err)
 	}
+
+	// Import the image into Docker
+	imageId, err := docker.ImportImageToEngine(saveInPath)
+	if err != nil {
+		return fmt.Errorf("failed to import image to Docker: %v", err)
+	}
+
+	fmt.Println("Image ID:", imageId)
+
 	return c.HTML(http.StatusOK, ActionSuccess(a))
 }
