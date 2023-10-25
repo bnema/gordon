@@ -11,10 +11,6 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 )
 
-var (
-	OauthCallbackURL string
-)
-
 type App struct {
 	TemplateFS      fs.FS
 	PublicFS        fs.FS
@@ -42,7 +38,7 @@ func (a *App) GenerateOauthCallbackURL() string {
 	config := a.Config
 	if config.General.RunEnv == "dev" {
 		scheme = "http"
-		port = fmt.Sprintf(":%d", config.Http.Port)
+		port = ":" + config.Http.Port
 	} else { // Assuming "prod"
 		scheme = "https"
 		port = ""
@@ -54,25 +50,6 @@ func (a *App) GenerateOauthCallbackURL() string {
 	}
 
 	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.Admin.Path)
-}
-
-func (a *App) GenerateAPIURL() string {
-	var scheme, port string
-	config := a.Config
-	if config.General.RunEnv == "dev" {
-		scheme = "http"
-		port = fmt.Sprintf(":%d", config.Http.Port)
-	} else { // Assuming "prod"
-		scheme = "https"
-		port = ""
-	}
-
-	domain := config.Http.TopDomain
-	if config.Http.SubDomain != "" {
-		domain = fmt.Sprintf("%s.%s", config.Http.SubDomain, config.Http.TopDomain)
-	}
-
-	return fmt.Sprintf("%s://%s%s/api", scheme, domain, port)
 }
 
 func (a *App) GetUptime() string {

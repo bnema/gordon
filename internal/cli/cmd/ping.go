@@ -11,6 +11,7 @@ import (
 )
 
 func NewPingCommand(a *cli.App) *cobra.Command {
+	handler.FieldCheck(a)
 	return &cobra.Command{
 		Use:   "ping",
 		Short: "Send a ping request to the backend",

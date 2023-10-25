@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"time"
@@ -19,9 +18,6 @@ func NewServerApp() (*App, error) {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Append build dir to storage dir
-	config.General.StorageDir = fmt.Sprintf("%s/%s", config.General.BuildDir, config.General.StorageDir)
-
 	// Open the strings.yml file containing the strings for the current language
 	file, err := templating.TemplateFS.Open("locstrings.yml")
 	if err != nil {
@@ -36,6 +32,9 @@ func NewServerApp() (*App, error) {
 
 	file.Close()
 
+	// Initialize DB
+	DBDir := config.General.StorageDir + "/db"
+
 	// Initialize App
 	a := &App{
 		TemplateFS: templating.TemplateFS,
@@ -47,6 +46,7 @@ func NewServerApp() (*App, error) {
 		StartTime:  time.Now(),
 	}
 
-	OauthCallbackURL = a.GenerateOauthCallbackURL()
+	a.GenerateOauthCallbackURL()
+
 	return a, nil
 }

@@ -10,8 +10,8 @@ import (
 
 // NewServeCommand creates a new serve command
 func NewServeCommand(a *server.App) *cobra.Command {
-	var port string
 	defaultport := "1323"
+	var port string
 
 	// if no flags -p or --port are specified, the default port is used
 	serveCmd := &cobra.Command{
@@ -20,12 +20,15 @@ func NewServeCommand(a *server.App) *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			// handler.StartServer will use the value of port, which will be the default
 			// value if no flag is specified
-			handler.StartServer(a, port)
+			a.Config.Http.Port = port
+			err := handler.StartServer(a, port)
+			if err != nil {
+				panic(err)
+			}
 		},
 	}
 
 	// Attach the flag to serveCmd and store its value in the variable port
-	serveCmd.Flags().StringVarP(&port, "port", "p", defaultport, "Port to listen on")
-
+	serveCmd.Flags().StringVarP(&port, "port", "p", defaultport, "port to listen on")
 	return serveCmd
 }
