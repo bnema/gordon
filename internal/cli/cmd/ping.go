@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
@@ -11,10 +12,16 @@ import (
 )
 
 func NewPingCommand(a *cli.App) *cobra.Command {
-	handler.FieldCheck(a)
+	//	handler.FieldCheck(a)
 	return &cobra.Command{
 		Use:   "ping",
 		Short: "Send a ping request to the backend",
+		PreRun: func(cmd *cobra.Command, args []string) {
+			if err := handler.FieldCheck(a); err != nil {
+				fmt.Println("Field check failed:", err)
+				os.Exit(1)
+			}
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			data := map[string]interface{}{"message": "ping"}
 			payload, err := common.NewPingPayload(data)
