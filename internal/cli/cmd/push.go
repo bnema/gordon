@@ -52,7 +52,7 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 			}
 			fmt.Println("Image exported successfully")
 			// Create a RequestPayload and populate it
-			payload := common.RequestPayload{ // <- TODO : Load RequestPayLoad from cli.App
+			reqPayload := common.RequestPayload{ // <- TODO : Load RequestPayLoad from cli.App
 				Type: "push",
 				Payload: common.PushPayload{ // <- Same
 					Ports:        port,
@@ -63,7 +63,7 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 			}
 			fmt.Println("Sending image to backend")
 			// Send the request to the backend
-			resp, err := handler.SendHTTPRequest(a, &payload, "/push")
+			resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
 			if err != nil {
 				fmt.Println("Error sending HTTP request:", err)
 				return
