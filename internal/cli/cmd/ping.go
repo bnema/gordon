@@ -36,7 +36,7 @@ func NewPingCommand(a *cli.App) *cobra.Command {
 				Payload: payload,
 			}
 
-			resp, err := handler.SendHTTPRequest(a, &reqPayload, "/ping")
+			resp, err := handler.SendHTTPRequest(a, &reqPayload, "GET", "/ping")
 			if err != nil {
 				fmt.Println("Error sending HTTP request:", err)
 				return
