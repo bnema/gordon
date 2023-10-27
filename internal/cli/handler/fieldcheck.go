@@ -12,38 +12,38 @@ import (
 // check in the config.yml if BackendURL and Token are set
 // if not, prompt the user to enter them
 
-func checkIfBackendURLisSet(a *cli.App) (string, error) {
-	if a.Config.Http.BackendURL == "" {
-		fmt.Println("BackendURL is not set in config.yml")
-		a.Config.Http.BackendURL = common.ReadUserInput("Enter the backend URL (e.g. https://gordon.mydomain.com):")
-		return a.Config.Http.BackendURL, nil
+// Helper function to check, prompt and set a value
+func checkAndSetField(value *string, promptMessage, errorMessage string) (bool, error) {
+	wasEmpty := false
+	if *value == "" {
+		wasEmpty = true
+		fmt.Println(errorMessage)
+		*value = common.ReadUserInput(promptMessage)
 	}
-	return a.Config.Http.BackendURL, nil
-}
-
-func checkIfTokenIsSet(a *cli.App) (string, error) {
-	if a.Config.General.Token == "" {
-		fmt.Println("Token is not set in config.yml")
-		a.Config.General.Token = common.ReadUserInput("Enter the token (check your backend config.yml):")
-		return a.Config.General.Token, nil
-	}
-	return a.Config.General.Token, nil
+	return wasEmpty, nil
 }
 
 func FieldCheck(a *cli.App) error {
-	_, err := checkIfBackendURLisSet(a)
-	if err != nil {
-		return err
-	}
-	_, err = checkIfTokenIsSet(a)
+	wasBackendURLEmpty, err := checkAndSetField(&a.Config.Http.BackendURL,
+		"Enter the backend URL (e.g. https://gordon.mydomain.com):",
+		"BackendURL is not set in config.yml")
 	if err != nil {
 		return err
 	}
 
-	// save config
-	err = a.Config.SaveConfig()
+	wasTokenEmpty, err := checkAndSetField(&a.Config.General.Token,
+		"Enter the token (check your backend config.yml):",
+		"Token is not set in config.yml")
 	if err != nil {
 		return err
+	}
+
+	// Save config if one of the fields was empty
+	if wasBackendURLEmpty || wasTokenEmpty {
+		err = a.Config.SaveConfig()
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
