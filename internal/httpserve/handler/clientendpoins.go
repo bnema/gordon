@@ -61,7 +61,7 @@ func GetInfos(c echo.Context, a *server.App) error {
 func PostPush(c echo.Context, a *server.App) error {
 	body, _ := io.ReadAll(c.Request().Body)
 	c.Request().Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
-
+	fmt.Print(body)
 	payload := new(common.RequestPayload)
 	if err := c.Bind(payload); err != nil {
 		fmt.Println("Bind Error:", err)
@@ -101,15 +101,17 @@ func PostPush(c echo.Context, a *server.App) error {
 		return c.JSON(http.StatusBadRequest, "Image name cannot be empty")
 	}
 
-	// 1 - Import the image tar
-	imageId, err := store.SaveImageToStorage(&a.Config, imageName, bytes.NewBuffer(imageTar))
+	// 1 - Save the image tar in the storage
+	imagePath, err := store.SaveImageToStorage(&a.Config, imageName, bytes.NewBuffer(imageTar))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, err.Error())
 	}
-	// 2 - Create the container with traefik labels
-	fmt.Println("Image ID:", imageId)
-	// 3 - Start the container
-	// 4 - Return :
+	fmt.Printf("Saved in %s", imagePath)
+	// 2 - Import the tar in docker
+
+	// 3 - Create the container with traefik labels
+
+	// 4 - Start the container
 
 	return c.JSON(http.StatusOK, "OK")
 }
