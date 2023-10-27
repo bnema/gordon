@@ -33,8 +33,6 @@ func CreateUser(a *server.App, accessToken string, browserInfo string, userInfo 
 		return err
 	}
 
-	fmt.Println("user", user)
-
 	// update the global state
 	a.DBTables.User.ID = user.ID
 	a.DBTables.User.Name = user.Name

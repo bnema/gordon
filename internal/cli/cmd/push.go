@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
@@ -28,12 +29,18 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 	var port string
 	var targetDomain string
 
-	handler.FieldCheck(a)
+	// handler.FieldCheck(a)
 
 	pushCmd := &cobra.Command{
 		Use:   "push [image:tag]",
 		Short: "Push an image to the server, if no tag is specified, latest is used",
-		Args:  cobra.ExactArgs(1), // Require exactly one positional argument for image:tag
+		Args:  cobra.ExactArgs(1),
+		PreRun: func(cmd *cobra.Command, args []string) {
+			if err := handler.FieldCheck(a); err != nil {
+				fmt.Println("Field check failed:", err)
+				os.Exit(1)
+			}
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			imageName := args[0]
 			fmt.Println("Exporting image:", imageName)
@@ -45,9 +52,9 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 			}
 			fmt.Println("Image exported successfully")
 			// Create a RequestPayload and populate it
-			payload := common.RequestPayload{
+			payload := common.RequestPayload{ // <- TODO : Load RequestPayLoad from cli.App
 				Type: "push",
-				Payload: common.PushPayload{
+				Payload: common.PushPayload{ // <- Same
 					Ports:        port,
 					TargetDomain: targetDomain,
 					ImageName:    imageName,
