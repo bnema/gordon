@@ -39,9 +39,11 @@ type Response struct {
 }
 
 // SendHTTPRequest sends the HTTP request
-func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, endpoint string) (*Response, error) {
+func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpoint string) (*Response, error) {
 	apiUrl := a.Config.Http.BackendURL + "/api"
 	token := a.Config.General.Token
+
+	fmt.Printf("Final url:", apiUrl+endpoint)
 
 	// Prepare the entire RequestPayload, not just the inner Payload
 	jsonPayload, err := json.Marshal(rp)
@@ -49,11 +51,10 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, endpoint string) (*R
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 	// Create a new request
-	req, err := CreateNewRequest("GET", apiUrl+endpoint, jsonPayload)
+	req, err := CreateNewRequest(method, apiUrl+endpoint, jsonPayload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new request: %w", err)
 	}
-
 	// Set the request headers
 	SetRequestHeaders(req, token)
 
