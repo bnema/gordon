@@ -219,6 +219,8 @@ func setSessionValues(c echo.Context, sess *sessions.Session, user *db.User, acc
 	sess.Values["expires"] = expires
 	sess.Values["sessionID"] = sessionID
 
+	fmt.Print(sess)
+
 	if err := sess.Save(c.Request(), c.Response()); err != nil {
 		return fmt.Errorf("could not save session: %w", err)
 	}

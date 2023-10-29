@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/sanitize"
@@ -103,7 +104,7 @@ func CreateContainerPOST(c echo.Context, a *server.App) error {
 		}
 	}
 
-	cmdParams, err := render.FromInputsToCmdParams(sanitizedInputs, a)
+	cmdParams, err := cmdparams.FromInputsToCmdParams(sanitizedInputs, a)
 	if err != nil {
 		return sendError(c, err)
 	}

@@ -7,3 +7,4 @@ bun.lockb
 *.log
 *.txt
 *sync-conflict*
+main

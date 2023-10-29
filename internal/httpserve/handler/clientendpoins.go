@@ -8,6 +8,7 @@ import (
 
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/store"
 	"github.com/labstack/echo/v4"
 )
@@ -61,7 +62,7 @@ func GetInfos(c echo.Context, a *server.App) error {
 func PostPush(c echo.Context, a *server.App) error {
 	body, _ := io.ReadAll(c.Request().Body)
 	c.Request().Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
-	fmt.Print(body)
+
 	payload := new(common.RequestPayload)
 	if err := c.Bind(payload); err != nil {
 		fmt.Println("Bind Error:", err)
@@ -106,8 +107,13 @@ func PostPush(c echo.Context, a *server.App) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, err.Error())
 	}
-	fmt.Printf("Saved in %s", imagePath)
 	// 2 - Import the tar in docker
+	imageID, err := docker.ImportImageToEngine(imagePath)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, err.Error())
+	}
+
+	fmt.Println("Import successful, ImageID:", imageID)
 
 	// 3 - Create the container with traefik labels
 
