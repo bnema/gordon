@@ -19,7 +19,7 @@ func NewServerApp() (*App, error) {
 	}
 
 	// Open the strings.yml file containing the strings for the current language
-	file, err := templating.TemplateFS.Open("locstrings.yml")
+	file, err := templating.TemplateFS.Open("txt/locstrings.yml")
 	if err != nil {
 		log.Fatalf("Failed to open strings.yml: %v", err)
 	}

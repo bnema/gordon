@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/labstack/echo/v4"
@@ -159,14 +160,14 @@ func ContainerManagerEditPOST(c echo.Context, a *server.App) error {
 	}
 
 	containerConfig := c.FormValue("container_config")
-	var containerParams render.YAMLContainerParams
+	var containerParams cmdparams.YAMLContainerParams
 	err = yaml.Unmarshal([]byte(containerConfig), &containerParams)
 	if err != nil {
 		return sendError(c, fmt.Errorf("YAML unmarshal failed: %w", err))
 	}
 
 	// Use render.FromYAMLStructToCmdParams to convert YAMLContainerParams to ContainerCommandParams
-	cmdParams, err := render.FromYAMLStructToCmdParams(containerParams)
+	cmdParams, err := cmdparams.FromYAMLStructToCmdParams(containerParams)
 	if err != nil {
 		return fmt.Errorf("failed to convert YAML: %w", err)
 	}

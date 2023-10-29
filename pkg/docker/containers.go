@@ -202,6 +202,27 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 	// Check if the Docker client has been initialized
 	CheckIfInitialized()
 
+	isNetworkCreated, err := CheckIfNetworkExists(cmdParams.Network)
+	if err != nil {
+		return "", err
+	}
+
+	if !isNetworkCreated {
+		_, err := dockerCli.NetworkCreate(context.Background(), cmdParams.Network, types.NetworkCreate{})
+		if err != nil {
+			return "", err
+		}
+	}
+
+	// if the network exist return its id
+	// networkInfo, err := GetNetworkInfo(cmdParams.Network)
+	// if err != nil {
+	// 	return "", err
+
+	// }
+
+	// fmt.Print(networkInfo.ID)
+
 	// Prepare port bindings
 	portBindings := nat.PortMap{}
 	for _, portMapping := range cmdParams.PortMappings {
@@ -255,6 +276,32 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 	}
 
 	return resp.ID, nil
+}
+
+func CheckIfNetworkExists(networkName string) (bool, error) {
+	networks, err := dockerCli.NetworkList(context.Background(), types.NetworkListOptions{})
+	if err != nil {
+		return false, err
+	}
+
+	for _, network := range networks {
+		if network.Name == networkName {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// GetNetworkInfo returns information about a network
+func GetNetworkInfo(networkName string) (types.NetworkResource, error) {
+	// Get network info using the Docker client
+	networkInfo, err := dockerCli.NetworkInspect(context.Background(), networkName, types.NetworkInspectOptions{})
+	if err != nil {
+		return types.NetworkResource{}, err
+	}
+
+	return networkInfo, nil
 }
 
 // GetContainerInfo returns information about a container

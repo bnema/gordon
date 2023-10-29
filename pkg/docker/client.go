@@ -30,7 +30,7 @@ type DockerClient struct{}
 func (d *DockerClient) InitializeClient(config *Config) error {
 	// Validate if the Sock field is not empty
 	if config.Sock == "" {
-		return fmt.Errorf("Sock field in Config is empty")
+		return fmt.Errorf("sock field in Config is empty")
 	}
 
 	// Check if the socket file exists if not return an error
@@ -44,7 +44,7 @@ func (d *DockerClient) InitializeClient(config *Config) error {
 		client.WithHost("unix://"+config.Sock),
 	)
 	if err != nil {
-		return fmt.Errorf("Error initializing Docker client: %s", err)
+		return fmt.Errorf("error initializing Docker client: %s", err)
 	}
 	dockerCli = cli
 	currentConfig = config
@@ -55,17 +55,17 @@ func (d *DockerClient) InitializeClient(config *Config) error {
 func CheckIfInitialized() error {
 	// Check if there is a socket file
 	if currentConfig == nil || currentConfig.Sock == "" {
-		return fmt.Errorf("Docker client is not initialized or configuration is missing")
+		return fmt.Errorf("docker client is not initialized or configuration is missing")
 	}
 
 	socketPath := currentConfig.Sock // Use the package-level variable
 	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
-		return fmt.Errorf("Sock file does not exist: %s", socketPath)
+		return fmt.Errorf("sock file does not exist: %s", socketPath)
 	}
 
 	// Then we check if the dockerCli is nil
 	if dockerCli == nil {
-		return fmt.Errorf("Docker client is not initialized")
+		return fmt.Errorf("docker client is not initialized")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -74,7 +74,7 @@ func CheckIfInitialized() error {
 	// More stringent check: try to list containers
 	_, err := dockerCli.ContainerList(ctx, types.ContainerListOptions{})
 	if err != nil {
-		return fmt.Errorf("Cannot connect to Docker daemon: %s", err)
+		return fmt.Errorf("cannot connect to Docker daemon: %s", err)
 	}
 	return nil
 }
