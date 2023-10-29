@@ -17,6 +17,12 @@ type Config struct {
 	Http            HttpConfig            `yaml:"Http"`
 	Admin           AdminConfig           `yaml:"Admin"`
 	ContainerEngine ContainerEngineConfig `yaml:"ContainerEngine"`
+	Build           BuildConfig           `yaml:"-"`
+}
+
+type BuildConfig struct {
+	RunEnv       string `yaml:"-"` // come from env
+	BuildVersion string `yaml:"-"` // come from build ldflags
 }
 
 type AdminConfig struct {
@@ -24,16 +30,15 @@ type AdminConfig struct {
 }
 
 type GeneralConfig struct {
-	RunEnv       string // come from env
-	BuildVersion string // come from env
-	StorageDir   string `yaml:"storageDir"`
-	Token        string `yaml:"token"`
+	StorageDir string `yaml:"storageDir"`
+	Token      string `yaml:"token"`
 }
 type HttpConfig struct {
 	Port       string `yaml:"port"`
-	TopDomain  string `yaml:"topDomain"`
+	Domain     string `yaml:"domain"`
 	SubDomain  string `yaml:"subDomain"`
 	BackendURL string `yaml:"backendURL"`
+	Https      bool   `yaml:"https"`
 }
 
 type ContainerEngineConfig struct {
@@ -124,14 +129,11 @@ func (config *Config) LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	// Load env elements
-	config.General.BuildVersion = os.Getenv("BUILD_VERSION")
-	config.General.RunEnv = os.Getenv("RUN_ENV")
+	// Load run env
+	config.Build.RunEnv = os.Getenv("RUN_ENV")
 
-	// if RUN_ENV is not set, assume "prod" and config dir is the current dir
-	if config.General.RunEnv == "" {
-		config.General.RunEnv = "prod"
-		configDir = "."
+	if config.Build.RunEnv == "" {
+		config.Build.RunEnv = "prod"
 	}
 
 	return config, nil
@@ -161,4 +163,14 @@ func (config *Config) GetToken() (string, error) {
 
 	return token, nil
 
+}
+
+// GetBuildVersion returns the build version
+func (config *BuildConfig) GetBuildVersion() string {
+	return config.BuildVersion
+}
+
+// GetRunEnv returns the run environment
+func (config *BuildConfig) GetRunEnv() string {
+	return config.RunEnv
 }
