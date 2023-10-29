@@ -93,6 +93,17 @@ func SessionCleaner(a *server.App, currentTime string) error {
 	return nil
 }
 
+// DeleteSession deletes the session from the database.
+func DeleteDBSession(a *server.App, accountID string, sessionID string) error {
+	query := "DELETE FROM sessions WHERE account_id = ? AND id = ?"
+	_, err := a.DB.Exec(query, accountID, sessionID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func GetSessionExpiration(a *server.App, accountID string, sessionID string, currentTime time.Time) (time.Time, error) {
 	var expirationTime string
 	// with userID and sessionID we can get the expiration time

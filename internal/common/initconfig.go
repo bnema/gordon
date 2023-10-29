@@ -43,6 +43,7 @@ type ContainerEngineConfig struct {
 	Network    string `yaml:"network"`
 }
 
+// Default values
 var (
 	sock       = "/var/run/docker.sock"
 	podmansock = "/run/user/1000/podman/podman.sock"

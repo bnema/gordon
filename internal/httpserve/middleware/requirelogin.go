@@ -9,7 +9,6 @@ import (
 	"github.com/bnema/gordon/internal/db/queries"
 	"github.com/bnema/gordon/internal/server"
 
-	// "github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
@@ -32,29 +31,48 @@ func validateSessionAndUser(c echo.Context, a *server.App) error {
 		return err
 	}
 
-	fmt.Print(sess)
-
-	if cookieExpired, err := isCookieExpired(c); err != nil || cookieExpired {
-		return err
-	}
-
-	_, ok := sess.Values["accountID"].(string)
+	// Retrieve accountID and sessionID from session values
+	accountID, ok := sess.Values["accountID"].(string)
 	if !ok {
 		return fmt.Errorf("invalid account ID type")
 	}
 
-	_, ok = sess.Values["sessionID"].(string)
+	sessionID, ok := sess.Values["sessionID"].(string)
 	if !ok {
 		return fmt.Errorf("invalid session ID type")
 	}
 
-	// if accountCheck, err := isAccountIDInDB(a, accountID); err != nil || !accountCheck {
-	// 	return err
-	// }
+	// Retrieve expires from session values and parse it to time.Time
+	expiresStr, ok := sess.Values["expires"].(string)
+	if !ok {
+		return fmt.Errorf("invalid expires type")
+	}
+	expires, err := time.Parse(time.RFC3339, expiresStr)
+	if err != nil {
+		return fmt.Errorf("could not parse expires: %v", err)
+	}
 
-	// if sessionExpired, err := isSessionExpiredInDB(a, accountID, sessionID); err != nil || sessionExpired {
-	// 	return err
-	// }
+	if accountCheck, err := isAccountIDInDB(a, accountID); err != nil || !accountCheck {
+		fmt.Println("accountCheck:", accountCheck)
+		return err
+	}
+
+	if sessionExpired, err := isSessionExpiredInDB(a, accountID, sessionID); err != nil || sessionExpired {
+		fmt.Println("sessionExpired:", sessionExpired)
+		return err
+	}
+
+	if cookieExpired, err := isCookieExpired(c); err != nil || cookieExpired {
+		fmt.Println("cookieExpired:", cookieExpired)
+		return err
+	}
+
+	if time.Now().After(expires) {
+		fmt.Println("session expired")
+		queries.SessionCleaner(a, time.Now().Format(time.RFC3339))
+		return fmt.Errorf("session expired")
+
+	}
 
 	return nil
 }
@@ -68,10 +86,10 @@ func isCookieExpired(c echo.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if cookie.Expires.IsZero() {
-		return false, nil // cookie has no expiration time; it's a session cookie
-	}
-	return time.Now().After(cookie.Expires), nil
+
+	currentTime := time.Now()
+	expirationTime := cookie.Expires
+	return currentTime.After(expirationTime), nil
 }
 
 func isSessionExpiredInDB(a *server.App, userID string, sessionID string) (bool, error) {
@@ -91,4 +109,36 @@ func isAccountIDInDB(a *server.App, accountID string) (bool, error) {
 	}
 
 	return accountExists, nil
+}
+
+func DeleteAndRedirectToLogin(c echo.Context, a *server.App) error {
+	sess, err := session.Get("session", c)
+	if err != nil {
+		return err
+	}
+
+	// Retrieve accountID and sessionID from session values
+	accountID, ok := sess.Values["accountID"].(string)
+	if !ok {
+		return fmt.Errorf("invalid account ID type")
+	}
+
+	sessionID, ok := sess.Values["sessionID"].(string)
+	if !ok {
+		return fmt.Errorf("invalid session ID type")
+	}
+
+	// Delete session from DB
+	if err := queries.DeleteDBSession(a, accountID, sessionID); err != nil {
+		return err
+	}
+
+	// Delete session cookie
+	cookie := new(http.Cookie)
+	cookie.Name = "session"
+	cookie.Value = ""
+	cookie.Expires = time.Now().Add(-1 * time.Hour)
+	c.SetCookie(cookie)
+
+	return redirectToLogin(c, a)
 }
