@@ -52,6 +52,10 @@ func (a *App) GenerateOauthCallbackURL() string {
 	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.Admin.Path)
 }
 
+func (a *App) IsDevEnvironment() bool {
+	return a.Config.General.RunEnv == "dev"
+}
+
 func (a *App) GetUptime() string {
 	uptime := time.Since(a.StartTime)
 	return uptime.String()

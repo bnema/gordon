@@ -19,7 +19,7 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 	e.Use(middleware.ErrorHandler)
 
 	// Initiate the session middleware
-	e.Use(middleware.InitSessionMiddleware())
+	e.Use(middleware.InitSessionMiddleware(a))
 	// Use middlewares
 	e.Use(middleware.SecureRoutes())
 
