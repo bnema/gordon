@@ -1,0 +1,28 @@
+version: '3'
+
+services:
+  gordon:
+    container_name: gordon
+    image: bnema/gordon:latest
+    ports:
+      - "1323"
+    environment:
+      SESSION_SECRET: "secret"
+      DEV: false
+      USER: "${USER}"
+    volumes:
+      - ./data:/data
+      - .config.yml:/config.yml
+      - /run/user/1000/podman/podman.sock:/var/run/docker.sock
+    restart: always
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gordon.rule=Host(`gordon.domain.tld)"
+      - "traefik.http.routers.gordon.entrypoints=websecure"
+      - "traefik.http.routers.gordon.tls.certresolver=letsencrypt"
+      - "traefik.http.services.gordon.loadbalancer.server.port=1323"
+networks:
+  traefik:
+    external: true
