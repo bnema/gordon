@@ -8,7 +8,7 @@ import (
 
 	"github.com/bnema/gordon/internal/db"
 	pkgsqlite "github.com/bnema/gordon/pkg/sqlite"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -59,7 +59,8 @@ func InitializeDB(a *App) (*sql.DB, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	// Change here from "sqlite3" to "sqlite"
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open disk DB: %w", err)
 	}
@@ -77,7 +78,8 @@ func InitializeDB(a *App) (*sql.DB, error) {
 }
 
 func bootstrapDB(dbPath string, app *App) error {
-	db, err := sql.Open("sqlite3", dbPath)
+	// Change here from "sqlite3" to "sqlite"
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
 	}

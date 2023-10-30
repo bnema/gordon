@@ -1,34 +1,31 @@
 before:
   hooks:
-    # You may remove this if you don't use go modules.
     - go mod tidy
 
 builds:
   - id: "gordon"
     main: ./cmd/cli/main.go
-    ldflags:
-      - -s -w -X main.build={{.Version}}
     goos:
       - linux
-      - windows
-      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+dockers:
+  - image_templates:
+      - bnema/gordon
+    use: buildx
+    skip_push: true
+    dockerfile: Dockerfile
 
 archives:
   - format: tar.gz
     # this name template makes the OS and Arch compatible with the results of `uname`.
-    name_template: >-
-      {{ .ProjectName }}_
-      {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
-    # use zip for windows archives
-    format_overrides:
-      - goos: windows
-        format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
-changelog:
+changelog: # Added this section
   sort: asc
   filters:
     exclude:
