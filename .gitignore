@@ -8,4 +8,6 @@ bun.lockb
 *.txt
 *sync-conflict*
 main
+gordon
 dist/
+data/
