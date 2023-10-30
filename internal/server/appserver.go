@@ -36,24 +36,27 @@ type DBTables struct {
 func (a *App) GenerateOauthCallbackURL() string {
 	var scheme, port string
 	config := a.Config
-	if config.General.RunEnv == "dev" {
-		scheme = "http"
-		port = ":" + config.Http.Port
-	} else { // Assuming "prod"
+
+	if config.Http.Https {
 		scheme = "https"
 		port = ""
 	}
 
-	domain := config.Http.TopDomain
+	if !config.Http.Https {
+		scheme = "http"
+		port = fmt.Sprintf(":%s", a.Config.Http.Port)
+	}
+
+	domain := config.Http.Domain
 	if config.Http.SubDomain != "" {
-		domain = fmt.Sprintf("%s.%s", config.Http.SubDomain, config.Http.TopDomain)
+		domain = fmt.Sprintf("%s.%s", config.Http.SubDomain, config.Http.Domain)
 	}
 
 	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.Admin.Path)
 }
 
 func (a *App) IsDevEnvironment() bool {
-	return a.Config.General.RunEnv == "dev"
+	return a.Config.Build.RunEnv == "dev"
 }
 
 func (a *App) GetUptime() string {
@@ -63,5 +66,5 @@ func (a *App) GetUptime() string {
 
 // GetVersion returns the version of the app
 func (a *App) GetVersionstring() string {
-	return fmt.Sprint(a.Config.General.BuildVersion)
+	return fmt.Sprint(a.Config.Build.BuildVersion)
 }

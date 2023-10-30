@@ -8,3 +8,4 @@ bun.lockb
 *.txt
 *sync-conflict*
 main
+dist/
