@@ -25,7 +25,7 @@ func SecureRoutes() echo.MiddlewareFunc {
 
 // InitSessionMiddleware initializes the session middleware with secure options
 func InitSessionMiddleware(a *server.App) echo.MiddlewareFunc {
-	isDev := a.IsDevEnvironment()
+	isHttps := a.Config.Http.Https
 	secret := os.Getenv("SESSION_SECRET")
 	if secret == "" {
 		log.Fatal("Environment variable SESSION_SECRET is not set or cannot be read")
@@ -34,7 +34,7 @@ func InitSessionMiddleware(a *server.App) echo.MiddlewareFunc {
 	store.Options = &sessions.Options{
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   !isDev, // Set to true in production
+		Secure:   isHttps,
 		MaxAge:   86400,
 	}
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
