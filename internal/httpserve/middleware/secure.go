@@ -44,11 +44,9 @@ func InitSessionMiddleware(a *server.App) echo.MiddlewareFunc {
 				log.Printf("Error in session middleware: %v", err)
 				return err
 			}
-			sess, err := session.Get("session", c)
+			_, err = session.Get("session", c)
 			if err != nil {
 				log.Printf("Could not retrieve session: %v", err)
-			} else {
-				log.Printf("Session values: %+v", sess.Values)
 			}
 			return nil
 		}
