@@ -9,6 +9,7 @@ import (
 
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/store"
 	"github.com/labstack/echo/v4"
@@ -85,19 +86,19 @@ func PostPush(c echo.Context, a *server.App) error {
 	// Save the image tar in the storage
 	imageFilePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
-		return err
+		return sendJsonError(c, err)
 	}
 
 	// Import the tar in docker
 	err = docker.ImportImageToEngine(imageFilePath)
 	if err != nil {
-		return err
+		return sendJsonError(c, err)
 	}
 
 	// Remove the image from the storage
 	err = store.RemoveFromStorage()
 	if err != nil {
-		return err
+		return sendJsonError(c, err)
 	}
 
 	// append localhost to the image name since it's a manually imported image and not from a registry
@@ -106,23 +107,39 @@ func PostPush(c echo.Context, a *server.App) error {
 	// Get the image ID
 	imageID, err := docker.GetImageID(payload.ImageName)
 	if err != nil {
-		return err
+		return sendJsonError(c, err)
 	}
 
-	// Print the imageID short version
-	fmt.Println("Image ID:", imageID[:12])
+	// Update the payload with the image ID
+	payload.ImageID = imageID
 
-	// // Create the container with traefik labels
-	// err = addTraefikLabels(payload)
-	// if err != nil {
-	// 	return err
-	// }
+	// Create the container using cmdparams.FromPayloadStructToCmdParams
+	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a)
+	if err != nil {
+		return sendJsonError(c, err)
+	}
 
-	// // Start the container
-	// err = docker.StartContainer(imageID)
-	// if err != nil {
-	// 	return err
-	// }
+	// Create the container
+	containerID, err := docker.CreateContainer(params)
+	if err != nil {
+		return sendJsonError(c, err)
+	}
 
-	return c.JSON(http.StatusOK, "Image pushed successfully")
+	// Start the container
+	err = docker.StartContainer(containerID)
+	if err != nil {
+		return sendJsonError(c, err)
+	}
+
+	// Remove the container if it fails to start
+	defer func() {
+		if err != nil {
+			docker.RemoveContainer(containerID)
+			c.JSON(http.StatusInternalServerError, sendJsonError(c, err))
+			return
+		}
+	}()
+
+	// If we arrive here, send back payload.TargetDomain so the client can test it
+	return c.JSON(http.StatusOK, payload.TargetDomain)
 }
