@@ -17,8 +17,6 @@ func GetLocalization(lang string, a *server.App) (map[string]interface{}, error)
 		return nil, fmt.Errorf("language %s is not supported", lang)
 	}
 
-	fmt.Println("Language:", lang)
-
 	// 2. Get the localizations from the strings.yml file
 	localizations, err := getLocalizations(a)
 	if err != nil {

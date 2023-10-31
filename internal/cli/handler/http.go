@@ -23,8 +23,7 @@ func CreateNewRequest(method, url string, body []byte) (*http.Request, error) {
 }
 
 // SetRequestHeaders sets the headers for the request
-func SetRequestHeaders(req *http.Request, token string) {
-	req.Header.Set("Content-Type", "application/json")
+func setAuthRequestHeaders(req *http.Request, token string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 }
 
@@ -35,7 +34,8 @@ func SendRequest(req *http.Request) (*http.Response, error) {
 }
 
 type Response struct {
-	Body []byte
+	Body       []byte
+	StatusCode int
 }
 
 // SendHTTPRequest sends the HTTP request
@@ -43,29 +43,62 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 	apiUrl := a.Config.Http.BackendURL + "/api"
 	token := a.Config.General.Token
 
-	fmt.Printf("Final url:", apiUrl+endpoint)
+	var req *http.Request
+	var err error
 
-	// Prepare the entire RequestPayload, not just the inner Payload
+	// Handle push type payload
+	if rp.Type == "push" {
+		pushPayload, ok := rp.Payload.(common.PushPayload)
+		if !ok {
+			return nil, fmt.Errorf("invalid payload type for push")
+		}
+
+		req, err = http.NewRequest(method, apiUrl+endpoint, pushPayload.Data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create new streaming request: %w", err)
+		}
+
+		setAuthRequestHeaders(req, token)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Ports", pushPayload.Ports)
+		req.Header.Set("X-Target-Domain", pushPayload.TargetDomain)
+		req.Header.Set("X-Image-Name", pushPayload.ImageName)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to send request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+		return &Response{Body: body}, nil
+	}
+
+	// Handle other types of payloads
 	jsonPayload, err := json.Marshal(rp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
-	// Create a new request
-	req, err := CreateNewRequest(method, apiUrl+endpoint, jsonPayload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create new request: %w", err)
-	}
-	// Set the request headers
-	SetRequestHeaders(req, token)
 
-	// Send the request
-	resp, err := SendRequest(req)
+	req, err = http.NewRequest(method, apiUrl+endpoint, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new JSON request: %w", err)
+	}
+
+	setAuthRequestHeaders(req, token)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Read the response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)

@@ -64,12 +64,16 @@ func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
 	}
 
 	// Import the image into Docker
-	imageId, err := docker.ImportImageToEngine(saveInPath)
+	err = docker.ImportImageToEngine(saveInPath)
 	if err != nil {
 		return fmt.Errorf("failed to import image to Docker: %v", err)
 	}
 
-	fmt.Println("Image ID:", imageId)
+	// Remove the image from the storage directory
+	err = store.RemoveFromStorage()
+	if err != nil {
+		return sendError(c, err)
+	}
 
 	return c.HTML(http.StatusOK, ActionSuccess(a))
 }

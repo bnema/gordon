@@ -7,20 +7,9 @@ import (
 	"path/filepath"
 
 	"github.com/bnema/gordon/internal/common"
-	"github.com/docker/docker/api/types"
 )
 
-type StorageConfig struct {
-	StorageDir string
-	ImageID    string
-	Images     []types.ImageSummary
-}
-
-func NewStorageConfig(config *common.Config) *StorageConfig {
-	return &StorageConfig{
-		StorageDir: config.General.StorageDir,
-	}
-}
+var imagePath string
 
 func SaveImageToStorage(config *common.Config, filename string, buf io.Reader) (string, error) {
 	// Check if the folder exist if not create it
@@ -32,10 +21,10 @@ func SaveImageToStorage(config *common.Config, filename string, buf io.Reader) (
 	}
 
 	// Define the path where the image will be saved
-	saveInPath := filepath.Join(config.General.StorageDir, filename)
+	imagePath = filepath.Join(config.General.StorageDir, filename)
 
 	// Create or open a file for appending.
-	outFile, err := os.Create(saveInPath)
+	outFile, err := os.Create(imagePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open file: %v", err)
 	}
@@ -47,20 +36,22 @@ func SaveImageToStorage(config *common.Config, filename string, buf io.Reader) (
 	}
 
 	// Check if file exists
-	if _, err := os.Stat(saveInPath); os.IsNotExist(err) {
+	if _, err := os.Stat(imagePath); os.IsNotExist(err) {
 		return "", fmt.Errorf("file does not exist: %v", err)
 	}
 
-	return saveInPath, nil
+	return imagePath, nil
 }
 
-func (sc *StorageConfig) DeleteImageFromStorage(imageId string) error {
-	// Delete the image from the storage directory
-	imagePath := filepath.Join(sc.StorageDir, imageId+".tar")
+func RemoveFromStorage() error {
+	// Delete the file
 	err := os.Remove(imagePath)
 	if err != nil {
-		return fmt.Errorf("failed to delete image from storage directory: %v", err)
+		return fmt.Errorf("failed to remove file: %v", err)
 	}
+
+	// clean up the path
+	imagePath = ""
 
 	return nil
 }
