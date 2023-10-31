@@ -99,7 +99,7 @@ func ListRunningContainers() ([]types.Container, error) {
 	}
 	// Check if the list is empty
 	if len(containers) == 0 {
-		return nil, fmt.Errorf("No containers found")
+		return nil, fmt.Errorf("no containers found")
 	}
 	return containers, nil
 }

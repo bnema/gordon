@@ -1,8 +1,8 @@
 package docker
 
 import (
-	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 
@@ -33,13 +33,10 @@ func DeleteContainerImage(imageID string) error {
 }
 
 func GetImageID(imageName string) (string, error) {
-	// Check if the Docker client has been initialized
-	CheckIfInitialized()
 
-	// List all images
 	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to list images: %w", err)
 	}
 
 	// Search for the image we just loaded
@@ -53,71 +50,53 @@ func GetImageID(imageName string) (string, error) {
 	}
 
 	if imageID == "" {
-		return "", err
+		return "", fmt.Errorf("image not found")
 	}
 
 	return imageID, nil
 }
 
 // ImportImageToEngine imports an image to the Docker engine
-func ImportImageToEngine(imagePath string) (string, error) {
+func ImportImageToEngine(imageFilePath string) error {
 	// Open the image file
-	imageFile, err := os.Open(imagePath)
+	imageFile, err := os.Open(imageFilePath)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("failed to open image file: %w", err)
 	}
+	defer imageFile.Close()
 
-	_, err = dockerCli.ImageLoad(context.Background(), imageFile, false)
+	// Import the image using the Docker client
+	importedImage, err := dockerCli.ImageLoad(context.Background(), imageFile, false)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("failed to import image: %w", err)
 	}
-	// Close the image file
-	imageFile.Close()
+	defer importedImage.Body.Close()
 
-	// List all images
-	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
-	if err != nil {
-		return "", err
-	}
-
-	// Search for the image we just loaded
-	var imageID string
-	for _, image := range images {
-		for _, tag := range image.RepoTags {
-			if tag == "<none>:<none>" {
-				imageID = image.ID
-			}
-		}
-	}
-
-	if imageID == "" {
-		return "", err
-	}
-
-	return imageID, nil
+	return nil
 }
 
-// ExportImageFromEngine exports an image from the Docker engine and returns it as a byte array
-func ExportImageFromEngine(imageName string) ([]byte, error) {
-	// we check if the image exists
-	_, err := GetImageID(imageName)
+// ExportImageFromEngine exports an image from the Docker engine and returns it as an io.Reader
+func ExportImageFromEngine(imageID string) (io.ReadCloser, error) {
+	// Check if the Docker client has been initialized
+	CheckIfInitialized()
+
+	// Get the image information using the Docker client
+	imageInfo, err := GetImageInfo(imageID)
 	if err != nil {
 		return nil, err
 	}
 
-	image, err := dockerCli.ImageSave(context.Background(), []string{imageName})
-	if err != nil {
-		return nil, err
-	}
-	defer image.Close()
-
-	var buf bytes.Buffer
-	_, err = io.Copy(&buf, image)
-	if err != nil {
-		return nil, err
+	if len(imageInfo.RepoTags) == 0 {
+		return nil, fmt.Errorf("image has no tag")
 	}
 
-	return buf.Bytes(), nil
+	// Export the image using the Docker client
+	imageReader, err := dockerCli.ImageSave(context.Background(), []string{imageInfo.RepoTags[0]})
+	if err != nil {
+		return nil, fmt.Errorf("failed to export image: %w", err)
+	}
+
+	return imageReader, nil
 }
 
 // From an ID, get the all the information about the image
@@ -129,4 +108,37 @@ func GetImageInfo(imageID string) (*types.ImageInspect, error) {
 	}
 
 	return &imageInfo, nil
+}
+
+// GetImageSize returns the size of an image
+func GetImageSize(imageID string) (int64, error) {
+	// Get the image information using the Docker client
+	imageInfo, err := GetImageInfo(imageID)
+	if err != nil {
+		return 0, err
+	}
+
+	return imageInfo.Size, nil
+}
+
+// GetImageTag returns the tag of an image
+func GetImageTag(imageID string) (string, error) {
+	// Get the image information using the Docker client
+	imageInfo, err := GetImageInfo(imageID)
+	if err != nil {
+		return "", err
+	}
+
+	return imageInfo.RepoTags[0], nil
+}
+
+// GetImageName returns the name of an image
+func GetImageName(imageID string) (string, error) {
+	// Get the image information using the Docker client
+	imageInfo, err := GetImageInfo(imageID)
+	if err != nil {
+		return "", err
+	}
+
+	return imageInfo.RepoDigests[0], nil
 }

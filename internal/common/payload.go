@@ -3,6 +3,8 @@ package common
 import (
 	"encoding/json"
 	"fmt"
+
+	"io"
 )
 
 type RequestPayload struct {
@@ -71,5 +73,5 @@ type PushPayload struct {
 	Ports        string `json:"ports"`
 	TargetDomain string `json:"targetdomain"`
 	ImageName    string `json:"imagename"`
-	Data         []byte `json:"data"`
+	Data         io.ReadCloser
 }
