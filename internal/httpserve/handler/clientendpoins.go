@@ -83,6 +83,16 @@ func PostPush(c echo.Context, a *server.App) error {
 	imageFileName = regexp.MustCompile(`(:[a-zA-Z0-9\-_.]+)?$`).ReplaceAllString(imageFileName, "")
 	imageFileName = imageFileName + ".tar"
 
+	// Check the ports struct, if there is no /tcp, or /udp, add /tcp
+	if !regexp.MustCompile(`\/(tcp|udp)$`).MatchString(payload.Ports) {
+		payload.Ports = payload.Ports + "/tcp"
+	}
+
+	// Check the target domain, if there is no https:// or http://, add https://
+	if !regexp.MustCompile(`^https?:\/\/`).MatchString(payload.TargetDomain) {
+		payload.TargetDomain = "https://" + payload.TargetDomain
+	}
+
 	// Save the image tar in the storage
 	imageFilePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
