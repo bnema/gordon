@@ -1,23 +1,34 @@
 package cmdparams
 
 import (
+	"io"
+
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/pkg/docker"
 )
 
+type PushPayload struct {
+	Ports        string `json:"ports"`
+	TargetDomain string `json:"targetdomain"`
+	ImageName    string `json:"imagename"`
+	Data         io.ReadCloser
+}
+
 // FromYAMLStructToCmdParams converts a YAMLContainerParams struct to a ContainerCommandParams struct
-func FromPayloadStructToCmdParams(PushPayload *common.PushPayload) (docker.ContainerCommandParams, error) {
+func FromPayloadStructToCmdParams(ppl *common.PushPayload) (docker.ContainerCommandParams, error) {
 
 	params := docker.ContainerCommandParams{
-		ContainerName: yamlParams.Name,
-		ImageName:     yamlParams.Image,
-		ImageID:       imageID,
-		Volumes:       yamlParams.Volumes,
-		Environment:   yamlParams.Environment,
-		Labels:        labels,
-		Network:       network,
-		Restart:       yamlParams.Restart,
-		PortMappings:  portMappings,
+		IsSSL:         ppl.IsSSL,
+		ContainerName: ppl.ContainerName,
+		ServiceName:   ppl.ServiceName,
+		Domain:        ppl.Domain,
+		ImageName:     ppl.ImageName,
+		ImageID:       ppl.ImageID,
+		Restart:       ppl.Restart,
+		Volumes:       ppl.Volumes,
+		Environment:   ppl.Environment,
+		Network:       ppl.Network,
+		PortMappings:  ppl.PortMappings,
 	}
 
 	return params, nil

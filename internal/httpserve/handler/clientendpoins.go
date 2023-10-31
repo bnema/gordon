@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
@@ -60,64 +61,68 @@ func GetInfos(c echo.Context, a *server.App) error {
 }
 
 func PostPush(c echo.Context, a *server.App) error {
-	body, _ := io.ReadAll(c.Request().Body)
-	c.Request().Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
 
-	payload := new(common.RequestPayload)
-	if err := c.Bind(payload); err != nil {
-		fmt.Println("Bind Error:", err)
-		return c.JSON(http.StatusBadRequest, err.Error())
+	// Initialize pushPayload object
+	payload := &common.PushPayload{
+		Ports:        c.Request().Header.Get("X-Ports"),
+		ImageName:    c.Request().Header.Get("X-Image-Name"),
+		TargetDomain: c.Request().Header.Get("X-Target-Domain"),
 	}
 
-	if payload.Type != "push" {
-		return c.JSON(http.StatusBadRequest, "Invalid payload type")
+	if payload.ImageName == "" {
+		return c.JSON(http.StatusBadRequest, "Invalid image name")
 	}
 
-	pushPayload, ok := payload.Payload.(common.PushPayload)
-	if !ok {
-		return c.JSON(http.StatusBadRequest, "Invalid payload type")
-	}
+	imageReader := c.Request().Body
+	defer imageReader.Close()
 
-	// Push payload contains Ports as a string, Image as string (image:tag), and the .tar image as a byte array
-	// Validate the ports
-	ports := pushPayload.Ports
-	if ports == "" {
-		return c.JSON(http.StatusBadRequest, "Ports cannot be empty")
-	}
+	// Rename the image to a valid name so that it can be saved (remove user/, :tag and add .tar)
+	imageFileName := payload.ImageName
+	imageFileName = regexp.MustCompile(`^([a-zA-Z0-9\-_.]+\/)?`).ReplaceAllString(imageFileName, "")
+	imageFileName = regexp.MustCompile(`(:[a-zA-Z0-9\-_.]+)?$`).ReplaceAllString(imageFileName, "")
+	imageFileName = imageFileName + ".tar"
 
-	// Validate the target domain
-	domain := pushPayload.TargetDomain
-	if domain == "" {
-		return c.JSON(http.StatusBadRequest, "Image cannot be empty")
-	}
-
-	// Validate the image tar
-	imageTar := pushPayload.Data
-	if imageTar == nil {
-		return c.JSON(http.StatusBadRequest, "Image tar cannot be empty")
-	}
-
-	imageName := pushPayload.ImageName
-	if imageName == "" {
-		return c.JSON(http.StatusBadRequest, "Image name cannot be empty")
-	}
-
-	// 1 - Save the image tar in the storage
-	imagePath, err := store.SaveImageToStorage(&a.Config, imageName, bytes.NewBuffer(imageTar))
+	// Save the image tar in the storage
+	imageFilePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, err.Error())
+		return err
 	}
-	// 2 - Import the tar in docker
-	imageID, err := docker.ImportImageToEngine(imagePath)
+
+	// Import the tar in docker
+	err = docker.ImportImageToEngine(imageFilePath)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, err.Error())
+		return err
 	}
 
-	fmt.Println("Import successful, ImageID:", imageID)
+	// Remove the image from the storage
+	err = store.RemoveFromStorage()
+	if err != nil {
+		return err
+	}
 
-	// 3 - Create the container with traefik labels
+	// append localhost to the image name since it's a manually imported image and not from a registry
+	payload.ImageName = "localhost/" + payload.ImageName
 
-	// 4 - Start the container
+	// Get the image ID
+	imageID, err := docker.GetImageID(payload.ImageName)
+	if err != nil {
+		return err
+	}
 
-	return c.JSON(http.StatusOK, "OK")
+	// Print the imageID short version
+	fmt.Println("Image ID:", imageID[:12])
+
+	// // Create the container with traefik labels
+	// err = addTraefikLabels(payload)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// // Start the container
+	// err = docker.StartContainer(imageID)
+	// if err != nil {
+	// 	return err
+	// }
+
+	return c.JSON(http.StatusOK, "Image pushed successfully")
 }

@@ -3,33 +3,19 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"regexp"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/pkg/docker"
+	"github.com/cheggaaa/pb"
 	"github.com/spf13/cobra"
 )
-
-// the push command is used to push a container image to gordon's endpoint
-
-// Pseudo code of the steps for the push command
-
-// 1. Extract the container image as .tar and store it in a temporary directory
-
-// 2. Prepare a payload with the .tar as a byte array, the image name and tag (if any)
-
-// 3. append the payload to the request body with the type "push" and the token
-
-// 4. Send the request to the backend
-
-// 5. If the response is 200, print the success message
 
 func NewPushCommand(a *cli.App) *cobra.Command {
 	var port string
 	var targetDomain string
-
-	// handler.FieldCheck(a)
 
 	pushCmd := &cobra.Command{
 		Use:   "push [image:tag]",
@@ -44,32 +30,64 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			imageName := args[0]
 			fmt.Println("Exporting image:", imageName)
-			// Export the image using Docker client
-			data, err := docker.ExportImageFromEngine(imageName)
+
+			// Check if the image name is valid or if a tag is specified
+			match, _ := regexp.MatchString(`^([a-zA-Z0-9\-_.]+\/)?[a-zA-Z0-9\-_.]+(:[a-zA-Z0-9\-_.]+)?$`, imageName)
+			if !match {
+				fmt.Println("Invalid image name or no tag specified")
+				return
+			}
+
+			imageID, err := docker.GetImageID(imageName)
+			if err != nil {
+				fmt.Println("Error getting image ID:", err)
+				return
+			}
+
+			totalSize, err := docker.GetImageSize(imageID)
+			if err != nil {
+				fmt.Println("Error estimating image size:", err)
+				return
+			}
+
+			// Create a new progress bar
+			bar := pb.New64(totalSize).SetUnits(pb.U_BYTES)
+			reader, err := docker.ExportImageFromEngine(imageID)
 			if err != nil {
 				fmt.Println("Error exporting image:", err)
 				return
 			}
-			fmt.Println("Image exported successfully")
+			// Wrap the original reader with progress bar reader
+			progressReader := bar.NewProxyReader(reader)
+
 			// Create a RequestPayload and populate it
-			reqPayload := common.RequestPayload{ // <- TODO : Load RequestPayLoad from cli.App
+			reqPayload := common.RequestPayload{
 				Type: "push",
-				Payload: common.PushPayload{ // <- Same
+				Payload: common.PushPayload{
 					Ports:        port,
 					TargetDomain: targetDomain,
 					ImageName:    imageName,
-					Data:         data,
+					Data:         progressReader,
 				},
 			}
-			fmt.Println("Sending image to backend")
+
+			// Start the progress bar
+			bar.Start()
 			// Send the request to the backend
 			resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
 			if err != nil {
 				fmt.Println("Error sending HTTP request:", err)
 				return
 			}
+			// Stop the progress bar
+			bar.Finish()
 
-			fmt.Print(string(resp.Body))
+			if resp.StatusCode != 200 {
+				fmt.Println("Unexpected status code:", resp.StatusCode)
+				return
+			}
+
+			fmt.Println(resp.Body)
 		},
 	}
 
