@@ -12,6 +12,7 @@ type Account struct {
 	UserID    string `sql:"user_id, foreign_key=user.id"`
 	Sessions  []Sessions
 	Providers []Provider
+	Clients   []Clients
 }
 
 type Sessions struct {
@@ -31,4 +32,13 @@ type Provider struct {
 	AvatarURL  string `sql:"avatar_url"`
 	ProfileURL string `sql:"profile_url"`
 	Email      string `sql:"email"`
+}
+
+type Clients struct {
+	ID        string `sql:"id, primary_key"`
+	AccountID string `sql:"account_id, foreign_key=account.id"`
+	OS        string `sql:"os"`
+	IP        string `sql:"ip"`
+	Hostname  string `sql:"hostname"`
+	Expires   string `sql:"expires"`
 }
