@@ -6,9 +6,7 @@ RUN mkdir -p /etc/ssl/certs/ && \
 # Start from scratch
 FROM scratch
 
-# Copy CA certificates
-COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-
+RUN apk --no-cache add ca-certificates
 COPY gordon /
 
 EXPOSE 1323
