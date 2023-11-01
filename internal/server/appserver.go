@@ -30,6 +30,7 @@ type DBTables struct {
 	Account  db.Account  `sql:"account"`
 	Sessions db.Sessions `sql:"sessions"`
 	Provider db.Provider `sql:"provider"`
+	Clients  db.Clients  `sql:"clients"`
 }
 
 // GenerateOauthCallbackURL generates the OAuth callback URL
