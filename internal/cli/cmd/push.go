@@ -42,7 +42,7 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 				return
 			}
 
-			// If there is :tag at the end of the image name, we append :latest
+			// If there is no :tag at the end of the image name, we append :latest
 			if !strings.Contains(imageName, ":") {
 				imageName += ":latest"
 			}
@@ -54,19 +54,21 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 				return
 			}
 
-			// Check the target domain struct http(s)://domain.tld (https is optional)
+			// Check the target domain struct http(s)://domain.tld (proto is optional)
 			match, _ = regexp.MatchString("^(https?:\\/\\/)?([a-zA-Z0-9\\-_\\.]+\\.)+[a-zA-Z0-9\\-_\\.]+(:[0-9]+)?$", targetDomain)
 			if !match {
 				fmt.Println("You must specify a valid target domain in the form http(s)://domain.tld, if no protocol is specified, HTTPS is used")
 				return
 			}
 
+			// Get the image ID
 			imageID, err := docker.GetImageID(imageName)
 			if err != nil {
 				fmt.Println("Error getting image ID:", err)
 				return
 			}
 
+			// Get the image size
 			totalSize, err := docker.GetImageSize(imageID)
 			if err != nil {
 				fmt.Println("Error estimating image size:", err)

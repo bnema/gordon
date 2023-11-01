@@ -18,7 +18,7 @@ func RequireLogin(a *server.App) echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			if err := validateSessionAndUser(c, a); err != nil {
 				log.Println("Session validation failed:", err)
-				return redirectToLogin(c, a)
+				return DeleteCookieAndRedirectToLogin(c, a)
 			}
 			return next(c)
 		}
@@ -26,52 +26,37 @@ func RequireLogin(a *server.App) echo.MiddlewareFunc {
 }
 
 func validateSessionAndUser(c echo.Context, a *server.App) error {
+	sessionExpiryTime := 30 * time.Minute
+
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return err
 	}
 
-	// Retrieve accountID and sessionID from session values
 	accountID, ok := sess.Values["accountID"].(string)
 	if !ok {
-		return fmt.Errorf("invalid account ID type")
+		return fmt.Errorf("accountID not found or invalid type")
 	}
 
 	sessionID, ok := sess.Values["sessionID"].(string)
 	if !ok {
-		return fmt.Errorf("invalid session ID type")
+		return fmt.Errorf("sessionID not found or invalid type")
 	}
 
-	// Retrieve expires from session values and parse it to time.Time
-	expiresStr, ok := sess.Values["expires"].(string)
-	if !ok {
-		return fmt.Errorf("invalid expires type")
+	accountExists, err := isAccountIDInDB(a, accountID)
+	if err != nil || !accountExists {
+		return fmt.Errorf("account does not exist")
 	}
-	expires, err := time.Parse(time.RFC3339, expiresStr)
+
+	sessionExpired, err := isSessionExpiredInDB(a, accountID, sessionID)
+	if err != nil || sessionExpired {
+		return fmt.Errorf("session is expired")
+	}
+
+	// Extend session expiration conditionally, e.g., if it's close to expiring
+	err = queries.ExtendSessionExpiration(a, accountID, sessionID, time.Now().Add(sessionExpiryTime))
 	if err != nil {
-		return fmt.Errorf("could not parse expires: %v", err)
-	}
-
-	if accountCheck, err := isAccountIDInDB(a, accountID); err != nil || !accountCheck {
-		fmt.Println("accountCheck:", accountCheck)
-		return err
-	}
-
-	if sessionExpired, err := isSessionExpiredInDB(a, accountID, sessionID); err != nil || sessionExpired {
-		fmt.Println("sessionExpired:", sessionExpired)
-		return err
-	}
-
-	if cookieExpired, err := isCookieExpired(c); err != nil || cookieExpired {
-		fmt.Println("cookieExpired:", cookieExpired)
-		return err
-	}
-
-	if time.Now().After(expires) {
-		fmt.Println("session expired")
-		queries.SessionCleaner(a, time.Now().Format(time.RFC3339))
-		return fmt.Errorf("session expired")
-
+		return fmt.Errorf("failed to extend session: %v", err)
 	}
 
 	return nil
@@ -79,17 +64,6 @@ func validateSessionAndUser(c echo.Context, a *server.App) error {
 
 func redirectToLogin(c echo.Context, a *server.App) error {
 	return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login")
-}
-
-func isCookieExpired(c echo.Context) (bool, error) {
-	cookie, err := c.Cookie("session")
-	if err != nil {
-		return false, err
-	}
-
-	currentTime := time.Now()
-	expirationTime := cookie.Expires
-	return currentTime.After(expirationTime), nil
 }
 
 func isSessionExpiredInDB(a *server.App, userID string, sessionID string) (bool, error) {
@@ -111,28 +85,7 @@ func isAccountIDInDB(a *server.App, accountID string) (bool, error) {
 	return accountExists, nil
 }
 
-func DeleteAndRedirectToLogin(c echo.Context, a *server.App) error {
-	sess, err := session.Get("session", c)
-	if err != nil {
-		return err
-	}
-
-	// Retrieve accountID and sessionID from session values
-	accountID, ok := sess.Values["accountID"].(string)
-	if !ok {
-		return fmt.Errorf("invalid account ID type")
-	}
-
-	sessionID, ok := sess.Values["sessionID"].(string)
-	if !ok {
-		return fmt.Errorf("invalid session ID type")
-	}
-
-	// Delete session from DB
-	if err := queries.DeleteDBSession(a, accountID, sessionID); err != nil {
-		return err
-	}
-
+func DeleteCookieAndRedirectToLogin(c echo.Context, a *server.App) error {
 	// Delete session cookie
 	cookie := new(http.Cookie)
 	cookie.Name = "session"
