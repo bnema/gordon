@@ -73,5 +73,6 @@ type PushPayload struct {
 	Ports        string `json:"ports"`
 	TargetDomain string `json:"targetdomain"`
 	ImageName    string `json:"imagename"`
+	ImageID      string `json:"imageid"`
 	Data         io.ReadCloser
 }

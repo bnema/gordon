@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"os"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
@@ -82,12 +86,51 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 			// Stop the progress bar
 			bar.Finish()
 
-			if resp.StatusCode != 200 {
-				fmt.Println("Unexpected status code:", resp.StatusCode)
-				return
-			}
+			// Check the response
+			targetDomain := string(resp.Body)
+			targetDomain = strings.TrimSpace(targetDomain)  // Remove leading and trailing whitespace
+			targetDomain = strings.Trim(targetDomain, "\"") // Remove leading and trailing quotes
 
-			fmt.Println(resp.Body)
+			// Notify user
+			fmt.Println("Wait while Traefik is setting up the domain and certificate...")
+			progressIndicator := ""
+			// Check URL availability
+			for {
+				client := &http.Client{
+					Timeout: time.Second * 20,
+					Transport: &http.Transport{
+						TLSClientConfig: &tls.Config{InsecureSkipVerify: false}, // set false to ensure certificate is validated
+					},
+				}
+
+				// Making GET request to the target domain
+				resp, err := client.Get(targetDomain)
+				if err != nil {
+					// we do nothing here, we just wait for the domain to be available
+
+				} else {
+					fmt.Println("Domain is available at:", targetDomain)
+					break
+				}
+
+				// Close the response body, if non-nil
+				if resp != nil {
+					resp.Body.Close()
+				}
+
+				// Update and print the progress indicator
+				progressIndicator += "."
+
+				// Limit the progress indicator to 5 dots
+				if len(progressIndicator) > 5 {
+					progressIndicator = ""
+				}
+
+				fmt.Printf("\r%s", progressIndicator)
+
+				// Wait for 1 secondsbefore next check
+				time.Sleep(time.Second)
+			}
 		},
 	}
 
