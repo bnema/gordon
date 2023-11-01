@@ -100,6 +100,10 @@ func bootstrapDB(dbPath string, app *App) error {
 		return err
 	}
 
+	if err := pkgsqlite.CreateTable(db, tables.Clients, "clients"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -121,6 +125,10 @@ type ProviderWrapper struct {
 
 type SessionsWrapper struct {
 	*db.Sessions
+}
+
+type ClientsWrapper struct {
+	*db.Clients
 }
 
 func populateTableFromDB(a *App, query string, table DBTable) error {
@@ -155,6 +163,10 @@ func (s *SessionsWrapper) ScanFromRows(rows *sql.Rows) error {
 	return rows.Scan(&s.ID, &s.AccountID, &s.AccessToken, &s.BrowserInfo, &s.Expires, &s.IsOnline)
 }
 
+func (c *ClientsWrapper) ScanFromRows(rows *sql.Rows) error {
+	return rows.Scan(&c.ID, &c.AccountID, &c.OS, &c.IP, &c.Hostname, &c.Expires)
+}
+
 // PopulateStructWithTables updates db struct with tables
 func PopulateStructWithTables(a *App) error {
 	tables := map[string]DBTable{
@@ -162,6 +174,7 @@ func PopulateStructWithTables(a *App) error {
 		"SELECT id, user_id FROM account":                                                     &AccountWrapper{&a.DBTables.Account},
 		"SELECT id, account_id, name, login, avatar_url, profile_url, email FROM provider":    &ProviderWrapper{&a.DBTables.Provider},
 		"SELECT id, account_id, access_token, browser_info, expires, is_online FROM sessions": &SessionsWrapper{&a.DBTables.Sessions},
+		"SELECT id, account_id, os, ip, hostname, expires FROM clients":                       &ClientsWrapper{&a.DBTables.Clients},
 	}
 
 	for query, table := range tables {

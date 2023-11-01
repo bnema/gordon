@@ -20,6 +20,9 @@ func StartServer(a *server.App, port string) error {
 		log.Fatal("Failed to initialize database:", err)
 	}
 
+	// Start the session cleaner cron job
+	a.StartSessionCleaner()
+
 	_, err = server.HandleNewTokenInitialization(a)
 	if err != nil {
 		log.Print(err)

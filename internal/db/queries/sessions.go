@@ -82,17 +82,6 @@ func CreateOrUpdateDBSession(a *server.App, accessToken string, browserInfo stri
 	return nil
 }
 
-// SessionCleaner, time as a string
-func SessionCleaner(a *server.App, currentTime string) error {
-	query := "DELETE FROM sessions WHERE expires < ?"
-	_, err := a.DB.Exec(query, currentTime)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // DeleteSession deletes the session from the database.
 func DeleteDBSession(a *server.App, accountID string, sessionID string) error {
 	query := "DELETE FROM sessions WHERE account_id = ? AND id = ?"
@@ -120,4 +109,14 @@ func GetSessionExpiration(a *server.App, accountID string, sessionID string, cur
 	}
 
 	return expirationTimeParsed, nil
+}
+
+func ExtendSessionExpiration(a *server.App, accountID string, sessionID string, newExpirationTime time.Time) error {
+	query := "UPDATE sessions SET expires = ? WHERE account_id = ? AND id = ?"
+	_, err := a.DB.Exec(query, newExpirationTime.Format(time.RFC3339), accountID, sessionID)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
