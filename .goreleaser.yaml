@@ -17,9 +17,10 @@ builds:
 
 dockers:
   - image_templates:
-      - bnema/gordon
+      - "ghcr.io/bnema/gordon:{{ .Tag }}"
+      - "ghcr.io/bnema/gordon:latest"
     use: buildx
-    skip_push: true
+    skip_push: false
     dockerfile: Dockerfile
 
 archives:
