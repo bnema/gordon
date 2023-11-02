@@ -1,9 +1,8 @@
 before:
   hooks:
     - go mod tidy
-  release:
+release:
   draft: true
-
 builds:
   - id: "gordon"
     main: ./cmd/cli/main.go
