@@ -16,5 +16,8 @@ func saveDB(a *App) error {
 
 // TODO
 func backupDBFile(a *App) error {
+	// Create a backup of the database file at the same location as the database file.
+	// The backup file name is the database file name with a timestamp appended to it.
+	// If the backup file already exists, overwrite it.
 	return nil
 }
