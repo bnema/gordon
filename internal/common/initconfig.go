@@ -23,6 +23,9 @@ type Config struct {
 type BuildConfig struct {
 	RunEnv       string `yaml:"-"` // come from env
 	BuildVersion string `yaml:"-"` // come from build ldflags
+	BuildCommit  string `yaml:"-"` // come from build ldflags
+	BuildDate    string `yaml:"-"` // come from build ldflags
+	ProxyURL     string `yaml:"-"`
 }
 
 type AdminConfig struct {
