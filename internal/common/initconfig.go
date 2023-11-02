@@ -58,24 +58,21 @@ var (
 )
 
 func getConfigDir() (string, error) {
-	if inContainer, err := docker.IsRunningInContainer(); err != nil {
-		return "", fmt.Errorf("error checking if running in a container: %w", err)
-	} else if inContainer {
+
+	if docker.IsRunningInContainer() {
 		return "/.", nil
 	}
 
-	// For non-container environments, determine the user's home directory
+	// Get the user's home directory for non-container environments
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("error getting user's home directory: %w", err)
 	}
 
-	// Determine the configuration directory based on the operating system
-	var configDir string
+	// Select the configuration directory based on the OS
+	configDir := filepath.Join(homeDir, ".config", "Gordon")
 	if runtime.GOOS == "windows" {
 		configDir = filepath.Join(homeDir, "AppData", "Roaming", "Gordon")
-	} else {
-		configDir = filepath.Join(homeDir, ".config", "Gordon")
 	}
 
 	return configDir, nil

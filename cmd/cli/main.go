@@ -9,7 +9,6 @@ import (
 	"github.com/bnema/gordon/internal/cli/cmd"
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
-	"github.com/bnema/gordon/pkg/docker"
 	"github.com/spf13/cobra"
 )
 
@@ -52,13 +51,7 @@ func main() {
 		ProxyURL:     "https://gordon-proxy.bnema.dev",
 	}
 
-	digest, err := docker.WhoAmI()
-	if err != nil {
-		log.Println(err)
-	}
-
-	fmt.Printf("Gordon version %s (%s) built on %s\n", s.Config.Build.BuildVersion, digest, s.Config.Build.BuildDate)
-
+	fmt.Printf("Gordon version %\n", s.Config.Build.BuildVersion)
 	go func() {
 		msg, err := common.CheckVersionPeriodically(&s.Config)
 		if err != nil {
