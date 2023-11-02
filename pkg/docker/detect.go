@@ -36,7 +36,7 @@ func checkCgroup() (bool, error) {
 
 func IsRunningInContainer() (bool, error) {
 	// Check for .dockerenv file
-	if fileExists("/.dockerenv") {
+	if fileExists("/.iscontainer") {
 		return true, nil
 	}
 
