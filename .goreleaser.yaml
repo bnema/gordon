@@ -1,6 +1,8 @@
 before:
   hooks:
     - go mod tidy
+  release:
+  draft: true
 
 builds:
   - id: "gordon"
@@ -17,18 +19,44 @@ builds:
 
 dockers:
   - image_templates:
-      - "ghcr.io/bnema/gordon:{{ .Tag }}"
-      - "ghcr.io/bnema/gordon:latest"
+      - "ghcr.io/bnema/gordon:{{ .Tag }}-amd64"
     use: buildx
-    skip_push: false
     dockerfile: Dockerfile
+    goarch: amd64
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
+  - image_templates:
+      - "ghcr.io/bnema/gordon:{{ .Tag }}-arm64"
+    use: buildx
+    dockerfile: Dockerfile
+    goarch: arm64
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
+
+docker_manifests:
+  - name_template: "ghcr.io/bnema/gordon:latest"
+    image_templates:
+      - "ghcr.io/bnema/gordon:{{ .Tag }}-amd64"
+      - "ghcr.io/bnema/gordon:{{ .Tag }}-arm64"
+    create_flags: ["--amend"]
 
 archives:
   - format: tar.gz
-    # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
-changelog: # Added this section
+changelog:
   sort: asc
   filters:
     exclude:
