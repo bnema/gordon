@@ -8,6 +8,7 @@ import (
 	"github.com/bnema/gordon/internal/cli/cmd"
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/spf13/cobra"
 )
 
@@ -44,5 +45,13 @@ func main() {
 	// Set the BuildVersion
 	s.Config.Build.BuildVersion = build
 
+	inContainer, err := docker.IsRunningInContainer()
+	if err != nil {
+		fmt.Printf("Error checking if running in a container: %s\n", err)
+	} else if inContainer {
+		fmt.Println("Running inside a container.")
+	} else {
+		fmt.Println("Not running inside a container.")
+	}
 	Execute(a, s)
 }
