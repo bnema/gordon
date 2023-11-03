@@ -14,34 +14,16 @@ import (
 )
 
 type CurrentVersion struct {
-	isDocker bool
-	Version  string `json:"version"`
-	Commit   string `json:"commit"`
-	Date     string `json:"date"`
-	Digest   string `json:"digest"`
+	isContainer bool
+	Version     string `json:"version"`
 }
 
-// {
-// "amd64": {
-// "name": "0.0.951-amd64",
-// "digest": "sha256:8486058cea46c5a18bc73d19446d6590b8b49cfadd7128ea443abbd69c11ea83"
-// },
-// "arm64": {
-// "name": "0.0.951-arm64",
-// "digest": "sha256:d9c2749117711e0bccd9cf3a3ac36ef7c4aa5487046e584640f2467add57a829"
-// }
-// }
-// VersionInfo represents the JSON structure of the version endpoint response.
-
-// ArchVersion represents the architecture-specific version details.
 type ArchVersion struct {
-	Name   string `json:"name"`
-	Digest string `json:"digest"`
+	Name string `json:"name"`
 }
 
 type VersionInfo struct {
-	Name   string `json:"name"`
-	Digest string `json:"digest"`
+	Name string `json:"name"`
 }
 
 type VersionsResponse struct {
@@ -50,23 +32,10 @@ type VersionsResponse struct {
 }
 
 func GetCurrentBuildVersionInfo(c *Config) CurrentVersion {
-	// Check if the Docker client has been initialized .iscontainer should be at root level
-	isContainer, err := docker.IsRunningInContainer()
-	if err != nil {
-		log.Println(err)
-	}
-
-	digest, err := docker.WhoAmI()
-	if err != nil {
-		log.Println(err)
-	}
 
 	return CurrentVersion{
-		isDocker: isContainer,
-		Version:  c.Build.BuildVersion,
-		Commit:   c.Build.BuildCommit,
-		Date:     c.Build.BuildDate,
-		Digest:   digest,
+		isContainer: docker.IsRunningInContainer(),
+		Version:     c.Build.BuildVersion,
 	}
 }
 
@@ -91,7 +60,7 @@ func CheckForNewVersion(local CurrentVersion, remote VersionsResponse) string {
 
 	// Compare the normalized local version with the remote version
 	if localVersion != remoteVersion {
-		return "a new version is available"
+		return "A new version is available"
 	}
 	return ""
 }
@@ -123,7 +92,7 @@ func CheckVersionPeriodically(c *Config) (string, error) {
 
 		message := CheckForNewVersion(localVersion, remoteVersion)
 		if message != "" {
-			log.Printf("New version available: %s", message)
+			log.Print(message)
 			// TODO: Add a notification
 		}
 	}
@@ -134,8 +103,6 @@ func CheckVersionPeriodically(c *Config) (string, error) {
 func getLocalVersion(c *Config) CurrentVersion {
 	return CurrentVersion{
 		Version: c.Build.BuildVersion,
-		Commit:  c.Build.BuildCommit,
-		Date:    c.Build.BuildDate,
 	}
 }
 
