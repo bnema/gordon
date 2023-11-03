@@ -58,8 +58,7 @@ func getConfigDir() (string, error) {
 	if inContainer, err := docker.IsRunningInContainer(); err != nil {
 		return "", fmt.Errorf("error checking if running in a container: %w", err)
 	} else if inContainer {
-		// Return the path for configuration inside the container
-		return "/.config/Gordon", nil
+		return "/.", nil
 	}
 
 	// For non-container environments, determine the user's home directory
