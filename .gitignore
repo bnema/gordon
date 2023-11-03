@@ -12,3 +12,4 @@ gordon
 dist/
 data/
 setup.sh
+.iscontainer
