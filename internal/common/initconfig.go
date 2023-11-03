@@ -165,12 +165,12 @@ func (config *Config) GetToken() (string, error) {
 
 }
 
-// GetBuildVersion returns the build version
-func (config *BuildConfig) GetBuildVersion() string {
-	return config.BuildVersion
-}
-
 // GetRunEnv returns the run environment
 func (config *BuildConfig) GetRunEnv() string {
 	return config.RunEnv
+}
+
+// GetVersion returns the version
+func (config *Config) GetVersion() string {
+	return config.Build.BuildVersion
 }
