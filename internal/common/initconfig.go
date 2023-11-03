@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/user"
 	"path/filepath"
 	"runtime"
 
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/parser"
 )
 
@@ -54,27 +54,28 @@ var (
 	podmansock = "/run/user/1000/podman/podman.sock"
 )
 
-func isMaybeRunningInDocker() bool { // Thanks Pocketbase
-	_, err := os.Stat("/.dockerenv")
-	return err == nil
-}
-
 func getConfigDir() (string, error) {
-	usr, err := user.Current()
+	if inContainer, err := docker.IsRunningInContainer(); err != nil {
+		return "", fmt.Errorf("error checking if running in a container: %w", err)
+	} else if inContainer {
+		// Return the path for configuration inside the container
+		return "/.config/Gordon", nil
+	}
+
+	// For non-container environments, determine the user's home directory
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("error getting user's home directory: %w", err)
 	}
 
-	if isMaybeRunningInDocker() {
-		return ".", nil // The directory where the binary is located
-	}
-
+	// Determine the configuration directory based on the operating system
 	var configDir string
 	if runtime.GOOS == "windows" {
-		configDir = filepath.Join(usr.HomeDir, "AppData", "Roaming", "Gordon")
+		configDir = filepath.Join(homeDir, "AppData", "Roaming", "Gordon")
 	} else {
-		configDir = filepath.Join(usr.HomeDir, ".config", "Gordon")
+		configDir = filepath.Join(homeDir, ".config", "Gordon")
 	}
+
 	return configDir, nil
 }
 
