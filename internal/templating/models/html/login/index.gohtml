@@ -1,55 +1,68 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ .header.meta.title }}</title>
+    <meta name="description" content="{{ .Header.Meta.Description }}" />
+    <meta name="keywords" content="{{ .Header.Meta.Keywords }}" />
+    <!-- Custom CSS + Tailwind -->
+    <link rel="stylesheet" href="/assets/css/tailwind.css" />
+    <!-- Iconoir -->
+    <link rel="stylesheet" href="/libs/iconoir.css" />
+    <!-- Alpine -->
+    <script src="/libs/alpine.min.js"></script>
+    <!-- HTMX min js  -->
+    <script src="/libs/htmx.min.js"></script>
+    <!-- HTMX SSE -->
+    <script src="/libs/htmx-sse.js"></script>
+    <!-- Custom JS from assets/js -->
+    <script src="/assets/js/custom.js"></script>
+  </head>
 
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{{ .header.meta.title }}</title>
-  <meta name="description" content="{{ .Header.Meta.Description }}" />
-  <meta name="keywords" content="{{ .Header.Meta.Keywords }}" />
-  <!-- Custom CSS + Tailwind -->
-  <link rel="stylesheet" href="/assets/css/tailwind.css" />
-  <!-- Iconoir -->
-  <link rel="stylesheet" href="/libs/iconoir.css" />
-  <!-- Alpine -->
-  <script src="/libs/alpine.min.js"></script>
-  <!-- HTMX min js  -->
-  <script src="/libs/htmx.min.js"></script>
-  <!-- HTMX SSE -->
-  <script src="/libs/htmx-sse.js"></script>
-  <!-- Custom JS from assets/js -->
-  <script src="/assets/js/custom.js"></script>
-</head>
-
-<body class="IBMPlexSans bg-zinc-200 md:p-8 flex flex-col items-center">
-  <!-- Logo and Title -->
-  <div id="logo-mascot" class="flex flex-col justify-center items-center p-4 mb-4">
-    <div class="circle-shadow flex justify-center w-100">
-      <img src="/assets/imgs/gordon-mascot-hq-trsp.png" alt="logo gordon" class="sm:h-24 h-32 xl:h-48" />
-    </div>
-    <div class="flex justify-center mt-4">
-      <h1 class="gordon-title text-4xl lg:text-4xl xl:text-5xl text-gordonmascot-hblue tracking-tighter">Gordon</h1>
-      <span class="gordon-v-subtitle text-gordonmascot-mblue text-sm ml-2">{{ .BuildVersion }}</span>
-    </div>
-  </div>
-
-  <!-- Main Content -->
-  <div class="bg-white p-4 rounded-md shadow mb-4 w-2/3">
-    <!-- Login Section -->
-    <div id="login-section">
-      <div class="flex flex-col items-center">
-        <h2 class="text-2xl font-semibold text-gray-800">Login</h2>
-        <!-- GitHub OAuth -->
-        <div class="mt-4 p-2 bg-gordonmascot-hblue text-white rounded-md flex justify-left">
-          <a href="login/oauth/github" class="flex items-center">
-            <img src="/assets/imgs/github/github-mark-white.png" alt="logo github" class="h-8 xl:h-12" />
-            <span class="w-full p-2  text-white ">Login with GitHub</span>
-          </a>
-        </div>
+  <body class="IBMPlexSans bg-zinc-200 md:p-8 flex flex-col items-center">
+    <!-- Logo and Title -->
+    <div
+      id="logo-mascot"
+      class="flex flex-col justify-center items-center p-4 mb-4">
+      <div class="circle-shadow flex justify-center w-100">
+        <img
+          src="/assets/imgs/gordon-mascot-mq-trsp.png"
+          alt="logo gordon"
+          class="sm:h-24 h-32 xl:h-48" />
+      </div>
+      <div class="flex justify-center mt-4">
+        <h1
+          class="gordon-title text-4xl lg:text-4xl xl:text-5xl text-gordonmascot-hblue tracking-tighter">
+          Gordon
+        </h1>
+        <span
+          class="gordon-v-subtitle text-gordonmascot-mblue text-sm ml-2"
+          >{{ .BuildVersion }}</span
+        >
       </div>
     </div>
-    <!-- End Login Section -->
-  </div>
-</body>
 
+    <!-- Main Content -->
+    <div class="bg-white p-4 rounded-md shadow mb-4 w-2/3">
+      <!-- Login Section -->
+      <div id="login-section">
+        <div class="flex flex-col items-center">
+          <h2 class="text-2xl font-semibold text-gray-800">Login</h2>
+          <!-- GitHub OAuth -->
+          <div
+            class="mt-4 p-2 bg-gordonmascot-hblue text-white rounded-md flex justify-left">
+            <a href="login/oauth/github" class="flex items-center">
+              <img
+                src="/assets/imgs/github/github-mark-white.png"
+                alt="logo github"
+                class="h-8 xl:h-12" />
+              <span class="w-full p-2 text-white">Login with GitHub</span>
+            </a>
+          </div>
+        </div>
+      </div>
+      <!-- End Login Section -->
+    </div>
+  </body>
 </html>
