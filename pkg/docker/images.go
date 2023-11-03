@@ -78,7 +78,6 @@ func ImportImageToEngine(imageFilePath string) error {
 // ExportImageFromEngine exports an image from the Docker engine and returns it as an io.Reader
 func ExportImageFromEngine(imageID string) (io.ReadCloser, error) {
 	// Check if the Docker client has been initialized
-	CheckIfInitialized()
 
 	// Get the image information using the Docker client
 	imageInfo, err := GetImageInfo(imageID)
@@ -141,4 +140,17 @@ func GetImageName(imageID string) (string, error) {
 	}
 
 	return imageInfo.RepoDigests[0], nil
+}
+
+// WhoAmI attempts to identify the Docker image digest of the container running this code.
+func WhoAmI() (string, error) {
+	gordonImage := "ghcr.io/bnema/gordon:latest"
+
+	// Get the image information using the Docker client
+	imageInfo, _, err := dockerCli.ImageInspectWithRaw(context.Background(), gordonImage)
+	if err != nil {
+		return "", err
+	}
+
+	return imageInfo.ID, nil
 }

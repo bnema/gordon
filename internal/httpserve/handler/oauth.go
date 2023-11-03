@@ -75,8 +75,10 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 	redirectDomain := a.GenerateOauthCallbackURL()
 	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
 	// Redirect to Gordon's Proxy to grab the oauth access
+	proxyURL := a.Config.Build.ProxyURL
 	oauthURL := fmt.Sprintf(
-		"https://gordon.bnema.dev/github-proxy/authorize?client_id=%s&redirect_uri=%s&state=%s",
+		"%s/github/authorize?client_id=%s&redirect_uri=%s&state=%s",
+		proxyURL,
 		clientID,
 		redirectDomain,
 		encodedState,

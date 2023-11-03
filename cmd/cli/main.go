@@ -2,16 +2,22 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/cmd"
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/spf13/cobra"
 )
 
-var build string
+var (
+	build  string
+	commit string
+	date   string
+)
 
 var rootCmd = &cobra.Command{Use: "gordon"}
 
@@ -38,11 +44,32 @@ func main() {
 
 	common.DockerInit(&s.Config.ContainerEngine)
 
-	// build looks like this: "0.0.901-b98a337"
-	//use regex to only get the version number
 	build = regexp.MustCompile(`\d+\.\d+\.\d+`).FindString(build)
-	// Set the BuildVersion
-	s.Config.Build.BuildVersion = build
+	s.Config.Build = common.BuildConfig{
+		BuildVersion: build,
+		BuildCommit:  commit,
+		BuildDate:    date,
+		ProxyURL:     "https://gordon-proxy.bnema.dev",
+	}
+
+	digest, err := docker.WhoAmI()
+	if err != nil {
+		log.Println(err)
+	}
+
+	fmt.Printf("Gordon version %s (%s) built on %s\n", s.Config.Build.BuildVersion, digest, s.Config.Build.BuildDate)
+
+	go func() {
+		msg, err := common.CheckVersionPeriodically(&s.Config)
+		if err != nil {
+			log.Println(err)
+		}
+
+		if msg != "" {
+			log.Println(msg)
+		}
+
+	}()
 
 	Execute(a, s)
 }
