@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -17,7 +16,6 @@ func RequireLogin(a *server.App) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if err := validateSessionAndUser(c, a); err != nil {
-				log.Println("Session validation failed:", err)
 				return DeleteCookieAndRedirectToLogin(c, a)
 			}
 			return next(c)
