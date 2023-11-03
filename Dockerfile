@@ -1,9 +1,7 @@
 # Use a small base image
 FROM alpine
 
-# Create a custom environment check file
-RUN touch /.iscontainer
-
+COPY .iscontainer /
 # Copy the compiled binary from your build context into the container
 COPY gordon /
 

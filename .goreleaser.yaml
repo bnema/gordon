@@ -30,6 +30,8 @@ dockers:
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
+    extra_files:
+      - .iscontainer
   - image_templates:
       - "ghcr.io/bnema/gordon:{{ .Tag }}-arm64"
     use: buildx
@@ -43,7 +45,8 @@ dockers:
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
-
+    extra_files:
+      - .iscontainer
 docker_manifests:
   - name_template: "ghcr.io/bnema/gordon:latest"
     image_templates:
