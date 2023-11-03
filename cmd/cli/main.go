@@ -51,17 +51,16 @@ func main() {
 		ProxyURL:     "https://gordon-proxy.bnema.dev",
 	}
 
-	fmt.Printf("Gordon version %\n", s.Config.Build.BuildVersion)
+	if s.Config.Build.BuildVersion != "" {
+		fmt.Printf("Gordon version %s\n", s.Config.Build.BuildVersion)
+	}
+
+	// Check for new version
 	go func() {
 		msg, err := common.CheckVersionPeriodically(&s.Config)
-		if err != nil {
-			log.Println(err)
+		if err != nil || msg != "" {
+			log.Printf("CheckVersionPeriodically: %v %s", err, msg)
 		}
-
-		if msg != "" {
-			log.Println(msg)
-		}
-
 	}()
 
 	Execute(a, s)
