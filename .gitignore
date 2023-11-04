@@ -13,3 +13,4 @@ dist/
 data/
 setup.sh
 .iscontainer
+sqlite.db
