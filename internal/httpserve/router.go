@@ -8,29 +8,34 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// RegisterRoutes registers all routes for the application
+// RegisterRoutes registers all routes and middlewares
 func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
+	// Initiate the session middleware
+	e.Use(middleware.InitSessionMiddleware(a))
+
+	// Language detection
+	e.Use(middleware.LanguageDetection)
+
 	AdminPath := a.Config.Admin.Path
 	bindLoginRoute(e, a, AdminPath)
 	bindAPIEndpoints(e, a)
 
 	// SetCommonDataMiddleware will pass data to the renderer
 	e.Use(middleware.SetCommonDataMiddleware(a))
+
 	// Error handler middleware
 	e.Use(middleware.ErrorHandler)
-	// Initiate the session middleware
-	e.Use(middleware.InitSessionMiddleware(a))
+
 	// Use middlewares
 	e.Use(middleware.SecureRoutes())
+
 	// Color scheme detection for dark/light mode
 	e.Use(middleware.ColorSchemeDetection)
-	// Language detection
-	e.Use(middleware.LanguageDetection)
 
-	// --- Register routes --- //
 	bindAdminRoute(e, a, AdminPath)
 	bindStaticRoute(e, a, "/*")
 	bindHTMXEndpoints(e, a)
+
 	// Protect the root path with a 403
 	e.GET("/", func(c echo.Context) error {
 		return c.String(403, "403 Forbidden")
