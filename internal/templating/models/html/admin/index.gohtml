@@ -1,25 +1,12 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   {{template "header.gohtml" .}}
 
   <body class="bg-zinc-200 flex flex-col md:flex-row p-4 md:p-0">
     {{template "menu.gohtml" .}}
     <div class="flex-1 flex flex-col md:pt-10 space-y-4 p-4 md:ml-4">
-      <div class="hidden md:flex mb-4 justify-end">
-        <div class="w-72 h-10 bg-gray-300 rounded-lg">
-          <div class="flex justify-between items-center h-full px-2">
-            <input
-              type="text"
-              class="w-full h-full bg-transparent outline-none"
-              placeholder="Search"
-            />
-            <i class="iconoir-search"></i>
-          </div>
-        </div>
-      </div>
       <div
-        class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow"
-      >
+        class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow">
         <div class="flex-grow bg-white p-4 rounded-md shadow mb-4">
           <h2>{{index .Lang "dashboard" "content" "title"}}</h2>
         </div>

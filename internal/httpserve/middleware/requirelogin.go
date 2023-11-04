@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/bnema/gordon/internal/httpserve/handler"
@@ -8,6 +9,10 @@ import (
 
 	"github.com/labstack/echo/v4"
 )
+
+func redirectToLogin(c echo.Context, a *server.App) error {
+	return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login")
+}
 
 func RequireLogin(a *server.App) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -23,14 +28,12 @@ func RequireLogin(a *server.App) echo.MiddlewareFunc {
 					time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
 				}
 			}
-			return c.JSON(401, map[string]string{"error": err.Error()})
+			// propose the redirect auth url as httpcode
+			return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login")
 		}
+
 	}
 }
-
-// func redirectToLogin(c echo.Context, a *server.App) error {
-// 	return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login")
-// }
 
 // func DeleteCookieAndRedirectToLogin(c echo.Context, a *server.App) error {
 // 	// Delete session cookie
