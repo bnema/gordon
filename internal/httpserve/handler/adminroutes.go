@@ -18,7 +18,6 @@ var (
 // GetLocalizedData returns the data for the localization
 func GetLocalizedData(c echo.Context, a *server.App) (map[string]interface{}, error) {
 	lang := c.Get("LangKey")
-
 	if lang == nil {
 		return nil, fmt.Errorf("LangKey not found in context")
 	}
@@ -28,7 +27,8 @@ func GetLocalizedData(c echo.Context, a *server.App) (map[string]interface{}, er
 		return nil, fmt.Errorf("failed to get localization: %w", err)
 	}
 	return map[string]interface{}{
-		"Lang": yamlData,
+		"Lang":      yamlData,
+		"LogoutURL": a.Config.Admin.Path + "/logout",
 	}, nil
 }
 

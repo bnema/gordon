@@ -120,3 +120,24 @@ func ExtendSessionExpiration(a *server.App, accountID string, sessionID string, 
 
 	return nil
 }
+
+func CheckDBSessionExists(a *server.App, sessionID string) (bool, error) {
+	var sessionExists bool
+	query := "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)"
+	err := a.DB.QueryRow(query, sessionID).Scan(&sessionExists)
+	if err != nil {
+		return false, err
+	}
+
+	return sessionExists, nil
+}
+
+func InvalidateDBSession(a *server.App, sessionID string) error {
+	query := "UPDATE sessions SET is_online = ? WHERE id = ?"
+	_, err := a.DB.Exec(query, false, sessionID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

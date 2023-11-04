@@ -57,38 +57,69 @@ func RenderLoginPage(c echo.Context, a *server.App) error {
 	return c.HTML(200, renderedHTML)
 }
 
-// StartOAuthGithub starts the Github OAuth flow
+// StartOAuthGithub starts the Github OAuth flow.
 func StartOAuthGithub(c echo.Context, a *server.App) error {
-	// Check if the session is already here and valid before going for the oauth flow
+	fmt.Println("Attempting to get an existing session.")
 	sess, err := getSession(c)
+	if err != nil || sess == nil || sess.Values == nil {
+		fmt.Println("Session retrieval failed, initiating new GitHub OAuth flow.")
+		return initiateGithubOAuthFlow(c, a)
+	}
+
+	fmt.Println("Attempting to assert session values.")
+	sessionID, ok1 := sess.Values["sessionID"].(string)
+	accountID, ok2 := sess.Values["accountID"].(string)
+	authenticated, ok3 := sess.Values["authenticated"].(bool)
+
+	if !ok1 || !ok2 || !ok3 || !authenticated {
+		fmt.Println("Session assertion failed, or user not authenticated. Initiating new OAuth flow.")
+		return initiateGithubOAuthFlow(c, a)
+	}
+
+	fmt.Println("Checking if session exists in DB.")
+	sessionExists, err := queries.CheckDBSessionExists(a, sessionID)
 	if err != nil {
-		return err
+		fmt.Printf("Error checking if session exists: %v\n", err)
+		return fmt.Errorf("could not check if session exists: %w", err)
 	}
 
-	// Check if the session values are valid
-	sessionID, accountID, ok := sess.Values["accountID"].(string), sess.Values["sessionID"].(string), sess.Values["authenticated"].(bool)
-	if ok && accountID != "" && sessionID != "" {
-		// Check if the session is expired
-		sessionExpired, err := IsSessionExpiredInDB(a, accountID, sessionID)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
-		if !sessionExpired {
-			sessionExpiryTime := 30 * time.Minute
-			// Extend session expiration conditionally, e.g., if it's close to expiring
-			err = queries.ExtendSessionExpiration(a, accountID, sessionID, time.Now().Add(sessionExpiryTime))
-			if err != nil {
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			}
-			return c.Redirect(http.StatusFound, a.Config.Admin.Path)
-		}
+	if !sessionExists {
+		fmt.Println("Session does not exist in DB, initiating new OAuth flow.")
+		return initiateGithubOAuthFlow(c, a)
 	}
 
-	//Initiate the Github OAuth flow
+	fmt.Println("Getting the expiration time of the session.")
+	currentTime := time.Now()
+	sessionExpiration, err := queries.GetSessionExpiration(a, accountID, sessionID, currentTime)
+	if err != nil {
+		fmt.Printf("Error getting session expiration: %v\n", err)
+		return fmt.Errorf("could not get session expiration: %w", err)
+	}
+
+	if currentTime.After(sessionExpiration) {
+		fmt.Println("Current time is after session expiration, initiating new OAuth flow.")
+		return initiateGithubOAuthFlow(c, a)
+	}
+
+	fmt.Println("Extending session expiration time by 30 minutes.")
+	newExpirationTime := currentTime.Add(30 * time.Minute)
+	err = queries.ExtendSessionExpiration(a, accountID, sessionID, newExpirationTime)
+	if err != nil {
+		fmt.Printf("Error extending session expiration: %v\n", err)
+		return fmt.Errorf("could not extend session expiration: %w", err)
+	}
+
+	fmt.Println("Session is valid and extended. Redirecting to admin panel.")
+	return c.Redirect(http.StatusFound, a.Config.Admin.Path)
+}
+
+// initiateGithubOAuthFlow starts a new GitHub OAuth flow
+func initiateGithubOAuthFlow(c echo.Context, a *server.App) error {
 	clientID := os.Getenv("GITHUB_APP_ID")
 	redirectDomain := a.GenerateOauthCallbackURL()
 	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
-	// Redirect to Gordon's Proxy to grab the oauth access
+
+	// Redirect to GitHub's OAuth endpoint to grab the OAuth access
 	proxyURL := a.Config.Build.ProxyURL
 	oauthURL := fmt.Sprintf(
 		"%s/github/authorize?client_id=%s&redirect_uri=%s&state=%s",
