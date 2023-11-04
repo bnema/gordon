@@ -5,7 +5,6 @@ import (
 
 	"net/http"
 
-	"github.com/bnema/gordon/internal/httpserve/middleware"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/labstack/echo/v4"
@@ -18,7 +17,7 @@ var (
 
 // GetLocalizedData returns the data for the localization
 func GetLocalizedData(c echo.Context, a *server.App) (map[string]interface{}, error) {
-	lang := c.Get(middleware.LangKey)
+	lang := c.Get("LangKey")
 
 	if lang == nil {
 		return nil, fmt.Errorf("LangKey not found in context")

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/bnema/gordon/internal/db"
 	"github.com/bnema/gordon/internal/db/queries"
@@ -65,9 +66,22 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 	}
 
 	// Check if the session values are valid
-	accountID, ok := sess.Values["accountID"].(string)
-	if ok && accountID != "" {
-		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path) // StatusSeeOther is HTTP 303
+	sessionID, accountID, ok := sess.Values["accountID"].(string), sess.Values["sessionID"].(string), sess.Values["authenticated"].(bool)
+	if ok && accountID != "" && sessionID != "" {
+		// Check if the session is expired
+		sessionExpired, err := IsSessionExpiredInDB(a, accountID, sessionID)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		if !sessionExpired {
+			sessionExpiryTime := 30 * time.Minute
+			// Extend session expiration conditionally, e.g., if it's close to expiring
+			err = queries.ExtendSessionExpiration(a, accountID, sessionID, time.Now().Add(sessionExpiryTime))
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			}
+			return c.Redirect(http.StatusFound, a.Config.Admin.Path)
+		}
 	}
 
 	//Initiate the Github OAuth flow
