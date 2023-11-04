@@ -47,9 +47,9 @@ func ValidateSessionAndUser(c echo.Context, a *server.App) error {
 	return nil
 }
 
-func IsSessionExpiredInDB(a *server.App, userID string, sessionID string) (bool, error) {
+func IsSessionExpiredInDB(a *server.App, accountID string, sessionID string) (bool, error) {
 	currentTime := time.Now()
-	expirationTime, err := queries.GetSessionExpiration(a, userID, sessionID, currentTime)
+	expirationTime, err := queries.GetSessionExpiration(a, accountID, sessionID, currentTime)
 	if err != nil {
 		return false, err
 	}

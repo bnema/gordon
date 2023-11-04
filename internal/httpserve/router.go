@@ -6,10 +6,13 @@ import (
 	"github.com/bnema/gordon/internal/server"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo/v4"
+	echomid "github.com/labstack/echo/v4/middleware"
 )
 
 // RegisterRoutes registers all routes and middlewares
 func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
+	// e.Use(echomid.Logger()) too verbose
+	e.Use(echomid.Recover())
 	// Initiate the session middleware
 	e.Use(middleware.InitSessionMiddleware(a))
 
@@ -63,7 +66,7 @@ func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 func bindStaticRoute(e *echo.Echo, a *server.App, path string) {
 	e.GET(path, func(c echo.Context) error {
 		return handler.StaticRoute(c, a)
-	})
+	}, echomid.Gzip())
 }
 
 // bindLoginRoute binds all login routes
@@ -78,7 +81,7 @@ func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
 		return handler.OAuthCallback(c, a)
 	})
 	e.GET(adminPath+"/logout", func(c echo.Context) error {
-		return c.HTML(200, "<h1>Logout</h1>")
+		return handler.Logout(c, a)
 	})
 }
 
