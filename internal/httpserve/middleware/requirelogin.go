@@ -15,14 +15,21 @@ import (
 func RequireLogin(a *server.App) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if err := validateSessionAndUser(c, a); err != nil {
-				return c.JSON(401, map[string]string{"error": err.Error()})
+			const maxRetries = 3
+			var err error
+			for i := 0; i < maxRetries; i++ {
+				err = validateSessionAndUser(c, a)
+				if err == nil {
+					return next(c)
+				}
+				if i < maxRetries-1 {
+					time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+				}
 			}
-			return next(c)
+			return c.JSON(401, map[string]string{"error": err.Error()})
 		}
 	}
 }
-
 func validateSessionAndUser(c echo.Context, a *server.App) error {
 	sessionExpiryTime := 30 * time.Minute
 
