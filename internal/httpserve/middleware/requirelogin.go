@@ -16,7 +16,7 @@ func RequireLogin(a *server.App) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if err := validateSessionAndUser(c, a); err != nil {
-				return redirectToLogin(c, a)
+				return c.JSON(401, map[string]string{"error": err.Error()})
 			}
 			return next(c)
 		}
