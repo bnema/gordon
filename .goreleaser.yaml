@@ -8,6 +8,8 @@ builds:
     main: ./cmd/cli/main.go
     goos:
       - linux
+      - windows
+      - darwin
     goarch:
       - amd64
       - arm64
@@ -55,7 +57,7 @@ docker_manifests:
     create_flags: ["--amend"]
 
 archives:
-  - format: tar.gz
+  - format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 changelog:

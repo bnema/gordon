@@ -51,9 +51,6 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 	apiGroup := e.Group("/api")
 	apiGroup.Use(middleware.RequireToken(a))
-	apiGroup.GET("/hello", func(c echo.Context) error {
-		return handler.GetHello(c, a)
-	})
 	apiGroup.GET("/ping", func(c echo.Context) error {
 		return handler.GetInfos(c, a)
 	})
