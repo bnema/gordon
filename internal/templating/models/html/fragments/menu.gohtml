@@ -1,3 +1,36 @@
+<script>
+  function checkVersion(versionData) {
+    var currentVersion = document
+      .getElementById("actual-version")
+      .textContent.trim();
+    // Extract the numeric part of the version string using a regular expression
+    var fetchedVersionNumber =
+      versionData["amd64"]["name"].match(/\d+\.\d+\.\d+/)[0];
+
+    if (currentVersion !== fetchedVersionNumber) {
+      console.log("New version available:", fetchedVersionNumber);
+      // Show the update-available span by removing the 'hidden' attribute
+      document.getElementById("update-available").removeAttribute("hidden");
+    } else {
+      console.log(
+        "No new version. Current version is up-to-date:",
+        currentVersion
+      );
+    }
+  }
+
+  function fetchVersionInfo() {
+    fetch("https://gordon-proxy.bnema.dev/version")
+      .then((response) => response.json())
+      .then((data) => {
+        checkVersion(data); // Pass the parsed JSON data to checkVersion
+      })
+      .catch((error) => console.error("Error fetching version:", error));
+  }
+
+  // Run fetchVersionInfo when the window loads
+  window.onload = fetchVersionInfo;
+</script>
 <div
   id="menubar"
   class="w-full h-12 md:h-16 fixed top-0 left-0 bg-gordonmascot-lblue flex flex-row justify-evenly items-center px-4 IBMPlexSans">
@@ -7,9 +40,18 @@
       Gordon
     </h1>
     <span
-      class="text-gordonmascot-mblue text-xs md:text-sm"
-      >{{ .BuildVersion }}</span
-    >
+      id="actual-version"
+      class="text-gordonmascot-mblue text-xs md:text-sm">
+      {{ .BuildVersion }}
+    </span>
+    <!-- if .LatestVersion is > to BuildVersion show arrow up -->
+    <span
+      hidden
+      id="update-available"
+      class="text-teal-200 text-xs md:text-sm"
+      title="A new version is available"
+      ><a href="{{ .LatestVersionURL }}">󰨦</a>
+    </span>
   </div>
   <div class="w-full">
     <ul
@@ -35,16 +77,3 @@
     >
   </div>
 </div>
-
-<!-- <li class="" hidden>
-        <i class="iconoir-dashboard-speed mr-2 text-3xl"></i>
-        <a href="/admin">Dashboard</a>
-      </li>
-      <li class="flex items-center justify-start w-full text-gray-600" hidden>
-        <i class="iconoir-community mr-2 text-3xl"></i>
-        <a title="Disabled" href="#">Users</a>
-      </li>
-      <li class="flex items-center justify-start w-full text-gray-600" hidden>
-        <i class="iconoir-database-settings mr-2 text-3xl"></i>
-        <a title="Disabled" href="#">Settings</a>
-      </li> -->
