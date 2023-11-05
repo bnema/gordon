@@ -11,9 +11,10 @@ import (
 )
 
 type Renderer struct {
-	Template     *template.Template
-	ParseError   error
-	BuildVersion string
+	Template      *template.Template
+	ParseError    error
+	BuildVersion  string
+	LatestVersion string
 }
 
 // Render function renders the template with the given data

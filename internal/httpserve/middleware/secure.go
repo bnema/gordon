@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"log"
 	"os"
 
@@ -12,14 +13,17 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
-func SecureRoutes() echo.MiddlewareFunc {
+func SecureRoutes(a *server.App) echo.MiddlewareFunc {
+	proxyURL := a.Config.Build.ProxyURL // <-- https://gordon-proxy.bnema.dev
+	urlCheckVersion := a.Config.Build.ProxyURL + "/version"
+	fmt.Println("Proxy URL:", proxyURL)
 	return middleware.SecureWithConfig(middleware.SecureConfig{
 		XSSProtection:         "1; mode=block",
 		ContentTypeNosniff:    "nosniff",
 		XFrameOptions:         "SAMEORIGIN",
 		HSTSMaxAge:            3600,
 		HSTSExcludeSubdomains: false,
-		ContentSecurityPolicy: "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; script-src 'self' 'unsafe-inline'",
+		ContentSecurityPolicy: "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' " + proxyURL + " " + urlCheckVersion,
 	})
 }
 

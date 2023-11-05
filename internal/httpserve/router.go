@@ -30,7 +30,7 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 	e.Use(middleware.ErrorHandler)
 
 	// Use middlewares
-	e.Use(middleware.SecureRoutes())
+	e.Use(middleware.SecureRoutes(a))
 
 	// Color scheme detection for dark/light mode
 	e.Use(middleware.ColorSchemeDetection)
