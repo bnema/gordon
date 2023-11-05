@@ -768,10 +768,6 @@ video {
   border-radius: 0.125rem;
 }
 
-.rounded-lg {
-  border-radius: 0.5rem;
-}
-
 .border {
   border-width: 1px;
 }
@@ -1132,8 +1128,6 @@ video {
 }
 
 #update-available {
-  display: inline-block;
-  /* Make sure the span is transformable */
   animation: wiggle 1s ease-in-out infinite;
 }
 
@@ -1167,10 +1161,6 @@ video {
 
 .JetBrainsMonoBoldNF, .iconfb{
   font-family: "JetBrainsMono-Nerd-Font-Bold", sans-serif;
-}
-
-.hover\:rounded-lg:hover {
-  border-radius: 0.5rem;
 }
 
 .hover\:bg-blue-700:hover {
