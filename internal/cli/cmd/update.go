@@ -19,6 +19,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/bnema/gordon/internal/cli"
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/fatih/color"
 	"github.com/pocketbase/pocketbase/tools/archive"
 	"github.com/spf13/cobra"
@@ -75,7 +76,7 @@ func NewUpdateCommand(a *cli.App) *cobra.Command {
 		SilenceUsage:  true,
 		RunE: func(command *cobra.Command, args []string) error {
 			var needConfirm bool
-			if isMaybeRunningInDocker() {
+			if docker.IsRunningInContainer() {
 				needConfirm = true
 				color.Yellow("NB! It seems that you are in a Docker container.")
 				color.Yellow("The update command may not work as expected in this context because usually the version of the app is managed by the container image itself.")
@@ -96,14 +97,6 @@ func NewUpdateCommand(a *cli.App) *cobra.Command {
 			return pluginInstance.update(withBackup)
 		},
 	}
-
-	command.PersistentFlags().BoolVar(
-		&withBackup,
-		"backup",
-		true,
-		"Creates a pb_data backup at the end of the update process",
-	)
-
 	return command
 }
 
@@ -119,9 +112,6 @@ func (p *plugin) update(withBackup bool) error {
 	if err != nil {
 		return err
 	}
-
-	fmt.Println("Latest version:", latest.Tag)
-	fmt.Println("Current version:", p.currentVersion)
 
 	if compareVersions(strings.TrimPrefix(p.currentVersion, "v"), strings.TrimPrefix(latest.Tag, "v")) <= 0 {
 		color.Green("You already have the latest version %s.", p.currentVersion)
@@ -366,9 +356,4 @@ func compareVersions(a, b string) int {
 	}
 
 	return 0 // equal
-}
-
-func isMaybeRunningInDocker() bool {
-	_, err := os.Stat("/.iscontainer")
-	return err == nil
 }
