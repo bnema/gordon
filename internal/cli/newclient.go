@@ -11,9 +11,11 @@ type App struct {
 }
 
 // NewClientApp initializes a new App with configuration.
-func NewClientApp() (*App, error) {
+func NewClientApp(buildConfig common.BuildConfig) (*App, error) {
 	// Initialize AppConfig
-	config := common.Config{}
+	config := common.Config{
+		Build: buildConfig,
+	}
 	_, err := config.LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)

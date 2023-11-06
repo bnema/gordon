@@ -10,7 +10,7 @@ import (
 	"github.com/bnema/gordon/internal/webui"
 )
 
-func NewServerApp() (*App, error) {
+func NewServerApp(common.BuildConfig) (*App, error) {
 	// Initialize AppConfig
 	config := common.Config{}
 	_, err := config.LoadConfig()
