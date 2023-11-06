@@ -93,8 +93,6 @@
 }
 
 #update-available {
-  display: inline-block;
-  /* Make sure the span is transformable */
   animation: wiggle 1s ease-in-out infinite;
 }
 
