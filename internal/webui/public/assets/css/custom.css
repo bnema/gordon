@@ -80,6 +80,24 @@
   }
 }
 
+@keyframes wiggle {
+
+  0%,
+  100% {
+    transform: rotate(-3deg);
+  }
+
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+#update-available {
+  display: inline-block;
+  /* Make sure the span is transformable */
+  animation: wiggle 1s ease-in-out infinite;
+}
+
 .slide-it {
   view-transition-name: slide-it;
 }

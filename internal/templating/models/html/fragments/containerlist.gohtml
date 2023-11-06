@@ -1,10 +1,8 @@
-<div id="actionResponse"></div>
-
-<div class="flex flex-col p-4" hx-boost="true">
+<div class="flex flex-col p-4" hx-ext="response-targets">
   <h1 class="text-lg md:text-xl font-bold text-gordonmascot-hblue">
     {{index .Lang "manager" "content" "h1-containers"}}
   </h1>
-  <table class="p-4 border-t-2 table-auto" hx-ext="response-targets">
+  <table class="p-4 border-t-2 table-auto">
     <thead>
       <tr class="text-center text-gray-400">
         <th>{{index .Lang "manager" "content" "thName"}}</th>
@@ -15,11 +13,11 @@
       </tr>
     </thead>
     <tbody>
-      {{ $Lang := .Lang }}  
+      {{ $Lang := .Lang }} 
       {{
         range.containers
       }}
-      <tr id="container-{{.ID}}" class="text-center">
+      <tr id="container-{{.ID}}" class="text-center hover:bg-slate-100">
         <td>
           <span
             title="{{.Container.ID}}"
@@ -31,11 +29,10 @@
         <td class="status-container">{{.Status}} (Up since {{.UpSince}})</td>
         <td style="color: {{.StateColor}};">{{.State}}</td>
         <td>
-          <!-- iconoir start -->
           <button
             id="start-button-{{.ID}}"
             hx-post="/htmx/container-manager/start/{{.ID}}"
-            hx-target="#actionResponse"
+            hx-target="#actionResponse-{{.ID}}"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="outerHTML"
             class="py-2 px-4"
@@ -46,11 +43,12 @@
           <button
             id="edit-button-{{.ID}}"
             hx-get="/htmx/container-manager/edit/{{.ID}}"
-            hx-target="#actionResponse"
+            hx-target="#actionResponse-{{.ID}}"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="innerHTML"
             class="py-2 px-4"
             data-active="false"
+            _="on click toggle between .visible and .hidden on #actionResponse-{{.ID}}"
           >
             <span title="Edit the container" class="iconf text-2xl text-blue-600 hover:text-gordonmascot-hblue">󱩽</span>
           </button>
@@ -58,7 +56,7 @@
           <button
             id="stop-button-{{.ID}}"
             hx-post="/htmx/container-manager/stop/{{.ID}}"
-            hx-target="#actionResponse"
+            hx-target="#actionResponse-{{.ID}}"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="innerHTML"
             hx-confirm="{{index $Lang "manager" "content" "confirm-container-stop"}}"
@@ -70,7 +68,7 @@
           <button
             id="remove-button-img-{{.ID}}"
             hx-delete="/htmx/container-manager/delete/{{.ID}}"
-            hx-target="#actionResponse"
+            hx-target="#actionResponse-{{.ID}}"
             hx-target-*="#error-message-{{.ID}}"
             hx-swap="innerHTML"
             hx-confirm="{{index $Lang "manager" "content" "confirm-delete"}}"
@@ -80,20 +78,20 @@
             <span title="Remove the container" class="iconf text-xl text-red-600 hover:text-red-900"></span>
           </button>
         </td>
-      </tr>
+        </tr>
       <tr>
         <td colspan="7">
-          <div id="edit-container-{{.ID}}"></div>
-        </td>
-      </tr>
-      <tr>
-        <td colspan="7">
+          <div id="actionResponse-{{.ID}}" hidden></div>
           <div id="error-message-{{.ID}}" class="text-red-500"></div>
         </td>
       </tr>
       {{ else }}
       <tr>
-        <td colspan="7" class="mt-2">{{index $Lang "manager" "content" "no-containers"}}.</td>
+        <td colspan="7" class="mt-2">
+          <p class="text-center text-gray-400 text-xl">
+            {{index $Lang "manager" "content" "no-containers"}}
+          </p>
+        </td>
       </tr>
       {{
         end
