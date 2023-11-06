@@ -120,8 +120,11 @@ func (p *plugin) update(withBackup bool) error {
 		return err
 	}
 
+	fmt.Println("Latest version:", latest.Tag)
+	fmt.Println("Current version:", p.currentVersion)
+
 	if compareVersions(strings.TrimPrefix(p.currentVersion, "v"), strings.TrimPrefix(latest.Tag, "v")) <= 0 {
-		color.Green("You already have the latest PocketBase %s.", p.currentVersion)
+		color.Green("You already have the latest version %s.", p.currentVersion)
 		return nil
 	}
 
