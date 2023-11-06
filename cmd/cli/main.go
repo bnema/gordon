@@ -33,28 +33,28 @@ func Execute(client *cli.App, server *server.App) {
 }
 
 func main() {
-	a, err := cli.NewClientApp()
-	if err != nil {
-		fmt.Println("Error initializing app:", err)
-	}
-	s, err := server.NewServerApp()
-	if err != nil {
-		fmt.Println("Error initializing app:", err)
-	}
-
-	common.DockerInit(&s.Config.ContainerEngine)
-
 	build = regexp.MustCompile(`\d+\.\d+\.\d+`).FindString(build)
-	s.Config.Build = common.BuildConfig{
+	buildInfo := common.BuildConfig{
 		BuildVersion: build,
 		BuildCommit:  commit,
 		BuildDate:    date,
 		ProxyURL:     "https://gordon-proxy.bnema.dev",
 	}
 
-	if s.Config.Build.BuildVersion != "" {
-		fmt.Printf("Gordon version %s\n", s.Config.Build.BuildVersion)
+	if buildInfo.BuildVersion != "" {
+		fmt.Printf("Gordon version %s\n", build)
 	}
+
+	a, err := cli.NewClientApp(buildInfo)
+	if err != nil {
+		fmt.Println("Error initializing app:", err)
+	}
+	s, err := server.NewServerApp(buildInfo)
+	if err != nil {
+		fmt.Println("Error initializing app:", err)
+	}
+
+	common.DockerInit(&s.Config.ContainerEngine)
 
 	// Check for new version
 	go func() {
