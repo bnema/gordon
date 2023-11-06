@@ -20,14 +20,15 @@ var (
 
 var rootCmd = &cobra.Command{Use: "gordon"}
 
-func InitializeCommands(a *cli.App, s *server.App) {
-	rootCmd.AddCommand(cmd.NewServeCommand(s))
-	rootCmd.AddCommand(cmd.NewPingCommand(a))
-	rootCmd.AddCommand(cmd.NewPushCommand(a))
+func InitializeCommands(client *cli.App, server *server.App) {
+	rootCmd.AddCommand(cmd.NewServeCommand(server))
+	rootCmd.AddCommand(cmd.NewPingCommand(client))
+	rootCmd.AddCommand(cmd.NewPushCommand(client))
+	rootCmd.AddCommand(cmd.NewUpdateCommand(client))
 }
 
-func Execute(a *cli.App, s *server.App) {
-	InitializeCommands(a, s)
+func Execute(client *cli.App, server *server.App) {
+	InitializeCommands(client, server)
 	cobra.CheckErr(rootCmd.Execute())
 }
 

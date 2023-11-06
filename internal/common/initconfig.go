@@ -174,3 +174,8 @@ func (config *BuildConfig) GetRunEnv() string {
 func (config *Config) GetVersion() string {
 	return config.Build.BuildVersion
 }
+
+// get storage dir
+func (config *Config) GetStorageDir() string {
+	return config.General.StorageDir
+}
