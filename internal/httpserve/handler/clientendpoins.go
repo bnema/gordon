@@ -15,11 +15,6 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// Handle GET on /api/hello endpoint
-func GetHello(c echo.Context, a *server.App) error {
-	return c.JSON(http.StatusOK, "Hello, World!")
-}
-
 type InfoResponse struct {
 	Uptime  string `json:"uptime"`
 	Version string `json:"version"`

@@ -23,7 +23,7 @@ func RequireToken(a *server.App) echo.MiddlewareFunc {
 func validateToken(c echo.Context, a *server.App) error {
 	token := c.Request().Header.Get("Authorization")
 	if token == "" {
-		return echo.ErrUnauthorized
+		return c.JSON(401, "Unauthorized")
 	}
 	fmt.Println(token)
 	token = strings.Replace(token, "Bearer ", "", 1)
@@ -33,7 +33,7 @@ func validateToken(c echo.Context, a *server.App) error {
 	}
 
 	if token != configToken {
-		return echo.ErrUnauthorized
+		return c.JSON(401, "Unauthorized")
 	}
 
 	return nil

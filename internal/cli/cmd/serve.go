@@ -13,10 +13,16 @@ func NewServeCommand(a *server.App) *cobra.Command {
 	defaultport := "1323"
 	var port string
 
+	// if the server is running in a docker container, the default port is 80
+	if isMaybeRunningInDocker() {
+		defaultport = "80"
+	}
+
 	// if no flags -p or --port are specified, the default port is used
 	serveCmd := &cobra.Command{
-		Use:  "serve",
-		Args: cobra.NoArgs,
+		Use:   "serve",
+		Short: "Start the Gordon server",
+		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			// handler.StartServer will use the value of port, which will be the default
 			// value if no flag is specified
