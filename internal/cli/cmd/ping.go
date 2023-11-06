@@ -1,25 +1,16 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
-	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/pkg/humanize"
 
 	"github.com/spf13/cobra"
 )
-
-// Define a struct to match the JSON response structure
-type PingResponse struct {
-	Uptime  string `json:"uptime"`
-	Version string `json:"version"`
-}
 
 func NewPingCommand(a *cli.App) *cobra.Command {
 	//	handler.FieldCheck(a)
@@ -33,47 +24,9 @@ func NewPingCommand(a *cli.App) *cobra.Command {
 			}
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			data := map[string]interface{}{"message": "ping"}
-			payload, err := common.NewPingPayload(data)
+			pingResp, err := handler.PerformPingRequest(a)
 			if err != nil {
-				fmt.Println("Error creating payload:", err)
-				return
-			}
-
-			// Create a RequestPayload and populate it
-			reqPayload := common.RequestPayload{
-				Type:    "ping",
-				Payload: payload,
-			}
-
-			resp, err := handler.SendHTTPRequest(a, &reqPayload, "GET", "/ping")
-			if err != nil {
-				fmt.Println("Error sending HTTP request:", err)
-				return
-			}
-
-			// Check for non-200 status codes
-			if resp.StatusCode != http.StatusOK {
-				fmt.Printf("Received non-OK response from server: %s\n", resp.StatusCode)
-				return
-			}
-
-			// Check for the correct Content-Type header
-			if contentType := resp.Header.Get("Content-Type"); contentType != "application/json" {
-				fmt.Printf("Expected application/json response, got %s\n", contentType)
-				return
-			}
-
-			if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 404 {
-				fmt.Println("Login incorrect, edit your config file and try again")
-				return
-			}
-
-			// Unmarshal the JSON response into the PingResponse struct
-			var pingResp PingResponse
-			err = json.Unmarshal(resp.Body, &pingResp)
-			if err != nil {
-				fmt.Println("Error unmarshalling response:", err)
+				fmt.Println("Error:", err)
 				return
 			}
 
@@ -90,9 +43,8 @@ func NewPingCommand(a *cli.App) *cobra.Command {
 			// Use humanize to get a human-readable representation of the start time
 			humanizedUptime := humanize.TimeAgo(startTime)
 
-			/// Print the information
+			// Print the information
 			fmt.Printf("Pong!\nServer up since: %s\nServer version: %s\n", humanizedUptime, pingResp.Version)
-
 		},
 	}
 }
