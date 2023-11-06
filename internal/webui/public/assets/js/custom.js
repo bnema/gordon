@@ -1,10 +1,14 @@
 function initializeVersionCheck() {
-  const updateStrTemplate =
-    "New version %VERSION% available, consider pulling the latest image";
+  const updateStrTemplate = "New version %VERSION% available, consider pulling the latest image";
 
   const checkVersion = (versionData) => {
     const currentVersion = document.getElementById("actual-version").textContent.trim();
     const fetchedVersionNumber = versionData?.amd64?.name.match(/\d+\.\d+\.\d+/)?.[0];
+
+    if (!fetchedVersionNumber) {
+      console.log("Dev mode detected, skipping version check.");
+      return;
+    }
 
     if (currentVersion !== fetchedVersionNumber) {
       const updateStr = updateStrTemplate.replace("%VERSION%", fetchedVersionNumber);
@@ -12,6 +16,8 @@ function initializeVersionCheck() {
       const updateElement = document.getElementById("update-available");
       updateElement.title = updateStr;
       updateElement.removeAttribute("hidden");
+      updateElement.classList.remove("hidden"); // Remove the Tailwind `hidden` class
+      updateElement.classList.add("block"); // Add the Tailwind `block` class
     } else {
       console.log("No new version. Current version is up-to-date:", currentVersion);
     }
@@ -26,18 +32,14 @@ function initializeVersionCheck() {
 
   const init = () => {
     const currentVersion = document.getElementById("actual-version").textContent.trim();
-    
-    // If currentVersion is empty, assume dev mode and do not fetch version info
     if (!currentVersion) {
       console.log("Dev mode detected, skipping version check.");
       return;
     }
-
     fetchVersionInfo();
   };
 
   init();
 }
 
-// Ensure the document is fully loaded before running the script
-document.addEventListener('DOMContentLoaded', initializeVersionCheck);// switched to hyperscript for the most part
+document.addEventListener('DOMContentLoaded', initializeVersionCheck);
