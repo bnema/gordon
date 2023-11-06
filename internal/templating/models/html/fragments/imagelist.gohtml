@@ -9,19 +9,20 @@
       hx-target="#upload-image"
       hx-swap="innerHTML"
       title="Manually upload a .tar container image"
-      _="on click toggle between .visible and .hidden on #upload-image then add .hidden to #create-container"
+      _="on click toggle between .visible and .hidden on #upload-image then add .hidden to .create-container"
     >
 
       <span class="iconf text-xl align-middle">󰭾 </span>
       Upload
     </button>
   </div>
+      <div id="upload-image"></div>
   <table class="p-4 border-t-2">
     <tbody>
       {{
         range.Images
       }}
-      <tr id="img-{{.ID}}" hx-ext="response-targets">
+      <tr id="img-{{.ID}}" hx-ext="response-targets" class=" hover:bg-slate-100">
         <td>
           <span title="{{.ImageSummary.ID}}">{{.Name}}</span>
         </td>
@@ -34,11 +35,11 @@
           <button
             id="add-button-img-{{.ID}}"
             hx-get="/htmx/create-container/{{.ID}}"
-            hx-target="#create-container"
+            hx-target="#create-container-{{.ID}}"
             hx-target-*="#error-message-div-{{.ID}}"
             hx-swap="innerHTML"
             class="py-2 px-4"
-            _="on click toggle between .visible and .hidden on #create-container then add .hidden to #upload-image"
+            _="on click toggle between .visible and .hidden on #create-container-{{.ID}} then add .hidden to #upload-image"
           >
             <span title="Deploy a container using this image" class="iconf text-xl text-blue-600 hover:text-gordonmascot-hblue"></span>
           </button>
@@ -59,6 +60,7 @@
       <t>
         <td colspan="4">
           <div id="error-message-div-{{.ID}}" class="text-red-500"></div>
+          <div class="create-container" id="create-container-{{.ID}}"></div>
         </td>
       </tr>
       {{ else }}
@@ -70,6 +72,4 @@
       }}
     </tbody>
   </table>
-  <div id="upload-image"></div>
-  <div id="create-container"></div>
 </div>
