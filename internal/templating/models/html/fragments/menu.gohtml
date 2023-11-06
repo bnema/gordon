@@ -1,40 +1,3 @@
-<script>
-  const updateStrTemplate =
-    "New version %VERSION% available, consider pulling the latest image";
-
-  const checkVersion = (versionData) => {
-    const currentVersion = document
-      .getElementById("actual-version")
-      .textContent.trim();
-    const fetchedVersionNumber =
-      versionData?.amd64?.name.match(/\d+\.\d+\.\d+/)?.[0];
-
-    if (currentVersion !== fetchedVersionNumber) {
-      const updateStr = updateStrTemplate.replace(
-        "%VERSION%",
-        fetchedVersionNumber
-      );
-      console.log(updateStr);
-      const updateElement = document.getElementById("update-available");
-      updateElement.title = updateStr; // Set the title attribute
-      updateElement.removeAttribute("hidden");
-    } else {
-      console.log(
-        "No new version. Current version is up-to-date:",
-        currentVersion
-      );
-    }
-  };
-
-  const fetchVersionInfo = () => {
-    fetch("https://gordon-proxy.bnema.dev/version")
-      .then((response) => response.json())
-      .then(checkVersion)
-      .catch((error) => console.error("Error fetching version:", error));
-  };
-
-  window.onload = fetchVersionInfo;
-</script>
 <div
   id="menubar"
   class="w-full h-12 md:h-16 fixed top-0 left-0 bg-gordonmascot-lblue flex flex-row justify-evenly items-center px-4 IBMPlexSans">
@@ -51,7 +14,7 @@
     <span
       hidden
       id="update-available"
-      class="text-green-300 text-xs md:text-sm JetBrainsMonoNF"
+      class="text-green-300 text-xs md:text-sm JetBrainsMonoNF hidden"
       title=""
       ><a href="https://github.com/bnema/gordon/releases">󰨦</a>
     </span>
