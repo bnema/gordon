@@ -66,6 +66,9 @@ func checkAndUpdateVersion(c *Config) (string, error) {
 		remoteVersion = remoteVersions.Name
 	}
 
+	fmt.Printf("Local version: %s\n", localVersion.Version)
+	remoteVersion = remoteVersion[:len(remoteVersion)-len(getArch())-1]
+	fmt.Printf("Remote version: %s\n", remoteVersion)
 	message := CheckForNewVersion(localVersion.Version, remoteVersion)
 	if message != "" {
 		return fmt.Sprintf("New version %s is available", remoteVersion), nil
