@@ -154,3 +154,27 @@ func WhoAmI() (string, error) {
 
 	return imageInfo.ID, nil
 }
+
+func GetImageSizeFromReader(imageID string) (int64, error) {
+	// Export the image using the Docker client
+	imageReader, err := dockerCli.ImageSave(context.Background(), []string{imageID})
+	if err != nil {
+		return 0, fmt.Errorf("failed to export image: %w", err)
+	}
+
+	// Read the entire stream to get the actual size
+	actualSize := int64(0)
+	buf := make([]byte, 1024) // A buffer for reading the stream
+	for {
+		n, err := imageReader.Read(buf)
+		actualSize += int64(n)
+		if err != nil {
+			if err == io.EOF {
+				break // End of file is reached
+			}
+			return 0, fmt.Errorf("failed to read image: %w", err)
+		}
+	}
+
+	return actualSize, nil
+}
