@@ -22,7 +22,7 @@ func NewServeCommand(a *server.App) *cobra.Command {
 	// if no flags -p or --port are specified, the default port is used
 	serveCmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Start the Gordon server",
+		Short: "Start a new Gordon server instance",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			// handler.StartServer will use the value of port, which will be the default

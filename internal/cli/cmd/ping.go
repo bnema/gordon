@@ -16,7 +16,7 @@ func NewPingCommand(a *cli.App) *cobra.Command {
 	//	handler.FieldCheck(a)
 	return &cobra.Command{
 		Use:   "ping",
-		Short: "Send a ping request to the backend",
+		Short: "Send a ping request to your remote Gordon instance",
 		PreRun: func(cmd *cobra.Command, args []string) {
 			if err := handler.FieldCheck(a); err != nil {
 				fmt.Println("Field check failed:", err)

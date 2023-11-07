@@ -70,6 +70,11 @@ func checkAndUpdateVersion(c *Config) (string, error) {
 	remoteVersion = remoteVersion[:len(remoteVersion)-len(getArch())-1]
 	message := CheckForNewVersion(localVersion.Version, remoteVersion)
 
+	// if local version is empty that means dev mode is on so we don't need to check for updates
+	if localVersion.Version == "" {
+		return "", nil
+	}
+
 	if message != "" {
 		// Create a new color attribute
 		green := color.New(color.FgGreen).SprintFunc()
@@ -77,6 +82,7 @@ func checkAndUpdateVersion(c *Config) (string, error) {
 		coloredMessage := green(fmt.Sprintf("New version %s is available", remoteVersion))
 		return coloredMessage, nil
 	}
+
 	return "", nil
 
 }
