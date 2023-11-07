@@ -23,7 +23,7 @@ var rootCmd = &cobra.Command{Use: "gordon"}
 func InitializeCommands(client *cli.App, server *server.App) {
 	rootCmd.AddCommand(cmd.NewServeCommand(server))
 	rootCmd.AddCommand(cmd.NewPingCommand(client))
-	rootCmd.AddCommand(cmd.NewPushCommand(client))
+	rootCmd.AddCommand(cmd.NewDeployCommand(client))
 	rootCmd.AddCommand(cmd.NewUpdateCommand(client))
 }
 
@@ -34,15 +34,11 @@ func Execute(client *cli.App, server *server.App) {
 
 func main() {
 	build = regexp.MustCompile(`\d+\.\d+\.\d+`).FindString(build)
-	buildInfo := common.BuildConfig{
+	buildInfo := &common.BuildConfig{
 		BuildVersion: build,
 		BuildCommit:  commit,
 		BuildDate:    date,
 		ProxyURL:     "https://gordon-proxy.bnema.dev",
-	}
-
-	if buildInfo.BuildVersion != "" {
-		fmt.Printf("Gordon version %s\n", build)
 	}
 
 	a, err := cli.NewClientApp(buildInfo)

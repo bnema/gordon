@@ -55,7 +55,7 @@ func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 		return handler.GetInfos(c, a)
 	})
 	apiGroup.POST("/push", func(c echo.Context) error {
-		return handler.PostPush(c, a)
+		return handler.PostDeploy(c, a)
 	})
 }
 
