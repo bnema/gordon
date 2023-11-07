@@ -11,9 +11,10 @@ import (
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
-	"github.com/bnema/gordon/internal/cli/model"
+	"github.com/bnema/gordon/internal/cli/mvu"
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/pkg/docker"
+	"github.com/cheggaaa/pb"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -34,7 +35,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			imageName := args[0]
-			fmt.Println("Exporting image:", imageName)
+			color.Blue("Deploying image: %s", imageName)
 
 			// Validate the image name
 			if err := handler.ValidateImageName(imageName); err != nil {
@@ -57,13 +58,18 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 				return
 			}
 
+			// Export the image to a reader and return its true size
 			reader, actualSize, err := exportDockerImage(imageName)
 			if err != nil {
 				fmt.Println("Error exporting image:", err)
 				return
 			}
 
-			fmt.Print(actualSize)
+			// Initialize the progress bar
+			bar := pb.New64(actualSize)
+
+			// Wrap the ReadCounter with the bar proxy
+			progressReader := bar.NewProxyReader(reader)
 
 			// Create a RequestPayload and populate it
 			reqPayload := common.RequestPayload{
@@ -72,15 +78,23 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 					Ports:        port,
 					TargetDomain: targetDomain,
 					ImageName:    imageName,
-					Data:         reader,
+					Data:         progressReader,
 				},
 			}
+
+			// Start the progress bar
+			bar.Start()
 			// Send the request to the backend
 			resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
 			if err != nil {
 				fmt.Println("Error sending HTTP request:", err)
 				return
 			}
+			// Before finishing, ensure progress does not exceed 100%
+			bar.Set64(actualSize)
+
+			// Stop the progress bar
+			bar.Finish()
 
 			// Check the response
 			targetDomain := string(resp.Body)
@@ -103,7 +117,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 			}
 
 			// Run the TUI program
-			finalModel, err := model.RunDeploymentTUI(client, imageName, targetDomain, port)
+			finalModel, err := mvu.RunDeploymentTUI(client, imageName, targetDomain, port)
 			if err != nil {
 				fmt.Println("Error running deployment TUI:", err)
 				return
@@ -144,5 +158,7 @@ func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("error exporting image: %w", err)
 	}
+
+	// Return the wrapped reader.
 	return reader, actualSize, nil
 }
