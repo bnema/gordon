@@ -3,6 +3,6 @@ package cmd
 
 // if no command selected print all commands
 // available commands for now are:
-// - push
+// - deploy
 // - serve
 // - version

@@ -10,9 +10,11 @@ import (
 	"github.com/bnema/gordon/internal/webui"
 )
 
-func NewServerApp(common.BuildConfig) (*App, error) {
+func NewServerApp(buildConfig *common.BuildConfig) (*App, error) {
 	// Initialize AppConfig
-	config := common.Config{}
+	config := common.Config{
+		Build: *buildConfig,
+	}
 	_, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)

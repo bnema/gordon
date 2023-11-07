@@ -11,10 +11,10 @@ type App struct {
 }
 
 // NewClientApp initializes a new App with configuration.
-func NewClientApp(buildConfig common.BuildConfig) (*App, error) {
+func NewClientApp(buildConfig *common.BuildConfig) (*App, error) {
 	// Initialize AppConfig
 	config := common.Config{
-		Build: buildConfig,
+		Build: *buildConfig,
 	}
 	_, err := config.LoadConfig()
 	if err != nil {

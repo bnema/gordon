@@ -34,6 +34,8 @@ func SendRequest(req *http.Request) (*http.Response, error) {
 }
 
 type Response struct {
+	Http       *http.Response
+	Header     http.Header
 	Body       []byte
 	StatusCode int
 }
@@ -46,23 +48,23 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 	var req *http.Request
 	var err error
 
-	// Handle push type payload
-	if rp.Type == "push" {
-		pushPayload, ok := rp.Payload.(common.PushPayload)
+	// Handle deploy type payload
+	if rp.Type == "deploy" {
+		deployPayload, ok := rp.Payload.(common.DeployPayload)
 		if !ok {
-			return nil, fmt.Errorf("invalid payload type for push")
+			return nil, fmt.Errorf("invalid payload type for deploy")
 		}
 
-		req, err = http.NewRequest(method, apiUrl+endpoint, pushPayload.Data)
+		req, err = http.NewRequest(method, apiUrl+endpoint, deployPayload.Data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create new streaming request: %w", err)
 		}
 
 		setAuthRequestHeaders(req, token)
 		req.Header.Set("Content-Type", "application/octet-stream")
-		req.Header.Set("X-Ports", pushPayload.Ports)
-		req.Header.Set("X-Target-Domain", pushPayload.TargetDomain)
-		req.Header.Set("X-Image-Name", pushPayload.ImageName)
+		req.Header.Set("X-Ports", deployPayload.Ports)
+		req.Header.Set("X-Target-Domain", deployPayload.TargetDomain)
+		req.Header.Set("X-Image-Name", deployPayload.ImageName)
 
 		client := &http.Client{}
 		resp, err := client.Do(req)
@@ -103,5 +105,5 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-	return &Response{Body: body}, nil
+	return &Response{Http: resp, Body: body, StatusCode: resp.StatusCode}, nil
 }

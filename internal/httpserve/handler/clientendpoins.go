@@ -56,10 +56,10 @@ func GetInfos(c echo.Context, a *server.App) error {
 
 }
 
-func PostPush(c echo.Context, a *server.App) error {
+func PostDeploy(c echo.Context, a *server.App) error {
 
 	// Initialize pushPayload object
-	payload := &common.PushPayload{
+	payload := &common.DeployPayload{
 		Ports:        c.Request().Header.Get("X-Ports"),
 		ImageName:    c.Request().Header.Get("X-Image-Name"),
 		TargetDomain: c.Request().Header.Get("X-Target-Domain"),
