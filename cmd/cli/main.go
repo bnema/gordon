@@ -21,6 +21,7 @@ var (
 var rootCmd = &cobra.Command{Use: "gordon"}
 
 func InitializeCommands(client *cli.App, server *server.App) {
+	rootCmd.AddCommand(cmd.NewRootCommand(client))
 	rootCmd.AddCommand(cmd.NewServeCommand(server))
 	rootCmd.AddCommand(cmd.NewPingCommand(client))
 	rootCmd.AddCommand(cmd.NewDeployCommand(client))

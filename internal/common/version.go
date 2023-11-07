@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/pkg/docker"
+	"github.com/fatih/color"
 )
 
 type CurrentVersion struct {
@@ -66,14 +67,18 @@ func checkAndUpdateVersion(c *Config) (string, error) {
 		remoteVersion = remoteVersions.Name
 	}
 
-	fmt.Printf("Local version: %s\n", localVersion.Version)
 	remoteVersion = remoteVersion[:len(remoteVersion)-len(getArch())-1]
-	fmt.Printf("Remote version: %s\n", remoteVersion)
 	message := CheckForNewVersion(localVersion.Version, remoteVersion)
+
 	if message != "" {
-		return fmt.Sprintf("New version %s is available", remoteVersion), nil
+		// Create a new color attribute
+		green := color.New(color.FgGreen).SprintFunc()
+		// Use the color attribute to format the string with ANSI codes
+		coloredMessage := green(fmt.Sprintf("New version %s is available", remoteVersion))
+		return coloredMessage, nil
 	}
 	return "", nil
+
 }
 
 func CheckVersionPeriodically(c *Config) (string, error) {

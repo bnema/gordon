@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"fmt"
 	"log"
 	"os"
 
@@ -16,7 +15,6 @@ import (
 func SecureRoutes(a *server.App) echo.MiddlewareFunc {
 	proxyURL := a.Config.Build.ProxyURL // <-- https://gordon-proxy.bnema.dev
 	urlCheckVersion := a.Config.Build.ProxyURL + "/version"
-	fmt.Println("Proxy URL:", proxyURL)
 	return middleware.SecureWithConfig(middleware.SecureConfig{
 		XSSProtection:         "1; mode=block",
 		ContentTypeNosniff:    "nosniff",
