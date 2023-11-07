@@ -11,7 +11,7 @@ import (
 )
 
 // FromYAMLStructToCmdParams converts a YAMLContainerParams struct to a ContainerCommandParams struct
-func FromPayloadStructToCmdParams(ppl *common.PushPayload, a *server.App) (docker.ContainerCommandParams, error) {
+func FromPayloadStructToCmdParams(ppl *common.DeployPayload, a *server.App) (docker.ContainerCommandParams, error) {
 
 	imageID, err := docker.GetImageID(ppl.ImageName)
 	if err != nil {

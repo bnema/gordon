@@ -34,8 +34,8 @@ func (p *RequestPayload) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		p.Payload = payload
-	case "push":
-		var payload PushPayload
+	case "deploy":
+		var payload DeployPayload
 		if err := json.Unmarshal(raw["payload"], &payload); err != nil {
 			return err
 		}
@@ -52,8 +52,8 @@ func (p PingPayload) GetType() string {
 	return "ping"
 }
 
-func (p PushPayload) GetType() string {
-	return "push"
+func (p DeployPayload) GetType() string {
+	return "deploy"
 }
 
 func NewPingPayload(data map[string]interface{}) (PingPayload, error) {
@@ -64,12 +64,12 @@ func NewPingPayload(data map[string]interface{}) (PingPayload, error) {
 	return PingPayload{Message: message}, nil
 }
 
-// What do we need inside the push payload :
+// What do we need inside the deploy payload :
 // the ports as a string (80:80/tcp, 443:443/tcp)
 // the image+tag as a string (nginx:latest)
 // the .tar container image as a byte array
 
-type PushPayload struct {
+type DeployPayload struct {
 	Ports        string `json:"ports"`
 	TargetDomain string `json:"targetdomain"`
 	ImageName    string `json:"imagename"`

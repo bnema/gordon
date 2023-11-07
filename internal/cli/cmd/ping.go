@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -48,6 +49,18 @@ func NewPingCommand(a *cli.App) *cobra.Command {
 			resp, err := handler.SendHTTPRequest(a, &reqPayload, "GET", "/ping")
 			if err != nil {
 				fmt.Println("Error sending HTTP request:", err)
+				return
+			}
+
+			// Check for non-200 status codes
+			if resp.StatusCode != http.StatusOK {
+				fmt.Printf("Received non-OK response from server: %s\n", resp.StatusCode)
+				return
+			}
+
+			// Check for the correct Content-Type header
+			if contentType := resp.Header.Get("Content-Type"); contentType != "application/json" {
+				fmt.Printf("Expected application/json response, got %s\n", contentType)
 				return
 			}
 

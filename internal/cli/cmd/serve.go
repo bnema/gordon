@@ -5,6 +5,7 @@ package cmd
 import (
 	"github.com/bnema/gordon/internal/cli/handler"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/spf13/cobra"
 )
 
@@ -14,7 +15,7 @@ func NewServeCommand(a *server.App) *cobra.Command {
 	var port string
 
 	// if the server is running in a docker container, the default port is 80
-	if isMaybeRunningInDocker() {
+	if docker.IsRunningInContainer() {
 		defaultport = "80"
 	}
 

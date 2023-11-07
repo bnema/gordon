@@ -17,13 +17,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func NewPushCommand(a *cli.App) *cobra.Command {
+func NewDeployCommand(a *cli.App) *cobra.Command {
 	var port string
 	var targetDomain string
 
-	pushCmd := &cobra.Command{
-		Use:   "push [image:tag]",
-		Short: "Push an image to the server, if no tag is specified, latest is used",
+	deployCmd := &cobra.Command{
+		Use:   "deploy [image:tag]",
+		Short: "Deploy an image to the server, if no tag is specified, latest is used",
 		Args:  cobra.ExactArgs(1),
 		PreRun: func(cmd *cobra.Command, args []string) {
 			if err := handler.FieldCheck(a); err != nil {
@@ -87,8 +87,8 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 
 			// Create a RequestPayload and populate it
 			reqPayload := common.RequestPayload{
-				Type: "push",
-				Payload: common.PushPayload{
+				Type: "deploy",
+				Payload: common.DeployPayload{
 					Ports:        port,
 					TargetDomain: targetDomain,
 					ImageName:    imageName,
@@ -171,8 +171,8 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 	}
 
 	// Add flags
-	pushCmd.Flags().StringVarP(&port, "port", "p", "", "Port mapping for the container")
-	pushCmd.Flags().StringVarP(&targetDomain, "target", "t", "", "Target domain for Traefik")
+	deployCmd.Flags().StringVarP(&port, "port", "p", "", "Port mapping for the container")
+	deployCmd.Flags().StringVarP(&targetDomain, "target", "t", "", "Target domain for Traefik")
 
-	return pushCmd
+	return deployCmd
 }
