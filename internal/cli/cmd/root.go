@@ -15,17 +15,21 @@ func NewRootCommand(a *cli.App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gordon",
 		Short: "Gordon is a CLI for the Gordon project",
-	}
+		Run: func(cmd *cobra.Command, args []string) {
+			if !cmd.HasSubCommands() || cmd.CalledAs() == "" {
+				color.Green("Gordon %s", a.Config.GetVersion())
 
-	backendVersion, err := getBackendVersion(a)
-	if err != nil {
-		fmt.Println("Error getting backend version:", err)
-		return cmd
-	}
+				backendVersion, err := getBackendVersion(a)
+				if err != nil {
+					fmt.Println("Error getting backend version:", err)
+					return
+				}
 
-	// Using color.Green function to print in green
-	color.Green("Gordon %s", a.Config.GetVersion())
-	color.Blue("Gordon Backend %s", backendVersion)
+				// Using color.Blue function to print in blue
+				color.Blue("Gordon Backend %s", backendVersion)
+			}
+		},
+	}
 
 	return cmd
 }
