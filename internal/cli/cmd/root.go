@@ -12,33 +12,28 @@ import (
 
 // NewRootCommand creates a new root command
 func NewRootCommand(a *cli.App) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "gordon",
-		Short: "Gordon is a CLI for the Gordon project",
+	return &cobra.Command{
 		Run: func(cmd *cobra.Command, args []string) {
-			if !cmd.HasSubCommands() || cmd.CalledAs() == "" {
-				color.Green("Gordon %s", a.Config.GetVersion())
 
-				backendVersion, err := getBackendVersion(a)
-				if err != nil {
-					fmt.Println("Error getting backend version:", err)
-					return
-				}
+			backendVersion := getBackendVersion(a)
+			color.Green("Gordon %s", a.Config.GetVersion())
+			color.Blue("Gordon Backend %s", backendVersion)
 
-				// Using color.Blue function to print in blue
-				color.Blue("Gordon Backend %s", backendVersion)
+			if backendVersion != a.Config.GetVersion() {
+				color.Yellow("A new version of Gordon is available")
 			}
+
+			fmt.Println()
+			fmt.Println("Use \"gordon --help\" for more information about a command.")
 		},
 	}
-
-	return cmd
 }
 
-func getBackendVersion(a *cli.App) (string, error) {
+func getBackendVersion(a *cli.App) string {
 	pingResp, err := handler.PerformPingRequest(a)
 	if err != nil {
-		return "", err
+		return fmt.Sprintf("Error: %s", err)
 	}
 
-	return pingResp.Version, nil
+	return pingResp.Version
 }
