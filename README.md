@@ -14,7 +14,8 @@ Gordon is a tool written in Go that aims to simplify the deployment of your cont
 ## **Key Features**
 
 - **Ease of use**: Deploy container images effortlessly using the command **`gordon deploy`**.
-- **Self-Hosted**: Operates within your existing self-hosted environment and don't interfere with your existing setup.
+- **Self-Hosted**: Operates within your existing self-hosted environment and don't interfere with your setup.
+- **Self-Update**: The client can update itself to the latest version with `gordon update`. The backend is updated by pulling the latest image from ghcr.io.
 - **Web UI**: Provides a simple web UI to manage your deployments, domains, exposed ports, and more.
 - **Automated Routing**: Collaborates with Traefik to automatically route your application to your desired domain or subdomain.
 - **One binary**: Gordon follows the Golang philosophy of keeping things simple, offering a single binary for all functionalities.
@@ -30,7 +31,11 @@ I needed a simple tool that would automate the process of quickly spin up my web
 
 ## **Installation / Getting Started / Usage**
 
-For detailed instructions, please refer to the wiki:  <https://github.com/bnema/gordon/wiki/>
+For detailed instructions, please refer to the [wiki](https://github.com/bnema/gordon/wiki/)
+
+- [Setting up Gordon’s Backend](https://github.com/bnema/gordon/wiki/Setting-up-Gordon%E2%80%99s-Backend)
+- [Setting up Gordon's Client](https://github.com/bnema/gordon/wiki/Setting-up-Gordon's-Client)
+- [Deploying your first app](https://github.com/bnema/gordon/wiki/First-deployment)
 
 
 ## **Development Status & Disclaimer**
