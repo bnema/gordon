@@ -10,6 +10,9 @@ import (
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/spf13/cobra"
+	// env auto load
+	_ "github.com/joho/godotenv/autoload"
+	"os"
 )
 
 var (
@@ -39,7 +42,7 @@ func main() {
 		BuildVersion: build,
 		BuildCommit:  commit,
 		BuildDate:    date,
-		ProxyURL:     "https://gordon-proxy.bnema.dev",
+		ProxyURL:     os.Getenv("PROXY_URL"),
 	}
 
 	a, err := cli.NewClientApp(buildInfo)
