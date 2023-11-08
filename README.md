@@ -13,29 +13,45 @@ Gordon is a tool written in Go that aims to simplify the deployment of your cont
 
 ## **Key Features**
 
-- **Quick Deployment**: Deploy container images effortlessly using the command **`gordon deploy <image:version> -p 8080:80 -t gordon.sld.tld`**
-- **Self-Hosted**: Operates within your existing self-hosted environment.
+- **Ease of use**: Deploy container images effortlessly using the command **`gordon deploy`**.
+- **Self-Hosted**: Operates within your existing self-hosted environment and don't interfere with your existing setup.
 - **Web UI**: Provides a simple web UI to manage your deployments, domains, exposed ports, and more.
 - **Automated Routing**: Collaborates with Traefik to automatically route your application to your desired domain or subdomain.
 - **One binary**: Gordon follows the Golang philosophy of keeping things simple, offering a single binary for all functionalities.
-- **Minimal stack**: Sqlite3 is used as in memory database (no ORM), the web UI is built using Go templates, HTMX and Tailwind CSS
+- **Minimal stack**: Sqlite3 (no ORM) for the db, the web UI is built using Go templates, HTMX and Tailwind CSS
+- **Simple authentication**: Use Github OAuth to authenticate with the web UI and a token for the CLI.
+
+![Demo Deploy](assets/vhs/demo_deploy.gif?raw=true)
+
 
 ## **Why ?**
 
-I found myself spending excessive time manually deploying my containerized applications using remote SSH. Being a lazy developer, I wanted a tool that would automate this process. However, I couldn't find one that met my requirements (dead simple), so I decided to make my own.
+I found myself spending excessive time manually deploying my containerized applications via remote SSH. I needed a tool that would automate the process to quickly spin up my test environments, and since I was eager to learn Go, I decided to create it myself.
 
-## **Development Status**
+## **Installation / Getting Started / Usage**
 
-🛠️ **Note**: This project is currently under heavy development. A 0.1 release with basic features will be available soon.
+For detailed instructions, please refer to the wiki:  <https://github.com/bnema/gordon/wiki/>
 
-## **TODO for 0.1 release**
 
-- [x] Basic web UI for managing deployments
-- [x] CRUD operations with the container engine
-- [x] Improve authentication security
-- [x] Interaction with the database
-- [ ] New version update mechanism (backup, rollback etc.)
-- [ ] Basic CLI to push images to the container engine
+## **Development Status & Disclaimer**
+
+🛠️ **Note**: Gordon is under heavy development and is absolutely not ready for production. Thank you in advance for taking the time to test it and report any issues you may encounter.
+
+I also want to emphasize that I am far from being a Go expert yet. Hence, if you notice any poor practices, I welcome your feedback—respectfully, of course. It's a valuable part of the learning process!
+
+## **Roadmap beyond 0.1**
+
+- Bug fixes (obviously)
+- Add tests
+- Better error handling and logging
+- Sexier WebUI with more features while keeping it simple (spa)
+- Sexier CLI (<3 [Charm](https://github.com/charmbracelet))
+- Refined CLI to backend authentication process (utilizing GitHub OAuth Device flow)
+- `deploy` command with no params
+- `push` command
+- Templates for databases (mysql, postgresql, redis, etc.)
+
+Have suggestions? Feel free to open an issue!
 
 ## **License**
 
