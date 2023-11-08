@@ -26,7 +26,7 @@ Gordon is a tool written in Go that aims to simplify the deployment of your cont
 
 ## **Why ?**
 
-I found myself spending too much time manually deploying my containerized web apps via remote SSH. I needed a simple tool that would automate the process, allowing me to quickly spin up my web apps and preferably not on someone else's computer. And since I wanted to learn Go, I decided to build it myself.
+I needed a simple tool that would automate the process of quickly spin up my web apps and preferably not on someone else's computer. And since I wanted to learn Go, I decided to build it myself.
 
 ## **Installation / Getting Started / Usage**
 
