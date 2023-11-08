@@ -56,6 +56,7 @@ Output demo.gif
 
 Require echo
 Require gordon
+Require curl
 
 Set TypingSpeed 75ms
 Set Shell "bash"
@@ -80,12 +81,10 @@ Type "-t hello.bamen.dev"
 Sleep 1
 Enter
 
-Sleep 10
-
-Type "curl"
+Sleep 15
+Enter
+Type "curl https://hello.bamen.dev"
 Sleep 1
-Space
-Type "https://hello.bamen.dev"
 Enter
 
 Sleep 10

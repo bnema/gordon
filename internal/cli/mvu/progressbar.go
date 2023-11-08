@@ -1,9 +1,7 @@
 package mvu
 
 import (
-	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -33,32 +31,12 @@ type ProgressReader struct {
 }
 
 func NewPBModel() Model {
-	// Gradient from #011E5C to #007BC0
 	m := progress.New(progress.WithGradient("#007BC0", "#011E5C"))
 	m.Width = maxWidth
 
 	return Model{
 		progress: m,
 	}
-}
-
-// Modify RunProgressBarTUI to return a pointer to Model.
-func RunProgressBarTUI(ProgressCh <-chan ProgressMsg) (*Model, error) {
-	m := NewPBModel()
-	p := tea.NewProgram(&m)
-	// Start a goroutine that updates the progress bar as percentages are received on the channel.
-	go func() {
-		for percent := range ProgressCh {
-			p.Send(ProgressMsg(percent))
-		}
-	}()
-
-	if _, err := p.Run(); err != nil {
-		fmt.Println("Error running progress bar TUI:", err)
-		os.Exit(1)
-	}
-
-	return &m, nil // Return a pointer to the model.
 }
 
 func (pr *ProgressReader) Read(p []byte) (int, error) {
@@ -77,7 +55,7 @@ func (pr *ProgressReader) Close() error {
 	if closer, ok := pr.Reader.(io.Closer); ok {
 		return closer.Close()
 	}
-	return nil // If there's nothing to close, return nil.
+	return nil
 }
 
 func (m Model) Init() tea.Cmd {
