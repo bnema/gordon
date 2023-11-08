@@ -14,7 +14,6 @@ import (
 	"github.com/bnema/gordon/internal/cli/mvu"
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/cheggaaa/pb"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -35,7 +34,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			imageName := args[0]
-			color.Blue("Deploying image: %s", imageName)
+			color.White("Pushing image: %s", imageName)
 
 			// Validate the image name
 			if err := handler.ValidateImageName(imageName); err != nil {
@@ -65,11 +64,14 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 				return
 			}
 
-			// Initialize the progress bar
-			bar := pb.New64(actualSize)
+			progressCh := make(chan mvu.ProgressMsg)
 
-			// Wrap the ReadCounter with the bar proxy
-			progressReader := bar.NewProxyReader(reader)
+			// Create a progress function to update the progress bar
+			progressReader := &mvu.ProgressReader{
+				Reader:     reader,     // This is the actual reader from exportDockerImage
+				Total:      actualSize, // This is the total size of the data to be read
+				ProgressCh: progressCh, // This is the channel used to send progress updates
+			}
 
 			// Create a RequestPayload and populate it
 			reqPayload := common.RequestPayload{
@@ -82,56 +84,70 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 				},
 			}
 
-			// Start the progress bar
-			bar.Start()
-			// Send the request to the backend
-			resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
-			if err != nil {
-				fmt.Println("Error sending HTTP request:", err)
-				return
-			}
-			// Before finishing, ensure progress does not exceed 100%
-			bar.Set64(actualSize)
-
-			// Stop the progress bar
-			bar.Finish()
-
-			// Check the response
-			targetDomain := string(resp.Body)
-			targetDomain = strings.TrimSpace(targetDomain)  // Remove leading and trailing whitespace
-			targetDomain = strings.Trim(targetDomain, "\"") // Remove leading and trailing quotes
-
-			// Determine if the target is HTTPS or HTTP
-			isHTTPS := strings.HasPrefix(targetDomain, "https://")
-
-			// Initialize HTTP client
-			client := &http.Client{
-				Timeout: 5 * time.Second,
-			}
-
-			// Only set TLS config if target is HTTPS
-			if isHTTPS {
-				client.Transport = &http.Transport{
-					TLSClientConfig: &tls.Config{InsecureSkipVerify: false}, // set false to ensure certificate is validated
+			go func() {
+				resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
+				if err != nil {
+					fmt.Println("Error sending HTTP request:", err)
+					// Don't forget to close the channel if there's an error
+					close(progressCh)
+					return
 				}
-			}
 
-			// Run the TUI program
-			finalModel, err := mvu.RunDeploymentTUI(client, imageName, targetDomain, port)
+				// Check the response
+				targetDomain := string(resp.Body)
+				targetDomain = strings.TrimSpace(targetDomain)  // Remove leading and trailing whitespace
+				targetDomain = strings.Trim(targetDomain, "\"") // Remove leading and trailing quotes
+				// Close the progress channel after the upload is complete
+				// Determine if the target is HTTPS or HTTP
+				isHTTPS := strings.HasPrefix(targetDomain, "https://")
+
+				// Initialize HTTP client
+				client := &http.Client{
+					Timeout: 5 * time.Second,
+				}
+
+				// Only set TLS config if target is HTTPS
+				if isHTTPS {
+					client.Transport = &http.Transport{
+						TLSClientConfig: &tls.Config{InsecureSkipVerify: false}, // set false to ensure certificate is validated
+					}
+				}
+
+				// Run the TUI program
+				finalModel, err := mvu.RunDeploymentTUI(client, imageName, targetDomain, port)
+				if err != nil {
+					fmt.Println("Error running deployment TUI:", err)
+					return
+				}
+
+				// Check if the deployment was successful
+				if !finalModel.DeploymentDone {
+					fmt.Println("Deployment failed check your configuration and try again.")
+					return
+				}
+
+				// Print the final message
+				color.Blue("	Deployment successful!")
+				fmt.Println("	Your application is now available at:", targetDomain)
+				close(progressCh)
+			}()
+
+			// Run the progress bar TUI
+			m, err := mvu.RunProgressBarTUI(progressCh)
 			if err != nil {
-				fmt.Println("Error running deployment TUI:", err)
+				fmt.Println("Error running progress bar TUI:", err)
 				return
 			}
 
-			// Check if the deployment was successful
-			if !finalModel.DeploymentDone {
-				fmt.Println("Deployment failed check your configuration and try again.")
+			// Close the reader
+			err = progressReader.Close()
+			if err != nil {
+				fmt.Println("Error closing reader:", err)
 				return
 			}
 
-			// Print the final message
-			color.Green("	Deployment successful!")
-			fmt.Println("	Your application is now available at:", targetDomain)
+			m.Done = true
+
 		},
 	}
 
