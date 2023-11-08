@@ -125,13 +125,13 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 
 			// Check if the deployment was successful
 			if !finalModel.DeploymentDone {
-				fmt.Println("Deployment failed.")
+				fmt.Println("Deployment failed check your configuration and try again.")
 				return
 			}
 
 			// Print the final message
-			color.Green("Deployment successful!")
-			fmt.Println("Your application is now available at:", targetDomain)
+			color.Green("	Deployment successful!")
+			fmt.Println("	Your application is now available at:", targetDomain)
 		},
 	}
 
