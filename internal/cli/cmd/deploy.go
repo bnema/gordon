@@ -65,6 +65,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 			}
 
 			progressCh := make(chan mvu.ProgressMsg)
+			errCh := make(chan error, 1) // Buffer of 1 to prevent goroutine leak in case of non-blocking send
 
 			// Create a progress function to update the progress bar
 			progressReader := &mvu.ProgressReader{
@@ -87,9 +88,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 			go func() {
 				resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
 				if err != nil {
-					fmt.Println("Error sending HTTP request:", err)
-					// Don't forget to close the channel if there's an error
-					close(progressCh)
+					errCh <- fmt.Errorf("error sending HTTP request: %w", err)
 					return
 				}
 
@@ -116,27 +115,42 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 				// Run the TUI program
 				finalModel, err := mvu.RunDeploymentTUI(client, imageName, targetDomain, port)
 				if err != nil {
-					fmt.Println("Error running deployment TUI:", err)
+					errCh <- fmt.Errorf("error running deployment TUI: %w", err)
 					return
 				}
 
 				// Check if the deployment was successful
 				if !finalModel.DeploymentDone {
-					fmt.Println("Deployment failed check your configuration and try again.")
+					errCh <- fmt.Errorf("deployment failed")
 					return
 				}
 
 				// Print the final message
-				color.Blue("	Deployment successful!")
-				fmt.Println("	Your application is now available at:", targetDomain)
+				color.Blue("Deployment successful!")
+				fmt.Println("Your application is now available at:", targetDomain)
 				close(progressCh)
 			}()
-
 			// Run the progress bar TUI
 			m, err := mvu.RunProgressBarTUI(progressCh)
 			if err != nil {
-				fmt.Println("Error running progress bar TUI:", err)
+				errCh <- fmt.Errorf("error running progress bar TUI: %w", err)
 				return
+			}
+			done := false
+
+			for !done {
+				select {
+				case err := <-errCh:
+					if err != nil {
+						fmt.Println(err)
+						return
+					}
+				case <-time.After(1 * time.Second):
+					// Check if the progress bar is done
+					if m.Done {
+						done = true
+					}
+				}
 			}
 
 			// Close the reader
