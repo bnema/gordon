@@ -135,25 +135,3 @@ func (m SpinnerModel) View() string {
 	// Use the textStyle to format the entire string
 	return fmt.Sprintf("\n\n	%s Wait while Traefik is setting up the domain and certificates... \n\n", m.spinner.View())
 }
-
-// RunDeploymentTUI runs the complete deployment TUI and returns the final model
-func RunDeploymentTUI(client *http.Client, imageName, targetDomain, port string) (SpinnerModel, error) {
-	m := NewSpinnerModel()
-	m.deployment.imageName = imageName
-	m.deployment.targetDomain = targetDomain
-	m.deployment.port = port
-	m.deployment.client = client
-
-	p := tea.NewProgram(m)
-	modelInterface, err := p.Run()
-	if err != nil {
-		return SpinnerModel{}, fmt.Errorf("error running TUI program: %w", err)
-	}
-
-	finalModel, ok := modelInterface.(SpinnerModel)
-	if !ok {
-		return SpinnerModel{}, fmt.Errorf("could not type assert tea model to concrete type")
-	}
-
-	return finalModel, nil
-}
