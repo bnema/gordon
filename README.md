@@ -26,7 +26,7 @@ Gordon is a tool written in Go that aims to simplify the deployment of your cont
 
 ## **Why ?**
 
-I found myself spending excessive time manually deploying my containerized applications via remote SSH. I needed a tool that would automate the process to quickly spin up my test environments, and since I was eager to learn Go, I decided to create it myself.
+I found myself spending too much time manually deploying my containerized web apps via remote SSH. I needed a simple tool that would automate the process, allowing me to quickly spin up my web apps and preferably not on someone else's computer. And since I wanted to learn Go, I decided to build it myself.
 
 ## **Installation / Getting Started / Usage**
 
@@ -45,7 +45,7 @@ I also want to emphasize that I am far from being a Go expert yet. Hence, if you
 - Add tests
 - Better error handling and logging
 - Sexier WebUI with more features while keeping it simple (spa)
-- Sexier CLI (<3 [Charm](https://github.com/charmbracelet))
+- Sexier CLI (💕 [Charm](https://github.com/charmbracelet))
 - Refined CLI to backend authentication process (utilizing GitHub OAuth Device flow)
 - `deploy` command with no params
 - `push` command
