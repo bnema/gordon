@@ -1,9 +1,9 @@
 package httpserve
 
 import (
+	server "github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/httpserve/handler"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
-	"github.com/bnema/gordon/internal/server"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo/v4"
 	echomid "github.com/labstack/echo/v4/middleware"

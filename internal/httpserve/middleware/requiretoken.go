@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/labstack/echo/v4"
 )
 
 // RequireToken is a middleware that checks for a valid token in the request
-func RequireToken(a *server.App) echo.MiddlewareFunc {
+func RequireToken(a *appserver.App) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if err := validateToken(c, a); err != nil {
@@ -20,7 +20,7 @@ func RequireToken(a *server.App) echo.MiddlewareFunc {
 	}
 }
 
-func validateToken(c echo.Context, a *server.App) error {
+func validateToken(c echo.Context, a *appserver.App) error {
 	token := c.Request().Header.Get("Authorization")
 	if token == "" {
 		return c.JSON(401, "Unauthorized")

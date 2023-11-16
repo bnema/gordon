@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/labstack/echo/v4"
 )
 
@@ -34,7 +34,7 @@ func (f NoDirFile) Readdir(count int) ([]fs.FileInfo, error) {
 }
 
 // StaticRoute serves static files from the embedded filesystem
-func StaticRoute(c echo.Context, a *server.App) error {
+func StaticRoute(c echo.Context, a *appserver.App) error {
 	// Set the cache-control header if we are not in dev mode
 	if os.Getenv("RUN_ENV") != "dev" {
 		c.Response().Header().Set("Cache-Control", "public, max-age=86400")

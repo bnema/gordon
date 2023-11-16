@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/common"
-	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/store"
@@ -20,13 +20,13 @@ type InfoResponse struct {
 	Version string `json:"version"`
 }
 
-func (info *InfoResponse) Populate(a *server.App) {
+func (info *InfoResponse) Populate(a *appserver.App) {
 	info.Uptime = a.GetUptime()
 	info.Version = a.GetVersionstring()
 }
 
 // Handle GET on /api/ping endpoint
-func GetInfos(c echo.Context, a *server.App) error {
+func GetInfos(c echo.Context, a *appserver.App) error {
 	body, _ := io.ReadAll(c.Request().Body)
 	c.Request().Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
 
@@ -56,7 +56,7 @@ func GetInfos(c echo.Context, a *server.App) error {
 
 }
 
-func PostDeploy(c echo.Context, a *server.App) error {
+func PostDeploy(c echo.Context, a *appserver.App) error {
 
 	// Initialize pushPayload object
 	payload := &common.DeployPayload{

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
@@ -22,7 +22,7 @@ func FromShortIDToImageID(ShortID string) (string, error) {
 }
 
 // CreateContainerRoute is the route for creating a new container
-func CreateContainerGET(c echo.Context, a *server.App) error {
+func CreateContainerGET(c echo.Context, a *appserver.App) error {
 	// Retreive the ShortID of the image from the URL
 	ShortID := c.Param("ID")
 
@@ -68,7 +68,7 @@ func CreateContainerGET(c echo.Context, a *server.App) error {
 }
 
 // CreateContainerPOST handles the create container form submission
-func CreateContainerPOST(c echo.Context, a *server.App) error {
+func CreateContainerPOST(c echo.Context, a *appserver.App) error {
 	// Retreive the ShortID of the image from the URL
 	ShortID := c.Param("ID")
 

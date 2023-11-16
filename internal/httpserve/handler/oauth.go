@@ -9,9 +9,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/db"
 	"github.com/bnema/gordon/internal/db/queries"
-	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/gorilla/sessions"
 	_ "github.com/joho/godotenv/autoload"
@@ -22,7 +22,7 @@ import (
 var urlToken string
 
 // compareGordonToken compares the token from the URL query parameter with the one from the config.yml
-func CompareGordonToken(c echo.Context, a *server.App) error {
+func CompareGordonToken(c echo.Context, a *appserver.App) error {
 	configToken, err := a.Config.GetToken()
 	if err != nil {
 		return err
@@ -36,7 +36,7 @@ func CompareGordonToken(c echo.Context, a *server.App) error {
 }
 
 // RenderLoginPage renders the login.html template
-func RenderLoginPage(c echo.Context, a *server.App) error {
+func RenderLoginPage(c echo.Context, a *appserver.App) error {
 	urlToken = c.QueryParam("token")
 	data := map[string]interface{}{
 		"Title": "Login",
@@ -58,7 +58,7 @@ func RenderLoginPage(c echo.Context, a *server.App) error {
 }
 
 // StartOAuthGithub starts the Github OAuth flow.
-func StartOAuthGithub(c echo.Context, a *server.App) error {
+func StartOAuthGithub(c echo.Context, a *appserver.App) error {
 	fmt.Println("Attempting to get an existing session.")
 	sess, err := getSession(c)
 	if err != nil || sess == nil || sess.Values == nil {
@@ -114,7 +114,7 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 }
 
 // initiateGithubOAuthFlow starts a new GitHub OAuth flow
-func initiateGithubOAuthFlow(c echo.Context, a *server.App) error {
+func initiateGithubOAuthFlow(c echo.Context, a *appserver.App) error {
 	clientID := os.Getenv("GITHUB_APP_ID")
 	redirectDomain := a.GenerateOauthCallbackURL()
 	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
@@ -136,7 +136,7 @@ type Sessions struct {
 }
 
 // OAuthCallback handles the callback response from Github OAuth
-func OAuthCallback(c echo.Context, a *server.App) error {
+func OAuthCallback(c echo.Context, a *appserver.App) error {
 	redirectPath := a.Config.Admin.Path
 
 	accessToken, encodedState, err := parseQueryParams(c)
@@ -201,7 +201,7 @@ func getSession(c echo.Context) (*sessions.Session, error) {
 }
 
 // handleUser handles the user creation or update
-func handleUser(c echo.Context, a *server.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
+func handleUser(c echo.Context, a *appserver.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
 	userExists, err := queries.CheckDBUserExists(a)
 	if err != nil {
 		return nil, fmt.Errorf("could not check if user exists: %w", err)
@@ -242,7 +242,7 @@ func handleUser(c echo.Context, a *server.App, accessToken, browserInfo string, 
 }
 
 // createUser creates a new user in the database
-func createUser(a *server.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
+func createUser(a *appserver.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
 	err := queries.CreateUser(a, accessToken, browserInfo, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("could not create user: %w", err)
@@ -251,7 +251,7 @@ func createUser(a *server.App, accessToken, browserInfo string, userInfo *querie
 }
 
 // updateUser updates an existing user in the database
-func updateUser(a *server.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
+func updateUser(a *appserver.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
 	user, err := queries.UpdateUser(a, accessToken, browserInfo, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("could not update user: %w", err)
@@ -305,7 +305,7 @@ func fetchGithubAPI(url string, authHeader string, result interface{}) error {
 }
 
 // githubGetUserDetails gets the user details from the Github API using the access token
-func githubGetUserDetails(c echo.Context, a *server.App) (userInfo *queries.GithubUserInfo, err error) {
+func githubGetUserDetails(c echo.Context, a *appserver.App) (userInfo *queries.GithubUserInfo, err error) {
 	accessToken := c.QueryParam("access_token")
 
 	// Fetch user info

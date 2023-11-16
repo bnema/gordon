@@ -4,17 +4,17 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/httpserve/handler"
-	"github.com/bnema/gordon/internal/server"
 
 	"github.com/labstack/echo/v4"
 )
 
-func redirectToLogin(c echo.Context, a *server.App) error {
+func redirectToLogin(c echo.Context, a *appserver.App) error {
 	return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login")
 }
 
-func RequireLogin(a *server.App) echo.MiddlewareFunc {
+func RequireLogin(a *appserver.App) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			const maxRetries = 3

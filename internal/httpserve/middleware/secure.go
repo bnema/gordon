@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/gorilla/sessions"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
@@ -12,7 +12,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
-func SecureRoutes(a *server.App) echo.MiddlewareFunc {
+func SecureRoutes(a *appserver.App) echo.MiddlewareFunc {
 	proxyURL := a.Config.Build.ProxyURL // <-- https://gordon-proxy.bnema.dev
 	urlCheckVersion := a.Config.Build.ProxyURL + "/version"
 	return middleware.SecureWithConfig(middleware.SecureConfig{
@@ -26,7 +26,7 @@ func SecureRoutes(a *server.App) echo.MiddlewareFunc {
 }
 
 // InitSessionMiddleware initializes the session middleware with secure options
-func InitSessionMiddleware(a *server.App) echo.MiddlewareFunc {
+func InitSessionMiddleware(a *appserver.App) echo.MiddlewareFunc {
 	isHttps := a.Config.Http.Https
 	secret := os.Getenv("SESSION_SECRET")
 	if secret == "" {

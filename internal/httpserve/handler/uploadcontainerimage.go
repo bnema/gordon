@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/store"
@@ -16,7 +16,7 @@ import (
 const MaxUploadSize = 1024 * 1024 * 1024 // 1GB
 
 // UploadImageHandler handles the /upload-image route to show the form
-func UploadImageGETHandler(c echo.Context, a *server.App) error {
+func UploadImageGETHandler(c echo.Context, a *appserver.App) error {
 	data := map[string]interface{}{
 		"Title": "Upload Image",
 	}
@@ -34,7 +34,7 @@ func UploadImageGETHandler(c echo.Context, a *server.App) error {
 }
 
 // UploadImageHandler handles the /upload-image
-func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
+func UploadImagePOSTHandler(c echo.Context, a *appserver.App) error {
 	// Set upload size limit
 	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, MaxUploadSize)
 	if err := c.Request().ParseMultipartForm(MaxUploadSize); err != nil {

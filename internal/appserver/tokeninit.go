@@ -1,4 +1,4 @@
-package server
+package appserver
 
 import (
 	"crypto/rand"
@@ -7,7 +7,7 @@ import (
 )
 
 // HandleNewInitialization checks if there is ANY user in the database.
-func HandleNewTokenInitialization(a *App) (string, error) {
+func (a *App) HandleNewTokenInitialization() (string, error) {
 	// Check if there is any user in the database
 	query := "SELECT COUNT(*) FROM user"
 	var count int

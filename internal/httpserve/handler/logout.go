@@ -5,13 +5,13 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/db/queries"
-	"github.com/bnema/gordon/internal/server"
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo/v4"
 )
 
-func Logout(c echo.Context, a *server.App) error {
+func Logout(c echo.Context, a *appserver.App) error {
 	// Retrieve the session
 	sess, err := getSession(c)
 	if err != nil || sess == nil {

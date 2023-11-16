@@ -7,15 +7,15 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/httpserve"
-	"github.com/bnema/gordon/internal/server"
 	"github.com/labstack/echo/v4"
 )
 
 // execute cmd/srv/main.go main function
 
-func StartServer(a *server.App, port string) error {
-	_, err := server.InitializeDB(a)
+func StartServer(a *appserver.App, port string) error {
+	_, err := appserver.InitializeDB(a)
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
@@ -23,7 +23,7 @@ func StartServer(a *server.App, port string) error {
 	// Start the session cleaner cron job
 	a.StartSessionCleaner()
 
-	_, err = server.HandleNewTokenInitialization(a)
+	_, err = a.HandleNewTokenInitialization()
 	if err != nil {
 		log.Print(err)
 	}

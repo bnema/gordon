@@ -3,14 +3,14 @@
 package cmd
 
 import (
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/cli/handler"
-	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/spf13/cobra"
 )
 
 // NewServeCommand creates a new serve command
-func NewServeCommand(a *server.App) *cobra.Command {
+func NewServeCommand(a *appserver.App) *cobra.Command {
 	defaultport := "1323"
 	var port string
 

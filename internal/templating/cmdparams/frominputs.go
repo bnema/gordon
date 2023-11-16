@@ -1,12 +1,12 @@
 package cmdparams
 
 import (
-	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/pkg/docker"
 )
 
 // FromInputsToCmdParams transforms the inputs map into a ContainerCommandParams struct
-func FromInputsToCmdParams(inputs map[string]string, a *server.App) (docker.ContainerCommandParams, error) {
+func FromInputsToCmdParams(inputs map[string]string, a *appserver.App) (docker.ContainerCommandParams, error) {
 	volumeSlice := ParseVolumeSlice(inputs["volumes"])
 	environmentSlice := ParseEnvironmentSlice(inputs["environment_variables"])
 	portMappings, err := ParsePortMappingsSlice(inputs["ports"])

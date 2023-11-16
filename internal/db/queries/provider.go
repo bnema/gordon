@@ -1,11 +1,11 @@
 package queries
 
 import (
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/db"
-	"github.com/bnema/gordon/internal/server"
 )
 
-func createDBGitHubProvider(a *server.App, userInfo *GithubUserInfo) error {
+func createDBGitHubProvider(a *appserver.App, userInfo *GithubUserInfo) error {
 	provider := &db.Provider{
 		ID:         generateUUID(),
 		Email:      userInfo.Emails[0],
@@ -20,7 +20,7 @@ func createDBGitHubProvider(a *server.App, userInfo *GithubUserInfo) error {
 	return err
 }
 
-func PopulateProviderFromDB(a *server.App) error {
+func PopulateProviderFromDB(a *appserver.App) error {
 	rows, err := a.DB.Query("SELECT id, account_id, name, login, avatar_url, profile_url, email FROM provider")
 	if err != nil {
 		return err

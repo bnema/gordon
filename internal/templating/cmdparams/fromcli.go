@@ -5,13 +5,13 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/common"
-	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
 )
 
 // FromYAMLStructToCmdParams converts a YAMLContainerParams struct to a ContainerCommandParams struct
-func FromPayloadStructToCmdParams(ppl *common.DeployPayload, a *server.App) (docker.ContainerCommandParams, error) {
+func FromPayloadStructToCmdParams(ppl *common.DeployPayload, a *appserver.App) (docker.ContainerCommandParams, error) {
 
 	imageID, err := docker.GetImageID(ppl.ImageName)
 	if err != nil {

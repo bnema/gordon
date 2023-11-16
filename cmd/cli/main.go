@@ -5,10 +5,10 @@ import (
 	"log"
 	"regexp"
 
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/cmd"
 	"github.com/bnema/gordon/internal/common"
-	"github.com/bnema/gordon/internal/server"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +20,7 @@ var (
 
 var rootCmd = &cobra.Command{Use: "gordon"}
 
-func InitializeCommands(client *cli.App, server *server.App) {
+func InitializeCommands(client *cli.App, server *appserver.App) {
 	rootCmd.AddCommand(cmd.NewRootCommand(client))
 	rootCmd.AddCommand(cmd.NewServeCommand(server))
 	rootCmd.AddCommand(cmd.NewPingCommand(client))
@@ -28,7 +28,7 @@ func InitializeCommands(client *cli.App, server *server.App) {
 	rootCmd.AddCommand(cmd.NewUpdateCommand(client))
 }
 
-func Execute(client *cli.App, server *server.App) {
+func Execute(client *cli.App, server *appserver.App) {
 	InitializeCommands(client, server)
 	cobra.CheckErr(rootCmd.Execute())
 }
@@ -46,7 +46,7 @@ func main() {
 	if err != nil {
 		fmt.Println("Error initializing app:", err)
 	}
-	s, err := server.NewServerApp(buildInfo)
+	s, err := appserver.NewServerApp(buildInfo)
 	if err != nil {
 		fmt.Println("Error initializing app:", err)
 	}

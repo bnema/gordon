@@ -1,4 +1,4 @@
-package server
+package appserver
 
 import (
 	"io"

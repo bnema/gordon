@@ -5,7 +5,7 @@ import (
 
 	"net/http"
 
-	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/appserver"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/labstack/echo/v4"
 )
@@ -16,7 +16,7 @@ var (
 )
 
 // GetLocalizedData returns the data for the localization
-func GetLocalizedData(c echo.Context, a *server.App) (map[string]interface{}, error) {
+func GetLocalizedData(c echo.Context, a *appserver.App) (map[string]interface{}, error) {
 	lang := c.Get("LangKey")
 	if lang == nil {
 		return nil, fmt.Errorf("LangKey not found in context")
@@ -33,7 +33,7 @@ func GetLocalizedData(c echo.Context, a *server.App) (map[string]interface{}, er
 }
 
 // renderAdminPage is a generalized function to render admin pages
-func renderAdminPage(c echo.Context, a *server.App, templateName string) error {
+func renderAdminPage(c echo.Context, a *appserver.App, templateName string) error {
 	data, err := GetLocalizedData(c, a)
 	if err != nil {
 		return err
@@ -53,11 +53,11 @@ func renderAdminPage(c echo.Context, a *server.App, templateName string) error {
 }
 
 // AdminRoute is the route for the admin panel
-func AdminRoute(c echo.Context, a *server.App) error {
+func AdminRoute(c echo.Context, a *appserver.App) error {
 	return renderAdminPage(c, a, "index.gohtml")
 }
 
 // AdminManagerRoute is the route of the manager page
-func AdminManagerRoute(c echo.Context, a *server.App) error {
+func AdminManagerRoute(c echo.Context, a *appserver.App) error {
 	return renderAdminPage(c, a, "manager.gohtml")
 }
