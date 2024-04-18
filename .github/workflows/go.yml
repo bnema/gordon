@@ -41,6 +41,7 @@ jobs:
           mkdir -p docker-build
           cp -r dist docker-build/
           cp Dockerfile docker-build/
+          cp .iscontainer docker-build/
 
       - name: Build and push Docker images
         run: |
