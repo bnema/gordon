@@ -2,8 +2,8 @@
 FROM alpine
 ARG BINARY
 COPY .iscontainer /
-COPY ${BINARY} /
-ENTRYPOINT ["/${BINARY}"]
+COPY gordon /
+ENTRYPOINT ["/gordon"]
 
 # Default command when running the container
 CMD ["serve"]
