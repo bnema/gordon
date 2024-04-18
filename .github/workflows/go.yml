@@ -3,10 +3,10 @@ name: Release
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
     tags:
       - '*'
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
   release:
@@ -36,10 +36,16 @@ jobs:
         run: |
           curl -sfL https://raw.githubusercontent.com/sigstore/cosign/main/install.sh | sudo sh
 
+      - name: Copy dist directory
+        run: |
+          mkdir -p docker-build
+          cp -r dist docker-build/
+          ls -a docker-build/
+
       - name: Build and push Docker images
         run: |
-          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64 --build-arg BINARY=dist/gordon_linux_amd64/gordon --platform=linux/amd64 .
-          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64 --build-arg BINARY=dist/gordon_linux_arm64/gordon --platform=linux/arm64 .
+          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64 --build-arg BINARY=gordon_linux_amd64/gordon --platform=linux/amd64 docker-build
+          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64 --build-arg BINARY=gordon_linux_arm64/gordon --platform=linux/arm64 docker-build
           docker push ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64
           docker push ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64
 
