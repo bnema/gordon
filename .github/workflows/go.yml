@@ -23,7 +23,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v3
         with:
           version: latest
-          args: release --rm-dist --clean
+          args: release --clean
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v1 
@@ -36,17 +36,17 @@ jobs:
         run: |
           curl -sfL https://raw.githubusercontent.com/sigstore/cosign/main/install.sh | sudo sh
 
-      
       - name: Build and push Docker images
         run: |
-          go build -o gordon ./cmd/cli/main.go
-          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64 --build-arg BINARY=gordon --platform=linux/amd64 .
-          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64 --build-arg BINARY=gordon --platform=linux/arm64 .
+          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64 --build-arg BINARY=dist/gordon_linux_amd64/gordon --platform=linux/amd64 .
+          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64 --build-arg BINARY=dist/gordon_linux_arm64/gordon --platform=linux/arm64 .
           docker push ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64
           docker push ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64
-          
+
       - name: Create Release
         uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref }}
           release_name: Release ${{ github.ref }}
