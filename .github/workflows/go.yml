@@ -20,7 +20,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v3
         with:
           version: latest
-          args: release --rm-dist
+          args: release --rm-dist --clean
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v1 
