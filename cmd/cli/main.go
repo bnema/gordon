@@ -61,12 +61,12 @@ func main() {
 	common.DockerInit(&s.Config.ContainerEngine)
 
 	// Check for new version
-	go func() {
-		msg, err := common.CheckVersionPeriodically(&s.Config)
-		if err != nil || msg != "" {
-			log.Printf("CheckVersionPeriodically: %v %s", err, msg)
-		}
-	}()
+	//go func() {
+	//msg, err := common.CheckVersionPeriodically(&s.Config)
+	//if err != nil || msg != "" {
+	//log.Printf("CheckVersionPeriodically: %v %s", err, msg)
+	//}
+	//}()
 
 	Execute(a, s)
 }
