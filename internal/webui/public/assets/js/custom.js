@@ -1,3 +1,6 @@
+import 'dotenv/config'; // Import dotenv to load environment variables
+
+
 function initializeVersionCheck() {
   // Dummy data for the remote version (as if fetched from a server)
   const updateStrTemplate = "New version %VERSION% available, consider pulling the latest image";
@@ -19,7 +22,8 @@ function initializeVersionCheck() {
   };
 
   const fetchVersionInfo = (currentVersion) => {
-    fetch("https://gordon-proxy.bnema.dev/version")
+    // os.Get env proxy url + /version
+    fetch(`${process.env.PROXY_URL}/version`)
       .then((response) => response.json())
       .then((versionData) => checkVersion(versionData, currentVersion))
       .catch((error) => console.error("Error fetching version:", error));
