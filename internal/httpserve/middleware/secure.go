@@ -13,7 +13,7 @@ import (
 )
 
 func SecureRoutes(a *server.App) echo.MiddlewareFunc {
-	proxyURL := a.Config.Build.ProxyURL // <-- https://gordon-proxy.bnema.dev
+	proxyURL := a.Config.Build.ProxyURL
 	urlCheckVersion := a.Config.Build.ProxyURL + "/version"
 	return middleware.SecureWithConfig(middleware.SecureConfig{
 		XSSProtection:         "1; mode=block",
