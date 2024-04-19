@@ -8,5 +8,8 @@
   "scripts": {
     "build:css": "tailwindcss build src/styles.css -o dist/styles.css",
     "dev:css": "tailwindcss -i internal/webui/public/assets/css/custom.css -o internal/webui/public/assets/css/tailwind.css --watch"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
   }
 }
