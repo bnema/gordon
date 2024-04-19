@@ -30,11 +30,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
-
-      - name: Install Cosign
-        run: |
-          curl -sfL https://raw.githubusercontent.com/sigstore/cosign/main/install.sh | sudo sh
-
+ 
       - name: Create Release
         uses: actions/create-release@v1
         env:
