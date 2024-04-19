@@ -16,16 +16,36 @@ jobs:
         with:
           go-version: 1.21
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v3
+      - name: Build
+        run: |
+          go mod tidy
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-linux-amd64 ./cmd/cli/main.go
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-windows-amd64.exe ./cmd/cli/main.go
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-darwin-amd64 ./cmd/cli/main.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-linux-arm64 ./cmd/cli/main.go
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-windows-arm64.exe ./cmd/cli/main.go
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-darwin-arm64 ./cmd/cli/main.go
+
+      - name: Build Docker Images
+        run: |
+          docker buildx build --platform linux/amd64 --tag ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64 --label org.opencontainers.image.created=$(date +'%Y-%m-%dT%H:%M:%SZ') --label org.opencontainers.image.title=gordon --label org.opencontainers.image.revision=${{ github.sha }} --label org.opencontainers.image.version=${{ github.ref_name }} --label org.opencontainers.image.source=https://github.com/bnema/gordon --push .
+          docker buildx build --platform linux/arm64 --tag ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64 --label org.opencontainers.image.created=$(date +'%Y-%m-%dT%H:%M:%SZ') --label org.opencontainers.image.title=gordon --label org.opencontainers.image.revision=${{ github.sha }} --label org.opencontainers.image.version=${{ github.ref_name }} --label org.opencontainers.image.source=https://github.com/bnema/gordon --push .
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          version: latest
-          args: release --clean
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Docker Manifest
+        run: |
+          docker manifest create ghcr.io/bnema/gordon:latest ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64 ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64 --amend
+          docker manifest push ghcr.io/bnema/gordon:latest
+
+      - name: Create Release Artifacts
+        run: |
+          zip -j gordon_${{ github.ref_name }}_linux_amd64.zip gordon-linux-amd64
+          zip -j gordon_${{ github.ref_name }}_windows_amd64.zip gordon-windows-amd64.exe
+          zip -j gordon_${{ github.ref_name }}_darwin_amd64.zip gordon-darwin-amd64
+          zip -j gordon_${{ github.ref_name }}_linux_arm64.zip gordon-linux-arm64
+          zip -j gordon_${{ github.ref_name }}_windows_arm64.zip gordon-windows-arm64.exe
+          zip -j gordon_${{ github.ref_name }}_darwin_arm64.zip gordon-darwin-arm64
 
       - name: Install Cosign
         run: |
