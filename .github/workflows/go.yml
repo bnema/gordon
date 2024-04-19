@@ -31,7 +31,9 @@ jobs:
       
       - name: Build and push Docker images
         run: |
-          goreleaser release --skip-publish --rm-dist
+          go build -o gordon ./cmd/cli/main.go
+          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64 --build-arg BINARY=gordon --platform=linux/amd64 .
+          docker build -t ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64 --build-arg BINARY=gordon --platform=linux/arm64 .
           docker push ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64
           docker push ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64
           
