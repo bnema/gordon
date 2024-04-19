@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 
 	"github.com/bnema/gordon/internal/cli"
@@ -10,9 +11,9 @@ import (
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/spf13/cobra"
+
 	// env auto load
 	_ "github.com/joho/godotenv/autoload"
-	"os"
 )
 
 var (
@@ -44,6 +45,9 @@ func main() {
 		BuildDate:    date,
 		ProxyURL:     os.Getenv("PROXY_URL"),
 	}
+
+	// console log proxy url
+	log.Printf("Proxy URL: %s", buildInfo.ProxyURL)
 
 	a, err := cli.NewClientApp(buildInfo)
 	if err != nil {
