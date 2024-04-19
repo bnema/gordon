@@ -18,18 +18,19 @@ jobs:
 
       - name: Build
         run: |
-          go mod tidy
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-linux-amd64 ./cmd/cli/main.go
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-windows-amd64.exe ./cmd/cli/main.go
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-darwin-amd64 ./cmd/cli/main.go
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-linux-arm64 ./cmd/cli/main.go
-          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-windows-arm64.exe ./cmd/cli/main.go
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o gordon-darwin-arm64 ./cmd/cli/main.go
+            go mod tidy
+            mkdir -p bin
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o bin/gordon-linux-amd64 ./cmd/cli/main.go
+            CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o bin/gordon-windows-amd64.exe ./cmd/cli/main.go
+            CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o bin/gordon-darwin-amd64 ./cmd/cli/main.go
+            CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o bin/gordon-linux-arm64 ./cmd/cli/main.go
+            CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o bin/gordon-windows-arm64.exe ./cmd/cli/main.go
+            CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.build=${{ github.ref_name }} -X main.commit=${{ github.sha }} -X main.date=$(date +'%Y-%m-%dT%H:%M:%SZ')" -o bin/gordon-darwin-arm64 ./cmd/cli/main.go
 
       - name: Build Docker Images
         run: |
-          docker buildx build --platform linux/amd64 --tag ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64 --label org.opencontainers.image.created=$(date +'%Y-%m-%dT%H:%M:%SZ') --label org.opencontainers.image.title=gordon --label org.opencontainers.image.revision=${{ github.sha }} --label org.opencontainers.image.version=${{ github.ref_name }} --label org.opencontainers.image.source=https://github.com/bnema/gordon --push .
-          docker buildx build --platform linux/arm64 --tag ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64 --label org.opencontainers.image.created=$(date +'%Y-%m-%dT%H:%M:%SZ') --label org.opencontainers.image.title=gordon --label org.opencontainers.image.revision=${{ github.sha }} --label org.opencontainers.image.version=${{ github.ref_name }} --label org.opencontainers.image.source=https://github.com/bnema/gordon --push .
+          docker buildx build --platform linux/amd64 --tag ghcr.io/bnema/gordon:${{ github.ref_name }}-amd64 --label org.opencontainers.image.created=$(date +'%Y-%m-%dT%H:%M:%SZ') --label org.opencontainers.image.title=gordon --label org.opencontainers.image.revision=${{ github.sha }} --label org.opencontainers.image.version=${{ github.ref_name }} --label org.opencontainers.image.source=https://github.com/bnema/gordon --build-arg BINARY=bin/gordon-linux-amd64 --push .
+          docker buildx build --platform linux/arm64 --tag ghcr.io/bnema/gordon:${{ github.ref_name }}-arm64 --label org.opencontainers.image.created=$(date +'%Y-%m-%dT%H:%M:%SZ') --label org.opencontainers.image.title=gordon --label org.opencontainers.image.revision=${{ github.sha }} --label org.opencontainers.image.version=${{ github.ref_name }} --label org.opencontainers.image.source=https://github.com/bnema/gordon --build-arg BINARY=bin/gordon-linux-arm64 --push .
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
