@@ -28,6 +28,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Install Cosign
+        run: |
+          curl -sfL https://raw.githubusercontent.com/sigstore/cosign/main/install.sh | sudo sh
+
       
       - name: Build and push Docker images
         run: |
