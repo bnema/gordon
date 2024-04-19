@@ -58,6 +58,7 @@ docker_manifests:
     image_templates:
       - "ghcr.io/bnema/gordon:{{ .Version }}-amd64"
       - "ghcr.io/bnema/gordon:{{ .Version }}-arm64"
+    create_flags: ["--amend"]
 
 archives:
   - format: zip
