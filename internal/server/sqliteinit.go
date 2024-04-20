@@ -17,6 +17,7 @@ const (
 
 func (a *App) getDiskDBFilePath() string {
 	DiskDBfilepath := filepath.Join(a.DBDir, a.DBFilename)
+	// if a.DBDir is empty return log "Set a path using storageDir in the config file"
 	return DiskDBfilepath
 }
 
@@ -59,7 +60,6 @@ func InitializeDB(a *App) (*sql.DB, error) {
 		}
 	}
 
-	// Change here from "sqlite3" to "sqlite"
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open disk DB: %w", err)
@@ -78,7 +78,6 @@ func InitializeDB(a *App) (*sql.DB, error) {
 }
 
 func bootstrapDB(dbPath string, app *App) error {
-	// Change here from "sqlite3" to "sqlite"
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err

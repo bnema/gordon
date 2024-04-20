@@ -46,9 +46,6 @@ func main() {
 		ProxyURL:     os.Getenv("PROXY_URL"),
 	}
 
-	// console log proxy url
-	log.Printf("Proxy URL: %s", buildInfo.ProxyURL)
-
 	a, err := cli.NewClientApp(buildInfo)
 	if err != nil {
 		fmt.Println("Error initializing app:", err)
@@ -61,12 +58,12 @@ func main() {
 	common.DockerInit(&s.Config.ContainerEngine)
 
 	// Check for new version
-	//go func() {
-	//msg, err := common.CheckVersionPeriodically(&s.Config)
-	//if err != nil || msg != "" {
-	//log.Printf("CheckVersionPeriodically: %v %s", err, msg)
-	//}
-	//}()
+	go func() {
+		msg, err := common.CheckVersionPeriodically(&s.Config)
+		if err != nil || msg != "" {
+			log.Println(msg)
+		}
+	}()
 
 	Execute(a, s)
 }

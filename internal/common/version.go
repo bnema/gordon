@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/bnema/gordon/pkg/docker"
@@ -67,6 +68,11 @@ func checkAndUpdateVersion(c *Config) (string, error) {
 		remoteVersion = remoteVersions.Name
 	}
 
+	// Check if remoteVersion is empty or doesn't contain the architecture suffix
+	if remoteVersion == "" || !strings.Contains(remoteVersion, getArch()) {
+		return "", fmt.Errorf("remote version not available for architecture %s", getArch())
+	}
+
 	remoteVersion = remoteVersion[:len(remoteVersion)-len(getArch())-1]
 	message := CheckForNewVersion(localVersion.Version, remoteVersion)
 
@@ -84,7 +90,6 @@ func checkAndUpdateVersion(c *Config) (string, error) {
 	}
 
 	return "", nil
-
 }
 
 func CheckVersionPeriodically(c *Config) (string, error) {
@@ -119,11 +124,6 @@ func CheckVersionPeriodically(c *Config) (string, error) {
 
 	return "", nil
 }
-
-// func getLocalVersion(c *Config) CurrentVersion {
-// 	// Dummy implementation, replace with your actual logic
-// 	return CurrentVersion{Version: "0.0.970"} // Example version
-// }
 
 func getRemoteVersion(c *Config) (VersionsResponse, error) {
 	proxyURL := c.Build.ProxyURL
