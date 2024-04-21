@@ -38,19 +38,26 @@ func UploadImageGETHandler(c echo.Context, a *server.App) error {
 func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
 	// Set upload size limit
 	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, MaxUploadSize)
-	if err := c.Request().ParseMultipartForm(MaxUploadSize); err != nil {
-		return c.String(http.StatusRequestEntityTooLarge, "File size exceeded")
-	}
 
-	// Get the file from the form
-	file, header, err := c.Request().FormFile("file")
+	// Parse the multipart form
+	form, err := c.MultipartForm()
 	if err != nil {
 		return sendError(c, err)
 	}
-	defer file.Close()
 
-	// Get the filename
-	filename := header.Filename
+	// Get the file from the form
+	files := form.File["file"]
+	if len(files) == 0 {
+		return c.String(http.StatusBadRequest, "No file uploaded")
+	}
+	file := files[0]
+
+	// Open the file
+	src, err := file.Open()
+	if err != nil {
+		return sendError(c, err)
+	}
+	defer src.Close()
 
 	// Create a temporary file to store the uploaded chunks
 	tempFile, err := os.CreateTemp("", "upload-*")
@@ -60,7 +67,7 @@ func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
 	defer tempFile.Close()
 
 	// Copy the file chunks to the temporary file
-	_, err = io.Copy(tempFile, file)
+	_, err = io.Copy(tempFile, src)
 	if err != nil {
 		return sendError(c, err)
 	}
@@ -72,7 +79,7 @@ func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
 	}
 
 	// Save the image to the storage directory
-	saveInPath, err := store.SaveImageToStorage(&a.Config, filename, tempFile)
+	saveInPath, err := store.SaveImageToStorage(&a.Config, file.Filename, tempFile)
 	if err != nil {
 		return sendError(c, err)
 	}
