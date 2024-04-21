@@ -32,7 +32,18 @@ func DeleteContainerImage(imageID string) error {
 	return nil
 }
 
-func GetImageID(imageName string) (string, error) {
+// CheckIfImageExists checks if an image exists in the Docker engine
+func CheckIfImageExists(imageID string) (bool, error) {
+	// Get the image information using the Docker client
+	_, err := GetImageInfo(imageID)
+	if err != nil {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func GetImageIDByName(imageName string) (string, error) {
 
 	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
 	if err != nil {
@@ -177,4 +188,15 @@ func GetImageSizeFromReader(imageID string) (int64, error) {
 	}
 
 	return actualSize, nil
+}
+
+// list all images
+func GetAllImages() ([]types.ImageSummary, error) {
+	// List images using the Docker client
+	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return images, nil
 }

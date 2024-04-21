@@ -110,7 +110,7 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	payload.ImageName = "localhost/" + payload.ImageName
 
 	// Get the image ID
-	imageID, err := docker.GetImageID(payload.ImageName)
+	imageID, err := docker.GetImageIDByName(payload.ImageName)
 	if err != nil {
 		return sendJsonError(c, err)
 	}

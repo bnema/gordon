@@ -177,21 +177,34 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 
 // export the docker image to a reader and return its true size
 func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
-	imageID, err := docker.GetImageID(imageName)
+	// Check if what the user submitted is a valid image ID
+	exists, err := docker.CheckIfImageExists(imageName)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error getting image ID: %w", err)
+		return nil, 0, fmt.Errorf("error while checking image existence: %w", err)
+	}
+
+	var imageID string
+	if exists {
+		// What the user submitted is a valid image ID
+		imageID = imageName
+	} else {
+		// What the user submitted is not a valid image ID, search by name
+		imageID, err = docker.GetImageIDByName(imageName)
+		if err != nil {
+			return nil, 0, fmt.Errorf("error while searching for image by name: %w", err)
+		}
 	}
 
 	actualSize, err := docker.GetImageSizeFromReader(imageID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error getting image size: %w", err)
+		return nil, 0, fmt.Errorf("error while retrieving image size: %w", err)
 	}
 
 	reader, err := docker.ExportImageFromEngine(imageID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error exporting image: %w", err)
+		return nil, 0, fmt.Errorf("error while exporting image: %w", err)
 	}
 
-	// Return the wrapped reader.
+	// Return the reader and the actual size
 	return reader, actualSize, nil
 }

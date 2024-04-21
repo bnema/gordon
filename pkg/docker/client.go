@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"os"
 	"time"
@@ -17,6 +18,7 @@ type ContainerEngineClient interface {
 type Config struct {
 	Sock         string
 	PodmanEnable bool
+	TLSConfig    *tls.Config
 }
 
 var (
