@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/bnema/gordon/internal/httpserve"
 	"github.com/bnema/gordon/internal/server"
@@ -39,6 +40,8 @@ func StartServer(a *server.App, port string) error {
 	}()
 
 	e := echo.New()
+	e.Server.ReadTimeout = 10 * time.Minute
+	e.Server.WriteTimeout = 10 * time.Minute
 	e.HideBanner = true
 	e.HidePort = true
 	e = httpserve.RegisterRoutes(e, a)
