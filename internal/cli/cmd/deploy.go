@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/gordon/internal/cli"
@@ -85,7 +86,11 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 				},
 			}
 
+			var wg sync.WaitGroup
+			wg.Add(1)
+
 			go func() {
+				defer wg.Done()
 				resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
 				if err != nil {
 					errCh <- fmt.Errorf("error sending HTTP request: %w", err)
@@ -136,32 +141,30 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 				errCh <- fmt.Errorf("error running progress bar TUI: %w", err)
 				return
 			}
-			done := false
+			// Wait for the deployment goroutine to complete
+			wg.Wait()
 
-			for !done {
-				select {
-				case err := <-errCh:
-					if err != nil {
-						fmt.Println(err)
-						return
-					}
-				case <-time.After(1 * time.Second):
-					// Check if the progress bar is done
-					if m.Done {
-						done = true
-					}
+			// Check for errors from the deployment goroutine
+			select {
+			case err := <-errCh:
+				if err != nil {
+					fmt.Println(err)
+					return
 				}
+			default:
 			}
 
-			// Close the reader
-			err = progressReader.Close()
-			if err != nil {
-				fmt.Println("Error closing reader:", err)
-				return
+			// Check if the progress bar is done
+			if m.Done {
+				// Close the reader
+				err = progressReader.Close()
+				if err != nil {
+					fmt.Println("Error closing reader:", err)
+					return
+				}
+			} else {
+				fmt.Println("Deployment completed, but progress bar is not done.")
 			}
-
-			m.Done = true
-
 		},
 	}
 
