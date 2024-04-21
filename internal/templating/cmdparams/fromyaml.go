@@ -22,7 +22,7 @@ type YAMLContainerParams struct {
 // FromYAMLStructToCmdParams converts a YAMLContainerParams struct to a ContainerCommandParams struct
 func FromYAMLStructToCmdParams(yamlParams YAMLContainerParams) (docker.ContainerCommandParams, error) {
 	// with the image name find the image id
-	imageID, err := docker.GetImageID(yamlParams.Image)
+	imageID, err := docker.GetImageIDByName(yamlParams.Image)
 	if err != nil {
 		return docker.ContainerCommandParams{}, err
 	}
