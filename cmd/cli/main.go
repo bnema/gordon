@@ -30,6 +30,7 @@ func InitializeCommands(client *cli.App, server *server.App) {
 	rootCmd.AddCommand(cmd.NewPingCommand(client))
 	rootCmd.AddCommand(cmd.NewDeployCommand(client))
 	rootCmd.AddCommand(cmd.NewUpdateCommand(client))
+	rootCmd.AddCommand(cmd.NewPushCommand(client))
 }
 
 func Execute(client *cli.App, server *server.App) {

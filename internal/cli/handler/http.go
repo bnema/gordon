@@ -81,6 +81,37 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 	}
 
 	// Handle other types of payloads
+	if rp.Type != "push" {
+		pushPayload, ok := rp.Payload.(common.PushPayload)
+		if !ok {
+			return nil, fmt.Errorf("invalid payload type for push")
+		}
+
+		req, err = http.NewRequest(method, apiUrl+endpoint, pushPayload.Data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create new streaming request: %w", err)
+		}
+
+		setAuthRequestHeaders(req, token)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Image-Name", pushPayload.ImageName)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to send request: %w", err)
+		}
+
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+
+		return &Response{Body: body}, nil
+	}
+
 	jsonPayload, err := json.Marshal(rp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
