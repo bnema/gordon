@@ -59,11 +59,13 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 			}
 
 			// Export the image to a reader and return its true size
-			reader, actualSize, err := exportDockerImage(imageName)
+			reader, actualSize, successMsg, err := exportDockerImage(imageName)
 			if err != nil {
 				fmt.Println("Error exporting image:", err)
 				return
 			}
+
+			fmt.Println(successMsg)
 
 			progressCh := make(chan mvu.ProgressMsg)
 			errCh := make(chan error, 1) // Buffer of 1 to prevent goroutine leak in case of non-blocking send
@@ -107,7 +109,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 
 				// Initialize HTTP client
 				client := &http.Client{
-					Timeout: 5 * time.Second,
+					Timeout: 60 * time.Second,
 				}
 
 				// Only set TLS config if target is HTTPS
@@ -176,11 +178,11 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 }
 
 // export the docker image to a reader and return its true size
-func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
+func exportDockerImage(imageName string) (io.ReadCloser, int64, string, error) {
 	// Check if what the user submitted is a valid image ID
 	exists, err := docker.CheckIfImageExists(imageName)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error while checking image existence: %w", err)
+		return nil, 0, "", fmt.Errorf("error while checking image existence: %w", err)
 	}
 
 	var imageID string
@@ -191,20 +193,23 @@ func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
 		// What the user submitted is not a valid image ID, search by name
 		imageID, err = docker.GetImageIDByName(imageName)
 		if err != nil {
-			return nil, 0, fmt.Errorf("error while searching for image by name: %w", err)
+			return nil, 0, "", fmt.Errorf("error while searching for image by name: %w", err)
 		}
 	}
 
 	actualSize, err := docker.GetImageSizeFromReader(imageID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error while retrieving image size: %w", err)
+		return nil, 0, "", fmt.Errorf("error while retrieving image size: %w", err)
 	}
 
 	reader, err := docker.ExportImageFromEngine(imageID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error while exporting image: %w", err)
+		return nil, 0, "", fmt.Errorf("error while exporting image: %w", err)
 	}
 
-	// Return the reader and the actual size
-	return reader, actualSize, nil
+	// Create a success message
+	successMsg := fmt.Sprintf("Image %s exported successfully", imageName)
+
+	// Return the reader, actual size, and success message
+	return reader, actualSize, successMsg, nil
 }
