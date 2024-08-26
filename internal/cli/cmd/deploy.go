@@ -143,8 +143,26 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 				errCh <- fmt.Errorf("error running progress bar TUI: %w", err)
 				return
 			}
+
 			// Wait for the deployment goroutine to complete
 			wg.Wait()
+
+			done := false
+
+			for !done {
+				select {
+				case err := <-errCh:
+					if err != nil {
+						fmt.Println(err)
+						return
+					}
+				case <-time.After(1 * time.Second):
+					// Check if the progress bar is done
+					if m.Done {
+						done = true
+					}
+				}
+			}
 
 			// Check for errors from the deployment goroutine
 			select {
