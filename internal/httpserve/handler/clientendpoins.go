@@ -1,9 +1,7 @@
 package handler
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 
@@ -27,13 +25,9 @@ func (info *InfoResponse) Populate(a *server.App) {
 
 // Handle GET on /api/ping endpoint
 func GetInfos(c echo.Context, a *server.App) error {
-	body, _ := io.ReadAll(c.Request().Body)
-	c.Request().Body = io.NopCloser(bytes.NewBuffer(body)) // Reset the body
-
 	payload := new(common.RequestPayload)
 	if err := c.Bind(payload); err != nil {
-		fmt.Println("Bind Error:", err)
-		return c.JSON(http.StatusBadRequest, err.Error())
+		return c.JSON(http.StatusBadRequest, "Invalid payload: "+err.Error())
 	}
 
 	if payload.Type != "ping" {
@@ -42,10 +36,11 @@ func GetInfos(c echo.Context, a *server.App) error {
 
 	pingPayload, ok := payload.Payload.(common.PingPayload)
 	if !ok {
-		return c.JSON(http.StatusBadRequest, "Invalid payload type")
+		return c.JSON(http.StatusBadRequest, "Invalid payload structure")
 	}
+
 	if pingPayload.Message != "ping" {
-		return c.JSON(http.StatusBadRequest, "Invalid payload data")
+		return c.JSON(http.StatusBadRequest, "Invalid ping message")
 	}
 
 	// Prepare and populate the information
@@ -53,11 +48,9 @@ func GetInfos(c echo.Context, a *server.App) error {
 	info.Populate(a)
 
 	return c.JSON(http.StatusOK, info)
-
 }
 
 func PostDeploy(c echo.Context, a *server.App) error {
-
 	// Initialize pushPayload object
 	payload := &common.DeployPayload{
 		Ports:        c.Request().Header.Get("X-Ports"),
@@ -89,21 +82,24 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	}
 
 	// Save the image tar in the storage
-	imageFilePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
+	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
-		return sendJsonError(c, err)
+		return sendJsonError(c, fmt.Errorf("failed to save image: %v", err))
 	}
 
+	fmt.Printf("Image saved successfully to: %s\n", imagePath)
+
 	// Import the tar in docker
-	err = docker.ImportImageToEngine(imageFilePath)
+	err = docker.ImportImageToEngine(imagePath)
 	if err != nil {
-		return sendJsonError(c, err)
+		store.RemoveFromStorage(imagePath) // Clean up the saved image if import fails
+		return sendJsonError(c, fmt.Errorf("failed to import image: %v", err))
 	}
 
 	// Remove the image from the storage
-	err = store.RemoveFromStorage()
+	err = store.RemoveFromStorage(imagePath)
 	if err != nil {
-		return sendJsonError(c, err)
+		return sendJsonError(c, fmt.Errorf("failed to remove temporary image file: %v", err))
 	}
 
 	// append localhost to the image name since it's a manually imported image and not from a registry
@@ -112,7 +108,7 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	// Get the image ID
 	imageID, err := docker.GetImageIDByName(payload.ImageName)
 	if err != nil {
-		return sendJsonError(c, err)
+		return sendJsonError(c, fmt.Errorf("failed to get image ID: %v", err))
 	}
 
 	// Update the payload with the image ID
@@ -121,29 +117,21 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	// Create the container using cmdparams.FromPayloadStructToCmdParams
 	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a)
 	if err != nil {
-		return sendJsonError(c, err)
+		return sendJsonError(c, fmt.Errorf("failed to create command parameters: %v", err))
 	}
 
 	// Create the container
 	containerID, err := docker.CreateContainer(params)
 	if err != nil {
-		return sendJsonError(c, err)
+		return sendJsonError(c, fmt.Errorf("failed to create container: %v", err))
 	}
 
 	// Start the container
 	err = docker.StartContainer(containerID)
 	if err != nil {
-		return sendJsonError(c, err)
+		docker.RemoveContainer(containerID) // Clean up if start fails
+		return sendJsonError(c, fmt.Errorf("failed to start container: %v", err))
 	}
-
-	// Remove the container if it fails to start
-	defer func() {
-		if err != nil {
-			docker.RemoveContainer(containerID)
-			c.JSON(http.StatusInternalServerError, sendJsonError(c, err))
-			return
-		}
-	}()
 
 	// If we arrive here, send back payload.TargetDomain so the client can test it
 	return c.JSON(http.StatusOK, payload.TargetDomain)
