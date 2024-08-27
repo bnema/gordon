@@ -135,7 +135,6 @@ func ImageManagerDelete(c echo.Context, a *server.App) error {
 	ShortID := c.Param("ID")
 
 	imageID, exists := safelyInteractWithIDMap(Fetch, ShortID)
-
 	if !exists {
 		return c.String(http.StatusBadRequest, "Invalid ShortImgID")
 	}
