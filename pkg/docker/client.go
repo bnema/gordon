@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 )
 
@@ -74,7 +74,7 @@ func CheckIfInitialized() error {
 	defer cancel()
 
 	// More stringent check: try to list containers
-	_, err := dockerCli.ContainerList(ctx, types.ContainerListOptions{})
+	_, err := dockerCli.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("cannot connect to Docker daemon: %s", err)
 	}
