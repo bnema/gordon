@@ -5,53 +5,82 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/bnema/gordon/internal/common"
+	"github.com/google/uuid"
 )
 
-var imagePath string
+var (
+	imagePath string
+	mu        sync.Mutex
+)
 
-func SaveImageToStorage(config *common.Config, filename string, buf io.Reader) (string, error) {
-	// Check if the folder exist if not create it
-	if _, err := os.Stat(config.General.StorageDir); os.IsNotExist(err) {
-		err := os.MkdirAll(config.General.StorageDir, 0755)
-		if err != nil {
-			return "", fmt.Errorf("failed to create storage directory: %v", err)
-		}
+// setImagePath sets the image path in a thread-safe manner
+func setImagePath(path string) {
+	mu.Lock()
+	defer mu.Unlock()
+	imagePath = path
+}
+
+// getImagePath gets the image path in a thread-safe manner
+func getImagePath() string {
+	mu.Lock()
+	defer mu.Unlock()
+	return imagePath
+}
+
+func SaveImageToStorage(config *common.Config, originalFilename string, buf io.Reader) (string, error) {
+	// Ensure the images directory exists
+	imagesDir := filepath.Join(config.General.StorageDir, "images")
+	if err := os.MkdirAll(imagesDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create images directory: %v", err)
 	}
 
-	// Define the path where the image will be saved
-	imagePath = filepath.Join(config.General.StorageDir, filename)
+	// Generate a unique ID for the image
+	id := uuid.New().String()
 
-	// Create or open a file for appending.
+	// Create a filename with the ID and original extension
+	ext := filepath.Ext(originalFilename)
+	filename := fmt.Sprintf("%s%s", id, ext)
+
+	// Full path for the new image
+	imagePath := filepath.Join(imagesDir, filename)
+
+	fmt.Printf("Saving image to: %s\n", imagePath)
+
+	// Create the file
 	outFile, err := os.Create(imagePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to open file: %v", err)
+		return "", fmt.Errorf("failed to create file: %v", err)
 	}
+	defer outFile.Close()
 
-	// Write the uploaded file's content to the outFile
-	_, err = io.Copy(outFile, buf)
+	// Write the content
+	written, err := io.Copy(outFile, buf)
 	if err != nil {
+		os.Remove(imagePath) // Clean up in case of error
 		return "", fmt.Errorf("failed to write file: %v", err)
 	}
 
-	// Check if file exists
-	if _, err := os.Stat(imagePath); os.IsNotExist(err) {
-		return "", fmt.Errorf("file does not exist: %v", err)
-	}
+	fmt.Printf("Wrote %d bytes to %s\n", written, imagePath)
 
 	return imagePath, nil
 }
 
-func RemoveFromStorage() error {
-	// Delete the file
+func RemoveFromStorage(imagePath string) error {
+	if imagePath == "" {
+		return fmt.Errorf("no image path provided to remove")
+	}
+
+	fmt.Printf("Attempting to remove file: %s\n", imagePath)
+
 	err := os.Remove(imagePath)
 	if err != nil {
 		return fmt.Errorf("failed to remove file: %v", err)
 	}
 
-	// clean up the path
-	imagePath = ""
+	fmt.Printf("Successfully removed file: %s\n", imagePath)
 
 	return nil
 }
