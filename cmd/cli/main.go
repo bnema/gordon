@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
 	"regexp"
 
 	"github.com/bnema/gordon/internal/cli"
@@ -17,12 +16,12 @@ import (
 )
 
 var (
-	build  string
-	commit string
-	date   string
+	build    string
+	commit   string
+	date     string
+	rootCmd  = &cobra.Command{Use: "gordon"}
+	proxyURL = "https://gordon-proxy.bamen.dev"
 )
-
-var rootCmd = &cobra.Command{Use: "gordon"}
 
 func InitializeCommands(client *cli.App, server *server.App) {
 	rootCmd.AddCommand(cmd.NewRootCommand(client))
@@ -44,7 +43,7 @@ func main() {
 		BuildVersion: build,
 		BuildCommit:  commit,
 		BuildDate:    date,
-		ProxyURL:     os.Getenv("PROXY_URL"),
+		ProxyURL:     proxyURL,
 	}
 
 	a, err := cli.NewClientApp(buildInfo)
