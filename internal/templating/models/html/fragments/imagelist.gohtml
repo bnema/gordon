@@ -1,6 +1,6 @@
 <div class="flex flex-col p-4">
   <!-- Upload button aligned right of Images -->
-  <div class="flex justify-between items-center mb-1"> 
+  <div class="flex justify-between items-center mb-1">
     <h1 class="text-lg md:text-xl font-bold text-gordonmascot-hblue">Images</h1>
     <button
       class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
@@ -24,14 +24,14 @@
       }}
       <tr id="img-{{.ID}}" hx-ext="response-targets" class=" hover:bg-slate-100">
         <td>
-          <span title="{{.ImageSummary.ID}}">{{.Name}}</span>
+          <span title="{{.ID}}">{{.Name}}</span>
         </td>
         <td>
           <span title="Image creation date">{{.CreatedStr}}</span>
         </td>
         <td>{{.SizeStr}}</td>
         <td align="right">
-        
+
           <button
             id="add-button-img-{{.ID}}"
             hx-get="/htmx/create-container/{{.ID}}"

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/bnema/gordon/internal/db"
@@ -115,7 +114,7 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 
 // initiateGithubOAuthFlow starts a new GitHub OAuth flow
 func initiateGithubOAuthFlow(c echo.Context, a *server.App) error {
-	clientID := os.Getenv("GITHUB_APP_ID")
+	clientID := "" // IDK why it needs that even empty, but it does
 	redirectDomain := a.GenerateOauthCallbackURL()
 	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
 
