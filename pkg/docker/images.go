@@ -7,14 +7,15 @@ import (
 	"os"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/image"
 )
 
-func ListContainerImages() ([]types.ImageSummary, error) {
+func ListContainerImages() ([]image.Summary, error) {
 	// Check if the Docker client has been initialized
 	CheckIfInitialized()
 
 	// List images using the Docker client
-	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
+	images, err := dockerCli.ImageList(context.Background(), image.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -24,7 +25,7 @@ func ListContainerImages() ([]types.ImageSummary, error) {
 
 // DeleteContainerImage deletes an image from the Docker engine
 func DeleteContainerImage(imageID string) error {
-	_, err := dockerCli.ImageRemove(context.Background(), imageID, types.ImageRemoveOptions{})
+	_, err := dockerCli.ImageRemove(context.Background(), imageID, image.RemoveOptions{})
 	if err != nil {
 		return err
 	}
@@ -45,7 +46,7 @@ func CheckIfImageExists(imageID string) (bool, error) {
 
 func GetImageIDByName(imageName string) (string, error) {
 
-	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
+	images, err := dockerCli.ImageList(context.Background(), image.ListOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to list images: %w", err)
 	}
@@ -191,9 +192,9 @@ func GetImageSizeFromReader(imageID string) (int64, error) {
 }
 
 // list all images
-func GetAllImages() ([]types.ImageSummary, error) {
+func GetAllImages() ([]image.Summary, error) {
 	// List images using the Docker client
-	images, err := dockerCli.ImageList(context.Background(), types.ImageListOptions{})
+	images, err := dockerCli.ImageList(context.Background(), image.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
