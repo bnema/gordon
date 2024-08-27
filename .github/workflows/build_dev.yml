@@ -1,39 +1,39 @@
-name: Build and Test Gordon
+# name: Build and Test Gordon
 
-on:
-  push:
-    branches:
-      - "dev"
+# on:
+#   push:
+#     branches:
+#       - "dev"
 
-jobs:
-  build-and-test:
-    name: Build and Test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    env:
-      KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
+# jobs:
+#   build-and-test:
+#     name: Build and Test
+#     runs-on: ubuntu-latest
+#     permissions:
+#       contents: read
+#       packages: write
+#     env:
+#       KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
 
-    steps:
-      - uses: actions/setup-go@v4
-        with:
-          go-version: "1.23"
+#     steps:
+#       - uses: actions/setup-go@v4
+#         with:
+#           go-version: "1.23"
 
-      - uses: actions/checkout@v3
+#       - uses: actions/checkout@v3
 
-      # - name: Run tests
-      #   run: go test ./...
+#       # - name: Run tests
+#       #   run: go test ./...
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+#       - name: Log in to GitHub Container Registry
+#         uses: docker/login-action@v2
+#         with:
+#           registry: ghcr.io
+#           username: ${{ github.actor }}
+#           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: ko-build/setup-ko@v0.6
+#       - uses: ko-build/setup-ko@v0.6
 
-      - name: Build and push with ko
-        run: |
-          ko build --platform=linux/amd64,linux/arm64 --bare --tags=dev -B ./cmd/cli --base-import-paths=false --image-refs=gordon-dev
+#       - name: Build and push with ko
+#         run: |
+#           ko build --platform=linux/amd64,linux/arm64 --bare --tags=dev -B ./cmd/cli --base-import-paths=false --image-refs=gordon-dev
