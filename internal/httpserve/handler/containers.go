@@ -50,11 +50,13 @@ func safelyInteractWithIDMap(op MapOperation, key string, value ...string) (stri
 }
 
 type HumanReadableContainerImage struct {
-	*types.ImageInspect
-	Name       string
-	ShortID    string
-	CreatedStr string
-	SizeStr    string
+	ID          string
+	Name        string
+	ShortID     string
+	CreatedStr  string
+	SizeStr     string
+	RepoDigests []string
+	RepoTags    []string
 }
 
 type HumanReadableContainer struct {
@@ -98,27 +100,29 @@ func ImageManagerComponent(c echo.Context, a *server.App) error {
 	if err != nil {
 		return sendError(c, err)
 	}
+
 	var humanReadableImages []HumanReadableContainerImage
 
-	for _, image := range images {
-		// We need to shorten the ID because it breaks the HTML
-		ShortID := image.ID[7:19]
-		// And we store both the ShortID and the full ID in a map so we can retrieve the full ID later
-		safelyInteractWithIDMap(Update, ShortID, image.ID)
-		createdTime := time.Unix(image.Created, 0)
+	for _, img := range images {
+		shortID := img.ID[7:19]
+		safelyInteractWithIDMap(Update, shortID, img.ID)
+		createdTime := time.Unix(img.Created, 0)
 		createdStr := humanize.TimeAgo(createdTime)
-		sizeStr := humanize.BytesToReadableSize(image.Size)
-		for _, repoTag := range image.RepoTags {
+		sizeStr := humanize.BytesToReadableSize(img.Size)
+
+		for _, repoTag := range img.RepoTags {
 			humanReadableImages = append(humanReadableImages, HumanReadableContainerImage{
-				ImageInspect: &types.ImageInspect{
-					ID: ShortID, // Set the ID to the ShortID
-				},
-				CreatedStr: createdStr,
-				SizeStr:    sizeStr,
-				Name:       repoTag,
+				ID:          img.ID,
+				ShortID:     shortID,
+				CreatedStr:  createdStr,
+				SizeStr:     sizeStr,
+				Name:        repoTag,
+				RepoDigests: img.RepoDigests,
+				RepoTags:    img.RepoTags,
 			})
 		}
 	}
+
 	data := map[string]interface{}{
 		"Images": humanReadableImages,
 	}

@@ -7,10 +7,9 @@ import (
 )
 
 func DockerInit(cc *ContainerEngineConfig) {
-	dockerClient := docker.DockerClient{}
-	err := dockerClient.InitializeClient(NewDockerConfig(cc))
+	err := docker.InitializeClient(NewDockerConfig(cc))
 	if err != nil {
-		log.Printf("Error: %s", err)
+		log.Printf("Error initializing Docker client: %s", err)
 	}
 }
 
