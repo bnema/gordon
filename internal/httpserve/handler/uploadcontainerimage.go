@@ -91,7 +91,7 @@ func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
 	}
 
 	// Remove the image from the storage directory
-	err = store.RemoveFromStorage()
+	err = store.RemoveFromStorage(saveInPath)
 	if err != nil {
 		return sendError(c, err)
 	}

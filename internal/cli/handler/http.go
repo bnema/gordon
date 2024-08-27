@@ -48,8 +48,8 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 	var req *http.Request
 	var err error
 
-	// Handle deploy type payload
-	if rp.Type == "deploy" {
+	switch rp.Type {
+	case "deploy":
 		deployPayload, ok := rp.Payload.(common.DeployPayload)
 		if !ok {
 			return nil, fmt.Errorf("invalid payload type for deploy")
@@ -66,22 +66,7 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 		req.Header.Set("X-Target-Domain", deployPayload.TargetDomain)
 		req.Header.Set("X-Image-Name", deployPayload.ImageName)
 
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to send request: %w", err)
-		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read response body: %w", err)
-		}
-		return &Response{Body: body}, nil
-	}
-
-	// Handle other types of payloads
-	if rp.Type != "push" {
+	case "push":
 		pushPayload, ok := rp.Payload.(common.PushPayload)
 		if !ok {
 			return nil, fmt.Errorf("invalid payload type for push")
@@ -96,34 +81,20 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("X-Image-Name", pushPayload.ImageName)
 
-		client := &http.Client{}
-		resp, err := client.Do(req)
+	default: // This will handle "ping" and any other types
+		jsonPayload, err := json.Marshal(rp)
 		if err != nil {
-			return nil, fmt.Errorf("failed to send request: %w", err)
+			return nil, fmt.Errorf("failed to marshal payload: %w", err)
 		}
 
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
+		req, err = http.NewRequest(method, apiUrl+endpoint, bytes.NewBuffer(jsonPayload))
 		if err != nil {
-			return nil, fmt.Errorf("failed to read response body: %w", err)
+			return nil, fmt.Errorf("failed to create new JSON request: %w", err)
 		}
 
-		return &Response{Body: body}, nil
+		setAuthRequestHeaders(req, token)
+		req.Header.Set("Content-Type", "application/json")
 	}
-
-	jsonPayload, err := json.Marshal(rp)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
-	req, err = http.NewRequest(method, apiUrl+endpoint, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create new JSON request: %w", err)
-	}
-
-	setAuthRequestHeaders(req, token)
-	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -136,5 +107,6 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
+
 	return &Response{Http: resp, Body: body, StatusCode: resp.StatusCode}, nil
 }
