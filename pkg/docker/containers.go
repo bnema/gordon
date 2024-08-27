@@ -93,7 +93,7 @@ func ListRunningContainers() ([]types.Container, error) {
 		return nil, err
 	}
 	// List containers using the Docker client:
-	containers, err := dockerCli.ContainerList(context.Background(), types.ContainerListOptions{All: true})
+	containers, err := dockerCli.ContainerList(context.Background(), container.ListOptions{All: true})
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +167,7 @@ func RenameContainer(containerID string, newName string) error {
 
 // RemoveContainer
 func RemoveContainer(containerID string) error {
-	err := dockerCli.ContainerRemove(context.Background(), containerID, types.ContainerRemoveOptions{})
+	err := dockerCli.ContainerRemove(context.Background(), containerID, container.RemoveOptions{Force: true})
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func StartContainer(containerID string) error {
 	}
 
 	// Start container using the Docker client
-	err = dockerCli.ContainerStart(context.Background(), containerID, types.ContainerStartOptions{})
+	err = dockerCli.ContainerStart(context.Background(), containerID, container.StartOptions{})
 	if err != nil {
 		return fmt.Errorf("could not start container: %v", err)
 	}
@@ -260,7 +260,7 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 			PortBindings: portBindings,
 			Binds:        cmdParams.Volumes,
 			RestartPolicy: container.RestartPolicy{
-				Name: cmdParams.Restart,
+				Name: "always",
 			},
 		},
 		&network.NetworkingConfig{
@@ -325,7 +325,7 @@ func UpdateContainerConfig(containerID string, newConfig *container.Config, newH
 	}
 
 	// 2. Remove the old container
-	if err := dockerCli.ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{}); err != nil {
+	if err := dockerCli.ContainerRemove(ctx, containerID, container.RemoveOptions{}); err != nil {
 		return err
 	}
 
@@ -343,7 +343,7 @@ func UpdateContainerConfig(containerID string, newConfig *container.Config, newH
 	}
 
 	// 4. Start the new container
-	if err := dockerCli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+	if err := dockerCli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return err
 	}
 
@@ -353,7 +353,7 @@ func UpdateContainerConfig(containerID string, newConfig *container.Config, newH
 // GetContainerLogs returns the logs of a container
 func GetContainerLogs(containerID string) (string, error) {
 	// Get container logs using the Docker client
-	containerLogs, err := dockerCli.ContainerLogs(context.Background(), containerID, types.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+	containerLogs, err := dockerCli.ContainerLogs(context.Background(), containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {
 		return "", err
 	}

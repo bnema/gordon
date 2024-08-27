@@ -50,7 +50,7 @@ func safelyInteractWithIDMap(op MapOperation, key string, value ...string) (stri
 }
 
 type HumanReadableContainerImage struct {
-	*types.ImageSummary
+	*types.ImageInspect
 	Name       string
 	ShortID    string
 	CreatedStr string
@@ -110,7 +110,7 @@ func ImageManagerComponent(c echo.Context, a *server.App) error {
 		sizeStr := humanize.BytesToReadableSize(image.Size)
 		for _, repoTag := range image.RepoTags {
 			humanReadableImages = append(humanReadableImages, HumanReadableContainerImage{
-				ImageSummary: &types.ImageSummary{
+				ImageInspect: &types.ImageInspect{
 					ID: ShortID, // Set the ID to the ShortID
 				},
 				CreatedStr: createdStr,
