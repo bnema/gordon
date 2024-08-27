@@ -18,30 +18,21 @@ type PingResponse struct {
 func PerformPingRequest(a *cli.App) (PingResponse, error) {
 	var pingResp PingResponse
 
-	data := map[string]interface{}{"message": "ping"}
-	payload, err := common.NewPingPayload(data)
-	if err != nil {
-		return pingResp, fmt.Errorf("failed to create new ping payload: %w", err)
-	}
-
-	// Create a RequestPayload and populate it
+	pingPayload := common.PingPayload{Message: "ping"}
 	reqPayload := common.RequestPayload{
 		Type:    "ping",
-		Payload: payload,
+		Payload: pingPayload,
 	}
 
 	resp, err := SendHTTPRequest(a, &reqPayload, "GET", "/ping")
 	if err != nil {
-		return pingResp, fmt.Errorf("failed to reach backend")
+		return pingResp, fmt.Errorf("failed to reach server: %w", err)
 	}
 
 	defer resp.Http.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return PingResponse{
-			Uptime:  "",
-			Version: "",
-		}, fmt.Errorf("expected status code 200, got %d", resp.StatusCode)
+		return PingResponse{}, fmt.Errorf("expected status code 200, got %d", resp.StatusCode)
 	}
 
 	// Unmarshal the JSON response into the PingResponse struct
