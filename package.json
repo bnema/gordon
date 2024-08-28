@@ -10,6 +10,7 @@
     "dev:css": "tailwindcss -i internal/webui/public/assets/css/custom.css -o internal/webui/public/assets/css/tailwind.css --watch"
   },
   "dependencies": {
+    "caniuse-lite": "^1.0.30001653",
     "dotenv": "^16.4.5"
   }
 }
