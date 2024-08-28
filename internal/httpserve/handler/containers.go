@@ -132,7 +132,6 @@ func ImageManagerComponent(c echo.Context, a *server.App) error {
 
 // ImageManagerDelete handles the /image-manager/delete route
 func ImageManagerDelete(c echo.Context, a *server.App) error {
-	//
 	ShortID := c.Param("ID")
 
 	imageID, exists := safelyInteractWithIDMap(Fetch, ShortID)
