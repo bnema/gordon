@@ -2,7 +2,6 @@ package handler
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/bnema/gordon/internal/httpserve"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/charmbracelet/log"
 	"github.com/labstack/echo/v4"
 )
 
@@ -35,7 +35,7 @@ func StartServer(a *server.App, port string) error {
 
 	go func() {
 		sig := <-sigs
-		log.Println("Received signal:", sig)
+		log.Info(fmt.Println("Received signal:", sig))
 		os.Exit(0)
 	}()
 
@@ -46,7 +46,7 @@ func StartServer(a *server.App, port string) error {
 	e.HidePort = true
 	e = httpserve.RegisterRoutes(e, a)
 
-	log.Println("Starting server on port", a.Config.Http.Port)
+	log.Info(fmt.Sprintf("Starting server on port %s", port))
 	if err := e.Start(fmt.Sprintf(":%s", a.Config.Http.Port)); err != nil {
 		log.Fatal(err)
 	}
