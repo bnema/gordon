@@ -22,9 +22,9 @@
       {{
         range.Images
       }}
-      <tr id="img-{{.ID}}" hx-ext="response-targets" class=" hover:bg-slate-100">
+      <tr id="img-{{.ShortID}}" hx-ext="response-targets" class=" hover:bg-slate-100">
         <td>
-          <span title="{{.ID}}">{{.Name}}</span>
+          <span title="{{.ShortID}}">{{.Name}}</span>
         </td>
         <td>
           <span title="Image creation date">{{.CreatedStr}}</span>
@@ -33,22 +33,22 @@
         <td align="right">
 
           <button
-            id="add-button-img-{{.ID}}"
-            hx-get="/htmx/create-container/{{.ID}}"
-            hx-target="#create-container-{{.ID}}"
-            hx-target-*="#error-message-div-{{.ID}}"
+            id="add-button-img-{{.ShortID}}"
+            hx-get="/htmx/create-container/{{.ShortID}}"
+            hx-target="#create-container-{{.ShortID}}"
+            hx-target-*="#error-message-div-{{.ShortID}}"
             hx-swap="innerHTML"
             class="py-2 px-4"
-            _="on click toggle between .visible and .hidden on #create-container-{{.ID}} then add .hidden to #upload-image"
+            _="on click toggle between .visible and .hidden on #create-container-{{.ShortID}} then add .hidden to #upload-image"
           >
             <span title="Deploy a container using this image" class="iconf text-xl text-blue-600 hover:text-gordonmascot-hblue"></span>
           </button>
 
           <button
-            id="remove-button-img-{{.ID}}"
-            hx-delete="/htmx/image-manager/delete/{{.ID}}"
-            hx-target="#img-{{.ID}}"
-            hx-target-*="#error-message-div-{{.ID}}"
+            id="remove-button-img-{{.ShortID}}"
+            hx-delete="/htmx/image-manager/delete/{{.ShortID}}"
+            hx-target="#img-{{.ShortID}}"
+            hx-target-*="#error-message-div-{{.ShortID}}"
             hx-swap="innerHTML"
             hx-confirm="Are you sure you want to delete this container image?"
             class="py-2 px-4"
@@ -59,8 +59,8 @@
       </tr>
       <t>
         <td colspan="4">
-          <div id="error-message-div-{{.ID}}" class="text-red-500"></div>
-          <div class="create-container" id="create-container-{{.ID}}"></div>
+          <div id="error-message-div-{{.ShortID}}" class="text-red-500"></div>
+          <div class="create-container" id="create-container-{{.ShortID}}"></div>
         </td>
       </tr>
       {{ else }}
