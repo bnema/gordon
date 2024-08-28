@@ -85,7 +85,7 @@ func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
 	}
 
 	// Import the image into Docker
-	err = docker.ImportImageToEngine(saveInPath)
+	_, err = docker.ImportImageToEngine(saveInPath)
 	if err != nil {
 		return fmt.Errorf("failed to import image to Docker: %v", err)
 	}

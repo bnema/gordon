@@ -1,10 +1,15 @@
 package docker
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"regexp"
+	"strings"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/image"
@@ -45,46 +50,143 @@ func CheckIfImageExists(imageID string) (bool, error) {
 }
 
 func GetImageIDByName(imageName string) (string, error) {
-
 	images, err := dockerCli.ImageList(context.Background(), image.ListOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to list images: %w", err)
 	}
 
-	// Search for the image we just loaded
-	var imageID string
-	for _, image := range images {
-		for _, tag := range image.RepoTags {
-			if tag == imageName {
-				imageID = image.ID
+	normalizedName, tag := normalizeImageName(imageName)
+	fmt.Printf("Searching for image: %s:%s\n", normalizedName, tag)
+
+	tagPattern := createTagPattern(tag)
+
+	for _, img := range images {
+		for _, repoTag := range img.RepoTags {
+			normalizedRepoTag, repoTagValue := normalizeImageName(repoTag)
+			fmt.Printf("Comparing with: %s:%s\n", normalizedRepoTag, repoTagValue)
+
+			// Check for exact match (including with docker.io/ prefix)
+			if repoTag == imageName || repoTag == "docker.io/"+imageName {
+				return img.ID, nil
+			}
+
+			// Check for localhost match
+			if repoTag == "localhost/"+imageName {
+				return img.ID, nil
+			}
+
+			// Check for match with normalized name and tag
+			if (normalizedRepoTag == normalizedName ||
+				normalizedRepoTag == "docker.io/"+normalizedName) &&
+				tagPattern.MatchString(repoTagValue) {
+				return img.ID, nil
 			}
 		}
 	}
 
-	if imageID == "" {
-		return "", fmt.Errorf("image not found")
-	}
-
-	return imageID, nil
+	return "", fmt.Errorf("image not found: %s", imageName)
 }
 
-// ImportImageToEngine imports an image to the Docker engine
-func ImportImageToEngine(imageFilePath string) error {
-	// Open the image file
+func normalizeImageName(name string) (string, string) {
+	// Split off the tag if present
+	parts := strings.SplitN(name, ":", 2)
+	normalizedName := parts[0]
+	tag := "latest"
+	if len(parts) > 1 {
+		tag = parts[1]
+	}
+
+	// Remove any leading "docker.io/" if present
+	normalizedName = strings.TrimPrefix(normalizedName, "docker.io/")
+
+	// Handle repository names with multiple segments
+	segments := strings.Split(normalizedName, "/")
+	if len(segments) > 1 {
+		// If there are multiple segments, join all but the last
+		normalizedName = strings.Join(segments[:len(segments)-1], "/") + "/" + segments[len(segments)-1]
+	}
+
+	return normalizedName, tag
+}
+
+func createTagPattern(tag string) *regexp.Regexp {
+	if tag == "" || tag == "latest" {
+		// Match any tag if the requested tag is empty or "latest"
+		return regexp.MustCompile(`.*`)
+	}
+
+	// Escape special regex characters in the tag
+	escapedTag := regexp.QuoteMeta(tag)
+
+	// Create a pattern that matches the tag exactly or as a prefix
+	// This allows matching "1.0" with "1.0.1", "1.0-alpine", etc.
+	return regexp.MustCompile(`^` + escapedTag + `($|[\.-])`)
+}
+
+// ImportImageToEngine imports an image to the Docker engine and returns the image ID
+func ImportImageToEngine(imageFilePath string) (string, error) {
+	log.Printf("Starting to import image from file: %s", imageFilePath)
+
 	imageFile, err := os.Open(imageFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to open image file: %w", err)
+		log.Printf("Failed to open image file: %v", err)
+		return "", fmt.Errorf("failed to open image file: %w", err)
 	}
 	defer imageFile.Close()
 
-	// Import the image using the Docker client
-	importedImage, err := dockerCli.ImageLoad(context.Background(), imageFile, false)
-	if err != nil {
-		return fmt.Errorf("failed to import image: %w", err)
-	}
-	defer importedImage.Body.Close()
+	log.Printf("Image file opened successfully")
 
-	return nil
+	resp, err := dockerCli.ImageLoad(context.Background(), imageFile, true)
+	if err != nil {
+		log.Printf("Failed to load image: %v", err)
+		return "", fmt.Errorf("failed to import image: %w", err)
+	}
+	defer resp.Body.Close()
+
+	log.Printf("Image load initiated, parsing response")
+
+	var imageName string
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		log.Printf("Response line: %s", line)
+
+		var message struct {
+			Stream string `json:"stream"`
+		}
+		if err := json.Unmarshal([]byte(line), &message); err != nil {
+			log.Printf("Failed to unmarshal JSON: %v", err)
+			continue // Skip lines that aren't JSON
+		}
+
+		log.Printf("Parsed message stream: %s", message.Stream)
+
+		if strings.HasPrefix(message.Stream, "Loaded image: ") {
+			imageName = strings.TrimSpace(strings.TrimPrefix(message.Stream, "Loaded image: "))
+			log.Printf("Found image name: %s", imageName)
+			break
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("Error reading response: %v", err)
+		return "", fmt.Errorf("error reading response: %w", err)
+	}
+
+	if imageName == "" {
+		log.Printf("Failed to find image name in import response")
+		return "", fmt.Errorf("failed to find image name in import response")
+	}
+
+	// Now we need to get the image ID from the image name
+	imageID, err := GetImageIDByName(imageName)
+	if err != nil {
+		log.Printf("Failed to get image ID for name %s: %v", imageName, err)
+		return "", fmt.Errorf("failed to get image ID: %w", err)
+	}
+
+	log.Printf("Successfully imported image with ID: %s", imageID)
+	return imageID, nil
 }
 
 // ExportImageFromEngine exports an image from the Docker engine and returns it as an io.Reader

@@ -90,11 +90,18 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	fmt.Printf("Image saved successfully to: %s\n", imagePath)
 
 	// Import the tar in docker
-	err = docker.ImportImageToEngine(imagePath)
+	imageID, err := docker.ImportImageToEngine(imagePath)
 	if err != nil {
 		store.RemoveFromStorage(imagePath) // Clean up the saved image if import fails
 		return sendJsonError(c, fmt.Errorf("failed to import image: %v", err))
 	}
+
+	if imageID == "" {
+		return sendJsonError(c, fmt.Errorf("imported image ID is empty"))
+	}
+
+	// Debug
+	fmt.Printf("Image ID: %s\n", imageID)
 
 	// Remove the image from the storage
 	err = store.RemoveFromStorage(imagePath)
@@ -102,20 +109,13 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		return sendJsonError(c, fmt.Errorf("failed to remove temporary image file: %v", err))
 	}
 
-	// append localhost to the image name since it's a manually imported image and not from a registry
-	payload.ImageName = "localhost/" + payload.ImageName
-
-	// Get the image ID
-	imageID, err := docker.GetImageIDByName(payload.ImageName)
-	if err != nil {
-		return sendJsonError(c, fmt.Errorf("failed to get image ID: %v", err))
-	}
+	fmt.Printf("Image imported successfully: %s\n", payload.ImageName)
 
 	// Update the payload with the image ID
 	payload.ImageID = imageID
 
 	// Create the container using cmdparams.FromPayloadStructToCmdParams
-	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a)
+	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a, imageID)
 	if err != nil {
 		return sendJsonError(c, fmt.Errorf("failed to create command parameters: %v", err))
 	}
