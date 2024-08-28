@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"regexp"
 
 	"github.com/bnema/gordon/internal/cli"
@@ -61,7 +60,7 @@ func main() {
 	go func() {
 		msg, err := common.CheckVersionPeriodically(&s.Config)
 		if err != nil || msg != "" {
-			log.Println(msg)
+			// log.Warnf("Error checking for new version: %s", err)
 		}
 	}()
 
