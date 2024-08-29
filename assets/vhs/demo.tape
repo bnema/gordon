@@ -52,7 +52,7 @@
 #   Hide                            Hide the subsequent commands from the output
 #   Show                            Show the subsequent commands in the output
 
-Output demo.gif
+Output demo_deploy.gif
 
 Require echo
 Require gordon
@@ -60,7 +60,7 @@ Require curl
 
 Set TypingSpeed 75ms
 Set Shell "bash"
-Set FontSize 20
+Set FontSize 19
 Set FontFamily "FiraCode Nerd Font"
 Set Width 1200
 Set Height 600
@@ -74,25 +74,20 @@ Space
 Type "bnema/go-helloworld:latest"
 Sleep 1
 Space
-Type "-p 8888:8080"
+Type "-p 6969:8080"
 Sleep 1
 Space
-Type "-t hello.bamen.dev"
-Sleep 1
+Type "-t helloworld.bamen.dev"
 Enter
-
-Sleep 14
+Sleep 10
 
 Hide
 Type "clear"
-sleep 1
 Enter
 Show
 
 
-Enter
-Type "curl https://hello.bamen.dev"
-Sleep 1
+Type "curl https://helloworld.bamen.dev"
 Enter
 
 Sleep 10
