@@ -15,7 +15,3 @@ func sendError(c echo.Context, err error) error {
 	}
 	return c.HTML(http.StatusInternalServerError, sanitizedHTML)
 }
-
-func sendJsonError(c echo.Context, err error) error {
-	return c.JSON(http.StatusInternalServerError, err.Error())
-}
