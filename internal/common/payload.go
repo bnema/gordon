@@ -16,6 +16,41 @@ type Payload interface {
 	GetType() string
 }
 
+type DeployResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Domain  string `json:"domain,omitempty"`
+}
+
+type PushResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type DeploymentError struct {
+	StatusCode  int    `json:"status_code"`
+	Message     string `json:"message"`
+	RawResponse string `json:"raw_response"`
+}
+
+func (e *DeploymentError) Error() string {
+	return fmt.Sprintf("Deployment failed (status %d): %s", e.StatusCode, e.Message)
+}
+
+type DeployPayload struct {
+	Ports        string `json:"ports"`
+	TargetDomain string `json:"targetdomain"`
+	ImageName    string `json:"imagename"`
+	ImageID      string `json:"imageid"`
+	Data         io.ReadCloser
+}
+
+type PushPayload struct {
+	ImageName string `json:"imagename"`
+	ImageID   string `json:"imageid"`
+	Data      io.ReadCloser
+}
+
 func (p *RequestPayload) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	err := json.Unmarshal(data, &raw)
@@ -75,17 +110,4 @@ func NewPingPayload(data map[string]interface{}) (PingPayload, error) {
 		return PingPayload{}, fmt.Errorf("invalid data for message")
 	}
 	return PingPayload{Message: message}, nil
-}
-
-type DeployPayload struct {
-	Ports        string `json:"ports"`
-	TargetDomain string `json:"targetdomain"`
-	ImageName    string `json:"imagename"`
-	ImageID      string `json:"imageid"`
-	Data         io.ReadCloser
-}
-
-type PushPayload struct {
-	ImageName string `json:"imagename"`
-	Data      io.ReadCloser
 }
