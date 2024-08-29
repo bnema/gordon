@@ -1,3 +1,5 @@
+version: 2
+
 before:
   hooks:
     - go mod tidy
@@ -27,13 +29,12 @@ dockers:
     build_flag_templates:
       - "--pull"
       - "--platform=linux/amd64"
+      - "--build-arg=ARCH=amd64"
       - "--label=org.opencontainers.image.created={{.Date}}"
       - "--label=org.opencontainers.image.title={{.ProjectName}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
-    extra_files:
-      - .iscontainer
   - image_templates:
       - "ghcr.io/bnema/gordon:{{ .Tag }}-arm64"
     use: buildx
@@ -42,13 +43,12 @@ dockers:
     build_flag_templates:
       - "--pull"
       - "--platform=linux/arm64"
+      - "--build-arg=ARCH=arm64"
       - "--label=org.opencontainers.image.created={{.Date}}"
       - "--label=org.opencontainers.image.title={{.ProjectName}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
-    extra_files:
-      - .iscontainer
 
 archives:
   - format: zip
