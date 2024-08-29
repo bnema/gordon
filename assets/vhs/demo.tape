@@ -71,17 +71,25 @@ Space
 Type "deploy"
 Sleep 1
 Space
-Type "bnema/go-helloworld-http:latest"
+Type "bnema/go-helloworld:latest"
 Sleep 1
 Space
 Type "-p 8888:8080"
 Sleep 1
 Space
-Type "-t hello.bamen.dev" 
+Type "-t hello.bamen.dev"
 Sleep 1
 Enter
 
-Sleep 15
+Sleep 14
+
+Hide
+Type "clear"
+sleep 1
+Enter
+Show
+
+
 Enter
 Type "curl https://hello.bamen.dev"
 Sleep 1

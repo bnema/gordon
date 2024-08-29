@@ -24,6 +24,6 @@ func CreateTraefikLabels(params *docker.ContainerCommandParams) {
 	}
 
 	if params.IsSSL {
-		params.Labels = append(params.Labels, fmt.Sprintf("%s.tls.certresolver=letsencrypt", baseRouter))
+		params.Labels = append(params.Labels, fmt.Sprintf("%s.tls.certresolver=myresolver", baseRouter))
 	}
 }

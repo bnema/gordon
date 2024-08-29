@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -16,6 +17,13 @@ import (
 type InfoResponse struct {
 	Uptime  string `json:"uptime"`
 	Version string `json:"version"`
+}
+
+type DeployResponse = common.DeployResponse
+type PushResponse = common.PushResponse
+
+func sendJSONResponse(c echo.Context, statusCode int, response interface{}) error {
+	return c.JSON(statusCode, response)
 }
 
 func (info *InfoResponse) Populate(a *server.App) {
@@ -48,6 +56,75 @@ func GetInfos(c echo.Context, a *server.App) error {
 	info.Populate(a)
 
 	return c.JSON(http.StatusOK, info)
+}
+
+func PostPush(c echo.Context, a *server.App) error {
+	// Initialize pushPayload object
+	payload := &common.PushPayload{
+		ImageName: c.Request().Header.Get("X-Image-Name"),
+	}
+
+	if payload.ImageName == "" {
+		return c.JSON(http.StatusBadRequest, "Invalid image name")
+	}
+
+	imageReader := c.Request().Body
+	defer imageReader.Close()
+
+	// Rename the image to a valid name so that it can be saved (remove user/, :tag and add .tar)
+	imageFileName := payload.ImageName
+	imageFileName = regexp.MustCompile(`^([a-zA-Z0-9\-_.]+\/)?`).ReplaceAllString(imageFileName, "")
+	imageFileName = regexp.MustCompile(`(:[a-zA-Z0-9\-_.]+)?$`).ReplaceAllString(imageFileName, "")
+	imageFileName = imageFileName + ".tar"
+
+	// Save the image tar in the storage
+	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
+	if err != nil {
+		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to save image: %v", err),
+		})
+	}
+
+	// Debug
+	fmt.Printf("Image saved successfully to: %s\n", imagePath)
+
+	// Import the tar in docker
+	imageID, err := docker.ImportImageToEngine(imagePath)
+	if err != nil {
+		store.RemoveFromStorage(imagePath) // Clean up the saved image if import fails
+		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to import image: %v", err),
+		})
+	}
+
+	if imageID == "" {
+		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
+			Success: false,
+			Message: "Imported image ID is empty",
+		})
+	}
+
+	// Remove the image from the storage
+	err = store.RemoveFromStorage(imagePath)
+	if err != nil {
+		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to remove temporary image file: %v", err),
+		})
+	}
+
+	fmt.Printf("Image imported successfully: %s\n", payload.ImageName)
+
+	// Update the payload with the image ID
+	payload.ImageID = imageID
+
+	// If we arrive here, send back a success response with the target domain
+	return sendJSONResponse(c, http.StatusOK, common.PushResponse{
+		Success: true,
+		Message: "Deployment successful",
+	})
 }
 
 func PostDeploy(c echo.Context, a *server.App) error {
@@ -84,29 +161,39 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	// Save the image tar in the storage
 	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
-		return sendJsonError(c, fmt.Errorf("failed to save image: %v", err))
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to save image: %v", err),
+		})
 	}
 
+	// Debug
 	fmt.Printf("Image saved successfully to: %s\n", imagePath)
 
 	// Import the tar in docker
 	imageID, err := docker.ImportImageToEngine(imagePath)
 	if err != nil {
 		store.RemoveFromStorage(imagePath) // Clean up the saved image if import fails
-		return sendJsonError(c, fmt.Errorf("failed to import image: %v", err))
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to import image: %v", err),
+		})
 	}
 
 	if imageID == "" {
-		return sendJsonError(c, fmt.Errorf("imported image ID is empty"))
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success: false,
+			Message: "Imported image ID is empty",
+		})
 	}
-
-	// Debug
-	fmt.Printf("Image ID: %s\n", imageID)
 
 	// Remove the image from the storage
 	err = store.RemoveFromStorage(imagePath)
 	if err != nil {
-		return sendJsonError(c, fmt.Errorf("failed to remove temporary image file: %v", err))
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to remove temporary image file: %v", err),
+		})
 	}
 
 	fmt.Printf("Image imported successfully: %s\n", payload.ImageName)
@@ -117,22 +204,40 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	// Create the container using cmdparams.FromPayloadStructToCmdParams
 	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a, imageID)
 	if err != nil {
-		return sendJsonError(c, fmt.Errorf("failed to create command parameters: %v", err))
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to create command parameters: %v", err),
+		})
 	}
-
 	// Create the container
 	containerID, err := docker.CreateContainer(params)
 	if err != nil {
-		return sendJsonError(c, fmt.Errorf("failed to create container: %v", err))
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to create container: %v", err),
+		})
 	}
 
 	// Start the container
 	err = docker.StartContainer(containerID)
 	if err != nil {
 		docker.RemoveContainer(containerID) // Clean up if start fails
-		return sendJsonError(c, fmt.Errorf("failed to start container: %v", err))
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to start container: %v", err),
+		})
 	}
 
-	// If we arrive here, send back payload.TargetDomain so the client can test it
-	return c.JSON(http.StatusOK, payload.TargetDomain)
+	// If we arrive here, send back a success response with the target domain
+	response := DeployResponse{
+		Success: true,
+		Message: "Deployment successful",
+		Domain:  payload.TargetDomain,
+	}
+
+	// Log the response before sending
+	responseJSON, _ := json.Marshal(response)
+	fmt.Printf("Server response: %s\n", string(responseJSON))
+
+	return c.JSON(http.StatusOK, response)
 }
