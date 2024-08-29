@@ -1,21 +1,21 @@
+// gordon/internal/cli/cmd/deploy.go
+
 package cmd
 
 import (
-	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
-	"github.com/bnema/gordon/internal/cli/mvu"
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/fatih/color"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
 
@@ -29,205 +29,152 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		PreRun: func(cmd *cobra.Command, args []string) {
 			if err := handler.FieldCheck(a); err != nil {
-				fmt.Println("Field check failed:", err)
+				log.Error("Field check failed", "error", err)
 				os.Exit(1)
 			}
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			imageName := args[0]
-			color.White("Pushing image: %s", imageName)
+			log.Info("Pushing image", "image", imageName)
 
-			// Validate the image name
-			if err := handler.ValidateImageName(imageName); err != nil {
-				fmt.Println(err)
+			if err := validateInputs(imageName, port, targetDomain); err != nil {
+				log.Error("Validation failed", "error", err)
 				return
 			}
 
-			// Ensure the image has a tag
-			handler.EnsureImageTag(&imageName)
-
-			// Validate the port mapping
-			if err := handler.ValidatePortMapping(port); err != nil {
-				fmt.Println(err)
-				return
-			}
-
-			// Validate the target domain
-			if err := handler.ValidateTargetDomain(targetDomain); err != nil {
-				fmt.Println(err)
-				return
-			}
-
-			// Export the image to a reader and return its true size
-			reader, actualSize, successMsg, err := exportDockerImage(imageName)
+			reader, actualSize, err := exportDockerImage(imageName)
 			if err != nil {
-				fmt.Println("Error exporting image:", err)
+				log.Error("Error exporting image", "error", err)
+				return
+			}
+			defer reader.Close()
+
+			log.Info("Image exported successfully", "image", imageName, "size", actualSize)
+
+			if err := deployImage(a, reader, imageName, port, targetDomain); err != nil {
+				if deployErr, ok := err.(*common.DeploymentError); ok {
+					log.Error("Deployment failed",
+						"status_code", deployErr.StatusCode,
+						"message", deployErr.Message,
+						"raw_response", deployErr.RawResponse)
+				} else {
+					log.Error("Deployment failed", "error", err)
+				}
 				return
 			}
 
-			fmt.Println(successMsg)
-
-			progressCh := make(chan mvu.ProgressMsg)
-			errCh := make(chan error, 1) // Buffer of 1 to prevent goroutine leak in case of non-blocking send
-
-			// Create a progress function to update the progress bar
-			progressReader := &mvu.ProgressReader{
-				Reader:     reader,     // This is the actual reader from exportDockerImage
-				Total:      actualSize, // This is the total size of the data to be read
-				ProgressCh: progressCh, // This is the channel used to send progress updates
-			}
-
-			// Create a RequestPayload and populate it
-			reqPayload := common.RequestPayload{
-				Type: "deploy",
-				Payload: common.DeployPayload{
-					Ports:        port,
-					TargetDomain: targetDomain,
-					ImageName:    imageName,
-					Data:         progressReader,
-				},
-			}
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-
-			go func() {
-				defer wg.Done()
-				resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
-				if err != nil {
-					errCh <- fmt.Errorf("error sending HTTP request: %w", err)
-					return
-				}
-
-				// Check the response
-				targetDomain := string(resp.Body)
-				targetDomain = strings.TrimSpace(targetDomain)  // Remove leading and trailing whitespace
-				targetDomain = strings.Trim(targetDomain, "\"") // Remove leading and trailing quotes
-				// Close the progress channel after the upload is complete
-				// Determine if the target is HTTPS or HTTP
-				isHTTPS := strings.HasPrefix(targetDomain, "https://")
-
-				// Initialize HTTP client
-				client := &http.Client{
-					Timeout: 60 * time.Second,
-				}
-
-				// Only set TLS config if target is HTTPS
-				if isHTTPS {
-					client.Transport = &http.Transport{
-						TLSClientConfig: &tls.Config{InsecureSkipVerify: false}, // set false to ensure certificate is validated
-					}
-				}
-
-				// Run the TUI program
-				finalModel, err := mvu.RunDeploymentTUI(client, imageName, targetDomain, port)
-				if err != nil {
-					errCh <- fmt.Errorf("error running deployment TUI: %w", err)
-					return
-				}
-
-				// Check if the deployment was successful
-				if !finalModel.DeploymentDone {
-					errCh <- fmt.Errorf("deployment failed")
-					return
-				}
-
-				// Print the final message
-				color.Blue("Deployment successful!")
-				fmt.Println("Your application is now available at:", targetDomain)
-				close(progressCh)
-			}()
-			// Run the progress bar TUI
-			m, err := mvu.RunProgressBarTUI(progressCh)
-			if err != nil {
-				errCh <- fmt.Errorf("error running progress bar TUI: %w", err)
-				return
-			}
-
-			// Wait for the deployment goroutine to complete
-			wg.Wait()
-
-			done := false
-
-			for !done {
-				select {
-				case err := <-errCh:
-					if err != nil {
-						fmt.Println(err)
-						return
-					}
-				case <-time.After(1 * time.Second):
-					// Check if the progress bar is done
-					if m.Done {
-						done = true
-					}
-				}
-			}
-
-			// Check for errors from the deployment goroutine
-			select {
-			case err := <-errCh:
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
-			default:
-			}
-
-			// Check if the progress bar is done
-			if m.Done {
-				// Close the reader
-				err = progressReader.Close()
-				if err != nil {
-					fmt.Println("Error closing reader:", err)
-					return
-				}
-			} else {
-				fmt.Println("Deployment completed, but progress bar is not done.")
-			}
+			log.Info("Deployment successful!")
 		},
 	}
 
-	// Add flags
 	deployCmd.Flags().StringVarP(&port, "port", "p", "", "Port mapping for the container")
 	deployCmd.Flags().StringVarP(&targetDomain, "target", "t", "", "Target domain for Traefik")
 
 	return deployCmd
 }
 
-// export the docker image to a reader and return its true size
-func exportDockerImage(imageName string) (io.ReadCloser, int64, string, error) {
-	// Check if what the user submitted is a valid image ID
+func validateInputs(imageName, port, targetDomain string) error {
+	if err := handler.ValidateImageName(imageName); err != nil {
+		return err
+	}
+	handler.EnsureImageTag(&imageName)
+	if err := handler.ValidatePortMapping(port); err != nil {
+		return err
+	}
+	return handler.ValidateTargetDomain(targetDomain)
+}
+
+func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
 	exists, err := docker.CheckIfImageExists(imageName)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("error while checking image existence: %w", err)
+		return nil, 0, fmt.Errorf("error checking image existence: %w", err)
 	}
 
 	var imageID string
 	if exists {
-		// What the user submitted is a valid image ID
 		imageID = imageName
 	} else {
-		// What the user submitted is not a valid image ID, search by name
 		imageID, err = docker.GetImageIDByName(imageName)
 		if err != nil {
-			return nil, 0, "", fmt.Errorf("error while searching for image by name: %w", err)
+			return nil, 0, fmt.Errorf("error searching for image by name: %w", err)
 		}
 	}
 
 	actualSize, err := docker.GetImageSizeFromReader(imageID)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("error while retrieving image size: %w", err)
+		return nil, 0, fmt.Errorf("error retrieving image size: %w", err)
 	}
 
 	reader, err := docker.ExportImageFromEngine(imageID)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("error while exporting image: %w", err)
+		return nil, 0, fmt.Errorf("error exporting image: %w", err)
 	}
 
-	// Create a success message
-	successMsg := fmt.Sprintf("Image %s exported successfully", imageName)
+	return reader, actualSize, nil
+}
 
-	// Return the reader, actual size, and success message
-	return reader, actualSize, successMsg, nil
+func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
+	reqPayload := common.RequestPayload{
+		Type: "deploy",
+		Payload: common.DeployPayload{
+			Ports:        port,
+			TargetDomain: targetDomain,
+			ImageName:    imageName,
+			Data:         io.NopCloser(reader),
+		},
+	}
+
+	resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/deploy")
+	if err != nil {
+		return &common.DeploymentError{
+			StatusCode: 0,
+			Message:    fmt.Sprintf("error sending HTTP request: %v", err),
+		}
+	}
+
+	var deployResponse common.DeployResponse
+	if err := json.Unmarshal(resp.Body, &deployResponse); err != nil {
+		return &common.DeploymentError{
+			StatusCode:  resp.StatusCode,
+			Message:     fmt.Sprintf("error parsing response: %v", err),
+			RawResponse: string(resp.Body),
+		}
+	}
+
+	if !deployResponse.Success {
+		return &common.DeploymentError{
+			StatusCode:  resp.StatusCode,
+			Message:     deployResponse.Message,
+			RawResponse: string(resp.Body),
+		}
+	}
+
+	log.Info("Application deployed", "domain", deployResponse.Domain)
+	return waitForDeployment(deployResponse.Domain)
+}
+
+func waitForDeployment(domain string) error {
+	client := &http.Client{Timeout: 10 * time.Second}
+	maxRetries := 20
+	retryInterval := time.Second
+
+	log.Info("Waiting for deployment to be reachable")
+	for i := 0; i < maxRetries; i++ {
+		resp, err := client.Get(domain)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+			// Check for error messages in the response body
+			body, _ := io.ReadAll(resp.Body)
+			if strings.Contains(string(body), "failed to create container:") {
+				return fmt.Errorf("deployment failed: %s", string(body))
+			}
+		}
+		log.Warn("Deployment not ready yet, retrying", "attempt", fmt.Sprintf("%d/20", i+1))
+		time.Sleep(retryInterval)
+	}
+
+	return fmt.Errorf("deployment not ready after %d attempts, giving up", maxRetries)
 }
