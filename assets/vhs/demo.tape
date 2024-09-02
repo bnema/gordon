@@ -63,7 +63,7 @@ Set Shell "bash"
 Set FontSize 19
 Set FontFamily "FiraCode Nerd Font"
 Set Width 1200
-Set Height 600
+Set Height 500
 
 Type "gordon"
 Sleep 1
@@ -74,10 +74,10 @@ Space
 Type "bnema/go-helloworld:latest"
 Sleep 1
 Space
-Type "-p 6969:8080"
+Type "-p 8080"
 Sleep 1
 Space
-Type "-t helloworld.bamen.dev"
+Type "-t hello.bamen.dev"
 Enter
 Sleep 10
 
@@ -87,7 +87,7 @@ Enter
 Show
 
 
-Type "curl https://helloworld.bamen.dev"
+Type "curl https://hello.bamen.dev"
 Enter
 
 Sleep 10
