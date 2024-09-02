@@ -130,7 +130,7 @@ func PostPush(c echo.Context, a *server.App) error {
 func PostDeploy(c echo.Context, a *server.App) error {
 	// Initialize pushPayload object
 	payload := &common.DeployPayload{
-		Ports:        c.Request().Header.Get("X-Ports"),
+		Port:         c.Request().Header.Get("X-Ports"),
 		ImageName:    c.Request().Header.Get("X-Image-Name"),
 		TargetDomain: c.Request().Header.Get("X-Target-Domain"),
 	}
@@ -149,8 +149,8 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	imageFileName = imageFileName + ".tar"
 
 	// Check the ports struct, if there is no /tcp, or /udp, add /tcp
-	if !regexp.MustCompile(`\/(tcp|udp)$`).MatchString(payload.Ports) {
-		payload.Ports = payload.Ports + "/tcp"
+	if !regexp.MustCompile(`\/(tcp|udp)$`).MatchString(payload.Port) {
+		payload.Port = payload.Port + "/tcp"
 	}
 
 	// Check the target domain, if there is no https:// or http://, add https://

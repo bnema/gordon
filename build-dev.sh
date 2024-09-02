@@ -16,3 +16,5 @@ rm -f $DIST_DIR/*
 echo "Building Go binaries..."
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o $DIST_DIR/gordon-linux-amd64 ./cmd/cli
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o $DIST_DIR/gordon-linux-arm64 ./cmd/cli
+
+echo "Successfully built Go binaries"
