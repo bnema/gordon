@@ -3,8 +3,10 @@ version: 2
 before:
   hooks:
     - go mod tidy
+
 release:
   draft: true
+
 builds:
   - id: "gordon"
     main: ./cmd/cli/main.go
@@ -49,6 +51,16 @@ dockers:
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
+
+docker_manifests:
+  - name_template: ghcr.io/bnema/gordon:{{ .Tag }}
+    image_templates:
+      - ghcr.io/bnema/gordon:{{ .Tag }}-amd64
+      - ghcr.io/bnema/gordon:{{ .Tag }}-arm64
+  - name_template: ghcr.io/bnema/gordon:latest
+    image_templates:
+      - ghcr.io/bnema/gordon:{{ .Tag }}-amd64
+      - ghcr.io/bnema/gordon:{{ .Tag }}-arm64
 
 archives:
   - format: zip
