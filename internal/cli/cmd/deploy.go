@@ -77,10 +77,13 @@ func validateInputs(imageName, port, targetDomain string) error {
 	if err := handler.ValidateImageName(imageName); err != nil {
 		return err
 	}
+
 	handler.EnsureImageTag(&imageName)
-	if err := handler.ValidatePortMapping(port); err != nil {
-		return err
+
+	if port == "" {
+		return fmt.Errorf("port is required")
 	}
+
 	return handler.ValidateTargetDomain(targetDomain)
 }
 
@@ -117,7 +120,7 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 	reqPayload := common.RequestPayload{
 		Type: "deploy",
 		Payload: common.DeployPayload{
-			Ports:        port,
+			Port:         port,
 			TargetDomain: targetDomain,
 			ImageName:    imageName,
 			Data:         io.NopCloser(reader),
