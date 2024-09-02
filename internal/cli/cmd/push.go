@@ -29,7 +29,7 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 			imageName := args[0]
 			log.Info("Pushing image", "image", imageName)
 
-			if err := pushImage(a, imageName, port); err != nil {
+			if err := pushImage(a, imageName); err != nil {
 				log.Error("Push failed", "error", err)
 				os.Exit(1)
 			}
@@ -41,18 +41,12 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 	return pushCmd
 }
 
-func pushImage(a *cli.App, imageName, port string) error {
+func pushImage(a *cli.App, imageName string) error {
 	if err := handler.ValidateImageName(imageName); err != nil {
 		return fmt.Errorf("invalid image name: %w", err)
 	}
 
 	handler.EnsureImageTag(&imageName)
-
-	if port != "" {
-		if err := handler.ValidatePortMapping(port); err != nil {
-			return fmt.Errorf("invalid port mapping: %w", err)
-		}
-	}
 
 	reader, actualSize, err := exportDockerImage(imageName)
 	if err != nil {
