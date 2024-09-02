@@ -38,7 +38,7 @@ func (e *DeploymentError) Error() string {
 }
 
 type DeployPayload struct {
-	Ports        string `json:"ports"`
+	Port         string `json:"port"`
 	TargetDomain string `json:"targetdomain"`
 	ImageName    string `json:"imagename"`
 	ImageID      string `json:"imageid"`
