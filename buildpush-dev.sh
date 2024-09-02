@@ -29,13 +29,21 @@ $ENGINE image prune -f
 
 # Build Docker images for each architecture
 echo "Building Docker images..."
-$ENGINE build -t $REPO:${TAG}-amd64 --build-arg ARCH=amd64 -f Dockerfile .
-$ENGINE build -t $REPO:${TAG}-arm64v8 --build-arg ARCH=arm64 -f Dockerfile .
+for ARCH in amd64 arm64; do
+    # Copy the appropriate binary to the root directory and rename it to 'gordon'
+    cp $DIST_DIR/gordon-linux-$ARCH gordon
+
+    # Build the Docker image
+    $ENGINE build -t $REPO:${TAG}-$ARCH .
+
+    # Remove the temporary 'gordon' file
+    rm gordon
+done
 
 # Push images
 echo "Pushing Docker images..."
 $ENGINE push $REPO:${TAG}-amd64
-$ENGINE push $REPO:${TAG}-arm64v8
+$ENGINE push $REPO:${TAG}-arm64
 
 # Remove existing manifest if it exists
 echo "Removing existing manifest..."

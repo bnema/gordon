@@ -18,11 +18,6 @@ func FromPayloadStructToCmdParams(ppl *common.DeployPayload, a *server.App, imag
 
 	environmentSlice := ParseEnvironmentSlice("")
 
-	portMappings, err := ParsePortMappingsSlice(ppl.Ports)
-	if err != nil {
-		return docker.ContainerCommandParams{}, err
-	}
-
 	// from ppl.TargetDomain, (eg. "https://test.example.com") get container_name (eg. "test"), get container_subdomain (eg. "test"), get container_domain (eg. "example.com") and get container_protocol (eg. "https")
 	// Parse TargetDomain to get the various components
 	parsedURL, err := url.Parse(ppl.TargetDomain)
@@ -52,10 +47,12 @@ func FromPayloadStructToCmdParams(ppl *common.DeployPayload, a *server.App, imag
 		Volumes:       volumeSlice,
 		Environment:   environmentSlice,
 		Network:       a.Config.ContainerEngine.Network,
-		PortMappings:  portMappings,
 	}
 
-	CreateTraefikLabels(&params)
+	err = CreateTraefikLabels(&params, ppl.Port, a)
+	if err != nil {
+		return docker.ContainerCommandParams{}, fmt.Errorf("error creating Traefik labels: %w", err)
+	}
 
 	return params, nil
 }
