@@ -17,6 +17,7 @@ type Config struct {
 	Http            HttpConfig            `yaml:"Http"`
 	Admin           AdminConfig           `yaml:"Admin"`
 	ContainerEngine ContainerEngineConfig `yaml:"ContainerEngine"`
+	Traefik         TraefikConfig         `yaml:"Traefik"`
 	Build           BuildConfig           `yaml:"-"`
 }
 
@@ -51,10 +52,19 @@ type ContainerEngineConfig struct {
 	Network    string `yaml:"network"`
 }
 
+type TraefikConfig struct {
+	EntryPoint       string `yaml:"entryPoint"`
+	SecureEntryPoint string `yaml:"secureEntryPoint"`
+	Resolver         string `yaml:"resolver"`
+}
+
 // Default values
 var (
-	sock       = "/var/run/docker.sock"
-	podmansock = "/run/user/1000/podman/podman.sock"
+	sock             = "/var/run/docker.sock"
+	podmansock       = "/run/user/1000/podman/podman.sock"
+	entryPoint       = "web"
+	entryPointSecure = "websecure"
+	resolver         = "myresolver"
 )
 
 func getConfigDir() (string, error) {
@@ -110,6 +120,11 @@ func (config *Config) LoadConfig() (*Config, error) {
 				Sock:       sock,
 				PodmanSock: podmansock,
 				Podman:     ReadUserInput("Are you using podman ? (y/n)") == "y",
+			},
+			Traefik: TraefikConfig{
+				EntryPoint:       entryPoint,
+				SecureEntryPoint: entryPointSecure,
+				Resolver:         resolver,
 			},
 		}
 

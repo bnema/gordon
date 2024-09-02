@@ -62,7 +62,7 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 
 		setAuthRequestHeaders(req, token)
 		req.Header.Set("Content-Type", "application/octet-stream")
-		req.Header.Set("X-Ports", deployPayload.Ports)
+		req.Header.Set("X-Ports", deployPayload.Port)
 		req.Header.Set("X-Target-Domain", deployPayload.TargetDomain)
 		req.Header.Set("X-Image-Name", deployPayload.ImageName)
 
