@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/bnema/gordon/internal/db"
@@ -20,6 +21,7 @@ import (
 
 var urlToken string
 
+// ClLI :
 // compareGordonToken compares the token from the URL query parameter with the one from the config.yml
 func CompareGordonToken(c echo.Context, a *server.App) error {
 	configToken, err := a.Config.GetToken()
@@ -327,4 +329,50 @@ func githubGetUserDetails(c echo.Context, a *server.App) (userInfo *queries.Gith
 	}
 
 	return userInfo, nil
+}
+
+func DeviceCodeRequest(c echo.Context, a *server.App) error {
+	proxyURL := a.Config.Build.ProxyURL
+	resp, err := http.Post(proxyURL+"/github/device/code", "application/json", nil)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return c.JSON(resp.StatusCode, map[string]string{"error": string(body)})
+	}
+
+	var deviceCode map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&deviceCode); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to decode response"})
+	}
+
+	return c.JSON(http.StatusOK, deviceCode)
+}
+
+func DeviceTokenRequest(c echo.Context, a *server.App) error {
+	proxyURL := a.Config.Build.ProxyURL
+	deviceCode := c.FormValue("device_code")
+
+	resp, err := http.PostForm(proxyURL+"/github/device/token", url.Values{
+		"device_code": {deviceCode},
+	})
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return c.JSON(resp.StatusCode, map[string]string{"error": string(body)})
+	}
+
+	var tokenResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to decode response"})
+	}
+
+	return c.JSON(http.StatusOK, tokenResp)
 }
