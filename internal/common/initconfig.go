@@ -194,3 +194,11 @@ func (config *Config) GetVersion() string {
 func (config *Config) GetStorageDir() string {
 	return config.General.StorageDir
 }
+
+func (c *Config) GetBackendURL() string {
+	return c.Http.BackendURL
+}
+
+func (c *Config) SetToken(token string) {
+	c.General.Token = token
+}
