@@ -32,7 +32,8 @@ func PerformPingRequest(a *cli.App) (PingResponse, error) {
 	defer resp.Http.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return PingResponse{}, fmt.Errorf("expected status code 200, got %d", resp.StatusCode)
+		// Return the error message from the server
+		return PingResponse{}, fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(resp.Body))
 	}
 
 	// Unmarshal the JSON response into the PingResponse struct

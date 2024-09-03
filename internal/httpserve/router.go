@@ -50,14 +50,24 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 // bindAPIEndpoints expose /api endpoints and speaks only JSON
 func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 	apiGroup := e.Group("/api")
-	apiGroup.Use(middleware.RequireToken(a))
-	apiGroup.GET("/ping", func(c echo.Context) error {
+
+	// Device flow endpoints (without RequireToken middleware)
+	apiGroup.POST("/device/code", func(c echo.Context) error {
+		return handler.DeviceCodeRequest(c, a)
+	})
+	apiGroup.POST("/device/token", func(c echo.Context) error {
+		return handler.DeviceTokenRequest(c, a)
+	})
+
+	// Other API endpoints that require a token
+	protectedApiGroup := apiGroup.Group("", middleware.RequireToken(a))
+	protectedApiGroup.GET("/ping", func(c echo.Context) error {
 		return handler.GetInfos(c, a)
 	})
-	apiGroup.POST("/deploy", func(c echo.Context) error {
+	protectedApiGroup.POST("/deploy", func(c echo.Context) error {
 		return handler.PostDeploy(c, a)
 	})
-	apiGroup.POST("/push", func(c echo.Context) error {
+	protectedApiGroup.POST("/push", func(c echo.Context) error {
 		return handler.PostPush(c, a)
 	})
 }
