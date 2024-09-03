@@ -56,7 +56,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 					log.Error("Deployment failed",
 						"status_code", deployErr.StatusCode,
 						"message", deployErr.Message,
-						"raw_response", deployErr.RawResponse)
+					)
 				} else {
 					log.Error("Deployment failed", "error", err)
 				}
