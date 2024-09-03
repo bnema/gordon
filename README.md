@@ -17,7 +17,7 @@ Gordon is a tool written in Go that aims to simplify the deployment of your cont
 - **Self-Hosted**: Operates within your existing self-hosted environment and don't interfere with your setup.
 - **Self-Updated**: The client can update itself to the latest version with `gordon update`. The backend is updated by pulling the latest image from ghcr.io.
 - **Minimal WebUI**: Provides a simple web UI to manage your deployments, domains, exposed ports. Using a very minimal stack (sqlite3, Go templates, HTMX and Tailwind CSS).
-- **Simple authentication**: Use Github OAuth to authenticate with the web UI and a token for the CLI.
+- **Simple authentication**: Use GitHub OAuth for the web UI and OAuth 2.0 device authorization grant (device flow) for the CLI client.
 - **Automated Routing**: Collaborates with Traefik to automatically route your application to your desired domain or subdomain.
 - **One binary**: Gordon follows the Golang philosophy of keeping things simple, offering a single binary for all functionalities.
 
