@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/bnema/gordon/internal/cli"
+	"github.com/bnema/gordon/internal/cli/auth"
 	"github.com/bnema/gordon/internal/common"
 )
 
@@ -31,15 +32,17 @@ func FieldCheck(a *cli.App) error {
 		return err
 	}
 
-	wasTokenEmpty, err := checkAndSetField(&a.Config.General.Token,
-		"Enter the token (check your backend config.yml):",
-		"Token is not set in config.yml")
-	if err != nil {
-		return err
+	if a.Config.General.Token == "" {
+		fmt.Println("Token is not set. Starting OAuth device flow...")
+		err := auth.DeviceFlowAuth(&a.Config)
+		if err != nil {
+			fmt.Printf("Device flow authentication error: %v\n", err)
+			return fmt.Errorf("failed to complete device flow authentication: %w", err)
+		}
 	}
 
-	// Save config if one of the fields was empty
-	if wasBackendURLEmpty || wasTokenEmpty {
+	// Save config if BackendURL was empty or if a new token was set
+	if wasBackendURLEmpty || a.Config.General.Token != "" {
 		err = a.Config.SaveConfig()
 		if err != nil {
 			return err
