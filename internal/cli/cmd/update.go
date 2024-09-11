@@ -67,8 +67,6 @@ func NewUpdateCommand(a *cli.App) *cobra.Command {
 		panic("app instance is nil")
 	}
 
-	var withBackup bool
-
 	command := &cobra.Command{
 		Use:           "update",
 		Short:         "Update the Gordon executable",
@@ -94,13 +92,13 @@ func NewUpdateCommand(a *cli.App) *cobra.Command {
 				}
 			}
 
-			return pluginInstance.update(withBackup)
+			return pluginInstance.update()
 		},
 	}
 	return command
 }
 
-func (p *plugin) update(withBackup bool) error {
+func (p *plugin) update() error {
 	color.Yellow("Fetching release information...")
 
 	latest, err := fetchLatestRelease(

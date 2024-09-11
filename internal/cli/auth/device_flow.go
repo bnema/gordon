@@ -8,14 +8,14 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bnema/gordon/internal/common"
+	"github.com/bnema/gordon/internal/cli"
 )
 
-func DeviceFlowAuth(config *common.Config) error {
+func DeviceFlowAuth(a *cli.App) error {
 	fmt.Println("Starting device flow authentication...")
 
 	// Request device code
-	deviceCode, err := requestDeviceCode(config)
+	deviceCode, err := requestDeviceCode(a)
 	if err != nil {
 		return fmt.Errorf("error requesting device code: %w", err)
 	}
@@ -28,20 +28,20 @@ func DeviceFlowAuth(config *common.Config) error {
 		interval = int(i)
 	}
 
-	token, err := pollForAccessToken(config, deviceCode["device_code"].(string), interval)
+	token, err := pollForAccessToken(a, deviceCode["device_code"].(string), interval)
 	if err != nil {
 		return fmt.Errorf("error polling for access token: %w", err)
 	}
 
 	// Save the token
-	config.SetToken(token)
+	a.Config.SetToken(token)
 
 	fmt.Println("Authentication successful!")
 	return nil
 }
 
-func requestDeviceCode(config *common.Config) (map[string]interface{}, error) {
-	resp, err := http.PostForm(config.GetBackendURL()+"/api/device/code", url.Values{})
+func requestDeviceCode(a *cli.App) (map[string]interface{}, error) {
+	resp, err := http.PostForm(a.Config.GetBackendURL()+"/api/device/code", url.Values{})
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %w", err)
 	}
@@ -72,12 +72,12 @@ func requestDeviceCode(config *common.Config) (map[string]interface{}, error) {
 	return deviceCode, nil
 }
 
-func pollForAccessToken(config *common.Config, deviceCode string, interval int) (string, error) {
+func pollForAccessToken(a *cli.App, deviceCode string, interval int) (string, error) {
 	maxAttempts := 60 // Maximum number of attempts (5 minutes with 5-second intervals)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		time.Sleep(time.Duration(interval) * time.Second)
 
-		resp, err := http.PostForm(config.GetBackendURL()+"/api/device/token", url.Values{
+		resp, err := http.PostForm(a.Config.GetBackendURL()+"/api/device/token", url.Values{
 			"device_code": {deviceCode},
 		})
 		if err != nil {

@@ -166,7 +166,6 @@ func (config *Config) SaveConfig() error {
 		return fmt.Errorf("error writing configuration file: %w", err)
 	}
 
-	fmt.Printf("Configuration saved to %s\n", configFilePath)
 	return nil
 }
 
