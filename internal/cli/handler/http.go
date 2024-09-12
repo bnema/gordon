@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/bnema/gordon/internal/cli"
+	"github.com/bnema/gordon/internal/cli/auth"
 	"github.com/bnema/gordon/internal/common"
 )
 
@@ -43,8 +44,51 @@ type Response struct {
 // SendHTTPRequest sends the HTTP request
 func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpoint string) (*Response, error) {
 	apiUrl := a.Config.Http.BackendURL + "/api"
-	token := a.Config.General.Token
+	client := &http.Client{}
 
+	reauthenticated := false
+
+	for {
+		req, err := createRequest(apiUrl, endpoint, method, rp, a.Config.General.Token)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to send request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			var errorResp map[string]interface{}
+			if err := json.Unmarshal(body, &errorResp); err == nil {
+				if resp.StatusCode == http.StatusUnauthorized && !reauthenticated {
+					fmt.Println("Token is invalid or expired. Initiating re-authentication...")
+					err := ReAuthenticate(a)
+					if err != nil {
+						return nil, fmt.Errorf("re-authentication failed: %w", err)
+					}
+
+					reauthenticated = true
+					continue
+				}
+				errorMsg := fmt.Sprintf("Request failed: status=%d, error=%v", resp.StatusCode, errorResp["error"])
+				return nil, fmt.Errorf(errorMsg)
+			}
+			return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+		}
+
+		return &Response{Http: resp, Body: body, StatusCode: resp.StatusCode}, nil
+	}
+}
+
+func createRequest(apiUrl, endpoint, method string, rp *common.RequestPayload, token string) (*http.Request, error) {
 	var req *http.Request
 	var err error
 
@@ -60,7 +104,6 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 			return nil, fmt.Errorf("failed to create new streaming request: %w", err)
 		}
 
-		setAuthRequestHeaders(req, token)
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("X-Ports", deployPayload.Port)
 		req.Header.Set("X-Target-Domain", deployPayload.TargetDomain)
@@ -77,11 +120,10 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 			return nil, fmt.Errorf("failed to create new streaming request: %w", err)
 		}
 
-		setAuthRequestHeaders(req, token)
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("X-Image-Name", pushPayload.ImageName)
 
-	default: // This will handle "ping" and any other types
+	default:
 		jsonPayload, err := json.Marshal(rp)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal payload: %w", err)
@@ -92,21 +134,36 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 			return nil, fmt.Errorf("failed to create new JSON request: %w", err)
 		}
 
-		setAuthRequestHeaders(req, token)
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
+	// Set the authorization header for all request types
+	req.Header.Set("Authorization", "Bearer "+token)
 
-	body, err := io.ReadAll(resp.Body)
+	return req, nil
+}
+
+func ReAuthenticate(a *cli.App) error {
+	fmt.Println("Re-authenticating...")
+	err := auth.DeviceFlowAuth(a)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return fmt.Errorf("device flow authentication failed: %w", err)
 	}
 
-	return &Response{Http: resp, Body: body, StatusCode: resp.StatusCode}, nil
+	// After successful re-authentication, get the new token
+	newToken, err := a.Config.GetToken()
+	if err != nil {
+		return fmt.Errorf("failed to get new token: %w", err)
+	}
+	// Update the token in the app config
+	a.Config.General.Token = newToken
+
+	// Save the new token to config file
+	err = a.Config.SaveConfig()
+	if err != nil {
+		return fmt.Errorf("failed to save new token to config: %w", err)
+	}
+
+	fmt.Println("Re-authentication successful. Your session has been renewed.")
+	return nil
 }

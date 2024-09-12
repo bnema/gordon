@@ -34,7 +34,7 @@ func FieldCheck(a *cli.App) error {
 
 	if a.Config.General.Token == "" {
 		fmt.Println("Token is not set. Starting OAuth device flow...")
-		err := auth.DeviceFlowAuth(&a.Config)
+		err := auth.DeviceFlowAuth(a)
 		if err != nil {
 			fmt.Printf("Device flow authentication error: %v\n", err)
 			return fmt.Errorf("failed to complete device flow authentication: %w", err)
