@@ -120,10 +120,20 @@ func PostPush(c echo.Context, a *server.App) error {
 	// Update the payload with the image ID
 	payload.ImageID = imageID
 
-	// If we arrive here, send back a success response with the target domain
+	// Generate shortened ID (first 12 characters)
+	shortID := imageID[:12]
+
+	// Store the mapping
+	safelyInteractWithIDMap(Update, shortID, imageID)
+
+	// Generate the URL for create container view
+	createContainerURL := fmt.Sprintf("%s/htmx/create-container/%s", a.Config.Server.URL, shortID)
+
+	// Return success response with the URL
 	return sendJSONResponse(c, http.StatusOK, common.PushResponse{
-		Success: true,
-		Message: "Deployment successful",
+		Success:            true,
+		Message:            "Image pushed successfully",
+		CreateContainerURL: createContainerURL,
 	})
 }
 
