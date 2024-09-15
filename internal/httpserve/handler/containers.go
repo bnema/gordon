@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,13 +62,14 @@ type HumanReadableContainerImage struct {
 
 type HumanReadableContainer struct {
 	*types.Container
-	Name       string
-	Ports      []string
-	ShortID    string
-	CreatedStr string
-	SizeStr    string
-	UpSince    string
-	StateColor string
+	Name              string
+	Ports             []string
+	ShortID           string
+	CreatedStr        string
+	SizeStr           string
+	UpSince           string
+	StateColor        string
+	TraefikEntryPoint string
 }
 
 // renderHTML is a generalized function to render HTML
@@ -162,9 +164,11 @@ func ContainerManagerComponent(c echo.Context, a *server.App) error {
 	for _, container := range containers {
 		localContainer := container // Make a local copy
 		sizeStr := humanize.BytesToReadableSize(container.SizeRw)
-		stateColor := "green"
+		stateColor := "blue"
 
-		if container.State == "exited" {
+		if container.State == "running" {
+			stateColor = "green"
+		} else if container.State == "exited" {
 			stateColor = "red"
 		}
 		var ports []string
@@ -176,12 +180,14 @@ func ContainerManagerComponent(c echo.Context, a *server.App) error {
 		for _, name := range container.Names {
 			name = name[1:]
 			humanReadableContainers = append(humanReadableContainers, HumanReadableContainer{
-				Container:  &localContainer,
-				SizeStr:    sizeStr,
-				UpSince:    humanize.TimeAgo(time.Unix(container.Created, 0)),
-				StateColor: stateColor,
-				Name:       name,
-				Ports:      ports,
+				Container:         &localContainer,
+				SizeStr:           sizeStr,
+				UpSince:           humanize.TimeAgo(time.Unix(container.Created, 0)),
+				StateColor:        stateColor,
+				Name:              name,
+				Ports:             ports,
+				TraefikEntryPoint: extractTraefikEntryPoint(container.Labels),
+				CreatedStr:        humanize.TimeAgo(time.Unix(container.Created, 0)),
 			})
 		}
 	}
@@ -195,6 +201,15 @@ func ContainerManagerComponent(c echo.Context, a *server.App) error {
 	}
 
 	return renderHTML(c, a, "html/fragments", "containerlist.gohtml", data)
+}
+
+func extractTraefikEntryPoint(labels map[string]string) string {
+	for key, value := range labels {
+		if strings.HasSuffix(key, ".loadbalancer.server.port") {
+			return value
+		}
+	}
+	return ""
 }
 
 // ContainerManagerDelete handles the /container-manager/delete route

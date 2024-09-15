@@ -15,20 +15,21 @@ import (
 )
 
 type ContainerCommandParams struct {
-	ContainerName string
-	ContainerHost string
-	Domain        string
-	ServiceName   string
-	IsSSL         bool
-	EnvVar        string
-	ImageName     string
-	ImageID       string
-	PortMappings  []PortMapping
-	Volumes       []string
-	Labels        []string
-	Network       string
-	Restart       string
-	Environment   []string
+	ContainerName     string
+	ContainerHost     string
+	Domain            string
+	ServiceName       string
+	IsSSL             bool
+	EnvVar            string
+	ImageName         string
+	ImageID           string
+	PortMappings      []PortMapping
+	Volumes           []string
+	Labels            []string
+	Network           string
+	Restart           string
+	Environment       []string
+	TraefikEntryPoint string
 }
 
 type PortMapping struct {
