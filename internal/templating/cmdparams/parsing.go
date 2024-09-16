@@ -26,6 +26,10 @@ func ParseEnvironmentSlice(environmentStr string) []string {
 
 // ParsePortMappingsSlice parses the port mappings string into a slice and a struct.
 func ParsePortMappingsSlice(portMappingsStr string) ([]docker.PortMapping, error) {
+	if portMappingsStr == "" {
+		return []docker.PortMapping{}, nil
+	}
+
 	portMappingsSliceRaw := strings.Split(portMappingsStr, ",")
 	portMappingsSlice := make([]string, len(portMappingsSliceRaw))
 	for i, spec := range portMappingsSliceRaw {

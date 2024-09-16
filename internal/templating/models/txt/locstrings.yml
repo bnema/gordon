@@ -27,10 +27,11 @@ en:
       confirm-container-stop: Are you sure you want to stop this container?
       no-containers: No available containers.
       thName: Name
-      thPorts: Ports
+      thPorts: Exposed Ports
       thStatus: Status
       thState: State
       thActions: Actions
+      thEntryPoint: "Entry Point"
   settings:
     meta:
       title: Gordon - Settings
@@ -66,10 +67,11 @@ fr:
       confirm-container-stop: Êtes-vous sûr de vouloir arrêter ce conteneur?
       no-containers: Aucun conteneur disponible.
       thName: Nom
-      thPorts: Ports
+      thPorts: Ports exposés
       thStatus: Statut
       thState: État
       thActions: Actions
+      thEntryPoint: "Point d'entrée"
   settings:
     meta:
       title: Gordon - Paramètres
