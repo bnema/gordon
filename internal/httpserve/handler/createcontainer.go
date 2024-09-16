@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/bnema/gordon/internal/server"
@@ -15,25 +16,30 @@ import (
 // FromShortIDToImageID converts a short image ID to a full image ID
 func FromShortIDToImageID(ShortID string) (string, error) {
 	imageID, exists := safelyInteractWithIDMap(Fetch, ShortID)
-	if exists {
-		return imageID, nil
+	if !exists {
+		log.Printf("No mapping found for short ID: %s", ShortID)
+		return "", fmt.Errorf("image ID not found")
 	}
-	return "", fmt.Errorf("image ID not found")
+	return imageID, nil
 }
 
 // CreateContainerRoute is the route for creating a new container
 func CreateContainerGET(c echo.Context, a *server.App) error {
-	// Retreive the ShortID of the image from the URL
-	ShortID := c.Param("ID")
+	log.Printf("Full request URL: %s", c.Request().URL.String())
+	// Retrieve the ShortID of the image from the URL
+	shortID := c.Param("ID")
+	log.Printf("Received ShortID: %s", shortID)
 
-	// Convert the ShortID to a full image ID
-	imageID, err := FromShortIDToImageID(ShortID)
-	if err != nil {
-		return sendError(c, err)
+	fullID, exists := safelyInteractWithIDMap(Fetch, shortID)
+	if !exists {
+		log.Printf("No mapping found for short ID: %s", shortID)
+		return c.String(http.StatusNotFound, "Image ID not found")
 	}
 
+	log.Printf("Found mapping: %s -> %s", shortID, fullID)
+
 	// Get the image info
-	imageInfo, err := docker.GetImageInfo(imageID)
+	imageInfo, err := docker.GetImageInfo(fullID)
 	if err != nil {
 		return sendError(c, err)
 	}
@@ -46,8 +52,8 @@ func CreateContainerGET(c echo.Context, a *server.App) error {
 
 	data := map[string]interface{}{
 		"Title":     "Create a new container",
-		"ShortID":   ShortID,
-		"ImageID":   imageID,
+		"ShortID":   shortID,
+		"ImageID":   fullID,
 		"ImageName": imageName,
 	}
 
@@ -65,6 +71,55 @@ func CreateContainerGET(c echo.Context, a *server.App) error {
 
 	return c.HTML(200, renderedHTML)
 
+}
+
+// CreateContainerFullGET handles the full HTML page for creating a new container
+func CreateContainerFullGET(c echo.Context, a *server.App) error {
+	// Retrieve the ShortID of the image from the URL
+	shortID := c.Param("ID")
+	log.Printf("Received ShortID: %s", shortID)
+
+	fullID, exists := safelyInteractWithIDMap(Fetch, shortID)
+	if !exists {
+		log.Printf("No mapping found for short ID: %s", shortID)
+		return c.String(http.StatusNotFound, "Image ID not found")
+	}
+
+	log.Printf("Found mapping: %s -> %s", shortID, fullID)
+
+	// Get the image info
+	imageInfo, err := docker.GetImageInfo(fullID)
+	if err != nil {
+		return sendError(c, err)
+	}
+
+	// Extract image name
+	var imageName string
+	if len(imageInfo.RepoTags) > 0 {
+		imageName = imageInfo.RepoTags[0]
+	}
+
+	data := map[string]interface{}{
+		"Title":     "Create a new container",
+		"ShortID":   shortID,
+		"ImageID":   fullID,
+		"ImageName": imageName,
+		"AdminPath": a.Config.Admin.Path,
+	}
+
+	// Specify both admin and fragments directories
+	rendererData, err := render.GetHTMLRenderer("html/admin", "createcontainerfull.gohtml", a.TemplateFS, a, "html/fragments")
+	if err != nil {
+		return sendError(c, err)
+	}
+
+	renderedHTML, err := rendererData.Render(data, a)
+	if err != nil {
+		log.Printf("Error rendering template: %v", err)
+		return sendError(c, err)
+	}
+
+	return c.HTML(200, renderedHTML)
 }
 
 // CreateContainerPOST handles the create container form submission
