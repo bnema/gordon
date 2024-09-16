@@ -60,10 +60,10 @@ Require curl
 
 Set TypingSpeed 75ms
 Set Shell "bash"
-Set FontSize 19
+Set FontSize 17
 Set FontFamily "FiraCode Nerd Font"
 Set Width 1200
-Set Height 500
+Set Height 300
 
 Type "gordon"
 Sleep 1
