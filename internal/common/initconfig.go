@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/parser"
@@ -68,21 +69,50 @@ var (
 )
 
 func getConfigDir() (string, error) {
+	var configDir string
+
+	if isWSL() {
+		// Use XDG_CONFIG_HOME for WSL
+		if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); xdgConfigHome != "" {
+			configDir = filepath.Join(xdgConfigHome, "Gordon")
+		} else {
+			// If XDG_CONFIG_HOME is not set, fall back to default locations
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				// If we can't get the home directory, use a fallback
+				homeDir = os.TempDir() // Use the system's temp directory as a fallback
+				fmt.Printf("Warning: Unable to determine home directory. Using temp directory: %s\n", homeDir)
+			}
+
+			configDir = filepath.Join(homeDir, ".config", "Gordon")
+
+		}
+
+		return configDir, nil
+	}
 
 	if docker.IsRunningInContainer() {
 		return "/.", nil
 	}
 
-	// Get the user's home directory for non-container environments
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("error getting user's home directory: %w", err)
-	}
+	// Check for XDG_CONFIG_HOME first
+	if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); xdgConfigHome != "" {
+		configDir = filepath.Join(xdgConfigHome, "Gordon")
+	} else {
+		// If XDG_CONFIG_HOME is not set, fall back to default locations
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			// If we can't get the home directory, use a fallback
+			homeDir = os.TempDir() // Use the system's temp directory as a fallback
+			fmt.Printf("Warning: Unable to determine home directory. Using temp directory: %s\n", homeDir)
+		}
 
-	// Select the configuration directory based on the OS
-	configDir := filepath.Join(homeDir, ".config", "Gordon")
-	if runtime.GOOS == "windows" {
-		configDir = filepath.Join(homeDir, "AppData", "Roaming", "Gordon")
+		// Select the configuration directory based on the OS
+		if runtime.GOOS == "windows" {
+			configDir = filepath.Join(homeDir, "AppData", "Roaming", "Gordon")
+		} else {
+			configDir = filepath.Join(homeDir, ".config", "Gordon")
+		}
 	}
 
 	return configDir, nil
@@ -200,4 +230,21 @@ func (c *Config) GetBackendURL() string {
 
 func (c *Config) SetToken(token string) {
 	c.General.Token = token
+}
+
+func isWSL() bool {
+	// Check for /proc/version file
+	if _, err := os.Stat("/proc/version"); err == nil {
+		content, err := os.ReadFile("/proc/version")
+		if err == nil && strings.Contains(strings.ToLower(string(content)), "microsoft") {
+			return true
+		}
+	}
+
+	// Check for WSL-specific environment variable
+	if os.Getenv("WSL_DISTRO_NAME") != "" {
+		return true
+	}
+
+	return false
 }

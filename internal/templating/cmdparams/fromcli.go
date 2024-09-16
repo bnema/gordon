@@ -37,19 +37,20 @@ func FromPayloadStructToCmdParams(ppl *common.DeployPayload, a *server.App, imag
 	containerDomain := strings.Join(hostParts[1:], ".")
 
 	params := docker.ContainerCommandParams{
-		IsSSL:         protocol == "https",
-		ContainerName: containerSubdomain,
-		ServiceName:   containerSubdomain,
-		Domain:        containerDomain,
-		ImageName:     ppl.ImageName,
-		ImageID:       imageID,
-		Restart:       "always",
-		Volumes:       volumeSlice,
-		Environment:   environmentSlice,
-		Network:       a.Config.ContainerEngine.Network,
+		IsSSL:             protocol == "https",
+		ContainerName:     containerSubdomain,
+		ServiceName:       containerSubdomain,
+		Domain:            containerDomain,
+		ImageName:         ppl.ImageName,
+		ImageID:           imageID,
+		Restart:           "always",
+		Volumes:           volumeSlice,
+		Environment:       environmentSlice,
+		Network:           a.Config.ContainerEngine.Network,
+		TraefikEntryPoint: ppl.Port,
 	}
 
-	err = CreateTraefikLabels(&params, ppl.Port, a)
+	err = CreateTraefikLabels(&params, params.TraefikEntryPoint, a)
 	if err != nil {
 		return docker.ContainerCommandParams{}, fmt.Errorf("error creating Traefik labels: %w", err)
 	}
