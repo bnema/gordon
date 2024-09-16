@@ -23,8 +23,9 @@ type DeployResponse struct {
 }
 
 type PushResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	Success            bool   `json:"success"`
+	Message            string `json:"message"`
+	CreateContainerURL string `json:"create_container_url,omitempty"`
 }
 
 type DeploymentError struct {

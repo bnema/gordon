@@ -162,6 +162,10 @@ func bindHTMXEndpoints(e *echo.Echo, a *server.App) {
 	htmxGroup.GET("/create-container/:ID", func(c echo.Context) error {
 		return handler.CreateContainerGET(c, a)
 	})
+	// Display create-container component
+	htmxGroup.GET("/create-container/:ShortID", func(c echo.Context) error {
+		return handler.CreateContainerGET(c, a)
+	})
 	// Create container
 	htmxGroup.POST("/create-container/:ID", func(c echo.Context) error {
 		return handler.CreateContainerPOST(c, a)
