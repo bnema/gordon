@@ -7,6 +7,7 @@
       <tr class="text-center text-gray-400">
         <th>{{index .Lang "manager" "content" "thName"}}</th>
         <th>{{index .Lang "manager" "content" "thPorts"}}</th>
+        <th>{{index .Lang "manager" "content" "thEntryPoint"}}</th>
         <th>{{index .Lang "manager" "content" "thStatus"}}</th>
         <th>{{index .Lang "manager" "content" "thState"}}</th>
         <th>{{index .Lang "manager" "content" "thActions"}}</th>
@@ -26,6 +27,7 @@
           >
         </td>
         <td class="port-container">{{ .Ports }}</td>
+        <td class="entrypoint-container">{{.TraefikEntryPoint}}</td>
         <td class="status-container">{{.Status}} (Up since {{.UpSince}})</td>
         <td style="color: {{.StateColor}};">{{.State}}</td>
         <td>

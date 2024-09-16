@@ -67,7 +67,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 		},
 	}
 
-	deployCmd.Flags().StringVarP(&port, "port", "p", "", "Port mapping for the container")
+	deployCmd.Flags().StringVarP(&port, "port", "p", "", "Port mapping for the container and Traefik entry point")
 	deployCmd.Flags().StringVarP(&targetDomain, "target", "t", "", "Target domain for Traefik")
 
 	return deployCmd

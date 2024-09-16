@@ -11,30 +11,34 @@ import (
 func FromInputsToCmdParams(inputs map[string]string, a *server.App) (docker.ContainerCommandParams, error) {
 	volumeSlice := ParseVolumeSlice(inputs["volumes"])
 	environmentSlice := ParseEnvironmentSlice(inputs["environment_variables"])
-	portMappings, err := ParsePortMappingsSlice(inputs["ports"])
 
-	// Extract the container port (right side of the mapping)
-	containerPort := extractContainerPort(portMappings)
+	var portMappings []docker.PortMapping
+	var err error
 
-	if err != nil {
-		return docker.ContainerCommandParams{}, err
+	// Parse port mappings if provided
+	if inputs["ports"] != "" {
+		portMappings, err = ParsePortMappingsSlice(inputs["ports"])
+		if err != nil {
+			return docker.ContainerCommandParams{}, err
+		}
 	}
 
 	params := docker.ContainerCommandParams{
-		IsSSL:         inputs["container_protocol"] == "https",
-		ContainerName: inputs["container_name"],
-		ServiceName:   inputs["container_subdomain"],
-		Domain:        inputs["container_domain"],
-		ImageName:     inputs["image_name"],
-		ImageID:       inputs["image_id"],
-		Restart:       inputs["restart"],
-		Volumes:       volumeSlice,
-		Environment:   environmentSlice,
-		Network:       a.Config.ContainerEngine.Network,
-		PortMappings:  portMappings,
+		IsSSL:             inputs["container_protocol"] == "https",
+		ContainerName:     inputs["container_name"],
+		ServiceName:       inputs["container_subdomain"],
+		Domain:            inputs["container_domain"],
+		ImageName:         inputs["image_name"],
+		ImageID:           inputs["image_id"],
+		Restart:           inputs["restart"],
+		TraefikEntryPoint: inputs["traefik_entry_point"],
+		Volumes:           volumeSlice,
+		Environment:       environmentSlice,
+		Network:           a.Config.ContainerEngine.Network,
+		PortMappings:      portMappings,
 	}
 
-	err = CreateTraefikLabels(&params, containerPort, a)
+	err = CreateTraefikLabels(&params, params.TraefikEntryPoint, a)
 	if err != nil {
 		return docker.ContainerCommandParams{}, fmt.Errorf("error creating Traefik labels: %w", err)
 	}

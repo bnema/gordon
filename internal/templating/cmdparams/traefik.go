@@ -8,7 +8,7 @@ import (
 )
 
 // CreateTraefikLabels creates Traefik labels based on the provided parameters.
-func CreateTraefikLabels(params *docker.ContainerCommandParams, portEntryPoint string, a *server.App) error {
+func CreateTraefikLabels(params *docker.ContainerCommandParams, containerPort string, a *server.App) error {
 	entryPoint := a.Config.Traefik.EntryPoint
 	if params.IsSSL {
 		entryPoint = a.Config.Traefik.SecureEntryPoint
@@ -21,12 +21,12 @@ func CreateTraefikLabels(params *docker.ContainerCommandParams, portEntryPoint s
 		"traefik.enable=true",
 		fmt.Sprintf("%s.rule=Host(`%s.%s`)", baseRouter, params.ServiceName, params.Domain),
 		fmt.Sprintf("%s.entrypoints=%s", baseRouter, entryPoint),
-		fmt.Sprintf("%s.loadbalancer.server.port=%s", baseService, portEntryPoint),
+		fmt.Sprintf("%s.loadbalancer.server.port=%s", baseService, containerPort),
 	}
 
 	resolver := a.Config.Traefik.Resolver
 	if resolver == "" {
-		fmt.Errorf("resolver not set in config")
+		return fmt.Errorf("resolver not set in config")
 	}
 
 	if params.IsSSL {
