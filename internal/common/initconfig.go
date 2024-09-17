@@ -248,3 +248,17 @@ func isWSL() bool {
 
 	return false
 }
+
+func (c *HttpConfig) Protocol() string {
+	if c.Https {
+		return "https"
+	}
+	return "http"
+}
+
+func (c *HttpConfig) FullDomain() string {
+	if c.SubDomain != "" {
+		return fmt.Sprintf("%s.%s", c.SubDomain, c.Domain)
+	}
+	return c.Domain
+}
