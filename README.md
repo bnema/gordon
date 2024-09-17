@@ -13,15 +13,21 @@ Gordon is a tool written in Go that aims to simplify the deployment of your cont
 
 ## **Key Features**
 
-- **Ease of use**: Deploy container images effortlessly using the command **`gordon deploy`**.
-- **Self-Hosted**: Operates within your existing self-hosted environment and don't interfere with your setup.
+- **Ease of use**: 
+  - Push your container images effortlessly using the **`gordon push`** command. A container creation URL is generated upon successful push.
+  
+  ![Demo Push](assets/vhs/demo_push.gif?raw=true)
+  
+  - Deploy your web applications quickly with **`gordon deploy`**.
+  
+  ![Demo Deploy](assets/vhs/demo_deploy.gif?raw=true)
+
+- **Self-Hosted**: Operates within your existing self-hosted environment without interfering with your setup.
 - **Self-Updated**: The client can update itself to the latest version with `gordon update`. The backend is updated by pulling the latest image from ghcr.io.
 - **Minimal WebUI**: Provides a simple web UI to manage your deployments, domains, exposed ports. Using a very minimal stack (sqlite3, Go templates, HTMX and Tailwind CSS).
 - **Simple authentication**: Use GitHub OAuth for the web UI and OAuth 2.0 device authorization grant (device flow) for the CLI client.
 - **Automated Routing**: Collaborates with Traefik to automatically route your application to your desired domain or subdomain.
 - **One binary**: Gordon follows the Golang philosophy of keeping things simple, offering a single binary for all functionalities.
-
-![Demo Deploy](assets/vhs/demo_deploy.gif?raw=true)
 
 ## **Why ?**
 
@@ -44,15 +50,10 @@ I also want to emphasize that I am far from being a Go expert yet. Hence, if you
 
 ## **Roadmap beyond 0.1**
 
-- Bug fixes (obviously)
-- Add tests
-- Better error handling and logging
-- Sexier WebUI with more features while keeping it simple (spa)
-- Sexier CLI (💕 [Charm](https://github.com/charmbracelet))
-- Refined CLI to backend authentication process (utilizing GitHub OAuth Device flow)
-- `deploy` command with no params
-- `push` command
-- Templates for databases (mysql, postgresql, redis, etc.)
+- [ ] Bug fixes
+- [x] Refined CLI to backend authentication process (utilizing GitHub OAuth Device flow)
+- [x] `push` command 
+- [ ] Templates for databases (mysql, postgresql, redis, etc.)
 
 Have suggestions? Feel free to open an issue!
 
