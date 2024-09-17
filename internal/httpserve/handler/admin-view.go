@@ -29,6 +29,7 @@ func GetLocalizedData(c echo.Context, a *server.App) (map[string]interface{}, er
 	return map[string]interface{}{
 		"Lang":      yamlData,
 		"LogoutURL": a.Config.Admin.Path + "/logout",
+		"AdminPath": a.Config.Admin.Path,
 	}, nil
 }
 
@@ -38,6 +39,10 @@ func renderAdminPage(c echo.Context, a *server.App, templateName string) error {
 	if err != nil {
 		return err
 	}
+
+	data["AdminPath"] = a.Config.Admin.Path
+	// DEBUG show the admin path here
+	fmt.Println("AdminPath:", a.Config.Admin.Path)
 
 	rendererData, err := render.GetHTMLRenderer(mainPath, templateName, a.TemplateFS, a, fragmentsPath)
 	if err != nil {

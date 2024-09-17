@@ -106,6 +106,9 @@ func bindAdminRoute(e *echo.Echo, a *server.App, adminPath string) {
 	adminGroup.GET("/manager", func(c echo.Context) error {
 		return handler.AdminManagerRoute(c, a)
 	}, middleware.RequireLogin(a))
+	adminGroup.GET("/create-container/:ID", func(c echo.Context) error {
+		return handler.CreateContainerFullGET(c, a)
+	}, middleware.RequireLogin(a))
 }
 
 // bindHTMXEndpoints binds all HTMX endpoints
@@ -160,10 +163,6 @@ func bindHTMXEndpoints(e *echo.Echo, a *server.App) {
 	})
 	// Display create-container component
 	htmxGroup.GET("/create-container/:ID", func(c echo.Context) error {
-		return handler.CreateContainerGET(c, a)
-	})
-	// Display create-container component
-	htmxGroup.GET("/create-container/:ShortID", func(c echo.Context) error {
 		return handler.CreateContainerGET(c, a)
 	})
 	// Create container

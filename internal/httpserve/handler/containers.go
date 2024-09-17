@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ func safelyInteractWithIDMap(op MapOperation, key string, value ...string) (stri
 	case Update:
 		if len(value) > 0 {
 			idMap[key] = value[0]
+			log.Printf("Updated mapping: %s -> %s", key, value[0])
 		}
 		return "", true
 	case Delete:

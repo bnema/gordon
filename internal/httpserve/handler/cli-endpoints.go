@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 
@@ -22,114 +24,66 @@ type InfoResponse struct {
 type DeployResponse = common.DeployResponse
 type PushResponse = common.PushResponse
 
+// sendJSONResponse is a helper function to send JSON responses
 func sendJSONResponse(c echo.Context, statusCode int, response interface{}) error {
 	return c.JSON(statusCode, response)
 }
 
+// Populate fills the InfoResponse struct with data from the App
 func (info *InfoResponse) Populate(a *server.App) {
 	info.Uptime = a.GetUptime()
 	info.Version = a.GetVersionstring()
 }
 
-// Handle GET on /api/ping endpoint
+// GetInfos handles GET requests on /api/ping endpoint
 func GetInfos(c echo.Context, a *server.App) error {
 	payload := new(common.RequestPayload)
 	if err := c.Bind(payload); err != nil {
-		return c.JSON(http.StatusBadRequest, "Invalid payload: "+err.Error())
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid payload: "+err.Error())
 	}
 
 	if payload.Type != "ping" {
-		return c.JSON(http.StatusBadRequest, "Invalid payload type")
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid payload type")
 	}
 
 	pingPayload, ok := payload.Payload.(common.PingPayload)
 	if !ok {
-		return c.JSON(http.StatusBadRequest, "Invalid payload structure")
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid payload structure")
 	}
 
 	if pingPayload.Message != "ping" {
-		return c.JSON(http.StatusBadRequest, "Invalid ping message")
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid ping message")
 	}
 
-	// Prepare and populate the information
 	info := &InfoResponse{}
 	info.Populate(a)
 
-	return c.JSON(http.StatusOK, info)
+	return sendJSONResponse(c, http.StatusOK, info)
 }
 
+// PostPush handles the image push request
 func PostPush(c echo.Context, a *server.App) error {
-	// Initialize pushPayload object
-	payload := &common.PushPayload{
-		ImageName: c.Request().Header.Get("X-Image-Name"),
+	payload, err := validateAndPreparePayload(c)
+	if err != nil {
+		return sendJSONResponse(c, http.StatusBadRequest, PushResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 	}
 
-	if payload.ImageName == "" {
-		return c.JSON(http.StatusBadRequest, "Invalid image name")
-	}
-
-	imageReader := c.Request().Body
-	defer imageReader.Close()
-
-	// Rename the image to a valid name so that it can be saved (remove user/, :tag and add .tar)
-	imageFileName := payload.ImageName
-	imageFileName = regexp.MustCompile(`^([a-zA-Z0-9\-_.]+\/)?`).ReplaceAllString(imageFileName, "")
-	imageFileName = regexp.MustCompile(`(:[a-zA-Z0-9\-_.]+)?$`).ReplaceAllString(imageFileName, "")
-	imageFileName = imageFileName + ".tar"
-
-	// Save the image tar in the storage
-	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
+	_, err = saveAndImportImage(c, a, payload)
 	if err != nil {
 		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
 			Success: false,
-			Message: fmt.Sprintf("Failed to save image: %v", err),
+			Message: err.Error(),
 		})
 	}
 
-	// Debug
-	fmt.Printf("Image saved successfully to: %s\n", imagePath)
+	shortID := generateShortID(payload.ImageID)
+	storeIDMapping(shortID, payload.ImageID)
 
-	// Import the tar in docker
-	imageID, err := docker.ImportImageToEngine(imagePath)
-	if err != nil {
-		store.RemoveFromStorage(imagePath) // Clean up the saved image if import fails
-		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to import image: %v", err),
-		})
-	}
+	createContainerURL := generateCreateContainerURL(a, shortID)
 
-	if imageID == "" {
-		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
-			Success: false,
-			Message: "Imported image ID is empty",
-		})
-	}
-
-	// Remove the image from the storage
-	err = store.RemoveFromStorage(imagePath)
-	if err != nil {
-		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to remove temporary image file: %v", err),
-		})
-	}
-
-	fmt.Printf("Image imported successfully: %s\n", payload.ImageName)
-
-	// Update the payload with the image ID
-	payload.ImageID = imageID
-
-	// Generate shortened ID (first 12 characters)
-	shortID := imageID[:12]
-
-	// Store the mapping
-	safelyInteractWithIDMap(Update, shortID, imageID)
-
-	// Generate the URL for create container view
-	createContainerURL := fmt.Sprintf("%s/htmx/create-container/%s", a.Config.Server.URL, shortID)
-
-	// Return success response with the URL
 	return sendJSONResponse(c, http.StatusOK, common.PushResponse{
 		Success:            true,
 		Message:            "Image pushed successfully",
@@ -137,8 +91,120 @@ func PostPush(c echo.Context, a *server.App) error {
 	})
 }
 
+// validateAndPreparePayload checks the request and prepares the payload
+func validateAndPreparePayload(c echo.Context) (*common.PushPayload, error) {
+	payload := &common.PushPayload{
+		ImageName: c.Request().Header.Get("X-Image-Name"),
+	}
+
+	if payload.ImageName == "" {
+		return nil, errors.New("Invalid image name")
+	}
+
+	return payload, nil
+}
+
+// saveAndImportImage saves the image to storage and imports it to the Docker engine
+func saveAndImportImage(c echo.Context, a *server.App, payload *common.PushPayload) (string, error) {
+	imageReader := c.Request().Body
+	defer imageReader.Close()
+
+	imageFileName := sanitizeImageFileName(payload.ImageName)
+
+	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
+	if err != nil {
+		return "", fmt.Errorf("Failed to save image: %v", err)
+	}
+
+	imageID, err := docker.ImportImageToEngine(imagePath)
+	if err != nil {
+		store.RemoveFromStorage(imagePath)
+		return "", fmt.Errorf("Failed to import image: %v", err)
+	}
+
+	if imageID == "" {
+		return "", errors.New("Imported image ID is empty")
+	}
+
+	err = store.RemoveFromStorage(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("Failed to remove temporary image file: %v", err)
+	}
+
+	payload.ImageID = imageID
+	return imagePath, nil
+}
+
+// sanitizeImageFileName removes unwanted parts from the image name
+func sanitizeImageFileName(imageName string) string {
+	imageName = regexp.MustCompile(`^([a-zA-Z0-9\-_.]+\/)?`).ReplaceAllString(imageName, "")
+	imageName = regexp.MustCompile(`(:[a-zA-Z0-9\-_.]+)?$`).ReplaceAllString(imageName, "")
+	return imageName + ".tar"
+}
+
+// generateShortID creates a shortened version of the image ID
+func generateShortID(imageID string) string {
+	shortID := imageID[7:]
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+	return shortID
+}
+
+// storeIDMapping saves the mapping between short ID and full ID
+func storeIDMapping(shortID, fullID string) {
+	log.Printf("Storing mapping: %s -> %s", shortID, fullID)
+	safelyInteractWithIDMap(Update, shortID, fullID)
+}
+
+// generateCreateContainerURL creates the URL for the container creation page
+func generateCreateContainerURL(a *server.App, shortID string) string {
+	return fmt.Sprintf("%s://%s%s/create-container/%s",
+		a.Config.Http.Protocol(),
+		a.Config.Http.FullDomain(),
+		a.Config.Admin.Path,
+		shortID)
+}
+
+// PostDeploy handles the container deployment request
 func PostDeploy(c echo.Context, a *server.App) error {
-	// Initialize pushPayload object
+	payload, err := validateAndPrepareDeployPayload(c)
+	if err != nil {
+		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+	}
+
+	_, err = saveAndImportDeployImage(c, a, payload)
+	if err != nil {
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+	}
+
+	_, err = createAndStartContainer(a, payload)
+	if err != nil {
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+	}
+
+	response := DeployResponse{
+		Success: true,
+		Message: "Deployment successful",
+		Domain:  payload.TargetDomain,
+	}
+
+	logResponse(response)
+
+	return sendJSONResponse(c, http.StatusOK, response)
+}
+
+// validateAndPrepareDeployPayload prepares the deployment payload
+func validateAndPrepareDeployPayload(c echo.Context) (*common.DeployPayload, error) {
 	payload := &common.DeployPayload{
 		Port:         c.Request().Header.Get("X-Ports"),
 		ImageName:    c.Request().Header.Get("X-Image-Name"),
@@ -146,108 +212,85 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	}
 
 	if payload.ImageName == "" {
-		return c.JSON(http.StatusBadRequest, "Invalid image name")
+		return nil, errors.New("Invalid image name")
 	}
 
+	payload.Port = normalizePort(payload.Port)
+	payload.TargetDomain = normalizeTargetDomain(payload.TargetDomain)
+
+	return payload, nil
+}
+
+// normalizePort adds "/tcp" to the port if not present
+func normalizePort(port string) string {
+	if !regexp.MustCompile(`\/(tcp|udp)$`).MatchString(port) {
+		return port + "/tcp"
+	}
+	return port
+}
+
+// normalizeTargetDomain adds "https://" to the domain if not present
+func normalizeTargetDomain(domain string) string {
+	if !regexp.MustCompile(`^https?:\/\/`).MatchString(domain) {
+		return "https://" + domain
+	}
+	return domain
+}
+
+// saveAndImportDeployImage saves and imports the deployment image
+func saveAndImportDeployImage(c echo.Context, a *server.App, payload *common.DeployPayload) (string, error) {
 	imageReader := c.Request().Body
 	defer imageReader.Close()
 
-	// Rename the image to a valid name so that it can be saved (remove user/, :tag and add .tar)
-	imageFileName := payload.ImageName
-	imageFileName = regexp.MustCompile(`^([a-zA-Z0-9\-_.]+\/)?`).ReplaceAllString(imageFileName, "")
-	imageFileName = regexp.MustCompile(`(:[a-zA-Z0-9\-_.]+)?$`).ReplaceAllString(imageFileName, "")
-	imageFileName = imageFileName + ".tar"
+	imageFileName := sanitizeImageFileName(payload.ImageName)
 
-	// Check the ports struct, if there is no /tcp, or /udp, add /tcp
-	if !regexp.MustCompile(`\/(tcp|udp)$`).MatchString(payload.Port) {
-		payload.Port = payload.Port + "/tcp"
-	}
-
-	// Check the target domain, if there is no https:// or http://, add https://
-	if !regexp.MustCompile(`^https?:\/\/`).MatchString(payload.TargetDomain) {
-		payload.TargetDomain = "https://" + payload.TargetDomain
-	}
-
-	// Save the image tar in the storage
 	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
-		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to save image: %v", err),
-		})
+		return "", fmt.Errorf("Failed to save image: %v", err)
 	}
 
-	// Debug
-	fmt.Printf("Image saved successfully to: %s\n", imagePath)
-
-	// Import the tar in docker
 	imageID, err := docker.ImportImageToEngine(imagePath)
 	if err != nil {
-		store.RemoveFromStorage(imagePath) // Clean up the saved image if import fails
-		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to import image: %v", err),
-		})
+		store.RemoveFromStorage(imagePath)
+		return "", fmt.Errorf("Failed to import image: %v", err)
 	}
 
 	if imageID == "" {
-		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: "Imported image ID is empty",
-		})
+		return "", errors.New("Imported image ID is empty")
 	}
 
-	// Remove the image from the storage
 	err = store.RemoveFromStorage(imagePath)
 	if err != nil {
-		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to remove temporary image file: %v", err),
-		})
+		return "", fmt.Errorf("Failed to remove temporary image file: %v", err)
 	}
 
-	fmt.Printf("Image imported successfully: %s\n", payload.ImageName)
-
-	// Update the payload with the image ID
 	payload.ImageID = imageID
+	return imagePath, nil
+}
 
-	// Create the container using cmdparams.FromPayloadStructToCmdParams
-	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a, imageID)
+// createAndStartContainer creates and starts a new container
+func createAndStartContainer(a *server.App, payload *common.DeployPayload) (string, error) {
+	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a, payload.ImageID)
 	if err != nil {
-		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to create command parameters: %v", err),
-		})
+		return "", fmt.Errorf("Failed to create command parameters: %v", err)
 	}
-	// Create the container
+
 	containerID, err := docker.CreateContainer(params)
 	if err != nil {
-		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to create container: %v", err),
-		})
+		return "", fmt.Errorf("Failed to create container: %v", err)
 	}
 
-	// Start the container
 	err = docker.StartContainer(containerID)
 	if err != nil {
-		docker.RemoveContainer(containerID) // Clean up if start fails
-		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to start container: %v", err),
-		})
+		docker.RemoveContainer(containerID)
+		return "", fmt.Errorf("Failed to start container: %v", err)
 	}
 
-	// If we arrive here, send back a success response with the target domain
-	response := DeployResponse{
-		Success: true,
-		Message: "Deployment successful",
-		Domain:  payload.TargetDomain,
-	}
+	return containerID, nil
+}
 
-	// Log the response before sending
+// logResponse logs the deployment response
+func logResponse(response DeployResponse) {
 	responseJSON, _ := json.Marshal(response)
 	fmt.Printf("Server response: %s\n", string(responseJSON))
-
-	return c.JSON(http.StatusOK, response)
 }
