@@ -7,11 +7,9 @@ import (
 	"log"
 	"net/http"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/fatih/color"
 )
 
 type CurrentVersion struct {
@@ -28,9 +26,8 @@ type VersionInfo struct {
 }
 
 type VersionsResponse struct {
-	Name  string      `json:"name"`
-	AMD64 VersionInfo `json:"amd64"`
-	ARM64 VersionInfo `json:"arm64"`
+	AMD64 string `json:"amd64"`
+	ARM64 string `json:"arm64"`
 }
 
 func GetCurrentBuildVersionInfo(c *Config) CurrentVersion {
@@ -61,35 +58,22 @@ func checkAndUpdateVersion(c *Config) (string, error) {
 	var remoteVersion string
 	switch getArch() {
 	case "amd64":
-		remoteVersion = remoteVersions.AMD64.Name
+		remoteVersion = remoteVersions.AMD64
 	case "arm64":
-		remoteVersion = remoteVersions.ARM64.Name
+		remoteVersion = remoteVersions.ARM64
 	default:
-		remoteVersion = remoteVersions.Name
+		return "", fmt.Errorf("unsupported architecture: %s", getArch())
 	}
 
-	// Check if remoteVersion is empty or doesn't contain the architecture suffix
-	if remoteVersion == "" || !strings.Contains(remoteVersion, getArch()) {
+	// Check if remoteVersion is empty
+	if remoteVersion == "" {
 		return "", fmt.Errorf("remote version not available for architecture %s", getArch())
 	}
 
-	remoteVersion = remoteVersion[:len(remoteVersion)-len(getArch())-1]
 	message := CheckForNewVersion(localVersion.Version, remoteVersion)
 
-	// if local version is empty that means dev mode is on so we don't need to check for updates
-	if localVersion.Version == "" {
-		return "", nil
-	}
-
-	if message != "" {
-		// Create a new color attribute
-		green := color.New(color.FgGreen).SprintFunc()
-		// Use the color attribute to format the string with ANSI codes
-		coloredMessage := green(fmt.Sprintf("New version %s is available", remoteVersion))
-		return coloredMessage, nil
-	}
-
-	return "", nil
+	// Return the message without an error, even if it's empty
+	return message, nil
 }
 
 func CheckVersionPeriodically(c *Config) (string, error) {
@@ -151,5 +135,4 @@ func getRemoteVersion(c *Config) (VersionsResponse, error) {
 	}
 
 	return remoteVersionInfo, nil
-
 }

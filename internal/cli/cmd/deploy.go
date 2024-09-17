@@ -19,6 +19,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func init() {
+	log.SetReportTimestamp(true)
+	log.SetTimeFormat("15:04")
+}
+
 func NewDeployCommand(a *cli.App) *cobra.Command {
 	var port string
 	var targetDomain string
@@ -49,7 +54,9 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 			}
 			defer reader.Close()
 
-			log.Info("Image exported successfully", "image", imageName, "size", actualSize)
+			sizeInMB := float64(actualSize) / 1024 / 1024
+
+			log.Info("Image exported successfully", "image", imageName, "size", fmt.Sprintf("%.2fMB", sizeInMB))
 
 			if err := deployImage(a, reader, imageName, port, targetDomain); err != nil {
 				if deployErr, ok := err.(*common.DeploymentError); ok {

@@ -8,6 +8,7 @@ import (
 	"github.com/bnema/gordon/internal/cli/cmd"
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 
 	// env auto load
@@ -29,6 +30,7 @@ func InitializeCommands(client *cli.App, server *server.App) {
 	rootCmd.AddCommand(cmd.NewDeployCommand(client))
 	rootCmd.AddCommand(cmd.NewUpdateCommand(client))
 	rootCmd.AddCommand(cmd.NewPushCommand(client))
+	rootCmd.AddCommand(cmd.NewVersionCommand(client))
 }
 
 func Execute(client *cli.App, server *server.App) {
@@ -59,8 +61,10 @@ func main() {
 	// Check for new version
 	go func() {
 		msg, err := common.CheckVersionPeriodically(&s.Config)
-		if err != nil || msg != "" {
-			// log.Warnf("Error checking for new version: %s", err)
+		if err != nil {
+			log.Warnf("Error checking for new version: %s", err)
+		} else if msg != "" {
+			log.Info(msg)
 		}
 	}()
 
