@@ -12,6 +12,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func init() {
+	log.SetReportTimestamp(true)
+	log.SetTimeFormat("15:04")
+}
+
 func NewPushCommand(a *cli.App) *cobra.Command {
 	var port string
 
@@ -54,7 +59,9 @@ func pushImage(a *cli.App, imageName string) error {
 	}
 	defer reader.Close()
 
-	log.Info("Image exported successfully", "image", imageName, "size", actualSize)
+	sizeInMB := float64(actualSize) / 1024 / 1024
+
+	log.Info("Image exported successfully", "image", imageName, "size", fmt.Sprintf("%.2fMB", sizeInMB))
 
 	reqPayload := common.RequestPayload{
 		Type: "push",

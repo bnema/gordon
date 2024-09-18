@@ -19,6 +19,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/bnema/gordon/internal/cli"
+	"github.com/bnema/gordon/internal/cli/handler"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/fatih/color"
 	"github.com/pocketbase/pocketbase/tools/archive"
@@ -76,7 +77,7 @@ func NewUpdateCommand(a *cli.App) *cobra.Command {
 			var needConfirm bool
 			if docker.IsRunningInContainer() {
 				needConfirm = true
-				color.Yellow("NB! It seems that you are in a Docker container.")
+				color.Yellow("It seems that you are in a Docker container.")
 				color.Yellow("The update command may not work as expected in this context because usually the version of the app is managed by the container image itself.")
 			}
 
@@ -90,6 +91,17 @@ func NewUpdateCommand(a *cli.App) *cobra.Command {
 					fmt.Println("The command has been cancelled.")
 					return nil
 				}
+			}
+
+			// Vérifier si l'utilisateur est root
+			if isRoot() {
+				color.Yellow("Running update as root. Skipping configuration check.")
+				return pluginInstance.update()
+			}
+
+			// Si non root, effectuer la vérification des champs
+			if err := handler.FieldCheck(a); err != nil {
+				return fmt.Errorf("field check failed: %w", err)
 			}
 
 			return pluginInstance.update()
@@ -113,6 +125,17 @@ func (p *plugin) update() error {
 
 	if compareVersions(strings.TrimPrefix(p.currentVersion, "v"), strings.TrimPrefix(latest.Tag, "v")) <= 0 {
 		color.Green("You already have the latest version %s.", p.currentVersion)
+		return nil
+	}
+
+	// Prompt user for update
+	confirm := false
+	prompt := &survey.Confirm{
+		Message: fmt.Sprintf("A new version (%s) is available. Do you want to update?", latest.Tag),
+	}
+	survey.AskOne(prompt, &confirm)
+	if !confirm {
+		fmt.Println("Update cancelled by user.")
 		return nil
 	}
 
@@ -156,18 +179,26 @@ func (p *plugin) update() error {
 	renamedOldExec := oldExec + ".old"
 	defer os.Remove(renamedOldExec)
 
+	// Check if the user has write permissions
+	if err := checkWritePermission(oldExec); err != nil {
+		color.Yellow("Administrator rights are required to perform the update.")
+		color.Yellow("Please run the following command with sudo:")
+		color.HiBlack("sudo gordon update")
+		return nil
+	}
+
 	newExec := filepath.Join(extractDir, p.config.ArchiveExecutable)
 	if _, err := os.Stat(newExec); err != nil {
 		// try again with an .exe extension
 		newExec = newExec + ".exe"
 		if _, fallbackErr := os.Stat(newExec); fallbackErr != nil {
-			return fmt.Errorf("The executable in the extracted path is missing or it is inaccessible: %v, %v", err, fallbackErr)
+			return fmt.Errorf("the executable in the extracted path is missing or it is inaccessible: %v, %v", err, fallbackErr)
 		}
 	}
 
 	// rename the current executable
 	if err := os.Rename(oldExec, renamedOldExec); err != nil {
-		return fmt.Errorf("Failed to rename the current executable: %w", err)
+		return fmt.Errorf("failed to rename the current executable: %w", err)
 	}
 
 	tryToRevertExecChanges := func() {
@@ -179,7 +210,7 @@ func (p *plugin) update() error {
 	// replace with the extracted binary
 	if err := os.Rename(newExec, oldExec); err != nil {
 		tryToRevertExecChanges()
-		return fmt.Errorf("Failed replacing the executable: %w", err)
+		return fmt.Errorf("failed replacing the executable: %w", err)
 	}
 
 	color.HiBlack("---")
@@ -354,4 +385,22 @@ func compareVersions(a, b string) int {
 	}
 
 	return 0 // equal
+}
+
+// New function to check write permissions
+func checkWritePermission(path string) error {
+	// Try to create a temporary file in the same directory
+	dir := filepath.Dir(path)
+	tmpFile := filepath.Join(dir, ".gordon_update_test")
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	os.Remove(tmpFile)
+	return nil
+}
+
+func isRoot() bool {
+	return os.Geteuid() == 0
 }
