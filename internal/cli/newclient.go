@@ -16,6 +16,7 @@ func NewClientApp(buildConfig *common.BuildConfig) (*App, error) {
 	config := common.Config{
 		Build: *buildConfig,
 	}
+
 	_, err := config.LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
