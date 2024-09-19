@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"fmt"
@@ -38,7 +38,7 @@ func Execute(client *cli.App, server *server.App) {
 	cobra.CheckErr(rootCmd.Execute())
 }
 
-func main() {
+func ExecuteCLI() {
 	build = regexp.MustCompile(`\d+\.\d+\.\d+`).FindString(build)
 	buildInfo := &common.BuildConfig{
 		BuildVersion: build,
