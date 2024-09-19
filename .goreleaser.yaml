@@ -10,6 +10,7 @@ release:
 builds:
   - id: "gordon"
     main: ./cmd/cli/main.go
+    binary: gordon
     goos:
       - linux
       - windows
