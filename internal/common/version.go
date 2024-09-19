@@ -77,6 +77,11 @@ func checkAndUpdateVersion(c *Config) (string, error) {
 }
 
 func CheckVersionPeriodically(c *Config) (string, error) {
+	// Check if version is "devel"
+	if c.GetVersion() == "devel" {
+		return "", nil
+	}
+
 	// Perform an immediate check.
 	newVersionMessage, err := checkAndUpdateVersion(c)
 
