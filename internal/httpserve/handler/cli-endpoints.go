@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
 
@@ -153,13 +152,12 @@ func generateShortID(imageID string) string {
 
 // storeIDMapping saves the mapping between short ID and full ID
 func storeIDMapping(shortID, fullID string) {
-	log.Printf("Storing mapping: %s -> %s", shortID, fullID)
 	safelyInteractWithIDMap(Update, shortID, fullID)
 }
 
 // generateCreateContainerURL creates the URL for the container creation page
 func generateCreateContainerURL(a *server.App, shortID string) string {
-	return fmt.Sprintf("%s://%s%s/create-container/%s",
+	return fmt.Sprintf("%s://%s%s/cc/%s",
 		a.Config.Http.Protocol(),
 		a.Config.Http.FullDomain(),
 		a.Config.Admin.Path,
