@@ -88,7 +88,7 @@ func pushImage(a *cli.App, imageName string) error {
 	log.Info("Image pushed successfully", "image", imageName)
 
 	if pushResponse.CreateContainerURL != "" {
-		log.Info("Create a container for this image at:", "url", pushResponse.CreateContainerURL)
+		log.Info("Container creation URL:", "url", pushResponse.CreateContainerURL)
 	}
 
 	return nil
