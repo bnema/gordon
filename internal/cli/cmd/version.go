@@ -10,7 +10,7 @@ import (
 func NewVersionCommand(a *cli.App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Affiche la version de Gordon",
+		Short: "Display the version of Gordon",
 		Run: func(cmd *cobra.Command, args []string) {
 			version := a.Config.GetVersion()
 			if version == "" {
