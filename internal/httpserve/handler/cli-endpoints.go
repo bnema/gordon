@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/store"
+	"github.com/charmbracelet/log"
 	"github.com/labstack/echo/v4"
 )
 
@@ -25,6 +27,8 @@ type PushResponse = common.PushResponse
 
 // sendJSONResponse is a helper function to send JSON responses
 func sendJSONResponse(c echo.Context, statusCode int, response interface{}) error {
+	// Debug
+	log.Debug("Sending JSON response", "statusCode", statusCode, "response", response)
 	return c.JSON(statusCode, response)
 }
 
@@ -166,37 +170,60 @@ func generateCreateContainerURL(a *server.App, shortID string) string {
 
 // PostDeploy handles the container deployment request
 func PostDeploy(c echo.Context, a *server.App) error {
+	// Debug
+	log.Info("Starting deployment process", "handler", "PostDeploy", "requestID", c.Response().Header().Get(echo.HeaderXRequestID))
+
 	payload, err := validateAndPrepareDeployPayload(c)
 	if err != nil {
+		// Debug
+		log.Error("Failed to validate and prepare payload", "error", err)
 		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
 			Success: false,
-			Message: err.Error(),
+			Message: fmt.Sprintf("Invalid payload: %v", err),
 		})
 	}
+	// Debug
+	log.Info("Payload validated and prepared", "payload", payload)
 
-	_, err = saveAndImportDeployImage(c, a, payload)
+	imagePath, err := saveAndImportDeployImage(c, a, payload)
 	if err != nil {
+		// Debug
+		log.Error("Failed to save and import image", "error", err)
 		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
 			Success: false,
-			Message: err.Error(),
+			Message: fmt.Sprintf("Failed to save or import image: %v", err),
 		})
 	}
+	// Debug
+	log.Info("Image saved and imported successfully", "imagePath", imagePath)
 
-	_, err = createAndStartContainer(a, payload)
+	containerID, err := createAndStartContainer(a, payload)
 	if err != nil {
+		if strings.Contains(err.Error(), "is already in use") {
+			log.Warn("Container already exists", "error", err)
+			return sendJSONResponse(c, http.StatusConflict, DeployResponse{
+				Success: false,
+				Message: fmt.Sprintf("Container with name '%s' already exists. Please remove it first or use a different name.", payload.ImageName),
+			})
+		}
+		log.Error("Failed to create or start container", "error", err)
 		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
 			Success: false,
-			Message: err.Error(),
+			Message: fmt.Sprintf("Failed to create or start container: %v", err),
 		})
 	}
+	// Debug
+	log.Info("Container created and started successfully", "containerID", containerID)
 
 	response := DeployResponse{
-		Success: true,
-		Message: "Deployment successful",
-		Domain:  payload.TargetDomain,
+		Success:     true,
+		Message:     "Deployment successful",
+		Domain:      payload.TargetDomain,
+		ContainerID: containerID,
 	}
 
-	logResponse(response)
+	// Debug
+	log.Info("Deployment completed successfully", "response", response)
 
 	return sendJSONResponse(c, http.StatusOK, response)
 }
