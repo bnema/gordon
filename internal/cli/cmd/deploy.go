@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,18 +60,8 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 			log.Info("Image exported successfully", "image", imageName, "size", fmt.Sprintf("%.2fMB", sizeInMB))
 
 			if err := deployImage(a, reader, imageName, port, targetDomain); err != nil {
-				if deployErr, ok := err.(*common.DeploymentError); ok {
-					log.Error("Deployment failed",
-						"status_code", deployErr.StatusCode,
-						"message", deployErr.Message,
-					)
-				} else {
-					log.Error("Deployment failed", "error", err)
-				}
-				return
+				os.Exit(1)
 			}
-
-			log.Info("Deployment successful!")
 		},
 	}
 
@@ -124,6 +115,9 @@ func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
 }
 
 func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
+
+	log.Info("Attempting to deploy...", "image", imageName, "port", port, "target_domain", targetDomain)
+
 	reqPayload := common.RequestPayload{
 		Type: "deploy",
 		Payload: common.DeployPayload{
@@ -136,33 +130,45 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 
 	resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/deploy")
 	if err != nil {
-		if deployErr, ok := err.(*common.DeploymentError); ok {
-			log.Error("Deployment failed",
-				"status_code", deployErr.StatusCode,
-				"message", deployErr.Message,
-			)
-		} else {
-			log.Error("Error sending HTTP request", "error", err)
+		var deployErr *common.DeploymentError
+		if errors.As(err, &deployErr) {
+			// Try to parse the raw response to get the container ID
+			var deployResponse common.DeployResponse
+			if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
+				log.Error("Deployment failed",
+					"error", deployErr.Message,
+					"status_code", deployErr.StatusCode,
+					"container_id", deployResponse.ContainerID,
+				)
+			} else {
+				// If parsing fails, just log the error without the container ID
+				log.Error("Deployment failed", "error", deployErr.Message, "status_code", deployErr.StatusCode)
+			}
+			// Return nil to prevent further error logging
+			return nil
 		}
-		return nil // Return nil to prevent double-logging
+		log.Error("Error sending HTTP request", "error", err)
+		return nil
 	}
 
 	var deployResponse common.DeployResponse
 	if err := json.Unmarshal(resp.Body, &deployResponse); err != nil {
-		log.Error("Error parsing response", "error", err)
+		log.Error("Error parsing response", "error", err, "response", string(resp.Body))
 		return nil
 	}
 
 	if !deployResponse.Success {
-		log.Error("Deployment failed", "message", deployResponse.Message)
+		log.Error("Deployment failed",
+			"message", deployResponse.Message,
+			"container_id", deployResponse.ContainerID,
+		)
 		return nil
 	}
 
-	log.Info("Application deployed", "domain", deployResponse.Domain)
-	return waitForDeployment(deployResponse.Domain)
+	return waitForDeployment(deployResponse.Domain, deployResponse.ContainerID)
 }
 
-func waitForDeployment(domain string) error {
+func waitForDeployment(domain string, containerID string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	maxRetries := 20
 	retryInterval := time.Second
@@ -173,6 +179,9 @@ func waitForDeployment(domain string) error {
 		if err == nil {
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
+				log.Info("Deployment successful",
+					"domain", domain,
+					"container_id", containerID)
 				return nil
 			}
 			// Check for error messages in the response body
@@ -181,7 +190,7 @@ func waitForDeployment(domain string) error {
 				return fmt.Errorf("deployment failed: %s", string(body))
 			}
 		}
-		log.Warn("Deployment not ready yet, retrying", "attempt", fmt.Sprintf("%d/20", i+1))
+		log.Warn("Deployment not ready yet, retrying", "attempt", fmt.Sprintf("%d/%d", i+1, maxRetries))
 		time.Sleep(retryInterval)
 	}
 

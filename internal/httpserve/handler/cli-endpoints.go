@@ -170,9 +170,6 @@ func generateCreateContainerURL(a *server.App, shortID string) string {
 
 // PostDeploy handles the container deployment request
 func PostDeploy(c echo.Context, a *server.App) error {
-	// Debug
-	log.Info("Starting deployment process", "handler", "PostDeploy", "requestID", c.Response().Header().Get(echo.HeaderXRequestID))
-
 	payload, err := validateAndPrepareDeployPayload(c)
 	if err != nil {
 		// Debug
@@ -182,10 +179,8 @@ func PostDeploy(c echo.Context, a *server.App) error {
 			Message: fmt.Sprintf("Invalid payload: %v", err),
 		})
 	}
-	// Debug
-	log.Info("Payload validated and prepared", "payload", payload)
 
-	imagePath, err := saveAndImportDeployImage(c, a, payload)
+	_, err = saveAndImportDeployImage(c, a, payload)
 	if err != nil {
 		// Debug
 		log.Error("Failed to save and import image", "error", err)
@@ -194,16 +189,26 @@ func PostDeploy(c echo.Context, a *server.App) error {
 			Message: fmt.Sprintf("Failed to save or import image: %v", err),
 		})
 	}
-	// Debug
-	log.Info("Image saved and imported successfully", "imagePath", imagePath)
 
 	containerID, err := createAndStartContainer(a, payload)
 	if err != nil {
 		if strings.Contains(err.Error(), "is already in use") {
 			log.Warn("Container already exists", "error", err)
+			extractedID := extractContainerID(err.Error())
+			log.Info("Extracted container ID", "containerID", extractedID)
+
+			if extractedID == "" {
+				log.Error("Failed to extract container ID from error message")
+				return sendJSONResponse(c, http.StatusConflict, DeployResponse{
+					Success: false,
+					Message: "A container with this name already exists, but we couldn't extract its ID.",
+				})
+			}
+
 			return sendJSONResponse(c, http.StatusConflict, DeployResponse{
-				Success: false,
-				Message: fmt.Sprintf("Container with name '%s' already exists. Please remove it first or use a different name.", payload.ImageName),
+				Success:     false,
+				Message:     fmt.Sprintf("A container for this deploy already exists."),
+				ContainerID: extractedID,
 			})
 		}
 		log.Error("Failed to create or start container", "error", err)
@@ -212,9 +217,6 @@ func PostDeploy(c echo.Context, a *server.App) error {
 			Message: fmt.Sprintf("Failed to create or start container: %v", err),
 		})
 	}
-	// Debug
-	log.Info("Container created and started successfully", "containerID", containerID)
-
 	response := DeployResponse{
 		Success:     true,
 		Message:     "Deployment successful",
@@ -222,10 +224,24 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		ContainerID: containerID,
 	}
 
-	// Debug
-	log.Info("Deployment completed successfully", "response", response)
+	// Debug: Verify containerID in response
+	if response.ContainerID != containerID {
+		log.Error("Container ID mismatch", "responseID", response.ContainerID, "actualID", containerID)
+	} else {
+		log.Info("Container ID successfully stored in response", "containerID", containerID)
+	}
 
 	return sendJSONResponse(c, http.StatusOK, response)
+}
+
+// is already in use by 08433f639cb1c01254d43f234360bfa793aa8c33b29e8de8ce42b0706c0090ba. example
+func extractContainerID(errorMessage string) string {
+	re := regexp.MustCompile(`by\s+([0-9a-f]+)\.`)
+	match := re.FindStringSubmatch(errorMessage)
+	if len(match) > 1 {
+		return match[1]
+	}
+	return ""
 }
 
 // validateAndPrepareDeployPayload prepares the deployment payload
