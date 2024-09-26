@@ -13,13 +13,13 @@ Gordon is a tool written in Go that aims to simplify the deployment of your cont
 
 ## **Key Features**
 
-- **Ease of use**: 
+- **Ease of use**:
   - Push your container images effortlessly using the **`gordon push`** command. A container creation URL is generated upon successful push.
-  
+
   ![Demo Push](assets/vhs/demo_push.gif?raw=true)
-  
+
   - Deploy your web applications quickly with **`gordon deploy`**.
-  
+
   ![Demo Deploy](assets/vhs/demo_deploy.gif?raw=true)
 
 - **Self-Hosted**: Operates within your existing self-hosted environment without interfering with your setup.
@@ -50,9 +50,15 @@ I also want to emphasize that I am far from being a Go expert yet. Hence, if you
 
 ## **Roadmap beyond 0.1**
 
-- [ ] Bug fixes
+- [x] Improved error handling
+- [x] Improved logging
 - [x] Refined CLI to backend authentication process (utilizing GitHub OAuth Device flow)
-- [x] `push` command 
+- [x] `push` command
+- [x] `version` command
+- [x] `update` command
+- [x] `deploy` command
+- [ ] Survey(s) on deploy command (delete if already exists, etc.)
+- [ ] Improved web UI
 - [ ] Templates for databases (mysql, postgresql, redis, etc.)
 
 Have suggestions? Feel free to open an issue!
