@@ -316,6 +316,18 @@ func GetContainerInfo(containerID string) (types.ContainerJSON, error) {
 	return containerInfo, nil
 }
 
+// GetContainerName returns the name of a container
+func GetContainerName(containerID string) (string, error) {
+	containerInfo, err := GetContainerInfo(containerID)
+	if err != nil {
+		return "", err
+	}
+
+	// Debug
+	fmt.Printf("Container name: %s\n", containerInfo.Name)
+	return containerInfo.Name, nil
+}
+
 // UpdateContainerConfig updates the configuration of an existing container.
 func UpdateContainerConfig(containerID string, newConfig *container.Config, newHostConfig *container.HostConfig, newNetworkingConfig *network.NetworkingConfig) error {
 	ctx := context.Background()
