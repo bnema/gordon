@@ -63,7 +63,7 @@ Set Shell "bash"
 Set FontSize 17
 Set FontFamily "FiraCode Nerd Font"
 Set Width 1200
-Set Height 300
+Set Height 500
 
 Type "gordon"
 Sleep 1
