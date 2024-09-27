@@ -66,7 +66,10 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			var errorResp map[string]interface{}
+			var errorResp struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
 			if err := json.Unmarshal(body, &errorResp); err == nil {
 				if resp.StatusCode == http.StatusUnauthorized && !reauthenticated {
 					fmt.Println("Token is invalid or expired. Initiating re-authentication...")
@@ -78,10 +81,17 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 					reauthenticated = true
 					continue
 				}
-				errorMsg := fmt.Sprintf("Request failed: status=%d, error=%v", resp.StatusCode, errorResp["error"])
-				return nil, fmt.Errorf(errorMsg)
+				return nil, &common.DeploymentError{
+					StatusCode:  resp.StatusCode,
+					Message:     errorResp.Message,
+					RawResponse: string(body),
+				}
 			}
-			return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+			return nil, &common.DeploymentError{
+				StatusCode:  resp.StatusCode,
+				Message:     "Unexpected error occurred",
+				RawResponse: string(body),
+			}
 		}
 
 		return &Response{Http: resp, Body: body, StatusCode: resp.StatusCode}, nil
