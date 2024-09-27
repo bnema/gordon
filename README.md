@@ -9,7 +9,8 @@
 <h4 align="center">Minimalist self-hosted containerized app deployment tool.</h4>
 
 
-Gordon is a tool written in Go that aims to simplify the deployment of your containerized web applications. It automates the process of integrating your locally built image into your self-hosted setup without the need of a container registry. Optionally, for the deploy command, Gordon can coordinate domain routing through Traefik (which needs to be pre-installed). When used, this feature eliminates the need for manual configuration and streamlines the deployment process.
+Gordon is a tool written in Go that aims to simplify the deployment of your containerized web applications. It automates the process of integrating your locally built image into your self-hosted setup without the need of a container registry. 
+Optionally, for the deploy command, Gordon can coordinate domain routing through Traefik (which needs to be pre-installed). When used, this feature eliminates the need for manual configuration and streamlines the deployment process.
 
 ## **Key Features**
 
