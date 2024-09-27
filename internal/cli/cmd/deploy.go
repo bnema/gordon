@@ -136,27 +136,26 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 
 	resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/deploy")
 	if err != nil {
-		return &common.DeploymentError{
-			StatusCode: 0,
-			Message:    fmt.Sprintf("error sending HTTP request: %v", err),
+		if deployErr, ok := err.(*common.DeploymentError); ok {
+			log.Error("Deployment failed",
+				"status_code", deployErr.StatusCode,
+				"message", deployErr.Message,
+			)
+		} else {
+			log.Error("Error sending HTTP request", "error", err)
 		}
+		return nil // Return nil to prevent double-logging
 	}
 
 	var deployResponse common.DeployResponse
 	if err := json.Unmarshal(resp.Body, &deployResponse); err != nil {
-		return &common.DeploymentError{
-			StatusCode:  resp.StatusCode,
-			Message:     fmt.Sprintf("error parsing response: %v", err),
-			RawResponse: string(resp.Body),
-		}
+		log.Error("Error parsing response", "error", err)
+		return nil
 	}
 
 	if !deployResponse.Success {
-		return &common.DeploymentError{
-			StatusCode:  resp.StatusCode,
-			Message:     deployResponse.Message,
-			RawResponse: string(resp.Body),
-		}
+		log.Error("Deployment failed", "message", deployResponse.Message)
+		return nil
 	}
 
 	log.Info("Application deployed", "domain", deployResponse.Domain)

@@ -17,9 +17,10 @@ type Payload interface {
 }
 
 type DeployResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	Domain  string `json:"domain,omitempty"`
+	Success     bool   `json:"success"`
+	Message     string `json:"message"`
+	Domain      string `json:"domain,omitempty"`
+	ContainerID string `json:"container_id,omitempty"`
 }
 
 type PushResponse struct {
@@ -29,7 +30,7 @@ type PushResponse struct {
 }
 
 type DeploymentError struct {
-	StatusCode  int    `json:"status_code"`
+	StatusCode  int    `json:"status"`
 	Message     string `json:"message"`
 	RawResponse string `json:"raw_response"`
 }
