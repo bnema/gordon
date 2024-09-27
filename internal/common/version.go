@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"runtime"
 	"time"
 
 	"github.com/bnema/gordon/pkg/docker"
+	"github.com/charmbracelet/log"
 )
 
 type CurrentVersion struct {
@@ -76,6 +76,14 @@ func checkAndUpdateVersion(c *Config) (string, error) {
 	return message, nil
 }
 
+// GetVersion returns the version
+func (c *Config) GetVersion() string {
+	if c.Build.BuildVersion != "" {
+		return c.Build.BuildVersion
+	}
+	return "devel"
+}
+
 func CheckVersionPeriodically(c *Config) (string, error) {
 	// Check if version is "devel"
 	if c.GetVersion() == "devel" {
@@ -90,7 +98,7 @@ func CheckVersionPeriodically(c *Config) (string, error) {
 	}
 
 	if newVersionMessage != "" {
-		fmt.Println(newVersionMessage)
+		log.Info(newVersionMessage)
 		return "", nil
 	}
 
