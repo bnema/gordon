@@ -1,4 +1,4 @@
-package handler
+package handlers
 
 import (
 	"fmt"
@@ -57,6 +57,7 @@ func CreateContainerGET(c echo.Context, a *server.App) error {
 		"ImageName": imageName,
 	}
 
+	// Render the create container page
 	rendererData, err := render.GetHTMLRenderer("html/fragments", "createcontainer.gohtml", a.TemplateFS, a)
 
 	if err != nil {
