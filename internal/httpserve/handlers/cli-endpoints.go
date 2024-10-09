@@ -1,4 +1,4 @@
-package handler
+package handlers
 
 import (
 	"encoding/json"
@@ -207,7 +207,7 @@ func PostDeploy(c echo.Context, a *server.App) error {
 
 			return sendJSONResponse(c, http.StatusConflict, DeployResponse{
 				Success:     false,
-				Message:     fmt.Sprintf("A container for this deploy already exists."),
+				Message:     "A container for this deploy already exists.",
 				ContainerID: extractedID,
 			})
 		}

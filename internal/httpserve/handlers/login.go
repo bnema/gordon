@@ -1,4 +1,4 @@
-package handler
+package handlers
 
 import (
 	"encoding/base64"
@@ -13,6 +13,7 @@ import (
 	"github.com/bnema/gordon/internal/db/queries"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/render"
+	"github.com/charmbracelet/log"
 	"github.com/gorilla/sessions"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
@@ -59,58 +60,59 @@ func RenderLoginPage(c echo.Context, a *server.App) error {
 }
 
 // StartOAuthGithub starts the Github OAuth flow.
+
 func StartOAuthGithub(c echo.Context, a *server.App) error {
-	fmt.Println("Attempting to get an existing session.")
+	log.Info("Attempting to get an existing session.")
 	sess, err := getSession(c)
 	if err != nil || sess == nil || sess.Values == nil {
-		fmt.Println("Session retrieval failed, initiating new GitHub OAuth flow.")
+		log.Info("Session retrieval failed, initiating new GitHub OAuth flow.")
 		return initiateGithubOAuthFlow(c, a)
 	}
 
-	fmt.Println("Attempting to assert session values.")
+	log.Info("Attempting to assert session values.")
 	sessionID, ok1 := sess.Values["sessionID"].(string)
 	accountID, ok2 := sess.Values["accountID"].(string)
 	authenticated, ok3 := sess.Values["authenticated"].(bool)
 
 	if !ok1 || !ok2 || !ok3 || !authenticated {
-		fmt.Println("Session assertion failed, or user not authenticated. Initiating new OAuth flow.")
+		log.Info("Session assertion failed, or user not authenticated. Initiating new OAuth flow.")
 		return initiateGithubOAuthFlow(c, a)
 	}
 
-	fmt.Println("Checking if session exists in DB.")
+	log.Info("Checking if session exists in DB.")
 	sessionExists, err := queries.CheckDBSessionExists(a, sessionID)
 	if err != nil {
-		fmt.Printf("Error checking if session exists: %v\n", err)
+		log.Info("Error checking if session exists", "error", err)
 		return fmt.Errorf("could not check if session exists: %w", err)
 	}
 
 	if !sessionExists {
-		fmt.Println("Session does not exist in DB, initiating new OAuth flow.")
+		log.Info("Session does not exist in DB, initiating new OAuth flow.")
 		return initiateGithubOAuthFlow(c, a)
 	}
 
-	fmt.Println("Getting the expiration time of the session.")
+	log.Info("Getting the expiration time of the session.")
 	currentTime := time.Now()
 	sessionExpiration, err := queries.GetSessionExpiration(a, accountID, sessionID, currentTime)
 	if err != nil {
-		fmt.Printf("Error getting session expiration: %v\n", err)
+		log.Info("Error getting session expiration", "error", err)
 		return fmt.Errorf("could not get session expiration: %w", err)
 	}
 
 	if currentTime.After(sessionExpiration) {
-		fmt.Println("Current time is after session expiration, initiating new OAuth flow.")
+		log.Info("Current time is after session expiration, initiating new OAuth flow.")
 		return initiateGithubOAuthFlow(c, a)
 	}
 
-	fmt.Println("Extending session expiration time by 30 minutes.")
+	log.Info("Extending session expiration time by 30 minutes.")
 	newExpirationTime := currentTime.Add(30 * time.Minute)
 	err = queries.ExtendSessionExpiration(a, accountID, sessionID, newExpirationTime)
 	if err != nil {
-		fmt.Printf("Error extending session expiration: %v\n", err)
+		log.Info("Error extending session expiration", "error", err)
 		return fmt.Errorf("could not extend session expiration: %w", err)
 	}
 
-	fmt.Println("Session is valid and extended. Redirecting to admin panel.")
+	log.Info("Session is valid and extended. Redirecting to admin panel.")
 	return c.Redirect(http.StatusFound, a.Config.Admin.Path)
 }
 
