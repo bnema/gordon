@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bnema/gordon/internal/httpserve/handler"
+	"github.com/bnema/gordon/internal/httpserve/handlers"
 	"github.com/bnema/gordon/internal/server"
 
 	"github.com/labstack/echo/v4"
@@ -20,7 +20,7 @@ func RequireLogin(a *server.App) echo.MiddlewareFunc {
 			const maxRetries = 3
 			var err error
 			for i := 0; i < maxRetries; i++ {
-				err = handler.ValidateSessionAndUser(c, a)
+				err = handlers.ValidateSessionAndUser(c, a)
 				if err == nil {
 					return next(c)
 				}

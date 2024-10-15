@@ -1,19 +1,64 @@
+# This Makefile is used for dev purposes
 # Variables
-INSTALL_DIR = /usr/bin
-BINARY_NAME = gordon 
+REPO := ghcr.io/bnema/gordon
+TAG := dev
+DIST_DIR := ./dist
+ENGINE := podman
+
+# Architectures
+ARCHS := amd64 arm64
+
+# Phony targets
+.PHONY: all build build-push clean
+
 # Default target
 all: build
 
-# Build the Go binary
+# Build binaries
 build:
-	go build -o $(BINARY_NAME) cmd/cli/main.go
+	@echo "Building Go binaries..."
+	@mkdir -p $(DIST_DIR)
+	@rm -f $(DIST_DIR)/*
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o $(DIST_DIR)/gordon-linux-amd64 ./main.go
+	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o $(DIST_DIR)/gordon-linux-arm64 ./main.go
+	@echo "Go binaries built successfully"
 
-# Install the binary to /usr/local/bin
-install:
-	mv $(BINARY_NAME) $(INSTALL_DIR)
+# Build and push Docker images
+build-push: build
+	@echo "Cleaning up dangling images..."
+	@$(ENGINE) image prune -f
 
-# Clean up the built binary
+	@echo "Building and pushing Docker images..."
+	@for arch in $(ARCHS); do \
+		cp $(DIST_DIR)/gordon-linux-$$arch gordon; \
+		$(ENGINE) build -t $(REPO):$(TAG)-$$arch .; \
+		rm gordon; \
+		$(ENGINE) push $(REPO):$(TAG)-$$arch; \
+	done
+
+	@echo "Removing existing manifest..."
+	@$(ENGINE) manifest rm $(REPO):$(TAG) || true
+
+	@echo "Creating multi-arch manifest..."
+	@$(ENGINE) manifest create $(REPO):$(TAG) \
+		$(REPO):$(TAG)-amd64 \
+		$(REPO):$(TAG)-arm64
+
+	@echo "Annotating arm64 image..."
+	@$(ENGINE) manifest annotate $(REPO):$(TAG) \
+		$(REPO):$(TAG)-arm64 --arch arm64 --variant v8
+
+	@echo "Inspecting manifest..."
+	@$(ENGINE) manifest inspect $(REPO):$(TAG)
+
+	@echo "Pushing multi-arch manifest..."
+	@$(ENGINE) manifest push --all $(REPO):$(TAG)
+
+	@echo "Script completed successfully."
+
+# Clean up
 clean:
-	rm -f $(BINARY_NAME)
-
-.PHONY: all build install clean
+	@echo "Cleaning up..."
+	@rm -rf $(DIST_DIR)
+	@$(ENGINE) system prune -f
+	@echo "Cleanup completed."
