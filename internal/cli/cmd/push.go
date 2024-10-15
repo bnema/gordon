@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
@@ -73,22 +74,28 @@ func pushImage(a *cli.App, imageName string) error {
 
 	resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
 	if err != nil {
-		return fmt.Errorf("error sending HTTP request: %w", err)
+		log.Error("Error sending HTTP request", "error", err)
+		return err
 	}
 
 	var pushResponse common.PushResponse
 	if err := json.Unmarshal(resp.Body, &pushResponse); err != nil {
-		return fmt.Errorf("error parsing response: %w", err)
+		log.Error("Error parsing response", "error", err)
+		return err
 	}
 
 	if !pushResponse.Success {
-		return fmt.Errorf("push failed: %s", pushResponse.Message)
+		log.Error("Push failed", "resp", pushResponse.Message)
+		return fmt.Errorf(pushResponse.Message)
 	}
 
-	log.Info("Image pushed successfully", "image", imageName)
+	//Remove the double quotes from the message
+	message := strings.Trim(pushResponse.Message, "\"")
+
+	log.Info(message)
 
 	if pushResponse.CreateContainerURL != "" {
-		log.Info("Container creation URL:", "url", pushResponse.CreateContainerURL)
+		log.Info("Container creation available", "url", pushResponse.CreateContainerURL)
 	}
 
 	return nil
