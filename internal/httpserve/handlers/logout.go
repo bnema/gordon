@@ -1,4 +1,4 @@
-package handler
+package handlers
 
 import (
 	"fmt"
@@ -21,8 +21,9 @@ func Logout(c echo.Context, a *server.App) error {
 	}
 
 	// Invalidate the session in the database
-	if sess != nil {
-		err := queries.InvalidateDBSession(a, sess.Values["sessionID"].(string))
+	sessionID, ok := sess.Values["sessionID"].(string)
+	if ok {
+		err := queries.InvalidateDBSession(a, sessionID)
 		if err != nil {
 			return fmt.Errorf("failed to invalidate session: %w", err)
 		}
