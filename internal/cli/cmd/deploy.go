@@ -116,7 +116,7 @@ func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
 
 func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
 
-	log.Info("Attempting to deploy...", "image", imageName, "port", port, "target_domain", targetDomain)
+	log.Info("Attempting to deploy...", "image", imageName, "port", port, "target", targetDomain)
 
 	reqPayload := common.RequestPayload{
 		Type: "deploy",
@@ -172,6 +172,8 @@ func waitForDeployment(domain string, containerID string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	maxRetries := 20
 	retryInterval := time.Second
+	// shorten the container id to 12 characters
+	shortContainerID := containerID[:12]
 
 	log.Info("Waiting for deployment to be reachable")
 	for i := 0; i < maxRetries; i++ {
@@ -181,7 +183,7 @@ func waitForDeployment(domain string, containerID string) error {
 			if resp.StatusCode == http.StatusOK {
 				log.Info("Deployment successful",
 					"domain", domain,
-					"container_id", containerID)
+					"container_id", shortContainerID)
 				return nil
 			}
 			// Check for error messages in the response body
