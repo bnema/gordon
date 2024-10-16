@@ -1,7 +1,7 @@
 package httpserve
 
 import (
-	"github.com/bnema/gordon/internal/httpserve/handler"
+	"github.com/bnema/gordon/internal/httpserve/handlers"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
 	"github.com/bnema/gordon/internal/server"
 	_ "github.com/joho/godotenv/autoload"
@@ -53,45 +53,45 @@ func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 
 	// Device flow endpoints (without RequireToken middleware)
 	apiGroup.POST("/device/code", func(c echo.Context) error {
-		return handler.DeviceCodeRequest(c, a)
+		return handlers.DeviceCodeRequest(c, a)
 	})
 	apiGroup.POST("/device/token", func(c echo.Context) error {
-		return handler.DeviceTokenRequest(c, a)
+		return handlers.DeviceTokenRequest(c, a)
 	})
 
 	// Other API endpoints that require a token
 	protectedApiGroup := apiGroup.Group("", middleware.RequireToken(a))
 	protectedApiGroup.GET("/ping", func(c echo.Context) error {
-		return handler.GetInfos(c, a)
+		return handlers.GetInfos(c, a)
 	})
 	protectedApiGroup.POST("/deploy", func(c echo.Context) error {
-		return handler.PostDeploy(c, a)
+		return handlers.PostDeploy(c, a)
 	})
 	protectedApiGroup.POST("/push", func(c echo.Context) error {
-		return handler.PostPush(c, a)
+		return handlers.PostPush(c, a)
 	})
 }
 
 // bindStaticRoute bind static path
 func bindStaticRoute(e *echo.Echo, a *server.App, path string) {
 	e.GET(path, func(c echo.Context) error {
-		return handler.StaticRoute(c, a)
+		return handlers.StaticRoute(c, a)
 	}, echomid.Gzip())
 }
 
 // bindLoginRoute binds all login routes
 func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
 	e.GET(adminPath+"/login", func(c echo.Context) error {
-		return handler.RenderLoginPage(c, a)
+		return handlers.RenderLoginPage(c, a)
 	})
 	e.GET(adminPath+"/login/oauth/github", func(c echo.Context) error {
-		return handler.StartOAuthGithub(c, a)
+		return handlers.StartOAuthGithub(c, a)
 	})
 	e.GET(adminPath+"/login/oauth/callback", func(c echo.Context) error {
-		return handler.OAuthCallback(c, a)
+		return handlers.OAuthCallback(c, a)
 	})
 	e.GET(adminPath+"/logout", func(c echo.Context) error {
-		return handler.Logout(c, a)
+		return handlers.Logout(c, a)
 	})
 }
 
@@ -104,10 +104,10 @@ func bindAdminRoute(e *echo.Echo, a *server.App, adminPath string) {
 	}, middleware.RequireLogin(a))
 
 	adminGroup.GET("/manager", func(c echo.Context) error {
-		return handler.AdminManagerRoute(c, a)
+		return handlers.AdminManagerRoute(c, a)
 	}, middleware.RequireLogin(a))
 	adminGroup.GET("/cc/:ID", func(c echo.Context) error {
-		return handler.CreateContainerFullGET(c, a)
+		return handlers.CreateContainerFullGET(c, a)
 	}, middleware.RequireLogin(a))
 }
 
@@ -121,52 +121,52 @@ func bindHTMXEndpoints(e *echo.Echo, a *server.App) {
 
 	// List all images component
 	htmxGroup.GET("/image-manager", func(c echo.Context) error {
-		return handler.ImageManagerComponent(c, a)
+		return handlers.ImageManagerComponent(c, a)
 	})
 	// Delete an image
 	htmxGroup.DELETE("/image-manager/delete/:ID", func(c echo.Context) error {
-		return handler.ImageManagerDelete(c, a)
+		return handlers.ImageManagerDelete(c, a)
 	})
 
 	// List all containers
 	htmxGroup.GET("/container-manager", func(c echo.Context) error {
-		return handler.ContainerManagerComponent(c, a)
+		return handlers.ContainerManagerComponent(c, a)
 	})
 	// Stop a container
 	htmxGroup.POST("/container-manager/stop/:ID", func(c echo.Context) error {
-		return handler.ContainerManagerStop(c, a)
+		return handlers.ContainerManagerStop(c, a)
 	})
 	// Delete a container
 	htmxGroup.DELETE("/container-manager/delete/:ID", func(c echo.Context) error {
-		return handler.ContainerManagerDelete(c, a)
+		return handlers.ContainerManagerDelete(c, a)
 	})
 	// Start a container
 	htmxGroup.POST("/container-manager/start/:ID", func(c echo.Context) error {
-		return handler.ContainerManagerStart(c, a)
+		return handlers.ContainerManagerStart(c, a)
 	})
 	// Edit a container view
 	htmxGroup.GET("/container-manager/edit/:ID", func(c echo.Context) error {
-		return handler.ContainerManagerEditGET(c, a)
+		return handlers.ContainerManagerEditGET(c, a)
 	})
 	// Edit a container action
 	htmxGroup.POST("/container-manager/edit/:ID", func(c echo.Context) error {
-		return handler.ContainerManagerEditPOST(c, a)
+		return handlers.ContainerManagerEditPOST(c, a)
 	})
 
 	// Display upload-image component
 	htmxGroup.GET("/upload-image", func(c echo.Context) error {
-		return handler.UploadImageGETHandler(c, a)
+		return handlers.UploadImageGETHandler(c, a)
 	})
 	// Upload image
 	htmxGroup.POST("/upload-image", func(c echo.Context) error {
-		return handler.UploadImagePOSTHandler(c, a)
+		return handlers.UploadImagePOSTHandler(c, a)
 	})
 	// Display create-container component
 	htmxGroup.GET("/create-container/:ID", func(c echo.Context) error {
-		return handler.CreateContainerGET(c, a)
+		return handlers.CreateContainerGET(c, a)
 	})
 	// Create container
 	htmxGroup.POST("/create-container/:ID", func(c echo.Context) error {
-		return handler.CreateContainerPOST(c, a)
+		return handlers.CreateContainerPOST(c, a)
 	})
 }
