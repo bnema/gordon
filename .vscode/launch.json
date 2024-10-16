@@ -9,7 +9,7 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "program": "./cmd/cli/main.go",
+            "program": "./main.go",
         }
         
 
