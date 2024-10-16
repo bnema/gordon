@@ -89,7 +89,7 @@ func PostPush(c echo.Context, a *server.App) error {
 
 	return sendJSONResponse(c, http.StatusOK, common.PushResponse{
 		Success:            true,
-		Message:            "Image pushed successfully",
+		Message:            "Image pushed and imported successfully",
 		CreateContainerURL: createContainerURL,
 	})
 }
@@ -101,7 +101,7 @@ func validateAndPreparePayload(c echo.Context) (*common.PushPayload, error) {
 	}
 
 	if payload.ImageName == "" {
-		return nil, errors.New("Invalid image name")
+		return nil, errors.New("invalid image name")
 	}
 
 	return payload, nil
@@ -116,22 +116,22 @@ func saveAndImportImage(c echo.Context, a *server.App, payload *common.PushPaylo
 
 	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
-		return "", fmt.Errorf("Failed to save image: %v", err)
+		return "", fmt.Errorf("failed to save image: %v", err)
 	}
 
 	imageID, err := docker.ImportImageToEngine(imagePath)
 	if err != nil {
 		store.RemoveFromStorage(imagePath)
-		return "", fmt.Errorf("Failed to import image: %v", err)
+		return "", fmt.Errorf("failed to import image: %v", err)
 	}
 
 	if imageID == "" {
-		return "", errors.New("Imported image ID is empty")
+		return "", errors.New("imported image ID is empty")
 	}
 
 	err = store.RemoveFromStorage(imagePath)
 	if err != nil {
-		return "", fmt.Errorf("Failed to remove temporary image file: %v", err)
+		return "", fmt.Errorf("failed to remove temporary image file: %v", err)
 	}
 
 	payload.ImageID = imageID
@@ -253,7 +253,7 @@ func validateAndPrepareDeployPayload(c echo.Context) (*common.DeployPayload, err
 	}
 
 	if payload.ImageName == "" {
-		return nil, errors.New("Invalid image name")
+		return nil, errors.New("invalid image name")
 	}
 
 	payload.Port = normalizePort(payload.Port)
@@ -287,22 +287,22 @@ func saveAndImportDeployImage(c echo.Context, a *server.App, payload *common.Dep
 
 	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
-		return "", fmt.Errorf("Failed to save image: %v", err)
+		return "", fmt.Errorf("failed to save image: %v", err)
 	}
 
 	imageID, err := docker.ImportImageToEngine(imagePath)
 	if err != nil {
 		store.RemoveFromStorage(imagePath)
-		return "", fmt.Errorf("Failed to import image: %v", err)
+		return "", fmt.Errorf("failed to import image: %v", err)
 	}
 
 	if imageID == "" {
-		return "", errors.New("Imported image ID is empty")
+		return "", errors.New("imported image ID is empty")
 	}
 
 	err = store.RemoveFromStorage(imagePath)
 	if err != nil {
-		return "", fmt.Errorf("Failed to remove temporary image file: %v", err)
+		return "", fmt.Errorf("failed to remove temporary image file: %v", err)
 	}
 
 	payload.ImageID = imageID
@@ -313,18 +313,18 @@ func saveAndImportDeployImage(c echo.Context, a *server.App, payload *common.Dep
 func createAndStartContainer(a *server.App, payload *common.DeployPayload) (string, error) {
 	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a, payload.ImageID)
 	if err != nil {
-		return "", fmt.Errorf("Failed to create command parameters: %v", err)
+		return "", fmt.Errorf("failed to create command parameters: %v", err)
 	}
 
 	containerID, err := docker.CreateContainer(params)
 	if err != nil {
-		return "", fmt.Errorf("Failed to create container: %v", err)
+		return "", fmt.Errorf("failed to create container: %v", err)
 	}
 
 	err = docker.StartContainer(containerID)
 	if err != nil {
 		docker.RemoveContainer(containerID)
-		return "", fmt.Errorf("Failed to start container: %v", err)
+		return "", fmt.Errorf("failed to start container: %v", err)
 	}
 
 	return containerID, nil

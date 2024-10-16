@@ -1,3 +1,4 @@
+# This Makefile is used for dev purposes
 # Variables
 REPO := ghcr.io/bnema/gordon
 TAG := dev
