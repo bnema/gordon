@@ -1,4 +1,4 @@
-# VHS documentation
+# VHS documentation 
 #
 # Output:
 #   Output <path>.gif               Create a GIF output at the given <path>
