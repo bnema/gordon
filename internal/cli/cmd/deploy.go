@@ -115,57 +115,69 @@ func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
 }
 
 func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
+	log.Info("Attempting to deploy...",
+		"image", imageName,
+		"port", port,
+		"target", targetDomain,
+	)
 
-	log.Info("Attempting to deploy...", "image", imageName, "port", port, "target", targetDomain)
+	for {
+		reqPayload := common.RequestPayload{
+			Type: "deploy",
+			Payload: common.DeployPayload{
+				Port:         port,
+				TargetDomain: targetDomain,
+				ImageName:    imageName,
+				Data:         io.NopCloser(reader),
+			},
+		}
 
-	reqPayload := common.RequestPayload{
-		Type: "deploy",
-		Payload: common.DeployPayload{
-			Port:         port,
-			TargetDomain: targetDomain,
-			ImageName:    imageName,
-			Data:         io.NopCloser(reader),
-		},
-	}
+		resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/deploy")
+		if err != nil {
+			var deployErr *common.DeploymentError
+			if errors.As(err, &deployErr) {
+				var deployResponse common.DeployResponse
+				if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
+					// Handle existing container case
+					if deployErr.StatusCode == http.StatusConflict && deployResponse.ContainerID != "" {
+						if err := handler.HandleExistingContainer(a, &deployResponse); err != nil {
+							if strings.Contains(err.Error(), "cancelled by user") {
+								log.Warn("Deployment cancelled by user")
+							} else {
+								log.Error("Failed to handle existing container", "error", err)
+							}
+							return nil
+						}
+						log.Info("Retrying deployment...")
+						continue // Retry deployment
+					}
 
-	resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/deploy")
-	if err != nil {
-		var deployErr *common.DeploymentError
-		if errors.As(err, &deployErr) {
-			// Try to parse the raw response to get the container ID
-			var deployResponse common.DeployResponse
-			if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
-				log.Error("Deployment failed",
-					"error", deployErr.Message,
-					"status_code", deployErr.StatusCode,
-					"container_id", deployResponse.ContainerID,
-				)
-			} else {
-				// If parsing fails, just log the error without the container ID
-				log.Error("Deployment failed", "error", deployErr.Message, "status_code", deployErr.StatusCode)
+					log.Error("Deployment failed",
+						"error", deployErr.Message,
+						"status_code", deployErr.StatusCode,
+						"container_id", deployResponse.ContainerID,
+					)
+				}
 			}
-			// Return nil to prevent further error logging
 			return nil
 		}
-		log.Error("Error sending HTTP request", "error", err)
-		return nil
-	}
 
-	var deployResponse common.DeployResponse
-	if err := json.Unmarshal(resp.Body, &deployResponse); err != nil {
-		log.Error("Error parsing response", "error", err, "response", string(resp.Body))
-		return nil
-	}
+		var deployResponse common.DeployResponse
+		if err := json.Unmarshal(resp.Body, &deployResponse); err != nil {
+			log.Error("Error parsing response", "error", err, "response", string(resp.Body))
+			return nil
+		}
 
-	if !deployResponse.Success {
-		log.Error("Deployment failed",
-			"message", deployResponse.Message,
-			"container_id", deployResponse.ContainerID,
-		)
-		return nil
-	}
+		if !deployResponse.Success {
+			log.Error("Deployment failed",
+				"message", deployResponse.Message,
+				"container_id", deployResponse.ContainerID,
+			)
+			return nil
+		}
 
-	return waitForDeployment(deployResponse.Domain, deployResponse.ContainerID)
+		return waitForDeployment(deployResponse.Domain, deployResponse.ContainerID)
+	}
 }
 
 func waitForDeployment(domain string, containerID string) error {

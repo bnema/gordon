@@ -19,10 +19,11 @@ type Payload interface {
 
 // DeployResponse represents the response structure for deployment requests
 type DeployResponse struct {
-	Success     bool   `json:"success"`
-	Message     string `json:"message"`
-	Domain      string `json:"domain,omitempty"`
-	ContainerID string `json:"container_id,omitempty"`
+	Success       bool   `json:"success"`
+	Message       string `json:"message"`
+	Domain        string `json:"domain"`
+	ContainerID   string `json:"container_id"`
+	ContainerName string `json:"container_name"`
 }
 
 // PushResponse represents the response structure for push requests
@@ -30,6 +31,21 @@ type PushResponse struct {
 	Success            bool   `json:"success"`
 	Message            string `json:"message"`
 	CreateContainerURL string `json:"create_container_url,omitempty"`
+}
+
+type StopResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type RemoveResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type StartResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
 }
 
 // DeploymentError represents an error that occurred during deployment
@@ -148,7 +164,8 @@ func NewPingPayload(data map[string]interface{}) (PingPayload, error) {
 
 // StopPayload represents the payload for stop requests
 type StopPayload struct {
-	ContainerID string `json:"container_id"`
+	ContainerID   string `json:"container_id"`
+	ContainerName string `json:"container_name"`
 }
 
 // GetType returns the type of the StopPayload
@@ -158,7 +175,8 @@ func (p StopPayload) GetType() string {
 
 // StartPayload represents the payload for start requests
 type StartPayload struct {
-	ContainerID string `json:"container_id"`
+	ContainerID   string `json:"container_id"`
+	ContainerName string `json:"container_name"`
 }
 
 // GetType returns the type of the StartPayload
