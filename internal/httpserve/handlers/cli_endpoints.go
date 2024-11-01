@@ -24,6 +24,8 @@ type InfoResponse struct {
 
 type DeployResponse = common.DeployResponse
 type PushResponse = common.PushResponse
+type StopResponse = common.StopResponse
+type RemoveResponse = common.RemoveResponse
 
 // sendJSONResponse is a helper function to send JSON responses
 func sendJSONResponse(c echo.Context, statusCode int, response interface{}) error {
@@ -62,6 +64,74 @@ func GetInfos(c echo.Context, a *server.App) error {
 	info.Populate(a)
 
 	return sendJSONResponse(c, http.StatusOK, info)
+}
+
+// PostContainerStop handles the container stop request
+func PostContainerStop(c echo.Context, a *server.App) error {
+	payload := new(common.RequestPayload)
+	if err := c.Bind(payload); err != nil {
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid payload: "+err.Error())
+	}
+
+	if payload.Type != "stop" {
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid payload type")
+	}
+
+	stopPayload, ok := payload.Payload.(common.StopPayload)
+	if !ok {
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid payload structure")
+	}
+
+	if stopPayload.ContainerID == "" {
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid container ID")
+	}
+
+	err := docker.StopContainer(stopPayload.ContainerID)
+	if err != nil {
+		return sendJSONResponse(c, http.StatusInternalServerError, StopResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+	}
+
+	return sendJSONResponse(c, http.StatusOK, StopResponse{
+		Success: true,
+		Message: "Container stopped successfully",
+	})
+}
+
+// PostContainerRemove handles the container remove request
+func PostContainerRemove(c echo.Context, a *server.App) error {
+	payload := new(common.RequestPayload)
+	if err := c.Bind(payload); err != nil {
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid payload: "+err.Error())
+	}
+
+	if payload.Type != "remove" {
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid payload type")
+	}
+
+	removePayload, ok := payload.Payload.(common.RemovePayload)
+	if !ok {
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid payload structure")
+	}
+
+	if removePayload.ContainerID == "" {
+		return sendJSONResponse(c, http.StatusBadRequest, "Invalid container ID")
+	}
+
+	err := docker.RemoveContainer(removePayload.ContainerID)
+	if err != nil {
+		return sendJSONResponse(c, http.StatusInternalServerError, RemoveResponse{
+			Success: false,
+			Message: err.Error(),
+		})
+	}
+
+	return sendJSONResponse(c, http.StatusOK, RemoveResponse{
+		Success: true,
+		Message: "Container removed successfully",
+	})
 }
 
 // PostPush handles the image push request
@@ -190,7 +260,7 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		})
 	}
 
-	containerID, err := createAndStartContainer(a, payload)
+	containerID, containerName, err := createAndStartContainer(a, payload)
 	if err != nil {
 		if strings.Contains(err.Error(), "is already in use") {
 			log.Warn("Container already exists", "error", err)
@@ -218,10 +288,11 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		})
 	}
 	response := DeployResponse{
-		Success:     true,
-		Message:     "Deployment successful",
-		Domain:      payload.TargetDomain,
-		ContainerID: containerID,
+		Success:       true,
+		Message:       "Deployment successful",
+		Domain:        payload.TargetDomain,
+		ContainerID:   containerID,
+		ContainerName: containerName,
 	}
 
 	// Debug: Verify containerID in response
@@ -310,28 +381,33 @@ func saveAndImportDeployImage(c echo.Context, a *server.App, payload *common.Dep
 }
 
 // createAndStartContainer creates and starts a new container
-func createAndStartContainer(a *server.App, payload *common.DeployPayload) (string, error) {
+func createAndStartContainer(a *server.App, payload *common.DeployPayload) (string, string, error) {
 	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a, payload.ImageID)
 	if err != nil {
-		return "", fmt.Errorf("failed to create command parameters: %v", err)
+		return "", "", fmt.Errorf("failed to create command parameters: %v", err)
 	}
 
 	containerID, err := docker.CreateContainer(params)
 	if err != nil {
-		return "", fmt.Errorf("failed to create container: %v", err)
+		return "", "", fmt.Errorf("failed to create container: %v", err)
+	}
+
+	containerName, err := docker.GetContainerName(containerID)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get container name: %v", err)
 	}
 
 	err = docker.StartContainer(containerID)
 	if err != nil {
 		docker.RemoveContainer(containerID)
-		return "", fmt.Errorf("failed to start container: %v", err)
+		return "", "", fmt.Errorf("failed to start container: %v", err)
 	}
 
-	return containerID, nil
+	return containerID, containerName, nil
 }
 
 // logResponse logs the deployment response
 func logResponse(response DeployResponse) {
 	responseJSON, _ := json.Marshal(response)
-	fmt.Printf("Server response: %s\n", string(responseJSON))
+	log.Info("Deployment response", string(responseJSON))
 }
