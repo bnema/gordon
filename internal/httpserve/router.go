@@ -70,6 +70,12 @@ func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 	protectedApiGroup.POST("/push", func(c echo.Context) error {
 		return handlers.PostPush(c, a)
 	})
+	protectedApiGroup.POST("/stop", func(c echo.Context) error {
+		return handlers.PostContainerStop(c, a)
+	})
+	protectedApiGroup.POST("/remove", func(c echo.Context) error {
+		return handlers.PostContainerRemove(c, a)
+	})
 }
 
 // bindStaticRoute bind static path
