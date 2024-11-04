@@ -11,7 +11,7 @@
 
 Gordon is a tool that aims to simplify the deployment of your containerized web applications. It automates the process of integrating your locally built image into your self-hosted setup without the need of a container registry. 
 
-Optionally, for the deploy command, Gordon can coordinate domain routing through Traefik (which needs to be pre-installed). This allows you to quickly route your applications to desired domain or subdomains.
+Optionally, Gordon can coordinate domain routing through Traefik (which needs to be pre-installed). This allows you to quickly deploy your applications to your desired domain or subdomain.
 
 ## **Key Features**
 
