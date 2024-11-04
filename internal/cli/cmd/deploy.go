@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -115,6 +116,12 @@ func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
 }
 
 func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
+	// Convert reader to bytes for reuse
+	imageData, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read image data: %w", err)
+	}
+
 	log.Info("Attempting to deploy...",
 		"image", imageName,
 		"port", port,
@@ -122,13 +129,14 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 	)
 
 	for {
+		// Create new reader from bytes for each attempt
 		reqPayload := common.RequestPayload{
 			Type: "deploy",
 			Payload: common.DeployPayload{
 				Port:         port,
 				TargetDomain: targetDomain,
 				ImageName:    imageName,
-				Data:         io.NopCloser(reader),
+				Data:         io.NopCloser(bytes.NewReader(imageData)),
 			},
 		}
 
@@ -138,28 +146,21 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 			if errors.As(err, &deployErr) {
 				var deployResponse common.DeployResponse
 				if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
-					// Handle existing container case
 					if deployErr.StatusCode == http.StatusConflict && deployResponse.ContainerID != "" {
 						if err := handler.HandleExistingContainer(a, &deployResponse); err != nil {
 							if strings.Contains(err.Error(), "cancelled by user") {
 								log.Warn("Deployment cancelled by user")
-							} else {
-								log.Error("Failed to handle existing container", "error", err)
+								return nil
 							}
-							return nil
+							log.Error("Failed to handle existing container", "error", err)
+							return err
 						}
 						log.Info("Retrying deployment...")
 						continue // Retry deployment
 					}
-
-					log.Error("Deployment failed",
-						"error", deployErr.Message,
-						"status_code", deployErr.StatusCode,
-						"container_id", deployResponse.ContainerID,
-					)
 				}
 			}
-			return nil
+			return err
 		}
 
 		var deployResponse common.DeployResponse
