@@ -58,9 +58,16 @@ I also want to emphasize that I am far from being a Go expert yet. Hence, if you
 - [x] `version` command
 - [x] `update` command
 - [x] `deploy` command
-- [ ] Survey(s) on deploy command (delete if already exists, etc.)
+- [x] Survey(s) on deploy command (stop/remove if already exists)
 - [ ] Improved web UI
-- [ ] Templates for databases (mysql, postgresql, redis, etc.)
+- [ ] Quick database deploy templates (libsql, postgresql)
+- [ ] GitHub Repository Integration:
+  - Repository selection and branch/tag filtering
+  - Dockerfile detection and validation
+  - Build configuration UI
+  - Build logs streaming
+  - Automated deployment triggers
+  - Build status notifications
 
 Have suggestions? Feel free to open an issue!
 
