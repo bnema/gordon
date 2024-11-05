@@ -264,21 +264,24 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	if err != nil {
 		if strings.Contains(err.Error(), "is already in use") {
 			log.Warn("Container already exists", "error", err)
-			extractedID := extractContainerID(err.Error())
-			log.Info("Extracted container ID", "containerID", extractedID)
+			existingContainerID := extractContainerID(err.Error())
+			existingContainerName, _ := docker.GetContainerName(existingContainerID)
+			// Remove the / from the container name
+			existingContainerName = strings.TrimLeft(existingContainerName, "/")
 
-			if extractedID == "" {
-				log.Error("Failed to extract container ID from error message")
+			if existingContainerID == "" || existingContainerName == "" {
+				log.Error("Failed to extract container ID or Name from error message")
 				return sendJSONResponse(c, http.StatusConflict, DeployResponse{
 					Success: false,
-					Message: "A container with this name already exists, but we couldn't extract its ID.",
+					Message: "A container for this deploy already exists but could not be identified.",
 				})
 			}
 
 			return sendJSONResponse(c, http.StatusConflict, DeployResponse{
-				Success:     false,
-				Message:     "A container for this deploy already exists.",
-				ContainerID: extractedID,
+				Success:       false,
+				Message:       "A container for this deploy already exists.",
+				ContainerID:   existingContainerID,
+				ContainerName: existingContainerName,
 			})
 		}
 		log.Error("Failed to create or start container", "error", err)
@@ -305,7 +308,7 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	return sendJSONResponse(c, http.StatusOK, response)
 }
 
-// is already in use by 08433f639cb1c01254d43f234360bfa793aa8c33b29e8de8ce42b0706c0090ba. example
+// extractContainerID extracts the container ID from the error message
 func extractContainerID(errorMessage string) string {
 	re := regexp.MustCompile(`by\s+([0-9a-f]+)\.`)
 	match := re.FindStringSubmatch(errorMessage)
