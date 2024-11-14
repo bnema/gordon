@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +17,6 @@ import (
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
 	"github.com/bnema/gordon/internal/common"
-	"github.com/bnema/gordon/pkg/docker"
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
@@ -49,7 +49,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 				return
 			}
 
-			reader, actualSize, err := exportDockerImage(imageName)
+			reader, actualSize, err := handler.ExportDockerImage(imageName)
 			if err != nil {
 				log.Error("Error exporting image", "error", err)
 				return
@@ -72,6 +72,118 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 	return deployCmd
 }
 
+// Client side - deploy.go
+
+func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
+	// Create a buffer to store the entire image data
+	var buf bytes.Buffer
+	size, err := io.Copy(&buf, reader)
+	if err != nil {
+		return fmt.Errorf("failed to read image data: %w", err)
+	}
+
+	// Create a new reader from the buffer
+	imageReader := bytes.NewReader(buf.Bytes())
+
+	sizeInMB := float64(size) / 1024 / 1024
+	log.Info("Attempting to deploy...",
+		"image", imageName,
+		"size", fmt.Sprintf("%.2fMB", sizeInMB),
+		"port", port,
+		"target", targetDomain,
+	)
+
+	headers := http.Header{
+		"X-Image-Name":    {imageName},
+		"X-Ports":         {port},
+		"X-Target-Domain": {targetDomain},
+		"Content-Type":    {"application/octet-stream"},
+	}
+
+	chunkedClient := handler.NewChunkedClient(a)
+	var finalResponse *common.DeployResponse
+
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+		defer cancel()
+
+		resp, err := chunkedClient.SendFile(ctx, "/deploy", headers, imageReader, size, imageName)
+		if err != nil {
+			var deployErr *common.DeploymentError
+			if errors.As(err, &deployErr) && deployErr.StatusCode == http.StatusConflict {
+				var deployResponse common.DeployResponse
+				if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
+					if deployResponse.ContainerID != "" {
+						if err := handler.HandleExistingContainer(a, &deployResponse); err != nil {
+							if strings.Contains(err.Error(), "cancelled by user") {
+								return fmt.Errorf("deployment cancelled by user")
+							}
+							return fmt.Errorf("failed to handle existing container: %w", err)
+						}
+						// Reset the reader for retry
+						imageReader.Seek(0, 0)
+						continue // Retry deployment
+					}
+				}
+			}
+			return fmt.Errorf("deployment failed: %w", err)
+		}
+
+		// Parse the final response
+		if resp != nil {
+			var deployResp common.DeployResponse
+			if err := json.Unmarshal(resp.Body, &deployResp); err != nil {
+				return fmt.Errorf("failed to parse deployment response: %w", err)
+			}
+			finalResponse = &deployResp
+		}
+		break // Successful deployment
+	}
+
+	// Use the response data for waiting
+	if finalResponse != nil {
+		return waitForDeployment(finalResponse.Domain, finalResponse.ContainerID)
+	}
+	return fmt.Errorf("no response received from deployment")
+}
+
+func waitForDeployment(domain string, containerID string) error {
+	client := &http.Client{Timeout: 10 * time.Second}
+	maxRetries := 20
+	retryInterval := time.Second
+
+	var shortContainerID string
+	if containerID != "" {
+		shortContainerID = containerID[:12]
+	}
+
+	log.Info("Waiting for deployment to be reachable",
+		"domain", domain,
+		"container_id", shortContainerID)
+
+	for i := 0; i < maxRetries; i++ {
+		resp, err := client.Get(domain)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				log.Info("Deployment successful",
+					"domain", domain,
+					"container_id", shortContainerID)
+				return nil
+			}
+			body, _ := io.ReadAll(resp.Body)
+			if strings.Contains(string(body), "failed to create container:") {
+				return fmt.Errorf("deployment failed: %s", string(body))
+			}
+		}
+		log.Warn("Deployment not ready yet, retrying",
+			"attempt", fmt.Sprintf("%d/%d", i+1, maxRetries))
+		time.Sleep(retryInterval)
+	}
+
+	return fmt.Errorf("deployment not ready after %d attempts", maxRetries)
+}
+
 func validateInputs(imageName, port, targetDomain string) error {
 	if err := handler.ValidateImageName(imageName); err != nil {
 		return err
@@ -86,128 +198,24 @@ func validateInputs(imageName, port, targetDomain string) error {
 	return handler.ValidateTargetDomain(targetDomain)
 }
 
-func exportDockerImage(imageName string) (io.ReadCloser, int64, error) {
-	exists, err := docker.CheckIfImageExists(imageName)
-	if err != nil {
-		return nil, 0, fmt.Errorf("error checking image existence: %w", err)
-	}
-
-	var imageID string
-	if exists {
-		imageID = imageName
-	} else {
-		imageID, err = docker.GetImageIDByName(imageName)
-		if err != nil {
-			return nil, 0, fmt.Errorf("error searching for image by name: %w", err)
-		}
-	}
-
-	actualSize, err := docker.GetImageSizeFromReader(imageID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("error retrieving image size: %w", err)
-	}
-
-	reader, err := docker.ExportImageFromEngine(imageID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("error exporting image: %w", err)
-	}
-
-	return reader, actualSize, nil
-}
-
-func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
-	// Convert reader to bytes for reuse
-	imageData, err := io.ReadAll(reader)
-	if err != nil {
-		return fmt.Errorf("failed to read image data: %w", err)
-	}
-
-	log.Info("Attempting to deploy...",
-		"image", imageName,
-		"port", port,
-		"target", targetDomain,
-	)
-
-	for {
-		// Create new reader from bytes for each attempt
-		reqPayload := common.RequestPayload{
-			Type: "deploy",
-			Payload: common.DeployPayload{
-				Port:         port,
-				TargetDomain: targetDomain,
-				ImageName:    imageName,
-				Data:         io.NopCloser(bytes.NewReader(imageData)),
-			},
-		}
-
-		resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/deploy")
-		if err != nil {
-			var deployErr *common.DeploymentError
-			if errors.As(err, &deployErr) {
-				var deployResponse common.DeployResponse
-				if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
-					if deployErr.StatusCode == http.StatusConflict && deployResponse.ContainerID != "" {
-						if err := handler.HandleExistingContainer(a, &deployResponse); err != nil {
-							if strings.Contains(err.Error(), "cancelled by user") {
-								log.Warn("Deployment cancelled by user")
-								return nil
-							}
-							log.Error("Failed to handle existing container", "error", err)
-							return err
-						}
-						log.Info("Retrying deployment...")
-						continue // Retry deployment
-					}
-				}
-			}
-			return err
-		}
-
+func handleDeployError(a *cli.App, err error, imageName, port, targetDomain string, reader io.Reader) error {
+	var deployErr *common.DeploymentError
+	if errors.As(err, &deployErr) {
 		var deployResponse common.DeployResponse
-		if err := json.Unmarshal(resp.Body, &deployResponse); err != nil {
-			log.Error("Error parsing response", "error", err, "response", string(resp.Body))
-			return nil
-		}
-
-		if !deployResponse.Success {
-			log.Error("Deployment failed",
-				"message", deployResponse.Message,
-				"container_id", deployResponse.ContainerID,
-			)
-			return nil
-		}
-
-		return waitForDeployment(deployResponse.Domain, deployResponse.ContainerID)
-	}
-}
-
-func waitForDeployment(domain string, containerID string) error {
-	client := &http.Client{Timeout: 10 * time.Second}
-	maxRetries := 20
-	retryInterval := time.Second
-	// shorten the container id to 12 characters
-	shortContainerID := containerID[:12]
-
-	log.Info("Waiting for deployment to be reachable")
-	for i := 0; i < maxRetries; i++ {
-		resp, err := client.Get(domain)
-		if err == nil {
-			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				log.Info("Deployment successful",
-					"domain", domain,
-					"container_id", shortContainerID)
-				return nil
-			}
-			// Check for error messages in the response body
-			body, _ := io.ReadAll(resp.Body)
-			if strings.Contains(string(body), "failed to create container:") {
-				return fmt.Errorf("deployment failed: %s", string(body))
+		if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
+			if deployErr.StatusCode == http.StatusConflict && deployResponse.ContainerID != "" {
+				if err := handler.HandleExistingContainer(a, &deployResponse); err != nil {
+					if strings.Contains(err.Error(), "cancelled by user") {
+						log.Warn("Deployment cancelled by user")
+						return nil
+					}
+					log.Error("Failed to handle existing container", "error", err)
+					return err
+				}
+				// Retry deployment
+				return deployImage(a, reader, imageName, port, targetDomain)
 			}
 		}
-		log.Warn("Deployment not ready yet, retrying", "attempt", fmt.Sprintf("%d/%d", i+1, maxRetries))
-		time.Sleep(retryInterval)
 	}
-
-	return fmt.Errorf("deployment not ready after %d attempts, giving up", maxRetries)
+	return err
 }

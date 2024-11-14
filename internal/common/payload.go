@@ -31,6 +31,7 @@ type PushResponse struct {
 	Success            bool   `json:"success"`
 	Message            string `json:"message"`
 	CreateContainerURL string `json:"create_container_url,omitempty"`
+	ImageID            string `json:"image_id,omitempty"`
 }
 
 type StopResponse struct {
@@ -73,7 +74,16 @@ type DeployPayload struct {
 type PushPayload struct {
 	ImageName string `json:"imagename"`
 	ImageID   string `json:"imageid"`
-	Data      io.ReadCloser
+	Data      io.Reader
+}
+
+type ChunkMetadata struct {
+	ChunkNumber int    `json:"chunk_number"`
+	TotalChunks int    `json:"total_chunks"`
+	ChunkSize   int64  `json:"chunk_size"`
+	TotalSize   int64  `json:"total_size"`
+	ImageName   string `json:"image_name"`
+	TransferID  string `json:"transfer_id"`
 }
 
 // UnmarshalJSON custom unmarshaler for RequestPayload
