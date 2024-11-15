@@ -72,19 +72,14 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 	return deployCmd
 }
 
-// Client side - deploy.go
-
 func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
-	// Create a buffer to store the entire image data
 	var buf bytes.Buffer
 	size, err := io.Copy(&buf, reader)
 	if err != nil {
 		return fmt.Errorf("failed to read image data: %w", err)
 	}
 
-	// Create a new reader from the buffer
 	imageReader := bytes.NewReader(buf.Bytes())
-
 	sizeInMB := float64(size) / 1024 / 1024
 	log.Info("Attempting to deploy...",
 		"image", imageName,
@@ -100,51 +95,54 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 		"Content-Type":    {"application/octet-stream"},
 	}
 
+	// Send a small chunk first to detect any conflicts
 	chunkedClient := handler.NewChunkedClient(a)
-	var finalResponse *common.DeployResponse
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
 
-	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
-		defer cancel()
+	// Create a small test chunk
+	testChunk := buf.Bytes()[:1024] // Just send first 1KB to check for conflicts
+	testReader := bytes.NewReader(testChunk)
 
-		resp, err := chunkedClient.SendFile(ctx, "/deploy", headers, imageReader, size, imageName)
-		if err != nil {
-			var deployErr *common.DeploymentError
-			if errors.As(err, &deployErr) && deployErr.StatusCode == http.StatusConflict {
-				var deployResponse common.DeployResponse
-				if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
-					if deployResponse.ContainerID != "" {
-						if err := handler.HandleExistingContainer(a, &deployResponse); err != nil {
-							if strings.Contains(err.Error(), "cancelled by user") {
-								return fmt.Errorf("deployment cancelled by user")
-							}
-							return fmt.Errorf("failed to handle existing container: %w", err)
+	resp, err := chunkedClient.SendFile(ctx, "/deploy", headers, testReader, int64(len(testChunk)), imageName)
+	if err != nil {
+		var deployErr *common.DeploymentError
+		if errors.As(err, &deployErr) && deployErr.StatusCode == http.StatusConflict {
+			var deployResponse common.DeployResponse
+			if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
+				if deployResponse.ContainerID != "" {
+					if err := handler.HandleExistingContainer(a, &deployResponse); err != nil {
+						if strings.Contains(err.Error(), "cancelled by user") {
+							return fmt.Errorf("deployment cancelled by user")
 						}
-						// Reset the reader for retry
-						imageReader.Seek(0, 0)
-						continue // Retry deployment
+						return fmt.Errorf("failed to handle existing container: %w", err)
+					}
+					// Now proceed with the full upload
+					imageReader.Seek(0, 0) // Reset reader to beginning
+					resp, err = chunkedClient.SendFile(ctx, "/deploy", headers, imageReader, size, imageName)
+					if err != nil {
+						return fmt.Errorf("deployment failed after container removal: %w", err)
 					}
 				}
 			}
+		} else {
 			return fmt.Errorf("deployment failed: %w", err)
 		}
-
-		// Parse the final response
-		if resp != nil {
-			var deployResp common.DeployResponse
-			if err := json.Unmarshal(resp.Body, &deployResp); err != nil {
-				return fmt.Errorf("failed to parse deployment response: %w", err)
-			}
-			finalResponse = &deployResp
+	} else {
+		// No conflict detected, proceed with the rest of the upload
+		imageReader.Seek(1024, 0) // Skip the first 1KB we already sent
+		resp, err = chunkedClient.SendFile(ctx, "/deploy", headers, imageReader, size-1024, imageName)
+		if err != nil {
+			return fmt.Errorf("deployment failed during main upload: %w", err)
 		}
-		break // Successful deployment
 	}
 
-	// Use the response data for waiting
-	if finalResponse != nil {
-		return waitForDeployment(finalResponse.Domain, finalResponse.ContainerID)
+	var deployResp common.DeployResponse
+	if err := json.Unmarshal(resp.Body, &deployResp); err != nil {
+		return fmt.Errorf("failed to parse deployment response: %w", err)
 	}
-	return fmt.Errorf("no response received from deployment")
+
+	return waitForDeployment(deployResp.Domain, deployResp.ContainerID)
 }
 
 func waitForDeployment(domain string, containerID string) error {
