@@ -77,7 +77,7 @@ func pushImage(a *cli.App, imageName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	resp, err := chunkedClient.SendFile(ctx, "/push", headers, reader, actualSize, imageName)
+	_, err = chunkedClient.SendFile(ctx, "/push", headers, reader, actualSize, imageName)
 	if err != nil {
 		var pushErr *common.DeploymentError
 		if errors.As(err, &pushErr) {
@@ -85,10 +85,6 @@ func pushImage(a *cli.App, imageName string) error {
 		}
 		return fmt.Errorf("chunked transfer failed: %w", err)
 	}
-
-	fmt.Println("Push response:", resp)
-
-	log.Info("Image pushed and imported successfully", "image", imageName)
 
 	return nil
 }
