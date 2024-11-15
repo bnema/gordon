@@ -56,14 +56,12 @@ func GetImageIDByName(imageName string) (string, error) {
 	}
 
 	normalizedName, tag := normalizeImageName(imageName)
-	fmt.Printf("Searching for image: %s:%s\n", normalizedName, tag)
 
 	tagPattern := createTagPattern(tag)
 
 	for _, img := range images {
 		for _, repoTag := range img.RepoTags {
 			normalizedRepoTag, repoTagValue := normalizeImageName(repoTag)
-			fmt.Printf("Comparing with: %s:%s\n", normalizedRepoTag, repoTagValue)
 
 			// Check for exact match (including with docker.io/ prefix)
 			if repoTag == imageName || repoTag == "docker.io/"+imageName {
@@ -134,8 +132,6 @@ func ImportImageToEngine(imageFilePath string) (string, error) {
 	}
 	defer imageFile.Close()
 
-	log.Printf("Image file opened successfully")
-
 	resp, err := dockerCli.ImageLoad(context.Background(), imageFile, true)
 	if err != nil {
 		log.Printf("Failed to load image: %v", err)
@@ -143,13 +139,10 @@ func ImportImageToEngine(imageFilePath string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	log.Printf("Image load initiated, parsing response")
-
 	var imageName string
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		log.Printf("Response line: %s", line)
 
 		var message struct {
 			Stream string `json:"stream"`
@@ -159,11 +152,8 @@ func ImportImageToEngine(imageFilePath string) (string, error) {
 			continue // Skip lines that aren't JSON
 		}
 
-		log.Printf("Parsed message stream: %s", message.Stream)
-
 		if strings.HasPrefix(message.Stream, "Loaded image: ") {
 			imageName = strings.TrimSpace(strings.TrimPrefix(message.Stream, "Loaded image: "))
-			log.Printf("Found image name: %s", imageName)
 			break
 		}
 	}

@@ -132,12 +132,6 @@ func handleChunkResponse(resp *Response, responseType string) error {
 		if err := json.Unmarshal(resp.Body, &deployResp); err != nil {
 			return fmt.Errorf("failed to unmarshal deploy response: %w", err)
 		}
-		log.Info("Deploy chunk response",
-			"success", deployResp.Success,
-			"message", deployResp.Message,
-			"domain", deployResp.Domain,
-			"containerID", deployResp.ContainerID,
-			"containerName", deployResp.ContainerName)
 		return nil
 
 	case "push":
@@ -145,11 +139,7 @@ func handleChunkResponse(resp *Response, responseType string) error {
 		if err := json.Unmarshal(resp.Body, &pushResp); err != nil {
 			return fmt.Errorf("failed to unmarshal push response: %w", err)
 		}
-		log.Info("Push chunk response",
-			"success", pushResp.Success,
-			"message", pushResp.Message,
-			"createContainerURL", pushResp.CreateContainerURL,
-			"imageID", pushResp.ImageID)
+
 		return nil
 
 	default:
@@ -164,9 +154,11 @@ func handleFinalResponse(resp *Response, responseType string) error {
 		if err := json.Unmarshal(resp.Body, &finalResp); err != nil {
 			return fmt.Errorf("failed to unmarshal final deploy response: %w", err)
 		}
-		log.Info("Final deploy response",
-			"success", finalResp.Success,
-			"message", finalResp.Message,
+		// only keep the 8 first characters of the container ID
+		finalResp.ContainerID = finalResp.ContainerID[:8]
+
+		log.Info(
+			finalResp.Message,
 			"domain", finalResp.Domain,
 			"containerID", finalResp.ContainerID,
 			"containerName", finalResp.ContainerName)
@@ -177,9 +169,8 @@ func handleFinalResponse(resp *Response, responseType string) error {
 		if err := json.Unmarshal(resp.Body, &finalResp); err != nil {
 			return fmt.Errorf("failed to unmarshal final push response: %w", err)
 		}
-		log.Info("Final push response",
-			"success", finalResp.Success,
-			"message", finalResp.Message,
+		log.Info(
+			finalResp.Message,
 			"createContainerURL", finalResp.CreateContainerURL,
 			"imageID", finalResp.ImageID)
 		return nil
@@ -190,18 +181,28 @@ func handleFinalResponse(resp *Response, responseType string) error {
 }
 
 func (c *ChunkedClient) sendChunkWithRetry(ctx context.Context, endpoint string, headers http.Header, chunk []byte, metadata common.ChunkMetadata) (*Response, error) {
+	// For the first chunk (conflict check), only try once
+	maxRetries := 3
+	if metadata.ChunkNumber == 0 && len(chunk) == 1024 {
+		maxRetries = 1
+	}
+
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < maxRetries; attempt++ {
 		resp, err := c.sendChunk(ctx, endpoint, headers, chunk, metadata)
 		if err == nil {
 			return resp, nil
 		}
 		lastErr = err
-		log.Warn("Chunk upload failed, retrying",
-			"chunk", metadata.ChunkNumber,
-			"attempt", attempt+1,
-			"error", err)
-		time.Sleep(time.Second * time.Duration(attempt+1))
+
+		// Don't log retry messages for the conflict check
+		if maxRetries > 1 {
+			log.Warn("Chunk upload failed, retrying",
+				"chunk", metadata.ChunkNumber,
+				"attempt", attempt+1,
+				"error", err)
+			time.Sleep(time.Second * time.Duration(attempt+1))
+		}
 	}
 	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
 }
