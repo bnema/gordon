@@ -163,17 +163,17 @@ func OAuthCallback(c echo.Context, a *server.App) error {
 	}
 
 	browserInfo := c.Request().UserAgent()
-	userInfo, err := githubGetUserDetails(c, a)
+	userInfo, err := githubGetUserDetails(c)
 	if err != nil {
 		return err
 	}
 
-	user, err := handleUser(c, a, accessToken, browserInfo, userInfo)
+	_, err = handleUser(c, a, accessToken, browserInfo, userInfo)
 	if err != nil {
 		return err
 	}
 
-	err = setSessionValues(c, sess, user, a.DBTables.Account.ID, a.DBTables.Sessions.Expires, a.DBTables.Sessions.ID)
+	err = setSessionValues(c, sess, a.DBTables.Account.ID, a.DBTables.Sessions.Expires, a.DBTables.Sessions.ID)
 	if err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func updateUser(a *server.App, accessToken, browserInfo string, userInfo *querie
 }
 
 // setSessionValues sets the session values for the user
-func setSessionValues(c echo.Context, sess *sessions.Session, user *db.User, accountID string, expires string, sessionID string) error {
+func setSessionValues(c echo.Context, sess *sessions.Session, accountID string, expires string, sessionID string) error {
 	sess.Values["authenticated"] = true
 	sess.Values["accountID"] = accountID
 	sess.Values["expires"] = expires
@@ -308,7 +308,7 @@ func fetchGithubAPI(url string, authHeader string, result interface{}) error {
 }
 
 // githubGetUserDetails gets the user details from the Github API using the access token
-func githubGetUserDetails(c echo.Context, a *server.App) (userInfo *queries.GithubUserInfo, err error) {
+func githubGetUserDetails(c echo.Context) (userInfo *queries.GithubUserInfo, err error) {
 	accessToken := c.QueryParam("access_token")
 
 	// Fetch user info

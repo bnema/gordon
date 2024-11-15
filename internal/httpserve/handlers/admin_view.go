@@ -41,8 +41,6 @@ func renderAdminPage(c echo.Context, a *server.App, templateName string) error {
 	}
 
 	data["AdminPath"] = a.Config.Admin.Path
-	// DEBUG show the admin path here
-	fmt.Println("AdminPath:", a.Config.Admin.Path)
 
 	rendererData, err := render.GetHTMLRenderer(mainPath, templateName, a.TemplateFS, a, fragmentsPath)
 	if err != nil {

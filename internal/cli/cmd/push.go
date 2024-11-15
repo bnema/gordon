@@ -1,10 +1,12 @@
 package cmd
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
-	"strings"
+	"time"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
@@ -54,49 +56,39 @@ func pushImage(a *cli.App, imageName string) error {
 
 	handler.EnsureImageTag(&imageName)
 
-	reader, actualSize, err := exportDockerImage(imageName)
+	reader, actualSize, err := handler.ExportDockerImage(imageName)
 	if err != nil {
 		return fmt.Errorf("error exporting image: %w", err)
 	}
 	defer reader.Close()
 
 	sizeInMB := float64(actualSize) / 1024 / 1024
+	log.Info("Image exported successfully",
+		"image", imageName,
+		"size", fmt.Sprintf("%.2fMB", sizeInMB))
 
-	log.Info("Image exported successfully", "image", imageName, "size", fmt.Sprintf("%.2fMB", sizeInMB))
-
-	reqPayload := common.RequestPayload{
-		Type: "push",
-		Payload: common.PushPayload{
-			ImageName: imageName,
-			Data:      reader,
-		},
+	headers := http.Header{
+		"X-Image-Name": {imageName},
+		"Content-Type": {"application/octet-stream"},
 	}
 
-	resp, err := handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
+	chunkedClient := handler.NewChunkedClient(a)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	resp, err := chunkedClient.SendFile(ctx, "/push", headers, reader, actualSize, imageName)
 	if err != nil {
-		log.Error("Error sending HTTP request", "error", err)
-		return err
+		var pushErr *common.DeploymentError
+		if errors.As(err, &pushErr) {
+			return fmt.Errorf(pushErr.Message)
+		}
+		return fmt.Errorf("chunked transfer failed: %w", err)
 	}
 
-	var pushResponse common.PushResponse
-	if err := json.Unmarshal(resp.Body, &pushResponse); err != nil {
-		log.Error("Error parsing response", "error", err)
-		return err
-	}
+	fmt.Println("Push response:", resp)
 
-	if !pushResponse.Success {
-		log.Error("Push failed", "resp", pushResponse.Message)
-		return fmt.Errorf(pushResponse.Message)
-	}
-
-	//Remove the double quotes from the message
-	message := strings.Trim(pushResponse.Message, "\"")
-
-	log.Info(message)
-
-	if pushResponse.CreateContainerURL != "" {
-		log.Info("Container creation available", "url", pushResponse.CreateContainerURL)
-	}
+	log.Info("Image pushed and imported successfully", "image", imageName)
 
 	return nil
 }
