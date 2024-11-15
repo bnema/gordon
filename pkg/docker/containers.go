@@ -398,3 +398,20 @@ func CheckContainerStatus(containerName string) (bool, bool, error) {
 
 	return false, false, nil
 }
+
+func GetContainerIDByName(containerName string) string {
+	containers, err := ListRunningContainers()
+	if err != nil {
+		return ""
+	}
+
+	for _, container := range containers {
+		for _, name := range container.Names {
+			if strings.TrimLeft(name, "/") == containerName {
+				return container.ID
+			}
+		}
+	}
+
+	return ""
+}
