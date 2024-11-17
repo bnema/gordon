@@ -147,7 +147,7 @@ func createRequest(apiUrl, endpoint, method string, rp *common.RequestPayload, t
 	}
 
 	// Set the authorization header for all request types
-	req.Header.Set("Authorization", "Bearer "+token)
+	setAuthRequestHeaders(req, token)
 
 	return req, nil
 }

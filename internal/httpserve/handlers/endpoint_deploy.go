@@ -30,7 +30,7 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		})
 	}
 
-	_, err = saveAndImportDeployImage(c, a, payload)
+	_, err = saveAndImportImage(c, a, payload)
 	if err != nil {
 		// Debug
 		log.Error("Failed to save and import image", "error", err)

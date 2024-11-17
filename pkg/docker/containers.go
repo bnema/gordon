@@ -109,8 +109,22 @@ func ListRunningContainers() ([]types.Container, error) {
 
 // StopContainer try to stop a container gracefully, if it fails, it will stop it forcefully
 func StopContainer(containerID string) error {
-	StopContainerGracefully(containerID, 3*time.Second)
-	StopContainerRagefully(containerID)
+	// Try graceful shutdown first
+	stopped, err := StopContainerGracefully(containerID, 3*time.Second)
+	if err != nil {
+		log.Warn("Failed to stop container gracefully", "error", err)
+	}
+
+	// If container wasn't stopped gracefully or there was an error, try forceful shutdown
+	if !stopped {
+		if err := StopContainerRagefully(containerID); err != nil {
+			return fmt.Errorf("failed to stop container forcefully: %w", err)
+		}
+		log.Info("Container stopped forcefully", "containerID", containerID)
+	} else {
+		log.Info("Container stopped gracefully", "containerID", containerID)
+	}
+
 	return nil
 }
 
@@ -127,18 +141,16 @@ func StopContainerGracefully(containerID string, timeoutDuration time.Duration) 
 	defer ticker.Stop()
 
 	for elapsed := 0; elapsed < int(timeoutDuration.Seconds()); elapsed++ {
-		select {
-		case <-ticker.C:
-			// Check if the container is still running
-			container, err := dockerCli.ContainerInspect(context.Background(), containerID)
-			if err != nil {
-				return false, err
-			}
+		<-ticker.C
+		// Check if the container is still running
+		container, err := dockerCli.ContainerInspect(context.Background(), containerID)
+		if err != nil {
+			return false, err
+		}
 
-			// If the container is not running, return true indicating it was stopped
-			if !container.State.Running {
-				return true, nil
-			}
+		// If the container is not running, return true
+		if !container.State.Running {
+			return true, nil
 		}
 	}
 
@@ -229,7 +241,10 @@ func StartContainer(containerID string) error {
 
 // CreateContainer creates a container with the given parameters
 func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
-	CheckIfInitialized()
+
+	if err := CheckIfInitialized(); err != nil {
+		return "", fmt.Errorf("failed to check if docker client is initialized: %w", err)
+	}
 
 	log.Info("Creating container with params: %+v\n", cmdParams)
 
@@ -241,7 +256,7 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 
 	if !isNetworkCreated {
 		fmt.Printf("Creating network: %s\n", cmdParams.Network)
-		_, err := dockerCli.NetworkCreate(context.Background(), cmdParams.Network, types.NetworkCreate{})
+		_, err := dockerCli.NetworkCreate(context.Background(), cmdParams.Network, network.CreateOptions{})
 		if err != nil {
 			return "", fmt.Errorf("network creation failed: %v", err)
 		}
@@ -334,7 +349,7 @@ func WaitForContainerToBeRunning(containerID string, timeout time.Duration) erro
 }
 
 func CheckIfNetworkExists(networkName string) (bool, error) {
-	networks, err := dockerCli.NetworkList(context.Background(), types.NetworkListOptions{})
+	networks, err := dockerCli.NetworkList(context.Background(), network.ListOptions{})
 	if err != nil {
 		return false, err
 	}
@@ -349,14 +364,13 @@ func CheckIfNetworkExists(networkName string) (bool, error) {
 }
 
 // GetNetworkInfo returns information about a network
-func GetNetworkInfo(networkName string) (types.NetworkResource, error) {
-	// Get network info using the Docker client
-	networkInfo, err := dockerCli.NetworkInspect(context.Background(), networkName, types.NetworkInspectOptions{})
+func GetNetworkInfo(networkName string) (*network.Inspect, error) {
+	networkInfo, err := dockerCli.NetworkInspect(context.Background(), networkName, network.InspectOptions{})
 	if err != nil {
-		return types.NetworkResource{}, err
+		return nil, err
 	}
 
-	return networkInfo, nil
+	return &networkInfo, nil
 }
 
 // GetContainerInfo returns information about a container
@@ -417,15 +431,16 @@ func UpdateContainerConfig(containerID string, newConfig *container.Config, newH
 
 // GetContainerLogs returns the logs of a container
 func GetContainerLogs(containerID string) (string, error) {
-	// Get container logs using the Docker client
 	containerLogs, err := dockerCli.ContainerLogs(context.Background(), containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {
 		return "", err
 	}
+	defer containerLogs.Close()
 
-	// Read the logs
 	buf := new(bytes.Buffer)
-	buf.ReadFrom(containerLogs)
+	if _, err := buf.ReadFrom(containerLogs); err != nil {
+		return "", fmt.Errorf("failed to read container logs: %w", err)
+	}
 	containerLogsString := buf.String()
 
 	return containerLogsString, nil
@@ -551,6 +566,15 @@ func GetContainerUptime(containerID string) (string, error) {
 	return formatDuration(duration), nil
 }
 
+// ContainerPortInfo holds information about container ports
+type ContainerPortInfo struct {
+	Name           string
+	ExposedPorts   map[nat.Port]struct{}
+	PortBindings   map[nat.Port][]nat.PortBinding
+	PublishedPorts []types.Port
+}
+
+// GetContainersUsingPort returns a list of container names that are using the specified port
 func GetContainersUsingPort(port string) ([]string, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
@@ -561,59 +585,100 @@ func GetContainersUsingPort(port string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// List all containers (including running and stopped)
 	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	return findContainersWithPort(ctx, cli, containers, port)
+}
+
+// findContainersWithPort processes the container list and finds those using the specified port
+func findContainersWithPort(ctx context.Context, cli *client.Client, containers []types.Container, port string) ([]string, error) {
 	var containersUsingPort []string
+	seen := make(map[string]bool)
 
 	for _, container := range containers {
-		// Inspect container to get detailed port information
-		inspect, err := cli.ContainerInspect(ctx, container.ID)
+		containerInfo, err := getContainerPortInfo(ctx, cli, container)
 		if err != nil {
-			continue // Skip containers we can't inspect
+			log.Warn("Failed to inspect container", "container", container.ID, "error", err)
+			continue
 		}
 
-		// Check exposed ports in container config
-		if inspect.Config != nil && inspect.Config.ExposedPorts != nil {
-			for exposedPort := range inspect.Config.ExposedPorts {
-				if strings.HasPrefix(string(exposedPort), port+"/") {
-					containersUsingPort = append(containersUsingPort, strings.TrimPrefix(container.Names[0], "/"))
-					break
-				}
-			}
-		}
-
-		// Check port bindings in host config
-		if inspect.HostConfig != nil && inspect.HostConfig.PortBindings != nil {
-			for _, bindings := range inspect.HostConfig.PortBindings {
-				for _, binding := range bindings {
-					if binding.HostPort == port {
-						containersUsingPort = append(containersUsingPort, strings.TrimPrefix(container.Names[0], "/"))
-						break
-					}
-				}
-			}
-		}
-
-		// Check currently published ports
-		for _, portBinding := range container.Ports {
-			if fmt.Sprintf("%d", portBinding.PublicPort) == port {
-				containersUsingPort = append(containersUsingPort, strings.TrimPrefix(container.Names[0], "/"))
-				break
-			}
+		if isContainerUsingPort(containerInfo, port) && !seen[containerInfo.Name] {
+			seen[containerInfo.Name] = true
+			containersUsingPort = append(containersUsingPort, containerInfo.Name)
 		}
 	}
 
-	// Remove duplicates
-	seen := make(map[string]bool)
-	unique := make([]string, 0, len(containersUsingPort))
-	for _, name := range containersUsingPort {
-		if !seen[name] {
-			seen[name] = true
-			unique = append(unique, name)
-		}
+	return containersUsingPort, nil
+}
+
+// getContainerPortInfo retrieves port-related information for a container
+func getContainerPortInfo(ctx context.Context, cli *client.Client, container types.Container) (ContainerPortInfo, error) {
+	inspect, err := cli.ContainerInspect(ctx, container.ID)
+	if err != nil {
+		return ContainerPortInfo{}, err
 	}
 
-	return unique, nil
+	return ContainerPortInfo{
+		Name:           strings.TrimPrefix(container.Names[0], "/"),
+		ExposedPorts:   inspect.Config.ExposedPorts,
+		PortBindings:   inspect.HostConfig.PortBindings,
+		PublishedPorts: container.Ports,
+	}, nil
+}
+
+// isContainerUsingPort checks if a container is using the specified port
+func isContainerUsingPort(info ContainerPortInfo, port string) bool {
+	// Check exposed ports
+	if hasExposedPort(info.ExposedPorts, port) {
+		return true
+	}
+
+	// Check port bindings
+	if hasPortBinding(info.PortBindings, port) {
+		return true
+	}
+
+	// Check published ports
+	if hasPublishedPort(info.PublishedPorts, port) {
+		return true
+	}
+
+	return false
+}
+
+// hasExposedPort checks if the port is exposed in the container configuration
+func hasExposedPort(exposedPorts nat.PortSet, port string) bool {
+	for exposedPort := range exposedPorts {
+		if strings.HasPrefix(string(exposedPort), port+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasPortBinding checks if the port is bound in the host configuration
+func hasPortBinding(portBindings nat.PortMap, port string) bool {
+	for _, bindings := range portBindings {
+		for _, binding := range bindings {
+			if binding.HostPort == port {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasPublishedPort checks if the port is currently published
+func hasPublishedPort(ports []types.Port, port string) bool {
+	for _, portBinding := range ports {
+		if fmt.Sprintf("%d", portBinding.PublicPort) == port {
+			return true
+		}
+	}
+	return false
 }
 
 func formatDuration(d time.Duration) string {
