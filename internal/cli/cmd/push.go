@@ -2,15 +2,16 @@ package cmd
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
-	"time"
+	"strings"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
 	"github.com/bnema/gordon/internal/common"
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
@@ -50,6 +51,12 @@ func NewPushCommand(a *cli.App) *cobra.Command {
 }
 
 func pushImage(a *cli.App, imageName string) error {
+	// Check authentication early
+	if err := handler.CheckAndRefreshAuth(a); err != nil {
+		log.Error("Authentication check failed", "error", err)
+		return err
+	}
+
 	if err := handler.ValidateImageName(imageName); err != nil {
 		return fmt.Errorf("invalid image name: %w", err)
 	}
@@ -62,28 +69,72 @@ func pushImage(a *cli.App, imageName string) error {
 	}
 	defer reader.Close()
 
+	_, err = docker.GetImageIDByName(imageName)
+	if err != nil {
+		return fmt.Errorf("failed to get image ID: %w", err)
+	}
+
 	sizeInMB := float64(actualSize) / 1024 / 1024
 	log.Info("Image exported successfully",
 		"image", imageName,
 		"size", fmt.Sprintf("%.2fMB", sizeInMB))
 
-	headers := http.Header{
-		"X-Image-Name": {imageName},
-		"Content-Type": {"application/octet-stream"},
+	var resp *handler.Response
+
+	// Use chunked endpoint if image is larger than 10MB
+	if sizeInMB > 10 {
+		chunkedClient := handler.NewChunkedClient(a)
+		if chunkedClient == nil {
+			return fmt.Errorf("failed to initialize chunked client - authentication issue")
+		}
+
+		ctx := context.Background()
+		headers := make(http.Header)
+		// Add any necessary headers here
+		headers.Set("Content-Type", "application/octet-stream")
+
+		var err error
+		resp, err = chunkedClient.SendFileAsChunks(ctx, "/push/chunked", headers, reader, actualSize, imageName)
+		if err != nil {
+			return fmt.Errorf("chunked transfer failed: %w", err)
+		}
+	} else {
+		// Use regular push endpoint for smaller images
+		reqPayload := common.RequestPayload{
+			Type: "push",
+			Payload: common.PushPayload{
+				ImageName: imageName,
+				Data:      reader,
+			},
+		}
+		var err error
+		resp, err = handler.SendHTTPRequest(a, &reqPayload, "POST", "/push")
+		if err != nil {
+			return fmt.Errorf("regular push failed: %w", err)
+		}
 	}
 
-	chunkedClient := handler.NewChunkedClient(a)
+	if resp == nil {
+		return fmt.Errorf("received nil response from server")
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	var pushResponse common.PushResponse
+	if err := json.Unmarshal(resp.Body, &pushResponse); err != nil {
+		log.Error("Error parsing response", "error", err)
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
 
-	_, err = chunkedClient.SendFile(ctx, "/push", headers, reader, actualSize, imageName)
-	if err != nil {
-		var pushErr *common.DeploymentError
-		if errors.As(err, &pushErr) {
-			return fmt.Errorf(pushErr.Message)
-		}
-		return fmt.Errorf("chunked transfer failed: %w", err)
+	if !pushResponse.Success {
+		log.Error("Push failed", "resp", pushResponse.Message)
+		return fmt.Errorf(pushResponse.Message)
+	}
+
+	// Remove the double quotes from the message
+	message := strings.Trim(pushResponse.Message, "\"")
+	log.Info(message)
+
+	if pushResponse.CreateContainerURL != "" {
+		log.Info("Container creation available", "url", pushResponse.CreateContainerURL)
 	}
 
 	return nil

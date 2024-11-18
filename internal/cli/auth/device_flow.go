@@ -1,3 +1,4 @@
+// internal/cli/auth/device_flow.go
 package auth
 
 import (
