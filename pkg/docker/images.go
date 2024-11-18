@@ -18,7 +18,9 @@ import (
 
 func ListContainerImages() ([]image.Summary, error) {
 	// Check if the Docker client has been initialized
-	CheckIfInitialized()
+	if err := CheckIfInitialized(); err != nil {
+		return nil, fmt.Errorf("failed to initialize Docker client: %w", err)
+	}
 
 	// List images using the Docker client
 	images, err := dockerCli.ImageList(context.Background(), image.ListOptions{})

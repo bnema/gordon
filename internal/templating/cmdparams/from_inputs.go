@@ -45,10 +45,3 @@ func FromInputsToCmdParams(inputs map[string]string, a *server.App) (docker.Cont
 
 	return params, nil
 }
-
-func extractContainerPort(portMappings []docker.PortMapping) string {
-	if len(portMappings) > 0 {
-		return portMappings[0].ContainerPort
-	}
-	return ""
-}
