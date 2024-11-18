@@ -86,6 +86,27 @@ type ChunkMetadata struct {
 	TransferID  string `json:"transfer_id"`
 }
 
+type ConflictCheckResponse struct {
+	Success       bool   `json:"success"`
+	Message       string `json:"message"`
+	ContainerID   string `json:"container_id"`
+	ContainerName string `json:"container_name"`
+	Domain        string `json:"domain"`
+	State         string `json:"state"`
+	RunningTime   string `json:"running_time"`
+	Ports         string `json:"ports"`
+}
+
+type ConflictAction struct {
+	Action string `json:"action"` // "stop", "remove", or "cancel"
+	Force  bool   `json:"force"`
+}
+
+type DeviceFlowResponse struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 // UnmarshalJSON custom unmarshaler for RequestPayload
 func (p *RequestPayload) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage

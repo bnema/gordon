@@ -67,8 +67,20 @@ func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 	protectedApiGroup.POST("/deploy", func(c echo.Context) error {
 		return handlers.PostDeploy(c, a)
 	})
+	protectedApiGroup.POST("/deploy/chunked", func(c echo.Context) error {
+		return handlers.PostDeployChunked(c, a)
+	})
+	protectedApiGroup.GET("/deploy/check-conflict", func(c echo.Context) error {
+		return handlers.CheckDeployConflict(c, a)
+	})
+	// Regular push endpoint for small images
 	protectedApiGroup.POST("/push", func(c echo.Context) error {
 		return handlers.PostPush(c, a)
+	})
+
+	// Chunked push endpoint for large images
+	protectedApiGroup.POST("/push/chunked", func(c echo.Context) error {
+		return handlers.PostPushChunked(c, a)
 	})
 	protectedApiGroup.POST("/stop", func(c echo.Context) error {
 		return handlers.PostContainerStop(c, a)
