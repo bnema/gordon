@@ -8,30 +8,44 @@ import (
 )
 
 func ExportDockerImage(imageName string) (io.ReadCloser, int64, error) {
-	exists, err := docker.CheckIfImageExists(imageName)
-	if err != nil {
-		return nil, 0, fmt.Errorf("error checking image existence: %w", err)
+	// Initialize Docker client
+	if err := docker.CheckIfInitialized(); err != nil {
+		return nil, 0, fmt.Errorf("failed to initialize Docker client: %w", err)
 	}
 
-	var imageID string
-	if exists {
-		imageID = imageName
-	} else {
-		imageID, err = docker.GetImageIDByName(imageName)
+	// Get the image ID first
+	imageID, err := docker.GetImageIDByName(imageName)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get image ID: %w", err)
+	}
+
+	// Create a pipe for streaming
+	pr, pw := io.Pipe()
+
+	go func() {
+		defer pw.Close()
+
+		// Export the image using save
+		reader, err := docker.ExportImageFromEngine(imageID)
 		if err != nil {
-			return nil, 0, fmt.Errorf("error searching for image by name: %w", err)
+			pw.CloseWithError(fmt.Errorf("failed to export image: %w", err))
+			return
 		}
-	}
+		defer reader.Close()
 
-	actualSize, err := docker.GetImageSizeFromReader(imageID)
+		// Copy the data to the pipe
+		_, err = io.Copy(pw, reader)
+		if err != nil {
+			pw.CloseWithError(fmt.Errorf("failed to copy image data: %w", err))
+			return
+		}
+	}()
+
+	// Get the actual size
+	size, err := docker.GetImageSize(imageID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error retrieving image size: %w", err)
+		return nil, 0, fmt.Errorf("failed to get image size: %w", err)
 	}
 
-	reader, err := docker.ExportImageFromEngine(imageID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("error exporting image: %w", err)
-	}
-
-	return reader, actualSize, nil
+	return pr, size, nil
 }

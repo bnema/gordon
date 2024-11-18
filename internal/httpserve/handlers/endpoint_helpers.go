@@ -101,8 +101,8 @@ func GetInfos(c echo.Context, a *server.App) error {
 	return sendJSONResponse(c, http.StatusOK, info)
 }
 
-// Helper functions for validation and preparation
-func validateAndPreparePayload(c echo.Context) (*common.PushPayload, error) {
+// validateAndPreparePushPayload validates and prepares the push payload
+func validateAndPreparePushPayload(c echo.Context) (*common.PushPayload, error) {
 	payload := &common.PushPayload{
 		ImageName: c.Request().Header.Get("X-Image-Name"),
 	}
@@ -114,6 +114,7 @@ func validateAndPreparePayload(c echo.Context) (*common.PushPayload, error) {
 	return payload, nil
 }
 
+// validateAndPrepareDeployPayload validates and prepares the deploy payload
 func validateAndPrepareDeployPayload(c echo.Context) (*common.DeployPayload, error) {
 	payload := &common.DeployPayload{
 		Port:         c.Request().Header.Get("X-Ports"),
@@ -131,38 +132,8 @@ func validateAndPrepareDeployPayload(c echo.Context) (*common.DeployPayload, err
 	return payload, nil
 }
 
-// Helper functions for saving and importing images
-func saveAndImportImage(c echo.Context, a *server.App, payload *common.PushPayload) error {
-	imageReader := c.Request().Body
-	defer imageReader.Close()
-
-	imageFileName := sanitizeImageFileName(payload.ImageName)
-
-	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
-	if err != nil {
-		return fmt.Errorf("failed to save image: %v", err)
-	}
-
-	imageID, err := docker.ImportImageToEngine(imagePath)
-	if err != nil {
-		store.RemoveFromStorage(imagePath)
-		return fmt.Errorf("failed to import image: %v", err)
-	}
-
-	if imageID == "" {
-		return errors.New("failed to import image")
-	}
-
-	err = store.RemoveFromStorage(imagePath)
-	if err != nil {
-		return fmt.Errorf("failed to remove temporary image file: %v", err)
-	}
-
-	payload.ImageID = imageID
-	return nil
-}
-
-func saveAndImportDeployImage(c echo.Context, a *server.App, payload *common.DeployPayload) (string, error) {
+// saveAndImportPushImage saves the image to the storage and imports it to the Docker engine, updating the payload with the image ID and returning the path to the saved image
+func saveAndImportPushImage(c echo.Context, a *server.App, payload *common.PushPayload) (string, error) {
 	imageReader := c.Request().Body
 	defer imageReader.Close()
 
@@ -192,39 +163,104 @@ func saveAndImportDeployImage(c echo.Context, a *server.App, payload *common.Dep
 	return imagePath, nil
 }
 
-// Container management helpers
+// saveAndImportDeployImage saves the image to the storage and imports it to the Docker engine, updating the payload with the image ID and returning the path to the saved image
+func saveAndImportDeployImage(c echo.Context, a *server.App, payload *common.DeployPayload) (string, error) {
+
+	imageReader := c.Request().Body
+	defer imageReader.Close()
+
+	imageFileName := sanitizeImageFileName(payload.ImageName)
+
+	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to save image: %v", err)
+	}
+
+	imageID, err := docker.ImportImageToEngine(imagePath)
+	if err != nil {
+		store.RemoveFromStorage(imagePath)
+		return "", fmt.Errorf("failed to import image: %v", err)
+	}
+
+	if imageID == "" {
+		return "", errors.New("imported image ID is empty")
+	}
+
+	err = store.RemoveFromStorage(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to remove temporary image file: %v", err)
+	}
+
+	payload.ImageID = imageID
+	return imagePath, nil
+}
+
+// createAndStartContainer creates a container from the image, starts it and returns the container ID
 func createAndStartContainer(a *server.App, payload *common.DeployPayload) (string, string, error) {
+	log.Info("Starting container creation process",
+		"imageName", payload.ImageName,
+		"imageID", payload.ImageID,
+		"port", payload.Port)
+
 	params, err := cmdparams.FromPayloadStructToCmdParams(payload, a, payload.ImageID)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create command parameters: %v", err)
 	}
+
+	log.Debug("Container parameters prepared", "params", params)
 
 	containerID, err := docker.CreateContainer(params)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create container: %v", err)
 	}
 
+	log.Info("Container created successfully", "containerID", containerID)
+
 	containerName, err := docker.GetContainerName(containerID)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get container name: %v", err)
 	}
 
+	log.Info("Starting container",
+		"containerID", containerID,
+		"name", containerName)
+
+	// Use regular StartContainer instead of StartContainerWithContext
 	err = docker.StartContainer(containerID)
 	if err != nil {
-		docker.RemoveContainer(containerID)
+		// Get container logs if start failed
+		logs, logErr := docker.GetContainerLogs(containerID)
+		if logErr == nil {
+			log.Error("Container start failed - container logs",
+				"logs", logs,
+				"containerID", containerID)
+		}
+
+		// Cleanup the failed container
+		cleanupErr := docker.RemoveContainer(containerID)
+		if cleanupErr != nil {
+			log.Error("Failed to cleanup container after start failure",
+				"containerID", containerID,
+				"error", cleanupErr)
+		}
 		return "", "", fmt.Errorf("failed to start container: %v", err)
 	}
+
+	log.Info("Container started successfully",
+		"containerID", containerID,
+		"name", containerName)
 
 	return containerID, containerName, nil
 }
 
-// String manipulation helpers
+// Helpers for sanitizing and normalizing input
 func sanitizeImageFileName(imageName string) string {
 	imageName = regexp.MustCompile(`^([a-zA-Z0-9\-_.]+\/)?`).ReplaceAllString(imageName, "")
 	imageName = regexp.MustCompile(`(:[a-zA-Z0-9\-_.]+)?$`).ReplaceAllString(imageName, "")
 	return imageName + ".tar"
 }
 
+// normalizePort ensures that the port is in the format of "port/protocol"
 func normalizePort(port string) string {
 	if !regexp.MustCompile(`\/(tcp|udp)$`).MatchString(port) {
 		return port + "/tcp"
@@ -232,6 +268,7 @@ func normalizePort(port string) string {
 	return port
 }
 
+// normalizeTargetDomain ensures that the target domain is in the format of "https://domain" or "http://domain"
 func normalizeTargetDomain(domain string) string {
 	if !regexp.MustCompile(`^https?:\/\/`).MatchString(domain) {
 		return "https://" + domain
@@ -239,6 +276,7 @@ func normalizeTargetDomain(domain string) string {
 	return domain
 }
 
+// generateShortID generates a short ID from the full image ID
 func generateShortID(imageID string) string {
 	shortID := imageID[7:]
 	if len(shortID) > 12 {
@@ -247,6 +285,7 @@ func generateShortID(imageID string) string {
 	return shortID
 }
 
+// generateCreateContainerURL generates the URL for creating a container
 func generateCreateContainerURL(a *server.App, shortID string) string {
 	return fmt.Sprintf("%s://%s%s/cc/%s",
 		a.Config.Http.Protocol(),
@@ -255,7 +294,7 @@ func generateCreateContainerURL(a *server.App, shortID string) string {
 		shortID)
 }
 
-// Chunk management helpers
+// generateContainerLogsURL generates the URL for viewing container logs
 func isTransferComplete(transferID string) bool {
 	chunkStore.mu.Lock()
 	defer chunkStore.mu.Unlock()
@@ -278,6 +317,7 @@ func isTransferComplete(transferID string) bool {
 	return isComplete
 }
 
+// Cleanup helpers for old transfers
 func cleanupTransfer(transferID string) {
 	chunkStore.mu.Lock()
 	defer chunkStore.mu.Unlock()
@@ -287,6 +327,7 @@ func cleanupTransfer(transferID string) {
 	delete(chunkStore.started, transferID)
 }
 
+// cleanupOldTransfers periodically checks for and cleans up old transfers
 func cleanupOldTransfers() {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop() // Good practice to clean up the ticker
@@ -306,7 +347,7 @@ func cleanupOldTransfers() {
 	}
 }
 
-// Error extraction helper
+// extractContainerID extracts the container ID from an error message
 func extractContainerID(errorMessage string) string {
 	re := regexp.MustCompile(`by\s+([0-9a-f]+)\.`)
 	match := re.FindStringSubmatch(errorMessage)
@@ -316,7 +357,7 @@ func extractContainerID(errorMessage string) string {
 	return ""
 }
 
-// File verification helper
+// verifyFileContents checks if the file size matches the expected size
 func verifyFileContents(file *os.File, expectedSize int64) error {
 	actualSize, err := file.Seek(0, 2) // Seek to end
 	if err != nil {
@@ -331,6 +372,7 @@ func verifyFileContents(file *os.File, expectedSize int64) error {
 	return err
 }
 
+// storeIDMapping stores a mapping between a short ID and a full ID
 func storeIDMapping(shortID, fullID string) {
 	safelyInteractWithIDMap(Update, shortID, fullID)
 }

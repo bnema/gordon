@@ -73,6 +73,39 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 }
 
 func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
+	// Check authentication early
+	if err := handler.CheckAndRefreshAuth(a); err != nil {
+		log.Error("Authentication check failed", "error", err)
+		return err
+	}
+
+	log.Info("Deploying image", "image", imageName)
+	// Check for conflicts first
+	conflictResp, err := checkDeployConflict(a, targetDomain, port)
+	if err != nil {
+		return fmt.Errorf("conflict check failed: %w", err)
+	}
+
+	// Shorten the ContainerID to 12 characters
+	shortID := conflictResp.ContainerID[:12]
+
+	// If there's a conflict, handle it before proceeding
+	if !conflictResp.Success && conflictResp.ContainerID != "" {
+		log.Warn("Container already exists",
+			"name", conflictResp.ContainerName,
+			"id", shortID,
+			"state", conflictResp.State,
+			"uptime", conflictResp.RunningTime)
+
+		if err := handler.HandleExistingContainer(a, conflictResp); err != nil {
+			if strings.Contains(err.Error(), "cancelled by user") {
+				return fmt.Errorf("deployment cancelled by user")
+			}
+			return fmt.Errorf("failed to handle existing container: %w", err)
+		}
+
+	}
+
 	var buf bytes.Buffer
 	size, err := io.Copy(&buf, reader)
 	if err != nil {
@@ -95,31 +128,21 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 		"Content-Type":    {"application/octet-stream"},
 	}
 
-	// Send a small chunk first to detect any conflicts
 	chunkedClient := handler.NewChunkedClient(a)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 
-	// Create a small test chunk
-	testChunk := buf.Bytes()[:1024] // Just send first 1KB to check for conflicts
-	testReader := bytes.NewReader(testChunk)
-
-	resp, err := chunkedClient.SendFile(ctx, "/deploy", headers, testReader, int64(len(testChunk)), imageName)
+	resp, err := chunkedClient.SendFileAsChunks(ctx, "/deploy/chunked", headers, imageReader, size, imageName)
 	if err != nil {
 		var deployErr *common.DeploymentError
 		if errors.As(err, &deployErr) && deployErr.StatusCode == http.StatusConflict {
 			var deployResponse common.DeployResponse
 			if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
 				if deployResponse.ContainerID != "" {
-					if err := handler.HandleExistingContainer(a, &deployResponse); err != nil {
-						if strings.Contains(err.Error(), "cancelled by user") {
-							return fmt.Errorf("deployment cancelled by user")
-						}
-						return fmt.Errorf("failed to handle existing container: %w", err)
-					}
-					// Now proceed with the full upload
+					log.Warn("Container already exists")
+					// Retry the deployment after handling the conflict
 					imageReader.Seek(0, 0) // Reset reader to beginning
-					resp, err = chunkedClient.SendFile(ctx, "/deploy", headers, imageReader, size, imageName)
+					resp, err = chunkedClient.SendFileAsChunks(ctx, "/deploy", headers, imageReader, size, imageName)
 					if err != nil {
 						return fmt.Errorf("deployment failed after container removal: %w", err)
 					}
@@ -128,13 +151,10 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 		} else {
 			return fmt.Errorf("deployment failed: %w", err)
 		}
-	} else {
-		// No conflict detected, proceed with the rest of the upload
-		imageReader.Seek(1024, 0) // Skip the first 1KB we already sent
-		resp, err = chunkedClient.SendFile(ctx, "/deploy", headers, imageReader, size-1024, imageName)
-		if err != nil {
-			return fmt.Errorf("deployment failed during main upload: %w", err)
-		}
+	}
+
+	if resp == nil {
+		return fmt.Errorf("received nil response from server")
 	}
 
 	var deployResp common.DeployResponse
@@ -147,7 +167,7 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 
 func waitForDeployment(domain string, containerID string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
-	maxRetries := 20
+	maxRetries := 10
 	retryInterval := time.Second
 
 	var shortContainerID string
@@ -200,9 +220,10 @@ func handleDeployError(a *cli.App, err error, imageName, port, targetDomain stri
 	var deployErr *common.DeploymentError
 	if errors.As(err, &deployErr) {
 		var deployResponse common.DeployResponse
+		var conflictResp common.ConflictCheckResponse
 		if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
 			if deployErr.StatusCode == http.StatusConflict && deployResponse.ContainerID != "" {
-				if err := handler.HandleExistingContainer(a, &deployResponse); err != nil {
+				if err := handler.HandleExistingContainer(a, &conflictResp); err != nil {
 					if strings.Contains(err.Error(), "cancelled by user") {
 						log.Warn("Deployment cancelled by user")
 						return nil
@@ -216,4 +237,37 @@ func handleDeployError(a *cli.App, err error, imageName, port, targetDomain stri
 		}
 	}
 	return err
+}
+
+func checkDeployConflict(a *cli.App, targetDomain string, port string) (*common.ConflictCheckResponse, error) {
+
+	// Create request to check-conflict endpoint with both domain and port parameters
+	reqUrl := fmt.Sprintf("%s/api/deploy/check-conflict?domain=%s&port=%s",
+		a.Config.Http.BackendURL, targetDomain, port)
+
+	req, err := http.NewRequest("GET", reqUrl, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create conflict check request: %w", err)
+	}
+
+	// Set auth header
+	req.Header.Set("Authorization", "Bearer "+a.Config.General.Token)
+
+	// Send request
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send conflict check request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Parse response
+	var conflictResp common.ConflictCheckResponse
+	if err := json.NewDecoder(resp.Body).Decode(&conflictResp); err != nil {
+		return nil, fmt.Errorf("failed to parse conflict check response: %w", err)
+	}
+
+	return &conflictResp, nil
 }
