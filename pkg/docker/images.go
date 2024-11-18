@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"regexp"
 	"strings"
 
+	"github.com/bnema/gordon/pkg/verify"
+	"github.com/charmbracelet/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/image"
 )
@@ -123,33 +124,52 @@ func createTagPattern(tag string) *regexp.Regexp {
 
 // ImportImageToEngine imports an image to the Docker engine and returns the image ID
 func ImportImageToEngine(imageFilePath string) (string, error) {
-	log.Printf("Starting to import image from file: %s", imageFilePath)
+	log.Info("Starting to import image from file", "path", imageFilePath)
 
 	imageFile, err := os.Open(imageFilePath)
 	if err != nil {
-		log.Printf("Failed to open image file: %v", err)
 		return "", fmt.Errorf("failed to open image file: %w", err)
 	}
 	defer imageFile.Close()
 
+	// Verify file size is non-zero
+	stat, err := imageFile.Stat()
+	if err != nil {
+		return "", fmt.Errorf("failed to get file stats: %w", err)
+	}
+	if stat.Size() == 0 {
+		return "", fmt.Errorf("image file is empty")
+	}
+
+	// Verify tar format
+	if err := verify.VerifyTarFile(imageFilePath); err != nil {
+		return "", fmt.Errorf("invalid tar file: %w", err)
+	}
+
+	// Reset file pointer
+	if _, err := imageFile.Seek(0, 0); err != nil {
+		return "", fmt.Errorf("failed to reset file pointer: %w", err)
+	}
+
 	resp, err := dockerCli.ImageLoad(context.Background(), imageFile, true)
 	if err != nil {
-		log.Printf("Failed to load image: %v", err)
-		return "", fmt.Errorf("failed to import image: %w", err)
+		return "", fmt.Errorf("failed to load image: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var imageName string
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
-		line := scanner.Text()
-
 		var message struct {
 			Stream string `json:"stream"`
+			Error  string `json:"error"`
 		}
-		if err := json.Unmarshal([]byte(line), &message); err != nil {
-			log.Printf("Failed to unmarshal JSON: %v", err)
-			continue // Skip lines that aren't JSON
+		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+			continue
+		}
+
+		if message.Error != "" {
+			return "", fmt.Errorf("docker load error: %s", message.Error)
 		}
 
 		if strings.HasPrefix(message.Stream, "Loaded image: ") {
@@ -159,47 +179,56 @@ func ImportImageToEngine(imageFilePath string) (string, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("Error reading response: %v", err)
-		return "", fmt.Errorf("error reading response: %w", err)
+		return "", fmt.Errorf("error reading docker response: %w", err)
 	}
 
 	if imageName == "" {
-		log.Printf("Failed to find image name in import response")
-		return "", fmt.Errorf("failed to find image name in import response")
+		return "", fmt.Errorf("failed to get loaded image name")
 	}
 
-	// Now we need to get the image ID from the image name
 	imageID, err := GetImageIDByName(imageName)
 	if err != nil {
-		log.Printf("Failed to get image ID for name %s: %v", imageName, err)
 		return "", fmt.Errorf("failed to get image ID: %w", err)
 	}
 
-	log.Printf("Successfully imported image with ID: %s", imageID)
+	log.Info("Image imported successfully", "imageID", imageID)
 	return imageID, nil
 }
 
 // ExportImageFromEngine exports an image from the Docker engine and returns it as an io.Reader
 func ExportImageFromEngine(imageID string) (io.ReadCloser, error) {
-	// Check if the Docker client has been initialized
+	log.Debug("Starting image export", "imageID", imageID)
 
 	// Get the image information using the Docker client
 	imageInfo, err := GetImageInfo(imageID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get image info: %w", err)
 	}
 
-	if len(imageInfo.RepoTags) == 0 {
-		return nil, fmt.Errorf("image has no tag")
+	// Log image details for debugging
+	log.Debug("Image info retrieved",
+		"repoTags", imageInfo.RepoTags,
+		"size", imageInfo.Size)
+
+	// Use ImageSave with both the image ID and repo tags to ensure metadata is preserved
+	references := []string{imageID}
+	if len(imageInfo.RepoTags) > 0 {
+		references = append(references, imageInfo.RepoTags...)
 	}
 
-	// Export the image using the Docker client
-	imageReader, err := dockerCli.ImageSave(context.Background(), []string{imageInfo.RepoTags[0]})
+	log.Debug("Saving image with references", "refs", references)
+
+	imageReader, err := dockerCli.ImageSave(context.Background(), references)
 	if err != nil {
-		return nil, fmt.Errorf("failed to export image: %w", err)
+		return nil, fmt.Errorf("failed to save image: %w", err)
 	}
 
-	return imageReader, nil
+	// Wrap in buffered reader for better performance
+	bufferedReader := bufio.NewReader(imageReader)
+
+	log.Debug("Image export successful", "imageID", imageID)
+
+	return io.NopCloser(bufferedReader), nil
 }
 
 // From an ID, get the all the information about the image

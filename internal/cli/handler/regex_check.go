@@ -14,10 +14,13 @@ func ValidateImageName(imageName string) error {
 	return nil
 }
 
-func EnsureImageTag(imageName *string) {
+func EnsureImageTag(imageName *string) error {
+	// if not tags returns an error
 	if !strings.Contains(*imageName, ":") {
-		*imageName += ":latest"
+		return fmt.Errorf("You must specify a tag for the image")
 	}
+
+	return nil
 }
 
 func ValidatePortMapping(port string) error {
