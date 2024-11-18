@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
 
@@ -179,7 +181,12 @@ func RemoveContainer(containerID string) error {
 // StartContainer starts a container
 func StartContainer(containerID string) error {
 	fmt.Println("Starting container", containerID)
-	// Check if the container is not already in a running state
+
+	// Add timeout context
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Get initial container state
 	containerInfo, err := GetContainerInfo(containerID)
 	if err != nil {
 		return fmt.Errorf("could not get container info: %v", err)
@@ -189,45 +196,61 @@ func StartContainer(containerID string) error {
 		return fmt.Errorf("container is already running")
 	}
 
-	// Start container using the Docker client
-	err = dockerCli.ContainerStart(context.Background(), containerID, container.StartOptions{})
+	// Start container
+	err = dockerCli.ContainerStart(ctx, containerID, container.StartOptions{})
 	if err != nil {
+		// Get container logs if start failed
+		logs, logErr := GetContainerLogs(containerID)
+		if logErr == nil {
+			fmt.Printf("Container logs after failed start: %s\n", logs)
+		}
 		return fmt.Errorf("could not start container: %v", err)
 	}
 
-	return nil
+	// Verify container is running
+	for i := 0; i < 5; i++ {
+		state, err := GetContainerState(containerID)
+		if err != nil {
+			fmt.Printf("Error checking container state: %v\n", err)
+			continue
+		}
+
+		if state == "running" {
+			return nil
+		}
+
+		time.Sleep(time.Second)
+	}
+
+	// If we get here, container didn't start properly
+	logs, _ := GetContainerLogs(containerID)
+	return fmt.Errorf("container failed to enter running state. Logs: %s", logs)
 }
 
 // CreateContainer creates a container with the given parameters
 func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
-	// Check if the Docker client has been initialized
 	CheckIfInitialized()
 
+	log.Info("Creating container with params: %+v\n", cmdParams)
+
+	// Check network
 	isNetworkCreated, err := CheckIfNetworkExists(cmdParams.Network)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("network check failed: %v", err)
 	}
 
 	if !isNetworkCreated {
+		fmt.Printf("Creating network: %s\n", cmdParams.Network)
 		_, err := dockerCli.NetworkCreate(context.Background(), cmdParams.Network, types.NetworkCreate{})
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("network creation failed: %v", err)
 		}
 	}
 
-	// if the network exist return its id
-	// networkInfo, err := GetNetworkInfo(cmdParams.Network)
-	// if err != nil {
-	// 	return "", err
-
-	// }
-
-	// fmt.Print(networkInfo.ID)
-
-	// Prepare port bindings
+	// Prepare port bindings with logging
 	portBindings := nat.PortMap{}
+	exposedPorts := nat.PortSet{}
 	for _, portMapping := range cmdParams.PortMappings {
-		// Prepare exposed port
 		exposedPort := nat.Port(portMapping.ContainerPort + "/" + portMapping.Protocol)
 		portBindings[exposedPort] = []nat.PortBinding{
 			{
@@ -235,9 +258,14 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 				HostPort: portMapping.HostPort,
 			},
 		}
+		exposedPorts[exposedPort] = struct{}{}
+		fmt.Printf("Adding port mapping: %s:%s/%s\n",
+			portMapping.HostPort,
+			portMapping.ContainerPort,
+			portMapping.Protocol)
 	}
 
-	// Prepare labels for Traefik
+	// Prepare labels
 	labels := map[string]string{}
 	for _, label := range cmdParams.Labels {
 		keyValue := strings.Split(label, "=")
@@ -246,16 +274,14 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 		}
 	}
 
-	// Prepare environment variables
-	envVars := append([]string{}, cmdParams.Environment...)
-
-	// Create container
+	// Create container with platform specification
 	resp, err := dockerCli.ContainerCreate(
 		context.Background(),
 		&container.Config{
-			Image:  cmdParams.ImageName,
-			Labels: labels,
-			Env:    envVars,
+			Image:        cmdParams.ImageName,
+			Labels:       labels,
+			Env:          cmdParams.Environment,
+			ExposedPorts: exposedPorts,
 		},
 		&container.HostConfig{
 			PortBindings: portBindings,
@@ -273,10 +299,38 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 		cmdParams.ContainerName,
 	)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("container creation failed: %v", err)
 	}
 
+	log.Info("Container created successfully with ID: %s\n", resp.ID)
+
 	return resp.ID, nil
+}
+
+func WaitForContainerToBeRunning(containerID string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for container to start")
+		case <-time.After(time.Second):
+			state, err := GetContainerState(containerID)
+			if err != nil {
+				return fmt.Errorf("error checking container state: %v", err)
+			}
+
+			if state == "running" {
+				return nil
+			}
+
+			if state == "exited" {
+				logs, _ := GetContainerLogs(containerID)
+				return fmt.Errorf("container exited unexpectedly. Logs: %s", logs)
+			}
+		}
+	}
 }
 
 func CheckIfNetworkExists(networkName string) (bool, error) {
@@ -323,8 +377,6 @@ func GetContainerName(containerID string) (string, error) {
 		return "", err
 	}
 
-	// Debug
-	fmt.Printf("Container name: %s\n", containerInfo.Name)
 	return containerInfo.Name, nil
 }
 
@@ -414,4 +466,166 @@ func GetContainerIDByName(containerName string) string {
 	}
 
 	return ""
+}
+
+func ContainerExists(containerID string) bool {
+	_, err := dockerCli.ContainerInspect(context.Background(), containerID)
+	return err == nil
+}
+
+func GetContainerState(containerID string) (string, error) {
+	info, err := dockerCli.ContainerInspect(context.Background(), containerID)
+	if err != nil {
+		return "", err
+	}
+	return info.State.Status, nil
+}
+
+// StartContainerWithContext starts a container with context
+func StartContainerWithContext(ctx context.Context, containerID string) error {
+	fmt.Println("Starting container", containerID)
+
+	// Check if the container is not already in a running state
+	containerInfo, err := GetContainerInfo(containerID)
+	if err != nil {
+		return fmt.Errorf("could not get container info: %v", err)
+	}
+
+	if containerInfo.State.Running {
+		return fmt.Errorf("container is already running")
+	}
+
+	// Start container using the Docker client with context
+	err = dockerCli.ContainerStart(ctx, containerID, container.StartOptions{})
+	if err != nil {
+		return fmt.Errorf("could not start container: %v", err)
+	}
+
+	return nil
+}
+
+func GetContainerPorts(containerID string) (string, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv)
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close()
+
+	container, err := cli.ContainerInspect(context.Background(), containerID)
+	if err != nil {
+		return "", err
+	}
+
+	var ports []string
+	for port, bindings := range container.NetworkSettings.Ports {
+		for _, binding := range bindings {
+			ports = append(ports, fmt.Sprintf("%s:%s->%s", binding.HostIP, binding.HostPort, port))
+		}
+	}
+
+	return strings.Join(ports, ", "), nil
+}
+
+func GetContainerUptime(containerID string) (string, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv)
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close()
+
+	container, err := cli.ContainerInspect(context.Background(), containerID)
+	if err != nil {
+		return "", err
+	}
+
+	if !container.State.Running {
+		return "not running", nil
+	}
+
+	startTime, err := time.Parse(time.RFC3339, container.State.StartedAt)
+	if err != nil {
+		return "", err
+	}
+
+	duration := time.Since(startTime)
+	return formatDuration(duration), nil
+}
+
+func GetContainersUsingPort(port string) ([]string, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+	}
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// List all containers (including running and stopped)
+	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true})
+	var containersUsingPort []string
+
+	for _, container := range containers {
+		// Inspect container to get detailed port information
+		inspect, err := cli.ContainerInspect(ctx, container.ID)
+		if err != nil {
+			continue // Skip containers we can't inspect
+		}
+
+		// Check exposed ports in container config
+		if inspect.Config != nil && inspect.Config.ExposedPorts != nil {
+			for exposedPort := range inspect.Config.ExposedPorts {
+				if strings.HasPrefix(string(exposedPort), port+"/") {
+					containersUsingPort = append(containersUsingPort, strings.TrimPrefix(container.Names[0], "/"))
+					break
+				}
+			}
+		}
+
+		// Check port bindings in host config
+		if inspect.HostConfig != nil && inspect.HostConfig.PortBindings != nil {
+			for _, bindings := range inspect.HostConfig.PortBindings {
+				for _, binding := range bindings {
+					if binding.HostPort == port {
+						containersUsingPort = append(containersUsingPort, strings.TrimPrefix(container.Names[0], "/"))
+						break
+					}
+				}
+			}
+		}
+
+		// Check currently published ports
+		for _, portBinding := range container.Ports {
+			if fmt.Sprintf("%d", portBinding.PublicPort) == port {
+				containersUsingPort = append(containersUsingPort, strings.TrimPrefix(container.Names[0], "/"))
+				break
+			}
+		}
+	}
+
+	// Remove duplicates
+	seen := make(map[string]bool)
+	unique := make([]string, 0, len(containersUsingPort))
+	for _, name := range containersUsingPort {
+		if !seen[name] {
+			seen[name] = true
+			unique = append(unique, name)
+		}
+	}
+
+	return unique, nil
+}
+
+func formatDuration(d time.Duration) string {
+	days := int(d.Hours() / 24)
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }

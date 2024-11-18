@@ -228,7 +228,7 @@ func handleUser(c echo.Context, a *server.App, accessToken, browserInfo string, 
 		}
 
 		if !isGoodUser {
-			return nil, echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+			return nil, echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized user")
 		}
 
 		if isGoodUser {
