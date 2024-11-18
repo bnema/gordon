@@ -2,7 +2,6 @@
 package handlers
 
 import (
-	"archive/tar"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -35,7 +34,7 @@ func PostPush(c echo.Context, a *server.App) error {
 		})
 	}
 
-	_, err = saveAndImportPushImage(c, a, payload)
+	_, err = saveAndImportImage(c, a, payload)
 	if err != nil {
 		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
 			Success: false,
@@ -176,26 +175,6 @@ func getTransferData(transferID string) (*ChunkMetadata, map[int][]byte, error) 
 	return metadata, chunkStore.chunks[transferID], nil
 }
 
-func createTempFile() (*os.File, func(), error) {
-	tmpDir, err := os.MkdirTemp("", "docker-import-*")
-	if err != nil {
-		return nil, nil, err
-	}
-
-	tmpFile, err := os.Create(filepath.Join(tmpDir, "image.tar"))
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, nil, err
-	}
-
-	cleanup := func() {
-		tmpFile.Close()
-		os.RemoveAll(tmpDir)
-	}
-
-	return tmpFile, cleanup, nil
-}
-
 func writeChunksToFile(file *os.File, chunks map[int][]byte, totalChunks int) error {
 	// First, seek to the beginning of the file
 	if _, err := file.Seek(0, 0); err != nil {
@@ -233,29 +212,6 @@ func writeChunksToFile(file *os.File, chunks map[int][]byte, totalChunks int) er
 	}
 
 	return nil
-}
-
-func prepareFileForImport(file *os.File) error {
-	// Reset to beginning of file
-	if _, err := file.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to seek to beginning: %w", err)
-	}
-
-	// Verify the tar format
-	tr := tar.NewReader(file)
-	header, err := tr.Next()
-	if err != nil {
-		return fmt.Errorf("invalid tar format: %w", err)
-	}
-
-	// Check if this is a valid Docker image tar
-	if header.Name == "manifest.json" {
-		// Reset file pointer for subsequent reads
-		_, err = file.Seek(0, 0)
-		return err
-	}
-
-	return fmt.Errorf("file does not appear to be a valid Docker image archive")
 }
 
 func sendErrorResponse(c echo.Context, message string, err error) error {

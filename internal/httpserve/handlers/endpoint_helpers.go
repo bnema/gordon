@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"regexp"
 	"sync"
 	"time"
@@ -132,66 +131,59 @@ func validateAndPrepareDeployPayload(c echo.Context) (*common.DeployPayload, err
 	return payload, nil
 }
 
-// saveAndImportPushImage saves the image to the storage and imports it to the Docker engine, updating the payload with the image ID and returning the path to the saved image
-func saveAndImportPushImage(c echo.Context, a *server.App, payload *common.PushPayload) (string, error) {
+// ssaveAndImportImage saves and imports an image from the request body
+func saveAndImportImage(c echo.Context, a *server.App, payload interface{}) (string, error) {
+	var imageName, imageID string
+
+	// Determine payload type and extract image name
+	switch p := payload.(type) {
+	case *common.PushPayload:
+		imageName = p.ImageName
+		defer func() { p.ImageID = imageID }()
+	case *common.DeployPayload:
+		imageName = p.ImageName
+		defer func() { p.ImageID = imageID }()
+	default:
+		return "", fmt.Errorf("unsupported payload type: %T", payload)
+	}
+
 	imageReader := c.Request().Body
 	defer imageReader.Close()
 
-	imageFileName := sanitizeImageFileName(payload.ImageName)
+	imageFileName := sanitizeImageFileName(imageName)
 
 	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
 		return "", fmt.Errorf("failed to save image: %v", err)
 	}
 
-	imageID, err := docker.ImportImageToEngine(imagePath)
+	imageID, err = docker.ImportImageToEngine(imagePath)
 	if err != nil {
-		store.RemoveFromStorage(imagePath)
+		if removeErr := store.RemoveFromStorage(imagePath); removeErr != nil {
+			log.Error("Failed to remove temporary image file after import failure",
+				"error", removeErr,
+				"path", imagePath)
+		}
 		return "", fmt.Errorf("failed to import image: %v", err)
 	}
 
 	if imageID == "" {
+		if removeErr := store.RemoveFromStorage(imagePath); removeErr != nil {
+			log.Error("Failed to remove temporary image file after empty ID",
+				"error", removeErr,
+				"path", imagePath)
+		}
 		return "", errors.New("imported image ID is empty")
 	}
 
 	err = store.RemoveFromStorage(imagePath)
 	if err != nil {
+		log.Error("Failed to remove temporary image file after successful import",
+			"error", err,
+			"path", imagePath)
 		return "", fmt.Errorf("failed to remove temporary image file: %v", err)
 	}
 
-	payload.ImageID = imageID
-	return imagePath, nil
-}
-
-// saveAndImportDeployImage saves the image to the storage and imports it to the Docker engine, updating the payload with the image ID and returning the path to the saved image
-func saveAndImportDeployImage(c echo.Context, a *server.App, payload *common.DeployPayload) (string, error) {
-
-	imageReader := c.Request().Body
-	defer imageReader.Close()
-
-	imageFileName := sanitizeImageFileName(payload.ImageName)
-
-	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
-	if err != nil {
-		return "", fmt.Errorf("failed to save image: %v", err)
-	}
-
-	imageID, err := docker.ImportImageToEngine(imagePath)
-	if err != nil {
-		store.RemoveFromStorage(imagePath)
-		return "", fmt.Errorf("failed to import image: %v", err)
-	}
-
-	if imageID == "" {
-		return "", errors.New("imported image ID is empty")
-	}
-
-	err = store.RemoveFromStorage(imagePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to remove temporary image file: %v", err)
-	}
-
-	payload.ImageID = imageID
 	return imagePath, nil
 }
 
@@ -355,21 +347,6 @@ func extractContainerID(errorMessage string) string {
 		return match[1]
 	}
 	return ""
-}
-
-// verifyFileContents checks if the file size matches the expected size
-func verifyFileContents(file *os.File, expectedSize int64) error {
-	actualSize, err := file.Seek(0, 2) // Seek to end
-	if err != nil {
-		return fmt.Errorf("failed to verify file size: %w", err)
-	}
-
-	if actualSize != expectedSize {
-		return fmt.Errorf("final file size mismatch: got %d, expected %d", actualSize, expectedSize)
-	}
-
-	_, err = file.Seek(0, 0) // Reset to beginning
-	return err
 }
 
 // storeIDMapping stores a mapping between a short ID and a full ID

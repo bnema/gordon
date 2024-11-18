@@ -38,14 +38,13 @@ type UploadProgress struct {
 
 // ProgressDisplay manages the upload progress display
 type ProgressDisplay struct {
-	mu          sync.Mutex
-	model       *uploadModel
-	program     *tea.Program
-	updateChan  chan UploadProgress
-	done        chan struct{}
-	interrupted bool
-	paused      bool
-	pauseChan   chan bool
+	mu         sync.Mutex
+	model      *uploadModel
+	program    *tea.Program
+	updateChan chan UploadProgress
+	done       chan struct{}
+	paused     bool
+	pauseChan  chan bool
 }
 
 type uploadModel struct {
@@ -80,7 +79,7 @@ func (pd *ProgressDisplay) Start() {
 
 	// Run the UI in a goroutine
 	go func() {
-		if err := pd.program.Start(); err != nil {
+		if _, err := pd.program.Run(); err != nil {
 			fmt.Printf("Error running progress display: %v\n", err)
 		}
 	}()
@@ -199,14 +198,13 @@ func (m *uploadModel) View() string {
 type ChunkMetadata = common.ChunkMetadata
 
 type ChunkedClient struct {
-	client         *http.Client
-	baseURL        string
-	token          string
-	chunkSize      int64
-	app            *cli.App
-	progress       *ProgressDisplay
-	cancelFunc     context.CancelFunc
-	conflictAction chan common.ConflictAction
+	client     *http.Client
+	baseURL    string
+	token      string
+	chunkSize  int64
+	app        *cli.App
+	progress   *ProgressDisplay
+	cancelFunc context.CancelFunc
 }
 
 type transferStore struct {
@@ -560,11 +558,6 @@ func verifyChunkIntegrity(chunk []byte, metadata common.ChunkMetadata) error {
 	}
 
 	return nil
-}
-
-// isAuthError checks if a response is an authentication error
-func isAuthError(resp *Response) bool {
-	return resp != nil && resp.StatusCode == http.StatusUnauthorized
 }
 
 // cleanupClientTransfer cleans up a client transfer

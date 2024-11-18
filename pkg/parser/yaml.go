@@ -47,7 +47,7 @@ func WriteYAMLFile(filename string, in interface{}) error {
 	}
 
 	// Write the YAML data to the file
-	err = os.WriteFile(filename, data, 0644)
+	err = os.WriteFile(filename, data, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to write to %s: %w", filename, err)
 	}
