@@ -15,7 +15,6 @@ linters:
     - misspell
     - gosec
     - unconvert
-    - deadcode
     - gocyclo
 
 linters-settings:

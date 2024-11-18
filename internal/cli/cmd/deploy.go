@@ -86,8 +86,12 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 		return fmt.Errorf("conflict check failed: %w", err)
 	}
 
-	// Shorten the ContainerID to 12 characters
-	shortID := conflictResp.ContainerID[:12]
+	var shortID string
+	if len(conflictResp.ContainerID) >= 12 {
+		shortID = conflictResp.ContainerID[:12]
+	} else {
+		shortID = conflictResp.ContainerID // Use full ID if less than 12 chars
+	}
 
 	// If there's a conflict, handle it before proceeding
 	if !conflictResp.Success && conflictResp.ContainerID != "" {
@@ -141,7 +145,9 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 				if deployResponse.ContainerID != "" {
 					log.Warn("Container already exists")
 					// Retry the deployment after handling the conflict
-					imageReader.Seek(0, 0) // Reset reader to beginning
+					if _, err := imageReader.Seek(0, 0); err != nil {
+						return fmt.Errorf("failed to reset image reader: %w", err)
+					}
 					resp, err = chunkedClient.SendFileAsChunks(ctx, "/deploy", headers, imageReader, size, imageName)
 					if err != nil {
 						return fmt.Errorf("deployment failed after container removal: %w", err)
@@ -207,36 +213,15 @@ func validateInputs(imageName, port, targetDomain string) error {
 		return err
 	}
 
-	handler.EnsureImageTag(&imageName)
+	if err := handler.EnsureImageTag(&imageName); err != nil {
+		return fmt.Errorf("failed to ensure image tag: %w", err)
+	}
 
 	if port == "" {
 		return fmt.Errorf("port is required")
 	}
 
 	return handler.ValidateTargetDomain(targetDomain)
-}
-
-func handleDeployError(a *cli.App, err error, imageName, port, targetDomain string, reader io.Reader) error {
-	var deployErr *common.DeploymentError
-	if errors.As(err, &deployErr) {
-		var deployResponse common.DeployResponse
-		var conflictResp common.ConflictCheckResponse
-		if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
-			if deployErr.StatusCode == http.StatusConflict && deployResponse.ContainerID != "" {
-				if err := handler.HandleExistingContainer(a, &conflictResp); err != nil {
-					if strings.Contains(err.Error(), "cancelled by user") {
-						log.Warn("Deployment cancelled by user")
-						return nil
-					}
-					log.Error("Failed to handle existing container", "error", err)
-					return err
-				}
-				// Retry deployment
-				return deployImage(a, reader, imageName, port, targetDomain)
-			}
-		}
-	}
-	return err
 }
 
 func checkDeployConflict(a *cli.App, targetDomain string, port string) (*common.ConflictCheckResponse, error) {
