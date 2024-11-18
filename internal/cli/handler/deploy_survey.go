@@ -5,6 +5,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/bnema/gordon/internal/cli"
@@ -12,13 +13,26 @@ import (
 	"github.com/charmbracelet/log"
 )
 
-func HandleExistingContainer(a *cli.App, deployResponse *common.DeployResponse) error {
-	containerName := deployResponse.ContainerName
-	shortID := deployResponse.ContainerID[:12]
+func HandleExistingContainer(app *cli.App, conflictResp *common.ConflictCheckResponse) error {
+	// Add a small delay to ensure terminal is clear
+	time.Sleep(100 * time.Millisecond)
+
+	// Clear the current line
+	fmt.Print("\033[2K\r")
+
+	containerName := conflictResp.ContainerName
+	shortID := conflictResp.ContainerID
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
 
 	var proceed bool
 	prompt := &survey.Confirm{
-		Message: fmt.Sprintf("Container '%s' (ID: %s) is already running. Stop and remove it?", containerName, shortID),
+		Message: fmt.Sprintf("Container '%s' (ID: %s) is already running for %s. Stop and remove it?",
+			containerName,
+			shortID,
+			conflictResp.RunningTime,
+		),
 		Default: true,
 	}
 
@@ -33,14 +47,14 @@ func HandleExistingContainer(a *cli.App, deployResponse *common.DeployResponse) 
 	log.Info("Stopping container...", "name", containerName, "id", shortID)
 
 	// Stop the container
-	if err := stopContainer(a, deployResponse.ContainerID); err != nil {
+	if err := stopContainer(app, conflictResp.ContainerID); err != nil {
 		return fmt.Errorf("failed to stop container '%s': %w", containerName, err)
 	}
 
 	log.Info("Removing container...", "name", containerName, "id", shortID)
 
 	// Remove the container
-	if err := removeContainer(a, deployResponse.ContainerID); err != nil {
+	if err := removeContainer(app, conflictResp.ContainerID); err != nil {
 		return fmt.Errorf("failed to remove container '%s': %w", containerName, err)
 	}
 

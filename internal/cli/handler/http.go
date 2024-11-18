@@ -8,7 +8,6 @@ import (
 	"net/http"
 
 	"github.com/bnema/gordon/internal/cli"
-	"github.com/bnema/gordon/internal/cli/auth"
 	"github.com/bnema/gordon/internal/common"
 )
 
@@ -151,29 +150,4 @@ func createRequest(apiUrl, endpoint, method string, rp *common.RequestPayload, t
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	return req, nil
-}
-
-func ReAuthenticate(a *cli.App) error {
-	fmt.Println("Re-authenticating...")
-	err := auth.DeviceFlowAuth(a)
-	if err != nil {
-		return fmt.Errorf("device flow authentication failed: %w", err)
-	}
-
-	// After successful re-authentication, get the new token
-	newToken, err := a.Config.GetToken()
-	if err != nil {
-		return fmt.Errorf("failed to get new token: %w", err)
-	}
-	// Update the token in the app config
-	a.Config.General.Token = newToken
-
-	// Save the new token to config file
-	err = a.Config.SaveConfig()
-	if err != nil {
-		return fmt.Errorf("failed to save new token to config: %w", err)
-	}
-
-	fmt.Println("Re-authentication successful. Your session has been renewed.")
-	return nil
 }
