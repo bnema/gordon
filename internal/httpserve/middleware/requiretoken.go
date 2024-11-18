@@ -26,22 +26,48 @@ func RequireToken(a *server.App) echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			token := strings.TrimPrefix(c.Request().Header.Get("Authorization"), "Bearer ")
 			if token == "" {
-				return c.JSON(http.StatusUnauthorized, map[string]string{
-					"error": "Token is missing",
+				return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+					"success": false,
+					"error":   "Token is missing",
 				})
 			}
 
 			// Check cache first
 			if _, cachedUser, found := tokenCache.GetWithUser(token); found {
+				// Verify if user exists in database and is authorized
+				isAuthorized, err := queries.CheckDBUserIsGood(a, cachedUser)
+				if err != nil || !isAuthorized {
+					return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+						"success": false,
+						"error":   "User not authorized",
+					})
+				}
 				c.Set("user", cachedUser)
 				return next(c)
 			}
 
-			// Validate with GitHub only for new tokens
+			// Validate with GitHub for new tokens
 			githubUser, err := validateGitHubToken(c)
 			if err != nil {
-				return c.JSON(http.StatusUnauthorized, map[string]string{
-					"error": "Invalid token",
+				return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+					"success": false,
+					"error":   "Invalid token",
+				})
+			}
+
+			// Verify if user exists in database and is authorized
+			isAuthorized, err := queries.CheckDBUserIsGood(a, githubUser)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]interface{}{
+					"success": false,
+					"error":   "Internal server error",
+				})
+			}
+
+			if !isAuthorized {
+				return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+					"success": false,
+					"error":   "User not authorized. Please login through the web interface first.",
 				})
 			}
 
