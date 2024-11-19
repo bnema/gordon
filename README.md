@@ -9,7 +9,7 @@
 <h4 align="center">Minimalist self-hosted containerized app deployment tool.</h4>
 
 
-Gordon is a tool that aims to simplify the deployment of your containerized web applications. It automates the process of integrating your locally built image into your self-hosted setup without the need of a container registry. 
+Gordon is a tool that aims to simplify the deployment of your containerized web applications. It automates the process of integrating your locally built image into your self-hosted setup without the need of a container registry.
 
 Optionally, Gordon can coordinate domain routing through Traefik (which needs to be pre-installed). This allows you to quickly deploy your applications to your desired domain or subdomain.
 
@@ -26,7 +26,7 @@ Optionally, Gordon can coordinate domain routing through Traefik (which needs to
 
 - **Self-Hosted**: Operates within your existing self-hosted environment without interfering with your setup.
 - **Self-Updated**: The client can update itself to the latest version with `gordon update`. The backend is updated by pulling the latest image from ghcr.io.
-- **Minimal WebUI**: Provides a simple web UI to manage your deployments, domains, exposed ports. Using a very minimal stack (sqlite3, Go templates, HTMX and Tailwind CSS).
+- **Minimal WebUI**: Provides a [simple web UI](assets/screenshots/webui-image-deploy.png) to manage your deployments, domains, exposed ports. Using a very minimal stack (sqlite3, Go templates, HTMX and Tailwind CSS).
 - **Simple authentication**: Use GitHub OAuth for the web UI and OAuth 2.0 device authorization grant (device flow) for the CLI client.
 - **Automated Routing**: Collaborates with Traefik to automatically route your application to your desired domain or subdomain.
 - **One binary**: Gordon follows the Golang philosophy of keeping things simple, offering a single binary for all functionalities.
