@@ -97,6 +97,15 @@ func pushImage(a *cli.App, reader io.Reader, imageName string) error {
 	defer cancel()
 
 	resp, err := chunkedClient.SendFileAsChunks(ctx, "/push/chunked", headers, imageReader, size, imageName)
+	if err != nil {
+		log.Error("Failed to send chunks", "error", err)
+		return fmt.Errorf("failed to send chunks: %w", err)
+	}
+
+	if resp == nil {
+		return fmt.Errorf("received nil response from server")
+	}
+
 	var pushResponse common.PushResponse
 	if err := json.Unmarshal(resp.Body, &pushResponse); err != nil {
 		log.Error("Error parsing response", "error", err)
