@@ -2,9 +2,12 @@
 package handlers
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"sync"
 	"time"
@@ -98,19 +101,6 @@ func GetInfos(c echo.Context, a *server.App) error {
 	info.Populate(a)
 
 	return sendJSONResponse(c, http.StatusOK, info)
-}
-
-// validateAndPreparePushPayload validates and prepares the push payload
-func validateAndPreparePushPayload(c echo.Context) (*common.PushPayload, error) {
-	payload := &common.PushPayload{
-		ImageName: c.Request().Header.Get("X-Image-Name"),
-	}
-
-	if payload.ImageName == "" {
-		return nil, errors.New("invalid image name")
-	}
-
-	return payload, nil
 }
 
 // validateAndPrepareDeployPayload validates and prepares the deploy payload
@@ -352,4 +342,104 @@ func extractContainerID(errorMessage string) string {
 // storeIDMapping stores a mapping between a short ID and a full ID
 func storeIDMapping(shortID, fullID string) {
 	safelyInteractWithIDMap(Update, shortID, fullID)
+}
+
+func writeChunksToFile(file *os.File, chunks map[int][]byte, totalChunks int) error {
+	// Validate input parameters
+	if file == nil {
+		return errors.New("nil file handle provided")
+	}
+	if len(chunks) == 0 {
+		return errors.New("no chunks provided")
+	}
+	if totalChunks <= 0 {
+		return fmt.Errorf("invalid total chunks count: %d", totalChunks)
+	}
+
+	// Verify we have all chunks before starting
+	if len(chunks) != totalChunks {
+		return fmt.Errorf("chunk count mismatch: got %d, expected %d", len(chunks), totalChunks)
+	}
+
+	// Calculate total expected size
+	var totalSize int64
+	for _, chunk := range chunks {
+		totalSize += int64(len(chunk))
+	}
+
+	log.Debug("Starting chunk assembly",
+		"totalChunks", totalChunks,
+		"totalSize", fmt.Sprintf("%.2f MB", float64(totalSize)/(1024*1024)))
+
+	// First, seek to the beginning of the file
+	if _, err := file.Seek(0, 0); err != nil {
+		return fmt.Errorf("failed to seek to beginning: %w", err)
+	}
+
+	// Create a temporary buffer with capacity hint
+	tempBuffer := bytes.NewBuffer(make([]byte, 0, totalSize))
+
+	// Write chunks in order with validation
+	for i := 0; i < totalChunks; i++ {
+		chunk, exists := chunks[i]
+		if !exists {
+			return fmt.Errorf("missing chunk %d", i)
+		}
+
+		if len(chunk) == 0 {
+			return fmt.Errorf("empty chunk found at index %d", i)
+		}
+
+		n, err := tempBuffer.Write(chunk)
+		if err != nil {
+			return fmt.Errorf("failed to write chunk %d to buffer: %w", i, err)
+		}
+		if n != len(chunk) {
+			return fmt.Errorf("incomplete chunk write: wrote %d of %d bytes for chunk %d",
+				n, len(chunk), i)
+		}
+	}
+
+	// Verify buffer size matches expected total
+	if int64(tempBuffer.Len()) != totalSize {
+		return fmt.Errorf("buffer size mismatch: got %d, expected %d",
+			tempBuffer.Len(), totalSize)
+	}
+
+	// Write the complete buffer to file
+	written, err := io.Copy(file, tempBuffer)
+	if err != nil {
+		return fmt.Errorf("failed to write buffer to file: %w", err)
+	}
+	if written != totalSize {
+		return fmt.Errorf("file write size mismatch: wrote %d, expected %d",
+			written, totalSize)
+	}
+
+	// Ensure all data is written to disk
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("failed to sync file: %w", err)
+	}
+
+	// Reset file pointer to beginning
+	if _, err := file.Seek(0, 0); err != nil {
+		return fmt.Errorf("failed to reset file pointer: %w", err)
+	}
+
+	log.Debug("Chunk assembly completed successfully",
+		"totalBytesWritten", written,
+		"sizeInMB", fmt.Sprintf("%.2f MB", float64(written)/(1024*1024)))
+
+	return nil
+}
+
+func getTransferData(transferID string) (*ChunkMetadata, map[int][]byte, error) {
+	chunkStore.mu.Lock()
+	defer chunkStore.mu.Unlock()
+
+	metadata := chunkStore.metadata[transferID]
+	if metadata == nil {
+		return nil, nil, fmt.Errorf("transfer metadata not found")
+	}
+	return metadata, chunkStore.chunks[transferID], nil
 }
