@@ -44,7 +44,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 			imageName := args[0]
 			log.Info("Pushing image", "image", imageName)
 
-			if err := validateInputs(imageName, port, targetDomain); err != nil {
+			if err := validateDeployInputs(imageName, port, targetDomain); err != nil {
 				log.Error("Validation failed", "error", err)
 				return
 			}
@@ -208,7 +208,7 @@ func waitForDeployment(domain string, containerID string) error {
 	return fmt.Errorf("deployment not ready after %d attempts", maxRetries)
 }
 
-func validateInputs(imageName, port, targetDomain string) error {
+func validateDeployInputs(imageName, port, targetDomain string) error {
 	if err := handler.ValidateImageName(imageName); err != nil {
 		return err
 	}
