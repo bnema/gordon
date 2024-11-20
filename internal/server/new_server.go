@@ -2,12 +2,12 @@ package server
 
 import (
 	"io"
-	"log"
 	"time"
 
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/templating"
 	"github.com/bnema/gordon/internal/webui"
+	"github.com/charmbracelet/log"
 )
 
 func NewServerApp(buildConfig *common.BuildConfig) (*App, error) {
@@ -15,6 +15,9 @@ func NewServerApp(buildConfig *common.BuildConfig) (*App, error) {
 	config := common.Config{
 		Build: *buildConfig,
 	}
+
+	log.Info("Starting Gordon server", "version", config.Build.BuildVersion)
+
 	_, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
