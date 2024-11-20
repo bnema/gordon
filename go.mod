@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7
+	github.com/Masterminds/semver/v3 v3.3.1
 	github.com/PuerkitoBio/goquery v1.9.2
 	github.com/charmbracelet/bubbles v0.20.0
 	github.com/charmbracelet/lipgloss v0.13.0
