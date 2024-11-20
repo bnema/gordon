@@ -2,20 +2,18 @@
 package handlers
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/bnema/gordon/pkg/verify"
 	"github.com/charmbracelet/log"
 	"github.com/labstack/echo/v4"
 )
@@ -68,85 +66,134 @@ func handleChunkedPush(c echo.Context, a *server.App, metadataStr string) error 
 		})
 	}
 
-	// Store chunk data for multi-chunk transfers
+	// Initialize chunk storage first
 	chunkStore.mu.Lock()
 	if chunkStore.chunks[metadata.TransferID] == nil {
 		chunkStore.chunks[metadata.TransferID] = make(map[int][]byte)
 		chunkStore.metadata[metadata.TransferID] = &metadata
 	}
+	chunkStore.mu.Unlock()
 
 	chunkData, err := io.ReadAll(c.Request().Body)
 	if err != nil {
-		chunkStore.mu.Unlock()
 		return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
 			Success: false,
 			Message: "Failed to read chunk data",
 		})
 	}
 
-	// Store the chunk
+	// Validate chunk data
+	if err := validatePushChunk(chunkData, &metadata); err != nil {
+		log.Error("Chunk validation failed",
+			"error", err,
+			"chunkNumber", metadata.ChunkNumber,
+			"transferID", metadata.TransferID)
+		return sendJSONResponse(c, http.StatusBadRequest, PushResponse{
+			Success: false,
+			Message: fmt.Sprintf("Invalid chunk: %v", err),
+		})
+	}
+
+	// Store chunk data
+	chunkStore.mu.Lock()
 	chunkStore.chunks[metadata.TransferID][metadata.ChunkNumber] = chunkData
 	chunkStore.mu.Unlock()
 
-	// If this is the last chunk, process the complete transfer
+	// Process complete transfer if this was the last chunk
 	if isTransferComplete(metadata.TransferID) {
 		return processCompleteChunkedPushTransfer(c, a, metadata.TransferID)
 	}
 
-	// For intermediate chunks, just acknowledge receipt
+	// Acknowledge intermediate chunk
 	return sendJSONResponse(c, http.StatusOK, PushResponse{
 		Success: true,
-		Message: fmt.Sprintf("Chunk %d/%d received", metadata.ChunkNumber+1, metadata.TotalChunks),
+		Message: fmt.Sprintf("Chunk %d/%d received successfully",
+			metadata.ChunkNumber+1, metadata.TotalChunks),
 	})
 }
 
 func processCompleteChunkedPushTransfer(c echo.Context, a *server.App, transferID string) error {
-	log.Info("Starting complete push transfer processing", "transferID", transferID)
+	log.Info("Starting complete push transfer processing",
+		"transferID", transferID)
 
-	imageName := c.Request().Header.Get("X-Image-Name")
 	// Get transfer data
 	metadata, chunks, err := getTransferData(transferID)
 	if err != nil {
-		return sendErrorResponse(c, "Failed to get transfer data", err)
+		return sendPushErrorResponse(c, "Failed to get transfer data", err)
 	}
 
-	// Create temporary file with .tar extension
-	tmpDir, err := os.MkdirTemp("", "docker-import-*")
+	// Validate we have all chunks
+	if len(chunks) != metadata.TotalChunks {
+		return sendPushErrorResponse(c, "Incomplete transfer",
+			fmt.Errorf("expected %d chunks, got %d", metadata.TotalChunks, len(chunks)))
+	}
+
+	// Create temporary directory with specific naming
+	tmpDir, err := os.MkdirTemp("", "docker-push-*")
 	if err != nil {
-		return sendErrorResponse(c, "Failed to create temp directory", err)
+		return sendPushErrorResponse(c, "Failed to create temp directory", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Create temporary file with .tar extension
 	tmpFile, err := os.Create(filepath.Join(tmpDir, "image.tar"))
 	if err != nil {
-		return sendErrorResponse(c, "Failed to create temp file", err)
+		return sendPushErrorResponse(c, "Failed to create temp file", err)
 	}
 	defer tmpFile.Close()
 
-	// Write chunks to file
-	if err := writeChunksToFile(tmpFile, chunks, metadata.TotalChunks); err != nil {
-		return sendErrorResponse(c, "Failed to write chunks", err)
+	// Write chunks in order to ensure proper tar assembly
+	for i := 0; i < metadata.TotalChunks; i++ {
+		chunk, exists := chunks[i]
+		if !exists {
+			return sendPushErrorResponse(c, "Missing chunk",
+				fmt.Errorf("chunk %d not found", i))
+		}
+		if _, err := tmpFile.Write(chunk); err != nil {
+			return sendPushErrorResponse(c, "Failed to write chunk",
+				fmt.Errorf("error writing chunk %d: %v", i, err))
+		}
 	}
 
-	// Verify the file is a valid tar archive
-	if err := verify.VerifyTarFile(tmpFile.Name()); err != nil {
-		return sendErrorResponse(c, "Invalid tar archive", err)
+	// Ensure all data is written to disk
+	if err := tmpFile.Sync(); err != nil {
+		return sendPushErrorResponse(c, "Failed to sync file", err)
 	}
+
+	// Reset file pointer to beginning
+	if _, err := tmpFile.Seek(0, 0); err != nil {
+		return sendPushErrorResponse(c, "Failed to reset file pointer", err)
+	}
+
+	// Verify file size
+	fileInfo, err := tmpFile.Stat()
+	if err != nil {
+		return sendPushErrorResponse(c, "Failed to get file info", err)
+	}
+
+	log.Info("Image file created",
+		"size", fmt.Sprintf("%.2f MB", float64(fileInfo.Size())/(1024*1024)),
+		"path", tmpFile.Name())
+
+	imageName := c.Request().Header.Get("X-Image-Name")
+	if imageName == "" {
+		return sendPushErrorResponse(c, "Missing image name", fmt.Errorf("X-Image-Name header is required"))
+	}
+
+	log.Info("Importing image",
+		"path", tmpFile.Name(),
+		"imageName", imageName)
 
 	// Import the image
-	log.Info("Importing image from file", "path", tmpFile.Name())
 	imageID, err := docker.ImportImageToEngine(tmpFile.Name())
 	if err != nil {
 		if strings.Contains(err.Error(), "platform compatibility check failed") {
-			log.Error("Platform compatibility check failed",
-				"error", err,
-				"imageName", imageName)
-			return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
+			return sendJSONResponse(c, http.StatusBadRequest, PushResponse{
 				Success: false,
-				Message: fmt.Sprintf("Image platform not compatible with server. Server is running on %s/%s. Please use a compatible image.", runtime.GOOS, runtime.GOARCH),
+				Message: fmt.Sprintf("Image platform not compatible with server: %v", err),
 			})
 		}
-		return sendErrorResponse(c, "Failed to import image", err)
+		return sendPushErrorResponse(c, "Failed to import image", err)
 	}
 
 	// Cleanup and prepare response
@@ -163,61 +210,40 @@ func processCompleteChunkedPushTransfer(c echo.Context, a *server.App, transferI
 	})
 }
 
-// Helper functions
-func getTransferData(transferID string) (*ChunkMetadata, map[int][]byte, error) {
-	chunkStore.mu.Lock()
-	defer chunkStore.mu.Unlock()
+func validatePushChunk(chunk []byte, metadata *ChunkMetadata) error {
+	if len(chunk) == 0 {
+		return errors.New("empty chunk received")
+	}
 
-	metadata := chunkStore.metadata[transferID]
 	if metadata == nil {
-		return nil, nil, fmt.Errorf("transfer metadata not found")
-	}
-	return metadata, chunkStore.chunks[transferID], nil
-}
-
-func writeChunksToFile(file *os.File, chunks map[int][]byte, totalChunks int) error {
-	// First, seek to the beginning of the file
-	if _, err := file.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to seek to beginning: %w", err)
+		return errors.New("missing chunk metadata")
 	}
 
-	// Create a temporary buffer to hold all chunks
-	tempBuffer := new(bytes.Buffer)
-
-	// Write chunks in order
-	for i := 0; i < totalChunks; i++ {
-		chunk, exists := chunks[i]
-		if !exists {
-			return fmt.Errorf("missing chunk %d", i)
-		}
-
-		if _, err := tempBuffer.Write(chunk); err != nil {
-			return fmt.Errorf("failed to write chunk %d to buffer: %w", i, err)
-		}
-	}
-
-	// Write the complete buffer to file
-	if _, err := io.Copy(file, tempBuffer); err != nil {
-		return fmt.Errorf("failed to write buffer to file: %w", err)
-	}
-
-	// Ensure all data is written to disk
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("failed to sync file: %w", err)
-	}
-
-	// Reset file pointer to beginning
-	if _, err := file.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to reset file pointer: %w", err)
+	if int64(len(chunk)) != metadata.ChunkSize {
+		return fmt.Errorf("chunk size mismatch: expected %d, got %d",
+			metadata.ChunkSize, len(chunk))
 	}
 
 	return nil
 }
 
-func sendErrorResponse(c echo.Context, message string, err error) error {
+func sendPushErrorResponse(c echo.Context, message string, err error) error {
 	log.Error(message, "error", err)
 	return sendJSONResponse(c, http.StatusInternalServerError, PushResponse{
 		Success: false,
 		Message: message,
 	})
+}
+
+// validateAndPreparePushPayload validates and prepares the push payload
+func validateAndPreparePushPayload(c echo.Context) (*common.PushPayload, error) {
+	payload := &common.PushPayload{
+		ImageName: c.Request().Header.Get("X-Image-Name"),
+	}
+
+	if payload.ImageName == "" {
+		return nil, errors.New("invalid image name")
+	}
+
+	return payload, nil
 }
