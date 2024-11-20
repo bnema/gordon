@@ -2,13 +2,12 @@ package cmd
 
 import (
 	"fmt"
-	"regexp"
+	"time"
 
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/cmd"
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
-	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 
 	// env auto load
@@ -16,9 +15,6 @@ import (
 )
 
 var (
-	build    string
-	commit   string
-	date     string
 	rootCmd  = &cobra.Command{Use: "gordon"}
 	proxyURL = "https://gordon-proxy.bamen.dev"
 )
@@ -38,8 +34,7 @@ func Execute(client *cli.App, server *server.App) {
 	cobra.CheckErr(rootCmd.Execute())
 }
 
-func ExecuteCLI() {
-	build = regexp.MustCompile(`\d+\.\d+\.\d+`).FindString(build)
+func ExecuteCLI(build, commit, date string) {
 	buildInfo := &common.BuildConfig{
 		BuildVersion: build,
 		BuildCommit:  commit,
@@ -58,15 +53,8 @@ func ExecuteCLI() {
 
 	common.DockerInit(&s.Config.ContainerEngine)
 
-	// Check for new version
-	go func() {
-		msg, err := common.CheckVersionPeriodically(&s.Config)
-		if err != nil {
-			log.Warnf("Error checking for new version: %s", err)
-		} else if msg != "" {
-			log.Info(msg)
-		}
-	}()
+	// Start periodic version checking in the background
+	go common.CheckVersionPeriodically(buildInfo.BuildVersion, 3*time.Hour)
 
 	Execute(a, s)
 }

@@ -5,6 +5,17 @@ TAG := dev
 DIST_DIR := ./dist
 ENGINE := podman
 
+# Version information
+VERSION := $(shell git describe --tags --always --dirty)
+COMMIT := $(shell git rev-parse --short HEAD)
+BUILD_DATE := $(shell date -u '+%Y-%m-%d_%I:%M:%S%p')
+
+# Build flags
+LDFLAGS := -s -w \
+	-X main.version=$(VERSION) \
+	-X main.commit=$(COMMIT) \
+	-X main.date=$(BUILD_DATE)
+
 # Architectures
 ARCHS := amd64 arm64
 
@@ -19,8 +30,9 @@ build:
 	@echo "Building Go binaries..."
 	@mkdir -p $(DIST_DIR)
 	@rm -f $(DIST_DIR)/*
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o $(DIST_DIR)/gordon-linux-amd64 ./main.go
-	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o $(DIST_DIR)/gordon-linux-arm64 ./main.go
+	@echo "Building with version $(VERSION), commit $(COMMIT), date $(BUILD_DATE)"
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/gordon-linux-amd64 ./main.go
+	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/gordon-linux-arm64 ./main.go
 	@echo "Go binaries built successfully"
 
 # Build and push Docker images

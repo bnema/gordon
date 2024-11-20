@@ -1,3 +1,4 @@
+// internal/common/version.go
 package common
 
 import (
@@ -5,147 +6,173 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"runtime"
+	"runtime/debug"
+	"strings"
 	"time"
 
-	"github.com/bnema/gordon/pkg/docker"
+	"github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/log"
 )
 
-type CurrentVersion struct {
-	isContainer bool
-	Version     string `json:"version"`
+const (
+	githubAPI = "https://api.github.com/repos/bnema/gordon/releases/latest"
+)
+
+// Info represents version information
+type Info struct {
+	Version string
+	Commit  string
+	Date    string
 }
 
-type ArchVersion struct {
-	Name string `json:"name"`
+// GitHubRelease represents the GitHub API response
+type GitHubRelease struct {
+	TagName     string    `json:"tag_name"`
+	Name        string    `json:"name"`
+	PublishedAt time.Time `json:"published_at"`
 }
 
-type VersionInfo struct {
-	Name string `json:"name"`
-}
-
-type VersionsResponse struct {
-	AMD64 string `json:"amd64"`
-	ARM64 string `json:"arm64"`
-}
-
-func GetCurrentBuildVersionInfo(c *Config) CurrentVersion {
-	return CurrentVersion{
-		isContainer: docker.IsRunningInContainer(),
-		Version:     c.GetVersion(),
-	}
-}
-
-func CheckForNewVersion(localVersion, remoteVersion string) string {
-	if localVersion != remoteVersion {
-		return "A new version is available"
-	}
-	return ""
-}
-
-func getArch() string {
-	return runtime.GOARCH
-}
-
-func checkAndUpdateVersion(c *Config) (string, error) {
-	localVersion := GetCurrentBuildVersionInfo(c)
-	remoteVersions, err := getRemoteVersion(c)
-	if err != nil {
-		return "", err
-	}
-
-	var remoteVersion string
-	switch getArch() {
-	case "amd64":
-		remoteVersion = remoteVersions.AMD64
-	case "arm64":
-		remoteVersion = remoteVersions.ARM64
-	default:
-		return "", fmt.Errorf("unsupported architecture: %s", getArch())
-	}
-
-	// Check if remoteVersion is empty
-	if remoteVersion == "" {
-		return "", fmt.Errorf("remote version not available for architecture %s", getArch())
-	}
-
-	message := CheckForNewVersion(localVersion.Version, remoteVersion)
-
-	// Return the message without an error, even if it's empty
-	return message, nil
-}
-
-// GetVersion returns the version
-func (c *Config) GetVersion() string {
-	if c.Build.BuildVersion != "" {
-		return c.Build.BuildVersion
-	}
-	return "devel"
-}
-
-func CheckVersionPeriodically(c *Config) (string, error) {
-	// Check if version is "devel"
-	if c.GetVersion() == "devel" {
-		return "", nil
-	}
-
-	// Perform an immediate check.
-	newVersionMessage, err := checkAndUpdateVersion(c)
-
-	if err != nil {
-		return "", err
-	}
-
-	if newVersionMessage != "" {
-		log.Info(newVersionMessage)
-		return "", nil
-	}
-
-	// Set up a ticker to check every 5 minutes.
-	timer := time.NewTicker(5 * time.Minute)
-	defer timer.Stop()
-
-	for range timer.C {
-		newVersionMessage, err = checkAndUpdateVersion(c)
-		if err != nil {
-			log.Printf("Error fetching remote version: %s", err)
-			continue
-		}
-
-		if newVersionMessage != "" {
-			fmt.Println(newVersionMessage)
-			return "", nil //We return so the loop stops in case of a new version
+// GetVersionInfo returns the current version information based on BuildConfig
+func GetVersionInfo(buildVersion, buildCommit, buildDate string) Info {
+	// If version was set in BuildConfig, use that
+	if buildVersion != "" && buildVersion != "dev" {
+		return Info{
+			Version: buildVersion,
+			Commit:  buildCommit,
+			Date:    buildDate,
 		}
 	}
 
-	return "", nil
+	// Try to get version from runtime build info (for go install)
+	if buildInfo, ok := debug.ReadBuildInfo(); ok {
+		return Info{
+			Version: buildInfo.Main.Version,
+			Commit:  "unknown",
+			Date:    "unknown",
+		}
+	}
+
+	// Fallback for development builds
+	return Info{
+		Version: "dev",
+		Commit:  "unknown",
+		Date:    "unknown",
+	}
 }
 
-func getRemoteVersion(c *Config) (VersionsResponse, error) {
-	proxyURL := c.Build.ProxyURL
-	if proxyURL == "" {
-		return VersionsResponse{}, fmt.Errorf("proxy URL is empty")
+// String returns a formatted version string
+func (i Info) String() string {
+	if i.Version == "dev" {
+		return "Gordon version dev (development build)"
 	}
 
-	checkVersionEndpoint := proxyURL + "/version"
-	resp, err := http.Get(checkVersionEndpoint)
+	// Check if it's a dirty version
+	if strings.Contains(i.Version, "-dirty") {
+		return fmt.Sprintf("Gordon version %s (commit: %s, built at: %s)",
+			i.Version, i.Commit, i.Date)
+	}
+
+	return fmt.Sprintf("Gordon version %s (commit: %s, built at: %s)",
+		i.Version, i.Commit, i.Date)
+}
+
+// CheckForNewVersion checks if a newer version is available on GitHub
+func CheckForNewVersion(currentVersion string) (bool, string, error) {
+	// Don't check for new versions in development builds or dirty builds
+	if currentVersion == "dev" || strings.Contains(currentVersion, "-dirty") {
+		return false, "", nil
+	}
+
+	// Create an HTTP client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Create request with User-Agent header (GitHub API requires this)
+	req, err := http.NewRequest("GET", githubAPI, nil)
 	if err != nil {
-		return VersionsResponse{}, err
+		return false, "", fmt.Errorf("error creating request: %w", err)
 	}
+	req.Header.Set("User-Agent", "Gordon-Version-Checker")
 
+	// Make the request
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, "", fmt.Errorf("error making request: %w", err)
+	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return VersionsResponse{}, err
+		return false, "", fmt.Errorf("error reading response: %w", err)
 	}
 
-	var remoteVersionInfo VersionsResponse
-	err = json.Unmarshal(body, &remoteVersionInfo)
+	var release GitHubRelease
+	if err := json.Unmarshal(body, &release); err != nil {
+		return false, "", fmt.Errorf("error parsing JSON: %w", err)
+	}
+
+	// Clean up version strings
+	latestVersion := strings.TrimPrefix(release.TagName, "v")
+	currentBase := extractBaseVersion(currentVersion)
+
+	// Parse versions using semver
+	current, err := semver.NewVersion(currentBase)
 	if err != nil {
-		return VersionsResponse{}, err
+		return false, "", fmt.Errorf("error parsing current version: %w", err)
 	}
 
-	return remoteVersionInfo, nil
+	latest, err := semver.NewVersion(latestVersion)
+	if err != nil {
+		return false, "", fmt.Errorf("error parsing latest version: %w", err)
+	}
+
+	// Compare versions
+	if latest.GreaterThan(current) {
+		return true, release.TagName, nil
+	}
+
+	return false, "", nil
+}
+
+// CheckVersionPeriodically checks for new versions periodically
+func CheckVersionPeriodically(currentVersion string, checkInterval time.Duration) {
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	// Initial check
+	checkVersion(currentVersion)
+
+	// Periodic checks
+	for range ticker.C {
+		checkVersion(currentVersion)
+	}
+}
+
+func checkVersion(currentVersion string) {
+	hasUpdate, latestVersion, err := CheckForNewVersion(currentVersion)
+	if err != nil {
+		log.Error("Failed to check for updates", "error", err)
+		return
+	}
+
+	if hasUpdate {
+		log.Info("New version available!",
+			"current", currentVersion,
+			"latest", latestVersion,
+			"update_url", "https://github.com/bnema/gordon/releases/latest")
+	}
+}
+
+func extractBaseVersion(version string) string {
+	// Remove 'v' prefix if present
+	version = strings.TrimPrefix(version, "v")
+
+	// Split on first hyphen to remove dirty/commit info
+	parts := strings.SplitN(version, "-", 2)
+	return parts[0]
 }

@@ -257,3 +257,8 @@ func (c *HttpConfig) FullDomain() string {
 	}
 	return c.Domain
 }
+
+// GetVersion
+func (c *Config) GetVersion() string {
+	return c.Build.BuildVersion
+}
