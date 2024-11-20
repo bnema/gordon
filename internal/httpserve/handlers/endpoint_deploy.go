@@ -164,6 +164,27 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 		})
 	}
 
+	// Add chunk validation
+	if len(chunkData) == 0 {
+		log.Error("Received empty chunk")
+		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
+			Success: false,
+			Message: "Received empty chunk",
+		})
+	}
+
+	// Verify chunk size matches metadata
+	if int64(len(chunkData)) != metadata.ChunkSize {
+		log.Error("Chunk size mismatch",
+			"expected", metadata.ChunkSize,
+			"received", len(chunkData))
+		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
+			Success: false,
+			Message: fmt.Sprintf("Chunk size mismatch: expected %d, got %d",
+				metadata.ChunkSize, len(chunkData)),
+		})
+	}
+
 	// Store the complete chunk
 	chunkStore.chunks[metadata.TransferID][metadata.ChunkNumber] = chunkData
 	chunkStore.mu.Unlock()
@@ -188,25 +209,25 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 	// Get transfer data
 	metadata, chunks, err := getTransferData(transferID)
 	if err != nil {
-		return sendErrorResponse(c, "Failed to get transfer data", err)
+		return sendDeployErrorResponse(c, "Failed to get transfer data", err)
 	}
 
 	// Create temporary directory for processing
 	tmpDir, err := os.MkdirTemp("", "docker-deploy-*")
 	if err != nil {
-		return sendErrorResponse(c, "Failed to create temp directory", err)
+		return sendDeployErrorResponse(c, "Failed to create temp directory", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	tmpFile, err := os.Create(filepath.Join(tmpDir, "image.tar"))
 	if err != nil {
-		return sendErrorResponse(c, "Failed to create temp file", err)
+		return sendDeployErrorResponse(c, "Failed to create temp file", err)
 	}
 	defer tmpFile.Close()
 
 	// Write chunks to file
 	if err := writeChunksToFile(tmpFile, chunks, metadata.TotalChunks); err != nil {
-		return sendErrorResponse(c, "Failed to write chunks", err)
+		return sendDeployErrorResponse(c, "Failed to write chunks", err)
 	}
 
 	// Get deployment-specific headers
@@ -215,7 +236,7 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 	imageName := c.Request().Header.Get("X-Image-Name")
 
 	if port == "" || targetDomain == "" || imageName == "" {
-		return sendErrorResponse(c, "Missing required deployment parameters",
+		return sendDeployErrorResponse(c, "Missing required deployment parameters",
 			fmt.Errorf("port: %s, domain: %s, image: %s", port, targetDomain, imageName))
 	}
 
@@ -224,7 +245,7 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 	containerName := strings.Split(cleanDomain, ".")[0]
 
 	if containerName == "" {
-		return sendErrorResponse(c, "Invalid target domain",
+		return sendDeployErrorResponse(c, "Invalid target domain",
 			fmt.Errorf("couldn't extract container name from domain: %s", targetDomain))
 	}
 
@@ -259,7 +280,7 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 				RawResponse: err.Error(),
 			})
 		}
-		return sendErrorResponse(c, "Failed to import image", err)
+		return sendDeployErrorResponse(c, "Failed to import image", err)
 	}
 
 	// Prepare deployment payload
@@ -285,7 +306,7 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 			})
 		}
 
-		return sendErrorResponse(c, "Failed to create or start container", err)
+		return sendDeployErrorResponse(c, "Failed to create or start container", err)
 	}
 
 	// Cleanup transfer data
@@ -302,6 +323,14 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 		Domain:        targetDomain,
 		ContainerID:   containerID,
 		ContainerName: strings.TrimPrefix(containerName, "/"),
+	})
+}
+
+func sendDeployErrorResponse(c echo.Context, message string, err error) error {
+	log.Error(message, "error", err)
+	return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+		Success: false,
+		Message: message,
 	})
 }
 
