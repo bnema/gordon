@@ -21,9 +21,13 @@ type Payload interface {
 type DeployResponse struct {
 	Success       bool   `json:"success"`
 	Message       string `json:"message"`
-	Domain        string `json:"domain"`
-	ContainerID   string `json:"container_id"`
-	ContainerName string `json:"container_name"`
+	StatusCode    int    `json:"status_code,omitempty"`
+	Domain        string `json:"domain,omitempty"`
+	ContainerID   string `json:"container_id,omitempty"`
+	ContainerName string `json:"container_name,omitempty"`
+	State         string `json:"state,omitempty"`
+	RunningTime   string `json:"running_time,omitempty"`
+	Ports         string `json:"ports,omitempty"`
 }
 
 // PushResponse represents the response structure for push requests
@@ -49,18 +53,6 @@ type StartResponse struct {
 	Message string `json:"message"`
 }
 
-// DeploymentError represents an error that occurred during deployment
-type DeploymentError struct {
-	StatusCode  int    `json:"status"`
-	Message     string `json:"message"`
-	RawResponse string `json:"raw_response"`
-}
-
-// Error implements the error interface for DeploymentError
-func (e *DeploymentError) Error() string {
-	return fmt.Sprintf("Deployment failed (status %d): %s", e.StatusCode, e.Message)
-}
-
 // DeployPayload represents the payload for deployment requests
 type DeployPayload struct {
 	Port         string `json:"port"`
@@ -84,17 +76,6 @@ type ChunkMetadata struct {
 	TotalSize   int64  `json:"total_size"`
 	ImageName   string `json:"image_name"`
 	TransferID  string `json:"transfer_id"`
-}
-
-type ConflictCheckResponse struct {
-	Success       bool   `json:"success"`
-	Message       string `json:"message"`
-	ContainerID   string `json:"container_id"`
-	ContainerName string `json:"container_name"`
-	Domain        string `json:"domain"`
-	State         string `json:"state"`
-	RunningTime   string `json:"running_time"`
-	Ports         string `json:"ports"`
 }
 
 type ConflictAction struct {

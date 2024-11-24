@@ -5,21 +5,19 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/charmbracelet/log"
 	"github.com/labstack/echo/v4"
 )
 
-type ConflictCheckResponse = common.ConflictCheckResponse
-
 func CheckDeployConflict(c echo.Context, a *server.App) error {
 	targetDomain := c.QueryParam("domain")
 	if targetDomain == "" {
-		return sendJSONResponse(c, http.StatusBadRequest, ConflictCheckResponse{
-			Success: false,
-			Message: "Target domain is required",
+		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
+			Success:    false,
+			Message:    "Target domain is required",
+			StatusCode: http.StatusBadRequest,
 		})
 	}
 
@@ -28,18 +26,20 @@ func CheckDeployConflict(c echo.Context, a *server.App) error {
 	containerName := strings.Split(cleanDomain, ".")[0]
 
 	if containerName == "" {
-		return sendJSONResponse(c, http.StatusBadRequest, ConflictCheckResponse{
-			Success: false,
-			Message: "Invalid target domain format",
+		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
+			Success:    false,
+			Message:    "Invalid target domain format",
+			StatusCode: http.StatusBadRequest,
 		})
 	}
 
 	// Check if container exists
 	containerID := docker.GetContainerIDByName(containerName)
 	if containerID == "" {
-		return sendJSONResponse(c, http.StatusOK, ConflictCheckResponse{
-			Success: true,
-			Message: "No conflicts found",
+		return sendJSONResponse(c, http.StatusOK, DeployResponse{
+			Success:    true,
+			Message:    "No conflicts found",
+			StatusCode: http.StatusOK,
 		})
 	}
 
@@ -62,7 +62,7 @@ func CheckDeployConflict(c echo.Context, a *server.App) error {
 		uptime = "unknown"
 	}
 
-	return sendJSONResponse(c, http.StatusConflict, ConflictCheckResponse{
+	return sendJSONResponse(c, http.StatusConflict, DeployResponse{
 		Success:       false,
 		Message:       fmt.Sprintf("Container with name '%s' already exists", containerName),
 		ContainerID:   containerID,
@@ -70,5 +70,6 @@ func CheckDeployConflict(c echo.Context, a *server.App) error {
 		State:         state,
 		RunningTime:   uptime,
 		Ports:         ports,
+		StatusCode:    http.StatusConflict,
 	})
 }

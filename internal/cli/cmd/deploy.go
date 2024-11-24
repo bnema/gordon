@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -81,27 +80,27 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 
 	log.Info("Deploying image", "image", imageName)
 	// Check for conflicts first
-	conflictResp, err := checkDeployConflict(a, targetDomain, port)
+	resp, err := checkDeployConflict(a, targetDomain, port)
 	if err != nil {
 		return fmt.Errorf("conflict check failed: %w", err)
 	}
 
 	var shortID string
-	if len(conflictResp.ContainerID) >= 12 {
-		shortID = conflictResp.ContainerID[:12]
+	if len(resp.ContainerID) >= 12 {
+		shortID = resp.ContainerID[:12]
 	} else {
-		shortID = conflictResp.ContainerID // Use full ID if less than 12 chars
+		shortID = resp.ContainerID // Use full ID if less than 12 chars
 	}
 
 	// If there's a conflict, handle it before proceeding
-	if !conflictResp.Success && conflictResp.ContainerID != "" {
+	if !resp.Success && resp.ContainerID != "" {
 		log.Warn("Container already exists",
-			"name", conflictResp.ContainerName,
+			"name", resp.ContainerName,
 			"id", shortID,
-			"state", conflictResp.State,
-			"uptime", conflictResp.RunningTime)
+			"state", resp.State,
+			"uptime", resp.RunningTime)
 
-		if err := handler.HandleExistingContainer(a, conflictResp); err != nil {
+		if err := handler.HandleExistingContainer(a, resp); err != nil {
 			if strings.Contains(err.Error(), "cancelled by user") {
 				return fmt.Errorf("deployment cancelled by user")
 			}
@@ -136,35 +135,17 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 
-	resp, err := chunkedClient.SendFileAsChunks(ctx, "/deploy/chunked", headers, imageReader, size, imageName)
+	chunkResp, err := chunkedClient.SendFileAsChunks(ctx, "/deploy/chunked", headers, imageReader, size, imageName)
 	if err != nil {
-		var deployErr *common.DeploymentError
-		if errors.As(err, &deployErr) && deployErr.StatusCode == http.StatusConflict {
-			var deployResponse common.DeployResponse
-			if jsonErr := json.Unmarshal([]byte(deployErr.RawResponse), &deployResponse); jsonErr == nil {
-				if deployResponse.ContainerID != "" {
-					log.Warn("Container already exists")
-					// Retry the deployment after handling the conflict
-					if _, err := imageReader.Seek(0, 0); err != nil {
-						return fmt.Errorf("failed to reset image reader: %w", err)
-					}
-					resp, err = chunkedClient.SendFileAsChunks(ctx, "/deploy", headers, imageReader, size, imageName)
-					if err != nil {
-						return fmt.Errorf("deployment failed after container removal: %w", err)
-					}
-				}
-			}
-		} else {
-			return fmt.Errorf("deployment failed: %w", err)
-		}
+		return fmt.Errorf("failed to deploy image: %w", err)
 	}
 
-	if resp == nil {
+	if chunkResp == nil {
 		return fmt.Errorf("received nil response from server")
 	}
 
 	var deployResp common.DeployResponse
-	if err := json.Unmarshal(resp.Body, &deployResp); err != nil {
+	if err := json.Unmarshal(chunkResp.Body, &deployResp); err != nil {
 		return fmt.Errorf("failed to parse deployment response: %w", err)
 	}
 
@@ -224,7 +205,7 @@ func validateDeployInputs(imageName, port, targetDomain string) error {
 	return handler.ValidateTargetDomain(targetDomain)
 }
 
-func checkDeployConflict(a *cli.App, targetDomain string, port string) (*common.ConflictCheckResponse, error) {
+func checkDeployConflict(a *cli.App, targetDomain string, port string) (*common.DeployResponse, error) {
 
 	// Create request to check-conflict endpoint with both domain and port parameters
 	reqUrl := fmt.Sprintf("%s/api/deploy/check-conflict?domain=%s&port=%s",
@@ -248,8 +229,7 @@ func checkDeployConflict(a *cli.App, targetDomain string, port string) (*common.
 	}
 	defer resp.Body.Close()
 
-	// Parse response
-	var conflictResp common.ConflictCheckResponse
+	var conflictResp common.DeployResponse
 	if err := json.NewDecoder(resp.Body).Decode(&conflictResp); err != nil {
 		return nil, fmt.Errorf("failed to parse conflict check response: %w", err)
 	}
