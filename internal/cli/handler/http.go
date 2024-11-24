@@ -80,17 +80,9 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 					reauthenticated = true
 					continue
 				}
-				return nil, &common.DeploymentError{
-					StatusCode:  resp.StatusCode,
-					Message:     errorResp.Message,
-					RawResponse: string(body),
-				}
+				return nil, fmt.Errorf("failed to send request: %s", errorResp.Message)
 			}
-			return nil, &common.DeploymentError{
-				StatusCode:  resp.StatusCode,
-				Message:     "Unexpected error occurred",
-				RawResponse: string(body),
-			}
+			return nil, fmt.Errorf("failed to send request: %s", string(body))
 		}
 
 		return &Response{Http: resp, Body: body, StatusCode: resp.StatusCode}, nil
