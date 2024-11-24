@@ -29,6 +29,8 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+type DeployResponse = common.DeployResponse
+
 // UploadProgress represents the current state of the upload
 type UploadProgress struct {
 	Completed  int
@@ -425,8 +427,7 @@ func handleFinalResponse(resp *Response, responseType string) error {
 
 // handleDeployResponse handles the response from a deploy operation
 func handleDeployResponse(resp *Response) error {
-	// If not a conflict, process as normal deploy response
-	var finalResp common.DeployResponse
+	finalResp := DeployResponse{}
 	if err := json.Unmarshal(resp.Body, &finalResp); err != nil {
 		return fmt.Errorf("failed to unmarshal deploy response: %w", err)
 	}
@@ -527,15 +528,11 @@ func (c *ChunkedClient) attemptChunkSend(ctx context.Context, endpoint string, h
 
 	if resp.StatusCode != http.StatusOK {
 		return &Response{
-				Http:       resp,
-				Body:       body,
-				StatusCode: resp.StatusCode,
-				Header:     resp.Header,
-			}, &common.DeploymentError{
-				StatusCode:  resp.StatusCode,
-				Message:     "Request failed",
-				RawResponse: string(body),
-			}
+			Http:       resp,
+			Body:       body,
+			StatusCode: resp.StatusCode,
+			Header:     resp.Header,
+		}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	return &Response{
