@@ -25,8 +25,9 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		// Debug
 		log.Error("Failed to validate and prepare payload", "error", err)
 		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Invalid payload: %v", err),
+			Success:    false,
+			Message:    fmt.Sprintf("Invalid payload: %v", err),
+			StatusCode: http.StatusBadRequest,
 		})
 	}
 
@@ -35,8 +36,9 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		// Debug
 		log.Error("Failed to save and import image", "error", err)
 		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to save or import image: %v", err),
+			Success:    false,
+			Message:    fmt.Sprintf("Failed to save or import image: %v", err),
+			StatusCode: http.StatusInternalServerError,
 		})
 	}
 
@@ -52,8 +54,9 @@ func PostDeploy(c echo.Context, a *server.App) error {
 			if existingContainerID == "" || existingContainerName == "" {
 				log.Error("Failed to extract container ID or Name from error message")
 				return sendJSONResponse(c, http.StatusConflict, DeployResponse{
-					Success: false,
-					Message: "A container for this deploy already exists but could not be identified.",
+					Success:    false,
+					Message:    "A container for this deploy already exists but could not be identified.",
+					StatusCode: http.StatusConflict,
 				})
 			}
 
@@ -62,30 +65,25 @@ func PostDeploy(c echo.Context, a *server.App) error {
 				Message:       "A container for this deploy already exists.",
 				ContainerID:   existingContainerID,
 				ContainerName: existingContainerName,
+				StatusCode:    http.StatusConflict,
 			})
 		}
 		log.Error("Failed to create or start container", "error", err)
 		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Failed to create or start container: %v", err),
+			Success:    false,
+			Message:    fmt.Sprintf("Failed to create or start container: %v", err),
+			StatusCode: http.StatusInternalServerError,
 		})
 	}
-	response := DeployResponse{
+
+	// Arrived here means deployment was successful
+	return sendJSONResponse(c, http.StatusOK, DeployResponse{
 		Success:       true,
 		Message:       "Deployment successful",
 		Domain:        payload.TargetDomain,
 		ContainerID:   containerID,
 		ContainerName: containerName,
-	}
-
-	// Debug: Verify containerID in response
-	if response.ContainerID != containerID {
-		log.Error("Container ID mismatch", "responseID", response.ContainerID, "actualID", containerID)
-	} else {
-		log.Info("Container ID successfully stored in response", "containerID", containerID)
-	}
-
-	return sendJSONResponse(c, http.StatusOK, response)
+	})
 }
 
 // PostDeployChunked handles the chunked container deployment request
@@ -97,8 +95,9 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 	var metadata ChunkMetadata
 	if err := json.Unmarshal([]byte(metadataStr), &metadata); err != nil {
 		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
-			Success: false,
-			Message: "Invalid chunk metadata",
+			Success:    false,
+			Message:    "Invalid chunk metadata",
+			StatusCode: http.StatusBadRequest,
 		})
 	}
 
@@ -106,34 +105,42 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 	if err != nil {
 		log.Error("Failed to validate and prepare payload", "error", err)
 		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
-			Success: false,
-			Message: fmt.Sprintf("Invalid payload: %v", err),
+			Success:    false,
+			Message:    fmt.Sprintf("Invalid payload: %v", err),
+			StatusCode: http.StatusBadRequest,
 		})
 	}
 
-	// Authenticate request
+	// Auth verification steps
+
 	auth := c.Request().Header.Get("Authorization")
 	if auth == "" {
 		return sendJSONResponse(c, http.StatusUnauthorized, DeployResponse{
-			Success: false,
-			Message: "Authentication required",
+			Success:    false,
+			Message:    "Authentication required",
+			StatusCode: http.StatusUnauthorized,
 		})
 	}
 
+	// Validate the token through GitHub API
 	token := strings.TrimPrefix(auth, "Bearer ")
 	if !authToken.IsValidGitHubToken(token) {
 		return sendJSONResponse(c, http.StatusUnauthorized, DeployResponse{
-			Success: false,
-			Message: "Invalid or expired token",
+			Success:    false,
+			Message:    "Invalid or expired token",
+			StatusCode: http.StatusUnauthorized,
 		})
 	}
+
+	// TODO: Here we should probably check that the github user is the same as the one in DB
 
 	if metadata.TotalChunks == 1 {
 		chunkData, err := io.ReadAll(c.Request().Body)
 		if err != nil {
 			return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-				Success: false,
-				Message: "Failed to read chunk data",
+				Success:    false,
+				Message:    "Failed to read chunk data",
+				StatusCode: http.StatusInternalServerError,
 			})
 		}
 
@@ -159,17 +166,20 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 	if err != nil {
 		chunkStore.mu.Unlock()
 		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success: false,
-			Message: "Failed to read chunk data",
+			Success:    false,
+			Message:    "Failed to read chunk data",
+			StatusCode: http.StatusInternalServerError,
 		})
 	}
 
-	// Add chunk validation
+	//  Chunks validation steps
+	//
 	if len(chunkData) == 0 {
 		log.Error("Received empty chunk")
 		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
-			Success: false,
-			Message: "Received empty chunk",
+			Success:    false,
+			Message:    "Received empty chunk",
+			StatusCode: http.StatusBadRequest,
 		})
 	}
 
@@ -182,10 +192,11 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 			Success: false,
 			Message: fmt.Sprintf("Chunk size mismatch: expected %d, got %d",
 				metadata.ChunkSize, len(chunkData)),
+			StatusCode: http.StatusBadRequest,
 		})
 	}
 
-	// Store the complete chunk
+	// Store the complete chunk into our store
 	chunkStore.chunks[metadata.TransferID][metadata.ChunkNumber] = chunkData
 	chunkStore.mu.Unlock()
 
@@ -196,9 +207,10 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 
 	// Include domain information in intermediate chunk responses
 	return sendJSONResponse(c, http.StatusOK, DeployResponse{
-		Success: true,
-		Message: fmt.Sprintf("Chunk %d/%d received", metadata.ChunkNumber+1, metadata.TotalChunks),
-		Domain:  payload.TargetDomain,
+		Success:    true,
+		Message:    fmt.Sprintf("Chunk %d/%d received", metadata.ChunkNumber+1, metadata.TotalChunks),
+		Domain:     payload.TargetDomain,
+		StatusCode: http.StatusOK,
 	})
 }
 
@@ -255,12 +267,7 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 		log.Warn("Container already exists",
 			"name", containerName,
 			"id", existingContainerID)
-		return sendJSONResponse(c, http.StatusConflict, DeployResponse{
-			Success:       false,
-			Message:       fmt.Sprintf("Container with name '%s' already exists", containerName),
-			ContainerID:   existingContainerID,
-			ContainerName: containerName,
-		})
+		return sendDeployErrorResponse(c, "Container already exists", nil)
 	}
 
 	// Import the image
@@ -274,11 +281,7 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 			log.Error("Platform compatibility check failed",
 				"error", err,
 				"imageName", imageName)
-			return c.JSON(http.StatusBadRequest, &common.DeploymentError{
-				StatusCode:  http.StatusBadRequest,
-				Message:     "Platform compatibility error",
-				RawResponse: err.Error(),
-			})
+			return sendDeployErrorResponse(c, "Platform compatibility check failed", err)
 		}
 		return sendDeployErrorResponse(c, "Failed to import image", err)
 	}
@@ -299,11 +302,7 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 			existingContainerName, _ := docker.GetContainerName(existingContainerID)
 			existingContainerName = strings.TrimPrefix(existingContainerName, "/")
 
-			return c.JSON(http.StatusBadRequest, &common.DeploymentError{
-				StatusCode:  http.StatusBadRequest,
-				Message:     fmt.Sprintf("Container with name '%s' already exists", existingContainerName),
-				RawResponse: err.Error(),
-			})
+			return sendDeployErrorResponse(c, "Container already in use", err)
 		}
 
 		return sendDeployErrorResponse(c, "Failed to create or start container", err)
@@ -327,10 +326,12 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 }
 
 func sendDeployErrorResponse(c echo.Context, message string, err error) error {
-	log.Error(message, "error", err)
+	// The error becomes the message
+	errorMsg := fmt.Sprintf("%s: %s", message, err.Error())
 	return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-		Success: false,
-		Message: message,
+		Success:    false,
+		Message:    errorMsg,
+		StatusCode: http.StatusInternalServerError,
 	})
 }
 

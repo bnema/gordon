@@ -13,7 +13,7 @@ import (
 	"github.com/charmbracelet/log"
 )
 
-func HandleExistingContainer(app *cli.App, conflictResp *common.ConflictCheckResponse) error {
+func HandleExistingContainer(app *cli.App, conflictResp *common.DeployResponse) error {
 	// Add a small delay to ensure terminal is clear
 	time.Sleep(100 * time.Millisecond)
 
