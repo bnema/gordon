@@ -10,7 +10,6 @@ import (
 	"github.com/bnema/gordon/internal/server"
 	"github.com/spf13/cobra"
 
-	// env auto load
 	_ "github.com/joho/godotenv/autoload"
 )
 
@@ -35,6 +34,8 @@ func Execute(client *cli.App, server *server.App) {
 }
 
 func ExecuteCLI(build, commit, date string) {
+	versionInfo := common.GetVersionInfo(build, commit, date, proxyURL)
+
 	buildInfo := &common.BuildConfig{
 		BuildVersion: build,
 		BuildCommit:  commit,
@@ -54,7 +55,7 @@ func ExecuteCLI(build, commit, date string) {
 	common.DockerInit(&s.Config.ContainerEngine)
 
 	// Start periodic version checking in the background
-	go common.CheckVersionPeriodically(buildInfo.BuildVersion, 3*time.Hour)
+	go common.CheckVersionPeriodically(versionInfo, 3*time.Hour)
 
 	Execute(a, s)
 }
