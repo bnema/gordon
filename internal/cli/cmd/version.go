@@ -8,28 +8,33 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func NewVersionCommand(a *cli.App) *cobra.Command {
-	return &cobra.Command{
+func NewVersionCommand(app *cli.App) *cobra.Command {
+	cmd := &cobra.Command{
 		Use:   "version",
-		Short: "Display the version of Gordon",
+		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
 			info := common.GetVersionInfo(
-				a.Config.Build.BuildVersion,
-				a.Config.Build.BuildCommit,
-				a.Config.Build.BuildDate,
+				app.Config.Build.BuildVersion,
+				app.Config.Build.BuildCommit,
+				app.Config.Build.BuildDate,
+				app.Config.Build.ProxyURL,
 			)
 			fmt.Println(info.String())
 
-			// Check for updates
-			hasUpdate, latestVersion, err := common.CheckForNewVersion(info.Version)
+			hasUpdate, latestVersion, err := common.CheckForNewVersion(
+				info.Version,
+				info.ProxyURL,
+			)
 			if err != nil {
 				fmt.Printf("Error checking for updates: %v\n", err)
 				return
 			}
 
 			if hasUpdate {
-				fmt.Printf("\nNew version %s available! Visit: https://github.com/bnema/gordon/releases/latest\n", latestVersion)
+				fmt.Printf("\nA new version is available: %s\n", latestVersion)
+				fmt.Println("You can update using: gordon update")
 			}
 		},
 	}
+	return cmd
 }
