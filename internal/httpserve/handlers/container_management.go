@@ -62,14 +62,25 @@ type HumanReadableContainerImage struct {
 
 type HumanReadableContainer struct {
 	*types.Container
+	Name       string
+	Ports      []string
+	ShortID    string
+	CreatedStr string
+	SizeStr    string
+	UpSince    string
+	StateColor string
+	ProxyPort  string
+}
+
+type ContainerDisplay struct {
+	ID                string
 	Name              string
-	Ports             []string
-	ShortID           string
+	Ports             []docker.PortMapping
+	ProxyPort         string
 	CreatedStr        string
-	SizeStr           string
-	UpSince           string
-	StateColor        string
-	TraefikEntryPoint string
+	Status            string
+	ImageName         string
+	IsGordonContainer bool
 }
 
 // renderHTML is a generalized function to render HTML
@@ -180,14 +191,14 @@ func ContainerManagerComponent(c echo.Context, a *server.App) error {
 		for _, name := range container.Names {
 			name = name[1:]
 			humanReadableContainers = append(humanReadableContainers, HumanReadableContainer{
-				Container:         &localContainer,
-				SizeStr:           sizeStr,
-				UpSince:           humanize.TimeAgo(time.Unix(container.Created, 0)),
-				StateColor:        stateColor,
-				Name:              name,
-				Ports:             ports,
-				TraefikEntryPoint: extractTraefikEntryPoint(container.Labels),
-				CreatedStr:        humanize.TimeAgo(time.Unix(container.Created, 0)),
+				Container:  &localContainer,
+				SizeStr:    sizeStr,
+				UpSince:    humanize.TimeAgo(time.Unix(container.Created, 0)),
+				StateColor: stateColor,
+				Name:       name,
+				Ports:      ports,
+				ProxyPort:  extractProxyPort(container.Labels),
+				CreatedStr: humanize.TimeAgo(time.Unix(container.Created, 0)),
 			})
 		}
 	}
@@ -203,12 +214,19 @@ func ContainerManagerComponent(c echo.Context, a *server.App) error {
 	return renderHTML(c, a, "html/fragments", "containerlist.gohtml", data)
 }
 
-func extractTraefikEntryPoint(labels map[string]string) string {
+func extractProxyPort(labels map[string]string) string {
+	// Check for the gordon proxy port label
+	if port, ok := labels["gordon.proxy.port"]; ok {
+		return port
+	}
+
+	// Backward compatibility for Traefik-labeled containers
 	for key, value := range labels {
-		if strings.HasSuffix(key, ".loadbalancer.server.port") {
+		if strings.Contains(key, "loadbalancer.server.port") {
 			return value
 		}
 	}
+
 	return ""
 }
 

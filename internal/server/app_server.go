@@ -26,11 +26,24 @@ type App struct {
 }
 
 type DBTables struct {
-	User     db.User     `sql:"user"`
-	Account  db.Account  `sql:"account"`
-	Sessions db.Sessions `sql:"sessions"`
-	Provider db.Provider `sql:"provider"`
-	Clients  db.Clients  `sql:"clients"`
+	User        db.User        `sql:"user"`
+	Account     db.Account     `sql:"account"`
+	Sessions    db.Sessions    `sql:"sessions"`
+	Provider    db.Provider    `sql:"provider"`
+	Clients     db.Clients     `sql:"clients"`
+	Domain      db.Domain      `sql:"domain"`
+	Certificate db.Certificate `sql:"certificate"`
+	ProxyRoute  db.ProxyRoute  `sql:"proxy_route"`
+}
+
+// GetConfig returns the configuration
+func (a *App) GetConfig() *common.Config {
+	return &a.Config
+}
+
+// GetDB returns the database connection
+func (a *App) GetDB() *sql.DB {
+	return a.DB
 }
 
 // GenerateOauthCallbackURL generates the OAuth callback URL
