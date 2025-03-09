@@ -425,8 +425,18 @@ func addProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 		}
 	}
 
-	// Add the route
-	if err := p.AddRoute(targetDomain, containerID, containerIP, containerPort, protocol, "/"); err != nil {
+	// Clean domain if it includes protocol
+	cleanDomain := targetDomain
+	if strings.Contains(cleanDomain, "://") {
+		cleanDomain = strings.Split(cleanDomain, "://")[1]
+	}
+
+	// Log that we're adding the domain for Let's Encrypt
+	log.Debug("Adding domain for Let's Encrypt verification",
+		"domain", cleanDomain)
+
+	// Add the route - this will also add to the domain database for Let's Encrypt
+	if err := p.AddRoute(cleanDomain, containerID, containerIP, containerPort, protocol, "/"); err != nil {
 		return fmt.Errorf("failed to add proxy route: %w", err)
 	}
 

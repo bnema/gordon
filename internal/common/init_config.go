@@ -52,6 +52,7 @@ func init() {
 
 		// Set the logger level
 		logger.SetLevel(logLevel)
+		log.SetLevel(logLevel) // Set the global logger level too
 		logger.Debug("Log level set from environment variable", "level", logLevelEnv)
 	} else if os.Getenv("ENV") == "dev" {
 		// Fall back to ENV=dev behavior if GORDON_LOG_LEVEL is not set

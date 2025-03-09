@@ -1356,6 +1356,41 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 			if err != nil {
 				return fmt.Errorf("failed to insert domain: %w", err)
 			}
+
+			log.Debug("Added domain to database for Let's Encrypt",
+				"domain", hostname)
+
+			// Also add the subdomain.domain format to the database if this is a domain with components
+			hostParts := strings.Split(hostname, ".")
+			if len(hostParts) >= 3 {
+				// This appears to be in format subdomain.domain.tld
+				// Extract subdomain and domain parts
+				subdomain := hostParts[0]
+				domainPart := strings.Join(hostParts[1:], ".")
+
+				// Check if the domain part already exists
+				var domainPartID string
+				err = tx.QueryRow("SELECT id FROM domain WHERE name = ?", domainPart).Scan(&domainPartID)
+				if err != nil {
+					if err == sql.ErrNoRows {
+						// Domain part doesn't exist, create it
+						domainPartID = generateUUID()
+						_, err = tx.Exec(
+							"INSERT INTO domain (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+							domainPartID, domainPart, now, now,
+						)
+						if err != nil {
+							log.Warn("Failed to insert domain part, continuing anyway",
+								"domain_part", domainPart,
+								"error", err)
+						} else {
+							log.Debug("Added domain part to database for Let's Encrypt",
+								"domain_part", domainPart,
+								"subdomain", subdomain)
+						}
+					}
+				}
+			}
 		} else {
 			return fmt.Errorf("failed to query domain: %w", err)
 		}
