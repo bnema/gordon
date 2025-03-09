@@ -552,6 +552,141 @@ func (p *Proxy) requestAdminCertificate() {
 	}
 }
 
+// requestDomainCertificate proactively requests a Let's Encrypt certificate
+// for a container domain
+func (p *Proxy) requestDomainCertificate(domain string) {
+	if domain == "" {
+		log.Warn("Empty domain provided to requestDomainCertificate")
+		return
+	}
+
+	// Extract hostname from domain, resolving it to see if it's publicly accessible
+	ips, err := net.LookupIP(domain)
+	if err != nil {
+		log.Error("Could not resolve domain, Let's Encrypt will likely fail",
+			"domain", domain,
+			"error", err.Error(),
+			"solution", "Check DNS settings and ensure domain points to this server")
+		return
+	}
+
+	var ipStrings []string
+	for _, ip := range ips {
+		ipStrings = append(ipStrings, ip.String())
+	}
+
+	log.Info("Successfully resolved domain for certificate request",
+		"domain", domain,
+		"ips", ipStrings)
+
+	// Check if we already have a valid certificate in the cache
+	if p.checkCertificateInCache(domain) {
+		log.Info("Using existing certificate from cache",
+			"domain", domain,
+			"action", "skipping Let's Encrypt request to avoid rate limits")
+		return
+	}
+
+	// Check if environment is production
+	mode := "staging"
+	email := p.config.Email
+
+	if !p.app.IsDevEnvironment() && email != "" {
+		mode = "production"
+	}
+
+	// Log the certificate request intent
+	log.Info("Initiating Let's Encrypt certificate request for container domain",
+		"domain", domain,
+		"email", email,
+		"mode", mode)
+
+	log.Info("⏳ Waiting for Let's Encrypt to validate domain ownership",
+		"domain", domain,
+		"validation_method", "HTTP-01 challenge",
+		"requirements", "Domain must be publicly accessible on port 80",
+		"timeout", "1 minute")
+
+	// Create a context with timeout for the initial certificate request
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+
+	// Try to obtain the certificate with timeout
+	var certResult *tls.Certificate
+	var certErr error
+
+	// Use a channel to handle the timeout
+	certChan := make(chan struct {
+		cert *tls.Certificate
+		err  error
+	})
+
+	go func() {
+		c, e := p.certManager.GetCertificate(&tls.ClientHelloInfo{
+			ServerName: domain,
+		})
+		certChan <- struct {
+			cert *tls.Certificate
+			err  error
+		}{c, e}
+	}()
+
+	// Wait for either the certificate request to complete or the timeout
+	select {
+	case result := <-certChan:
+		certResult = result.cert
+		certErr = result.err
+	case <-ctx.Done():
+		certErr = fmt.Errorf("certificate request timed out after 1 minute: %w", ctx.Err())
+		log.Error("Let's Encrypt certificate request timed out",
+			"domain", domain,
+			"timeout", "1 minute",
+			"error", certErr)
+	}
+
+	if certErr != nil {
+		// Check for rate limit errors
+		if strings.Contains(strings.ToLower(certErr.Error()), "ratelimited") {
+			// Extract the retry-after time if available in the error message
+			retryAfterStr := ""
+			re := regexp.MustCompile(`retry after ([^:]+)`)
+			matches := re.FindStringSubmatch(certErr.Error())
+			if len(matches) > 1 {
+				retryAfterStr = matches[1]
+			}
+
+			log.Error("Let's Encrypt rate limit reached",
+				"domain", domain,
+				"error", certErr,
+				"retry_after", retryAfterStr,
+				"solution", "Wait until the rate limit expires, then restart the server")
+
+			// Don't retry on rate limits
+			log.Info("Skipping certificate request retries due to rate limiting",
+				"domain", domain)
+		} else {
+			log.Error("Failed to obtain Let's Encrypt certificate",
+				"domain", domain,
+				"error", certErr)
+
+			log.Info("⏳ Retrying certificate request with exponential backoff",
+				"domain", domain,
+				"timeout", "2 minutes")
+			// Implement retry logic with backoff
+			go p.retryCertificateRequest(domain, 3, 10*time.Second)
+		}
+	} else if certResult != nil {
+		log.Info("Successfully obtained Let's Encrypt certificate",
+			"domain", domain)
+	} else {
+		log.Error("Unexpected error: received nil certificate but no error",
+			"domain", domain,
+			"timeout", "1 minute")
+		// Implement retry logic with backoff
+		go p.retryCertificateRequest(domain, 3, 10*time.Second)
+	}
+}
+
 // retryCertificateRequest attempts to request a certificate with exponential backoff
 func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBackoff time.Duration) {
 	backoff := initialBackoff
@@ -1197,9 +1332,18 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 	}
 	defer tx.Rollback()
 
+	// Extract the hostname from domainName if it contains a protocol
+	hostname := domainName
+	if strings.Contains(hostname, "://") {
+		parsedURL, err := url.Parse(hostname)
+		if err == nil && parsedURL.Host != "" {
+			hostname = parsedURL.Host
+		}
+	}
+
 	// Check if the domain exists
 	var domainID string
-	err = tx.QueryRow("SELECT id FROM domain WHERE name = ?", domainName).Scan(&domainID)
+	err = tx.QueryRow("SELECT id FROM domain WHERE name = ?", hostname).Scan(&domainID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// Domain doesn't exist, create it
@@ -1207,7 +1351,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 			now := time.Now().Format(time.RFC3339)
 			_, err = tx.Exec(
 				"INSERT INTO domain (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-				domainID, domainName, now, now,
+				domainID, hostname, now, now,
 			)
 			if err != nil {
 				return fmt.Errorf("failed to insert domain: %w", err)
@@ -1268,10 +1412,19 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 	}
 
 	log.Info("Added proxy route",
-		"domain", domainName,
+		"domain", hostname,
 		"containerIP", containerIP,
 		"containerPort", containerPort,
 	)
+
+	// Request a certificate if this is an HTTPS route
+	if strings.ToLower(protocol) == "https" {
+		log.Info("Requesting Let's Encrypt certificate for new HTTPS route",
+			"domain", hostname)
+		// Run in a goroutine to avoid blocking
+		go p.requestDomainCertificate(hostname)
+	}
+
 	return nil
 }
 
