@@ -758,6 +758,7 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 		maxDelay := 1 * time.Minute
 		currentDelay := initialDelay
 		consecutiveFailures := 0
+		maxConsecutiveFailures := 10
 
 		for {
 			// Check if context was canceled (application is shutting down)
@@ -765,11 +766,15 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 				return
 			}
 
+			// Add a timeout context for the Events call
+			// This helps prevent long-running connections that might become stale
+			eventCtx, eventCancel := context.WithTimeout(ctx, 5*time.Minute)
+
 			// Set up filters for the events we're interested in
 			filters := makeEventFilters(networkFilter)
 
-			// Start listening for events
-			messages, errs := dockerCli.Events(ctx, events.ListOptions{
+			// Start listening for events with timeout context
+			messages, errs := dockerCli.Events(eventCtx, events.ListOptions{
 				Filters: filters,
 			})
 
@@ -777,6 +782,7 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 
 			// Process events in an inner loop
 			listenSuccess := false
+			lastEventTime := time.Now()
 		eventStreamLoop:
 			for {
 				select {
@@ -784,15 +790,26 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 					if err != nil && ctx.Err() == nil {
 						// Only log if this isn't due to context cancellation
 						log.Error("Error in container event stream", "error", err)
+
+						// Cancel the event context to clean up resources
+						eventCancel()
+
 						// Increment failure counter for backoff calculation
 						consecutiveFailures++
+
+						// If we have too many consecutive failures, log a warning
+						if consecutiveFailures >= maxConsecutiveFailures {
+							log.Warn("Multiple consecutive failures in container event stream",
+								"count", consecutiveFailures,
+								"will_continue_trying", true)
+						}
 
 						// Calculate backoff delay with exponential increase
 						if listenSuccess {
 							// If we had successful events before failure, reset the delay
 							currentDelay = initialDelay
 						} else {
-							// Exponential backoff: double the delay each time, up to max
+							// Exponential backoff: increase the delay each time, up to max
 							currentDelay = time.Duration(float64(currentDelay) * 1.5)
 							if currentDelay > maxDelay {
 								currentDelay = maxDelay
@@ -808,6 +825,7 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 					}
 					// Context was canceled, exit completely
 					if ctx.Err() != nil {
+						eventCancel()
 						return
 					}
 				case event := <-messages:
@@ -818,6 +836,9 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 						consecutiveFailures = 0
 						log.Info("Successfully receiving container events")
 					}
+
+					// Update last event time
+					lastEventTime = time.Now()
 
 					// Process container events
 					if event.Type == "container" {
@@ -870,12 +891,31 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 							// Add other event types as needed
 						}
 					}
+				case <-time.After(30 * time.Second):
+					// If we haven't received events for a while, check if the connection is still alive
+					timeSinceLastEvent := time.Since(lastEventTime)
+
+					// If it's been more than 2 minutes since the last event, reconnect
+					if timeSinceLastEvent > 2*time.Minute {
+						log.Debug("No events received for too long, reconnecting",
+							"time_since_last_event", timeSinceLastEvent)
+
+						// Cancel the event context to clean up resources
+						eventCancel()
+
+						// Break out of the inner event loop to reconnect
+						break eventStreamLoop
+					}
 				case <-ctx.Done():
+					eventCancel()
 					return
 				}
 			}
 
 			// If we get here, the event stream failed and we need to reconnect
+			// Clean up the event context
+			eventCancel()
+
 			// Wait for the calculated delay before reconnecting
 			select {
 			case <-time.After(currentDelay):
