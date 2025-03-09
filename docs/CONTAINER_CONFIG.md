@@ -191,6 +191,34 @@ Gordon supports the following environment variables for configuration:
 | `SESSION_SECRET` | Secret for session encryption | Required |
 | `RUN_ENV` | Runtime environment (`dev` or `prod`) | `prod` |
 
+## Default Values for Configuration
+
+Gordon now automatically applies default values for critical configuration settings that are missing or set to zero values in your config.yml. This ensures that your reverse proxy and Let's Encrypt integration work properly without requiring you to manually specify every field.
+
+### Important Default Values Applied
+
+If not specified in your config.yml, Gordon will automatically apply these recommended values:
+
+| Setting | Default Value | Why It's Important |
+|---------|--------------|---------------------|
+| `ReverseProxy.RenewBefore` | 30 days | Ensures certificates are renewed well before expiry |
+| `ReverseProxy.CacheSize` | 1000 entries | Optimizes performance when serving multiple domains |
+| `ReverseProxy.GracePeriod` | 30 seconds | Allows for graceful server shutdowns |
+| `ReverseProxy.AutoRenew` | true | Prevents certificate expiration issues |
+| `ReverseProxy.LetsEncryptMode` | staging | Safe default for testing; change to "production" for real certificates |
+
+This behavior prevents issues that could occur with zero values like:
+- Certificates only being renewed at the last moment (or not at all)
+- Poor performance due to disabled caching
+- Abrupt connection termination during shutdowns
+
+These defaults are applied when:
+1. A new configuration file is created
+2. An existing configuration file is loaded but is missing these values
+3. The values are explicitly set to zero or empty in your configuration
+
+You can always override these defaults by explicitly setting values in your config.yml or through environment variables.
+
 ## Secrets Management
 
 For sensitive values like `GORDON_TOKEN` and `SESSION_SECRET`, consider using Docker secrets or a proper secrets management system in production deployments.

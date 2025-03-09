@@ -37,11 +37,44 @@ func CompareGordonToken(c echo.Context, a *server.App) error {
 	return nil
 }
 
+// HandleTokenSubmission handles the token form submission
+func HandleTokenSubmission(c echo.Context, a *server.App) error {
+	// Get the token from the form
+	formToken := c.FormValue("token")
+	if formToken == "" {
+		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login?error=empty_token")
+	}
+
+	// Store the token in the urlToken variable for compatibility with existing code
+	urlToken = formToken
+
+	// Validate the token
+	configToken, err := a.Config.GetToken()
+	if err != nil {
+		log.Debug("Error getting token from config:", err)
+		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login?error=server_error")
+	}
+
+	if urlToken != configToken {
+		log.Debug("Invalid token provided:", urlToken)
+		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login?error=invalid_token")
+	}
+
+	// Redirect to GitHub OAuth
+	return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login/oauth/github")
+}
+
 // RenderLoginPage renders the login.html template
 func RenderLoginPage(c echo.Context, a *server.App) error {
+	// Check for token in query param for backward compatibility
 	urlToken = c.QueryParam("token")
+
+	// Check for error message
+	errorMsg := c.QueryParam("error")
+
 	data := map[string]interface{}{
 		"Title": "Login",
+		"Error": errorMsg,
 	}
 
 	// Navigate inside the fs.FS to get the template

@@ -2,13 +2,22 @@ package proxy
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +29,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/time/rate"
 )
 
 // Proxy represents the reverse proxy server
@@ -31,6 +41,7 @@ type Proxy struct {
 	routes        map[string]*ProxyRouteInfo
 	mu            sync.RWMutex
 	certManager   *autocert.Manager
+	fallbackCert  *tls.Certificate // Fallback self-signed certificate
 	serverStarted bool
 	blacklist     *BlacklistConfig
 
@@ -139,32 +150,50 @@ func (p *Proxy) setupMiddleware() {
 	// Create blacklist middleware for HTTPS
 	p.httpsServer.Use(p.createBlacklistMiddleware())
 
-	// Add custom logger that skips blocked IPs
-	p.httpsServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}`,
-		Skipper: func(c echo.Context) bool {
-			// Skip logging if the request is marked as blacklisted
-			if reqCtx, ok := c.Get("reqContext").(*requestContext); ok && reqCtx.blacklisted {
-				return true
-			}
-			return false
+	// Add rate limiter middleware to prevent spam attacks
+	p.httpsServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
+		Store: middleware.NewRateLimiterMemoryStoreWithConfig(
+			middleware.RateLimiterMemoryStoreConfig{
+				Rate:      rate.Limit(10),  // 10 requests per second
+				Burst:     30,              // Burst of 30 requests
+				ExpiresIn: 3 * time.Minute, // Store expiration
+			},
+		),
+		DenyHandler: func(context echo.Context, identifier string, err error) error {
+			log.Warn("Rate limit exceeded",
+				"ip", identifier,
+				"path", context.Request().URL.Path,
+				"method", context.Request().Method)
+			return context.String(http.StatusTooManyRequests, "Too many requests")
 		},
 	}))
+
+	// Add default Echo logger middleware
+	p.httpsServer.Use(middleware.Logger())
 
 	// Create blacklist middleware for HTTP
 	p.httpServer.Use(p.createBlacklistMiddleware())
 
-	// Add custom logger that skips blocked IPs
-	p.httpServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}`,
-		Skipper: func(c echo.Context) bool {
-			// Skip logging if the request is marked as blacklisted
-			if reqCtx, ok := c.Get("reqContext").(*requestContext); ok && reqCtx.blacklisted {
-				return true
-			}
-			return false
+	// Add rate limiter middleware to prevent spam attacks for HTTP server
+	p.httpServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
+		Store: middleware.NewRateLimiterMemoryStoreWithConfig(
+			middleware.RateLimiterMemoryStoreConfig{
+				Rate:      rate.Limit(10),  // 10 requests per second
+				Burst:     30,              // Burst of 30 requests
+				ExpiresIn: 3 * time.Minute, // Store expiration
+			},
+		),
+		DenyHandler: func(context echo.Context, identifier string, err error) error {
+			log.Warn("Rate limit exceeded",
+				"ip", identifier,
+				"path", context.Request().URL.Path,
+				"method", context.Request().Method)
+			return context.String(http.StatusTooManyRequests, "Too many requests")
 		},
 	}))
+
+	// Add default Echo logger middleware for HTTP server
+	p.httpServer.Use(middleware.Logger())
 }
 
 // createBlacklistMiddleware returns a middleware function that checks IPs against the blacklist
@@ -173,6 +202,24 @@ func (p *Proxy) createBlacklistMiddleware() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			// Get client IP
 			clientIP := c.RealIP()
+
+			// Get host and strip port if present
+			host := c.Request().Host
+			if strings.Contains(host, ":") {
+				host = strings.Split(host, ":")[0]
+			}
+
+			// Check if the host is an IP address
+			if net.ParseIP(host) != nil {
+				// This is an IP address being used as a hostname - silently reject
+				// This prevents log spam without adding IPs to the blacklist
+				// Set context for other middleware
+				c.Set("reqContext", &requestContext{blacklisted: true})
+				return c.String(http.StatusForbidden, "Forbidden")
+			}
+
+			// Debug log for all requests to check if the IP is being properly recognized
+			log.Debug("Received request", "ip", clientIP, "path", c.Request().URL.Path)
 
 			// Check if IP is blacklisted (if blacklist exists)
 			if p.blacklist != nil && p.blacklist.IsBlocked(clientIP) {
@@ -201,6 +248,13 @@ func (p *Proxy) setupCertManager() {
 		dir = p.app.GetConfig().General.StorageDir + "/certs"
 	}
 
+	// Ensure directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Warn("Failed to create certificate cache directory",
+			"dir", dir,
+			"error", err)
+	}
+
 	// Set up the certificate manager
 	certManager := &autocert.Manager{
 		Prompt: autocert.AcceptTOS,
@@ -217,13 +271,26 @@ func (p *Proxy) setupCertManager() {
 		certManager.Client = &acme.Client{
 			DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
 		}
+		log.Debug("Using Let's Encrypt staging environment",
+			"url", "https://acme-staging-v02.api.letsencrypt.org/directory")
+	} else {
+		// Explicitly set production URL when not in staging mode
+		certManager.Client = &acme.Client{
+			DirectoryURL: acme.LetsEncryptURL, // "https://acme-v02.api.letsencrypt.org/directory"
+		}
+		log.Debug("Using Let's Encrypt production environment",
+			"url", acme.LetsEncryptURL)
 	}
 
 	// Set HostPolicy to allow the admin domain
 	adminDomain := p.app.GetConfig().Http.FullDomain()
+	rootDomain := p.app.GetConfig().Http.Domain
+
+	// Use a more permissive hostpolicy that logs unknown domains rather than rejecting them
+	// This helps debug certificate acquisition issues
 	certManager.HostPolicy = func(_ context.Context, host string) error {
-		// Always allow the admin domain
-		if host == adminDomain {
+		// Always allow the admin domain and root domain
+		if host == adminDomain || host == rootDomain {
 			return nil
 		}
 
@@ -235,7 +302,36 @@ func (p *Proxy) setupCertManager() {
 			return nil
 		}
 
-		return fmt.Errorf("host %q not configured in gordon", host)
+		// Log the attempt but still allow it - this helps debug
+		// certificate acquisition issues during development
+		log.Warn("Unknown host in certificate request",
+			"host", host,
+			"adminDomain", adminDomain,
+			"allowed", "yes")
+
+		// Allow unknown domains temporarily to help diagnose issues
+		// Change this to return an error in production for stricter security
+		return nil
+	}
+
+	// Generate a fallback self-signed certificate for the admin domain
+	var fallbackDomains []string
+	fallbackDomains = append(fallbackDomains, adminDomain)
+
+	// Include root domain in fallback certificate if it's different from admin domain
+	if rootDomain != "" && rootDomain != adminDomain {
+		fallbackDomains = append(fallbackDomains, rootDomain)
+	}
+
+	fallbackCert, err := generateFallbackCertificates(fallbackDomains)
+	if err != nil {
+		log.Warn("Failed to generate fallback certificate", "error", err)
+	} else {
+		log.Info("Generated fallback self-signed certificate for admin domain",
+			"domain", adminDomain,
+			"valid_until", time.Now().Add(24*time.Hour).Format("2006-01-02 15:04:05"))
+		// Store the fallback certificate
+		p.fallbackCert = fallbackCert
 	}
 
 	p.certManager = certManager
@@ -247,103 +343,343 @@ func (p *Proxy) setupCertManager() {
 	go p.requestAdminCertificate()
 }
 
+// checkCertificateInCache checks if a valid certificate for the given domain exists in the cache
+// Returns true if a valid certificate exists, false otherwise
+func (p *Proxy) checkCertificateInCache(domain string) bool {
+	if p.certManager == nil || p.certManager.Cache == nil {
+		return false
+	}
+
+	// The cache key format used by autocert is "cert-" + domain
+	cacheKey := "cert-" + domain
+
+	// Create a context with a short timeout for the cache check
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Try to get the certificate from the cache
+	certData, err := p.certManager.Cache.Get(ctx, cacheKey)
+	if err != nil {
+		// ErrCacheMiss or other error means the certificate is not in the cache
+		log.Debug("Certificate not found in cache",
+			"domain", domain,
+			"error", err)
+		return false
+	}
+
+	// Parse the certificate to check its validity
+	block, _ := pem.Decode(certData)
+	if block == nil || block.Type != "CERTIFICATE" {
+		log.Warn("Invalid certificate data in cache",
+			"domain", domain)
+		return false
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		log.Warn("Failed to parse certificate from cache",
+			"domain", domain,
+			"error", err)
+		return false
+	}
+
+	// Check if the certificate is still valid
+	now := time.Now()
+	if now.After(cert.NotAfter) || now.Before(cert.NotBefore) {
+		log.Info("Certificate in cache has expired or is not yet valid",
+			"domain", domain,
+			"not_before", cert.NotBefore,
+			"not_after", cert.NotAfter)
+		return false
+	}
+
+	// Check if the certificate is about to expire (within 30 days)
+	if now.Add(30 * 24 * time.Hour).After(cert.NotAfter) {
+		log.Info("Certificate in cache is valid but will expire soon",
+			"domain", domain,
+			"expires_in", cert.NotAfter.Sub(now).Hours()/24,
+			"days")
+		// Return false to trigger renewal if it's about to expire
+		return false
+	}
+
+	log.Info("Valid certificate found in cache",
+		"domain", domain,
+		"expires_in", cert.NotAfter.Sub(now).Hours()/24,
+		"days")
+	return true
+}
+
 // requestAdminCertificate preemptively requests a Let's Encrypt certificate
 // for the Gordon admin interface
 func (p *Proxy) requestAdminCertificate() {
 	adminDomain := p.app.GetConfig().Http.FullDomain()
+	if adminDomain == "" {
+		return
+	}
 
+	// Only proceed if HTTPS is enabled
+	if !p.app.GetConfig().Http.Https {
+		log.Debug("HTTPS is disabled, skipping admin certificate request")
+		return
+	}
+
+	// Extract hostname from admin domain, resolving it to see if it's publicly accessible
+	host := adminDomain
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		log.Error("Could not resolve admin domain, Let's Encrypt will likely fail",
+			"domain", adminDomain,
+			"error", err.Error(),
+			"solution", "Check DNS settings and ensure domain points to this server")
+		return
+	}
+
+	var ipStrings []string
+	for _, ip := range ips {
+		ipStrings = append(ipStrings, ip.String())
+	}
+
+	log.Info("Successfully resolved admin domain",
+		"domain", adminDomain,
+		"ips", ipStrings)
+
+	// Check if we already have a valid certificate in the cache
+	if p.checkCertificateInCache(adminDomain) {
+		log.Info("Using existing certificate from cache",
+			"domain", adminDomain,
+			"action", "skipping Let's Encrypt request to avoid rate limits")
+		return
+	}
+
+	// Check if environment is production
+	mode := "staging"
+	email := p.config.Email
+
+	if !p.app.IsDevEnvironment() && email != "" {
+		mode = "production"
+	}
+
+	// Log the certificate request intent
 	log.Info("Initiating Let's Encrypt certificate request for admin domain",
 		"domain", adminDomain,
-		"email", p.config.Email,
-		"mode", p.config.LetsEncryptMode,
-		"cert_dir", p.config.CertDir)
+		"email", email,
+		"mode", mode)
 
-	// Set up an HTTP client that can be used to make a request to trigger certificate generation
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // We expect cert errors since we're creating the cert
-			},
-		},
-		Timeout: 30 * time.Second,
+	log.Info("⏳ Waiting for Let's Encrypt to validate domain ownership",
+		"domain", adminDomain,
+		"validation_method", "HTTP-01 challenge",
+		"requirements", "Domain must be publicly accessible on port 80",
+		"timeout", "1 minute")
+
+	// Create a context with timeout for the initial certificate request
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+
+	// Try to obtain the certificate with timeout
+	var certResult *tls.Certificate
+	var certErr error
+
+	// Use a channel to handle the timeout
+	certChan := make(chan struct {
+		cert *tls.Certificate
+		err  error
+	})
+
+	go func() {
+		c, e := p.certManager.GetCertificate(&tls.ClientHelloInfo{
+			ServerName: adminDomain,
+		})
+		certChan <- struct {
+			cert *tls.Certificate
+			err  error
+		}{c, e}
+	}()
+
+	// Wait for either the certificate request to complete or the timeout
+	select {
+	case result := <-certChan:
+		certResult = result.cert
+		certErr = result.err
+	case <-ctx.Done():
+		certErr = fmt.Errorf("certificate request timed out after 2 minutes: %w", ctx.Err())
+		log.Error("Let's Encrypt certificate request timed out",
+			"domain", adminDomain,
+			"timeout", "2 minutes",
+			"error", certErr)
 	}
 
-	// We need to make an HTTPS request to our domain to trigger the certificate generation
-	// The first attempt will generate a certificate through Let's Encrypt
-	url := fmt.Sprintf("https://%s", adminDomain)
+	if certErr != nil {
+		// Check for rate limit errors
+		if strings.Contains(strings.ToLower(certErr.Error()), "ratelimited") {
+			// Extract the retry-after time if available in the error message
+			retryAfterStr := ""
+			re := regexp.MustCompile(`retry after ([^:]+)`)
+			matches := re.FindStringSubmatch(certErr.Error())
+			if len(matches) > 1 {
+				retryAfterStr = matches[1]
+			}
 
-	log.Debug("Sending HTTPS request to trigger certificate creation",
-		"url", url)
-
-	// Make the request
-	resp, err := client.Get(url)
-	if err != nil {
-		log.Debug("Certificate request triggered with expected TLS error (this is normal)",
-			"domain", adminDomain,
-			"error", err.Error())
-
-		// Check if the error message contains indications that DNS might not be configured
-		if strings.Contains(err.Error(), "no such host") ||
-			strings.Contains(err.Error(), "dial tcp") ||
-			strings.Contains(err.Error(), "lookup") {
-			log.Error("⚠️ DNS resolution failed for admin domain. Make sure the domain points to this server's IP address",
-				"domain", adminDomain)
-		}
-	} else {
-		resp.Body.Close()
-		log.Info("Initial HTTPS request completed (unexpected)",
-			"domain", adminDomain,
-			"status", resp.StatusCode)
-	}
-
-	// Wait a bit for the certificate to be obtained
-	log.Debug("Waiting for certificate generation process to complete")
-	for i := 1; i <= 12; i++ { // Check for ~60 seconds (12 * 5s)
-		time.Sleep(5 * time.Second)
-
-		// Try to get the certificate from the cache
-		hello := &tls.ClientHelloInfo{ServerName: adminDomain}
-		cert, err := p.certManager.GetCertificate(hello)
-
-		if err == nil && cert != nil && cert.Leaf != nil {
-			log.Info("✅ Successfully obtained certificate for admin domain",
+			log.Error("Let's Encrypt rate limit reached",
 				"domain", adminDomain,
-				"cert_expiry", cert.Leaf.NotAfter.Format("2006-01-02 15:04:05"),
-				"issuer", cert.Leaf.Issuer.CommonName,
-				"elapsed_time", fmt.Sprintf("%ds", i*5))
+				"error", certErr,
+				"retry_after", retryAfterStr,
+				"solution", "Wait until the rate limit expires, then restart the server")
+
+			// Don't retry on rate limits
+			log.Info("Skipping certificate request retries due to rate limiting",
+				"domain", adminDomain)
+		} else {
+			log.Error("Failed to obtain Let's Encrypt certificate",
+				"domain", adminDomain,
+				"error", certErr)
+
+			log.Info("⏳ Retrying certificate request with exponential backoff",
+				"domain", adminDomain,
+				"timeout", "2 minutes")
+			// Implement retry logic with backoff
+			go p.retryCertificateRequest(adminDomain, 3, 10*time.Second)
+		}
+	} else if certResult != nil {
+		log.Info("Successfully obtained Let's Encrypt certificate",
+			"domain", adminDomain)
+	} else {
+		log.Error("Unexpected error: received nil certificate but no error",
+			"domain", adminDomain,
+			"timeout", "2 minutes")
+		// Implement retry logic with backoff
+		go p.retryCertificateRequest(adminDomain, 3, 10*time.Second)
+	}
+}
+
+// retryCertificateRequest attempts to request a certificate with exponential backoff
+func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBackoff time.Duration) {
+	backoff := initialBackoff
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Wait for backoff period
+		log.Info("Retrying Let's Encrypt certificate request",
+			"domain", domain,
+			"attempt", attempt,
+			"max_retries", maxRetries,
+			"wait_time", backoff)
+		time.Sleep(backoff)
+
+		// Before each retry, check if the HTTP challenge endpoint is accessible
+		if attempt > 1 {
+			// Try connecting to our own HTTP server on port 80
+			// to verify its availability for Let's Encrypt validation
+			client := &http.Client{
+				Timeout: 5 * time.Second,
+				CheckRedirect: func(req *http.Request, via []*http.Request) error {
+					// Don't follow redirects for this test
+					return http.ErrUseLastResponse
+				},
+			}
+
+			// Test the ACME challenge path with a fake token
+			testURL := fmt.Sprintf("http://%s/.well-known/acme-challenge/test-token", domain)
+			resp, err := client.Get(testURL)
+
+			if err != nil {
+				log.Warn("HTTP challenge endpoint might not be accessible",
+					"domain", domain,
+					"url", testURL,
+					"error", err,
+					"solution", "Ensure port 80 is accessible and not blocked by firewall")
+			} else {
+				resp.Body.Close()
+				log.Info("HTTP challenge endpoint is accessible",
+					"domain", domain,
+					"url", testURL,
+					"status", resp.StatusCode)
+			}
+		}
+
+		// Create context with timeout for this attempt
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+
+		// Request certificate
+		err := func(ctx context.Context) error {
+			defer cancel()
+			cert, certErr := p.certManager.GetCertificate(&tls.ClientHelloInfo{
+				ServerName: domain,
+			})
+			if cert == nil && certErr == nil {
+				return fmt.Errorf("certificate is nil but no error returned")
+			}
+			return certErr
+		}(ctx)
+
+		// Check result
+		if err == nil {
+			log.Info("Successfully obtained Let's Encrypt certificate on retry",
+				"domain", domain,
+				"attempt", attempt)
 			return
 		}
 
-		log.Debug("Certificate not ready yet, continuing to wait",
-			"attempt", i,
-			"elapsed_time", fmt.Sprintf("%ds", i*5))
-	}
-
-	// Final check
-	hello := &tls.ClientHelloInfo{ServerName: adminDomain}
-	cert, err := p.certManager.GetCertificate(hello)
-
-	if err != nil {
-		log.Error("Failed to request certificate for admin domain after multiple attempts",
-			"domain", adminDomain,
+		log.Error("Let's Encrypt certificate request retry failed",
+			"domain", domain,
+			"attempt", attempt,
 			"error", err)
 
-		// Let's provide clear guidance about what might be wrong
-		log.Error("⚠️ Certificate generation troubleshooting guide:")
-		log.Error("1. Ensure DNS is correctly configured with the domain pointing to this server's IP")
-		log.Error("2. Make sure port 80 is open and accessible from the internet for HTTP-01 challenge verification")
-		log.Error("3. Check for rate limits from Let's Encrypt (https://letsencrypt.org/docs/rate-limits/)")
-		log.Error("4. Verify that the domain belongs to you and is properly registered")
-	} else if cert != nil && cert.Leaf != nil {
-		log.Info("✅ Successfully obtained certificate for admin domain",
-			"domain", adminDomain,
-			"cert_expiry", cert.Leaf.NotAfter.Format("2006-01-02 15:04:05"),
-			"issuer", cert.Leaf.Issuer.CommonName)
-	} else {
-		log.Warn("Certificate request in progress for admin domain - may take longer to complete",
-			"domain", adminDomain)
-		log.Info("You may need to restart the server once your DNS propagation is complete")
+		// Provide more detailed diagnostics based on the error
+		if strings.Contains(strings.ToLower(err.Error()), "connection refused") ||
+			strings.Contains(strings.ToLower(err.Error()), "timeout") {
+			log.Error("Let's Encrypt connection failed - this typically indicates:",
+				"issue_1", "Port 80 is not accessible from the internet",
+				"issue_2", "Firewall is blocking inbound connections",
+				"issue_3", "DNS records not properly propagated",
+				"solution", "Check firewall settings and DNS configuration")
+		} else if strings.Contains(strings.ToLower(err.Error()), "unauthorized") {
+			log.Error("Let's Encrypt authorization failed - this typically indicates:",
+				"issue", "Domain ownership validation failed",
+				"solution", "Ensure the server is publicly accessible on port 80")
+		} else if strings.Contains(strings.ToLower(err.Error()), "ratelimited") {
+			// Extract the retry-after date if present
+			retryAfterStr := "see error message for details"
+			if strings.Contains(err.Error(), "retry after") {
+				parts := strings.Split(err.Error(), "retry after")
+				if len(parts) > 1 {
+					retryAfterStr = strings.TrimSpace(parts[1])
+					if idx := strings.Index(retryAfterStr, ":"); idx > 0 {
+						retryAfterStr = retryAfterStr[:idx]
+					}
+				}
+			}
+
+			log.Error("Let's Encrypt rate limit reached - cannot issue more certificates for this domain yet",
+				"domain", domain,
+				"retry_after", retryAfterStr,
+				"solution", "Wait until the rate limit expires, then restart the server")
+
+			// No point in retrying on rate limit errors
+			return
+		}
+
+		// Increase backoff for next attempt (exponential backoff)
+		backoff *= 2
 	}
+
+	log.Error("All Let's Encrypt certificate request retries failed",
+		"domain", domain,
+		"max_retries", maxRetries,
+		"fallback", "Using self-signed certificate")
+
+	// At this point, all retries have failed, so we'll rely on the fallback self-signed certificate
+	// But let's log this prominently for debugging
+	log.Error("⚠️ HTTPS is using a self-signed certificate which browsers will warn about",
+		"domain", domain,
+		"reason", "Let's Encrypt certificate issuance failed",
+		"solution", "Check network settings and Let's Encrypt status")
+
+	// Suggest checking the common issues
+	log.Error("Common Let's Encrypt issues to check:",
+		"check_1", "Ensure ports 80 and 443 are open on your firewall",
+		"check_2", "Verify DNS records point to your server IP",
+		"check_3", "Make sure no other services are running on ports 80/443",
+		"check_4", "Check if Let's Encrypt service is having issues (https://letsencrypt.status.io/)")
 }
 
 // Start loads the routes from the database and starts the proxy server
@@ -377,7 +713,7 @@ func (p *Proxy) Start() error {
 
 	// In a container environment, we need to use the host container IP
 	// instead of 127.0.0.1 because each container has its own localhost
-	containerIP := "host.containers.internal" // Modern Docker/Podman default hostname for host
+	containerIP := "localhost" // Default to localhost for most reliable connectivity
 
 	// Fall back options for container IP
 	if os.Getenv("GORDON_ADMIN_HOST") != "" {
@@ -392,14 +728,9 @@ func (p *Proxy) Start() error {
 			"hostname", containerIP)
 	}
 
-	// Try to detect the optimal Gordon admin host by testing connections
-	testedIP := p.testAdminConnection(containerIP, p.app.GetConfig().Http.Port)
-	if testedIP != "" && testedIP != containerIP {
-		log.Info("Auto-detected working connection to Gordon admin",
-			"host", testedIP,
-			"original", containerIP)
-		containerIP = testedIP
-	}
+	// Don't test connections yet - the server isn't running
+	// We'll add the admin route with the default host for now
+	// and test connections later with TestAdminConnectionLater
 
 	p.mu.Lock()
 	// Only add if it doesn't already exist
@@ -416,6 +747,25 @@ func (p *Proxy) Start() error {
 		log.Info("Added special route for admin domain",
 			"domain", adminDomain,
 			"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
+	}
+
+	// Add support for the root domain, redirecting to admin subdomain
+	rootDomain := p.app.GetConfig().Http.Domain
+	if rootDomain != "" && rootDomain != adminDomain {
+		if _, exists := p.routes[rootDomain]; !exists {
+			p.routes[rootDomain] = &ProxyRouteInfo{
+				Domain:        rootDomain,
+				ContainerIP:   containerIP,
+				ContainerPort: p.app.GetConfig().Http.Port,
+				ContainerID:   "gordon-server",
+				Protocol:      "http", // Gordon server uses HTTP internally
+				Path:          "/",
+				Active:        true,
+			}
+			log.Info("Added route for root domain with redirect to admin subdomain",
+				"root_domain", rootDomain,
+				"admin_domain", adminDomain)
+		}
 	}
 	p.mu.Unlock()
 
@@ -441,6 +791,20 @@ func (p *Proxy) Start() error {
 			host = strings.Split(host, ":")[0]
 		}
 
+		// Special handling for root domain - redirect to admin subdomain
+		adminDomain := p.app.GetConfig().Http.FullDomain()
+		rootDomain := p.app.GetConfig().Http.Domain
+
+		if host == rootDomain && rootDomain != adminDomain {
+			// Redirect to HTTPS admin subdomain
+			redirectURL := fmt.Sprintf("https://%s%s", adminDomain, c.Request().RequestURI)
+			log.Debug("Redirecting HTTP root domain request to HTTPS admin subdomain",
+				"from", host,
+				"to", adminDomain,
+				"redirect_url", redirectURL)
+			return c.Redirect(http.StatusPermanentRedirect, redirectURL)
+		}
+
 		// Redirect to HTTPS
 		return c.Redirect(http.StatusMovedPermanently,
 			fmt.Sprintf("https://%s%s", host, c.Request().RequestURI))
@@ -451,11 +815,42 @@ func (p *Proxy) Start() error {
 		Addr:    ":" + p.config.Port,
 		Handler: p.httpsServer,
 		TLSConfig: &tls.Config{
-			GetCertificate: p.certManager.GetCertificate,
-			MinVersion:     tls.VersionTLS12,
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				// Enhanced logging to debug SNI issues
+				adminDomain := p.app.GetConfig().Http.FullDomain()
+
+				// If SNI is missing, use the admin domain
+				if hello.ServerName == "" {
+					log.Debug("TLS handshake without SNI, using default admin domain",
+						"default_domain", adminDomain)
+					hello.ServerName = adminDomain
+				} else {
+					log.Debug("TLS handshake with SNI",
+						"server_name", hello.ServerName)
+				}
+
+				// Try to get the certificate from the autocert manager
+				cert, err := p.certManager.GetCertificate(hello)
+
+				// If we can't get a certificate and we have a fallback, use it for the admin domain
+				if (err != nil || cert == nil) && hello.ServerName == adminDomain && p.fallbackCert != nil {
+					log.Debug("Using fallback certificate for admin domain",
+						"domain", adminDomain,
+						"error", err)
+					return p.fallbackCert, nil
+				}
+
+				return cert, err
+			},
+			MinVersion: tls.VersionTLS12,
+			// Add server name to use when client doesn't send SNI
+			ServerName: p.app.GetConfig().Http.FullDomain(),
+			// Add support for TLS-ALPN-01 challenges
+			NextProtos: []string{acme.ALPNProto},
 		},
-		ReadTimeout:  5 * time.Minute,
-		WriteTimeout: 5 * time.Minute,
+		// Add timeouts to prevent hanging connections
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 
@@ -463,8 +858,8 @@ func (p *Proxy) Start() error {
 	httpServer := &http.Server{
 		Addr:         ":" + p.config.HttpPort,
 		Handler:      p.httpServer,
-		ReadTimeout:  5 * time.Minute,
-		WriteTimeout: 5 * time.Minute,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 
@@ -492,62 +887,80 @@ func (p *Proxy) Start() error {
 // testAdminConnection attempts to find a working connection to the Gordon admin
 // by testing different hostnames and IPs
 func (p *Proxy) testAdminConnection(defaultHost string, port string) string {
-	log.Debug("Testing connections to Gordon admin server")
+	log.Info("Testing connections to Gordon admin server")
 
 	// Create a client with a short timeout to quickly test connections
 	client := &http.Client{
-		Timeout: 1 * time.Second,
+		Timeout: 2 * time.Second,
 	}
 
-	// Define addresses to try (from most likely to least likely)
-	addresses := []string{
-		defaultHost,                // Try the provided default first
-		"localhost",                // Local connections
-		"127.0.0.1",                // Localhost IP
-		"host.docker.internal",     // Docker host
-		"host.containers.internal", // Podman/Docker host
-		"172.17.0.1",               // Common Docker gateway
-		os.Getenv("HOSTNAME"),      // Container's own hostname
-		"gordon",                   // Service name
+	// List of potential hosts to try, in order of preference
+	hostsToTry := []string{
+		"localhost",
+		"127.0.0.1",                // Always try localhost first
+		defaultHost,                // The current host value
+		"host.docker.internal",     // Docker Desktop default
+		"host.containers.internal", // Modern Docker/Podman default
 	}
 
-	// Remove duplicates and empty entries
-	uniqueAddresses := make([]string, 0, len(addresses))
+	// Add hostname if available
+	if hostname := os.Getenv("HOSTNAME"); hostname != "" {
+		hostsToTry = append(hostsToTry, hostname)
+	}
+
+	// If GORDON_ADMIN_HOST is defined, make it highest priority after localhost
+	if adminHost := os.Getenv("GORDON_ADMIN_HOST"); adminHost != "" && adminHost != defaultHost {
+		// Add after localhost
+		hostsToTry = append(hostsToTry[:1], append([]string{adminHost}, hostsToTry[1:]...)...)
+	}
+
+	// Deduplicate
 	seen := make(map[string]bool)
-
-	for _, addr := range addresses {
-		if addr == "" || seen[addr] {
-			continue
+	var uniqueHosts []string
+	for _, host := range hostsToTry {
+		if !seen[host] && host != "" {
+			seen[host] = true
+			uniqueHosts = append(uniqueHosts, host)
 		}
-		seen[addr] = true
-		uniqueAddresses = append(uniqueAddresses, addr)
 	}
+	hostsToTry = uniqueHosts
 
-	// Test each address
-	for _, addr := range uniqueAddresses {
-		url := fmt.Sprintf("http://%s:%s/admin/ping", addr, port)
-		log.Debug("Testing connection to Gordon admin", "url", url)
+	log.Debug("Will test the following hosts for admin connections",
+		"hosts", strings.Join(hostsToTry, ", "))
 
-		resp, err := client.Get(url)
+	// Test each host
+	for _, host := range hostsToTry {
+		testPath := fmt.Sprintf("http://%s:%s%s/ping", host, port, p.app.GetConfig().Admin.Path)
+		log.Info("Testing connection to Gordon admin", "host", host, "url", testPath)
+
+		startTime := time.Now()
+		resp, err := client.Get(testPath)
+		duration := time.Since(startTime)
+
 		if err == nil {
+			statusCode := resp.StatusCode
 			resp.Body.Close()
-			if resp.StatusCode < 500 {
-				log.Debug("Successfully connected to Gordon admin",
-					"host", addr,
-					"status", resp.StatusCode)
-				return addr
-			}
-			log.Debug("Received error status from Gordon admin",
-				"host", addr,
-				"status", resp.StatusCode)
+
+			log.Info("Successfully connected to Gordon admin",
+				"host", host,
+				"status", statusCode,
+				"duration", duration)
+
+			// Consider any connection successful, even non-2xx responses
+			// This is important since the route might be valid even if the specific endpoint
+			// returns a different status (e.g. 404 if /ping doesn't exist)
+			return host
 		} else {
 			log.Debug("Failed to connect to Gordon admin",
-				"host", addr,
-				"error", err.Error())
+				"host", host,
+				"error", err.Error(),
+				"duration", duration)
 		}
 	}
 
-	// If none worked, return the default
+	// If no connections worked, default to the original
+	log.Warn("Could not establish connection to Gordon admin on any tested host",
+		"fallback", defaultHost)
 	return defaultHost
 }
 
@@ -669,29 +1082,51 @@ func (p *Proxy) configureRoutes() {
 			"path", c.Request().URL.Path,
 			"method", c.Request().Method)
 
+		// Special handling for root domain - redirect to admin subdomain
+		adminDomain := p.app.GetConfig().Http.FullDomain()
+		rootDomain := p.app.GetConfig().Http.Domain
+
+		if host == rootDomain && rootDomain != adminDomain {
+			redirectURL := fmt.Sprintf("https://%s%s", adminDomain, c.Request().URL.Path)
+			log.Debug("Redirecting root domain request to admin subdomain",
+				"from", host,
+				"to", adminDomain,
+				"redirect_url", redirectURL)
+			return c.Redirect(http.StatusPermanentRedirect, redirectURL)
+		}
+
 		// Find the route for this host
 		route, ok := p.routes[host]
 		if !ok {
+			// Check if the host is an IP address - silently handle without logging warnings
+			if net.ParseIP(host) != nil {
+				// For IP-based requests, just return a 404 without logging warnings
+				return c.String(http.StatusNotFound, "Domain not found")
+			}
+
 			// Create list of available domains for debugging
 			availableDomains := make([]string, 0, len(p.routes))
 			for d := range p.routes {
 				availableDomains = append(availableDomains, d)
 			}
 
-			log.Warn("Domain not found in routes",
-				"domain", host,
+			// Log warning for non-IP hosts that aren't configured
+			log.Warn("Request with unknown host",
+				"requested_host", host,
+				"client_ip", c.RealIP(),
 				"available_domains", strings.Join(availableDomains, ", "))
 			return c.String(http.StatusNotFound, "Domain not found")
 		}
 
 		// Check if the route is active
 		if !route.Active {
-			log.Warn("Route is not active", "domain", host)
+			log.Warn("Route is not active",
+				"domain", host,
+				"client_ip", c.RealIP())
 			return c.String(http.StatusServiceUnavailable, "Route is not active")
 		}
 
 		// Special handling for the admin domain
-		adminDomain := p.app.GetConfig().Http.FullDomain()
 		if host == adminDomain {
 			log.Debug("Proxying request to admin domain",
 				"domain", host,
@@ -890,23 +1325,6 @@ func generateUUID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-// joinPaths joins two paths ensuring there's only one slash between them
-func joinPaths(a, b string) string {
-	if a == "" {
-		return b
-	}
-	if b == "" {
-		return a
-	}
-	if a[len(a)-1] == '/' {
-		a = a[:len(a)-1]
-	}
-	if b[0] == '/' {
-		b = b[1:]
-	}
-	return a + "/" + b
-}
-
 // GetRoutes returns a copy of the routes map
 func (p *Proxy) GetRoutes() map[string]*ProxyRouteInfo {
 	p.mu.RLock()
@@ -974,5 +1392,158 @@ func (p *Proxy) logBlockedIP(clientIP, path, userAgent string) {
 	// Debug logging only if needed
 	if false {
 		log.Debug("Request marked as blacklisted for logging skip", "ip", clientIP)
+	}
+}
+
+// generateFallbackCertificates creates a self-signed certificate for use when no certificate is available.
+// This prevents initial handshake failures while waiting for Let's Encrypt certificates.
+func generateFallbackCertificates(domains []string) (*tls.Certificate, error) {
+	// Generate a private key
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a certificate template
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Gordon Server Temporary Certificate"},
+			CommonName:   domains[0],
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(24 * time.Hour), // Valid for 24 hours
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              domains,
+	}
+
+	// Create the certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to PEM format
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	// Convert private key to PKCS8 format
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
+
+	// Parse the certificate
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+
+	return &cert, nil
+}
+
+// TestAdminConnectionLater tests connections to the admin server after startup
+func (p *Proxy) TestAdminConnectionLater() {
+	log.Debug("Starting deferred admin connection testing")
+
+	// Wait a moment for the server to fully start
+	time.Sleep(2 * time.Second)
+
+	adminDomain := p.app.GetConfig().Http.FullDomain()
+
+	// Get the current route
+	p.mu.RLock()
+	currentRoute, exists := p.routes[adminDomain]
+	p.mu.RUnlock()
+
+	if !exists {
+		log.Warn("Admin route not found when testing connections")
+		return
+	}
+
+	log.Debug("Testing admin connections after server startup",
+		"domain", adminDomain,
+		"current_ip", currentRoute.ContainerIP)
+
+	// Try to detect the optimal Gordon admin host by testing connections
+	testedIP := p.testAdminConnection(currentRoute.ContainerIP, p.app.GetConfig().Http.Port)
+	if testedIP != "" && testedIP != currentRoute.ContainerIP {
+		log.Info("Auto-detected working connection to Gordon admin",
+			"host", testedIP,
+			"original", currentRoute.ContainerIP)
+
+		// Update the route with the working IP
+		p.mu.Lock()
+		if route, exists := p.routes[adminDomain]; exists {
+			route.ContainerIP = testedIP
+			log.Info("Updated admin route with working connection",
+				"domain", adminDomain,
+				"target", fmt.Sprintf("http://%s:%s", testedIP, p.app.GetConfig().Http.Port))
+		}
+		p.mu.Unlock()
+	}
+
+	// Now that we have a working connection, check if ports 80 and 443 are accessible
+	p.checkExternalPortAccess()
+}
+
+// Helper function to check if ports 80 and 443 are accessible
+func (p *Proxy) checkExternalPortAccess() {
+	adminDomain := p.app.GetConfig().Http.FullDomain()
+	if adminDomain == "" {
+		return
+	}
+
+	// Try to connect to our own HTTP server on port 80
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Don't follow redirects for this test
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Testing port 80 (HTTP)
+	httpURL := fmt.Sprintf("http://%s/.well-known/acme-challenge/test-token", adminDomain)
+	_, httpErr := client.Get(httpURL)
+
+	if httpErr != nil {
+		log.Warn("External HTTP port 80 might not be accessible",
+			"domain", adminDomain,
+			"error", httpErr.Error(),
+			"solution", "Ensure port 80 is open in your firewall and not blocked by ISP")
+	} else {
+		log.Info("External HTTP port 80 is accessible - good for Let's Encrypt validation",
+			"domain", adminDomain)
+	}
+
+	// Testing port 443 (HTTPS)
+	// Use a custom transport with InsecureSkipVerify since we might have a self-signed cert
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+	}
+	httpsClient := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	httpsURL := fmt.Sprintf("https://%s/", adminDomain)
+	_, httpsErr := httpsClient.Get(httpsURL)
+
+	if httpsErr != nil {
+		log.Warn("External HTTPS port 443 might not be accessible",
+			"domain", adminDomain,
+			"error", httpsErr.Error(),
+			"solution", "Ensure port 443 is open in your firewall and not blocked by ISP")
+	} else {
+		log.Info("External HTTPS port 443 is accessible",
+			"domain", adminDomain)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"github.com/bnema/gordon/internal/httpserve/handlers"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/charmbracelet/log"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo/v4"
 	echomid "github.com/labstack/echo/v4/middleware"
@@ -11,7 +12,8 @@ import (
 
 // RegisterRoutes registers all routes and middlewares
 func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
-	// e.Use(echomid.Logger()) too verbose
+	// Add default Echo logger middleware
+	e.Use(echomid.Logger())
 	e.Use(echomid.Recover())
 	// Initiate the session middleware
 	e.Use(middleware.InitSessionMiddleware(a))
@@ -102,6 +104,9 @@ func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
 	e.GET(adminPath+"/login", func(c echo.Context) error {
 		return handlers.RenderLoginPage(c, a)
 	})
+	e.POST(adminPath+"/login/submit-token", func(c echo.Context) error {
+		return handlers.HandleTokenSubmission(c, a)
+	})
 	e.GET(adminPath+"/login/oauth/github", func(c echo.Context) error {
 		return handlers.StartOAuthGithub(c, a)
 	})
@@ -127,6 +132,16 @@ func bindAdminRoute(e *echo.Echo, a *server.App, adminPath string) {
 	adminGroup.GET("/cc/:ID", func(c echo.Context) error {
 		return handlers.CreateContainerFullGET(c, a)
 	}, middleware.RequireLogin(a))
+
+	// Add a ping endpoint for health checks and connection testing
+	// This endpoint doesn't require authentication since it's used by the proxy for connection testing
+	adminGroup.GET("/ping", func(c echo.Context) error {
+		log.Debug("Ping endpoint hit from:", "ip", c.RealIP())
+		return c.JSON(200, map[string]string{
+			"status":  "ok",
+			"message": "Gordon admin server is running",
+		})
+	})
 }
 
 // bindHTMXEndpoints binds all HTMX endpoints
