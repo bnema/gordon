@@ -24,23 +24,23 @@ func FromInputsToCmdParams(inputs map[string]string, a *server.App) (docker.Cont
 	}
 
 	params := docker.ContainerCommandParams{
-		IsSSL:             inputs["container_protocol"] == "https",
-		ContainerName:     inputs["container_name"],
-		ServiceName:       inputs["container_subdomain"],
-		Domain:            inputs["container_domain"],
-		ImageName:         inputs["image_name"],
-		ImageID:           inputs["image_id"],
-		Restart:           inputs["restart"],
-		TraefikEntryPoint: inputs["traefik_entry_point"],
-		Volumes:           volumeSlice,
-		Environment:       environmentSlice,
-		Network:           a.Config.ContainerEngine.Network,
-		PortMappings:      portMappings,
+		IsSSL:         inputs["container_protocol"] == "https",
+		ContainerName: inputs["container_name"],
+		ServiceName:   inputs["container_subdomain"],
+		Domain:        inputs["container_domain"],
+		ImageName:     inputs["image_name"],
+		ImageID:       inputs["image_id"],
+		Restart:       inputs["restart"],
+		ProxyPort:     inputs["proxy_port"],
+		Volumes:       volumeSlice,
+		Environment:   environmentSlice,
+		Network:       a.Config.ContainerEngine.Network,
+		PortMappings:  portMappings,
 	}
 
-	err = CreateTraefikLabels(&params, params.TraefikEntryPoint, a)
+	err = SetupProxyRoute(&params, params.ProxyPort, a)
 	if err != nil {
-		return docker.ContainerCommandParams{}, fmt.Errorf("error creating Traefik labels: %w", err)
+		return docker.ContainerCommandParams{}, fmt.Errorf("error setting up proxy route: %w", err)
 	}
 
 	return params, nil

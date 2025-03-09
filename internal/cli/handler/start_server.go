@@ -29,13 +29,28 @@ func StartServer(a *server.App, port string) error {
 		log.Print(err)
 	}
 
+	// Initialize and start the reverse proxy
+	p, err := httpserve.InitializeProxy(a)
+	if err != nil {
+		log.Error("Failed to initialize reverse proxy:", err)
+		// Continue even if proxy fails, as the main server should still work
+	}
+
 	// Setup a channel to capture termination signals
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		sig := <-sigs
-		log.Info(fmt.Println("Received signal:", sig))
+		log.Info("Received signal:", sig)
+
+		// Stop the proxy if it was started
+		if p != nil {
+			if err := p.Stop(); err != nil {
+				log.Error("Failed to stop reverse proxy:", err)
+			}
+		}
+
 		os.Exit(0)
 	}()
 

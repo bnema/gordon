@@ -59,13 +59,13 @@
         <input type="text" name="ports" class="w-full p-4 rounded-md" value="{{.Ports}}" />
       </div>
 
-      <!-- Traefik Entry Point -->
-      <div class="pb-4">
-        <label class="block">Traefik Entry Point (Required)</label>
-        <span class="text-gray-500">
-          Specify the internal container port used in Traefik's loadbalancer labels
-        </span>
-        <input type="text" name="traefik_entry_point" class="w-full p-4 rounded-md" value="{{.TraefikEntryPoint}}" required />
+      <!-- Proxy Port -->
+      <div class="mb-6">
+        <label class="block">Container Proxy Port (Required)</label>
+        <div class="text-xs text-gray-500 mb-2">
+          Specify the internal container port that the proxy will route traffic to
+        </div>
+        <input type="text" name="proxy_port" class="w-full p-4 rounded-md" value="{{.ProxyPort}}" required />
       </div>
       
       <!-- Volumes -->

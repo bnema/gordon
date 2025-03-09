@@ -50,88 +50,28 @@
 
     <!-- Main Content -->
     <div class="bg-white p-4 rounded-md shadow mb-4 w-2/3">
-      <!-- Install Traefik -->
-      <div id="install-traefik">
-        <div class="flex flex-col items-center">
-          <h2 class="text-2xl font-semibold text-gray-800">
-            1 - Install Traefik
-          </h2>
-          <!-- Dual view left : install procedure / right : SSE log installation -->
-          <div class="flex flex-col md:flex-row justify-items-center w-full">
-            <!-- Left -->
-            <div class="w-full md:w-1/2 p-4">
-              <form
-                id="install-traefik-form"
-                action="/admin/install/traefik"
-                method="POST"
-                hx-post="/admin/install/traefik"
-                hx-swap="outerHTML"
-              >
-                <h2 class="">1.1 - Set your top domain name</h2>
-                <input
-                  type="text"
-                  name="topdomain"
-                  id="topdomain"
-                  class="w-full py-2 px-4 my-2 border border-gray-300 rounded-md"
-                  placeholder="example.com"
-                />
-                <h2>1.2 - Set your admin email (a reachable one)</h2>
-                <input
-                  type="text"
-                  name="adminemail"
-                  id="adminemail"
-                  class="w-full p-2 border border-gray-300 rounded-md"
-                  placeholder="admin@example.com"
-                />
-                <button
-                  type="submit"
-                  class="w-full p-2 bg-gordonmascot-hblue text-slate-100 rounded-md mt-4"
-                >
-                  Save & Install Traefik
-                </button>
-              </form>
-            </div>
-            <!-- Right -->
-            <div class="w-full md:w-1/2 p-4 text-slate-100">
-              <div
-                class="flex flex-col items-center bg-gordonmascot-hblue rounded-md"
-              >
-                <div class="w-full h-64 overflow-y-scroll-auto p-4">
-                  <div
-                    class="flex flex-col space-y-2"
-                    hx-ext="sse"
-                    sse-connect="/admin/install/traefik/sse"
-                  >
-                    <!-- One item -->
-                    <div class="flex flex-row items-center">
-                      <span class="">[INFO]</span>
-                      <span class="">Traefik installed</span>
-                    </div>
-                    <!-- One item -->
-                    <div class="flex flex-row items-center">
-                      <span class="">[INFO]</span>
-                      <span class="ml-2">Traefik started</span>
-                    </div>
-                    <!-- One item -->
-                    <div class="flex flex-row items-center">
-                      <span class="">[INFO]</span>
-                      <span class="ml-2"
-                        >Traefik configuration file created</span
-                      >
-                    </div>
-                    <!-- One item -->
-                    <div class="flex flex-row items-center">
-                      <span class="">[INFO]</span>
-                      <span class="">Traefik configuration file updated</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+      <!-- Built-in Proxy -->
+      <div id="built-in-proxy" class="mt-8">
+        <div class="flex items-center mb-4">
+          <div class="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
+            <span class="text-white font-bold">✓</span>
           </div>
+          <h2 class="text-lg ml-2">Reverse Proxy</h2>
+        </div>
+
+        <div class="bg-gray-100 p-4 rounded-md">
+          <p class="mb-4">Gordon now uses a built-in reverse proxy to handle all domain routing and TLS certificates.</p>
+          <p>The proxy automatically:</p>
+          <ul class="list-disc ml-6 mb-4">
+            <li>Manages Let's Encrypt certificates</li>
+            <li>Routes domains to the appropriate containers</li>
+            <li>Handles HTTP to HTTPS redirects</li>
+            <li>Provides proper headers for forwarded requests</li>
+          </ul>
+          <p>No additional configuration is required.</p>
         </div>
       </div>
-      <!-- End Install Traefik -->
+      <!-- End Built-in Proxy -->
     </div>
   </body>
 </html>

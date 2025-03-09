@@ -12,6 +12,7 @@ import (
 
 	authToken "github.com/bnema/gordon/internal/cli/auth"
 	"github.com/bnema/gordon/internal/common"
+	"github.com/bnema/gordon/internal/proxy"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/charmbracelet/log"
@@ -72,6 +73,17 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
 			Success:    false,
 			Message:    fmt.Sprintf("Failed to create or start container: %v", err),
+			StatusCode: http.StatusInternalServerError,
+		})
+	}
+
+	// After successfully deploying a container, add a proxy route
+	err = addProxyRoute(a, containerID, containerName, payload.Port, payload.TargetDomain)
+	if err != nil {
+		log.Error("Failed to add proxy route", "error", err)
+		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
+			Success:    false,
+			Message:    fmt.Sprintf("Failed to add proxy route: %v", err),
 			StatusCode: http.StatusInternalServerError,
 		})
 	}
@@ -316,6 +328,13 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 		"containerName", containerName,
 		"domain", targetDomain)
 
+	// After successfully deploying a container, add a proxy route
+	err = addProxyRoute(a, containerID, containerName, port, targetDomain)
+	if err != nil {
+		log.Error("Failed to add proxy route", "error", err)
+		return sendDeployErrorResponse(c, "Failed to add proxy route", err)
+	}
+
 	return sendJSONResponse(c, http.StatusOK, DeployResponse{
 		Success:       true,
 		Message:       "Deployment successful",
@@ -371,3 +390,27 @@ func sendDeployErrorResponse(c echo.Context, message string, err error) error {
 
 // 	return fmt.Errorf("deployment not ready after %d attempts", maxRetries)
 // }
+
+// After successfully deploying a container, add a proxy route
+func addProxyRoute(a *server.App, containerID, containerIP, containerPort, targetDomain string) error {
+	// Create a new proxy instance
+	p, err := proxy.NewProxy(a)
+	if err != nil {
+		return fmt.Errorf("failed to create proxy: %w", err)
+	}
+
+	// Extract the protocol (default to http)
+	protocol := "http"
+
+	// Add the route
+	if err := p.AddRoute(targetDomain, containerID, containerIP, containerPort, protocol, "/"); err != nil {
+		return fmt.Errorf("failed to add proxy route: %w", err)
+	}
+
+	log.Debug("Added proxy route",
+		"domain", targetDomain,
+		"containerIP", containerIP,
+		"containerPort", containerPort,
+	)
+	return nil
+}

@@ -1,0 +1,112 @@
+version: '3'
+
+services:
+  gordon:
+    image: ghcr.io/bnema/gordon:latest
+    container_name: gordon
+    volumes:
+      - ./data:/data
+      - ./data/config.yml:/config.yml  # Mount config.yml directly at the root
+      - ./data/certs:/certs            # Mount certs directory to persist Let's Encrypt certificates
+      # For Docker:
+      - /var/run/docker.sock:/var/run/docker.sock # Required for Docker management
+      # For Podman (uncomment and comment the Docker line above):
+      # - /run/user/1000/podman/podman.sock:/var/run/docker.sock # For Podman
+    ports:
+      - "8080:8080"  # HTTP API (Gordon main server)
+      - "443:443"    # HTTPS for reverse proxy
+      - "80:80"      # HTTP for reverse proxy
+    environment:
+      # General Configuration
+      - GORDON_STORAGE_DIR=/data
+      - GORDON_TOKEN=your_secure_token
+      
+      # HTTP Configuration  
+      - GORDON_HTTP_PORT=8080       # IMPORTANT: API port must be different from proxy HTTP port
+      - GORDON_HTTP_DOMAIN=example.com
+      - GORDON_HTTP_SUBDOMAIN=gordon
+      - GORDON_HTTP_HTTPS=true
+      
+      # Container Engine Configuration - Docker
+      - GORDON_CONTAINER_SOCK=/var/run/docker.sock
+      - GORDON_CONTAINER_NETWORK=gordon
+      
+      # Container Engine Configuration - Podman (Method 1: Auto-detection)
+      # Just specify the Podman socket path and Gordon will auto-detect Podman:
+      # - GORDON_CONTAINER_SOCK=/run/user/1000/podman/podman.sock
+      
+      # Container Engine Configuration - Podman (Method 2: Explicit Configuration)
+      # - GORDON_CONTAINER_PODMAN=true
+      # - GORDON_CONTAINER_PODMAN_SOCK=/run/podman/podman.sock
+      # - GORDON_CONTAINER_SOCK=/run/podman/podman.sock
+      
+      # Reverse Proxy Configuration
+      - GORDON_PROXY_PORT=443       # HTTPS port for reverse proxy
+      - GORDON_PROXY_HTTP_PORT=80   # HTTP port for reverse proxy
+      - GORDON_PROXY_CERT_DIR=/certs
+      - GORDON_PROXY_EMAIL=admin@example.com
+      
+      # Session Secret for security
+      - SESSION_SECRET=replace_with_secure_random_string
+      
+      # Runtime Environment
+      - RUN_ENV=prod
+    restart: always
+    networks:
+      - gordon
+
+networks:
+  gordon:
+    external: false
+
+# -------------------------------------
+# Example for Podman Users (podman-compose)
+# -------------------------------------
+# version: '3'
+# 
+# services:
+#   gordon:
+#     image: ghcr.io/bnema/gordon:latest
+#     container_name: gordon
+#     volumes:
+#       - ./data:/data
+#       - ./data/config.yml:/config.yml
+#       - ./data/certs:/certs            # Mount certs directory to persist Let's Encrypt certificates
+#       - /run/user/1000/podman/podman.sock:/var/run/docker.sock
+#     ports:
+#       - "8080:8080"  # HTTP API (Gordon main server)
+#       - "443:443"    # HTTPS for reverse proxy
+#       - "80:80"      # HTTP for reverse proxy
+#     environment:
+#       # General Configuration
+#       - GORDON_STORAGE_DIR=/data
+#       - GORDON_TOKEN=your_secure_token
+#       
+#       # HTTP Configuration  
+#       - GORDON_HTTP_PORT=8080       # API port must be different from proxy HTTP port
+#       - GORDON_HTTP_DOMAIN=example.com
+#       - GORDON_HTTP_SUBDOMAIN=gordon
+#       - GORDON_HTTP_HTTPS=true
+#       
+#       # Container Engine Configuration
+#       - GORDON_CONTAINER_SOCK=/run/user/1000/podman/podman.sock
+#       - GORDON_CONTAINER_NETWORK=gordon
+#       
+#       # Reverse Proxy Configuration
+#       - GORDON_PROXY_PORT=443       # HTTPS port for reverse proxy
+#       - GORDON_PROXY_HTTP_PORT=80   # HTTP port for reverse proxy
+#       - GORDON_PROXY_CERT_DIR=/certs
+#       - GORDON_PROXY_EMAIL=admin@example.com
+#       
+#       # Session Secret for security
+#       - SESSION_SECRET=replace_with_secure_random_string
+#       
+#       # Runtime Environment
+#       - RUN_ENV=prod
+#     restart: always
+#     networks:
+#       - gordon
+# 
+# networks:
+#   gordon:
+#     external: false 
