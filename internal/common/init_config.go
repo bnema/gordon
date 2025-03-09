@@ -30,11 +30,33 @@ func init() {
 	log.SetReportTimestamp(true)
 	log.SetTimeFormat("15:04:05")
 
-	// Check for debug environment variable
-	if os.Getenv("ENV") == "dev" {
-		// Set logger to debug level
+	// First check for GORDON_LOG_LEVEL environment variable
+	if logLevelEnv := os.Getenv("GORDON_LOG_LEVEL"); logLevelEnv != "" {
+		// Convert string log level to charmbracelet/log level
+		var logLevel log.Level
+		switch strings.ToLower(logLevelEnv) {
+		case "debug":
+			logLevel = log.DebugLevel
+		case "info":
+			logLevel = log.InfoLevel
+		case "warn", "warning":
+			logLevel = log.WarnLevel
+		case "error":
+			logLevel = log.ErrorLevel
+		case "fatal":
+			logLevel = log.FatalLevel
+		default:
+			// Default to info level for unknown values
+			logLevel = log.InfoLevel
+		}
+
+		// Set the logger level
+		logger.SetLevel(logLevel)
+		logger.Debug("Log level set from environment variable", "level", logLevelEnv)
+	} else if os.Getenv("ENV") == "dev" {
+		// Fall back to ENV=dev behavior if GORDON_LOG_LEVEL is not set
 		logger.SetLevel(log.DebugLevel)
-		logger.Debug("Debug logging enabled")
+		logger.Debug("Debug logging enabled from ENV=dev")
 	}
 }
 
@@ -62,6 +84,7 @@ type AdminConfig struct {
 type GeneralConfig struct {
 	StorageDir string `yaml:"storageDir"`
 	Token      string `yaml:"token"`
+	LogLevel   string `yaml:"logLevel"`
 }
 type HttpConfig struct {
 	Port       string `yaml:"port"`
@@ -99,15 +122,23 @@ var (
 	certDir          = "/certs"
 	letsEncryptMode  = "staging"
 	autoRenew        = true
-	renewBefore      = 30   // days
-	cacheSize        = 1000 // entries
-	gracePeriod      = 30   // seconds
+	renewBefore      = 30     // days
+	cacheSize        = 1000   // entries
+	gracePeriod      = 30     // seconds
+	defaultLogLevel  = "info" // Default log level
 )
 
 // applyDefaultsToConfig applies default values to any fields that have zero values
 // Returns true if any defaults were applied
 func applyDefaultsToConfig(config *Config) bool {
 	defaultsApplied := false
+
+	// Apply defaults to GeneralConfig
+	if config.General.LogLevel == "" {
+		config.General.LogLevel = defaultLogLevel
+		logger.Debug("Applied default value for General.LogLevel", "value", defaultLogLevel)
+		defaultsApplied = true
+	}
 
 	// Apply defaults to ReverseProxy config
 	if config.ReverseProxy.Port == "" {
@@ -353,6 +384,12 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 			logger.Info("Using environment variable GORDON_TOKEN")
 		}
 	}
+	if val := os.Getenv("GORDON_LOG_LEVEL"); val != "" {
+		config.General.LogLevel = val
+		if printLogs {
+			logger.Info("Using environment variable GORDON_LOG_LEVEL", "value", val)
+		}
+	}
 
 	// HTTP Configuration
 	if val := os.Getenv("GORDON_HTTP_PORT"); val != "" {
@@ -530,6 +567,7 @@ func (config *Config) LoadConfig() (*Config, error) {
 		*config = Config{
 			General: GeneralConfig{
 				StorageDir: homeDir + "/.gordon",
+				LogLevel:   defaultLogLevel,
 			},
 			Http: HttpConfig{
 				Port:   "8080",
@@ -666,6 +704,7 @@ func (config *Config) LoadConfig() (*Config, error) {
 		*config = Config{
 			General: GeneralConfig{
 				StorageDir: homeDir + "/.gordon",
+				LogLevel:   defaultLogLevel,
 			},
 			Http: HttpConfig{
 				Port:   "8080",
@@ -760,6 +799,31 @@ func (config *Config) LoadConfig() (*Config, error) {
 	} else {
 		// Just print a simplified message
 		logger.Info("Loaded configuration from", "path", configFilePath)
+	}
+
+	// Apply the log level from configuration
+	if config.General.LogLevel != "" {
+		// Convert string log level to charmbracelet/log level
+		var logLevel log.Level
+		switch strings.ToLower(config.General.LogLevel) {
+		case "debug":
+			logLevel = log.DebugLevel
+		case "info":
+			logLevel = log.InfoLevel
+		case "warn", "warning":
+			logLevel = log.WarnLevel
+		case "error":
+			logLevel = log.ErrorLevel
+		case "fatal":
+			logLevel = log.FatalLevel
+		default:
+			logger.Warn("Unknown log level specified, using default info level", "specified", config.General.LogLevel)
+			logLevel = log.InfoLevel
+		}
+
+		// Set the logger level
+		logger.SetLevel(logLevel)
+		logger.Debug("Log level set from configuration", "level", config.General.LogLevel)
 	}
 
 	logger.Debug("LoadConfig: Completed LoadConfig function")
