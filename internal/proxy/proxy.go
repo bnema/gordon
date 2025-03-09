@@ -38,6 +38,10 @@ type Proxy struct {
 	lastBlockedLog   time.Time
 	blockedIPCounter map[string]int
 	blockedIPCountMu sync.Mutex
+
+	// Firewall-like memory of recently blocked IPs for quick rejection
+	recentlyBlocked   map[string]time.Time
+	recentlyBlockedMu sync.RWMutex
 }
 
 // ProxyRouteInfo contains the information needed to route traffic to a container
@@ -99,48 +103,10 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 	httpsServer.HideBanner = true
 	httpsServer.Use(middleware.Recover())
 
-	// Custom logger that skips blocked IPs
-	httpsServer.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			// Store the context in the request context
-			c.Set("reqContext", &requestContext{blacklisted: false})
-			return next(c)
-		}
-	})
-
-	httpsServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Skipper: func(c echo.Context) bool {
-			// Skip logging if the request is marked as blacklisted
-			if reqCtx, ok := c.Get("reqContext").(*requestContext); ok && reqCtx.blacklisted {
-				return true
-			}
-			return false
-		},
-	}))
-
 	// Create the HTTP echo instance (for redirects to HTTPS)
 	httpServer := echo.New()
 	httpServer.HideBanner = true
 	httpServer.Use(middleware.Recover())
-
-	// Custom logger that skips blocked IPs
-	httpServer.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			// Store the context in the request context
-			c.Set("reqContext", &requestContext{blacklisted: false})
-			return next(c)
-		}
-	})
-
-	httpServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Skipper: func(c echo.Context) bool {
-			// Skip logging if the request is marked as blacklisted
-			if reqCtx, ok := c.Get("reqContext").(*requestContext); ok && reqCtx.blacklisted {
-				return true
-			}
-			return false
-		},
-	}))
 
 	// Create the proxy
 	p := &Proxy{
@@ -153,13 +119,76 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 		blacklist:        blacklist,
 		blockedIPCounter: make(map[string]int),
 		lastBlockedLog:   time.Time{}, // Zero time
+		recentlyBlocked:  make(map[string]time.Time),
 	}
+
+	// Now add the middleware with the proxy reference
+	p.setupMiddleware()
 
 	// Set up the certificate manager
 	p.setupCertManager()
 
 	log.Debug("Reverse proxy initialized")
 	return p, nil
+}
+
+// setupMiddleware configures middleware for both HTTP and HTTPS servers
+func (p *Proxy) setupMiddleware() {
+	// Create blacklist middleware for HTTPS
+	p.httpsServer.Use(p.createBlacklistMiddleware())
+
+	// Add custom logger that skips blocked IPs
+	p.httpsServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+		Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}`,
+		Skipper: func(c echo.Context) bool {
+			// Skip logging if the request is marked as blacklisted
+			if reqCtx, ok := c.Get("reqContext").(*requestContext); ok && reqCtx.blacklisted {
+				return true
+			}
+			return false
+		},
+	}))
+
+	// Create blacklist middleware for HTTP
+	p.httpServer.Use(p.createBlacklistMiddleware())
+
+	// Add custom logger that skips blocked IPs
+	p.httpServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+		Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}`,
+		Skipper: func(c echo.Context) bool {
+			// Skip logging if the request is marked as blacklisted
+			if reqCtx, ok := c.Get("reqContext").(*requestContext); ok && reqCtx.blacklisted {
+				return true
+			}
+			return false
+		},
+	}))
+}
+
+// createBlacklistMiddleware returns a middleware function that checks IPs against the blacklist
+func (p *Proxy) createBlacklistMiddleware() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			// Get client IP
+			clientIP := c.RealIP()
+
+			// Check if IP is blacklisted (if blacklist exists)
+			if p.blacklist != nil && p.blacklist.IsBlocked(clientIP) {
+				// Set context for other middleware
+				c.Set("reqContext", &requestContext{blacklisted: true})
+
+				// Rate-limited logging of blocked IPs
+				p.logBlockedIP(clientIP, c.Request().URL.Path, c.Request().UserAgent())
+
+				// Return forbidden without calling next handlers at all
+				return c.String(http.StatusForbidden, "Forbidden")
+			}
+
+			// Store the context in the request context for non-blacklisted IPs
+			c.Set("reqContext", &requestContext{blacklisted: false})
+			return next(c)
+		}
+	}
 }
 
 // setupCertManager configures the autocert manager for Let's Encrypt
@@ -402,19 +431,8 @@ func (p *Proxy) Start() error {
 			return nil
 		}
 
-		// Get client IP
-		clientIP := c.RealIP()
-
-		// Check if IP is blacklisted (if blacklist exists)
-		if p.blacklist != nil && p.blacklist.IsBlocked(clientIP) {
-			// Mark request as blacklisted to skip logging
-			if reqCtx, ok := c.Get("reqContext").(*requestContext); ok {
-				reqCtx.blacklisted = true
-			}
-
-			p.logBlockedIP(clientIP, c.Request().URL.Path, c.Request().UserAgent())
-			return c.String(http.StatusForbidden, "Forbidden")
-		}
+		// No need to check for blacklisting here as it's already checked in middleware
+		// and all blacklisted requests will be stopped before reaching this handler
 
 		host := c.Request().Host
 		if strings.Contains(host, ":") {
@@ -617,7 +635,7 @@ func (p *Proxy) loadRoutes() error {
 	return nil
 }
 
-// configureRoutes sets up the echo routes for proxying
+// configureRoutes sets up the HTTP and HTTPS routes
 func (p *Proxy) configureRoutes() {
 	// Lock the routes map for reading
 	p.mu.RLock()
@@ -634,19 +652,8 @@ func (p *Proxy) configureRoutes() {
 
 	// Add a handler for all incoming requests (HTTPS)
 	p.httpsServer.Any("/*", func(c echo.Context) error {
-		// Get client IP
-		clientIP := c.RealIP()
-
-		// Check if IP is blacklisted (if blacklist exists)
-		if p.blacklist != nil && p.blacklist.IsBlocked(clientIP) {
-			// Mark request as blacklisted to skip logging
-			if reqCtx, ok := c.Get("reqContext").(*requestContext); ok {
-				reqCtx.blacklisted = true
-			}
-
-			p.logBlockedIP(clientIP, c.Request().URL.Path, c.Request().UserAgent())
-			return c.String(http.StatusForbidden, "Forbidden")
-		}
+		// No need to check for blacklisting here as it's already checked in middleware
+		// and all blacklisted requests will be stopped before reaching this handler
 
 		host := c.Request().Host
 
@@ -919,16 +926,23 @@ func (p *Proxy) logBlockedIP(clientIP, path, userAgent string) {
 
 	now := time.Now()
 
-	// If this is the first block or it's been more than 5 minutes since the last summary
-	if p.lastBlockedLog.IsZero() || now.Sub(p.lastBlockedLog) > 5*time.Minute {
-		// Log this block and reset counters
+	// If this is the first block or it's been more than 5 minutes since the last summary,
+	// or if this is a new IP we haven't seen recently
+	if p.lastBlockedLog.IsZero() ||
+		now.Sub(p.lastBlockedLog) > 5*time.Minute ||
+		p.blockedIPCounter[clientIP] == 0 {
+
+		// Log this block and update counters
 		log.Info("Blocked request from blacklisted IP",
 			"ip", clientIP,
 			"path", path,
 			"user_agent", userAgent)
 
-		// Reset counters
-		p.blockedIPCounter = make(map[string]int)
+		// If we're resetting due to time, clear the counters
+		if p.lastBlockedLog.IsZero() || now.Sub(p.lastBlockedLog) > 5*time.Minute {
+			p.blockedIPCounter = make(map[string]int)
+		}
+
 		p.blockedIPCounter[clientIP] = 1
 		p.lastBlockedLog = now
 		return
@@ -937,8 +951,8 @@ func (p *Proxy) logBlockedIP(clientIP, path, userAgent string) {
 	// Increment counter for this IP
 	p.blockedIPCounter[clientIP]++
 
-	// If it's been at least 60 seconds since the last log, print a summary
-	if now.Sub(p.lastBlockedLog) >= 60*time.Second {
+	// Only log summaries every 5 minutes by default
+	if now.Sub(p.lastBlockedLog) >= 5*time.Minute {
 		// Log summary of blocked requests
 		totalBlocked := 0
 		for _, count := range p.blockedIPCounter {
@@ -953,5 +967,10 @@ func (p *Proxy) logBlockedIP(clientIP, path, userAgent string) {
 		// Reset counters
 		p.blockedIPCounter = make(map[string]int)
 		p.lastBlockedLog = now
+	}
+
+	// Debug logging only if needed
+	if false {
+		log.Debug("Request marked as blacklisted for logging skip", "ip", clientIP)
 	}
 }
