@@ -12,19 +12,15 @@ type App struct {
 
 // NewClientApp initializes a new App with configuration.
 func NewClientApp(buildConfig *common.BuildConfig) (*App, error) {
-	// Initialize AppConfig
-	config := common.Config{
-		Build: *buildConfig,
-	}
-
-	_, err := config.LoadConfig()
+	// Get global config singleton instead of loading the config again
+	config, err := common.GetGlobalConfig(buildConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
 	// Initialize App
 	a := &App{
-		Config: config,
+		Config: *config,
 	}
 
 	return a, nil

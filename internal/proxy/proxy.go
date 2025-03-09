@@ -62,6 +62,8 @@ type requestContext struct {
 
 // NewProxy creates a new reverse proxy
 func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
+	// Get the configuration from the app interface
+	// This will use the already loaded global configuration
 	config := app.GetConfig().ReverseProxy
 
 	// Create the routes map

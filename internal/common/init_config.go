@@ -9,9 +9,17 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/parser"
+)
+
+// Global singleton configuration instance
+var (
+	globalConfig     *Config
+	globalConfigOnce sync.Once
+	globalConfigMu   sync.RWMutex
 )
 
 type Config struct {
@@ -82,6 +90,58 @@ var (
 
 // Track whether config logs have been printed already
 var configLogsPrinted bool = false
+
+// GetGlobalConfig returns the singleton config instance, loading it if necessary
+func GetGlobalConfig(buildConfig *BuildConfig) (*Config, error) {
+	globalConfigMu.RLock()
+	if globalConfig != nil {
+		// If buildConfig is provided, update the Build field
+		if buildConfig != nil {
+			globalConfig.Build = *buildConfig
+		}
+		config := globalConfig
+		globalConfigMu.RUnlock()
+		fmt.Println("Using existing global configuration (already loaded)")
+		return config, nil
+	}
+	globalConfigMu.RUnlock()
+
+	// Need to load the config
+	globalConfigMu.Lock()
+	defer globalConfigMu.Unlock()
+
+	// Double-check in case another goroutine loaded the config while we were waiting
+	if globalConfig != nil {
+		// If buildConfig is provided, update the Build field
+		if buildConfig != nil {
+			globalConfig.Build = *buildConfig
+		}
+		fmt.Println("Using existing global configuration (loaded by another goroutine)")
+		return globalConfig, nil
+	}
+
+	fmt.Println("Loading global configuration for the first time")
+
+	// Initialize config with build info
+	config := &Config{}
+	if buildConfig != nil {
+		config.Build = *buildConfig
+	}
+
+	// Load the config once
+	var err error
+	globalConfigOnce.Do(func() {
+		config, err = config.LoadConfig()
+		if err == nil {
+			globalConfig = config
+			fmt.Println("Global configuration loaded successfully")
+		} else {
+			fmt.Printf("Error loading global configuration: %v\n", err)
+		}
+	})
+
+	return globalConfig, err
+}
 
 func getConfigDir() (string, error) {
 	var configDir string
@@ -303,6 +363,17 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 }
 
 func (config *Config) LoadConfig() (*Config, error) {
+	// Check if we already have a global config loaded
+	globalConfigMu.RLock()
+	if globalConfig != nil && config != globalConfig {
+		// Copy the global config to this config instance
+		*config = *globalConfig
+		globalConfigMu.RUnlock()
+		fmt.Println("Using existing global configuration instead of loading again")
+		return config, nil
+	}
+	globalConfigMu.RUnlock()
+
 	configDir, err := getConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("error getting configuration directory: %w", err)
