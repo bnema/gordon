@@ -37,22 +37,22 @@ func FromPayloadStructToCmdParams(ppl *common.DeployPayload, a *server.App, imag
 	containerDomain := strings.Join(hostParts[1:], ".")
 
 	params := docker.ContainerCommandParams{
-		IsSSL:             protocol == "https",
-		ContainerName:     containerSubdomain,
-		ServiceName:       containerSubdomain,
-		Domain:            containerDomain,
-		ImageName:         ppl.ImageName,
-		ImageID:           imageID,
-		Restart:           "always",
-		Volumes:           volumeSlice,
-		Environment:       environmentSlice,
-		Network:           a.Config.ContainerEngine.Network,
-		TraefikEntryPoint: ppl.Port,
+		IsSSL:         protocol == "https",
+		ContainerName: containerSubdomain,
+		ServiceName:   containerSubdomain,
+		Domain:        containerDomain,
+		ImageName:     ppl.ImageName,
+		ImageID:       imageID,
+		Restart:       "always",
+		Volumes:       volumeSlice,
+		Environment:   environmentSlice,
+		Network:       a.Config.ContainerEngine.Network,
+		ProxyPort:     ppl.Port,
 	}
 
-	err = CreateTraefikLabels(&params, params.TraefikEntryPoint, a)
+	err = SetupProxyRoute(&params, params.ProxyPort, a)
 	if err != nil {
-		return docker.ContainerCommandParams{}, fmt.Errorf("error creating Traefik labels: %w", err)
+		return docker.ContainerCommandParams{}, fmt.Errorf("error setting up proxy route: %w", err)
 	}
 
 	return params, nil

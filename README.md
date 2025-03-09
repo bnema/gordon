@@ -11,8 +11,6 @@
 
 Gordon is a tool that aims to simplify the deployment of your containerized web applications. It automates the process of integrating your locally built image into your self-hosted setup without the need of a container registry.
 
-Optionally, Gordon can coordinate domain routing through Traefik (which needs to be pre-installed). This allows you to quickly deploy your applications to your desired domain or subdomain.
-
 ## **Key Features**
 
 - **Ease of use**:
@@ -28,7 +26,7 @@ Optionally, Gordon can coordinate domain routing through Traefik (which needs to
 - **Self-Updated**: The client can update itself to the latest version with `gordon update`. The backend is updated by pulling the latest image from ghcr.io.
 - **Minimal WebUI**: Provides a [simple web UI](assets/screenshots/webui-image-deploy.png) to manage your deployments, domains, exposed ports. Using a very minimal stack (sqlite3, Go templates, HTMX and Tailwind CSS).
 - **Simple authentication**: Use GitHub OAuth for the web UI and OAuth 2.0 device authorization grant (device flow) for the CLI client.
-- **Automated Routing**: Collaborates with Traefik to automatically route your application to your desired domain or subdomain.
+- **Automated Routing**: Gordon automatically routes your application to your desired domain or subdomain, with no manual configuration needed.
 - **One binary**: Gordon follows the Golang philosophy of keeping things simple, offering a single binary for all functionalities.
 
 ## **Why ?**
@@ -39,7 +37,7 @@ I needed a simple tool that would automate the process of quickly spin up my web
 
 For detailed instructions, please refer to the [wiki](https://github.com/bnema/gordon/wiki/)
 
-- [Setting up Gordon’s Backend](https://github.com/bnema/gordon/wiki/Setting-up-Gordon%E2%80%99s-Backend)
+- [Setting up Gordon's Backend](https://github.com/bnema/gordon/wiki/Setting-up-Gordon's-Backend)
 - [Setting up Gordon's Client](https://github.com/bnema/gordon/wiki/Setting-up-Gordon's-Client)
 - [Deploying your first app](https://github.com/bnema/gordon/wiki/First-deployment)
 
@@ -75,3 +73,9 @@ Have suggestions? Feel free to open an issue!
 ## **License**
 
 Gordon is licensed under the GPL-3.0 license. Please see the LICENSE file for more details.
+
+## Features
+
+- **Container Management**: Connect to your Docker daemon to manage your containers, whether they're running locally or remotely.
+- **Image Management**: Download, delete, and manage your container images with ease.
+- **Built-in Reverse Proxy**: Gordon includes a built-in reverse proxy that automatically handles domain routing, Let's Encrypt TLS certificates, and HTTP to HTTPS redirects.

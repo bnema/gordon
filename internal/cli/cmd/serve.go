@@ -3,7 +3,10 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/bnema/gordon/internal/cli/handler"
+	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/spf13/cobra"
@@ -14,9 +17,10 @@ func NewServeCommand(a *server.App) *cobra.Command {
 	defaultport := "1323"
 	var port string
 
-	// if the server is running in a docker container, the default port is 80
+	// if the server is running in a docker container, the default port is 8080
+	// (changed from 80 to avoid conflict with the reverse proxy)
 	if docker.IsRunningInContainer() {
-		defaultport = "80"
+		defaultport = "8080"
 	}
 
 	// if no flags -p or --port are specified, the default port is used
@@ -25,6 +29,12 @@ func NewServeCommand(a *server.App) *cobra.Command {
 		Short: "Start a new Gordon server instance",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
+			// Initialize Docker client here, before starting the server
+			if err := common.DockerInit(&a.Config.ContainerEngine); err != nil {
+				fmt.Printf("Warning: %s\n", err)
+				fmt.Println("Continuing with Docker/Podman functionality disabled")
+			}
+
 			// handler.StartServer will use the value of port, which will be the default
 			// value if no flag is specified
 			a.Config.Http.Port = port

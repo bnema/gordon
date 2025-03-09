@@ -26,6 +26,7 @@ func InitializeCommands(client *cli.App, server *server.App) {
 	rootCmd.AddCommand(cmd.NewUpdateCommand(client))
 	rootCmd.AddCommand(cmd.NewPushCommand(client))
 	rootCmd.AddCommand(cmd.NewVersionCommand(client))
+	rootCmd.AddCommand(cmd.NewProxyCommand(server))
 }
 
 func Execute(client *cli.App, server *server.App) {
@@ -51,8 +52,6 @@ func ExecuteCLI(build, commit, date string) {
 	if err != nil {
 		fmt.Println("Error initializing app:", err)
 	}
-
-	common.DockerInit(&s.Config.ContainerEngine)
 
 	// Start periodic version checking in the background
 	go common.CheckVersionPeriodically(versionInfo, 3*time.Hour)

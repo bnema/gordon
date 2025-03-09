@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/bnema/gordon/pkg/docker"
@@ -18,7 +19,7 @@ type Config struct {
 	Http            HttpConfig            `yaml:"Http"`
 	Admin           AdminConfig           `yaml:"Admin"`
 	ContainerEngine ContainerEngineConfig `yaml:"ContainerEngine"`
-	Traefik         TraefikConfig         `yaml:"Traefik"`
+	ReverseProxy    ReverseProxyConfig    `yaml:"ReverseProxy"`
 	Build           BuildConfig           `yaml:"-"`
 }
 
@@ -53,19 +54,30 @@ type ContainerEngineConfig struct {
 	Network    string `yaml:"network"`
 }
 
-type TraefikConfig struct {
-	EntryPoint       string `yaml:"entryPoint"`
-	SecureEntryPoint string `yaml:"secureEntryPoint"`
-	Resolver         string `yaml:"resolver"`
+type ReverseProxyConfig struct {
+	Port            string `yaml:"port"`            // Port for the reverse proxy to listen on
+	HttpPort        string `yaml:"httpPort"`        // HTTP port (usually 80) for redirecting to HTTPS
+	CertDir         string `yaml:"certDir"`         // Directory to store Let's Encrypt certificates
+	AutoRenew       bool   `yaml:"autoRenew"`       // Whether to automatically renew certificates
+	RenewBefore     int    `yaml:"renewBefore"`     // Days before expiry to renew certificates
+	LetsEncryptMode string `yaml:"letsEncryptMode"` // "staging" or "production"
+	Email           string `yaml:"email"`           // Email for Let's Encrypt
+	CacheSize       int    `yaml:"cacheSize"`       // Size of the certificate cache
+	GracePeriod     int    `yaml:"gracePeriod"`     // Shutdown grace period in seconds
 }
 
 // Default values
 var (
 	sock             = "/var/run/docker.sock"
 	podmansock       = "/run/user/1000/podman/podman.sock"
-	entryPoint       = "web"
-	entryPointSecure = "websecure"
-	resolver         = "myresolver"
+	reverseProxyPort = "443" // Changed to 443 for standard HTTPS
+	httpPort         = "80"  // Standard HTTP port
+	certDir          = "/certs"
+	letsEncryptMode  = "staging"
+	autoRenew        = true
+	renewBefore      = 30   // days
+	cacheSize        = 1000 // entries
+	gracePeriod      = 30   // seconds
 )
 
 func getConfigDir() (string, error) {
@@ -92,7 +104,7 @@ func getConfigDir() (string, error) {
 	}
 
 	if docker.IsRunningInContainer() {
-		return "/.", nil
+		return "/", nil
 	}
 
 	// Check for XDG_CONFIG_HOME first
@@ -126,13 +138,135 @@ func readAndUnmarshalConfig(fs fs.FS, filePath string, config *Config) error {
 	return nil
 }
 
+// loadConfigFromEnv loads configuration from environment variables
+func loadConfigFromEnv(config *Config) {
+	// General Configuration
+	if val := os.Getenv("GORDON_STORAGE_DIR"); val != "" {
+		config.General.StorageDir = val
+		fmt.Printf("Using environment variable GORDON_STORAGE_DIR: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_TOKEN"); val != "" {
+		config.General.Token = val
+		fmt.Printf("Using environment variable GORDON_TOKEN\n")
+	}
+
+	// HTTP Configuration
+	if val := os.Getenv("GORDON_HTTP_PORT"); val != "" {
+		config.Http.Port = val
+		fmt.Printf("Using environment variable GORDON_HTTP_PORT: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_HTTP_DOMAIN"); val != "" {
+		config.Http.Domain = val
+		fmt.Printf("Using environment variable GORDON_HTTP_DOMAIN: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_HTTP_SUBDOMAIN"); val != "" {
+		config.Http.SubDomain = val
+		fmt.Printf("Using environment variable GORDON_HTTP_SUBDOMAIN: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_HTTP_BACKEND_URL"); val != "" {
+		config.Http.BackendURL = val
+		fmt.Printf("Using environment variable GORDON_HTTP_BACKEND_URL: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_HTTP_HTTPS"); val != "" {
+		config.Http.Https = strings.ToLower(val) == "true"
+		fmt.Printf("Using environment variable GORDON_HTTP_HTTPS: %t\n", config.Http.Https)
+	}
+
+	// Admin Configuration
+	if val := os.Getenv("GORDON_ADMIN_PATH"); val != "" {
+		config.Admin.Path = val
+		fmt.Printf("Using environment variable GORDON_ADMIN_PATH: %s\n", val)
+	}
+
+	// Container Engine Configuration
+	if val := os.Getenv("GORDON_CONTAINER_SOCK"); val != "" {
+		config.ContainerEngine.Sock = val
+		fmt.Printf("Using environment variable GORDON_CONTAINER_SOCK: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_CONTAINER_PODMAN_SOCK"); val != "" {
+		config.ContainerEngine.PodmanSock = val
+		fmt.Printf("Using environment variable GORDON_CONTAINER_PODMAN_SOCK: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_CONTAINER_PODMAN"); val != "" {
+		config.ContainerEngine.Podman = strings.ToLower(val) == "true"
+		fmt.Printf("Using environment variable GORDON_CONTAINER_PODMAN: %t\n", config.ContainerEngine.Podman)
+
+		// If using Podman, and Sock is empty but PodmanSock is set, use PodmanSock for Sock field
+		if config.ContainerEngine.Podman && config.ContainerEngine.Sock == "" && config.ContainerEngine.PodmanSock != "" {
+			config.ContainerEngine.Sock = config.ContainerEngine.PodmanSock
+			fmt.Printf("Setting ContainerEngine.Sock to PodmanSock value: %s\n", config.ContainerEngine.Sock)
+		}
+	}
+	if val := os.Getenv("GORDON_CONTAINER_NETWORK"); val != "" {
+		config.ContainerEngine.Network = val
+		fmt.Printf("Using environment variable GORDON_CONTAINER_NETWORK: %s\n", val)
+	}
+
+	// If using Docker socket with podman-compose mounting
+	if config.ContainerEngine.Sock == "" && fileExists("/var/run/docker.sock") {
+		config.ContainerEngine.Sock = "/var/run/docker.sock"
+		fmt.Printf("Docker socket found at /var/run/docker.sock, using it\n")
+	}
+
+	// Reverse Proxy Configuration
+	if val := os.Getenv("GORDON_PROXY_PORT"); val != "" {
+		config.ReverseProxy.Port = val
+		fmt.Printf("Using environment variable GORDON_PROXY_PORT: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_PROXY_HTTP_PORT"); val != "" {
+		config.ReverseProxy.HttpPort = val
+		fmt.Printf("Using environment variable GORDON_PROXY_HTTP_PORT: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_PROXY_CERT_DIR"); val != "" {
+		config.ReverseProxy.CertDir = val
+		fmt.Printf("Using environment variable GORDON_PROXY_CERT_DIR: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_PROXY_AUTO_RENEW"); val != "" {
+		config.ReverseProxy.AutoRenew = strings.ToLower(val) == "true"
+		fmt.Printf("Using environment variable GORDON_PROXY_AUTO_RENEW: %t\n", config.ReverseProxy.AutoRenew)
+	}
+	if val := os.Getenv("GORDON_PROXY_RENEW_BEFORE"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			config.ReverseProxy.RenewBefore = i
+			fmt.Printf("Using environment variable GORDON_PROXY_RENEW_BEFORE: %d\n", i)
+		}
+	}
+	if val := os.Getenv("GORDON_PROXY_LETSENCRYPT_MODE"); val != "" {
+		config.ReverseProxy.LetsEncryptMode = val
+		fmt.Printf("Using environment variable GORDON_PROXY_LETSENCRYPT_MODE: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_PROXY_EMAIL"); val != "" {
+		config.ReverseProxy.Email = val
+		fmt.Printf("Using environment variable GORDON_PROXY_EMAIL: %s\n", val)
+	}
+	if val := os.Getenv("GORDON_PROXY_CACHE_SIZE"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			config.ReverseProxy.CacheSize = i
+			fmt.Printf("Using environment variable GORDON_PROXY_CACHE_SIZE: %d\n", i)
+		}
+	}
+	if val := os.Getenv("GORDON_PROXY_GRACE_PERIOD"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			config.ReverseProxy.GracePeriod = i
+			fmt.Printf("Using environment variable GORDON_PROXY_GRACE_PERIOD: %d\n", i)
+		}
+	}
+}
+
 func (config *Config) LoadConfig() (*Config, error) {
 	configDir, err := getConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("error getting configuration directory: %w", err)
 	}
 
-	configFilePath := filepath.Join(configDir, "config.yml")
+	// Check for directly mounted config.yml in root when in container
+	var configFilePath string
+	if docker.IsRunningInContainer() && fileExists("/config.yml") {
+		configFilePath = "/config.yml"
+		fmt.Println("Found directly mounted config.yml in container root")
+	} else {
+		configFilePath = filepath.Join(configDir, "config.yml")
+	}
 
 	_, err = os.Stat(configFilePath)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -145,17 +279,52 @@ func (config *Config) LoadConfig() (*Config, error) {
 		}
 
 		// Create config file with the default values of ContainerEngineConfig
-		config = &Config{
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("could not get user home directory: %w", err)
+		}
+
+		*config = Config{
+			General: GeneralConfig{
+				StorageDir: homeDir + "/.gordon",
+			},
+			Http: HttpConfig{
+				Port:   "8080",
+				Domain: "localhost",
+				Https:  true,
+			},
+			Admin: AdminConfig{
+				Path: "/admin",
+			},
 			ContainerEngine: ContainerEngineConfig{
 				Sock:       sock,
 				PodmanSock: podmansock,
 				Podman:     ReadUserInput("Are you using podman ? (y/n)") == "y",
+				Network:    "gordon",
 			},
-			Traefik: TraefikConfig{
-				EntryPoint:       entryPoint,
-				SecureEntryPoint: entryPointSecure,
-				Resolver:         resolver,
+			ReverseProxy: ReverseProxyConfig{
+				Port:            reverseProxyPort,
+				HttpPort:        httpPort,
+				CertDir:         certDir,
+				AutoRenew:       autoRenew,
+				RenewBefore:     renewBefore,
+				LetsEncryptMode: letsEncryptMode,
+				CacheSize:       cacheSize,
+				GracePeriod:     gracePeriod,
 			},
+		}
+
+		// If running in a container, skip the prompt and load from env vars
+		if docker.IsRunningInContainer() {
+			config.ContainerEngine.Podman = false
+			fmt.Println("Running in container, loading configuration from environment variables...")
+			loadConfigFromEnv(config)
+
+			// Handle the Podman case if the GORDON_CONTAINER_PODMAN env var is set to true
+			if os.Getenv("GORDON_CONTAINER_PODMAN") == "true" {
+				config.ContainerEngine.Podman = true
+				fmt.Println("Podman container engine detected via environment variable")
+			}
 		}
 
 		err = config.SaveConfig()
@@ -174,12 +343,26 @@ func (config *Config) LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	// If running in a container, override with env vars
+	if docker.IsRunningInContainer() {
+		fmt.Println("Running in container, overriding configuration with environment variables...")
+		loadConfigFromEnv(config)
+	}
+
 	// Load run env
 	config.Build.RunEnv = os.Getenv("RUN_ENV")
 
 	if config.Build.RunEnv == "" {
 		config.Build.RunEnv = "prod"
 	}
+
+	// Debug output to verify config was loaded correctly
+	fmt.Printf("Loaded configuration from %s\n", configFilePath)
+	fmt.Printf("Container engine config - Docker socket: %s, Podman socket: %s, Using Podman: %t, Network: %s\n",
+		config.ContainerEngine.Sock,
+		config.ContainerEngine.PodmanSock,
+		config.ContainerEngine.Podman,
+		config.ContainerEngine.Network)
 
 	return config, nil
 }
@@ -189,7 +372,16 @@ func (config *Config) SaveConfig() error {
 	if err != nil {
 		return fmt.Errorf("error getting configuration directory: %w", err)
 	}
-	configFilePath := filepath.Join(configDir, "config.yml")
+
+	// Check for directly mounted config.yml in root when in container
+	var configFilePath string
+	if docker.IsRunningInContainer() && fileExists("/config.yml") {
+		configFilePath = "/config.yml"
+	} else {
+		configFilePath = filepath.Join(configDir, "config.yml")
+	}
+
+	fmt.Printf("Saving configuration to %s\n", configFilePath)
 
 	err = parser.WriteYAMLFile(configFilePath, config)
 	if err != nil {
@@ -197,6 +389,12 @@ func (config *Config) SaveConfig() error {
 	}
 
 	return nil
+}
+
+// Helper function to check if a file exists
+func fileExists(filepath string) bool {
+	_, err := os.Stat(filepath)
+	return err == nil
 }
 
 func (config *Config) GetToken() (string, error) {
