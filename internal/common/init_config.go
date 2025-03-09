@@ -268,8 +268,10 @@ func (config *Config) LoadConfig() (*Config, error) {
 		configFilePath = filepath.Join(configDir, "config.yml")
 	}
 
+	configExists := true
 	_, err = os.Stat(configFilePath)
 	if errors.Is(err, fs.ErrNotExist) {
+		configExists = false
 		fmt.Printf("Config file not found, creating it at %s\n", configFilePath)
 
 		// Create config dir if it doesn't exist
@@ -314,36 +316,28 @@ func (config *Config) LoadConfig() (*Config, error) {
 			},
 		}
 
-		// If running in a container, skip the prompt and load from env vars
+		// If running in a container, skip the prompt
 		if docker.IsRunningInContainer() {
 			config.ContainerEngine.Podman = false
-			fmt.Println("Running in container, loading configuration from environment variables...")
-			loadConfigFromEnv(config)
-
 			// Handle the Podman case if the GORDON_CONTAINER_PODMAN env var is set to true
 			if os.Getenv("GORDON_CONTAINER_PODMAN") == "true" {
 				config.ContainerEngine.Podman = true
 				fmt.Println("Podman container engine detected via environment variable")
 			}
 		}
-
-		err = config.SaveConfig()
-		if err != nil {
-			return nil, fmt.Errorf("error saving new configuration: %w", err)
-		}
-		return config, nil
-	}
-
-	if err != nil {
+	} else if err != nil {
 		return nil, fmt.Errorf("error checking configuration file: %w", err)
 	}
 
-	err = readAndUnmarshalConfig(os.DirFS(configDir), "config.yml", config)
-	if err != nil {
-		return nil, err
+	// If config file exists, read it
+	if configExists {
+		err = readAndUnmarshalConfig(os.DirFS(filepath.Dir(configFilePath)), filepath.Base(configFilePath), config)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	// If running in a container, override with env vars
+	// Only load environment variables once, after either creating a new config or reading an existing one
 	if docker.IsRunningInContainer() {
 		fmt.Println("Running in container, overriding configuration with environment variables...")
 		loadConfigFromEnv(config)
@@ -354,6 +348,14 @@ func (config *Config) LoadConfig() (*Config, error) {
 
 	if config.Build.RunEnv == "" {
 		config.Build.RunEnv = "prod"
+	}
+
+	// If we created a new config, save it
+	if !configExists {
+		err = config.SaveConfig()
+		if err != nil {
+			return nil, fmt.Errorf("error saving new configuration: %w", err)
+		}
 	}
 
 	// Debug output to verify config was loaded correctly
