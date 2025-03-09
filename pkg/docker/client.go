@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
@@ -30,13 +31,19 @@ func InitializeClient(config *Config) error {
 		return err
 	}
 
+	// For Podman compatibility, we need to ensure we're using the right connection approach
+	host := "unix://" + config.Sock
+
+	// Create the Docker client with appropriate options
 	cli, err := client.NewClientWithOpts(
 		client.WithAPIVersionNegotiation(),
-		client.WithHost("unix://"+config.Sock),
+		client.WithHost(host),
 	)
 	if err != nil {
 		return fmt.Errorf("error initializing Docker client: %s", err)
 	}
+
+	log.Debug("Docker client initialized", "socket", config.Sock, "podman_enabled", config.PodmanEnable)
 	dockerCli = cli
 	currentConfig = config
 	return nil
