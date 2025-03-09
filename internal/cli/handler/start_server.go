@@ -29,7 +29,7 @@ func StartServer(a *server.App, port string) error {
 		log.Print(err)
 	}
 
-	// Initialize and start the reverse proxy
+	// Initialize and start the reverse proxy using the already loaded configuration
 	p, err := httpserve.InitializeProxy(a)
 	if err != nil {
 		log.Error("Failed to initialize reverse proxy:", err)

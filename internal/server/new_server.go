@@ -14,17 +14,13 @@ import (
 )
 
 func NewServerApp(buildConfig *common.BuildConfig) (*App, error) {
-	// Initialize AppConfig
-	config := common.Config{
-		Build: *buildConfig,
-	}
-
-	log.Info("Starting Gordon server", "version", config.Build.BuildVersion)
-
-	_, err := config.LoadConfig()
+	// Get global config singleton instead of loading the config again
+	config, err := common.GetGlobalConfig(buildConfig)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+
+	log.Info("Starting Gordon server", "version", config.Build.BuildVersion)
 
 	// For development environment, use the project root directory
 	if config.Build.RunEnv == "dev" {
@@ -68,7 +64,7 @@ func NewServerApp(buildConfig *common.BuildConfig) (*App, error) {
 		LocYML:     bytes,
 		DBDir:      DBDir,
 		DBFilename: DBFilename,
-		Config:     config,
+		Config:     *config,
 		StartTime:  time.Now(),
 	}
 
