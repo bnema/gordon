@@ -114,7 +114,7 @@ func pushImage(a *cli.App, reader io.Reader, imageName string) error {
 
 	if !pushResponse.Success {
 		log.Error("Push failed", "resp", pushResponse.Message)
-		return fmt.Errorf(pushResponse.Message)
+		return fmt.Errorf("%s", pushResponse.Message)
 	}
 
 	// Remove the double quotes from the message

@@ -45,9 +45,51 @@
       <div id="login-section">
         <div class="flex flex-col items-center">
           <h2 class="text-2xl font-semibold text-gray-800">Login</h2>
+          
+          <!-- Error Message Display -->
+          {{ if .Error }}
+          <div class="mt-4 w-full max-w-md bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+            <span class="block sm:inline">
+              {{ if eq .Error "empty_token" }}
+                Please enter a token.
+              {{ else if eq .Error "invalid_token" }}
+                Invalid token. Please try again.
+              {{ else if eq .Error "server_error" }}
+                A server error occurred. Please try again later.
+              {{ else }}
+                An error occurred. Please try again.
+              {{ end }}
+            </span>
+          </div>
+          {{ end }}
+          
+          <!-- Token Input Form -->
+          <div class="mt-4 w-full max-w-md">
+            <form action="login/submit-token" method="POST" class="mb-4">
+              <div class="mb-2">
+                <label for="token" class="block text-sm font-medium text-gray-700">Admin Token</label>
+                <input 
+                  type="text" 
+                  id="token" 
+                  name="token" 
+                  placeholder="Enter your admin token" 
+                  class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-gordonmascot-hblue focus:border-gordonmascot-hblue"
+                  required
+                />
+              </div>
+              <button 
+                type="submit" 
+                class="w-full bg-gordonmascot-mblue hover:bg-gordonmascot-hblue text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline transition duration-150 ease-in-out"
+              >
+                Continue with Token
+              </button>
+            </form>
+            <div class="text-center text-sm text-gray-500 mb-4">- OR -</div>
+          </div>
+          
           <!-- GitHub OAuth -->
           <div
-            class="mt-4 p-2 bg-gordonmascot-hblue text-white rounded-md flex justify-left">
+            class="mt-2 p-2 bg-gordonmascot-hblue text-white rounded-md flex justify-left">
             <a href="login/oauth/github" class="flex items-center">
               <img
                 src="/assets/imgs/github/github-mark-white.png"

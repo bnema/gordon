@@ -62,6 +62,16 @@ func StartServer(a *server.App, port string) error {
 	e = httpserve.RegisterRoutes(e, a)
 
 	log.Info(fmt.Sprintf("Starting server on port %s", port))
+
+	// Test admin connections after the server has started (in a separate goroutine)
+	if p != nil {
+		go func() {
+			// Add a delay to ensure the server has fully started
+			time.Sleep(2 * time.Second)
+			p.TestAdminConnectionLater()
+		}()
+	}
+
 	if err := e.Start(fmt.Sprintf(":%s", a.Config.Http.Port)); err != nil {
 		log.Fatal(err)
 	}
