@@ -22,7 +22,7 @@ import (
 
 func init() {
 	log.SetReportTimestamp(true)
-	log.SetTimeFormat("15:04")
+	log.SetTimeFormat("15:04:05")
 }
 
 func NewDeployCommand(a *cli.App) *cobra.Command {

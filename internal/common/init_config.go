@@ -13,14 +13,30 @@ import (
 
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/parser"
+	"github.com/charmbracelet/log"
 )
 
-// Global singleton configuration instance
 var (
-	globalConfig     *Config
-	globalConfigOnce sync.Once
-	globalConfigMu   sync.RWMutex
+	logger            = log.NewWithOptions(os.Stderr, log.Options{Level: log.InfoLevel})
+	globalConfig      *Config
+	globalConfigOnce  sync.Once
+	globalConfigMu    sync.RWMutex
+	configLogsPrinted bool
 )
+
+// Initialize package-level logging configuration
+func init() {
+	// Enable timestamp reporting and set format
+	log.SetReportTimestamp(true)
+	log.SetTimeFormat("15:04:05")
+
+	// Check for debug environment variable
+	if os.Getenv("ENV") == "dev" {
+		// Set logger to debug level
+		logger.SetLevel(log.DebugLevel)
+		logger.Debug("Debug logging enabled")
+	}
+}
 
 type Config struct {
 	General         GeneralConfig         `yaml:"General"`
@@ -77,7 +93,7 @@ type ReverseProxyConfig struct {
 // Default values
 var (
 	sock             = "/var/run/docker.sock"
-	podmansock       = "/run/user/1000/podman/podman.sock"
+	podmansock       = "/run/podman/podman.sock"
 	reverseProxyPort = "443" // Changed to 443 for standard HTTPS
 	httpPort         = "80"  // Standard HTTP port
 	certDir          = "/certs"
@@ -88,11 +104,100 @@ var (
 	gracePeriod      = 30   // seconds
 )
 
-// Track whether config logs have been printed already
-var configLogsPrinted bool = false
+// applyDefaultsToConfig applies default values to any fields that have zero values
+// Returns true if any defaults were applied
+func applyDefaultsToConfig(config *Config) bool {
+	defaultsApplied := false
+
+	// Apply defaults to ReverseProxy config
+	if config.ReverseProxy.Port == "" {
+		config.ReverseProxy.Port = reverseProxyPort
+		logger.Debug("Applied default value for ReverseProxy.Port", "value", reverseProxyPort)
+		defaultsApplied = true
+	}
+	if config.ReverseProxy.HttpPort == "" {
+		config.ReverseProxy.HttpPort = httpPort
+		logger.Debug("Applied default value for ReverseProxy.HttpPort", "value", httpPort)
+		defaultsApplied = true
+	}
+	if config.ReverseProxy.CertDir == "" {
+		config.ReverseProxy.CertDir = certDir
+		logger.Debug("Applied default value for ReverseProxy.CertDir", "value", certDir)
+		defaultsApplied = true
+	}
+	if config.ReverseProxy.RenewBefore == 0 {
+		config.ReverseProxy.RenewBefore = renewBefore
+		logger.Debug("Applied default value for ReverseProxy.RenewBefore", "value", renewBefore)
+		defaultsApplied = true
+	}
+	if config.ReverseProxy.LetsEncryptMode == "" {
+		config.ReverseProxy.LetsEncryptMode = letsEncryptMode
+		logger.Debug("Applied default value for ReverseProxy.LetsEncryptMode", "value", letsEncryptMode)
+		defaultsApplied = true
+	}
+	if config.ReverseProxy.CacheSize == 0 {
+		config.ReverseProxy.CacheSize = cacheSize
+		logger.Debug("Applied default value for ReverseProxy.CacheSize", "value", cacheSize)
+		defaultsApplied = true
+	}
+	if config.ReverseProxy.GracePeriod == 0 {
+		config.ReverseProxy.GracePeriod = gracePeriod
+		logger.Debug("Applied default value for ReverseProxy.GracePeriod", "value", gracePeriod)
+		defaultsApplied = true
+	}
+
+	// Handle autoRenew
+	configFilePath := filepath.Join(getConfigDirMustExist(), "config.yml")
+	if fileExists(configFilePath) {
+		yamlContent, err := os.ReadFile(configFilePath)
+		if err == nil {
+			// Check if "autoRenew" is explicitly mentioned in the config file
+			if !strings.Contains(string(yamlContent), "autoRenew:") {
+				config.ReverseProxy.AutoRenew = autoRenew
+				logger.Debug("Applied default value for ReverseProxy.AutoRenew", "value", autoRenew)
+				defaultsApplied = true
+			} else {
+				logger.Debug("Keeping explicit value for ReverseProxy.AutoRenew", "value", config.ReverseProxy.AutoRenew)
+			}
+		} else {
+			// If we can't read the file for some reason, apply the default
+			if !config.ReverseProxy.AutoRenew {
+				config.ReverseProxy.AutoRenew = autoRenew
+				logger.Debug("Applied default value for ReverseProxy.AutoRenew", "value", autoRenew)
+				defaultsApplied = true
+			}
+		}
+	} else {
+		// If config file doesn't exist yet, set the default
+		config.ReverseProxy.AutoRenew = autoRenew
+		logger.Debug("Applied default value for ReverseProxy.AutoRenew", "value", autoRenew)
+		defaultsApplied = true
+	}
+
+	return defaultsApplied
+}
+
+// getConfigDirMustExist returns the config directory and creates it if it doesn't exist
+// This is a helper function to avoid error handling in applyDefaultsToConfig
+func getConfigDirMustExist() string {
+	configDir, err := getConfigDir()
+	if err != nil {
+		// Fallback to a reasonable default if there's an error
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "/tmp/.gordon"
+		}
+		return filepath.Join(homeDir, ".gordon")
+	}
+	return configDir
+}
 
 // GetGlobalConfig returns the singleton config instance, loading it if necessary
 func GetGlobalConfig(buildConfig *BuildConfig) (*Config, error) {
+	logger.Debug("GetGlobalConfig: Starting with buildConfig", "buildConfig", buildConfig != nil)
+
+	// Try read lock first
+	logger.Debug("GetGlobalConfig: Acquiring read lock")
 	globalConfigMu.RLock()
 	if globalConfig != nil {
 		// If buildConfig is provided, update the Build field
@@ -100,15 +205,21 @@ func GetGlobalConfig(buildConfig *BuildConfig) (*Config, error) {
 			globalConfig.Build = *buildConfig
 		}
 		config := globalConfig
+		logger.Debug("GetGlobalConfig: Config exists, releasing read lock")
 		globalConfigMu.RUnlock()
-		fmt.Println("Using existing global configuration (already loaded)")
+		logger.Debug("GetGlobalConfig: Using existing global configuration (already loaded)")
 		return config, nil
 	}
+	logger.Debug("GetGlobalConfig: Config not found, releasing read lock")
 	globalConfigMu.RUnlock()
 
-	// Need to load the config
+	// Need to load the config - acquire write lock
+	logger.Debug("GetGlobalConfig: No existing config, acquiring write lock")
 	globalConfigMu.Lock()
-	defer globalConfigMu.Unlock()
+	defer func() {
+		logger.Debug("GetGlobalConfig: Releasing write lock via defer")
+		globalConfigMu.Unlock()
+	}()
 
 	// Double-check in case another goroutine loaded the config while we were waiting
 	if globalConfig != nil {
@@ -116,11 +227,9 @@ func GetGlobalConfig(buildConfig *BuildConfig) (*Config, error) {
 		if buildConfig != nil {
 			globalConfig.Build = *buildConfig
 		}
-		fmt.Println("Using existing global configuration (loaded by another goroutine)")
+		logger.Debug("GetGlobalConfig: Using existing global configuration (loaded by another goroutine)")
 		return globalConfig, nil
 	}
-
-	fmt.Println("Loading global configuration for the first time")
 
 	// Initialize config with build info
 	config := &Config{}
@@ -130,74 +239,102 @@ func GetGlobalConfig(buildConfig *BuildConfig) (*Config, error) {
 
 	// Load the config once
 	var err error
+	logger.Debug("GetGlobalConfig: About to execute globalConfigOnce.Do")
 	globalConfigOnce.Do(func() {
-		config, err = config.LoadConfig()
+		logger.Debug("Inside globalConfigOnce.Do, loading configuration...")
+		var loadedConfig *Config
+		loadedConfig, err = config.LoadConfig()
 		if err == nil {
-			globalConfig = config
-			fmt.Println("Global configuration loaded successfully")
+			logger.Debug("GetGlobalConfig: LoadConfig successful, setting globalConfig")
+			globalConfig = loadedConfig
+			logger.Info("Global configuration loaded successfully")
 		} else {
-			fmt.Printf("Error loading global configuration: %v\n", err)
+			logger.Error("Error loading global configuration", "error", err)
 		}
 	})
+	logger.Debug("GetGlobalConfig: Completed globalConfigOnce.Do")
 
-	return globalConfig, err
+	// Return the global config if it was set, otherwise return the local config
+	if globalConfig != nil {
+		return globalConfig, err
+	}
+
+	return config, err
 }
 
 func getConfigDir() (string, error) {
+	logger.Debug("getConfigDir: Starting getConfigDir function")
 	var configDir string
 
+	logger.Debug("getConfigDir: Checking if running in WSL")
 	if isWSL() {
+		logger.Debug("getConfigDir: Running in WSL")
 		// Use XDG_CONFIG_HOME for WSL
 		if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); xdgConfigHome != "" {
+			logger.Debug("getConfigDir: Using XDG_CONFIG_HOME environment variable", "value", xdgConfigHome)
 			configDir = filepath.Join(xdgConfigHome, "Gordon")
 		} else {
 			// If XDG_CONFIG_HOME is not set, fall back to default locations
+			logger.Debug("getConfigDir: XDG_CONFIG_HOME not set, getting user home directory")
 			homeDir, err := os.UserHomeDir()
 			if err != nil {
 				// If we can't get the home directory, use a fallback
+				logger.Debug("getConfigDir: Failed to get user home directory, using temp dir", "error", err)
 				homeDir = os.TempDir() // Use the system's temp directory as a fallback
-				fmt.Printf("Warning: Unable to determine home directory. Using temp directory: %s\n", homeDir)
+				logger.Warn("Warning: Unable to determine home directory. Using temp directory", "dir", homeDir)
 			}
 
 			configDir = filepath.Join(homeDir, ".config", "Gordon")
-
+			logger.Debug("getConfigDir: Set config directory based on home dir", "dir", configDir)
 		}
 
+		logger.Debug("getConfigDir: Returning WSL config directory", "dir", configDir)
 		return configDir, nil
 	}
 
+	logger.Debug("getConfigDir: Checking if running in container")
 	if docker.IsRunningInContainer() {
-		return "/", nil
+		logger.Debug("getConfigDir: Running in container, using current directory")
+		return ".", nil
 	}
 
 	// Check for XDG_CONFIG_HOME first
+	logger.Debug("getConfigDir: Checking XDG_CONFIG_HOME environment variable")
 	if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); xdgConfigHome != "" {
+		logger.Debug("getConfigDir: Using XDG_CONFIG_HOME environment variable", "value", xdgConfigHome)
 		configDir = filepath.Join(xdgConfigHome, "Gordon")
 	} else {
 		// If XDG_CONFIG_HOME is not set, fall back to default locations
+		logger.Debug("getConfigDir: XDG_CONFIG_HOME not set, getting user home directory")
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			// If we can't get the home directory, use a fallback
-			homeDir = os.TempDir() // Use the system's temp directory as a fallback
-			fmt.Printf("Warning: Unable to determine home directory. Using temp directory: %s\n", homeDir)
+			logger.Debug("getConfigDir: Failed to get user home directory", "error", err)
+			return "", fmt.Errorf("could not determine user home directory: %w", err)
 		}
 
-		// Select the configuration directory based on the OS
+		// For Windows, use the standard application data directory
 		if runtime.GOOS == "windows" {
-			configDir = filepath.Join(homeDir, "AppData", "Roaming", "Gordon")
+			logger.Debug("getConfigDir: On Windows, using AppData")
+			configDir = filepath.Join(homeDir, "AppData", "Local", "Gordon")
 		} else {
+			// For Unix systems, use the XDG Base Directory Specification
+			logger.Debug("getConfigDir: On Unix system, using XDG pattern")
 			configDir = filepath.Join(homeDir, ".config", "Gordon")
 		}
 	}
 
+	logger.Debug("getConfigDir: Returning config directory", "dir", configDir)
 	return configDir, nil
 }
 
 func readAndUnmarshalConfig(fs fs.FS, filePath string, config *Config) error {
+	logger.Debug("readAndUnmarshalConfig: Starting to read and unmarshal config file", "path", filePath)
 	err := parser.ParseYAMLFile(fs, filePath, config)
 	if err != nil {
+		logger.Debug("readAndUnmarshalConfig: Failed to parse YAML file", "error", err)
 		return fmt.Errorf("error reading and unmarshaling configuration file: %w", err)
 	}
+	logger.Debug("readAndUnmarshalConfig: Successfully parsed YAML file")
 	return nil
 }
 
@@ -207,13 +344,13 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 	if val := os.Getenv("GORDON_STORAGE_DIR"); val != "" {
 		config.General.StorageDir = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_STORAGE_DIR: %s\n", val)
+			logger.Info("Using environment variable GORDON_STORAGE_DIR", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_TOKEN"); val != "" {
 		config.General.Token = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_TOKEN\n")
+			logger.Info("Using environment variable GORDON_TOKEN")
 		}
 	}
 
@@ -221,31 +358,31 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 	if val := os.Getenv("GORDON_HTTP_PORT"); val != "" {
 		config.Http.Port = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_HTTP_PORT: %s\n", val)
+			logger.Info("Using environment variable GORDON_HTTP_PORT", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_HTTP_DOMAIN"); val != "" {
 		config.Http.Domain = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_HTTP_DOMAIN: %s\n", val)
+			logger.Info("Using environment variable GORDON_HTTP_DOMAIN", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_HTTP_SUBDOMAIN"); val != "" {
 		config.Http.SubDomain = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_HTTP_SUBDOMAIN: %s\n", val)
+			logger.Info("Using environment variable GORDON_HTTP_SUBDOMAIN", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_HTTP_BACKEND_URL"); val != "" {
 		config.Http.BackendURL = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_HTTP_BACKEND_URL: %s\n", val)
+			logger.Info("Using environment variable GORDON_HTTP_BACKEND_URL", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_HTTP_HTTPS"); val != "" {
 		config.Http.Https = strings.ToLower(val) == "true"
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_HTTP_HTTPS: %t\n", config.Http.Https)
+			logger.Info("Using environment variable GORDON_HTTP_HTTPS", "value", config.Http.Https)
 		}
 	}
 
@@ -253,7 +390,7 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 	if val := os.Getenv("GORDON_ADMIN_PATH"); val != "" {
 		config.Admin.Path = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_ADMIN_PATH: %s\n", val)
+			logger.Info("Using environment variable GORDON_ADMIN_PATH", "value", val)
 		}
 	}
 
@@ -261,41 +398,45 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 	if val := os.Getenv("GORDON_CONTAINER_SOCK"); val != "" {
 		config.ContainerEngine.Sock = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_CONTAINER_SOCK: %s\n", val)
+			logger.Info("Using environment variable GORDON_CONTAINER_SOCK", "value", val)
 		}
 	}
-	if val := os.Getenv("GORDON_CONTAINER_PODMAN_SOCK"); val != "" {
+	if val := os.Getenv("GORDON_CONTAINER_PODMANSOCK"); val != "" {
 		config.ContainerEngine.PodmanSock = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_CONTAINER_PODMAN_SOCK: %s\n", val)
+			logger.Info("Using environment variable GORDON_CONTAINER_PODMANSOCK", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_CONTAINER_PODMAN"); val != "" {
 		config.ContainerEngine.Podman = strings.ToLower(val) == "true"
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_CONTAINER_PODMAN: %t\n", config.ContainerEngine.Podman)
+			logger.Info("Using environment variable GORDON_CONTAINER_PODMAN", "value", config.ContainerEngine.Podman)
 		}
-
-		// If using Podman, and Sock is empty but PodmanSock is set, use PodmanSock for Sock field
-		if config.ContainerEngine.Podman && config.ContainerEngine.Sock == "" && config.ContainerEngine.PodmanSock != "" {
-			config.ContainerEngine.Sock = config.ContainerEngine.PodmanSock
+	} else {
+		// Auto-detect Podman if not specified in environment
+		isPodman, podmanSocket := docker.DetectPodman()
+		if isPodman {
+			config.ContainerEngine.Podman = true
+			config.ContainerEngine.PodmanSock = podmanSocket
 			if printLogs {
-				fmt.Printf("Setting ContainerEngine.Sock to PodmanSock value: %s\n", config.ContainerEngine.Sock)
+				logger.Info("Automatically detected Podman installation",
+					"using_podman", true,
+					"socket", podmanSocket)
 			}
 		}
 	}
 	if val := os.Getenv("GORDON_CONTAINER_NETWORK"); val != "" {
 		config.ContainerEngine.Network = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_CONTAINER_NETWORK: %s\n", val)
+			logger.Info("Using environment variable GORDON_CONTAINER_NETWORK", "value", val)
 		}
 	}
 
-	// If using Docker socket with podman-compose mounting
-	if config.ContainerEngine.Sock == "" && fileExists("/var/run/docker.sock") {
-		config.ContainerEngine.Sock = "/var/run/docker.sock"
+	// Use Podman socket if Podman is enabled and no Docker socket is specified
+	if config.ContainerEngine.Podman && config.ContainerEngine.Sock == "" && config.ContainerEngine.PodmanSock != "" {
+		config.ContainerEngine.Sock = config.ContainerEngine.PodmanSock
 		if printLogs {
-			fmt.Printf("Docker socket found at /var/run/docker.sock, using it\n")
+			logger.Info("Setting ContainerEngine.Sock to PodmanSock value", "value", config.ContainerEngine.Sock)
 		}
 	}
 
@@ -303,52 +444,52 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 	if val := os.Getenv("GORDON_PROXY_PORT"); val != "" {
 		config.ReverseProxy.Port = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_PROXY_PORT: %s\n", val)
+			logger.Info("Using environment variable GORDON_PROXY_PORT", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_HTTP_PORT"); val != "" {
 		config.ReverseProxy.HttpPort = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_PROXY_HTTP_PORT: %s\n", val)
+			logger.Info("Using environment variable GORDON_PROXY_HTTP_PORT", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_CERT_DIR"); val != "" {
 		config.ReverseProxy.CertDir = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_PROXY_CERT_DIR: %s\n", val)
+			logger.Info("Using environment variable GORDON_PROXY_CERT_DIR", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_AUTO_RENEW"); val != "" {
 		config.ReverseProxy.AutoRenew = strings.ToLower(val) == "true"
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_PROXY_AUTO_RENEW: %t\n", config.ReverseProxy.AutoRenew)
+			logger.Info("Using environment variable GORDON_PROXY_AUTO_RENEW", "value", config.ReverseProxy.AutoRenew)
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_RENEW_BEFORE"); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
 			config.ReverseProxy.RenewBefore = i
 			if printLogs {
-				fmt.Printf("Using environment variable GORDON_PROXY_RENEW_BEFORE: %d\n", i)
+				logger.Info("Using environment variable GORDON_PROXY_RENEW_BEFORE", "value", i)
 			}
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_LETSENCRYPT_MODE"); val != "" {
 		config.ReverseProxy.LetsEncryptMode = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_PROXY_LETSENCRYPT_MODE: %s\n", val)
+			logger.Info("Using environment variable GORDON_PROXY_LETSENCRYPT_MODE", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_EMAIL"); val != "" {
 		config.ReverseProxy.Email = val
 		if printLogs {
-			fmt.Printf("Using environment variable GORDON_PROXY_EMAIL: %s\n", val)
+			logger.Info("Using environment variable GORDON_PROXY_EMAIL", "value", val)
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_CACHE_SIZE"); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
 			config.ReverseProxy.CacheSize = i
 			if printLogs {
-				fmt.Printf("Using environment variable GORDON_PROXY_CACHE_SIZE: %d\n", i)
+				logger.Info("Using environment variable GORDON_PROXY_CACHE_SIZE", "value", i)
 			}
 		}
 	}
@@ -356,61 +497,172 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 		if i, err := strconv.Atoi(val); err == nil {
 			config.ReverseProxy.GracePeriod = i
 			if printLogs {
-				fmt.Printf("Using environment variable GORDON_PROXY_GRACE_PERIOD: %d\n", i)
+				logger.Info("Using environment variable GORDON_PROXY_GRACE_PERIOD", "value", i)
 			}
 		}
 	}
 }
 
 func (config *Config) LoadConfig() (*Config, error) {
-	// Check if we already have a global config loaded
-	globalConfigMu.RLock()
-	if globalConfig != nil && config != globalConfig {
-		// Copy the global config to this config instance
-		*config = *globalConfig
-		globalConfigMu.RUnlock()
-		fmt.Println("Using existing global configuration instead of loading again")
+	// If we're in a non-interactive environment, use simplified config
+	nonInteractiveEnv := os.Getenv("GORDON_NONINTERACTIVE")
+	isNonInteractive := nonInteractiveEnv == "true" || nonInteractiveEnv == "1" || nonInteractiveEnv == "yes"
+
+	if isNonInteractive {
+		logger.Info("Non-interactive mode detected, using simplified config without prompts")
+		// Create base configuration without prompts
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			homeDir = "/tmp"
+			logger.Warn("Could not get user home directory, using /tmp instead")
+		}
+
+		// Get default socket paths
+		sock := "/var/run/docker.sock"
+		podmansock := "/run/podman/podman.sock"
+
+		// Auto-detect Podman
+		isPodman, podmanSocket := docker.DetectPodman()
+		if isPodman {
+			podmansock = podmanSocket
+		}
+
+		*config = Config{
+			General: GeneralConfig{
+				StorageDir: homeDir + "/.gordon",
+			},
+			Http: HttpConfig{
+				Port:   "8080",
+				Domain: "localhost",
+				Https:  false,
+			},
+			Admin: AdminConfig{
+				Path: "/admin",
+			},
+			ContainerEngine: ContainerEngineConfig{
+				Sock:       sock,
+				PodmanSock: podmansock,
+				Podman:     isPodman, // Use the auto-detected value
+				Network:    "gordon",
+			},
+			ReverseProxy: ReverseProxyConfig{
+				Port:            reverseProxyPort,
+				HttpPort:        httpPort,
+				CertDir:         certDir,
+				AutoRenew:       autoRenew,
+				RenewBefore:     renewBefore,
+				LetsEncryptMode: letsEncryptMode,
+				CacheSize:       cacheSize,
+				GracePeriod:     gracePeriod,
+			},
+		}
+
+		// If in container, apply env vars
+		if docker.IsRunningInContainer() {
+			logger.Info("Running in container, overriding configuration with environment variables...")
+
+			loadConfigFromEnv(config, true)
+		}
+
 		return config, nil
 	}
-	globalConfigMu.RUnlock()
 
+	// Original LoadConfig implementation continues below for interactive mode
+	logger.Debug("LoadConfig: Starting LoadConfig function")
+
+	// Log current execution environment for debugging
+	isInContainer := docker.IsRunningInContainer()
+	cwd, _ := os.Getwd()
+	logger.Debug("LoadConfig: Environment information",
+		"isContainer", isInContainer,
+		"currentDir", cwd,
+		"ENV", os.Getenv("ENV"),
+		"GORDON_NONINTERACTIVE", os.Getenv("GORDON_NONINTERACTIVE"))
+
+	logger.Info("Loading config...")
+
+	// Enable extra debugging for this function if requested
+	debugLevel := os.Getenv("GORDON_CONFIG_LOG_LEVEL")
+	if debugLevel == "trace" {
+		logger.Debug("LoadConfig: TRACE mode enabled, will log detailed steps")
+	}
+
+	// Get the config directory
+	logger.Debug("LoadConfig: About to call getConfigDir()")
 	configDir, err := getConfigDir()
 	if err != nil {
+		logger.Error("LoadConfig: Failed to get config directory", "error", err)
 		return nil, fmt.Errorf("error getting configuration directory: %w", err)
 	}
 
+	logger.Debug("LoadConfig: Got config directory", "dir", configDir)
+	logger.Info("Using configuration directory", "dir", configDir)
+
 	// Check for directly mounted config.yml in root when in container
 	var configFilePath string
-	if docker.IsRunningInContainer() && fileExists("/config.yml") {
-		configFilePath = "/config.yml"
-		fmt.Println("Found directly mounted config.yml in container root")
+	logger.Debug("LoadConfig: Checking if running in container")
+	if docker.IsRunningInContainer() && fileExists("./config.yml") {
+		configFilePath = "./config.yml"
+		logger.Info("Found directly mounted config.yml in container current directory")
 	} else {
 		configFilePath = filepath.Join(configDir, "config.yml")
+		logger.Info("Using config file path", "path", configFilePath)
 	}
 
 	// Add an indicator if this is not the first time we're loading config
 	if configLogsPrinted {
-		fmt.Println("Reloading configuration (already loaded previously)...")
+		logger.Info("Reloading configuration (already loaded previously)...")
 	}
 
 	configExists := true
+	var defaultsApplied bool = false
+
+	logger.Debug("LoadConfig: Checking if config file exists", "path", configFilePath)
 	_, err = os.Stat(configFilePath)
 	if errors.Is(err, fs.ErrNotExist) {
 		configExists = false
-		fmt.Printf("Config file not found, creating it at %s\n", configFilePath)
+		logger.Info("Config file not found, creating it", "path", configFilePath)
 
 		// Create config dir if it doesn't exist
+		logger.Debug("LoadConfig: Creating config directory", "dir", configDir)
 		err = os.MkdirAll(configDir, 0755)
 		if err != nil {
+			logger.Error("LoadConfig: Failed to create config directory", "error", err)
 			return nil, fmt.Errorf("error creating configuration directory: %w", err)
 		}
 
 		// Create config file with the default values of ContainerEngineConfig
+		logger.Debug("LoadConfig: Getting user home directory")
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
+			logger.Error("LoadConfig: Failed to get user home directory", "error", err)
 			return nil, fmt.Errorf("could not get user home directory: %w", err)
 		}
 
+		// Check if running in container before creating the config
+		logger.Debug("LoadConfig: Checking if running in container for podman setting")
+		isInContainer := docker.IsRunningInContainer()
+		logger.Info("Is running in container", "value", isInContainer)
+
+		// Set default podman value based on environment
+		defaultPodman := false
+		// Check for non-interactive mode flag
+		nonInteractive := os.Getenv("GORDON_NONINTERACTIVE") == "true"
+
+		// Only prompt if not in a container and not in non-interactive mode
+		if !isInContainer && !nonInteractive {
+			logger.Info("Not in container, prompting for podman preference...")
+			logger.Debug("LoadConfig: About to prompt for podman preference")
+			defaultPodman = ReadUserInputNonBlocking("Are you using podman ? (y/n)", "n") == "y"
+			logger.Debug("LoadConfig: User responded to podman prompt", "usingPodman", defaultPodman)
+		} else if os.Getenv("GORDON_CONTAINER_PODMAN") == "true" {
+			defaultPodman = true
+			logger.Info("Podman container engine detected via environment variable")
+		} else {
+			logger.Info("Using Docker as the default container engine in container environment")
+		}
+
+		logger.Debug("LoadConfig: Creating default config structure")
 		*config = Config{
 			General: GeneralConfig{
 				StorageDir: homeDir + "/.gordon",
@@ -426,7 +678,7 @@ func (config *Config) LoadConfig() (*Config, error) {
 			ContainerEngine: ContainerEngineConfig{
 				Sock:       sock,
 				PodmanSock: podmansock,
-				Podman:     ReadUserInput("Are you using podman ? (y/n)") == "y",
+				Podman:     defaultPodman,
 				Network:    "gordon",
 			},
 			ReverseProxy: ReverseProxyConfig{
@@ -441,65 +693,76 @@ func (config *Config) LoadConfig() (*Config, error) {
 			},
 		}
 
-		// If running in a container, skip the prompt
-		if docker.IsRunningInContainer() {
-			config.ContainerEngine.Podman = false
-			// Handle the Podman case if the GORDON_CONTAINER_PODMAN env var is set to true
-			if os.Getenv("GORDON_CONTAINER_PODMAN") == "true" {
-				config.ContainerEngine.Podman = true
-				fmt.Println("Podman container engine detected via environment variable")
-			}
-		}
+		// In this case, all defaults were applied since we created a new config
+		defaultsApplied = true
 	} else if err != nil {
+		logger.Error("LoadConfig: Error checking if config file exists", "error", err)
 		return nil, fmt.Errorf("error checking configuration file: %w", err)
-	}
-
-	// If config file exists, read it
-	if configExists {
+	} else {
+		// If config file exists, read it
+		logger.Info("Reading existing configuration file...")
+		logger.Debug("LoadConfig: About to read and unmarshal existing config file")
 		err = readAndUnmarshalConfig(os.DirFS(filepath.Dir(configFilePath)), filepath.Base(configFilePath), config)
 		if err != nil {
+			logger.Error("LoadConfig: Failed to read/unmarshal config file", "error", err)
 			return nil, err
 		}
+		logger.Debug("LoadConfig: Successfully read and unmarshaled config file")
+
+		// Apply default values to fields that were not specified in the config file
+		logger.Info("Applying default values to missing configuration fields...")
+		defaultsApplied = applyDefaultsToConfig(config)
 	}
 
 	// Only load environment variables once, after either creating a new config or reading an existing one
+	logger.Debug("LoadConfig: Checking if running in container for env vars")
 	if docker.IsRunningInContainer() {
 		// Only print logs if we haven't printed them before
 		shouldPrintLogs := !configLogsPrinted
-		fmt.Println("Running in container, overriding configuration with environment variables...")
+		logger.Info("Running in container, overriding configuration with environment variables...")
+		logger.Debug("LoadConfig: About to load config from environment")
 		loadConfigFromEnv(config, shouldPrintLogs)
 		configLogsPrinted = true
+		logger.Debug("LoadConfig: Finished loading config from environment")
 	}
 
 	// Load run env
+	logger.Debug("LoadConfig: Setting run environment")
 	config.Build.RunEnv = os.Getenv("RUN_ENV")
+	logger.Info("Run environment", "env", config.Build.RunEnv)
 
 	if config.Build.RunEnv == "" {
 		config.Build.RunEnv = "prod"
+		logger.Info("No RUN_ENV specified, defaulting to 'prod'")
 	}
 
-	// If we created a new config, save it
-	if !configExists {
+	// If we created a new config or applied defaults to an existing one, save it
+	if !configExists || defaultsApplied {
+		logger.Info("Saving configuration with default values...")
+		logger.Debug("LoadConfig: About to save configuration with defaults")
 		err = config.SaveConfig()
 		if err != nil {
-			return nil, fmt.Errorf("error saving new configuration: %w", err)
+			logger.Error("LoadConfig: Failed to save configuration", "error", err)
+			return nil, fmt.Errorf("error saving configuration: %w", err)
 		}
+		logger.Debug("LoadConfig: Successfully saved configuration with defaults")
 	}
 
 	// Debug output to verify config was loaded correctly
 	// Only print this debug information if we're also printing the env var logs
 	if !configLogsPrinted {
-		fmt.Printf("Loaded configuration from %s\n", configFilePath)
-		fmt.Printf("Container engine config - Docker socket: %s, Podman socket: %s, Using Podman: %t, Network: %s\n",
-			config.ContainerEngine.Sock,
-			config.ContainerEngine.PodmanSock,
-			config.ContainerEngine.Podman,
-			config.ContainerEngine.Network)
+		logger.Info("Loaded configuration from", "path", configFilePath)
+		logger.Info("Container engine config",
+			"docker_socket", config.ContainerEngine.Sock,
+			"podman_socket", config.ContainerEngine.PodmanSock,
+			"using_podman", config.ContainerEngine.Podman,
+			"network", config.ContainerEngine.Network)
 	} else {
 		// Just print a simplified message
-		fmt.Printf("Loaded configuration from %s\n", configFilePath)
+		logger.Info("Loaded configuration from", "path", configFilePath)
 	}
 
+	logger.Debug("LoadConfig: Completed LoadConfig function")
 	return config, nil
 }
 
@@ -517,7 +780,7 @@ func (config *Config) SaveConfig() error {
 		configFilePath = filepath.Join(configDir, "config.yml")
 	}
 
-	fmt.Printf("Saving configuration to %s\n", configFilePath)
+	logger.Info("Saving configuration to", "path", configFilePath)
 
 	err = parser.WriteYAMLFile(configFilePath, config)
 	if err != nil {
@@ -562,20 +825,27 @@ func (c *Config) SetToken(token string) {
 }
 
 func isWSL() bool {
-	// Check for /proc/version file
-	if _, err := os.Stat("/proc/version"); err == nil {
-		content, err := os.ReadFile("/proc/version")
-		if err == nil && strings.Contains(strings.ToLower(string(content)), "microsoft") {
-			return true
-		}
+	logger.Debug("isWSL: Checking if running in WSL")
+	// Check if /proc/version exists
+	_, err := os.Stat("/proc/version")
+	if err != nil {
+		logger.Debug("isWSL: /proc/version does not exist, not WSL", "error", err)
+		return false
 	}
 
-	// Check for WSL-specific environment variable
-	if os.Getenv("WSL_DISTRO_NAME") != "" {
-		return true
+	// Read /proc/version file
+	logger.Debug("isWSL: Reading /proc/version file")
+	data, err := os.ReadFile("/proc/version")
+	if err != nil {
+		logger.Debug("isWSL: Failed to read /proc/version", "error", err)
+		return false
 	}
 
-	return false
+	// Convert to string and check if it contains "Microsoft" or "WSL"
+	version := string(data)
+	isWsl := strings.Contains(strings.ToLower(version), "microsoft") || strings.Contains(strings.ToLower(version), "wsl")
+	logger.Debug("isWSL: WSL detection result", "isWsl", isWsl)
+	return isWsl
 }
 
 func (c *HttpConfig) Protocol() string {
