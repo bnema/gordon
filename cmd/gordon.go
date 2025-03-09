@@ -44,6 +44,14 @@ func ExecuteCLI(build, commit, date string) {
 		ProxyURL:     proxyURL,
 	}
 
+	// Load global configuration once before initializing the apps
+	_, err := common.GetGlobalConfig(buildInfo)
+	if err != nil {
+		fmt.Println("Error initializing global configuration:", err)
+		return
+	}
+
+	// Now initialize the client and server apps, which will use the already loaded config
 	a, err := cli.NewClientApp(buildInfo)
 	if err != nil {
 		fmt.Println("Error initializing app:", err)
