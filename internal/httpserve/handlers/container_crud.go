@@ -2,14 +2,15 @@ package handlers
 
 import (
 	"fmt"
-	"log"
 	"net/http"
+	"strings"
 
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/sanitize"
+	"github.com/charmbracelet/log"
 	"github.com/labstack/echo/v4"
 )
 
@@ -17,7 +18,7 @@ import (
 func FromShortIDToImageID(ShortID string) (string, error) {
 	imageID, exists := safelyInteractWithIDMap(Fetch, ShortID)
 	if !exists {
-		log.Printf("No mapping found for short ID: %s", ShortID)
+		log.Debug("No mapping found for short ID: %s", ShortID)
 		return "", fmt.Errorf("image ID not found")
 	}
 	return imageID, nil
@@ -25,18 +26,18 @@ func FromShortIDToImageID(ShortID string) (string, error) {
 
 // CreateContainerRoute is the route for creating a new container
 func CreateContainerGET(c echo.Context, a *server.App) error {
-	log.Printf("Full request URL: %s", c.Request().URL.String())
+	log.Debug("Full request URL: %s", c.Request().URL.String())
 	// Retrieve the ShortID of the image from the URL
 	shortID := c.Param("ID")
-	log.Printf("Received ShortID: %s", shortID)
+	log.Debug("Received ShortID: %s", shortID)
 
 	fullID, exists := safelyInteractWithIDMap(Fetch, shortID)
 	if !exists {
-		log.Printf("No mapping found for short ID: %s", shortID)
+		log.Debug("No mapping found for short ID: %s", shortID)
 		return c.String(http.StatusNotFound, "Image ID not found")
 	}
 
-	log.Printf("Found mapping: %s -> %s", shortID, fullID)
+	log.Debug("Found mapping: %s -> %s", shortID, fullID)
 
 	// Get the image info
 	imageInfo, err := docker.GetImageInfo(fullID)
@@ -78,15 +79,15 @@ func CreateContainerGET(c echo.Context, a *server.App) error {
 func CreateContainerFullGET(c echo.Context, a *server.App) error {
 	// Retrieve the ShortID of the image from the URL
 	shortID := c.Param("ID")
-	log.Printf("Received ShortID: %s", shortID)
+	log.Debug("Received ShortID: %s", shortID)
 
 	fullID, exists := safelyInteractWithIDMap(Fetch, shortID)
 	if !exists {
-		log.Printf("No mapping found for short ID: %s", shortID)
+		log.Debug("No mapping found for short ID: %s", shortID)
 		return c.String(http.StatusNotFound, "Image ID not found")
 	}
 
-	log.Printf("Found mapping: %s -> %s", shortID, fullID)
+	log.Debug("Found mapping: %s -> %s", shortID, fullID)
 
 	// Get the image info
 	imageInfo, err := docker.GetImageInfo(fullID)
@@ -116,7 +117,7 @@ func CreateContainerFullGET(c echo.Context, a *server.App) error {
 
 	renderedHTML, err := rendererData.Render(data, a)
 	if err != nil {
-		log.Printf("Error rendering template: %v", err)
+		log.Debug("Error rendering template: %v", err)
 		return sendError(c, err)
 	}
 
@@ -166,9 +167,42 @@ func CreateContainerPOST(c echo.Context, a *server.App) error {
 	}
 
 	// Create the container
-	_, err = docker.CreateContainer(cmdParams)
+	containerID, err := docker.CreateContainer(cmdParams)
 	if err != nil {
 		return sendError(c, err)
+	}
+
+	// Start the container
+	err = docker.StartContainer(containerID)
+	if err != nil {
+		// If start fails, try to cleanup the container
+		log.Warn("Failed to start container", "error", err)
+		_ = docker.RemoveContainer(containerID)
+		return sendError(c, fmt.Errorf("failed to start container: %w", err))
+	}
+
+	// Get the container name for logging and as fallback
+	containerName, err := docker.GetContainerName(containerID)
+	if err != nil {
+		log.Warn("Failed to get container name", "error", err)
+	} else {
+		containerName = strings.TrimPrefix(containerName, "/")
+	}
+
+	// Get container IP
+	containerIP := GetContainerIP(a, containerID, containerName)
+
+	// Construct target domain from form inputs
+	targetDomain := fmt.Sprintf("%s://%s.%s",
+		sanitizedInputs["container_protocol"],
+		sanitizedInputs["container_subdomain"],
+		sanitizedInputs["container_domain"])
+
+	// Add proxy route for the new container
+	err = AddProxyRoute(a, containerID, containerIP, sanitizedInputs["proxy_port"], targetDomain)
+	if err != nil {
+		log.Error("Failed to add proxy route", "error", err)
+		// Continue anyway, don't fail the whole operation
 	}
 
 	return c.HTML(http.StatusOK, ActionSuccess(a))
