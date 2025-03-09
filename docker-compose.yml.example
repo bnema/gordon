@@ -7,6 +7,7 @@ services:
     volumes:
       - ./data:/data
       - ./data/config.yml:/config.yml  # Mount config.yml directly at the root
+      - ./data/blacklist.yml:/blacklist.yml # Mount blacklist.yml
       - ./data/certs:/certs            # Mount certs directory to persist Let's Encrypt certificates
       # For Docker:
       - /var/run/docker.sock:/var/run/docker.sock # Required for Docker management
