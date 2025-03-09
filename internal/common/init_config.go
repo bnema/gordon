@@ -80,6 +80,9 @@ var (
 	gracePeriod      = 30   // seconds
 )
 
+// Track whether config logs have been printed already
+var configLogsPrinted bool = false
+
 func getConfigDir() (string, error) {
 	var configDir string
 
@@ -139,116 +142,162 @@ func readAndUnmarshalConfig(fs fs.FS, filePath string, config *Config) error {
 }
 
 // loadConfigFromEnv loads configuration from environment variables
-func loadConfigFromEnv(config *Config) {
+func loadConfigFromEnv(config *Config, printLogs bool) {
 	// General Configuration
 	if val := os.Getenv("GORDON_STORAGE_DIR"); val != "" {
 		config.General.StorageDir = val
-		fmt.Printf("Using environment variable GORDON_STORAGE_DIR: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_STORAGE_DIR: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_TOKEN"); val != "" {
 		config.General.Token = val
-		fmt.Printf("Using environment variable GORDON_TOKEN\n")
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_TOKEN\n")
+		}
 	}
 
 	// HTTP Configuration
 	if val := os.Getenv("GORDON_HTTP_PORT"); val != "" {
 		config.Http.Port = val
-		fmt.Printf("Using environment variable GORDON_HTTP_PORT: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_HTTP_PORT: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_HTTP_DOMAIN"); val != "" {
 		config.Http.Domain = val
-		fmt.Printf("Using environment variable GORDON_HTTP_DOMAIN: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_HTTP_DOMAIN: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_HTTP_SUBDOMAIN"); val != "" {
 		config.Http.SubDomain = val
-		fmt.Printf("Using environment variable GORDON_HTTP_SUBDOMAIN: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_HTTP_SUBDOMAIN: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_HTTP_BACKEND_URL"); val != "" {
 		config.Http.BackendURL = val
-		fmt.Printf("Using environment variable GORDON_HTTP_BACKEND_URL: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_HTTP_BACKEND_URL: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_HTTP_HTTPS"); val != "" {
 		config.Http.Https = strings.ToLower(val) == "true"
-		fmt.Printf("Using environment variable GORDON_HTTP_HTTPS: %t\n", config.Http.Https)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_HTTP_HTTPS: %t\n", config.Http.Https)
+		}
 	}
 
 	// Admin Configuration
 	if val := os.Getenv("GORDON_ADMIN_PATH"); val != "" {
 		config.Admin.Path = val
-		fmt.Printf("Using environment variable GORDON_ADMIN_PATH: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_ADMIN_PATH: %s\n", val)
+		}
 	}
 
 	// Container Engine Configuration
 	if val := os.Getenv("GORDON_CONTAINER_SOCK"); val != "" {
 		config.ContainerEngine.Sock = val
-		fmt.Printf("Using environment variable GORDON_CONTAINER_SOCK: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_CONTAINER_SOCK: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_CONTAINER_PODMAN_SOCK"); val != "" {
 		config.ContainerEngine.PodmanSock = val
-		fmt.Printf("Using environment variable GORDON_CONTAINER_PODMAN_SOCK: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_CONTAINER_PODMAN_SOCK: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_CONTAINER_PODMAN"); val != "" {
 		config.ContainerEngine.Podman = strings.ToLower(val) == "true"
-		fmt.Printf("Using environment variable GORDON_CONTAINER_PODMAN: %t\n", config.ContainerEngine.Podman)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_CONTAINER_PODMAN: %t\n", config.ContainerEngine.Podman)
+		}
 
 		// If using Podman, and Sock is empty but PodmanSock is set, use PodmanSock for Sock field
 		if config.ContainerEngine.Podman && config.ContainerEngine.Sock == "" && config.ContainerEngine.PodmanSock != "" {
 			config.ContainerEngine.Sock = config.ContainerEngine.PodmanSock
-			fmt.Printf("Setting ContainerEngine.Sock to PodmanSock value: %s\n", config.ContainerEngine.Sock)
+			if printLogs {
+				fmt.Printf("Setting ContainerEngine.Sock to PodmanSock value: %s\n", config.ContainerEngine.Sock)
+			}
 		}
 	}
 	if val := os.Getenv("GORDON_CONTAINER_NETWORK"); val != "" {
 		config.ContainerEngine.Network = val
-		fmt.Printf("Using environment variable GORDON_CONTAINER_NETWORK: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_CONTAINER_NETWORK: %s\n", val)
+		}
 	}
 
 	// If using Docker socket with podman-compose mounting
 	if config.ContainerEngine.Sock == "" && fileExists("/var/run/docker.sock") {
 		config.ContainerEngine.Sock = "/var/run/docker.sock"
-		fmt.Printf("Docker socket found at /var/run/docker.sock, using it\n")
+		if printLogs {
+			fmt.Printf("Docker socket found at /var/run/docker.sock, using it\n")
+		}
 	}
 
 	// Reverse Proxy Configuration
 	if val := os.Getenv("GORDON_PROXY_PORT"); val != "" {
 		config.ReverseProxy.Port = val
-		fmt.Printf("Using environment variable GORDON_PROXY_PORT: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_PROXY_PORT: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_PROXY_HTTP_PORT"); val != "" {
 		config.ReverseProxy.HttpPort = val
-		fmt.Printf("Using environment variable GORDON_PROXY_HTTP_PORT: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_PROXY_HTTP_PORT: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_PROXY_CERT_DIR"); val != "" {
 		config.ReverseProxy.CertDir = val
-		fmt.Printf("Using environment variable GORDON_PROXY_CERT_DIR: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_PROXY_CERT_DIR: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_PROXY_AUTO_RENEW"); val != "" {
 		config.ReverseProxy.AutoRenew = strings.ToLower(val) == "true"
-		fmt.Printf("Using environment variable GORDON_PROXY_AUTO_RENEW: %t\n", config.ReverseProxy.AutoRenew)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_PROXY_AUTO_RENEW: %t\n", config.ReverseProxy.AutoRenew)
+		}
 	}
 	if val := os.Getenv("GORDON_PROXY_RENEW_BEFORE"); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
 			config.ReverseProxy.RenewBefore = i
-			fmt.Printf("Using environment variable GORDON_PROXY_RENEW_BEFORE: %d\n", i)
+			if printLogs {
+				fmt.Printf("Using environment variable GORDON_PROXY_RENEW_BEFORE: %d\n", i)
+			}
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_LETSENCRYPT_MODE"); val != "" {
 		config.ReverseProxy.LetsEncryptMode = val
-		fmt.Printf("Using environment variable GORDON_PROXY_LETSENCRYPT_MODE: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_PROXY_LETSENCRYPT_MODE: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_PROXY_EMAIL"); val != "" {
 		config.ReverseProxy.Email = val
-		fmt.Printf("Using environment variable GORDON_PROXY_EMAIL: %s\n", val)
+		if printLogs {
+			fmt.Printf("Using environment variable GORDON_PROXY_EMAIL: %s\n", val)
+		}
 	}
 	if val := os.Getenv("GORDON_PROXY_CACHE_SIZE"); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
 			config.ReverseProxy.CacheSize = i
-			fmt.Printf("Using environment variable GORDON_PROXY_CACHE_SIZE: %d\n", i)
+			if printLogs {
+				fmt.Printf("Using environment variable GORDON_PROXY_CACHE_SIZE: %d\n", i)
+			}
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_GRACE_PERIOD"); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
 			config.ReverseProxy.GracePeriod = i
-			fmt.Printf("Using environment variable GORDON_PROXY_GRACE_PERIOD: %d\n", i)
+			if printLogs {
+				fmt.Printf("Using environment variable GORDON_PROXY_GRACE_PERIOD: %d\n", i)
+			}
 		}
 	}
 }
@@ -266,6 +315,11 @@ func (config *Config) LoadConfig() (*Config, error) {
 		fmt.Println("Found directly mounted config.yml in container root")
 	} else {
 		configFilePath = filepath.Join(configDir, "config.yml")
+	}
+
+	// Add an indicator if this is not the first time we're loading config
+	if configLogsPrinted {
+		fmt.Println("Reloading configuration (already loaded previously)...")
 	}
 
 	configExists := true
@@ -339,8 +393,11 @@ func (config *Config) LoadConfig() (*Config, error) {
 
 	// Only load environment variables once, after either creating a new config or reading an existing one
 	if docker.IsRunningInContainer() {
+		// Only print logs if we haven't printed them before
+		shouldPrintLogs := !configLogsPrinted
 		fmt.Println("Running in container, overriding configuration with environment variables...")
-		loadConfigFromEnv(config)
+		loadConfigFromEnv(config, shouldPrintLogs)
+		configLogsPrinted = true
 	}
 
 	// Load run env
@@ -359,12 +416,18 @@ func (config *Config) LoadConfig() (*Config, error) {
 	}
 
 	// Debug output to verify config was loaded correctly
-	fmt.Printf("Loaded configuration from %s\n", configFilePath)
-	fmt.Printf("Container engine config - Docker socket: %s, Podman socket: %s, Using Podman: %t, Network: %s\n",
-		config.ContainerEngine.Sock,
-		config.ContainerEngine.PodmanSock,
-		config.ContainerEngine.Podman,
-		config.ContainerEngine.Network)
+	// Only print this debug information if we're also printing the env var logs
+	if !configLogsPrinted {
+		fmt.Printf("Loaded configuration from %s\n", configFilePath)
+		fmt.Printf("Container engine config - Docker socket: %s, Podman socket: %s, Using Podman: %t, Network: %s\n",
+			config.ContainerEngine.Sock,
+			config.ContainerEngine.PodmanSock,
+			config.ContainerEngine.Podman,
+			config.ContainerEngine.Network)
+	} else {
+		// Just print a simplified message
+		fmt.Printf("Loaded configuration from %s\n", configFilePath)
+	}
 
 	return config, nil
 }
