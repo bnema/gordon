@@ -399,8 +399,31 @@ func addProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 		return fmt.Errorf("failed to create proxy: %w", err)
 	}
 
-	// Extract the protocol (default to http)
+	// Extract the protocol from the target domain
 	protocol := "http"
+
+	// Check if the target domain specifies HTTPS
+	if strings.HasPrefix(strings.ToLower(targetDomain), "https://") {
+		protocol = "https"
+		log.Debug("Using HTTPS protocol for proxy route based on target domain",
+			"domain", targetDomain,
+			"protocol", protocol)
+	} else {
+		// If target domain doesn't specify protocol, check the container labels
+		containerInfo, err := docker.GetContainerInfo(containerID)
+		if err == nil {
+			// Check if gordon.proxy.ssl label is set to true
+			if sslValue, exists := containerInfo.Config.Labels["gordon.proxy.ssl"]; exists &&
+				(sslValue == "true" || sslValue == "1" || sslValue == "yes") {
+				protocol = "https"
+				log.Debug("Using HTTPS protocol for proxy route based on container labels",
+					"domain", targetDomain,
+					"containerID", containerID,
+					"label_value", sslValue,
+					"protocol", protocol)
+			}
+		}
+	}
 
 	// Add the route
 	if err := p.AddRoute(targetDomain, containerID, containerIP, containerPort, protocol, "/"); err != nil {
@@ -411,6 +434,7 @@ func addProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 		"domain", targetDomain,
 		"containerIP", containerIP,
 		"containerPort", containerPort,
+		"protocol", protocol,
 	)
 	return nil
 }
