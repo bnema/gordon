@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/client"
 )
 
 func ListContainerImages() ([]image.Summary, error) {
@@ -153,7 +154,7 @@ func ImportImageToEngine(imageFilePath string) (string, error) {
 		return "", fmt.Errorf("failed to reset file pointer: %w", err)
 	}
 
-	resp, err := dockerCli.ImageLoad(context.Background(), imageFile, true)
+	resp, err := dockerCli.ImageLoad(context.Background(), imageFile, client.ImageLoadWithQuiet(true))
 	if err != nil {
 		return "", fmt.Errorf("failed to load image: %w", err)
 	}
