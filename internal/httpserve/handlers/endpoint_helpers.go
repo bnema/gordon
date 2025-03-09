@@ -443,3 +443,40 @@ func getTransferData(transferID string) (*ChunkMetadata, map[int][]byte, error) 
 	}
 	return metadata, chunkStore.chunks[transferID], nil
 }
+
+// GetContainerIP gets the IP address of a container within its Docker network
+func GetContainerIP(a *server.App, containerID, containerName string) string {
+	// Try to get container info
+	containerInfo, err := docker.GetContainerInfo(containerID)
+	if err != nil {
+		log.Warn("Failed to get container info, using container name as IP", "error", err)
+		return containerName // Use container name as fallback
+	}
+
+	// Extract IP address from container info
+	if containerInfo.NetworkSettings != nil {
+		// Look for the network specified in the config
+		networkName := a.Config.ContainerEngine.Network
+		if networkSettings, exists := containerInfo.NetworkSettings.Networks[networkName]; exists && networkSettings.IPAddress != "" {
+			log.Debug("Found container IP",
+				"containerName", containerName,
+				"containerIP", networkSettings.IPAddress,
+				"network", networkName)
+			return networkSettings.IPAddress
+		}
+
+		// Look for any network if the specified one isn't found
+		for networkName, networkSettings := range containerInfo.NetworkSettings.Networks {
+			if networkSettings.IPAddress != "" {
+				log.Debug("Found container IP in alternative network",
+					"containerName", containerName,
+					"containerIP", networkSettings.IPAddress,
+					"network", networkName)
+				return networkSettings.IPAddress
+			}
+		}
+	}
+
+	// Fallback to container name if no IP found
+	return containerName
+}

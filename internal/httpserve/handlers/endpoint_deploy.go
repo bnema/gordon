@@ -78,14 +78,11 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	}
 
 	// After successfully deploying a container, add a proxy route
-	err = addProxyRoute(a, containerID, containerName, payload.Port, payload.TargetDomain)
+	containerIP := GetContainerIP(a, containerID, containerName)
+	err = AddProxyRoute(a, containerID, containerIP, payload.Port, payload.TargetDomain)
 	if err != nil {
 		log.Error("Failed to add proxy route", "error", err)
-		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
-			Success:    false,
-			Message:    fmt.Sprintf("Failed to add proxy route: %v", err),
-			StatusCode: http.StatusInternalServerError,
-		})
+		return sendDeployErrorResponse(c, "Failed to add proxy route", err)
 	}
 
 	// Arrived here means deployment was successful
@@ -329,7 +326,8 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 		"domain", targetDomain)
 
 	// After successfully deploying a container, add a proxy route
-	err = addProxyRoute(a, containerID, containerName, port, targetDomain)
+	containerIP := GetContainerIP(a, containerID, containerName)
+	err = AddProxyRoute(a, containerID, containerIP, port, targetDomain)
 	if err != nil {
 		log.Error("Failed to add proxy route", "error", err)
 		return sendDeployErrorResponse(c, "Failed to add proxy route", err)
@@ -392,7 +390,7 @@ func sendDeployErrorResponse(c echo.Context, message string, err error) error {
 // }
 
 // After successfully deploying a container, add a proxy route
-func addProxyRoute(a *server.App, containerID, containerIP, containerPort, targetDomain string) error {
+func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targetDomain string) error {
 	// Create a new proxy instance
 	p, err := proxy.NewProxy(a)
 	if err != nil {

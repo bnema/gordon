@@ -297,6 +297,7 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 			Labels:       labels,
 			Env:          cmdParams.Environment,
 			ExposedPorts: exposedPorts,
+			Hostname:     cmdParams.ServiceName,
 		},
 		&container.HostConfig{
 			PortBindings: portBindings,
