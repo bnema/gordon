@@ -152,7 +152,7 @@ func (p *Proxy) configureRoutes() {
 			if err != nil {
 				// Connection failed, check if container exists but has a new IP
 				containerID := route.ContainerID
-				if containerID != "" && containerID != "gordon-server" {
+				if containerID != "" {
 					// Try to get container info and check if it has a different IP
 					containerInfo, err := docker.GetContainerInfo(containerID)
 					if err == nil && containerInfo.NetworkSettings != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/bnema/gordon/pkg/docker"
@@ -95,17 +96,21 @@ func (p *Proxy) Start() error {
 	p.mu.Lock()
 	// Only add if it doesn't already exist
 	if _, exists := p.routes[adminDomain]; !exists {
+		// Auto-detect the Gordon container name
+		containerName := p.detectGordonContainer()
+
 		p.routes[adminDomain] = &ProxyRouteInfo{
 			Domain:        adminDomain,
 			ContainerIP:   containerIP,
 			ContainerPort: p.app.GetConfig().Http.Port,
-			ContainerID:   "gordon-server",
-			Protocol:      "http", // Gordon server uses HTTP internally
+			ContainerID:   containerName, // Use auto-detected container name
+			Protocol:      "http",        // Gordon server uses HTTP internally
 			Path:          "/",
 			Active:        true,
 		}
 		log.Info("Added special route for admin domain",
 			"domain", adminDomain,
+			"container", containerName,
 			"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
 	}
 
@@ -113,12 +118,15 @@ func (p *Proxy) Start() error {
 	rootDomain := p.app.GetConfig().Http.Domain
 	if rootDomain != "" && rootDomain != adminDomain {
 		if _, exists := p.routes[rootDomain]; !exists {
+			// Use the same auto-detected container name
+			containerName := p.detectGordonContainer()
+
 			p.routes[rootDomain] = &ProxyRouteInfo{
 				Domain:        rootDomain,
 				ContainerIP:   containerIP,
 				ContainerPort: p.app.GetConfig().Http.Port,
-				ContainerID:   "gordon-server",
-				Protocol:      "http", // Gordon server uses HTTP internally
+				ContainerID:   containerName, // Use auto-detected container name
+				Protocol:      "http",        // Gordon server uses HTTP internally
 				Path:          "/",
 				Active:        true,
 			}
@@ -388,4 +396,84 @@ func (p *Proxy) checkExternalPortAccess() {
 	} else {
 		log.Info("External HTTPS port 443 is accessible")
 	}
+}
+
+// detectGordonContainer attempts to find the Gordon container automatically
+func (p *Proxy) detectGordonContainer() string {
+	// Check if we're running inside a container
+	if docker.IsRunningInContainer() {
+		log.Debug("Detected we're running in a container")
+
+		// Get our hostname which should be the container ID in Docker/Podman
+		hostname := os.Getenv("HOSTNAME")
+		if hostname != "" {
+			// Check if there's a container with this hostname
+			containers, err := docker.ListRunningContainers()
+			if err == nil {
+				for _, container := range containers {
+					// Check if this container is us by comparing hostname with container ID
+					if strings.HasPrefix(hostname, container.ID) {
+						// This is our container
+						containerName := strings.TrimLeft(container.Names[0], "/")
+						log.Debug("Auto-detected Gordon container name from hostname", "container_name", containerName)
+						return containerName
+					}
+				}
+			} else {
+				log.Debug("Could not list containers when checking hostname", "error", err)
+			}
+		}
+	}
+
+	// Try to find Gordon by examining container processes
+	containers, err := docker.ListRunningContainers()
+	if err == nil {
+		for _, container := range containers {
+			containerID := container.ID
+
+			// Check container processes for Gordon
+			containerLogs, err := docker.GetContainerLogs(containerID)
+			if err == nil && (strings.Contains(containerLogs, "/gordon") || strings.Contains(containerLogs, "serve")) {
+				containerName := strings.TrimLeft(container.Names[0], "/")
+				log.Debug("Auto-detected Gordon container by process", "container_name", containerName)
+				return containerName
+			} else if err != nil {
+				log.Debug("Could not get container logs", "container_id", containerID, "error", err)
+			}
+
+			// Check container command for Gordon
+			if len(container.Command) > 0 && strings.Contains(container.Command, "gordon") {
+				containerName := strings.TrimLeft(container.Names[0], "/")
+				log.Debug("Auto-detected Gordon container by command", "container_name", containerName)
+				return containerName
+			}
+		}
+	} else {
+		log.Debug("Could not list containers when checking processes", "error", err)
+	}
+
+	// If we couldn't detect from processes, try to find a container with gordon in the name or image
+	if err == nil {
+		for _, container := range containers {
+			// Check container names for "gordon"
+			for _, name := range container.Names {
+				if strings.Contains(strings.ToLower(name), "gordon") {
+					containerName := strings.TrimLeft(name, "/")
+					log.Debug("Auto-detected Gordon container by name", "container_name", containerName)
+					return containerName
+				}
+			}
+
+			// Check image name for "gordon"
+			if strings.Contains(strings.ToLower(container.Image), "gordon") {
+				containerName := strings.TrimLeft(container.Names[0], "/")
+				log.Debug("Auto-detected Gordon container by image", "container_name", containerName, "image", container.Image)
+				return containerName
+			}
+		}
+	}
+
+	// If all else fails, default to "gordon"
+	log.Debug("Could not auto-detect Gordon container, using default name", "container_name", "gordon")
+	return "gordon"
 }
