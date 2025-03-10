@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,7 +23,6 @@ import (
 	"github.com/bnema/gordon/internal/cli/handler"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/fatih/color"
-	"github.com/pocketbase/pocketbase/tools/archive"
 	"github.com/spf13/cobra"
 )
 
@@ -166,7 +166,7 @@ func (p *plugin) update() error {
 	extractDir := filepath.Join(releaseDir, "extracted_"+asset.Name)
 	defer os.RemoveAll(extractDir)
 
-	if err := archive.Extract(assetZip, extractDir); err != nil {
+	if err := extractZip(assetZip, extractDir); err != nil {
 		return err
 	}
 
@@ -403,4 +403,71 @@ func checkWritePermission(path string) error {
 
 func isRoot() bool {
 	return os.Geteuid() == 0
+}
+
+// extractZip extracts a zip file to a destination directory
+func extractZip(zipPath, destPath string) error {
+	// Open the zip file
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("failed to open zip file: %w", err)
+	}
+	defer reader.Close()
+
+	// Create destination directory if it doesn't exist
+	if err := os.MkdirAll(destPath, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	// Extract each file
+	for _, file := range reader.File {
+		// Construct the full path for the file
+		path := filepath.Join(destPath, file.Name)
+
+		// Check for path traversal vulnerabilities
+		if !strings.HasPrefix(path, filepath.Clean(destPath)+string(os.PathSeparator)) {
+			return fmt.Errorf("illegal file path in zip: %s", file.Name)
+		}
+
+		// Create directory for file
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(path, os.ModePerm); err != nil {
+				return fmt.Errorf("failed to create directory: %w", err)
+			}
+			continue
+		}
+
+		// Create parent directory if it doesn't exist
+		if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+			return fmt.Errorf("failed to create directory structure: %w", err)
+		}
+
+		// Create file
+		destFile, err := os.Create(path)
+		if err != nil {
+			return fmt.Errorf("failed to create file: %w", err)
+		}
+
+		// Open the file in the zip
+		srcFile, err := file.Open()
+		if err != nil {
+			destFile.Close()
+			return fmt.Errorf("failed to open file in zip: %w", err)
+		}
+
+		// Copy the contents
+		_, err = io.Copy(destFile, srcFile)
+		srcFile.Close()
+		destFile.Close()
+		if err != nil {
+			return fmt.Errorf("failed to extract file: %w", err)
+		}
+
+		// Preserve file permissions
+		if err := os.Chmod(path, file.Mode()); err != nil {
+			return fmt.Errorf("failed to set file permissions: %w", err)
+		}
+	}
+
+	return nil
 }
