@@ -217,7 +217,16 @@ func (p *Proxy) configureRoutes() {
 
 		// Create the target URL
 		targetURL := &url.URL{
-			Scheme: route.Protocol,
+			Scheme: "http", // Always use HTTP for internal connections
+		}
+
+		// Log protocol conversion if needed
+		if route.Protocol == "https" {
+			log.Debug("Converting HTTPS external route to HTTP for internal connection",
+				"domain", host,
+				"containerID", route.ContainerID,
+				"externalProtocol", "https",
+				"internalProtocol", "http")
 		}
 
 		// Format host properly for both IPv4 and IPv6
@@ -235,7 +244,12 @@ func (p *Proxy) configureRoutes() {
 		originalDirector := proxy.Director
 		proxy.Director = func(req *http.Request) {
 			originalDirector(req)
-			req.Header.Set("X-Forwarded-Proto", "https")
+			// Use the original protocol for forwarded proto header
+			forwardedProto := "http"
+			if route.Protocol == "https" {
+				forwardedProto = "https"
+			}
+			req.Header.Set("X-Forwarded-Proto", forwardedProto)
 			req.Header.Set("X-Forwarded-Host", host)
 			req.Header.Set("X-Forwarded-For", c.RealIP())
 			req.Header.Set("X-Real-IP", c.RealIP())
@@ -245,7 +259,8 @@ func (p *Proxy) configureRoutes() {
 				"host", host,
 				"target", targetURL.String(),
 				"path", req.URL.Path,
-				"clientIP", c.RealIP())
+				"clientIP", c.RealIP(),
+				"originalProtocol", route.Protocol)
 		}
 
 		// Add error handling
@@ -274,6 +289,9 @@ func (p *Proxy) configureRoutes() {
 }
 
 // AddRoute adds a new route to the database and reloads the proxy
+// The protocol parameter specifies the external protocol (http or https) for client connections.
+// Note: Regardless of the external protocol, all internal connections to containers use HTTP.
+// The HTTPS protocol is only used for external connections and certificates.
 func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, protocol, path string) error {
 	// Begin a transaction
 	tx, err := p.app.GetDB().Begin()

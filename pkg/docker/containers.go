@@ -750,83 +750,141 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 	// Store cancel func to allow shutdown
 	containerEventCancel = cancel
 
-	// Set up filters for the events we're interested in
-	filters := makeEventFilters(networkFilter)
-
-	// Start listening for events
-	messages, errs := dockerCli.Events(ctx, types.EventsOptions{
-		Filters: filters,
-	})
-
-	// Process events in a goroutine
+	// Start the main listener loop in a goroutine
 	go func() {
+		// Implement exponential backoff for reconnection
+		initialDelay := 1 * time.Second
+		maxDelay := 1 * time.Minute
+		currentDelay := initialDelay
+		consecutiveFailures := 0
+
 		for {
-			select {
-			case err := <-errs:
-				if err != nil && ctx.Err() == nil {
-					// Only log if this isn't due to context cancellation
-					log.Error("Error in container event stream", "error", err)
-				}
+			// Check if context was canceled (application is shutting down)
+			if ctx.Err() != nil {
 				return
-			case event := <-messages:
-				// Process container events
-				if event.Type == "container" {
-					containerID := event.Actor.ID
+			}
 
-					// Get container name from event attributes
-					containerName := event.Actor.Attributes["name"]
-					if containerName == "" {
-						// If not in attributes, try to get it from the API
-						name, err := GetContainerName(containerID)
-						if err == nil {
-							containerName = strings.TrimPrefix(name, "/")
+			// Set up filters for the events we're interested in
+			filters := makeEventFilters(networkFilter)
+
+			// Start listening for events
+			messages, errs := dockerCli.Events(ctx, types.EventsOptions{
+				Filters: filters,
+			})
+
+			log.Info("Started container event listener", "network_filter", networkFilter)
+
+			// Process events in an inner loop
+			listenSuccess := false
+		eventStreamLoop:
+			for {
+				select {
+				case err := <-errs:
+					if err != nil && ctx.Err() == nil {
+						// Only log if this isn't due to context cancellation
+						log.Error("Error in container event stream", "error", err)
+						// Increment failure counter for backoff calculation
+						consecutiveFailures++
+
+						// Calculate backoff delay with exponential increase
+						if listenSuccess {
+							// If we had successful events before failure, reset the delay
+							currentDelay = initialDelay
+						} else {
+							// Exponential backoff: double the delay each time, up to max
+							currentDelay = time.Duration(float64(currentDelay) * 1.5)
+							if currentDelay > maxDelay {
+								currentDelay = maxDelay
+							}
 						}
+
+						log.Debug("Will attempt to reconnect to container event stream",
+							"delay", currentDelay,
+							"consecutive_failures", consecutiveFailures)
+
+						// Break out of the inner event loop to reconnect
+						break eventStreamLoop
+					}
+					// Context was canceled, exit completely
+					if ctx.Err() != nil {
+						return
+					}
+				case event := <-messages:
+					// Mark that we've successfully received events
+					if !listenSuccess {
+						listenSuccess = true
+						// Reset failure counter on successful event
+						consecutiveFailures = 0
+						log.Info("Successfully receiving container events")
 					}
 
-					// Handle container events based on action
-					switch event.Action {
-					case "start":
-						// Container started - need to get its IP and update any proxy routes
-						log.Debug("Container started event",
-							"container_id", containerID,
-							"container_name", containerName)
+					// Process container events
+					if event.Type == "container" {
+						containerID := event.Actor.ID
 
-						// Get container IP from the network
-						containerIP, err := getContainerIPFromNetwork(containerID, networkFilter)
-						if err != nil {
-							log.Error("Failed to get container IP",
+						// Get container name from event attributes
+						containerName := event.Actor.Attributes["name"]
+						if containerName == "" {
+							// If not in attributes, try to get it from the API
+							name, err := GetContainerName(containerID)
+							if err == nil {
+								containerName = strings.TrimPrefix(name, "/")
+							}
+						}
+
+						// Handle container events based on action
+						switch event.Action {
+						case "start":
+							// Container started - need to get its IP and update any proxy routes
+							log.Debug("Container started event",
 								"container_id", containerID,
-								"error", err)
-							continue
+								"container_name", containerName)
+
+							// Get container IP from the network
+							containerIP, err := getContainerIPFromNetwork(containerID, networkFilter)
+							if err != nil {
+								log.Error("Failed to get container IP",
+									"container_id", containerID,
+									"error", err)
+								continue
+							}
+
+							// Call the callback with the container ID, name, and IP
+							callback(containerID, containerName, containerIP)
+
+						case "die", "kill", "destroy":
+							// Container stopped - might need to mark routes as inactive
+							log.Debug("Container stopped event",
+								"container_id", containerID,
+								"container_name", containerName,
+								"action", event.Action)
+
+						case "rename":
+							// Container renamed - update related proxy routes
+							log.Debug("Container renamed event",
+								"container_id", containerID,
+								"container_name", containerName,
+								"new_name", event.Actor.Attributes["name"])
+
+							// Add other event types as needed
 						}
-
-						// Call the callback with the container ID, name, and IP
-						callback(containerID, containerName, containerIP)
-
-					case "die", "kill", "destroy":
-						// Container stopped - might need to mark routes as inactive
-						log.Debug("Container stopped event",
-							"container_id", containerID,
-							"container_name", containerName,
-							"action", event.Action)
-
-					case "rename":
-						// Container renamed - update related proxy routes
-						log.Debug("Container renamed event",
-							"container_id", containerID,
-							"container_name", containerName,
-							"new_name", event.Actor.Attributes["name"])
-
-						// Add other event types as needed
 					}
+				case <-ctx.Done():
+					return
 				}
+			}
+
+			// If we get here, the event stream failed and we need to reconnect
+			// Wait for the calculated delay before reconnecting
+			select {
+			case <-time.After(currentDelay):
+				log.Info("Attempting to reconnect to container event stream")
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	log.Info("Started container event listener", "network_filter", networkFilter)
 	return nil
 }
 

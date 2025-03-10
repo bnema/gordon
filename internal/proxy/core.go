@@ -51,6 +51,9 @@ type Proxy struct {
 func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 	log.Debug("Initializing reverse proxy")
 
+	// Log important configuration information
+	log.Debug("All internal connections to containers will use HTTP protocol regardless of external protocol")
+
 	// Set up the echo server for HTTPS traffic
 	httpsServer := echo.New()
 	httpsServer.HideBanner = true

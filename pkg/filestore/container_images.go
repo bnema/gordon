@@ -1,4 +1,4 @@
-package store
+package filestore
 
 import (
 	"fmt"
@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// SaveImageToStorage saves a container image to the file system
 func SaveImageToStorage(config *common.Config, originalFilename string, buf io.Reader) (string, error) {
 	// Ensure the images directory exists
 	imagesDir := filepath.Join(config.General.StorageDir, "images")

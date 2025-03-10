@@ -214,6 +214,11 @@ func (p *Proxy) Start() error {
 func (p *Proxy) Stop() error {
 	log.Info("Stopping reverse proxy")
 
+	// Run any rate limiter cleanup functions
+	for _, cleanup := range rateLimiterCleanup {
+		cleanup()
+	}
+
 	// Stop the container event listener
 	docker.StopContainerEventListener()
 

@@ -17,7 +17,7 @@ import (
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/bnema/gordon/pkg/store"
+	"github.com/bnema/gordon/pkg/filestore"
 	"github.com/charmbracelet/log"
 	"github.com/labstack/echo/v4"
 )
@@ -143,14 +143,14 @@ func saveAndImportImage(c echo.Context, a *server.App, payload interface{}) (str
 
 	imageFileName := sanitizeImageFileName(imageName)
 
-	imagePath, err := store.SaveImageToStorage(&a.Config, imageFileName, imageReader)
+	imagePath, err := filestore.SaveImageToStorage(&a.Config, imageFileName, imageReader)
 	if err != nil {
 		return "", fmt.Errorf("failed to save image: %v", err)
 	}
 
 	imageID, err = docker.ImportImageToEngine(imagePath)
 	if err != nil {
-		if removeErr := store.RemoveFromStorage(imagePath); removeErr != nil {
+		if removeErr := filestore.RemoveFromStorage(imagePath); removeErr != nil {
 			log.Error("Failed to remove temporary image file after import failure",
 				"error", removeErr,
 				"path", imagePath)
@@ -159,7 +159,7 @@ func saveAndImportImage(c echo.Context, a *server.App, payload interface{}) (str
 	}
 
 	if imageID == "" {
-		if removeErr := store.RemoveFromStorage(imagePath); removeErr != nil {
+		if removeErr := filestore.RemoveFromStorage(imagePath); removeErr != nil {
 			log.Error("Failed to remove temporary image file after empty ID",
 				"error", removeErr,
 				"path", imagePath)
@@ -167,7 +167,7 @@ func saveAndImportImage(c echo.Context, a *server.App, payload interface{}) (str
 		return "", errors.New("imported image ID is empty")
 	}
 
-	err = store.RemoveFromStorage(imagePath)
+	err = filestore.RemoveFromStorage(imagePath)
 	if err != nil {
 		log.Error("Failed to remove temporary image file after successful import",
 			"error", err,
