@@ -19,8 +19,17 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/pocketbase/pocketbase v0.22.19
 	github.com/spf13/cobra v1.8.1
+	github.com/starskey-io/starskey v0.1.8
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.32.0
+)
+
+require (
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/klauspost/compress v1.16.7 // indirect
+	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
+	github.com/zeebo/xxh3 v1.0.2 // indirect
+	go.mongodb.org/mongo-driver v1.17.2 // indirect
 )
 
 require (

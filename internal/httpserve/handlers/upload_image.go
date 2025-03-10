@@ -9,7 +9,7 @@ import (
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/bnema/gordon/pkg/store"
+	"github.com/bnema/gordon/pkg/filestore"
 	"github.com/labstack/echo/v4"
 )
 
@@ -79,7 +79,7 @@ func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
 	}
 
 	// Save the image to the storage directory
-	saveInPath, err := store.SaveImageToStorage(&a.Config, file.Filename, tempFile)
+	saveInPath, err := filestore.SaveImageToStorage(&a.Config, file.Filename, tempFile)
 	if err != nil {
 		return sendError(c, err)
 	}
@@ -91,7 +91,7 @@ func UploadImagePOSTHandler(c echo.Context, a *server.App) error {
 	}
 
 	// Remove the image from the storage directory
-	err = store.RemoveFromStorage(saveInPath)
+	err = filestore.RemoveFromStorage(saveInPath)
 	if err != nil {
 		return sendError(c, err)
 	}
