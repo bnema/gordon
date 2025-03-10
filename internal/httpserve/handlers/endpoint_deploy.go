@@ -2,6 +2,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	authToken "github.com/bnema/gordon/internal/cli/auth"
 	"github.com/bnema/gordon/internal/common"
@@ -397,6 +399,47 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 		return fmt.Errorf("failed to create proxy: %w", err)
 	}
 
+	// Double check that we have a valid container IP - critical for recreated containers
+	if containerIP == "" || containerIP == containerID || containerIP == "localhost" {
+		log.Warn("Invalid container IP detected, attempting to get correct IP",
+			"containerID", containerID,
+			"invalid_ip", containerIP)
+
+		// Try to get the container name for better logging
+		containerName, err := docker.GetContainerName(containerID)
+		if err != nil {
+			containerName = containerID
+		} else {
+			containerName = strings.TrimPrefix(containerName, "/")
+		}
+
+		// Get the correct container IP with retry logic
+		newContainerIP := GetContainerIP(a, containerID, containerName)
+		if newContainerIP != containerIP && newContainerIP != containerName {
+			log.Info("Updated container IP for proxy route",
+				"containerID", containerID,
+				"old_ip", containerIP,
+				"new_ip", newContainerIP)
+			containerIP = newContainerIP
+		}
+	}
+
+	// Get container info to check labels
+	containerInfo, err := docker.GetContainerInfo(containerID)
+	if err != nil {
+		log.Warn("Failed to get container info", "error", err)
+	} else {
+		// Check if the container has a gordon.proxy.port label that might override containerPort
+		if portLabel, exists := containerInfo.Config.Labels["gordon.proxy.port"]; exists && portLabel != "" {
+			if portLabel != containerPort {
+				log.Info("Using container label port instead of provided port",
+					"label_port", portLabel,
+					"provided_port", containerPort)
+				containerPort = portLabel
+			}
+		}
+	}
+
 	// Extract the protocol from the target domain
 	protocol := "http"
 
@@ -408,8 +451,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 			"protocol", protocol)
 	} else {
 		// If target domain doesn't specify protocol, check the container labels
-		containerInfo, err := docker.GetContainerInfo(containerID)
-		if err == nil {
+		if err == nil { // Only check if we have containerInfo
 			// Check if gordon.proxy.ssl label is set to true
 			if sslValue, exists := containerInfo.Config.Labels["gordon.proxy.ssl"]; exists &&
 				(sslValue == "true" || sslValue == "1" || sslValue == "yes") {
@@ -433,6 +475,121 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 	log.Debug("Adding domain for Let's Encrypt verification",
 		"domain", cleanDomain)
 
+	// Get container name for better logging
+	containerName, err := docker.GetContainerName(containerID)
+	if err != nil {
+		log.Warn("Unable to get container name", "containerID", containerID, "error", err)
+	} else {
+		containerName = strings.TrimPrefix(containerName, "/")
+		log.Debug("Container name for proxy route", "name", containerName)
+	}
+
+	// Check the database for any existing routes with this domain, regardless of container ID
+	// This handles the case where a container is recreated with the same name but a different ID
+	tx, err := a.GetDB().Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var existingRouteID string
+	var existingContainerID string
+	err = tx.QueryRow(`
+		SELECT pr.id, pr.container_id 
+		FROM proxy_route pr 
+		JOIN domain d ON pr.domain_id = d.id 
+		WHERE d.name = ?`, cleanDomain).Scan(&existingRouteID, &existingContainerID)
+
+	if err == nil {
+		// Domain exists in database, check if this is a recreated container
+		log.Info("Found existing proxy route for domain",
+			"domain", cleanDomain,
+			"old_container_id", existingContainerID,
+			"new_container_id", containerID)
+
+		// Verify container IP one last time before updating the route
+		containerNetworkInfo, err := docker.GetContainerInfo(containerID)
+		if err == nil && containerNetworkInfo.NetworkSettings != nil {
+			// Check the container's network settings for the configured network
+			networkName := a.Config.ContainerEngine.Network
+			if networkSettings, exists := containerNetworkInfo.NetworkSettings.Networks[networkName]; exists &&
+				networkSettings.IPAddress != "" && networkSettings.IPAddress != containerIP {
+				log.Info("Updating container IP before database update",
+					"domain", cleanDomain,
+					"old_ip", containerIP,
+					"new_ip", networkSettings.IPAddress)
+				containerIP = networkSettings.IPAddress
+			}
+		}
+
+		// If the container IDs are different, this is likely a recreated container
+		// Update the route directly in the database
+		now := time.Now().Format(time.RFC3339)
+		_, err = tx.Exec(`
+			UPDATE proxy_route 
+			SET container_id = ?, container_ip = ?, container_port = ?, updated_at = ? 
+			WHERE id = ?`,
+			containerID, containerIP, containerPort, now, existingRouteID)
+
+		if err != nil {
+			return fmt.Errorf("failed to update proxy route: %w", err)
+		}
+
+		log.Info("Updated proxy route for recreated container",
+			"domain", cleanDomain,
+			"old_container_id", existingContainerID,
+			"new_container_id", containerID,
+			"container_ip", containerIP,
+			"container_port", containerPort)
+
+		// Commit transaction
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
+
+		// Verify the database update with a direct query
+		var updatedContainerIP string
+		err = a.GetDB().QueryRow(`
+			SELECT container_ip 
+			FROM proxy_route 
+			WHERE id = ?`, existingRouteID).Scan(&updatedContainerIP)
+
+		if err == nil && updatedContainerIP != containerIP {
+			log.Warn("Database verification failed: container IP mismatch",
+				"expected", containerIP,
+				"actual", updatedContainerIP)
+		} else {
+			log.Debug("Database verification passed: container IP updated correctly",
+				"container_ip", containerIP)
+		}
+
+		// Reload the routes
+		if err := p.Reload(); err != nil {
+			return fmt.Errorf("failed to reload routes: %w", err)
+		}
+
+		// Final verification: check that the route was loaded with the correct IP
+		routes := p.GetRoutes()
+		if route, exists := routes[cleanDomain]; exists {
+			if route.ContainerIP != containerIP {
+				log.Warn("Route reload verification failed: container IP mismatch",
+					"domain", cleanDomain,
+					"expected", containerIP,
+					"actual", route.ContainerIP)
+			} else {
+				log.Debug("Route reload verification passed: container IP loaded correctly",
+					"domain", cleanDomain,
+					"container_ip", containerIP)
+			}
+		}
+
+		return nil
+	} else if err != sql.ErrNoRows {
+		// A database error other than "not found"
+		return fmt.Errorf("failed to query database for existing route: %w", err)
+	}
+
+	// Route doesn't exist or we had ErrNoRows, continue with normal AddRoute
 	// Add the route - this will also add to the domain database for Let's Encrypt
 	if err := p.AddRoute(cleanDomain, containerID, containerIP, containerPort, protocol, "/"); err != nil {
 		return fmt.Errorf("failed to add proxy route: %w", err)

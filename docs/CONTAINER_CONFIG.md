@@ -183,6 +183,7 @@ Gordon supports the following environment variables for configuration:
 | `GORDON_PROXY_EMAIL` | Email for Let's Encrypt | Empty |
 | `GORDON_PROXY_CACHE_SIZE` | Certificate cache size | `1000` |
 | `GORDON_PROXY_GRACE_PERIOD` | Shutdown grace period in seconds | `30` |
+| `GORDON_PROXY_ENABLE_LOGS` | Controls whether HTTP request logs are enabled for the proxy | `true` |
 
 ### Other Configuration
 
@@ -205,6 +206,7 @@ If not specified in your config.yml, Gordon will automatically apply these recom
 | `ReverseProxy.CacheSize` | 1000 entries | Optimizes performance when serving multiple domains |
 | `ReverseProxy.GracePeriod` | 30 seconds | Allows for graceful server shutdowns |
 | `ReverseProxy.AutoRenew` | true | Prevents certificate expiration issues |
+| `ReverseProxy.EnableLogs` | true | Controls whether HTTP request logs are enabled for the proxy |
 | `ReverseProxy.LetsEncryptMode` | staging | Safe default for testing; change to "production" for real certificates |
 
 This behavior prevents issues that could occur with zero values like:

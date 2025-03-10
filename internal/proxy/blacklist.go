@@ -406,3 +406,59 @@ func (b *BlacklistConfig) RemoveRange(cidr string) error {
 	// Force a reload to rebuild Networks and the cache
 	return b.Load()
 }
+
+// logBlockedIP is a helper method to log blocked IPs with rate limiting
+func (p *Proxy) logBlockedIP(clientIP, path, userAgent string) {
+	p.blockedIPCountMu.Lock()
+	defer p.blockedIPCountMu.Unlock()
+
+	now := time.Now()
+
+	// If this is the first block or it's been more than 5 minutes since the last summary,
+	// or if this is a new IP we haven't seen recently
+	if p.lastBlockedLog.IsZero() ||
+		now.Sub(p.lastBlockedLog) > 5*time.Minute ||
+		p.blockedIPCounter[clientIP] == 0 {
+
+		// Log this block and update counters
+		log.Info("Blocked request from blacklisted IP",
+			"ip", clientIP,
+			"path", path,
+			"user_agent", userAgent)
+
+		// If we're resetting due to time, clear the counters
+		if p.lastBlockedLog.IsZero() || now.Sub(p.lastBlockedLog) > 5*time.Minute {
+			p.blockedIPCounter = make(map[string]int)
+		}
+
+		p.blockedIPCounter[clientIP] = 1
+		p.lastBlockedLog = now
+		return
+	}
+
+	// Increment counter for this IP
+	p.blockedIPCounter[clientIP]++
+
+	// Only log summaries every 5 minutes by default
+	if now.Sub(p.lastBlockedLog) >= 5*time.Minute {
+		// Log summary of blocked requests
+		totalBlocked := 0
+		for _, count := range p.blockedIPCounter {
+			totalBlocked += count
+		}
+
+		log.Info("Blocked IP summary",
+			"unique_ips", len(p.blockedIPCounter),
+			"total_requests", totalBlocked,
+			"since", p.lastBlockedLog.Format(time.RFC3339))
+
+		// Reset counters
+		p.blockedIPCounter = make(map[string]int)
+		p.lastBlockedLog = now
+	}
+
+	// Debug logging only if needed
+	if false {
+		log.Debug("Request marked as blacklisted for logging skip", "ip", clientIP)
+	}
+}

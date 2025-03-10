@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -446,37 +447,106 @@ func getTransferData(transferID string) (*ChunkMetadata, map[int][]byte, error) 
 
 // GetContainerIP gets the IP address of a container within its Docker network
 func GetContainerIP(a *server.App, containerID, containerName string) string {
-	// Try to get container info
-	containerInfo, err := docker.GetContainerInfo(containerID)
-	if err != nil {
-		log.Warn("Failed to get container info, using container name as IP", "error", err)
-		return containerName // Use container name as fallback
-	}
+	// Add retry logic with exponential backoff to ensure container network is ready
+	maxRetries := 3
+	var containerIP string
+	var lastErr error
 
-	// Extract IP address from container info
-	if containerInfo.NetworkSettings != nil {
-		// Look for the network specified in the config
-		networkName := a.Config.ContainerEngine.Network
-		if networkSettings, exists := containerInfo.NetworkSettings.Networks[networkName]; exists && networkSettings.IPAddress != "" {
-			log.Debug("Found container IP",
-				"containerName", containerName,
-				"containerIP", networkSettings.IPAddress,
-				"network", networkName)
-			return networkSettings.IPAddress
+	for retry := 0; retry < maxRetries; retry++ {
+		// If this is a retry, add an increasing delay
+		if retry > 0 {
+			sleepTime := time.Duration(500*retry) * time.Millisecond
+			log.Debug("Retrying to get container IP",
+				"attempt", retry+1,
+				"containerID", containerID,
+				"delay", sleepTime)
+			time.Sleep(sleepTime)
 		}
 
-		// Look for any network if the specified one isn't found
-		for networkName, networkSettings := range containerInfo.NetworkSettings.Networks {
-			if networkSettings.IPAddress != "" {
-				log.Debug("Found container IP in alternative network",
+		// Try to get container info
+		containerInfo, err := docker.GetContainerInfo(containerID)
+		if err != nil {
+			lastErr = err
+			continue // Try again
+		}
+
+		// Make sure we have the most up-to-date container info by refreshing if needed
+		// This is crucial for recreated containers
+		if containerInfo.State == nil || !containerInfo.State.Running {
+			// Container might still be starting, wait a bit longer
+			time.Sleep(500 * time.Millisecond)
+			refreshedInfo, err := docker.GetContainerInfo(containerID)
+			if err == nil {
+				containerInfo = refreshedInfo
+				log.Debug("Refreshed container info for IP retrieval",
 					"containerName", containerName,
-					"containerIP", networkSettings.IPAddress,
+					"containerID", containerID)
+			} else {
+				lastErr = err
+				continue // Try again
+			}
+		}
+
+		// Extract IP address from container info
+		if containerInfo.NetworkSettings != nil {
+			// Look for the network specified in the config
+			networkName := a.Config.ContainerEngine.Network
+			if networkSettings, exists := containerInfo.NetworkSettings.Networks[networkName]; exists && networkSettings.IPAddress != "" {
+				containerIP = networkSettings.IPAddress
+				log.Debug("Found container IP",
+					"containerName", containerName,
+					"containerID", containerID,
+					"containerIP", containerIP,
 					"network", networkName)
-				return networkSettings.IPAddress
+				return containerIP
+			}
+
+			// Look for any network if the specified one isn't found
+			for networkName, networkSettings := range containerInfo.NetworkSettings.Networks {
+				if networkSettings.IPAddress != "" {
+					containerIP = networkSettings.IPAddress
+					log.Debug("Found container IP in alternative network",
+						"containerName", containerName,
+						"containerID", containerID,
+						"containerIP", containerIP,
+						"network", networkName)
+					return containerIP
+				}
+			}
+		}
+
+		// If we've gotten this far, let's try inspecting the network directly
+		networkName := a.Config.ContainerEngine.Network
+		networkInfo, err := docker.GetNetworkInfo(networkName)
+		if err == nil {
+			// Search for this container in the network
+			for contID, endpoint := range networkInfo.Containers {
+				if contID == containerID && endpoint.IPv4Address != "" {
+					// Extract just the IP address from the CIDR format
+					ipCIDR := endpoint.IPv4Address
+					containerIP = strings.Split(ipCIDR, "/")[0]
+					log.Debug("Found container IP via network inspection",
+						"containerName", containerName,
+						"containerID", containerID,
+						"containerIP", containerIP,
+						"network", networkName)
+					return containerIP
+				}
 			}
 		}
 	}
 
-	// Fallback to container name if no IP found
+	// If we've tried multiple times and couldn't get an IP
+	if lastErr != nil {
+		log.Warn("Failed to get container info after multiple attempts",
+			"error", lastErr,
+			"containerID", containerID)
+	}
+
+	log.Warn("Could not find container IP, using container name as fallback",
+		"containerName", containerName,
+		"containerID", containerID)
+
+	// Use container name as a fallback
 	return containerName
 }

@@ -112,6 +112,7 @@ type ReverseProxyConfig struct {
 	Email           string `yaml:"email"`           // Email for Let's Encrypt
 	CacheSize       int    `yaml:"cacheSize"`       // Size of the certificate cache
 	GracePeriod     int    `yaml:"gracePeriod"`     // Shutdown grace period in seconds
+	EnableLogs      bool   `yaml:"enableLogs"`      // Whether to enable HTTP request logging (default: true)
 }
 
 // Default values
@@ -175,6 +176,12 @@ func applyDefaultsToConfig(config *Config) bool {
 	if config.ReverseProxy.GracePeriod == 0 {
 		config.ReverseProxy.GracePeriod = gracePeriod
 		logger.Debug("Applied default value for ReverseProxy.GracePeriod", "value", gracePeriod)
+		defaultsApplied = true
+	}
+	// Set EnableLogs to true by default if not specified
+	if !config.ReverseProxy.EnableLogs {
+		config.ReverseProxy.EnableLogs = true
+		logger.Debug("Applied default value for ReverseProxy.EnableLogs", "value", true)
 		defaultsApplied = true
 	}
 
@@ -532,12 +539,20 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 		}
 	}
 	if val := os.Getenv("GORDON_PROXY_GRACE_PERIOD"); val != "" {
-		if i, err := strconv.Atoi(val); err == nil {
+		i, err := strconv.Atoi(val)
+		if err == nil {
 			config.ReverseProxy.GracePeriod = i
-			if printLogs {
-				logger.Info("Using environment variable GORDON_PROXY_GRACE_PERIOD", "value", i)
-			}
 		}
+		logger.Info("Using environment variable GORDON_PROXY_GRACE_PERIOD", "value", i)
+	}
+
+	// Handle GORDON_PROXY_ENABLE_LOGS environment variable
+	if val := os.Getenv("GORDON_PROXY_ENABLE_LOGS"); val != "" {
+		enableLogs, err := strconv.ParseBool(val)
+		if err == nil {
+			config.ReverseProxy.EnableLogs = enableLogs
+		}
+		logger.Info("Using environment variable GORDON_PROXY_ENABLE_LOGS", "value", config.ReverseProxy.EnableLogs)
 	}
 }
 
@@ -593,6 +608,7 @@ func (config *Config) LoadConfig() (*Config, error) {
 				LetsEncryptMode: letsEncryptMode,
 				CacheSize:       cacheSize,
 				GracePeriod:     gracePeriod,
+				EnableLogs:      true,
 			},
 		}
 
@@ -730,6 +746,7 @@ func (config *Config) LoadConfig() (*Config, error) {
 				LetsEncryptMode: letsEncryptMode,
 				CacheSize:       cacheSize,
 				GracePeriod:     gracePeriod,
+				EnableLogs:      true,
 			},
 		}
 

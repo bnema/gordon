@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
@@ -246,7 +247,45 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 		return "", fmt.Errorf("failed to check if docker client is initialized: %w", err)
 	}
 
-	log.Info("Creating container with params: %+v\n", cmdParams)
+	log.Info("Creating container with params",
+		"name", cmdParams.ContainerName,
+		"image", cmdParams.ImageName,
+		"proxy_port", cmdParams.ProxyPort)
+
+	// Check if a container with this name already exists - handle recreation case
+	existingContainers, err := ListRunningContainers()
+	if err != nil {
+		log.Warn("Failed to check for existing containers", "error", err)
+	} else {
+		for _, container := range existingContainers {
+			for _, name := range container.Names {
+				// Container names in Docker API have a leading slash
+				cleanName := strings.TrimPrefix(name, "/")
+				if cleanName == cmdParams.ContainerName {
+					log.Warn("Container with this name already exists, it will be replaced",
+						"name", cmdParams.ContainerName,
+						"existing_id", container.ID)
+
+					// Stop and remove the existing container
+					if err := StopContainer(container.ID); err != nil {
+						log.Warn("Failed to stop existing container",
+							"container_id", container.ID,
+							"error", err)
+					}
+
+					if err := RemoveContainer(container.ID); err != nil {
+						log.Warn("Failed to remove existing container",
+							"container_id", container.ID,
+							"error", err)
+					}
+
+					log.Info("Removed existing container to create a new one",
+						"name", cmdParams.ContainerName)
+					break
+				}
+			}
+		}
+	}
 
 	// Check network
 	isNetworkCreated, err := CheckIfNetworkExists(cmdParams.Network)
@@ -695,3 +734,148 @@ func formatDuration(d time.Duration) string {
 	}
 	return fmt.Sprintf("%dm", minutes)
 }
+
+// ListenForContainerEvents starts listening for container events and calls the provided callback
+// when relevant container events occur. This is used for real-time service discovery and IP updates.
+func ListenForContainerEvents(networkFilter string, callback func(string, string, string)) error {
+	// Check if the Docker client has been initialized
+	err := CheckIfInitialized()
+	if err != nil {
+		return err
+	}
+
+	// Create a context with cancel to allow for clean shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Store cancel func to allow shutdown
+	containerEventCancel = cancel
+
+	// Set up filters for the events we're interested in
+	filters := makeEventFilters(networkFilter)
+
+	// Start listening for events
+	messages, errs := dockerCli.Events(ctx, types.EventsOptions{
+		Filters: filters,
+	})
+
+	// Process events in a goroutine
+	go func() {
+		for {
+			select {
+			case err := <-errs:
+				if err != nil && ctx.Err() == nil {
+					// Only log if this isn't due to context cancellation
+					log.Error("Error in container event stream", "error", err)
+				}
+				return
+			case event := <-messages:
+				// Process container events
+				if event.Type == "container" {
+					containerID := event.Actor.ID
+
+					// Get container name from event attributes
+					containerName := event.Actor.Attributes["name"]
+					if containerName == "" {
+						// If not in attributes, try to get it from the API
+						name, err := GetContainerName(containerID)
+						if err == nil {
+							containerName = strings.TrimPrefix(name, "/")
+						}
+					}
+
+					// Handle container events based on action
+					switch event.Action {
+					case "start":
+						// Container started - need to get its IP and update any proxy routes
+						log.Debug("Container started event",
+							"container_id", containerID,
+							"container_name", containerName)
+
+						// Get container IP from the network
+						containerIP, err := getContainerIPFromNetwork(containerID, networkFilter)
+						if err != nil {
+							log.Error("Failed to get container IP",
+								"container_id", containerID,
+								"error", err)
+							continue
+						}
+
+						// Call the callback with the container ID, name, and IP
+						callback(containerID, containerName, containerIP)
+
+					case "die", "kill", "destroy":
+						// Container stopped - might need to mark routes as inactive
+						log.Debug("Container stopped event",
+							"container_id", containerID,
+							"container_name", containerName,
+							"action", event.Action)
+
+					case "rename":
+						// Container renamed - update related proxy routes
+						log.Debug("Container renamed event",
+							"container_id", containerID,
+							"container_name", containerName,
+							"new_name", event.Actor.Attributes["name"])
+
+						// Add other event types as needed
+					}
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	log.Info("Started container event listener", "network_filter", networkFilter)
+	return nil
+}
+
+// StopContainerEventListener stops the container event listener
+func StopContainerEventListener() {
+	if containerEventCancel != nil {
+		containerEventCancel()
+		log.Info("Stopped container event listener")
+	}
+}
+
+// getContainerIPFromNetwork gets a container's IP address from the specified network
+func getContainerIPFromNetwork(containerID, networkName string) (string, error) {
+	// Get network info
+	networkInfo, err := GetNetworkInfo(networkName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get network info: %w", err)
+	}
+
+	// Look for container in the network
+	containerEndpoint, exists := networkInfo.Containers[containerID]
+	if !exists {
+		return "", fmt.Errorf("container not found in network %s", networkName)
+	}
+
+	// Return the container's IP address
+	return containerEndpoint.IPv4Address, nil
+}
+
+// makeEventFilters creates filters for the Events API
+func makeEventFilters(networkName string) filters.Args {
+	f := filters.NewArgs()
+
+	// Filter for container events only
+	f.Add("type", "container")
+
+	// Filter for events we're interested in
+	f.Add("event", "start")
+	f.Add("event", "die")
+	f.Add("event", "destroy")
+	f.Add("event", "rename")
+
+	// If network name provided, filter for containers in that network
+	if networkName != "" {
+		f.Add("network", networkName)
+	}
+
+	return f
+}
+
+// Variable to store cancel function for event listener
+var containerEventCancel context.CancelFunc
