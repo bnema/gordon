@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -768,7 +769,7 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 			filters := makeEventFilters(networkFilter)
 
 			// Start listening for events
-			messages, errs := dockerCli.Events(ctx, types.EventsOptions{
+			messages, errs := dockerCli.Events(ctx, events.ListOptions{
 				Filters: filters,
 			})
 
