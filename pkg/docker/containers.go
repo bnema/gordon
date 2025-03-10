@@ -760,6 +760,13 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 		consecutiveFailures := 0
 		maxConsecutiveFailures := 10
 
+		// Track EOFs for reduced logging
+		eofCount := 0
+		lastEOFLogTime := time.Now().Add(-10 * time.Minute) // Initialize to past time
+
+		// Fixed delay for EOFs to prevent rapid reconnection
+		eofReconnectDelay := 5 * time.Second
+
 		for {
 			// Check if context was canceled (application is shutting down)
 			if ctx.Err() != nil {
@@ -767,18 +774,24 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 			}
 
 			// Add a timeout context for the Events call
-			// This helps prevent long-running connections that might become stale
-			eventCtx, eventCancel := context.WithTimeout(ctx, 5*time.Minute)
+			eventCtx, eventCancel := context.WithCancel(ctx)
 
 			// Set up filters for the events we're interested in
 			filters := makeEventFilters(networkFilter)
 
-			// Start listening for events with timeout context
+			log.Debug("connecting to container event stream", "network_filter", networkFilter)
+
+			// Start listening for events
 			messages, errs := dockerCli.Events(eventCtx, events.ListOptions{
 				Filters: filters,
 			})
 
-			log.Info("Started container event listener", "network_filter", networkFilter)
+			// Only log the first connection and every 10th reconnection for EOF
+			if eofCount == 0 {
+				log.Info("Started container event listener", "network_filter", networkFilter)
+			} else {
+				log.Debug("Reconnected container event listener", "network_filter", networkFilter, "reconnect_count", eofCount)
+			}
 
 			// Process events in an inner loop
 			listenSuccess := false
@@ -789,7 +802,24 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 				case err := <-errs:
 					if err != nil && ctx.Err() == nil {
 						// Only log if this isn't due to context cancellation
-						log.Error("Error in container event stream", "error", err)
+						if err.Error() == "EOF" {
+							// Increment EOF counter
+							eofCount++
+
+							// Log EOF errors less frequently to reduce spam
+							now := time.Now()
+							if eofCount == 1 || eofCount%10 == 0 || now.Sub(lastEOFLogTime) > time.Minute {
+								log.Debug("Docker event stream closed with EOF - will reconnect",
+									"count", eofCount,
+									"next_reconnect_delay", eofReconnectDelay)
+								lastEOFLogTime = now
+							}
+						} else {
+							// Non-EOF errors are still important, log them as errors
+							log.Error("Error in container event stream", "error", err)
+							// Reset EOF counter for non-EOF errors
+							eofCount = 0
+						}
 
 						// Cancel the event context to clean up resources
 						eventCancel()
@@ -798,27 +828,25 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 						consecutiveFailures++
 
 						// If we have too many consecutive failures, log a warning
-						if consecutiveFailures >= maxConsecutiveFailures {
+						if consecutiveFailures >= maxConsecutiveFailures && consecutiveFailures%maxConsecutiveFailures == 0 {
 							log.Warn("Multiple consecutive failures in container event stream",
 								"count", consecutiveFailures,
 								"will_continue_trying", true)
 						}
 
-						// Calculate backoff delay with exponential increase
-						if listenSuccess {
-							// If we had successful events before failure, reset the delay
-							currentDelay = initialDelay
-						} else {
-							// Exponential backoff: increase the delay each time, up to max
-							currentDelay = time.Duration(float64(currentDelay) * 1.5)
-							if currentDelay > maxDelay {
-								currentDelay = maxDelay
+						// Calculate backoff delay with exponential increase for non-EOF errors
+						if err.Error() != "EOF" {
+							if listenSuccess {
+								// If we had successful events before failure, reset the delay
+								currentDelay = initialDelay
+							} else {
+								// Exponential backoff: increase the delay each time, up to max
+								currentDelay = time.Duration(float64(currentDelay) * 1.5)
+								if currentDelay > maxDelay {
+									currentDelay = maxDelay
+								}
 							}
 						}
-
-						log.Debug("Will attempt to reconnect to container event stream",
-							"delay", currentDelay,
-							"consecutive_failures", consecutiveFailures)
 
 						// Break out of the inner event loop to reconnect
 						break eventStreamLoop
@@ -834,7 +862,10 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 						listenSuccess = true
 						// Reset failure counter on successful event
 						consecutiveFailures = 0
-						log.Info("Successfully receiving container events")
+						// Only log first successful connection or after errors
+						if eofCount <= 1 {
+							log.Info("Successfully receiving container events")
+						}
 					}
 
 					// Update last event time
@@ -858,7 +889,7 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 						switch event.Action {
 						case "start":
 							// Container started - need to get its IP and update any proxy routes
-							log.Debug("Container started event",
+							log.Debug("container started event",
 								"container_id", containerID,
 								"container_name", containerName)
 
@@ -876,14 +907,14 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 
 						case "die", "kill", "destroy":
 							// Container stopped - might need to mark routes as inactive
-							log.Debug("Container stopped event",
+							log.Debug("container stopped event",
 								"container_id", containerID,
 								"container_name", containerName,
 								"action", event.Action)
 
 						case "rename":
 							// Container renamed - update related proxy routes
-							log.Debug("Container renamed event",
+							log.Debug("container renamed event",
 								"container_id", containerID,
 								"container_name", containerName,
 								"new_name", event.Actor.Attributes["name"])
@@ -916,10 +947,23 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 			// Clean up the event context
 			eventCancel()
 
+			// Use different reconnection delays for different error types
+			var reconnectDelay time.Duration
+			if eofCount > 0 {
+				// Use fixed delay for EOF errors to prevent rapid reconnection cycles
+				reconnectDelay = eofReconnectDelay
+			} else {
+				// Use exponential backoff for other errors
+				reconnectDelay = currentDelay
+			}
+
 			// Wait for the calculated delay before reconnecting
 			select {
-			case <-time.After(currentDelay):
-				log.Info("Attempting to reconnect to container event stream")
+			case <-time.After(reconnectDelay):
+				// Only log reconnection attempts for non-EOF errors or occasional EOF errors
+				if eofCount == 0 || eofCount%10 == 0 {
+					log.Debug("Attempting to reconnect to container event stream", "delay", reconnectDelay)
+				}
 			case <-ctx.Done():
 				return
 			}
