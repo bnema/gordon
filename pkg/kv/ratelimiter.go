@@ -15,10 +15,11 @@ type RateLimitInfo struct {
 }
 
 type StarskeyRateLimiterStore struct {
-	db        *starskey.Starskey
-	rate      float64
-	burst     int
-	expiresIn time.Duration
+	db          *starskey.Starskey
+	rate        float64
+	burst       int
+	expiresIn   time.Duration
+	stopReports chan struct{} // Channel to signal stopping the report goroutine
 }
 
 // NewStarskeyRateLimiterStore creates a new rate limiter store backed by Starskey
@@ -47,12 +48,18 @@ func NewStarskeyRateLimiterStore(dbPath string, rate float64, burst int, expires
 		"burst", burst,
 		"expiration", expiresIn)
 
-	return &StarskeyRateLimiterStore{
-		db:        db,
-		rate:      rate,
-		burst:     burst,
-		expiresIn: expiresIn,
-	}, nil
+	store := &StarskeyRateLimiterStore{
+		db:          db,
+		rate:        rate,
+		burst:       burst,
+		expiresIn:   expiresIn,
+		stopReports: make(chan struct{}),
+	}
+
+	// Start the jailed IPs reporting
+	go store.startJailReporting()
+
+	return store, nil
 }
 
 // Implement Echo's RateLimiterStore interface
@@ -84,6 +91,12 @@ func (s *StarskeyRateLimiterStore) Allow(identifier string) (bool, error) {
 				return nil
 			}
 
+			// If IP was jailed but now should be freed (reset time passed)
+			if info.Jailed && !now.Before(info.ResetTime) {
+				log.Info("IP address released from jail", "ip", identifier)
+				info.Jailed = false
+			}
+
 			// Calculate time-based allowance
 			timePassed := now.Sub(info.ResetTime).Seconds()
 			tokensToAdd := timePassed * s.rate
@@ -107,6 +120,8 @@ func (s *StarskeyRateLimiterStore) Allow(identifier string) (bool, error) {
 				info.Jailed = true
 				info.ResetTime = now.Add(time.Second) // 1 second penalty
 				log.Debug("IP jailed (burst exceeded)", "ip", identifier, "reset_at", info.ResetTime)
+				// Add info level log when an IP is jailed
+				log.Info("IP address jailed due to rate limit violation", "ip", identifier, "reset_at", info.ResetTime)
 			} else {
 				log.Debug("Request allowed", "ip", identifier, "attempts", info.Attempts)
 			}
@@ -134,7 +149,25 @@ func (s *StarskeyRateLimiterStore) Allow(identifier string) (bool, error) {
 }
 
 func (s *StarskeyRateLimiterStore) Reset(identifier string) (bool, error) {
-	err := s.db.Delete([]byte(identifier))
+	// Check if the IP was jailed before resetting
+	var wasJailed bool
+
+	// Access data before deletion to check jail status
+	value, err := s.db.Get([]byte(identifier))
+	if err == nil && value != nil {
+		var info RateLimitInfo
+		if err := json.Unmarshal(value, &info); err == nil {
+			wasJailed = info.Jailed
+		}
+	}
+
+	err = s.db.Delete([]byte(identifier))
+
+	// Log if we freed a jailed IP
+	if wasJailed {
+		log.Info("IP address manually reset and released from jail", "ip", identifier)
+	}
+
 	return err == nil, err
 }
 
@@ -177,9 +210,47 @@ func (s *StarskeyRateLimiterStore) GetJailedIPs() (map[string]time.Time, error) 
 	return jailed, nil
 }
 
-// Close closes the underlying Starskey database
+// startJailReporting starts a goroutine that logs jailed IPs count on startup and every 5 minutes
+func (s *StarskeyRateLimiterStore) startJailReporting() {
+	// Initial report on startup
+	s.reportJailedIPs()
+
+	// Set up ticker for periodic reporting (every 5 minutes)
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.reportJailedIPs()
+		case <-s.stopReports:
+			log.Debug("Stopping jailed IPs reporting")
+			return
+		}
+	}
+}
+
+// reportJailedIPs gets and logs the current jailed IPs count
+func (s *StarskeyRateLimiterStore) reportJailedIPs() {
+	jailed, err := s.GetJailedIPs()
+	if err != nil {
+		log.Error("Failed to get jailed IPs", "error", err)
+		return
+	}
+
+	count := len(jailed)
+	if count > 0 {
+		log.Info("Currently jailed IPs", "count", count)
+	} else {
+		log.Debug("No IPs currently in jail")
+	}
+}
+
+// Close closes the underlying Starskey database and stops the reporting goroutine
 func (s *StarskeyRateLimiterStore) Close() error {
 	log.Debug("Closing rate limiter store")
+	// Signal the reporting goroutine to stop
+	close(s.stopReports)
 	return s.db.Close()
 }
 
