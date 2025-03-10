@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/bnema/gordon/internal/proxy"
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/pkg/docker"
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
@@ -17,6 +21,8 @@ func NewProxyCommand(a *server.App) *cobra.Command {
 		protocol      string
 		path          string
 		remove        bool
+		update        bool
+		force         bool
 	)
 
 	proxyCmd := &cobra.Command{
@@ -34,6 +40,53 @@ func NewProxyCommand(a *server.App) *cobra.Command {
 			p, err := proxy.NewProxy(a)
 			if err != nil {
 				log.Fatal("Failed to create proxy:", err)
+			}
+
+			// If update flag is set, update a container's IP address
+			if update {
+				if domain == "" {
+					log.Fatal("Domain is required for updating a route IP")
+				}
+
+				if containerIP == "" {
+					log.Fatal("Container IP is required for updating a route IP")
+				}
+
+				// If force flag is not set, try to get the IP from the container ID
+				if !force && containerID != "" {
+					// Get container info to verify the IP
+					containerInfo, err := docker.GetContainerInfo(containerID)
+					if err != nil {
+						log.Warn("Failed to get container info, using provided IP", "error", err)
+					} else {
+						// Look for the network specified in the config
+						networkName := a.Config.ContainerEngine.Network
+						if networkSettings, exists := containerInfo.NetworkSettings.Networks[networkName]; exists && networkSettings.IPAddress != "" {
+							if networkSettings.IPAddress != containerIP {
+								log.Warn("Provided IP doesn't match container's actual IP",
+									"provided", containerIP,
+									"actual", networkSettings.IPAddress)
+								if !force {
+									log.Info("Using actual container IP instead of provided IP",
+										"container_id", containerID,
+										"new_ip", networkSettings.IPAddress)
+									containerIP = networkSettings.IPAddress
+								} else {
+									log.Warn("Force flag is set, using provided IP despite mismatch")
+								}
+							}
+						}
+					}
+				}
+
+				// Update the route
+				err := p.ForceUpdateRouteIP(domain, containerIP)
+				if err != nil {
+					log.Fatal("Failed to update route IP:", err)
+				}
+
+				log.Info("Route IP updated successfully", "domain", domain, "ip", containerIP)
+				return
 			}
 
 			// If remove flag is set, remove the route
@@ -95,6 +148,10 @@ func NewProxyCommand(a *server.App) *cobra.Command {
 			}
 			defer rows.Close()
 
+			fmt.Println("--- Proxy Routes ---")
+			fmt.Printf("%-30s %-12s %-15s %-6s %-7s\n", "DOMAIN", "CONTAINER ID", "IP", "PORT", "ACTIVE")
+			fmt.Println(strings.Repeat("-", 75))
+
 			var count int
 			for rows.Next() {
 				var domain, containerID, containerIP, containerPort string
@@ -103,16 +160,25 @@ func NewProxyCommand(a *server.App) *cobra.Command {
 					log.Fatal("Failed to scan row:", err)
 				}
 
-				log.Info("Route",
-					"domain", domain,
-					"containerIP", containerIP,
-					"containerPort", containerPort,
-					"active", active,
-				)
+				// Format container ID to show just first 12 chars
+				shortID := containerID
+				if len(containerID) > 12 {
+					shortID = containerID[:12]
+				}
+
+				// Format active status
+				activeStr := "✓"
+				if !active {
+					activeStr = "✗"
+				}
+
+				fmt.Printf("%-30s %-12s %-15s %-6s %-7s\n",
+					domain, shortID, containerIP, containerPort, activeStr)
 				count++
 			}
 
-			log.Info("Proxy routes loaded", "count", count)
+			fmt.Println(strings.Repeat("-", 75))
+			fmt.Printf("Total routes: %d\n", count)
 		},
 	}
 
@@ -124,6 +190,8 @@ func NewProxyCommand(a *server.App) *cobra.Command {
 	proxyCmd.Flags().StringVarP(&protocol, "protocol", "t", "http", "Protocol (http or https)")
 	proxyCmd.Flags().StringVarP(&path, "path", "a", "/", "Path prefix to route")
 	proxyCmd.Flags().BoolVarP(&remove, "remove", "r", false, "Remove the route for the specified domain")
+	proxyCmd.Flags().BoolVarP(&update, "update", "u", false, "Update the IP address for an existing route")
+	proxyCmd.Flags().BoolVarP(&force, "force", "f", false, "Force update with provided IP even if it doesn't match container's actual IP")
 
 	return proxyCmd
 }

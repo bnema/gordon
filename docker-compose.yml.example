@@ -46,6 +46,7 @@ services:
       - GORDON_PROXY_HTTP_PORT=80   # HTTP port for reverse proxy
       - GORDON_PROXY_CERT_DIR=/certs
       - GORDON_PROXY_EMAIL=admin@example.com
+      - GORDON_PROXY_ENABLE_LOGS=true    # Enable HTTP request logging (set to false to disable)
       
       # Session Secret for security
       - SESSION_SECRET=replace_with_secure_random_string
