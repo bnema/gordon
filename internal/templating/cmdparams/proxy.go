@@ -11,18 +11,19 @@ func SetupProxyRoute(params *docker.ContainerCommandParams, containerPort string
 	// Set the container port to be used by the reverse proxy
 	params.ProxyPort = containerPort
 
+	// Create the full domain (service.domain)
+	fullDomain := params.ServiceName + "." + params.Domain
+
 	// Add custom labels to identify this container as manageable by Gordon
 	params.Labels = []string{
 		"gordon.managed=true",
-		"gordon.domain=" + params.Domain,
-		"gordon.service=" + params.ServiceName,
+		"gordon.domain=" + fullDomain,
 		"gordon.proxy.port=" + containerPort,
 		"gordon.proxy.ssl=" + boolToString(params.IsSSL),
 	}
 
 	log.Debug("Container proxy configuration set up",
-		"domain", params.Domain,
-		"service", params.ServiceName,
+		"domain", fullDomain,
 		"proxyPort", containerPort,
 		"ssl", params.IsSSL)
 

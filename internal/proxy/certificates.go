@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -33,7 +33,7 @@ func (p *Proxy) setupCertManager() {
 
 	// Ensure directory exists
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Warn("Failed to create certificate cache directory",
+		logger.Warn("Failed to create certificate cache directory",
 			"dir", dir,
 			"error", err)
 	}
@@ -54,14 +54,14 @@ func (p *Proxy) setupCertManager() {
 		certManager.Client = &acme.Client{
 			DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
 		}
-		log.Debug("Using Let's Encrypt staging environment",
+		logger.Debug("Using Let's Encrypt staging environment",
 			"url", "https://acme-staging-v02.api.letsencrypt.org/directory")
 	} else {
 		// Explicitly set production URL when not in staging mode
 		certManager.Client = &acme.Client{
 			DirectoryURL: acme.LetsEncryptURL, // "https://acme-v02.api.letsencrypt.org/directory"
 		}
-		log.Debug("Using Let's Encrypt production environment",
+		logger.Debug("Using Let's Encrypt production environment",
 			"url", acme.LetsEncryptURL)
 	}
 
@@ -87,7 +87,7 @@ func (p *Proxy) setupCertManager() {
 
 		// Log the attempt but still allow it - this helps debug
 		// certificate acquisition issues during development
-		log.Warn("Unknown host in certificate request",
+		logger.Warn("Unknown host in certificate request",
 			"host", host,
 			"adminDomain", adminDomain,
 			"allowed", "yes")
@@ -108,9 +108,9 @@ func (p *Proxy) setupCertManager() {
 
 	fallbackCert, err := generateFallbackCertificates(fallbackDomains)
 	if err != nil {
-		log.Warn("Failed to generate fallback certificate", "error", err)
+		logger.Warn("Failed to generate fallback certificate", "error", err)
 	} else {
-		log.Info("Generated fallback self-signed certificate for admin domain",
+		logger.Info("Generated fallback self-signed certificate for admin domain",
 			"domain", adminDomain,
 			"valid_until", time.Now().Add(24*time.Hour).Format("2006-01-02 15:04:05"))
 		// Store the fallback certificate
@@ -118,7 +118,7 @@ func (p *Proxy) setupCertManager() {
 	}
 
 	p.certManager = certManager
-	log.Debug("Certificate manager setup completed",
+	logger.Debug("Certificate manager setup completed",
 		"directory", dir,
 		"mode", p.config.LetsEncryptMode)
 
@@ -147,7 +147,7 @@ func (p *Proxy) checkCertificateInCache(domain string) bool {
 	certData, err := p.certManager.Cache.Get(ctx, cacheKey)
 	if err != nil {
 		// ErrCacheMiss or other error means the certificate is not in the cache
-		log.Debug("Certificate not found in cache",
+		logger.Debug("Certificate not found in cache",
 			"domain", domain,
 			"error", err)
 		return false
@@ -156,14 +156,14 @@ func (p *Proxy) checkCertificateInCache(domain string) bool {
 	// Parse the certificate to check its validity
 	block, _ := pem.Decode(certData)
 	if block == nil || block.Type != "CERTIFICATE" {
-		log.Warn("Invalid certificate data in cache",
+		logger.Warn("Invalid certificate data in cache",
 			"domain", domain)
 		return false
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		log.Warn("Failed to parse certificate from cache",
+		logger.Warn("Failed to parse certificate from cache",
 			"domain", domain,
 			"error", err)
 		return false
@@ -172,7 +172,7 @@ func (p *Proxy) checkCertificateInCache(domain string) bool {
 	// Check if the certificate is still valid
 	now := time.Now()
 	if now.After(cert.NotAfter) || now.Before(cert.NotBefore) {
-		log.Info("Certificate in cache has expired or is not yet valid",
+		logger.Info("Certificate in cache has expired or is not yet valid",
 			"domain", domain,
 			"not_before", cert.NotBefore,
 			"not_after", cert.NotAfter)
@@ -181,7 +181,7 @@ func (p *Proxy) checkCertificateInCache(domain string) bool {
 
 	// Check if the certificate is about to expire (within 30 days)
 	if now.Add(30 * 24 * time.Hour).After(cert.NotAfter) {
-		log.Info("Certificate in cache is valid but will expire soon",
+		logger.Info("Certificate in cache is valid but will expire soon",
 			"domain", domain,
 			"expires_in", cert.NotAfter.Sub(now).Hours()/24,
 			"days")
@@ -189,7 +189,7 @@ func (p *Proxy) checkCertificateInCache(domain string) bool {
 		return false
 	}
 
-	log.Info("Valid certificate found in cache",
+	logger.Info("Valid certificate found in cache",
 		"domain", domain,
 		"expires_in", cert.NotAfter.Sub(now).Hours()/24,
 		"days")
@@ -206,7 +206,7 @@ func (p *Proxy) requestAdminCertificate() {
 
 	// Only proceed if HTTPS is enabled
 	if !p.app.GetConfig().Http.Https {
-		log.Debug("HTTPS is disabled, skipping admin certificate request")
+		logger.Debug("HTTPS is disabled, skipping admin certificate request")
 		return
 	}
 
@@ -214,7 +214,7 @@ func (p *Proxy) requestAdminCertificate() {
 	host := adminDomain
 	ips, err := net.LookupIP(host)
 	if err != nil {
-		log.Error("Could not resolve admin domain, Let's Encrypt will likely fail",
+		logger.Error("Could not resolve admin domain, Let's Encrypt will likely fail",
 			"domain", adminDomain,
 			"error", err.Error(),
 			"solution", "Check DNS settings and ensure domain points to this server")
@@ -226,13 +226,13 @@ func (p *Proxy) requestAdminCertificate() {
 		ipStrings = append(ipStrings, ip.String())
 	}
 
-	log.Info("Successfully resolved admin domain",
+	logger.Info("Successfully resolved admin domain",
 		"domain", adminDomain,
 		"ips", ipStrings)
 
 	// Check if we already have a valid certificate in the cache
 	if p.checkCertificateInCache(adminDomain) {
-		log.Info("Using existing certificate from cache",
+		logger.Info("Using existing certificate from cache",
 			"domain", adminDomain,
 			"action", "skipping Let's Encrypt request to avoid rate limits")
 		return
@@ -247,12 +247,12 @@ func (p *Proxy) requestAdminCertificate() {
 	}
 
 	// Log the certificate request intent
-	log.Info("Initiating Let's Encrypt certificate request for admin domain",
+	logger.Info("Initiating Let's Encrypt certificate request for admin domain",
 		"domain", adminDomain,
 		"email", email,
 		"mode", mode)
 
-	log.Info("⏳ Waiting for Let's Encrypt to validate domain ownership",
+	logger.Info("⏳ Waiting for Let's Encrypt to validate domain ownership",
 		"domain", adminDomain,
 		"validation_method", "HTTP-01 challenge",
 		"requirements", "Domain must be publicly accessible on port 80",
@@ -289,7 +289,7 @@ func (p *Proxy) requestAdminCertificate() {
 		certErr = result.err
 	case <-ctx.Done():
 		certErr = fmt.Errorf("certificate request timed out after 2 minutes: %w", ctx.Err())
-		log.Error("Let's Encrypt certificate request timed out",
+		logger.Error("Let's Encrypt certificate request timed out",
 			"domain", adminDomain,
 			"timeout", "2 minutes",
 			"error", certErr)
@@ -306,31 +306,31 @@ func (p *Proxy) requestAdminCertificate() {
 				retryAfterStr = matches[1]
 			}
 
-			log.Error("Let's Encrypt rate limit reached",
+			logger.Error("Let's Encrypt rate limit reached",
 				"domain", adminDomain,
 				"error", certErr,
 				"retry_after", retryAfterStr,
 				"solution", "Wait until the rate limit expires, then restart the server")
 
 			// Don't retry on rate limits
-			log.Info("Skipping certificate request retries due to rate limiting",
+			logger.Info("Skipping certificate request retries due to rate limiting",
 				"domain", adminDomain)
 		} else {
-			log.Error("Failed to obtain Let's Encrypt certificate",
+			logger.Error("Failed to obtain Let's Encrypt certificate",
 				"domain", adminDomain,
 				"error", certErr)
 
-			log.Info("⏳ Retrying certificate request with exponential backoff",
+			logger.Info("⏳ Retrying certificate request with exponential backoff",
 				"domain", adminDomain,
 				"timeout", "2 minutes")
 			// Implement retry logic with backoff
 			go p.retryCertificateRequest(adminDomain, 3, 10*time.Second)
 		}
 	} else if certResult != nil {
-		log.Info("Successfully obtained Let's Encrypt certificate",
+		logger.Info("Successfully obtained Let's Encrypt certificate",
 			"domain", adminDomain)
 	} else {
-		log.Error("Unexpected error: received nil certificate but no error",
+		logger.Error("Unexpected error: received nil certificate but no error",
 			"domain", adminDomain,
 			"timeout", "2 minutes")
 		// Implement retry logic with backoff
@@ -342,14 +342,14 @@ func (p *Proxy) requestAdminCertificate() {
 // for a container domain
 func (p *Proxy) requestDomainCertificate(domain string) {
 	if domain == "" {
-		log.Warn("Empty domain provided to requestDomainCertificate")
+		logger.Warn("Empty domain provided to requestDomainCertificate")
 		return
 	}
 
 	// Extract hostname from domain, resolving it to see if it's publicly accessible
 	ips, err := net.LookupIP(domain)
 	if err != nil {
-		log.Error("Could not resolve domain, Let's Encrypt will likely fail",
+		logger.Error("Could not resolve domain, Let's Encrypt will likely fail",
 			"domain", domain,
 			"error", err.Error(),
 			"solution", "Check DNS settings and ensure domain points to this server")
@@ -361,13 +361,13 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 		ipStrings = append(ipStrings, ip.String())
 	}
 
-	log.Info("Successfully resolved domain for certificate request",
+	logger.Info("Successfully resolved domain for certificate request",
 		"domain", domain,
 		"ips", ipStrings)
 
 	// Check if we already have a valid certificate in the cache
 	if p.checkCertificateInCache(domain) {
-		log.Info("Using existing certificate from cache",
+		logger.Info("Using existing certificate from cache",
 			"domain", domain,
 			"action", "skipping Let's Encrypt request to avoid rate limits")
 		return
@@ -382,12 +382,12 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 	}
 
 	// Log the certificate request intent
-	log.Info("Initiating Let's Encrypt certificate request for container domain",
+	logger.Info("Initiating Let's Encrypt certificate request for container domain",
 		"domain", domain,
 		"email", email,
 		"mode", mode)
 
-	log.Info("⏳ Waiting for Let's Encrypt to validate domain ownership",
+	logger.Info("⏳ Waiting for Let's Encrypt to validate domain ownership",
 		"domain", domain,
 		"validation_method", "HTTP-01 challenge",
 		"requirements", "Domain must be publicly accessible on port 80",
@@ -424,7 +424,7 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 		certErr = result.err
 	case <-ctx.Done():
 		certErr = fmt.Errorf("certificate request timed out after 1 minute: %w", ctx.Err())
-		log.Error("Let's Encrypt certificate request timed out",
+		logger.Error("Let's Encrypt certificate request timed out",
 			"domain", domain,
 			"timeout", "1 minute",
 			"error", certErr)
@@ -441,31 +441,31 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 				retryAfterStr = matches[1]
 			}
 
-			log.Error("Let's Encrypt rate limit reached",
+			logger.Error("Let's Encrypt rate limit reached",
 				"domain", domain,
 				"error", certErr,
 				"retry_after", retryAfterStr,
 				"solution", "Wait until the rate limit expires, then restart the server")
 
 			// Don't retry on rate limits
-			log.Info("Skipping certificate request retries due to rate limiting",
+			logger.Info("Skipping certificate request retries due to rate limiting",
 				"domain", domain)
 		} else {
-			log.Error("Failed to obtain Let's Encrypt certificate",
+			logger.Error("Failed to obtain Let's Encrypt certificate",
 				"domain", domain,
 				"error", certErr)
 
-			log.Info("⏳ Retrying certificate request with exponential backoff",
+			logger.Info("⏳ Retrying certificate request with exponential backoff",
 				"domain", domain,
 				"timeout", "2 minutes")
 			// Implement retry logic with backoff
 			go p.retryCertificateRequest(domain, 3, 10*time.Second)
 		}
 	} else if certResult != nil {
-		log.Info("Successfully obtained Let's Encrypt certificate",
+		logger.Info("Successfully obtained Let's Encrypt certificate",
 			"domain", domain)
 	} else {
-		log.Error("Unexpected error: received nil certificate but no error",
+		logger.Error("Unexpected error: received nil certificate but no error",
 			"domain", domain,
 			"timeout", "1 minute")
 		// Implement retry logic with backoff
@@ -479,7 +479,7 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// Wait for backoff period
-		log.Info("Retrying Let's Encrypt certificate request",
+		logger.Info("Retrying Let's Encrypt certificate request",
 			"domain", domain,
 			"attempt", attempt,
 			"max_retries", maxRetries,
@@ -503,14 +503,14 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 			resp, err := client.Get(testURL)
 
 			if err != nil {
-				log.Warn("HTTP challenge endpoint might not be accessible",
+				logger.Warn("HTTP challenge endpoint might not be accessible",
 					"domain", domain,
 					"url", testURL,
 					"error", err,
 					"solution", "Ensure port 80 is accessible and not blocked by firewall")
 			} else {
 				resp.Body.Close()
-				log.Info("HTTP challenge endpoint is accessible",
+				logger.Info("HTTP challenge endpoint is accessible",
 					"domain", domain,
 					"url", testURL,
 					"status", resp.StatusCode)
@@ -534,13 +534,13 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 
 		// Check result
 		if err == nil {
-			log.Info("Successfully obtained Let's Encrypt certificate on retry",
+			logger.Info("Successfully obtained Let's Encrypt certificate on retry",
 				"domain", domain,
 				"attempt", attempt)
 			return
 		}
 
-		log.Error("Let's Encrypt certificate request retry failed",
+		logger.Error("Let's Encrypt certificate request retry failed",
 			"domain", domain,
 			"attempt", attempt,
 			"error", err)
@@ -548,13 +548,13 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 		// Provide more detailed diagnostics based on the error
 		if strings.Contains(strings.ToLower(err.Error()), "connection refused") ||
 			strings.Contains(strings.ToLower(err.Error()), "timeout") {
-			log.Error("Let's Encrypt connection failed - this typically indicates:",
+			logger.Error("Let's Encrypt connection failed - this typically indicates:",
 				"issue_1", "Port 80 is not accessible from the internet",
 				"issue_2", "Firewall is blocking inbound connections",
 				"issue_3", "DNS records not properly propagated",
 				"solution", "Check firewall settings and DNS configuration")
 		} else if strings.Contains(strings.ToLower(err.Error()), "unauthorized") {
-			log.Error("Let's Encrypt authorization failed - this typically indicates:",
+			logger.Error("Let's Encrypt authorization failed - this typically indicates:",
 				"issue", "Domain ownership validation failed",
 				"solution", "Ensure the server is publicly accessible on port 80")
 		} else if strings.Contains(strings.ToLower(err.Error()), "ratelimited") {
@@ -570,7 +570,7 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 				}
 			}
 
-			log.Error("Let's Encrypt rate limit reached - cannot issue more certificates for this domain yet",
+			logger.Error("Let's Encrypt rate limit reached - cannot issue more certificates for this domain yet",
 				"domain", domain,
 				"retry_after", retryAfterStr,
 				"solution", "Wait until the rate limit expires, then restart the server")
@@ -583,20 +583,20 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 		backoff *= 2
 	}
 
-	log.Error("All Let's Encrypt certificate request retries failed",
+	logger.Error("All Let's Encrypt certificate request retries failed",
 		"domain", domain,
 		"max_retries", maxRetries,
 		"fallback", "Using self-signed certificate")
 
 	// At this point, all retries have failed, so we'll rely on the fallback self-signed certificate
 	// But let's log this prominently for debugging
-	log.Error("⚠️ HTTPS is using a self-signed certificate which browsers will warn about",
+	logger.Error("⚠️ HTTPS is using a self-signed certificate which browsers will warn about",
 		"domain", domain,
 		"reason", "Let's Encrypt certificate issuance failed",
 		"solution", "Check network settings and Let's Encrypt status")
 
 	// Suggest checking the common issues
-	log.Error("Common Let's Encrypt issues to check:",
+	logger.Error("Common Let's Encrypt issues to check:",
 		"check_1", "Ensure ports 80 and 443 are open on your firewall",
 		"check_2", "Verify DNS records point to your server IP",
 		"check_3", "Make sure no other services are running on ports 80/443",

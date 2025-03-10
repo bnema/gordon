@@ -11,7 +11,7 @@ import (
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/interfaces"
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -55,10 +55,10 @@ type Proxy struct {
 
 // NewProxy creates a new instance of the reverse proxy
 func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
-	log.Debug("Initializing reverse proxy")
+	logger.Debug("Initializing reverse proxy")
 
 	// Log important configuration information
-	log.Debug("All internal connections to containers will use HTTP protocol regardless of external protocol")
+	logger.Debug("All internal connections to containers will use HTTP protocol regardless of external protocol")
 
 	// Set up the echo server for HTTPS traffic
 	httpsServer := echo.New()
@@ -85,7 +85,7 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 						// Store our container ID for future reference
 						ourContainerID = container.ID
 						containerName := strings.TrimLeft(container.Names[0], "/")
-						log.Info("Gordon identity established",
+						logger.Info("Gordon identity established",
 							"container_id", ourContainerID,
 							"container_name", containerName)
 						break
@@ -99,7 +99,7 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 	blacklistPath := app.GetConfig().General.StorageDir + "/blacklist.json"
 	blacklist, err := NewBlacklist(blacklistPath)
 	if err != nil {
-		log.Warn("Failed to initialize blacklist, continuing without it", "error", err)
+		logger.Warn("Failed to initialize blacklist, continuing without it", "error", err)
 	}
 
 	// Initialize routes map
@@ -126,6 +126,6 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 	// Set up the certificate manager
 	p.setupCertManager()
 
-	log.Debug("Reverse proxy initialized")
+	logger.Debug("Reverse proxy initialized")
 	return p, nil
 }

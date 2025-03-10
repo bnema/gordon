@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"gopkg.in/yaml.v3"
 )
 
@@ -64,7 +64,7 @@ func NewBlacklist(path string) (*BlacklistConfig, error) {
 			return nil, fmt.Errorf("failed to create blacklist file: %w", err)
 		}
 
-		log.Info("Created new blacklist file", "path", path)
+		logger.Info("Created new blacklist file", "path", path)
 	}
 
 	// Load the blacklist
@@ -72,7 +72,7 @@ func NewBlacklist(path string) (*BlacklistConfig, error) {
 		return nil, fmt.Errorf("failed to load blacklist: %w", err)
 	}
 
-	log.Info("Blacklist loaded",
+	logger.Info("Blacklist loaded",
 		"ips", len(blacklist.IPs),
 		"ranges", len(blacklist.Ranges))
 
@@ -119,7 +119,7 @@ func (b *BlacklistConfig) Load() error {
 
 		_, network, err := net.ParseCIDR(cidr)
 		if err != nil {
-			log.Warn("Invalid CIDR in blacklist", "cidr", cidr, "error", err)
+			logger.Warn("Invalid CIDR in blacklist", "cidr", cidr, "error", err)
 			continue
 		}
 		networks = append(networks, network)
@@ -136,12 +136,12 @@ func (b *BlacklistConfig) Load() error {
 
 	// If the file has actually changed, log about it
 	if fileInfo.ModTime() != b.LastMod {
-		log.Info("Loaded blacklist",
+		logger.Info("Loaded blacklist",
 			"ips", len(b.IPs),
 			"ranges", len(b.Ranges),
 			"last_modified", b.LastMod.Format(time.RFC3339))
 	} else if forceReload {
-		log.Debug("Reloaded blacklist (forced refresh)",
+		logger.Debug("Reloaded blacklist (forced refresh)",
 			"ips", len(b.IPs),
 			"ranges", len(b.Ranges))
 	}
@@ -162,14 +162,14 @@ func (b *BlacklistConfig) rebuildBlockedCache() {
 	// Replace the cache atomically
 	b.blockedCache = newCache
 
-	log.Debug("Rebuilt blocked IP cache", "direct_ips", len(b.blockedCache))
+	logger.Debug("Rebuilt blocked IP cache", "direct_ips", len(b.blockedCache))
 }
 
 // IsBlocked checks if an IP is in the blacklist
 func (b *BlacklistConfig) IsBlocked(ip string) bool {
 	// Try to reload the blacklist first
 	if err := b.Load(); err != nil {
-		log.Error("Failed to reload blacklist", "error", err)
+		logger.Error("Failed to reload blacklist", "error", err)
 	}
 
 	b.mu.RLock()
@@ -183,7 +183,7 @@ func (b *BlacklistConfig) IsBlocked(ip string) bool {
 	// Parse the IP
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
-		log.Warn("Failed to parse IP", "ip", ip)
+		logger.Warn("Failed to parse IP", "ip", ip)
 		return false
 	}
 
@@ -239,7 +239,7 @@ func (b *BlacklistConfig) AddIP(ip string) error {
 
 	// Add to in-memory cache immediately
 	b.blockedCache[ip] = true
-	log.Info("Added IP to blacklist", "ip", ip)
+	logger.Info("Added IP to blacklist", "ip", ip)
 
 	// Force a reload
 	return b.Load()
@@ -292,7 +292,7 @@ func (b *BlacklistConfig) AddRange(cidr string) error {
 		return err
 	}
 
-	log.Info("Added CIDR range to blacklist", "cidr", cidr)
+	logger.Info("Added CIDR range to blacklist", "cidr", cidr)
 
 	// Force a reload to update Networks and the cache
 	return b.Load()
@@ -345,7 +345,7 @@ func (b *BlacklistConfig) RemoveIP(ip string) error {
 
 	// Remove from cache
 	delete(b.blockedCache, ip)
-	log.Info("Removed IP from blacklist", "ip", ip)
+	logger.Info("Removed IP from blacklist", "ip", ip)
 
 	// Force a reload
 	return b.Load()
@@ -401,7 +401,7 @@ func (b *BlacklistConfig) RemoveRange(cidr string) error {
 		return err
 	}
 
-	log.Info("Removed CIDR range from blacklist", "cidr", cidr)
+	logger.Info("Removed CIDR range from blacklist", "cidr", cidr)
 
 	// Force a reload to rebuild Networks and the cache
 	return b.Load()
@@ -421,7 +421,7 @@ func (p *Proxy) logBlockedIP(clientIP, path, userAgent string) {
 		p.blockedIPCounter[clientIP] == 0 {
 
 		// Log this block and update counters
-		log.Info("Blocked request from blacklisted IP",
+		logger.Info("Blocked request from blacklisted IP",
 			"ip", clientIP,
 			"path", path,
 			"user_agent", userAgent)
@@ -447,7 +447,7 @@ func (p *Proxy) logBlockedIP(clientIP, path, userAgent string) {
 			totalBlocked += count
 		}
 
-		log.Info("Blocked IP summary",
+		logger.Info("Blocked IP summary",
 			"unique_ips", len(p.blockedIPCounter),
 			"total_requests", totalBlocked,
 			"since", p.lastBlockedLog.Format(time.RFC3339))
@@ -459,6 +459,6 @@ func (p *Proxy) logBlockedIP(clientIP, path, userAgent string) {
 
 	// Debug logging only if needed
 	if false {
-		log.Debug("Request marked as blacklisted for logging skip", "ip", clientIP)
+		logger.Debug("Request marked as blacklisted for logging skip", "ip", clientIP)
 	}
 }
