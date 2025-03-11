@@ -712,17 +712,55 @@ func (p *Proxy) ForceUpdateRouteIP(domain string, newIP string) error {
 	p.mu.RUnlock()
 
 	if !exists {
+		logger.Warn("Route not found for domain when updating IP", "domain", domain)
 		return fmt.Errorf("route not found for domain: %s", domain)
 	}
 
 	// Get the container ID from the route
 	containerID := route.ContainerID
 
+	// Add additional debug to track the IP update
+	logger.Debug("Attempting to force update route IP",
+		"domain", domain,
+		"container_id", containerID,
+		"old_ip", route.ContainerIP,
+		"new_ip", newIP)
+
+	// Double-check that the container exists and is running
+	containerInfo, err := docker.GetContainerInfo(containerID)
+	if err != nil {
+		logger.Warn("Container not found when updating route IP, might have been recreated",
+			"domain", domain,
+			"container_id", containerID,
+			"error", err)
+		// Continue with the update anyway, as the container ID might still be valid
+	} else {
+		logger.Debug("Container exists when updating route IP",
+			"domain", domain,
+			"container_id", containerID,
+			"container_state", containerInfo.State.Status)
+
+		// Verify the new IP matches what's in the container
+		networkName := p.app.GetConfig().ContainerEngine.Network
+		if containerInfo.NetworkSettings != nil && containerInfo.NetworkSettings.Networks != nil {
+			if networkSettings, exists := containerInfo.NetworkSettings.Networks[networkName]; exists &&
+				networkSettings.IPAddress != "" && networkSettings.IPAddress != newIP {
+				logger.Warn("New IP doesn't match container network IP, using container's actual IP",
+					"domain", domain,
+					"provided_ip", newIP,
+					"container_actual_ip", networkSettings.IPAddress)
+				newIP = networkSettings.IPAddress
+			}
+		}
+	}
+
 	// First, update the in-memory route immediately
 	p.mu.Lock()
 	if r, ok := p.routes[domain]; ok {
 		oldIP := r.ContainerIP
 		r.ContainerIP = newIP
+		// Make sure the route is also marked as active
+		r.Active = true
 		logger.Info("Force updated route IP in-memory",
 			"domain", domain,
 			"old_ip", oldIP,
@@ -735,33 +773,38 @@ func (p *Proxy) ForceUpdateRouteIP(domain string, newIP string) error {
 	var domainID string
 	rows, err := p.dbQueryWithRetry("SELECT id FROM domain WHERE name = ?", domain)
 	if err != nil {
+		logger.Error("Failed to query domain for IP update", "domain", domain, "error", err)
 		return fmt.Errorf("failed to query domain: %w", err)
 	}
 
 	if !rows.Next() {
 		rows.Close()
+		logger.Error("Domain not found in database when updating IP", "domain", domain)
 		return fmt.Errorf("domain not found: %s", domain)
 	}
 
 	if err := rows.Scan(&domainID); err != nil {
 		rows.Close()
+		logger.Error("Failed to scan domain ID for IP update", "domain", domain, "error", err)
 		return fmt.Errorf("failed to scan domain ID: %w", err)
 	}
 	rows.Close()
 
-	// Update the proxy_route record with retry
+	// Update the proxy_route record with retry and ensure it's marked as active
 	now := time.Now().Format(time.RFC3339)
 	result, err := p.dbExecWithRetry(`
-		UPDATE proxy_route SET container_ip = ?, updated_at = ? 
+		UPDATE proxy_route SET container_ip = ?, active = 1, updated_at = ? 
 		WHERE domain_id = ? AND container_id = ?`,
 		newIP, now, domainID, containerID)
 
 	if err != nil {
+		logger.Error("Failed to update IP in database", "domain", domain, "error", err)
 		return fmt.Errorf("failed to update database: %w", err)
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
+		logger.Warn("No rows affected when updating route IP in database", "domain", domain)
 		return fmt.Errorf("no rows affected when updating route in database")
 	}
 
@@ -1056,6 +1099,72 @@ func (p *Proxy) StartContainerEventListener() error {
 
 	// Create a callback function to handle container events
 	containerEventCallback := func(containerID, containerName, containerIP string) {
+		logger.Debug("Container event (start/restart) received",
+			"container_id", containerID,
+			"container_name", containerName,
+			"container_ip", containerIP)
+
+		// First, check if there are any existing routes for this container ID
+		var existingRoutes = make(map[string]*ProxyRouteInfo)
+		p.mu.RLock()
+		for domain, route := range p.routes {
+			if route.ContainerID == containerID {
+				existingRoutes[domain] = route
+			}
+		}
+		p.mu.RUnlock()
+
+		// If we found existing routes, check if the IP has changed
+		if len(existingRoutes) > 0 {
+			logger.Debug("Found existing routes for container",
+				"container_id", containerID,
+				"route_count", len(existingRoutes))
+
+			// Verify the container IP with an additional check
+			verifiedIP, err := docker.GetContainerIPFromNetwork(containerID, networkName)
+			if err == nil && verifiedIP != "" && verifiedIP != containerIP {
+				logger.Warn("Container IP mismatch from event vs. direct network check",
+					"container_id", containerID,
+					"event_ip", containerIP,
+					"network_ip", verifiedIP)
+
+				// Use the directly checked IP as it's more reliable
+				containerIP = verifiedIP
+			}
+
+			// Check and update each route if IP has changed
+			for domain, route := range existingRoutes {
+				if route.ContainerIP != containerIP {
+					logger.Info("Container restarted with new IP - updating route",
+						"container_id", containerID,
+						"container_name", containerName,
+						"domain", domain,
+						"old_ip", route.ContainerIP,
+						"new_ip", containerIP)
+
+					// Update the route IP
+					err := p.ForceUpdateRouteIP(domain, containerIP)
+					if err != nil {
+						logger.Error("Failed to update IP for restarted container",
+							"domain", domain,
+							"error", err)
+					}
+				} else {
+					// Even if IP is the same, make sure the route is active
+					if !route.Active {
+						logger.Info("Reactivating route for restarted container",
+							"container_id", containerID,
+							"container_name", containerName,
+							"domain", domain)
+
+						// Just reuse ForceUpdateRouteIP with the same IP to activate the route
+						p.ForceUpdateRouteIP(domain, containerIP)
+					}
+				}
+			}
+		}
+
+		// Call the standard recreation handler for additional checks
 		p.HandleContainerRecreation(containerID, containerName, containerIP)
 	}
 
@@ -1083,8 +1192,83 @@ func (p *Proxy) StartContainerEventListener() error {
 		}
 	}
 
+	// Schedule periodic check for routes with stale IPs
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				logger.Debug("Running periodic check for route IP consistency")
+				p.checkRoutesForIPConsistency()
+			case <-time.After(24 * time.Hour): // This is just a fallback in case the app is shutting down
+				return
+			}
+		}
+	}()
+
 	// Start the container event listener
 	return docker.ListenForContainerEvents(networkName, containerEventCallback, containerStopCallback)
+}
+
+// checkRoutesForIPConsistency verifies that all active routes have the correct container IP
+func (p *Proxy) checkRoutesForIPConsistency() {
+	networkName := p.app.GetConfig().ContainerEngine.Network
+
+	// Get a copy of the current routes
+	p.mu.RLock()
+	routesToCheck := make(map[string]*ProxyRouteInfo)
+	for domain, route := range p.routes {
+		if route.Active {
+			routesToCheck[domain] = &ProxyRouteInfo{
+				Domain:        route.Domain,
+				ContainerID:   route.ContainerID,
+				ContainerIP:   route.ContainerIP,
+				ContainerPort: route.ContainerPort,
+				Protocol:      route.Protocol,
+				Path:          route.Path,
+				Active:        route.Active,
+			}
+		}
+	}
+	p.mu.RUnlock()
+
+	// Check each active route
+	for domain, route := range routesToCheck {
+		// Skip checking admin domain
+		if domain == p.app.GetConfig().Http.FullDomain() {
+			continue
+		}
+
+		// Verify the current container IP
+		currentIP, err := docker.GetContainerIPFromNetwork(route.ContainerID, networkName)
+		if err != nil {
+			// Container might not exist anymore
+			logger.Warn("Failed to get current IP for container during consistency check",
+				"domain", domain,
+				"container_id", route.ContainerID,
+				"error", err)
+			continue
+		}
+
+		// If IP has changed, update the route
+		if currentIP != "" && currentIP != route.ContainerIP {
+			logger.Info("Detected IP mismatch during consistency check",
+				"domain", domain,
+				"container_id", route.ContainerID,
+				"old_ip", route.ContainerIP,
+				"current_ip", currentIP)
+
+			// Update the route
+			err := p.ForceUpdateRouteIP(domain, currentIP)
+			if err != nil {
+				logger.Error("Failed to update IP during consistency check",
+					"domain", domain,
+					"error", err)
+			}
+		}
+	}
 }
 
 // markRoutesInactive marks the specified routes as inactive in the database and memory
@@ -1510,143 +1694,152 @@ func (p *Proxy) detectGordonContainer() string {
 	return "gordon"
 }
 
-// proxyRequest handles the actual proxying of the request to the target container
+// proxyRequest proxies an HTTP request to a container
 func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 	host := c.Request().Host
-
-	// For container routes, verify the IP is reachable before proxying
-	if host != p.app.GetConfig().Http.FullDomain() {
-		// Test TCP connection to container before proxying
-		dialer := net.Dialer{Timeout: 500 * time.Millisecond}
-		// Format address properly for both IPv4 and IPv6
-		target := route.ContainerIP
-		if strings.Contains(target, ":") {
-			// IPv6 address needs to be wrapped in brackets
-			target = "[" + target + "]"
-		}
-		conn, err := dialer.Dial("tcp", net.JoinHostPort(target, route.ContainerPort))
-		if err != nil {
-			// Connection failed, check if container exists but has a new IP
-			containerID := route.ContainerID
-			if containerID != "" {
-				// Try to get container info and check if it has a different IP
-				containerInfo, err := docker.GetContainerInfo(containerID)
-				if err == nil && containerInfo.NetworkSettings != nil {
-					// Check if container has a different IP
-					networkName := p.app.GetConfig().ContainerEngine.Network
-					if networkSettings, exists := containerInfo.NetworkSettings.Networks[networkName]; exists &&
-						networkSettings.IPAddress != "" && networkSettings.IPAddress != route.ContainerIP {
-						// Found container with different IP, update the route and use new IP for this request
-						logger.Warn("Container IP mismatch detected, using live IP instead of cached value",
-							"domain", host,
-							"cached_ip", route.ContainerIP,
-							"live_ip", networkSettings.IPAddress)
-
-						// Update the in-memory route for this request
-						route.ContainerIP = networkSettings.IPAddress
-
-						// Update the database in background to persist the change
-						go func(domain, containerID, containerIP, containerPort string) {
-							// Get the domain ID
-							var domainID string
-							err := p.app.GetDB().QueryRow("SELECT id FROM domain WHERE name = ?", domain).Scan(&domainID)
-							if err != nil {
-								logger.Error("Failed to find domain ID for IP update", "domain", domain, "error", err)
-								return
-							}
-
-							// Update the proxy_route record
-							now := time.Now().Format(time.RFC3339)
-							_, err = p.app.GetDB().Exec(`
-								UPDATE proxy_route SET container_ip = ?, updated_at = ? 
-								WHERE domain_id = ? AND container_id = ?`,
-								containerIP, now, domainID, containerID)
-
-							if err != nil {
-								logger.Error("Failed to update container IP in database",
-									"domain", domain,
-									"containerID", containerID,
-									"error", err)
-							} else {
-								logger.Info("Updated container IP in database after live detection",
-									"domain", domain,
-									"containerID", containerID,
-									"old_ip", route.ContainerIP,
-									"new_ip", containerIP)
-							}
-						}(host, containerID, networkSettings.IPAddress, route.ContainerPort)
-					} else {
-						logger.Debug("Container exists but connection still failed",
-							"domain", host,
-							"container_id", containerID,
-							"container_ip", route.ContainerIP,
-							"container_port", route.ContainerPort,
-							"error", err)
-					}
-				}
-			}
-		} else {
-			// Connection successful, close it
-			conn.Close()
-		}
-	}
-
-	// Create the target URL
-	targetURL := &url.URL{
-		Scheme: "http", // Always use HTTP for internal connections
-	}
-
-	// Log protocol conversion if needed
-	if route.Protocol == "https" {
-		logger.Debug("Converting HTTPS external route to HTTP for internal connection",
-			"domain", host,
-			"containerID", route.ContainerID,
-			"externalProtocol", "https",
-			"internalProtocol", "http")
-	}
-
-	// Format host properly for both IPv4 and IPv6
+	containerID := route.ContainerID
 	containerIP := route.ContainerIP
-	if strings.Contains(containerIP, ":") {
-		// IPv6 address needs to be wrapped in brackets
-		containerIP = "[" + containerIP + "]"
+	containerPort := route.ContainerPort
+	targetProtocol := route.Protocol
+
+	// Always verify the container IP is current before proxying
+	networkName := p.app.GetConfig().ContainerEngine.Network
+
+	// Get the latest container info to check if IP has changed
+	containerInfo, err := docker.GetContainerInfo(containerID)
+	if err == nil && containerInfo.NetworkSettings != nil {
+		// Check if container has a different IP
+		if networkSettings, exists := containerInfo.NetworkSettings.Networks[networkName]; exists &&
+			networkSettings.IPAddress != "" && networkSettings.IPAddress != containerIP {
+			// Found container with different IP, update the route and use new IP for this request
+			logger.Warn("Container IP mismatch detected, using live IP instead of cached value",
+				"domain", host,
+				"cached_ip", containerIP,
+				"live_ip", networkSettings.IPAddress)
+
+			// Use the new IP for this request
+			containerIP = networkSettings.IPAddress
+
+			// Update routes in the background
+			go func(domain, containerID, containerIP, containerPort string) {
+				err := p.ForceUpdateRouteIP(domain, containerIP)
+				if err != nil {
+					logger.Error("Failed to update IP after mismatch detection",
+						"domain", domain,
+						"error", err)
+				}
+			}(host, containerID, containerIP, containerPort)
+		}
 	}
-	targetURL.Host = fmt.Sprintf("%s:%s", containerIP, route.ContainerPort)
+
+	// Construct the target URL
+	targetURL := fmt.Sprintf("%s://%s:%s", targetProtocol, containerIP, containerPort)
+
+	// Add the path from the original request
+	if c.Request().URL.Path != "" {
+		targetURL += c.Request().URL.Path
+	}
+
+	// Add query string if present
+	if c.Request().URL.RawQuery != "" {
+		targetURL += "?" + c.Request().URL.RawQuery
+	}
+
+	// Parse the target URL
+	target, err := url.Parse(targetURL)
+	if err != nil {
+		logger.Error("Failed to parse target URL",
+			"url", targetURL,
+			"error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to parse target URL")
+	}
+
+	// Special logging for admin domain
+	if host == p.app.GetConfig().Http.FullDomain() {
+		logger.Debug("Proxying request to admin domain",
+			"domain", host,
+			"target", targetURL,
+			"path", c.Request().URL.Path)
+	} else {
+		logger.Debug("Proxying request host",
+			"host", host,
+			"target", targetURL,
+			"path", c.Request().URL.Path,
+			"clientIP", c.RealIP(),
+			"remoteAddr", c.Request().RemoteAddr,
+			"originalProtocol", c.Scheme())
+	}
 
 	// Create a reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy := httputil.NewSingleHostReverseProxy(target)
 
-	// Update headers to allow for SSL redirection
+	// Use our custom transport with longer timeouts
+	if p.reverseProxyClient != nil {
+		proxy.Transport = p.reverseProxyClient.Transport
+	}
+
+	// Set up request director to modify the request before it's sent
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
+		// Call the original director first
 		originalDirector(req)
-		// Use the original protocol for forwarded proto header
-		forwardedProto := "http"
-		if route.Protocol == "https" {
-			forwardedProto = "https"
-		}
-		req.Header.Set("X-Forwarded-Proto", forwardedProto)
-		req.Header.Set("X-Forwarded-Host", host)
-		req.Header.Set("X-Forwarded-For", c.RealIP())
-		req.Header.Set("X-Real-IP", c.RealIP())
 
-		// Log all headers for troubleshooting
+		// Update the Host header to the target host
+		req.Host = target.Host
+
+		// Set X-Forwarded-For
+		if clientIP := c.RealIP(); clientIP != "" {
+			req.Header.Set("X-Forwarded-For", clientIP)
+			req.Header.Set("X-Real-IP", clientIP)
+		}
+
+		// Set X-Forwarded-Proto to the original protocol
+		req.Header.Set("X-Forwarded-Proto", c.Scheme())
+
+		// Log request headers for debugging
 		logger.Debug("Request headers for proxy",
 			"domain", host,
 			"X-Forwarded-For", req.Header.Get("X-Forwarded-For"),
 			"X-Real-IP", req.Header.Get("X-Real-IP"))
 	}
 
-	// Add error handling
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+	// Log errors that occur during proxying
+	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
 		logger.Error("Proxy error",
 			"host", host,
-			"path", r.URL.Path,
+			"target", targetURL,
 			"error", err)
-		c.String(http.StatusBadGateway, "Proxy Error: "+err.Error())
+
+		// Check if this is a connection refused error
+		if strings.Contains(err.Error(), "connection refused") ||
+			strings.Contains(err.Error(), "no route to host") ||
+			strings.Contains(err.Error(), "i/o timeout") {
+			// Container might be down or unreachable - mark the route as inactive
+			logger.Warn("Container appears to be down, marking route as inactive",
+				"domain", host,
+				"container_id", containerID)
+
+			// Find domains for this container and mark them inactive
+			var domains []string
+			p.mu.RLock()
+			for d, r := range p.routes {
+				if r.ContainerID == containerID {
+					domains = append(domains, d)
+				}
+			}
+			p.mu.RUnlock()
+
+			if len(domains) > 0 {
+				go p.markRoutesInactive(domains)
+			}
+		}
+
+		// Return a 502 Bad Gateway error
+		c.Response().WriteHeader(http.StatusBadGateway)
+		c.Response().Write([]byte("Bad Gateway: Container is unreachable"))
 	}
 
-	// Serve the request
+	// Serve the request using the reverse proxy
 	proxy.ServeHTTP(c.Response(), c.Request())
 	return nil
 }
