@@ -66,6 +66,9 @@ func NewStarskeyRateLimiterStore(dbPath string, rate float64, burst int, expires
 func (s *StarskeyRateLimiterStore) Allow(identifier string) (bool, error) {
 	var allowed bool
 
+	// Log the identifier for debugging
+	log.Debug("Rate limiter checking identifier", "identifier", identifier)
+
 	err := s.db.Update(func(txn *starskey.Txn) error {
 		now := time.Now()
 		key := []byte(identifier)
@@ -88,6 +91,7 @@ func (s *StarskeyRateLimiterStore) Allow(identifier string) (bool, error) {
 			// Check if jailed
 			if info.Jailed && now.Before(info.ResetTime) {
 				allowed = false
+				log.Debug("Request denied: IP is jailed", "ip", identifier, "jail_expires", info.ResetTime)
 				return nil
 			}
 
@@ -95,53 +99,64 @@ func (s *StarskeyRateLimiterStore) Allow(identifier string) (bool, error) {
 			if info.Jailed && !now.Before(info.ResetTime) {
 				log.Info("IP address released from jail", "ip", identifier)
 				info.Jailed = false
+				info.Attempts = 0 // Reset attempts when released from jail
 			}
 
 			// Calculate time-based allowance
 			timePassed := now.Sub(info.ResetTime).Seconds()
 			tokensToAdd := timePassed * s.rate
 
+			log.Debug("Rate limit state",
+				"ip", identifier,
+				"current_attempts", info.Attempts,
+				"burst_limit", s.burst,
+				"time_passed", timePassed,
+				"tokens_to_add", tokensToAdd)
+
 			// Reset if needed
 			if now.After(info.ResetTime.Add(s.expiresIn)) {
+				log.Debug("Resetting rate limit counter (expired)", "ip", identifier)
 				info.Attempts = 0
 				info.ResetTime = now
 			} else {
+				oldAttempts := info.Attempts
 				info.Attempts = max(0, info.Attempts-int(tokensToAdd))
+				log.Debug("Updated attempts count",
+					"ip", identifier,
+					"old_attempts", oldAttempts,
+					"new_attempts", info.Attempts)
 			}
 		}
 
-		// Check if under rate limit
-		if info.Attempts < s.burst {
+		// Check if this request would exceed burst limit
+		if info.Attempts >= s.burst {
+			// Jail the IP before returning not allowed
+			info.Jailed = true
+			info.ResetTime = now.Add(10 * time.Second) // 10 second penalty (increased from 1 second)
+			log.Warn("IP address jailed due to rate limit violation",
+				"ip", identifier,
+				"attempts", info.Attempts,
+				"burst_limit", s.burst,
+				"reset_at", info.ResetTime)
+			allowed = false
+		} else {
+			// Under limit, allow and increment
 			info.Attempts++
 			allowed = true
-
-			// Jail if needed (e.g., if burst exceeded)
-			if info.Attempts >= s.burst {
-				info.Jailed = true
-				info.ResetTime = now.Add(time.Second) // 1 second penalty
-				log.Debug("IP jailed (burst exceeded)", "ip", identifier, "reset_at", info.ResetTime)
-				// Add info level log when an IP is jailed
-				log.Info("IP address jailed due to rate limit violation", "ip", identifier, "reset_at", info.ResetTime)
-			} else {
-				log.Debug("Request allowed", "ip", identifier, "attempts", info.Attempts)
-			}
-
-			// Save updated info
-			data, err := json.Marshal(info)
-			if err != nil {
-				log.Debug("Failed to marshal rate limit info", "ip", identifier, "error", err)
-				return err
-			}
-
-			// Fix: txn.Put doesn't return a value in Starskey
-			// The errors are handled at the transaction level
-			txn.Put(key, data)
-			log.Debug("Rate limit info saved", "ip", identifier)
-			return nil
+			log.Debug("Request allowed",
+				"ip", identifier,
+				"attempts", info.Attempts,
+				"burst_limit", s.burst)
 		}
 
-		log.Debug("Request blocked (rate limited)", "ip", identifier, "attempts", info.Attempts)
-		allowed = false
+		// Save updated info
+		data, err := json.Marshal(info)
+		if err != nil {
+			log.Debug("Failed to marshal rate limit info", "ip", identifier, "error", err)
+			return err
+		}
+
+		txn.Put(key, data)
 		return nil
 	})
 

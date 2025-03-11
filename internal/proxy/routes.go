@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -34,6 +35,20 @@ func (p *Proxy) loadRoutes() error {
 
 	log.Debug("Loading proxy routes from database")
 
+	// Now check if we have a Gordon container ID stored for identity purposes
+	p.gordonContainerID = p.loadGordonContainerID()
+	if p.gordonContainerID != "" {
+		log.Info("Loaded Gordon container ID from config file during route initialization", "container_id", p.gordonContainerID)
+	}
+
+	// Save the admin domain route if it exists
+	adminDomain := p.app.GetConfig().Http.FullDomain()
+	var adminRoute *ProxyRouteInfo
+	if route, exists := p.routes[adminDomain]; exists {
+		adminRoute = route
+		log.Debug("Preserving admin domain route", "domain", adminDomain)
+	}
+
 	// Query the database for active proxy routes
 	rows, err := p.app.GetDB().Query(`
 		SELECT pr.id, d.name, pr.container_id, pr.container_ip, pr.container_port, pr.protocol, pr.path, pr.active
@@ -44,14 +59,28 @@ func (p *Proxy) loadRoutes() error {
 	if err != nil {
 		if err == sql.ErrNoRows {
 			log.Info("No active proxy routes found")
+
+			// Restore admin route if it was saved
+			if adminRoute != nil {
+				p.routes = make(map[string]*ProxyRouteInfo)
+				p.routes[adminDomain] = adminRoute
+				log.Debug("Restored admin domain route after empty database query", "domain", adminDomain)
+			}
+
 			return nil
 		}
 		return fmt.Errorf("failed to query database: %w", err)
 	}
 	defer rows.Close()
 
-	// Clear the routes map
+	// Clear the routes map but preserve the admin domain route
 	p.routes = make(map[string]*ProxyRouteInfo)
+
+	// Restore admin route if it was saved
+	if adminRoute != nil {
+		p.routes[adminDomain] = adminRoute
+		log.Debug("Restored admin domain route after clearing routes map", "domain", adminDomain)
+	}
 
 	// Populate the routes map
 	for rows.Next() {
@@ -88,6 +117,47 @@ func (p *Proxy) configureRoutes() {
 	// Get the admin domain from the config
 	adminDomain := p.app.GetConfig().Http.FullDomain()
 	log.Debug("Configuring proxy routes", "admin_domain", adminDomain)
+
+	// Verify admin domain is in routes - if not, we need to add it
+	p.mu.RLock()
+	_, adminRouteExists := p.routes[adminDomain]
+	p.mu.RUnlock()
+
+	if !adminRouteExists {
+		log.Warn("Admin domain route is missing, attempting to recreate it")
+		p.mu.Lock()
+		// Auto-detect the Gordon container name
+		containerName := p.detectGordonContainer()
+
+		// In a container environment, we need to use the host container IP
+		// instead of 127.0.0.1 because each container has its own localhost
+		containerIP := "localhost" // Default to localhost for most reliable connectivity
+
+		// Fall back options for container IP
+		if os.Getenv("GORDON_ADMIN_HOST") != "" {
+			// Allow explicit configuration via env var
+			containerIP = os.Getenv("GORDON_ADMIN_HOST")
+		} else if os.Getenv("HOSTNAME") != "" {
+			// Use container's own hostname as they're on the same network
+			containerIP = os.Getenv("HOSTNAME")
+		}
+
+		p.routes[adminDomain] = &ProxyRouteInfo{
+			Domain:        adminDomain,
+			ContainerIP:   containerIP,
+			ContainerPort: p.app.GetConfig().Http.Port,
+			ContainerID:   containerName,
+			Protocol:      "http", // Gordon server uses HTTP internally
+			Path:          "/",
+			Active:        true,
+		}
+		log.Info("Recreated admin domain route",
+			"domain", adminDomain,
+			"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
+		p.mu.Unlock()
+	} else {
+		log.Debug("Admin domain route exists", "domain", adminDomain)
+	}
 
 	// Handler function - will be assigned to both HTTP and HTTPS servers
 	handler := echo.HandlerFunc(func(c echo.Context) error {
@@ -260,7 +330,14 @@ func (p *Proxy) configureRoutes() {
 				"target", targetURL.String(),
 				"path", req.URL.Path,
 				"clientIP", c.RealIP(),
+				"remoteAddr", req.RemoteAddr,
 				"originalProtocol", route.Protocol)
+
+			// Log all headers for troubleshooting
+			log.Debug("Request headers for proxy",
+				"domain", host,
+				"X-Forwarded-For", req.Header.Get("X-Forwarded-For"),
+				"X-Real-IP", req.Header.Get("X-Real-IP"))
 		}
 
 		// Add error handling
@@ -474,6 +551,14 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 
 // RemoveRoute removes a route from the database and reloads the proxy
 func (p *Proxy) RemoveRoute(domainName string) error {
+	// Prevent removing the admin domain
+	adminDomain := p.app.GetConfig().Http.FullDomain()
+	if domainName == adminDomain {
+		log.Warn("Attempt to remove admin domain route prevented",
+			"domain", domainName)
+		return fmt.Errorf("cannot remove admin domain route: %s", domainName)
+	}
+
 	// Begin a transaction
 	tx, err := p.app.GetDB().Begin()
 	if err != nil {
@@ -535,6 +620,26 @@ func (p *Proxy) GetRoutes() map[string]*ProxyRouteInfo {
 func (p *Proxy) Reload() error {
 	log.Info("Reloading proxy routes from database")
 
+	// Get admin domain - this should be the full subdomain.domain format
+	adminDomain := p.app.GetConfig().Http.FullDomain()
+
+	// Save existing admin route if it exists
+	p.mu.RLock()
+	var adminRoute *ProxyRouteInfo
+	if route, exists := p.routes[adminDomain]; exists {
+		adminRoute = &ProxyRouteInfo{
+			Domain:        route.Domain,
+			ContainerID:   route.ContainerID,
+			ContainerIP:   route.ContainerIP,
+			ContainerPort: route.ContainerPort,
+			Protocol:      route.Protocol,
+			Path:          route.Path,
+			Active:        route.Active,
+		}
+		log.Debug("Preserved admin domain route during reload", "domain", adminDomain)
+	}
+	p.mu.RUnlock()
+
 	// Create a new route map instead of modifying the existing one
 	// This ensures a clean reload without any potential race conditions
 	newRoutes := make(map[string]*ProxyRouteInfo)
@@ -575,11 +680,84 @@ func (p *Proxy) Reload() error {
 				Active:        active,
 			}
 
-			log.Info("Loaded route during reload",
+			log.Debug("Loaded route during reload",
 				"domain", domain,
 				"containerID", containerID,
 				"containerIP", containerIP,
 				"containerPort", containerPort)
+		}
+	}
+
+	// Check if admin domain was loaded from the database
+	_, adminLoaded := newRoutes[adminDomain]
+
+	// If admin domain wasn't loaded from DB but we had it in memory, restore it
+	if !adminLoaded && adminRoute != nil {
+		newRoutes[adminDomain] = adminRoute
+		log.Warn("Admin domain route missing from database, restoring from memory",
+			"domain", adminDomain)
+
+		// Also try to add it back to the database
+		err := p.AddRoute(
+			adminDomain,
+			adminRoute.ContainerID,
+			adminRoute.ContainerIP,
+			adminRoute.ContainerPort,
+			adminRoute.Protocol,
+			adminRoute.Path,
+		)
+
+		if err != nil {
+			log.Error("Failed to save admin route to database",
+				"error", err,
+				"domain", adminDomain)
+		} else {
+			log.Info("Re-added admin domain route to database", "domain", adminDomain)
+		}
+	}
+
+	// If admin domain is still missing, recreate it
+	if _, exists := newRoutes[adminDomain]; !exists {
+		log.Warn("Admin domain route is missing, recreating it", "domain", adminDomain)
+
+		// Auto-detect the Gordon container information
+		containerName := p.detectGordonContainer()
+		containerIP := "localhost" // Default to localhost
+
+		// Fall back options for container IP
+		if os.Getenv("GORDON_ADMIN_HOST") != "" {
+			containerIP = os.Getenv("GORDON_ADMIN_HOST")
+		} else if os.Getenv("HOSTNAME") != "" {
+			containerIP = os.Getenv("HOSTNAME")
+		}
+
+		// Add to in-memory routes
+		newRoutes[adminDomain] = &ProxyRouteInfo{
+			Domain:        adminDomain,
+			ContainerID:   containerName,
+			ContainerIP:   containerIP,
+			ContainerPort: p.app.GetConfig().Http.Port,
+			Protocol:      "http", // Gordon server uses HTTP internally
+			Path:          "/",
+			Active:        true,
+		}
+
+		// Add to database
+		err := p.AddRoute(
+			adminDomain,
+			containerName,
+			containerIP,
+			p.app.GetConfig().Http.Port,
+			"http",
+			"/",
+		)
+
+		if err != nil {
+			log.Error("Failed to save recreated admin route to database",
+				"error", err,
+				"domain", adminDomain)
+		} else {
+			log.Info("Recreated and saved admin domain route", "domain", adminDomain)
 		}
 	}
 
@@ -588,6 +766,9 @@ func (p *Proxy) Reload() error {
 	p.mu.Lock()
 	p.routes = newRoutes
 	p.mu.Unlock()
+
+	// Clean up any root domain conflict
+	p.CleanupRootDomainForAdmin()
 
 	// Rebuild route configuration
 	p.configureRoutes()
@@ -603,11 +784,6 @@ func (p *Proxy) Reload() error {
 		p.httpsServer.Routes()
 	}
 
-	// Add a small delay to allow any in-flight requests to complete
-	// and ensure new requests use the updated routes
-	time.Sleep(100 * time.Millisecond)
-
-	log.Info("Successfully reloaded proxy routes", "count", len(newRoutes))
 	return nil
 }
 
@@ -985,84 +1161,180 @@ func (p *Proxy) StartPeriodicIPVerification(interval time.Duration) {
 
 // verifyAllContainerIPs checks all routes and verifies their container IPs
 func (p *Proxy) verifyAllContainerIPs() {
-	// Get the network name from app config
-	networkName := p.app.GetConfig().ContainerEngine.Network
-	if networkName == "" {
-		log.Error("Cannot verify container IPs, network name is not configured")
-		return
-	}
-
-	// Get network info
-	networkInfo, err := docker.GetNetworkInfo(networkName)
-	if err != nil {
-		log.Error("Failed to get network info", "error", err)
-		return
-	}
-
-	// Get a copy of the routes
 	p.mu.RLock()
 	routes := make(map[string]*ProxyRouteInfo, len(p.routes))
-	for k, v := range p.routes {
-		routes[k] = v
+	for domain, route := range p.routes {
+		routes[domain] = &ProxyRouteInfo{
+			Domain:        route.Domain,
+			ContainerID:   route.ContainerID,
+			ContainerIP:   route.ContainerIP,
+			ContainerPort: route.ContainerPort,
+			Protocol:      route.Protocol,
+			Path:          route.Path,
+			Active:        route.Active,
+		}
 	}
 	p.mu.RUnlock()
+
+	// Get network name from config
+	networkName := p.app.GetConfig().ContainerEngine.Network
+	if networkName == "" {
+		log.Error("Container network name is not configured")
+		return
+	}
+
+	// Check each route and verify the container IP
+	routesUpdated := false
+	updatedIPs := make(map[string]string) // cache to avoid redundant lookups
 
 	// Track orphaned routes to mark as inactive
 	orphanedRoutes := []string{}
 
-	// Check each route
-	for domain, route := range routes {
-		// Check if the container exists in the network
-		containerEndpoint, exists := networkInfo.Containers[route.ContainerID]
-		if !exists {
-			// Container not found in the network
-			// Could be stopped or removed
+	// Special handling for Gordon container - ensure its IP is correct first
+	gordonContainerID := p.loadGordonContainerID()
+	if gordonContainerID != "" {
+		log.Debug("Verifying Gordon container IP first", "container_id", gordonContainerID)
 
-			// Check if container still exists
-			if docker.ContainerExists(route.ContainerID) {
-				// Container exists but not in our network
-				log.Warn("Container exists but not in Gordon network",
-					"domain", domain,
-					"container_id", route.ContainerID)
-			} else {
-				// Container no longer exists
-				log.Warn("Container no longer exists but route is active",
-					"domain", domain,
-					"container_id", route.ContainerID)
-				orphanedRoutes = append(orphanedRoutes, domain)
+		gordonIP, err := docker.GetContainerIPFromNetwork(gordonContainerID, networkName)
+		if err == nil && gordonIP != "" {
+			log.Debug("Found Gordon container IP", "ip", gordonIP)
+			updatedIPs[gordonContainerID] = gordonIP
+
+			// Double-check by direct container inspection to ensure maximum reliability
+			containerInfo, inspectErr := docker.GetContainerInfo(gordonContainerID)
+			if inspectErr == nil && containerInfo.NetworkSettings != nil {
+				if network, exists := containerInfo.NetworkSettings.Networks[networkName]; exists &&
+					network.IPAddress != "" && network.IPAddress != gordonIP {
+					log.Info("Different IP found for Gordon container through inspection",
+						"network_ip", gordonIP,
+						"inspect_ip", network.IPAddress)
+					updatedIPs[gordonContainerID] = network.IPAddress
+				}
 			}
+		} else {
+			log.Warn("Failed to get Gordon container IP from network",
+				"container_id", gordonContainerID,
+				"error", err)
+		}
+	}
+
+	for domain, route := range routes {
+		if !route.Active {
 			continue
 		}
 
-		// Extract container IP from network info
-		containerIP := containerEndpoint.IPv4Address
-		if containerIP == "" {
-			// Try IPv6
-			containerIP = containerEndpoint.IPv6Address
-		}
+		containerID := route.ContainerID
 
-		// Extract just the IP part without subnet
-		if idx := strings.Index(containerIP, "/"); idx > 0 {
-			containerIP = containerIP[:idx]
-		}
-
-		// Compare with the route's IP
-		if containerIP != route.ContainerIP {
-			log.Info("Container IP has changed, updating route",
+		// Skip verification if container doesn't exist anymore
+		if !docker.ContainerExists(containerID) {
+			log.Warn("Container no longer exists but route is active",
 				"domain", domain,
-				"container_id", route.ContainerID,
-				"old_ip", route.ContainerIP,
-				"new_ip", containerIP)
+				"container_id", containerID)
+			orphanedRoutes = append(orphanedRoutes, domain)
+			continue
+		}
 
-			// Update the route IP
-			err := p.ForceUpdateRouteIP(domain, containerIP)
+		// Check if this is for the Gordon container
+		isGordonContainer := (containerID == gordonContainerID)
+		if isGordonContainer {
+			log.Debug("Verifying Gordon container route",
+				"domain", domain,
+				"container_id", containerID)
+		}
+
+		// Get the current container IP
+		var currentIP string
+		var err error
+
+		// Check if we already looked up this container's IP
+		if cachedIP, exists := updatedIPs[containerID]; exists {
+			currentIP = cachedIP
+			log.Debug("Using cached container IP",
+				"container_id", containerID,
+				"ip", currentIP)
+		} else {
+			// Otherwise, look it up
+			currentIP, err = docker.GetContainerIPFromNetwork(containerID, networkName)
 			if err != nil {
-				log.Error("Failed to update route IP", "error", err)
-			} else {
-				log.Debug("Successfully updated route IP",
+				log.Error("Failed to get container IP for verification",
 					"domain", domain,
-					"new_ip", containerIP)
+					"container_id", containerID,
+					"error", err)
+
+				// For Gordon container, try harder to get the IP
+				if isGordonContainer {
+					log.Info("Attempting alternative methods to get Gordon container IP")
+
+					// Try direct container inspection as a fallback
+					containerInfo, inspectErr := docker.GetContainerInfo(containerID)
+					if inspectErr == nil && containerInfo.NetworkSettings != nil {
+						// Check for our network specifically
+						if network, exists := containerInfo.NetworkSettings.Networks[networkName]; exists && network.IPAddress != "" {
+							currentIP = network.IPAddress
+							log.Info("Successfully got Gordon container IP through inspection",
+								"ip", currentIP)
+						} else if containerInfo.NetworkSettings.IPAddress != "" {
+							// Fallback to default network IP
+							currentIP = containerInfo.NetworkSettings.IPAddress
+							log.Info("Using default network IP for Gordon container",
+								"ip", currentIP)
+						}
+					}
+				}
+
+				// If we still couldn't get the IP, skip this route
+				if currentIP == "" {
+					continue
+				}
 			}
+
+			// Cache the IP for future route checks
+			updatedIPs[containerID] = currentIP
+		}
+
+		// Check if the IP has changed
+		if route.ContainerIP != currentIP {
+			// Throttle updates for non-Gordon containers to prevent excessive updates
+			if !isGordonContainer {
+				containerName, _ := docker.GetContainerName(containerID)
+				if containerName != "" {
+					containerName = strings.TrimPrefix(containerName, "/")
+				}
+
+				log.Info("Container IP has changed - updating route",
+					"domain", domain,
+					"container_id", containerID,
+					"container_name", containerName,
+					"old_ip", route.ContainerIP,
+					"new_ip", currentIP)
+			} else {
+				log.Info("Gordon container IP has changed - updating route",
+					"admin_domain", domain,
+					"gordon_container", containerID,
+					"old_ip", route.ContainerIP,
+					"new_ip", currentIP)
+			}
+
+			// Update the route in the database
+			err = p.ForceUpdateRouteIP(domain, currentIP)
+			if err != nil {
+				log.Error("Failed to update route IP",
+					"domain", domain,
+					"error", err)
+			} else {
+				routesUpdated = true
+
+				if isGordonContainer {
+					log.Info("Successfully fixed admin domain route to point to Gordon container",
+						"admin_domain", domain,
+						"gordon_container", containerID)
+				}
+			}
+		} else {
+			log.Debug("Container IP verified and unchanged",
+				"domain", domain,
+				"container_id", containerID,
+				"ip", currentIP)
 		}
 	}
 
@@ -1070,9 +1342,17 @@ func (p *Proxy) verifyAllContainerIPs() {
 	if len(orphanedRoutes) > 0 {
 		log.Info("Marking orphaned routes as inactive", "count", len(orphanedRoutes))
 		p.markRoutesInactive(orphanedRoutes)
+		routesUpdated = true
 	}
 
-	log.Debug("Completed IP verification", "routes_checked", len(routes), "orphaned_routes", len(orphanedRoutes))
+	// Reload routes if any were updated
+	if routesUpdated {
+		log.Debug("Routes were updated - reloading proxy configuration")
+		err := p.Reload()
+		if err != nil {
+			log.Error("Failed to reload routes after IP verification", "error", err)
+		}
+	}
 }
 
 // markRoutesInactive marks the specified routes as inactive in the database and memory
@@ -1080,6 +1360,28 @@ func (p *Proxy) markRoutesInactive(domains []string) {
 	if len(domains) == 0 {
 		return
 	}
+
+	// Get the admin domain to protect it
+	adminDomain := p.app.GetConfig().Http.FullDomain()
+
+	// Filter out admin domain from domains to mark inactive
+	filteredDomains := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		if domain != adminDomain {
+			filteredDomains = append(filteredDomains, domain)
+		} else {
+			log.Warn("Prevented admin domain from being marked inactive",
+				"domain", adminDomain)
+		}
+	}
+
+	// If all domains were filtered out, nothing to do
+	if len(filteredDomains) == 0 {
+		return
+	}
+
+	// Use the filtered domains from here on
+	domains = filteredDomains
 
 	// Begin a transaction
 	tx, err := p.app.GetDB().Begin()
@@ -1137,6 +1439,9 @@ func (p *Proxy) DiscoverMissingRoutes() {
 		return
 	}
 
+	// Get the admin domain from the config
+	adminDomain := p.app.GetConfig().Http.FullDomain()
+
 	// Get all containers in the network
 	networkInfo, err := docker.GetNetworkInfo(networkName)
 	if err != nil {
@@ -1188,6 +1493,14 @@ func (p *Proxy) DiscoverMissingRoutes() {
 			continue
 		}
 
+		// Skip if this is the admin domain
+		if domainLabel == adminDomain {
+			log.Debug("Skipping auto-discovery for admin domain",
+				"domain", domainLabel,
+				"container_id", containerID)
+			continue
+		}
+
 		// Check if this domain already has a route (different container)
 		if _, exists := routes[domainLabel]; exists {
 			log.Warn("Domain already has a route with a different container",
@@ -1233,104 +1546,437 @@ func (p *Proxy) DiscoverMissingRoutes() {
 			log.Error("Failed to add missing route", "error", err)
 		}
 	}
+
+	// Add a debug log for routes after discovery
+	count := 0
+	p.mu.RLock()
+	for range p.routes {
+		count++
+	}
+	p.mu.RUnlock()
+	log.Debug("Routes after discovery", "count", count)
+
+	// Clean up any root domain conflict
+	p.CleanupRootDomainForAdmin()
 }
 
-// LogActiveContainersAndRoutes prints a summary of all active containers and their routes
-// to the logs for debugging and monitoring purposes
+// LogActiveContainersAndRoutes logs a list of active containers and their routes
 func (p *Proxy) LogActiveContainersAndRoutes() {
-	// Get the network name from app config
-	networkName := p.app.GetConfig().ContainerEngine.Network
-	if networkName == "" {
-		log.Error("Cannot list containers, network name is not configured")
-		return
-	}
+	log.Info("---- Listing active containers and routes ----")
 
-	// Get all containers in the network
-	networkInfo, err := docker.GetNetworkInfo(networkName)
-	if err != nil {
-		log.Error("Failed to get network info for logging active containers", "error", err)
-		return
-	}
+	// Get the admin domain
+	adminDomain := p.app.GetConfig().Http.FullDomain()
 
-	// Get all active routes
+	// Check if admin domain is in routes
 	p.mu.RLock()
-	routes := make(map[string]*ProxyRouteInfo, len(p.routes))
-	for k, v := range p.routes {
-		if v.Active {
-			routes[k] = v
+	_, adminExists := p.routes[adminDomain]
+	activeRoutes := len(p.routes)
+	p.mu.RUnlock()
+
+	if !adminExists {
+		log.Warn("Admin domain is missing from routes", "domain", adminDomain)
+	}
+
+	log.Info(fmt.Sprintf("Found %d active routes", activeRoutes))
+
+	// Create a map of container IDs to their information
+	containerMap := make(map[string]struct {
+		Name      string
+		IP        string
+		Image     string
+		Domains   []string
+		Protocols []string
+		Ports     []string
+	})
+
+	// Populate the map with route information
+	p.mu.RLock()
+	for domain, route := range p.routes {
+		if !route.Active {
+			continue
+		}
+
+		// If this container is not in the map yet, add it
+		if _, exists := containerMap[route.ContainerID]; !exists {
+			containerMap[route.ContainerID] = struct {
+				Name      string
+				IP        string
+				Image     string
+				Domains   []string
+				Protocols []string
+				Ports     []string
+			}{
+				Name:      route.ContainerID,
+				IP:        route.ContainerIP,
+				Image:     "unknown",
+				Domains:   []string{domain},
+				Protocols: []string{route.Protocol},
+				Ports:     []string{route.ContainerPort},
+			}
+		} else {
+			// Otherwise, append this domain to the container's domains
+			container := containerMap[route.ContainerID]
+			container.Domains = append(container.Domains, domain)
+			container.Protocols = append(container.Protocols, route.Protocol)
+			container.Ports = append(container.Ports, route.ContainerPort)
+			containerMap[route.ContainerID] = container
 		}
 	}
 	p.mu.RUnlock()
 
-	// Map container IDs to names for more readable output
-	containerNames := make(map[string]string)
-	for containerID := range networkInfo.Containers {
-		name, err := docker.GetContainerName(containerID)
+	// Get container names and images
+	for containerID, containerData := range containerMap {
+		containerInfo, err := docker.GetContainerInfo(containerID)
 		if err == nil {
-			containerNames[containerID] = strings.TrimPrefix(name, "/")
-		} else {
-			containerNames[containerID] = containerID[:12] + "..." // Shortened ID if name not available
+			name, err := docker.GetContainerName(containerID)
+			if err == nil {
+				containerData.Name = strings.TrimPrefix(name, "/")
+				containerData.Image = containerInfo.Config.Image
+				containerMap[containerID] = containerData
+			}
 		}
 	}
 
-	// Format and log the active containers and routes
-	log.Info("---- Listing active containers and routes ----")
-
-	// Create a nice table-like format for the logs
-	routeCount := len(routes)
-	if routeCount == 0 {
-		log.Info("No active routes found")
-	} else {
-		// Log header
-		log.Info(fmt.Sprintf("Found %d active routes", routeCount))
-
-		// Group routes by container for better readability
-		containerRoutes := make(map[string][]string)
-		for domain, route := range routes {
-			containerRoutes[route.ContainerID] = append(containerRoutes[route.ContainerID], domain)
+	// Display each container and its routes
+	for containerID, container := range containerMap {
+		// Log container info
+		// Safety check to prevent slice bounds panic
+		containerIDShort := containerID
+		if len(containerID) >= 12 {
+			containerIDShort = containerID[:12]
 		}
+		log.Info(fmt.Sprintf("Container: %s (%s)", container.Name, containerIDShort),
+			"ip", container.IP,
+			"image", container.Image)
 
-		// Display each container and its routes
-		for containerID, domains := range containerRoutes {
-			containerInfo, err := docker.GetContainerInfo(containerID)
-			if err != nil {
-				log.Debug("Failed to get container info", "container_id", containerID)
-				continue
-			}
-
-			containerName := containerNames[containerID]
-			if containerName == "" {
-				containerName = containerID[:12] + "..." // Shortened ID if name not available
-			}
-
-			// Get container IP from network info
-			containerIP := ""
-			if endpoint, exists := networkInfo.Containers[containerID]; exists {
-				containerIP = endpoint.IPv4Address
-				if containerIP == "" {
-					containerIP = endpoint.IPv6Address
-				}
-
-				// Extract just the IP part without subnet
-				if idx := strings.Index(containerIP, "/"); idx > 0 {
-					containerIP = containerIP[:idx]
-				}
-			}
-
-			// Log container info
-			log.Info(fmt.Sprintf("Container: %s (%s)", containerName, containerID[:12]),
-				"ip", containerIP,
-				"image", containerInfo.Config.Image)
-
-			// Log each domain for this container
-			for _, domain := range domains {
-				route := routes[domain]
-				log.Info(fmt.Sprintf("  ├─ Domain: %s", domain),
-					"protocol", route.Protocol,
-					"port", route.ContainerPort)
-			}
+		// Log each domain for this container
+		for i, domain := range container.Domains {
+			log.Info(fmt.Sprintf("  ├─ Domain: %s", domain),
+				"protocol", container.Protocols[i],
+				"port", container.Ports[i])
 		}
 	}
 
 	log.Info("---- End of active containers and routes list ----")
+}
+
+// saveGordonContainerID saves the Gordon container ID to the config file
+func (p *Proxy) saveGordonContainerID(containerID string) {
+	log.Debug("Saving Gordon container ID to config file", "container_id", containerID)
+
+	// Update the config
+	config := p.app.GetConfig()
+	config.General.GordonContainerID = containerID
+
+	// Save the config file
+	err := config.SaveConfig()
+	if err != nil {
+		log.Error("Failed to save Gordon container ID to config file", "error", err)
+		return
+	}
+
+	// Update the gordonContainerID field
+	p.gordonContainerID = containerID
+
+	log.Info("Successfully saved Gordon container ID to config file", "container_id", containerID)
+}
+
+// loadGordonContainerID loads the Gordon container ID from the config file
+func (p *Proxy) loadGordonContainerID() string {
+	log.Debug("Loading Gordon container ID from config file")
+
+	// Get the container ID from the config
+	containerID := p.app.GetConfig().General.GordonContainerID
+
+	if containerID == "" {
+		log.Debug("No Gordon container ID found in config file")
+		return ""
+	}
+
+	log.Info("Loaded Gordon container ID from config file", "container_id", containerID)
+	return containerID
+}
+
+// detectGordonContainer attempts to find the Gordon container automatically
+func (p *Proxy) detectGordonContainer() string {
+	log.Debug("Starting Gordon container detection")
+
+	// First try to load the container ID from the config file
+	dbContainerID := p.loadGordonContainerID()
+	if dbContainerID != "" {
+		p.gordonContainerID = dbContainerID
+		log.Debug("Loaded Gordon container ID from config file", "container_id", p.gordonContainerID)
+
+		// Verify the container still exists
+		containers, err := docker.ListRunningContainers()
+		if err == nil {
+			for _, container := range containers {
+				if container.ID == p.gordonContainerID {
+					containerName := strings.TrimLeft(container.Names[0], "/")
+					log.Debug("Identified Gordon container using config file ID", "container_name", containerName)
+					return containerName
+				}
+			}
+			// If the container ID is no longer found, log it but continue with other detection methods
+			log.Warn("Stored Gordon container ID from config file no longer found in running containers", "container_id", p.gordonContainerID)
+			p.gordonContainerID = "" // Reset since it's invalid
+		}
+	}
+
+	// If we have our container ID stored from initialization, use that next
+	if p.gordonContainerID != "" {
+		log.Debug("Using stored Gordon container ID for identification", "container_id", p.gordonContainerID)
+
+		// Get the container name from the ID
+		containers, err := docker.ListRunningContainers()
+		if err == nil {
+			for _, container := range containers {
+				if container.ID == p.gordonContainerID {
+					containerName := strings.TrimLeft(container.Names[0], "/")
+					log.Info("Gordon identity established via exact ID match",
+						"container_id", container.ID,
+						"container_name", containerName)
+					p.gordonContainerID = container.ID
+					// Save to config file for persistence
+					p.saveGordonContainerID(container.ID)
+					return containerName
+				}
+			}
+			// If the container ID is no longer found, log it but continue with other detection methods
+			log.Warn("Stored Gordon container ID no longer found in running containers", "container_id", p.gordonContainerID)
+		}
+	}
+
+	// Check if we're running inside a container
+	if docker.IsRunningInContainer() {
+		log.Debug("Detected we're running in a container")
+
+		// Get our hostname which should be the container ID in Docker/Podman
+		hostname := os.Getenv("HOSTNAME")
+
+		if hostname != "" {
+			// Check if there's a container with this hostname
+			containers, err := docker.ListRunningContainers()
+			if err == nil {
+				// First try exact match (Podman often uses full ID as hostname)
+				for _, container := range containers {
+					if hostname == container.ID {
+						containerName := strings.TrimLeft(container.Names[0], "/")
+						log.Info("Gordon identity established via exact ID match",
+							"container_id", container.ID,
+							"container_name", containerName)
+						p.gordonContainerID = container.ID
+						// Save to config file for persistence
+						p.saveGordonContainerID(container.ID)
+						return containerName
+					}
+				}
+
+				// Then try prefix match (Docker often uses ID prefix as hostname)
+				for _, container := range containers {
+					if strings.HasPrefix(container.ID, hostname) || strings.HasPrefix(hostname, container.ID) {
+						containerName := strings.TrimLeft(container.Names[0], "/")
+						log.Info("Gordon identity established via ID prefix match",
+							"container_id", container.ID,
+							"container_name", containerName,
+							"hostname", hostname)
+						p.gordonContainerID = container.ID
+						// Save to config file for persistence
+						p.saveGordonContainerID(container.ID)
+						return containerName
+					}
+				}
+			} else {
+				log.Debug("Could not list containers when checking hostname", "error", err)
+			}
+		}
+	}
+
+	// Look for containers with the name "gordon" first (Docker Compose default)
+	containers, err := docker.ListRunningContainers()
+	if err == nil {
+		for _, container := range containers {
+			containerName := strings.TrimLeft(container.Names[0], "/")
+			if containerName == "gordon" {
+				log.Info("Found Gordon container with exact name 'gordon'", "container_id", container.ID)
+				p.gordonContainerID = container.ID
+				// Save to config file for persistence
+				p.saveGordonContainerID(container.ID)
+				return containerName
+			}
+		}
+
+		// If we still haven't found it, look for containers with 'gordon' in the name
+		for _, container := range containers {
+			containerName := strings.TrimLeft(container.Names[0], "/")
+			if strings.Contains(strings.ToLower(containerName), "gordon") {
+				log.Info("Found Gordon container with partial name match",
+					"container_name", containerName,
+					"container_id", container.ID)
+				p.gordonContainerID = container.ID
+				// Save to config file for persistence
+				p.saveGordonContainerID(container.ID)
+				return containerName
+			}
+		}
+	}
+
+	// Fallback to a default name
+	log.Warn("Could not auto-detect Gordon container, using fallback name", "container_name", "gordon")
+	return "gordon"
+}
+
+// CleanupRootDomainForAdmin checks if the root domain is pointing to the admin container
+// and removes that route to avoid conflicts with other services using the root domain
+func (p *Proxy) CleanupRootDomainForAdmin() {
+	// Get admin domain and root domain
+	adminDomain := p.app.GetConfig().Http.FullDomain()
+	rootDomain := p.app.GetConfig().Http.Domain
+
+	// Skip if root domain is the same as admin domain
+	if rootDomain == adminDomain || rootDomain == "" {
+		return
+	}
+
+	// Check if root domain exists in memory routes
+	p.mu.RLock()
+	rootRoute, rootExists := p.routes[rootDomain]
+	adminRoute, adminExists := p.routes[adminDomain]
+	p.mu.RUnlock()
+
+	// If both root domain and admin domain routes exist,
+	// check if they point to the same container ID (Gordon)
+	if rootExists && adminExists {
+		// Always ensure the admin domain points to the Gordon container
+		if p.gordonContainerID != "" && adminRoute.ContainerID != p.gordonContainerID {
+			log.Warn("Admin domain is pointing to the wrong container, fixing",
+				"admin_domain", adminDomain,
+				"current_container", adminRoute.ContainerID,
+				"gordon_container", p.gordonContainerID)
+
+			// Update the admin route to point to the Gordon container
+			// Begin a transaction
+			tx, err := p.app.GetDB().Begin()
+			if err != nil {
+				log.Error("Failed to begin transaction for admin domain fix", "error", err)
+				return
+			}
+			defer tx.Rollback()
+
+			// Get the domain ID for admin domain
+			var domainID string
+			err = tx.QueryRow("SELECT id FROM domain WHERE name = ?", adminDomain).Scan(&domainID)
+			if err != nil {
+				if err != sql.ErrNoRows {
+					log.Error("Failed to query domain for admin domain fix", "error", err)
+				}
+				return
+			}
+
+			// Update the route for admin domain
+			_, err = tx.Exec("UPDATE proxy_route SET container_id = ? WHERE domain_id = ?",
+				p.gordonContainerID, domainID)
+			if err != nil {
+				log.Error("Failed to update admin domain route", "error", err)
+				return
+			}
+
+			// Commit the transaction
+			if err := tx.Commit(); err != nil {
+				log.Error("Failed to commit transaction for admin domain fix", "error", err)
+				return
+			}
+
+			// Update in-memory route
+			p.mu.Lock()
+			adminRoute.ContainerID = p.gordonContainerID
+			p.mu.Unlock()
+
+			log.Info("Successfully fixed admin domain route to point to Gordon container",
+				"admin_domain", adminDomain,
+				"gordon_container", p.gordonContainerID)
+		}
+
+		// Now handle the root domain conflict
+		if rootRoute.ContainerID == adminRoute.ContainerID {
+			log.Warn("Found root domain pointing to admin container, removing to avoid conflicts",
+				"root_domain", rootDomain,
+				"admin_domain", adminDomain,
+				"container", rootRoute.ContainerID)
+
+			// Begin a transaction
+			tx, err := p.app.GetDB().Begin()
+			if err != nil {
+				log.Error("Failed to begin transaction for root domain cleanup", "error", err)
+				return
+			}
+			defer tx.Rollback()
+
+			// Get the domain ID for root domain
+			var domainID string
+			err = tx.QueryRow("SELECT id FROM domain WHERE name = ?", rootDomain).Scan(&domainID)
+			if err != nil {
+				if err != sql.ErrNoRows {
+					log.Error("Failed to query domain for root domain cleanup", "error", err)
+				}
+				return
+			}
+
+			// Delete the route for root domain
+			_, err = tx.Exec("DELETE FROM proxy_route WHERE domain_id = ?", domainID)
+			if err != nil {
+				log.Error("Failed to delete root domain route", "error", err)
+				return
+			}
+
+			// We don't delete the domain itself from the database to avoid affecting certificate management
+
+			// Commit the transaction
+			if err := tx.Commit(); err != nil {
+				log.Error("Failed to commit transaction for root domain cleanup", "error", err)
+				return
+			}
+
+			// Remove root domain from in-memory routes
+			p.mu.Lock()
+			delete(p.routes, rootDomain)
+			p.mu.Unlock()
+
+			log.Info("Successfully removed conflicting root domain route",
+				"root_domain", rootDomain,
+				"admin_domain", adminDomain)
+		}
+	}
+}
+
+// LogGordonIdentity prints information about the Gordon container for debugging
+func (p *Proxy) LogGordonIdentity() {
+	// If we don't have a container ID yet, try to load it from the database first
+	if p.gordonContainerID == "" {
+		dbContainerID := p.loadGordonContainerID()
+		if dbContainerID != "" {
+			p.gordonContainerID = dbContainerID
+			log.Info("Loaded Gordon container ID from config file during identity check", "container_id", p.gordonContainerID)
+		}
+	}
+
+	// If we still don't have a container ID, try to detect it
+	if p.gordonContainerID == "" {
+		// This will attempt to detect the container and set p.gordonContainerID
+		containerName := p.detectGordonContainer()
+		if p.gordonContainerID != "" {
+			log.Info("Detected Gordon container during identity check",
+				"container_id", p.gordonContainerID,
+				"container_name", containerName)
+		}
+	}
+
+	// Now print our container ID for debugging
+	if p.gordonContainerID != "" {
+		log.Info("Gordon container identity",
+			"container_id", p.gordonContainerID,
+			"container_name", p.detectGordonContainer())
+	} else {
+		log.Warn("Gordon container ID not available - running outside container?")
+	}
 }

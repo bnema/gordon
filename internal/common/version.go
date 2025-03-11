@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 )
 
 // Info represents version information
@@ -146,12 +146,12 @@ func CheckVersionPeriodically(info Info, checkInterval time.Duration) {
 func checkVersion(info Info) {
 	hasUpdate, latestVersion, err := CheckForNewVersion(info.Version, info.ProxyURL)
 	if err != nil {
-		log.Error("Failed to check for updates", "error", err)
+		logger.Error("Failed to check for updates", "error", err)
 		return
 	}
 
 	if hasUpdate {
-		log.Info("New version available!",
+		logger.Info("New version available!",
 			"current", info.Version,
 			"latest", latestVersion,
 			"update_url", "https://github.com/bnema/gordon/releases/latest")
