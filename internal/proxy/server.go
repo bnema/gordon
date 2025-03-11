@@ -5,11 +5,10 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/acme"
 )
@@ -29,12 +28,11 @@ func (p *Proxy) Start() error {
 
 	// Scan Gordon network containers and check for certificates
 	if err := p.scanContainersAndCheckCertificates(); err != nil {
-		log.Warn("Failed to scan containers for certificate checks", "error", err)
+		logger.Warn("Failed to scan containers for certificate checks", "error", err)
 	}
 
 	// Run an immediate route verification to ensure all routes are valid on startup
-	log.Info("Performing initial route verification on startup")
-	p.verifyAllContainerIPs()
+	logger.Info("Performing initial route verification on startup")
 
 	// Discover any containers that should have routes but don't
 	p.DiscoverMissingRoutes()
@@ -44,20 +42,16 @@ func (p *Proxy) Start() error {
 
 	// Start the container event listener for real-time updates
 	if err := p.StartContainerEventListener(); err != nil {
-		log.Warn("Failed to start container event listener", "error", err)
+		logger.Warn("Failed to start container event listener", "error", err)
 		// Continue anyway, this is non-critical
 	}
-
-	// Start periodic IP verification (every 5 minutes)
-	// This ensures we catch any IP changes that the event listener might miss
-	p.StartPeriodicIPVerification(5 * time.Minute)
 
 	// Check if there might be port conflicts with the main server
 	mainServerPort := p.app.GetConfig().Http.Port
 
 	// Check HTTP port conflict
 	if p.config.HttpPort == mainServerPort {
-		log.Warn("HTTP port for reverse proxy conflicts with main server port",
+		logger.Warn("HTTP port for reverse proxy conflicts with main server port",
 			"port", p.config.HttpPort,
 			"solution", "reverse proxy HTTP server will be disabled")
 		return nil
@@ -65,7 +59,7 @@ func (p *Proxy) Start() error {
 
 	// Check HTTPS port conflict (less common, but still possible)
 	if p.config.Port == mainServerPort {
-		log.Warn("HTTPS port for reverse proxy conflicts with main server port",
+		logger.Warn("HTTPS port for reverse proxy conflicts with main server port",
 			"port", p.config.Port,
 			"solution", "reverse proxy HTTPS server will be disabled")
 		return nil
@@ -74,32 +68,38 @@ func (p *Proxy) Start() error {
 	// Add a special route for the admin domain (Gordon itself)
 	adminDomain := p.app.GetConfig().Http.FullDomain()
 
-	// In a container environment, we need to use the host container IP
-	// instead of 127.0.0.1 because each container has its own localhost
-	containerIP := "localhost" // Default to localhost for most reliable connectivity
-
-	// Fall back options for container IP
-	if os.Getenv("GORDON_ADMIN_HOST") != "" {
-		// Allow explicit configuration via env var
-		containerIP = os.Getenv("GORDON_ADMIN_HOST")
-		log.Debug("Using admin host from environment variable",
-			"host", containerIP)
-	} else if os.Getenv("HOSTNAME") != "" {
-		// Use container's own hostname as they're on the same network
-		containerIP = os.Getenv("HOSTNAME")
-		log.Debug("Using container hostname for admin routing",
-			"hostname", containerIP)
-	}
-
-	// Don't test connections yet - the server isn't running
-	// We'll add the admin route with the default host for now
-	// and test connections later with TestAdminConnectionLater
-
-	// Auto-detect the Gordon container name
+	// Auto-detect the Gordon container name and ID
 	containerName := p.detectGordonContainer()
 
+	// Get the network name from config
+	networkName := p.app.GetConfig().ContainerEngine.Network
+
+	// Initialize container IP
+	var containerIP string
+
+	// Try to get the actual container IP from the network
+	if p.gordonContainerID == "" {
+		return fmt.Errorf("failed to detect Gordon container ID, cannot add admin route")
+	}
+
+	// Get the IP address from the container's network
+	ip, err := docker.GetContainerIPFromNetwork(p.gordonContainerID, networkName)
+	if err != nil || ip == "" {
+		logger.Error("Failed to get Gordon container IP from network",
+			"container_id", p.gordonContainerID,
+			"network", networkName,
+			"error", err)
+		return fmt.Errorf("failed to get Gordon container IP from network %s: %w", networkName, err)
+	}
+
+	containerIP = ip
+	logger.Info("Using Gordon container IP from network",
+		"container_id", p.gordonContainerID,
+		"network", networkName,
+		"ip", containerIP)
+
 	// Check if admin route exists in database and create/update it
-	err := p.AddRoute(
+	err = p.AddRoute(
 		adminDomain,
 		containerName,
 		containerIP,
@@ -109,11 +109,11 @@ func (p *Proxy) Start() error {
 	)
 
 	if err != nil {
-		log.Error("Failed to add admin route to database",
+		logger.Error("Failed to add admin route to database",
 			"error", err,
 			"domain", adminDomain)
 	} else {
-		log.Info("Ensured admin domain route is in database",
+		logger.Info("Ensured admin domain route is in database",
 			"domain", adminDomain,
 			"container", containerName,
 			"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
@@ -131,12 +131,12 @@ func (p *Proxy) Start() error {
 			Path:          "/",
 			Active:        true,
 		}
-		log.Info("Added special route for admin domain",
+		logger.Info("Added special route for admin domain",
 			"domain", adminDomain,
 			"container", containerName,
 			"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
 	} else {
-		log.Debug("Admin domain route already exists",
+		logger.Debug("Admin domain route already exists",
 			"domain", adminDomain,
 			"route", fmt.Sprintf("%s://%s:%s",
 				p.routes[adminDomain].Protocol,
@@ -144,13 +144,6 @@ func (p *Proxy) Start() error {
 				p.routes[adminDomain].ContainerPort))
 	}
 	p.mu.Unlock()
-
-	// We no longer automatically add the root domain redirect to avoid conflicts
-	// with other containers that might be using the root domain.
-	// If root domain redirection is needed, it should be explicitly configured.
-
-	// Clean up any existing root domain conflict
-	p.CleanupRootDomainForAdmin()
 
 	// Set up middleware
 	p.setupMiddleware()
@@ -170,7 +163,7 @@ func (p *Proxy) Start() error {
 			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 				// Log SNI information in debug mode
 				if hello.ServerName != "" {
-					log.Debug("TLS handshake with SNI",
+					logger.Debug("TLS handshake with SNI",
 						"server_name", hello.ServerName)
 				}
 
@@ -179,7 +172,7 @@ func (p *Proxy) Start() error {
 
 				// If we can't get a certificate and we have a fallback, use it for the admin domain
 				if (err != nil || cert == nil) && hello.ServerName == adminDomain && p.fallbackCert != nil {
-					log.Debug("Using fallback certificate for admin domain",
+					logger.Debug("Using fallback certificate for admin domain",
 						"domain", adminDomain,
 						"error", err)
 					return p.fallbackCert, nil
@@ -212,18 +205,18 @@ func (p *Proxy) Start() error {
 
 	// Start HTTPS server
 	go func() {
-		log.Info("Starting HTTPS server", "address", httpsServer.Addr)
+		logger.Info("Starting HTTPS server", "address", httpsServer.Addr)
 		// Using empty strings for cert and key files since we're using GetCertificate
 		if err := httpsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			log.Error("HTTPS server failed", "error", err)
+			logger.Error("HTTPS server failed", "error", err)
 		}
 	}()
 
 	// Start HTTP server
 	go func() {
-		log.Info("Starting HTTP server", "address", httpServer.Addr)
+		logger.Info("Starting HTTP server", "address", httpServer.Addr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error("HTTP server failed", "error", err)
+			logger.Error("HTTP server failed", "error", err)
 		}
 	}()
 
@@ -235,7 +228,7 @@ func (p *Proxy) Start() error {
 
 // Stop gracefully shuts down the proxy server
 func (p *Proxy) Stop() error {
-	log.Info("Stopping reverse proxy")
+	logger.Info("Stopping reverse proxy")
 
 	// Run any rate limiter cleanup functions
 	for _, cleanup := range rateLimiterCleanup {
@@ -247,7 +240,7 @@ func (p *Proxy) Stop() error {
 
 	// Skip the rest if the server was never started
 	if !p.serverStarted {
-		log.Debug("Proxy server was never started, nothing to stop")
+		logger.Debug("Proxy server was never started, nothing to stop")
 		return nil
 	}
 
@@ -262,18 +255,18 @@ func (p *Proxy) Stop() error {
 	// Shutdown HTTP server if it's running
 	if p.httpServer != nil {
 		if err := p.httpServer.Shutdown(ctx); err != nil {
-			log.Error("Failed to gracefully shutdown HTTP server", "error", err)
+			logger.Error("Failed to gracefully shutdown HTTP server", "error", err)
 		}
 	}
 
 	// Shutdown HTTPS server if it's running
 	if p.httpsServer != nil {
 		if err := p.httpsServer.Shutdown(ctx); err != nil {
-			log.Error("Failed to gracefully shutdown HTTPS server", "error", err)
+			logger.Error("Failed to gracefully shutdown HTTPS server", "error", err)
 		}
 	}
 
-	log.Info("Reverse proxy stopped")
+	logger.Info("Reverse proxy stopped")
 	return nil
 }
 
@@ -282,7 +275,7 @@ func (p *Proxy) testAdminConnection(defaultHost string, port string) string {
 	adminPath := p.app.GetConfig().Admin.Path
 	url := fmt.Sprintf("http://%s:%s%s", defaultHost, port, adminPath)
 
-	log.Debug("Testing admin connection", "url", url)
+	logger.Debug("Testing admin connection", "url", url)
 
 	// Try connecting using the provided default host
 	client := &http.Client{
@@ -298,7 +291,7 @@ func (p *Proxy) testAdminConnection(defaultHost string, port string) string {
 	resp, err := client.Get(url)
 	if err == nil {
 		resp.Body.Close()
-		log.Info("Admin connection successful", "host", defaultHost)
+		logger.Info("Admin connection successful", "host", defaultHost)
 		return defaultHost
 	}
 
@@ -316,17 +309,17 @@ func (p *Proxy) testAdminConnection(defaultHost string, port string) string {
 		}
 
 		url = fmt.Sprintf("http://%s:%s%s", host, port, adminPath)
-		log.Debug("Trying alternative host", "url", url)
+		logger.Debug("Trying alternative host", "url", url)
 
 		resp, err := client.Get(url)
 		if err == nil {
 			resp.Body.Close()
-			log.Info("Found working admin connection", "host", host)
+			logger.Info("Found working admin connection", "host", host)
 			return host
 		}
 	}
 
-	log.Warn("Could not establish admin connection on any tested host", "fallback", defaultHost)
+	logger.Warn("Could not establish admin connection on any tested host", "fallback", defaultHost)
 	return defaultHost
 }
 
@@ -335,7 +328,7 @@ func (p *Proxy) TestAdminConnectionLater() {
 	// Wait for servers to start
 	time.Sleep(2 * time.Second)
 
-	log.Debug("Testing admin connections after server startup")
+	logger.Debug("Testing admin connections after server startup")
 
 	// Get domain and current route
 	adminDomain := p.app.GetConfig().Http.FullDomain()
@@ -345,7 +338,7 @@ func (p *Proxy) TestAdminConnectionLater() {
 	p.mu.RUnlock()
 
 	if !exists {
-		log.Warn("Admin route not found")
+		logger.Warn("Admin route not found")
 		return
 	}
 
@@ -355,7 +348,7 @@ func (p *Proxy) TestAdminConnectionLater() {
 		p.mu.Lock()
 		if r, ok := p.routes[adminDomain]; ok {
 			r.ContainerIP = testedIP
-			log.Info("Updated admin route with working connection",
+			logger.Info("Updated admin route with working connection",
 				"domain", adminDomain,
 				"ip", testedIP)
 		}
@@ -384,10 +377,10 @@ func (p *Proxy) checkExternalPortAccess() {
 	httpURL := fmt.Sprintf("http://%s/.well-known/acme-challenge/test", adminDomain)
 	_, httpErr := client.Get(httpURL)
 	if httpErr != nil {
-		log.Warn("External HTTP port 80 might not be accessible",
+		logger.Warn("External HTTP port 80 might not be accessible",
 			"error", httpErr.Error())
 	} else {
-		log.Info("External HTTP port 80 is accessible")
+		logger.Info("External HTTP port 80 is accessible")
 	}
 
 	// Test HTTPS port 443
@@ -406,10 +399,10 @@ func (p *Proxy) checkExternalPortAccess() {
 	httpsURL := fmt.Sprintf("https://%s/", adminDomain)
 	_, httpsErr := httpsClient.Get(httpsURL)
 	if httpsErr != nil {
-		log.Warn("External HTTPS port 443 might not be accessible",
+		logger.Warn("External HTTPS port 443 might not be accessible",
 			"error", httpsErr.Error())
 	} else {
-		log.Info("External HTTPS port 443 is accessible")
+		logger.Info("External HTTPS port 443 is accessible")
 	}
 }
 
@@ -417,7 +410,7 @@ func (p *Proxy) checkExternalPortAccess() {
 // func (p *Proxy) detectGordonContainer() string {
 // 	// Check if we're running inside a container
 // 	if docker.IsRunningInContainer() {
-// 		log.Debug("Detected we're running in a container")
+// 		logger.Debug("Detected we're running in a container")
 
 // 		// Get our hostname which should be the container ID in Docker/Podman
 // 		hostname := os.Getenv("HOSTNAME")
@@ -430,12 +423,12 @@ func (p *Proxy) checkExternalPortAccess() {
 // 					if strings.HasPrefix(hostname, container.ID) {
 // 						// This is our container
 // 						containerName := strings.TrimLeft(container.Names[0], "/")
-// 						log.Debug("Auto-detected Gordon container name from hostname", "container_name", containerName)
+// 						logger.Debug("Auto-detected Gordon container name from hostname", "container_name", containerName)
 // 						return containerName
 // 					}
 // 				}
 // 			} else {
-// 				log.Debug("Could not list containers when checking hostname", "error", err)
+// 				logger.Debug("Could not list containers when checking hostname", "error", err)
 // 			}
 // 		}
 // 	}
@@ -450,21 +443,21 @@ func (p *Proxy) checkExternalPortAccess() {
 // 			containerLogs, err := docker.GetContainerLogs(containerID)
 // 			if err == nil && (strings.Contains(containerLogs, "/gordon") || strings.Contains(containerLogs, "serve")) {
 // 				containerName := strings.TrimLeft(container.Names[0], "/")
-// 				log.Debug("Auto-detected Gordon container by process", "container_name", containerName)
+// 				logger.Debug("Auto-detected Gordon container by process", "container_name", containerName)
 // 				return containerName
 // 			} else if err != nil {
-// 				log.Debug("Could not get container logs", "container_id", containerID, "error", err)
+// 				logger.Debug("Could not get container logs", "container_id", containerID, "error", err)
 // 			}
 
 // 			// Check container command for Gordon
 // 			if len(container.Command) > 0 && strings.Contains(container.Command, "gordon") {
 // 				containerName := strings.TrimLeft(container.Names[0], "/")
-// 				log.Debug("Auto-detected Gordon container by command", "container_name", containerName)
+// 				logger.Debug("Auto-detected Gordon container by command", "container_name", containerName)
 // 				return containerName
 // 			}
 // 		}
 // 	} else {
-// 		log.Debug("Could not list containers when checking processes", "error", err)
+// 		logger.Debug("Could not list containers when checking processes", "error", err)
 // 	}
 
 // 	// If we couldn't detect from processes, try to find a container with gordon in the name or image
@@ -474,7 +467,7 @@ func (p *Proxy) checkExternalPortAccess() {
 // 			for _, name := range container.Names {
 // 				if strings.Contains(strings.ToLower(name), "gordon") {
 // 					containerName := strings.TrimLeft(name, "/")
-// 					log.Debug("Auto-detected Gordon container by name", "container_name", containerName)
+// 					logger.Debug("Auto-detected Gordon container by name", "container_name", containerName)
 // 					return containerName
 // 				}
 // 			}
@@ -482,13 +475,13 @@ func (p *Proxy) checkExternalPortAccess() {
 // 			// Check image name for "gordon"
 // 			if strings.Contains(strings.ToLower(container.Image), "gordon") {
 // 				containerName := strings.TrimLeft(container.Names[0], "/")
-// 				log.Debug("Auto-detected Gordon container by image", "container_name", containerName, "image", container.Image)
+// 				logger.Debug("Auto-detected Gordon container by image", "container_name", containerName, "image", container.Image)
 // 				return containerName
 // 			}
 // 		}
 // 	}
 
 // 	// If all else fails, default to "gordon"
-// 	log.Debug("Could not auto-detect Gordon container, using default name", "container_name", "gordon")
+// 	logger.Debug("Could not auto-detect Gordon container, using default name", "container_name", "gordon")
 // 	return "gordon"
 // }
