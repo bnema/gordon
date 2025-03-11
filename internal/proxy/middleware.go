@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -33,7 +33,7 @@ func (p *Proxy) setupMiddleware() {
 	// Since we are the reverse proxy, we need to make sure we identify client IPs correctly
 	p.httpsServer.IPExtractor = echo.ExtractIPFromXFFHeader()
 	p.httpServer.IPExtractor = echo.ExtractIPFromXFFHeader()
-	
+
 	// Add UUID generator middleware for both HTTP and HTTPS servers
 	p.httpsServer.Use(p.createRequestIDMiddleware())
 	p.httpServer.Use(p.createRequestIDMiddleware())
@@ -42,7 +42,7 @@ func (p *Proxy) setupMiddleware() {
 	p.httpsServer.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			req := c.Request()
-			log.Debug("Request headers",
+			logger.Debug("Request headers",
 				"method", req.Method,
 				"path", req.URL.Path,
 				"remote_addr", req.RemoteAddr,
@@ -63,7 +63,7 @@ func (p *Proxy) setupMiddleware() {
 		3*time.Minute,              // Expires in 3 minutes
 	)
 	if err != nil {
-		log.Error("Failed to create HTTPS rate limiter store, falling back to memory store", "error", err)
+		logger.Error("Failed to create HTTPS rate limiter store, falling back to memory store", "error", err)
 
 		// Fallback to memory store if Starskey store creation fails
 		p.httpsServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
@@ -75,7 +75,7 @@ func (p *Proxy) setupMiddleware() {
 				},
 			),
 			DenyHandler: func(context echo.Context, identifier string, err error) error {
-				log.Warn("Rate limit exceeded",
+				logger.Warn("Rate limit exceeded",
 					"ip", identifier,
 					"path", context.Request().URL.Path,
 					"method", context.Request().Method)
@@ -84,14 +84,14 @@ func (p *Proxy) setupMiddleware() {
 		}))
 	} else {
 		// Use the Starskey store for HTTPS rate limiting
-		log.Debug("Using Starskey rate limiter for HTTPS server")
+		logger.Debug("Using Starskey rate limiter for HTTPS server")
 
 		// Add custom Starskey rate limiter middleware
 		p.httpsServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
 			Store: httpsRateLimiter,
 			IdentifierExtractor: func(ctx echo.Context) (string, error) {
 				id := ctx.RealIP()
-				log.Debug("Rate limiting HTTPS request",
+				logger.Debug("Rate limiting HTTPS request",
 					"ip", id,
 					"remote_addr", ctx.Request().RemoteAddr)
 
@@ -101,7 +101,7 @@ func (p *Proxy) setupMiddleware() {
 				return id, nil
 			},
 			DenyHandler: func(context echo.Context, identifier string, err error) error {
-				log.Warn("HTTPS rate limit exceeded",
+				logger.Warn("HTTPS rate limit exceeded",
 					"ip", identifier,
 					"path", context.Request().URL.Path,
 					"method", context.Request().Method)
@@ -112,7 +112,7 @@ func (p *Proxy) setupMiddleware() {
 		// Add cleanup function to global slice
 		rateLimiterCleanup = append(rateLimiterCleanup, func() {
 			if err := httpsRateLimiter.Close(); err != nil {
-				log.Error("Failed to close HTTPS rate limiter store", "error", err)
+				logger.Error("Failed to close HTTPS rate limiter store", "error", err)
 			}
 		})
 	}
@@ -120,15 +120,15 @@ func (p *Proxy) setupMiddleware() {
 	// Add custom logger middleware with request ID if enabled in config
 	if p.config.EnableLogs {
 		p.httpsServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-			Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
+			Format:           `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
 			CustomTimeFormat: "2006-01-02T15:04:05.00000Z07:00",
 			Skipper: func(c echo.Context) bool {
 				return !p.config.EnableLogs
 			},
 		}))
-		log.Debug("HTTP request logging enabled for HTTPS server")
+		logger.Debug("HTTP request logging enabled for HTTPS server")
 	} else {
-		log.Debug("HTTP request logging disabled for HTTPS server")
+		logger.Debug("HTTP request logging disabled for HTTPS server")
 	}
 
 	// Create blacklist middleware for HTTP
@@ -137,24 +137,24 @@ func (p *Proxy) setupMiddleware() {
 	// Create a new Starskey rate limiter store for HTTP server
 	httpRateLimiter, err := kv.NewStarskeyRateLimiterStore(
 		"./data/ratelimiter/http", // Path to store rate limit data
-		2,                         // Rate: 2 requests per second (lowered from 10)
-		10,                        // Burst: 10 requests (lowered from 30)
+		10,                        // Rate: 10 requests per second (lowered from 10)
+		30,                        // Burst: 30 requests (lowered from 30)
 		3*time.Minute,             // Expires in 3 minutes
 	)
 	if err != nil {
-		log.Error("Failed to create HTTP rate limiter store, falling back to memory store", "error", err)
+		logger.Error("Failed to create HTTP rate limiter store, falling back to memory store", "error", err)
 
 		// Fallback to memory store if Starskey store creation fails
 		p.httpServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
 			Store: middleware.NewRateLimiterMemoryStoreWithConfig(
 				middleware.RateLimiterMemoryStoreConfig{
-					Rate:      rate.Limit(2),   // 2 requests per second (lowered from 10)
-					Burst:     10,              // Burst of 10 requests (lowered from 30)
+					Rate:      rate.Limit(10),  // 10 requests per second (lowered from 10)
+					Burst:     30,              // Burst of 30 requests (lowered from 30)
 					ExpiresIn: 3 * time.Minute, // Store expiration
 				},
 			),
 			DenyHandler: func(context echo.Context, identifier string, err error) error {
-				log.Warn("Rate limit exceeded",
+				logger.Warn("Rate limit exceeded",
 					"ip", identifier,
 					"path", context.Request().URL.Path,
 					"method", context.Request().Method)
@@ -163,14 +163,14 @@ func (p *Proxy) setupMiddleware() {
 		}))
 	} else {
 		// Use the Starskey store for HTTP rate limiting
-		log.Debug("Using Starskey rate limiter for HTTP server")
+		logger.Debug("Using Starskey rate limiter for HTTP server")
 
 		// Add custom Starskey rate limiter middleware
 		p.httpServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
 			Store: httpRateLimiter,
 			IdentifierExtractor: func(ctx echo.Context) (string, error) {
 				id := ctx.RealIP()
-				log.Debug("Rate limiting HTTP request",
+				logger.Debug("Rate limiting HTTP request",
 					"ip", id,
 					"remote_addr", ctx.Request().RemoteAddr)
 
@@ -180,7 +180,7 @@ func (p *Proxy) setupMiddleware() {
 				return id, nil
 			},
 			DenyHandler: func(context echo.Context, identifier string, err error) error {
-				log.Warn("HTTP rate limit exceeded",
+				logger.Warn("HTTP rate limit exceeded",
 					"ip", identifier,
 					"path", context.Request().URL.Path,
 					"method", context.Request().Method)
@@ -191,7 +191,7 @@ func (p *Proxy) setupMiddleware() {
 		// Add cleanup function to global slice
 		rateLimiterCleanup = append(rateLimiterCleanup, func() {
 			if err := httpRateLimiter.Close(); err != nil {
-				log.Error("Failed to close HTTP rate limiter store", "error", err)
+				logger.Error("Failed to close HTTP rate limiter store", "error", err)
 			}
 		})
 	}
@@ -199,15 +199,15 @@ func (p *Proxy) setupMiddleware() {
 	// Add custom logger middleware with request ID for HTTP server if enabled in config
 	if p.config.EnableLogs {
 		p.httpServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-			Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
+			Format:           `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
 			CustomTimeFormat: "2006-01-02T15:04:05.00000Z07:00",
 			Skipper: func(c echo.Context) bool {
 				return !p.config.EnableLogs
 			},
 		}))
-		log.Debug("HTTP request logging enabled for HTTP server")
+		logger.Debug("HTTP request logging enabled for HTTP server")
 	} else {
-		log.Debug("HTTP request logging disabled for HTTP server")
+		logger.Debug("HTTP request logging disabled for HTTP server")
 	}
 }
 
@@ -217,13 +217,13 @@ func (p *Proxy) createRequestIDMiddleware() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			// Generate a new UUID for this request
 			requestID := uuid.New().String()
-			
+
 			// Store the UUID in the context
 			c.Set(RequestIDKey, requestID)
-			
+
 			// Add the UUID as a response header
 			c.Response().Header().Set(echo.HeaderXRequestID, requestID)
-			
+
 			// Continue with the next middleware
 			return next(c)
 		}
@@ -253,7 +253,7 @@ func (p *Proxy) createBlacklistMiddleware() echo.MiddlewareFunc {
 			}
 
 			// Debug log for all requests to check if the IP is being properly recognized
-			log.Debug("Received request", "ip", clientIP, "path", c.Request().URL.Path)
+			logger.Debug("Received request", "ip", clientIP, "path", c.Request().URL.Path)
 
 			// Check if IP is blacklisted (if blacklist exists)
 			if p.blacklist != nil && p.blacklist.IsBlocked(clientIP) {

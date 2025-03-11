@@ -253,6 +253,10 @@ func normalizePort(port string) string {
 
 // normalizeTargetDomain ensures that the target domain is in the format of "https://domain" or "http://domain"
 func normalizeTargetDomain(domain string) string {
+	// First, remove any leading dot from the domain
+	domain = strings.TrimPrefix(domain, ".")
+
+	// Then check if we need to add the protocol
 	if !regexp.MustCompile(`^https?:\/\/`).MatchString(domain) {
 		return "https://" + domain
 	}

@@ -754,7 +754,7 @@ func formatDuration(d time.Duration) string {
 // when relevant container events are detected. This is used for service discovery and IP updates.
 // This implementation uses a polling approach instead of Docker event streams, which is more
 // stable for both Docker and Podman environments.
-func ListenForContainerEvents(networkFilter string, callback func(string, string, string)) error {
+func ListenForContainerEvents(networkFilter string, startCallback func(string, string, string), stopCallback func(string, string)) error {
 	// Check if the Docker client has been initialized
 	err := CheckIfInitialized()
 	if err != nil {
@@ -936,7 +936,7 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 							"container_ip", containerIP)
 
 						// Call the callback with the container ID, name, and IP
-						callback(event.id, event.name, containerIP)
+						startCallback(event.id, event.name, containerIP)
 
 						logger.Debug("Processed container start",
 							"container_id", event.id,
@@ -947,7 +947,14 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 						logger.Debug("Container stopped",
 							"container_id", event.id,
 							"container_name", event.name)
-						// If any stop event handling is needed, add it here
+						
+						// Call the stop callback if provided
+						if stopCallback != nil {
+							logger.Debug("Calling container stop callback",
+								"container_id", event.id,
+								"container_name", event.name)
+							stopCallback(event.id, event.name)
+						}
 
 						// Remove from IP tracking map when container stops
 						delete(containerIPs, event.id)

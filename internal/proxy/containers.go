@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 )
 
 // scanContainersAndCheckCertificates scans all containers from the Gordon network
@@ -19,7 +19,7 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 		return fmt.Errorf("container network name is not configured")
 	}
 
-	log.Info("Scanning containers in network for certificate checks",
+	logger.Info("Scanning containers in network for certificate checks",
 		"network", networkName)
 
 	// Try to get network info using the docker client
@@ -31,7 +31,7 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 	// Skip admin cert check if environment variable is set
 	skipAdminCertCheck := os.Getenv("GORDON_SKIP_ADMIN_CERT_CHECK") == "true"
 	if skipAdminCertCheck {
-		log.Info("Skipping admin certificate check as GORDON_SKIP_ADMIN_CERT_CHECK=true")
+		logger.Info("Skipping admin certificate check as GORDON_SKIP_ADMIN_CERT_CHECK=true")
 	}
 
 	// Get all containers in the network
@@ -41,7 +41,7 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 		// Get container info to check for relevant domains
 		containerInfo, err := docker.GetContainerInfo(containerID)
 		if err != nil {
-			log.Warn("Failed to get container info",
+			logger.Warn("Failed to get container info",
 				"containerID", containerID,
 				"containerName", containerName,
 				"error", err)
@@ -54,7 +54,22 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 
 		// Check common domain-related labels
 		if domainLabel, exists := containerInfo.Config.Labels["gordon.domain"]; exists && domainLabel != "" {
+			// Remove any leading dot from domain label
+			domainLabel = strings.TrimPrefix(domainLabel, ".")
+
+			// Always add the base domain
 			domains = append(domains, domainLabel)
+
+			// Also check if there's a service label to use as a subdomain
+			if serviceLabel, serviceExists := containerInfo.Config.Labels["gordon.service"]; serviceExists && serviceLabel != "" {
+				// Combine service name with domain to create service.domain format
+				serviceSubdomain := serviceLabel + "." + domainLabel
+				domains = append(domains, serviceSubdomain)
+				logger.Debug("Created additional domain from service label",
+					"domain", serviceSubdomain,
+					"service", serviceLabel,
+					"base_domain", domainLabel)
+			}
 		}
 
 		// Check environment variables for domain information
@@ -64,7 +79,9 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 				if len(parts) == 2 && parts[1] != "" {
 					// Multiple domains might be comma-separated
 					for _, domain := range strings.Split(parts[1], ",") {
-						domains = append(domains, strings.TrimSpace(domain))
+						// Remove any leading dot before adding the domain
+						cleanDomain := strings.TrimPrefix(strings.TrimSpace(domain), ".")
+						domains = append(domains, cleanDomain)
 					}
 				}
 			}
@@ -96,11 +113,11 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 			hasCert := p.checkCertificateInCache(domain)
 
 			if hasCert {
-				log.Debug("Certificate exists for domain",
+				logger.Debug("Certificate exists for domain",
 					"domain", domain,
 					"container", containerName)
 			} else {
-				log.Info("Certificate not found in cache, requesting",
+				logger.Info("Certificate not found in cache, requesting",
 					"domain", domain,
 					"container", containerName)
 
@@ -125,7 +142,7 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 				if len(parts) > 2 && !isCommonTLD(parts[len(parts)-1]) {
 					hasCert = p.checkCertificateInCache(parentDomain)
 					if !hasCert {
-						log.Info("Certificate not found for parent domain",
+						logger.Info("Certificate not found for parent domain",
 							"domain", parentDomain,
 							"container", containerName)
 
