@@ -12,12 +12,11 @@ import (
 	"sync"
 
 	"github.com/bnema/gordon/pkg/docker"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/bnema/gordon/pkg/parser"
-	"github.com/charmbracelet/log"
 )
 
 var (
-	logger            = log.NewWithOptions(os.Stderr, log.Options{Level: log.InfoLevel})
 	globalConfig      *Config
 	globalConfigOnce  sync.Once
 	globalConfigMu    sync.RWMutex
@@ -26,39 +25,8 @@ var (
 
 // Initialize package-level logging configuration
 func init() {
-	// Enable timestamp reporting and set format
-	log.SetReportTimestamp(true)
-	log.SetTimeFormat("15:04:05")
-
-	// First check for GORDON_LOG_LEVEL environment variable
-	if logLevelEnv := os.Getenv("GORDON_LOG_LEVEL"); logLevelEnv != "" {
-		// Convert string log level to charmbracelet/log level
-		var logLevel log.Level
-		switch strings.ToLower(logLevelEnv) {
-		case "debug":
-			logLevel = log.DebugLevel
-		case "info":
-			logLevel = log.InfoLevel
-		case "warn", "warning":
-			logLevel = log.WarnLevel
-		case "error":
-			logLevel = log.ErrorLevel
-		case "fatal":
-			logLevel = log.FatalLevel
-		default:
-			// Default to info level for unknown values
-			logLevel = log.InfoLevel
-		}
-
-		// Set the logger level
-		logger.SetLevel(logLevel)
-		log.SetLevel(logLevel) // Set the global logger level too
-		logger.Debug("Log level set from environment variable", "level", logLevelEnv)
-	} else if os.Getenv("ENV") == "dev" {
-		// Fall back to ENV=dev behavior if GORDON_LOG_LEVEL is not set
-		logger.SetLevel(log.DebugLevel)
-		logger.Debug("Debug logging enabled from ENV=dev")
-	}
+	// Configure the logger from environment variables
+	logger.GetLogger().ConfigureFromEnv()
 }
 
 type Config struct {
@@ -83,10 +51,12 @@ type AdminConfig struct {
 }
 
 type GeneralConfig struct {
-	StorageDir string `yaml:"storageDir"`
-	Token      string `yaml:"token"`
-	LogLevel   string `yaml:"logLevel"`
+	StorageDir        string `yaml:"storageDir"`
+	Token             string `yaml:"token"`
+	LogLevel          string `yaml:"logLevel"`
+	GordonContainerID string `yaml:"gordonContainerID"`
 }
+
 type HttpConfig struct {
 	Port       string `yaml:"port"`
 	Domain     string `yaml:"domain"`
@@ -821,26 +791,8 @@ func (config *Config) LoadConfig() (*Config, error) {
 
 	// Apply the log level from configuration
 	if config.General.LogLevel != "" {
-		// Convert string log level to charmbracelet/log level
-		var logLevel log.Level
-		switch strings.ToLower(config.General.LogLevel) {
-		case "debug":
-			logLevel = log.DebugLevel
-		case "info":
-			logLevel = log.InfoLevel
-		case "warn", "warning":
-			logLevel = log.WarnLevel
-		case "error":
-			logLevel = log.ErrorLevel
-		case "fatal":
-			logLevel = log.FatalLevel
-		default:
-			logger.Warn("Unknown log level specified, using default info level", "specified", config.General.LogLevel)
-			logLevel = log.InfoLevel
-		}
-
-		// Set the logger level
-		logger.SetLevel(logLevel)
+		// Set the log level using our centralized logger
+		logger.GetLogger().SetLogLevel(config.General.LogLevel)
 		logger.Debug("Log level set from configuration", "level", config.General.LogLevel)
 	}
 

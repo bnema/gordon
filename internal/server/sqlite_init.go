@@ -69,6 +69,16 @@ func (a *App) checkDBFile(dbPath string) (bool, error) {
 	return true, nil
 }
 
+// runMigrations applies any necessary database migrations for existing databases
+func runMigrations(db *sql.DB) error {
+	log.Info("Checking for database migrations")
+
+	// No migrations needed at this time
+	log.Debug("No migrations needed")
+
+	return nil
+}
+
 // InitializeDB initializes the database
 func InitializeDB(a *App) (*sql.DB, error) {
 	log.Debug("Initializing database")
@@ -86,7 +96,7 @@ func InitializeDB(a *App) (*sql.DB, error) {
 
 	if !dbExists {
 		log.Debug("Database needs bootstrapping", "path", dbPath)
-		if err := bootstrapDB(dbPath, a); err != nil {
+		if err := bootstrapDB(dbPath); err != nil {
 			return nil, fmt.Errorf("failed to bootstrap DB: %w", err)
 		}
 	}
@@ -104,6 +114,11 @@ func InitializeDB(a *App) (*sql.DB, error) {
 	a.DB = db
 
 	if dbExists {
+		// Run migrations for existing database
+		if err := runMigrations(db); err != nil {
+			log.Warn("Failed to run database migrations", "error", err)
+		}
+
 		// Populate the struct tables from the database
 		log.Debug("Populating struct tables from existing database")
 		if err := PopulateStructWithTables(a); err != nil {
@@ -116,7 +131,7 @@ func InitializeDB(a *App) (*sql.DB, error) {
 	return db, nil
 }
 
-func bootstrapDB(dbPath string, app *App) error {
+func bootstrapDB(dbPath string) error {
 	// Open the database file
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {

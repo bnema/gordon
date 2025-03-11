@@ -8,11 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
@@ -114,17 +112,18 @@ func StopContainer(containerID string) error {
 	// Try graceful shutdown first
 	stopped, err := StopContainerGracefully(containerID, 3*time.Second)
 	if err != nil {
-		log.Warn("Failed to stop container gracefully", "error", err)
+		logger.Warn("Failed to stop container gracefully", "error", err)
 	}
 
 	// If container wasn't stopped gracefully or there was an error, try forceful shutdown
 	if !stopped {
 		if err := StopContainerRagefully(containerID); err != nil {
+			logger.Error("Failed to stop container forcefully", "error", err)
 			return fmt.Errorf("failed to stop container forcefully: %w", err)
 		}
-		log.Info("Container stopped forcefully", "containerID", containerID)
+		logger.Info("Container stopped forcefully", "containerID", containerID)
 	} else {
-		log.Info("Container stopped gracefully", "containerID", containerID)
+		logger.Info("Container stopped gracefully", "containerID", containerID)
 	}
 
 	return nil
@@ -194,7 +193,7 @@ func RemoveContainer(containerID string) error {
 
 // StartContainer starts a container
 func StartContainer(containerID string) error {
-	fmt.Println("Starting container", containerID)
+	logger.Info("Starting container", "containerID", containerID)
 
 	// Add timeout context
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -203,20 +202,23 @@ func StartContainer(containerID string) error {
 	// Get initial container state
 	containerInfo, err := GetContainerInfo(containerID)
 	if err != nil {
+		logger.Error("Failed to get container info", "containerID", containerID, "error", err)
 		return fmt.Errorf("could not get container info: %v", err)
 	}
 
 	if containerInfo.State.Running {
+		logger.Warn("Container is already running", "containerID", containerID)
 		return fmt.Errorf("container is already running")
 	}
 
 	// Start container
+	logger.Debug("Executing container start", "containerID", containerID)
 	err = dockerCli.ContainerStart(ctx, containerID, container.StartOptions{})
 	if err != nil {
 		// Get container logs if start failed
 		logs, logErr := GetContainerLogs(containerID)
 		if logErr == nil {
-			fmt.Printf("Container logs after failed start: %s\n", logs)
+			logger.Error("Container logs after failed start", "containerID", containerID, "logs", logs)
 		}
 		return fmt.Errorf("could not start container: %v", err)
 	}
@@ -225,19 +227,22 @@ func StartContainer(containerID string) error {
 	for i := 0; i < 5; i++ {
 		state, err := GetContainerState(containerID)
 		if err != nil {
-			fmt.Printf("Error checking container state: %v\n", err)
+			logger.Warn("Error checking container state", "containerID", containerID, "error", err)
 			continue
 		}
 
 		if state == "running" {
+			logger.Info("Container started successfully", "containerID", containerID)
 			return nil
 		}
 
+		logger.Debug("Waiting for container to start", "containerID", containerID, "state", state, "attempt", i+1)
 		time.Sleep(time.Second)
 	}
 
 	// If we get here, container didn't start properly
 	logs, _ := GetContainerLogs(containerID)
+	logger.Error("Container failed to enter running state", "containerID", containerID, "logs", logs)
 	return fmt.Errorf("container failed to enter running state. Logs: %s", logs)
 }
 
@@ -245,10 +250,11 @@ func StartContainer(containerID string) error {
 func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 
 	if err := CheckIfInitialized(); err != nil {
+		logger.Error("Failed to check if docker client is initialized", "error", err)
 		return "", fmt.Errorf("failed to check if docker client is initialized: %w", err)
 	}
 
-	log.Info("Creating container with params",
+	logger.Info("Creating container with params",
 		"name", cmdParams.ContainerName,
 		"image", cmdParams.ImageName,
 		"proxy_port", cmdParams.ProxyPort)
@@ -256,31 +262,31 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 	// Check if a container with this name already exists - handle recreation case
 	existingContainers, err := ListRunningContainers()
 	if err != nil {
-		log.Warn("Failed to check for existing containers", "error", err)
+		logger.Warn("Failed to check for existing containers", "error", err)
 	} else {
 		for _, container := range existingContainers {
 			for _, name := range container.Names {
 				// Container names in Docker API have a leading slash
 				cleanName := strings.TrimPrefix(name, "/")
 				if cleanName == cmdParams.ContainerName {
-					log.Warn("Container with this name already exists, it will be replaced",
+					logger.Warn("Container with this name already exists, it will be replaced",
 						"name", cmdParams.ContainerName,
 						"existing_id", container.ID)
 
 					// Stop and remove the existing container
 					if err := StopContainer(container.ID); err != nil {
-						log.Warn("Failed to stop existing container",
+						logger.Warn("Failed to stop existing container",
 							"container_id", container.ID,
 							"error", err)
 					}
 
 					if err := RemoveContainer(container.ID); err != nil {
-						log.Warn("Failed to remove existing container",
+						logger.Warn("Failed to remove existing container",
 							"container_id", container.ID,
 							"error", err)
 					}
 
-					log.Info("Removed existing container to create a new one",
+					logger.Info("Removed existing container to create a new one",
 						"name", cmdParams.ContainerName)
 					break
 				}
@@ -291,13 +297,15 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 	// Check network
 	isNetworkCreated, err := CheckIfNetworkExists(cmdParams.Network)
 	if err != nil {
+		logger.Error("Network check failed", "network", cmdParams.Network, "error", err)
 		return "", fmt.Errorf("network check failed: %v", err)
 	}
 
 	if !isNetworkCreated {
-		fmt.Printf("Creating network: %s\n", cmdParams.Network)
+		logger.Info("Creating network", "network", cmdParams.Network)
 		_, err := dockerCli.NetworkCreate(context.Background(), cmdParams.Network, network.CreateOptions{})
 		if err != nil {
+			logger.Error("Network creation failed", "network", cmdParams.Network, "error", err)
 			return "", fmt.Errorf("network creation failed: %v", err)
 		}
 	}
@@ -314,10 +322,10 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 			},
 		}
 		exposedPorts[exposedPort] = struct{}{}
-		fmt.Printf("Adding port mapping: %s:%s/%s\n",
-			portMapping.HostPort,
-			portMapping.ContainerPort,
-			portMapping.Protocol)
+		logger.Debug("Adding port mapping",
+			"host_port", portMapping.HostPort,
+			"container_port", portMapping.ContainerPort,
+			"protocol", portMapping.Protocol)
 	}
 
 	// Prepare labels
@@ -358,31 +366,37 @@ func CreateContainer(cmdParams ContainerCommandParams) (string, error) {
 		return "", fmt.Errorf("container creation failed: %v", err)
 	}
 
-	log.Info("Container created successfully with ID: %s\n", resp.ID)
+	logger.Info("Container created successfully", "id", resp.ID)
 
 	return resp.ID, nil
 }
 
 func WaitForContainerToBeRunning(containerID string, timeout time.Duration) error {
+	logger.Debug("Waiting for container to be running", "containerID", containerID, "timeout", timeout)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Error("Timeout waiting for container to start", "containerID", containerID)
 			return fmt.Errorf("timeout waiting for container to start")
 		case <-time.After(time.Second):
 			state, err := GetContainerState(containerID)
 			if err != nil {
+				logger.Error("Error checking container state", "containerID", containerID, "error", err)
 				return fmt.Errorf("error checking container state: %v", err)
 			}
 
+			logger.Debug("Container state check", "containerID", containerID, "state", state)
 			if state == "running" {
+				logger.Info("Container is now running", "containerID", containerID)
 				return nil
 			}
 
 			if state == "exited" {
 				logs, _ := GetContainerLogs(containerID)
+				logger.Error("Container exited unexpectedly", "containerID", containerID, "logs", logs)
 				return fmt.Errorf("container exited unexpectedly. Logs: %s", logs)
 			}
 		}
@@ -642,7 +656,7 @@ func findContainersWithPort(ctx context.Context, cli *client.Client, containers 
 	for _, container := range containers {
 		containerInfo, err := getContainerPortInfo(ctx, cli, container)
 		if err != nil {
-			log.Warn("Failed to inspect container", "container", container.ID, "error", err)
+			logger.Warn("Failed to inspect container", "container", container.ID, "error", err)
 			continue
 		}
 
@@ -736,8 +750,10 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dm", minutes)
 }
 
-// ListenForContainerEvents starts listening for container events and calls the provided callback
-// when relevant container events occur. This is used for real-time service discovery and IP updates.
+// ListenForContainerEvents starts polling for container state changes and calls the provided callback
+// when relevant container events are detected. This is used for service discovery and IP updates.
+// This implementation uses a polling approach instead of Docker event streams, which is more
+// stable for both Docker and Podman environments.
 func ListenForContainerEvents(networkFilter string, callback func(string, string, string)) error {
 	// Check if the Docker client has been initialized
 	err := CheckIfInitialized()
@@ -751,220 +767,195 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 	// Store cancel func to allow shutdown
 	containerEventCancel = cancel
 
-	// Start the main listener loop in a goroutine
+	// Start the polling loop in a goroutine
 	go func() {
-		// Implement exponential backoff for reconnection
-		initialDelay := 1 * time.Second
-		maxDelay := 1 * time.Minute
-		currentDelay := initialDelay
+		// Configure polling interval - can be adjusted based on needs
+		pollInterval := 10 * time.Second
+		logger.Info("Starting container polling",
+			"network_filter", networkFilter,
+			"poll_interval", pollInterval)
+
+		// Initialize container tracking map
+		containerStates := make(map[string]containerState)
+		// Track previous IPs to detect if they actually changed
+		containerIPs := make(map[string]string)
+
+		// Create ticker for polling
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+
+		// Track failures for backoff
 		consecutiveFailures := 0
-		maxConsecutiveFailures := 10
-
-		// Track EOFs for reduced logging
-		eofCount := 0
-		lastEOFLogTime := time.Now().Add(-10 * time.Minute) // Initialize to past time
-
-		// Fixed delay for EOFs to prevent rapid reconnection
-		eofReconnectDelay := 5 * time.Second
+		maxConsecutiveFailures := 5
+		initialBackoff := 5 * time.Second
+		maxBackoff := 1 * time.Minute
+		currentBackoff := initialBackoff
 
 		for {
-			// Check if context was canceled (application is shutting down)
-			if ctx.Err() != nil {
-				return
-			}
+			select {
+			case <-ticker.C:
+				// Get current list of running containers
+				logger.Debug("Polling for container state changes", "network_filter", networkFilter)
+				currentContainers, err := ListContainers(ctx)
+				if err != nil {
+					consecutiveFailures++
+					logger.Error("Failed to list containers during polling",
+						"error", err,
+						"consecutive_failures", consecutiveFailures)
 
-			// Add a timeout context for the Events call
-			eventCtx, eventCancel := context.WithCancel(ctx)
+					// Implement backoff for repeated failures
+					if consecutiveFailures >= maxConsecutiveFailures {
+						// Increase backoff time
+						currentBackoff = time.Duration(float64(currentBackoff) * 1.5)
+						if currentBackoff > maxBackoff {
+							currentBackoff = maxBackoff
+						}
 
-			// Set up filters for the events we're interested in
-			filters := makeEventFilters(networkFilter)
+						logger.Warn("Multiple consecutive container polling failures",
+							"count", consecutiveFailures,
+							"next_poll_after", currentBackoff)
 
-			log.Debug("connecting to container event stream", "network_filter", networkFilter)
+						// Temporarily slow down polling
+						ticker.Reset(currentBackoff)
+					}
+					continue
+				}
 
-			// Start listening for events
-			messages, errs := dockerCli.Events(eventCtx, events.ListOptions{
-				Filters: filters,
-			})
+				// Reset on successful poll
+				if consecutiveFailures > 0 {
+					logger.Debug("Container polling recovered after failures",
+						"previous_failure_count", consecutiveFailures)
+					consecutiveFailures = 0
+					// Reset to normal polling interval
+					ticker.Reset(pollInterval)
+					logger.Debug("Reset polling interval to normal", "interval", pollInterval)
+				}
 
-			// Only log the first connection and every 10th reconnection for EOF
-			if eofCount == 0 {
-				log.Info("Started container event listener", "network_filter", networkFilter)
-			} else {
-				log.Debug("Reconnected container event listener", "network_filter", networkFilter, "reconnect_count", eofCount)
-			}
+				// Process the current containers
+				newStates, events := detectContainerEvents(containerStates, currentContainers, networkFilter)
 
-			// Process events in an inner loop
-			listenSuccess := false
-			lastEventTime := time.Now()
-		eventStreamLoop:
-			for {
-				select {
-				case err := <-errs:
-					if err != nil && ctx.Err() == nil {
-						// Only log if this isn't due to context cancellation
-						if err.Error() == "EOF" {
-							// Increment EOF counter
-							eofCount++
+				// Update our tracking map
+				containerStates = newStates
 
-							// Log EOF errors less frequently to reduce spam
-							now := time.Now()
-							if eofCount == 1 || eofCount%10 == 0 || now.Sub(lastEOFLogTime) > time.Minute {
-								log.Debug("Docker event stream closed with EOF - will reconnect",
-									"count", eofCount,
-									"next_reconnect_delay", eofReconnectDelay)
-								lastEOFLogTime = now
+				// Process detected events
+				for _, event := range events {
+					logger.Debug("Container event detected by polling",
+						"container_id", event.id,
+						"container_name", event.name,
+						"event_type", event.eventType)
+
+					// Handle container start events
+					if event.eventType == "start" {
+						// Get container IP from the network
+						containerIP, err := GetContainerIPFromNetwork(event.id, networkFilter)
+						if err != nil {
+							logger.Error("Failed to get container IP from network",
+								"container_id", event.id,
+								"container_name", event.name,
+								"network", networkFilter,
+								"error", err)
+
+							// Additional fallback to try to get IP through container inspection
+							// This is especially important for Podman compatibility
+							containerInfo, inspectErr := GetContainerInfo(event.id)
+							if inspectErr == nil {
+								// Try to get IP address from container inspection
+								if containerInfo.NetworkSettings != nil {
+									// First check if NetworkSettings.Networks contains our network
+									if network, exists := containerInfo.NetworkSettings.Networks[networkFilter]; exists && network.IPAddress != "" {
+										containerIP = network.IPAddress
+										logger.Debug("Found container IP through inspection - network specific",
+											"container_id", event.id,
+											"container_name", event.name,
+											"network", networkFilter,
+											"ip", containerIP)
+									} else if containerInfo.NetworkSettings.IPAddress != "" {
+										// Fallback to default IPAddress
+										containerIP = containerInfo.NetworkSettings.IPAddress
+										logger.Debug("Found container IP through inspection - default network",
+											"container_id", event.id,
+											"container_name", event.name,
+											"ip", containerIP)
+									}
+								}
 							}
-						} else {
-							// Non-EOF errors are still important, log them as errors
-							log.Error("Error in container event stream", "error", err)
-							// Reset EOF counter for non-EOF errors
-							eofCount = 0
+
+							// If we still don't have an IP, skip this container
+							if containerIP == "" {
+								logger.Error("Failed to get container IP through any method",
+									"container_id", event.id,
+									"container_name", event.name)
+								continue
+							}
 						}
 
-						// Cancel the event context to clean up resources
-						eventCancel()
+						// Check if this is a container IP change or if it's a new discovery
+						prevIP, ipExists := containerIPs[event.id]
+						if ipExists && prevIP == containerIP {
+							// IP hasn't actually changed, no need to trigger callback
+							logger.Debug("Container IP verified but unchanged - skipping callback",
+								"container_id", event.id,
+								"container_name", event.name,
+								"container_ip", containerIP)
 
-						// Increment failure counter for backoff calculation
-						consecutiveFailures++
-
-						// If we have too many consecutive failures, log a warning
-						if consecutiveFailures >= maxConsecutiveFailures && consecutiveFailures%maxConsecutiveFailures == 0 {
-							log.Warn("Multiple consecutive failures in container event stream",
-								"count", consecutiveFailures,
-								"will_continue_trying", true)
+							// Update the container IP map to refresh timestamp
+							containerIPs[event.id] = containerIP
+							continue
 						}
 
-						// Calculate backoff delay with exponential increase for non-EOF errors
-						if err.Error() != "EOF" {
-							if listenSuccess {
-								// If we had successful events before failure, reset the delay
-								currentDelay = initialDelay
-							} else {
-								// Exponential backoff: increase the delay each time, up to max
-								currentDelay = time.Duration(float64(currentDelay) * 1.5)
-								if currentDelay > maxDelay {
-									currentDelay = maxDelay
+						// Update the container IP map
+						containerIPs[event.id] = containerIP
+
+						// For Gordon container, add extra verification to prevent routing issues
+						if event.name == "gordon" {
+							logger.Info("Gordon container event detected - verifying IP before callback",
+								"container_id", event.id,
+								"container_name", event.name,
+								"container_ip", containerIP)
+
+							// Double-check the IP with a direct inspection for reliability
+							containerInfo, err := GetContainerInfo(event.id)
+							if err == nil && containerInfo.NetworkSettings != nil {
+								if network, exists := containerInfo.NetworkSettings.Networks[networkFilter]; exists {
+									if network.IPAddress != "" && network.IPAddress != containerIP {
+										logger.Warn("IP mismatch detected for Gordon container - using network inspection IP",
+											"container_id", event.id,
+											"polling_ip", containerIP,
+											"inspection_ip", network.IPAddress)
+										containerIP = network.IPAddress
+										containerIPs[event.id] = containerIP
+									}
 								}
 							}
 						}
 
-						// Break out of the inner event loop to reconnect
-						break eventStreamLoop
+						// Add debug output before calling callback
+						logger.Debug("Calling container event callback",
+							"container_id", event.id,
+							"container_name", event.name,
+							"container_ip", containerIP)
+
+						// Call the callback with the container ID, name, and IP
+						callback(event.id, event.name, containerIP)
+
+						logger.Debug("Processed container start",
+							"container_id", event.id,
+							"container_name", event.name,
+							"container_ip", containerIP)
+					} else if event.eventType == "stop" {
+						// Handle container stop events if needed
+						logger.Debug("Container stopped",
+							"container_id", event.id,
+							"container_name", event.name)
+						// If any stop event handling is needed, add it here
+
+						// Remove from IP tracking map when container stops
+						delete(containerIPs, event.id)
 					}
-					// Context was canceled, exit completely
-					if ctx.Err() != nil {
-						eventCancel()
-						return
-					}
-				case event := <-messages:
-					// Mark that we've successfully received events
-					if !listenSuccess {
-						listenSuccess = true
-						// Reset failure counter on successful event
-						consecutiveFailures = 0
-						// Only log first successful connection or after errors
-						if eofCount <= 1 {
-							log.Info("Successfully receiving container events")
-						}
-					}
-
-					// Update last event time
-					lastEventTime = time.Now()
-
-					// Process container events
-					if event.Type == "container" {
-						containerID := event.Actor.ID
-
-						// Get container name from event attributes
-						containerName := event.Actor.Attributes["name"]
-						if containerName == "" {
-							// If not in attributes, try to get it from the API
-							name, err := GetContainerName(containerID)
-							if err == nil {
-								containerName = strings.TrimPrefix(name, "/")
-							}
-						}
-
-						// Handle container events based on action
-						switch event.Action {
-						case "start":
-							// Container started - need to get its IP and update any proxy routes
-							log.Debug("container started event",
-								"container_id", containerID,
-								"container_name", containerName)
-
-							// Get container IP from the network
-							containerIP, err := getContainerIPFromNetwork(containerID, networkFilter)
-							if err != nil {
-								log.Error("Failed to get container IP",
-									"container_id", containerID,
-									"error", err)
-								continue
-							}
-
-							// Call the callback with the container ID, name, and IP
-							callback(containerID, containerName, containerIP)
-
-						case "die", "kill", "destroy":
-							// Container stopped - might need to mark routes as inactive
-							log.Debug("container stopped event",
-								"container_id", containerID,
-								"container_name", containerName,
-								"action", event.Action)
-
-						case "rename":
-							// Container renamed - update related proxy routes
-							log.Debug("container renamed event",
-								"container_id", containerID,
-								"container_name", containerName,
-								"new_name", event.Actor.Attributes["name"])
-
-							// Add other event types as needed
-						}
-					}
-				case <-time.After(30 * time.Second):
-					// If we haven't received events for a while, check if the connection is still alive
-					timeSinceLastEvent := time.Since(lastEventTime)
-
-					// If it's been more than 2 minutes since the last event, reconnect
-					if timeSinceLastEvent > 2*time.Minute {
-						log.Debug("No events received for too long, reconnecting",
-							"time_since_last_event", timeSinceLastEvent)
-
-						// Cancel the event context to clean up resources
-						eventCancel()
-
-						// Break out of the inner event loop to reconnect
-						break eventStreamLoop
-					}
-				case <-ctx.Done():
-					eventCancel()
-					return
 				}
-			}
 
-			// If we get here, the event stream failed and we need to reconnect
-			// Clean up the event context
-			eventCancel()
-
-			// Use different reconnection delays for different error types
-			var reconnectDelay time.Duration
-			if eofCount > 0 {
-				// Use fixed delay for EOF errors to prevent rapid reconnection cycles
-				reconnectDelay = eofReconnectDelay
-			} else {
-				// Use exponential backoff for other errors
-				reconnectDelay = currentDelay
-			}
-
-			// Wait for the calculated delay before reconnecting
-			select {
-			case <-time.After(reconnectDelay):
-				// Only log reconnection attempts for non-EOF errors or occasional EOF errors
-				if eofCount == 0 || eofCount%10 == 0 {
-					log.Debug("Attempting to reconnect to container event stream", "delay", reconnectDelay)
-				}
 			case <-ctx.Done():
+				logger.Info("Container polling stopped due to context cancellation")
 				return
 			}
 		}
@@ -973,51 +964,195 @@ func ListenForContainerEvents(networkFilter string, callback func(string, string
 	return nil
 }
 
-// StopContainerEventListener stops the container event listener
-func StopContainerEventListener() {
-	if containerEventCancel != nil {
-		containerEventCancel()
-		log.Info("Stopped container event listener")
-	}
+// Container state tracking
+type containerState struct {
+	id      string
+	name    string
+	status  string
+	running bool
 }
 
-// getContainerIPFromNetwork gets a container's IP address from the specified network
-func getContainerIPFromNetwork(containerID, networkName string) (string, error) {
+// Container event structure
+type containerEvent struct {
+	id        string
+	name      string
+	eventType string // "start" or "stop"
+}
+
+// detectContainerEvents compares previous and current container states to detect events
+func detectContainerEvents(previousStates map[string]containerState, currentContainers []types.Container, networkFilter string) (map[string]containerState, []containerEvent) {
+	newStates := make(map[string]containerState)
+	var events []containerEvent
+
+	// Build map of current containers by ID
+	for _, container := range currentContainers {
+		// Skip containers not in the specified network if networkFilter is provided
+		if networkFilter != "" {
+			// Check if container is in the specified network
+			inNetwork := false
+
+			// First, check if the container has any network with the network name matching our filter
+			for networkName := range container.NetworkSettings.Networks {
+				if networkName == networkFilter ||
+					strings.Contains(strings.ToLower(networkName), strings.ToLower(networkFilter)) {
+					inNetwork = true
+					break
+				}
+			}
+
+			// If not found by name, check network IDs as fallback (for compatibility with previous code)
+			if !inNetwork {
+				for _, network := range container.NetworkSettings.Networks {
+					if network.NetworkID == networkFilter ||
+						strings.Contains(strings.ToLower(network.NetworkID), strings.ToLower(networkFilter)) {
+						inNetwork = true
+						break
+					}
+				}
+			}
+
+			if !inNetwork {
+				logger.Debug("Container not in target network - skipping",
+					"container_id", container.ID,
+					"container_name", strings.TrimPrefix(container.Names[0], "/"),
+					"network_filter", networkFilter)
+				continue
+			}
+		}
+
+		containerName := strings.TrimPrefix(container.Names[0], "/")
+
+		// Create current state entry
+		newState := containerState{
+			id:      container.ID,
+			name:    containerName,
+			status:  container.Status,
+			running: strings.Contains(strings.ToLower(container.Status), "up"),
+		}
+
+		// Add to new state map
+		newStates[container.ID] = newState
+
+		// Check if this is a new container or status changed from not running to running
+		prevState, existed := previousStates[container.ID]
+		if !existed {
+			// New container detected
+			if newState.running {
+				// New running container - fire "start" event
+				events = append(events, containerEvent{
+					id:        container.ID,
+					name:      containerName,
+					eventType: "start",
+				})
+				logger.Debug("New container detected",
+					"container_id", container.ID,
+					"container_name", containerName)
+			}
+		} else if !prevState.running && newState.running {
+			// Container changed from not running to running - fire "start" event
+			events = append(events, containerEvent{
+				id:        container.ID,
+				name:      containerName,
+				eventType: "start",
+			})
+			logger.Debug("Container started",
+				"container_id", container.ID,
+				"container_name", containerName)
+		}
+	}
+
+	// Check for stopped containers
+	for id, prevState := range previousStates {
+		if _, stillExists := newStates[id]; !stillExists && prevState.running {
+			// Container was running but is now gone - fire "stop" event
+			events = append(events, containerEvent{
+				id:        id,
+				name:      prevState.name,
+				eventType: "stop",
+			})
+			logger.Debug("Container stopped or removed",
+				"container_id", id,
+				"container_name", prevState.name)
+		}
+	}
+
+	return newStates, events
+}
+
+// GetContainerIPFromNetwork gets a container's IP address from the specified network
+func GetContainerIPFromNetwork(containerID, networkName string) (string, error) {
 	// Get network info
 	networkInfo, err := GetNetworkInfo(networkName)
 	if err != nil {
-		return "", fmt.Errorf("failed to get network info: %w", err)
+		// Simply log an error without trying to list networks
+		logger.Debug("Failed to get network info", "network", networkName, "error", err)
+		return "", fmt.Errorf("failed to get network info for %s: %w", networkName, err)
 	}
 
 	// Look for container in the network
 	containerEndpoint, exists := networkInfo.Containers[containerID]
 	if !exists {
-		return "", fmt.Errorf("container not found in network %s", networkName)
+		// For Podman compatibility, try alternative approaches
+
+		// First, try to get the container info directly
+		containerInfo, inspectErr := GetContainerInfo(containerID)
+		if inspectErr == nil && containerInfo.NetworkSettings != nil {
+			// Try to find the container IP using the NetworkSettings
+			if network, exists := containerInfo.NetworkSettings.Networks[networkName]; exists && network.IPAddress != "" {
+				logger.Debug("Found container IP using direct inspection - specific network",
+					"container_id", containerID,
+					"network", networkName,
+					"ip", network.IPAddress)
+				return network.IPAddress, nil
+			} else if containerInfo.NetworkSettings.IPAddress != "" {
+				// Fallback to default network IP
+				logger.Debug("Found container IP using direct inspection - default network",
+					"container_id", containerID,
+					"ip", containerInfo.NetworkSettings.IPAddress)
+				return containerInfo.NetworkSettings.IPAddress, nil
+			}
+		}
+
+		// If we got here, we couldn't find the container in the network
+		// Log details about the containers in the network for debugging
+		containerNames := []string{}
+		for id := range networkInfo.Containers {
+			name, _ := GetContainerName(id)
+			containerNames = append(containerNames, fmt.Sprintf("%s (%s)", name, id[:12]))
+		}
+
+		logger.Debug("Container not found in network",
+			"container_id", containerID,
+			"network", networkName,
+			"containers_in_network", strings.Join(containerNames, ", "))
+
+		return "", fmt.Errorf("container %s not found in network %s", containerID, networkName)
+	}
+
+	// If IPv4 address is not available, try IPv6
+	if containerEndpoint.IPv4Address == "" && containerEndpoint.IPv6Address != "" {
+		logger.Debug("Using IPv6 address instead of IPv4",
+			"container_id", containerID,
+			"ip", containerEndpoint.IPv6Address)
+		return containerEndpoint.IPv6Address, nil
 	}
 
 	// Return the container's IP address
-	return containerEndpoint.IPv4Address, nil
-}
-
-// makeEventFilters creates filters for the Events API
-func makeEventFilters(networkName string) filters.Args {
-	f := filters.NewArgs()
-
-	// Filter for container events only
-	f.Add("type", "container")
-
-	// Filter for events we're interested in
-	f.Add("event", "start")
-	f.Add("event", "die")
-	f.Add("event", "destroy")
-	f.Add("event", "rename")
-
-	// If network name provided, filter for containers in that network
-	if networkName != "" {
-		f.Add("network", networkName)
+	// Extract just the IP part without subnet
+	ipAddress := containerEndpoint.IPv4Address
+	if idx := strings.Index(ipAddress, "/"); idx > 0 {
+		ipAddress = ipAddress[:idx]
 	}
 
-	return f
+	return ipAddress, nil
+}
+
+// StopContainerEventListener stops the container event listener
+func StopContainerEventListener() {
+	if containerEventCancel != nil {
+		containerEventCancel()
+		logger.Info("Stopped container event listener")
+	}
 }
 
 // Variable to store cancel function for event listener

@@ -13,8 +13,7 @@ import (
 func createDBSession(a *server.App, browserInfo string, accessToken string, accountID string) error {
 	expireTime := time.Now().Add(time.Hour * 24).Format(time.RFC3339)
 	sessions := &db.Sessions{
-		ID:          generateUUID(),
-		AccessToken: accessToken,
+		ID: generateUUID(),
 	}
 
 	query := "INSERT INTO sessions (id, account_id, access_token, browser_info, expires, is_online) VALUES (?, ?, ?, ?, ?, ?)"
@@ -45,7 +44,7 @@ func GetDBUserSession(a *server.App, accessToken string, browserInfo string) (*d
 	return &a.DBTables.Sessions, nil
 }
 
-func updateDBSession(a *server.App, accessToken string, browserInfo string) error {
+func updateDBSession(a *server.App, accessToken string) error {
 	expireTime := time.Now().Add(time.Hour * 24).Format(time.RFC3339)
 	query := "UPDATE sessions SET access_token = ?, expires = ? WHERE id = ?"
 	_, err := a.DB.Exec(query, accessToken, expireTime, a.DBTables.Sessions.ID)
@@ -65,7 +64,7 @@ func CreateOrUpdateDBSession(a *server.App, accessToken string, browserInfo stri
 
 	// If the session exists, update the session
 	if session != nil {
-		err := updateDBSession(a, accessToken, browserInfo)
+		err := updateDBSession(a, accessToken)
 		if err != nil {
 			return fmt.Errorf("error updating session: %w", err)
 		}
