@@ -13,7 +13,7 @@ import (
 	"github.com/bnema/gordon/internal/db/queries"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/render"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/gorilla/sessions"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
@@ -51,12 +51,12 @@ func HandleTokenSubmission(c echo.Context, a *server.App) error {
 	// Validate the token
 	configToken, err := a.Config.GetToken()
 	if err != nil {
-		log.Debug("Error getting token from config:", err)
+		logger.Debug("Error getting token from config", "error", err)
 		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login?error=server_error")
 	}
 
 	if urlToken != configToken {
-		log.Debug("Invalid token provided:", urlToken)
+		logger.Debug("Invalid token provided", "token", urlToken)
 		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login?error=invalid_token")
 	}
 
@@ -95,57 +95,57 @@ func RenderLoginPage(c echo.Context, a *server.App) error {
 // StartOAuthGithub starts the Github OAuth flow.
 
 func StartOAuthGithub(c echo.Context, a *server.App) error {
-	log.Info("Attempting to get an existing session.")
+	logger.Info("Attempting to get an existing session")
 	sess, err := getSession(c)
 	if err != nil || sess == nil || sess.Values == nil {
-		log.Info("Session retrieval failed, initiating new GitHub OAuth flow.")
+		logger.Info("Session retrieval failed, initiating new GitHub OAuth flow")
 		return initiateGithubOAuthFlow(c, a)
 	}
 
-	log.Info("Attempting to assert session values.")
+	logger.Info("Attempting to assert session values")
 	sessionID, ok1 := sess.Values["sessionID"].(string)
 	accountID, ok2 := sess.Values["accountID"].(string)
 	authenticated, ok3 := sess.Values["authenticated"].(bool)
 
 	if !ok1 || !ok2 || !ok3 || !authenticated {
-		log.Info("Session assertion failed, or user not authenticated. Initiating new OAuth flow.")
+		logger.Info("Session assertion failed, or user not authenticated. Initiating new OAuth flow")
 		return initiateGithubOAuthFlow(c, a)
 	}
 
-	log.Info("Checking if session exists in DB.")
+	logger.Info("Checking if session exists in DB")
 	sessionExists, err := queries.CheckDBSessionExists(a, sessionID)
 	if err != nil {
-		log.Info("Error checking if session exists", "error", err)
+		logger.Info("Error checking if session exists", "error", err)
 		return fmt.Errorf("could not check if session exists: %w", err)
 	}
 
 	if !sessionExists {
-		log.Info("Session does not exist in DB, initiating new OAuth flow.")
+		logger.Info("Session does not exist in DB, initiating new OAuth flow")
 		return initiateGithubOAuthFlow(c, a)
 	}
 
-	log.Info("Getting the expiration time of the session.")
+	logger.Info("Getting the expiration time of the session")
 	currentTime := time.Now()
 	sessionExpiration, err := queries.GetSessionExpiration(a, accountID, sessionID, currentTime)
 	if err != nil {
-		log.Info("Error getting session expiration", "error", err)
+		logger.Info("Error getting session expiration", "error", err)
 		return fmt.Errorf("could not get session expiration: %w", err)
 	}
 
 	if currentTime.After(sessionExpiration) {
-		log.Info("Current time is after session expiration, initiating new OAuth flow.")
+		logger.Info("Current time is after session expiration, initiating new OAuth flow")
 		return initiateGithubOAuthFlow(c, a)
 	}
 
-	log.Info("Extending session expiration time by 30 minutes.")
+	logger.Info("Extending session expiration time by 30 minutes")
 	newExpirationTime := currentTime.Add(30 * time.Minute)
 	err = queries.ExtendSessionExpiration(a, accountID, sessionID, newExpirationTime)
 	if err != nil {
-		log.Info("Error extending session expiration", "error", err)
+		logger.Info("Error extending session expiration", "error", err)
 		return fmt.Errorf("could not extend session expiration: %w", err)
 	}
 
-	log.Info("Session is valid and extended. Redirecting to admin panel.")
+	logger.Info("Session is valid and extended. Redirecting to admin panel")
 	return c.Redirect(http.StatusFound, a.Config.Admin.Path)
 }
 

@@ -4,8 +4,9 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 
-	log "github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 )
 
 func fileExists(filepath string) bool {
@@ -14,11 +15,41 @@ func fileExists(filepath string) bool {
 }
 
 func IsRunningInContainer() bool {
-
-	// Check for .dockerenv file or .iscontainer
-	isContainer := fileExists("/.iscontainer") || fileExists("/.dockerenv")
-	log.Debug("IsRunningInContainer: Container detection result", "isContainer", isContainer)
-	return isContainer
+	// Method 1: Check for .dockerenv file or .iscontainer (Docker standard)
+	if fileExists("/.iscontainer") || fileExists("/.dockerenv") {
+		logger.Debug("IsRunningInContainer: Container detected via marker files")
+		return true
+	}
+	
+	// Method 2: Check hostname format (often container IDs in Docker/Podman)
+	hostname := os.Getenv("HOSTNAME")
+	if hostname != "" && len(hostname) >= 12 {
+		// Container IDs are typically at least 12 chars and hexadecimal
+		isHexString := true
+		for _, c := range hostname[:12] {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				isHexString = false
+				break
+			}
+		}
+		
+		if isHexString {
+			logger.Debug("IsRunningInContainer: Container detected via hostname format", "hostname", hostname)
+			return true
+		}
+	}
+	
+	// Method 3: Check cgroup info (works in most container environments)
+	if cgroupData, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		if !strings.Contains(string(cgroupData), ":/") {
+			// Non-root cgroup namespace indicates containerization
+			logger.Debug("IsRunningInContainer: Container detected via cgroup namespace")
+			return true
+		}
+	}
+	
+	logger.Debug("IsRunningInContainer: Not running in a container")
+	return false
 }
 
 // DetectPodman automatically detects if Podman is available and returns
@@ -32,7 +63,7 @@ func DetectPodman() (bool, string) {
 
 	for _, socket := range systemSockets {
 		if fileExists(socket) {
-			log.Debug("DetectPodman: Found system Podman socket", "path", socket)
+			logger.Debug("DetectPodman: Found system Podman socket", "path", socket)
 			return true, socket
 		}
 	}
@@ -40,7 +71,7 @@ func DetectPodman() (bool, string) {
 	// Then check for rootless installation
 	currentUser, err := user.Current()
 	if err != nil {
-		log.Error("DetectPodman: Failed to get current user", "error", err)
+		logger.Error("DetectPodman: Failed to get current user", "error", err)
 		return false, ""
 	}
 
@@ -49,7 +80,7 @@ func DetectPodman() (bool, string) {
 	if xdgRuntime != "" {
 		xdgSocket := filepath.Join(xdgRuntime, "podman", "podman.sock")
 		if fileExists(xdgSocket) {
-			log.Debug("DetectPodman: Found rootless Podman socket (XDG)", "path", xdgSocket)
+			logger.Debug("DetectPodman: Found rootless Podman socket (XDG)", "path", xdgSocket)
 			return true, xdgSocket
 		}
 	}
@@ -57,11 +88,11 @@ func DetectPodman() (bool, string) {
 	// Check home directory socket location
 	homeSocket := filepath.Join(currentUser.HomeDir, ".local", "share", "containers", "podman", "machine", "podman.sock")
 	if fileExists(homeSocket) {
-		log.Debug("DetectPodman: Found rootless Podman socket (home)", "path", homeSocket)
+		logger.Debug("DetectPodman: Found rootless Podman socket (home)", "path", homeSocket)
 		return true, homeSocket
 	}
 
 	// No Podman socket found
-	log.Debug("DetectPodman: No Podman sockets found")
+	logger.Debug("DetectPodman: No Podman sockets found")
 	return false, ""
 }

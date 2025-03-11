@@ -16,14 +16,11 @@ import (
 	"github.com/bnema/gordon/internal/cli"
 	"github.com/bnema/gordon/internal/cli/handler"
 	"github.com/bnema/gordon/internal/common"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	log.SetReportTimestamp(true)
-	log.SetTimeFormat("15:04:05")
-}
+// No need for logger initialization here as it's handled by the centralized logger
 
 func NewDeployCommand(a *cli.App) *cobra.Command {
 	var port string
@@ -35,29 +32,29 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		PreRun: func(cmd *cobra.Command, args []string) {
 			if err := handler.FieldCheck(a); err != nil {
-				log.Error("Field check failed", "error", err)
+				logger.Error("Field check failed", "error", err)
 				os.Exit(1)
 			}
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			imageName := args[0]
-			log.Info("Pushing image", "image", imageName)
+			logger.Info("Pushing image", "image", imageName)
 
 			if err := validateDeployInputs(imageName, port, targetDomain); err != nil {
-				log.Error("Validation failed", "error", err)
+				logger.Error("Validation failed", "error", err)
 				return
 			}
 
 			reader, actualSize, err := handler.ExportDockerImage(imageName)
 			if err != nil {
-				log.Error("Error exporting image", "error", err)
+				logger.Error("Error exporting image", "error", err)
 				return
 			}
 			defer reader.Close()
 
 			sizeInMB := float64(actualSize) / 1024 / 1024
 
-			log.Info("Image exported successfully", "image", imageName, "size", fmt.Sprintf("%.2fMB", sizeInMB))
+			logger.Info("Image exported successfully", "image", imageName, "size", fmt.Sprintf("%.2fMB", sizeInMB))
 
 			if err := deployImage(a, reader, imageName, port, targetDomain); err != nil {
 				os.Exit(1)
@@ -74,11 +71,11 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
 	// Check authentication early
 	if err := handler.CheckAndRefreshAuth(a); err != nil {
-		log.Error("Authentication check failed", "error", err)
+		logger.Error("Authentication check failed", "error", err)
 		return err
 	}
 
-	log.Info("Deploying image", "image", imageName)
+	logger.Info("Deploying image", "image", imageName)
 	// Check for conflicts first
 	resp, err := checkDeployConflict(a, targetDomain, port)
 	if err != nil {
@@ -94,7 +91,7 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 
 	// If there's a conflict, handle it before proceeding
 	if !resp.Success && resp.ContainerID != "" {
-		log.Warn("Container already exists",
+		logger.Warn("Container already exists",
 			"name", resp.ContainerName,
 			"id", shortID,
 			"state", resp.State,
@@ -117,7 +114,7 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 
 	imageReader := bytes.NewReader(buf.Bytes())
 	sizeInMB := float64(size) / 1024 / 1024
-	log.Info("Attempting to deploy...",
+	logger.Info("Attempting to deploy...",
 		"image", imageName,
 		"size", fmt.Sprintf("%.2fMB", sizeInMB),
 		"port", port,
@@ -162,7 +159,7 @@ func waitForDeployment(domain string, containerID string) error {
 		shortContainerID = containerID[:12]
 	}
 
-	log.Info("Waiting for deployment to be reachable",
+	logger.Info("Waiting for deployment to be reachable",
 		"domain", domain,
 		"container_id", shortContainerID)
 
@@ -171,7 +168,7 @@ func waitForDeployment(domain string, containerID string) error {
 		if err == nil {
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				log.Info("Deployment successful",
+				logger.Info("Deployment successful",
 					"domain", domain,
 					"container_id", shortContainerID)
 				return nil
@@ -181,7 +178,7 @@ func waitForDeployment(domain string, containerID string) error {
 				return fmt.Errorf("deployment failed: %s", string(body))
 			}
 		}
-		log.Warn("Deployment not ready yet, retrying",
+		logger.Warn("Deployment not ready yet, retrying",
 			"attempt", fmt.Sprintf("%d/%d", i+1, maxRetries))
 		time.Sleep(retryInterval)
 	}

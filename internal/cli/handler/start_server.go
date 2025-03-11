@@ -9,7 +9,7 @@ import (
 
 	"github.com/bnema/gordon/internal/httpserve"
 	"github.com/bnema/gordon/internal/server"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/labstack/echo/v4"
 )
 
@@ -18,7 +18,7 @@ import (
 func StartServer(a *server.App, port string) error {
 	_, err := server.InitializeDB(a)
 	if err != nil {
-		log.Fatal("Failed to initialize database:", err)
+		logger.Fatal("Failed to initialize database:", err)
 	}
 
 	// Start the session cleaner cron job
@@ -26,13 +26,13 @@ func StartServer(a *server.App, port string) error {
 
 	_, err = server.HandleNewTokenInitialization(a)
 	if err != nil {
-		log.Print(err)
+		logger.Error("Token initialization error", "error", err)
 	}
 
 	// Initialize and start the reverse proxy using the already loaded configuration
 	p, err := httpserve.InitializeProxy(a)
 	if err != nil {
-		log.Error("Failed to initialize reverse proxy:", err)
+		logger.Error("Failed to initialize reverse proxy", "error", err)
 		// Continue even if proxy fails, as the main server should still work
 	}
 
@@ -42,12 +42,12 @@ func StartServer(a *server.App, port string) error {
 
 	go func() {
 		sig := <-sigs
-		log.Info("Received signal:", sig)
+		logger.Info("Received signal", "signal", sig)
 
 		// Stop the proxy if it was started
 		if p != nil {
 			if err := p.Stop(); err != nil {
-				log.Error("Failed to stop reverse proxy:", err)
+				logger.Error("Failed to stop reverse proxy", "error", err)
 			}
 		}
 
@@ -61,7 +61,7 @@ func StartServer(a *server.App, port string) error {
 	e.HidePort = true
 	e = httpserve.RegisterRoutes(e, a)
 
-	log.Info(fmt.Sprintf("Starting server on port %s", port))
+	logger.Info("Starting server", "port", port)
 
 	// Test admin connections after the server has started (in a separate goroutine)
 	if p != nil {
@@ -73,7 +73,7 @@ func StartServer(a *server.App, port string) error {
 	}
 
 	if err := e.Start(fmt.Sprintf(":%s", a.Config.Http.Port)); err != nil {
-		log.Fatal(err)
+		logger.Fatal("Server error", "error", err)
 	}
 
 	return nil
