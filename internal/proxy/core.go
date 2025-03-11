@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"crypto/tls"
+	"net/http"
 
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/interfaces"
@@ -51,6 +52,15 @@ type Proxy struct {
 
 	// Store Gordon's own container ID at startup for reliable identification
 	gordonContainerID string
+
+	reverseProxyClient        *http.Client
+	processingGlobalCert      bool
+	dbMaxRetries              int
+	dbRetryBaseDelay          time.Duration
+	acmeManager               *autocert.Manager
+	acmePerDomainRefreshMutex sync.Mutex
+	acmeDirCache              autocert.DirCache
+	shutdown                  chan struct{} // Channel for signaling shutdown to background goroutines
 }
 
 // NewProxy creates a new instance of the reverse proxy
@@ -118,6 +128,7 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 		lastBlockedLog:    time.Time{}, // Zero time
 		recentlyBlocked:   make(map[string]time.Time),
 		gordonContainerID: ourContainerID,
+		shutdown:          make(chan struct{}),
 	}
 
 	// Now add the middleware with the proxy reference
@@ -128,4 +139,25 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 
 	logger.Debug("Reverse proxy initialized")
 	return p, nil
+}
+
+// Close cleans up resources used by the proxy
+func (p *Proxy) Close() {
+	// Signal all background goroutines to stop
+	close(p.shutdown)
+
+	// Close the HTTP and HTTPS servers if they exist
+	if p.httpServer != nil {
+		if err := p.httpServer.Close(); err != nil {
+			logger.Error("Error closing HTTP server", "error", err)
+		}
+	}
+
+	if p.httpsServer != nil {
+		if err := p.httpsServer.Close(); err != nil {
+			logger.Error("Error closing HTTPS server", "error", err)
+		}
+	}
+
+	logger.Info("Proxy resources cleaned up")
 }
