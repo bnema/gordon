@@ -58,8 +58,8 @@ func (p *Proxy) setupMiddleware() {
 	// Create a new Starskey rate limiter store for HTTPS server
 	httpsRateLimiter, err := kv.NewStarskeyRateLimiterStore(
 		"./data/ratelimiter/https", // Path to store rate limit data
-		2,                          // Rate: 2 requests per second (lowered from 10)
-		10,                         // Burst: 10 requests (lowered from 30)
+		10,                         // Rate: 10 requests per second (lowered from 10)
+		30,                         // Burst: 30 requests (lowered from 30)
 		3*time.Minute,              // Expires in 3 minutes
 	)
 	if err != nil {
@@ -69,8 +69,8 @@ func (p *Proxy) setupMiddleware() {
 		p.httpsServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
 			Store: middleware.NewRateLimiterMemoryStoreWithConfig(
 				middleware.RateLimiterMemoryStoreConfig{
-					Rate:      rate.Limit(2),   // 2 requests per second (lowered from 10)
-					Burst:     10,              // Burst of 10 requests (lowered from 30)
+					Rate:      rate.Limit(10),  // 10 requests per second (lowered from 10)
+					Burst:     30,              // Burst of 30 requests (lowered from 30)
 					ExpiresIn: 3 * time.Minute, // Store expiration
 				},
 			),
@@ -137,8 +137,8 @@ func (p *Proxy) setupMiddleware() {
 	// Create a new Starskey rate limiter store for HTTP server
 	httpRateLimiter, err := kv.NewStarskeyRateLimiterStore(
 		"./data/ratelimiter/http", // Path to store rate limit data
-		10,                        // Rate: 10 requests per second (lowered from 10)
-		30,                        // Burst: 30 requests (lowered from 30)
+		2,                         // Rate: 2 requests per second (lowered from 10)
+		10,                        // Burst: 10 requests (lowered from 30)
 		3*time.Minute,             // Expires in 3 minutes
 	)
 	if err != nil {
@@ -148,8 +148,8 @@ func (p *Proxy) setupMiddleware() {
 		p.httpServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
 			Store: middleware.NewRateLimiterMemoryStoreWithConfig(
 				middleware.RateLimiterMemoryStoreConfig{
-					Rate:      rate.Limit(10),  // 10 requests per second (lowered from 10)
-					Burst:     30,              // Burst of 30 requests (lowered from 30)
+					Rate:      rate.Limit(2),   // 2 requests per second (lowered from 10)
+					Burst:     10,              // Burst of 10 requests (lowered from 30)
 					ExpiresIn: 3 * time.Minute, // Store expiration
 				},
 			),
