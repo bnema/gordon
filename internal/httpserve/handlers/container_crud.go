@@ -189,21 +189,42 @@ func CreateContainerPOST(c echo.Context, a *server.App) error {
 		containerName = strings.TrimPrefix(containerName, "/")
 	}
 
-	// Get container IP
-	containerIP := GetContainerIP(a, containerID, containerName)
-
-	// Construct target domain from form inputs
-	targetDomain := fmt.Sprintf("%s://%s.%s",
-		sanitizedInputs["container_protocol"],
-		sanitizedInputs["container_subdomain"],
-		sanitizedInputs["container_domain"])
-
-	// Add proxy route for the new container
-	err = AddProxyRoute(a, containerID, containerIP, sanitizedInputs["proxy_port"], targetDomain)
-	if err != nil {
-		log.Error("Failed to add proxy route", "error", err)
-		// Continue anyway, don't fail the whole operation
+	// Check if we should skip proxy setup
+	skipProxySetup := false
+	if skipProxyValue, exists := sanitizedInputs["skip_proxy_setup"]; exists {
+		skipProxySetup = skipProxyValue == "true" || skipProxyValue == "1" || skipProxyValue == "yes"
 	}
 
-	return c.HTML(http.StatusOK, ActionSuccess(a))
+	// Only set up proxy if not skipped
+	if !skipProxySetup {
+		// Get container IP
+		containerIP := GetContainerIP(a, containerID, containerName)
+
+		// Construct target domain from form inputs
+		var targetDomain string
+		if sanitizedInputs["container_subdomain"] == "" {
+			// If subdomain is empty, use just the domain
+			targetDomain = fmt.Sprintf("%s://%s",
+				sanitizedInputs["container_protocol"],
+				sanitizedInputs["container_domain"])
+		} else {
+			// If subdomain is provided, use subdomain.domain format
+			targetDomain = fmt.Sprintf("%s://%s.%s",
+				sanitizedInputs["container_protocol"],
+				sanitizedInputs["container_subdomain"],
+				sanitizedInputs["container_domain"])
+		}
+
+		// Add proxy route for the new container
+		err = AddProxyRoute(a, containerID, containerIP, sanitizedInputs["container_port"], targetDomain)
+		if err != nil {
+			log.Error("Failed to add proxy route", "error", err)
+			// Continue anyway, as the container is already created and started
+		}
+	} else {
+		log.Info("Skipping proxy setup as requested", "container_id", containerID, "container_name", containerName)
+	}
+
+	// Redirect to the container list page
+	return c.Redirect(http.StatusSeeOther, fmt.Sprintf("%s/containers", a.Config.Admin.Path))
 }

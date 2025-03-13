@@ -33,13 +33,30 @@ func FromPayloadStructToCmdParams(ppl *common.DeployPayload, a *server.App, imag
 
 	// Protocol (http/https), Container name, Container subdomain, and Container domain
 	protocol := parsedURL.Scheme
-	containerSubdomain := hostParts[0]
-	containerDomain := strings.Join(hostParts[1:], ".")
+
+	var containerSubdomain string
+	var containerDomain string
+
+	if len(hostParts) == 2 {
+		// No subdomain (e.g., domain.tld)
+		containerSubdomain = ""
+		containerDomain = parsedURL.Host
+	} else {
+		// Has subdomain (e.g., sub.domain.tld)
+		containerSubdomain = hostParts[0]
+		containerDomain = strings.Join(hostParts[1:], ".")
+	}
+
+	// Use subdomain as container name, or domain with hyphens if no subdomain
+	containerName := containerSubdomain
+	if containerName == "" {
+		containerName = strings.ReplaceAll(containerDomain, ".", "-")
+	}
 
 	params := docker.ContainerCommandParams{
 		IsSSL:         protocol == "https",
-		ContainerName: containerSubdomain,
-		ServiceName:   containerSubdomain,
+		ContainerName: containerName,
+		ServiceName:   containerName,
 		Domain:        containerDomain,
 		ImageName:     ppl.ImageName,
 		ImageID:       imageID,

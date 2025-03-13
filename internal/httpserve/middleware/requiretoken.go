@@ -10,13 +10,15 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/cli/auth"
+	"github.com/bnema/gordon/internal/db"
 	"github.com/bnema/gordon/internal/db/queries"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/logger"
 	"github.com/labstack/echo/v4"
 )
 
-type GithubUserInfo = queries.GithubUserInfo
+// GithubUserInfo is an alias to db.GithubUserInfo
+type GithubUserInfo = db.GithubUserInfo
 
 // middleware/require_token.go
 func RequireToken(a *server.App) echo.MiddlewareFunc {
@@ -35,7 +37,7 @@ func RequireToken(a *server.App) echo.MiddlewareFunc {
 			// Check cache first
 			if _, cachedUser, found := tokenCache.GetWithUser(token); found {
 				// Verify if user exists in database and is authorized
-				isAuthorized, err := queries.CheckDBUserIsGood(a, cachedUser)
+				_, isAuthorized, err := queries.CheckDBUserIsGood(a.DB, cachedUser)
 				if err != nil || !isAuthorized {
 					return c.JSON(http.StatusUnauthorized, map[string]interface{}{
 						"success": false,
@@ -56,7 +58,7 @@ func RequireToken(a *server.App) echo.MiddlewareFunc {
 			}
 
 			// Verify if user exists in database and is authorized
-			isAuthorized, err := queries.CheckDBUserIsGood(a, githubUser)
+			_, isAuthorized, err := queries.CheckDBUserIsGood(a.DB, githubUser)
 			if err != nil {
 				return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 					"success": false,

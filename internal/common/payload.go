@@ -55,11 +55,12 @@ type StartResponse struct {
 
 // DeployPayload represents the payload for deployment requests
 type DeployPayload struct {
-	Port         string `json:"port"`
-	TargetDomain string `json:"targetdomain"`
-	ImageName    string `json:"imagename"`
-	ImageID      string `json:"imageid"`
-	Data         io.ReadCloser
+	Port           string `json:"port"`
+	TargetDomain   string `json:"targetdomain"`
+	ImageName      string `json:"imagename"`
+	ImageID        string `json:"imageid"`
+	SkipProxySetup bool   `json:"skip_proxy_setup"`
+	Data           io.ReadCloser
 }
 
 // PushPayload represents the payload for push requests

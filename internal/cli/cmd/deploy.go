@@ -25,6 +25,7 @@ import (
 func NewDeployCommand(a *cli.App) *cobra.Command {
 	var port string
 	var targetDomain string
+	var skipProxySetup bool
 
 	deployCmd := &cobra.Command{
 		Use:   "deploy [image:tag]",
@@ -56,7 +57,7 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 
 			logger.Info("Image exported successfully", "image", imageName, "size", fmt.Sprintf("%.2fMB", sizeInMB))
 
-			if err := deployImage(a, reader, imageName, port, targetDomain); err != nil {
+			if err := deployImage(a, reader, imageName, port, targetDomain, skipProxySetup); err != nil {
 				os.Exit(1)
 			}
 		},
@@ -64,11 +65,12 @@ func NewDeployCommand(a *cli.App) *cobra.Command {
 
 	deployCmd.Flags().StringVarP(&port, "port", "p", "", "Container port for the proxy to route traffic to")
 	deployCmd.Flags().StringVarP(&targetDomain, "target", "t", "", "Target domain for the proxy")
+	deployCmd.Flags().BoolVar(&skipProxySetup, "skip-proxy", false, "Skip proxy setup (create container only)")
 
 	return deployCmd
 }
 
-func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string) error {
+func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain string, skipProxySetup bool) error {
 	// Check authentication early
 	if err := handler.CheckAndRefreshAuth(a); err != nil {
 		logger.Error("Authentication check failed", "error", err)
@@ -128,6 +130,12 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 		"Content-Type":    {"application/octet-stream"},
 	}
 
+	// Add skip proxy setup header if enabled
+	if skipProxySetup {
+		headers.Add("X-Skip-Proxy-Setup", "true")
+		logger.Info("Skipping proxy setup as requested")
+	}
+
 	chunkedClient := handler.NewChunkedClient(a)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
@@ -150,13 +158,22 @@ func deployImage(a *cli.App, reader io.Reader, imageName, port, targetDomain str
 }
 
 func waitForDeployment(domain string, containerID string) error {
+	// If domain is empty, it means proxy setup was skipped
+	if domain == "" {
+		logger.Info("Deployment successful (proxy setup skipped)",
+			"container_id", containerID)
+		return nil
+	}
+
 	client := &http.Client{Timeout: 10 * time.Second}
 	maxRetries := 10
 	retryInterval := time.Second
 
 	var shortContainerID string
-	if containerID != "" {
+	if containerID != "" && len(containerID) >= 12 {
 		shortContainerID = containerID[:12]
+	} else {
+		shortContainerID = containerID
 	}
 
 	logger.Info("Waiting for deployment to be reachable",

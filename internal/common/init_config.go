@@ -73,16 +73,17 @@ type ContainerEngineConfig struct {
 }
 
 type ReverseProxyConfig struct {
-	Port            string `yaml:"port"`            // Port for the reverse proxy to listen on
-	HttpPort        string `yaml:"httpPort"`        // HTTP port (usually 80) for redirecting to HTTPS
-	CertDir         string `yaml:"certDir"`         // Directory to store Let's Encrypt certificates
-	AutoRenew       bool   `yaml:"autoRenew"`       // Whether to automatically renew certificates
-	RenewBefore     int    `yaml:"renewBefore"`     // Days before expiry to renew certificates
-	LetsEncryptMode string `yaml:"letsEncryptMode"` // "staging" or "production"
-	Email           string `yaml:"email"`           // Email for Let's Encrypt
-	CacheSize       int    `yaml:"cacheSize"`       // Size of the certificate cache
-	GracePeriod     int    `yaml:"gracePeriod"`     // Shutdown grace period in seconds
-	EnableLogs      bool   `yaml:"enableLogs"`      // Whether to enable HTTP request logging (default: true)
+	Port             string `yaml:"port"`             // Port for the reverse proxy to listen on
+	HttpPort         string `yaml:"httpPort"`         // HTTP port (usually 80) for redirecting to HTTPS
+	CertDir          string `yaml:"certDir"`          // Directory to store Let's Encrypt certificates
+	AutoRenew        bool   `yaml:"autoRenew"`        // Whether to automatically renew certificates
+	RenewBefore      int    `yaml:"renewBefore"`      // Days before expiry to renew certificates
+	LetsEncryptMode  string `yaml:"letsEncryptMode"`  // "staging" or "production"
+	Email            string `yaml:"email"`            // Email for Let's Encrypt
+	CacheSize        int    `yaml:"cacheSize"`        // Size of the certificate cache
+	GracePeriod      int    `yaml:"gracePeriod"`      // Shutdown grace period in seconds
+	EnableLogs       bool   `yaml:"enableLogs"`       // Whether to enable HTTP request logging (default: true)
+	DisableRateLimit bool   `yaml:"disableRateLimit"` // Whether to disable rate limiting middleware (default: false)
 }
 
 // Default values
@@ -98,6 +99,7 @@ var (
 	cacheSize        = 1000   // entries
 	gracePeriod      = 30     // seconds
 	defaultLogLevel  = "info" // Default log level
+	disableRateLimit = false
 )
 
 // applyDefaultsToConfig applies default values to any fields that have zero values
@@ -152,6 +154,12 @@ func applyDefaultsToConfig(config *Config) bool {
 	if !config.ReverseProxy.EnableLogs {
 		config.ReverseProxy.EnableLogs = true
 		logger.Debug("Applied default value for ReverseProxy.EnableLogs", "value", true)
+		defaultsApplied = true
+	}
+	// Set DisableRateLimit to false by default if not specified
+	if !config.ReverseProxy.DisableRateLimit {
+		config.ReverseProxy.DisableRateLimit = false
+		logger.Debug("Applied default value for ReverseProxy.DisableRateLimit", "value", false)
 		defaultsApplied = true
 	}
 
@@ -524,6 +532,15 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 		}
 		logger.Info("Using environment variable GORDON_PROXY_ENABLE_LOGS", "value", config.ReverseProxy.EnableLogs)
 	}
+
+	// Handle GORDON_PROXY_DISABLE_RATE_LIMIT environment variable
+	if val := os.Getenv("GORDON_PROXY_DISABLE_RATE_LIMIT"); val != "" {
+		disableRateLimit, err := strconv.ParseBool(val)
+		if err == nil {
+			config.ReverseProxy.DisableRateLimit = disableRateLimit
+		}
+		logger.Info("Using environment variable GORDON_PROXY_DISABLE_RATE_LIMIT", "value", config.ReverseProxy.DisableRateLimit)
+	}
 }
 
 func (config *Config) LoadConfig() (*Config, error) {
@@ -570,15 +587,16 @@ func (config *Config) LoadConfig() (*Config, error) {
 				Network:    "gordon",
 			},
 			ReverseProxy: ReverseProxyConfig{
-				Port:            reverseProxyPort,
-				HttpPort:        httpPort,
-				CertDir:         certDir,
-				AutoRenew:       autoRenew,
-				RenewBefore:     renewBefore,
-				LetsEncryptMode: letsEncryptMode,
-				CacheSize:       cacheSize,
-				GracePeriod:     gracePeriod,
-				EnableLogs:      true,
+				Port:             reverseProxyPort,
+				HttpPort:         httpPort,
+				CertDir:          certDir,
+				AutoRenew:        autoRenew,
+				RenewBefore:      renewBefore,
+				LetsEncryptMode:  letsEncryptMode,
+				CacheSize:        cacheSize,
+				GracePeriod:      gracePeriod,
+				EnableLogs:       true,
+				DisableRateLimit: false,
 			},
 		}
 
@@ -708,15 +726,16 @@ func (config *Config) LoadConfig() (*Config, error) {
 				Network:    "gordon",
 			},
 			ReverseProxy: ReverseProxyConfig{
-				Port:            reverseProxyPort,
-				HttpPort:        httpPort,
-				CertDir:         certDir,
-				AutoRenew:       autoRenew,
-				RenewBefore:     renewBefore,
-				LetsEncryptMode: letsEncryptMode,
-				CacheSize:       cacheSize,
-				GracePeriod:     gracePeriod,
-				EnableLogs:      true,
+				Port:             reverseProxyPort,
+				HttpPort:         httpPort,
+				CertDir:          certDir,
+				AutoRenew:        autoRenew,
+				RenewBefore:      renewBefore,
+				LetsEncryptMode:  letsEncryptMode,
+				CacheSize:        cacheSize,
+				GracePeriod:      gracePeriod,
+				EnableLogs:       true,
+				DisableRateLimit: false,
 			},
 		}
 
@@ -890,10 +909,21 @@ func (c *HttpConfig) Protocol() string {
 }
 
 func (c *HttpConfig) FullDomain() string {
-	if c.SubDomain != "" {
-		return fmt.Sprintf("%s.%s", c.SubDomain, c.Domain)
+	domain := c.Domain
+
+	// Clean the domain to ensure it doesn't contain path components
+	domain = strings.TrimSuffix(domain, "/")
+	if idx := strings.Index(domain, "/"); idx >= 0 {
+		// If there's a path component, remove it
+		domain = domain[:idx]
 	}
-	return c.Domain
+
+	if c.SubDomain != "" {
+		// Clean the subdomain too
+		subdomain := strings.TrimSuffix(c.SubDomain, "/")
+		return fmt.Sprintf("%s.%s", subdomain, domain)
+	}
+	return domain
 }
 
 // GetVersion

@@ -6,97 +6,171 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/db"
-	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/pkg/logger"
 )
 
-// createSession creates a session for the user.
-func createDBSession(a *server.App, browserInfo string, accessToken string, accountID string) error {
+// SessionQueries contains all SQL queries for session operations
+type SessionQueries struct {
+	InsertSession       string
+	GetSessionByToken   string
+	UpdateSessionToken  string
+	DeleteSession       string
+	GetSessionExpiry    string
+	UpdateSessionExpiry string
+	CheckSessionExists  string
+	InvalidateSession   string
+}
+
+// NewSessionQueries returns a new instance of SessionQueries
+func NewSessionQueries() *SessionQueries {
+	return &SessionQueries{
+		InsertSession:       "INSERT INTO sessions (id, account_id, access_token, browser_info, expires, is_online) VALUES (?, ?, ?, ?, ?, ?)",
+		GetSessionByToken:   "SELECT sessions.id, sessions.account_id, sessions.access_token, sessions.browser_info, sessions.expires, sessions.is_online FROM sessions INNER JOIN account ON sessions.account_id = account.id INNER JOIN provider ON account.id = provider.account_id WHERE sessions.access_token = ? AND sessions.browser_info = ?",
+		UpdateSessionToken:  "UPDATE sessions SET access_token = ?, expires = ? WHERE id = ?",
+		DeleteSession:       "DELETE FROM sessions WHERE account_id = ? AND id = ?",
+		GetSessionExpiry:    "SELECT expires FROM sessions WHERE account_id = ? AND id = ?",
+		UpdateSessionExpiry: "UPDATE sessions SET expires = ? WHERE account_id = ? AND id = ?",
+		CheckSessionExists:  "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)",
+		InvalidateSession:   "UPDATE sessions SET is_online = ? WHERE id = ?",
+	}
+}
+
+// CreateDBSession creates a session for the user.
+func CreateDBSession(database *sql.DB, browserInfo string, accessToken string, accountID string) (*db.Sessions, error) {
 	expireTime := time.Now().Add(time.Hour * 24).Format(time.RFC3339)
-	sessions := &db.Sessions{
-		ID: generateUUID(),
-	}
-
-	query := "INSERT INTO sessions (id, account_id, access_token, browser_info, expires, is_online) VALUES (?, ?, ?, ?, ?, ?)"
-	_, err := a.DB.Exec(query, sessions.ID, accountID, accessToken, browserInfo, expireTime, true)
+	sessionID := generateUUID()
+	
+	_, err := database.Exec(
+		NewSessionQueries().InsertSession,
+		sessionID, accountID, accessToken, browserInfo, expireTime, true,
+	)
+	
 	if err != nil {
-		return err
+		logger.Error("Failed to create session in database", "error", err, "session_id", sessionID, "account_id", accountID)
+		return nil, err
 	}
-
-	// Update global state here if really necessary
-	a.DBTables.Sessions.ID = sessions.ID
-	a.DBTables.Sessions.AccessToken = accessToken
-	a.DBTables.Sessions.Expires = expireTime
-
-	return nil
+	
+	// Create a Sessions struct to return
+	session := &db.Sessions{
+		ID:          sessionID,
+		AccountID:   accountID,
+		AccessToken: accessToken,
+		BrowserInfo: browserInfo,
+		Expires:     expireTime,
+		IsOnline:    true,
+	}
+	
+	logger.Debug("Session created in database", "session_id", sessionID, "account_id", accountID, "expires", expireTime)
+	return session, nil
 }
 
 // GetDBUserSession gets the user session from the database based on the access token and browser info.
-func GetDBUserSession(a *server.App, accessToken string, browserInfo string) (*db.Sessions, error) {
-	query := "SELECT sessions.id, sessions.account_id, sessions.access_token, sessions.browser_info, sessions.expires, sessions.is_online FROM sessions INNER JOIN account ON sessions.account_id = account.id INNER JOIN provider ON account.id = provider.account_id WHERE sessions.access_token = ? AND sessions.browser_info = ?"
-	err := a.DB.QueryRow(query, accessToken, browserInfo).Scan(&a.DBTables.Sessions.ID, &a.DBTables.Sessions.AccountID, &a.DBTables.Sessions.AccessToken, &a.DBTables.Sessions.BrowserInfo, &a.DBTables.Sessions.Expires, &a.DBTables.Sessions.IsOnline)
+func GetDBUserSession(database *sql.DB, accessToken string, browserInfo string) (*db.Sessions, error) {
+	session := &db.Sessions{}
+
+	err := database.QueryRow(
+		NewSessionQueries().GetSessionByToken,
+		accessToken,
+		browserInfo,
+	).Scan(
+		&session.ID,
+		&session.AccountID,
+		&session.AccessToken,
+		&session.BrowserInfo,
+		&session.Expires,
+		&session.IsOnline,
+	)
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
+		logger.Warn("Failed to get session", "error", err)
 		return nil, fmt.Errorf("error getting session: %w", err)
 	}
 
-	return &a.DBTables.Sessions, nil
+	logger.Debug("Session retrieved from database", "session", session)
+
+	return session, nil
 }
 
-func updateDBSession(a *server.App, accessToken string) error {
+// UpdateDBSession updates an existing session with a new access token
+func UpdateDBSession(database *sql.DB, sessionID string, accessToken string) error {
 	expireTime := time.Now().Add(time.Hour * 24).Format(time.RFC3339)
-	query := "UPDATE sessions SET access_token = ?, expires = ? WHERE id = ?"
-	_, err := a.DB.Exec(query, accessToken, expireTime, a.DBTables.Sessions.ID)
+	
+	_, err := database.Exec(
+		NewSessionQueries().UpdateSessionToken,
+		accessToken,
+		expireTime,
+		sessionID,
+	)
+	
 	if err != nil {
+		logger.Error("Failed to update session in database", "error", err, "session_id", sessionID)
 		return err
 	}
-
+	
+	logger.Debug("Session updated in database", "sessionID", sessionID, "expires", expireTime)
 	return nil
 }
 
-func CreateOrUpdateDBSession(a *server.App, accessToken string, browserInfo string) error {
+// CreateOrUpdateDBSession creates a new session or updates an existing one
+func CreateOrUpdateDBSession(database *sql.DB, accessToken string, browserInfo string, accountID string) error {
 	// Check if the session exists using the access token and browser info
-	session, err := GetDBUserSession(a, accessToken, browserInfo)
+	session, err := GetDBUserSession(database, accessToken, browserInfo)
 	if err != nil && err != sql.ErrNoRows {
+		logger.Warn("Failed to check for session", "error", err)
 		return fmt.Errorf("error checking for session: %w", err)
 	}
 
 	// If the session exists, update the session
 	if session != nil {
-		err := updateDBSession(a, accessToken)
+		err := UpdateDBSession(database, session.ID, accessToken)
 		if err != nil {
+			logger.Warn("Failed to update session", "error", err)
 			return fmt.Errorf("error updating session: %w", err)
 		}
-	}
-
-	// If the session does not exist, create the session
-	if session == nil {
-		err := createDBSession(a, browserInfo, accessToken, a.DBTables.Account.ID)
+		logger.Debug("Session updated in database", "accountID", accountID, "sessionID", session.ID)
+	} else {
+		// If the session does not exist, create the session
+		_, err := CreateDBSession(database, browserInfo, accessToken, accountID)
 		if err != nil {
+			logger.Warn("Failed to create session", "error", err)
 			return fmt.Errorf("error creating session: %w", err)
 		}
+		logger.Debug("New session created in database", "accountID", accountID)
 	}
 
 	return nil
 }
 
-// DeleteSession deletes the session from the database.
-func DeleteDBSession(a *server.App, accountID string, sessionID string) error {
-	query := "DELETE FROM sessions WHERE account_id = ? AND id = ?"
-	_, err := a.DB.Exec(query, accountID, sessionID)
+// DeleteDBSession deletes the session from the database.
+func DeleteDBSession(database *sql.DB, accountID string, sessionID string) error {
+	_, err := database.Exec(
+		NewSessionQueries().DeleteSession,
+		accountID,
+		sessionID,
+	)
+	
 	if err != nil {
+		logger.Error("Failed to delete session from database", "error", err, "account_id", accountID, "session_id", sessionID)
 		return err
 	}
-
+	
+	logger.Debug("Session deleted from database", "accountID", accountID, "sessionID", sessionID)
 	return nil
 }
 
-func GetSessionExpiration(a *server.App, accountID string, sessionID string, currentTime time.Time) (time.Time, error) {
+// GetSessionExpiration gets the expiration time for a session
+func GetSessionExpiration(database *sql.DB, accountID string, sessionID string, currentTime time.Time) (time.Time, error) {
 	var expirationTime string
-	// with userID and sessionID we can get the expiration time
-	query := "SELECT expires FROM sessions WHERE account_id = ? AND id = ?"
-	err := a.DB.QueryRow(query, accountID, sessionID).Scan(&expirationTime)
+
+	err := database.QueryRow(
+		NewSessionQueries().GetSessionExpiry,
+		accountID,
+		sessionID,
+	).Scan(&expirationTime)
+
 	if err != nil {
 		return currentTime, err
 	}
@@ -107,36 +181,58 @@ func GetSessionExpiration(a *server.App, accountID string, sessionID string, cur
 		return currentTime, err
 	}
 
+	logger.Debug("Session expiration time retrieved", "accountID", accountID, "sessionID", sessionID, "expirationTime", expirationTimeParsed)
+
 	return expirationTimeParsed, nil
 }
 
-func ExtendSessionExpiration(a *server.App, accountID string, sessionID string, newExpirationTime time.Time) error {
-	query := "UPDATE sessions SET expires = ? WHERE account_id = ? AND id = ?"
-	_, err := a.DB.Exec(query, newExpirationTime.Format(time.RFC3339), accountID, sessionID)
+// ExtendSessionExpiration extends the expiration time for a session
+func ExtendSessionExpiration(database *sql.DB, accountID string, sessionID string, newExpirationTime time.Time) error {
+	_, err := database.Exec(
+		NewSessionQueries().UpdateSessionExpiry,
+		newExpirationTime.Format(time.RFC3339),
+		accountID,
+		sessionID,
+	)
+	
 	if err != nil {
+		logger.Error("Failed to extend session expiration", "error", err, "account_id", accountID, "session_id", sessionID)
 		return err
 	}
-
+	
+	logger.Debug("Session expiration time extended", "accountID", accountID, "sessionID", sessionID, "newExpirationTime", newExpirationTime)
 	return nil
 }
 
-func CheckDBSessionExists(a *server.App, sessionID string) (bool, error) {
+// CheckDBSessionExists checks if a session exists
+func CheckDBSessionExists(database *sql.DB, sessionID string) (bool, error) {
 	var sessionExists bool
-	query := "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)"
-	err := a.DB.QueryRow(query, sessionID).Scan(&sessionExists)
+	err := database.QueryRow(
+		NewSessionQueries().CheckSessionExists,
+		sessionID,
+	).Scan(&sessionExists)
+
 	if err != nil {
 		return false, err
 	}
 
+	logger.Debug("Session existence checked", "sessionID", sessionID, "exists", sessionExists)
 	return sessionExists, nil
 }
 
-func InvalidateDBSession(a *server.App, sessionID string) error {
-	query := "UPDATE sessions SET is_online = ? WHERE id = ?"
-	_, err := a.DB.Exec(query, false, sessionID)
+// InvalidateDBSession marks a session as offline
+func InvalidateDBSession(database *sql.DB, sessionID string) error {
+	_, err := database.Exec(
+		NewSessionQueries().InvalidateSession,
+		false,
+		sessionID,
+	)
+	
 	if err != nil {
+		logger.Error("Failed to invalidate session", "error", err, "session_id", sessionID)
 		return err
 	}
-
+	
+	logger.Debug("Session invalidated", "sessionID", sessionID)
 	return nil
 }

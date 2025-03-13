@@ -79,12 +79,22 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		})
 	}
 
-	// After successfully deploying a container, add a proxy route
-	containerIP := GetContainerIP(a, containerID, containerName)
-	err = AddProxyRoute(a, containerID, containerIP, payload.Port, payload.TargetDomain)
-	if err != nil {
-		log.Error("Failed to add proxy route", "error", err)
-		return sendDeployErrorResponse(c, "Failed to add proxy route", err)
+	// Check if we should skip proxy setup
+	skipProxySetup := false
+	if payload.SkipProxySetup {
+		skipProxySetup = true
+	}
+
+	// After successfully deploying a container, add a proxy route if not skipped
+	if !skipProxySetup {
+		containerIP := GetContainerIP(a, containerID, containerName)
+		err = AddProxyRoute(a, containerID, containerIP, payload.Port, payload.TargetDomain)
+		if err != nil {
+			log.Error("Failed to add proxy route", "error", err)
+			return sendDeployErrorResponse(c, "Failed to add proxy route", err)
+		}
+	} else {
+		log.Info("Skipping proxy setup as requested", "container_id", containerID, "container_name", containerName)
 	}
 
 	// Arrived here means deployment was successful
@@ -265,7 +275,18 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 
 	// Extract container name from domain and perform safety checks
 	cleanDomain := strings.TrimPrefix(strings.TrimPrefix(targetDomain, "https://"), "http://")
-	containerName := strings.Split(cleanDomain, ".")[0]
+
+	// Check if the domain has a subdomain
+	domainParts := strings.Split(cleanDomain, ".")
+	var containerName string
+
+	if len(domainParts) >= 2 {
+		// If there's a subdomain (e.g., sub.domain.tld), use it as the container name
+		containerName = domainParts[0]
+	} else {
+		// If there's no subdomain (e.g., domain.tld), use the domain as the container name
+		containerName = strings.ReplaceAll(cleanDomain, ".", "-")
+	}
 
 	if containerName == "" {
 		return sendDeployErrorResponse(c, "Invalid target domain",
@@ -471,6 +492,9 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 		cleanDomain = strings.Split(cleanDomain, "://")[1]
 	}
 
+	// Remove any leading dot that might have been added
+	cleanDomain = strings.TrimPrefix(cleanDomain, ".")
+
 	// Log that we're adding the domain for Let's Encrypt
 	log.Debug("Adding domain for Let's Encrypt verification",
 		"domain", cleanDomain)
@@ -594,6 +618,10 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 	if err := p.AddRoute(cleanDomain, containerID, containerIP, containerPort, protocol, "/"); err != nil {
 		return fmt.Errorf("failed to add proxy route: %w", err)
 	}
+
+	// Register this container to prevent immediate recreation logic
+	// and avoid database locking conflicts
+	p.RegisterNewlyCreatedContainer(containerID)
 
 	log.Debug("Added proxy route",
 		"domain", targetDomain,

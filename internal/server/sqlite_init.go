@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bnema/gordon/internal/db"
 	"github.com/charmbracelet/log"
@@ -13,6 +15,8 @@ import (
 
 const (
 	DBFilename = "sqlite.db"
+	// Auto-save interval in minutes
+	AutoSaveInterval = 5
 )
 
 func (a *App) getDiskDBFilePath() string {
@@ -69,39 +73,61 @@ func (a *App) checkDBFile(dbPath string) (bool, error) {
 	return true, nil
 }
 
-// InitializeDB initializes the database
+// InitializeDB initializes the database in memory and loads data from disk if available
 func InitializeDB(a *App) (*sql.DB, error) {
-	log.Debug("Initializing database")
+	log.Debug("Initializing in-memory database")
 	if err := a.ensureDBDir(); err != nil {
 		return nil, fmt.Errorf("failed to ensure DB directory: %w", err)
 	}
 
-	dbPath := a.getDiskDBFilePath()
-	a.DBPath = dbPath
+	diskDBPath := a.getDiskDBFilePath()
+	a.DBPath = diskDBPath
 
-	dbExists, err := a.checkDBFile(dbPath)
+	// Create in-memory database connection
+	log.Debug("Opening in-memory SQLite database")
+	memDB, err := sql.Open("sqlite", "file::memory:?cache=shared")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open in-memory DB: %w", err)
+	}
+
+	// Test that the in-memory database is working
+	log.Debug("Testing in-memory database connection")
+	if err := memDB.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping in-memory database: %w", err)
+	}
+
+	// Check if disk database exists
+	dbExists, err := a.checkDBFile(diskDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check DB file: %w", err)
 	}
 
 	if !dbExists {
-		log.Debug("Database needs bootstrapping", "path", dbPath)
-		if err := bootstrapDB(dbPath); err != nil {
-			return nil, fmt.Errorf("failed to bootstrap DB: %w", err)
+		log.Debug("Database needs bootstrapping", "path", diskDBPath)
+		// Create tables in memory
+		log.Debug("Creating tables in memory")
+		if err := bootstrapDB(memDB); err != nil {
+			return nil, fmt.Errorf("failed to bootstrap in-memory DB: %w", err)
 		}
+
+		// Save the initialized in-memory database to disk
+		log.Debug("Saving initialized in-memory database to disk")
+		if err := saveMemDBToDisk(memDB, diskDBPath); err != nil {
+			return nil, fmt.Errorf("failed to save initial in-memory DB to disk: %w", err)
+		}
+
+		log.Debug("Initialized new in-memory database and saved to disk")
+	} else {
+		// Load existing database from disk into memory
+		log.Debug("Loading existing database from disk into memory", "path", diskDBPath)
+		if err := loadDiskDBToMemory(diskDBPath, memDB); err != nil {
+			return nil, fmt.Errorf("failed to load disk DB into memory: %w", err)
+		}
+
+		log.Debug("Successfully loaded disk database into memory")
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open disk DB: %w", err)
-	}
-
-	// Test that the database is working
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	a.DB = db
+	a.DB = memDB
 
 	if dbExists {
 		// Populate the struct tables from the database
@@ -109,20 +135,320 @@ func InitializeDB(a *App) (*sql.DB, error) {
 		if err := PopulateStructWithTables(a); err != nil {
 			return nil, err
 		}
-	} else {
-		log.Debug("Initialized new database")
 	}
 
-	return db, nil
+	// Create a context for the auto-save routine that will be canceled when the app is shutting down
+	a.DBSaveCtx, a.DBSaveCancel = context.WithCancel(context.Background())
+
+	// Start auto-save routine
+	log.Debug("Starting auto-save routine with interval of", "minutes", AutoSaveInterval)
+	go autoSaveDB(a.DBSaveCtx, a, AutoSaveInterval)
+
+	return memDB, nil
 }
 
-func bootstrapDB(dbPath string) error {
-	// Open the database file
-	db, err := sql.Open("sqlite", dbPath)
+// loadDiskDBToMemory loads the database from disk into memory
+func loadDiskDBToMemory(diskDBPath string, memDB *sql.DB) error {
+	log.Debug("Opening disk database for loading", "path", diskDBPath)
+	// Open the disk database
+	diskDB, err := sql.Open("sqlite", diskDBPath)
 	if err != nil {
-		return fmt.Errorf("error opening database: %w", err)
+		return fmt.Errorf("failed to open disk DB for loading: %w", err)
 	}
-	defer db.Close()
+	defer diskDB.Close()
+
+	// Backup disk database to memory
+	// First, get all table names
+	log.Debug("Retrieving table names from disk database")
+	rows, err := diskDB.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+	if err != nil {
+		return fmt.Errorf("failed to get table names: %w", err)
+	}
+	defer rows.Close()
+
+	// Begin transaction for memory DB
+	log.Debug("Beginning transaction on memory database")
+	memTx, err := memDB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction on memory DB: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			log.Debug("Rolling back memory database transaction due to error")
+			memTx.Rollback()
+		}
+	}()
+
+	tableCount := 0
+	// For each table, create it in memory and copy data
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return fmt.Errorf("failed to scan table name: %w", err)
+		}
+		tableCount++
+
+		log.Debug("Processing table", "name", tableName)
+
+		// Get table schema
+		var createStmt string
+		err := diskDB.QueryRow(fmt.Sprintf("SELECT sql FROM sqlite_master WHERE type='table' AND name='%s'", tableName)).Scan(&createStmt)
+		if err != nil {
+			return fmt.Errorf("failed to get create statement for table %s: %w", tableName, err)
+		}
+
+		// Create table in memory
+		log.Debug("Creating table in memory", "name", tableName)
+		_, err = memTx.Exec(createStmt)
+		if err != nil {
+			return fmt.Errorf("failed to create table %s in memory: %w", tableName, err)
+		}
+
+		// Get all data from disk table
+		log.Debug("Retrieving data from disk table", "name", tableName)
+		dataRows, err := diskDB.Query(fmt.Sprintf("SELECT * FROM %s", tableName))
+		if err != nil {
+			return fmt.Errorf("failed to query data from table %s: %w", tableName, err)
+		}
+		defer dataRows.Close()
+
+		// Get column names
+		columns, err := dataRows.Columns()
+		if err != nil {
+			return fmt.Errorf("failed to get columns for table %s: %w", tableName, err)
+		}
+		log.Debug("Table columns", "name", tableName, "columns", columns)
+
+		// Prepare insert statement for memory DB
+		placeholders := make([]string, len(columns))
+		for i := range placeholders {
+			placeholders[i] = "?"
+		}
+		insertStmt, err := memTx.Prepare(fmt.Sprintf("INSERT INTO %s VALUES (%s)", tableName, joinStrings(placeholders, ",")))
+		if err != nil {
+			return fmt.Errorf("failed to prepare insert statement for table %s: %w", tableName, err)
+		}
+		defer insertStmt.Close()
+
+		// Copy data row by row
+		rowCount := 0
+		for dataRows.Next() {
+			// Create a slice of interface{} to hold the values
+			values := make([]interface{}, len(columns))
+			valuePtrs := make([]interface{}, len(columns))
+			for i := range values {
+				valuePtrs[i] = &values[i]
+			}
+
+			// Scan the row into the slice
+			if err := dataRows.Scan(valuePtrs...); err != nil {
+				return fmt.Errorf("failed to scan row from table %s: %w", tableName, err)
+			}
+
+			// Insert into memory DB
+			_, err = insertStmt.Exec(values...)
+			if err != nil {
+				return fmt.Errorf("failed to insert row into memory table %s: %w", tableName, err)
+			}
+			rowCount++
+		}
+		log.Debug("Copied rows to memory", "table", tableName, "count", rowCount)
+
+		if err := dataRows.Err(); err != nil {
+			return fmt.Errorf("error iterating rows for table %s: %w", tableName, err)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating table names: %w", err)
+	}
+
+	// Commit transaction
+	log.Debug("Committing transaction to memory database")
+	if err := memTx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction to memory DB: %w", err)
+	}
+
+	log.Debug("Successfully loaded database from disk to memory", "tables", tableCount)
+	return nil
+}
+
+// saveMemDBToDisk saves the in-memory database to disk
+func saveMemDBToDisk(memDB *sql.DB, diskDBPath string) error {
+	log.Debug("Saving in-memory database to disk", "path", diskDBPath)
+
+	// Create a backup of the existing file if it exists
+	if _, err := os.Stat(diskDBPath); err == nil {
+		backupPath := diskDBPath + ".bak"
+		log.Debug("Creating backup of existing database file", "backup", backupPath)
+		if err := os.Rename(diskDBPath, backupPath); err != nil {
+			log.Warn("Failed to create backup of database file", "error", err)
+			// Continue anyway, as this is just a backup
+		} else {
+			log.Debug("Created backup of database file", "backup", backupPath)
+		}
+	}
+
+	// Open the disk database
+	log.Debug("Opening disk database for saving")
+	diskDB, err := sql.Open("sqlite", diskDBPath)
+	if err != nil {
+		return fmt.Errorf("failed to open disk DB for saving: %w", err)
+	}
+	defer diskDB.Close()
+
+	// Get all table names from memory DB
+	log.Debug("Retrieving table names from memory database")
+	rows, err := memDB.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+	if err != nil {
+		return fmt.Errorf("failed to get table names from memory: %w", err)
+	}
+	defer rows.Close()
+
+	// Begin transaction for disk DB
+	log.Debug("Beginning transaction on disk database")
+	diskTx, err := diskDB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction on disk DB: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			log.Debug("Rolling back disk database transaction due to error")
+			diskTx.Rollback()
+		}
+	}()
+
+	tableCount := 0
+	// For each table, create it on disk and copy data
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return fmt.Errorf("failed to scan table name: %w", err)
+		}
+		tableCount++
+
+		log.Debug("Processing table for saving", "name", tableName)
+
+		// Get table schema
+		var createStmt string
+		err := memDB.QueryRow(fmt.Sprintf("SELECT sql FROM sqlite_master WHERE type='table' AND name='%s'", tableName)).Scan(&createStmt)
+		if err != nil {
+			return fmt.Errorf("failed to get create statement for table %s: %w", tableName, err)
+		}
+
+		// Create table on disk
+		log.Debug("Creating table on disk", "name", tableName)
+		_, err = diskTx.Exec(createStmt)
+		if err != nil {
+			return fmt.Errorf("failed to create table %s on disk: %w", tableName, err)
+		}
+
+		// Get all data from memory table
+		log.Debug("Retrieving data from memory table", "name", tableName)
+		dataRows, err := memDB.Query(fmt.Sprintf("SELECT * FROM %s", tableName))
+		if err != nil {
+			return fmt.Errorf("failed to query data from memory table %s: %w", tableName, err)
+		}
+		defer dataRows.Close()
+
+		// Get column names
+		columns, err := dataRows.Columns()
+		if err != nil {
+			return fmt.Errorf("failed to get columns for table %s: %w", tableName, err)
+		}
+
+		// Prepare insert statement for disk DB
+		placeholders := make([]string, len(columns))
+		for i := range placeholders {
+			placeholders[i] = "?"
+		}
+		insertStmt, err := diskTx.Prepare(fmt.Sprintf("INSERT INTO %s VALUES (%s)", tableName, joinStrings(placeholders, ",")))
+		if err != nil {
+			return fmt.Errorf("failed to prepare insert statement for table %s: %w", tableName, err)
+		}
+		defer insertStmt.Close()
+
+		// Copy data row by row
+		rowCount := 0
+		for dataRows.Next() {
+			// Create a slice of interface{} to hold the values
+			values := make([]interface{}, len(columns))
+			valuePtrs := make([]interface{}, len(columns))
+			for i := range values {
+				valuePtrs[i] = &values[i]
+			}
+
+			// Scan the row into the slice
+			if err := dataRows.Scan(valuePtrs...); err != nil {
+				return fmt.Errorf("failed to scan row from memory table %s: %w", tableName, err)
+			}
+
+			// Insert into disk DB
+			_, err = insertStmt.Exec(values...)
+			if err != nil {
+				return fmt.Errorf("failed to insert row into disk table %s: %w", tableName, err)
+			}
+			rowCount++
+		}
+		log.Debug("Copied rows to disk", "table", tableName, "count", rowCount)
+
+		if err := dataRows.Err(); err != nil {
+			return fmt.Errorf("error iterating rows for table %s: %w", tableName, err)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating table names: %w", err)
+	}
+
+	// Commit transaction
+	log.Debug("Committing transaction to disk database")
+	if err := diskTx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction to disk DB: %w", err)
+	}
+
+	log.Debug("Successfully saved in-memory database to disk", "tables", tableCount)
+	return nil
+}
+
+// autoSaveDB periodically saves the in-memory database to disk
+func autoSaveDB(ctx context.Context, a *App, intervalMinutes int) {
+	ticker := time.NewTicker(time.Duration(intervalMinutes) * time.Minute)
+	defer ticker.Stop()
+
+	log.Debug("Auto-save routine started", "interval_minutes", intervalMinutes)
+
+	for {
+		select {
+		case <-ticker.C:
+			log.Debug("Auto-saving in-memory database to disk")
+			if err := saveMemDBToDisk(a.DB, a.DBPath); err != nil {
+				log.Error("Failed to auto-save in-memory database to disk", "error", err)
+			} else {
+				log.Debug("Auto-save completed successfully")
+			}
+		case <-ctx.Done():
+			log.Debug("Auto-save routine stopping due to context cancellation")
+			return
+		}
+	}
+}
+
+// Helper function to join strings with a separator
+func joinStrings(strings []string, separator string) string {
+	if len(strings) == 0 {
+		return ""
+	}
+	result := strings[0]
+	for i := 1; i < len(strings); i++ {
+		result += separator + strings[i]
+	}
+	return result
+}
+
+// bootstrapDB creates the initial database schema
+func bootstrapDB(db *sql.DB) error {
+	log.Debug("Bootstrapping database with initial schema")
 
 	// Begin a transaction
 	tx, err := db.Begin()
@@ -131,6 +457,7 @@ func bootstrapDB(dbPath string) error {
 	}
 
 	// Create tables
+	log.Debug("Creating database tables")
 	_, err = tx.Exec(`
 		CREATE TABLE IF NOT EXISTS user (
 			id TEXT PRIMARY KEY,
@@ -204,14 +531,17 @@ func bootstrapDB(dbPath string) error {
 		);
 	`)
 	if err != nil {
-		return fmt.Errorf("failed to create tables: %w", err)
+		tx.Rollback()
+		return fmt.Errorf("error creating tables: %w", err)
 	}
 
 	// Commit the transaction
+	log.Debug("Committing transaction with initial schema")
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("error committing transaction: %w", err)
 	}
 
+	log.Debug("Database bootstrap completed successfully")
 	return nil
 }
 
@@ -296,7 +626,7 @@ func (c *CertificateWrapper) ScanFromRows(rows *sql.Rows) error {
 }
 
 func (p *ProxyRouteWrapper) ScanFromRows(rows *sql.Rows) error {
-	return rows.Scan(&p.ID, &p.DomainID, &p.ContainerID, &p.ContainerIP, &p.ContainerPort, &p.Protocol, &p.Path, &p.Active, &p.CreatedAt, &p.UpdatedAt)
+	return rows.Scan(&p.ID, &p.DomainID, &p.ContainerID, &p.ContainerIP, &p.ContainerPort, &p.Protocol, &p.Path, &p.Active)
 }
 
 // PopulateStructWithTables updates db struct with tables
@@ -345,7 +675,7 @@ func PopulateStructWithTables(a *App) error {
 
 	// Populate the ProxyRoute table
 	proxyRouteWrapper := &ProxyRouteWrapper{ProxyRoute: &a.DBTables.ProxyRoute}
-	if err := populateTableFromDB(a, "SELECT id, domain_id, container_id, container_ip, container_port, protocol, path, active, created_at, updated_at FROM proxy_route", proxyRouteWrapper); err != nil {
+	if err := populateTableFromDB(a, "SELECT id, domain_id, container_id, container_ip, container_port, protocol, path, active FROM proxy_route", proxyRouteWrapper); err != nil {
 		return err
 	}
 
