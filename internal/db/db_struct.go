@@ -1,5 +1,6 @@
 package db
 
+// User struct model
 type User struct {
 	ID      string `sql:"id, primary_key"`
 	Name    string `sql:"name"`
@@ -76,4 +77,12 @@ type ProxyRoute struct {
 	Active        bool   `sql:"active"`
 	CreatedAt     string `sql:"created_at"`
 	UpdatedAt     string `sql:"updated_at"`
+}
+
+// GithubUserInfo holds the essential information for a Github user
+type GithubUserInfo struct {
+	Login      string `json:"login"`
+	AvatarURL  string `json:"avatar_url"`
+	ProfileURL string `json:"html_url"`
+	Emails     []string
 }

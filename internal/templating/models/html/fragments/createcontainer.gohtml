@@ -65,7 +65,7 @@
         <div class="text-xs text-gray-500 mb-2">
           Specify the internal container port that the proxy will route traffic to
         </div>
-        <input type="text" name="proxy_port" class="w-full p-4 rounded-md" value="{{.ProxyPort}}" required />
+        <input type="text" name="container_port" class="w-full p-4 rounded-md" value="{{.ProxyPort}}" required />
       </div>
       
       <!-- Volumes -->
@@ -90,6 +90,18 @@
           <option value="unless-stopped">Unless stopped</option>
           <option value="never">Never</option>
         </select>
+      </div>
+
+      <!-- Skip Proxy Setup Option -->
+      <div class="pb-4">
+        <label class="flex items-center space-x-2">
+          <input type="checkbox" name="skip_proxy_setup" value="true" class="form-checkbox h-5 w-5 text-blue-600" />
+          <span>Skip proxy setup (create container only, don't set up domain/certificates)</span>
+        </label>
+        <p class="text-sm text-gray-500 ml-7">
+          Use this option if you only want to create the container without triggering proxy setup, 
+          certificate generation, and other related processes.
+        </p>
       </div>
 
       <input type="submit" value="Create" id="create-container-submit"

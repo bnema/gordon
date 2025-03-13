@@ -1,9 +1,7 @@
 package proxy
 
 import (
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/bnema/gordon/pkg/logger"
@@ -17,12 +15,6 @@ import (
 
 // rateLimiterCleanup holds the cleanup functions for rate limiters
 var rateLimiterCleanup []func()
-
-// Create blacklistedIPs set to track IPs for middleware skipping
-type requestContext struct {
-	blacklisted bool
-	requestID   string
-}
 
 // RequestIDKey is the key used to store the request ID in the context
 const RequestIDKey = "request_id"
@@ -38,83 +30,71 @@ func (p *Proxy) setupMiddleware() {
 	p.httpsServer.Use(p.createRequestIDMiddleware())
 	p.httpServer.Use(p.createRequestIDMiddleware())
 
-	// Add debug middleware to log all headers
-	p.httpsServer.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			req := c.Request()
-			logger.Debug("Request headers",
-				"method", req.Method,
-				"path", req.URL.Path,
-				"remote_addr", req.RemoteAddr,
-				"x-forwarded-for", req.Header.Get("X-Forwarded-For"),
-				"x-real-ip", req.Header.Get("X-Real-IP"))
-			return next(c)
-		}
-	})
+	// Check if rate limiting is disabled via configuration
+	if !p.config.DisableRateLimit {
+		// Create a new Starskey rate limiter store for HTTPS server
+		httpsRateLimiter, err := kv.NewStarskeyRateLimiterStore(
+			"./data/ratelimiter/https", // Path to store rate limit data
+			10,                         // Rate: 10 requests per second (lowered from 10)
+			30,                         // Burst: 30 requests (lowered from 30)
+			3*time.Minute,              // Expires in 3 minutes
+		)
+		if err != nil {
+			logger.Error("Failed to create HTTPS rate limiter store, falling back to memory store", "error", err)
 
-	// Create blacklist middleware for HTTPS
-	p.httpsServer.Use(p.createBlacklistMiddleware())
-
-	// Create a new Starskey rate limiter store for HTTPS server
-	httpsRateLimiter, err := kv.NewStarskeyRateLimiterStore(
-		"./data/ratelimiter/https", // Path to store rate limit data
-		10,                         // Rate: 10 requests per second (lowered from 10)
-		30,                         // Burst: 30 requests (lowered from 30)
-		3*time.Minute,              // Expires in 3 minutes
-	)
-	if err != nil {
-		logger.Error("Failed to create HTTPS rate limiter store, falling back to memory store", "error", err)
-
-		// Fallback to memory store if Starskey store creation fails
-		p.httpsServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
-			Store: middleware.NewRateLimiterMemoryStoreWithConfig(
-				middleware.RateLimiterMemoryStoreConfig{
-					Rate:      rate.Limit(10),  // 10 requests per second (lowered from 10)
-					Burst:     30,              // Burst of 30 requests (lowered from 30)
-					ExpiresIn: 3 * time.Minute, // Store expiration
+			// Fallback to memory store if Starskey store creation fails
+			p.httpsServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
+				Store: middleware.NewRateLimiterMemoryStoreWithConfig(
+					middleware.RateLimiterMemoryStoreConfig{
+						Rate:      rate.Limit(10),  // 10 requests per second (lowered from 10)
+						Burst:     30,              // Burst of 30 requests (lowered from 30)
+						ExpiresIn: 3 * time.Minute, // Store expiration
+					},
+				),
+				DenyHandler: func(context echo.Context, identifier string, err error) error {
+					logger.Warn("Rate limit exceeded",
+						"ip", identifier,
+						"path", context.Request().URL.Path,
+						"method", context.Request().Method)
+					return context.String(http.StatusTooManyRequests, "Too many requests")
 				},
-			),
-			DenyHandler: func(context echo.Context, identifier string, err error) error {
-				logger.Warn("Rate limit exceeded",
-					"ip", identifier,
-					"path", context.Request().URL.Path,
-					"method", context.Request().Method)
-				return context.String(http.StatusTooManyRequests, "Too many requests")
-			},
-		}))
+			}))
+		} else {
+			// Use the Starskey store for HTTPS rate limiting
+			logger.Debug("Using Starskey rate limiter for HTTPS server")
+
+			// Add custom Starskey rate limiter middleware
+			p.httpsServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
+				Store: httpsRateLimiter,
+				IdentifierExtractor: func(ctx echo.Context) (string, error) {
+					id := ctx.RealIP()
+					logger.Debug("Rate limiting HTTPS request",
+						"ip", id,
+						"remote_addr", ctx.Request().RemoteAddr)
+
+					// Add a response header to show the detected IP (for debugging)
+					ctx.Response().Header().Set("X-Rate-Limit-IP", id)
+
+					return id, nil
+				},
+				DenyHandler: func(context echo.Context, identifier string, err error) error {
+					logger.Warn("HTTPS rate limit exceeded",
+						"ip", identifier,
+						"path", context.Request().URL.Path,
+						"method", context.Request().Method)
+					return context.String(http.StatusTooManyRequests, "Too many requests")
+				},
+			}))
+
+			// Add cleanup function to global slice
+			rateLimiterCleanup = append(rateLimiterCleanup, func() {
+				if err := httpsRateLimiter.Close(); err != nil {
+					logger.Error("Failed to close HTTPS rate limiter store", "error", err)
+				}
+			})
+		}
 	} else {
-		// Use the Starskey store for HTTPS rate limiting
-		logger.Debug("Using Starskey rate limiter for HTTPS server")
-
-		// Add custom Starskey rate limiter middleware
-		p.httpsServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
-			Store: httpsRateLimiter,
-			IdentifierExtractor: func(ctx echo.Context) (string, error) {
-				id := ctx.RealIP()
-				logger.Debug("Rate limiting HTTPS request",
-					"ip", id,
-					"remote_addr", ctx.Request().RemoteAddr)
-
-				// Add a response header to show the detected IP (for debugging)
-				ctx.Response().Header().Set("X-Rate-Limit-IP", id)
-
-				return id, nil
-			},
-			DenyHandler: func(context echo.Context, identifier string, err error) error {
-				logger.Warn("HTTPS rate limit exceeded",
-					"ip", identifier,
-					"path", context.Request().URL.Path,
-					"method", context.Request().Method)
-				return context.String(http.StatusTooManyRequests, "Too many requests")
-			},
-		}))
-
-		// Add cleanup function to global slice
-		rateLimiterCleanup = append(rateLimiterCleanup, func() {
-			if err := httpsRateLimiter.Close(); err != nil {
-				logger.Error("Failed to close HTTPS rate limiter store", "error", err)
-			}
-		})
+		logger.Info("Rate limiting is disabled for HTTPS server via configuration")
 	}
 
 	// Add custom logger middleware with request ID if enabled in config
@@ -131,69 +111,71 @@ func (p *Proxy) setupMiddleware() {
 		logger.Debug("HTTP request logging disabled for HTTPS server")
 	}
 
-	// Create blacklist middleware for HTTP
-	p.httpServer.Use(p.createBlacklistMiddleware())
+	// Check if rate limiting is disabled via configuration
+	if !p.config.DisableRateLimit {
+		// Create a new Starskey rate limiter store for HTTP server
+		httpRateLimiter, err := kv.NewStarskeyRateLimiterStore(
+			"./data/ratelimiter/http", // Path to store rate limit data
+			2,                         // Rate: 2 requests per second (lowered from 10)
+			10,                        // Burst: 10 requests (lowered from 30)
+			3*time.Minute,             // Expires in 3 minutes
+		)
+		if err != nil {
+			logger.Error("Failed to create HTTP rate limiter store, falling back to memory store", "error", err)
 
-	// Create a new Starskey rate limiter store for HTTP server
-	httpRateLimiter, err := kv.NewStarskeyRateLimiterStore(
-		"./data/ratelimiter/http", // Path to store rate limit data
-		2,                         // Rate: 2 requests per second (lowered from 10)
-		10,                        // Burst: 10 requests (lowered from 30)
-		3*time.Minute,             // Expires in 3 minutes
-	)
-	if err != nil {
-		logger.Error("Failed to create HTTP rate limiter store, falling back to memory store", "error", err)
-
-		// Fallback to memory store if Starskey store creation fails
-		p.httpServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
-			Store: middleware.NewRateLimiterMemoryStoreWithConfig(
-				middleware.RateLimiterMemoryStoreConfig{
-					Rate:      rate.Limit(2),   // 2 requests per second (lowered from 10)
-					Burst:     10,              // Burst of 10 requests (lowered from 30)
-					ExpiresIn: 3 * time.Minute, // Store expiration
+			// Fallback to memory store if Starskey store creation fails
+			p.httpServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
+				Store: middleware.NewRateLimiterMemoryStoreWithConfig(
+					middleware.RateLimiterMemoryStoreConfig{
+						Rate:      rate.Limit(2),   // 2 requests per second (lowered from 10)
+						Burst:     10,              // Burst of 10 requests (lowered from 30)
+						ExpiresIn: 3 * time.Minute, // Store expiration
+					},
+				),
+				DenyHandler: func(context echo.Context, identifier string, err error) error {
+					logger.Warn("Rate limit exceeded",
+						"ip", identifier,
+						"path", context.Request().URL.Path,
+						"method", context.Request().Method)
+					return context.String(http.StatusTooManyRequests, "Too many requests")
 				},
-			),
-			DenyHandler: func(context echo.Context, identifier string, err error) error {
-				logger.Warn("Rate limit exceeded",
-					"ip", identifier,
-					"path", context.Request().URL.Path,
-					"method", context.Request().Method)
-				return context.String(http.StatusTooManyRequests, "Too many requests")
-			},
-		}))
+			}))
+		} else {
+			// Use the Starskey store for HTTP rate limiting
+			logger.Debug("Using Starskey rate limiter for HTTP server")
+
+			// Add custom Starskey rate limiter middleware
+			p.httpServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
+				Store: httpRateLimiter,
+				IdentifierExtractor: func(ctx echo.Context) (string, error) {
+					id := ctx.RealIP()
+					logger.Debug("Rate limiting HTTP request",
+						"ip", id,
+						"remote_addr", ctx.Request().RemoteAddr)
+
+					// Add a response header to show the detected IP (for debugging)
+					ctx.Response().Header().Set("X-Rate-Limit-IP", id)
+
+					return id, nil
+				},
+				DenyHandler: func(context echo.Context, identifier string, err error) error {
+					logger.Warn("HTTP rate limit exceeded",
+						"ip", identifier,
+						"path", context.Request().URL.Path,
+						"method", context.Request().Method)
+					return context.String(http.StatusTooManyRequests, "Too many requests")
+				},
+			}))
+
+			// Add cleanup function to global slice
+			rateLimiterCleanup = append(rateLimiterCleanup, func() {
+				if err := httpRateLimiter.Close(); err != nil {
+					logger.Error("Failed to close HTTP rate limiter store", "error", err)
+				}
+			})
+		}
 	} else {
-		// Use the Starskey store for HTTP rate limiting
-		logger.Debug("Using Starskey rate limiter for HTTP server")
-
-		// Add custom Starskey rate limiter middleware
-		p.httpServer.Use(middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
-			Store: httpRateLimiter,
-			IdentifierExtractor: func(ctx echo.Context) (string, error) {
-				id := ctx.RealIP()
-				logger.Debug("Rate limiting HTTP request",
-					"ip", id,
-					"remote_addr", ctx.Request().RemoteAddr)
-
-				// Add a response header to show the detected IP (for debugging)
-				ctx.Response().Header().Set("X-Rate-Limit-IP", id)
-
-				return id, nil
-			},
-			DenyHandler: func(context echo.Context, identifier string, err error) error {
-				logger.Warn("HTTP rate limit exceeded",
-					"ip", identifier,
-					"path", context.Request().URL.Path,
-					"method", context.Request().Method)
-				return context.String(http.StatusTooManyRequests, "Too many requests")
-			},
-		}))
-
-		// Add cleanup function to global slice
-		rateLimiterCleanup = append(rateLimiterCleanup, func() {
-			if err := httpRateLimiter.Close(); err != nil {
-				logger.Error("Failed to close HTTP rate limiter store", "error", err)
-			}
-		})
+		logger.Info("Rate limiting is disabled for HTTP server via configuration")
 	}
 
 	// Add custom logger middleware with request ID for HTTP server if enabled in config
@@ -215,60 +197,16 @@ func (p *Proxy) setupMiddleware() {
 func (p *Proxy) createRequestIDMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// Generate a new UUID for this request
+			// Generate a UUID for this request
 			requestID := uuid.New().String()
 
-			// Store the UUID in the context
+			// Store it in the context
 			c.Set(RequestIDKey, requestID)
 
-			// Add the UUID as a response header
+			// Add it as a response header
 			c.Response().Header().Set(echo.HeaderXRequestID, requestID)
 
-			// Continue with the next middleware
-			return next(c)
-		}
-	}
-}
-
-// createBlacklistMiddleware returns a middleware function that checks IPs against the blacklist
-func (p *Proxy) createBlacklistMiddleware() echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			// Get client IP
-			clientIP := c.RealIP()
-
-			// Get host and strip port if present
-			host := c.Request().Host
-			if strings.Contains(host, ":") {
-				host = strings.Split(host, ":")[0]
-			}
-
-			// Check if the host is an IP address
-			if net.ParseIP(host) != nil {
-				// This is an IP address being used as a hostname - silently reject
-				// This prevents log spam without adding IPs to the blacklist
-				// Set context for other middleware
-				c.Set("reqContext", &requestContext{blacklisted: true})
-				return c.String(http.StatusForbidden, "Forbidden")
-			}
-
-			// Debug log for all requests to check if the IP is being properly recognized
-			logger.Debug("Received request", "ip", clientIP, "path", c.Request().URL.Path)
-
-			// Check if IP is blacklisted (if blacklist exists)
-			if p.blacklist != nil && p.blacklist.IsBlocked(clientIP) {
-				// Set context for other middleware
-				c.Set("reqContext", &requestContext{blacklisted: true})
-
-				// Rate-limited logging of blocked IPs
-				p.logBlockedIP(clientIP, c.Request().URL.Path, c.Request().UserAgent())
-
-				// Return forbidden without calling next handlers at all
-				return c.String(http.StatusForbidden, "Forbidden")
-			}
-
-			// Store the context in the request context for non-blacklisted IPs
-			c.Set("reqContext", &requestContext{blacklisted: false})
+			// Continue processing
 			return next(c)
 		}
 	}

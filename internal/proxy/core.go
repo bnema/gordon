@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/bnema/gordon/internal/common"
+	"github.com/bnema/gordon/internal/db/queries"
 	"github.com/bnema/gordon/internal/interfaces"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/logger"
@@ -36,16 +37,6 @@ type Proxy struct {
 	certManager   *autocert.Manager
 	fallbackCert  *tls.Certificate // Fallback self-signed certificate
 	serverStarted bool
-	blacklist     *BlacklistConfig
-
-	// Fields for throttling blacklist logs
-	lastBlockedLog   time.Time
-	blockedIPCounter map[string]int
-	blockedIPCountMu sync.Mutex
-
-	// Firewall-like memory of recently blocked IPs for quick rejection
-	recentlyBlocked   map[string]time.Time
-	recentlyBlockedMu sync.RWMutex
 
 	// Flag to track specific domain certificate operations
 	processingSpecificDomain bool
@@ -61,6 +52,14 @@ type Proxy struct {
 	acmePerDomainRefreshMutex sync.Mutex
 	acmeDirCache              autocert.DirCache
 	shutdown                  chan struct{} // Channel for signaling shutdown to background goroutines
+
+	// Track recently created containers to prevent recreation logic
+	recentContainers        map[string]time.Time
+	recentContainersMu      sync.RWMutex
+	containerCooldownPeriod time.Duration
+
+	// SQL queries
+	queries *queries.ProxyQueries
 }
 
 // NewProxy creates a new instance of the reverse proxy
@@ -105,30 +104,25 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 		}
 	}
 
-	// Initialize the blacklist
-	blacklistPath := app.GetConfig().General.StorageDir + "/blacklist.json"
-	blacklist, err := NewBlacklist(blacklistPath)
-	if err != nil {
-		logger.Warn("Failed to initialize blacklist, continuing without it", "error", err)
-	}
-
 	// Initialize routes map
 	routes := make(map[string]*ProxyRouteInfo)
 
+	// Initialize SQL queries
+	proxyQueries := queries.NewProxyQueries()
+
 	// Create the proxy
 	p := &Proxy{
-		config:            config,
-		app:               app,
-		httpsServer:       httpsServer,
-		httpServer:        httpServer,
-		routes:            routes,
-		serverStarted:     false,
-		blacklist:         blacklist,
-		blockedIPCounter:  make(map[string]int),
-		lastBlockedLog:    time.Time{}, // Zero time
-		recentlyBlocked:   make(map[string]time.Time),
-		gordonContainerID: ourContainerID,
-		shutdown:          make(chan struct{}),
+		config:                  config,
+		app:                     app,
+		httpsServer:             httpsServer,
+		httpServer:              httpServer,
+		routes:                  routes,
+		serverStarted:           false,
+		gordonContainerID:       ourContainerID,
+		shutdown:                make(chan struct{}),
+		recentContainers:        make(map[string]time.Time),
+		containerCooldownPeriod: 10 * time.Second, // Default 10 second cooldown period
+		queries:                 proxyQueries,
 	}
 
 	// Now add the middleware with the proxy reference

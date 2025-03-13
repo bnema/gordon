@@ -1,18 +1,50 @@
 package server
 
-import "fmt"
+import (
+	"fmt"
 
-// CloseAndSaveDB closes the in-memory database and backup the database file if there is any modification.
+	"github.com/charmbracelet/log"
+)
+
+// CloseDB saves the in-memory database to disk and then closes the database connection.
 func CloseDB(a *App) error {
-	if a.DB != nil {
-		// if err := saveDB(a); err != nil {
-		// 	return fmt.Errorf("failed to save database: %w", err)
-		// }
+	log.Debug("CloseDB called, checking if database connection exists")
 
+	if a.DB != nil {
+		log.Debug("Database connection exists, proceeding with cleanup")
+
+		// Cancel the auto-save routine
+		if a.DBSaveCancel != nil {
+			log.Debug("Canceling auto-save routine")
+			a.DBSaveCancel()
+		} else {
+			log.Debug("No auto-save routine to cancel")
+		}
+
+		log.Info("Saving in-memory database to disk before shutdown")
+
+		// Save the in-memory database to disk
+		if err := saveMemDBToDisk(a.DB, a.DBPath); err != nil {
+			log.Error("Failed to save in-memory database to disk during shutdown", "error", err)
+			// Continue with closing even if saving fails
+		} else {
+			log.Info("Successfully saved in-memory database to disk")
+		}
+
+		// Close the database connection
+		log.Debug("Closing database connection")
 		if err := a.DB.Close(); err != nil {
+			log.Error("Failed to close database connection", "error", err)
 			return fmt.Errorf("failed to close database: %w", err)
 		}
+
+		log.Info("Database connection closed successfully")
+		// Set DB to nil to prevent double-close attempts
+		a.DB = nil
+	} else {
+		log.Debug("No database connection to close")
 	}
+
 	return nil
 }
 

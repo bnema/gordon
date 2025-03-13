@@ -50,12 +50,7 @@ func (p *Proxy) loadRoutes() error {
 	}
 
 	// Query the database for active proxy routes using retry mechanism
-	rows, err := p.dbQueryWithRetry(`
-		SELECT pr.id, d.name, pr.container_id, pr.container_ip, pr.container_port, pr.protocol, pr.path, pr.active
-		FROM proxy_route pr
-		JOIN domain d ON pr.domain_id = d.id
-		WHERE pr.active = 1
-	`)
+	rows, err := p.dbQueryWithRetry(p.queries.GetActiveRoutes)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			logger.Info("No active proxy routes found")
@@ -174,12 +169,6 @@ func (p *Proxy) configureRoutes() {
 		// Normalize host (trim trailing dot, convert to lowercase)
 		host = strings.TrimSuffix(strings.ToLower(host), ".")
 
-		// Special handling for debug: log all request details
-		logger.Debug("Request headers for proxy",
-			"domain", host,
-			"X-Forwarded-For", c.Request().Header.Get("X-Forwarded-For"),
-			"X-Real-IP", c.Request().Header.Get("X-Real-IP"))
-
 		// Check if this is the admin domain
 		adminDomain := p.app.GetConfig().Http.FullDomain()
 		if strings.EqualFold(host, adminDomain) {
@@ -189,21 +178,6 @@ func (p *Proxy) configureRoutes() {
 			p.mu.RUnlock()
 
 			if adminOk {
-				logger.Debug("Proxying request to admin domain",
-					"domain", host,
-					"target", fmt.Sprintf("%s://%s:%s", adminRoute.Protocol, adminRoute.ContainerIP, adminRoute.ContainerPort),
-					"path", c.Request().URL.Path)
-
-				// Special logging for admin domain handling
-				logger.Debug("Proxying request",
-					"host", host,
-					"target", fmt.Sprintf("%s://%s:%s", adminRoute.Protocol, adminRoute.ContainerIP, adminRoute.ContainerPort),
-					"path", c.Request().URL.Path,
-					"clientIP", c.RealIP(),
-					"remoteAddr", c.Request().RemoteAddr,
-					"originalProtocol", c.Scheme())
-
-				// Use the admin route
 				return p.proxyRequest(c, adminRoute)
 			}
 		}
@@ -244,16 +218,6 @@ func (p *Proxy) configureRoutes() {
 				"client_ip", c.RealIP())
 			return c.String(http.StatusServiceUnavailable, "Route is not active")
 		}
-
-		// Regular debug logging for all domains
-		logger.Debug("Proxying request",
-			"host", host,
-			"target", fmt.Sprintf("%s://%s:%s", route.Protocol, route.ContainerIP, route.ContainerPort),
-			"path", c.Request().URL.Path,
-			"clientIP", c.RealIP(),
-			"remoteAddr", c.Request().RemoteAddr,
-			"originalProtocol", c.Scheme())
-
 		return p.proxyRequest(c, route)
 	})
 
@@ -284,9 +248,35 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 		"protocol", protocol,
 		"path", path)
 
+	// Check if the container is in cooldown period - if so, let the event listener handle it
+	if p.IsContainerInCooldownPeriod(containerID) {
+		logger.Info("Container is in cooldown period, letting event listener handle route creation",
+			"container_id", containerID,
+			"domain", domainName)
+
+		// Add the route to memory immediately for better UX
+		p.mu.Lock()
+		p.routes[domainName] = &ProxyRouteInfo{
+			Domain:        domainName,
+			ContainerID:   containerID,
+			ContainerIP:   containerIP,
+			ContainerPort: containerPort,
+			Protocol:      protocol,
+			Path:          path,
+			Active:        true,
+		}
+		p.mu.Unlock()
+
+		// Return success - the event listener will handle the database update
+		return nil
+	}
+
 	// Begin a transaction with retry
 	tx, err := p.dbBeginWithRetry()
 	if err != nil {
+		logger.Error("Failed to begin transaction when adding route",
+			"domain", domainName,
+			"error", err)
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
@@ -302,7 +292,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 
 	// Get the account ID - default to the first account if available
 	var accountID string
-	err = tx.QueryRow("SELECT id FROM account LIMIT 1").Scan(&accountID)
+	err = tx.QueryRow(p.queries.GetFirstAccount).Scan(&accountID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			logger.Warn("No account found when adding route, domains will have NULL account_id")
@@ -314,17 +304,20 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 
 	// Check if the domain exists
 	var domainID string
-	err = tx.QueryRow("SELECT id FROM domain WHERE name = ?", hostname).Scan(&domainID)
+	err = tx.QueryRow(p.queries.GetDomainByName, hostname).Scan(&domainID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// Domain doesn't exist, create it
 			domainID = proxyGenerateUUID()
 			now := time.Now().Format(time.RFC3339)
 			_, err = txExecWithRetry(tx,
-				"INSERT INTO domain (id, name, account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+				p.queries.InsertDomain,
 				domainID, hostname, accountID, now, now,
 			)
 			if err != nil {
+				logger.Error("Failed to insert domain",
+					"domain", hostname,
+					"error", err)
 				return fmt.Errorf("failed to insert domain: %w", err)
 			}
 
@@ -347,7 +340,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 						// Domain part doesn't exist, create it
 						domainPartID = proxyGenerateUUID()
 						_, err = txExecWithRetry(tx,
-							"INSERT INTO domain (id, name, account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+							p.queries.InsertDomain,
 							domainPartID, domainPart, accountID, now, now,
 						)
 						if err != nil {
@@ -363,6 +356,9 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 				}
 			}
 		} else {
+			logger.Error("Failed to query domain",
+				"domain", hostname,
+				"error", err)
 			return fmt.Errorf("failed to query domain: %w", err)
 		}
 	}
@@ -371,10 +367,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 	var existingRouteID string
 	var existingContainerID string
 	var existingContainerPort string
-	err = tx.QueryRow(`
-		SELECT id, container_id, container_port 
-		FROM proxy_route 
-		WHERE domain_id = ?`, domainID).Scan(&existingRouteID, &existingContainerID, &existingContainerPort)
+	err = tx.QueryRow(p.queries.GetRouteByDomain, domainID).Scan(&existingRouteID, &existingContainerID, &existingContainerPort)
 
 	if err == nil {
 		// Route exists, update it
@@ -408,6 +401,9 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 			containerID, containerIP, containerPort, protocol, path, true, now, existingRouteID,
 		)
 		if err != nil {
+			logger.Error("Failed to update route",
+				"domain", hostname,
+				"error", err)
 			return fmt.Errorf("failed to update route: %w", err)
 		}
 	} else if err == sql.ErrNoRows {
@@ -415,29 +411,55 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 		routeID := proxyGenerateUUID()
 		now := time.Now().Format(time.RFC3339)
 		_, err = txExecWithRetry(tx,
-			`INSERT INTO proxy_route (
-				id, domain_id, container_id, container_ip, container_port, 
-				protocol, path, active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			p.queries.InsertRoute,
 			routeID, domainID, containerID, containerIP, containerPort,
 			protocol, path, true, now, now,
 		)
 		if err != nil {
+			logger.Error("Failed to insert route",
+				"domain", hostname,
+				"error", err)
 			return fmt.Errorf("failed to insert route: %w", err)
 		}
 	} else {
+		logger.Error("Failed to query route",
+			"domain", hostname,
+			"error", err)
 		return fmt.Errorf("failed to query route: %w", err)
 	}
 
 	// Commit the transaction
 	if err := tx.Commit(); err != nil {
+		logger.Error("Failed to commit transaction",
+			"domain", hostname,
+			"error", err)
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// Reload the routes
-	if err := p.Reload(); err != nil {
-		return fmt.Errorf("failed to reload routes: %w", err)
+	// Register this container to prevent duplicate processing
+	p.RegisterNewlyCreatedContainer(containerID)
+
+	// Update the in-memory routes map immediately for better UX
+	p.mu.Lock()
+	p.routes[hostname] = &ProxyRouteInfo{
+		Domain:        hostname,
+		ContainerID:   containerID,
+		ContainerIP:   containerIP,
+		ContainerPort: containerPort,
+		Protocol:      protocol,
+		Path:          path,
+		Active:        true,
 	}
+	p.mu.Unlock()
+
+	// Reload the routes in the background to avoid blocking
+	go func() {
+		if err := p.Reload(); err != nil {
+			logger.Error("Failed to reload routes after adding route",
+				"domain", hostname,
+				"error", err)
+		}
+	}()
 
 	logger.Info("Added proxy route",
 		"domain", hostname,
@@ -482,7 +504,7 @@ func (p *Proxy) RemoveRoute(domainName string) error {
 
 	// Get the domain ID
 	var domainID string
-	err = tx.QueryRow("SELECT id FROM domain WHERE name = ?", domainName).Scan(&domainID)
+	err = tx.QueryRow(p.queries.GetDomainByName, domainName).Scan(&domainID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("domain not found: %s", domainName)
@@ -491,13 +513,13 @@ func (p *Proxy) RemoveRoute(domainName string) error {
 	}
 
 	// Delete the route with retry
-	_, err = txExecWithRetry(tx, "DELETE FROM proxy_route WHERE domain_id = ?", domainID)
+	_, err = txExecWithRetry(tx, p.queries.DeleteRouteByDomainID, domainID)
 	if err != nil {
 		return fmt.Errorf("failed to delete route: %w", err)
 	}
 
 	// Delete the domain with retry
-	_, err = txExecWithRetry(tx, "DELETE FROM domain WHERE id = ?", domainID)
+	_, err = txExecWithRetry(tx, p.queries.DeleteDomainByID, domainID)
 	if err != nil {
 		return fmt.Errorf("failed to delete domain: %w", err)
 	}
@@ -561,12 +583,7 @@ func (p *Proxy) Reload() error {
 	newRoutes := make(map[string]*ProxyRouteInfo)
 
 	// Load routes from the database into the new map
-	rows, err := p.app.GetDB().Query(`
-		SELECT pr.id, d.name, pr.container_id, pr.container_ip, pr.container_port, pr.protocol, pr.path, pr.active
-		FROM proxy_route pr
-		JOIN domain d ON pr.domain_id = d.id
-		WHERE pr.active = 1
-	`)
+	rows, err := p.app.GetDB().Query(p.queries.GetActiveRoutes)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			logger.Info("No active proxy routes found during reload")
@@ -771,7 +788,7 @@ func (p *Proxy) ForceUpdateRouteIP(domain string, newIP string) error {
 	// Next, update the database
 	// Get the domain ID with retry
 	var domainID string
-	rows, err := p.dbQueryWithRetry("SELECT id FROM domain WHERE name = ?", domain)
+	rows, err := p.app.GetDB().Query(p.queries.GetDomainByName, domain)
 	if err != nil {
 		logger.Error("Failed to query domain for IP update", "domain", domain, "error", err)
 		return fmt.Errorf("failed to query domain: %w", err)
@@ -792,10 +809,7 @@ func (p *Proxy) ForceUpdateRouteIP(domain string, newIP string) error {
 
 	// Update the proxy_route record with retry and ensure it's marked as active
 	now := time.Now().Format(time.RFC3339)
-	result, err := p.dbExecWithRetry(`
-		UPDATE proxy_route SET container_ip = ?, active = 1, updated_at = ? 
-		WHERE domain_id = ? AND container_id = ?`,
-		newIP, now, domainID, containerID)
+	result, err := p.app.GetDB().Exec(p.queries.UpdateRouteIP, newIP, now, domainID, containerID)
 
 	if err != nil {
 		logger.Error("Failed to update IP in database", "domain", domain, "error", err)
@@ -865,12 +879,7 @@ func (p *Proxy) FindRoutesByOldName(containerName string) map[string]*ProxyRoute
 	result := make(map[string]*ProxyRouteInfo)
 
 	// Query the database with retry to find if any route might be associated with this container name
-	rows, err := p.dbQueryWithRetry(`
-		SELECT d.name, pr.container_id, pr.container_ip, pr.container_port, pr.protocol, pr.path
-		FROM proxy_route pr
-		JOIN domain d ON pr.domain_id = d.id
-		WHERE pr.active = 1
-	`)
+	rows, err := p.app.GetDB().Query(p.queries.GetAllRoutes)
 	if err != nil {
 		logger.Error("Failed to query database for routes by old name", "error", err)
 		return result
@@ -930,9 +939,39 @@ func (p *Proxy) FindRoutesByOldName(containerName string) map[string]*ProxyRoute
 	return result
 }
 
-// HandleContainerRecreation handles a container that has been recreated with the same name but a new ID
-// It updates all relevant routes with the new container ID and IP
+// HandleContainerRecreation handles the recreation of containers and updates routes accordingly
 func (p *Proxy) HandleContainerRecreation(containerID, containerName, containerIP string) {
+	// Skip processing if this container is in its cooldown period
+	if p.IsContainerInCooldownPeriod(containerID) {
+		logger.Debug("Skipping container recreation logic - container in cooldown period",
+			"container_id", containerID,
+			"container_name", containerName)
+		return
+	}
+
+	// Use a mutex to prevent concurrent processing of the same container
+	p.recentContainersMu.Lock()
+
+	// Check if we're already processing this container
+	if _, exists := p.recentContainers[containerID]; exists {
+		logger.Debug("Skipping container recreation - already being processed",
+			"container_id", containerID,
+			"container_name", containerName)
+		p.recentContainersMu.Unlock()
+		return
+	}
+
+	// Mark this container as being processed
+	p.recentContainers[containerID] = time.Now()
+	p.recentContainersMu.Unlock()
+
+	// Ensure we clean up the processing state when done
+	defer func() {
+		p.recentContainersMu.Lock()
+		delete(p.recentContainers, containerID)
+		p.recentContainersMu.Unlock()
+	}()
+
 	logger.Info("Handling potential container recreation",
 		"container_id", containerID,
 		"container_name", containerName,
@@ -1104,139 +1143,154 @@ func (p *Proxy) StartContainerEventListener() error {
 			"container_name", containerName,
 			"container_ip", containerIP)
 
-		// Check if this is the Gordon container (admin domain)
-		isAdminContainer := false
-		adminDomain := p.app.GetConfig().Http.FullDomain()
-
-		p.mu.RLock()
-		if route, exists := p.routes[adminDomain]; exists && route.ContainerID == containerID {
-			isAdminContainer = true
-			logger.Debug("Admin container event detected", "container_id", containerID)
-		}
-		p.mu.RUnlock()
-
-		// First, check if there are any existing routes for this container ID
-		var existingRoutes = make(map[string]*ProxyRouteInfo)
-		p.mu.RLock()
-		for domain, route := range p.routes {
-			if route.ContainerID == containerID {
-				existingRoutes[domain] = route
-			}
-		}
-		p.mu.RUnlock()
-
-		// If we found existing routes, check if the IP has changed
-		if len(existingRoutes) > 0 {
-			logger.Debug("Found existing routes for container",
+		// Skip processing if container is in cooldown period
+		if p.IsContainerInCooldownPeriod(containerID) {
+			logger.Debug("Skipping container event processing - container in cooldown period",
 				"container_id", containerID,
-				"route_count", len(existingRoutes))
+				"container_name", containerName)
+			return
+		}
 
-			// Verify the container IP with an additional check
-			verifiedIP, err := docker.GetContainerIPFromNetwork(containerID, networkName)
-			if err == nil && verifiedIP != "" && verifiedIP != containerIP {
-				logger.Warn("Container IP mismatch from event vs. direct network check",
-					"container_id", containerID,
-					"event_ip", containerIP,
-					"network_ip", verifiedIP)
+		// Register this container as recently created to prevent duplicate processing
+		p.RegisterNewlyCreatedContainer(containerID)
 
-				// Use the directly checked IP as it's more reliable
-				containerIP = verifiedIP
+		// Use a goroutine to handle the event asynchronously to avoid blocking the event listener
+		go func() {
+			// Add a small delay to allow any direct API calls to complete first
+			time.Sleep(500 * time.Millisecond)
+
+			// Check if this is the Gordon container (admin domain)
+			isAdminContainer := false
+			adminDomain := p.app.GetConfig().Http.FullDomain()
+
+			p.mu.RLock()
+			if route, exists := p.routes[adminDomain]; exists && route.ContainerID == containerID {
+				isAdminContainer = true
+				logger.Debug("Admin container event detected", "container_id", containerID)
 			}
+			p.mu.RUnlock()
 
-			// Check and update each route if IP has changed
-			for domain, route := range existingRoutes {
-				// Handle admin domain specially to avoid path issues
-				if domain == adminDomain && isAdminContainer {
-					// For admin domain, only update the IP if it has changed
-					if route.ContainerIP != containerIP {
-						logger.Info("Admin container restarted with new IP - updating route",
+			// First, check if there are any existing routes for this container ID
+			var existingRoutes = make(map[string]*ProxyRouteInfo)
+			p.mu.RLock()
+			for domain, route := range p.routes {
+				if route.ContainerID == containerID {
+					existingRoutes[domain] = route
+				}
+			}
+			p.mu.RUnlock()
+
+			// If we found existing routes, check if the IP has changed
+			if len(existingRoutes) > 0 {
+				logger.Debug("Found existing routes for container",
+					"container_id", containerID,
+					"route_count", len(existingRoutes))
+
+				// Verify the container IP with an additional check
+				verifiedIP, err := docker.GetContainerIPFromNetwork(containerID, networkName)
+				if err == nil && verifiedIP != "" && verifiedIP != containerIP {
+					logger.Warn("Container IP mismatch from event vs. direct network check",
+						"container_id", containerID,
+						"event_ip", containerIP,
+						"network_ip", verifiedIP)
+
+					// Use the directly checked IP as it's more reliable
+					containerIP = verifiedIP
+				}
+
+				// Check and update each route if IP has changed
+				for domain, route := range existingRoutes {
+					// Handle admin domain specially to avoid path issues
+					if domain == adminDomain && isAdminContainer {
+						// For admin domain, only update the IP if it has changed
+						if route.ContainerIP != containerIP {
+							logger.Info("Admin container restarted with new IP - updating route",
+								"container_id", containerID,
+								"container_name", containerName,
+								"domain", domain,
+								"old_ip", route.ContainerIP,
+								"new_ip", containerIP)
+
+							// Update IP in memory only first
+							p.mu.Lock()
+							if r, ok := p.routes[domain]; ok {
+								r.ContainerIP = containerIP
+								r.Active = true
+							}
+							p.mu.Unlock()
+
+							// Update DB in background
+							go func(domain, containerID, containerIP string) {
+								// Get the domain ID
+								var domainID string
+								rows, err := p.dbQueryWithRetry("SELECT id FROM domain WHERE name = ?", domain)
+								if err != nil {
+									logger.Error("Failed to query domain for admin IP update", "domain", domain, "error", err)
+									return
+								}
+
+								if !rows.Next() {
+									rows.Close()
+									logger.Error("Admin domain not found in database", "domain", domain)
+									return
+								}
+
+								if err := rows.Scan(&domainID); err != nil {
+									rows.Close()
+									logger.Error("Failed to scan admin domain ID", "domain", domain, "error", err)
+									return
+								}
+								rows.Close()
+
+								// Update the IP in the database directly
+								now := time.Now().Format(time.RFC3339)
+								_, err = p.dbExecWithRetry(p.queries.UpdateRouteIP,
+									containerIP, now, domainID, containerID)
+
+								if err != nil {
+									logger.Error("Failed to update admin container IP in database", "domain", domain, "error", err)
+								} else {
+									logger.Info("Updated admin container IP in database",
+										"domain", domain,
+										"container_id", containerID,
+										"new_ip", containerIP)
+								}
+							}(domain, containerID, containerIP)
+						}
+					} else if route.ContainerIP != containerIP {
+						// For non-admin domains, use the standard route update
+						logger.Info("Container restarted with new IP - updating route",
 							"container_id", containerID,
 							"container_name", containerName,
 							"domain", domain,
 							"old_ip", route.ContainerIP,
 							"new_ip", containerIP)
 
-						// Update IP in memory only first
-						p.mu.Lock()
-						if r, ok := p.routes[domain]; ok {
-							r.ContainerIP = containerIP
-							r.Active = true
+						// Update the route IP
+						err = p.ForceUpdateRouteIP(domain, containerIP)
+						if err != nil {
+							logger.Error("Failed to update IP for restarted container",
+								"domain", domain,
+								"error", err)
 						}
-						p.mu.Unlock()
+					} else {
+						// Even if IP is the same, make sure the route is active
+						if !route.Active {
+							logger.Info("Reactivating route for restarted container",
+								"container_id", containerID,
+								"container_name", containerName,
+								"domain", domain)
 
-						// Update DB in background
-						go func(domain, containerID, containerIP string) {
-							// Get the domain ID
-							var domainID string
-							rows, err := p.dbQueryWithRetry("SELECT id FROM domain WHERE name = ?", domain)
-							if err != nil {
-								logger.Error("Failed to query domain for admin IP update", "domain", domain, "error", err)
-								return
-							}
-
-							if !rows.Next() {
-								rows.Close()
-								logger.Error("Admin domain not found in database", "domain", domain)
-								return
-							}
-
-							if err := rows.Scan(&domainID); err != nil {
-								rows.Close()
-								logger.Error("Failed to scan admin domain ID", "domain", domain, "error", err)
-								return
-							}
-							rows.Close()
-
-							// Update the IP in the database directly
-							now := time.Now().Format(time.RFC3339)
-							_, err = p.dbExecWithRetry(`
-								UPDATE proxy_route SET container_ip = ?, active = 1, updated_at = ? 
-								WHERE domain_id = ? AND container_id = ?`,
-								containerIP, now, domainID, containerID)
-
-							if err != nil {
-								logger.Error("Failed to update admin container IP in database", "domain", domain, "error", err)
-							} else {
-								logger.Info("Updated admin container IP in database",
-									"domain", domain,
-									"container_id", containerID,
-									"new_ip", containerIP)
-							}
-						}(domain, containerID, containerIP)
-					}
-				} else if route.ContainerIP != containerIP {
-					// For non-admin domains, use the standard route update
-					logger.Info("Container restarted with new IP - updating route",
-						"container_id", containerID,
-						"container_name", containerName,
-						"domain", domain,
-						"old_ip", route.ContainerIP,
-						"new_ip", containerIP)
-
-					// Update the route IP
-					err := p.ForceUpdateRouteIP(domain, containerIP)
-					if err != nil {
-						logger.Error("Failed to update IP for restarted container",
-							"domain", domain,
-							"error", err)
-					}
-				} else {
-					// Even if IP is the same, make sure the route is active
-					if !route.Active {
-						logger.Info("Reactivating route for restarted container",
-							"container_id", containerID,
-							"container_name", containerName,
-							"domain", domain)
-
-						// Just reuse ForceUpdateRouteIP with the same IP to activate the route
-						p.ForceUpdateRouteIP(domain, containerIP)
+							// Just reuse ForceUpdateRouteIP with the same IP to activate the route
+							p.ForceUpdateRouteIP(domain, containerIP)
+						}
 					}
 				}
 			}
-		}
 
-		// Call the standard recreation handler for additional checks
-		p.HandleContainerRecreation(containerID, containerName, containerIP)
+			// Call the standard recreation handler for additional checks
+			p.HandleContainerRecreation(containerID, containerName, containerIP)
+		}()
 	}
 
 	// Create a callback function to handle container stop events
@@ -1332,7 +1386,7 @@ func (p *Proxy) checkRoutesForIPConsistency() {
 				"current_ip", currentIP)
 
 			// Update the route
-			err := p.ForceUpdateRouteIP(domain, currentIP)
+			err = p.ForceUpdateRouteIP(domain, currentIP)
 			if err != nil {
 				logger.Error("Failed to update IP during consistency check",
 					"domain", domain,
@@ -1382,7 +1436,7 @@ func (p *Proxy) markRoutesInactive(domains []string) {
 	for _, domain := range domains {
 		// First, get the domain ID
 		var domainID string
-		err := tx.QueryRow("SELECT id FROM domain WHERE name = ?", domain).Scan(&domainID)
+		err := tx.QueryRow(p.queries.GetDomainByName, domain).Scan(&domainID)
 		if err != nil {
 			logger.Error("Failed to get domain ID for inactive route", "domain", domain, "error", err)
 			continue
@@ -1390,7 +1444,7 @@ func (p *Proxy) markRoutesInactive(domains []string) {
 
 		// Update the route to mark it as inactive
 		now := time.Now().Format(time.RFC3339)
-		_, err = tx.Exec("UPDATE proxy_route SET active = 0, updated_at = ? WHERE domain_id = ?", now, domainID)
+		_, err = tx.Exec(p.queries.MarkRouteInactive, now, domainID)
 		if err != nil {
 			logger.Error("Failed to mark route as inactive in database", "domain", domain, "error", err)
 			continue
@@ -1425,9 +1479,6 @@ func (p *Proxy) DiscoverMissingRoutes() {
 		logger.Error("Cannot discover missing routes, network name is not configured")
 		return
 	}
-
-	// Get the admin domain from the config
-	adminDomain := p.app.GetConfig().Http.FullDomain()
 
 	// Get all containers in the network
 	networkInfo, err := docker.GetNetworkInfo(networkName)
@@ -1484,7 +1535,7 @@ func (p *Proxy) DiscoverMissingRoutes() {
 		domainLabel = strings.TrimSuffix(strings.ToLower(domainLabel), ".")
 
 		// Skip if this is the admin domain
-		if domainLabel == adminDomain {
+		if domainLabel == p.app.GetConfig().Http.FullDomain() {
 			logger.Debug("Skipping auto-discovery for admin domain",
 				"domain", domainLabel)
 			continue
@@ -1551,93 +1602,111 @@ func (p *Proxy) LogActiveContainersAndRoutes() {
 	// Get the admin domain
 	adminDomain := p.app.GetConfig().Http.FullDomain()
 
-	// Check if admin domain is in routes
 	p.mu.RLock()
 	_, adminExists := p.routes[adminDomain]
 	activeRoutes := len(p.routes)
-	p.mu.RUnlock()
 
-	if !adminExists {
-		logger.Warn("Admin domain is missing from routes", "domain", adminDomain)
-	}
-
-	logger.Info(fmt.Sprintf("Found %d active routes", activeRoutes))
-
-	// Create a map of container IDs to their information
-	containerMap := make(map[string]struct {
-		Name      string
-		IP        string
-		Image     string
-		Domains   []string
-		Protocols []string
-		Ports     []string
+	// Group routes by container ID directly
+	containerGroups := make(map[string][]string)
+	containerInfo := make(map[string]struct {
+		ContainerIP string
+		ContainerID string
+		Protocols   []string
+		Ports       []string
 	})
 
-	// Populate the map with route information
-	p.mu.RLock()
 	for domain, route := range p.routes {
 		if !route.Active {
 			continue
 		}
 
-		// If this container is not in the map yet, add it
-		if _, exists := containerMap[route.ContainerID]; !exists {
-			containerMap[route.ContainerID] = struct {
-				Name      string
-				IP        string
-				Image     string
-				Domains   []string
-				Protocols []string
-				Ports     []string
+		containerGroups[route.ContainerID] = append(containerGroups[route.ContainerID], domain)
+
+		// Store container info only once per container
+		if _, exists := containerInfo[route.ContainerID]; !exists {
+			containerInfo[route.ContainerID] = struct {
+				ContainerIP string
+				ContainerID string
+				Protocols   []string
+				Ports       []string
 			}{
-				Name:      route.ContainerID,
-				IP:        route.ContainerIP,
-				Image:     "unknown",
-				Domains:   []string{domain},
-				Protocols: []string{route.Protocol},
-				Ports:     []string{route.ContainerPort},
+				ContainerIP: route.ContainerIP,
+				ContainerID: route.ContainerID,
+				Protocols:   []string{route.Protocol},
+				Ports:       []string{route.ContainerPort},
 			}
 		} else {
-			// Otherwise, append this domain to the container's domains
-			container := containerMap[route.ContainerID]
-			container.Domains = append(container.Domains, domain)
-			container.Protocols = append(container.Protocols, route.Protocol)
-			container.Ports = append(container.Ports, route.ContainerPort)
-			containerMap[route.ContainerID] = container
+			info := containerInfo[route.ContainerID]
+			info.Protocols = append(info.Protocols, route.Protocol)
+			info.Ports = append(info.Ports, route.ContainerPort)
+			containerInfo[route.ContainerID] = info
 		}
 	}
 	p.mu.RUnlock()
 
+	// Log admin domain status and active routes count
+	if !adminExists {
+		logger.Warn("Admin domain is missing from routes", "domain", adminDomain)
+	}
+	logger.Info(fmt.Sprintf("Found %d active routes", activeRoutes))
+
 	// Get container names and images
-	for containerID, containerData := range containerMap {
+	containerNames := make(map[string]string)
+	containerImages := make(map[string]string)
+
+	for containerID := range containerGroups {
 		containerInfo, err := docker.GetContainerInfo(containerID)
 		if err == nil {
 			name, err := docker.GetContainerName(containerID)
 			if err == nil {
-				containerData.Name = strings.TrimLeft(name, "/")
-				containerData.Image = containerInfo.Config.Image
-				containerMap[containerID] = containerData
+				containerNames[containerID] = strings.TrimLeft(name, "/")
+				containerImages[containerID] = containerInfo.Config.Image
 			}
 		}
 	}
 
 	// Display each container and its routes
-	for containerID, container := range containerMap {
+	for containerID, domains := range containerGroups {
 		// Log container info
 		// Safety check to prevent slice bounds panic
 		containerIDShort := containerID
 		if len(containerID) >= 12 {
 			containerIDShort = containerID[:12]
 		}
-		logger.Info(fmt.Sprintf("Container: %s (%s)", container.Name, containerIDShort),
-			"ip", container.IP,
-			"image", container.Image)
+
+		containerName := containerID
+		if name, exists := containerNames[containerID]; exists {
+			containerName = name
+		}
+
+		containerImage := "unknown"
+		if image, exists := containerImages[containerID]; exists {
+			containerImage = image
+		}
+
+		info := containerInfo[containerID]
+
+		logger.Info(fmt.Sprintf("Container: %s (%s)", containerName, containerIDShort),
+			"ip", info.ContainerIP,
+			"image", containerImage)
 
 		// Log each domain for this container
-		for i, domain := range container.Domains {
+		for i, domain := range domains {
+			// Check if i is within bounds of the protocol and port arrays
+			protocol := "unknown"
+			port := "unknown"
+
+			if i < len(info.Protocols) {
+				protocol = info.Protocols[i]
+			}
+
+			if i < len(info.Ports) {
+				port = info.Ports[i]
+			}
+
 			logger.Info(fmt.Sprintf("  ├─ Domain: %s", domain),
-				"protocol", container.Protocols[i],
-				"port", container.Ports[i])
+				"protocol", protocol,
+				"port", port)
 		}
 	}
 
@@ -1820,26 +1889,6 @@ func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 	}
 	targetURL.Host = fmt.Sprintf("%s:%s", containerIP, containerPort)
 
-	// Set the path - keeping it simple to avoid duplication issues
-	targetURL.Path = c.Request().URL.Path
-	targetURL.RawQuery = c.Request().URL.RawQuery
-
-	// Special logging based on domain type
-	if isAdminDomain {
-		logger.Debug("Proxying request to admin domain",
-			"domain", host,
-			"target", targetURL.String(),
-			"path", c.Request().URL.Path)
-	} else {
-		logger.Debug("Proxying request to container",
-			"host", host,
-			"target", targetURL.String(),
-			"path", c.Request().URL.Path,
-			"clientIP", c.RealIP(),
-			"remoteAddr", c.Request().RemoteAddr,
-			"originalProtocol", c.Scheme())
-	}
-
 	// Create a reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 
@@ -1854,14 +1903,8 @@ func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 		// Call the original director first
 		originalDirector(req)
 
-		// Handle the Host header differently based on domain type
-		if isAdminDomain {
-			// For admin domain, use the target host for internal routing
-			req.Host = targetURL.Host
-		} else {
-			// For other domains, keep the original host
-			req.Host = host
-		}
+		// Keep the original host in the Host header
+		req.Host = host
 
 		// Set X-Forwarded headers to preserve client information
 		if clientIP := c.RealIP(); clientIP != "" {
@@ -1874,12 +1917,6 @@ func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 
 		// Set X-Forwarded-Host to the original host
 		req.Header.Set("X-Forwarded-Host", host)
-
-		// Log request headers for debugging
-		logger.Debug("Request headers for proxy",
-			"domain", host,
-			"X-Forwarded-For", req.Header.Get("X-Forwarded-For"),
-			"X-Real-IP", req.Header.Get("X-Real-IP"))
 	}
 
 	// Log errors that occur during proxying
@@ -1924,4 +1961,51 @@ func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 	// Serve the request using the reverse proxy
 	proxy.ServeHTTP(c.Response(), c.Request())
 	return nil
+}
+
+// RegisterNewlyCreatedContainer adds a container to the recently created list
+// to prevent duplicate processing during the cooldown period
+func (p *Proxy) RegisterNewlyCreatedContainer(containerID string) {
+	p.recentContainersMu.Lock()
+	defer p.recentContainersMu.Unlock()
+
+	// Add the container to the recently created list with the current time
+	p.recentContainers[containerID] = time.Now()
+
+	// Log the registration
+	logger.Debug("Registered container in cooldown period",
+		"container_id", containerID,
+		"cooldown_period", p.containerCooldownPeriod)
+
+	// Schedule cleanup of old entries
+	go func() {
+		// Wait for the cooldown period
+		time.Sleep(p.containerCooldownPeriod)
+
+		// Remove the container from the recently created list
+		p.recentContainersMu.Lock()
+		defer p.recentContainersMu.Unlock()
+
+		// Only delete if the timestamp hasn't been updated
+		if timestamp, exists := p.recentContainers[containerID]; exists {
+			if time.Since(timestamp) >= p.containerCooldownPeriod {
+				delete(p.recentContainers, containerID)
+				logger.Debug("Removed container from cooldown period", "container_id", containerID)
+			}
+		}
+	}()
+}
+
+// IsContainerInCooldownPeriod checks if a container is in its cooldown period
+func (p *Proxy) IsContainerInCooldownPeriod(containerID string) bool {
+	p.recentContainersMu.RLock()
+	defer p.recentContainersMu.RUnlock()
+
+	timestamp, exists := p.recentContainers[containerID]
+	if !exists {
+		return false
+	}
+
+	// Check if the container is still in its cooldown period
+	return time.Since(timestamp) < p.containerCooldownPeriod
 }

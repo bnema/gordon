@@ -22,18 +22,22 @@ import (
 
 var urlToken string
 
-// ClLI :
 // compareGordonToken compares the token from the URL query parameter with the one from the config.yml
 func CompareGordonToken(c echo.Context, a *server.App) error {
+	logger.Debug("Starting token comparison")
 	configToken, err := a.Config.GetToken()
 	if err != nil {
+		logger.Error("Error retrieving token from config", "error", err)
 		return err
 	}
 
+	logger.Debug("Comparing tokens", "url_token_exists", urlToken != "", "config_token_exists", configToken != "")
 	if urlToken != configToken {
+		logger.Warn("Token mismatch or empty", "url_token_empty", urlToken == "")
 		return fmt.Errorf("token is empty or not valid")
 	}
 
+	logger.Debug("Token validation successful")
 	return nil
 }
 
@@ -113,7 +117,7 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 	}
 
 	logger.Info("Checking if session exists in DB")
-	sessionExists, err := queries.CheckDBSessionExists(a, sessionID)
+	sessionExists, err := queries.CheckDBSessionExists(a.DB, sessionID)
 	if err != nil {
 		logger.Info("Error checking if session exists", "error", err)
 		return fmt.Errorf("could not check if session exists: %w", err)
@@ -126,7 +130,7 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 
 	logger.Info("Getting the expiration time of the session")
 	currentTime := time.Now()
-	sessionExpiration, err := queries.GetSessionExpiration(a, accountID, sessionID, currentTime)
+	sessionExpiration, err := queries.GetSessionExpiration(a.DB, accountID, sessionID, currentTime)
 	if err != nil {
 		logger.Info("Error getting session expiration", "error", err)
 		return fmt.Errorf("could not get session expiration: %w", err)
@@ -137,9 +141,9 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 		return initiateGithubOAuthFlow(c, a)
 	}
 
-	logger.Info("Extending session expiration time by 30 minutes")
-	newExpirationTime := currentTime.Add(30 * time.Minute)
-	err = queries.ExtendSessionExpiration(a, accountID, sessionID, newExpirationTime)
+	logger.Info("Extending session expiration time by 24 hours")
+	newExpirationTime := currentTime.Add(time.Hour * 24)
+	err = queries.ExtendSessionExpiration(a.DB, accountID, sessionID, newExpirationTime)
 	if err != nil {
 		logger.Info("Error extending session expiration", "error", err)
 		return fmt.Errorf("could not extend session expiration: %w", err)
@@ -173,12 +177,15 @@ type Sessions struct {
 
 // OAuthCallback handles the callback response from Github OAuth
 func OAuthCallback(c echo.Context, a *server.App) error {
+	logger.Info("Starting OAuth callback handler")
 	redirectPath := a.Config.Admin.Path
 
 	accessToken, encodedState, err := parseQueryParams(c)
 	if err != nil {
+		logger.Error("Failed to parse query params from OAuth callback", "error", err)
 		return c.String(http.StatusBadRequest, err.Error())
 	}
+	logger.Debug("Parsed access token and state from query params", "token_length", len(accessToken), "encoded_state", encodedState)
 
 	// update the struct with the new access token
 	a.DBTables.Sessions.AccessToken = accessToken
@@ -187,30 +194,42 @@ func OAuthCallback(c echo.Context, a *server.App) error {
 	redirectDomain := a.GenerateOauthCallbackURL()
 	encodedRedirectDomain := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
 	if encodedState != encodedRedirectDomain {
+		logger.Error("Invalid state parameter", "expected", encodedRedirectDomain, "received", encodedState)
 		return c.String(http.StatusBadRequest, "invalid state parameter")
 	}
+	logger.Debug("State parameter validation successful")
 
 	sess, err := getSession(c)
 	if err != nil {
+		logger.Error("Failed to get session", "error", err)
 		return err
 	}
+	logger.Debug("Session retrieved successfully")
 
 	browserInfo := c.Request().UserAgent()
 	userInfo, err := githubGetUserDetails(c)
 	if err != nil {
+		logger.Error("Failed to get GitHub user details", "error", err)
 		return err
 	}
+	logger.Debug("Retrieved GitHub user details", "login", userInfo.Login, "email_count", len(userInfo.Emails))
 
-	_, err = handleUser(c, a, accessToken, browserInfo, userInfo)
+	user, accountID, session, err := handleUser(c, a, accessToken, browserInfo, userInfo)
 	if err != nil {
+		logger.Error("Failed to handle user", "error", err)
 		return err
 	}
+	logger.Info("User handled successfully", "user_id", user.ID, "account_id", accountID)
 
-	err = setSessionValues(c, sess, a.DBTables.Account.ID, a.DBTables.Sessions.Expires, a.DBTables.Sessions.ID)
+	logger.Debug("Before setting session values", "account_id", accountID, "session", session)
+	err = setSessionValues(c, sess, accountID, session)
 	if err != nil {
+		logger.Error("Failed to set session values", "error", err)
 		return err
 	}
+	logger.Info("Session values set successfully")
 
+	logger.Info("OAuth callback successful, redirecting to", "path", redirectPath)
 	return c.Redirect(http.StatusFound, redirectPath)
 }
 
@@ -237,70 +256,98 @@ func getSession(c echo.Context) (*sessions.Session, error) {
 }
 
 // handleUser handles the user creation or update
-func handleUser(c echo.Context, a *server.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
-	userExists, err := queries.CheckDBUserExists(a)
+func handleUser(c echo.Context, a *server.App, accessToken, browserInfo string, userInfo *db.GithubUserInfo) (*db.User, string, *db.Sessions, error) {
+	logger.Debug("Starting handleUser function", "github_login", userInfo.Login, "github_email", userInfo.Emails[0])
+	userExists, err := queries.CheckDBUserExists(a.DB)
 	if err != nil {
-		return nil, fmt.Errorf("could not check if user exists: %w", err)
+		logger.Error("Error checking if user exists", "error", err)
+		return nil, "", nil, fmt.Errorf("could not check if user exists: %w", err)
 	}
+
+	logger.Debug("User exists check result", "user_exists", userExists)
 
 	if !userExists {
 		// if it is a new user creation we compare the gordon token
+		logger.Debug("No user exists, attempting to create new user")
 		err := CompareGordonToken(c, a)
 		if err != nil {
-			return nil, echo.NewHTTPError(http.StatusUnauthorized, "Token is empty or not valid")
+			logger.Error("Token comparison failed", "error", err)
+			return nil, "", nil, echo.NewHTTPError(http.StatusUnauthorized, "Token is empty or not valid")
 		}
+		logger.Debug("Token comparison successful, proceeding with user creation")
 
-		return createUser(a, accessToken, browserInfo, userInfo)
+		user, accountID, session, err := createUser(a, accessToken, browserInfo, userInfo)
+		if err != nil {
+			logger.Error("Failed to create user", "error", err)
+			return nil, "", nil, err
+		}
+		logger.Info("Successfully created new user", "user_id", user.ID, "user_name", user.Name, "account_id", accountID)
+		return user, accountID, session, nil
 	}
 
 	if userExists {
 		// if it is an existing user we compare the login and email to see if it is the same user
-		isGoodUser, err := queries.CheckDBUserIsGood(a, userInfo)
+		logger.Debug("User exists, checking if GitHub info matches existing user")
+		_, isGoodUser, err := queries.CheckDBUserIsGood(a.DB, userInfo)
 		if err != nil {
-			return nil, fmt.Errorf("could not check if user is good: %w", err)
+			logger.Error("Error checking if user is good", "error", err)
+			return nil, "", nil, fmt.Errorf("could not check if user is good: %w", err)
 		}
 
+		logger.Debug("User check result", "is_good_user", isGoodUser)
+
 		if !isGoodUser {
-			return nil, echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized user")
+			logger.Warn("Unauthorized user", "github_login", userInfo.Login)
+			return nil, "", nil, echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized user")
 		}
 
 		if isGoodUser {
 			// Update the user
-			updatedUser, err := updateUser(a, accessToken, browserInfo, userInfo)
+			logger.Debug("User is authorized, updating session")
+			updatedUser, accountID, session, err := updateUser(a, accessToken, browserInfo, userInfo)
 			if err != nil {
-				return nil, fmt.Errorf("could not update user: %w", err)
+				logger.Error("Could not update user", "error", err)
+				return nil, "", nil, fmt.Errorf("could not update user: %w", err)
 			}
-			return updatedUser, nil
+			logger.Info("Successfully updated user session", "user_id", updatedUser.ID, "account_id", accountID)
+			return updatedUser, accountID, session, nil
 		}
 	}
 
-	return nil, fmt.Errorf("could not handle user")
+	logger.Error("Could not handle user - reached end of function without returning")
+	return nil, "", nil, fmt.Errorf("could not handle user")
 }
 
 // createUser creates a new user in the database
-func createUser(a *server.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
-	err := queries.CreateUser(a, accessToken, browserInfo, userInfo)
+func createUser(a *server.App, accessToken, browserInfo string, userInfo *db.GithubUserInfo) (*db.User, string, *db.Sessions, error) {
+	logger.Debug("Starting createUser function", "github_login", userInfo.Login)
+	user, accountID, session, err := queries.CreateUser(a.DB, accessToken, browserInfo, userInfo)
 	if err != nil {
-		return nil, fmt.Errorf("could not create user: %w", err)
+		logger.Error("Failed to create user in database", "error", err)
+		return nil, "", nil, fmt.Errorf("could not create user: %w", err)
 	}
-	return &a.DBTables.User, nil
+	logger.Info("User created successfully", "user_id", user.ID, "name", user.Name, "account_id", accountID)
+	return user, accountID, session, nil
 }
 
 // updateUser updates an existing user in the database
-func updateUser(a *server.App, accessToken, browserInfo string, userInfo *queries.GithubUserInfo) (*db.User, error) {
-	user, err := queries.UpdateUser(a, accessToken, browserInfo, userInfo)
+func updateUser(a *server.App, accessToken, browserInfo string, userInfo *db.GithubUserInfo) (*db.User, string, *db.Sessions, error) {
+	user, accountID, session, err := queries.UpdateUser(a.DB, accessToken, browserInfo, userInfo)
 	if err != nil {
-		return nil, fmt.Errorf("could not update user: %w", err)
+		logger.Error("Could not update user", "error", err)
+		return nil, "", nil, fmt.Errorf("could not update user: %w", err)
 	}
-	return user, nil
+	logger.Info("User updated successfully", "user_id", user.ID, "account_id", accountID)
+	return user, accountID, session, nil
 }
 
 // setSessionValues sets the session values for the user
-func setSessionValues(c echo.Context, sess *sessions.Session, accountID string, expires string, sessionID string) error {
+func setSessionValues(c echo.Context, sess *sessions.Session, accountID string, session *db.Sessions) error {
 	sess.Values["authenticated"] = true
 	sess.Values["accountID"] = accountID
-	sess.Values["expires"] = expires
-	sess.Values["sessionID"] = sessionID
+	sess.Values["expires"] = session.Expires
+	sess.Values["sessionID"] = session.ID
+	sess.Values["isOnline"] = session.IsOnline
 
 	if err := sess.Save(c.Request(), c.Response()); err != nil {
 		return fmt.Errorf("could not save session: %w", err)
@@ -341,7 +388,7 @@ func fetchGithubAPI(url string, authHeader string, result interface{}) error {
 }
 
 // githubGetUserDetails gets the user details from the Github API using the access token
-func githubGetUserDetails(c echo.Context) (userInfo *queries.GithubUserInfo, err error) {
+func githubGetUserDetails(c echo.Context) (userInfo *db.GithubUserInfo, err error) {
 	accessToken := c.QueryParam("access_token")
 
 	// Fetch user info

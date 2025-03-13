@@ -1,16 +1,15 @@
 {
   "devDependencies": {
     "@catppuccin/tailwindcss": "^0.1.6",
-    "prettier": "^3.3.3",
+    "prettier": "^3.5.3",
     "prettier-plugin-tailwindcss": "^0.5.14",
-    "tailwindcss": "^3.4.14"
+    "tailwindcss": "^3.4.17"
   },
   "scripts": {
     "build:css": "tailwindcss build src/styles.css -o dist/styles.css",
     "dev:css": "tailwindcss -i internal/webui/public/assets/css/custom.css -o internal/webui/public/assets/css/tailwind.css --watch"
   },
   "dependencies": {
-    "caniuse-lite": "^1.0.30001669",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.7"
   }
 }

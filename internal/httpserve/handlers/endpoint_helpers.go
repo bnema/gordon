@@ -107,9 +107,10 @@ func GetInfos(c echo.Context, a *server.App) error {
 // validateAndPrepareDeployPayload validates and prepares the deploy payload
 func validateAndPrepareDeployPayload(c echo.Context) (*common.DeployPayload, error) {
 	payload := &common.DeployPayload{
-		Port:         c.Request().Header.Get("X-Ports"),
-		ImageName:    c.Request().Header.Get("X-Image-Name"),
-		TargetDomain: c.Request().Header.Get("X-Target-Domain"),
+		Port:           c.Request().Header.Get("X-Ports"),
+		ImageName:      c.Request().Header.Get("X-Image-Name"),
+		TargetDomain:   c.Request().Header.Get("X-Target-Domain"),
+		SkipProxySetup: c.Request().Header.Get("X-Skip-Proxy-Setup") == "true",
 	}
 
 	if payload.ImageName == "" {
@@ -255,6 +256,9 @@ func normalizePort(port string) string {
 func normalizeTargetDomain(domain string) string {
 	// First, remove any leading dot from the domain
 	domain = strings.TrimPrefix(domain, ".")
+
+	// If domain contains a dot prefix in the middle (like "example.com/.domain.tld"), fix it
+	domain = strings.ReplaceAll(domain, "/.", "/")
 
 	// Then check if we need to add the protocol
 	if !regexp.MustCompile(`^https?:\/\/`).MatchString(domain) {
