@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"io/fs"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/db"
+	"github.com/charmbracelet/log"
 	_ "github.com/joho/godotenv/autoload"
 )
 
@@ -22,6 +24,8 @@ type App struct {
 	Config          common.Config
 	DB              *sql.DB
 	DBTables        DBTables
+	DBSaveCtx       context.Context    // Context for the auto-save routine
+	DBSaveCancel    context.CancelFunc // Cancel function for the auto-save routine
 	StartTime       time.Time
 }
 
@@ -81,4 +85,18 @@ func (a *App) GetUptime() string {
 // GetVersion returns the version of the app
 func (a *App) GetVersionstring() string {
 	return fmt.Sprint(a.Config.Build.BuildVersion)
+}
+
+// Shutdown performs a clean shutdown of the application
+func (a *App) Shutdown() error {
+	log.Info("Initiating application shutdown")
+
+	// Close the database connection
+	if err := CloseDB(a); err != nil {
+		log.Error("Error during database shutdown", "error", err)
+		return err
+	}
+
+	log.Info("Application shutdown completed successfully")
+	return nil
 }

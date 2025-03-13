@@ -1,16 +1,14 @@
 package queries
 
 import (
+	"database/sql"
 	"fmt"
-
-	"github.com/bnema/gordon/internal/server"
 )
 
 // InspectInMemoryDB inspects the in-memory database. (for debug purpose)
-func InspectInMemoryDB(a *server.App) error {
-	memDb := a.DB
+func InspectInMemoryDB(database *sql.DB) error {
 	// Query the sqlite_master table to get a list of all tables
-	rows, err := memDb.Query("SELECT name FROM sqlite_master WHERE type='table'")
+	rows, err := database.Query("SELECT name FROM sqlite_master WHERE type='table'")
 	fmt.Println("rows", rows)
 	if err != nil {
 		return err
@@ -36,7 +34,7 @@ func InspectInMemoryDB(a *server.App) error {
 		fmt.Println(table)
 	}
 	// Print the content of the users table
-	userRows, err := memDb.Query("SELECT * FROM user")
+	userRows, err := database.Query("SELECT * FROM user")
 	if err != nil {
 		return err
 	}
@@ -54,10 +52,11 @@ func InspectInMemoryDB(a *server.App) error {
 	}
 
 	// Print the content of accounts table
-	accountRows, err := memDb.Query("SELECT * FROM account")
+	accountRows, err := database.Query("SELECT * FROM account")
 	if err != nil {
 		return err
 	}
+	defer accountRows.Close()
 
 	fmt.Println("\nContent of the 'account' table:")
 	for accountRows.Next() {

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -69,8 +70,7 @@ func (p *Proxy) setupCertManager() {
 	adminDomain := p.app.GetConfig().Http.FullDomain()
 	rootDomain := p.app.GetConfig().Http.Domain
 
-	// Use a more permissive hostpolicy that logs unknown domains rather than rejecting them
-	// This helps debug certificate acquisition issues
+	// Use a stricter hostpolicy that only allows domains in our routes
 	certManager.HostPolicy = func(_ context.Context, host string) error {
 		// Always allow the admin domain and root domain
 		if host == adminDomain || host == rootDomain {
@@ -85,16 +85,14 @@ func (p *Proxy) setupCertManager() {
 			return nil
 		}
 
-		// Log the attempt but still allow it - this helps debug
-		// certificate acquisition issues during development
-		logger.Warn("Unknown host in certificate request",
+		// Log the attempt and reject it
+		logger.Warn("Rejecting certificate request for unknown host",
 			"host", host,
 			"adminDomain", adminDomain,
-			"allowed", "yes")
+			"allowed", "no")
 
-		// Allow unknown domains temporarily to help diagnose issues
-		// Change this to return an error in production for stricter security
-		return nil
+		// Return an error for domains not in our routes
+		return fmt.Errorf("host %q not configured in routes", host)
 	}
 
 	// Generate a fallback self-signed certificate for the admin domain
@@ -153,47 +151,224 @@ func (p *Proxy) checkCertificateInCache(domain string) bool {
 		return false
 	}
 
-	// Parse the certificate to check its validity
-	block, _ := pem.Decode(certData)
-	if block == nil || block.Type != "CERTIFICATE" {
-		logger.Warn("Invalid certificate data in cache",
-			"domain", domain)
-		return false
-	}
-
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		logger.Warn("Failed to parse certificate from cache",
-			"domain", domain,
-			"error", err)
-		return false
-	}
-
-	// Check if the certificate is still valid
-	now := time.Now()
-	if now.After(cert.NotAfter) || now.Before(cert.NotBefore) {
-		logger.Info("Certificate in cache has expired or is not yet valid",
-			"domain", domain,
-			"not_before", cert.NotBefore,
-			"not_after", cert.NotAfter)
-		return false
-	}
-
-	// Check if the certificate is about to expire (within 30 days)
-	if now.Add(30 * 24 * time.Hour).After(cert.NotAfter) {
-		logger.Info("Certificate in cache is valid but will expire soon",
-			"domain", domain,
-			"expires_in", cert.NotAfter.Sub(now).Hours()/24,
-			"days")
-		// Return false to trigger renewal if it's about to expire
+	// Validate the certificate data
+	validCert, expiresInDays := isCertificateValid(certData, domain)
+	if !validCert {
 		return false
 	}
 
 	logger.Info("Valid certificate found in cache",
 		"domain", domain,
-		"expires_in", cert.NotAfter.Sub(now).Hours()/24,
+		"expires_in", expiresInDays,
 		"days")
 	return true
+}
+
+// isCertificateValid checks if a certificate PEM data is valid and not expired
+// Returns whether it's valid and how many days until expiration
+func isCertificateValid(certData []byte, domain string) (bool, float64) {
+	// Parse the certificate to check its validity
+	block, _ := pem.Decode(certData)
+	if block == nil || block.Type != "CERTIFICATE" {
+		logger.Warn("Invalid certificate data",
+			"domain", domain)
+		return false, 0
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		logger.Warn("Failed to parse certificate",
+			"domain", domain,
+			"error", err)
+		return false, 0
+	}
+
+	// Check if the certificate is still valid
+	now := time.Now()
+	if now.After(cert.NotAfter) || now.Before(cert.NotBefore) {
+		logger.Info("Certificate has expired or is not yet valid",
+			"domain", domain,
+			"not_before", cert.NotBefore,
+			"not_after", cert.NotAfter)
+		return false, 0
+	}
+
+	// Calculate days until expiration
+	expiresInDays := cert.NotAfter.Sub(now).Hours() / 24
+
+	// Check if the certificate is about to expire (within 30 days)
+	if expiresInDays < 30 {
+		logger.Info("Certificate is valid but will expire soon",
+			"domain", domain,
+			"expires_in", expiresInDays,
+			"days")
+		// Return false to trigger renewal if it's about to expire
+		return false, expiresInDays
+	}
+
+	return true, expiresInDays
+}
+
+// checkCertificateInFilesystem checks if valid certificate files exist directly in the certs directory
+// This is useful when the database record might be missing but valid certificate files exist
+func (p *Proxy) checkCertificateInFilesystem(domain string) bool {
+	if p.certManager == nil {
+		return false
+	}
+
+	// Get the certificate directory path
+	certDir := p.config.CertDir
+	if certDir == "" {
+		certDir = p.app.GetConfig().General.StorageDir + "/certs"
+	}
+
+	// Check for the certificate file and its corresponding private key
+	certFile := filepath.Join(certDir, domain)
+	keyFile := filepath.Join(certDir, domain+"+rsa")
+
+	// Check if both files exist
+	if _, err := os.Stat(certFile); os.IsNotExist(err) {
+		logger.Debug("Certificate file not found in filesystem",
+			"domain", domain,
+			"file", certFile)
+		return false
+	}
+
+	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+		logger.Debug("Certificate key file not found in filesystem",
+			"domain", domain,
+			"file", keyFile)
+		return false
+	}
+
+	// If we found both files, validate the certificate
+	certData, err := os.ReadFile(certFile)
+	if err != nil {
+		logger.Warn("Failed to read certificate file",
+			"domain", domain,
+			"file", certFile,
+			"error", err)
+		return false
+	}
+
+	// Validate the certificate data
+	validCert, expiresInDays := isCertificateValid(certData, domain)
+	if !validCert {
+		return false
+	}
+
+	logger.Info("Valid certificate found in filesystem",
+		"domain", domain,
+		"expires_in", expiresInDays,
+		"days",
+		"not_in_cache", true)
+
+	// Log some debug information about the certificate files
+	certFileInfo, _ := os.Stat(certFile)
+	keyFileInfo, _ := os.Stat(keyFile)
+	logger.Debug("Certificate file details",
+		"domain", domain,
+		"cert_file", certFile,
+		"cert_size", certFileInfo.Size(),
+		"cert_modified", certFileInfo.ModTime(),
+		"key_file", keyFile,
+		"key_size", keyFileInfo.Size(),
+		"key_modified", keyFileInfo.ModTime())
+
+	return true
+}
+
+// testCertificateWithTLSConnection attempts to establish a TLS connection to verify the certificate
+// This is an optional verification step for certificates we find on the filesystem
+func testCertificateWithTLSConnection(domain string, port string) bool {
+	if port == "" {
+		port = "443" // Default HTTPS port
+	}
+
+	// Create a connection with a short timeout
+	dialer := &net.Dialer{
+		Timeout: 5 * time.Second,
+	}
+
+	// Connect to the server
+	logger.Debug("Testing certificate by establishing TLS connection",
+		"domain", domain,
+		"address", domain+":"+port)
+
+	conn, err := tls.DialWithDialer(dialer, "tcp", domain+":"+port, &tls.Config{
+		// Skip verification since we're testing if the connection works
+		// not validating the cert chain (which might use custom CA)
+		InsecureSkipVerify: true,
+		ServerName:         domain,
+	})
+
+	if err != nil {
+		logger.Debug("TLS connection test failed",
+			"domain", domain,
+			"error", err)
+		return false
+	}
+
+	// Close the connection when done
+	defer conn.Close()
+
+	// Verify the connection state
+	state := conn.ConnectionState()
+
+	// Check if the certificate is valid
+	for _, cert := range state.PeerCertificates {
+		// Verify the certificate is valid for the domain
+		if err := cert.VerifyHostname(domain); err != nil {
+			logger.Debug("Certificate hostname verification failed",
+				"domain", domain,
+				"cert_domains", cert.DNSNames,
+				"error", err)
+			continue
+		}
+
+		// Check certificate expiration
+		now := time.Now()
+		if now.After(cert.NotAfter) || now.Before(cert.NotBefore) {
+			logger.Debug("Certificate from TLS connection is not valid",
+				"domain", domain,
+				"not_before", cert.NotBefore,
+				"not_after", cert.NotAfter)
+			continue
+		}
+
+		// We found a valid certificate
+		expiresInDays := cert.NotAfter.Sub(now).Hours() / 24
+		logger.Info("Successfully verified certificate via TLS connection",
+			"domain", domain,
+			"expires_in", expiresInDays,
+			"days",
+			"issuer", cert.Issuer.CommonName)
+		return true
+	}
+
+	logger.Debug("No valid certificate found from TLS connection",
+		"domain", domain)
+	return false
+}
+
+// checkCertificateExists is a helper function that checks if a valid certificate exists
+// either in the cache or the filesystem. Returns true if a valid certificate is found.
+func (p *Proxy) checkCertificateExists(domain string) bool {
+	// First check in the cache
+	if p.checkCertificateInCache(domain) {
+		logger.Debug("Certificate exists in cache", "domain", domain)
+		return true
+	}
+
+	// If not in cache, check the filesystem
+	if p.checkCertificateInFilesystem(domain) {
+		logger.Debug("Certificate exists in filesystem but not in cache", "domain", domain)
+		return true
+	}
+
+	// No valid certificate found
+	logger.Debug("No valid certificate found for domain", "domain", domain)
+	return false
 }
 
 // requestAdminCertificate preemptively requests a Let's Encrypt certificate
@@ -230,11 +405,30 @@ func (p *Proxy) requestAdminCertificate() {
 		"domain", adminDomain,
 		"ips", ipStrings)
 
-	// Check if we already have a valid certificate in the cache
-	if p.checkCertificateInCache(adminDomain) {
-		logger.Info("Using existing certificate from cache",
+	// Check if we already have a valid certificate (cache or filesystem)
+	if p.checkCertificateExists(adminDomain) {
+		logger.Info("Using existing certificate",
 			"domain", adminDomain,
 			"action", "skipping Let's Encrypt request to avoid rate limits")
+
+		// If a valid certificate was found in the filesystem but not in the cache,
+		// try to verify it with a TLS connection (non-blocking)
+		go func() {
+			// Only attempt TLS verification if certificate was found in filesystem
+			// and not in cache (to avoid unnecessary check for cached certificates)
+			if !p.checkCertificateInCache(adminDomain) && p.checkCertificateInFilesystem(adminDomain) {
+				if testCertificateWithTLSConnection(adminDomain, p.config.Port) {
+					logger.Debug("Certificate verification succeeded via TLS connection",
+						"domain", adminDomain,
+						"note", "Certificate is trusted and working properly")
+				} else {
+					logger.Warn("Certificate verification via TLS connection failed",
+						"domain", adminDomain,
+						"note", "Certificate exists but might not be trusted or properly configured")
+				}
+			}
+		}()
+
 		return
 	}
 
@@ -365,11 +559,30 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 		"domain", domain,
 		"ips", ipStrings)
 
-	// Check if we already have a valid certificate in the cache
-	if p.checkCertificateInCache(domain) {
-		logger.Info("Using existing certificate from cache",
+	// Check if we already have a valid certificate (cache or filesystem)
+	if p.checkCertificateExists(domain) {
+		logger.Info("Using existing certificate",
 			"domain", domain,
 			"action", "skipping Let's Encrypt request to avoid rate limits")
+
+		// If a valid certificate was found in the filesystem but not in the cache,
+		// try to verify it with a TLS connection (non-blocking)
+		go func() {
+			// Only attempt TLS verification if certificate was found in filesystem
+			// and not in cache (to avoid unnecessary check for cached certificates)
+			if !p.checkCertificateInCache(domain) && p.checkCertificateInFilesystem(domain) {
+				if testCertificateWithTLSConnection(domain, p.config.Port) {
+					logger.Debug("Certificate verification succeeded via TLS connection",
+						"domain", domain,
+						"note", "Certificate is trusted and working properly")
+				} else {
+					logger.Warn("Certificate verification via TLS connection failed",
+						"domain", domain,
+						"note", "Certificate exists but might not be trusted or properly configured")
+				}
+			}
+		}()
+
 		return
 	}
 

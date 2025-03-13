@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bnema/gordon/internal/db/queries"
+	"github.com/bnema/gordon/internal/db"
 	"github.com/charmbracelet/log"
 )
 
@@ -15,7 +15,7 @@ type TokenCache struct {
 type cacheEntry struct {
 	token      string
 	expiration time.Time
-	githubUser *queries.GithubUserInfo
+	githubUser *db.GithubUserInfo
 }
 
 var (
@@ -33,7 +33,7 @@ func GetTokenCache() *TokenCache {
 }
 
 // GetWithUser retrieves a token and GitHub user info from the cache
-func (tc *TokenCache) GetWithUser(key string) (string, *queries.GithubUserInfo, bool) {
+func (tc *TokenCache) GetWithUser(key string) (string, *db.GithubUserInfo, bool) {
 	if value, ok := tc.cache.Load(key); ok {
 		entry := value.(cacheEntry)
 		if time.Now().Before(entry.expiration) {
@@ -63,7 +63,7 @@ func (tc *TokenCache) Get(key string) (bool, bool) {
 }
 
 // SetWithUser stores a token and GitHub user info in the cache
-func (tc *TokenCache) SetWithUser(key string, token string, user *queries.GithubUserInfo, duration time.Duration) {
+func (tc *TokenCache) SetWithUser(key string, token string, user *db.GithubUserInfo, duration time.Duration) {
 	tc.cache.Store(key, cacheEntry{
 		token:      token,
 		githubUser: user,

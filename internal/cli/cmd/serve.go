@@ -9,6 +9,7 @@ import (
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/spf13/cobra"
 )
 
@@ -40,6 +41,11 @@ func NewServeCommand(a *server.App) *cobra.Command {
 			a.Config.Http.Port = port
 			err := handler.StartServer(a, port)
 			if err != nil {
+				logger.Error("Server error", "error", err)
+				// Ensure database is closed on error
+				if err := a.Shutdown(); err != nil {
+					logger.Error("Error during shutdown after server error", "error", err)
+				}
 				panic(err)
 			}
 		},
