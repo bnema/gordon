@@ -1,7 +1,17 @@
 <div class="flex flex-col p-4" hx-ext="response-targets">
-  <h1 class="text-lg md:text-xl font-bold text-gordonmascot-hblue">
-    {{index .Lang "manager" "content" "h1-containers"}}
-  </h1>
+  <div class="flex justify-between items-center mb-1">
+    <h1 class="text-lg md:text-xl font-bold text-gordonmascot-hblue">
+      {{index .Lang "manager" "content" "h1-containers"}}
+    </h1>
+    <button
+      id="refresh-containers-button"
+      class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
+      title="Refresh container list"
+    >
+      <span class="iconf text-xl align-middle">󰑐 </span>
+      Refresh
+    </button>
+  </div>
   <table class="p-4 border-t-2 table-auto">
     <thead>
       <tr class="text-center text-gray-400">
@@ -50,7 +60,6 @@
             hx-swap="innerHTML"
             class="py-2 px-4"
             data-active="false"
-            _="on click toggle between .visible and .hidden on #actionResponse-{{.ID}}"
           >
             <span title="Edit the container" class="iconf text-2xl text-blue-600 hover:text-gordonmascot-hblue">󱩽</span>
           </button>

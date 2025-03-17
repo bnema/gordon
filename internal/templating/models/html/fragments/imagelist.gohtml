@@ -2,21 +2,29 @@
   <!-- Upload button aligned right of Images -->
   <div class="flex justify-between items-center mb-1">
     <h1 class="text-lg md:text-xl font-bold text-gordonmascot-hblue">Images</h1>
-    <button
-      class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
-      id="upload-button"
-      hx-get="/htmx/upload-image"
-      hx-target="#upload-image"
-      hx-swap="innerHTML"
-      title="Manually upload a .tar container image"
-      _="on click toggle between .visible and .hidden on #upload-image then add .hidden to .create-container"
-    >
-
-      <span class="iconf text-xl align-middle">󰭾 </span>
-      Upload
-    </button>
+    <div class="flex space-x-2">
+      <button
+        id="refresh-images-button"
+        class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
+        title="Refresh image list"
+      >
+        <span class="iconf text-xl align-middle">󰑐 </span>
+        Refresh
+      </button>
+      <button
+        class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
+        id="upload-button"
+        hx-get="/htmx/upload-image"
+        hx-target="#upload-image"
+        hx-swap="innerHTML"
+        title="Manually upload a .tar container image"
+      >
+        <span class="iconf text-xl align-middle">󰭾 </span>
+        Upload
+      </button>
+    </div>
   </div>
-      <div id="upload-image"></div>
+  <div id="upload-image"></div>
   <table class="p-4 border-t-2">
     <tbody>
       {{
@@ -39,9 +47,8 @@
             hx-target-*="#error-message-div-{{.ShortID}}"
             hx-swap="innerHTML"
             class="py-2 px-4"
-            _="on click toggle between .visible and .hidden on #create-container-{{.ShortID}} then add .hidden to #upload-image"
           >
-            <span title="Deploy a container using this image" class="iconf text-xl text-blue-600 hover:text-gordonmascot-hblue"></span>
+            <span title="Deploy a container using this image" class="iconf text-xl text-blue-600 hover:text-gordonmascot-hblue">󰆍</span>
           </button>
 
           <button
