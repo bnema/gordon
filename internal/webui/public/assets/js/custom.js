@@ -12,14 +12,14 @@ function initializeVersionCheck() {
         "%VERSION%",
         fetchedVersionNumber,
       );
-      console.log(updateStr);
+      console.debug("Update available:", updateStr);
       const updateElement = document.getElementById("update-available");
       updateElement.title = updateStr;
       updateElement.toggleAttribute("hidden", false);
       updateElement.classList.remove("hidden"); // Remove the Tailwind `hidden` class
       updateElement.classList.add("block"); // Add the Tailwind `block` class
     } else {
-      console.log(
+      console.debug(
         "No new version. Current version is up-to-date:",
         currentVersion,
       );
@@ -36,12 +36,12 @@ function initializeVersionCheck() {
   const init = () => {
     const currentVersionElement = document.getElementById("actual-version");
     if (!currentVersionElement) {
-      console.log("Error: #actual-version element not found.");
+      console.debug("Error: #actual-version element not found.");
       return;
     }
     const currentVersion = currentVersionElement.textContent.trim();
     if (!currentVersion) {
-      console.log("Dev mode detected, skipping version check.");
+      console.debug("Dev mode detected, skipping version check.");
       return;
     }
     fetchVersionInfo(currentVersion);
@@ -50,4 +50,279 @@ function initializeVersionCheck() {
   init();
 }
 
-document.addEventListener("DOMContentLoaded", initializeVersionCheck);
+// Initialize jQuery functionality for the admin dashboard
+function initializeAdminDashboard() {
+  // Handle edit button clicks to toggle action response visibility
+  $(document).on('click', '[id^="edit-button-"]', function() {
+    const id = $(this).attr('id').replace('edit-button-', '');
+    const actionResponse = $(`#actionResponse-${id}`);
+    
+    console.debug(`Toggle visibility for actionResponse-${id}`);
+    actionResponse.toggleClass('visible hidden');
+    
+    // Update the active state
+    const isActive = $(this).data('active') === true;
+    $(this).data('active', !isActive);
+  });
+  
+  // Handle upload button click
+  $(document).on('click', '#upload-button', function() {
+    console.debug('Upload button clicked');
+    $('#upload-image').toggleClass('visible hidden');
+    $('.create-container').addClass('hidden');
+  });
+  
+  // Handle add button click
+  $(document).on('click', '[id^="add-button-img-"]', function() {
+    const id = $(this).attr('id').replace('add-button-img-', '');
+    console.debug(`Add button clicked for ${id}`);
+    $(`#create-container-${id}`).toggleClass('visible hidden');
+    $('#upload-image').addClass('hidden');
+  });
+  
+  // Handle upload submit button
+  $(document).on('click', '#upload-submit-button', function() {
+    console.debug('Upload submit button clicked');
+    $(this).prop('disabled', true);
+    
+    // Re-enable the button after the HTMX request completes
+    document.body.addEventListener('htmx:afterOnLoad', function() {
+      $('#upload-submit-button').prop('disabled', false);
+    }, { once: true });
+  });
+  
+  // Handle success message without page reload
+  $(document).on('htmx:afterSwap', function(event) {
+    if ($(event.detail.target).find('#success').length > 0) {
+      console.debug('Success message detected');
+      
+      // Instead of reloading the page, refresh the container list
+      refreshContainerList();
+      
+      // Animate and remove the success message
+      setTimeout(function() {
+        $('#success').animate({ opacity: 0 }, 1000, function() {
+          $(this).remove();
+        });
+      }, 1000);
+    }
+  });
+  
+  // Handle refresh buttons
+  $(document).on('click', '#refresh-containers-button', function() {
+    console.debug('Refreshing container list manually');
+    refreshContainerList();
+  });
+  
+  $(document).on('click', '#refresh-images-button', function() {
+    console.debug('Refreshing image list manually');
+    refreshImageList();
+  });
+  
+  // Setup HTMX event listeners to avoid page reloads
+  setupHtmxEventListeners();
+  
+  // Initialize notification system
+  initializeNotifications();
+  
+  console.debug("Admin dashboard jQuery functionality initialized");
+}
+
+// Function to initialize notification system
+function initializeNotifications() {
+  // Create notification container if it doesn't exist
+  if ($('#notification-container').length === 0) {
+    $('body').append('<div id="notification-container" class="fixed top-4 right-4 z-50 flex flex-col space-y-2"></div>');
+  }
+  
+  console.debug("Notification system initialized");
+}
+
+// Function to show a notification
+function showNotification(message, type = 'success', duration = 3000) {
+  const notificationId = 'notification-' + Date.now();
+  const bgColor = type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500';
+  
+  const notification = $(`
+    <div id="${notificationId}" class="${bgColor} text-white p-3 rounded-md shadow-md opacity-0 transition-opacity duration-300">
+      ${message}
+    </div>
+  `);
+  
+  $('#notification-container').append(notification);
+  
+  // Fade in
+  setTimeout(() => {
+    $(`#${notificationId}`).css('opacity', '1');
+  }, 10);
+  
+  // Fade out and remove after duration
+  setTimeout(() => {
+    $(`#${notificationId}`).css('opacity', '0');
+    setTimeout(() => {
+      $(`#${notificationId}`).remove();
+    }, 300);
+  }, duration);
+  
+  console.debug(`Notification shown: ${message}`);
+}
+
+// Function to refresh container list without page reload
+function refreshContainerList() {
+  console.debug("Refreshing container list");
+  
+  // Show loading indicator
+  const containerManager = $('#container-manager');
+  const originalContent = containerManager.html();
+  containerManager.html('<div class="text-center p-4"><span class="iconf text-3xl animate-spin inline-block">󰑐</span> Loading containers...</div>');
+  
+  $.ajax({
+    url: '/htmx/container-manager',
+    type: 'GET',
+    success: function(data) {
+      $('#container-manager').html(data);
+      console.debug("Container list refreshed successfully");
+    },
+    error: function(xhr, status, error) {
+      console.error("Error refreshing container list:", error);
+      // Restore original content on error
+      containerManager.html(originalContent);
+    }
+  });
+}
+
+// Function to refresh image list without page reload
+function refreshImageList() {
+  console.debug("Refreshing image list");
+  
+  // Show loading indicator
+  const imageManager = $('#image-manager');
+  const originalContent = imageManager.html();
+  imageManager.html('<div class="text-center p-4"><span class="iconf text-3xl animate-spin inline-block">󰑐</span> Loading images...</div>');
+  
+  $.ajax({
+    url: '/htmx/image-manager',
+    type: 'GET',
+    success: function(data) {
+      $('#image-manager').html(data);
+      console.debug("Image list refreshed successfully");
+    },
+    error: function(xhr, status, error) {
+      console.error("Error refreshing image list:", error);
+      // Restore original content on error
+      imageManager.html(originalContent);
+    }
+  });
+}
+
+// Setup HTMX event listeners to avoid page reloads
+function setupHtmxEventListeners() {
+  // Listen for container actions (start, stop, edit, delete)
+  document.body.addEventListener('htmx:afterOnLoad', function(event) {
+    const targetId = event.detail.target.id;
+    console.debug(`HTMX afterOnLoad event for target: ${targetId}`);
+    
+    // Check if the target is an action response
+    if (targetId && targetId.startsWith('actionResponse-')) {
+      console.debug(`Action completed for ${targetId}`);
+      
+      // Show notification instead of reloading
+      const responseText = $(event.detail.target).text().trim();
+      if (responseText.includes('Success')) {
+        showNotification('Action completed successfully', 'success');
+      } else if (responseText) {
+        showNotification(responseText, 'info');
+      }
+      
+      // Refresh container list after a short delay
+      setTimeout(refreshContainerList, 500);
+    }
+    
+    // Check if the target is the image manager (after upload)
+    if (targetId === 'image-manager') {
+      console.debug('Image manager updated');
+      
+      // Show notification for successful upload
+      if (event.detail.xhr.responseText.includes('Success')) {
+        showNotification('Image uploaded successfully', 'success');
+      }
+      
+      // Hide the upload form after successful upload
+      $('#upload-image').addClass('hidden');
+    }
+    
+    // Check if this is a container creation form response
+    if (targetId && targetId.includes('create-container-')) {
+      console.debug(`Container creation form response for ${targetId}`);
+      const responseText = $(event.detail.target).text().trim();
+      
+      // If the response contains success message
+      if (responseText.includes('Success') || responseText.includes('Container created successfully')) {
+        showNotification('Container created successfully', 'success');
+        
+        // Hide the container creation form
+        $(event.detail.target).closest('.create-container').addClass('hidden');
+        
+        // Refresh container list to show the new container
+        setTimeout(refreshContainerList, 500);
+      }
+    }
+  });
+  
+  // Listen for form submissions
+  $(document).on('submit', 'form[hx-post^="/htmx/create-container/"]', function(event) {
+    console.debug('Container creation form submitted');
+    
+    // Disable the submit button to prevent double submission
+    $('#create-container-submit').prop('disabled', true);
+    
+    // We don't prevent default because HTMX needs to handle the form submission
+  });
+  
+  // Listen for container creation
+  $(document).on('htmx:afterRequest', function(event) {
+    const path = event.detail.pathInfo.requestPath;
+    console.debug(`HTMX afterRequest for path: ${path}`);
+    
+    // If this was a container creation request
+    if (path && path.includes('/htmx/create-container/')) {
+      console.debug('Container creation request completed');
+      
+      // Re-enable the submit button
+      $('#create-container-submit').prop('disabled', false);
+      
+      // Check if the response indicates success
+      const responseText = event.detail.xhr.responseText;
+      if (responseText && (responseText.includes('Success') || responseText.includes('Container created successfully'))) {
+        showNotification('Container created successfully', 'success');
+        
+        // Refresh container list after creation
+        setTimeout(refreshContainerList, 500);
+      } else if (responseText && responseText.includes('Error')) {
+        showNotification('Error creating container: ' + responseText, 'error');
+      }
+    }
+    
+    // If this was an image deletion request
+    if (path && path.includes('/htmx/image-manager/delete/')) {
+      console.debug('Image deletion request completed');
+      
+      // Show notification
+      showNotification('Image deleted successfully', 'success');
+      
+      // Refresh image list after deletion
+      setTimeout(refreshImageList, 500);
+    }
+  });
+  
+  // Handle errors
+  $(document).on('htmx:responseError', function(event) {
+    console.error('HTMX response error:', event.detail.error);
+    showNotification('Error: ' + (event.detail.error || 'Unknown error occurred'), 'error');
+  });
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+  initializeVersionCheck();
+  initializeAdminDashboard();
+});

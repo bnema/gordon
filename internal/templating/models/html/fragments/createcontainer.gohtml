@@ -5,8 +5,11 @@
     {{if .ErrorMessage}}
     <div class="text-red-500">{{.ErrorMessage}}</div>
     {{ end }}
-    <form action="/create-container/{{.ShortID}}" method="post" hx-post="/htmx/create-container/{{.ShortID}}"
-      hx-swap="innerHTML" hx-target-*="#error-message-create-container-{{.ShortID}}">
+    <form id="create-container-form-{{.ShortID}}" action="/create-container/{{.ShortID}}" method="post" 
+      hx-post="/htmx/create-container/{{.ShortID}}"
+      hx-swap="innerHTML" 
+      hx-target="#create-container-{{.ShortID}}"
+      hx-target-*="#error-message-create-container-{{.ShortID}}">
       <!-- Image Name -->
       <div class="flex space-x-4 pb-4">
         <div class="w-1/3">
