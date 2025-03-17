@@ -91,8 +91,21 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 		if len(domains) == 0 {
 			// Check if there is a proxy route for this container
 			var found bool
-			for domain, routeInfo := range p.routes {
-				if routeInfo.ContainerID == containerID {
+			
+			// Query the database for routes with this container ID
+			rows, err := p.dbQueryWithRetry(p.queries.FindRoutesByContainerID, containerID)
+			if err != nil {
+				logger.Error("Failed to query database for routes by container ID", "error", err)
+			} else {
+				defer rows.Close()
+				
+				// Collect the domain names
+				for rows.Next() {
+					var domain string
+					if err := rows.Scan(&domain); err != nil {
+						logger.Error("Failed to scan row", "error", err)
+						continue
+					}
 					domains = append(domains, domain)
 					found = true
 				}

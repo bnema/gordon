@@ -63,8 +63,12 @@
           </div>
           {{ end }}
           
-          <!-- Token Input Form -->
+          {{ if .NeedsToken }}
+          <!-- Token Input Form (Only shown for first-time setup) -->
           <div class="mt-4 w-full max-w-md">
+            <div class="mb-4 text-center">
+              <p class="text-sm text-gray-600">First-time setup: Please enter the admin token generated on the server.</p>
+            </div>
             <form action="login/submit-token" method="POST" class="mb-4">
               <div class="mb-2">
                 <label for="token" class="block text-sm font-medium text-gray-700">Admin Token</label>
@@ -86,6 +90,7 @@
             </form>
             <div class="text-center text-sm text-gray-500 mb-4">- OR -</div>
           </div>
+          {{ end }}
           
           <!-- GitHub OAuth -->
           <div

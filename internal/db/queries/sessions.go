@@ -3,6 +3,8 @@ package queries
 import (
 	"database/sql"
 	"fmt"
+	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/bnema/gordon/internal/db"
@@ -38,7 +40,7 @@ func NewSessionQueries() *SessionQueries {
 // CreateDBSession creates a session for the user.
 func CreateDBSession(database *sql.DB, browserInfo string, accessToken string, accountID string) (*db.Sessions, error) {
 	expireTime := time.Now().Add(time.Hour * 24).Format(time.RFC3339)
-	sessionID := generateUUID()
+	sessionID := GenerateUUID()
 	
 	_, err := database.Exec(
 		NewSessionQueries().InsertSession,
@@ -235,4 +237,135 @@ func InvalidateDBSession(database *sql.DB, sessionID string) error {
 	
 	logger.Debug("Session invalidated", "sessionID", sessionID)
 	return nil
+}
+
+// CreateSimpleUser creates a simple user with just a username
+func CreateSimpleUser(database *sql.DB, username string) (*db.User, string, error) {
+	// Generate UUIDs for user and account
+	userID := GenerateUUID()
+	accountID := GenerateUUID()
+	
+	// Begin a transaction
+	tx, err := database.Begin()
+	if err != nil {
+		logger.Error("Failed to begin transaction", "error", err)
+		return nil, "", err
+	}
+	
+	// Create the user
+	_, err = tx.Exec(
+		"INSERT INTO user (id, name) VALUES (?, ?)",
+		userID, username,
+	)
+	if err != nil {
+		tx.Rollback()
+		logger.Error("Failed to create user", "error", err)
+		return nil, "", err
+	}
+	
+	// Create the account
+	_, err = tx.Exec(
+		"INSERT INTO account (id, user_id) VALUES (?, ?)",
+		accountID, userID,
+	)
+	if err != nil {
+		tx.Rollback()
+		logger.Error("Failed to create account", "error", err)
+		return nil, "", err
+	}
+	
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		logger.Error("Failed to commit transaction", "error", err)
+		return nil, "", err
+	}
+	
+	// Create a User struct to return
+	user := &db.User{
+		ID:   userID,
+		Name: username,
+	}
+	
+	logger.Debug("Simple user created in database", "user_id", userID, "account_id", accountID)
+	return user, accountID, nil
+}
+
+// GetFirstUserAccountID gets the account ID of the first user in the database
+func GetFirstUserAccountID(database *sql.DB) (string, error) {
+	var accountID string
+	
+	err := database.QueryRow(
+		"SELECT account.id FROM account INNER JOIN user ON account.user_id = user.id LIMIT 1",
+	).Scan(&accountID)
+	
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("no users found")
+		}
+		logger.Error("Failed to get first user account ID", "error", err)
+		return "", err
+	}
+	
+	return accountID, nil
+}
+
+// GetUserByAccountID gets a user by their account ID
+func GetUserByAccountID(database *sql.DB, accountID string) (*db.User, error) {
+	var user db.User
+	
+	err := database.QueryRow(
+		"SELECT user.id, user.name, user.email FROM user INNER JOIN account ON user.id = account.user_id WHERE account.id = ?",
+		accountID,
+	).Scan(&user.ID, &user.Name, &user.Email)
+	
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("no user found with account ID: %s", accountID)
+		}
+		logger.Error("Failed to get user by account ID", "error", err, "account_id", accountID)
+		return nil, err
+	}
+	
+	return &user, nil
+}
+
+// GetSessionByID gets a session by its ID
+func GetSessionByID(database *sql.DB, sessionID string) (*db.Sessions, error) {
+	var session db.Sessions
+	
+	err := database.QueryRow(
+		"SELECT id, account_id, browser_info, access_token, expires, is_online FROM sessions WHERE id = ?",
+		sessionID,
+	).Scan(&session.ID, &session.AccountID, &session.BrowserInfo, &session.AccessToken, &session.Expires, &session.IsOnline)
+	
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("no session found with ID: %s", sessionID)
+		}
+		logger.Error("Failed to get session by ID", "error", err, "session_id", sessionID)
+		return nil, err
+	}
+	
+	return &session, nil
+}
+
+// GenerateUUID generates a UUID string
+func GenerateUUID() string {
+	return fmt.Sprintf("%s-%s-%s-%s-%s",
+		randomHex(8),
+		randomHex(4),
+		randomHex(4),
+		randomHex(4),
+		randomHex(12),
+	)
+}
+
+// randomHex generates a random hex string of the specified length
+func randomHex(length int) string {
+	bytes := make([]byte, length/2)
+	if _, err := rand.Read(bytes); err != nil {
+		logger.Error("Failed to generate random bytes", "error", err)
+		return strings.Repeat("0", length)
+	}
+	return fmt.Sprintf("%x", bytes)
 }

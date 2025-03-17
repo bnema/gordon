@@ -6,11 +6,6 @@ import (
 	"github.com/bnema/gordon/internal/db"
 )
 
-// dbExecWithRetry performs a database execution with retry logic for handling locked database
-func (p *Proxy) dbExecWithRetry(query string, args ...interface{}) (sql.Result, error) {
-	return db.ExecWithRetry(p.app.GetDB(), query, args...)
-}
-
 // dbQueryWithRetry performs a database query with retry logic for handling locked database
 func (p *Proxy) dbQueryWithRetry(query string, args ...interface{}) (*sql.Rows, error) {
 	return db.QueryWithRetry(p.app.GetDB(), query, args...)

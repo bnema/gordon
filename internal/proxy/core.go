@@ -38,6 +38,15 @@ type Proxy struct {
 	fallbackCert  *tls.Certificate // Fallback self-signed certificate
 	serverStarted bool
 
+	// Fields for throttling blacklist logs
+	lastBlockedLog   time.Time
+	blockedIPCounter map[string]int
+	blockedIPCountMu sync.Mutex
+
+	// Firewall-like memory of recently blocked IPs for quick rejection
+	recentlyBlocked   map[string]time.Time
+	recentlyBlockedMu sync.RWMutex
+
 	// Flag to track specific domain certificate operations
 	processingSpecificDomain bool
 
@@ -118,6 +127,9 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 		httpServer:              httpServer,
 		routes:                  routes,
 		serverStarted:           false,
+		blockedIPCounter:        make(map[string]int),
+		lastBlockedLog:          time.Time{}, // Zero time
+		recentlyBlocked:         make(map[string]time.Time),
 		gordonContainerID:       ourContainerID,
 		shutdown:                make(chan struct{}),
 		recentContainers:        make(map[string]time.Time),

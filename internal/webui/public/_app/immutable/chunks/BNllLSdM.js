@@ -1,0 +1,1 @@
+import{v as c,E as s,w as i,x as h,y as r,z as p,A as d}from"./IamVTuIH.js";function u(t,f,o){r&&p();var n=t,a,e;c(()=>{a!==(a=f())&&(e&&(h(e),e=null),a&&(e=i(()=>o(n,a))))},s),r&&(n=d)}export{u as c};

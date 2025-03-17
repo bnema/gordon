@@ -76,9 +76,16 @@ func RenderLoginPage(c echo.Context, a *server.App) error {
 	// Check for error message
 	errorMsg := c.QueryParam("error")
 
+	// Check if the database is empty (no users)
+	_, err := queries.GetFirstUserAccountID(a.DB)
+	isEmpty := err != nil
+
+	logger.Debug("Rendering login page", "dbEmpty", isEmpty, "error", errorMsg)
+
 	data := map[string]interface{}{
-		"Title": "Login",
-		"Error": errorMsg,
+		"Title":      "Login",
+		"Error":      errorMsg,
+		"NeedsToken": isEmpty,
 	}
 
 	// Navigate inside the fs.FS to get the template
@@ -457,4 +464,19 @@ func DeviceTokenRequest(c echo.Context, a *server.App) error {
 	}
 
 	return c.JSON(http.StatusOK, tokenResp)
+}
+
+// CheckDBEmpty checks if the database is empty (no users)
+func CheckDBEmpty(c echo.Context, a *server.App) error {
+	// Try to get the first user account ID
+	_, err := queries.GetFirstUserAccountID(a.DB)
+
+	// If there's an error, it means there are no users in the database
+	isEmpty := err != nil
+
+	logger.Debug("Checking if database is empty", "isEmpty", isEmpty)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"isEmpty": isEmpty,
+	})
 }

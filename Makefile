@@ -20,13 +20,19 @@ LDFLAGS := -s -w \
 ARCHS := amd64 arm64
 
 # Phony targets
-.PHONY: all build build-push clean
+.PHONY: all build build-push clean build-admin-ui
 
 # Default target
 all: build
 
+# Build SvelteKit admin UI
+build-admin-ui:
+	@echo "Building SvelteKit admin UI..."
+	@cd admin-ui && bun install && bun run build
+	@echo "SvelteKit admin UI built successfully"
+
 # Build binaries
-build:
+build: build-admin-ui
 	@echo "Building Go binaries..."
 	@mkdir -p $(DIST_DIR)
 	@rm -f $(DIST_DIR)/*

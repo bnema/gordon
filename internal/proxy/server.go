@@ -98,50 +98,40 @@ func (p *Proxy) Start() error {
 		"network", networkName,
 		"ip", containerIP)
 
-	// Check if admin route exists in database and create/update it
-	err = p.AddRoute(
-		adminDomain,
-		containerName,
-		containerIP,
-		p.app.GetConfig().Http.Port,
-		"http", // Gordon server uses HTTP internally
-		"/",
-	)
-
-	if err != nil {
-		logger.Error("Failed to add admin route to database",
-			"error", err,
-			"domain", adminDomain)
-	} else {
-		logger.Info("Ensured admin domain route is in database",
-			"domain", adminDomain,
-			"container", containerName,
-			"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
-	}
-
 	p.mu.Lock()
-	// Only add if it doesn't already exist in memory
-	if _, exists := p.routes[adminDomain]; !exists {
-		p.routes[adminDomain] = &ProxyRouteInfo{
-			Domain:        adminDomain,
-			ContainerIP:   containerIP,
-			ContainerPort: p.app.GetConfig().Http.Port,
-			ContainerID:   containerName, // Use auto-detected container name
-			Protocol:      "http",        // Gordon server uses HTTP internally
-			Path:          "/",
-			Active:        true,
+	// Check if admin route exists in the database
+	adminRoute, err := p.GetRouteByDomainName(adminDomain)
+	if err != nil {
+		logger.Error("Error checking for admin route", "error", err)
+	}
+	
+	// Only add if it doesn't already exist
+	if adminRoute == nil {
+		// Add the admin route to the database
+		err := p.AddRoute(
+			adminDomain,
+			containerName,
+			containerIP,
+			p.app.GetConfig().Http.Port,
+			"http", // Gordon server uses HTTP internally
+			"/",
+		)
+		
+		if err != nil {
+			logger.Error("Failed to add admin route to database", "error", err)
+		} else {
+			logger.Info("Added special route for admin domain",
+				"domain", adminDomain,
+				"container", containerName,
+				"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
 		}
-		logger.Info("Added special route for admin domain",
-			"domain", adminDomain,
-			"container", containerName,
-			"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
 	} else {
 		logger.Debug("Admin domain route already exists",
 			"domain", adminDomain,
 			"route", fmt.Sprintf("%s://%s:%s",
-				p.routes[adminDomain].Protocol,
-				p.routes[adminDomain].ContainerIP,
-				p.routes[adminDomain].ContainerPort))
+				adminRoute.Protocol,
+				adminRoute.ContainerIP,
+				adminRoute.ContainerPort))
 	}
 	p.mu.Unlock()
 
@@ -334,10 +324,15 @@ func (p *Proxy) TestAdminConnectionLater() {
 	adminDomain := p.app.GetConfig().Http.FullDomain()
 
 	p.mu.RLock()
-	route, exists := p.routes[adminDomain]
+	route, err := p.GetRouteByDomainName(adminDomain)
 	p.mu.RUnlock()
 
-	if !exists {
+	if err != nil {
+		logger.Error("Error checking for admin route", "error", err)
+		return
+	}
+
+	if route == nil {
 		logger.Warn("Admin route not found")
 		return
 	}
@@ -346,11 +341,20 @@ func (p *Proxy) TestAdminConnectionLater() {
 	testedIP := p.testAdminConnection(route.ContainerIP, p.app.GetConfig().Http.Port)
 	if testedIP != route.ContainerIP {
 		p.mu.Lock()
-		if r, ok := p.routes[adminDomain]; ok {
-			r.ContainerIP = testedIP
-			logger.Info("Updated admin route with working connection",
-				"domain", adminDomain,
-				"ip", testedIP)
+		adminRoute, err := p.GetRouteByDomainName(adminDomain)
+		if err != nil {
+			logger.Error("Error getting admin route", "error", err)
+		} else if adminRoute != nil {
+			// Update the route in the database
+			err := p.ForceUpdateRouteIP(adminDomain, testedIP)
+			if err != nil {
+				logger.Error("Failed to update admin route IP", "error", err)
+			} else {
+				logger.Info("Updated admin route with working connection",
+					"domain", adminDomain,
+					"old_ip", route.ContainerIP,
+					"new_ip", testedIP)
+			}
 		}
 		p.mu.Unlock()
 	}

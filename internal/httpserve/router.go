@@ -24,6 +24,7 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 	AdminPath := a.Config.Admin.Path
 	bindLoginRoute(e, a, AdminPath)
 	bindAPIEndpoints(e, a)
+	bindLogLevelEndpoint(e, a)
 
 	// SetCommonDataMiddleware will pass data to the renderer
 	e.Use(middleware.SetCommonDataMiddleware(a))
@@ -53,12 +54,27 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 	apiGroup := e.Group("/api")
 
+	// Config endpoint for SvelteKit frontend (not protected)
+	apiGroup.GET("/config", func(c echo.Context) error {
+		return handlers.GetConfigAPI(c, a)
+	})
+
 	// Device flow endpoints (without RequireToken middleware)
 	apiGroup.POST("/device/code", func(c echo.Context) error {
 		return handlers.DeviceCodeRequest(c, a)
 	})
 	apiGroup.POST("/device/token", func(c echo.Context) error {
 		return handlers.DeviceTokenRequest(c, a)
+	})
+
+	// Auth endpoint for SvelteKit frontend (not protected)
+	apiGroup.POST("/auth/login", func(c echo.Context) error {
+		return handlers.LoginAPI(c, a)
+	})
+
+	// Check if database is empty (used for first-time setup)
+	apiGroup.GET("/admin/auth/check-db-empty", func(c echo.Context) error {
+		return handlers.CheckDBEmpty(c, a)
 	})
 
 	// Other API endpoints that require a token
@@ -90,6 +106,54 @@ func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 	protectedApiGroup.POST("/remove", func(c echo.Context) error {
 		return handlers.PostContainerRemove(c, a)
 	})
+
+	// Admin API endpoints for SvelteKit frontend (protected with session-based authentication)
+	adminApiGroup := apiGroup.Group("/admin", middleware.RequireLogin(a))
+
+	// Authentication endpoints
+	adminApiGroup.POST("/auth/session", func(c echo.Context) error {
+		return handlers.CreateSessionAPI(c, a)
+	})
+	adminApiGroup.POST("/auth/session/validate", func(c echo.Context) error {
+		return handlers.ValidateSessionAPI(c, a)
+	})
+	adminApiGroup.POST("/auth/session/invalidate", func(c echo.Context) error {
+		return handlers.InvalidateSessionAPI(c, a)
+	})
+
+	// Container endpoints
+	adminApiGroup.GET("/containers", func(c echo.Context) error {
+		return handlers.ContainerManagerAPI(c, a)
+	})
+	adminApiGroup.GET("/containers/:ID", func(c echo.Context) error {
+		return handlers.ContainerInfoAPI(c, a)
+	})
+	adminApiGroup.POST("/containers/:ID/stop", func(c echo.Context) error {
+		return handlers.ContainerStopAPI(c, a)
+	})
+	adminApiGroup.POST("/containers/:ID/start", func(c echo.Context) error {
+		return handlers.ContainerStartAPI(c, a)
+	})
+	adminApiGroup.DELETE("/containers/:ID", func(c echo.Context) error {
+		return handlers.ContainerDeleteAPI(c, a)
+	})
+	adminApiGroup.GET("/containers/:ID/edit", func(c echo.Context) error {
+		return handlers.ContainerEditGetAPI(c, a)
+	})
+	adminApiGroup.PUT("/containers/:ID", func(c echo.Context) error {
+		return handlers.ContainerEditPostAPI(c, a)
+	})
+
+	// Image endpoints
+	adminApiGroup.GET("/images", func(c echo.Context) error {
+		return handlers.ImageManagerAPI(c, a)
+	})
+	adminApiGroup.DELETE("/images/:ID", func(c echo.Context) error {
+		return handlers.ImageDeleteAPI(c, a)
+	})
+	adminApiGroup.POST("/images/upload", func(c echo.Context) error {
+		return handlers.UploadImageAPI(c, a)
+	})
 }
 
 // bindStaticRoute bind static path
@@ -101,9 +165,17 @@ func bindStaticRoute(e *echo.Echo, a *server.App, path string) {
 
 // bindLoginRoute binds all login routes
 func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
+	// Serve the SvelteKit login page - handle both with and without trailing slash
 	e.GET(adminPath+"/login", func(c echo.Context) error {
-		return handlers.RenderLoginPage(c, a)
+		return handlers.StaticRoute(c, a)
 	})
+
+	// Add explicit handler for trailing slash to prevent 301 redirects
+	e.GET(adminPath+"/login/", func(c echo.Context) error {
+		return handlers.StaticRoute(c, a)
+	})
+
+	// Keep the API endpoints for login functionality
 	e.POST(adminPath+"/login/submit-token", func(c echo.Context) error {
 		return handlers.HandleTokenSubmission(c, a)
 	})
@@ -121,17 +193,6 @@ func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
 // bindAdminRoute binds all admin routes
 func bindAdminRoute(e *echo.Echo, a *server.App, adminPath string) {
 	adminGroup := e.Group(adminPath)
-	// Since login is behind the admin path, we cannot use group middleware
-	adminGroup.GET("", func(c echo.Context) error {
-		return c.Redirect(302, adminPath+"/manager")
-	}, middleware.RequireLogin(a))
-
-	adminGroup.GET("/manager", func(c echo.Context) error {
-		return handlers.AdminManagerRoute(c, a)
-	}, middleware.RequireLogin(a))
-	adminGroup.GET("/cc/:ID", func(c echo.Context) error {
-		return handlers.CreateContainerFullGET(c, a)
-	}, middleware.RequireLogin(a))
 
 	// Add a ping endpoint for health checks and connection testing
 	// This endpoint doesn't require authentication since it's used by the proxy for connection testing
@@ -142,6 +203,12 @@ func bindAdminRoute(e *echo.Echo, a *server.App, adminPath string) {
 			"message": "Gordon admin server is running",
 		})
 	})
+
+	// For all other admin routes, serve the SvelteKit app
+	// This will let the SvelteKit router handle the routing
+	adminGroup.GET("/*", func(c echo.Context) error {
+		return handlers.StaticRoute(c, a)
+	}, middleware.RequireLogin(a))
 }
 
 // bindHTMXEndpoints binds all HTMX endpoints
@@ -201,5 +268,14 @@ func bindHTMXEndpoints(e *echo.Echo, a *server.App) {
 	// Create container
 	htmxGroup.POST("/create-container/:ID", func(c echo.Context) error {
 		return handlers.CreateContainerPOST(c, a)
+	})
+}
+
+// Add a new endpoint to get the current log level
+func bindLogLevelEndpoint(e *echo.Echo, a *server.App) {
+	e.GET("/api/config/log-level", func(c echo.Context) error {
+		return c.JSON(200, map[string]string{
+			"level": a.Config.General.LogLevel,
+		})
 	})
 }

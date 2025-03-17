@@ -1,0 +1,73 @@
+import { redirect } from '@sveltejs/kit';
+import type { RequestHandler } from '@sveltejs/kit';
+import { apiService } from '$lib/services/api-service.server';
+
+/**
+ * Interface for the OAuth callback response from the Go backend
+ */
+interface OAuthCallbackResponse {
+  accountID: string;
+  sessionID: string;
+  expires: string;
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+    login: string;
+    avatarURL: string;
+    profileURL: string;
+  };
+}
+
+/**
+ * GET handler for the OAuth callback
+ * This will handle the callback from the GitHub OAuth flow
+ */
+export const GET: RequestHandler = async ({ url, cookies }) => {
+  try {
+    // Get the code and state from the query parameters
+    const code = url.searchParams.get('code');
+    const state = url.searchParams.get('state');
+    
+    if (!code || !state) {
+      return redirect(302, '/admin/login?error=oauth_missing_params');
+    }
+    
+    try {
+      // Use the apiService to handle the OAuth callback
+      const authResponse = await apiService.fetch<OAuthCallbackResponse>(`/admin/login/oauth/callback?code=${code}&state=${state}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      // The Go backend should set the session cookie, but we'll also handle it here
+      // for compatibility with our SvelteKit auth system
+      
+      // Create a session token
+      const sessionToken = apiService.auth.generateSessionToken();
+      
+      // Get the user ID from the auth response or use a fallback
+      const userId = authResponse.accountID || 'github-user-1';
+      
+      // Create a session using the apiService
+      const session = await apiService.auth.createSession(sessionToken, userId);
+      
+      // Set the session cookie
+      cookies.set(apiService.sessionCookieName, sessionToken, {
+        path: '/',
+        expires: session.expiresAt
+      });
+      
+      // Redirect to the admin dashboard
+      return redirect(302, '/admin/manager');
+    } catch (error) {
+      console.error('OAuth API call failed:', error);
+      return redirect(302, '/admin/login?error=oauth_failed');
+    }
+  } catch (error) {
+    console.error('OAuth callback error:', error);
+    return redirect(302, '/admin/login?error=oauth_error');
+  }
+};

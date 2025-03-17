@@ -77,11 +77,13 @@ func (p *Proxy) setupCertManager() {
 			return nil
 		}
 
-		// For other domains, check if they are in our routes
-		p.mu.RLock()
-		defer p.mu.RUnlock()
-
-		if _, ok := p.routes[host]; ok {
+		// Check if route exists in the database
+		route, err := p.GetRouteByDomainName(host)
+		if err != nil {
+			logger.Error("Error checking route for certificate request", "error", err)
+		}
+		
+		if route != nil {
 			return nil
 		}
 

@@ -436,7 +436,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 
 		// Get the correct container IP with retry logic
 		newContainerIP := GetContainerIP(a, containerID, containerName)
-		if newContainerIP != containerIP && newContainerIP != containerName {
+		if newContainerIP != containerIP {
 			log.Info("Updated container IP for proxy route",
 				"containerID", containerID,
 				"old_ip", containerIP,
@@ -551,12 +551,17 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 		now := time.Now().Format(time.RFC3339)
 		_, err = tx.Exec(`
 			UPDATE proxy_route 
-			SET container_id = ?, container_ip = ?, container_port = ?, updated_at = ? 
+			SET container_id = ?, container_ip = ?, container_port = ?, active = 1, updated_at = ? 
 			WHERE id = ?`,
 			containerID, containerIP, containerPort, now, existingRouteID)
 
 		if err != nil {
 			return fmt.Errorf("failed to update proxy route: %w", err)
+		}
+
+		// Commit transaction
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
 		}
 
 		log.Info("Updated proxy route for recreated container",
@@ -566,48 +571,37 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 			"container_ip", containerIP,
 			"container_port", containerPort)
 
-		// Commit transaction
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("failed to commit transaction: %w", err)
-		}
-
 		// Verify the database update with a direct query
 		var updatedContainerIP string
+		var isActive int
 		err = a.GetDB().QueryRow(`
-			SELECT container_ip 
+			SELECT container_ip, active 
 			FROM proxy_route 
-			WHERE id = ?`, existingRouteID).Scan(&updatedContainerIP)
+			WHERE id = ?`, existingRouteID).Scan(&updatedContainerIP, &isActive)
 
-		if err == nil && updatedContainerIP != containerIP {
-			log.Warn("Database verification failed: container IP mismatch",
-				"expected", containerIP,
-				"actual", updatedContainerIP)
-		} else {
-			log.Debug("Database verification passed: container IP updated correctly",
-				"container_ip", containerIP)
-		}
-
-		// Reload the routes
-		if err := p.Reload(); err != nil {
-			return fmt.Errorf("failed to reload routes: %w", err)
-		}
-
-		// Final verification: check that the route was loaded with the correct IP
-		routes := p.GetRoutes()
-		if route, exists := routes[cleanDomain]; exists {
-			if route.ContainerIP != containerIP {
-				log.Warn("Route reload verification failed: container IP mismatch",
-					"domain", cleanDomain,
+		if err == nil {
+			if updatedContainerIP != containerIP {
+				log.Warn("Database verification failed: container IP mismatch",
 					"expected", containerIP,
-					"actual", route.ContainerIP)
+					"actual", updatedContainerIP)
 			} else {
-				log.Debug("Route reload verification passed: container IP loaded correctly",
-					"domain", cleanDomain,
+				log.Debug("Database verification passed: container IP updated correctly",
 					"container_ip", containerIP)
 			}
+			
+			if isActive != 1 {
+				log.Warn("Route is not active after update, forcing activation",
+					"domain", cleanDomain)
+				
+				// Force activate the route
+				_, err = a.GetDB().Exec(`UPDATE proxy_route SET active = 1 WHERE id = ?`, existingRouteID)
+				if err != nil {
+					log.Error("Failed to force activate route", "error", err)
+				} else {
+					log.Info("Forced route activation", "domain", cleanDomain)
+				}
+			}
 		}
-
-		return nil
 	} else if err != sql.ErrNoRows {
 		// A database error other than "not found"
 		return fmt.Errorf("failed to query database for existing route: %w", err)
@@ -619,9 +613,66 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 		return fmt.Errorf("failed to add proxy route: %w", err)
 	}
 
-	// Register this container to prevent immediate recreation logic
-	// and avoid database locking conflicts
-	p.RegisterNewlyCreatedContainer(containerID)
+	// Reload the routes
+	if err := p.Reload(); err != nil {
+		return fmt.Errorf("failed to reload routes: %w", err)
+	}
+
+	// Force reload of the proxy routes
+	log.Info("Forcing reload of proxy routes")
+	if err := p.Reload(); err != nil {
+		log.Error("Failed to reload proxy routes", "error", err)
+	}
+
+	// Final verification: check that the route was loaded with the correct IP
+	routes := p.GetRoutes()
+	if route, exists := routes[cleanDomain]; exists {
+		if route.ContainerIP != containerIP {
+			log.Warn("Route reload verification failed: container IP mismatch",
+				"domain", cleanDomain,
+				"expected", containerIP,
+				"actual", route.ContainerIP)
+			
+			// Force update the route in memory if needed
+			route.ContainerIP = containerIP
+			route.Active = true
+			log.Info("Forced in-memory route update", "domain", cleanDomain)
+		} else {
+			log.Info("Route reload verification passed: container IP loaded correctly",
+				"domain", cleanDomain,
+				"container_ip", containerIP)
+		}
+		
+		if !route.Active {
+			log.Warn("Route is not active after reload, forcing activation", 
+				"domain", cleanDomain)
+			
+			// Force activate the route in memory
+			route.Active = true
+			log.Info("Forced in-memory route activation", "domain", cleanDomain)
+			
+			// Try one more reload
+			if err := p.Reload(); err != nil {
+				log.Error("Failed to reload proxy routes after activation", "error", err)
+			}
+		} else {
+			log.Info("Route is active after reload", "domain", cleanDomain)
+		}
+	} else {
+		log.Warn("Route not found after reload", 
+			"domain", cleanDomain)
+		
+		// Log all active routes for debugging
+		log.Info("Current active routes after reload")
+		for domain, r := range routes {
+			log.Debug("Route", "domain", domain, "containerIP", r.ContainerIP, "active", r.Active)
+		}
+		
+		// Try one more explicit reload
+		if err := p.Reload(); err != nil {
+			log.Error("Failed to reload proxy routes", "error", err)
+		}
+	}
 
 	log.Debug("Added proxy route",
 		"domain", targetDomain,

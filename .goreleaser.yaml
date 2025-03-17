@@ -3,6 +3,7 @@ version: 2
 before:
   hooks:
     - go mod tidy
+    - cd admin-ui && bun install && bun run build
 
 release:
   draft: true

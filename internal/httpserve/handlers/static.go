@@ -42,8 +42,21 @@ func StaticRoute(c echo.Context, a *server.App) error {
 		c.Response().Header().Set("Cache-Control", "no-cache")
 	}
 
+	// Get the requested path
+	path := c.Request().URL.Path
+
 	// Convert fs.FS to http.FileSystem
 	httpFS := http.FS(a.PublicFS)
+
+	// Check if the file exists
+	f, err := httpFS.Open(path)
+	if err != nil {
+		// If the file doesn't exist, serve index.html for client-side routing
+		// This is necessary for SvelteKit's client-side routing to work
+		c.Request().URL.Path = "/index.html"
+	} else {
+		f.Close()
+	}
 
 	// Use custom file system wrapper to disable directory listing
 	noDirFS := NoDirFileSys{httpFS}

@@ -34,8 +34,8 @@ func ValidateSessionAndUser(c echo.Context, a *server.App) error {
 
 	accountExists, err := IsAccountIDInDB(a, accountID)
 	if err != nil || !accountExists {
-		logger.Warn("Account does not exist")
-		return fmt.Errorf("account does not exist")
+		logger.Warn("Account does not exist", "accountID", accountID)
+		return fmt.Errorf("account with ID '%s' does not exist in the database", accountID)
 	}
 
 	sessionExpired, err := IsSessionExpiredInDB(a, accountID, sessionID)
@@ -71,8 +71,8 @@ func IsSessionExpiredInDB(a *server.App, accountID string, sessionID string) (bo
 func IsAccountIDInDB(a *server.App, accountID string) (bool, error) {
 	accountExists, err := queries.CheckDBAccountExists(a.DB, accountID)
 	if err != nil {
-		logger.Warn("Failed to check account existence", "error", err)
-		return false, err
+		logger.Warn("Failed to check account existence", "accountID", accountID, "error", err)
+		return false, fmt.Errorf("failed to verify account existence for ID '%s': %w", accountID, err)
 	}
 
 	logger.Debug("Account existence check", "accountID", accountID, "exists", accountExists)
