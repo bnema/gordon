@@ -27,21 +27,9 @@
       <input
         type="submit"
         value="Upload"
-        _="on click toggle @disabled until htmx:afterOnLoad"
+        id="upload-submit-button"
         class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded" />
     </form>
     <div id="error-message-div" class="text-red-500"></div>
   </div>
 </div>
-<script>
-  document.body.addEventListener("htmx:afterOnLoad", function (event) {
-    if (
-      event.target.id === "image-manager" &&
-      event.detail.xhr.responseText === "Success"
-    ) {
-      setTimeout(function () {
-        location.reload();
-      }, 3000);
-    }
-  });
-</script>

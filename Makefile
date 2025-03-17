@@ -20,13 +20,13 @@ LDFLAGS := -s -w \
 ARCHS := amd64 arm64
 
 # Phony targets
-.PHONY: all build build-push clean
+.PHONY: all build build-push clean build-css
 
 # Default target
 all: build
 
 # Build binaries
-build:
+build: build-css
 	@echo "Building Go binaries..."
 	@mkdir -p $(DIST_DIR)
 	@rm -f $(DIST_DIR)/*
@@ -35,8 +35,14 @@ build:
 	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/gordon-linux-arm64 ./main.go
 	@echo "Go binaries built successfully"
 
+# Build CSS with tailwindcss
+build-css:
+	@echo "Building CSS with tailwindcss..."
+	@bun run build:css
+	@echo "CSS built successfully"
+
 # Build and push Docker images
-build-push: build
+build-push: build-css build
 	@echo "Cleaning up dangling images..."
 	@$(ENGINE) image prune -f
 

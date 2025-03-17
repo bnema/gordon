@@ -1,9 +1,19 @@
 (function(){
 
+    if (htmx.version && !htmx.version.startsWith("1.")) {
+        console.warn("WARNING: You are using an htmx 1 extension with htmx " + htmx.version +
+            ".  It is recommended that you move to the version of this extension found on https://htmx.org/extensions")
+    }
+
     /** @type {import("../htmx").HtmxInternalApi} */
     var api;
 
     var attrPrefix = 'hx-target-';
+
+    // IE11 doesn't support string.startsWith
+    function startsWith(str, prefix) {
+        return str.substring(0, prefix.length) === prefix
+    }
 
     /**
      * @param {HTMLElement} elt
@@ -38,6 +48,9 @@
             '***',
             'xxx',
         ];
+        if (startsWith(respCode, '4') || startsWith(respCode, '5')) {
+            attrPossibilities.push('error');
+        }
 
         for (var i = 0; i < attrPossibilities.length; i++) {
             var attr = attrPrefix + attrPossibilities[i];
@@ -50,7 +63,7 @@
                 }
             }
         }
-        
+
         return null;
     }
 
