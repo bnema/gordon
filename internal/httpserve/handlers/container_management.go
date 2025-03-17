@@ -98,7 +98,12 @@ func renderHTML(c echo.Context, a *server.App, path, templateName string, data m
 
 // ActionSuccess returns the success HTML fragment
 func ActionSuccess(a *server.App) string {
-	successFragment, err := load.Fragment(a, "success")
+	// Create a data structure to pass to the template
+	data := map[string]interface{}{
+		"Message": "Container deleted successfully!",
+	}
+
+	successFragment, err := load.Fragment(a, "success", data)
 	if err != nil {
 		fmt.Println(err)
 		return ""
