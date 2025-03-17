@@ -126,18 +126,24 @@ func CreateContainerFullGET(c echo.Context, a *server.App) error {
 
 // CreateContainerPOST handles the create container form submission
 func CreateContainerPOST(c echo.Context, a *server.App) error {
-	// Retreive the ShortID of the image from the URL
+	log.Debug("CreateContainerPOST handler called")
+
+	// Retrieve the ShortID of the image from the URL
 	ShortID := c.Param("ID")
+	log.Debug("Received ShortID for container creation:", "ShortID", ShortID)
 
 	// Convert the ShortID to a full image ID
 	imageID, err := FromShortIDToImageID(ShortID)
 	if err != nil {
+		log.Error("Error converting ShortID to full image ID:", "error", err)
 		return sendError(c, err)
 	}
+	log.Debug("Converted ShortID to full image ID:", "imageID", imageID)
 
 	// Get the image info
 	_, err = docker.GetImageInfo(imageID)
 	if err != nil {
+		log.Error("Error getting image info:", "error", err)
 		return sendError(c, err)
 	}
 
