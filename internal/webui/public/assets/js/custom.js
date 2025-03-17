@@ -52,6 +52,14 @@ function initializeVersionCheck() {
 
 // Initialize jQuery functionality for the admin dashboard
 function initializeAdminDashboard() {
+  console.debug('Initializing admin dashboard with jQuery');
+  
+  // Check if jQuery is properly loaded
+  if (typeof $ === 'undefined') {
+    console.error('jQuery is not defined! Make sure jQuery is loaded before this script.');
+    return;
+  }
+  
   // Handle edit button clicks to toggle action response visibility
   $(document).on('click', '[id^="edit-button-"]', function() {
     const id = $(this).attr('id').replace('edit-button-', '');
@@ -78,6 +86,12 @@ function initializeAdminDashboard() {
     console.debug(`Add button clicked for ${id}`);
     $(`#create-container-${id}`).toggleClass('visible hidden');
     $('#upload-image').addClass('hidden');
+    
+    // Add event listener for form submission
+    $(document).on('submit', `#create-container-form-${id}`, function(e) {
+      console.debug(`Form submission for container ${id}`);
+      // Don't prevent default as HTMX will handle the submission
+    });
   });
   
   // Handle upload submit button
@@ -320,9 +334,31 @@ function setupHtmxEventListeners() {
     console.error('HTMX response error:', event.detail.error);
     showNotification('Error: ' + (event.detail.error || 'Unknown error occurred'), 'error');
   });
+  
+  // Add HTMX event listeners for debugging
+  document.addEventListener('htmx:beforeRequest', function(event) {
+    console.debug('HTMX before request:', event.detail);
+  });
+  
+  document.addEventListener('htmx:afterRequest', function(event) {
+    console.debug('HTMX after request:', event.detail);
+  });
+  
+  document.addEventListener('htmx:responseError', function(event) {
+    console.error('HTMX response error:', event.detail);
+  });
 }
 
 document.addEventListener("DOMContentLoaded", function() {
+  console.debug('DOM fully loaded');
+  
+  // Check if jQuery is available
+  if (typeof $ === 'undefined') {
+    console.error('jQuery is not loaded! Some features may not work properly.');
+  } else {
+    console.debug('jQuery is loaded successfully');
+  }
+  
   initializeVersionCheck();
   initializeAdminDashboard();
 });
