@@ -1,0 +1,80 @@
+package components
+
+// HTMXHeader creates the hero header with HTMX attributes
+templ HTMXHeader(title string, subtitle string) {
+	<div id="header" class="hero bg-base-200">
+	  <div class="hero-content text-center">
+	    <div class="max-w-md">
+	      <h1 class="text-5xl font-bold gordon-title">
+	        { title }
+	      </h1>
+	      <p class="py-6 IBMPlexSans">{ subtitle }</p>
+	      <button class="btn btn-primary">Get Started</button>
+	    </div>
+	  </div>
+	</div>
+}
+
+// HTMXAlert creates an alert box that can be loaded with HTMX
+templ HTMXAlert(message string) {
+	<div id="hello" class="alert alert-info shadow-lg mt-4 mb-4">
+	  <div>
+	    <span class="iconfb">󰋽</span>
+	    <span class="IBMPlexSans">{ message }</span>
+	  </div>
+	</div>
+}
+
+// HTMXHeaderContainer creates a container to load the HTMX header
+templ HTMXHeaderContainer() {
+	<div
+	  id="header"
+	  hx-get="/htmx"
+	  hx-headers='{"HX-Fragment": "header"}'
+	  hx-trigger="load"
+	  hx-swap="outerHTML"
+	></div>
+}
+
+// HTMXAppContainer creates a container to load the HTMX app
+templ HTMXAppContainer() {
+	<div
+	  id="app"
+	  hx-get="/htmx"
+	  hx-headers='{"HX-Fragment": "hello"}'
+	  hx-trigger="load"
+	  hx-swap="outerHTML"
+	></div>
+}
+
+// StatsCard creates individual stat cards for the dashboard
+templ StatsCard(title string, value string, description string, icon string) {
+	<div class="stat bg-base-100 shadow">
+	  <div class="stat-figure text-primary">
+	    <span class="iconfb text-3xl">{ icon }</span>
+	  </div>
+	  <div class="stat-title">{ title }</div>
+	  <div class="stat-value">{ value }</div>
+	  <div class="stat-desc">{ description }</div>
+	</div>
+}
+
+// StatsCards creates a set of stats cards
+templ StatsCards() {
+	<div class="grid grid-cols-1 md:grid-cols-3 gap-4 my-4">
+		@StatsCard("Containers", "31", "Running containers", "󰡨")
+		@StatsCard("Images", "42", "Available images", "󱧕")
+		@StatsCard("Networks", "12", "Container networks", "󰙅")
+	</div>
+}
+
+// TabsNav creates a navigation tabs component
+templ TabsNav(activeTab string) {
+	<div class="tabs tabs-boxed my-4">
+	  <a class={templ.KV("tab", true), templ.KV("tab-active", activeTab == "Overview")}>Overview</a> 
+	  <a class={templ.KV("tab", true), templ.KV("tab-active", activeTab == "Containers")}>Containers</a> 
+	  <a class={templ.KV("tab", true), templ.KV("tab-active", activeTab == "Images")}>Images</a>
+	  <a class={templ.KV("tab", true), templ.KV("tab-active", activeTab == "Networks")}>Networks</a>
+	  <a class={templ.KV("tab", true), templ.KV("tab-active", activeTab == "Volumes")}>Volumes</a>
+	</div>
+}

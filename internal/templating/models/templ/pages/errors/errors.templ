@@ -1,0 +1,46 @@
+package errors
+
+import "github.com/bnema/gordon/internal/templating/models/templ/layouts"
+
+// ErrorPageData represents data needed for error pages
+type ErrorPageData struct {
+	Title        string
+	BuildVersion string
+	AdminPath    string
+	StatusCode   int
+	Message      string
+}
+
+// NotFoundPage renders a 404 error page
+templ NotFoundPage(data ErrorPageData) {
+	@layouts.Base(data.Title) {
+		<div class="flex flex-col items-center justify-center min-h-screen p-4">
+			<div class="flex flex-col items-center mb-8">
+				<img src="/assets/imgs/gordon-mascot-hq-trsp.png" alt="Gordon Mascot" class="w-64 h-64 mb-4" />
+				<h1 class="text-4xl font-bold text-error">404</h1>
+				<h2 class="text-2xl mb-2">Page Not Found</h2>
+				<p class="text-center text-base-content opacity-70 max-w-md mb-8">{ data.Message }</p>
+				<a href={ templ.URL(data.AdminPath) } class="btn btn-primary">
+					<span class="iconf mr-2">🏠</span> Go Home
+				</a>
+			</div>
+		</div>
+	}
+}
+
+// ForbiddenPage renders a 403 error page
+templ ForbiddenPage(data ErrorPageData) {
+	@layouts.Base(data.Title) {
+		<div class="flex flex-col items-center justify-center min-h-screen p-4">
+			<div class="flex flex-col items-center mb-8">
+				<img src="/assets/imgs/gordon-mascot-hq-trsp.png" alt="Gordon Mascot" class="w-64 h-64 mb-4" />
+				<h1 class="text-4xl font-bold text-error">403</h1>
+				<h2 class="text-2xl mb-2">Access Forbidden</h2>
+				<p class="text-center text-base-content opacity-70 max-w-md mb-8">{ data.Message }</p>
+				<a href={ templ.URL(data.AdminPath) } class="btn btn-primary">
+					<span class="iconf mr-2">🏠</span> Go Home
+				</a>
+			</div>
+		</div>
+	}
+} 

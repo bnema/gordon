@@ -12,6 +12,7 @@ import (
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/humanize"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/docker/docker/api/types"
 	"github.com/labstack/echo/v4"
 )
@@ -58,6 +59,10 @@ type HumanReadableContainerImage struct {
 	SizeStr     string
 	RepoDigests []string
 	RepoTags    []string
+	Repository  string
+	Tag         string
+	Size        string
+	Created     string
 }
 
 type HumanReadableContainer struct {
@@ -85,15 +90,31 @@ type ContainerDisplay struct {
 
 // renderHTML is a generalized function to render HTML
 func renderHTML(c echo.Context, a *server.App, path, templateName string, data map[string]interface{}) error {
+	logger.Debug("Rendering HTML", "path", path, "template", templateName, "data_keys", getKeysFromMap(data))
+
 	rendererData, err := render.GetHTMLRenderer(path, templateName, a.TemplateFS, a)
 	if err != nil {
+		logger.Error("Error getting HTML renderer", "error", err)
 		return err
 	}
+
 	renderedHTML, err := rendererData.Render(data, a)
 	if err != nil {
+		logger.Error("Error rendering HTML", "error", err)
 		return err
 	}
+
+	logger.Debug("HTML rendered successfully", "content_length", len(renderedHTML))
 	return c.HTML(http.StatusOK, renderedHTML)
+}
+
+// getKeysFromMap returns a slice of keys from a map
+func getKeysFromMap(data map[string]interface{}) []string {
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // ActionSuccess returns the success HTML fragment
@@ -114,9 +135,17 @@ func ActionSuccess(a *server.App) string {
 
 // ImageManagerComponent handles the /image-manager route (HTMX route)
 func ImageManagerComponent(c echo.Context, a *server.App) error {
+	logger.Debug("ImageManagerComponent called", "url", c.Request().URL.String())
+
 	images, err := docker.ListContainerImages()
 	if err != nil {
+		logger.Error("Error listing container images:", "error", err)
 		return sendError(c, err)
+	}
+
+	logger.Debug("Images found", "count", len(images))
+	for i, img := range images {
+		logger.Debug("Image details", "index", i, "id", img.ID, "repoTags", img.RepoTags)
 	}
 
 	var humanReadableImages []HumanReadableContainerImage
@@ -129,6 +158,14 @@ func ImageManagerComponent(c echo.Context, a *server.App) error {
 		sizeStr := humanize.BytesToReadableSize(img.Size)
 
 		for _, repoTag := range img.RepoTags {
+			// Split the repo tag into repository and tag
+			parts := strings.Split(repoTag, ":")
+			repository := parts[0]
+			tag := "latest"
+			if len(parts) > 1 {
+				tag = parts[1]
+			}
+
 			humanReadableImages = append(humanReadableImages, HumanReadableContainerImage{
 				ID:          img.ID,
 				ShortID:     shortID,
@@ -137,6 +174,11 @@ func ImageManagerComponent(c echo.Context, a *server.App) error {
 				Name:        repoTag,
 				RepoDigests: img.RepoDigests,
 				RepoTags:    img.RepoTags,
+				// Add fields that match template expectations
+				Repository: repository,
+				Tag:        tag,
+				Size:       sizeStr,
+				Created:    createdStr,
 			})
 		}
 	}
@@ -145,6 +187,7 @@ func ImageManagerComponent(c echo.Context, a *server.App) error {
 		"Images": humanReadableImages,
 	}
 
+	logger.Debug("Rendering imagelist template with", len(humanReadableImages), "images")
 	return renderHTML(c, a, "html/fragments", "imagelist.gohtml", data)
 }
 
@@ -170,9 +213,17 @@ func ImageManagerDelete(c echo.Context, a *server.App) error {
 
 // ContainerManagerComponent handles the /container-manager route
 func ContainerManagerComponent(c echo.Context, a *server.App) error {
+	logger.Debug("ContainerManagerComponent called", "url", c.Request().URL.String())
+
 	containers, err := docker.ListRunningContainers()
 	if err != nil {
+		logger.Error("Error listing containers", "error", err)
 		return sendError(c, err)
+	}
+
+	logger.Debug("Containers found", "count", len(containers))
+	for i, container := range containers {
+		logger.Debug("Container details", "index", i, "id", container.ID, "names", container.Names, "state", container.State)
 	}
 
 	var humanReadableContainers []HumanReadableContainer
@@ -212,9 +263,14 @@ func ContainerManagerComponent(c echo.Context, a *server.App) error {
 		return err
 	}
 	data := map[string]interface{}{
-		"Lang":       yamlData["Lang"],
-		"containers": humanReadableContainers,
+		"Lang":        yamlData["Lang"],
+		"Containers":  humanReadableContainers,
+		"NoContainer": len(humanReadableContainers) == 0,
 	}
+
+	logger.Debug("Rendering containerlist template",
+		"humanReadableContainers", len(humanReadableContainers),
+		"noContainer", len(humanReadableContainers) == 0)
 
 	return renderHTML(c, a, "html/fragments", "containerlist.gohtml", data)
 }

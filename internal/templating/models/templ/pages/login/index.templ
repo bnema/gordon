@@ -1,0 +1,126 @@
+package login
+
+// LoginPage implements the login page with token and GitHub authentication
+templ LoginPage(title string, buildVersion string, errorMsg string) {
+	<!doctype html>
+	<html lang="en" data-theme="gordon-dark">
+	  <head>
+	    <meta charset="UTF-8" />
+	    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	    <title>{ title }</title>
+	    <meta name="description" content="Gordon Container Management System" />
+	    <meta name="keywords" content="container, management, docker, podman" />
+	    <!-- Custom CSS + Tailwind -->
+	    <link rel="stylesheet" href="/assets/css/tailwind.css" />
+	    <!-- HTMX min js  -->
+	    <script src="/libs/htmx.min.js"></script>
+	    <!-- HTMX SSE -->
+	    <script src="/libs/htmx-sse.js"></script>
+	    <!-- DaisyUI -->
+	    <script src="/libs/daisyui.js"></script>
+	    <!-- Custom JS from assets/js -->
+	    <script src="/assets/js/custom.js"></script>
+	    
+	    <!-- daisyUI theme configuration -->
+	    <script>
+	      // Check for saved theme preference or use preferred color scheme
+	      const savedTheme = localStorage.getItem('theme') || 'gordon-dark';
+	      document.documentElement.setAttribute('data-theme', savedTheme);
+	      console.debug('Theme loaded:', savedTheme);
+	    </script>
+	  </head>
+
+	  <body class="IBMPlexSans bg-base-200 min-h-screen flex flex-col items-center justify-center p-4">
+	    <!-- Logo and Title -->
+	    <div
+	      id="logo-mascot"
+	      class="flex flex-col justify-center items-center p-4 mb-4">
+	      <div class="flex justify-center w-100">
+	        <img
+	          src="/assets/imgs/gordon-mascot-mq-trsp.png"
+	          alt="logo gordon"
+	          class="sm:h-24 h-32 xl:h-48 drop-shadow-xl" />
+	      </div>
+	      <div class="flex justify-center mt-4">
+	        <h1
+	          class="gordon-title text-4xl lg:text-4xl xl:text-5xl text-primary tracking-tighter">
+	          Gordon
+	        </h1>
+	        <span
+	          class="gordon-v-subtitle text-secondary text-sm ml-2"
+	          >{ buildVersion }</span>
+	      </div>
+	    </div>
+
+	    <!-- Main Content -->
+	    <div class="card bg-base-100 shadow-xl w-full max-w-md">
+	      <div class="card-body">
+	        <!-- Login Section -->
+	        <div id="login-section">
+	          <div class="flex flex-col items-center">
+	            <h2 class="card-title text-center mb-4">Login</h2>
+	            
+	            <!-- Error Message Display -->
+	            if errorMsg != "" {
+	                <div class="alert alert-error mb-4">
+	                  <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+	                  <span>
+	                    if errorMsg == "empty_token" {
+	                      Please enter a token.
+	                    } else if errorMsg == "invalid_token" {
+	                      Invalid token. Please try again.
+	                    } else if errorMsg == "server_error" {
+	                      A server error occurred. Please try again later.
+	                    } else {
+	                      An error occurred. Please try again.
+	                    }
+	                  </span>
+	                </div>
+	            }
+	            
+	            <!-- Token Input Form -->
+	            <div class="w-full">
+	              <form action="login/submit-token" method="POST" class="mb-4">
+	                <div class="form-control mb-4">
+	                  <label for="token" class="label">
+	                    <span class="label-text">Admin Token</span>
+	                  </label>
+	                  <input 
+	                    type="text" 
+	                    id="token" 
+	                    name="token" 
+	                    placeholder="Enter your admin token" 
+	                    class="input input-bordered w-full" 
+	                    required
+	                  />
+	                </div>
+	                <button 
+	                  type="submit" 
+	                  class="btn btn-primary w-full"
+	                >
+	                  Continue with Token
+	                </button>
+	              </form>
+	              <div class="divider">OR</div>
+	            </div>
+	            
+	            <!-- GitHub OAuth -->
+	            <div class="w-full">
+	              <a 
+	                href="login/oauth/github" 
+	                class="btn btn-secondary w-full"
+	              >
+	                <svg class="mr-2 h-5 w-5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+	                  <path fill-rule="evenodd" d="M10 0C4.477 0 0 4.484 0 10.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0110 4.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.942.359.31.678.921.678 1.856 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0020 10.017C20 4.484 15.522 0 10 0z" clip-rule="evenodd" />
+	                </svg>
+	                Sign in with GitHub
+	              </a>
+	            </div>
+	          </div>
+	        </div>
+	        <!-- End Login Section -->
+	      </div>
+	    </div>
+	  </body>
+	</html>
+}

@@ -3,6 +3,8 @@ version: 2
 before:
   hooks:
     - go mod tidy
+    - templ generate
+    - bun run build:css
 
 release:
   draft: true

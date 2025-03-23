@@ -22,7 +22,6 @@ import (
 // - certificates.go - Certificate management functions
 // - routes.go - Route management functions
 // - middleware.go - HTTP middleware functions
-// - blacklist.go - IP blacklisting functionality
 // - server.go - Server startup and shutdown
 // - utils.go - Utility functions
 
@@ -58,6 +57,10 @@ type Proxy struct {
 	recentContainersMu      sync.RWMutex
 	containerCooldownPeriod time.Duration
 
+	// Upstream proxy detection
+	upstreamProxyDetected bool
+	upstreamProxyMu       sync.RWMutex
+
 	// SQL queries
 	queries *queries.ProxyQueries
 }
@@ -66,8 +69,36 @@ type Proxy struct {
 func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 	logger.Debug("Initializing reverse proxy")
 
-	// Log important configuration information
-	logger.Debug("All internal connections to containers will use HTTP protocol regardless of external protocol")
+	// Set up the config
+	config := app.GetConfig().ReverseProxy
+
+	// Check if proxy is disabled through configuration
+	if !config.Enabled {
+		logger.Info("Reverse proxy is disabled via configuration")
+		// Return a non-active proxy instance
+		return &Proxy{
+			config:        config,
+			app:           app,
+			serverStarted: false,
+			shutdown:      make(chan struct{}),
+		}, nil
+	}
+
+	// Check if running inside a container
+	isContainer := docker.IsRunningInContainer()
+	logger.Debug("Container environment check", "is_running_in_container", isContainer)
+
+	if !isContainer {
+		logger.Info("Gordon is not running in a container, proxy will be disabled automatically")
+		// Override the enabled setting to false
+		config.Enabled = false
+		return &Proxy{
+			config:        config,
+			app:           app,
+			serverStarted: false,
+			shutdown:      make(chan struct{}),
+		}, nil
+	}
 
 	// Set up the echo server for HTTPS traffic
 	httpsServer := echo.New()
@@ -76,9 +107,6 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 	// Set up the echo server for HTTP traffic (redirects to HTTPS)
 	httpServer := echo.New()
 	httpServer.HideBanner = true
-
-	// Set up the config
-	config := app.GetConfig().ReverseProxy
 
 	// Detect and store our container ID (if we're running in a container)
 	var ourContainerID string

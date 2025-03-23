@@ -1,6 +1,8 @@
 package httpserve
 
 import (
+	"time"
+	
 	"github.com/bnema/gordon/internal/proxy"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/charmbracelet/log"
@@ -21,6 +23,10 @@ func InitializeProxy(a *server.App) (*proxy.Proxy, error) {
 		return nil, err
 	}
 
+	// Add a small delay to ensure router initialization is complete
+	// This helps prevent race conditions during startup
+	time.Sleep(500 * time.Millisecond)
+	
 	log.Info("Reverse proxy initialized and started")
 	return p, nil
 }

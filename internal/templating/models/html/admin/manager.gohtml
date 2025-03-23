@@ -1,34 +1,76 @@
 <!-- manager.gohtml -->
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="gordon">
   {{template "header.gohtml" .}}
 
-  <body class="bg-zinc-200 flex flex-col lg:flex-row p-0">
+  <body class="min-h-screen bg-base-200">
     {{template "menu.gohtml" .}}
-    <!-- Main content here -->
-    <div class="flex-1 flex flex-col space-y-4 pt-16 md:pt-32 md:px-6">
-    <div class="flex flex-col md:flex-row w-full flex-grow">
-      <div class="flex-grow bg-white p-4 md:rounded-md md:shadow mb-4">
-        <!-- List all the containers -->
-        <div
-          id="container-manager"
-          hx-get="/htmx/container-manager"
-          hx-trigger="load"
-          hx-swap="innerHTML"
-          hx-swap-oob="true"
-        ></div>
-        <!-- List all the images  -->
-        <div
-          id="image-manager"
-          hx-get="/htmx/image-manager"
-          hx-trigger="load"
-          hx-swap="innerHTML"
-          hx-swap-oob="true"
-        ></div>
+    
+    <!-- Main content -->
+    <div class="container mx-auto py-6 px-4 mt-16">
+      <div class="text-sm breadcrumbs mb-4">
+        <ul>
+          <li><a href="{{ .AdminPath }}">Gordon</a></li>
+          <li>Manager</li>
+        </ul>
       </div>
+      
+      <!-- Stats overview -->
+      <div class="stats shadow mb-6 w-full">
+        <div class="stat">
+          <div class="stat-figure text-primary">
+            <span class="iconf text-3xl">󰡨</span>
+          </div>
+          <div class="stat-title">Containers</div>
+          <div class="stat-value" id="container-count">{{.ContainerCount}}</div>
+          <div class="stat-desc">Docker containers managed by Gordon</div>
+        </div>
+        
+        <div class="stat">
+          <div class="stat-figure text-secondary">
+            <span class="iconf text-3xl">󰋊</span>
+          </div>
+          <div class="stat-title">Images</div>
+          <div class="stat-value" id="image-count">{{.ImageCount}}</div>
+          <div class="stat-desc">Docker images available</div>
+        </div>
+      </div>
+      
+      <!-- Tabs for containers and images -->
+      <div role="tablist" class="tabs tabs-boxed mb-4">
+        <input type="radio" name="my_tabs" role="tab" class="tab" aria-label="Containers" id="containers-tab" checked />
+        <div role="tabpanel" class="tab-content p-0">
+          <!-- Container manager section -->
+          <div id="container-manager"
+            hx-get="/htmx/container-manager"
+            hx-trigger="load"
+            hx-swap="innerHTML">
+            <!-- Container content loaded via HTMX -->
+            <div class="text-center p-4">
+              <span class="iconf text-3xl animate-spin inline-block">󰑐</span> 
+              Loading containers...
+            </div>
+          </div>
+        </div>
+        
+        <input type="radio" name="my_tabs" role="tab" class="tab" aria-label="Images" id="images-tab" />
+        <div role="tabpanel" class="tab-content p-0">
+          <!-- Image manager section -->
+          <div id="image-manager"
+            hx-get="/htmx/image-manager"
+            hx-trigger="load"
+            hx-swap="innerHTML">
+            <!-- Image content loaded via HTMX -->
+            <div class="text-center p-4">
+              <span class="iconf text-3xl animate-spin inline-block">󰑐</span> 
+              Loading images...
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
-    <!-- footer -->
     {{template "footer.gohtml" .}}
   </body>
 </html>

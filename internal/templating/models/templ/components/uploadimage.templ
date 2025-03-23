@@ -1,0 +1,66 @@
+package components
+
+// UploadImageForm displays a form for uploading Docker images
+templ UploadImageForm() {
+	<!-- Upload image form using DaisyUI components -->
+	<div class="card bg-base-100 shadow">
+		<div class="card-body">
+			<div class="flex justify-between items-center">
+				<h2 class="card-title text-primary">Upload Image</h2>
+				<button 
+					class="btn btn-sm btn-circle btn-ghost"
+					hx-get="/htmx/image-manager"
+					hx-target="#image-manager"
+					hx-swap="innerHTML">
+					<span class="iconf text-lg">✕</span>
+				</button>
+			</div>
+			<div class="divider"></div>
+			
+			<form
+				id="upload-form"
+				hx-encoding="multipart/form-data"
+				hx-post="/htmx/upload-image"
+				hx-target="#image-manager"
+				hx-swap="innerHTML"
+				class="space-y-4">
+
+				<div class="alert alert-info shadow-lg mb-4">
+					<span class="iconf">ℹ️</span>
+					<div>
+						<p>This form allows you to upload a container image (.tar file) to Gordon.</p>
+						<p>After uploading, you can create and manage containers from this image.</p>
+					</div>
+				</div>
+
+				<div class="form-control w-full">
+					<label class="label">
+						<span class="label-text">Select a container image file (.tar)</span>
+					</label>
+					<input 
+						type="file" 
+						name="imageFile" 
+						class="file-input file-input-bordered w-full" 
+						accept=".tar"
+						required />
+				</div>
+				
+				<div class="card-actions justify-end mt-4">
+					<button 
+						class="btn btn-ghost"
+						hx-get="/htmx/image-manager"
+						hx-target="#image-manager"
+						hx-swap="innerHTML"
+						type="button">
+						Cancel
+					</button>
+					<button 
+						class="btn btn-primary"
+						type="submit">
+						<span class="iconf mr-1">󰦒</span> Upload
+					</button>
+				</div>
+			</form>
+		</div>
+	</div>
+} 
