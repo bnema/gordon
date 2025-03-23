@@ -20,13 +20,13 @@ LDFLAGS := -s -w \
 ARCHS := amd64 arm64
 
 # Phony targets
-.PHONY: all build build-push clean build-css
+.PHONY: all build build-push clean build-css build-templ
 
 # Default target
 all: build
 
 # Build binaries
-build: build-css
+build: build-css build-templ
 	@echo "Building Go binaries..."
 	@mkdir -p $(DIST_DIR)
 	@rm -f $(DIST_DIR)/*
@@ -40,6 +40,12 @@ build-css:
 	@echo "Building CSS with tailwindcss..."
 	@bun run build:css
 	@echo "CSS built successfully"
+
+# Generate Go code from templ templates
+build-templ:
+	@echo "Generating Go code from templ templates..."
+	@templ generate
+	@echo "templ generation completed successfully"
 
 # Build and push Docker images
 build-push: build-css build

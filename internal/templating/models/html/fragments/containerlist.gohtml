@@ -1,112 +1,122 @@
-<div class="flex flex-col p-4" hx-ext="response-targets">
-  <div class="flex justify-between items-center mb-1">
-    <h1 class="text-lg md:text-xl font-bold text-gordonmascot-hblue">
-      {{index .Lang "manager" "content" "h1-containers"}}
-    </h1>
-    <button
-      id="refresh-containers-button"
-      class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
-      title="Refresh container list"
-    >
-      <span class="iconf text-xl align-middle">󰑐 </span>
-      Refresh
-    </button>
-  </div>
-  <table class="p-4 border-t-2 table-auto">
-    <thead>
-      <tr class="text-center text-gray-400">
-        <th>{{index .Lang "manager" "content" "thName"}}</th>
-        <th>{{index .Lang "manager" "content" "thPorts"}}</th>
-        <th>{{index .Lang "manager" "content" "thEntryPoint"}}</th>
-        <th>{{index .Lang "manager" "content" "thStatus"}}</th>
-        <th>{{index .Lang "manager" "content" "thState"}}</th>
-        <th>{{index .Lang "manager" "content" "thActions"}}</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{ $Lang := .Lang }} 
-      {{
-        range.containers
-      }}
-      <tr id="container-{{.ID}}" class="text-center hover:bg-slate-100">
-        <td>
-          <span
-            title="{{.Container.ID}}"
-            class="font-bold"
-            >{{.Name}}</span
-          >
-        </td>
-        <td class="port-container">{{ .Ports }}</td>
-        <td class="entrypoint-container">{{.ProxyPort}}</td>
-        <td class="status-container">{{.Status}} (Up since {{.UpSince}})</td>
-        <td style="color: {{.StateColor}};">{{.State}}</td>
-        <td>
-          <button
-            id="start-button-{{.ID}}"
-            hx-post="/htmx/container-manager/start/{{.ID}}"
-            hx-target="#actionResponse-{{.ID}}"
-            hx-target-*="#error-message-{{.ID}}"
-            hx-swap="outerHTML"
-            class="py-2 px-4"
-          >
-            <span title="Start the container" class="iconf text-xl text-blue-600 hover:text-gordonmascot-hblue"></span>
-          </button>
-          <!-- EDIT -->
-          <button
-            id="edit-button-{{.ID}}"
-            hx-get="/htmx/container-manager/edit/{{.ID}}"
-            hx-target="#actionResponse-{{.ID}}"
-            hx-target-*="#error-message-{{.ID}}"
-            hx-swap="innerHTML"
-            class="py-2 px-4"
-            data-active="false"
-          >
-            <span title="Edit the container" class="iconf text-2xl text-blue-600 hover:text-gordonmascot-hblue">󱩽</span>
-          </button>
-                 <!-- stop -->
-          <button
-            id="stop-button-{{.ID}}"
-            hx-post="/htmx/container-manager/stop/{{.ID}}"
-            hx-target="#actionResponse-{{.ID}}"
-            hx-target-*="#error-message-{{.ID}}"
-            hx-swap="innerHTML"
-            hx-confirm="{{index $Lang "manager" "content" "confirm-container-stop"}}"
-            class="py-2 px-4"
-          >
-            <span title="Stop the container" class="iconf text-xl text-red-600 hover:text-red-900"></span>
-          </button>
-          <!-- REMOVE -->
-          <button
-            id="remove-button-img-{{.ID}}"
-            hx-delete="/htmx/container-manager/delete/{{.ID}}"
-            hx-target="#actionResponse-{{.ID}}"
-            hx-target-*="#error-message-{{.ID}}"
-            hx-swap="innerHTML"
-            hx-confirm="{{index $Lang "manager" "content" "confirm-delete"}}"
-            class="py-2 px-4"
-          >
-            <!-- iconoir trash -->
-            <span title="Remove the container" class="iconf text-xl text-red-600 hover:text-red-900"></span>
-          </button>
-        </td>
+<!-- Container list using daisyUI components -->
+<div class="card w-full bg-base-300">
+  <div class="card-body p-4">
+    
+    <!-- Action buttons -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
+      <h3 class="font-semibold text-base-content">Available Containers: {{ len .Containers }}</h3>
+      <div class="btn-group">
+        <button 
+          class="btn btn-sm btn-primary"
+          hx-get="/htmx/container-manager"
+          hx-target="#container-manager"
+          hx-swap="innerHTML">
+          <span class="iconf">󰑓</span> Refresh
+        </button>
+      </div>
+    </div>
+
+    <!-- Container list -->
+    <table class="table">
+      <!-- head -->
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Image</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th>Actions</th>
         </tr>
-      <tr>
-        <td colspan="7">
-          <div id="actionResponse-{{.ID}}"></div>
-          <div id="error-message-{{.ID}}" class="text-red-500"></div>
-        </td>
-      </tr>
-      {{ else }}
-      <tr>
-        <td colspan="7" class="mt-2">
-          <p class="text-center text-gray-400 text-xl">
-            {{index $Lang "manager" "content" "no-containers"}}
-          </p>
-        </td>
-      </tr>
-      {{
-        end
-      }}
-    </tbody>
-  </table>
+      </thead>
+      <tbody>
+        {{ if or .NoContainer (eq (len .Containers) 0) }}
+        <tr>
+          <td colspan="5" class="text-center py-4">
+            <div class="alert alert-info">
+              <span class="iconf">ℹ️</span>
+              <span>No containers found. Upload an image first, then create a container.</span>
+            </div>
+          </td>
+        </tr>
+        {{ else }}
+          {{ range .Containers }}
+          <tr class="hover">
+            <td>
+              <div class="flex items-center gap-3">
+                <div>
+                  <div class="font-bold">{{ .Names }}</div>
+                  <div class="text-sm opacity-50">{{ .ID }}</div>
+                </div>
+              </div>
+            </td>
+            <td>{{ .Image }}</td>
+            <td>
+              {{ if eq .State "running" }}
+                <div class="badge badge-success badge-sm">Running</div>
+              {{ else if eq .State "exited" }}
+                <div class="badge badge-warning badge-sm">Stopped</div>
+              {{ else }}
+                <div class="badge badge-ghost badge-sm">{{ .State }}</div>
+              {{ end }}
+            </td>
+            <td>{{ .Created }}</td>
+            <th>
+              <div class="dropdown dropdown-end">
+                <div tabindex="0" role="button" class="btn btn-ghost btn-xs">
+                  <span class="iconf">󰅀</span>
+                </div>
+                <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-200 rounded-box w-40">
+                  {{ if eq .State "running" }}
+                  <li>
+                    <button 
+                      class="text-warning flex items-center"
+                      hx-post="/htmx/container-manager/stop/{{ .ID }}"
+                      hx-target="#container-manager"
+                      hx-swap="innerHTML">
+                      <span class="iconf mr-2">󰓛</span> Stop
+                    </button>
+                  </li>
+                  {{ else if eq .State "exited" }}
+                  <li>
+                    <button 
+                      class="text-success flex items-center"
+                      hx-post="/htmx/container-manager/start/{{ .ID }}"
+                      hx-target="#container-manager"
+                      hx-swap="innerHTML">
+                      <span class="iconf mr-2">󰐊</span> Start
+                    </button>
+                  </li>
+                  {{ end }}
+                  <li>
+                    <button 
+                      class="text-info flex items-center"
+                      hx-get="/htmx/container-manager/edit/{{ .ID }}"
+                      hx-target="#container-manager"
+                      hx-swap="innerHTML">
+                      <span class="iconf mr-2">󰏫</span> Edit
+                    </button>
+                  </li>
+                  <li>
+                    <button 
+                      class="text-error flex items-center"
+                      hx-delete="/htmx/container-manager/delete/{{ .ID }}"
+                      hx-target="#container-manager"
+                      hx-swap="innerHTML"
+                      hx-confirm="Are you sure you want to delete this container?">
+                      <span class="iconf mr-2">󰆴</span> Delete
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </th>
+          </tr>
+          {{ end }}
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
 </div>
+
+<script>
+console.debug('Container list rendered');
+</script>

@@ -24,8 +24,116 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 )
 
+// detectUpstreamProxy checks for signs of an upstream TLS-terminating proxy
+func (p *Proxy) detectUpstreamProxy() bool {
+	// Check if detection is explicitly disabled
+	if !p.config.DetectUpstreamProxy {
+		return false
+	}
+	
+	// First check our cached detection status - if we already detected a proxy previously
+	p.upstreamProxyMu.RLock()
+	alreadyDetected := p.upstreamProxyDetected
+	p.upstreamProxyMu.RUnlock()
+	
+	if alreadyDetected {
+		return true
+	}
+
+	// Check for known HTTP headers that indicate a TLS termination proxy
+	// This is a best-effort approach since we're analyzing HTTP headers from 
+	// previous requests stored in our context (if available)
+	
+	// Look for common proxy headers in our recent requests
+	// This is a static check at startup; ideally we would check incoming 
+	// requests dynamically, but for this implementation we're using
+	// known proxy environment indicators
+	
+	// Most common proxy headers: X-Forwarded-Proto, X-Forwarded-SSL, X-Forwarded-For
+	// Environment variables: HTTPS=on, HTTP_X_FORWARDED_PROTO=https
+	
+	// Check for common environment variables set by upstream proxies
+	if os.Getenv("HTTPS") == "on" || 
+	   os.Getenv("HTTP_X_FORWARDED_PROTO") == "https" ||
+	   os.Getenv("HTTP_X_FORWARDED_SSL") == "on" {
+		logger.Info("Upstream TLS-terminating proxy detected via environment variables",
+			"detection_method", "environment_variables",
+			"https", os.Getenv("HTTPS"),
+			"x_forwarded_proto", os.Getenv("HTTP_X_FORWARDED_PROTO"),
+			"x_forwarded_ssl", os.Getenv("HTTP_X_FORWARDED_SSL"))
+		
+		// Cache this result
+		p.upstreamProxyMu.Lock()
+		p.upstreamProxyDetected = true
+		p.upstreamProxyMu.Unlock()
+		
+		return true
+	}
+	
+	// Check if Cloudflare headers are present in environment
+	// Cloudflare sets environment variables like HTTP_CF_VISITOR={"scheme":"https"}
+	if cfVisitor := os.Getenv("HTTP_CF_VISITOR"); cfVisitor != "" {
+		if strings.Contains(cfVisitor, "\"scheme\":\"https\"") {
+			logger.Info("Cloudflare proxy detected via environment variables",
+				"detection_method", "cloudflare_headers",
+				"cf_visitor", cfVisitor)
+			
+			// Cache this result
+			p.upstreamProxyMu.Lock()
+			p.upstreamProxyDetected = true
+			p.upstreamProxyMu.Unlock()
+			
+			return true
+		}
+	}
+	
+	// Not detected, but log if explicit configuration is set
+	if p.config.SkipCertificates {
+		logger.Info("No upstream proxy detected automatically, but certificate acquisition will be skipped due to configuration",
+			"detection_result", "false",
+			"skip_certificates", "true (forced via config)")
+	}
+	
+	return false
+}
+
 // setupCertManager configures the autocert manager for Let's Encrypt
 func (p *Proxy) setupCertManager() {
+	// First check for upstream TLS-terminating proxies if detection is enabled
+	isProxied := p.detectUpstreamProxy()
+	
+	// Skip certificate acquisition if we're behind a TLS-terminating proxy
+	// and the skip certificates option is enabled
+	if isProxied && p.config.SkipCertificates {
+		logger.Info("Upstream TLS-terminating proxy detected, skipping Let's Encrypt certificate acquisition",
+			"upstream_proxy", "detected",
+			"certificate_acquisition", "disabled")
+		// We still setup a fallback cert for the admin domain
+		adminDomain := p.app.GetConfig().Http.FullDomain()
+		rootDomain := p.app.GetConfig().Http.Domain
+		
+		var fallbackDomains []string
+		fallbackDomains = append(fallbackDomains, adminDomain)
+		
+		// Include root domain in fallback certificate if it's different from admin domain
+		if rootDomain != "" && rootDomain != adminDomain {
+			fallbackDomains = append(fallbackDomains, rootDomain)
+		}
+		
+		fallbackCert, err := generateFallbackCertificates(fallbackDomains)
+		if err != nil {
+			logger.Warn("Failed to generate fallback certificate", "error", err)
+		} else {
+			logger.Info("Generated fallback self-signed certificate for admin domain behind proxy",
+				"domain", adminDomain,
+				"valid_until", time.Now().Add(24*time.Hour).Format("2006-01-02 15:04:05"))
+			// Store the fallback certificate
+			p.fallbackCert = fallbackCert
+		}
+		
+		return
+	}
+	
 	// Create a cache directory if it doesn't exist
 	dir := p.config.CertDir
 	if dir == "" {
@@ -384,6 +492,15 @@ func (p *Proxy) requestAdminCertificate() {
 		logger.Debug("HTTPS is disabled, skipping admin certificate request")
 		return
 	}
+	
+	// Check for upstream proxy with certificate skipping enabled
+	isProxied := p.detectUpstreamProxy()
+	if isProxied && p.config.SkipCertificates {
+		logger.Info("Upstream TLS-terminating proxy detected, skipping admin certificate request",
+			"domain", adminDomain,
+			"skip_reason", "behind TLS-terminating proxy")
+		return
+	}
 
 	// Extract hostname from admin domain, resolving it to see if it's publicly accessible
 	host := adminDomain
@@ -537,6 +654,15 @@ func (p *Proxy) requestAdminCertificate() {
 func (p *Proxy) requestDomainCertificate(domain string) {
 	if domain == "" {
 		logger.Warn("Empty domain provided to requestDomainCertificate")
+		return
+	}
+	
+	// Check for upstream proxy with certificate skipping enabled
+	isProxied := p.detectUpstreamProxy()
+	if isProxied && p.config.SkipCertificates {
+		logger.Info("Upstream TLS-terminating proxy detected, skipping domain certificate request",
+			"domain", domain,
+			"skip_reason", "behind TLS-terminating proxy")
 		return
 	}
 

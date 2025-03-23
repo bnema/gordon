@@ -1,0 +1,21 @@
+package layouts
+
+import "github.com/bnema/gordon/internal/templating/models/templ/components"
+
+// AdminLayout provides the base layout for admin pages
+templ AdminLayout(title string, buildVersion string, adminPath string, userSettingsURL string, logoutURL string) {
+	<!DOCTYPE html>
+	<html lang="en" data-theme="gordon-dark">
+		@components.Header(title)
+		<body class="min-h-screen bg-base-100">
+			@components.Navbar(buildVersion, adminPath, userSettingsURL, logoutURL)
+			
+			<!-- Main content starts after navbar height -->
+			<div class="container mx-auto pt-20 px-4">
+				{ children... }
+			</div>
+			
+			@components.Footer()
+		</body>
+	</html>
+}

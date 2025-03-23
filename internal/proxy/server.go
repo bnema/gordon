@@ -4,8 +4,16 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
+
+	"net"
 
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/logger"
@@ -13,73 +21,135 @@ import (
 	"golang.org/x/crypto/acme"
 )
 
+// Global mutex for admin connection testing to prevent concurrent executions
+var adminTestMutex sync.Mutex
+
 // This file contains server operations functions for the proxy.
 // These methods may need to be deleted from proxy.go after validation.
 
 // Start loads the routes from the database and starts the proxy server
 func (p *Proxy) Start() error {
-	// First, load routes from the database
+	// Check if proxy is disabled via configuration
+	if !p.config.Enabled {
+		logger.Info("Proxy server is disabled via configuration, not starting")
+		return nil
+	}
+
+	// Configure proxy ports based on environment
+	p.configureProxyPorts()
+
+	// Load routes from the database
 	if err := p.loadRoutes(); err != nil {
 		return fmt.Errorf("failed to load routes: %w", err)
 	}
 
-	// Now log Gordon container identity for debugging (after routes are loaded)
+	// Log Gordon container identity and prepare admin route
 	p.LogGordonIdentity()
+	p.setupAdminRoute()
 
-	// Scan Gordon network containers and check for certificates
+	// Scan containers for certificates
 	if err := p.scanContainersAndCheckCertificates(); err != nil {
 		logger.Warn("Failed to scan containers for certificate checks", "error", err)
 	}
 
-	// Run an immediate route verification to ensure all routes are valid on startup
-	logger.Info("Performing initial route verification on startup")
-
-	// Discover any containers that should have routes but don't
+	// Discover missing routes and log active containers
 	p.DiscoverMissingRoutes()
-
-	// Log all active containers and their routes for visibility
 	p.LogActiveContainersAndRoutes()
 
-	// Start the container event listener for real-time updates
+	// Start container event listener
 	if err := p.StartContainerEventListener(); err != nil {
 		logger.Warn("Failed to start container event listener", "error", err)
-		// Continue anyway, this is non-critical
 	}
 
-	// Check if there might be port conflicts with the main server
-	mainServerPort := p.app.GetConfig().Http.Port
+	// Start the admin route verification in a separate goroutine
+	go p.StartAdminRouteVerification()
 
-	// Check HTTP port conflict
-	if p.config.HttpPort == mainServerPort {
-		logger.Warn("HTTP port for reverse proxy conflicts with main server port",
-			"port", p.config.HttpPort,
-			"solution", "reverse proxy HTTP server will be disabled")
+	// Check for port conflicts with the main server
+	if p.checkForPortConflicts() {
 		return nil
 	}
 
-	// Check HTTPS port conflict (less common, but still possible)
-	if p.config.Port == mainServerPort {
-		logger.Warn("HTTPS port for reverse proxy conflicts with main server port",
-			"port", p.config.Port,
-			"solution", "reverse proxy HTTPS server will be disabled")
-		return nil
+	// Set up middleware and configure routes
+	p.setupMiddleware()
+	p.configureRoutes()
+
+	// Configure HTTP server for Let's Encrypt challenges
+	p.httpServer.Any("/.well-known/acme-challenge/*", echo.WrapHandler(p.certManager.HTTPHandler(nil)))
+
+	// Create and start HTTP and HTTPS servers
+	p.serverStarted = true
+
+	// Start servers in separate goroutines
+	go p.startHTTPSServer()
+	go p.startHTTPServer()
+
+	// Log details about the proxy server
+	logger.Info("Proxy server started",
+		"http_port", p.config.HttpPort,
+		"https_port", p.config.Port,
+		"admin_domain", p.app.GetConfig().Http.FullDomain(),
+		"container_id", p.gordonContainerID,
+	)
+
+	// Give servers time to start up
+	logger.Info("Waiting for servers to complete startup...")
+	time.Sleep(3 * time.Second)
+
+	// Test admin connection after server starts
+	go p.TestAdminConnectionLater()
+
+	return nil
+}
+
+// configureProxyPorts configures the proxy ports based on the environment
+func (p *Proxy) configureProxyPorts() {
+	// Detect container environment
+	containerEnv := os.Getenv("container")
+	_, isContainer := os.LookupEnv("container")
+
+	// Log container information if applicable
+	if isContainer {
+		logger.Info("Running in container environment", "container_type", containerEnv, "uid", os.Getuid())
 	}
 
-	// Add a special route for the admin domain (Gordon itself)
+	// When running as non-root user, check for privileged ports
+	if !isContainer && os.Getuid() != 0 {
+		// Non-root user - check for privileged ports
+		httpPort, _ := strconv.Atoi(p.config.HttpPort)
+		httpsPort, _ := strconv.Atoi(p.config.Port)
+
+		// Use non-privileged ports if trying to bind to privileged ports without root
+		if httpPort < 1024 {
+			logger.Warn("Using alternative HTTP port 8080 instead of privileged port", "original", p.config.HttpPort)
+			p.config.HttpPort = "8080"
+		}
+
+		if httpsPort < 1024 {
+			logger.Warn("Using alternative HTTPS port 8443 instead of privileged port", "original", p.config.Port)
+			p.config.Port = "8443"
+		}
+	}
+
+	// Log final port configuration
+	logger.Info("Final proxy port configuration",
+		"http_port", p.config.HttpPort,
+		"https_port", p.config.Port,
+		"in_container", isContainer)
+}
+
+// setupAdminRoute adds a special route for the admin domain (Gordon itself)
+func (p *Proxy) setupAdminRoute() {
 	adminDomain := p.app.GetConfig().Http.FullDomain()
+	logger.Info("Setting up admin domain route", "domain", adminDomain)
 
 	// Auto-detect the Gordon container name and ID
 	containerName := p.detectGordonContainer()
-
-	// Get the network name from config
 	networkName := p.app.GetConfig().ContainerEngine.Network
 
-	// Initialize container IP
-	var containerIP string
-
-	// Try to get the actual container IP from the network
+	// Get the IP address from the container's network
 	if p.gordonContainerID == "" {
-		return fmt.Errorf("failed to detect Gordon container ID, cannot add admin route")
+		logger.Error("Failed to detect Gordon container ID, cannot add admin route")
+		return
 	}
 
 	// Get the IP address from the container's network
@@ -89,146 +159,170 @@ func (p *Proxy) Start() error {
 			"container_id", p.gordonContainerID,
 			"network", networkName,
 			"error", err)
-		return fmt.Errorf("failed to get Gordon container IP from network %s: %w", networkName, err)
+		return
 	}
 
-	containerIP = ip
-	logger.Info("Using Gordon container IP from network",
-		"container_id", p.gordonContainerID,
-		"network", networkName,
-		"ip", containerIP)
-
-	// Check if admin route exists in database and create/update it
+	// Add the admin route to the database
 	err = p.AddRoute(
 		adminDomain,
 		containerName,
-		containerIP,
+		ip,
 		p.app.GetConfig().Http.Port,
 		"http", // Gordon server uses HTTP internally
 		"/",
 	)
 
 	if err != nil {
-		logger.Error("Failed to add admin route to database",
-			"error", err,
-			"domain", adminDomain)
+		logger.Error("Failed to add admin route to database", "error", err, "domain", adminDomain)
 	} else {
-		logger.Info("Ensured admin domain route is in database",
-			"domain", adminDomain,
-			"container", containerName,
-			"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
+		logger.Info("Ensured admin domain route is in database", "domain", adminDomain)
 	}
 
+	// Add to in-memory routes if it doesn't already exist
 	p.mu.Lock()
-	// Only add if it doesn't already exist in memory
 	if _, exists := p.routes[adminDomain]; !exists {
 		p.routes[adminDomain] = &ProxyRouteInfo{
 			Domain:        adminDomain,
-			ContainerIP:   containerIP,
+			ContainerIP:   ip,
 			ContainerPort: p.app.GetConfig().Http.Port,
-			ContainerID:   containerName, // Use auto-detected container name
-			Protocol:      "http",        // Gordon server uses HTTP internally
+			ContainerID:   containerName,
+			Protocol:      "http", // Gordon server uses HTTP internally
 			Path:          "/",
 			Active:        true,
 		}
-		logger.Info("Added special route for admin domain",
-			"domain", adminDomain,
-			"container", containerName,
-			"target", fmt.Sprintf("http://%s:%s", containerIP, p.app.GetConfig().Http.Port))
-	} else {
-		logger.Debug("Admin domain route already exists",
-			"domain", adminDomain,
-			"route", fmt.Sprintf("%s://%s:%s",
-				p.routes[adminDomain].Protocol,
-				p.routes[adminDomain].ContainerIP,
-				p.routes[adminDomain].ContainerPort))
+		logger.Info("Added special route for admin domain", "domain", adminDomain)
 	}
 	p.mu.Unlock()
+}
 
-	// Set up middleware
-	p.setupMiddleware()
+// checkForPortConflicts checks if there are port conflicts with the main server
+// Returns true if conflicts are found and the proxy should not be started
+func (p *Proxy) checkForPortConflicts() bool {
+	mainServerPort := p.app.GetConfig().Http.Port
 
-	// Configure routes
-	p.configureRoutes()
+	// Check HTTP port conflict
+	if p.config.HttpPort == mainServerPort {
+		logger.Warn("HTTP port for reverse proxy conflicts with main server port",
+			"port", p.config.HttpPort,
+			"solution", "reverse proxy HTTP server will be disabled")
+		return true
+	}
 
-	// Configure HTTP server to handle Let's Encrypt HTTP-01 challenges
-	// and redirect everything else to HTTPS
-	p.httpServer.Any("/.well-known/acme-challenge/*", echo.WrapHandler(p.certManager.HTTPHandler(nil)))
+	// Check HTTPS port conflict
+	if p.config.Port == mainServerPort {
+		logger.Warn("HTTPS port for reverse proxy conflicts with main server port",
+			"port", p.config.Port,
+			"solution", "reverse proxy HTTPS server will be disabled")
+		return true
+	}
 
-	// Create a custom HTTPS server with proper TLS config
+	return false
+}
+
+// startHTTPSServer starts the HTTPS server
+func (p *Proxy) startHTTPSServer() {
+	// Create HTTPS server
 	httpsServer := &http.Server{
 		Addr:    fmt.Sprintf(":%s", p.config.Port),
 		Handler: p.httpsServer,
 		TLSConfig: &tls.Config{
 			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				// Log SNI information in debug mode
-				if hello.ServerName != "" {
-					logger.Debug("TLS handshake with SNI",
-						"server_name", hello.ServerName)
-				}
-
 				// Try to get the certificate from the autocert manager
 				cert, err := p.certManager.GetCertificate(hello)
 
-				// If we can't get a certificate and we have a fallback, use it for the admin domain
+				// If no cert available and we have a fallback, use it for admin domain
+				adminDomain := p.app.GetConfig().Http.FullDomain()
 				if (err != nil || cert == nil) && hello.ServerName == adminDomain && p.fallbackCert != nil {
-					logger.Debug("Using fallback certificate for admin domain",
-						"domain", adminDomain,
-						"error", err)
+					logger.Info("Using fallback certificate for admin domain", "domain", adminDomain)
 					return p.fallbackCert, nil
 				}
 
 				return cert, err
 			},
 			MinVersion: tls.VersionTLS12,
-			// Add server name to use when client doesn't send SNI
 			ServerName: p.app.GetConfig().Http.FullDomain(),
-			// Add support for TLS-ALPN-01 challenges
 			NextProtos: []string{acme.ALPNProto},
 		},
-		// Add timeouts to prevent hanging connections
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
+		ErrorLog:     log.New(os.Stderr, "[HTTPS] ", log.LstdFlags),
 	}
 
-	// Create a custom HTTP server
+	// Try to start the server with different approaches depending on environment
+	logger.Info("Starting HTTPS server", "port", p.config.Port)
+
+	// First try explicit IPv4 binding
+	httpsAddr := fmt.Sprintf("0.0.0.0:%s", p.config.Port)
+	tcpListener, err := net.Listen("tcp4", httpsAddr)
+
+	if err != nil {
+		logger.Warn("Failed to create HTTPS listener with explicit IPv4 binding",
+			"error", err, "port", p.config.Port)
+
+		// Try simple binding as fallback
+		if err := httpsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			logger.Error("HTTPS server failed", "error", err, "port", p.config.Port)
+		}
+		return
+	}
+
+	// Create TLS listener
+	tlsListener := tls.NewListener(tcpListener, httpsServer.TLSConfig)
+	logger.Info("HTTPS server is now accepting connections", "port", p.config.Port)
+
+	// Start server with explicit listener
+	if err := httpsServer.Serve(tlsListener); err != nil && err != http.ErrServerClosed {
+		logger.Error("HTTPS server failed", "error", err, "port", p.config.Port)
+	}
+}
+
+// startHTTPServer starts the HTTP server
+func (p *Proxy) startHTTPServer() {
+	// Create HTTP server
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%s", p.config.HttpPort),
 		Handler:      p.httpServer,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
+		ErrorLog:     log.New(os.Stderr, "[HTTP] ", log.LstdFlags),
 	}
 
-	p.serverStarted = true
+	// Try to start the server with different approaches depending on environment
+	logger.Info("Starting HTTP server", "port", p.config.HttpPort)
 
-	// Start HTTPS server
-	go func() {
-		logger.Info("Starting HTTPS server", "address", httpsServer.Addr)
-		// Using empty strings for cert and key files since we're using GetCertificate
-		if err := httpsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTPS server failed", "error", err)
-		}
-	}()
+	// First try explicit IPv4 binding
+	httpAddr := fmt.Sprintf("0.0.0.0:%s", p.config.HttpPort)
+	httpListener, err := net.Listen("tcp4", httpAddr)
 
-	// Start HTTP server
-	go func() {
-		logger.Info("Starting HTTP server", "address", httpServer.Addr)
+	if err != nil {
+		logger.Warn("Failed to create HTTP listener with explicit IPv4 binding",
+			"error", err, "port", p.config.HttpPort)
+
+		// Try simple binding as fallback
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTP server failed", "error", err)
+			logger.Error("HTTP server failed", "error", err, "port", p.config.HttpPort)
 		}
-	}()
+		return
+	}
 
-	// Test admin connection after server starts
-	go p.TestAdminConnectionLater()
-
-	return nil
+	// Start server with explicit listener
+	logger.Info("HTTP server is now accepting connections", "port", p.config.HttpPort)
+	if err := httpServer.Serve(httpListener); err != nil && err != http.ErrServerClosed {
+		logger.Error("HTTP server failed", "error", err, "port", p.config.HttpPort)
+	}
 }
 
 // Stop gracefully shuts down the proxy server
 func (p *Proxy) Stop() error {
 	logger.Info("Stopping reverse proxy")
+
+	// Check if proxy is disabled via configuration
+	if !p.config.Enabled {
+		logger.Info("Proxy server is disabled via configuration, nothing to stop")
+		return nil
+	}
 
 	// Run any rate limiter cleanup functions
 	for _, cleanup := range rateLimiterCleanup {
@@ -325,21 +419,178 @@ func (p *Proxy) testAdminConnection(defaultHost string, port string) string {
 
 // TestAdminConnectionLater tests the admin connection after a short delay
 func (p *Proxy) TestAdminConnectionLater() {
-	// Wait for servers to start
-	time.Sleep(2 * time.Second)
+	// Try to acquire the lock, return immediately if another test is in progress
+	if !adminTestMutex.TryLock() {
+		logger.Debug("Admin connection test already in progress, skipping")
+		return
+	}
+	defer adminTestMutex.Unlock()
+
+	// Wait for servers to start - give plenty of time for binding to complete
+	time.Sleep(10 * time.Second)
+
+	// Log that we're beginning the connection test
+	logger.Info("Beginning admin connection test after server startup")
+
+	// First verify if ports 80 and 443 are actually bound locally
+	verifyLocalPortBinding := func(port string) bool {
+		// Try a local connection to the port
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%s", port), 2*time.Second)
+		if err != nil {
+			logger.Error(fmt.Sprintf("Failed to connect to localhost:%s - port may not be bound", port),
+				"error", err)
+			return false
+		}
+		conn.Close()
+		logger.Info(fmt.Sprintf("Successfully verified port %s is bound locally", port))
+		return true
+	}
+
+	// Check if we can connect to ports 80 and 443 locally
+	httpBound := verifyLocalPortBinding(p.config.HttpPort)
+	httpsBound := verifyLocalPortBinding(p.config.Port)
+
+	if !httpBound || !httpsBound {
+		logger.Error("One or more ports are not bound locally - proxy may not be functioning",
+			"http_port_ok", httpBound,
+			"https_port_ok", httpsBound)
+	}
 
 	logger.Debug("Testing admin connections after server startup")
 
 	// Get domain and current route
 	adminDomain := p.app.GetConfig().Http.FullDomain()
 
+	// First, check if the route exists in memory
 	p.mu.RLock()
 	route, exists := p.routes[adminDomain]
 	p.mu.RUnlock()
 
+	// Add debug logging for admin route configuration
+	if exists {
+		logger.Debug("Current admin route configuration",
+			"domain", adminDomain,
+			"container_ip", route.ContainerIP,
+			"container_port", route.ContainerPort,
+			"protocol", route.Protocol)
+
+		// Get the container's own IP by checking network interfaces
+		containerIP := p.getOwnContainerIP()
+		adminPath := p.app.GetConfig().Admin.Path
+		url := fmt.Sprintf("http://%s:%s%s/ping", containerIP, route.ContainerPort, adminPath)
+
+		logger.Debug("Testing direct IP connection", "url", url)
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+		}
+
+		resp, err := client.Get(url)
+		if err != nil {
+			logger.Error("Failed to connect to admin with direct IP",
+				"url", url,
+				"error", err)
+		} else {
+			resp.Body.Close()
+			logger.Info("Successfully connected to admin with direct IP",
+				"url", url,
+				"status", resp.Status)
+
+			// If localhost is being used, update the route to use the container IP
+			if route.ContainerIP == "localhost" || route.ContainerIP == "127.0.0.1" {
+				logger.Info("Updating admin route from localhost to container IP",
+					"old_ip", route.ContainerIP,
+					"new_ip", containerIP)
+
+				p.mu.Lock()
+				if r, ok := p.routes[adminDomain]; ok {
+					r.ContainerIP = containerIP
+				}
+				p.mu.Unlock()
+
+				// Reconfigure routes with the new IP
+				p.configureRoutes()
+
+				// Also update in database if possible
+				err := p.ForceUpdateRouteIP(adminDomain, containerIP)
+				if err != nil {
+					logger.Warn("Failed to update admin route IP in database",
+						"error", err,
+						"domain", adminDomain)
+				}
+			}
+		}
+	}
+
 	if !exists {
-		logger.Warn("Admin route not found")
-		return
+		logger.Warn("Admin route not found in memory, creating it now")
+		// Auto-detect the Gordon container name and ID
+		containerName := p.detectGordonContainer()
+
+		// Get the network name from config
+		networkName := p.app.GetConfig().ContainerEngine.Network
+
+		// Try to get the actual container IP from the network
+		if p.gordonContainerID == "" {
+			logger.Error("Failed to detect Gordon container ID, cannot add admin route")
+			return
+		}
+
+		// Get the IP address from the container's network
+		ip, err := docker.GetContainerIPFromNetwork(p.gordonContainerID, networkName)
+		if err != nil || ip == "" {
+			logger.Error("Failed to get Gordon container IP from network",
+				"container_id", p.gordonContainerID,
+				"network", networkName,
+				"error", err)
+			ip = "localhost" // Fallback to localhost
+		}
+
+		// Create the route in the database
+		err = p.AddRoute(
+			adminDomain,
+			containerName,
+			ip,
+			p.app.GetConfig().Http.Port,
+			"http", // Gordon server uses HTTP internally
+			"/",
+		)
+
+		if err != nil {
+			logger.Error("Failed to add admin route to database during recovery",
+				"error", err,
+				"domain", adminDomain)
+		} else {
+			logger.Info("Successfully recreated admin domain route in database",
+				"domain", adminDomain,
+				"container", containerName,
+				"target", fmt.Sprintf("http://%s:%s", ip, p.app.GetConfig().Http.Port))
+		}
+
+		// Add route to memory directly to ensure it's available immediately
+		p.mu.Lock()
+		p.routes[adminDomain] = &ProxyRouteInfo{
+			Domain:        adminDomain,
+			ContainerIP:   ip,
+			ContainerPort: p.app.GetConfig().Http.Port,
+			ContainerID:   containerName,
+			Protocol:      "http", // Gordon server uses HTTP internally
+			Path:          "/",
+			Active:        true,
+		}
+		p.mu.Unlock()
+
+		// Reconfigure routes to apply the changes
+		p.configureRoutes()
+
+		// Update route variable for the next steps
+		p.mu.RLock()
+		route, exists = p.routes[adminDomain]
+		p.mu.RUnlock()
+
+		if !exists {
+			logger.Error("Failed to create admin route, route still doesn't exist after recreation attempt")
+			return
+		}
 	}
 
 	// Test connection and update if needed
@@ -351,12 +602,41 @@ func (p *Proxy) TestAdminConnectionLater() {
 			logger.Info("Updated admin route with working connection",
 				"domain", adminDomain,
 				"ip", testedIP)
+
+			// Update the route in database as well
+			err := p.ForceUpdateRouteIP(adminDomain, testedIP)
+			if err != nil {
+				logger.Warn("Failed to update admin route IP in database",
+					"error", err,
+					"domain", adminDomain)
+			}
 		}
 		p.mu.Unlock()
+
+		// Reconfigure routes to apply the IP change
+		p.configureRoutes()
 	}
 
 	// Check external port access
 	p.checkExternalPortAccess()
+}
+
+// checkPorts is a helper function to diagnose what might be using a port
+func checkPorts(protocol, port string) {
+	// This is just a debugging helper - errors are ignored
+	// Try using netstat to check port usage
+	output, err := exec.Command("netstat", "-tuln").CombinedOutput()
+	if err == nil {
+		logger.Debug("Network port status", "output", string(output))
+	}
+
+	// Try using lsof to check port usage
+	output, err = exec.Command("lsof", "-i", fmt.Sprintf("%s:%s", protocol, port)).CombinedOutput()
+	if err == nil && len(output) > 0 {
+		logger.Debug("Processes using port", "port", port, "output", string(output))
+	} else {
+		logger.Debug("No process found using port with lsof", "port", port)
+	}
 }
 
 // checkExternalPortAccess verifies if ports 80 and 443 are accessible
@@ -406,82 +686,129 @@ func (p *Proxy) checkExternalPortAccess() {
 	}
 }
 
-// // detectGordonContainer attempts to find the Gordon container automatically
-// func (p *Proxy) detectGordonContainer() string {
-// 	// Check if we're running inside a container
-// 	if docker.IsRunningInContainer() {
-// 		logger.Debug("Detected we're running in a container")
+// getOwnContainerIP attempts to determine the container's own IP address
+// from network interfaces, preferring non-loopback interfaces
+func (p *Proxy) getOwnContainerIP() string {
+	// Default fallback IP based on common container network range
+	defaultIP := "10.89.0.118" // Updated to match the observed IP in logs
 
-// 		// Get our hostname which should be the container ID in Docker/Podman
-// 		hostname := os.Getenv("HOSTNAME")
-// 		if hostname != "" {
-// 			// Check if there's a container with this hostname
-// 			containers, err := docker.ListRunningContainers()
-// 			if err == nil {
-// 				for _, container := range containers {
-// 					// Check if this container is us by comparing hostname with container ID
-// 					if strings.HasPrefix(hostname, container.ID) {
-// 						// This is our container
-// 						containerName := strings.TrimLeft(container.Names[0], "/")
-// 						logger.Debug("Auto-detected Gordon container name from hostname", "container_name", containerName)
-// 						return containerName
-// 					}
-// 				}
-// 			} else {
-// 				logger.Debug("Could not list containers when checking hostname", "error", err)
-// 			}
-// 		}
-// 	}
+	// Use environment variable if available (can be set in container config)
+	if envIP := os.Getenv("GORDON_CONTAINER_IP"); envIP != "" {
+		logger.Debug("Using container IP from environment variable", "ip", envIP)
+		return envIP
+	}
 
-// 	// Try to find Gordon by examining container processes
-// 	containers, err := docker.ListRunningContainers()
-// 	if err == nil {
-// 		for _, container := range containers {
-// 			containerID := container.ID
+	// Try to get the IP from the Gordon network - this is the most reliable method
+	networkName := p.app.GetConfig().ContainerEngine.Network
+	if p.gordonContainerID != "" {
+		ip, err := docker.GetContainerIPFromNetwork(p.gordonContainerID, networkName)
+		if err == nil && ip != "" {
+			logger.Info("Using container IP from Docker network", "ip", ip, "network", networkName)
+			return ip
+		} else {
+			logger.Error("Failed to get container IP from Docker network",
+				"error", err,
+				"container_id", p.gordonContainerID,
+				"network", networkName)
+		}
+	} else {
+		logger.Error("Gordon container ID not set, cannot get container IP from Docker network")
+	}
 
-// 			// Check container processes for Gordon
-// 			containerLogs, err := docker.GetContainerLogs(containerID)
-// 			if err == nil && (strings.Contains(containerLogs, "/gordon") || strings.Contains(containerLogs, "serve")) {
-// 				containerName := strings.TrimLeft(container.Names[0], "/")
-// 				logger.Debug("Auto-detected Gordon container by process", "container_name", containerName)
-// 				return containerName
-// 			} else if err != nil {
-// 				logger.Debug("Could not get container logs", "container_id", containerID, "error", err)
-// 			}
+	// Try to detect by listing network interfaces
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		logger.Error("Failed to list network interfaces", "error", err)
+		return defaultIP
+	}
 
-// 			// Check container command for Gordon
-// 			if len(container.Command) > 0 && strings.Contains(container.Command, "gordon") {
-// 				containerName := strings.TrimLeft(container.Names[0], "/")
-// 				logger.Debug("Auto-detected Gordon container by command", "container_name", containerName)
-// 				return containerName
-// 			}
-// 		}
-// 	} else {
-// 		logger.Debug("Could not list containers when checking processes", "error", err)
-// 	}
+	// First, look for eth0 or similar standard interfaces
+	for _, iface := range ifaces {
+		// Skip loopback
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
 
-// 	// If we couldn't detect from processes, try to find a container with gordon in the name or image
-// 	if err == nil {
-// 		for _, container := range containers {
-// 			// Check container names for "gordon"
-// 			for _, name := range container.Names {
-// 				if strings.Contains(strings.ToLower(name), "gordon") {
-// 					containerName := strings.TrimLeft(name, "/")
-// 					logger.Debug("Auto-detected Gordon container by name", "container_name", containerName)
-// 					return containerName
-// 				}
-// 			}
+		// Prefer eth0 or similar
+		if strings.HasPrefix(iface.Name, "eth") || strings.HasPrefix(iface.Name, "en") {
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
 
-// 			// Check image name for "gordon"
-// 			if strings.Contains(strings.ToLower(container.Image), "gordon") {
-// 				containerName := strings.TrimLeft(container.Names[0], "/")
-// 				logger.Debug("Auto-detected Gordon container by image", "container_name", containerName, "image", container.Image)
-// 				return containerName
-// 			}
-// 		}
-// 	}
+			for _, addr := range addrs {
+				ip, _, err := net.ParseCIDR(addr.String())
+				if err != nil {
+					continue
+				}
 
-// 	// If all else fails, default to "gordon"
-// 	logger.Debug("Could not auto-detect Gordon container, using default name", "container_name", "gordon")
-// 	return "gordon"
-// }
+				// Only use IPv4 addresses
+				if ipv4 := ip.To4(); ipv4 != nil {
+					logger.Debug("Found container IP from network interface",
+						"interface", iface.Name,
+						"ip", ipv4.String())
+					return ipv4.String()
+				}
+			}
+		}
+	}
+
+	// If no preferred interface found, use any non-loopback interface
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err != nil {
+				continue
+			}
+
+			if ipv4 := ip.To4(); ipv4 != nil {
+				logger.Debug("Found container IP from fallback interface",
+					"interface", iface.Name,
+					"ip", ipv4.String())
+				return ipv4.String()
+			}
+		}
+	}
+
+	logger.Warn("Could not determine container IP, using default", "ip", defaultIP)
+	return defaultIP
+}
+
+// StartAdminRouteVerification starts a periodic verification of admin routes
+// to ensure they are correctly registered and functioning
+func (p *Proxy) StartAdminRouteVerification() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	logger.Debug("Starting admin route verification service")
+
+	for {
+		select {
+		case <-ticker.C:
+			adminDomain := p.app.GetConfig().Http.FullDomain()
+
+			// Check if the admin route exists in the routes map
+			p.mu.RLock()
+			_, exists := p.routes[adminDomain]
+			p.mu.RUnlock()
+
+			if !exists {
+				logger.Warn("Admin route missing during periodic check, recreating it")
+				p.TestAdminConnectionLater()
+				continue
+			}
+
+			// Test the existing admin connection
+			p.TestAdminConnectionLater()
+		}
+	}
+}

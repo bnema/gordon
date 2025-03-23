@@ -1,0 +1,72 @@
+package components
+
+// Navbar is a menu component for navigation
+templ Navbar(buildVersion string, adminPath string, userSettingsURL string, logoutURL string) {
+	<!-- DaisyUI Navbar -->
+	<div class="navbar bg-base-100 shadow-lg fixed top-0 z-50">
+	  <div class="navbar-start">
+	    <div class="flex items-center">
+	      <h1 class="gordon-title text-2xl md:text-3xl text-primary tracking-tighter px-4">
+	        Gordon
+	      </h1>
+	      <span id="actual-version" class="text-xs md:text-sm pr-1 JetBrainsMonoNF text-base-content/70">
+	        { buildVersion }
+	      </span>
+	      <span hidden id="update-available" class="text-success text-xs md:text-sm JetBrainsMonoNF hidden" title="">
+	        <a href="https://github.com/bnema/gordon/releases" class="link">󰨦</a>
+	      </span>
+	    </div>
+	  </div>
+	  <div class="navbar-center hidden lg:flex">
+	    <ul class="menu menu-horizontal px-1">
+	      <li>
+	        <a href={ templ.URL(adminPath + "/manager") } class="font-semibold">
+	          <span class="JetBrainsMonoBoldNF pr-1">󰘦</span> Manager
+	        </a>
+	      </li>
+	    </ul>
+	  </div>
+	  <div class="navbar-end">
+	    <!-- Theme toggle -->
+	    <div class="dropdown dropdown-end">
+	      <label tabindex="0" class="btn btn-ghost btn-circle">
+	        <span class="iconf text-lg md:text-xl">󰔎</span>
+	      </label>
+	      <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52">
+	        <li><button onclick="setTheme('gordon')">Gordon Light</button></li>
+	        <li><button onclick="setTheme('gordon-dark')">Gordon Dark</button></li>
+	        <li><button onclick="setTheme('light')">Light</button></li>
+	        <li><button onclick="setTheme('dark')">Dark</button></li>
+	      </ul>
+	    </div>
+	    
+	    <!-- User menu -->
+	    <div class="dropdown dropdown-end">
+	      <label tabindex="0" class="btn btn-ghost btn-circle">
+	        <span class="iconf text-lg md:text-xl">󰀉</span>
+	      </label>
+	      <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52">
+	        <li>
+	          <a href={ templ.URL(userSettingsURL) } title="User settings">
+	            <span class="iconf">󰒓</span> Settings
+	          </a>
+	        </li>
+	        <li>
+	          <a href={ templ.URL(logoutURL) } title="Logout">
+	            <span class="iconf">󰍃</span> Logout
+	          </a>
+	        </li>
+	      </ul>
+	    </div>
+	  </div>
+	</div>
+
+	<!-- Theme toggle script -->
+	<script>
+	  function setTheme(theme) {
+	    document.documentElement.setAttribute('data-theme', theme);
+	    localStorage.setItem('theme', theme);
+	    console.debug('Theme changed to:', theme);
+	  }
+	</script>
+}

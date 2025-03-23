@@ -1,9 +1,9 @@
 <div
   id="edit-container-{{.ID}}"
-  class="h-fit-content"
+  class="card bg-base-100 shadow-xl"
   hx-ext="response-targets"
 >
-  <div id="editor">
+  <div id="editor" class="card-body">
     <form
       method="post"
       action="/htmx/container-manager/edit/{{.ID}}"
@@ -14,17 +14,19 @@
       <textarea
         name="container_config"
         id="container_config"
-        class="w-full p-4 rounded-md bg-slate-100 border-gray-300 border-2"
+        class="textarea textarea-bordered w-full h-96 font-mono JetBrainsMonoNF"
         rows="20"
         >{{.ContainerInfo}}</textarea
       >
-      <input
-        type="submit"
-        value="Save"
-        id="save-button-{{.ID}}"
-        class="bg-gordonmascot-lblue text-white font-bold px-8 py-1 rounded-md hover:bg-gordonmascot-mblue cursor-pointer"
-      />
+      <div class="card-actions justify-end mt-4">
+        <input
+          type="submit"
+          value="Save"
+          id="save-button-{{.ID}}"
+          class="btn btn-primary"
+        />
+      </div>
     </form>
-    <div id="error-message-edit-container-{{.ID}}" class="text-red-500"></div>
+    <div id="error-message-edit-container-{{.ID}}" class="text-error mt-2"></div>
   </div>
 </div>

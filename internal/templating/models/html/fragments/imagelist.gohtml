@@ -1,82 +1,98 @@
-<div class="flex flex-col p-4">
-  <!-- Upload button aligned right of Images -->
-  <div class="flex justify-between items-center mb-1">
-    <h1 class="text-lg md:text-xl font-bold text-gordonmascot-hblue">Images</h1>
-    <div class="flex space-x-2">
-      <button
-        id="refresh-images-button"
-        class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
-        title="Refresh image list"
-      >
-        <span class="iconf text-xl align-middle">󰑐 </span>
-        Refresh
-      </button>
-      <button
-        class="py-1 px-2 bg-blue-500 hover:bg-blue-700 text-white font-bold rounded"
-        id="upload-button"
-        hx-get="/htmx/upload-image"
-        hx-target="#upload-image"
-        hx-swap="innerHTML"
-        title="Manually upload a .tar container image"
-      >
-        <span class="iconf text-xl align-middle">󰭾 </span>
-        Upload
-      </button>
+<!-- Image list using daisyUI components -->
+<div class="card w-full bg-base-300">
+  <div class="card-body p-4">
+    
+    <!-- Action buttons -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
+      <h3 class="font-semibold text-base-content">Available Images: {{ len .Images }}</h3>
+      <div class="flex gap-2">
+        <button 
+          class="btn btn-sm btn-secondary"
+          hx-get="/htmx/upload-image"
+          hx-target="#image-manager"
+          hx-swap="innerHTML">
+          <span class="iconf">󰦒</span> Upload
+        </button>
+        <button 
+          class="btn btn-sm btn-primary"
+          hx-get="/htmx/image-manager"
+          hx-target="#image-manager"
+          hx-swap="innerHTML">
+          <span class="iconf">󰑓</span> Refresh
+        </button>
+      </div>
     </div>
+
+    <!-- Image list -->
+    <table class="table">
+      <!-- head -->
+      <thead>
+        <tr>
+          <th>Repository</th>
+          <th>Tag</th>
+          <th>Size</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ if .NoImage }}
+        <tr>
+          <td colspan="5" class="text-center py-4">
+            <div class="alert alert-info">
+              <span class="iconf">ℹ️</span>
+              <span>No images found. Upload an image first.</span>
+            </div>
+          </td>
+        </tr>
+        {{ else }}
+          {{ range .Images }}
+          <tr class="hover">
+            <td>
+              <div class="flex items-center gap-3">
+                <div>
+                  <div class="font-bold">{{ .Repository }}</div>
+                  <div class="text-sm opacity-50">{{ .ID }}</div>
+                </div>
+              </div>
+            </td>
+            <td>{{ .Tag }}</td>
+            <td>{{ .Size }}</td>
+            <td>{{ .Created }}</td>
+            <th>
+              <div class="dropdown dropdown-end">
+                <div tabindex="0" role="button" class="btn btn-ghost btn-xs">
+                  <span class="iconf">󰅀</span>
+                </div>
+                <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-200 rounded-box w-52">
+                  <li>
+                    <a 
+                      href="/htmx/create-container/{{ if gt (len .ID) 12 }}{{ slice .ID 0 12 }}{{ else }}{{ .ID }}{{ end }}"
+                      class="text-success flex items-center">
+                      <span class="iconf mr-2">󰐕</span> Create Container
+                    </a>
+                  </li>
+                  <li>
+                    <button 
+                      class="text-error flex items-center"
+                      hx-delete="/htmx/image-manager/delete/{{ .ID }}"
+                      hx-target="#image-manager"
+                      hx-swap="innerHTML"
+                      hx-confirm="Are you sure you want to delete this image?">
+                      <span class="iconf mr-2">󰆴</span> Delete
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </th>
+          </tr>
+          {{ end }}
+        {{ end }}
+      </tbody>
+    </table>
   </div>
-  <div id="upload-image"></div>
-  <table class="p-4 border-t-2">
-    <tbody>
-      {{
-        range.Images
-      }}
-      <tr id="img-{{.ShortID}}" hx-ext="response-targets" class=" hover:bg-slate-100">
-        <td>
-          <span title="{{.ShortID}}">{{.Name}}</span>
-        </td>
-        <td>
-          <span title="Image creation date">{{.CreatedStr}}</span>
-        </td>
-        <td>{{.SizeStr}}</td>
-        <td align="right">
-
-          <button
-            id="add-button-img-{{.ShortID}}"
-            hx-get="/htmx/create-container/{{.ShortID}}"
-            hx-target="#create-container-{{.ShortID}}"
-            hx-target-*="#error-message-div-{{.ShortID}}"
-            hx-swap="innerHTML"
-            class="py-2 px-4"
-          >
-            <span title="Deploy a container using this image" class="iconf text-xl text-blue-600 hover:text-gordonmascot-hblue">󰆍</span>
-          </button>
-
-          <button
-            id="remove-button-img-{{.ShortID}}"
-            hx-delete="/htmx/image-manager/delete/{{.ShortID}}"
-            hx-target="#img-{{.ShortID}}"
-            hx-target-*="#error-message-div-{{.ShortID}}"
-            hx-swap="innerHTML"
-            hx-confirm="Are you sure you want to delete this container image?"
-            class="py-2 px-4"
-          >
-            <span title="Remove this image" class="iconf text-xl text-red-600 hover:text-red-900"></span>
-          </button>
-        </td>
-      </tr>
-      <t>
-        <td colspan="4">
-          <div id="error-message-div-{{.ShortID}}" class="text-red-500"></div>
-          <div class="create-container" id="create-container-{{.ShortID}}"></div>
-        </td>
-      </tr>
-      {{ else }}
-      <tr>
-        <td colspan="4" class="mt-2">No images found.</td>
-      </tr>
-      {{
-        end
-      }}
-    </tbody>
-  </table>
 </div>
+
+<script>
+console.debug('Image list rendered');
+</script>
