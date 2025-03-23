@@ -1,9 +1,12 @@
 <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow" hx-ext="response-targets">
   <!-- Left Side: Docker Run Options -->
-  <div class="flex-grow bg-slate-100 p-4 rounded-md">
-    <h2 class="font-bold pb-4">Deploy a container based on {{.ImageName}}</h2>
+  <div class="flex-grow card p-6">
+    <h2 class="card-title pb-4">Deploy a container based on {{.ImageName}}</h2>
     {{if .ErrorMessage}}
-    <div class="text-red-500">{{.ErrorMessage}}</div>
+    <div class="alert alert-error">
+      <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      <span>{{.ErrorMessage}}</span>
+    </div>
     {{ end }}
     <form id="create-container-form-{{.ShortID}}" action="/create-container/{{.ShortID}}" method="post" 
       hx-post="/htmx/create-container/{{.ShortID}}"
@@ -11,83 +14,104 @@
       hx-target="#create-container-{{.ShortID}}"
       hx-target-*="#error-message-create-container-{{.ShortID}}">
       <!-- Image Name -->
-      <div class="flex space-x-4 pb-4">
-        <div class="w-1/3">
-          <label class="block">Image name</label>
-          <input type="text" name="image_name" class="w-full p-4 rounded-md bg-gray-100 border-gray-300 border-2"
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pb-4">
+        <div class="md:col-span-1">
+          <label class="label">
+            <span class="label-text">Image name</span>
+          </label>
+          <input type="text" name="image_name" class="input input-bordered input-disabled w-full"
             value="{{.ImageName}}" readonly />
         </div>
 
-        <div class="w-2/3">
-          <label class="block">Image ID</label>
-          <input type="text" name="image_id" class="w-full p-4 rounded-md bg-gray-100 border-gray-300 border-2"
+        <div class="md:col-span-2">
+          <label class="label">
+            <span class="label-text">Image ID</span>
+          </label>
+          <input type="text" name="image_id" class="input input-bordered input-disabled w-full"
             value="{{.ImageID}}" readonly />
         </div>
       </div>
 
       <!-- Container Name -->
-      <div class="pb-4">
-        <label class="block">Container name</label>
-        <input type="text" name="container_name" class="w-full p-4 rounded-md" value="{{.ContainerName}}" />
+      <div class="form-control pb-4">
+        <label class="label">
+          <span class="label-text">Container name</span>
+        </label>
+        <input type="text" name="container_name" class="input input-bordered w-full" value="{{.ContainerName}}" />
       </div>
+      
       <!-- Http(s) / Subdomain / Domain -->
-      <div class="flex pb-4 space-x-4">
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-4 pb-4">
         <!-- Protocol -->
-        <div class="w-1/4">
-          <label class="block">Protocol</label>
-          <select name="container_protocol" class="w-full p-4 rounded-md border-2 bg-slate-200 border-gray-300">
+        <div class="md:col-span-3">
+          <label class="label">
+            <span class="label-text">Protocol</span>
+          </label>
+          <select name="container_protocol" class="select select-bordered w-full">
             <option value="https">https</option>
             <option value="http">http</option>
           </select>
         </div>
 
         <!-- Subdomain -->
-        <div class="w-1/3">
-          <label class="block">Subdomain</label>
-          <input type="text" name="container_subdomain" class="w-full p-4 rounded-md" value="{{.ContainerSubdomain}}" />
+        <div class="md:col-span-4">
+          <label class="label">
+            <span class="label-text">Subdomain</span>
+          </label>
+          <input type="text" name="container_subdomain" class="input input-bordered w-full" value="{{.ContainerSubdomain}}" />
         </div>
 
         <!-- Domain -->
-        <div class="w-5/12">
-          <label class="block">Domain</label>
-          <input type="text" name="container_domain" class="w-full p-4 rounded-md" value="{{.ContainerDomain}}" />
+        <div class="md:col-span-5">
+          <label class="label">
+            <span class="label-text">Domain</span>
+          </label>
+          <input type="text" name="container_domain" class="input input-bordered w-full" value="{{.ContainerDomain}}" />
         </div>
       </div>
+      
       <!-- Exposed Ports -->
-      <div class="pb-4">
-        <label class="block">Exposed Ports (Optional)</label>
-        <span class="text-gray-500">
-          eg: 8080:1887/tcp (You can specify multiple ports by separating them with a comma)
-        </span>
-        <input type="text" name="ports" class="w-full p-4 rounded-md" value="{{.Ports}}" />
+      <div class="form-control pb-4">
+        <label class="label">
+          <span class="label-text">Exposed Ports (Optional)</span>
+          <span class="label-text-alt">eg: 8080:1887/tcp (You can specify multiple ports by separating them with a comma)</span>
+        </label>
+        <input type="text" name="ports" class="input input-bordered w-full" value="{{.Ports}}" />
       </div>
 
       <!-- Proxy Port -->
-      <div class="mb-6">
-        <label class="block">Container Proxy Port (Required)</label>
-        <div class="text-xs text-gray-500 mb-2">
-          Specify the internal container port that the proxy will route traffic to
-        </div>
-        <input type="text" name="container_port" class="w-full p-4 rounded-md" value="{{.ProxyPort}}" required />
+      <div class="form-control pb-4">
+        <label class="label">
+          <span class="label-text">Container Proxy Port (Required)</span>
+          <span class="label-text-alt">Specify the internal container port that the proxy will route traffic to</span>
+        </label>
+        <input type="text" name="container_port" class="input input-bordered w-full" value="{{.ProxyPort}}" required />
       </div>
       
       <!-- Volumes -->
-      <div class="pb-4">
-        <label class="block">Volumes</label>
-        <span class="text-gray-500">e.g. ./data:/container/data </span>
-        <input type="text" name="volumes" class="w-full p-4 rounded-md" value="{{.Volumes}}" />
+      <div class="form-control pb-4">
+        <label class="label">
+          <span class="label-text">Volumes</span>
+          <span class="label-text-alt">e.g. ./data:/container/data</span>
+        </label>
+        <input type="text" name="volumes" class="input input-bordered w-full" value="{{.Volumes}}" />
       </div>
 
-      <div class="pb-4">
-        <label class="block">Environment variables</label>
-        <span class="text-gray-500">e.g. KEY=VALUE </span>
-        <textarea name="environment_variables" class="w-full p-4 rounded-md"
+      <div class="form-control pb-4">
+        <label class="label">
+          <span class="label-text">Environment variables</span>
+          <span class="label-text-alt">e.g. KEY=VALUE</span>
+        </label>
+        <textarea name="environment_variables" class="textarea textarea-bordered w-full"
           rows="4">{{.EnvironmentVariables}}</textarea>
       </div>
+      
       <!-- Restart: always/on-failure/only when stopped/never -->
-      <div class="pb-4">
-        <label class="block">Restart</label>
-        <select name="restart" class="w-full p-4 rounded-md border-2 bg-gray-100 border-gray-300">
+      <div class="form-control pb-4">
+        <label class="label">
+          <span class="label-text">Restart</span>
+        </label>
+        <select name="restart" class="select select-bordered w-full">
           <option value="always">Always</option>
           <option value="on-failure">On failure</option>
           <option value="unless-stopped">Unless stopped</option>
@@ -96,20 +120,21 @@
       </div>
 
       <!-- Skip Proxy Setup Option -->
-      <div class="pb-4">
-        <label class="flex items-center space-x-2">
-          <input type="checkbox" name="skip_proxy_setup" value="true" class="form-checkbox h-5 w-5 text-blue-600" />
+      <div class="form-control pb-4">
+        <label class="label cursor-pointer justify-start gap-4">
+          <input type="checkbox" name="skip_proxy_setup" value="true" class="checkbox checkbox-primary" />
           <span>Skip proxy setup (create container only, don't set up domain/certificates)</span>
         </label>
-        <p class="text-sm text-gray-500 ml-7">
+        <div class="text-sm opacity-70 ml-10">
           Use this option if you only want to create the container without triggering proxy setup, 
           certificate generation, and other related processes.
-        </p>
+        </div>
       </div>
 
-      <input type="submit" value="Create" id="create-container-submit"
-        class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded" />
+      <button type="submit" id="create-container-submit" class="btn btn-primary">
+        Create Container
+      </button>
     </form>
-    <div id="error-message-create-container-{{.ShortID}}" class="text-red-500"></div>
+    <div id="error-message-create-container-{{.ShortID}}" class="text-error mt-4"></div>
   </div>
 </div>

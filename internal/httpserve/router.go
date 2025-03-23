@@ -12,9 +12,13 @@ import (
 
 // RegisterRoutes registers all routes and middlewares
 func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
-	// Add default Echo logger middleware
-	e.Use(echomid.Logger())
 	e.Use(echomid.Recover())
+
+	// Log admin status
+	log.Info("Admin WebUI status",
+		"enabled", a.Config.Admin.IsAdminWebUIEnabled(),
+		"path", a.Config.Admin.Path)
+
 	// Initiate the session middleware
 	e.Use(middleware.InitSessionMiddleware(a))
 
@@ -22,7 +26,10 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 	e.Use(middleware.LanguageDetection)
 
 	AdminPath := a.Config.Admin.Path
+	log.Debug("Binding login routes with AdminPath", "path", AdminPath)
 	bindLoginRoute(e, a, AdminPath)
+
+	log.Debug("Binding API endpoints")
 	bindAPIEndpoints(e, a)
 
 	// SetCommonDataMiddleware will pass data to the renderer
@@ -37,15 +44,29 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 	// Color scheme detection for dark/light mode
 	e.Use(middleware.ColorSchemeDetection)
 
+	// Set custom error handler
+	e.HTTPErrorHandler = middleware.CustomHTTPErrorHandler(a)
+
+	log.Debug("Binding admin routes with AdminPath", "path", AdminPath)
 	bindAdminRoute(e, a, AdminPath)
+
+	log.Debug("Binding static routes")
 	bindStaticRoute(e, a, "/*")
-	bindHTMXEndpoints(e, a)
+
+	// Only bind HTMX endpoints if Admin WebUI is enabled
+	if a.Config.Admin.IsAdminWebUIEnabled() {
+		log.Info("Admin WebUI is enabled, binding HTMX endpoints")
+		bindHTMXEndpoints(e, a)
+	} else {
+		log.Info("Admin WebUI is disabled, skipping HTMX endpoints")
+	}
 
 	// Protect the root path with a 403
 	e.GET("/", func(c echo.Context) error {
-		return c.String(403, "403 Forbidden")
+		return handlers.RenderForbiddenPage(c, a)
 	})
 
+	log.Info("All routes registered successfully")
 	return e
 }
 
@@ -101,8 +122,14 @@ func bindStaticRoute(e *echo.Echo, a *server.App, path string) {
 
 // bindLoginRoute binds all login routes
 func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
+	// Skip binding admin login routes if admin webUI is disabled
+	if !a.Config.Admin.IsAdminWebUIEnabled() {
+		log.Debug("Admin WebUI is disabled, skipping admin login routes")
+		return
+	}
+
 	e.GET(adminPath+"/login", func(c echo.Context) error {
-		return handlers.RenderLoginPage(c, a)
+		return handlers.RenderTemplLoginPage(c, a)
 	})
 	e.POST(adminPath+"/login/submit-token", func(c echo.Context) error {
 		return handlers.HandleTokenSubmission(c, a)
@@ -120,6 +147,12 @@ func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
 
 // bindAdminRoute binds all admin routes
 func bindAdminRoute(e *echo.Echo, a *server.App, adminPath string) {
+	// Skip binding admin routes if admin webUI is disabled
+	if !a.Config.Admin.IsAdminWebUIEnabled() {
+		log.Debug("Admin WebUI is disabled, skipping admin routes")
+		return
+	}
+
 	adminGroup := e.Group(adminPath)
 	// Since login is behind the admin path, we cannot use group middleware
 	adminGroup.GET("", func(c echo.Context) error {
@@ -127,7 +160,7 @@ func bindAdminRoute(e *echo.Echo, a *server.App, adminPath string) {
 	}, middleware.RequireLogin(a))
 
 	adminGroup.GET("/manager", func(c echo.Context) error {
-		return handlers.AdminManagerRoute(c, a)
+		return handlers.RenderTemplManagerPage(c, a)
 	}, middleware.RequireLogin(a))
 	adminGroup.GET("/cc/:ID", func(c echo.Context) error {
 		return handlers.CreateContainerFullGET(c, a)
@@ -146,7 +179,13 @@ func bindAdminRoute(e *echo.Echo, a *server.App, adminPath string) {
 
 // bindHTMXEndpoints binds all HTMX endpoints
 func bindHTMXEndpoints(e *echo.Echo, a *server.App) {
-	// Create a  group for /htmx endpoints
+	// Skip if AdminWebUI is disabled
+	if !a.Config.Admin.IsAdminWebUIEnabled() {
+		log.Debug("Admin WebUI is disabled, skipping HTMX endpoints")
+		return
+	}
+
+	// Create a group for /htmx endpoints
 	htmxGroup := e.Group("/htmx")
 
 	// Apply middleware to the group, so all endpoints are protected
@@ -163,7 +202,7 @@ func bindHTMXEndpoints(e *echo.Echo, a *server.App) {
 
 	// List all containers
 	htmxGroup.GET("/container-manager", func(c echo.Context) error {
-		return handlers.ContainerManagerComponent(c, a)
+		return handlers.RenderTemplContainerList(c, a)
 	})
 	// Stop a container
 	htmxGroup.POST("/container-manager/stop/:ID", func(c echo.Context) error {

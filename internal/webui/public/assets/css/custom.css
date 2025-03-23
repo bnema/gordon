@@ -6,9 +6,118 @@
 
 /* Embeded path : assets/css/cutsom.css */
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@source "../../../templating/models/html/**/*.{gohtml,go}";
+@plugin "daisyui";
+
+/* Custom DaisyUI theme */
+@plugin "daisyui/theme" {
+  name: "gordon-dark";
+  default: true;
+  prefersdark: true;
+  color-scheme: "dark";
+  --color-base-100: oklch(28% 0.091 267.935);
+  --color-base-200: oklch(13% 0.028 261.692);
+  --color-base-300: oklch(20% 0.042 265.755);
+  --color-base-content: oklch(93% 0.034 272.788);
+  --color-primary: oklch(87% 0 0);
+  --color-primary-content: oklch(14% 0 0);
+  --color-secondary: oklch(83% 0.145 321.434);
+  --color-secondary-content: oklch(29% 0.136 325.661);
+  --color-accent: oklch(80% 0.105 251.813);
+  --color-accent-content: oklch(28% 0.091 267.935);
+  --color-neutral: oklch(37% 0.034 259.733);
+  --color-neutral-content: oklch(98% 0.002 247.839);
+  --color-info: oklch(68% 0.169 237.323);
+  --color-info-content: oklch(97% 0.013 236.62);
+  --color-success: oklch(70% 0.14 182.503);
+  --color-success-content: oklch(98% 0.014 180.72);
+  --color-warning: oklch(76% 0.188 70.08);
+  --color-warning-content: oklch(98% 0.022 95.277);
+  --color-error: oklch(64% 0.246 16.439);
+  --color-error-content: oklch(96% 0.015 12.422);
+  --radius-selector: 1rem;
+  --radius-field: 0rem;
+  --radius-box: 0.25rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+
+/* Custom component classes */
+@layer components {
+  /* Button styles */
+  .btn-primary {
+    @apply flex w-full justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2;
+  }
+  
+  .btn-secondary {
+    @apply flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2;
+  }
+  
+  .btn-danger {
+    @apply flex w-full justify-center rounded-md border border-transparent bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2;
+  }
+  
+  /* Alert styles */
+  .alert-error {
+    @apply rounded-md bg-red-50 p-4 dark:bg-red-900/20;
+  }
+  
+  .alert-error-icon {
+    @apply h-5 w-5 text-red-400;
+  }
+  
+  .alert-error-text {
+    @apply text-sm font-medium text-red-800 dark:text-red-300;
+  }
+  
+  .alert-success {
+    @apply rounded-md bg-green-50 p-4 dark:bg-green-900/20;
+  }
+  
+  .alert-success-icon {
+    @apply h-5 w-5 text-green-400;
+  }
+  
+  .alert-success-text {
+    @apply text-sm font-medium text-green-800 dark:text-green-300;
+  }
+  
+  /* Card styles */
+  .card {
+    @apply bg-white p-4 rounded-md shadow mb-4;
+  }
+  
+  .card-header {
+    @apply text-lg font-semibold text-indigo-600 mb-2;
+  }
+  
+  /* Background styles */
+  .bg-app {
+    @apply bg-indigo-50;
+  }
+  
+  .bg-sidebar {
+    @apply bg-indigo-900;
+  }
+  
+  .bg-card {
+    @apply bg-white;
+  }
+  
+  /* Text styles */
+  .text-title {
+    @apply text-indigo-600 font-semibold;
+  }
+  
+  .text-subtitle {
+    @apply text-indigo-500;
+  }
+}
 
 /* Import IBM Plex Fonts */
 @font-face {

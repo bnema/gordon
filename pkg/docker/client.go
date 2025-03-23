@@ -28,14 +28,15 @@ func InitializeClient(config *Config) error {
 		return fmt.Errorf("sock field in Config is empty")
 	}
 
+	logger.Debug("Checking socket file existence", "socket_path", config.Sock)
 	if _, err := os.Stat(config.Sock); os.IsNotExist(err) {
-		logger.Error("Failed to initialize Docker client", "error", err)
+		logger.Error("Failed to initialize Docker client", "error", err, "socket_path", config.Sock)
 		return err
 	}
 
 	// For Podman compatibility, we need to ensure we're using the right connection approach
 	host := "unix://" + config.Sock
-	logger.Debug("Setting up Docker client", "host", host)
+	logger.Debug("Setting up Docker client", "host", host, "podman_enabled", config.PodmanEnable)
 
 	// Create the Docker client with appropriate options
 	cli, err := client.NewClientWithOpts(
@@ -47,7 +48,18 @@ func InitializeClient(config *Config) error {
 		return fmt.Errorf("error initializing Docker client: %s", err)
 	}
 
-	logger.Debug("Docker client initialized", "socket", config.Sock, "podman_enabled", config.PodmanEnable)
+	// Test the connection to make sure it works
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	logger.Debug("Testing Docker client connection", "socket", config.Sock)
+	_, err = cli.Ping(ctx)
+	if err != nil {
+		logger.Error("Docker client ping failed", "error", err, "socket", config.Sock)
+		return fmt.Errorf("docker daemon not responding: %s", err)
+	}
+
+	logger.Debug("Docker client initialized successfully", "socket", config.Sock, "podman_enabled", config.PodmanEnable)
 	dockerCli = cli
 	currentConfig = config
 	return nil
@@ -56,17 +68,20 @@ func InitializeClient(config *Config) error {
 func CheckIfInitialized() error {
 	if currentConfig == nil || currentConfig.Sock == "" {
 		logger.Error("Docker client check failed", "error", "client not initialized or configuration missing")
+		logger.Debug("Docker client initialization failed: configuration is missing or empty")
 		return fmt.Errorf("docker client is not initialized or configuration is missing")
 	}
 
 	socketPath := currentConfig.Sock
 	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
 		logger.Error("Docker client check failed", "error", "socket file not found", "path", socketPath)
+		logger.Debug("Docker client check failed: socket file not found", "path", socketPath)
 		return fmt.Errorf("sock file does not exist: %s", socketPath)
 	}
 
 	if dockerCli == nil {
 		logger.Error("Docker client check failed", "error", "client is nil")
+		logger.Debug("Docker client check failed: client is nil")
 		return fmt.Errorf("docker client is not initialized")
 	}
 
@@ -76,6 +91,7 @@ func CheckIfInitialized() error {
 	_, err := dockerCli.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
 		logger.Error("Docker client check failed", "error", err)
+		logger.Debug("Docker client check failed: cannot connect to Docker daemon", "error", err)
 		return fmt.Errorf("cannot connect to Docker daemon: %s", err)
 	}
 

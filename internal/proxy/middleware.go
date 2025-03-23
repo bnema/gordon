@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bnema/gordon/pkg/logger"
@@ -30,8 +31,8 @@ func (p *Proxy) setupMiddleware() {
 	p.httpsServer.Use(p.createRequestIDMiddleware())
 	p.httpServer.Use(p.createRequestIDMiddleware())
 
-	// Check if rate limiting is disabled via configuration
-	if !p.config.DisableRateLimit {
+	// Check if rate limiting is enabled via configuration
+	if p.config.EnableRateLimit {
 		// Create a new Starskey rate limiter store for HTTPS server
 		httpsRateLimiter, err := kv.NewStarskeyRateLimiterStore(
 			"./data/ratelimiter/https", // Path to store rate limit data
@@ -98,12 +99,12 @@ func (p *Proxy) setupMiddleware() {
 	}
 
 	// Add custom logger middleware with request ID if enabled in config
-	if p.config.EnableLogs {
+	if p.config.EnableHttpLogs {
 		p.httpsServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
 			Format:           `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
 			CustomTimeFormat: "2006-01-02T15:04:05.00000Z07:00",
 			Skipper: func(c echo.Context) bool {
-				return !p.config.EnableLogs
+				return !p.config.EnableHttpLogs
 			},
 		}))
 		logger.Debug("HTTP request logging enabled for HTTPS server")
@@ -111,8 +112,8 @@ func (p *Proxy) setupMiddleware() {
 		logger.Debug("HTTP request logging disabled for HTTPS server")
 	}
 
-	// Check if rate limiting is disabled via configuration
-	if !p.config.DisableRateLimit {
+	// Check if rate limiting is enabled via configuration
+	if p.config.EnableRateLimit {
 		// Create a new Starskey rate limiter store for HTTP server
 		httpRateLimiter, err := kv.NewStarskeyRateLimiterStore(
 			"./data/ratelimiter/http", // Path to store rate limit data
@@ -179,12 +180,12 @@ func (p *Proxy) setupMiddleware() {
 	}
 
 	// Add custom logger middleware with request ID for HTTP server if enabled in config
-	if p.config.EnableLogs {
+	if p.config.EnableHttpLogs {
 		p.httpServer.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
 			Format:           `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
 			CustomTimeFormat: "2006-01-02T15:04:05.00000Z07:00",
 			Skipper: func(c echo.Context) bool {
-				return !p.config.EnableLogs
+				return !p.config.EnableHttpLogs
 			},
 		}))
 		logger.Debug("HTTP request logging enabled for HTTP server")
@@ -206,8 +207,89 @@ func (p *Proxy) createRequestIDMiddleware() echo.MiddlewareFunc {
 			// Add it as a response header
 			c.Response().Header().Set(echo.HeaderXRequestID, requestID)
 
+			// If proxy detection is enabled, check for upstream proxy headers
+			if p.config.DetectUpstreamProxy {
+				p.detectUpstreamProxyFromRequest(c)
+			}
+
 			// Continue processing
 			return next(c)
+		}
+	}
+}
+
+// detectUpstreamProxyFromRequest checks for headers that indicate TLS termination upstream
+// This allows real-time detection as requests come in
+func (p *Proxy) detectUpstreamProxyFromRequest(c echo.Context) {
+	// Only check if detection is enabled
+	if !p.config.DetectUpstreamProxy {
+		return
+	}
+
+	// First check our cached detection status
+	p.upstreamProxyMu.RLock()
+	alreadyDetected := p.upstreamProxyDetected
+	p.upstreamProxyMu.RUnlock()
+
+	// Skip if we already detected a proxy previously
+	if alreadyDetected {
+		return
+	}
+
+	req := c.Request()
+	headers := req.Header
+	proxyDetected := false
+	detectionMethod := ""
+	headerName := ""
+	headerValue := ""
+
+	// Check for common TLS termination proxy headers
+	// X-Forwarded-Proto: https indicates an upstream proxy terminated TLS
+	if proto := headers.Get("X-Forwarded-Proto"); proto == "https" {
+		proxyDetected = true
+		detectionMethod = "request_header"
+		headerName = "X-Forwarded-Proto"
+		headerValue = proto
+	}
+
+	// X-Forwarded-SSL: on indicates an upstream proxy terminated TLS
+	if !proxyDetected {
+		if ssl := headers.Get("X-Forwarded-SSL"); ssl == "on" {
+			proxyDetected = true
+			detectionMethod = "request_header"
+			headerName = "X-Forwarded-SSL"
+			headerValue = ssl
+		}
+	}
+
+	// Cloudflare specific headers
+	if !proxyDetected {
+		if cf := headers.Get("CF-Visitor"); cf != "" && strings.Contains(cf, "\"scheme\":\"https\"") {
+			proxyDetected = true
+			detectionMethod = "cloudflare_header"
+			headerName = "CF-Visitor"
+			headerValue = cf
+		}
+	}
+
+	// If we detected a proxy, store the detection and log it
+	if proxyDetected {
+		// Store the detection in our state with lock protection
+		p.upstreamProxyMu.Lock()
+		p.upstreamProxyDetected = true
+		p.upstreamProxyMu.Unlock()
+
+		logger.Info("Upstream TLS-terminating proxy detected from request headers",
+			"detection_method", detectionMethod,
+			"header", headerName,
+			"value", headerValue,
+			"host", req.Host)
+
+		// If certificate skipping is enabled, log it
+		if p.config.SkipCertificates {
+			logger.Info("Upstream TLS-terminating proxy detected during request, future certificate requests will be skipped",
+				"host", req.Host,
+				"certificate_acquisition", "will be skipped for new domains")
 		}
 	}
 }

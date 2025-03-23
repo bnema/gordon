@@ -18,7 +18,7 @@ import (
 	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/filestore"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/labstack/echo/v4"
 )
 
@@ -71,7 +71,7 @@ func (info *InfoResponse) Populate(a *server.App) {
 func sendJSONResponse(c echo.Context, statusCode int, response interface{}) error {
 	err := c.JSON(statusCode, response)
 	if err != nil {
-		log.Error("Failed to send JSON response",
+		logger.Error("Failed to send JSON response",
 			"error", err,
 			"statusCode", statusCode)
 	}
@@ -152,7 +152,7 @@ func saveAndImportImage(c echo.Context, a *server.App, payload interface{}) (str
 	imageID, err = docker.ImportImageToEngine(imagePath)
 	if err != nil {
 		if removeErr := filestore.RemoveFromStorage(imagePath); removeErr != nil {
-			log.Error("Failed to remove temporary image file after import failure",
+			logger.Error("Failed to remove temporary image file after import failure",
 				"error", removeErr,
 				"path", imagePath)
 		}
@@ -161,7 +161,7 @@ func saveAndImportImage(c echo.Context, a *server.App, payload interface{}) (str
 
 	if imageID == "" {
 		if removeErr := filestore.RemoveFromStorage(imagePath); removeErr != nil {
-			log.Error("Failed to remove temporary image file after empty ID",
+			logger.Error("Failed to remove temporary image file after empty ID",
 				"error", removeErr,
 				"path", imagePath)
 		}
@@ -170,7 +170,7 @@ func saveAndImportImage(c echo.Context, a *server.App, payload interface{}) (str
 
 	err = filestore.RemoveFromStorage(imagePath)
 	if err != nil {
-		log.Error("Failed to remove temporary image file after successful import",
+		logger.Error("Failed to remove temporary image file after successful import",
 			"error", err,
 			"path", imagePath)
 		return "", fmt.Errorf("failed to remove temporary image file: %v", err)
@@ -181,7 +181,7 @@ func saveAndImportImage(c echo.Context, a *server.App, payload interface{}) (str
 
 // createAndStartContainer creates a container from the image, starts it and returns the container ID
 func createAndStartContainer(a *server.App, payload *common.DeployPayload) (string, string, error) {
-	log.Info("Starting container creation process",
+	logger.Info("Starting container creation process",
 		"imageName", payload.ImageName,
 		"imageID", payload.ImageID,
 		"port", payload.Port)
@@ -191,21 +191,21 @@ func createAndStartContainer(a *server.App, payload *common.DeployPayload) (stri
 		return "", "", fmt.Errorf("failed to create command parameters: %v", err)
 	}
 
-	log.Debug("Container parameters prepared", "params", params)
+	logger.Debug("Container parameters prepared", "params", params)
 
 	containerID, err := docker.CreateContainer(params)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create container: %v", err)
 	}
 
-	log.Info("Container created successfully", "containerID", containerID)
+	logger.Info("Container created successfully", "containerID", containerID)
 
 	containerName, err := docker.GetContainerName(containerID)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get container name: %v", err)
 	}
 
-	log.Info("Starting container",
+	logger.Info("Starting container",
 		"containerID", containerID,
 		"name", containerName)
 
@@ -215,7 +215,7 @@ func createAndStartContainer(a *server.App, payload *common.DeployPayload) (stri
 		// Get container logs if start failed
 		logs, logErr := docker.GetContainerLogs(containerID)
 		if logErr == nil {
-			log.Error("Container start failed - container logs",
+			logger.Error("Container start failed - container logs",
 				"logs", logs,
 				"containerID", containerID)
 		}
@@ -223,14 +223,14 @@ func createAndStartContainer(a *server.App, payload *common.DeployPayload) (stri
 		// Cleanup the failed container
 		cleanupErr := docker.RemoveContainer(containerID)
 		if cleanupErr != nil {
-			log.Error("Failed to cleanup container after start failure",
+			logger.Error("Failed to cleanup container after start failure",
 				"containerID", containerID,
 				"error", cleanupErr)
 		}
 		return "", "", fmt.Errorf("failed to start container: %v", err)
 	}
 
-	log.Info("Container started successfully",
+	logger.Info("Container started successfully",
 		"containerID", containerID,
 		"name", containerName)
 
@@ -292,14 +292,14 @@ func isTransferComplete(transferID string) bool {
 
 	metadata := chunkStore.metadata[transferID]
 	if metadata == nil {
-		log.Warn("No metadata found for transfer", "transferID", transferID)
+		logger.Warn("No metadata found for transfer", "transferID", transferID)
 		return false
 	}
 
 	chunksReceived := len(chunkStore.chunks[transferID])
 	isComplete := chunksReceived == metadata.TotalChunks
 
-	log.Debug("Transfer completion check",
+	logger.Debug("Transfer completion check",
 		"transferID", transferID,
 		"chunksReceived", chunksReceived,
 		"totalExpected", metadata.TotalChunks,
@@ -328,7 +328,7 @@ func cleanupOldTransfers() {
 		chunkStore.mu.Lock()
 		for id, startTime := range chunkStore.started {
 			if now.Sub(startTime) > transferTimeout {
-				log.Debug("Cleaning up stale transfer",
+				logger.Debug("Cleaning up stale transfer",
 					"transferID", id,
 					"age", now.Sub(startTime))
 				cleanupTransfer(id)
@@ -376,7 +376,7 @@ func writeChunksToFile(file *os.File, chunks map[int][]byte, totalChunks int) er
 		totalSize += int64(len(chunk))
 	}
 
-	log.Debug("Starting chunk assembly",
+	logger.Debug("Starting chunk assembly",
 		"totalChunks", totalChunks,
 		"totalSize", fmt.Sprintf("%.2f MB", float64(totalSize)/(1024*1024)))
 
@@ -435,7 +435,7 @@ func writeChunksToFile(file *os.File, chunks map[int][]byte, totalChunks int) er
 		return fmt.Errorf("failed to reset file pointer: %w", err)
 	}
 
-	log.Debug("Chunk assembly completed successfully",
+	logger.Debug("Chunk assembly completed successfully",
 		"totalBytesWritten", written,
 		"sizeInMB", fmt.Sprintf("%.2f MB", float64(written)/(1024*1024)))
 
@@ -464,7 +464,7 @@ func GetContainerIP(a *server.App, containerID, containerName string) string {
 		// If this is a retry, add an increasing delay
 		if retry > 0 {
 			sleepTime := time.Duration(500*retry) * time.Millisecond
-			log.Debug("Retrying to get container IP",
+			logger.Debug("Retrying to get container IP",
 				"attempt", retry+1,
 				"containerID", containerID,
 				"delay", sleepTime)
@@ -486,7 +486,7 @@ func GetContainerIP(a *server.App, containerID, containerName string) string {
 			refreshedInfo, err := docker.GetContainerInfo(containerID)
 			if err == nil {
 				containerInfo = refreshedInfo
-				log.Debug("Refreshed container info for IP retrieval",
+				logger.Debug("Refreshed container info for IP retrieval",
 					"containerName", containerName,
 					"containerID", containerID)
 			} else {
@@ -501,7 +501,7 @@ func GetContainerIP(a *server.App, containerID, containerName string) string {
 			networkName := a.Config.ContainerEngine.Network
 			if networkSettings, exists := containerInfo.NetworkSettings.Networks[networkName]; exists && networkSettings.IPAddress != "" {
 				containerIP = networkSettings.IPAddress
-				log.Debug("Found container IP",
+				logger.Debug("Found container IP",
 					"containerName", containerName,
 					"containerID", containerID,
 					"containerIP", containerIP,
@@ -513,7 +513,7 @@ func GetContainerIP(a *server.App, containerID, containerName string) string {
 			for networkName, networkSettings := range containerInfo.NetworkSettings.Networks {
 				if networkSettings.IPAddress != "" {
 					containerIP = networkSettings.IPAddress
-					log.Debug("Found container IP in alternative network",
+					logger.Debug("Found container IP in alternative network",
 						"containerName", containerName,
 						"containerID", containerID,
 						"containerIP", containerIP,
@@ -533,7 +533,7 @@ func GetContainerIP(a *server.App, containerID, containerName string) string {
 					// Extract just the IP address from the CIDR format
 					ipCIDR := endpoint.IPv4Address
 					containerIP = strings.Split(ipCIDR, "/")[0]
-					log.Debug("Found container IP via network inspection",
+					logger.Debug("Found container IP via network inspection",
 						"containerName", containerName,
 						"containerID", containerID,
 						"containerIP", containerIP,
@@ -546,12 +546,12 @@ func GetContainerIP(a *server.App, containerID, containerName string) string {
 
 	// If we've tried multiple times and couldn't get an IP
 	if lastErr != nil {
-		log.Warn("Failed to get container info after multiple attempts",
+		logger.Warn("Failed to get container info after multiple attempts",
 			"error", lastErr,
 			"containerID", containerID)
 	}
 
-	log.Warn("Could not find container IP, using container name as fallback",
+	logger.Warn("Could not find container IP, using container name as fallback",
 		"containerName", containerName,
 		"containerID", containerID)
 

@@ -47,14 +47,15 @@ type BuildConfig struct {
 }
 
 type AdminConfig struct {
-	Path string `yaml:"path"`
+	Path       string `yaml:"path"`
+	AdminWebUI bool   `yaml:"-"`
 }
 
 type GeneralConfig struct {
 	StorageDir        string `yaml:"storageDir"`
 	Token             string `yaml:"token"`
 	LogLevel          string `yaml:"logLevel"`
-	GordonContainerID string `yaml:"gordonContainerID"`
+	GordonContainerID string `yaml:"-"`
 }
 
 type HttpConfig struct {
@@ -73,33 +74,39 @@ type ContainerEngineConfig struct {
 }
 
 type ReverseProxyConfig struct {
-	Port             string `yaml:"port"`             // Port for the reverse proxy to listen on
-	HttpPort         string `yaml:"httpPort"`         // HTTP port (usually 80) for redirecting to HTTPS
-	CertDir          string `yaml:"certDir"`          // Directory to store Let's Encrypt certificates
-	AutoRenew        bool   `yaml:"autoRenew"`        // Whether to automatically renew certificates
-	RenewBefore      int    `yaml:"renewBefore"`      // Days before expiry to renew certificates
-	LetsEncryptMode  string `yaml:"letsEncryptMode"`  // "staging" or "production"
-	Email            string `yaml:"email"`            // Email for Let's Encrypt
-	CacheSize        int    `yaml:"cacheSize"`        // Size of the certificate cache
-	GracePeriod      int    `yaml:"gracePeriod"`      // Shutdown grace period in seconds
-	EnableLogs       bool   `yaml:"enableLogs"`       // Whether to enable HTTP request logging (default: true)
-	DisableRateLimit bool   `yaml:"disableRateLimit"` // Whether to disable rate limiting middleware (default: false)
+	Enabled             bool   `yaml:"enabled"`             // Whether the reverse proxy is enabled
+	Port                string `yaml:"port"`                // Port for the reverse proxy to listen on
+	HttpPort            string `yaml:"httpPort"`            // HTTP port (usually 80) for redirecting to HTTPS
+	CertDir             string `yaml:"certDir"`             // Directory to store Let's Encrypt certificates
+	AutoRenew           bool   `yaml:"autoRenew"`           // Whether to automatically renew certificates
+	RenewBefore         int    `yaml:"renewBefore"`         // Days before expiry to renew certificates
+	LetsEncryptMode     string `yaml:"letsEncryptMode"`     // "staging" or "production"
+	Email               string `yaml:"email"`               // Email for Let's Encrypt
+	CacheSize           int    `yaml:"cacheSize"`           // Size of the certificate cache
+	GracePeriod         int    `yaml:"gracePeriod"`         // Shutdown grace period in seconds
+	EnableHttpLogs      bool   `yaml:"enableHttpLogs"`      // Whether to enable HTTP request logging (default: true)
+	EnableRateLimit     bool   `yaml:"enableRateLimit"`     // Whether to enable rate limiting middleware (default: false)
+	DetectUpstreamProxy bool   `yaml:"detectUpstreamProxy"` // Whether to detect and handle upstream TLS termination proxies (default: false)
+	SkipCertificates    bool   `yaml:"skipCertificates"`    // Skip Let's Encrypt certificate acquisition when behind a TLS terminating proxy (default: false)
 }
 
 // Default values
 var (
-	sock             = "/var/run/docker.sock"
-	podmansock       = "/run/podman/podman.sock"
-	reverseProxyPort = "443" // Changed to 443 for standard HTTPS
-	httpPort         = "80"  // Standard HTTP port
-	certDir          = "/certs"
-	letsEncryptMode  = "staging"
-	autoRenew        = true
-	renewBefore      = 30     // days
-	cacheSize        = 1000   // entries
-	gracePeriod      = 30     // seconds
-	defaultLogLevel  = "info" // Default log level
-	disableRateLimit = false
+	sock                = "/var/run/docker.sock"
+	podmansock          = "/run/podman/podman.sock"
+	reverseProxyPort    = "443" // Changed to 443 for standard HTTPS
+	httpPort            = "80"  // Standard HTTP port
+	certDir             = "/certs"
+	letsEncryptMode     = "staging"
+	autoRenew           = true
+	proxyEnabled        = true   // Default to enabled for backward compatibility
+	renewBefore         = 30     // days
+	cacheSize           = 1000   // entries
+	gracePeriod         = 30     // seconds
+	defaultLogLevel     = "info" // Default log level
+	disableRateLimit    = false
+	detectUpstreamProxy = false // Default to disabled
+	skipCertificates    = false // Default to disabled
 )
 
 // applyDefaultsToConfig applies default values to any fields that have zero values
@@ -115,6 +122,12 @@ func applyDefaultsToConfig(config *Config) bool {
 	}
 
 	// Apply defaults to ReverseProxy config
+	// Set Enabled to true by default if not specified
+	if !config.ReverseProxy.Enabled {
+		config.ReverseProxy.Enabled = proxyEnabled
+		logger.Debug("Applied default value for ReverseProxy.Enabled", "value", proxyEnabled)
+		defaultsApplied = true
+	}
 	if config.ReverseProxy.Port == "" {
 		config.ReverseProxy.Port = reverseProxyPort
 		logger.Debug("Applied default value for ReverseProxy.Port", "value", reverseProxyPort)
@@ -150,16 +163,30 @@ func applyDefaultsToConfig(config *Config) bool {
 		logger.Debug("Applied default value for ReverseProxy.GracePeriod", "value", gracePeriod)
 		defaultsApplied = true
 	}
-	// Set EnableLogs to true by default if not specified
-	if !config.ReverseProxy.EnableLogs {
-		config.ReverseProxy.EnableLogs = true
-		logger.Debug("Applied default value for ReverseProxy.EnableLogs", "value", true)
+	// Set EnableHttpLogs to true by default if not specified
+	if !config.ReverseProxy.EnableHttpLogs {
+		config.ReverseProxy.EnableHttpLogs = true
+		logger.Debug("Applied default value for ReverseProxy.EnableHttpLogs", "value", true)
 		defaultsApplied = true
 	}
-	// Set DisableRateLimit to false by default if not specified
-	if !config.ReverseProxy.DisableRateLimit {
-		config.ReverseProxy.DisableRateLimit = false
-		logger.Debug("Applied default value for ReverseProxy.DisableRateLimit", "value", false)
+	// Set EnableRateLimit to false by default if not specified
+	if !config.ReverseProxy.EnableRateLimit {
+		config.ReverseProxy.EnableRateLimit = false
+		logger.Debug("Applied default value for ReverseProxy.EnableRateLimit", "value", false)
+		defaultsApplied = true
+	}
+
+	// Set DetectUpstreamProxy to false by default if not specified
+	if !config.ReverseProxy.DetectUpstreamProxy {
+		config.ReverseProxy.DetectUpstreamProxy = detectUpstreamProxy
+		logger.Debug("Applied default value for ReverseProxy.DetectUpstreamProxy", "value", detectUpstreamProxy)
+		defaultsApplied = true
+	}
+
+	// Set SkipCertificates to false by default if not specified
+	if !config.ReverseProxy.SkipCertificates {
+		config.ReverseProxy.SkipCertificates = skipCertificates
+		logger.Debug("Applied default value for ReverseProxy.SkipCertificates", "value", skipCertificates)
 		defaultsApplied = true
 	}
 
@@ -476,6 +503,25 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 			logger.Info("Using environment variable GORDON_PROXY_HTTP_PORT", "value", val)
 		}
 	}
+
+	// New environment variables for reverse proxy port control
+	if val := os.Getenv("GORDON_USE_FALLBACK_BINDING"); val != "" {
+		// This is handled at runtime in the proxy server but we log it here
+		if printLogs {
+			logger.Info("Found environment variable GORDON_USE_FALLBACK_BINDING", "value", val)
+		}
+	}
+
+	// Handle GORDON_PROXY_ENABLED environment variable
+	if val := os.Getenv("GORDON_PROXY_ENABLED"); val != "" {
+		enabled, err := strconv.ParseBool(val)
+		if err == nil {
+			config.ReverseProxy.Enabled = enabled
+		}
+		if printLogs {
+			logger.Info("Using environment variable GORDON_PROXY_ENABLED", "value", config.ReverseProxy.Enabled)
+		}
+	}
 	if val := os.Getenv("GORDON_PROXY_CERT_DIR"); val != "" {
 		config.ReverseProxy.CertDir = val
 		if printLogs {
@@ -524,22 +570,59 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 		logger.Info("Using environment variable GORDON_PROXY_GRACE_PERIOD", "value", i)
 	}
 
-	// Handle GORDON_PROXY_ENABLE_LOGS environment variable
-	if val := os.Getenv("GORDON_PROXY_ENABLE_LOGS"); val != "" {
+	// Handle GORDON_PROXY_ENABLE_HTTP_LOGS environment variable
+	if val := os.Getenv("GORDON_PROXY_ENABLE_HTTP_LOGS"); val != "" {
 		enableLogs, err := strconv.ParseBool(val)
 		if err == nil {
-			config.ReverseProxy.EnableLogs = enableLogs
+			config.ReverseProxy.EnableHttpLogs = enableLogs
 		}
-		logger.Info("Using environment variable GORDON_PROXY_ENABLE_LOGS", "value", config.ReverseProxy.EnableLogs)
+		logger.Info("Using environment variable GORDON_PROXY_ENABLE_HTTP_LOGS", "value", config.ReverseProxy.EnableHttpLogs)
+	} else if val := os.Getenv("GORDON_PROXY_ENABLE_LOGS"); val != "" {
+		// For backward compatibility
+		enableLogs, err := strconv.ParseBool(val)
+		if err == nil {
+			config.ReverseProxy.EnableHttpLogs = enableLogs
+		}
+		logger.Info("Using environment variable GORDON_PROXY_ENABLE_LOGS (deprecated, use GORDON_PROXY_ENABLE_HTTP_LOGS)", "value", config.ReverseProxy.EnableHttpLogs)
 	}
 
-	// Handle GORDON_PROXY_DISABLE_RATE_LIMIT environment variable
-	if val := os.Getenv("GORDON_PROXY_DISABLE_RATE_LIMIT"); val != "" {
+	// Handle GORDON_PROXY_ENABLE_RATE_LIMIT environment variable
+	if val := os.Getenv("GORDON_PROXY_ENABLE_RATE_LIMIT"); val != "" {
+		enableRateLimit, err := strconv.ParseBool(val)
+		if err == nil {
+			config.ReverseProxy.EnableRateLimit = enableRateLimit
+		}
+		logger.Info("Using environment variable GORDON_PROXY_ENABLE_RATE_LIMIT", "value", config.ReverseProxy.EnableRateLimit)
+	} else if val := os.Getenv("GORDON_PROXY_DISABLE_RATE_LIMIT"); val != "" {
+		// For backward compatibility
 		disableRateLimit, err := strconv.ParseBool(val)
 		if err == nil {
-			config.ReverseProxy.DisableRateLimit = disableRateLimit
+			// Invert the logic
+			config.ReverseProxy.EnableRateLimit = !disableRateLimit
 		}
-		logger.Info("Using environment variable GORDON_PROXY_DISABLE_RATE_LIMIT", "value", config.ReverseProxy.DisableRateLimit)
+		logger.Info("Using environment variable GORDON_PROXY_DISABLE_RATE_LIMIT (deprecated, use GORDON_PROXY_ENABLE_RATE_LIMIT)", "value", !config.ReverseProxy.EnableRateLimit)
+	}
+
+	// Handle GORDON_PROXY_DETECT_UPSTREAM environment variable
+	if val := os.Getenv("GORDON_PROXY_DETECT_UPSTREAM"); val != "" {
+		detectUpstream, err := strconv.ParseBool(val)
+		if err == nil {
+			config.ReverseProxy.DetectUpstreamProxy = detectUpstream
+		}
+		if printLogs {
+			logger.Info("Using environment variable GORDON_PROXY_DETECT_UPSTREAM", "value", config.ReverseProxy.DetectUpstreamProxy)
+		}
+	}
+
+	// Handle GORDON_PROXY_SKIP_CERTIFICATES environment variable
+	if val := os.Getenv("GORDON_PROXY_SKIP_CERTIFICATES"); val != "" {
+		skipCerts, err := strconv.ParseBool(val)
+		if err == nil {
+			config.ReverseProxy.SkipCertificates = skipCerts
+		}
+		if printLogs {
+			logger.Info("Using environment variable GORDON_PROXY_SKIP_CERTIFICATES", "value", config.ReverseProxy.SkipCertificates)
+		}
 	}
 }
 
@@ -587,16 +670,16 @@ func (config *Config) LoadConfig() (*Config, error) {
 				Network:    "gordon",
 			},
 			ReverseProxy: ReverseProxyConfig{
-				Port:             reverseProxyPort,
-				HttpPort:         httpPort,
-				CertDir:          certDir,
-				AutoRenew:        autoRenew,
-				RenewBefore:      renewBefore,
-				LetsEncryptMode:  letsEncryptMode,
-				CacheSize:        cacheSize,
-				GracePeriod:      gracePeriod,
-				EnableLogs:       true,
-				DisableRateLimit: false,
+				Port:            reverseProxyPort,
+				HttpPort:        httpPort,
+				CertDir:         certDir,
+				AutoRenew:       autoRenew,
+				RenewBefore:     renewBefore,
+				LetsEncryptMode: letsEncryptMode,
+				CacheSize:       cacheSize,
+				GracePeriod:     gracePeriod,
+				EnableHttpLogs:  true,
+				EnableRateLimit: false,
 			},
 		}
 
@@ -726,16 +809,16 @@ func (config *Config) LoadConfig() (*Config, error) {
 				Network:    "gordon",
 			},
 			ReverseProxy: ReverseProxyConfig{
-				Port:             reverseProxyPort,
-				HttpPort:         httpPort,
-				CertDir:          certDir,
-				AutoRenew:        autoRenew,
-				RenewBefore:      renewBefore,
-				LetsEncryptMode:  letsEncryptMode,
-				CacheSize:        cacheSize,
-				GracePeriod:      gracePeriod,
-				EnableLogs:       true,
-				DisableRateLimit: false,
+				Port:            reverseProxyPort,
+				HttpPort:        httpPort,
+				CertDir:         certDir,
+				AutoRenew:       autoRenew,
+				RenewBefore:     renewBefore,
+				LetsEncryptMode: letsEncryptMode,
+				CacheSize:       cacheSize,
+				GracePeriod:     gracePeriod,
+				EnableHttpLogs:  true,
+				EnableRateLimit: false,
 			},
 		}
 
@@ -806,6 +889,27 @@ func (config *Config) LoadConfig() (*Config, error) {
 	} else {
 		// Just print a simplified message
 		logger.Info("Loaded configuration from", "path", configFilePath)
+	}
+
+	// After loading from file or environment, check if Admin.Path is empty
+	// This should be placed before returning the config
+	if config.Admin.Path == "" {
+		logger.Warn("Admin path is empty or not set, admin dashboard webui will be disabled")
+		config.Admin.AdminWebUI = false
+	} else {
+		config.Admin.AdminWebUI = true
+	}
+
+	// Save config file if running in container and env vars were applied
+	// This ensures config.yml always reflects the environment variables
+	if docker.IsRunningInContainer() && configLogsPrinted {
+		logger.Info("Environment variables were applied, saving configuration to reflect current values...")
+		err = config.SaveConfig()
+		if err != nil {
+			logger.Error("Failed to save configuration with environment variables", "error", err)
+		} else {
+			logger.Info("Successfully updated config.yml with environment variable values")
+		}
 	}
 
 	// Apply the log level from configuration
@@ -929,4 +1033,9 @@ func (c *HttpConfig) FullDomain() string {
 // GetVersion
 func (c *Config) GetVersion() string {
 	return c.Build.BuildVersion
+}
+
+// IsAdminWebUIEnabled returns whether the admin dashboard is enabled
+func (c *AdminConfig) IsAdminWebUIEnabled() bool {
+	return c.AdminWebUI && c.Path != ""
 }

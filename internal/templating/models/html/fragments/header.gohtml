@@ -11,4 +11,14 @@
   <script src="/libs/htmx-sse.js"></script>
   <script defer src="/libs/hyperscript.min.js"></script>
   <script defer src="/assets/js/custom.js"></script>
+  
+  <!-- daisyUI theme configuration -->
+  <script>
+    // Check for saved theme preference or use preferred color scheme
+    const savedTheme = localStorage.getItem('theme') || 'gordon';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    
+    // Log theme loading for debugging
+    console.debug('Theme loaded:', savedTheme);
+  </script>
 </head>
