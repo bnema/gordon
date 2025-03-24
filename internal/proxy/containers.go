@@ -110,7 +110,13 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 		// Check certificates for each domain
 		for _, domain := range domains {
 			// Check certificate for the full domain
-			hasCert := p.checkCertificateInCache(domain)
+			hasCert, certType := p.checkCertificateInCache(domain)
+
+			if certType == "staging" && p.config.LetsEncryptMode == "production" {
+				logger.Info("Found staging certificate but production mode is enabled",
+					"domain", domain,
+					"action", "will request new production certificate")
+			}
 
 			if hasCert {
 				logger.Debug("Certificate exists for domain",
@@ -140,7 +146,12 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 
 				// Only check parent domain if it's not an ordinary TLD
 				if len(parts) > 2 && !isCommonTLD(parts[len(parts)-1]) {
-					hasCert = p.checkCertificateInCache(parentDomain)
+					hasCert, certType := p.checkCertificateInCache(parentDomain)
+					if certType == "staging" && p.config.LetsEncryptMode == "production" {
+						logger.Info("Found staging certificate but production mode is enabled",
+							"domain", parentDomain,
+							"action", "will request new production certificate")
+					}
 					if !hasCert {
 						logger.Info("Certificate not found for parent domain",
 							"domain", parentDomain,

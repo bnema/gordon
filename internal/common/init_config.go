@@ -113,6 +113,45 @@ func applyDefaultsToConfig(config *Config) bool {
 		logger.Debug("Applied default value for General.LogLevel", "value", defaultLogLevel)
 		defaultsApplied = true
 	}
+	if config.General.StorageDir == "" {
+		// When running in container, use /data as the default storage location
+		if docker.IsRunningInContainer() {
+			config.General.StorageDir = "/data"
+		} else {
+			// Otherwise, use ~/.gordon
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				homeDir = "/tmp"
+			}
+			config.General.StorageDir = filepath.Join(homeDir, ".gordon")
+		}
+		logger.Debug("Applied default value for General.StorageDir", "value", config.General.StorageDir)
+		defaultsApplied = true
+	}
+
+	// Apply defaults to Admin config
+	if config.Admin.Path == "" {
+		config.Admin.Path = "/admin"
+		logger.Debug("Applied default value for Admin.Path", "value", "/admin")
+		defaultsApplied = true
+	}
+
+	// Apply defaults to ContainerEngine config
+	if config.ContainerEngine.Sock == "" {
+		config.ContainerEngine.Sock = sock
+		logger.Debug("Applied default value for ContainerEngine.Sock", "value", sock)
+		defaultsApplied = true
+	}
+	if config.ContainerEngine.PodmanSock == "" {
+		config.ContainerEngine.PodmanSock = podmansock
+		logger.Debug("Applied default value for ContainerEngine.PodmanSock", "value", podmansock)
+		defaultsApplied = true
+	}
+	if config.ContainerEngine.Network == "" {
+		config.ContainerEngine.Network = "gordon"
+		logger.Debug("Applied default value for ContainerEngine.Network", "value", "gordon")
+		defaultsApplied = true
+	}
 
 	// Apply defaults to ReverseProxy config
 	if config.ReverseProxy.Port == "" {
@@ -447,6 +486,17 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 					"socket", podmanSocket)
 			}
 		}
+
+		// If we're in a container, check for special socket naming patterns
+		if docker.IsRunningInContainer() && fileExists(config.ContainerEngine.Sock) {
+			// Check if socket path contains "podman" which indicates it might be a podman socket
+			if strings.Contains(config.ContainerEngine.Sock, "podman") {
+				config.ContainerEngine.Podman = true
+				if printLogs {
+					logger.Info("Socket path contains 'podman', enabling Podman mode", "path", config.ContainerEngine.Sock)
+				}
+			}
+		}
 	}
 	if val := os.Getenv("GORDON_CONTAINER_NETWORK"); val != "" {
 		config.ContainerEngine.Network = val
@@ -460,6 +510,32 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 		config.ContainerEngine.Sock = config.ContainerEngine.PodmanSock
 		if printLogs {
 			logger.Info("Setting ContainerEngine.Sock to PodmanSock value", "value", config.ContainerEngine.Sock)
+		}
+	}
+
+	// Additional debug info for container sockets
+	if docker.IsRunningInContainer() {
+		logger.Debug("Container socket configuration",
+			"sock", config.ContainerEngine.Sock,
+			"podmansock", config.ContainerEngine.PodmanSock,
+			"podman", config.ContainerEngine.Podman,
+			"sock_exists", fileExists(config.ContainerEngine.Sock),
+			"podmansock_exists", fileExists(config.ContainerEngine.PodmanSock))
+
+		// Special handling for container environment to ensure sockets are properly set
+		// If no socket is configured but default socket path exists, use it
+		if config.ContainerEngine.Sock == "" && fileExists(sock) {
+			config.ContainerEngine.Sock = sock
+			logger.Info("Found default Docker socket in container, using it", "path", sock)
+		}
+
+		// If podman socket exists but podman mode is not enabled, check if we should enable it
+		if fileExists(podmansock) && !config.ContainerEngine.Podman {
+			// If the main socket path contains "podman", enable podman mode
+			if strings.Contains(config.ContainerEngine.Sock, "podman") {
+				config.ContainerEngine.Podman = true
+				logger.Info("Socket path suggests Podman usage, enabling Podman mode", "path", config.ContainerEngine.Sock)
+			}
 		}
 	}
 
