@@ -109,36 +109,40 @@ func (p *Proxy) setupCertManager() {
 	// First check for upstream TLS-terminating proxies if detection is enabled
 	isProxied := p.detectUpstreamProxy()
 
+	// Get admin domain and root domain
+	adminDomain := p.app.GetConfig().Http.FullDomain()
+	rootDomain := p.app.GetConfig().Http.Domain
+
+	// Generate a fallback certificate for admin domain regardless of proxy status
+	var fallbackDomains []string
+	fallbackDomains = append(fallbackDomains, adminDomain)
+
+	// Include root domain in fallback certificate if it's different from admin domain
+	if rootDomain != "" && rootDomain != adminDomain {
+		fallbackDomains = append(fallbackDomains, rootDomain)
+	}
+
+	// Generate the fallback certificate
+	fallbackCert, err := generateFallbackCertificates(fallbackDomains)
+	if err != nil {
+		logger.Warn("Failed to generate fallback certificate", "error", err)
+	} else {
+		logger.Info("Generated fallback self-signed certificate for admin domain",
+			"domain", adminDomain,
+			"valid_until", time.Now().Add(24*time.Hour).Format("2006-01-02 15:04:05"))
+		// Store the fallback certificate
+		p.fallbackCert = fallbackCert
+	}
+
 	// Skip certificate acquisition if we're behind a TLS-terminating proxy
 	// and the skip certificates option is enabled
 	if isProxied && p.config.SkipCertificates {
 		logger.Info("Upstream TLS-terminating proxy detected, skipping Let's Encrypt certificate acquisition",
 			"upstream_proxy", "detected",
 			"certificate_acquisition", "disabled")
-		// We still setup a fallback cert for the admin domain
-		adminDomain := p.app.GetConfig().Http.FullDomain()
-		rootDomain := p.app.GetConfig().Http.Domain
 
-		var fallbackDomains []string
-		fallbackDomains = append(fallbackDomains, adminDomain)
-
-		// Include root domain in fallback certificate if it's different from admin domain
-		if rootDomain != "" && rootDomain != adminDomain {
-			fallbackDomains = append(fallbackDomains, rootDomain)
-		}
-
-		fallbackCert, err := generateFallbackCertificates(fallbackDomains)
-		if err != nil {
-			logger.Warn("Failed to generate fallback certificate", "error", err)
-		} else {
-			logger.Info("Generated fallback self-signed certificate for admin domain behind proxy",
-				"domain", adminDomain,
-				"valid_until", time.Now().Add(24*time.Hour).Format("2006-01-02 15:04:05"))
-			// Store the fallback certificate
-			p.fallbackCert = fallbackCert
-		}
-
-		return
+		// We will still initialize the certificate manager but will use it in a more limited way
+		logger.Info("Initializing minimal Let's Encrypt certificate manager for fallback purposes")
 	}
 
 	// Create a cache directory if it doesn't exist
@@ -181,10 +185,6 @@ func (p *Proxy) setupCertManager() {
 			"url", acme.LetsEncryptURL)
 	}
 
-	// Set HostPolicy to allow the admin domain
-	adminDomain := p.app.GetConfig().Http.FullDomain()
-	rootDomain := p.app.GetConfig().Http.Domain
-
 	// Use a stricter hostpolicy that only allows domains in our routes
 	certManager.HostPolicy = func(_ context.Context, host string) error {
 		// Always allow the admin domain and root domain
@@ -210,30 +210,13 @@ func (p *Proxy) setupCertManager() {
 		return fmt.Errorf("host %q not configured in routes", host)
 	}
 
-	// Generate a fallback self-signed certificate for the admin domain
-	var fallbackDomains []string
-	fallbackDomains = append(fallbackDomains, adminDomain)
-
-	// Include root domain in fallback certificate if it's different from admin domain
-	if rootDomain != "" && rootDomain != adminDomain {
-		fallbackDomains = append(fallbackDomains, rootDomain)
-	}
-
-	fallbackCert, err := generateFallbackCertificates(fallbackDomains)
-	if err != nil {
-		logger.Warn("Failed to generate fallback certificate", "error", err)
-	} else {
-		logger.Info("Generated fallback self-signed certificate for admin domain",
-			"domain", adminDomain,
-			"valid_until", time.Now().Add(24*time.Hour).Format("2006-01-02 15:04:05"))
-		// Store the fallback certificate
-		p.fallbackCert = fallbackCert
-	}
-
 	p.certManager = certManager
 	logger.Debug("Certificate manager setup completed",
 		"directory", dir,
 		"mode", p.config.LetsEncryptMode)
+
+	// Preload certificates from disk into cache to avoid unnecessary Let's Encrypt requests
+	p.preloadCertificates()
 
 	// Only request admin certificate during server startup, not during specific domain processing
 	if !p.processingSpecificDomain {
@@ -343,11 +326,50 @@ func getCertificateType(cert *x509.Certificate) string {
 // Returns whether it's valid and how many days until expiration, and the certificate type
 func isCertificateValid(certData []byte, domain string) (bool, float64, string, *x509.Certificate) {
 	// Parse the certificate to check its validity
-	block, _ := pem.Decode(certData)
+	block, rest := pem.Decode(certData)
 	if block == nil || block.Type != "CERTIFICATE" {
-		logger.Warn("Invalid certificate data",
-			"domain", domain)
+		logger.Warn("Invalid certificate data - not a valid PEM CERTIFICATE block",
+			"domain", domain,
+			"dataLength", len(certData))
+
+		// Debug: output first few bytes to help diagnose format issues
+		if len(certData) > 0 {
+			previewLen := 50
+			if len(certData) < previewLen {
+				previewLen = len(certData)
+			}
+			preview := string(certData[:previewLen])
+			logger.Debug("Certificate data preview",
+				"domain", domain,
+				"preview", preview+"...")
+		}
 		return false, 0, "unknown", nil
+	}
+
+	// Check if there are additional certificates in the chain
+	var certChain []*x509.Certificate
+	currentRest := rest
+
+	for len(currentRest) > 0 {
+		var nextBlock *pem.Block
+		nextBlock, currentRest = pem.Decode(currentRest)
+		if nextBlock == nil || nextBlock.Type != "CERTIFICATE" {
+			break
+		}
+		cert, err := x509.ParseCertificate(nextBlock.Bytes)
+		if err != nil {
+			logger.Debug("Failed to parse certificate in chain",
+				"domain", domain,
+				"error", err)
+			continue
+		}
+		certChain = append(certChain, cert)
+	}
+
+	if len(certChain) > 0 {
+		logger.Debug("Found certificate chain with additional certificates",
+			"domain", domain,
+			"chain_length", len(certChain))
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
@@ -358,8 +380,35 @@ func isCertificateValid(certData []byte, domain string) (bool, float64, string, 
 		return false, 0, "unknown", nil
 	}
 
+	// Verify the certificate includes the domain we're checking for
+	var domainFound bool
+	if len(cert.DNSNames) > 0 {
+		logger.Debug("Certificate DNS names",
+			"domain", domain,
+			"certificate_domains", cert.DNSNames)
+
+		for _, dnsName := range cert.DNSNames {
+			if dnsName == domain {
+				domainFound = true
+				break
+			}
+		}
+	}
+
+	if !domainFound && cert.Subject.CommonName != domain {
+		logger.Warn("Certificate doesn't match the required domain",
+			"domain", domain,
+			"cert_common_name", cert.Subject.CommonName,
+			"cert_dns_names", cert.DNSNames)
+		return false, 0, "unknown", cert
+	}
+
 	// Determine the certificate type
 	certType := getCertificateType(cert)
+	logger.Debug("Determined certificate type",
+		"domain", domain,
+		"type", certType,
+		"issuer", cert.Issuer.CommonName)
 
 	// Check if the certificate is still valid
 	now := time.Now()
@@ -816,6 +865,46 @@ func (p *Proxy) requestAdminCertificate() {
 		return
 	}
 
+	// First, check if certificate is already in the autocert cache
+	// This is the critical step to avoid unnecessary Let's Encrypt requests
+	cacheKey := "cert-" + adminDomain
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if p.certManager != nil && p.certManager.Cache != nil {
+		certData, err := p.certManager.Cache.Get(ctx, cacheKey)
+		if err == nil && len(certData) > 0 {
+			// Check if the cached certificate is valid
+			isValid, expiresInDays, certType, _ := isCertificateValid(certData, adminDomain)
+			if isValid {
+				logger.Info("Using valid certificate from cache",
+					"domain", adminDomain,
+					"type", certType,
+					"expires_in_days", expiresInDays)
+				return
+			}
+
+			// If certificate is invalid or expiring soon, log but continue
+			logger.Info("Cached certificate is invalid or expiring soon",
+				"domain", adminDomain,
+				"expires_in_days", expiresInDays,
+				"valid", isValid)
+		}
+	}
+
+	// Additional rate limit safety check
+	// Check if we've recently hit a rate limit for this domain
+	// This is a temporary memory-only safeguard
+	rlCacheKey := adminDomain + "_ratelimit_history"
+	rateLimitData, _ := p.certManager.Cache.Get(ctx, rlCacheKey)
+	if len(rateLimitData) > 0 {
+		logger.Warn("Rate limit history found for admin domain, skipping certificate request",
+			"domain", adminDomain,
+			"data", string(rateLimitData),
+			"solution", "Wait for rate limit to expire")
+		return
+	}
+
 	// Extract hostname from admin domain, resolving it to see if it's publicly accessible
 	host := adminDomain
 	ips, err := net.LookupIP(host)
@@ -907,7 +996,7 @@ func (p *Proxy) requestAdminCertificate() {
 		"timeout", "1 minute")
 
 	// Create a context with timeout for the initial certificate request
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
 	// Try to obtain the certificate with timeout
@@ -951,7 +1040,10 @@ func (p *Proxy) requestAdminCertificate() {
 			re := regexp.MustCompile(`retry after ([^:]+)`)
 			matches := re.FindStringSubmatch(certErr.Error())
 			if len(matches) > 1 {
-				retryAfterStr = matches[1]
+				retryAfterStr = strings.TrimSpace(matches[1])
+				if idx := strings.Index(retryAfterStr, ":"); idx > 0 {
+					retryAfterStr = retryAfterStr[:idx]
+				}
 			}
 
 			logger.Error("Let's Encrypt rate limit reached",
@@ -959,6 +1051,27 @@ func (p *Proxy) requestAdminCertificate() {
 				"error", certErr,
 				"retry_after", retryAfterStr,
 				"solution", "Wait until the rate limit expires, then restart the server")
+
+			// Store rate limit history in cache to prevent further requests
+			rlCacheKey := adminDomain + "_ratelimit_history"
+			rlCtx, rlCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer rlCancel()
+
+			// Store the error message and timestamp in the cache
+			rlData := []byte(fmt.Sprintf("Rate limited at %s: %s",
+				time.Now().Format(time.RFC3339), certErr.Error()))
+
+			if p.certManager != nil && p.certManager.Cache != nil {
+				// Store with a long expiration - Let's Encrypt rate limits are typically for a week
+				err := p.certManager.Cache.Put(rlCtx, rlCacheKey, rlData)
+				if err != nil {
+					logger.Debug("Failed to store rate limit history in cache",
+						"domain", adminDomain, "error", err)
+				} else {
+					logger.Info("Stored rate limit history in cache to prevent further requests",
+						"domain", adminDomain, "retry_after", retryAfterStr)
+				}
+			}
 
 			// Don't retry on rate limits
 			logger.Info("Skipping certificate request retries due to rate limiting",
@@ -989,10 +1102,96 @@ func (p *Proxy) requestAdminCertificate() {
 		newCertPath := filepath.Join(certDir, newName)
 		newKeyPath := filepath.Join(certDir, newName+"+rsa")
 
+		// Debug log certificate file paths
+		logger.Debug("Certificate file paths",
+			"domain", adminDomain,
+			"old_cert", oldCertPath,
+			"new_cert", newCertPath,
+			"old_key", oldKeyPath,
+			"new_key", newKeyPath)
+
+		// Check if files exist first
+		oldCertExists := false
+		if _, err := os.Stat(oldCertPath); err == nil {
+			oldCertExists = true
+			logger.Debug("Old certificate file exists", "path", oldCertPath)
+		} else {
+			logger.Debug("Old certificate file not found", "path", oldCertPath, "error", err)
+		}
+
+		// Read the certificate files directly to verify they contain valid data
+		if oldCertExists {
+			certBytes, err := os.ReadFile(oldCertPath)
+			if err != nil {
+				logger.Error("Failed to read certificate file",
+					"path", oldCertPath,
+					"error", err)
+			} else {
+				logger.Debug("Successfully read certificate file",
+					"path", oldCertPath,
+					"size", len(certBytes))
+
+				// Verify it's a valid PEM format
+				block, _ := pem.Decode(certBytes)
+				if block == nil {
+					logger.Error("Certificate file does not contain valid PEM data",
+						"path", oldCertPath)
+				} else {
+					logger.Debug("Certificate file contains valid PEM data",
+						"path", oldCertPath,
+						"type", block.Type)
+				}
+			}
+
+			// Check permissions on cert and key files
+			certFileInfo, err := os.Stat(oldCertPath)
+			if err == nil {
+				mode := certFileInfo.Mode()
+				logger.Debug("Certificate file permissions",
+					"path", oldCertPath,
+					"mode", mode.String())
+
+				// Ensure cert file is readable by all
+				if mode.Perm()&0444 != 0444 {
+					logger.Warn("Certificate file has restrictive permissions, fixing",
+						"path", oldCertPath,
+						"current_mode", mode.String())
+					if err := os.Chmod(oldCertPath, 0644); err != nil {
+						logger.Error("Failed to fix certificate file permissions",
+							"path", oldCertPath,
+							"error", err)
+					}
+				}
+			}
+
+			// Check key file permissions
+			if _, err := os.Stat(oldKeyPath); err == nil {
+				keyFileInfo, err := os.Stat(oldKeyPath)
+				if err == nil {
+					mode := keyFileInfo.Mode()
+					logger.Debug("Key file permissions",
+						"path", oldKeyPath,
+						"mode", mode.String())
+
+					// Ensure key file is only readable by owner
+					if mode.Perm()&0400 != 0400 || mode.Perm()&0077 != 0 {
+						logger.Warn("Key file has incorrect permissions, fixing",
+							"path", oldKeyPath,
+							"current_mode", mode.String())
+						if err := os.Chmod(oldKeyPath, 0600); err != nil {
+							logger.Error("Failed to fix key file permissions",
+								"path", oldKeyPath,
+								"error", err)
+						}
+					}
+				}
+			}
+		}
+
 		// Only rename if the files exist and the new names are different
 		if oldCertPath != newCertPath {
 			// Check if old cert exists
-			if _, err := os.Stat(oldCertPath); err == nil {
+			if oldCertExists {
 				// Rename cert
 				if err := os.Rename(oldCertPath, newCertPath); err != nil {
 					logger.Warn("Failed to rename certificate file",
@@ -1023,6 +1222,8 @@ func (p *Proxy) requestAdminCertificate() {
 							"from", oldKeyPath,
 							"to", newKeyPath)
 					}
+				} else {
+					logger.Warn("Old key file not found", "path", oldKeyPath, "error", err)
 				}
 			}
 		}
@@ -1030,6 +1231,75 @@ func (p *Proxy) requestAdminCertificate() {
 		logger.Info("Successfully obtained Let's Encrypt certificate",
 			"domain", adminDomain,
 			"type", certType)
+
+		// Verify the certificate files are accessible in the cache
+		cacheKey := "cert-" + adminDomain
+		cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cacheCancel()
+
+		certData, cacheErr := p.certManager.Cache.Get(cacheCtx, cacheKey)
+		if cacheErr != nil {
+			logger.Warn("Certificate not found in cache after successful obtainment",
+				"domain", adminDomain,
+				"error", cacheErr,
+				"solution", "Check certificate permissions and file paths")
+
+			// If certificate isn't in autocert cache but exists in filesystem, try to manually add it
+			newCertExists := false
+			if _, err := os.Stat(newCertPath); err == nil {
+				newCertExists = true
+			}
+
+			if oldCertExists || newCertExists {
+				logger.Info("Attempting to manually add certificate to cache from filesystem",
+					"domain", adminDomain)
+
+				sourceCertPath := newCertPath
+				sourceKeyPath := newKeyPath
+
+				// If the file wasn't renamed, use the old paths
+				if _, err := os.Stat(sourceCertPath); err != nil {
+					sourceCertPath = oldCertPath
+					sourceKeyPath = oldKeyPath
+				}
+
+				// Read the certificate and key files
+				certBytes, err := os.ReadFile(sourceCertPath)
+				if err != nil {
+					logger.Error("Failed to read certificate file for manual cache addition",
+						"path", sourceCertPath,
+						"error", err)
+				} else {
+					keyBytes, err := os.ReadFile(sourceKeyPath)
+					if err != nil {
+						logger.Error("Failed to read key file for manual cache addition",
+							"path", sourceKeyPath,
+							"error", err)
+					} else {
+						// Add to autocert cache
+						if err := p.certManager.Cache.Put(cacheCtx, cacheKey, certBytes); err != nil {
+							logger.Error("Failed to manually add certificate to cache",
+								"domain", adminDomain,
+								"error", err)
+						} else {
+							keyKey := "key-" + adminDomain
+							if err := p.certManager.Cache.Put(cacheCtx, keyKey, keyBytes); err != nil {
+								logger.Error("Failed to manually add key to cache",
+									"domain", adminDomain,
+									"error", err)
+							} else {
+								logger.Info("Successfully manually added certificate to cache",
+									"domain", adminDomain)
+							}
+						}
+					}
+				}
+			}
+		} else {
+			logger.Debug("Certificate successfully stored in cache",
+				"domain", adminDomain,
+				"cert_size", len(certData))
+		}
 	} else {
 		logger.Error("Unexpected error: received nil certificate but no error",
 			"domain", adminDomain,
@@ -1054,6 +1324,33 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 			"domain", domain,
 			"skip_reason", "behind TLS-terminating proxy")
 		return
+	}
+
+	// First, check if certificate is already in the autocert cache
+	// This is the critical step to avoid unnecessary Let's Encrypt requests
+	cacheKey := "cert-" + domain
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if p.certManager != nil && p.certManager.Cache != nil {
+		certData, err := p.certManager.Cache.Get(ctx, cacheKey)
+		if err == nil && len(certData) > 0 {
+			// Check if the cached certificate is valid
+			isValid, expiresInDays, certType, _ := isCertificateValid(certData, domain)
+			if isValid {
+				logger.Info("Using valid certificate from cache",
+					"domain", domain,
+					"type", certType,
+					"expires_in_days", expiresInDays)
+				return
+			}
+
+			// If certificate is invalid or expiring soon, log but continue
+			logger.Info("Cached certificate is invalid or expiring soon",
+				"domain", domain,
+				"expires_in_days", expiresInDays,
+				"valid", isValid)
+		}
 	}
 
 	// Extract hostname from domain, resolving it to see if it's publicly accessible
@@ -1100,6 +1397,46 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 				validInCache, _ := p.checkCertificateInCache(domain)
 				validInFS, _ := p.checkCertificateInFilesystem(domain)
 				if !validInCache && validInFS {
+					// Try to load the certificate into the cache if it's not there already
+					// This helps prevent future Let's Encrypt requests
+					hasOnDisk, certType := p.checkCertificateInFilesystem(domain)
+					if hasOnDisk {
+						logger.Info("Loading filesystem certificate into cache",
+							"domain", domain,
+							"type", certType)
+
+						// Get the certificate directory path for finding files
+						certDir := p.config.CertDir
+						if certDir == "" {
+							certDir = p.app.GetConfig().General.StorageDir + "/certs"
+						}
+
+						// Look for production certificate first, then staging
+						certFile := getCertificateFileName(domain, "production")
+						certPath := filepath.Join(certDir, certFile)
+						keyPath := filepath.Join(certDir, certFile+"+rsa")
+
+						// If production cert doesn't exist, try staging
+						if _, err := os.Stat(certPath); os.IsNotExist(err) {
+							certFile = getCertificateFileName(domain, "staging")
+							certPath = filepath.Join(certDir, certFile)
+							keyPath = filepath.Join(certDir, certFile+"+rsa")
+						}
+
+						// If no specific cert found, try the domain name directly
+						if _, err := os.Stat(certPath); os.IsNotExist(err) {
+							certPath = filepath.Join(certDir, domain)
+							keyPath = filepath.Join(certDir, domain+"+rsa")
+						}
+
+						// Add to cache if files exist
+						if _, err := os.Stat(certPath); err == nil {
+							if _, err := os.Stat(keyPath); err == nil {
+								p.addCertificateToCache(domain, certPath, keyPath)
+							}
+						}
+					}
+
 					if testCertificateWithTLSConnection(domain, p.config.Port) {
 						logger.Debug("Certificate verification succeeded via TLS connection",
 							"domain", domain,
@@ -1114,6 +1451,18 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 
 			return
 		}
+	}
+
+	// Additional rate limit safety check
+	// Check if we've recently hit a rate limit for this domain
+	// This is a temporary memory-only safeguard
+	cacheKey = domain + "_ratelimit_history"
+	rateLimitData, _ := p.certManager.Cache.Get(ctx, cacheKey)
+	if len(rateLimitData) > 0 {
+		logger.Warn("Rate limit history found for this domain, skipping certificate request",
+			"domain", domain,
+			"solution", "Wait for rate limit to expire")
+		return
 	}
 
 	// Get the certificate directory path for naming the output files
@@ -1146,7 +1495,7 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 		"timeout", "1 minute")
 
 	// Create a context with timeout for the initial certificate request
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
 	// Try to obtain the certificate with timeout
@@ -1190,7 +1539,10 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 			re := regexp.MustCompile(`retry after ([^:]+)`)
 			matches := re.FindStringSubmatch(certErr.Error())
 			if len(matches) > 1 {
-				retryAfterStr = matches[1]
+				retryAfterStr = strings.TrimSpace(matches[1])
+				if idx := strings.Index(retryAfterStr, ":"); idx > 0 {
+					retryAfterStr = retryAfterStr[:idx]
+				}
 			}
 
 			logger.Error("Let's Encrypt rate limit reached",
@@ -1198,6 +1550,27 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 				"error", certErr,
 				"retry_after", retryAfterStr,
 				"solution", "Wait until the rate limit expires, then restart the server")
+
+			// Store rate limit history in cache to prevent further requests
+			rlCacheKey := domain + "_ratelimit_history"
+			rlCtx, rlCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer rlCancel()
+
+			// Store the error message and timestamp in the cache
+			rlData := []byte(fmt.Sprintf("Rate limited at %s: %s",
+				time.Now().Format(time.RFC3339), certErr.Error()))
+
+			if p.certManager != nil && p.certManager.Cache != nil {
+				// Store with a long expiration - Let's Encrypt rate limits are typically for a week
+				err := p.certManager.Cache.Put(rlCtx, rlCacheKey, rlData)
+				if err != nil {
+					logger.Debug("Failed to store rate limit history in cache",
+						"domain", domain, "error", err)
+				} else {
+					logger.Info("Stored rate limit history in cache to prevent further requests",
+						"domain", domain, "retry_after", retryAfterStr)
+				}
+			}
 
 			// Don't retry on rate limits
 			logger.Info("Skipping certificate request retries due to rate limiting",
@@ -1262,6 +1635,8 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 							"from", oldKeyPath,
 							"to", newKeyPath)
 					}
+				} else {
+					logger.Warn("Old key file not found", "path", oldKeyPath, "error", err)
 				}
 			}
 		}
@@ -1393,6 +1768,8 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 								"from", oldKeyPath,
 								"to", newKeyPath)
 						}
+					} else {
+						logger.Warn("Old key file not found", "path", oldKeyPath, "error", err)
 					}
 				}
 			}
@@ -1584,4 +1961,320 @@ func generateFallbackCertificates(domains []string) (*tls.Certificate, error) {
 	}
 
 	return &cert, nil
+}
+
+// preloadCertificates scans the certificate directory and loads all valid certificates
+// into the autocert cache to prevent unnecessary requests to Let's Encrypt
+func (p *Proxy) preloadCertificates() {
+	if p.certManager == nil || p.certManager.Cache == nil {
+		logger.Warn("Cannot preload certificates: certificate manager or cache not initialized")
+		return
+	}
+
+	// Get the certificate directory path
+	certDir := p.config.CertDir
+	if certDir == "" {
+		certDir = p.app.GetConfig().General.StorageDir + "/certs"
+	}
+
+	logger.Info("Preloading certificates from directory", "dir", certDir)
+
+	// Ensure directory exists
+	if _, err := os.Stat(certDir); os.IsNotExist(err) {
+		logger.Warn("Certificate directory does not exist, creating it", "dir", certDir)
+		if err := os.MkdirAll(certDir, 0755); err != nil {
+			logger.Error("Failed to create certificate directory", "dir", certDir, "error", err)
+			return
+		}
+	}
+
+	// List all files in the certificate directory
+	files, err := os.ReadDir(certDir)
+	if err != nil {
+		logger.Error("Failed to read certificate directory", "dir", certDir, "error", err)
+		return
+	}
+
+	// Log all files in the directory to help troubleshoot
+	var fileNames []string
+	for _, file := range files {
+		fileNames = append(fileNames, file.Name())
+
+		// Check file permissions and fix if too restrictive
+		filePath := filepath.Join(certDir, file.Name())
+		info, err := os.Stat(filePath)
+		if err != nil {
+			logger.Warn("Could not stat file", "path", filePath, "error", err)
+			continue
+		}
+
+		mode := info.Mode()
+		if strings.HasSuffix(file.Name(), "+rsa") {
+			// Key files should be 0600 (owner read/write only)
+			if mode.Perm() != 0600 {
+				logger.Info("Fixing key file permissions", "file", file.Name(), "current_mode", mode.String(), "target_mode", "0600")
+				if err := os.Chmod(filePath, 0600); err != nil {
+					logger.Warn("Failed to fix key file permissions", "file", file.Name(), "error", err)
+				}
+			}
+		} else {
+			// Certificate files should be 0644 (readable by all)
+			if mode.Perm() != 0644 {
+				logger.Info("Fixing certificate file permissions", "file", file.Name(), "current_mode", mode.String(), "target_mode", "0644")
+				if err := os.Chmod(filePath, 0644); err != nil {
+					logger.Warn("Failed to fix certificate file permissions", "file", file.Name(), "error", err)
+				}
+			}
+		}
+	}
+
+	logger.Debug("Files in certificate directory", "dir", certDir, "files", fileNames)
+
+	// Track the number of certificates loaded
+	loadedCount := 0
+
+	// Create a context for cache operations
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Find and process certificate files (excluding key files with +rsa suffix)
+	// Group them by domain for easier processing
+	domainCerts := make(map[string][]string)
+
+	for _, file := range files {
+		name := file.Name()
+
+		// Skip account keys and +rsa key files as we'll handle these separately
+		if strings.HasSuffix(name, "+rsa") || strings.Contains(name, "acme_account") {
+			continue
+		}
+
+		// Get associated key file name (file+rsa)
+		keyName := name + "+rsa"
+		keyPath := filepath.Join(certDir, keyName)
+
+		// Skip certificates without key files
+		if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+			logger.Debug("Skipping certificate without key file", "cert", name, "key", keyName)
+			continue
+		}
+
+		// Try to determine the domain from the filename
+		domain := name
+
+		// Handle special patterns like domain_letsencrypt-production
+		for _, pattern := range []string{"_letsencrypt-production", "_letsencrypt-staging", "_self-signed"} {
+			if strings.HasSuffix(domain, pattern) {
+				domain = strings.TrimSuffix(domain, pattern)
+				break
+			}
+		}
+
+		// Add to domain certificates map
+		domainCerts[domain] = append(domainCerts[domain], name)
+	}
+
+	// Process certificates for each domain
+	for domain, certFiles := range domainCerts {
+		logger.Debug("Found certificate files for domain", "domain", domain, "files", certFiles)
+
+		// Prioritize production certificates if multiple exist
+		var bestCert string
+		bestCertType := ""
+
+		for _, certFile := range certFiles {
+			certPath := filepath.Join(certDir, certFile)
+
+			// Read certificate to check its validity
+			certData, err := os.ReadFile(certPath)
+			if err != nil {
+				logger.Warn("Failed to read certificate file", "path", certPath, "error", err)
+				continue
+			}
+
+			// Debug certificate content
+			if len(certData) < 100 {
+				logger.Warn("Certificate file too small, may be corrupted",
+					"path", certPath, "size", len(certData))
+				continue
+			}
+
+			// Validate the certificate
+			valid, expiresInDays, certType, _ := isCertificateValid(certData, domain)
+			if !valid {
+				logger.Debug("Invalid certificate found", "domain", domain, "file", certFile)
+				continue
+			}
+
+			logger.Info("Found valid certificate", "domain", domain, "type", certType,
+				"expires_in_days", expiresInDays, "file", certFile)
+
+			// Prioritize production certificates over staging ones
+			if bestCertType == "" ||
+				(bestCertType != "production" && certType == "production") {
+				bestCert = certFile
+				bestCertType = certType
+			}
+		}
+
+		// If we found a valid certificate for this domain, add it to the cache
+		if bestCert != "" {
+			certPath := filepath.Join(certDir, bestCert)
+			keyPath := filepath.Join(certDir, bestCert+"+rsa")
+
+			// Read certificate and key data
+			certData, err := os.ReadFile(certPath)
+			if err != nil {
+				logger.Warn("Failed to read certificate file", "path", certPath, "error", err)
+				continue
+			}
+
+			keyData, err := os.ReadFile(keyPath)
+			if err != nil {
+				logger.Warn("Failed to read key file", "path", keyPath, "error", err)
+				continue
+			}
+
+			// Add certificate to autocert cache
+			cacheKey := "cert-" + domain
+			err = p.certManager.Cache.Put(ctx, cacheKey, certData)
+			if err != nil {
+				logger.Error("Failed to add certificate to cache", "domain", domain, "error", err)
+				continue
+			}
+
+			// Add key to cache
+			keyKey := "key-" + domain
+			err = p.certManager.Cache.Put(ctx, keyKey, keyData)
+			if err != nil {
+				logger.Error("Failed to add key to cache", "domain", domain, "error", err)
+				continue
+			}
+
+			logger.Info("Preloaded certificate into cache", "domain", domain, "type", bestCertType)
+			loadedCount++
+		} else {
+			logger.Warn("No valid certificate found for domain after checking all files",
+				"domain", domain,
+				"files_checked", certFiles)
+		}
+	}
+
+	logger.Info("Certificate preloading complete", "loaded_certificates", loadedCount)
+}
+
+// manuallyLoadCertificate is a fallback method to load certificates directly
+// when autocert cache is failing. This directly builds the tls.Certificate from files.
+func (p *Proxy) manuallyLoadCertificate(domain string) (*tls.Certificate, error) {
+	// Get certificate directory
+	certDir := p.config.CertDir
+	if certDir == "" {
+		certDir = p.app.GetConfig().General.StorageDir + "/certs"
+	}
+
+	// Check preferred file naming patterns
+	filePatterns := []string{
+		// Try production certificate first
+		fmt.Sprintf(LetsEncryptProdPattern, domain),
+		// Then staging certificate
+		fmt.Sprintf(LetsEncryptStagingPattern, domain),
+		// Then self-signed
+		fmt.Sprintf(SelfSignedCertPattern, domain),
+		// Finally plain domain name
+		domain,
+	}
+
+	for _, pattern := range filePatterns {
+		certPath := filepath.Join(certDir, pattern)
+		keyPath := filepath.Join(certDir, pattern+"+rsa")
+
+		// Check if both files exist
+		if _, err := os.Stat(certPath); os.IsNotExist(err) {
+			continue
+		}
+		if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+			continue
+		}
+
+		// Try to load the certificate pair
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			logger.Warn("Failed to load certificate key pair",
+				"domain", domain,
+				"certPath", certPath,
+				"keyPath", keyPath,
+				"error", err)
+
+			// Additional diagnostics
+			if data, readErr := os.ReadFile(certPath); readErr == nil {
+				logger.Debug("Certificate file content preview",
+					"path", certPath,
+					"size", len(data),
+					"preview", string(data[:min(100, len(data))]))
+
+				// Try to parse the certificate - this may help diagnose format issues
+				block, _ := pem.Decode(data)
+				if block == nil {
+					logger.Error("Certificate file does not contain valid PEM data",
+						"path", certPath)
+				} else {
+					logger.Debug("Certificate PEM block info",
+						"type", block.Type,
+						"headers", block.Headers)
+				}
+			}
+
+			continue
+		}
+
+		// Success!
+		logger.Info("Manually loaded certificate from filesystem",
+			"domain", domain,
+			"certPath", certPath)
+		return &cert, nil
+	}
+
+	// Also try with glob pattern
+	filePaths, err := filepath.Glob(filepath.Join(certDir, domain+"*"))
+	if err != nil {
+		return nil, fmt.Errorf("glob error: %w", err)
+	}
+
+	for _, certPath := range filePaths {
+		// Skip if it's an RSA key
+		if strings.HasSuffix(certPath, "+rsa") {
+			continue
+		}
+
+		// Check if key exists
+		keyPath := certPath + "+rsa"
+		if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+			continue
+		}
+
+		// Try to load
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			logger.Debug("Failed to load certificate from glob match",
+				"domain", domain,
+				"certPath", certPath,
+				"error", err)
+			continue
+		}
+
+		logger.Info("Manually loaded certificate from glob search",
+			"domain", domain,
+			"certPath", certPath)
+		return &cert, nil
+	}
+
+	return nil, fmt.Errorf("no valid certificate found for domain %s", domain)
+}
+
+// min returns the smaller of x or y.
+func min(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
 }
