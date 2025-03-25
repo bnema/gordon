@@ -1,0 +1,18 @@
+package admin
+
+import "github.com/bnema/gordon/internal/templating/models/templ/layouts"
+
+// DashboardPage implements the admin dashboard
+templ DashboardPage(title string, buildVersion string, adminPath string, userSettingsURL string, logoutURL string) {
+	@layouts.AdminLayout(title, buildVersion, adminPath, userSettingsURL, logoutURL) {
+		<div id="dashboard">
+		  <h1
+		    class="text-5xl fw100 text-indigo-600 animate-bounce-alt animate-count-infinite animate-duration-1s"
+		  >
+		    Hello World from dashboard.html
+		  </h1>
+		  <!-- We load Chart.js here to avoid loading it in every page end when all the rest is loaded -->
+		  <script src="libs/chart.js"></script>
+		</div>
+	}
+}

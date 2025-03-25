@@ -31,8 +31,116 @@ const (
 	LetsEncryptProdPattern    = "%s_letsencrypt-production"
 )
 
+// detectUpstreamProxy checks for signs of an upstream TLS-terminating proxy
+func (p *Proxy) detectUpstreamProxy() bool {
+	// Check if detection is explicitly disabled
+	if !p.config.DetectUpstreamProxy {
+		return false
+	}
+
+	// First check our cached detection status - if we already detected a proxy previously
+	p.upstreamProxyMu.RLock()
+	alreadyDetected := p.upstreamProxyDetected
+	p.upstreamProxyMu.RUnlock()
+
+	if alreadyDetected {
+		return true
+	}
+
+	// Check for known HTTP headers that indicate a TLS termination proxy
+	// This is a best-effort approach since we're analyzing HTTP headers from
+	// previous requests stored in our context (if available)
+
+	// Look for common proxy headers in our recent requests
+	// This is a static check at startup; ideally we would check incoming
+	// requests dynamically, but for this implementation we're using
+	// known proxy environment indicators
+
+	// Most common proxy headers: X-Forwarded-Proto, X-Forwarded-SSL, X-Forwarded-For
+	// Environment variables: HTTPS=on, HTTP_X_FORWARDED_PROTO=https
+
+	// Check for common environment variables set by upstream proxies
+	if os.Getenv("HTTPS") == "on" ||
+		os.Getenv("HTTP_X_FORWARDED_PROTO") == "https" ||
+		os.Getenv("HTTP_X_FORWARDED_SSL") == "on" {
+		logger.Info("Upstream TLS-terminating proxy detected via environment variables",
+			"detection_method", "environment_variables",
+			"https", os.Getenv("HTTPS"),
+			"x_forwarded_proto", os.Getenv("HTTP_X_FORWARDED_PROTO"),
+			"x_forwarded_ssl", os.Getenv("HTTP_X_FORWARDED_SSL"))
+
+		// Cache this result
+		p.upstreamProxyMu.Lock()
+		p.upstreamProxyDetected = true
+		p.upstreamProxyMu.Unlock()
+
+		return true
+	}
+
+	// Check if Cloudflare headers are present in environment
+	// Cloudflare sets environment variables like HTTP_CF_VISITOR={"scheme":"https"}
+	if cfVisitor := os.Getenv("HTTP_CF_VISITOR"); cfVisitor != "" {
+		if strings.Contains(cfVisitor, "\"scheme\":\"https\"") {
+			logger.Info("Cloudflare proxy detected via environment variables",
+				"detection_method", "cloudflare_headers",
+				"cf_visitor", cfVisitor)
+
+			// Cache this result
+			p.upstreamProxyMu.Lock()
+			p.upstreamProxyDetected = true
+			p.upstreamProxyMu.Unlock()
+
+			return true
+		}
+	}
+
+	// Not detected, but log if explicit configuration is set
+	if p.config.SkipCertificates {
+		logger.Info("No upstream proxy detected automatically, but certificate acquisition will be skipped due to configuration",
+			"detection_result", "false",
+			"skip_certificates", "true (forced via config)")
+	}
+
+	return false
+}
+
 // setupCertManager configures the autocert manager for Let's Encrypt
 func (p *Proxy) setupCertManager() {
+	// First check for upstream TLS-terminating proxies if detection is enabled
+	isProxied := p.detectUpstreamProxy()
+
+	// Skip certificate acquisition if we're behind a TLS-terminating proxy
+	// and the skip certificates option is enabled
+	if isProxied && p.config.SkipCertificates {
+		logger.Info("Upstream TLS-terminating proxy detected, skipping Let's Encrypt certificate acquisition",
+			"upstream_proxy", "detected",
+			"certificate_acquisition", "disabled")
+		// We still setup a fallback cert for the admin domain
+		adminDomain := p.app.GetConfig().Http.FullDomain()
+		rootDomain := p.app.GetConfig().Http.Domain
+
+		var fallbackDomains []string
+		fallbackDomains = append(fallbackDomains, adminDomain)
+
+		// Include root domain in fallback certificate if it's different from admin domain
+		if rootDomain != "" && rootDomain != adminDomain {
+			fallbackDomains = append(fallbackDomains, rootDomain)
+		}
+
+		fallbackCert, err := generateFallbackCertificates(fallbackDomains)
+		if err != nil {
+			logger.Warn("Failed to generate fallback certificate", "error", err)
+		} else {
+			logger.Info("Generated fallback self-signed certificate for admin domain behind proxy",
+				"domain", adminDomain,
+				"valid_until", time.Now().Add(24*time.Hour).Format("2006-01-02 15:04:05"))
+			// Store the fallback certificate
+			p.fallbackCert = fallbackCert
+		}
+
+		return
+	}
+
 	// Create a cache directory if it doesn't exist
 	dir := p.config.CertDir
 	if dir == "" {
@@ -169,11 +277,11 @@ func (p *Proxy) checkCertificateInCache(domain string) (bool, string) {
 		"expires_in", expiresInDays,
 		"days",
 		"type", certType)
-	
+
 	// Check if certificate matches current mode
 	if p.config.LetsEncryptMode == "production" && certType == "staging" {
 		logger.Info("Found staging certificate but production mode is enabled",
-			"domain", domain, 
+			"domain", domain,
 			"action", "will request new production certificate")
 		return false, certType
 	} else if p.config.LetsEncryptMode == "staging" && certType == "production" {
@@ -183,7 +291,7 @@ func (p *Proxy) checkCertificateInCache(domain string) (bool, string) {
 			"domain", domain,
 			"action", "using existing production certificate")
 	}
-	
+
 	return true, certType
 }
 
@@ -206,27 +314,27 @@ func getCertificateFileName(domain string, certType string) string {
 func getCertificateType(cert *x509.Certificate) string {
 	// Check issuer to determine the certificate type
 	issuer := cert.Issuer.CommonName
-	
+
 	// Check for self-signed certificate
 	if cert.Issuer.CommonName == cert.Subject.CommonName {
 		return "self-signed"
 	}
-	
+
 	// Check for Let's Encrypt staging certificate
-	if strings.Contains(issuer, "STAGING") || 
-	   strings.Contains(issuer, "Fake LE") || 
-	   strings.Contains(issuer, "Counterfeit") || 
-	   strings.Contains(issuer, "False Fennel") {
+	if strings.Contains(issuer, "STAGING") ||
+		strings.Contains(issuer, "Fake LE") ||
+		strings.Contains(issuer, "Counterfeit") ||
+		strings.Contains(issuer, "False Fennel") {
 		return "staging"
 	}
-	
+
 	// Check for Let's Encrypt production certificate
-	if strings.Contains(issuer, "Let's Encrypt") || 
-	   strings.Contains(issuer, "R3") || 
-	   strings.Contains(issuer, "E1") {
+	if strings.Contains(issuer, "Let's Encrypt") ||
+		strings.Contains(issuer, "R3") ||
+		strings.Contains(issuer, "E1") {
 		return "production"
 	}
-	
+
 	// Unknown issuer
 	return "unknown"
 }
@@ -252,7 +360,7 @@ func isCertificateValid(certData []byte, domain string) (bool, float64, string, 
 
 	// Determine the certificate type
 	certType := getCertificateType(cert)
-	
+
 	// Check if the certificate is still valid
 	now := time.Now()
 	if now.After(cert.NotAfter) || now.Before(cert.NotBefore) {
@@ -303,21 +411,21 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 		getCertificateFileName(domain, "staging"),
 		getCertificateFileName(domain, "production"),
 	}
-	
+
 	// Check each possible certificate file using known patterns
 	for _, baseName := range certFiles {
 		certFile := filepath.Join(certDir, baseName)
 		keyFile := filepath.Join(certDir, baseName+"+rsa")
-		
+
 		// Skip if either file doesn't exist
 		if _, err := os.Stat(certFile); os.IsNotExist(err) {
 			continue
 		}
-		
+
 		if _, err := os.Stat(keyFile); os.IsNotExist(err) {
 			continue
 		}
-		
+
 		// If we found both files, validate the certificate
 		certData, err := os.ReadFile(certFile)
 		if err != nil {
@@ -327,24 +435,24 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 				"error", err)
 			continue
 		}
-		
+
 		// Validate the certificate data
 		validCert, expiresInDays, certType, _ := isCertificateValid(certData, domain)
 		if !validCert {
 			continue
 		}
-		
+
 		logger.Info("Valid certificate found in filesystem with standard naming pattern",
 			"domain", domain,
 			"expires_in", expiresInDays,
 			"days",
 			"type", certType,
 			"cert_file", certFile)
-			
+
 		// Check if certificate matches current mode
 		if p.config.LetsEncryptMode == "production" && certType == "staging" {
 			logger.Info("Found staging certificate but production mode is enabled",
-				"domain", domain, 
+				"domain", domain,
 				"action", "will request new production certificate")
 			// Delete the staging certificate
 			deleteCertificateFiles(certDir, baseName)
@@ -356,7 +464,7 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 				"domain", domain,
 				"action", "using existing production certificate")
 		}
-		
+
 		// Log some debug information about the certificate files
 		certFileInfo, _ := os.Stat(certFile)
 		keyFileInfo, _ := os.Stat(keyFile)
@@ -368,30 +476,30 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 			"key_file", keyFile,
 			"key_size", keyFileInfo.Size(),
 			"key_modified", keyFileInfo.ModTime())
-		
+
 		// Attempt to add to autocert cache if it's not already there
 		if certType == "production" || (certType == "staging" && p.config.LetsEncryptMode == "staging") {
 			// Add to autocert cache for future use
 			p.addCertificateToCache(domain, certFile, keyFile)
 		}
-		
+
 		return true, certType
 	}
 
 	// If no matches with standard patterns, try a glob search for any files starting with the domain name
-	// This will catch files with any suffix like domain_letsencrypt-production 
+	// This will catch files with any suffix like domain_letsencrypt-production
 	// and domain_letsencrypt-staging
 	logger.Debug("No standard certificate files found, searching for any matching certificates",
 		"domain", domain)
-	
+
 	files, err := filepath.Glob(filepath.Join(certDir, domain+"*"))
 	if err != nil {
-		logger.Warn("Error searching for certificate files", 
-			"domain", domain, 
+		logger.Warn("Error searching for certificate files",
+			"domain", domain,
 			"error", err)
 		return false, ""
 	}
-	
+
 	// Extract base names without the path
 	var candidates []string
 	for _, file := range files {
@@ -399,34 +507,34 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 		if strings.HasSuffix(file, "+rsa") {
 			continue
 		}
-		
+
 		baseFile := filepath.Base(file)
 		// Check if the corresponding key file exists
 		keyFile := file + "+rsa"
 		if _, err := os.Stat(keyFile); os.IsNotExist(err) {
 			continue
 		}
-		
+
 		// Add this candidate
 		candidates = append(candidates, baseFile)
 	}
-	
+
 	// No certificate files found
 	if len(candidates) == 0 {
-		logger.Debug("No certificate files found in filesystem glob search", 
+		logger.Debug("No certificate files found in filesystem glob search",
 			"domain", domain)
 		return false, ""
 	}
-	
+
 	logger.Debug("Found certificate candidates in glob search",
 		"domain", domain,
 		"candidates", candidates)
-	
+
 	// Process each candidate (if there are multiple matches)
 	for _, baseName := range candidates {
 		certFile := filepath.Join(certDir, baseName)
 		keyFile := filepath.Join(certDir, baseName+"+rsa")
-		
+
 		// Read and validate the certificate
 		certData, err := os.ReadFile(certFile)
 		if err != nil {
@@ -436,27 +544,27 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 				"error", err)
 			continue
 		}
-		
+
 		// Validate the certificate data
 		validCert, expiresInDays, certType, _ := isCertificateValid(certData, domain)
 		if !validCert {
 			continue
 		}
-		
+
 		logger.Info("Valid certificate found in filesystem with non-standard naming",
 			"domain", domain,
 			"expires_in", expiresInDays,
 			"days",
 			"type", certType,
 			"cert_file", certFile)
-			
+
 		// If we're in production mode and this is a production certificate, use it
 		if p.config.LetsEncryptMode == "production" && certType == "production" {
 			// Attempt to add to autocert cache
 			p.addCertificateToCache(domain, certFile, keyFile)
 			return true, certType
 		}
-		
+
 		// If we're in staging mode, prefer production certificates if available
 		if p.config.LetsEncryptMode == "staging" {
 			if certType == "production" {
@@ -470,7 +578,7 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 				return true, certType
 			}
 		}
-		
+
 		// If this is a staging certificate but we're in production mode, ignore it
 		// and continue checking other candidates
 		if p.config.LetsEncryptMode == "production" && certType == "staging" {
@@ -479,7 +587,7 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 				"cert_file", certFile)
 			continue
 		}
-		
+
 		// Fallback: use the certificate if it's valid
 		// Attempt to add to autocert cache
 		p.addCertificateToCache(domain, certFile, keyFile)
@@ -495,7 +603,7 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 func deleteCertificateFiles(certDir string, baseName string) {
 	certFile := filepath.Join(certDir, baseName)
 	keyFile := filepath.Join(certDir, baseName+"+rsa")
-	
+
 	// Delete certificate file
 	if err := os.Remove(certFile); err != nil && !os.IsNotExist(err) {
 		logger.Warn("Failed to delete certificate file",
@@ -504,7 +612,7 @@ func deleteCertificateFiles(certDir string, baseName string) {
 	} else if !os.IsNotExist(err) {
 		logger.Info("Deleted certificate file", "file", certFile)
 	}
-	
+
 	// Delete key file
 	if err := os.Remove(keyFile); err != nil && !os.IsNotExist(err) {
 		logger.Warn("Failed to delete certificate key file",
@@ -665,8 +773,8 @@ func (p *Proxy) checkCertificateExists(domain string) (bool, string) {
 	// First check in the cache
 	validInCache, cacheType := p.checkCertificateInCache(domain)
 	if validInCache {
-		logger.Debug("Certificate exists in cache", 
-			"domain", domain, 
+		logger.Debug("Certificate exists in cache",
+			"domain", domain,
 			"type", cacheType)
 		return true, cacheType
 	}
@@ -674,8 +782,8 @@ func (p *Proxy) checkCertificateExists(domain string) (bool, string) {
 	// If not in cache, check the filesystem
 	validInFS, fsType := p.checkCertificateInFilesystem(domain)
 	if validInFS {
-		logger.Debug("Certificate exists in filesystem but not in cache", 
-			"domain", domain, 
+		logger.Debug("Certificate exists in filesystem but not in cache",
+			"domain", domain,
 			"type", fsType)
 		return true, fsType
 	}
@@ -696,6 +804,15 @@ func (p *Proxy) requestAdminCertificate() {
 	// Only proceed if HTTPS is enabled
 	if !p.app.GetConfig().Http.Https {
 		logger.Debug("HTTPS is disabled, skipping admin certificate request")
+		return
+	}
+
+	// Check for upstream proxy with certificate skipping enabled
+	isProxied := p.detectUpstreamProxy()
+	if isProxied && p.config.SkipCertificates {
+		logger.Info("Upstream TLS-terminating proxy detected, skipping admin certificate request",
+			"domain", adminDomain,
+			"skip_reason", "behind TLS-terminating proxy")
 		return
 	}
 
@@ -721,7 +838,7 @@ func (p *Proxy) requestAdminCertificate() {
 
 	// Check if we already have a valid certificate (cache or filesystem)
 	hasValidCert, certType := p.checkCertificateExists(adminDomain)
-	
+
 	// If we have a valid cert that matches our mode, use it
 	if hasValidCert {
 		// Check for mode mismatch
@@ -765,7 +882,7 @@ func (p *Proxy) requestAdminCertificate() {
 	if certDir == "" {
 		certDir = p.app.GetConfig().General.StorageDir + "/certs"
 	}
-	
+
 	// Ensure certificate directory exists
 	if err := os.MkdirAll(certDir, 0755); err != nil {
 		logger.Warn("Failed to create certificate directory",
@@ -863,15 +980,15 @@ func (p *Proxy) requestAdminCertificate() {
 		if p.config.LetsEncryptMode == "staging" {
 			certType = "staging"
 		}
-		
+
 		// Try to rename the certificate files
 		oldCertPath := filepath.Join(certDir, adminDomain)
 		oldKeyPath := filepath.Join(certDir, adminDomain+"+rsa")
-		
+
 		newName := getCertificateFileName(adminDomain, certType)
 		newCertPath := filepath.Join(certDir, newName)
 		newKeyPath := filepath.Join(certDir, newName+"+rsa")
-		
+
 		// Only rename if the files exist and the new names are different
 		if oldCertPath != newCertPath {
 			// Check if old cert exists
@@ -890,7 +1007,7 @@ func (p *Proxy) requestAdminCertificate() {
 						"from", oldCertPath,
 						"to", newCertPath)
 				}
-				
+
 				// Rename key
 				if _, err := os.Stat(oldKeyPath); err == nil {
 					if err := os.Rename(oldKeyPath, newKeyPath); err != nil {
@@ -909,7 +1026,7 @@ func (p *Proxy) requestAdminCertificate() {
 				}
 			}
 		}
-		
+
 		logger.Info("Successfully obtained Let's Encrypt certificate",
 			"domain", adminDomain,
 			"type", certType)
@@ -927,6 +1044,15 @@ func (p *Proxy) requestAdminCertificate() {
 func (p *Proxy) requestDomainCertificate(domain string) {
 	if domain == "" {
 		logger.Warn("Empty domain provided to requestDomainCertificate")
+		return
+	}
+
+	// Check for upstream proxy with certificate skipping enabled
+	isProxied := p.detectUpstreamProxy()
+	if isProxied && p.config.SkipCertificates {
+		logger.Info("Upstream TLS-terminating proxy detected, skipping domain certificate request",
+			"domain", domain,
+			"skip_reason", "behind TLS-terminating proxy")
 		return
 	}
 
@@ -951,7 +1077,7 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 
 	// Check if we already have a valid certificate (cache or filesystem)
 	hasValidCert, certType := p.checkCertificateExists(domain)
-	
+
 	// If we have a valid cert that matches our mode, use it
 	if hasValidCert {
 		// Check for mode mismatch
@@ -995,7 +1121,7 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 	if certDir == "" {
 		certDir = p.app.GetConfig().General.StorageDir + "/certs"
 	}
-	
+
 	// Ensure certificate directory exists
 	if err := os.MkdirAll(certDir, 0755); err != nil {
 		logger.Warn("Failed to create certificate directory",
@@ -1093,15 +1219,15 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 		if p.config.LetsEncryptMode == "staging" {
 			certType = "staging"
 		}
-		
+
 		// Try to rename the certificate files
 		oldCertPath := filepath.Join(certDir, domain)
 		oldKeyPath := filepath.Join(certDir, domain+"+rsa")
-		
+
 		newName := getCertificateFileName(domain, certType)
 		newCertPath := filepath.Join(certDir, newName)
 		newKeyPath := filepath.Join(certDir, newName+"+rsa")
-		
+
 		// Only rename if the files exist and the new names are different
 		if oldCertPath != newCertPath {
 			// Check if old cert exists
@@ -1120,7 +1246,7 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 						"from", oldCertPath,
 						"to", newCertPath)
 				}
-				
+
 				// Rename key
 				if _, err := os.Stat(oldKeyPath); err == nil {
 					if err := os.Rename(oldKeyPath, newKeyPath); err != nil {
@@ -1139,7 +1265,7 @@ func (p *Proxy) requestDomainCertificate(domain string) {
 				}
 			}
 		}
-		
+
 		logger.Info("Successfully obtained Let's Encrypt certificate",
 			"domain", domain,
 			"type", certType)
@@ -1224,15 +1350,15 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 			if p.config.LetsEncryptMode == "staging" {
 				certType = "staging"
 			}
-			
+
 			// Rename the certificate files to include the type
 			oldCertPath := filepath.Join(certDir, domain)
 			oldKeyPath := filepath.Join(certDir, domain+"+rsa")
-			
+
 			newName := getCertificateFileName(domain, certType)
 			newCertPath := filepath.Join(certDir, newName)
 			newKeyPath := filepath.Join(certDir, newName+"+rsa")
-			
+
 			// Only rename if the files exist and the new names are different
 			if oldCertPath != newCertPath {
 				// Check if old cert exists
@@ -1251,7 +1377,7 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 							"from", oldCertPath,
 							"to", newCertPath)
 					}
-					
+
 					// Rename key
 					if _, err := os.Stat(oldKeyPath); err == nil {
 						if err := os.Rename(oldKeyPath, newKeyPath); err != nil {
@@ -1270,7 +1396,7 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 					}
 				}
 			}
-			
+
 			logger.Info("Successfully obtained Let's Encrypt certificate on retry",
 				"domain", domain,
 				"attempt", attempt,
@@ -1326,7 +1452,7 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 		"domain", domain,
 		"max_retries", maxRetries,
 		"fallback", "Generating self-signed certificate")
-		
+
 	// Generate a self-signed certificate for this domain
 	fallbackCert, err := generateFallbackCertificates([]string{domain})
 	if err != nil {
@@ -1338,13 +1464,13 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 		selfSignedName := getCertificateFileName(domain, "self-signed")
 		certPath := filepath.Join(certDir, selfSignedName)
 		keyPath := filepath.Join(certDir, selfSignedName+"+rsa")
-		
+
 		// Save the certificate and key
 		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: fallbackCert.Certificate[0]})
 		keyBytes, err := x509.MarshalPKCS8PrivateKey(fallbackCert.PrivateKey)
 		if err == nil {
 			keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
-			
+
 			// Write files
 			if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
 				logger.Error("Failed to write self-signed certificate to disk",
@@ -1352,14 +1478,14 @@ func (p *Proxy) retryCertificateRequest(domain string, maxRetries int, initialBa
 					"path", certPath,
 					"error", err)
 			}
-			
+
 			if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
 				logger.Error("Failed to write self-signed key to disk",
 					"domain", domain,
 					"path", keyPath,
 					"error", err)
 			}
-			
+
 			logger.Info("Generated and saved self-signed fallback certificate",
 				"domain", domain,
 				"cert_path", certPath,

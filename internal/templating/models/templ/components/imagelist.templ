@@ -1,0 +1,122 @@
+package components
+
+import (
+	"strconv"
+)
+
+// HumanReadableImage represents an image with human-readable attributes
+type HumanReadableImage struct {
+	ID          string
+	ShortID     string
+	Name        string
+	Repository  string
+	Tag         string
+	Size        string
+	Created     string
+	RepoDigests []string
+	RepoTags    []string
+}
+
+// ImageList displays a list of images
+templ ImageList(images []HumanReadableImage) {
+	<!-- Image list using daisyUI components -->
+	<div class="card w-full bg-base-300">
+		<div class="card-body p-4">
+			
+			<!-- Action buttons -->
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
+				<h3 class="font-semibold text-base-content">Available Images: { strconv.Itoa(len(images)) }</h3>
+				<div class="flex gap-2">
+					<button 
+						class="btn btn-sm btn-secondary"
+						hx-get="/htmx/upload-image"
+						hx-target="#image-manager"
+						hx-swap="innerHTML">
+						<span class="iconf">󰦒</span> Upload
+					</button>
+					<button 
+						class="btn btn-sm btn-primary"
+						hx-get="/htmx/image-manager"
+						hx-target="#image-manager"
+						hx-swap="innerHTML">
+						<span class="iconf">󰑓</span> Refresh
+					</button>
+				</div>
+			</div>
+
+			<!-- Image list -->
+			<table class="table">
+				<!-- head -->
+				<thead>
+					<tr>
+						<th>Repository</th>
+						<th>Tag</th>
+						<th>Size</th>
+						<th>Created</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					/* Check if there are no images */
+					if len(images) == 0 {
+						<tr>
+							<td colspan="5" class="text-center py-4">
+								<div class="alert alert-info">
+									<span class="iconf">ℹ️</span>
+									<span>No images found. Upload an image first.</span>
+								</div>
+							</td>
+						</tr>
+					} else {
+						/* List all available images */
+						for _, img := range images {
+							<tr class="hover">
+								<td>
+									<div class="flex items-center gap-3">
+										<div>
+											<div class="font-bold">{ img.Repository }</div>
+											<div class="text-sm opacity-50">{ img.ID }</div>
+										</div>
+									</div>
+								</td>
+								<td>{ img.Tag }</td>
+								<td>{ img.Size }</td>
+								<td>{ img.Created }</td>
+								<th>
+									<div class="dropdown dropdown-end">
+										<div tabindex="0" role="button" class="btn btn-ghost btn-xs">
+											<span class="iconf">󰅀</span>
+										</div>
+										<ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-200 rounded-box w-52">
+											<li>
+												<a 
+													href={ templ.SafeURL("/htmx/create-container/" + img.ShortID) }
+													class="text-success flex items-center">
+													<span class="iconf mr-2">󰐕</span> Create Container
+												</a>
+											</li>
+											<li>
+												<button 
+													class="text-error flex items-center"
+													hx-delete={ "/htmx/image-manager/delete/" + img.ShortID }
+													hx-target="#image-manager"
+													hx-swap="innerHTML"
+													hx-confirm="Are you sure you want to delete this image?">
+													<span class="iconf mr-2">󰆴</span> Delete
+												</button>
+											</li>
+										</ul>
+									</div>
+								</th>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+		</div>
+	</div>
+
+	<script>
+	console.debug('Image list rendered');
+	</script>
+} 

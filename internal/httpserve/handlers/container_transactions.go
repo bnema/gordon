@@ -2,13 +2,13 @@ package handlers
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/cmdparams"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/labstack/echo/v4"
 	"gopkg.in/yaml.v3"
 )
@@ -132,13 +132,13 @@ func (tq *TransactionQueue) Execute() error {
 	for i, step := range tq.steps {
 		err := step()
 		if err != nil {
-			log.Printf("Error occurred at step index %d: %v", i, err)
+			logger.Error(fmt.Sprintf("Error occurred at step index %d: %v", i, err))
 			transactionErrors = append(transactionErrors, err)
 			for j := i - 1; j >= 0; j-- {
 				rollback := tq.rollbacks[j]
 				if rollback != nil {
 					if rollbackErr := rollback(); rollbackErr != nil {
-						log.Printf("Failed to execute rollback at index %d: %v", j, rollbackErr)
+						logger.Error(fmt.Sprintf("Failed to execute rollback at index %d: %v", j, rollbackErr))
 						rollbackErrors = append(rollbackErrors, rollbackErr)
 					}
 				}

@@ -1,0 +1,73 @@
+package admin
+
+import (
+	"github.com/bnema/gordon/internal/templating/models/templ/layouts"
+	"strconv"
+)
+
+// ManagerPage implements the container and image manager page
+templ ManagerPage(title string, buildVersion string, adminPath string, userSettingsURL string, logoutURL string, containerCount int, imageCount int) {
+	@layouts.AdminLayout(title, buildVersion, adminPath, userSettingsURL, logoutURL) {
+		<!-- Main content -->
+		<div class="text-sm breadcrumbs mb-4">
+			<ul>
+				<li><a href={ templ.URL(adminPath) }>Gordon</a></li>
+				<li>Manager</li>
+			</ul>
+		</div>
+		
+		<!-- Stats overview -->
+		<div class="stats shadow mb-6 w-full">
+			<div class="stat">
+				<div class="stat-figure text-primary">
+					<span class="iconf text-3xl">󰡨</span>
+				</div>
+				<div class="stat-title">Containers</div>
+				<div class="stat-value" id="container-count">{ strconv.Itoa(containerCount) }</div>
+				<div class="stat-desc">Docker containers managed by Gordon</div>
+			</div>
+			
+			<div class="stat">
+				<div class="stat-figure text-secondary">
+					<span class="iconf text-3xl">󰋊</span>
+				</div>
+				<div class="stat-title">Images</div>
+				<div class="stat-value" id="image-count">{ strconv.Itoa(imageCount) }</div>
+				<div class="stat-desc">Docker images available</div>
+			</div>
+		</div>
+		
+		<!-- Tabs for containers and images -->
+		<div role="tablist" class="tabs tabs-boxed mb-4">
+			<input type="radio" name="my_tabs" role="tab" class="tab" aria-label="Containers" id="containers-tab" checked />
+			<div role="tabpanel" class="tab-content p-0">
+				<!-- Container manager section -->
+				<div id="container-manager"
+					hx-get="/htmx/container-manager"
+					hx-trigger="load"
+					hx-swap="innerHTML">
+					<!-- Container content loaded via HTMX -->
+					<div class="text-center p-4">
+						<span class="iconf text-3xl animate-spin inline-block">󰑐</span> 
+						Loading containers...
+					</div>
+				</div>
+			</div>
+			
+			<input type="radio" name="my_tabs" role="tab" class="tab" aria-label="Images" id="images-tab" />
+			<div role="tabpanel" class="tab-content p-0">
+				<!-- Image manager section -->
+				<div id="image-manager"
+					hx-get="/htmx/image-manager"
+					hx-trigger="load"
+					hx-swap="innerHTML">
+					<!-- Image content loaded via HTMX -->
+					<div class="text-center p-4">
+						<span class="iconf text-3xl animate-spin inline-block">󰑐</span> 
+						Loading images...
+					</div>
+				</div>
+			</div>
+		</div>
+	}
+}
