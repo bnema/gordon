@@ -100,10 +100,7 @@ func ListRunningContainers() ([]types.Container, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Check if the list is empty
-	if len(containers) == 0 {
-		return nil, fmt.Errorf("no containers found")
-	}
+	// Just return the containers, even if it's an empty slice
 	return containers, nil
 }
 
@@ -420,6 +417,11 @@ func CheckIfNetworkExists(networkName string) (bool, error) {
 
 // GetNetworkInfo returns information about a network
 func GetNetworkInfo(networkName string) (*network.Inspect, error) {
+	// Check if Docker client is initialized
+	if err := CheckIfInitialized(); err != nil {
+		return nil, fmt.Errorf("cannot get network info: %w", err)
+	}
+
 	networkInfo, err := dockerCli.NetworkInspect(context.Background(), networkName, network.InspectOptions{})
 	if err != nil {
 		return nil, err
@@ -947,7 +949,7 @@ func ListenForContainerEvents(networkFilter string, startCallback func(string, s
 						logger.Debug("Container stopped",
 							"container_id", event.id,
 							"container_name", event.name)
-						
+
 						// Call the stop callback if provided
 						if stopCallback != nil {
 							logger.Debug("Calling container stop callback",

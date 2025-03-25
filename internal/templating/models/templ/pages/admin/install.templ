@@ -1,0 +1,59 @@
+package admin
+
+import "github.com/bnema/gordon/internal/templating/models/templ/layouts"
+
+// InstallPage replaces install.gohtml
+// It renders the installation page
+templ InstallPage(title string, version string) {
+	@layouts.Base(title) {
+		<!-- Logo and Title -->
+		<div
+			id="logo-mascot"
+			class="flex flex-col justify-center items-center p-4 mb-4"
+		>
+			<div class="circle-shadow flex justify-center w-100">
+				<img
+					src="/assets/imgs/gordon-mascot-hq-trsp.png"
+					alt="logo"
+					class="sm:h-24 h-32 xl:h-48"
+				/>
+			</div>
+			<div class="flex justify-center mt-4">
+				<h1
+					class="gordon-title text-2xl lg:text-4xl xl:text-5xl text-indigo-800 tracking-tighter"
+				>
+					Gordon
+				</h1>
+				<span class="gordon-v-subtitle text-indigo-600 text-sm ml-2">
+					v{ version }
+				</span>
+			</div>
+		</div>
+
+		<!-- Main Content -->
+		<div class="card w-2/3">
+			<!-- Built-in Proxy -->
+			<div id="built-in-proxy" class="mt-8">
+				<div class="flex items-center mb-4">
+					<div class="w-8 h-8 bg-indigo-500 rounded-full flex items-center justify-center">
+						<span class="text-white font-bold">✓</span>
+					</div>
+					<h2 class="text-lg ml-2 text-title">Reverse Proxy</h2>
+				</div>
+
+				<div class="bg-indigo-50 p-4 rounded-md">
+					<p class="mb-4">Gordon now uses a built-in reverse proxy to handle all domain routing and TLS certificates.</p>
+					<p>The proxy automatically:</p>
+					<ul class="list-disc ml-6 mb-4">
+						<li>Manages Let's Encrypt certificates</li>
+						<li>Routes domains to the appropriate containers</li>
+						<li>Handles HTTP to HTTPS redirects</li>
+						<li>Provides proper headers for forwarded requests</li>
+					</ul>
+					<p>No additional configuration is required.</p>
+				</div>
+			</div>
+			<!-- End Built-in Proxy -->
+		</div>
+	}
+} 

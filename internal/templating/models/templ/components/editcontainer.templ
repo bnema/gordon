@@ -1,0 +1,39 @@
+package components
+
+import t "github.com/a-h/templ"
+
+// EditContainer replaces editcontainer.gohtml 
+// It renders a form to edit a container's configuration
+templ EditContainer(id string, containerInfo string) {
+	<div
+		id={ "edit-container-" + id }
+		class="card bg-base-100 shadow-xl"
+		hx-ext="response-targets"
+	>
+		<div id="editor" class="card-body">
+			<form
+				method="post"
+				action={ t.URL("/htmx/container-manager/edit/" + id) }
+				hx-post={ string(t.URL("/htmx/container-manager/edit/" + id)) }
+				hx-swap="innerHTML"
+				hx-target-*={ "#error-message-edit-container-" + id }
+			>
+				<textarea
+					name="container_config"
+					id="container_config"
+					class="textarea textarea-bordered w-full h-96 font-mono JetBrainsMonoNF"
+					rows="20"
+				>{ containerInfo }</textarea>
+				<div class="card-actions justify-end mt-4">
+					<input
+						type="submit"
+						value="Save"
+						id={ "save-button-" + id }
+						class="btn btn-primary"
+					/>
+				</div>
+			</form>
+			<div id={ "error-message-edit-container-" + id } class="text-error mt-2"></div>
+		</div>
+	</div>
+} 

@@ -1,0 +1,16 @@
+package layouts
+
+import "github.com/bnema/gordon/internal/templating/models/templ/components"
+
+// Base layout template that provides the HTML structure
+// All pages will use this layout template
+templ Base(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		@components.Header(title)
+		<body class="min-h-screen bg-base-100">
+			{ children... }
+			@components.Footer()
+		</body>
+	</html>
+}

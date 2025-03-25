@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
@@ -12,11 +11,11 @@ import (
 // scanContainersAndCheckCertificates scans all containers from the Gordon network
 // and checks if we have certificates for their domains and subdomains
 func (p *Proxy) scanContainersAndCheckCertificates() error {
-	// Get the network name from app config
 	networkName := p.app.GetConfig().ContainerEngine.Network
-
 	if networkName == "" {
-		return fmt.Errorf("container network name is not configured")
+		// If no network is defined, skip container scanning
+		logger.Info("No container network defined, skipping certificate checks")
+		return nil
 	}
 
 	logger.Info("Scanning containers in network for certificate checks",
@@ -25,7 +24,10 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 	// Try to get network info using the docker client
 	networkInfo, err := docker.GetNetworkInfo(networkName)
 	if err != nil {
-		return fmt.Errorf("failed to get network info: %w", err)
+		logger.Warn("Failed to get network info, skipping certificate checks",
+			"error", err,
+			"network", networkName)
+		return nil // Return nil instead of error to continue execution
 	}
 
 	// Skip admin cert check if environment variable is set

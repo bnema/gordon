@@ -187,18 +187,36 @@ function refreshContainerList() {
   
   // Show loading indicator
   const containerManager = $('#container-manager');
+  if (containerManager.length === 0) {
+    console.error("Container manager element not found in DOM");
+    return;
+  }
+  
+  console.debug("Container manager element found:", containerManager[0]);
+  console.debug("Container manager classes:", containerManager.attr('class'));
+  
   const originalContent = containerManager.html();
   containerManager.html('<div class="text-center p-4"><span class="iconf text-3xl animate-spin inline-block">󰑐</span> Loading containers...</div>');
+  
+  // Ensure the container is visible
+  containerManager.removeClass('hidden');
   
   $.ajax({
     url: '/htmx/container-manager',
     type: 'GET',
     success: function(data) {
+      console.debug("Container data received, length:", data.length);
       $('#container-manager').html(data);
+      
+      // Force visibility
+      $('#container-manager').removeClass('hidden');
+      
       console.debug("Container list refreshed successfully");
     },
     error: function(xhr, status, error) {
       console.error("Error refreshing container list:", error);
+      console.error("Status:", status);
+      console.error("Response:", xhr.responseText);
       // Restore original content on error
       containerManager.html(originalContent);
     }
@@ -211,6 +229,14 @@ function refreshImageList() {
   
   // Show loading indicator
   const imageManager = $('#image-manager');
+  if (imageManager.length === 0) {
+    console.error("Image manager element not found in DOM");
+    return;
+  }
+  
+  console.debug("Image manager element found:", imageManager[0]);
+  console.debug("Image manager classes:", imageManager.attr('class'));
+  
   const originalContent = imageManager.html();
   imageManager.html('<div class="text-center p-4"><span class="iconf text-3xl animate-spin inline-block">󰑐</span> Loading images...</div>');
   
@@ -218,11 +244,14 @@ function refreshImageList() {
     url: '/htmx/image-manager',
     type: 'GET',
     success: function(data) {
+      console.debug("Image data received, length:", data.length);
       $('#image-manager').html(data);
       console.debug("Image list refreshed successfully");
     },
     error: function(xhr, status, error) {
       console.error("Error refreshing image list:", error);
+      console.error("Status:", status);
+      console.error("Response:", xhr.responseText);
       // Restore original content on error
       imageManager.html(originalContent);
     }
@@ -235,6 +264,9 @@ function setupHtmxEventListeners() {
   document.body.addEventListener('htmx:afterOnLoad', function(event) {
     const targetId = event.detail.target.id;
     console.debug(`HTMX afterOnLoad event for target: ${targetId}`);
+    
+    // Remove the tab visibility fix which was interfering with DaisyUI
+    // DaisyUI handles tab visibility automatically with the input[type="radio"] approach
     
     // Check if the target is an action response
     if (targetId && targetId.startsWith('actionResponse-')) {
@@ -257,7 +289,7 @@ function setupHtmxEventListeners() {
       console.debug('Image manager updated');
       
       // Show notification for successful upload
-      if (event.detail.xhr.responseText.includes('Success')) {
+      if (event.detail.xhr && event.detail.xhr.responseText && event.detail.xhr.responseText.includes('Success')) {
         showNotification('Image uploaded successfully', 'success');
       }
       
