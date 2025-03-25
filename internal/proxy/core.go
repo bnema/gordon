@@ -1,8 +1,7 @@
 package proxy
 
 import (
-	"os"
-	"strings"
+	"net"
 	"sync"
 	"time"
 
@@ -108,58 +107,72 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 	httpServer := echo.New()
 	httpServer.HideBanner = true
 
-	// Detect and store our container ID (if we're running in a container)
-	var ourContainerID string
-	if docker.IsRunningInContainer() {
-		// Get our hostname which should be the container ID in Docker/Podman
-		hostname := os.Getenv("HOSTNAME")
-		if hostname != "" {
-			containers, err := docker.ListRunningContainers()
-			if err == nil {
-				for _, container := range containers {
-					// Check if this container is us by comparing hostname with container ID
-					if strings.HasPrefix(hostname, container.ID) {
-						// Store our container ID for future reference
-						ourContainerID = container.ID
-						containerName := strings.TrimLeft(container.Names[0], "/")
-						logger.Info("Gordon identity established",
-							"container_id", ourContainerID,
-							"container_name", containerName)
-						break
-					}
-				}
-			}
-		}
+	// Initialize container storage and cooldown settings
+	recentContainers := make(map[string]time.Time)
+	containerCooldownPeriod := time.Duration(10) * time.Second
+	// Use a fixed cooldown period of 10 seconds (currently no config option for this)
+
+	// Set up DB retry configuration
+	dbMaxRetries := 3
+	dbRetryBaseDelay := time.Duration(500) * time.Millisecond
+
+	// Initialize the reverseProxyClient with reasonable timeouts
+	reverseProxyClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+			// Add more detailed timeout settings
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+			ExpectContinueTimeout: 5 * time.Second,
+			// Add a custom dialer with explicit timeouts
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+				DualStack: true,
+			}).DialContext,
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+			ForceAttemptHTTP2:   true,
+		},
 	}
 
-	// Initialize routes map
-	routes := make(map[string]*ProxyRouteInfo)
-
-	// Initialize SQL queries
+	// Initialize the proxy queries
 	proxyQueries := queries.NewProxyQueries()
 
-	// Create the proxy
+	// Create the proxy instance
 	p := &Proxy{
 		config:                  config,
 		app:                     app,
 		httpsServer:             httpsServer,
 		httpServer:              httpServer,
-		routes:                  routes,
-		serverStarted:           false,
-		gordonContainerID:       ourContainerID,
+		routes:                  make(map[string]*ProxyRouteInfo),
+		reverseProxyClient:      reverseProxyClient,
+		dbMaxRetries:            dbMaxRetries,
+		dbRetryBaseDelay:        dbRetryBaseDelay,
+		recentContainers:        recentContainers,
+		containerCooldownPeriod: containerCooldownPeriod,
 		shutdown:                make(chan struct{}),
-		recentContainers:        make(map[string]time.Time),
-		containerCooldownPeriod: 10 * time.Second, // Default 10 second cooldown period
 		queries:                 proxyQueries,
 	}
 
-	// Now add the middleware with the proxy reference
-	p.setupMiddleware()
-
-	// Set up the certificate manager
+	// Setup the certificate manager for HTTPS
 	p.setupCertManager()
 
-	logger.Debug("Reverse proxy initialized")
+	// Verify the certificate manager was properly initialized
+	if p.certManager == nil {
+		logger.Error("Certificate manager initialization failed",
+			"solution", "Check certificate directory permissions and configuration")
+	} else {
+		logger.Debug("Certificate manager successfully initialized")
+	}
+
+	// Detect our container ID for later use
+	p.detectGordonContainer()
+
 	return p, nil
 }
 
