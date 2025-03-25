@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bnema/gordon/pkg/docker"
@@ -167,15 +169,126 @@ func (p *Proxy) Start() error {
 						"server_name", hello.ServerName)
 				}
 
+				// Verify certificate manager is properly initialized
+				if p.certManager == nil {
+					logger.Error("TLS certificate manager is nil during handshake - certificate initialization failed",
+						"server_name", hello.ServerName,
+						"solution", "Check certificate configuration and logs for setup errors")
+
+					// Use fallback certificate if we have one
+					if p.fallbackCert != nil {
+						logger.Warn("Using fallback self-signed certificate due to missing certificate manager",
+							"server_name", hello.ServerName)
+						return p.fallbackCert, nil
+					}
+
+					return nil, fmt.Errorf("certificate manager not initialized")
+				}
+
 				// Try to get the certificate from the autocert manager
+				logger.Debug("Attempting to get certificate from manager",
+					"server_name", hello.ServerName,
+					"has_fallback", p.fallbackCert != nil)
+
+				// First try checking if we have a valid certificate in cache
+				cacheKey := "cert-" + hello.ServerName
+				certCache := p.certManager.Cache
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				if certCache != nil {
+					certData, err := certCache.Get(ctx, cacheKey)
+					if err == nil && len(certData) > 0 {
+						logger.Debug("Found certificate in cache", "domain", hello.ServerName)
+						// Use directly if found in cache - skip the potentially slower autocert.Manager GetCertificate
+						keyKey := "key-" + hello.ServerName
+						keyData, keyErr := certCache.Get(ctx, keyKey)
+						if keyErr == nil && len(keyData) > 0 {
+							cert, err := tls.X509KeyPair(certData, keyData)
+							if err == nil {
+								logger.Debug("Successfully loaded certificate from cache",
+									"domain", hello.ServerName)
+								return &cert, nil
+							}
+							logger.Error("Failed to create X509KeyPair from cache",
+								"domain", hello.ServerName,
+								"error", err)
+						} else {
+							logger.Error("Certificate found in cache but key is missing or invalid",
+								"domain", hello.ServerName,
+								"key_error", keyErr)
+						}
+					} else if err != nil {
+						logger.Debug("Certificate not found in cache during TLS handshake",
+							"domain", hello.ServerName,
+							"error", err)
+
+						// Check if we have it on disk but not in cache (unlikely after preloading)
+						hasOnDisk, certType := p.checkCertificateInFilesystem(hello.ServerName)
+						if hasOnDisk {
+							logger.Warn("Certificate found on disk but not in cache - this should not happen after preloading",
+								"domain", hello.ServerName,
+								"type", certType,
+								"solution", "Check preloadCertificates implementation")
+						}
+					}
+				}
+
+				// If not in cache, use the standard GetCertificate method
+				// Let's Encrypt may be contacted if no certificate exists
 				cert, err := p.certManager.GetCertificate(hello)
 
-				// If we can't get a certificate and we have a fallback, use it for the admin domain
-				if (err != nil || cert == nil) && hello.ServerName == adminDomain && p.fallbackCert != nil {
-					logger.Debug("Using fallback certificate for admin domain",
-						"domain", adminDomain,
+				if err != nil {
+					logger.Error("Error getting certificate from manager",
+						"server_name", hello.ServerName,
 						"error", err)
-					return p.fallbackCert, nil
+
+					// Check for rate limit errors
+					if strings.Contains(err.Error(), "too many certificates") ||
+						strings.Contains(err.Error(), "rateLimited") {
+						logger.Error("Let's Encrypt rate limit hit during TLS handshake",
+							"domain", hello.ServerName,
+							"solution", "Wait for rate limit to expire or manually add certificate")
+					}
+
+					// Try manually loading certificate files directly as a fallback before using fallback cert
+					if manualCert, manualErr := p.manuallyLoadCertificate(hello.ServerName); manualErr == nil {
+						logger.Info("Successfully loaded certificate manually as fallback",
+							"domain", hello.ServerName)
+						return manualCert, nil
+					} else {
+						logger.Debug("Manual certificate loading also failed",
+							"domain", hello.ServerName,
+							"error", manualErr)
+					}
+
+					// If we can't get a certificate and we have a fallback, use it for the admin domain
+					if hello.ServerName == p.app.GetConfig().Http.FullDomain() && p.fallbackCert != nil {
+						logger.Debug("Using fallback certificate for admin domain",
+							"domain", hello.ServerName,
+							"error", err)
+						return p.fallbackCert, nil
+					}
+				} else if cert == nil {
+					logger.Error("Certificate manager returned nil certificate without error",
+						"server_name", hello.ServerName)
+
+					// Try manually loading certificate files directly as a fallback
+					if manualCert, manualErr := p.manuallyLoadCertificate(hello.ServerName); manualErr == nil {
+						logger.Info("Successfully loaded certificate manually when autocert returned nil",
+							"domain", hello.ServerName)
+						return manualCert, nil
+					}
+
+					// If we can't get a certificate and we have a fallback, use it for the admin domain
+					if hello.ServerName == p.app.GetConfig().Http.FullDomain() && p.fallbackCert != nil {
+						logger.Debug("Using fallback certificate for admin domain",
+							"domain", hello.ServerName)
+						return p.fallbackCert, nil
+					}
+				} else {
+					logger.Debug("Successfully obtained certificate from manager",
+						"server_name", hello.ServerName)
 				}
 
 				return cert, err
@@ -186,11 +299,15 @@ func (p *Proxy) Start() error {
 			// Add support for TLS-ALPN-01 challenges
 			NextProtos: []string{acme.ALPNProto},
 		},
-		// Add timeouts to prevent hanging connections
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		// Add increased timeouts to prevent hanging connections
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: 30 * time.Second, // Add header timeout
 	}
+
+	// Store the HTTPS server for later use in Stop()
+	p.httpsServer.Server = httpsServer
 
 	// Create a custom HTTP server
 	httpServer := &http.Server{
@@ -203,12 +320,24 @@ func (p *Proxy) Start() error {
 
 	p.serverStarted = true
 
-	// Start HTTPS server
+	// Start HTTPS server with more error details
 	go func() {
 		logger.Info("Starting HTTPS server", "address", httpsServer.Addr)
 		// Using empty strings for cert and key files since we're using GetCertificate
 		if err := httpsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTPS server failed", "error", err)
+			logger.Error("HTTPS server failed", "error", err, "address", httpsServer.Addr)
+
+			// Print more diagnostic information
+			if strings.Contains(err.Error(), "bind: address already in use") {
+				logger.Error("Port 443 is already in use by another process. Check if another web server is running.",
+					"solution", "Stop other services using port 443 or configure Gordon to use a different HTTPS port")
+			} else if strings.Contains(err.Error(), "permission denied") {
+				logger.Error("Permission denied when binding to port 443. This often happens when running without root privileges.",
+					"solution", "Use setcap to allow binding to privileged ports or run in a container with proper port mapping")
+			} else if strings.Contains(err.Error(), "certificate") {
+				logger.Error("Certificate-related error when starting HTTPS server",
+					"solution", "Check certificate files and permissions in the certificate directory")
+			}
 		}
 	}()
 
@@ -385,24 +514,64 @@ func (p *Proxy) checkExternalPortAccess() {
 
 	// Test HTTPS port 443
 	httpsClient := &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: 10 * time.Second, // Increased timeout for more reliable testing
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true,
 			},
+			// Add more detailed timeout settings
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: 5 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			// Add a custom dialer with explicit timeouts
+			DialContext: (&net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 30 * time.Second,
+				DualStack: true,
+			}).DialContext,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
+	// Verify TLS settings are consistent
+	if p.certManager == nil {
+		logger.Error("Certificate manager is nil - TLS will not work correctly",
+			"solution", "Check setupCertManager implementation")
+	}
+
+	// First try a basic TCP connection to port 443 to test if it's open
+	logger.Info("Testing TCP connectivity to HTTPS port 443...")
+	conn, tcpErr := net.DialTimeout("tcp", adminDomain+":443", 5*time.Second)
+	if tcpErr != nil {
+		logger.Warn("TCP connection to port 443 failed - HTTPS will not work",
+			"domain", adminDomain,
+			"error", tcpErr.Error())
+	} else {
+		conn.Close()
+		logger.Info("TCP connection to port 443 successful")
+	}
+
+	// Then try the full HTTPS request
 	httpsURL := fmt.Sprintf("https://%s/", adminDomain)
+	logger.Info("Testing HTTPS connection with SNI...", "url", httpsURL)
 	_, httpsErr := httpsClient.Get(httpsURL)
 	if httpsErr != nil {
 		logger.Warn("External HTTPS port 443 might not be accessible",
 			"error", httpsErr.Error())
+
+		// Provide more detailed troubleshooting info
+		if strings.Contains(httpsErr.Error(), "certificate") {
+			logger.Warn("TLS certificate issue detected",
+				"hint", "Certificate verification failed but connection succeeded")
+		} else if strings.Contains(httpsErr.Error(), "connection refused") {
+			logger.Warn("Connection refused - firewall may be blocking port 443")
+		} else if strings.Contains(httpsErr.Error(), "i/o timeout") || strings.Contains(httpsErr.Error(), "deadline exceeded") {
+			logger.Warn("Connection timeout - port 443 may be filtered or not properly forwarded")
+		}
 	} else {
-		logger.Info("External HTTPS port 443 is accessible")
+		logger.Info("External HTTPS port 443 is accessible - TLS handshake successful")
 	}
 }
 

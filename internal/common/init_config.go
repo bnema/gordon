@@ -202,8 +202,29 @@ func applyDefaultsToConfig(config *Config) bool {
 		logger.Debug("Applied default value for ReverseProxy.GracePeriod", "value", gracePeriod)
 		defaultsApplied = true
 	}
-	// Set EnableHttpLogs to true by default if not specified
-	if !config.ReverseProxy.EnableHttpLogs {
+	// Check if "enableHttpLogs" is explicitly mentioned in the config file
+	configFilePath := filepath.Join(getConfigDirMustExist(), "config.yml")
+	if fileExists(configFilePath) {
+		yamlContent, err := os.ReadFile(configFilePath)
+		if err == nil {
+			// Only set default if enableHttpLogs not explicitly specified
+			if !strings.Contains(string(yamlContent), "enableHttpLogs:") {
+				config.ReverseProxy.EnableHttpLogs = true
+				logger.Debug("Applied default value for ReverseProxy.EnableHttpLogs", "value", true)
+				defaultsApplied = true
+			} else {
+				logger.Debug("Keeping explicit value for ReverseProxy.EnableHttpLogs", "value", config.ReverseProxy.EnableHttpLogs)
+			}
+		} else {
+			// If we can't read the file, apply the default only if not set
+			if !config.ReverseProxy.EnableHttpLogs {
+				config.ReverseProxy.EnableHttpLogs = true
+				logger.Debug("Applied default value for ReverseProxy.EnableHttpLogs", "value", true)
+				defaultsApplied = true
+			}
+		}
+	} else {
+		// If config file doesn't exist yet, set the default
 		config.ReverseProxy.EnableHttpLogs = true
 		logger.Debug("Applied default value for ReverseProxy.EnableHttpLogs", "value", true)
 		defaultsApplied = true
@@ -230,7 +251,7 @@ func applyDefaultsToConfig(config *Config) bool {
 	}
 
 	// Handle autoRenew
-	configFilePath := filepath.Join(getConfigDirMustExist(), "config.yml")
+	configFilePath = filepath.Join(getConfigDirMustExist(), "config.yml")
 	if fileExists(configFilePath) {
 		yamlContent, err := os.ReadFile(configFilePath)
 		if err == nil {

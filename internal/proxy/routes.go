@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/logger"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 )
 
@@ -157,78 +159,14 @@ func (p *Proxy) configureRoutes() {
 		logger.Debug("Admin domain route exists", "domain", adminDomain)
 	}
 
-	// Handler function - will be assigned to both HTTP and HTTPS servers
-	handler := echo.HandlerFunc(func(c echo.Context) error {
-		host := c.Request().Host
-
-		// Strip port if present in the host
-		if hostParts := strings.Split(host, ":"); len(hostParts) > 1 {
-			host = hostParts[0]
-		}
-
-		// Normalize host (trim trailing dot, convert to lowercase)
-		host = strings.TrimSuffix(strings.ToLower(host), ".")
-
-		// Check if this is the admin domain
-		adminDomain := p.app.GetConfig().Http.FullDomain()
-		if strings.EqualFold(host, adminDomain) {
-			// Always prioritize admin domain
-			p.mu.RLock()
-			adminRoute, adminOk := p.routes[adminDomain]
-			p.mu.RUnlock()
-
-			if adminOk {
-				return p.proxyRequest(c, adminRoute)
-			}
-		}
-
-		// Important: Get the route freshly from the map for every request
-		// This ensures we always use the most up-to-date IP
-		p.mu.RLock()
-		route, ok := p.routes[host]
-		p.mu.RUnlock()
-
-		if !ok {
-			// Check if the host is an IP address - silently handle without logging warnings
-			if net.ParseIP(host) != nil {
-				// For IP-based requests, just return a 404 without logging warnings
-				return c.String(http.StatusNotFound, "Domain not found")
-			}
-
-			// Create list of available domains for debugging
-			availableDomains := make([]string, 0, len(p.routes))
-			p.mu.RLock()
-			for d := range p.routes {
-				availableDomains = append(availableDomains, d)
-			}
-			p.mu.RUnlock()
-
-			// Log warning for non-IP hosts that aren't configured
-			logger.Warn("Request with unknown host",
-				"requested_host", host,
-				"client_ip", c.RealIP(),
-				"available_domains", strings.Join(availableDomains, ", "))
-			return c.String(http.StatusNotFound, "Domain not found")
-		}
-
-		// Check if the route is active
-		if !route.Active {
-			logger.Warn("Route is not active",
-				"domain", host,
-				"client_ip", c.RealIP())
-			return c.String(http.StatusServiceUnavailable, "Route is not active")
-		}
-		return p.proxyRequest(c, route)
-	})
-
 	// Add the handler to the HTTPS server
 	if p.httpsServer != nil {
-		p.httpsServer.Any("/*", handler)
+		p.httpsServer.Any("/*", p.proxyRequest)
 	}
 
 	// Also add the handler to the HTTP server for HTTP-01 challenges
 	if p.httpServer != nil {
-		p.httpServer.Any("/*", handler)
+		p.httpServer.Any("/*", p.proxyRequest)
 	}
 }
 
@@ -308,7 +246,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// Domain doesn't exist, create it
-			domainID = proxyGenerateUUID()
+			domainID = uuid.New().String()
 			now := time.Now().Format(time.RFC3339)
 			_, err = txExecWithRetry(tx,
 				p.queries.InsertDomain,
@@ -338,7 +276,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 				if err != nil {
 					if err == sql.ErrNoRows {
 						// Domain part doesn't exist, create it
-						domainPartID = proxyGenerateUUID()
+						domainPartID = uuid.New().String()
 						_, err = txExecWithRetry(tx,
 							p.queries.InsertDomain,
 							domainPartID, domainPart, accountID, now, now,
@@ -408,7 +346,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 		}
 	} else if err == sql.ErrNoRows {
 		// Route doesn't exist, create it
-		routeID := proxyGenerateUUID()
+		routeID := uuid.New().String()
 		now := time.Now().Format(time.RFC3339)
 		_, err = txExecWithRetry(tx,
 			p.queries.InsertRoute,
@@ -1835,12 +1773,75 @@ func (p *Proxy) detectGordonContainer() string {
 }
 
 // proxyRequest proxies an HTTP request to a container
-func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
+func (p *Proxy) proxyRequest(c echo.Context) error {
+	host := c.Request().Host
+
+	// Strip port if present in the host
+	if hostParts := strings.Split(host, ":"); len(hostParts) > 1 {
+		host = hostParts[0]
+	}
+
+	// Normalize host (trim trailing dot, convert to lowercase)
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+
+	// Debug log the incoming request
+	logger.Debug("Proxy request received",
+		"host", host,
+		"method", c.Request().Method,
+		"path", c.Request().URL.Path,
+		"client_ip", c.RealIP())
+
+	// Get the route for this host
+	p.mu.RLock()
+	route, ok := p.routes[host]
+	p.mu.RUnlock()
+
+	if !ok {
+		// Check if the host is an IP address
+		if net.ParseIP(host) != nil {
+			// For IP-based requests, just return a 404 without logging warnings
+			return c.String(http.StatusNotFound, "Domain not found")
+		}
+
+		// Log available domains for debugging
+		availableDomains := make([]string, 0, len(p.routes))
+		p.mu.RLock()
+		for d := range p.routes {
+			availableDomains = append(availableDomains, d)
+		}
+		p.mu.RUnlock()
+
+		logger.Warn("Request with unknown host",
+			"requested_host", host,
+			"client_ip", c.RealIP(),
+			"available_domains", strings.Join(availableDomains, ", "))
+		return c.String(http.StatusNotFound, "Domain not found")
+	}
+
+	// Check if the route is active
+	if !route.Active {
+		logger.Warn("Route is not active",
+			"domain", host,
+			"client_ip", c.RealIP())
+		return c.String(http.StatusServiceUnavailable, "Route is not active")
+	}
+
+	return p.doProxyRequest(c, route)
+}
+
+func (p *Proxy) doProxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 	host := c.Request().Host
 	containerID := route.ContainerID
 	containerIP := route.ContainerIP
 	containerPort := route.ContainerPort
 	targetProtocol := route.Protocol
+
+	logger.Debug("Starting proxy request",
+		"host", host,
+		"container_id", containerID,
+		"container_ip", containerIP,
+		"container_port", containerPort,
+		"protocol", targetProtocol)
 
 	// Check if this is the admin domain
 	isAdminDomain := host == p.app.GetConfig().Http.FullDomain()
@@ -1879,7 +1880,7 @@ func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 
 	// Create the target URL
 	targetURL := &url.URL{
-		Scheme: targetProtocol,
+		Scheme: "http", // Always use HTTP internally, regardless of external protocol
 	}
 
 	// Format host properly for both IPv4 and IPv6
@@ -1889,12 +1890,37 @@ func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 	}
 	targetURL.Host = fmt.Sprintf("%s:%s", containerIP, containerPort)
 
+	logger.Debug("Proxying to backend",
+		"target_url", targetURL.String(),
+		"original_host", host)
+
 	// Create a reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 
 	// Use our custom transport with longer timeouts
 	if p.reverseProxyClient != nil {
 		proxy.Transport = p.reverseProxyClient.Transport
+	} else {
+		// Create a transport with reasonable timeouts if none exists
+		proxy.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+			// Use shorter timeouts for internal network
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+			ExpectContinueTimeout: 3 * time.Second,
+			// Add a custom dialer with explicit timeouts
+			DialContext: (&net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 30 * time.Second,
+				DualStack: true,
+			}).DialContext,
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+			ForceAttemptHTTP2:   true,
+		}
 	}
 
 	// Set up request director to modify the request before it's sent
@@ -1917,6 +1943,11 @@ func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 
 		// Set X-Forwarded-Host to the original host
 		req.Header.Set("X-Forwarded-Host", host)
+
+		logger.Debug("Modified outgoing proxy request",
+			"req_host", req.Host,
+			"req_url", req.URL.String(),
+			"x_forwarded_proto", req.Header.Get("X-Forwarded-Proto"))
 	}
 
 	// Log errors that occur during proxying
@@ -1958,8 +1989,54 @@ func (p *Proxy) proxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 		c.Response().Write([]byte("Bad Gateway: Container is unreachable"))
 	}
 
+	// For admin domain, ensure the connection succeeds
+	if isAdminDomain {
+		// Do a pre-check to make sure the admin service is reachable
+		testURL := fmt.Sprintf("http://%s:%s/admin/ping", containerIP, containerPort)
+		client := &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout: 1 * time.Second,
+				}).DialContext,
+			},
+		}
+
+		logger.Debug("Testing admin connection before proxying",
+			"test_url", testURL)
+
+		_, err := client.Get(testURL)
+		if err != nil {
+			logger.Warn("Admin service pre-check failed, trying alternative connection methods",
+				"error", err)
+
+			// Try alternative IPs for the admin domain if the container IP isn't working
+			altIPs := []string{"localhost", "127.0.0.1", p.app.GetConfig().Http.SubDomain}
+
+			for _, altIP := range altIPs {
+				testURL = fmt.Sprintf("http://%s:%s/admin/ping", altIP, containerPort)
+				_, err := client.Get(testURL)
+				if err == nil {
+					logger.Info("Found working admin connection with alternative IP",
+						"ip", altIP)
+					containerIP = altIP
+					targetURL.Host = fmt.Sprintf("%s:%s", containerIP, containerPort)
+					break
+				}
+			}
+		}
+	}
+
 	// Serve the request using the reverse proxy
+	logger.Debug("Serving proxy request",
+		"target", targetURL.String())
 	proxy.ServeHTTP(c.Response(), c.Request())
+
+	logger.Debug("Proxy request completed",
+		"host", host,
+		"target", targetURL.String(),
+		"status", c.Response().Status)
+
 	return nil
 }
 
