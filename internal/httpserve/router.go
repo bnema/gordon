@@ -12,8 +12,7 @@ import (
 
 // RegisterRoutes registers all routes and middlewares
 func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
-	// Add default Echo logger middleware
-	e.Use(echomid.Logger())
+
 	e.Use(echomid.Recover())
 	// Initiate the session middleware
 	e.Use(middleware.InitSessionMiddleware(a))
