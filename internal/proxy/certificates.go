@@ -294,7 +294,7 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 		certDir = p.app.GetConfig().General.StorageDir + "/certs"
 	}
 
-	// Check for certificates using different naming patterns
+	// First check for known certificate patterns
 	certFiles := []string{
 		// Standard autocert naming
 		domain,
@@ -304,7 +304,7 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 		getCertificateFileName(domain, "production"),
 	}
 	
-	// Check each possible certificate file
+	// Check each possible certificate file using known patterns
 	for _, baseName := range certFiles {
 		certFile := filepath.Join(certDir, baseName)
 		keyFile := filepath.Join(certDir, baseName+"+rsa")
@@ -334,12 +334,12 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 			continue
 		}
 		
-		logger.Info("Valid certificate found in filesystem",
+		logger.Info("Valid certificate found in filesystem with standard naming pattern",
 			"domain", domain,
 			"expires_in", expiresInDays,
 			"days",
 			"type", certType,
-			"not_in_cache", true)
+			"cert_file", certFile)
 			
 		// Check if certificate matches current mode
 		if p.config.LetsEncryptMode == "production" && certType == "staging" {
@@ -369,12 +369,125 @@ func (p *Proxy) checkCertificateInFilesystem(domain string) (bool, string) {
 			"key_size", keyFileInfo.Size(),
 			"key_modified", keyFileInfo.ModTime())
 		
+		// Attempt to add to autocert cache if it's not already there
+		if certType == "production" || (certType == "staging" && p.config.LetsEncryptMode == "staging") {
+			// Add to autocert cache for future use
+			p.addCertificateToCache(domain, certFile, keyFile)
+		}
+		
+		return true, certType
+	}
+
+	// If no matches with standard patterns, try a glob search for any files starting with the domain name
+	// This will catch files with any suffix like domain_letsencrypt-production 
+	// and domain_letsencrypt-staging
+	logger.Debug("No standard certificate files found, searching for any matching certificates",
+		"domain", domain)
+	
+	files, err := filepath.Glob(filepath.Join(certDir, domain+"*"))
+	if err != nil {
+		logger.Warn("Error searching for certificate files", 
+			"domain", domain, 
+			"error", err)
+		return false, ""
+	}
+	
+	// Extract base names without the path
+	var candidates []string
+	for _, file := range files {
+		// Skip key files ending with +rsa since we'll process them together with certs
+		if strings.HasSuffix(file, "+rsa") {
+			continue
+		}
+		
+		baseFile := filepath.Base(file)
+		// Check if the corresponding key file exists
+		keyFile := file + "+rsa"
+		if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+			continue
+		}
+		
+		// Add this candidate
+		candidates = append(candidates, baseFile)
+	}
+	
+	// No certificate files found
+	if len(candidates) == 0 {
+		logger.Debug("No certificate files found in filesystem glob search", 
+			"domain", domain)
+		return false, ""
+	}
+	
+	logger.Debug("Found certificate candidates in glob search",
+		"domain", domain,
+		"candidates", candidates)
+	
+	// Process each candidate (if there are multiple matches)
+	for _, baseName := range candidates {
+		certFile := filepath.Join(certDir, baseName)
+		keyFile := filepath.Join(certDir, baseName+"+rsa")
+		
+		// Read and validate the certificate
+		certData, err := os.ReadFile(certFile)
+		if err != nil {
+			logger.Warn("Failed to read certificate file from glob search",
+				"domain", domain,
+				"file", certFile,
+				"error", err)
+			continue
+		}
+		
+		// Validate the certificate data
+		validCert, expiresInDays, certType, _ := isCertificateValid(certData, domain)
+		if !validCert {
+			continue
+		}
+		
+		logger.Info("Valid certificate found in filesystem with non-standard naming",
+			"domain", domain,
+			"expires_in", expiresInDays,
+			"days",
+			"type", certType,
+			"cert_file", certFile)
+			
+		// If we're in production mode and this is a production certificate, use it
+		if p.config.LetsEncryptMode == "production" && certType == "production" {
+			// Attempt to add to autocert cache
+			p.addCertificateToCache(domain, certFile, keyFile)
+			return true, certType
+		}
+		
+		// If we're in staging mode, prefer production certificates if available
+		if p.config.LetsEncryptMode == "staging" {
+			if certType == "production" {
+				// Attempt to add to autocert cache
+				p.addCertificateToCache(domain, certFile, keyFile)
+				return true, certType
+			} else if certType == "staging" {
+				// If this is a staging certificate and we're in staging mode, use it
+				// Attempt to add to autocert cache
+				p.addCertificateToCache(domain, certFile, keyFile)
+				return true, certType
+			}
+		}
+		
+		// If this is a staging certificate but we're in production mode, ignore it
+		// and continue checking other candidates
+		if p.config.LetsEncryptMode == "production" && certType == "staging" {
+			logger.Info("Ignoring staging certificate in production mode",
+				"domain", domain,
+				"cert_file", certFile)
+			continue
+		}
+		
+		// Fallback: use the certificate if it's valid
+		// Attempt to add to autocert cache
+		p.addCertificateToCache(domain, certFile, keyFile)
 		return true, certType
 	}
 
 	logger.Debug("No valid certificate files found in filesystem",
-		"domain", domain,
-		"searched_patterns", certFiles)
+		"domain", domain)
 	return false, ""
 }
 
@@ -400,6 +513,76 @@ func deleteCertificateFiles(certDir string, baseName string) {
 	} else if !os.IsNotExist(err) {
 		logger.Info("Deleted certificate key file", "file", keyFile)
 	}
+}
+
+// addCertificateToCache adds a certificate found in the filesystem to the autocert cache
+// This ensures certificates found on disk are also available for the autocert manager
+func (p *Proxy) addCertificateToCache(domain string, certFile, keyFile string) {
+	// Skip if we don't have a certificate manager
+	if p.certManager == nil || p.certManager.Cache == nil {
+		logger.Warn("Cannot add certificate to cache: certificate manager not initialized",
+			"domain", domain)
+		return
+	}
+
+	// Create context for cache operations
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Read the certificate and key files
+	certData, err := os.ReadFile(certFile)
+	if err != nil {
+		logger.Warn("Failed to read certificate file for cache addition",
+			"domain", domain,
+			"file", certFile,
+			"error", err)
+		return
+	}
+
+	keyData, err := os.ReadFile(keyFile)
+	if err != nil {
+		logger.Warn("Failed to read certificate key file for cache addition",
+			"domain", domain,
+			"file", keyFile,
+			"error", err)
+		return
+	}
+
+	// Format of cache key used by autocert is "cert-" + domain
+	cacheKey := "cert-" + domain
+
+	// Check if certificate is already in the cache
+	_, getCacheErr := p.certManager.Cache.Get(ctx, cacheKey)
+	if getCacheErr == nil {
+		// Certificate already exists in cache, no need to add
+		logger.Debug("Certificate already exists in autocert cache, skipping addition",
+			"domain", domain)
+		return
+	}
+
+	// Add certificate to cache
+	err = p.certManager.Cache.Put(ctx, cacheKey, certData)
+	if err != nil {
+		logger.Warn("Failed to add certificate to autocert cache",
+			"domain", domain,
+			"error", err)
+		return
+	}
+
+	// Add key to cache with proper key format
+	keyKey := "key-" + domain
+	err = p.certManager.Cache.Put(ctx, keyKey, keyData)
+	if err != nil {
+		logger.Warn("Failed to add certificate key to autocert cache",
+			"domain", domain,
+			"error", err)
+		return
+	}
+
+	logger.Info("Successfully added certificate to autocert cache",
+		"domain", domain,
+		"from_cert_file", certFile,
+		"from_key_file", keyFile)
 }
 
 // testCertificateWithTLSConnection attempts to establish a TLS connection to verify the certificate
