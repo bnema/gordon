@@ -1,0 +1,39 @@
+package components
+
+// Footer is a templ component for the page footer
+// It replaces footer.gohtml
+templ Footer() {
+	<footer class="footer p-10 bg-base-200 text-base-content">
+	  <div>
+	    <span class="footer-title">Gordon</span> 
+	    <a class="link link-hover">About us</a> 
+	    <a class="link link-hover">Documentation</a> 
+	    <a class="link link-hover">Github</a> 
+	  </div> 
+	  <div>
+	    <span class="footer-title">Container Management</span> 
+	    <a class="link link-hover">Dashboard</a> 
+	    <a class="link link-hover">Settings</a> 
+	    <a class="link link-hover">Stats</a>
+	  </div> 
+	  <div>
+	    <span class="footer-title">Legal</span> 
+	    <a class="link link-hover">Terms of use</a> 
+	    <a class="link link-hover">Privacy policy</a> 
+	    <a class="link link-hover">License</a>
+	  </div>
+	</footer>
+	<footer class="footer px-10 py-4 border-t bg-base-300 text-base-content border-base-300">
+	  <div class="items-center grid-flow-col">
+	    <span class="iconfb text-2xl">󰊢</span> 
+	    <p class="IBMPlexSans">Gordon Container Manager<br/>Providing reliable container management since 2023</p>
+	  </div> 
+	  <div class="md:place-self-center md:justify-self-end">
+	    <div class="grid grid-flow-col gap-4">
+	      <a class="iconfb text-2xl">󰊤</a> 
+	      <a class="iconfb text-2xl">󰗃</a>
+	      <a class="iconfb text-2xl">󰖟</a>
+	    </div>
+	  </div>
+	</footer>
+}

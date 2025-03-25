@@ -1,35 +1,61 @@
-<!-- Form to upload a container image (.tar format) -->
-<div
-  class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow"
-  hx-ext="response-targets"
-  hx-boost="true">
-  <div class="flex-grow bg-slate-100 p-4 rounded-md">
-    <h2>Upload Image Containers</h2>
-    <!-- Upload Form -->
+<!-- Upload image form using DaisyUI components -->
+<div class="card bg-base-100 shadow">
+  <div class="card-body">
+    <div class="flex justify-between items-center">
+      <h2 class="card-title text-primary">Upload Image</h2>
+      <button 
+        class="btn btn-sm btn-circle btn-ghost"
+        hx-get="/htmx/image-manager"
+        hx-target="#image-manager"
+        hx-swap="innerHTML">
+        <span class="iconf text-lg">✕</span>
+      </button>
+    </div>
+    <div class="divider"></div>
+    
     <form
-      action="/upload"
-      method="post"
-      enctype="multipart/form-data"
+      id="upload-form"
+      hx-encoding="multipart/form-data"
       hx-post="/htmx/upload-image"
-      hx-swap="innerHTML"
       hx-target="#image-manager"
-      hx-target-*="#error-message-div">
-      <div
-        class="upload-zone w-full h-44 bg-slate-200 rounded-md p-4"
-        hx-drop="true">
-        Drag & Drop your file here or
-        <input
-          type="file"
-          name="file"
-          accept=".tar"
-          class="bg-transparent outline-none" />
+      hx-swap="innerHTML"
+      class="space-y-4">
+
+      <div class="alert alert-info shadow-lg mb-4">
+        <span class="iconf">ℹ️</span>
+        <div>
+          <p>This form allows you to upload a container image (.tar file) to Gordon.</p>
+          <p>After uploading, you can create and manage containers from this image.</p>
+        </div>
       </div>
-      <input
-        type="submit"
-        value="Upload"
-        id="upload-submit-button"
-        class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded" />
+
+      <div class="form-control w-full">
+        <label class="label">
+          <span class="label-text">Select a container image file (.tar)</span>
+        </label>
+        <input 
+          type="file" 
+          name="imageFile" 
+          class="file-input file-input-bordered w-full" 
+          accept=".tar"
+          required />
+      </div>
+      
+      <div class="card-actions justify-end mt-4">
+        <button 
+          class="btn btn-ghost"
+          hx-get="/htmx/image-manager"
+          hx-target="#image-manager"
+          hx-swap="innerHTML"
+          type="button">
+          Cancel
+        </button>
+        <button 
+          class="btn btn-primary"
+          type="submit">
+          <span class="iconf mr-1">󰦒</span> Upload
+        </button>
+      </div>
     </form>
-    <div id="error-message-div" class="text-red-500"></div>
   </div>
 </div>

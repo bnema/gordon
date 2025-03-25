@@ -17,7 +17,7 @@ import (
 	"github.com/bnema/gordon/internal/proxy"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/pkg/docker"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/pkg/logger"
 	"github.com/labstack/echo/v4"
 )
 
@@ -26,7 +26,7 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	payload, err := validateAndPrepareDeployPayload(c)
 	if err != nil {
 		// Debug
-		log.Error("Failed to validate and prepare payload", "error", err)
+		logger.Error("Failed to validate and prepare payload", "error", err)
 		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
 			Success:    false,
 			Message:    fmt.Sprintf("Invalid payload: %v", err),
@@ -37,7 +37,7 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	_, err = saveAndImportImage(c, a, payload)
 	if err != nil {
 		// Debug
-		log.Error("Failed to save and import image", "error", err)
+		logger.Error("Failed to save and import image", "error", err)
 		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
 			Success:    false,
 			Message:    fmt.Sprintf("Failed to save or import image: %v", err),
@@ -48,14 +48,14 @@ func PostDeploy(c echo.Context, a *server.App) error {
 	containerID, containerName, err := createAndStartContainer(a, payload)
 	if err != nil {
 		if strings.Contains(err.Error(), "is already in use") {
-			log.Warn("Container already exists", "error", err)
+			logger.Warn("Container already exists", "error", err)
 			existingContainerID := extractContainerID(err.Error())
 			existingContainerName, _ := docker.GetContainerName(existingContainerID)
 			// Remove the / from the container name
 			existingContainerName = strings.TrimLeft(existingContainerName, "/")
 
 			if existingContainerID == "" || existingContainerName == "" {
-				log.Error("Failed to extract container ID or Name from error message")
+				logger.Error("Failed to extract container ID or Name from error message")
 				return sendJSONResponse(c, http.StatusConflict, DeployResponse{
 					Success:    false,
 					Message:    "A container for this deploy already exists but could not be identified.",
@@ -71,7 +71,7 @@ func PostDeploy(c echo.Context, a *server.App) error {
 				StatusCode:    http.StatusConflict,
 			})
 		}
-		log.Error("Failed to create or start container", "error", err)
+		logger.Error("Failed to create or start container", "error", err)
 		return sendJSONResponse(c, http.StatusInternalServerError, DeployResponse{
 			Success:    false,
 			Message:    fmt.Sprintf("Failed to create or start container: %v", err),
@@ -90,11 +90,11 @@ func PostDeploy(c echo.Context, a *server.App) error {
 		containerIP := GetContainerIP(a, containerID, containerName)
 		err = AddProxyRoute(a, containerID, containerIP, payload.Port, payload.TargetDomain)
 		if err != nil {
-			log.Error("Failed to add proxy route", "error", err)
+			logger.Error("Failed to add proxy route", "error", err)
 			return sendDeployErrorResponse(c, "Failed to add proxy route", err)
 		}
 	} else {
-		log.Info("Skipping proxy setup as requested", "container_id", containerID, "container_name", containerName)
+		logger.Info("Skipping proxy setup as requested", "container_id", containerID, "container_name", containerName)
 	}
 
 	// Arrived here means deployment was successful
@@ -124,7 +124,7 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 
 	payload, err := validateAndPrepareDeployPayload(c)
 	if err != nil {
-		log.Error("Failed to validate and prepare payload", "error", err)
+		logger.Error("Failed to validate and prepare payload", "error", err)
 		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
 			Success:    false,
 			Message:    fmt.Sprintf("Invalid payload: %v", err),
@@ -196,7 +196,7 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 	//  Chunks validation steps
 	//
 	if len(chunkData) == 0 {
-		log.Error("Received empty chunk")
+		logger.Error("Received empty chunk")
 		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
 			Success:    false,
 			Message:    "Received empty chunk",
@@ -206,7 +206,7 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 
 	// Verify chunk size matches metadata
 	if int64(len(chunkData)) != metadata.ChunkSize {
-		log.Error("Chunk size mismatch",
+		logger.Error("Chunk size mismatch",
 			"expected", metadata.ChunkSize,
 			"received", len(chunkData))
 		return sendJSONResponse(c, http.StatusBadRequest, DeployResponse{
@@ -236,7 +236,7 @@ func handleChunkedDeploy(c echo.Context, a *server.App, metadataStr string) erro
 }
 
 func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transferID string) error {
-	log.Info("Starting complete deploy transfer processing",
+	logger.Info("Starting complete deploy transfer processing",
 		"transferID", transferID)
 
 	// Get transfer data
@@ -296,21 +296,21 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 	// Check for existing container
 	existingContainerID := docker.GetContainerIDByName(containerName)
 	if existingContainerID != "" {
-		log.Warn("Container already exists",
+		logger.Warn("Container already exists",
 			"name", containerName,
 			"id", existingContainerID)
 		return sendDeployErrorResponse(c, "Container already exists", nil)
 	}
 
 	// Import the image
-	log.Info("Importing image from file",
+	logger.Info("Importing image from file",
 		"path", tmpFile.Name(),
 		"imageName", imageName)
 
 	imageID, err := docker.ImportImageToEngine(tmpFile.Name())
 	if err != nil {
 		if strings.Contains(err.Error(), "platform compatibility check failed") {
-			log.Error("Platform compatibility check failed",
+			logger.Error("Platform compatibility check failed",
 				"error", err,
 				"imageName", imageName)
 			return sendDeployErrorResponse(c, "Platform compatibility check failed", err)
@@ -343,7 +343,7 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 	// Cleanup transfer data
 	cleanupTransfer(transferID)
 
-	log.Info("Deployment completed successfully",
+	logger.Info("Deployment completed successfully",
 		"containerID", containerID,
 		"containerName", containerName,
 		"domain", targetDomain)
@@ -352,7 +352,7 @@ func processCompleteChunkedDeployTansfert(c echo.Context, a *server.App, transfe
 	containerIP := GetContainerIP(a, containerID, containerName)
 	err = AddProxyRoute(a, containerID, containerIP, port, targetDomain)
 	if err != nil {
-		log.Error("Failed to add proxy route", "error", err)
+		logger.Error("Failed to add proxy route", "error", err)
 		return sendDeployErrorResponse(c, "Failed to add proxy route", err)
 	}
 
@@ -422,7 +422,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 
 	// Double check that we have a valid container IP - critical for recreated containers
 	if containerIP == "" || containerIP == containerID || containerIP == "localhost" {
-		log.Warn("Invalid container IP detected, attempting to get correct IP",
+		logger.Warn("Invalid container IP detected, attempting to get correct IP",
 			"containerID", containerID,
 			"invalid_ip", containerIP)
 
@@ -437,7 +437,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 		// Get the correct container IP with retry logic
 		newContainerIP := GetContainerIP(a, containerID, containerName)
 		if newContainerIP != containerIP && newContainerIP != containerName {
-			log.Info("Updated container IP for proxy route",
+			logger.Info("Updated container IP for proxy route",
 				"containerID", containerID,
 				"old_ip", containerIP,
 				"new_ip", newContainerIP)
@@ -448,12 +448,12 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 	// Get container info to check labels
 	containerInfo, err := docker.GetContainerInfo(containerID)
 	if err != nil {
-		log.Warn("Failed to get container info", "error", err)
+		logger.Warn("Failed to get container info", "error", err)
 	} else {
 		// Check if the container has a gordon.proxy.port label that might override containerPort
 		if portLabel, exists := containerInfo.Config.Labels["gordon.proxy.port"]; exists && portLabel != "" {
 			if portLabel != containerPort {
-				log.Info("Using container label port instead of provided port",
+				logger.Info("Using container label port instead of provided port",
 					"label_port", portLabel,
 					"provided_port", containerPort)
 				containerPort = portLabel
@@ -467,7 +467,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 	// Check if the target domain specifies HTTPS
 	if strings.HasPrefix(strings.ToLower(targetDomain), "https://") {
 		protocol = "https"
-		log.Debug("Using HTTPS protocol for proxy route based on target domain",
+		logger.Debug("Using HTTPS protocol for proxy route based on target domain",
 			"domain", targetDomain,
 			"protocol", protocol)
 	} else {
@@ -477,7 +477,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 			if sslValue, exists := containerInfo.Config.Labels["gordon.proxy.ssl"]; exists &&
 				(sslValue == "true" || sslValue == "1" || sslValue == "yes") {
 				protocol = "https"
-				log.Debug("Using HTTPS protocol for proxy route based on container labels",
+				logger.Debug("Using HTTPS protocol for proxy route based on container labels",
 					"domain", targetDomain,
 					"containerID", containerID,
 					"label_value", sslValue,
@@ -496,16 +496,16 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 	cleanDomain = strings.TrimPrefix(cleanDomain, ".")
 
 	// Log that we're adding the domain for Let's Encrypt
-	log.Debug("Adding domain for Let's Encrypt verification",
+	logger.Debug("Adding domain for Let's Encrypt verification",
 		"domain", cleanDomain)
 
 	// Get container name for better logging
 	containerName, err := docker.GetContainerName(containerID)
 	if err != nil {
-		log.Warn("Unable to get container name", "containerID", containerID, "error", err)
+		logger.Warn("Unable to get container name", "containerID", containerID, "error", err)
 	} else {
 		containerName = strings.TrimPrefix(containerName, "/")
-		log.Debug("Container name for proxy route", "name", containerName)
+		logger.Debug("Container name for proxy route", "name", containerName)
 	}
 
 	// Check the database for any existing routes with this domain, regardless of container ID
@@ -526,7 +526,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 
 	if err == nil {
 		// Domain exists in database, check if this is a recreated container
-		log.Info("Found existing proxy route for domain",
+		logger.Info("Found existing proxy route for domain",
 			"domain", cleanDomain,
 			"old_container_id", existingContainerID,
 			"new_container_id", containerID)
@@ -538,7 +538,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 			networkName := a.Config.ContainerEngine.Network
 			if networkSettings, exists := containerNetworkInfo.NetworkSettings.Networks[networkName]; exists &&
 				networkSettings.IPAddress != "" && networkSettings.IPAddress != containerIP {
-				log.Info("Updating container IP before database update",
+				logger.Info("Updating container IP before database update",
 					"domain", cleanDomain,
 					"old_ip", containerIP,
 					"new_ip", networkSettings.IPAddress)
@@ -559,7 +559,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 			return fmt.Errorf("failed to update proxy route: %w", err)
 		}
 
-		log.Info("Updated proxy route for recreated container",
+		logger.Info("Updated proxy route for recreated container",
 			"domain", cleanDomain,
 			"old_container_id", existingContainerID,
 			"new_container_id", containerID,
@@ -579,11 +579,11 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 			WHERE id = ?`, existingRouteID).Scan(&updatedContainerIP)
 
 		if err == nil && updatedContainerIP != containerIP {
-			log.Warn("Database verification failed: container IP mismatch",
+			logger.Warn("Database verification failed: container IP mismatch",
 				"expected", containerIP,
 				"actual", updatedContainerIP)
 		} else {
-			log.Debug("Database verification passed: container IP updated correctly",
+			logger.Debug("Database verification passed: container IP updated correctly",
 				"container_ip", containerIP)
 		}
 
@@ -596,12 +596,12 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 		routes := p.GetRoutes()
 		if route, exists := routes[cleanDomain]; exists {
 			if route.ContainerIP != containerIP {
-				log.Warn("Route reload verification failed: container IP mismatch",
+				logger.Warn("Route reload verification failed: container IP mismatch",
 					"domain", cleanDomain,
 					"expected", containerIP,
 					"actual", route.ContainerIP)
 			} else {
-				log.Debug("Route reload verification passed: container IP loaded correctly",
+				logger.Debug("Route reload verification passed: container IP loaded correctly",
 					"domain", cleanDomain,
 					"container_ip", containerIP)
 			}
@@ -623,7 +623,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 	// and avoid database locking conflicts
 	p.RegisterNewlyCreatedContainer(containerID)
 
-	log.Debug("Added proxy route",
+	logger.Debug("Added proxy route",
 		"domain", targetDomain,
 		"containerIP", containerIP,
 		"containerPort", containerPort,

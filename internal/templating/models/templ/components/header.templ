@@ -1,0 +1,30 @@
+package components
+
+// Header is a templ component for the page header
+// It replaces header.gohtml
+templ Header(title string) {
+	<head>
+	  <meta charset="UTF-8" />
+	  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	  <title>{ title }</title>
+	  <link rel="stylesheet" href="/assets/css/tailwind.css" />
+
+	  <script src="/libs/jquery.min.js"></script>
+	  <script src="/libs/htmx.min.js"></script>
+	  <script src="/libs/htmx-response-targets.js"></script>
+	  <script src="/libs/htmx-debug.js"></script>
+	  <script src="/libs/htmx-sse.js"></script>
+	  <script defer src="/libs/hyperscript.min.js"></script>
+	  <script defer src="/assets/js/custom.js"></script>
+	  
+	  <!-- daisyUI theme configuration -->
+	  <script>
+	    // Check for saved theme preference or use preferred color scheme
+	    const savedTheme = localStorage.getItem('theme') || 'gordon-dark';
+	    document.documentElement.setAttribute('data-theme', savedTheme);
+	    
+	    // Log theme loading for debugging
+	    console.debug('Theme loaded:', savedTheme);
+	  </script>
+	</head>
+}

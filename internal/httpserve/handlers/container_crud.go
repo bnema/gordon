@@ -7,6 +7,8 @@ import (
 
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/cmdparams"
+	templcomponents "github.com/bnema/gordon/internal/templating/models/templ/components"
+	templadmin "github.com/bnema/gordon/internal/templating/models/templ/pages/admin"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/sanitize"
@@ -34,7 +36,7 @@ func CreateContainerGET(c echo.Context, a *server.App) error {
 	fullID, exists := safelyInteractWithIDMap(Fetch, shortID)
 	if !exists {
 		log.Debug("No mapping found for short ID: %s", shortID)
-		return c.String(http.StatusNotFound, "Image ID not found")
+		return RenderNotFoundPage(c, a)
 	}
 
 	log.Debug("Found mapping: %s -> %s", shortID, fullID)
@@ -49,30 +51,23 @@ func CreateContainerGET(c echo.Context, a *server.App) error {
 	var imageName string
 	if len(imageInfo.RepoTags) > 0 {
 		imageName = imageInfo.RepoTags[0]
+	} else {
+		imageName = imageInfo.ID
 	}
 
-	data := map[string]interface{}{
-		"Title":     "Create a new container",
-		"ShortID":   shortID,
-		"ImageID":   fullID,
-		"ImageName": imageName,
+	// Setup form data
+	formData := templcomponents.ContainerFormData{
+		ImageName:    imageName,
+		ImageID:      fullID,
+		ShortID:      shortID,
+		ErrorMessage: "",
 	}
 
-	// Render the create container page
-	rendererData, err := render.GetHTMLRenderer("html/fragments", "createcontainer.gohtml", a.TemplateFS, a)
+	// Get the renderer
+	renderer := render.NewTemplRenderer(a)
 
-	if err != nil {
-		return sendError(c, err)
-	}
-
-	renderedHTML, err := rendererData.Render(data, a)
-
-	if err != nil {
-		return sendError(c, err)
-	}
-
-	return c.HTML(200, renderedHTML)
-
+	// Render the component
+	return renderer.RenderTempl(c, templcomponents.CreateContainerForm(formData))
 }
 
 // CreateContainerFullGET handles the full HTML page for creating a new container
@@ -84,7 +79,7 @@ func CreateContainerFullGET(c echo.Context, a *server.App) error {
 	fullID, exists := safelyInteractWithIDMap(Fetch, shortID)
 	if !exists {
 		log.Debug("No mapping found for short ID: %s", shortID)
-		return c.String(http.StatusNotFound, "Image ID not found")
+		return RenderNotFoundPage(c, a)
 	}
 
 	log.Debug("Found mapping: %s -> %s", shortID, fullID)
@@ -99,29 +94,32 @@ func CreateContainerFullGET(c echo.Context, a *server.App) error {
 	var imageName string
 	if len(imageInfo.RepoTags) > 0 {
 		imageName = imageInfo.RepoTags[0]
+	} else {
+		imageName = imageInfo.ID
 	}
 
-	data := map[string]interface{}{
-		"Title":     "Create a new container",
-		"ShortID":   shortID,
-		"ImageID":   fullID,
-		"ImageName": imageName,
-		"AdminPath": a.Config.Admin.Path,
+	// Setup form data
+	formData := templcomponents.ContainerFormData{
+		ImageName:    imageName,
+		ImageID:      fullID,
+		ShortID:      shortID,
+		ErrorMessage: "",
 	}
 
-	// Specify both admin and fragments directories
-	rendererData, err := render.GetHTMLRenderer("html/admin", "createcontainerfull.gohtml", a.TemplateFS, a, "html/fragments")
-	if err != nil {
-		return sendError(c, err)
+	// Get the renderer
+	renderer := render.NewTemplRenderer(a)
+
+	// Render the createcontainerfull template
+	pageData := templadmin.CreateContainerFullData{
+		Title:         "Create Container | Gordon",
+		BuildVersion:  a.Config.Build.BuildVersion,
+		AdminPath:     a.Config.Admin.Path,
+		UserSettings:  "/user",
+		LogoutURL:     a.Config.Admin.Path + "/logout",
+		ContainerData: formData,
 	}
 
-	renderedHTML, err := rendererData.Render(data, a)
-	if err != nil {
-		log.Debug("Error rendering template: %v", err)
-		return sendError(c, err)
-	}
-
-	return c.HTML(200, renderedHTML)
+	return renderer.RenderTempl(c, templadmin.CreateContainerFullPage(pageData))
 }
 
 // CreateContainerPOST handles the create container form submission
