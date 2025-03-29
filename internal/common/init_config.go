@@ -7,26 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
-
-	"crypto/rand"
-	"encoding/hex"
 
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/logger"
 	"github.com/bnema/gordon/pkg/parser"
 )
-
-// generateRandomSecret generates a secure random string of the specified byte length, hex-encoded.
-func generateRandomSecret(length int) (string, error) {
-	bytes := make([]byte, length)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(bytes), nil
-}
 
 var (
 	globalConfig      *Config
@@ -94,9 +81,7 @@ type ReverseProxyConfig struct {
 	LetsEncryptMode                       string `yaml:"letsEncryptMode"`      // staging or production
 	SkipCertificates                      bool   `yaml:"skipCertificates"`     // Skip Let's Encrypt certificate acquisition when behind a TLS terminating proxy
 	GracePeriod                           int    `yaml:"gracePeriod"`          // Shutdown grace period in seconds
-	AutoRenew                             bool   `yaml:"autoRenew"`            // Whether to automatically renew certificates
 	RenewBefore                           int    `yaml:"renewBefore"`          // Days before expiry to renew certificates
-	CacheSize                             int    `yaml:"cacheSize"`            // Size of the certificate cache
 	EnableHttpLogs                        bool   `yaml:"enableHttpLogs"`       // Whether to enable HTTP request logging
 	EnableRateLimit                       bool   `yaml:"enableRateLimit"`      // Whether to enable rate limiting middleware
 	DetectUpstreamProxy                   bool   `yaml:"detectUpstreamProxy"`  // Whether to detect and handle upstream TLS termination proxies
@@ -108,21 +93,24 @@ type ReverseProxyConfig struct {
 
 // Default values
 var (
-	sock                = "/var/run/docker.sock"
-	podmansock          = "/run/podman/podman.sock"
-	reverseProxyPort    = "443" // Changed to 443 for standard HTTPS
-	httpPort            = "80"  // Standard HTTP port
-	certDir             = "/certs"
-	letsEncryptMode     = "staging"
-	autoRenew           = true
-	proxyEnabled        = true   // Default to enabled for backward compatibility
-	renewBefore         = 30     // days
-	cacheSize           = 1000   // entries
-	gracePeriod         = 30     // seconds
-	defaultLogLevel     = "info" // Default log level
-	disableRateLimit    = false
-	detectUpstreamProxy = false // Default to disabled
-	skipCertificates    = false // Default to disabled
+	sock                                  = "/var/run/docker.sock"
+	podmansock                            = "/run/podman/podman.sock"
+	reverseProxyPort                      = "443" // Changed to 443 for standard HTTPS
+	httpPort                              = "80"  // Standard HTTP port
+	certDir                               = "/certs"
+	letsEncryptMode                       = "staging"
+	proxyEnabled                          = true   // Default to enabled for backward compatibility
+	renewBefore                           = 30     // days
+	gracePeriod                           = 30     // seconds
+	defaultLogLevel                       = "info" // Default log level
+	disableRateLimit                      = false
+	detectUpstreamProxy                   = false // Default to disabled
+	skipCertificates                      = false // Default to disabled
+	enableRateLimit                       = false // Default to disabled
+	defaultChallengeType                  = "http-01"
+	defaultHttpChallengePort              = "80"
+	defaultDnsChallengePropagationTimeout = 60 // seconds
+	defaultDnsChallengePollingInterval    = 5  // seconds
 )
 
 // applyDefaultsToConfig applies default values to any fields that have zero values
@@ -208,11 +196,6 @@ func applyDefaultsToConfig(config *Config) bool {
 		logger.Debug("Applied default value for ReverseProxy.LetsEncryptMode", "value", letsEncryptMode)
 		defaultsApplied = true
 	}
-	if config.ReverseProxy.CacheSize == 0 {
-		config.ReverseProxy.CacheSize = cacheSize
-		logger.Debug("Applied default value for ReverseProxy.CacheSize", "value", cacheSize)
-		defaultsApplied = true
-	}
 	if config.ReverseProxy.GracePeriod == 0 {
 		config.ReverseProxy.GracePeriod = gracePeriod
 		logger.Debug("Applied default value for ReverseProxy.GracePeriod", "value", gracePeriod)
@@ -263,34 +246,6 @@ func applyDefaultsToConfig(config *Config) bool {
 	if !config.ReverseProxy.SkipCertificates {
 		config.ReverseProxy.SkipCertificates = skipCertificates
 		logger.Debug("Applied default value for ReverseProxy.SkipCertificates", "value", skipCertificates)
-		defaultsApplied = true
-	}
-
-	// Handle autoRenew
-	configFilePath = filepath.Join(getConfigDirMustExist(), "config.yml")
-	if fileExists(configFilePath) {
-		yamlContent, err := os.ReadFile(configFilePath)
-		if err == nil {
-			// Check if "autoRenew" is explicitly mentioned in the config file
-			if !strings.Contains(string(yamlContent), "autoRenew:") {
-				config.ReverseProxy.AutoRenew = autoRenew
-				logger.Debug("Applied default value for ReverseProxy.AutoRenew", "value", autoRenew)
-				defaultsApplied = true
-			} else {
-				logger.Debug("Keeping explicit value for ReverseProxy.AutoRenew", "value", config.ReverseProxy.AutoRenew)
-			}
-		} else {
-			// If we can't read the file for some reason, apply the default
-			if !config.ReverseProxy.AutoRenew {
-				config.ReverseProxy.AutoRenew = autoRenew
-				logger.Debug("Applied default value for ReverseProxy.AutoRenew", "value", autoRenew)
-				defaultsApplied = true
-			}
-		}
-	} else {
-		// If config file doesn't exist yet, set the default
-		config.ReverseProxy.AutoRenew = autoRenew
-		logger.Debug("Applied default value for ReverseProxy.AutoRenew", "value", autoRenew)
 		defaultsApplied = true
 	}
 
@@ -447,6 +402,7 @@ func getConfigDir() (string, error) {
 	return configDir, nil
 }
 
+// readAndUnmarshalConfig reads and unmarshals a configuration file using the provided filesystem and path.
 func readAndUnmarshalConfig(fs fs.FS, filePath string, config *Config) error {
 	logger.Debug("readAndUnmarshalConfig: Starting to read and unmarshal config file", "path", filePath)
 	err := parser.ParseYAMLFile(fs, filePath, config)
@@ -456,282 +412,6 @@ func readAndUnmarshalConfig(fs fs.FS, filePath string, config *Config) error {
 	}
 	logger.Debug("readAndUnmarshalConfig: Successfully parsed YAML file")
 	return nil
-}
-
-// loadConfigFromEnv loads configuration from environment variables
-func loadConfigFromEnv(config *Config, printLogs bool) {
-	// General Configuration
-	if val := os.Getenv("GORDON_STORAGE_DIR"); val != "" {
-		config.General.StorageDir = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_STORAGE_DIR", "value", val)
-		}
-	}
-	// Removed GORDON_TOKEN handling
-	if val := os.Getenv("GORDON_LOG_LEVEL"); val != "" {
-		config.General.LogLevel = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_LOG_LEVEL", "value", val)
-		}
-	}
-
-	// HTTP Configuration
-	if val := os.Getenv("GORDON_HTTP_PORT"); val != "" {
-		config.Http.Port = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_HTTP_PORT", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_HTTP_DOMAIN"); val != "" {
-		config.Http.Domain = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_HTTP_DOMAIN", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_HTTP_SUBDOMAIN"); val != "" {
-		config.Http.SubDomain = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_HTTP_SUBDOMAIN", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_HTTP_BACKEND_URL"); val != "" {
-		config.Http.BackendURL = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_HTTP_BACKEND_URL", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_HTTP_HTTPS"); val != "" {
-		config.Http.Https = strings.ToLower(val) == "true"
-		if printLogs {
-			logger.Info("Using environment variable GORDON_HTTP_HTTPS", "value", config.Http.Https)
-		}
-	}
-
-	// Admin Configuration
-	if val := os.Getenv("GORDON_ADMIN_PATH"); val != "" {
-		config.Admin.Path = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_ADMIN_PATH", "value", val)
-		}
-	}
-
-	// Container Engine Configuration
-	if val := os.Getenv("GORDON_CONTAINER_SOCK"); val != "" {
-		config.ContainerEngine.Sock = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_CONTAINER_SOCK", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_CONTAINER_PODMANSOCK"); val != "" {
-		config.ContainerEngine.PodmanSock = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_CONTAINER_PODMANSOCK", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_CONTAINER_PODMAN"); val != "" {
-		config.ContainerEngine.Podman = strings.ToLower(val) == "true"
-		if printLogs {
-			logger.Info("Using environment variable GORDON_CONTAINER_PODMAN", "value", config.ContainerEngine.Podman)
-		}
-	} else {
-		// Auto-detect Podman if not specified in environment
-		isPodman, podmanSocket := docker.DetectPodman()
-		if isPodman {
-			config.ContainerEngine.Podman = true
-			config.ContainerEngine.PodmanSock = podmanSocket
-			if printLogs {
-				logger.Info("Automatically detected Podman installation",
-					"using_podman", true,
-					"socket", podmanSocket)
-			}
-		}
-
-		// If we're in a container, check for special socket naming patterns
-		if docker.IsRunningInContainer() && fileExists(config.ContainerEngine.Sock) {
-			// Check if socket path contains "podman" which indicates it might be a podman socket
-			if strings.Contains(config.ContainerEngine.Sock, "podman") {
-				config.ContainerEngine.Podman = true
-				if printLogs {
-					logger.Info("Socket path contains 'podman', enabling Podman mode", "path", config.ContainerEngine.Sock)
-				}
-			}
-		}
-	}
-	if val := os.Getenv("GORDON_CONTAINER_NETWORK"); val != "" {
-		config.ContainerEngine.Network = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_CONTAINER_NETWORK", "value", val)
-		}
-	}
-
-	// Use Podman socket if Podman is enabled and no Docker socket is specified
-	if config.ContainerEngine.Podman && config.ContainerEngine.Sock == "" && config.ContainerEngine.PodmanSock != "" {
-		config.ContainerEngine.Sock = config.ContainerEngine.PodmanSock
-		if printLogs {
-			logger.Info("Setting ContainerEngine.Sock to PodmanSock value", "value", config.ContainerEngine.Sock)
-		}
-	}
-
-	// Additional debug info for container sockets
-	if docker.IsRunningInContainer() {
-		logger.Debug("Container socket configuration",
-			"sock", config.ContainerEngine.Sock,
-			"podmansock", config.ContainerEngine.PodmanSock,
-			"podman", config.ContainerEngine.Podman,
-			"sock_exists", fileExists(config.ContainerEngine.Sock),
-			"podmansock_exists", fileExists(config.ContainerEngine.PodmanSock))
-
-		// Special handling for container environment to ensure sockets are properly set
-		// If no socket is configured but default socket path exists, use it
-		if config.ContainerEngine.Sock == "" && fileExists(sock) {
-			config.ContainerEngine.Sock = sock
-			logger.Info("Found default Docker socket in container, using it", "path", sock)
-		}
-
-		// If podman socket exists but podman mode is not enabled, check if we should enable it
-		if fileExists(podmansock) && !config.ContainerEngine.Podman {
-			// If the main socket path contains "podman", enable podman mode
-			if strings.Contains(config.ContainerEngine.Sock, "podman") {
-				config.ContainerEngine.Podman = true
-				logger.Info("Socket path suggests Podman usage, enabling Podman mode", "path", config.ContainerEngine.Sock)
-			}
-		}
-	}
-
-	// Reverse Proxy Configuration
-	if val := os.Getenv("GORDON_PROXY_PORT"); val != "" {
-		config.ReverseProxy.Port = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_PROXY_PORT", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_PROXY_HTTP_PORT"); val != "" {
-		config.ReverseProxy.HttpPort = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_PROXY_HTTP_PORT", "value", val)
-		}
-	}
-
-	// New environment variables for reverse proxy port control
-	if val := os.Getenv("GORDON_USE_FALLBACK_BINDING"); val != "" {
-		// This is handled at runtime in the proxy server but we log it here
-		if printLogs {
-			logger.Info("Found environment variable GORDON_USE_FALLBACK_BINDING", "value", val)
-		}
-	}
-
-	// Handle GORDON_PROXY_ENABLED environment variable
-	if val := os.Getenv("GORDON_PROXY_ENABLED"); val != "" {
-		enabled, err := strconv.ParseBool(val)
-		if err == nil {
-			config.ReverseProxy.Enabled = enabled
-		}
-		if printLogs {
-			logger.Info("Using environment variable GORDON_PROXY_ENABLED", "value", config.ReverseProxy.Enabled)
-		}
-	}
-	if val := os.Getenv("GORDON_PROXY_CERT_DIR"); val != "" {
-		config.ReverseProxy.CertDir = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_PROXY_CERT_DIR", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_PROXY_AUTO_RENEW"); val != "" {
-		config.ReverseProxy.AutoRenew = strings.ToLower(val) == "true"
-		if printLogs {
-			logger.Info("Using environment variable GORDON_PROXY_AUTO_RENEW", "value", config.ReverseProxy.AutoRenew)
-		}
-	}
-	if val := os.Getenv("GORDON_PROXY_RENEW_BEFORE"); val != "" {
-		if i, err := strconv.Atoi(val); err == nil {
-			config.ReverseProxy.RenewBefore = i
-			if printLogs {
-				logger.Info("Using environment variable GORDON_PROXY_RENEW_BEFORE", "value", i)
-			}
-		}
-	}
-	if val := os.Getenv("GORDON_PROXY_LETSENCRYPT_MODE"); val != "" {
-		config.ReverseProxy.LetsEncryptMode = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_PROXY_LETSENCRYPT_MODE", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_PROXY_EMAIL"); val != "" {
-		config.ReverseProxy.Email = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_PROXY_EMAIL", "value", val)
-		}
-	}
-	if val := os.Getenv("GORDON_PROXY_CACHE_SIZE"); val != "" {
-		if i, err := strconv.Atoi(val); err == nil {
-			config.ReverseProxy.CacheSize = i
-			if printLogs {
-				logger.Info("Using environment variable GORDON_PROXY_CACHE_SIZE", "value", i)
-			}
-		}
-	}
-	if val := os.Getenv("GORDON_PROXY_GRACE_PERIOD"); val != "" {
-		i, err := strconv.Atoi(val)
-		if err == nil {
-			config.ReverseProxy.GracePeriod = i
-		}
-		logger.Info("Using environment variable GORDON_PROXY_GRACE_PERIOD", "value", i)
-	}
-
-	// Handle GORDON_PROXY_ENABLE_HTTP_LOGS environment variable
-	if val := os.Getenv("GORDON_PROXY_ENABLE_HTTP_LOGS"); val != "" {
-		enableLogs, err := strconv.ParseBool(val)
-		if err == nil {
-			config.ReverseProxy.EnableHttpLogs = enableLogs
-		}
-		logger.Info("Using environment variable GORDON_PROXY_ENABLE_HTTP_LOGS", "value", config.ReverseProxy.EnableHttpLogs)
-	} else if val := os.Getenv("GORDON_PROXY_ENABLE_LOGS"); val != "" {
-		// For backward compatibility
-		enableLogs, err := strconv.ParseBool(val)
-		if err == nil {
-			config.ReverseProxy.EnableHttpLogs = enableLogs
-		}
-		logger.Info("Using environment variable GORDON_PROXY_ENABLE_LOGS (deprecated, use GORDON_PROXY_ENABLE_HTTP_LOGS)", "value", config.ReverseProxy.EnableHttpLogs)
-	}
-
-	// Handle GORDON_PROXY_ENABLE_RATE_LIMIT environment variable
-	if val := os.Getenv("GORDON_PROXY_ENABLE_RATE_LIMIT"); val != "" {
-		enableRateLimit, err := strconv.ParseBool(val)
-		if err == nil {
-			config.ReverseProxy.EnableRateLimit = enableRateLimit
-		}
-		logger.Info("Using environment variable GORDON_PROXY_ENABLE_RATE_LIMIT", "value", config.ReverseProxy.EnableRateLimit)
-	} else if val := os.Getenv("GORDON_PROXY_DISABLE_RATE_LIMIT"); val != "" {
-		// For backward compatibility
-		disableRateLimit, err := strconv.ParseBool(val)
-		if err == nil {
-			// Invert the logic
-			config.ReverseProxy.EnableRateLimit = !disableRateLimit
-		}
-		logger.Info("Using environment variable GORDON_PROXY_DISABLE_RATE_LIMIT (deprecated, use GORDON_PROXY_ENABLE_RATE_LIMIT)", "value", !config.ReverseProxy.EnableRateLimit)
-	}
-
-	// Handle GORDON_PROXY_DETECT_UPSTREAM environment variable
-	if val := os.Getenv("GORDON_PROXY_DETECT_UPSTREAM"); val != "" {
-		detectUpstream, err := strconv.ParseBool(val)
-		if err == nil {
-			config.ReverseProxy.DetectUpstreamProxy = detectUpstream
-		}
-		if printLogs {
-			logger.Info("Using environment variable GORDON_PROXY_DETECT_UPSTREAM", "value", config.ReverseProxy.DetectUpstreamProxy)
-		}
-	}
-
-	// Handle GORDON_PROXY_SKIP_CERTIFICATES environment variable
-	if val := os.Getenv("GORDON_PROXY_SKIP_CERTIFICATES"); val != "" {
-		skipCerts, err := strconv.ParseBool(val)
-		if err == nil {
-			config.ReverseProxy.SkipCertificates = skipCerts
-		}
-		if printLogs {
-			logger.Info("Using environment variable GORDON_PROXY_SKIP_CERTIFICATES", "value", config.ReverseProxy.SkipCertificates)
-		}
-	}
 }
 
 func (config *Config) LoadConfig() (*Config, error) {
@@ -781,10 +461,8 @@ func (config *Config) LoadConfig() (*Config, error) {
 				Port:            reverseProxyPort,
 				HttpPort:        httpPort,
 				CertDir:         certDir,
-				AutoRenew:       autoRenew,
 				RenewBefore:     renewBefore,
 				LetsEncryptMode: letsEncryptMode,
-				CacheSize:       cacheSize,
 				GracePeriod:     gracePeriod,
 				EnableHttpLogs:  true,
 				EnableRateLimit: false,
@@ -920,10 +598,8 @@ func (config *Config) LoadConfig() (*Config, error) {
 				Port:            reverseProxyPort,
 				HttpPort:        httpPort,
 				CertDir:         certDir,
-				AutoRenew:       autoRenew,
 				RenewBefore:     renewBefore,
 				LetsEncryptMode: letsEncryptMode,
-				CacheSize:       cacheSize,
 				GracePeriod:     gracePeriod,
 				EnableHttpLogs:  true,
 				EnableRateLimit: false,
@@ -1026,32 +702,6 @@ func (config *Config) LoadConfig() (*Config, error) {
 		logger.GetLogger().SetLogLevel(config.General.LogLevel)
 		logger.Debug("Log level set from configuration", "level", config.General.LogLevel)
 	}
-
-	// --- Generate JWT Secret if missing ---
-	if config.General.JwtToken == "" {
-		logger.Warn("JWTSecret is missing from configuration, generating a new one...")
-		newSecret, err := generateRandomSecret(32) // Generate a 256-bit key (32 bytes)
-		if err != nil {
-			logger.Error("Failed to generate JWT secret", "error", err)
-			// Decide if this is a fatal error or if we can continue without JWT functionality
-			// For now, let's return the error as JWT is crucial for API auth
-			return nil, fmt.Errorf("failed to generate JWT secret: %w", err)
-		}
-		config.General.JwtToken = newSecret
-		logger.Info("Generated new JWTSecret")
-
-		// Save the config immediately to store the new secret
-		err = config.SaveConfig()
-		if err != nil {
-			logger.Error("Failed to save configuration after generating JWT secret", "error", err)
-			// Return error as saving failed
-			return nil, fmt.Errorf("failed to save config with new JWT secret: %w", err)
-		}
-		logger.Info("Saved configuration with new JWTSecret")
-	} else {
-		logger.Debug("JWTSecret found in configuration")
-	}
-	// --- End JWT Secret Generation ---
 
 	logger.Debug("LoadConfig: Completed LoadConfig function")
 	return config, nil
