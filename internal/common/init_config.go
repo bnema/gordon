@@ -11,10 +11,22 @@ import (
 	"strings"
 	"sync"
 
+	"crypto/rand"
+	"encoding/hex"
+
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/logger"
 	"github.com/bnema/gordon/pkg/parser"
 )
+
+// generateRandomSecret generates a secure random string of the specified byte length, hex-encoded.
+func generateRandomSecret(length int) (string, error) {
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
 
 var (
 	globalConfig      *Config
@@ -53,9 +65,9 @@ type AdminConfig struct {
 
 type GeneralConfig struct {
 	StorageDir        string `yaml:"storageDir"`
-	Token             string `yaml:"token"`
 	LogLevel          string `yaml:"logLevel"`
 	GordonContainerID string `yaml:"-"`
+	JwtToken          string `yaml:"jwtToken"`
 }
 
 type HttpConfig struct {
@@ -455,12 +467,7 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 			logger.Info("Using environment variable GORDON_STORAGE_DIR", "value", val)
 		}
 	}
-	if val := os.Getenv("GORDON_TOKEN"); val != "" {
-		config.General.Token = val
-		if printLogs {
-			logger.Info("Using environment variable GORDON_TOKEN")
-		}
-	}
+	// Removed GORDON_TOKEN handling
 	if val := os.Getenv("GORDON_LOG_LEVEL"); val != "" {
 		config.General.LogLevel = val
 		if printLogs {
@@ -1020,6 +1027,32 @@ func (config *Config) LoadConfig() (*Config, error) {
 		logger.Debug("Log level set from configuration", "level", config.General.LogLevel)
 	}
 
+	// --- Generate JWT Secret if missing ---
+	if config.General.JwtToken == "" {
+		logger.Warn("JWTSecret is missing from configuration, generating a new one...")
+		newSecret, err := generateRandomSecret(32) // Generate a 256-bit key (32 bytes)
+		if err != nil {
+			logger.Error("Failed to generate JWT secret", "error", err)
+			// Decide if this is a fatal error or if we can continue without JWT functionality
+			// For now, let's return the error as JWT is crucial for API auth
+			return nil, fmt.Errorf("failed to generate JWT secret: %w", err)
+		}
+		config.General.JwtToken = newSecret
+		logger.Info("Generated new JWTSecret")
+
+		// Save the config immediately to store the new secret
+		err = config.SaveConfig()
+		if err != nil {
+			logger.Error("Failed to save configuration after generating JWT secret", "error", err)
+			// Return error as saving failed
+			return nil, fmt.Errorf("failed to save config with new JWT secret: %w", err)
+		}
+		logger.Info("Saved configuration with new JWTSecret")
+	} else {
+		logger.Debug("JWTSecret found in configuration")
+	}
+	// --- End JWT Secret Generation ---
+
 	logger.Debug("LoadConfig: Completed LoadConfig function")
 	return config, nil
 }
@@ -1054,16 +1087,6 @@ func fileExists(filepath string) bool {
 	return err == nil
 }
 
-func (config *Config) GetToken() (string, error) {
-	token := config.General.Token
-	if token == "" {
-		return "", fmt.Errorf("no token found in config.yml")
-	}
-
-	return token, nil
-
-}
-
 // GetRunEnv returns the run environment
 func (config *BuildConfig) GetRunEnv() string {
 	return config.RunEnv
@@ -1078,8 +1101,9 @@ func (c *Config) GetBackendURL() string {
 	return c.Http.BackendURL
 }
 
-func (c *Config) SetToken(token string) {
-	c.General.Token = token
+// GetToken returns the token
+func (c *Config) GetToken() string {
+	return c.General.JwtToken
 }
 
 func isWSL() bool {

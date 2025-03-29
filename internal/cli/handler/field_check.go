@@ -32,9 +32,9 @@ func FieldCheck(a *cli.App) error {
 		return err
 	}
 
-	if a.Config.General.Token == "" {
+	if a.Config.General.JwtToken == "" {
 		fmt.Println("Token is not set. Starting OAuth device flow...")
-		err := auth.DeviceFlowAuth(a)
+		_, err := auth.DeviceFlowAuth(a)
 		if err != nil {
 			fmt.Printf("Device flow authentication error: %v\n", err)
 			return fmt.Errorf("failed to complete device flow authentication: %w", err)
@@ -42,7 +42,7 @@ func FieldCheck(a *cli.App) error {
 	}
 
 	// Save config if BackendURL was empty or if a new token was set
-	if wasBackendURLEmpty || a.Config.General.Token != "" {
+	if wasBackendURLEmpty || a.Config.General.JwtToken != "" {
 		err = a.Config.SaveConfig()
 		if err != nil {
 			return err

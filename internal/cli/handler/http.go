@@ -48,7 +48,8 @@ func SendHTTPRequest(a *cli.App, rp *common.RequestPayload, method string, endpo
 	reauthenticated := false
 
 	for {
-		req, err := createRequest(apiUrl, endpoint, method, rp, a.Config.General.Token)
+		// Use JWTSecret (which now holds the CLI JWT) for authentication
+		req, err := createRequest(apiUrl, endpoint, method, rp, a.Config.General.JwtToken)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}

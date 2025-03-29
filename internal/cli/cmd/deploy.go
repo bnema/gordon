@@ -231,7 +231,7 @@ func checkDeployConflict(a *cli.App, targetDomain string, port string) (*common.
 	}
 
 	// Set auth header
-	req.Header.Set("Authorization", "Bearer "+a.Config.General.Token)
+	req.Header.Set("Authorization", "Bearer "+a.Config.General.JwtToken)
 
 	// Send request
 	client := &http.Client{

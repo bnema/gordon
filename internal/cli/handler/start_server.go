@@ -49,11 +49,6 @@ func StartServer(a *server.App, port string) error {
 	// Start the session cleaner cron job
 	a.StartSessionCleaner()
 
-	_, err = server.HandleNewTokenInitialization(a)
-	if err != nil {
-		logger.Error("Token initialization error", "error", err)
-	}
-
 	// Initialize and start the reverse proxy using the already loaded configuration
 	p, err := httpserve.InitializeProxy(a)
 	if err != nil {

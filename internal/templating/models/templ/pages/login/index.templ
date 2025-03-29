@@ -65,44 +65,21 @@ templ LoginPage(title string, buildVersion string, errorMsg string) {
 	                <div class="alert alert-error mb-4">
 	                  <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
 	                  <span>
-	                    if errorMsg == "empty_token" {
-	                      Please enter a token.
-	                    } else if errorMsg == "invalid_token" {
-	                      Invalid token. Please try again.
-	                    } else if errorMsg == "server_error" {
-	                      A server error occurred. Please try again later.
+	                    // Removed token-specific errors. Display generic or GitHub-related errors.
+	                    if errorMsg == "server_error" {
+	                      A server error occurred during login. Please try again later.
+	                    } else if errorMsg == "github_error" {
+	                      An error occurred during GitHub authentication. Please try again.
+	                    } else if errorMsg == "unauthorized" {
+	                      This GitHub account is not authorized.
 	                    } else {
-	                      An error occurred. Please try again.
+	                      An unknown login error occurred. Please try again.
 	                    }
 	                  </span>
 	                </div>
 	            }
 	            
-	            <!-- Token Input Form -->
-	            <div class="w-full">
-	              <form action="login/submit-token" method="POST" class="mb-4">
-	                <div class="form-control mb-4">
-	                  <label for="token" class="label">
-	                    <span class="label-text">Admin Token</span>
-	                  </label>
-	                  <input 
-	                    type="text" 
-	                    id="token" 
-	                    name="token" 
-	                    placeholder="Enter your admin token" 
-	                    class="input input-bordered w-full" 
-	                    required
-	                  />
-	                </div>
-	                <button 
-	                  type="submit" 
-	                  class="btn btn-primary w-full"
-	                >
-	                  Continue with Token
-	                </button>
-	              </form>
-	              <div class="divider">OR</div>
-	            </div>
+	            <!-- Token Input Form Removed -->
 	            
 	            <!-- GitHub OAuth -->
 	            <div class="w-full">
