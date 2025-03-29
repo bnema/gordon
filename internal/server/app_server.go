@@ -59,9 +59,7 @@ func (a *App) GenerateOauthCallbackURL() string {
 	if config.Http.Https {
 		scheme = "https"
 		port = ""
-	}
-
-	if !config.Http.Https {
+	} else {
 		scheme = "http"
 		port = fmt.Sprintf(":%s", a.Config.Http.Port)
 	}
@@ -71,7 +69,9 @@ func (a *App) GenerateOauthCallbackURL() string {
 		domain = fmt.Sprintf("%s.%s", config.Http.SubDomain, config.Http.Domain)
 	}
 
-	return fmt.Sprintf("%s://%s%s%s/login/oauth/callback", scheme, domain, port, config.Admin.Path)
+	callbackURL := fmt.Sprintf("%s://%s%s/callback", scheme, domain, port)
+	log.Debug("Generated OAuth Callback URL", "url", callbackURL)
+	return callbackURL
 }
 
 func (a *App) IsDevEnvironment() bool {
