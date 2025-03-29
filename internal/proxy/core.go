@@ -174,6 +174,7 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 		BehindTLSProxy:   initialBehindTLSProxy, // Pass initial detection result
 		AdminDomain:      app.GetConfig().Http.FullDomain(),
 		RootDomain:       app.GetConfig().Http.Domain,
+		HttpPort:         config.DefaultHttpChallengePort,
 		// RouteValidator: p.isHostInRoutes, // TODO: Pass a function if needed by hostPolicy
 	}
 

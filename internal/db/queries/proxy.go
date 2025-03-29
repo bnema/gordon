@@ -127,10 +127,13 @@ func NewProxyQueries() *ProxyQueries {
 			WHERE name = ?
 		`,
 		GetCertificateByDomain: `
+			-- Reverted: Select all original columns as expected by checkExistingCertificate
 			SELECT c.cert_file, c.key_file, c.issued_at, c.expires_at, c.issuer, c.status
 			FROM certificate c
 			JOIN domain d ON c.domain_id = d.id
 			WHERE d.name = ?
+			-- Note: This query might return multiple rows or non-valid certs.
+			-- The calling code (checkExistingCertificate and GetCertificate) needs to handle this.
 		`,
 		UpdateCertificate: `
 			INSERT OR REPLACE INTO certificate (

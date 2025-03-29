@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -144,6 +143,12 @@ func (p *Proxy) Start() error {
 				p.routes[adminDomain].ContainerPort))
 	}
 	p.mu.Unlock()
+
+	// Explicitly request certificate for admin domain after ensuring route exists
+	if err := p.requestDomainCertificate(adminDomain); err != nil {
+		logger.Error("Failed to request initial certificate for admin domain", "domain", adminDomain, "error", err)
+		// Don't return an error here, let the server start and retry later
+	}
 
 	// Set up middleware
 	p.setupMiddleware()
@@ -301,6 +306,7 @@ func (p *Proxy) checkExternalPortAccess() {
 	}
 
 	// Test HTTP port 80
+	/* // Commenting out HTTP check due to potential hairpin NAT issues
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -316,8 +322,10 @@ func (p *Proxy) checkExternalPortAccess() {
 	} else {
 		logger.Info("External HTTP port 80 is accessible")
 	}
+	*/
 
 	// Test HTTPS port 443
+	/* // Commenting out httpsClient as it's no longer used
 	httpsClient := &http.Client{
 		Timeout: 10 * time.Second, // Increased timeout for more reliable testing
 		Transport: &http.Transport{
@@ -339,6 +347,7 @@ func (p *Proxy) checkExternalPortAccess() {
 			return http.ErrUseLastResponse
 		},
 	}
+	*/
 
 	// Verify TLS settings are consistent
 	if p.certificateManager == nil { // Updated check
@@ -346,6 +355,7 @@ func (p *Proxy) checkExternalPortAccess() {
 			"solution", "Check NewProxy implementation and logs")
 	}
 
+	/* // Commenting out port 443 checks due to potential hairpin NAT issues
 	// First try a basic TCP connection to port 443 to test if it's open
 	logger.Info("Testing TCP connectivity to HTTPS port 443...")
 	conn, tcpErr := net.DialTimeout("tcp", adminDomain+":443", 5*time.Second)
@@ -378,6 +388,7 @@ func (p *Proxy) checkExternalPortAccess() {
 	} else {
 		logger.Info("External HTTPS port 443 is accessible - TLS handshake successful")
 	}
+	*/
 }
 
 // // detectGordonContainer attempts to find the Gordon container automatically
