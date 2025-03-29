@@ -52,7 +52,7 @@ func (p *Proxy) loadRoutes() error {
 	}
 
 	// Query the database for active proxy routes using retry mechanism
-	rows, err := p.dbQueryWithRetry(p.queries.GetActiveRoutes)
+	rows, err := p.dbQueryWithRetry(p.Queries.GetActiveRoutes)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			logger.Info("No active proxy routes found")
@@ -163,11 +163,6 @@ func (p *Proxy) configureRoutes() {
 	if p.httpsServer != nil {
 		p.httpsServer.Any("/*", p.proxyRequest)
 	}
-
-	// Also add the handler to the HTTP server for HTTP-01 challenges
-	if p.httpServer != nil {
-		p.httpServer.Any("/*", p.proxyRequest)
-	}
 }
 
 // AddRoute adds a new route to the database and reloads the proxy
@@ -230,7 +225,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 
 	// Get the account ID - default to the first account if available
 	var accountID string
-	err = tx.QueryRow(p.queries.GetFirstAccount).Scan(&accountID)
+	err = tx.QueryRow(p.Queries.GetFirstAccount).Scan(&accountID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			logger.Warn("No account found when adding route, domains will have NULL account_id")
@@ -242,14 +237,14 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 
 	// Check if the domain exists
 	var domainID string
-	err = tx.QueryRow(p.queries.GetDomainByName, hostname).Scan(&domainID)
+	err = tx.QueryRow(p.Queries.GetDomainByName, hostname).Scan(&domainID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// Domain doesn't exist, create it
 			domainID = uuid.New().String()
 			now := time.Now().Format(time.RFC3339)
 			_, err = txExecWithRetry(tx,
-				p.queries.InsertDomain,
+				p.Queries.InsertDomain,
 				domainID, hostname, accountID, now, now,
 			)
 			if err != nil {
@@ -278,7 +273,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 						// Domain part doesn't exist, create it
 						domainPartID = uuid.New().String()
 						_, err = txExecWithRetry(tx,
-							p.queries.InsertDomain,
+							p.Queries.InsertDomain,
 							domainPartID, domainPart, accountID, now, now,
 						)
 						if err != nil {
@@ -305,7 +300,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 	var existingRouteID string
 	var existingContainerID string
 	var existingContainerPort string
-	err = tx.QueryRow(p.queries.GetRouteByDomain, domainID).Scan(&existingRouteID, &existingContainerID, &existingContainerPort)
+	err = tx.QueryRow(p.Queries.GetRouteByDomain, domainID).Scan(&existingRouteID, &existingContainerID, &existingContainerPort)
 
 	if err == nil {
 		// Route exists, update it
@@ -326,16 +321,9 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 				"new_port", containerPort)
 		}
 
+		// Use the UpdateRoute query from the queries package
 		_, err = txExecWithRetry(tx,
-			`UPDATE proxy_route SET 
-				container_id = ?, 
-				container_ip = ?, 
-				container_port = ?, 
-				protocol = ?, 
-				path = ?, 
-				active = ?, 
-				updated_at = ? 
-			WHERE id = ?`,
+			p.Queries.UpdateRoute,
 			containerID, containerIP, containerPort, protocol, path, true, now, existingRouteID,
 		)
 		if err != nil {
@@ -349,7 +337,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 		routeID := uuid.New().String()
 		now := time.Now().Format(time.RFC3339)
 		_, err = txExecWithRetry(tx,
-			p.queries.InsertRoute,
+			p.Queries.InsertRoute,
 			routeID, domainID, containerID, containerIP, containerPort,
 			protocol, path, true, now, now,
 		)
@@ -414,7 +402,7 @@ func (p *Proxy) AddRoute(domainName, containerID, containerIP, containerPort, pr
 			// Set the flag to indicate we're processing a specific domain
 			p.processingSpecificDomain = true
 			// Try to request certificate for domain
-			p.requestDomainCertificate(domain)
+			p.requestCertificateForDomain(domain)
 			// Reset the flag after we're done
 			p.processingSpecificDomain = false
 		}(hostname)
@@ -442,7 +430,7 @@ func (p *Proxy) RemoveRoute(domainName string) error {
 
 	// Get the domain ID
 	var domainID string
-	err = tx.QueryRow(p.queries.GetDomainByName, domainName).Scan(&domainID)
+	err = tx.QueryRow(p.Queries.GetDomainByName, domainName).Scan(&domainID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("domain not found: %s", domainName)
@@ -451,13 +439,13 @@ func (p *Proxy) RemoveRoute(domainName string) error {
 	}
 
 	// Delete the route with retry
-	_, err = txExecWithRetry(tx, p.queries.DeleteRouteByDomainID, domainID)
+	_, err = txExecWithRetry(tx, p.Queries.DeleteRouteByDomainID, domainID)
 	if err != nil {
 		return fmt.Errorf("failed to delete route: %w", err)
 	}
 
 	// Delete the domain with retry
-	_, err = txExecWithRetry(tx, p.queries.DeleteDomainByID, domainID)
+	_, err = txExecWithRetry(tx, p.Queries.DeleteDomainByID, domainID)
 	if err != nil {
 		return fmt.Errorf("failed to delete domain: %w", err)
 	}
@@ -521,7 +509,7 @@ func (p *Proxy) Reload() error {
 	newRoutes := make(map[string]*ProxyRouteInfo)
 
 	// Load routes from the database into the new map
-	rows, err := p.app.GetDB().Query(p.queries.GetActiveRoutes)
+	rows, err := p.app.GetDB().Query(p.Queries.GetActiveRoutes)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			logger.Info("No active proxy routes found during reload")
@@ -644,12 +632,6 @@ func (p *Proxy) Reload() error {
 	// Rebuild route configuration
 	p.configureRoutes()
 
-	// Force recreation of the route handlers if servers are initialized
-	if p.httpServer != nil {
-		logger.Debug("Refreshing HTTP routes")
-		p.httpServer.Routes()
-	}
-
 	if p.httpsServer != nil {
 		logger.Debug("Refreshing HTTPS routes")
 		p.httpsServer.Routes()
@@ -726,7 +708,7 @@ func (p *Proxy) ForceUpdateRouteIP(domain string, newIP string) error {
 	// Next, update the database
 	// Get the domain ID with retry
 	var domainID string
-	rows, err := p.app.GetDB().Query(p.queries.GetDomainByName, domain)
+	rows, err := p.app.GetDB().Query(p.Queries.GetDomainByName, domain)
 	if err != nil {
 		logger.Error("Failed to query domain for IP update", "domain", domain, "error", err)
 		return fmt.Errorf("failed to query domain: %w", err)
@@ -747,7 +729,7 @@ func (p *Proxy) ForceUpdateRouteIP(domain string, newIP string) error {
 
 	// Update the proxy_route record with retry and ensure it's marked as active
 	now := time.Now().Format(time.RFC3339)
-	result, err := p.app.GetDB().Exec(p.queries.UpdateRouteIP, newIP, now, domainID, containerID)
+	result, err := p.app.GetDB().Exec(p.Queries.UpdateRouteIP, newIP, now, domainID, containerID)
 
 	if err != nil {
 		logger.Error("Failed to update IP in database", "domain", domain, "error", err)
@@ -817,7 +799,7 @@ func (p *Proxy) FindRoutesByOldName(containerName string) map[string]*ProxyRoute
 	result := make(map[string]*ProxyRouteInfo)
 
 	// Query the database with retry to find if any route might be associated with this container name
-	rows, err := p.app.GetDB().Query(p.queries.GetAllRoutes)
+	rows, err := p.app.GetDB().Query(p.Queries.GetAllRoutes)
 	if err != nil {
 		logger.Error("Failed to query database for routes by old name", "error", err)
 		return result
@@ -1182,7 +1164,7 @@ func (p *Proxy) StartContainerEventListener() error {
 
 								// Update the IP in the database directly
 								now := time.Now().Format(time.RFC3339)
-								_, err = p.dbExecWithRetry(p.queries.UpdateRouteIP,
+								_, err = p.dbExecWithRetry(p.Queries.UpdateRouteIP,
 									containerIP, now, domainID, containerID)
 
 								if err != nil {
@@ -1374,7 +1356,7 @@ func (p *Proxy) markRoutesInactive(domains []string) {
 	for _, domain := range domains {
 		// First, get the domain ID
 		var domainID string
-		err := tx.QueryRow(p.queries.GetDomainByName, domain).Scan(&domainID)
+		err := tx.QueryRow(p.Queries.GetDomainByName, domain).Scan(&domainID)
 		if err != nil {
 			logger.Error("Failed to get domain ID for inactive route", "domain", domain, "error", err)
 			continue
@@ -1382,7 +1364,7 @@ func (p *Proxy) markRoutesInactive(domains []string) {
 
 		// Update the route to mark it as inactive
 		now := time.Now().Format(time.RFC3339)
-		_, err = tx.Exec(p.queries.MarkRouteInactive, now, domainID)
+		_, err = tx.Exec(p.Queries.MarkRouteInactive, now, domainID)
 		if err != nil {
 			logger.Error("Failed to mark route as inactive in database", "domain", domain, "error", err)
 			continue
@@ -1785,11 +1767,11 @@ func (p *Proxy) proxyRequest(c echo.Context) error {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
 
 	// Debug log the incoming request
-	logger.Debug("Proxy request received",
-		"host", host,
-		"method", c.Request().Method,
-		"path", c.Request().URL.Path,
-		"client_ip", c.RealIP())
+	// logger.Debug("Proxy request received",
+	// 	"host", host,
+	// 	"method", c.Request().Method,
+	// 	"path", c.Request().URL.Path,
+	// 	"client_ip", c.RealIP())
 
 	// Get the route for this host
 	p.mu.RLock()
@@ -2085,4 +2067,32 @@ func (p *Proxy) IsContainerInCooldownPeriod(containerID string) bool {
 
 	// Check if the container is still in its cooldown period
 	return time.Since(timestamp) < p.containerCooldownPeriod
+}
+
+// Add specific domain handling to use our new certificate manager
+
+// requestCertificateForDomain requests a certificate for a specific domain using our new refactored system
+func (p *Proxy) requestCertificateForDomain(domain string) {
+	// Use the certificate manager stored on the Proxy struct
+	if p.certificateManager != nil {
+		// Request the certificate using the new manager
+		_, err := p.certificateManager.GetCertificate(domain)
+		if err != nil {
+			logger.Error("Failed to get certificate with new manager",
+				"domain", domain,
+				"error", err)
+		} else {
+			logger.Info("Successfully secured certificate for domain",
+				"domain", domain)
+		}
+		return
+	}
+
+	// Fall back to old method if new manager not available
+	// logger.Debug("Using legacy certificate manager for domain",
+	// 	"domain", domain)
+	// p.requestDomainCertificateRefactored(domain) // Removed fallback to non-existent method
+
+	// If manager is nil, log an error (should have been caught earlier)
+	logger.Error("requestCertificateForDomain called but certificateManager is nil", "domain", domain)
 }

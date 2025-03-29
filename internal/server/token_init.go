@@ -25,11 +25,7 @@ func HandleNewTokenInitialization(a *App) (string, error) {
 	token, err := generateRandomToken(16) // 16 bytes
 	if err != nil {
 		return "", fmt.Errorf("failed to generate token: %v", err)
-	}
-
-	// url = config.Http.SubDomain + config.Http.TopDomain + config.Http.Port + config.Admin.Path
-
-	fmt.Printf("Login with the new token: %s\n", token)
+	
 
 	// Store the token in the config file
 	a.Config.General.Token = token

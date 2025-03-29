@@ -573,10 +573,7 @@ func AddProxyRoute(a *server.App, containerID, containerIP, containerPort, targe
 
 		// Verify the database update with a direct query
 		var updatedContainerIP string
-		err = a.GetDB().QueryRow(`
-			SELECT container_ip 
-			FROM proxy_route 
-			WHERE id = ?`, existingRouteID).Scan(&updatedContainerIP)
+		err = a.GetDB().QueryRow(p.Queries.GetRouteIPByID, existingRouteID).Scan(&updatedContainerIP)
 
 		if err == nil && updatedContainerIP != containerIP {
 			logger.Warn("Database verification failed: container IP mismatch",

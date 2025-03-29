@@ -1,5 +1,9 @@
 package db
 
+import (
+	"database/sql"
+)
+
 // User struct model
 type User struct {
 	ID      string `sql:"id, primary_key"`
@@ -46,11 +50,15 @@ type Clients struct {
 
 // Domain represents a domain configuration for the proxy
 type Domain struct {
-	ID        string `sql:"id, primary_key"`
-	Name      string `sql:"name"` // e.g. example.com
-	AccountID string `sql:"account_id, foreign_key=account.id"`
-	CreatedAt string `sql:"created_at"`
-	UpdatedAt string `sql:"updated_at"`
+	ID                    string         `sql:"id, primary_key"`
+	Name                  string         `sql:"name"` // e.g. example.com
+	AccountID             string         `sql:"account_id, foreign_key=account.id"`
+	CreatedAt             string         `sql:"created_at"`
+	UpdatedAt             string         `sql:"updated_at"`
+	AcmeEnabled           bool           `sql:"acme_enabled"`             // Whether ACME is enabled for this domain
+	AcmeChallengeType     sql.NullString `sql:"acme_challenge_type"`      // e.g. "http-01", "dns-01"
+	AcmeDnsProvider       sql.NullString `sql:"acme_dns_provider"`        // DNS provider name if using DNS-01
+	AcmeDnsCredentialsRef sql.NullString `sql:"acme_dns_credentials_ref"` // Reference to credentials (not raw credentials)
 }
 
 // Certificate represents a TLS certificate for a domain
@@ -77,6 +85,15 @@ type ProxyRoute struct {
 	Active        bool   `sql:"active"`
 	CreatedAt     string `sql:"created_at"`
 	UpdatedAt     string `sql:"updated_at"`
+}
+
+// AcmeAccount represents the stored ACME account details
+type AcmeAccount struct {
+	Email            string         `sql:"email, primary_key"`
+	PrivateKey       string         `sql:"private_key"`       // PEM encoded private key
+	RegistrationInfo sql.NullString `sql:"registration_info"` // JSON marshaled registration resource
+	CreatedAt        string         `sql:"created_at"`
+	UpdatedAt        string         `sql:"updated_at"`
 }
 
 // GithubUserInfo holds the essential information for a Github user

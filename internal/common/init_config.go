@@ -74,20 +74,24 @@ type ContainerEngineConfig struct {
 }
 
 type ReverseProxyConfig struct {
-	Enabled             bool   `yaml:"enabled"`             // Whether the reverse proxy is enabled
-	Port                string `yaml:"port"`                // Port for the reverse proxy to listen on
-	HttpPort            string `yaml:"httpPort"`            // HTTP port (usually 80) for redirecting to HTTPS
-	CertDir             string `yaml:"certDir"`             // Directory to store Let's Encrypt certificates
-	AutoRenew           bool   `yaml:"autoRenew"`           // Whether to automatically renew certificates
-	RenewBefore         int    `yaml:"renewBefore"`         // Days before expiry to renew certificates
-	LetsEncryptMode     string `yaml:"letsEncryptMode"`     // "staging" or "production"
-	Email               string `yaml:"email"`               // Email for Let's Encrypt
-	CacheSize           int    `yaml:"cacheSize"`           // Size of the certificate cache
-	GracePeriod         int    `yaml:"gracePeriod"`         // Shutdown grace period in seconds
-	EnableHttpLogs      bool   `yaml:"enableHttpLogs"`      // Whether to enable HTTP request logging (default: true)
-	EnableRateLimit     bool   `yaml:"enableRateLimit"`     // Whether to enable rate limiting middleware (default: false)
-	DetectUpstreamProxy bool   `yaml:"detectUpstreamProxy"` // Whether to detect and handle upstream TLS termination proxies (default: false)
-	SkipCertificates    bool   `yaml:"skipCertificates"`    // Skip Let's Encrypt certificate acquisition when behind a TLS terminating proxy (default: false)
+	Enabled                               bool   `yaml:"enabled"`              // Whether the reverse proxy is enabled
+	Port                                  string `yaml:"port"`                 // Port for the reverse proxy to listen on
+	HttpPort                              string `yaml:"httpPort"`             // HTTP port (usually 80) for redirecting to HTTPS
+	CertDir                               string `yaml:"certDir"`              // Directory to store Let's Encrypt certificates
+	Email                                 string `yaml:"email"`                // Email for Let's Encrypt
+	LetsEncryptMode                       string `yaml:"letsEncryptMode"`      // staging or production
+	SkipCertificates                      bool   `yaml:"skipCertificates"`     // Skip Let's Encrypt certificate acquisition when behind a TLS terminating proxy
+	GracePeriod                           int    `yaml:"gracePeriod"`          // Shutdown grace period in seconds
+	AutoRenew                             bool   `yaml:"autoRenew"`            // Whether to automatically renew certificates
+	RenewBefore                           int    `yaml:"renewBefore"`          // Days before expiry to renew certificates
+	CacheSize                             int    `yaml:"cacheSize"`            // Size of the certificate cache
+	EnableHttpLogs                        bool   `yaml:"enableHttpLogs"`       // Whether to enable HTTP request logging
+	EnableRateLimit                       bool   `yaml:"enableRateLimit"`      // Whether to enable rate limiting middleware
+	DetectUpstreamProxy                   bool   `yaml:"detectUpstreamProxy"`  // Whether to detect and handle upstream TLS termination proxies
+	DefaultChallengeType                  string `yaml:"defaultChallengeType"` // http-01 or dns-01
+	DefaultHttpChallengePort              string `yaml:"defaultHttpChallengePort"`
+	DefaultDnsChallengePropagationTimeout int    `yaml:"defaultDnsChallengePropagationTimeout"`
+	DefaultDnsChallengePollingInterval    int    `yaml:"defaultDnsChallengePollingInterval"`
 }
 
 // Default values
