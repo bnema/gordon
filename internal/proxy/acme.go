@@ -96,6 +96,8 @@ func NewCertificateManager(config CertManagerConfig, app interfaces.AppInterface
 				logger.Error("Failed to save newly generated ACME user key to DB", "error", saveErr)
 				// Depending on policy, might want to return error here:
 				// return nil, fmt.Errorf("failed to save initial ACME user: %w", saveErr)
+			} else {
+				logger.Debug("Saved ACME user details to DB", "email", user.Email)
 			}
 		} else {
 			// Handle other DB errors during load
@@ -201,6 +203,9 @@ func loadAcmeUserFromDB(email string, db *sql.DB, queries *queries.ProxyQueries)
 		}
 		return nil, fmt.Errorf("failed to query ACME user: %w", err)
 	}
+
+	// Add detailed logging for the loaded registration info
+	logger.Debug("Raw registration_info from DB", "email", email, "Valid", registrationJSON.Valid, "String", registrationJSON.String)
 
 	// Parse the private key
 	privateKey, err := certcrypto.ParsePEMPrivateKey([]byte(privateKeyPEM))
@@ -482,32 +487,88 @@ func (cm *CertificateManager) RenewCertificate(domainName string, proxy *Proxy) 
 func (cm *CertificateManager) GetCertificateForTLS(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	logger.Debug("Getting certificate for TLS handshake", "server_name", hello.ServerName)
 
-	// Get the certificate resource
-	cert, err := cm.GetCertificate(hello.ServerName)
+	// Get the certificate resource from the database
+	certResource, err := cm.GetCertificate(hello.ServerName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get certificate: %w", err)
+		// If the certificate is specifically not found in the DB,
+		// return nil, nil to indicate no certificate is available for this ServerName.
+		// This allows the TLS handshake to potentially use other certificates or fail gracefully.
+		if err == sql.ErrNoRows {
+			logger.Debug("Certificate not found in DB during TLS handshake", "server_name", hello.ServerName)
+			return nil, nil // Indicate no certificate available for this name
+		}
+		// For other errors (DB connection issues, etc.), return the error.
+		logger.Error("Error getting certificate during TLS handshake", "server_name", hello.ServerName, "error", err)
+		return nil, fmt.Errorf("failed to get certificate for %s: %w", hello.ServerName, err)
 	}
 
-	// Convert to tls.Certificate
-	tlsCert, err := tls.X509KeyPair(cert.Certificate, cert.PrivateKey)
+	// Convert the retrieved certificate resource to tls.Certificate
+	tlsCert, err := tls.X509KeyPair(certResource.Certificate, certResource.PrivateKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %w", err)
+		logger.Error("Failed to create key pair from retrieved certificate", "server_name", hello.ServerName, "error", err)
+		return nil, fmt.Errorf("failed to parse retrieved certificate for %s: %w", hello.ServerName, err)
 	}
 
 	return &tlsCert, nil
 }
 
-// GetCertificate retrieves a certificate from the database
+// GetCertificate retrieves a certificate for a domain from the database
 func (cm *CertificateManager) GetCertificate(domainName string) (*certificate.Resource, error) {
-	// Try to obtain the certificate if it doesn't exist
-	request := certificate.ObtainRequest{
-		Domains: []string{domainName},
-		Bundle:  true,
-	}
-	cert, err := cm.client.Certificate.Obtain(request)
+	logger.Debug("Attempting to retrieve certificate from DB", "domain", domainName)
+	var certPEM, keyPEM string
+	// Add dummy variables to scan the extra columns we don't need in this function
+	var issuedAt, expiresAt, issuer, status sql.NullString // Use sql.NullString or appropriate types
+
+	// Query the database using the predefined query (which now returns 6 columns)
+	err := cm.db.QueryRow(cm.queries.GetCertificateByDomain, domainName).Scan(
+		&certPEM, &keyPEM, // The columns we need
+		&issuedAt, &expiresAt, &issuer, &status, // Dummy scans for the rest
+	)
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to obtain certificate: %w", err)
+		// Check for ErrNoRows *after* attempting the scan
+		if err == sql.ErrNoRows {
+			logger.Warn("Certificate not found in DB for domain, attempting to obtain.", "domain", domainName)
+			// Certificate not found, try obtaining a new one.
+			// Note: Need the 'proxy' instance here. This function signature might need adjustment,
+			// or the obtaining logic should be handled higher up (e.g., in GetCertificateForTLS or the proxy core).
+			// For now, returning an error to highlight this dependency.
+			// Alternatively, we could pass the proxy instance or necessary config down.
+			// Let's return a specific error indicating it needs obtaining.
+			return nil, fmt.Errorf("certificate not found in DB for domain %s, obtain needed", domainName)
+
+			// --- Alternative: Obtain directly (Requires Proxy instance or refactor) ---
+			// proxyInstance := ??? // How to get the proxy instance here?
+			// if proxyInstance == nil {
+			// 	 return nil, fmt.Errorf("cannot obtain certificate without proxy instance in GetCertificate")
+			// }
+			// obtainedCert, obtainErr := cm.ObtainCertificate(domainName, proxyInstance)
+			// if obtainErr != nil {
+			// 	 logger.Error("Failed to obtain certificate after not finding in DB", "domain", domainName, "error", obtainErr)
+			// 	 return nil, fmt.Errorf("certificate not found and obtain failed for %s: %w", domainName, obtainErr)
+			// }
+			// logger.Info("Successfully obtained certificate after not finding in DB", "domain", domainName)
+			// return obtainedCert, nil
+			// --- End Alternative ---
+
+		}
+		logger.Error("Failed to query certificate from DB", "domain", domainName, "error", err)
+		return nil, fmt.Errorf("database error retrieving certificate for %s: %w", domainName, err)
 	}
+
+	logger.Debug("Successfully retrieved certificate from DB", "domain", domainName)
+
+	// Construct the certificate resource
+	cert := &certificate.Resource{
+		Domain:            domainName,
+		CertURL:           "", // Not stored/retrieved from DB in this example
+		CertStableURL:     "", // Not stored/retrieved from DB
+		PrivateKey:        []byte(keyPEM),
+		Certificate:       []byte(certPEM),
+		IssuerCertificate: nil, // Not typically stored/needed for serving
+		CSR:               nil, // Not stored
+	}
+
 	return cert, nil
 }
 
