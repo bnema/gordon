@@ -1,11 +1,14 @@
 package httpserve
 
 import (
+	"net/http"
+
 	"github.com/bnema/gordon/internal/httpserve/handlers"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
 	"github.com/bnema/gordon/internal/server"
 	"github.com/charmbracelet/log"
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 	echomid "github.com/labstack/echo/v4/middleware"
 )
@@ -129,11 +132,17 @@ func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
 	}
 
 	e.GET(adminPath+"/login", func(c echo.Context) error {
+		// Check if already logged in, if so redirect to admin panel, otherwise render login page
+		sess, _ := session.Get("session", c) // Use echo-contrib session
+		if sess != nil && sess.Values != nil {
+			if authenticated, ok := sess.Values["authenticated"].(bool); ok && authenticated {
+				return c.Redirect(http.StatusFound, a.Config.Admin.Path)
+			}
+		}
+		// If not authenticated, render the login page (which should now only contain GitHub login)
 		return handlers.RenderTemplLoginPage(c, a)
 	})
-	e.POST(adminPath+"/login/submit-token", func(c echo.Context) error {
-		return handlers.HandleTokenSubmission(c, a)
-	})
+	// Removed POST /login/submit-token route
 	e.GET(adminPath+"/login/oauth/github", func(c echo.Context) error {
 		return handlers.StartOAuthGithub(c, a)
 	})

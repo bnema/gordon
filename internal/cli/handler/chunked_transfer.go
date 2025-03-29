@@ -225,7 +225,7 @@ var clientChunkStore = &transferStore{
 // NewChunkedClient creates a new chunked client
 func NewChunkedClient(app *cli.App) *ChunkedClient {
 	baseURL := app.Config.Http.BackendURL + "/api"
-	token := app.Config.General.Token
+	token := app.Config.General.JwtToken
 
 	return &ChunkedClient{
 		client: &http.Client{
