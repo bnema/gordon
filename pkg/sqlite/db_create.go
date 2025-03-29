@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// CreateTable creates a table in the database based on the given struct.
-func CreateTable(db *sql.DB, table interface{}, tableName string) error {
+// CreateTableInTx creates a table within a transaction based on the given struct.
+func CreateTableInTx(tx *sql.Tx, table interface{}, tableName string) error {
 	t := reflect.TypeOf(table)
 
 	var fields []string
@@ -53,7 +53,7 @@ func CreateTable(db *sql.DB, table interface{}, tableName string) error {
 	}
 	createTableSQL += ");"
 
-	_, err := db.Exec(createTableSQL)
+	_, err := tx.Exec(createTableSQL)
 	if err != nil {
 		return fmt.Errorf("failed to create table %s: %v", tableName, err)
 	}

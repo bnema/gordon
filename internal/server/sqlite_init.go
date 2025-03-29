@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/bnema/gordon/internal/db"
+	pkgsqlite "github.com/bnema/gordon/pkg/sqlite"
 	"github.com/charmbracelet/log"
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
@@ -37,45 +41,9 @@ func (a *App) ensureDBDir() error {
 	return nil
 }
 
-// checkDBFile checks if the database file exists.
-func (a *App) checkDBFile(dbPath string) (bool, error) {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		log.Debug("Database file does not exist", "path", dbPath)
-		return false, nil
-	} else if err != nil {
-		return false, err
-	}
-
-	// File exists, but let's also check if the tables exist
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return false, fmt.Errorf("failed to open DB to check tables: %w", err)
-	}
-	defer db.Close()
-
-	// Check if domain table exists
-	var tableCount int
-	err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='domain'").Scan(&tableCount)
-	if err != nil {
-		return false, fmt.Errorf("failed to check for domain table: %w", err)
-	}
-
-	if tableCount == 0 {
-		log.Debug("Database file exists but domain table is missing, will reinitialize")
-		// The file exists but doesn't have the required tables, treat as non-existent
-		if err := os.Remove(dbPath); err != nil {
-			return false, fmt.Errorf("failed to remove corrupted DB file: %w", err)
-		}
-		return false, nil
-	}
-
-	log.Debug("Database file exists and contains required tables", "path", dbPath)
-	return true, nil
-}
-
 // InitializeDB initializes the database in memory and loads data from disk if available
 func InitializeDB(a *App) (*sql.DB, error) {
-	log.Debug("Initializing in-memory database")
+	log.Debug("Initializing database")
 	if err := a.ensureDBDir(); err != nil {
 		return nil, fmt.Errorf("failed to ensure DB directory: %w", err)
 	}
@@ -83,67 +51,218 @@ func InitializeDB(a *App) (*sql.DB, error) {
 	diskDBPath := a.getDiskDBFilePath()
 	a.DBPath = diskDBPath
 
-	// Create in-memory database connection
+	// --- Start Refactored Schema Handling ---
+	log.Debug("Ensuring database schema is up-to-date on disk", "path", diskDBPath)
+	// UpdateDatabase will create the file and tables if they don't exist,
+	// or update the schema if they do. It also handles backups.
+	if err := pkgsqlite.UpdateDatabase(diskDBPath, a.DBTables); err != nil {
+		return nil, fmt.Errorf("failed to create/update database schema on disk: %w", err)
+	}
+	log.Debug("Database schema on disk is up-to-date.")
+	// --- End Refactored Schema Handling ---
+
+	// --- BEGIN Seed Admin Account if Necessary ---
+	log.Debug("Checking if admin account seeding is necessary", "path", diskDBPath)
+	// Need to temporarily open the disk DB to check and potentially write
+	seedDB, err := sql.Open("sqlite", diskDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open disk DB for seeding check: %w", err)
+	}
+
+	var accountCount int
+	err = seedDB.QueryRow("SELECT COUNT(*) FROM account").Scan(&accountCount)
+	if err != nil {
+		seedDB.Close()
+		// If the table doesn't exist yet (shouldn't happen after UpdateDatabase), log it
+		if pkgsqlite.IsNoSuchTableError(err) {
+			log.Warn("Account table not found during seeding check, skipping seed.", "error", err)
+			// Proceed without seeding, assuming UpdateDatabase handled creation correctly
+		} else {
+			return nil, fmt.Errorf("failed to query account count from disk DB: %w", err)
+		}
+	} else if accountCount == 0 {
+		log.Info("No accounts found, seeding default admin user and account.")
+		// Begin transaction for seeding
+		seedTx, txErr := seedDB.Begin()
+		if txErr != nil {
+			seedDB.Close()
+			return nil, fmt.Errorf("failed to begin transaction for seeding: %w", txErr)
+		}
+
+		adminUserID := uuid.NewString()
+		adminAccountID := uuid.NewString()
+		adminEmail := "admin@local.host" // Or some other placeholder
+
+		// Insert User
+		_, txErr = seedTx.Exec("INSERT INTO user (id, name, email) VALUES (?, ?, ?)",
+			adminUserID, "Admin User", adminEmail)
+		if txErr != nil {
+			seedTx.Rollback()
+			seedDB.Close()
+			return nil, fmt.Errorf("failed to insert default admin user: %w", txErr)
+		}
+
+		// Insert Account
+		_, txErr = seedTx.Exec("INSERT INTO account (id, user_id) VALUES (?, ?)",
+			adminAccountID, adminUserID)
+		if txErr != nil {
+			seedTx.Rollback()
+			seedDB.Close()
+			return nil, fmt.Errorf("failed to insert default admin account: %w", txErr)
+		}
+
+		// Commit transaction
+		txErr = seedTx.Commit()
+		if txErr != nil {
+			seedDB.Close()
+			return nil, fmt.Errorf("failed to commit seeding transaction: %w", txErr)
+		}
+		log.Info("Default admin user and account seeded successfully", "user_id", adminUserID, "account_id", adminAccountID)
+	} else {
+		log.Debug("Accounts already exist, skipping admin seeding.", "count", accountCount)
+	}
+
+	// Close the temporary connection used for seeding
+	if err := seedDB.Close(); err != nil {
+		// Log error but don't necessarily fail initialization at this point
+		log.Error("Error closing temporary seed DB connection", "error", err)
+	}
+	// --- END Seed Admin Account if Necessary ---
+
+	// Create in-memory database connection (remains the same)
 	log.Debug("Opening in-memory SQLite database")
 	memDB, err := sql.Open("sqlite", "file::memory:?cache=shared")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open in-memory DB: %w", err)
 	}
 
-	// Test that the in-memory database is working
+	// Test that the in-memory database is working (remains the same)
 	log.Debug("Testing in-memory database connection")
 	if err := memDB.Ping(); err != nil {
+		memDB.Close() // Close memDB if ping fails
 		return nil, fmt.Errorf("failed to ping in-memory database: %w", err)
 	}
 
-	// Check if disk database exists
-	dbExists, err := a.checkDBFile(diskDBPath)
+	// --- Load from Disk to Memory ---
+	// Now that the disk schema is guaranteed to be correct, load it into memory.
+	// We need to check if the file actually contains data before loading.
+	// A simple way is to check if the file size is > 0 after UpdateDatabase.
+	fileInfo, err := os.Stat(diskDBPath)
+	loadNeeded := true
 	if err != nil {
-		return nil, fmt.Errorf("failed to check DB file: %w", err)
+		if os.IsNotExist(err) {
+			log.Debug("Database file still doesn't exist after schema update (likely first run with no tables?), skipping load from disk.")
+			loadNeeded = false // Nothing to load
+		} else {
+			memDB.Close()
+			return nil, fmt.Errorf("failed to stat disk DB file after schema update: %w", err)
+		}
+	} else if fileInfo.Size() == 0 {
+		log.Debug("Database file is empty after schema update, skipping load from disk.")
+		loadNeeded = false // Nothing to load
 	}
 
-	if !dbExists {
-		log.Debug("Database needs bootstrapping", "path", diskDBPath)
-		// Create tables in memory
-		log.Debug("Creating tables in memory")
-		if err := bootstrapDB(memDB); err != nil {
-			return nil, fmt.Errorf("failed to bootstrap in-memory DB: %w", err)
-		}
-
-		// Save the initialized in-memory database to disk
-		log.Debug("Saving initialized in-memory database to disk")
-		if err := saveMemDBToDisk(memDB, diskDBPath); err != nil {
-			return nil, fmt.Errorf("failed to save initial in-memory DB to disk: %w", err)
-		}
-
-		log.Debug("Initialized new in-memory database and saved to disk")
-	} else {
-		// Load existing database from disk into memory
-		log.Debug("Loading existing database from disk into memory", "path", diskDBPath)
+	if loadNeeded {
+		log.Debug("Loading database from disk into memory", "path", diskDBPath)
 		if err := loadDiskDBToMemory(diskDBPath, memDB); err != nil {
+			memDB.Close()
 			return nil, fmt.Errorf("failed to load disk DB into memory: %w", err)
 		}
-
 		log.Debug("Successfully loaded disk database into memory")
+	} else {
+		// If we didn't load, the memory DB is empty but has the correct schema
+		// implicitly because UpdateDatabase already ran on the (possibly new) disk file.
+		// However, loadDiskDBToMemory *also* creates the schema in memory based on the disk file.
+		// If the disk file was *just* created by UpdateDatabase and is empty,
+		// loadDiskDBToMemory won't run, and memDB won't have the tables yet.
+		// We need to ensure the schema exists in memory even if the disk file was initially empty.
+		// Easiest way: re-apply the schema creation logic to memDB.
+		log.Debug("Applying schema to empty in-memory database")
+		memTx, err := memDB.Begin()
+		if err != nil {
+			memDB.Close()
+			return nil, fmt.Errorf("failed to begin transaction on memory DB for schema creation: %w", err)
+		}
+		schemaCreated := false
+		// Iterate through DBTables fields using reflection to get correct table names
+		dbTablesType := reflect.TypeOf(a.DBTables)
+		dbTablesValue := reflect.ValueOf(a.DBTables)
+		if dbTablesType.Kind() == reflect.Ptr {
+			dbTablesType = dbTablesType.Elem()
+			dbTablesValue = dbTablesValue.Elem()
+		}
+
+		if dbTablesType.Kind() == reflect.Struct {
+			log.Debug("Reflecting DBTables struct for in-memory schema creation", "type", dbTablesType.Name())
+			for i := 0; i < dbTablesType.NumField(); i++ {
+				field := dbTablesType.Field(i)
+				fieldValue := dbTablesValue.Field(i).Interface() // e.g., db.ProxyRoute instance
+				sqlTag := field.Tag.Get("sql")
+
+				if sqlTag == "" || sqlTag == "-" {
+					log.Debug("Skipping field without sql tag in memory schema creation", "field", field.Name)
+					continue // Skip fields without a sql tag or marked to be ignored
+				}
+
+				tableName := sqlTag // Use the tag directly as the table name
+				log.Debug("Attempting to create table in memory", "tableName", tableName, "structType", reflect.TypeOf(fieldValue).Name())
+
+				if err := pkgsqlite.CreateTableInTx(memTx, fieldValue, tableName); err != nil {
+					// Ignore "table already exists" errors if somehow they occur
+					if !strings.Contains(strings.ToLower(err.Error()), "already exists") {
+						log.Error("Failed to create table in memory", "table", tableName, "error", err)
+						memTx.Rollback()
+						memDB.Close()
+						return nil, fmt.Errorf("failed to create table %s in memory: %w", tableName, err)
+					} else {
+						log.Debug("Table already exists in memory, skipping creation", "table", tableName)
+					}
+				} else {
+					log.Debug("Successfully created table in memory", "table", tableName)
+					schemaCreated = true
+				}
+			}
+		} else {
+			log.Error("a.DBTables is not a struct, cannot create schema in memory")
+			memDB.Close()
+			return nil, fmt.Errorf("internal error: DBTables is not a struct type (%T)", a.DBTables)
+		}
+
+		if err := memTx.Commit(); err != nil {
+			memDB.Close()
+			return nil, fmt.Errorf("failed to commit schema creation transaction to memory DB: %w", err)
+		}
+		if schemaCreated {
+			log.Debug("Successfully applied schema to in-memory database")
+		} else {
+			log.Debug("In-memory schema already existed or no tables defined.")
+		}
+
 	}
+	// --- End Load from Disk to Memory ---
 
 	a.DB = memDB
 
-	if dbExists {
-		// Populate the struct tables from the database
-		log.Debug("Populating struct tables from existing database")
+	// Populate struct tables if data was loaded
+	if loadNeeded {
+		log.Debug("Populating struct tables from loaded database")
 		if err := PopulateStructWithTables(a); err != nil {
-			return nil, err
+			// Don't fail initialization for this, maybe just log an error
+			log.Error("Failed to populate struct tables after loading DB", "error", err)
+			// Depending on severity, you might want to return nil, err here
 		}
+	} else {
+		log.Debug("Skipping struct table population as no data was loaded from disk.")
 	}
 
-	// Create a context for the auto-save routine that will be canceled when the app is shutting down
+	// Create context for auto-save (remains the same)
 	a.DBSaveCtx, a.DBSaveCancel = context.WithCancel(context.Background())
 
-	// Start auto-save routine
-	log.Debug("Starting auto-save routine with interval of", "minutes", AutoSaveInterval)
+	// Start auto-save routine (remains the same)
+	log.Debug("Starting auto-save routine with interval", "minutes", AutoSaveInterval)
 	go autoSaveDB(a.DBSaveCtx, a, AutoSaveInterval)
 
+	log.Info("Database initialization completed successfully")
 	return memDB, nil
 }
 
@@ -446,105 +565,6 @@ func joinStrings(strings []string, separator string) string {
 	return result
 }
 
-// bootstrapDB creates the initial database schema
-func bootstrapDB(db *sql.DB) error {
-	log.Debug("Bootstrapping database with initial schema")
-
-	// Begin a transaction
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("error beginning transaction: %w", err)
-	}
-
-	// Create tables
-	log.Debug("Creating database tables")
-	_, err = tx.Exec(`
-		CREATE TABLE IF NOT EXISTS user (
-			id TEXT PRIMARY KEY,
-			name TEXT,
-			email TEXT
-		);
-		CREATE TABLE IF NOT EXISTS account (
-			id TEXT PRIMARY KEY,
-			user_id TEXT,
-			FOREIGN KEY (user_id) REFERENCES user(id)
-		);
-		CREATE TABLE IF NOT EXISTS sessions (
-			id TEXT PRIMARY KEY,
-			account_id TEXT,
-			browser_info TEXT,
-			access_token TEXT,
-			expires TEXT,
-			is_online INTEGER,
-			FOREIGN KEY (account_id) REFERENCES account(id)
-		);
-		CREATE TABLE IF NOT EXISTS provider (
-			id TEXT PRIMARY KEY,
-			account_id TEXT,
-			name TEXT,
-			login TEXT,
-			avatar_url TEXT,
-			profile_url TEXT,
-			email TEXT,
-			FOREIGN KEY (account_id) REFERENCES account(id)
-		);
-		CREATE TABLE IF NOT EXISTS clients (
-			id TEXT PRIMARY KEY,
-			account_id TEXT,
-			os TEXT,
-			ip TEXT,
-			hostname TEXT,
-			expires TEXT,
-			FOREIGN KEY (account_id) REFERENCES account(id)
-		);
-		CREATE TABLE IF NOT EXISTS domain (
-			id TEXT PRIMARY KEY,
-			name TEXT,
-			account_id TEXT,
-			created_at TEXT,
-			updated_at TEXT,
-			FOREIGN KEY (account_id) REFERENCES account(id)
-		);
-		CREATE TABLE IF NOT EXISTS certificate (
-			id TEXT PRIMARY KEY,
-			domain_id TEXT,
-			cert_file TEXT,
-			key_file TEXT,
-			issued_at TEXT,
-			expires_at TEXT,
-			issuer TEXT,
-			status TEXT,
-			FOREIGN KEY (domain_id) REFERENCES domain(id)
-		);
-		CREATE TABLE IF NOT EXISTS proxy_route (
-			id TEXT PRIMARY KEY,
-			domain_id TEXT,
-			container_id TEXT,
-			container_ip TEXT,
-			container_port TEXT,
-			protocol TEXT,
-			path TEXT,
-			active INTEGER,
-			created_at TEXT,
-			updated_at TEXT,
-			FOREIGN KEY (domain_id) REFERENCES domain(id)
-		);
-	`)
-	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("error creating tables: %w", err)
-	}
-
-	// Commit the transaction
-	log.Debug("Committing transaction with initial schema")
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("error committing transaction: %w", err)
-	}
-
-	log.Debug("Database bootstrap completed successfully")
-	return nil
-}
-
 type DBTable interface {
 	ScanFromRows(rows *sql.Rows) error
 }
@@ -618,7 +638,17 @@ func (c *ClientsWrapper) ScanFromRows(rows *sql.Rows) error {
 }
 
 func (d *DomainWrapper) ScanFromRows(rows *sql.Rows) error {
-	return rows.Scan(&d.ID, &d.Name, &d.AccountID, &d.CreatedAt, &d.UpdatedAt)
+	return rows.Scan(
+		&d.ID,
+		&d.Name,
+		&d.AccountID,
+		&d.CreatedAt,
+		&d.UpdatedAt,
+		&d.AcmeEnabled,
+		&d.AcmeChallengeType,
+		&d.AcmeDnsProvider,
+		&d.AcmeDnsCredentialsRef,
+	)
 }
 
 func (c *CertificateWrapper) ScanFromRows(rows *sql.Rows) error {
@@ -663,7 +693,7 @@ func PopulateStructWithTables(a *App) error {
 
 	// Populate the Domain table
 	domainWrapper := &DomainWrapper{Domain: &a.DBTables.Domain}
-	if err := populateTableFromDB(a, "SELECT id, name, account_id, created_at, updated_at FROM domain", domainWrapper); err != nil {
+	if err := populateTableFromDB(a, "SELECT id, name, account_id, created_at, updated_at, acme_enabled, acme_challenge_type, acme_dns_provider, acme_dns_credentials_ref FROM domain", domainWrapper); err != nil {
 		return err
 	}
 

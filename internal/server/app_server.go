@@ -38,6 +38,7 @@ type DBTables struct {
 	Domain      db.Domain      `sql:"domain"`
 	Certificate db.Certificate `sql:"certificate"`
 	ProxyRoute  db.ProxyRoute  `sql:"proxy_route"`
+	AcmeAccount db.AcmeAccount `sql:"acme_account"`
 }
 
 // GetConfig returns the configuration

@@ -111,63 +111,34 @@ func (p *Proxy) scanContainersAndCheckCertificates() error {
 
 		// Check certificates for each domain
 		for _, domain := range domains {
-			// Check certificate for the full domain
-			hasCert, certType := p.checkCertificateInCache(domain)
+			// With the refactored CertificateManager, we don't need to manually check
+			// the cache here. We can just attempt to ensure a certificate exists
+			// by calling requestDomainCertificate, which delegates to GetCertificate.
+			// GetCertificate will use autocert's cache and request a new cert only if needed.
 
-			if certType == "staging" && p.config.LetsEncryptMode == "production" {
-				logger.Info("Found staging certificate but production mode is enabled",
-					"domain", domain,
-					"action", "will request new production certificate")
-			}
+			logger.Debug("Ensuring certificate exists for domain",
+				"domain", domain,
+				"container", containerName)
 
-			if hasCert {
-				logger.Debug("Certificate exists for domain",
-					"domain", domain,
-					"container", containerName)
-			} else {
-				logger.Info("Certificate not found in cache, requesting",
-					"domain", domain,
-					"container", containerName)
+			// Request certificate (non-blocking).
+			// GetCertificate handles checking cache/validity and requesting if necessary.
+			go p.requestDomainCertificate(domain) // Simplified call
 
-				// Request certificate (non-blocking)
-				go func(domain string) {
-					// Set flag to indicate we're processing a specific domain
-					p.processingSpecificDomain = true
-					// Try to request certificate for domain
-					p.requestDomainCertificate(domain)
-					// Reset flag when done
-					p.processingSpecificDomain = false
-				}(domain)
-			}
-
-			// If this is a subdomain, check the parent domain too
+			// If this is a subdomain, ensure the parent domain cert exists too
 			parts := strings.Split(domain, ".")
 			if len(parts) >= 3 {
-				// This is a subdomain (e.g., sub.domain.com)
 				parentDomain := strings.Join(parts[1:], ".")
 
 				// Only check parent domain if it's not an ordinary TLD
-				if len(parts) > 2 && !isCommonTLD(parts[len(parts)-1]) {
-					hasCert, certType := p.checkCertificateInCache(parentDomain)
-					if certType == "staging" && p.config.LetsEncryptMode == "production" {
-						logger.Info("Found staging certificate but production mode is enabled",
-							"domain", parentDomain,
-							"action", "will request new production certificate")
-					}
-					if !hasCert {
-						logger.Info("Certificate not found for parent domain",
-							"domain", parentDomain,
-							"container", containerName)
+				// and not the same as the root domain (to avoid redundant checks)
+				if len(parts) > 2 && !isCommonTLD(parts[len(parts)-1]) && parentDomain != p.app.GetConfig().Http.Domain {
+					logger.Debug("Ensuring certificate exists for parent domain",
+						"parent_domain", parentDomain,
+						"original_domain", domain,
+						"container", containerName)
 
-						// Request certificate for parent domain also
-						go func(domain string) {
-							// Set flag to indicate we're processing a specific domain
-							p.processingSpecificDomain = true
-							p.requestDomainCertificate(domain)
-							// Reset flag when done
-							p.processingSpecificDomain = false
-						}(parentDomain)
-					}
+					// Request certificate for parent domain also
+					go p.requestDomainCertificate(parentDomain) // Simplified call
 				}
 			}
 		}

@@ -134,11 +134,8 @@ func NewProxyCommand(a *server.App) *cobra.Command {
 			}
 
 			// List routes from the database
-			rows, err := a.DB.Query(`
-				SELECT d.name, pr.container_id, pr.container_ip, pr.container_port, pr.active
-				FROM proxy_route pr
-				JOIN domain d ON pr.domain_id = d.id
-			`)
+			// Use the query from the instantiated proxy queries
+			rows, err := a.DB.Query(p.Queries.GetAllRoutes)
 			if err != nil {
 				log.Fatal("Failed to query routes:", err)
 			}
@@ -150,9 +147,11 @@ func NewProxyCommand(a *server.App) *cobra.Command {
 
 			var count int
 			for rows.Next() {
-				var domain, containerID, containerIP, containerPort string
+				// Adjust variables to match the columns selected by GetAllRoutes
+				var id, domain, containerID, containerIP, containerPort, protocol, path string
 				var active bool
-				if err := rows.Scan(&domain, &containerID, &containerIP, &containerPort, &active); err != nil {
+				// Adjust scan targets
+				if err := rows.Scan(&id, &domain, &containerID, &containerIP, &containerPort, &protocol, &path, &active); err != nil {
 					log.Fatal("Failed to scan row:", err)
 				}
 
