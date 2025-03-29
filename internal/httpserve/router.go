@@ -146,7 +146,8 @@ func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
 	e.GET(adminPath+"/login/oauth/github", func(c echo.Context) error {
 		return handlers.StartOAuthGithub(c, a)
 	})
-	e.GET(adminPath+"/login/oauth/callback", func(c echo.Context) error {
+	e.GET("/callback", func(c echo.Context) error {
+		log.Debug("OAuth callback endpoint hit", "path", c.Path(), "query", c.QueryString())
 		return handlers.OAuthCallback(c, a)
 	})
 	e.GET(adminPath+"/logout", func(c echo.Context) error {

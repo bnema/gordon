@@ -1,0 +1,5 @@
+	            <div class="w-full">
+	              <a 
+	                href="login/oauth/github" 
+	                class="btn btn-secondary w-full"
+	              > 
