@@ -11,8 +11,6 @@ import (
 
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/logger"
-	"github.com/labstack/echo/v4"
-	"golang.org/x/crypto/acme"
 )
 
 // This file contains server operations functions for the proxy.
@@ -153,204 +151,11 @@ func (p *Proxy) Start() error {
 	// Configure routes
 	p.configureRoutes()
 
-	// Configure HTTP server to handle Let's Encrypt HTTP-01 challenges
-	// and redirect everything else to HTTPS
-	p.httpServer.Any("/.well-known/acme-challenge/*", echo.WrapHandler(p.certManager.HTTPHandler(nil)))
-
-	// Create a custom HTTPS server with proper TLS config
-	httpsServer := &http.Server{
-		Addr:    fmt.Sprintf(":%s", p.config.Port),
-		Handler: p.httpsServer,
-		TLSConfig: &tls.Config{
-			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				// Log SNI information in debug mode
-				if hello.ServerName != "" {
-					logger.Debug("TLS handshake with SNI",
-						"server_name", hello.ServerName)
-				}
-
-				// Verify certificate manager is properly initialized
-				if p.certManager == nil {
-					logger.Error("TLS certificate manager is nil during handshake - certificate initialization failed",
-						"server_name", hello.ServerName,
-						"solution", "Check certificate configuration and logs for setup errors")
-
-					// Use fallback certificate if we have one
-					if p.fallbackCert != nil {
-						logger.Warn("Using fallback self-signed certificate due to missing certificate manager",
-							"server_name", hello.ServerName)
-						return p.fallbackCert, nil
-					}
-
-					return nil, fmt.Errorf("certificate manager not initialized")
-				}
-
-				// Try to get the certificate from the autocert manager
-				logger.Debug("Attempting to get certificate from manager",
-					"server_name", hello.ServerName,
-					"has_fallback", p.fallbackCert != nil)
-
-				// First try checking if we have a valid certificate in cache
-				cacheKey := "cert-" + hello.ServerName
-				certCache := p.certManager.Cache
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-
-				if certCache != nil {
-					certData, err := certCache.Get(ctx, cacheKey)
-					if err == nil && len(certData) > 0 {
-						logger.Debug("Found certificate in cache", "domain", hello.ServerName)
-						// Use directly if found in cache - skip the potentially slower autocert.Manager GetCertificate
-						keyKey := "key-" + hello.ServerName
-						keyData, keyErr := certCache.Get(ctx, keyKey)
-						if keyErr == nil && len(keyData) > 0 {
-							cert, err := tls.X509KeyPair(certData, keyData)
-							if err == nil {
-								logger.Debug("Successfully loaded certificate from cache",
-									"domain", hello.ServerName)
-								return &cert, nil
-							}
-							logger.Error("Failed to create X509KeyPair from cache",
-								"domain", hello.ServerName,
-								"error", err)
-						} else {
-							logger.Error("Certificate found in cache but key is missing or invalid",
-								"domain", hello.ServerName,
-								"key_error", keyErr)
-						}
-					} else if err != nil {
-						logger.Debug("Certificate not found in cache during TLS handshake",
-							"domain", hello.ServerName,
-							"error", err)
-
-						// Check if we have it on disk but not in cache (unlikely after preloading)
-						hasOnDisk, certType := p.checkCertificateInFilesystem(hello.ServerName)
-						if hasOnDisk {
-							logger.Warn("Certificate found on disk but not in cache - this should not happen after preloading",
-								"domain", hello.ServerName,
-								"type", certType,
-								"solution", "Check preloadCertificates implementation")
-						}
-					}
-				}
-
-				// If not in cache, use the standard GetCertificate method
-				// Let's Encrypt may be contacted if no certificate exists
-				cert, err := p.certManager.GetCertificate(hello)
-
-				if err != nil {
-					logger.Error("Error getting certificate from manager",
-						"server_name", hello.ServerName,
-						"error", err)
-
-					// Check for rate limit errors
-					if strings.Contains(err.Error(), "too many certificates") ||
-						strings.Contains(err.Error(), "rateLimited") {
-						logger.Error("Let's Encrypt rate limit hit during TLS handshake",
-							"domain", hello.ServerName,
-							"solution", "Wait for rate limit to expire or manually add certificate")
-					}
-
-					// Try manually loading certificate files directly as a fallback before using fallback cert
-					if manualCert, manualErr := p.manuallyLoadCertificate(hello.ServerName); manualErr == nil {
-						logger.Info("Successfully loaded certificate manually as fallback",
-							"domain", hello.ServerName)
-						return manualCert, nil
-					} else {
-						logger.Debug("Manual certificate loading also failed",
-							"domain", hello.ServerName,
-							"error", manualErr)
-					}
-
-					// If we can't get a certificate and we have a fallback, use it for the admin domain
-					if hello.ServerName == p.app.GetConfig().Http.FullDomain() && p.fallbackCert != nil {
-						logger.Debug("Using fallback certificate for admin domain",
-							"domain", hello.ServerName,
-							"error", err)
-						return p.fallbackCert, nil
-					}
-				} else if cert == nil {
-					logger.Error("Certificate manager returned nil certificate without error",
-						"server_name", hello.ServerName)
-
-					// Try manually loading certificate files directly as a fallback
-					if manualCert, manualErr := p.manuallyLoadCertificate(hello.ServerName); manualErr == nil {
-						logger.Info("Successfully loaded certificate manually when autocert returned nil",
-							"domain", hello.ServerName)
-						return manualCert, nil
-					}
-
-					// If we can't get a certificate and we have a fallback, use it for the admin domain
-					if hello.ServerName == p.app.GetConfig().Http.FullDomain() && p.fallbackCert != nil {
-						logger.Debug("Using fallback certificate for admin domain",
-							"domain", hello.ServerName)
-						return p.fallbackCert, nil
-					}
-				} else {
-					logger.Debug("Successfully obtained certificate from manager",
-						"server_name", hello.ServerName)
-				}
-
-				return cert, err
-			},
-			MinVersion: tls.VersionTLS12,
-			// Add server name to use when client doesn't send SNI
-			ServerName: p.app.GetConfig().Http.FullDomain(),
-			// Add support for TLS-ALPN-01 challenges
-			NextProtos: []string{acme.ALPNProto},
-		},
-		// Add increased timeouts to prevent hanging connections
-		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		ReadHeaderTimeout: 30 * time.Second, // Add header timeout
+	// Configure HTTPS and HTTP servers using our refactored method
+	if err := p.StartHTTPSServer(); err != nil {
+		logger.Error("Failed to start HTTPS server", "error", err)
+		return err
 	}
-
-	// Store the HTTPS server for later use in Stop()
-	p.httpsServer.Server = httpsServer
-
-	// Create a custom HTTP server
-	httpServer := &http.Server{
-		Addr:         fmt.Sprintf(":%s", p.config.HttpPort),
-		Handler:      p.httpServer,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
-
-	p.serverStarted = true
-
-	// Start HTTPS server with more error details
-	go func() {
-		logger.Info("Starting HTTPS server", "address", httpsServer.Addr)
-		// Using empty strings for cert and key files since we're using GetCertificate
-		if err := httpsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTPS server failed", "error", err, "address", httpsServer.Addr)
-
-			// Print more diagnostic information
-			if strings.Contains(err.Error(), "bind: address already in use") {
-				logger.Error("Port 443 is already in use by another process. Check if another web server is running.",
-					"solution", "Stop other services using port 443 or configure Gordon to use a different HTTPS port")
-			} else if strings.Contains(err.Error(), "permission denied") {
-				logger.Error("Permission denied when binding to port 443. This often happens when running without root privileges.",
-					"solution", "Use setcap to allow binding to privileged ports or run in a container with proper port mapping")
-			} else if strings.Contains(err.Error(), "certificate") {
-				logger.Error("Certificate-related error when starting HTTPS server",
-					"solution", "Check certificate files and permissions in the certificate directory")
-			}
-		}
-	}()
-
-	// Start HTTP server
-	go func() {
-		logger.Info("Starting HTTP server", "address", httpServer.Addr)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTP server failed", "error", err)
-		}
-	}()
-
-	// Test admin connection after server starts
-	go p.TestAdminConnectionLater()
 
 	return nil
 }
@@ -381,12 +186,12 @@ func (p *Proxy) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	// Shutdown HTTP server if it's running
-	if p.httpServer != nil {
-		if err := p.httpServer.Shutdown(ctx); err != nil {
-			logger.Error("Failed to gracefully shutdown HTTP server", "error", err)
-		}
-	}
+	// Removed HTTP server shutdown logic
+	// if p.httpServer != nil {
+	// 	if err := p.httpServer.Shutdown(ctx); err != nil {
+	// 		logger.Error("Failed to gracefully shutdown HTTP server", "error", err)
+	// 	}
+	// }
 
 	// Shutdown HTTPS server if it's running
 	if p.httpsServer != nil {
@@ -536,9 +341,9 @@ func (p *Proxy) checkExternalPortAccess() {
 	}
 
 	// Verify TLS settings are consistent
-	if p.certManager == nil {
+	if p.certificateManager == nil { // Updated check
 		logger.Error("Certificate manager is nil - TLS will not work correctly",
-			"solution", "Check setupCertManager implementation")
+			"solution", "Check NewProxy implementation and logs")
 	}
 
 	// First try a basic TCP connection to port 443 to test if it's open
@@ -654,3 +459,114 @@ func (p *Proxy) checkExternalPortAccess() {
 // 	logger.Debug("Could not auto-detect Gordon container, using default name", "container_name", "gordon")
 // 	return "gordon"
 // }
+
+// StartHTTPSServer starts the HTTPS server
+func (p *Proxy) StartHTTPSServer() error {
+	logger.Info("Starting HTTPS server",
+		"port", p.config.Port,
+		"mode", p.config.LetsEncryptMode)
+
+	// Verify the certificate manager is initialized (it's done in NewProxy now)
+	if p.certificateManager == nil {
+		// This should ideally not happen if NewProxy succeeded
+		logger.Error("Certificate manager is nil in StartHTTPSServer, cannot start HTTPS")
+		return fmt.Errorf("certificate manager not initialized")
+	}
+	logger.Info("Using new certificate management system")
+
+	// Setup TLS configuration
+	tlsConfig := &tls.Config{
+		// Use the helper function that gets the GetCertificate func from the manager
+		GetCertificate: p.getTLSCertificateFunc(),
+		// Ensure we use TLS 1.2 or higher
+		MinVersion: tls.VersionTLS12,
+		// Optimize cipher suites for security and performance
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+		},
+		// Use server's preferred ciphersuite
+		PreferServerCipherSuites: true,
+		// Enable HTTP/2
+		NextProtos: []string{"h2", "http/1.1"},
+		// Add server name to use when client doesn't send SNI
+		ServerName: p.app.GetConfig().Http.FullDomain(),
+	}
+
+	// Removed setup for ACME challenge handler on the persistent HTTP server,
+	// as it's no longer running. Lego's temporary server will handle challenges.
+	// p.httpServer.Any("/.well-known/acme-challenge/*", echo.WrapHandler(p.getACMEHTTPHandler()))
+
+	// Create a custom HTTPS server with proper TLS config
+	httpsServer := &http.Server{
+		Addr:      fmt.Sprintf(":%s", p.config.Port),
+		Handler:   p.httpsServer,
+		TLSConfig: tlsConfig,
+		// Add increased timeouts to prevent hanging connections
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: 30 * time.Second, // Add header timeout
+	}
+
+	// Store the HTTPS server for later use in Stop()
+	p.httpsServer.Server = httpsServer
+
+	// // Create a custom HTTP server
+	// httpServer := &http.Server{
+	// 	Addr:         fmt.Sprintf(":%s", p.config.HttpPort),
+	// 	Handler:      p.httpServer,
+	// 	ReadTimeout:  30 * time.Second,
+	// 	WriteTimeout: 30 * time.Second,
+	// 	IdleTimeout:  120 * time.Second,
+	// }
+
+	p.serverStarted = true
+
+	// httpServer is no longer needed as ACME HTTP-01 uses its own temporary server
+	// httpServer := &http.Server{
+	// 	Addr:         fmt.Sprintf(":%s", p.config.HttpPort),
+	// 	Handler:      p.httpServer,
+	// 	ReadTimeout:  30 * time.Second,
+	// 	WriteTimeout: 30 * time.Second,
+	// 	IdleTimeout:  120 * time.Second,
+	// }
+
+	// Start HTTPS server with more error details
+	go func() {
+		logger.Info("Starting HTTPS server", "address", httpsServer.Addr)
+		// Using empty strings for cert and key files since we're using GetCertificate
+		if err := httpsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			logger.Error("HTTPS server failed", "error", err, "address", httpsServer.Addr)
+
+			// Print more diagnostic information
+			if strings.Contains(err.Error(), "bind: address already in use") {
+				logger.Error("Port 443 is already in use by another process. Check if another web server is running.",
+					"solution", "Stop other services using port 443 or configure Gordon to use a different HTTPS port")
+			} else if strings.Contains(err.Error(), "permission denied") {
+				logger.Error("Permission denied when binding to port 443. This often happens when running without root privileges.",
+					"solution", "Use setcap to allow binding to privileged ports or run in a container with proper port mapping")
+			} else if strings.Contains(err.Error(), "certificate") {
+				logger.Error("Certificate-related error when starting HTTPS server",
+					"solution", "Check certificate files and permissions in the certificate directory")
+			}
+		}
+	}()
+
+	// Test admin connection after server starts
+	go p.TestAdminConnectionLater()
+
+	return nil
+}
+
+// getTLSCertificateFunc returns a function that gets certificates for TLS handshakes
+func (p *Proxy) getTLSCertificateFunc() func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		logger.Debug("Getting certificate for TLS handshake", "server_name", hello.ServerName)
+		return p.certificateManager.GetCertificateForTLS(hello)
+	}
+}

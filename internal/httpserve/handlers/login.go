@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -257,88 +258,119 @@ func getSession(c echo.Context) (*sessions.Session, error) {
 
 // handleUser handles the user creation or update
 func handleUser(c echo.Context, a *server.App, accessToken, browserInfo string, userInfo *db.GithubUserInfo) (*db.User, string, *db.Sessions, error) {
-	logger.Debug("Starting handleUser function", "github_login", userInfo.Login, "github_email", userInfo.Emails[0])
-	userExists, err := queries.CheckDBUserExists(a.DB)
+	logger.Debug("Starting handleUser function", "github_login", userInfo.Login)
+
+	// --- Check provider count ---
+	providerCount, err := queries.CountProviders(a.DB)
 	if err != nil {
-		logger.Error("Error checking if user exists", "error", err)
-		return nil, "", nil, fmt.Errorf("could not check if user exists: %w", err)
+		logger.Error("Error checking provider count", "error", err)
+		return nil, "", nil, fmt.Errorf("could not check provider count: %w", err)
 	}
+	logger.Debug("Provider count check result", "count", providerCount)
 
-	logger.Debug("User exists check result", "user_exists", userExists)
+	// --- Case 1: First ever GitHub login ---
+	if providerCount == 0 {
+		logger.Info("First GitHub login detected. Linking to seeded admin account.")
 
-	if !userExists {
-		// if it is a new user creation we compare the gordon token
-		logger.Debug("No user exists, attempting to create new user")
+		// Compare the Gordon token (still need admin token for the *very first* setup)
 		err := CompareGordonToken(c, a)
 		if err != nil {
-			logger.Error("Token comparison failed", "error", err)
-			return nil, "", nil, echo.NewHTTPError(http.StatusUnauthorized, "Token is empty or not valid")
+			logger.Error("Admin token comparison failed for first login", "error", err)
+			return nil, "", nil, echo.NewHTTPError(http.StatusUnauthorized, "Admin token is empty or not valid for initial setup")
 		}
-		logger.Debug("Token comparison successful, proceeding with user creation")
+		logger.Debug("Admin token comparison successful for first login.")
 
-		user, accountID, session, err := createUser(a, accessToken, browserInfo, userInfo)
+		// --- Link to Seeded Admin ---
+		seededUser, seededAccountID, session, err := linkProviderToSeededAdmin(a, accessToken, browserInfo, userInfo)
 		if err != nil {
-			logger.Error("Failed to create user", "error", err)
+			logger.Error("Failed to link provider to seeded admin", "error", err)
 			return nil, "", nil, err
 		}
-		logger.Info("Successfully created new user", "user_id", user.ID, "user_name", user.Name, "account_id", accountID)
-		return user, accountID, session, nil
+		logger.Info("Successfully linked GitHub provider to seeded admin account", "user_id", seededUser.ID, "account_id", seededAccountID)
+		return seededUser, seededAccountID, session, nil
 	}
 
-	if userExists {
-		// if it is an existing user we compare the login and email to see if it is the same user
-		logger.Debug("User exists, checking if GitHub info matches existing user")
-		_, isGoodUser, err := queries.CheckDBUserIsGood(a.DB, userInfo)
+	// --- Case 2: Subsequent GitHub logins ---
+	if providerCount > 0 {
+		logger.Debug("Existing provider(s) found. Checking if incoming GitHub login matches.")
+
+		// --- Check if incoming GitHub user matches an existing provider ---
+		existingUser, existingAccountID, err := queries.GetUserByProviderLogin(a.DB, "github", userInfo.Login)
 		if err != nil {
-			logger.Error("Error checking if user is good", "error", err)
-			return nil, "", nil, fmt.Errorf("could not check if user is good: %w", err)
-		}
-
-		logger.Debug("User check result", "is_good_user", isGoodUser)
-
-		if !isGoodUser {
-			logger.Warn("Unauthorized user", "github_login", userInfo.Login)
-			return nil, "", nil, echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized user")
-		}
-
-		if isGoodUser {
-			// Update the user
-			logger.Debug("User is authorized, updating session")
-			updatedUser, accountID, session, err := updateUser(a, accessToken, browserInfo, userInfo)
-			if err != nil {
-				logger.Error("Could not update user", "error", err)
-				return nil, "", nil, fmt.Errorf("could not update user: %w", err)
+			// Handle sql.ErrNoRows specifically: means this GitHub user is not linked yet.
+			if err == sql.ErrNoRows {
+				logger.Warn("Unauthorized GitHub user trying to log in (no matching provider found).", "github_login", userInfo.Login)
+				// For now, deny access. Future: could allow multiple users if desired.
+				return nil, "", nil, echo.NewHTTPError(http.StatusUnauthorized, "This GitHub account is not authorized.")
 			}
-			logger.Info("Successfully updated user session", "user_id", updatedUser.ID, "account_id", accountID)
-			return updatedUser, accountID, session, nil
+			// Handle other potential database errors
+			logger.Error("Error checking for existing provider by login", "error", err)
+			return nil, "", nil, fmt.Errorf("could not check existing provider: %w", err)
 		}
+		logger.Debug("Incoming GitHub login matches existing user.", "github_login", userInfo.Login, "user_id", existingUser.ID, "account_id", existingAccountID)
+
+		// --- Update Session for Existing User ---
+		// The user is valid and matches the existing provider, just update their session.
+		session, err := queries.CreateOrUpdateSession(a.DB, existingAccountID, accessToken, browserInfo)
+		if err != nil {
+			logger.Error("Could not create/update session for existing user", "error", err)
+			return nil, "", nil, fmt.Errorf("could not update session: %w", err)
+		}
+		logger.Info("Successfully created/updated session for existing user", "user_id", existingUser.ID, "account_id", existingAccountID)
+		return existingUser, existingAccountID, session, nil
 	}
 
-	logger.Error("Could not handle user - reached end of function without returning")
+	// Should not be reached if logic is correct
+	logger.Error("Could not handle user - reached end of function unexpectedly", "provider_count", providerCount)
 	return nil, "", nil, fmt.Errorf("could not handle user")
 }
 
-// createUser creates a new user in the database
-func createUser(a *server.App, accessToken, browserInfo string, userInfo *db.GithubUserInfo) (*db.User, string, *db.Sessions, error) {
-	logger.Debug("Starting createUser function", "github_login", userInfo.Login)
-	user, accountID, session, err := queries.CreateUser(a.DB, accessToken, browserInfo, userInfo)
-	if err != nil {
-		logger.Error("Failed to create user in database", "error", err)
-		return nil, "", nil, fmt.Errorf("could not create user: %w", err)
-	}
-	logger.Info("User created successfully", "user_id", user.ID, "name", user.Name, "account_id", accountID)
-	return user, accountID, session, nil
-}
+// --- NEW FUNCTION: linkProviderToSeededAdmin ---
+// Finds the seeded admin, updates its details, creates the provider and session.
+func linkProviderToSeededAdmin(a *server.App, accessToken, browserInfo string, userInfo *db.GithubUserInfo) (*db.User, string, *db.Sessions, error) {
+	logger.Debug("Starting linkProviderToSeededAdmin", "github_login", userInfo.Login)
 
-// updateUser updates an existing user in the database
-func updateUser(a *server.App, accessToken, browserInfo string, userInfo *db.GithubUserInfo) (*db.User, string, *db.Sessions, error) {
-	user, accountID, session, err := queries.UpdateUser(a.DB, accessToken, browserInfo, userInfo)
+	// 1. Get the seeded user and account ID (assuming it's the only one)
+	seededUser, seededAccountID, err := queries.GetFirstUserAndAccount(a.DB)
 	if err != nil {
-		logger.Error("Could not update user", "error", err)
-		return nil, "", nil, fmt.Errorf("could not update user: %w", err)
+		logger.Error("Failed to get seeded user/account", "error", err)
+		return nil, "", nil, fmt.Errorf("critical: could not find seeded admin account: %w", err)
 	}
-	logger.Info("User updated successfully", "user_id", user.ID, "account_id", accountID)
-	return user, accountID, session, nil
+	logger.Debug("Found seeded admin", "user_id", seededUser.ID, "account_id", seededAccountID, "original_email", seededUser.Email)
+
+	// 2. Update the seeded user's details with GitHub info
+	newEmail := seededUser.Email // Keep original unless GitHub provides one
+	if len(userInfo.Emails) > 0 && userInfo.Emails[0] != "" {
+		newEmail = userInfo.Emails[0]
+	}
+	newName := userInfo.Login
+
+	err = queries.UpdateUserDetails(a.DB, seededUser.ID, newName, newEmail)
+	if err != nil {
+		logger.Error("Failed to update seeded user details", "user_id", seededUser.ID, "error", err)
+		return nil, "", nil, fmt.Errorf("could not update seeded user details: %w", err)
+	}
+	logger.Info("Updated seeded user details", "user_id", seededUser.ID, "new_name", newName, "new_email", newEmail)
+	seededUser.Name = newName
+	seededUser.Email = newEmail
+
+	// 3. Create the Provider record linked to the seeded account
+	err = queries.InsertProviderForAccount(a.DB, seededAccountID, "github", userInfo)
+	if err != nil {
+		logger.Error("Failed to insert provider record for seeded account", "account_id", seededAccountID, "error", err)
+		return nil, "", nil, fmt.Errorf("could not insert provider record: %w", err)
+	}
+	logger.Info("Inserted provider record", "account_id", seededAccountID, "provider", "github", "login", userInfo.Login)
+
+	// 4. Create/Update the Session record linked to the seeded account
+	session, err := queries.CreateOrUpdateSession(a.DB, seededAccountID, accessToken, browserInfo)
+	if err != nil {
+		logger.Error("Failed to create/update session for seeded account", "account_id", seededAccountID, "error", err)
+		return nil, "", nil, fmt.Errorf("could not create/update session: %w", err)
+	}
+	logger.Info("Created/Updated session record", "account_id", seededAccountID, "session_id", session.ID)
+
+	return seededUser, seededAccountID, session, nil
 }
 
 // setSessionValues sets the session values for the user
