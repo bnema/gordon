@@ -756,30 +756,6 @@ func (c *Config) GetToken() string {
 	return c.General.JwtToken
 }
 
-func isWSL() bool {
-	logger.Debug("isWSL: Checking if running in WSL")
-	// Check if /proc/version exists
-	_, err := os.Stat("/proc/version")
-	if err != nil {
-		logger.Debug("isWSL: /proc/version does not exist, not WSL", "error", err)
-		return false
-	}
-
-	// Read /proc/version file
-	logger.Debug("isWSL: Reading /proc/version file")
-	data, err := os.ReadFile("/proc/version")
-	if err != nil {
-		logger.Debug("isWSL: Failed to read /proc/version", "error", err)
-		return false
-	}
-
-	// Convert to string and check if it contains "Microsoft" or "WSL"
-	version := string(data)
-	isWsl := strings.Contains(strings.ToLower(version), "microsoft") || strings.Contains(strings.ToLower(version), "wsl")
-	logger.Debug("isWSL: WSL detection result", "isWsl", isWsl)
-	return isWsl
-}
-
 func (c *HttpConfig) Protocol() string {
 	if c.Https {
 		return "https"
