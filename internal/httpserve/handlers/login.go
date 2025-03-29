@@ -128,18 +128,21 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 // initiateGithubOAuthFlow starts a new GitHub OAuth flow
 func initiateGithubOAuthFlow(c echo.Context, a *server.App) error {
 	clientID := "" // IDK why it needs that even empty, but it does
+	// Use the corrected generation function
 	redirectDomain := a.GenerateOauthCallbackURL()
+
 	encodedState := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
 
-	// Redirect to GitHub's OAuth endpoint to grab the OAuth access
+	// Redirect to GitHub's OAuth endpoint via the proxy
 	proxyURL := a.Config.Build.ProxyURL
 	oauthURL := fmt.Sprintf(
 		"%s/github/authorize?client_id=%s&redirect_uri=%s&state=%s",
 		proxyURL,
 		clientID,
-		redirectDomain,
+		redirectDomain, // Pass the correctly generated public URL to the proxy
 		encodedState,
 	)
+	logger.Debug("Initiating OAuth flow, redirecting to proxy", "proxy_url", oauthURL)
 	return c.Redirect(http.StatusFound, oauthURL)
 }
 
@@ -162,7 +165,7 @@ func OAuthCallback(c echo.Context, a *server.App) error {
 	// update the struct with the new access token
 	a.DBTables.Sessions.AccessToken = accessToken
 
-	// Compare the state parameter with the redirect domain
+	// Compare the state parameter with the correctly generated redirect domain
 	redirectDomain := a.GenerateOauthCallbackURL()
 	encodedRedirectDomain := base64.StdEncoding.EncodeToString([]byte("redirectDomain:" + redirectDomain))
 	if encodedState != encodedRedirectDomain {
@@ -196,10 +199,11 @@ func OAuthCallback(c echo.Context, a *server.App) error {
 	logger.Debug("Before setting session values", "account_id", accountID, "session", session)
 	err = setSessionValues(c, sess, accountID, session)
 	if err != nil {
-		logger.Error("Failed to set session values", "error", err)
-		return err
+		// Error is already logged within setSessionValues
+		return err // Return immediately if saving failed
 	}
-	logger.Info("Session values set successfully")
+	// Log success ONLY after setSessionValues returns without error
+	logger.Info("Session values set and saved successfully")
 
 	logger.Info("OAuth callback successful, redirecting to", "path", redirectPath)
 	return c.Redirect(http.StatusFound, redirectPath)
@@ -346,6 +350,7 @@ func setSessionValues(c echo.Context, sess *sessions.Session, accountID string, 
 	sess.Values["isOnline"] = session.IsOnline
 
 	if err := sess.Save(c.Request(), c.Response()); err != nil {
+		logger.Error("Failed to save session cookie", "error", err, "sessionID", session.ID)
 		return fmt.Errorf("could not save session: %w", err)
 	}
 	return nil

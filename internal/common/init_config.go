@@ -103,6 +103,7 @@ var (
 	renewBefore                           = 30     // days
 	gracePeriod                           = 30     // seconds
 	defaultLogLevel                       = "info" // Default log level
+	defaultHttpHttps                      = true   // Default to true
 	disableRateLimit                      = false
 	detectUpstreamProxy                   = false // Default to disabled
 	skipCertificates                      = false // Default to disabled
@@ -142,6 +143,15 @@ func applyDefaultsToConfig(config *Config) bool {
 		logger.Debug("Applied default value for General.StorageDir", "value", config.General.StorageDir)
 		defaultsApplied = true
 	}
+
+	// Apply defaults to HttpConfig
+	// Check if Https is NOT explicitly set to true (i.e., it's the zero value 'false')
+	if !config.Http.Https {
+		config.Http.Https = defaultHttpHttps // Use the defined default variable
+		logger.Debug("Applied default value for Http.Https", "value", defaultHttpHttps)
+		defaultsApplied = true
+	}
+	// No defaults for Http.Port, Http.Domain, Http.SubDomain as they require explicit config
 
 	// Apply defaults to Admin config
 	if config.Admin.Path == "" {
