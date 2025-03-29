@@ -15,90 +15,61 @@ import (
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/logger"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/sessions"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 )
 
-var urlToken string
-
-// compareGordonToken compares the token from the URL query parameter with the one from the config.yml
-func CompareGordonToken(c echo.Context, a *server.App) error {
-	logger.Debug("Starting token comparison")
-	configToken, err := a.Config.GetToken()
-	if err != nil {
-		logger.Error("Error retrieving token from config", "error", err)
-		return err
-	}
-
-	logger.Debug("Comparing tokens", "url_token_exists", urlToken != "", "config_token_exists", configToken != "")
-	if urlToken != configToken {
-		logger.Warn("Token mismatch or empty", "url_token_empty", urlToken == "")
-		return fmt.Errorf("token is empty or not valid")
-	}
-
-	logger.Debug("Token validation successful")
-	return nil
+// --- JWT Claims ---
+type JwtCustomClaims struct {
+	AccountID string `json:"account_id"`
+	jwt.RegisteredClaims
 }
 
-// HandleTokenSubmission handles the token form submission
-func HandleTokenSubmission(c echo.Context, a *server.App) error {
-	// Get the token from the form
-	formToken := c.FormValue("token")
-	if formToken == "" {
-		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login?error=empty_token")
-	}
-
-	// Store the token in the urlToken variable for compatibility with existing code
-	urlToken = formToken
-
-	// Validate the token
-	configToken, err := a.Config.GetToken()
-	if err != nil {
-		logger.Debug("Error getting token from config", "error", err)
-		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login?error=server_error")
-	}
-
-	if urlToken != configToken {
-		logger.Debug("Invalid token provided", "token", urlToken)
-		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login?error=invalid_token")
-	}
-
-	// Redirect to GitHub OAuth
-	return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login/oauth/github")
-}
-
-// RenderLoginPage renders the login.html template
+// RenderLoginPage renders the login.html template (or redirects if already logged in)
+// NOTE: This function might be superseded by RenderTemplLoginPage depending on router setup.
+// Keeping it for now, but it needs adjustment if used.
 func RenderLoginPage(c echo.Context, a *server.App) error {
-	// Check for token in query param for backward compatibility
-	urlToken = c.QueryParam("token")
+	// Check if user is already authenticated via session
+	sess, _ := getSession(c) // Ignore error for check
+	if sess != nil && sess.Values != nil {
+		if authenticated, ok := sess.Values["authenticated"].(bool); ok && authenticated {
+			// If authenticated, redirect to admin panel
+			logger.Debug("User already authenticated, redirecting to admin panel")
+			return c.Redirect(http.StatusFound, a.Config.Admin.Path)
+		}
+	}
 
-	// Check for error message
+	// Check for error message from previous attempts (e.g., GitHub auth failure)
 	errorMsg := c.QueryParam("error")
 
 	data := map[string]interface{}{
 		"Title": "Login",
 		"Error": errorMsg,
+		// Add other necessary data for the template
 	}
 
 	// Navigate inside the fs.FS to get the template
+	// TODO: Verify the correct template path and name (e.g., "html/login/index.gohtml")
 	path := "html/login"
 	rendererData, err := render.GetHTMLRenderer(path, "index.gohtml", a.TemplateFS, a)
 	if err != nil {
-		return err
+		logger.Error("Failed to get HTML renderer for login page", "error", err)
+		return err // Or render a generic error page
 	}
 
 	renderedHTML, err := rendererData.Render(data, a)
 	if err != nil {
-		return err
+		logger.Error("Failed to render login page HTML", "error", err)
+		return err // Or render a generic error page
 	}
 
-	return c.HTML(200, renderedHTML)
+	return c.HTML(http.StatusOK, renderedHTML)
 }
 
 // StartOAuthGithub starts the Github OAuth flow.
-
 func StartOAuthGithub(c echo.Context, a *server.App) error {
 	logger.Info("Attempting to get an existing session")
 	sess, err := getSession(c)
@@ -215,7 +186,7 @@ func OAuthCallback(c echo.Context, a *server.App) error {
 	}
 	logger.Debug("Retrieved GitHub user details", "login", userInfo.Login, "email_count", len(userInfo.Emails))
 
-	user, accountID, session, err := handleUser(c, a, accessToken, browserInfo, userInfo)
+	user, accountID, session, err := handleUser(a, accessToken, browserInfo, userInfo)
 	if err != nil {
 		logger.Error("Failed to handle user", "error", err)
 		return err
@@ -257,7 +228,7 @@ func getSession(c echo.Context) (*sessions.Session, error) {
 }
 
 // handleUser handles the user creation or update
-func handleUser(c echo.Context, a *server.App, accessToken, browserInfo string, userInfo *db.GithubUserInfo) (*db.User, string, *db.Sessions, error) {
+func handleUser(a *server.App, accessToken, browserInfo string, userInfo *db.GithubUserInfo) (*db.User, string, *db.Sessions, error) {
 	logger.Debug("Starting handleUser function", "github_login", userInfo.Login)
 
 	// --- Check provider count ---
@@ -272,15 +243,8 @@ func handleUser(c echo.Context, a *server.App, accessToken, browserInfo string, 
 	if providerCount == 0 {
 		logger.Info("First GitHub login detected. Linking to seeded admin account.")
 
-		// Compare the Gordon token (still need admin token for the *very first* setup)
-		err := CompareGordonToken(c, a)
-		if err != nil {
-			logger.Error("Admin token comparison failed for first login", "error", err)
-			return nil, "", nil, echo.NewHTTPError(http.StatusUnauthorized, "Admin token is empty or not valid for initial setup")
-		}
-		logger.Debug("Admin token comparison successful for first login.")
-
 		// --- Link to Seeded Admin ---
+		// No token check needed anymore, proceed directly to linking.
 		seededUser, seededAccountID, session, err := linkProviderToSeededAdmin(a, accessToken, browserInfo, userInfo)
 		if err != nil {
 			logger.Error("Failed to link provider to seeded admin", "error", err)
@@ -488,5 +452,107 @@ func DeviceTokenRequest(c echo.Context, a *server.App) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to decode response"})
 	}
 
-	return c.JSON(http.StatusOK, tokenResp)
+	// --- Start JWT Generation ---
+	// Extract the access token from the response
+	githubAccessToken, ok := tokenResp["access_token"].(string)
+	if !ok || githubAccessToken == "" {
+		logger.Error("GitHub access token not found or invalid in device token response", "response", tokenResp)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to retrieve GitHub token"})
+	}
+	logger.Debug("Retrieved GitHub access token via device flow")
+
+	// Get GitHub user details using the access token
+	userInfo, err := githubGetUserDetailsWithToken(githubAccessToken)
+	if err != nil {
+		logger.Error("Failed to get GitHub user details using device flow token", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch GitHub user details"})
+	}
+	logger.Debug("Retrieved GitHub user details via device flow", "login", userInfo.Login)
+
+	// Find the user in the database based on GitHub login
+	_, accountID, err := queries.GetUserByProviderLogin(a.DB, "github", userInfo.Login)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			logger.Warn("Unauthorized GitHub user trying to get CLI token via device flow.", "github_login", userInfo.Login)
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "This GitHub account is not authorized."})
+		}
+		logger.Error("Error checking for existing provider by login during device flow", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database error during user lookup"})
+	}
+	logger.Info("Found matching user for device flow", "account_id", accountID, "github_login", userInfo.Login)
+
+	// Generate JWT
+	jwtToken, err := generateJWT(accountID, a.Config.General.JwtToken)
+	if err != nil {
+		logger.Error("Failed to generate JWT for device flow", "error", err, "account_id", accountID)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to generate authentication token"})
+	}
+	logger.Info("Generated JWT for CLI device flow", "account_id", accountID)
+
+	// Return the JWT
+	return c.JSON(http.StatusOK, map[string]string{"jwt_token": jwtToken})
+	// --- End JWT Generation ---
+}
+
+// githubGetUserDetailsWithToken gets user details using a provided token
+// (Similar to githubGetUserDetails but takes token as argument)
+func githubGetUserDetailsWithToken(accessToken string) (*db.GithubUserInfo, error) {
+	var userInfo *db.GithubUserInfo // Initialize userInfo
+
+	// Fetch user info
+	err := fetchGithubAPI("https://api.github.com/user", "Bearer "+accessToken, &userInfo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user info: %w", err)
+	}
+	if userInfo == nil {
+		return nil, fmt.Errorf("received nil user info from GitHub API")
+	}
+
+	// Fetch user emails
+	var emailObjects []struct {
+		Email string `json:"email"`
+	}
+	err = fetchGithubAPI("https://api.github.com/user/emails", "Bearer "+accessToken, &emailObjects)
+	if err != nil {
+		// Log email fetch error but continue, email might not be needed or primary
+		logger.Warn("Failed to fetch user emails from GitHub API", "error", err)
+	} else {
+		// Extract emails and populate the Emails field in userInfo
+		userInfo.Emails = []string{} // Ensure Emails slice is initialized
+		for _, emailObj := range emailObjects {
+			userInfo.Emails = append(userInfo.Emails, emailObj.Email)
+		}
+	}
+
+	return userInfo, nil
+}
+
+// generateJWT creates a new JWT token for the given account ID
+func generateJWT(accountID string, secret string) (string, error) {
+	if secret == "" {
+		return "", fmt.Errorf("JWT secret is not configured")
+	}
+	// Set custom claims
+	claims := &JwtCustomClaims{
+		AccountID: accountID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			// Set token expiration (e.g., 24 hours)
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24 * 30)), // 30 days validity for CLI token
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Issuer:    "gordon",
+			Subject:   "cli_auth",
+		},
+	}
+
+	// Create token with claims
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+	// Generate encoded token and return it
+	t, err := token.SignedString([]byte(secret))
+	if err != nil {
+		return "", fmt.Errorf("failed to sign JWT token: %w", err)
+	}
+
+	return t, nil
 }

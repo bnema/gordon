@@ -11,7 +11,7 @@ import (
 )
 
 func CheckAndRefreshAuth(a *cli.App) error {
-	if a.Config.General.Token == "" {
+	if a.Config.General.JwtToken == "" {
 		log.Info("No authentication token found. Initiating authentication...")
 		return ReAuthenticate(a)
 	}
@@ -46,19 +46,20 @@ func ReAuthenticate(a *cli.App) error {
 	// Small delay for visual clarity
 	time.Sleep(100 * time.Millisecond)
 
-	err := auth.DeviceFlowAuth(a)
+	token, err := auth.DeviceFlowAuth(a)
+
 	if err != nil {
 		return fmt.Errorf("device flow authentication failed: %w", err)
 	}
 
-	// After successful re-authentication, get the new token
-	newToken, err := a.Config.GetToken()
-	if err != nil {
-		return fmt.Errorf("failed to get new token: %w", err)
+	// if token is the same as the current one, no need to save
+	if token == a.Config.General.JwtToken {
+		fmt.Println("Token is still valid, no changes made.")
+		return nil
 	}
 
-	// Update the token in the app config
-	a.Config.General.Token = newToken
+	// Update the JWTSecret in the config
+	a.Config.General.JwtToken = token
 
 	// Save the new token to config file
 	err = a.Config.SaveConfig()

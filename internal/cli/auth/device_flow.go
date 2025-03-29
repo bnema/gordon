@@ -12,13 +12,13 @@ import (
 	"github.com/bnema/gordon/internal/cli"
 )
 
-func DeviceFlowAuth(a *cli.App) error {
+func DeviceFlowAuth(a *cli.App) (token string, err error) {
 	fmt.Println("Starting device flow authentication...")
 
 	// Request device code
 	deviceCode, err := requestDeviceCode(a)
 	if err != nil {
-		return fmt.Errorf("error requesting device code: %w", err)
+		return "", fmt.Errorf("error requesting device code: %w", err)
 	}
 
 	fmt.Printf("Please go to %v and enter the code: %v\n", deviceCode["verification_uri"], deviceCode["user_code"])
@@ -29,16 +29,24 @@ func DeviceFlowAuth(a *cli.App) error {
 		interval = int(i)
 	}
 
-	token, err := pollForAccessToken(a, deviceCode["device_code"].(string), interval)
+	token, err = pollForAccessToken(a, deviceCode["device_code"].(string), interval)
 	if err != nil {
-		return fmt.Errorf("error polling for access token: %w", err)
+		return "", fmt.Errorf("error polling for access token: %w", err)
 	}
 
-	// Save the token
-	a.Config.SetToken(token)
+	// Save the obtained JWT into the JWTSecret field in the config
+	a.Config.General.JwtToken = token
+	err = a.Config.SaveConfig() // Save the updated config
+	if err != nil {
+		// Log the error but don't necessarily fail the whole flow,
+		// as the token might still be usable in memory for the current session.
+		fmt.Printf("\nWarning: Failed to save token to config file: %v\n", err)
+		fmt.Println("Authentication successful, but token might not persist.")
+	} else {
+		fmt.Println("Authentication successful! Token saved to configuration.")
+	}
 
-	fmt.Println("Authentication successful!")
-	return nil
+	return token, nil
 }
 
 func requestDeviceCode(a *cli.App) (map[string]interface{}, error) {
@@ -96,11 +104,13 @@ func pollForAccessToken(a *cli.App, deviceCode string, interval int) (string, er
 			continue
 		}
 
-		if accessToken, ok := tokenResp["access_token"].(string); ok && accessToken != "" {
-			return accessToken, nil
+		// Expect "jwt_token" instead of "access_token"
+		if jwtToken, ok := tokenResp["jwt_token"].(string); ok && jwtToken != "" {
+			fmt.Println() // Print a newline after successful polling dots
+			return jwtToken, nil
 		}
 
-		if tokenResp["error"] == "authorization_pending" {
+		if errorMsg, ok := tokenResp["error"].(string); ok && errorMsg == "authorization_pending" {
 			// Optionally, you can print a dot to show progress without cluttering the output
 			fmt.Print(".")
 			continue
