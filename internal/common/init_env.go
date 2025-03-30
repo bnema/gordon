@@ -269,4 +269,15 @@ func loadConfigFromEnv(config *Config, printLogs bool) {
 			logger.Info("Using environment variable GORDON_PROXY_SKIP_CERTIFICATES", "value", config.ReverseProxy.SkipCertificates)
 		}
 	}
+
+	// Handle GORDON_PROXY_BLOCK_DIRECT_IP environment variable
+	if val := os.Getenv("GORDON_PROXY_BLOCK_DIRECT_IP"); val != "" {
+		blockDirectIP, err := strconv.ParseBool(val)
+		if err == nil {
+			config.ReverseProxy.BlockDirectIP = blockDirectIP
+		}
+		if printLogs {
+			logger.Info("Using environment variable GORDON_PROXY_BLOCK_DIRECT_IP", "value", config.ReverseProxy.BlockDirectIP)
+		}
+	}
 }

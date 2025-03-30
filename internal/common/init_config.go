@@ -85,6 +85,7 @@ type ReverseProxyConfig struct {
 	EnableHttpLogs                        bool   `yaml:"enableHttpLogs"`       // Whether to enable HTTP request logging
 	EnableRateLimit                       bool   `yaml:"enableRateLimit"`      // Whether to enable rate limiting middleware
 	DetectUpstreamProxy                   bool   `yaml:"detectUpstreamProxy"`  // Whether to detect and handle upstream TLS termination proxies
+	BlockDirectIP                         bool   `yaml:"blockDirectIP"`        // Whether to block requests made directly to the server's IP (allows ACME)
 	DefaultChallengeType                  string `yaml:"defaultChallengeType"` // http-01 or dns-01
 	DefaultHttpChallengePort              string `yaml:"defaultHttpChallengePort"`
 	DefaultDnsChallengePropagationTimeout int    `yaml:"defaultDnsChallengePropagationTimeout"`
@@ -115,6 +116,7 @@ var (
 	defaultDnsChallengePollingInterval    = 5  // seconds
 	defaultAdminPath                      = "/admin"
 	defaultNetwork                        = "gordon"
+	blockDirectIP                         = true // Default to enabled
 )
 
 // applyDefaultsToConfig applies default values to any fields that have zero values
@@ -260,6 +262,33 @@ func applyDefaultsToConfig(config *Config) bool {
 		config.ReverseProxy.SkipCertificates = skipCertificates
 		logger.Debug("Applied default value for ReverseProxy.SkipCertificates", "value", skipCertificates)
 		defaultsApplied = true
+	}
+
+	// Set BlockDirectIP to true by default if not explicitly set to false
+	if !config.ReverseProxy.BlockDirectIP {
+		// Check if the field is explicitly set to false in the config file
+		configFilePath := filepath.Join(getConfigDirMustExist(), "config.yml")
+		isExplicitlyFalse := false
+		if fileExists(configFilePath) {
+			yamlContent, err := os.ReadFile(configFilePath)
+			if err == nil {
+				// Simple check for 'blockDirectIP: false'
+				// Note: This doesn't handle comments or complex YAML structures perfectly
+				if strings.Contains(string(yamlContent), "blockDirectIP: false") {
+					isExplicitlyFalse = true
+				}
+			}
+		}
+
+		// Apply default 'true' only if it wasn't explicitly set to 'false'
+		if !isExplicitlyFalse {
+			config.ReverseProxy.BlockDirectIP = blockDirectIP
+			logger.Debug("Applied default value for ReverseProxy.BlockDirectIP", "value", blockDirectIP)
+			defaultsApplied = true
+		} else {
+			// It was explicitly set to false in the file, keep it as false (env var can still override)
+			logger.Debug("Keeping explicitly set 'false' for ReverseProxy.BlockDirectIP", "value", config.ReverseProxy.BlockDirectIP)
+		}
 	}
 
 	// Apply defaults for Let's Encrypt challenge settings
