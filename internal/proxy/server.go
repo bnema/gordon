@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -209,12 +210,13 @@ func (p *Proxy) Stop() error {
 	return nil
 }
 
-// testAdminConnection attempts to find a working connection to the Gordon admin
+// testAdminConnection attempts to find a working connection to the Gordon admin ping endpoint
 func (p *Proxy) testAdminConnection(defaultHost string, port string) string {
-	adminPath := p.app.GetConfig().Admin.Path
-	url := fmt.Sprintf("http://%s:%s%s", defaultHost, port, adminPath)
+	adminPath := p.app.GetConfig().Admin.Path // Get the base admin path
+	pingPath := adminPath + "/ping"           // Construct the full ping path
+	url := fmt.Sprintf("http://%s:%s%s", defaultHost, port, pingPath)
 
-	logger.Debug("Testing admin connection", "url", url)
+	logger.Debug("Testing admin ping connection", "url", url) // Update log message
 
 	// Try connecting using the provided default host
 	client := &http.Client{
@@ -230,11 +232,18 @@ func (p *Proxy) testAdminConnection(defaultHost string, port string) string {
 	resp, err := client.Get(url)
 	if err == nil {
 		resp.Body.Close()
-		logger.Info("Admin connection successful", "host", defaultHost)
-		return defaultHost
+		// Check if the response status is OK
+		if resp.StatusCode == http.StatusOK {
+			logger.Info("Admin ping connection successful", "host", defaultHost) // Update log message
+			return defaultHost
+		} else {
+			logger.Warn("Admin ping connection returned non-OK status", "host", defaultHost, "status_code", resp.StatusCode)
+		}
+	} else {
+		logger.Warn("Admin ping connection failed", "host", defaultHost, "error", err)
 	}
 
-	// If connection failed, try other common hostnames
+	// If connection failed or status not OK, try other common hostnames
 	hosts := []string{
 		"localhost",
 		"127.0.0.1",
@@ -247,18 +256,24 @@ func (p *Proxy) testAdminConnection(defaultHost string, port string) string {
 			continue // Already tried this one
 		}
 
-		url = fmt.Sprintf("http://%s:%s%s", host, port, adminPath)
-		logger.Debug("Trying alternative host", "url", url)
+		url = fmt.Sprintf("http://%s:%s%s", host, port, pingPath)          // Use full pingPath here too
+		logger.Debug("Trying alternative host for admin ping", "url", url) // Update log message
 
 		resp, err := client.Get(url)
 		if err == nil {
 			resp.Body.Close()
-			logger.Info("Found working admin connection", "host", host)
-			return host
+			if resp.StatusCode == http.StatusOK {
+				logger.Info("Found working admin ping connection", "host", host) // Update log message
+				return host
+			} else {
+				logger.Warn("Admin ping connection on alternative host returned non-OK status", "host", host, "status_code", resp.StatusCode)
+			}
+		} else {
+			logger.Warn("Admin ping connection failed on alternative host", "host", host, "error", err)
 		}
 	}
 
-	logger.Warn("Could not establish admin connection on any tested host", "fallback", defaultHost)
+	logger.Warn("Could not establish admin ping connection on any tested host", "fallback", defaultHost) // Update log message
 	return defaultHost
 }
 
@@ -473,105 +488,109 @@ func (p *Proxy) checkExternalPortAccess() {
 
 // StartHTTPSServer starts the HTTPS server
 func (p *Proxy) StartHTTPSServer() error {
-	logger.Info("Starting HTTPS server",
-		"port", p.config.Port,
-		"mode", p.config.LetsEncryptMode)
+	// Setup main Echo instance for routing (used by both HTTP/HTTPS handlers)
+	e := p.httpsServer // Use the existing Echo instance
 
-	// Verify the certificate manager is initialized (it's done in NewProxy now)
-	if p.certificateManager == nil {
-		// This should ideally not happen if NewProxy succeeded
-		logger.Error("Certificate manager is nil in StartHTTPSServer, cannot start HTTPS")
-		return fmt.Errorf("certificate manager not initialized")
-	}
-	logger.Info("Using new certificate management system")
+	// If SkipCertificates is true, start a plain HTTP listener instead of HTTPS
+	if p.config.SkipCertificates {
+		logger.Info("Starting plain HTTP listener because SkipCertificates is true",
+			"port", p.config.DefaultHttpChallengePort)
 
-	// Setup TLS configuration
-	tlsConfig := &tls.Config{
-		// Use the helper function that gets the GetCertificate func from the manager
-		GetCertificate: p.getTLSCertificateFunc(),
-		// Ensure we use TLS 1.2 or higher
-		MinVersion: tls.VersionTLS12,
-		// Optimize cipher suites for security and performance
-		CipherSuites: []uint16{
-			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-		},
-		// Use server's preferred ciphersuite
-		PreferServerCipherSuites: true,
-		// Enable HTTP/2
-		NextProtos: []string{"h2", "http/1.1"},
-		// Add server name to use when client doesn't send SNI
-		ServerName: p.app.GetConfig().Http.FullDomain(),
-	}
-
-	// Removed setup for ACME challenge handler on the persistent HTTP server,
-	// as it's no longer running. Lego's temporary server will handle challenges.
-	// p.httpServer.Any("/.well-known/acme-challenge/*", echo.WrapHandler(p.getACMEHTTPHandler()))
-
-	// Create a custom HTTPS server with proper TLS config
-	httpsServer := &http.Server{
-		Addr:      fmt.Sprintf(":%s", p.config.Port),
-		Handler:   p.httpsServer,
-		TLSConfig: tlsConfig,
-		// Add increased timeouts to prevent hanging connections
-		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		ReadHeaderTimeout: 30 * time.Second, // Add header timeout
-	}
-
-	// Store the HTTPS server for later use in Stop()
-	p.httpsServer.Server = httpsServer
-
-	// // Create a custom HTTP server
-	// httpServer := &http.Server{
-	// 	Addr:         fmt.Sprintf(":%s", p.config.HttpPort),
-	// 	Handler:      p.httpServer,
-	// 	ReadTimeout:  30 * time.Second,
-	// 	WriteTimeout: 30 * time.Second,
-	// 	IdleTimeout:  120 * time.Second,
-	// }
-
-	p.serverStarted = true
-
-	// httpServer is no longer needed as ACME HTTP-01 uses its own temporary server
-	// httpServer := &http.Server{
-	// 	Addr:         fmt.Sprintf(":%s", p.config.HttpPort),
-	// 	Handler:      p.httpServer,
-	// 	ReadTimeout:  30 * time.Second,
-	// 	WriteTimeout: 30 * time.Second,
-	// 	IdleTimeout:  120 * time.Second,
-	// }
-
-	// Start HTTPS server with more error details
-	go func() {
-		logger.Info("Starting HTTPS server", "address", httpsServer.Addr)
-		// Using empty strings for cert and key files since we're using GetCertificate
-		if err := httpsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTPS server failed", "error", err, "address", httpsServer.Addr)
-
-			// Print more diagnostic information
-			if strings.Contains(err.Error(), "bind: address already in use") {
-				logger.Error("Port 443 is already in use by another process. Check if another web server is running.",
-					"solution", "Stop other services using port 443 or configure Gordon to use a different HTTPS port")
-			} else if strings.Contains(err.Error(), "permission denied") {
-				logger.Error("Permission denied when binding to port 443. This often happens when running without root privileges.",
-					"solution", "Use setcap to allow binding to privileged ports or run in a container with proper port mapping")
-			} else if strings.Contains(err.Error(), "certificate") {
-				logger.Error("Certificate-related error when starting HTTPS server",
-					"solution", "Check certificate files and permissions in the certificate directory")
-			}
+		// Create a standard http.Server for the plain HTTP listener
+		httpServer := &http.Server{
+			Addr:         fmt.Sprintf(":%s", p.config.DefaultHttpChallengePort), // Add colon prefix
+			Handler:      e,                                                     // Use the main Echo instance
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  120 * time.Second,
 		}
-	}()
 
-	// Test admin connection after server starts
+		// Start plain HTTP listener using http.Server's ListenAndServe
+		go func() {
+			logger.Info("Plain HTTP listener starting", "address", httpServer.Addr)
+			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				// Log specific errors if possible
+				if strings.Contains(err.Error(), "bind: address already in use") {
+					logger.Error("Plain HTTP port is already in use", "port", p.config.DefaultHttpChallengePort, "error", err)
+				} else if strings.Contains(err.Error(), "permission denied") {
+					logger.Error("Permission denied binding to plain HTTP port", "port", p.config.DefaultHttpChallengePort, "error", err)
+				} else {
+					logger.Error("Plain HTTP listener failed", "error", err, "address", httpServer.Addr)
+				}
+			}
+		}()
+		p.serverStarted = true // Mark server as started
+
+	} else {
+		// --- Start HTTPS Server (only if SkipCertificates is false) ---
+		logger.Info("Starting HTTPS server",
+			"port", p.config.Port,
+			"mode", p.config.LetsEncryptMode)
+
+		// Verify certificate manager is initialized *only* if we need it for HTTPS
+		if p.certificateManager == nil {
+			logger.Error("Certificate manager is nil, cannot start HTTPS server")
+			return fmt.Errorf("certificate manager not initialized for HTTPS")
+		}
+		logger.Info("Using certificate management system for HTTPS")
+
+		// Setup TLS configuration
+		tlsConfig := &tls.Config{
+			GetCertificate: p.getTLSCertificateFunc(),
+			MinVersion:     tls.VersionTLS12,
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			},
+			PreferServerCipherSuites: true,
+			NextProtos:               []string{"h2", "http/1.1"},
+			ServerName:               p.app.GetConfig().Http.FullDomain(),
+		}
+
+		// Create a custom HTTPS server with proper TLS config
+		httpsServer := &http.Server{
+			Addr:              fmt.Sprintf(":%s", p.config.Port), // Use the configured HTTPS port (e.g., :443)
+			Handler:           e,                                 // Use the main Echo instance
+			TLSConfig:         tlsConfig,
+			ReadTimeout:       60 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			ReadHeaderTimeout: 30 * time.Second,
+		}
+
+		// Store the HTTPS server for later use in Stop()
+		p.httpsServer.Server = httpsServer // Store the http.Server within Echo
+
+		// Start HTTPS server in a goroutine
+		go func() {
+			logger.Info("HTTPS server starting", "address", httpsServer.Addr)
+			// Using empty strings for cert and key files since GetCertificate is used
+			if err := httpsServer.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				// Log specific errors if possible
+				if strings.Contains(err.Error(), "bind: address already in use") {
+					logger.Error("HTTPS port is already in use", "port", p.config.Port, "error", err)
+				} else if strings.Contains(err.Error(), "permission denied") {
+					logger.Error("Permission denied binding to HTTPS port", "port", p.config.Port, "error", err)
+				} else if strings.Contains(err.Error(), "certificate") {
+					logger.Error("Certificate-related error starting HTTPS server", "error", err)
+				} else {
+					logger.Error("HTTPS server failed", "error", err, "address", httpsServer.Addr)
+				}
+			}
+		}()
+		p.serverStarted = true // Mark server as started
+	}
+
+	// Test admin connection after attempting to start the appropriate server
 	go p.TestAdminConnectionLater()
 
-	return nil
+	// Remove the old/duplicate HTTP listener logic that was here
+
+	return nil // Return nil indicating server start was initiated
 }
 
 // getTLSCertificateFunc returns a function that gets certificates for TLS handshakes

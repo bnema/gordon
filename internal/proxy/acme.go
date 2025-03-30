@@ -27,7 +27,6 @@ type CertManagerConfig struct {
 	Email            string
 	Mode             string
 	SkipCertificates bool
-	BehindTLSProxy   bool
 	AdminDomain      string
 	RootDomain       string
 	HttpPort         string

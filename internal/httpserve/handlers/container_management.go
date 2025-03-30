@@ -177,6 +177,15 @@ func ImageManagerDelete(c echo.Context, a *server.App) error {
 	return c.String(http.StatusOK, ActionSuccess(a))
 }
 
+// ImageManagerPrune handles the /image-manager/prune route
+func ImageManagerPrune(c echo.Context, a *server.App) error {
+	numPurged, err := docker.PruneImages()
+	if err != nil {
+		return sendError(c, err)
+	}
+	return c.String(http.StatusOK, fmt.Sprintf("Successfully purged %d images", numPurged))
+}
+
 // ContainerManagerComponent handles the /container-manager route
 func ContainerManagerComponent(c echo.Context, a *server.App) error {
 	logger.Debug("ContainerManagerComponent called", "url", c.Request().URL.String())

@@ -2,6 +2,7 @@ package components
 
 import (
 	"strconv"
+	"fmt"
 )
 
 // HumanReadableImage represents an image with human-readable attributes
@@ -24,7 +25,7 @@ templ ImageList(images []HumanReadableImage) {
 		<div class="card-body p-4">
 			
 			<!-- Action buttons -->
-			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
+			<div class="flex flex-col sm:flex-row sm:justify-start items-start sm:items-center gap-4 flex-wrap">
 				<h3 class="font-semibold text-base-content">Available Images: { strconv.Itoa(len(images)) }</h3>
 				<div class="flex gap-2">
 					<button 
@@ -40,6 +41,14 @@ templ ImageList(images []HumanReadableImage) {
 						hx-target="#image-manager"
 						hx-swap="innerHTML">
 						<span class="iconf">󰑓</span> Refresh
+					</button>
+					<button
+						class="btn btn-sm btn-warning"
+						hx-post="/htmx/image-manager/prune"
+						hx-target="#image-manager"
+						hx-swap="innerHTML"
+						hx-confirm="Are you sure you want to delete all unused (dangling and unreferenced) images? This cannot be undone.">
+						<span class="iconf">󰩹</span> Purge Unused
 					</button>
 				</div>
 			</div>
@@ -90,7 +99,10 @@ templ ImageList(images []HumanReadableImage) {
 										<ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-200 rounded-box w-52">
 											<li>
 												<a 
-													href={ templ.SafeURL("/htmx/create-container/" + img.ShortID) }
+													href="#"
+													hx-get={ string(templ.URL(fmt.Sprintf("/htmx/create-container/%s", img.ShortID))) }
+													hx-target={ "#create-form-target-" + img.ShortID }
+													hx-swap="innerHTML"
 													class="text-success flex items-center">
 													<span class="iconf mr-2">󰐕</span> Create Container
 												</a>
@@ -98,7 +110,7 @@ templ ImageList(images []HumanReadableImage) {
 											<li>
 												<button 
 													class="text-error flex items-center"
-													hx-delete={ "/htmx/image-manager/delete/" + img.ShortID }
+													hx-delete={ string(templ.URL(fmt.Sprintf("/htmx/image-manager/delete/%s", img.ShortID))) }
 													hx-target="#image-manager"
 													hx-swap="innerHTML"
 													hx-confirm="Are you sure you want to delete this image?">
@@ -108,6 +120,11 @@ templ ImageList(images []HumanReadableImage) {
 										</ul>
 									</div>
 								</th>
+							</tr>
+							<tr>
+								<td colspan="5" id={ "create-form-target-" + img.ShortID }>
+									<!-- Form will be loaded here by HTMX -->
+								</td>
 							</tr>
 						}
 					}
