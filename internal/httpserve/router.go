@@ -2,6 +2,7 @@ package httpserve
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/bnema/gordon/internal/httpserve/handlers"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
@@ -53,8 +54,27 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 	log.Debug("Binding admin routes with AdminPath", "path", AdminPath)
 	bindAdminRoute(e, a, AdminPath)
 
-	log.Debug("Binding static routes")
-	bindStaticRoute(e, a, "/*")
+	log.Debug("Binding static routes under /assets/*")
+
+	// Setup static file server
+	httpFS := http.FS(a.PublicFS)
+	noDirFS := handlers.NewNoDirFileSys(httpFS)
+	fileServer := http.FileServer(noDirFS)
+
+	// Middleware to set cache headers for static files
+	staticCacheMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if os.Getenv("RUN_ENV") != "dev" {
+				c.Response().Header().Set("Cache-Control", "public, max-age=86400") // 1 day
+			} else {
+				c.Response().Header().Set("Cache-Control", "no-cache")
+			}
+			return next(c)
+		}
+	}
+
+	// Serve static files from /assets path
+	e.GET("/assets/*", echo.WrapHandler(http.StripPrefix("/assets/", fileServer)), staticCacheMiddleware, echomid.Gzip())
 
 	// Only bind HTMX endpoints if Admin WebUI is enabled
 	if a.Config.Admin.IsAdminWebUIEnabled() {
@@ -114,13 +134,6 @@ func bindAPIEndpoints(e *echo.Echo, a *server.App) {
 	protectedApiGroup.POST("/remove", func(c echo.Context) error {
 		return handlers.PostContainerRemove(c, a)
 	})
-}
-
-// bindStaticRoute bind static path
-func bindStaticRoute(e *echo.Echo, a *server.App, path string) {
-	e.GET(path, func(c echo.Context) error {
-		return handlers.StaticRoute(c, a)
-	}, echomid.Gzip())
 }
 
 // bindLoginRoute binds all login routes
