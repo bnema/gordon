@@ -43,12 +43,17 @@ templ ImageList(images []HumanReadableImage) {
 						<span class="iconf">󰑓</span> Refresh
 					</button>
 					<button
+						id="purge-button"
 						class="btn btn-sm btn-warning"
 						hx-post="/htmx/image-manager/prune"
 						hx-target="#image-manager"
 						hx-swap="innerHTML"
+						hx-indicator="#purge-spinner"
 						hx-confirm="Are you sure you want to delete all unused (dangling and unreferenced) images? This cannot be undone.">
-						<span class="iconf">󰩹</span> Purge Unused
+						<span class="btn-content flex items-center"> 
+							<span class="iconf mr-1">󰩹</span> Purge Unused
+						</span>
+						<span class="loading loading-spinner loading-sm hidden" id="purge-spinner"></span>
 					</button>
 				</div>
 			</div>
@@ -133,7 +138,52 @@ templ ImageList(images []HumanReadableImage) {
 		</div>
 	</div>
 
+	<!-- Notification Area -->
+	<div id="image-prune-notifications" class="fixed bottom-4 right-4 z-50 space-y-2"></div>
+
+	<style>
+	  #purge-button.htmx-request .btn-content {
+	    display: none;
+	  }
+	  #purge-button.htmx-request #purge-spinner {
+	    display: inline-block;
+	  }
+	</style>
+
 	<script>
 	console.debug('Image list rendered');
+
+	document.body.addEventListener('showMessage', function(evt) {
+		console.debug('showMessage event received:', evt.detail);
+		const detail = evt.detail;
+		const notificationArea = document.getElementById('image-prune-notifications');
+		if (!notificationArea || !detail || !detail.message) return;
+
+		const alertDiv = document.createElement('div');
+		let alertClass = 'alert-info'; // Default
+		let iconClass = 'ℹ️'; // Default icon
+
+		if (detail.level === 'success') {
+			alertClass = 'alert-success';
+			iconClass = '󰕬'; // Checkmark icon
+		} else if (detail.level === 'error') {
+			alertClass = 'alert-error';
+			iconClass = '󰅚'; // Error icon
+		}
+
+		alertDiv.className = `alert ${alertClass} shadow-lg flex`;
+		alertDiv.innerHTML = `
+			<span class="iconf text-xl">${iconClass}</span>
+			<span>${detail.message}</span>
+			<button class="btn btn-sm btn-ghost ml-auto" onclick="this.parentElement.remove()">✕</button>
+		`;
+
+		notificationArea.appendChild(alertDiv);
+
+		// Automatically remove the alert after 5 seconds
+		setTimeout(() => {
+			alertDiv.remove();
+		}, 5000);
+	});
 	</script>
 } 
