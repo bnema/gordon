@@ -17,7 +17,7 @@ templ ManagerPage(title string, buildVersion string, adminPath string, userSetti
 		</div>
 		
 		<!-- Stats overview -->
-		<div class="stats shadow mb-6 w-full">
+		<div class="stats shadow mb-6 w-full bg-base-300">
 			<div class="stat">
 				<div class="stat-figure text-primary">
 					<span class="iconf text-3xl">󰡨</span>
@@ -40,7 +40,7 @@ templ ManagerPage(title string, buildVersion string, adminPath string, userSetti
 		<!-- Tabs for containers and images -->
 		<div role="tablist" class="tabs tabs-boxed mb-4">
 			<input type="radio" name="my_tabs" role="tab" class="tab" aria-label="Containers" id="containers-tab" checked />
-			<div role="tabpanel" class="tab-content p-0">
+			<div role="tabpanel" class="tab-content p-0 bg-base-300">
 				<!-- Container manager section -->
 				<div id="container-manager"
 					hx-get="/htmx/container-manager"
@@ -55,7 +55,7 @@ templ ManagerPage(title string, buildVersion string, adminPath string, userSetti
 			</div>
 			
 			<input type="radio" name="my_tabs" role="tab" class="tab" aria-label="Images" id="images-tab" />
-			<div role="tabpanel" class="tab-content p-0">
+			<div role="tabpanel" class="tab-content p-0 bg-base-300">
 				<!-- Image manager section -->
 				<div id="image-manager"
 					hx-get="/htmx/image-manager"

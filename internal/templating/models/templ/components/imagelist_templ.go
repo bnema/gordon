@@ -9,6 +9,7 @@ import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
 import (
+	"fmt"
 	"strconv"
 )
 
@@ -47,20 +48,20 @@ func ImageList(images []HumanReadableImage) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- Image list using daisyUI components --><div class=\"card w-full bg-base-300\"><div class=\"card-body p-4\"><!-- Action buttons --><div class=\"flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4\"><h3 class=\"font-semibold text-base-content\">Available Images: ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- Image list using daisyUI components --><div class=\"card w-full bg-base-300\"><div class=\"card-body p-4\"><!-- Action buttons --><div class=\"flex flex-col sm:flex-row sm:justify-start items-start sm:items-center gap-4 flex-wrap\"><h3 class=\"font-semibold text-base-content\">Available Images: ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(len(images)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 28, Col: 93}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 29, Col: 93}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</h3><div class=\"flex gap-2\"><button class=\"btn btn-sm btn-secondary\" hx-get=\"/htmx/upload-image\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\"><span class=\"iconf\">\U000f0992</span> Upload</button> <button class=\"btn btn-sm btn-primary\" hx-get=\"/htmx/image-manager\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\"><span class=\"iconf\">\U000f0453</span> Refresh</button></div></div><!-- Image list --><table class=\"table\"><!-- head --><thead><tr><th>Repository</th><th>Tag</th><th>Size</th><th>Created</th><th>Actions</th></tr></thead> <tbody>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</h3><div class=\"flex gap-2\"><button class=\"btn btn-sm btn-secondary\" hx-get=\"/htmx/upload-image\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\"><span class=\"iconf\">\U000f0992</span> Upload</button> <button class=\"btn btn-sm btn-primary\" hx-get=\"/htmx/image-manager\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\"><span class=\"iconf\">\U000f0453</span> Refresh</button> <button class=\"btn btn-sm btn-warning\" hx-post=\"/htmx/image-manager/prune\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\" hx-confirm=\"Are you sure you want to delete all unused (dangling and unreferenced) images? This cannot be undone.\"><span class=\"iconf\">\U000f0a79</span> Purge Unused</button></div></div><!-- Image list --><table class=\"table\"><!-- head --><thead><tr><th>Repository</th><th>Tag</th><th>Size</th><th>Created</th><th>Actions</th></tr></thead> <tbody>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -78,7 +79,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(img.Repository)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 77, Col: 50}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 86, Col: 50}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -91,7 +92,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var4 string
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(img.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 78, Col: 51}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 87, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 				if templ_7745c5c3_Err != nil {
@@ -104,7 +105,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var5 string
 				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(img.Tag)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 82, Col: 21}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 91, Col: 21}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 				if templ_7745c5c3_Err != nil {
@@ -117,7 +118,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var6 string
 				templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(img.Size)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 83, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 92, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 				if templ_7745c5c3_Err != nil {
@@ -130,41 +131,71 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var7 string
 				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(img.Created)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 84, Col: 25}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 93, Col: 25}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</td><th><div class=\"dropdown dropdown-end\"><div tabindex=\"0\" role=\"button\" class=\"btn btn-ghost btn-xs\"><span class=\"iconf\">\U000f0140</span></div><ul tabindex=\"0\" class=\"dropdown-content z-[1] menu p-2 shadow bg-base-200 rounded-box w-52\"><li><a href=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</td><th><div class=\"dropdown dropdown-end\"><div tabindex=\"0\" role=\"button\" class=\"btn btn-ghost btn-xs\"><span class=\"iconf\">\U000f0140</span></div><ul tabindex=\"0\" class=\"dropdown-content z-[1] menu p-2 shadow bg-base-200 rounded-box w-52\"><li><a href=\"#\" hx-get=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var8 templ.SafeURL = templ.SafeURL("/htmx/create-container/" + img.ShortID)
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(string(templ_7745c5c3_Var8)))
+				var templ_7745c5c3_Var8 string
+				templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/htmx/create-container/%s", img.ShortID))))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 103, Col: 94}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "\" class=\"text-success flex items-center\"><span class=\"iconf mr-2\">\U000f0415</span> Create Container</a></li><li><button class=\"text-error flex items-center\" hx-delete=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "\" hx-target=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var9 string
-				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs("/htmx/image-manager/delete/" + img.ShortID)
+				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs("#create-form-target-" + img.ShortID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 101, Col: 68}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 104, Col: 61}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\" hx-confirm=\"Are you sure you want to delete this image?\"><span class=\"iconf mr-2\">\U000f01b4</span> Delete</button></li></ul></div></th></tr>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "\" hx-swap=\"innerHTML\" class=\"text-success flex items-center\"><span class=\"iconf mr-2\">\U000f0415</span> Create Container</a></li><li><button class=\"text-error flex items-center\" hx-delete=\"")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var10 string
+				templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/htmx/image-manager/delete/%s", img.ShortID))))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 113, Col: 101}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\" hx-confirm=\"Are you sure you want to delete this image?\"><span class=\"iconf mr-2\">\U000f01b4</span> Delete</button></li></ul></div></th></tr><tr><td colspan=\"5\" id=\"")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var11 string
+				templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs("create-form-target-" + img.ShortID)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 125, Col: 64}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\"><!-- Form will be loaded here by HTMX --></td></tr>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</tbody></table></div></div><script>\n\tconsole.debug('Image list rendered');\n\t</script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</tbody></table></div></div><script>\n\tconsole.debug('Image list rendered');\n\t</script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

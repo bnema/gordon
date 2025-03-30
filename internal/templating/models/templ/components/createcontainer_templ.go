@@ -8,6 +8,8 @@ package components
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
+import "fmt"
+
 // ContainerFormData holds the data needed for the container creation form
 type ContainerFormData struct {
 	ImageName            string
@@ -45,14 +47,14 @@ func CreateContainerForm(data ContainerFormData) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow\" hx-ext=\"response-targets\"><!-- Left Side: Docker Run Options --><div class=\"flex-grow card p-6\"><h2 class=\"card-title pb-4\">Deploy a container based on ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow\"><!-- Left Side: Docker Run Options --><div class=\"flex-grow card p-6\"><h2 class=\"card-title pb-4\">Deploy a container based on ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(data.ImageName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 23, Col: 75}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 25, Col: 75}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
@@ -70,7 +72,7 @@ func CreateContainerForm(data ContainerFormData) templ.Component {
 			var templ_7745c5c3_Var3 string
 			templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(data.ErrorMessage)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 27, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 29, Col: 30}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 			if templ_7745c5c3_Err != nil {
@@ -88,7 +90,7 @@ func CreateContainerForm(data ContainerFormData) templ.Component {
 		var templ_7745c5c3_Var4 string
 		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs("create-container-form-" + data.ShortID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 30, Col: 53}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 32, Col: 53}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
@@ -98,7 +100,7 @@ func CreateContainerForm(data ContainerFormData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var5 templ.SafeURL = templ.SafeURL("/create-container/" + data.ShortID)
+		var templ_7745c5c3_Var5 templ.SafeURL = templ.URL(fmt.Sprintf("/create-container/%s", data.ShortID))
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(string(templ_7745c5c3_Var5)))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -108,9 +110,9 @@ func CreateContainerForm(data ContainerFormData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var6 string
-		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs("/htmx/create-container/" + data.ShortID)
+		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/htmx/create-container/%s", data.ShortID))))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 31, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 35, Col: 87}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 		if templ_7745c5c3_Err != nil {
@@ -121,158 +123,132 @@ func CreateContainerForm(data ContainerFormData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var7 string
-		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs("#create-container-" + data.ShortID)
+		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs("#create-form-target-" + data.ShortID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 33, Col: 51}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 37, Col: 53}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "\" hx-target-*=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "\"><!-- Image Name --><div class=\"grid grid-cols-1 md:grid-cols-3 gap-4 pb-4\"><div class=\"md:col-span-1\"><label class=\"label\"><span class=\"label-text\">Image name</span></label> <input type=\"text\" name=\"image_name\" class=\"input input-bordered input-disabled w-full\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var8 string
-		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs("#error-message-create-container-" + data.ShortID)
+		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(data.ImageName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 34, Col: 67}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 45, Col: 29}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "\"><!-- Image Name --><div class=\"grid grid-cols-1 md:grid-cols-3 gap-4 pb-4\"><div class=\"md:col-span-1\"><label class=\"label\"><span class=\"label-text\">Image name</span></label> <input type=\"text\" name=\"image_name\" class=\"input input-bordered input-disabled w-full\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "\" readonly></div><div class=\"md:col-span-2\"><label class=\"label\"><span class=\"label-text\">Image ID</span></label> <input type=\"text\" name=\"image_id\" class=\"input input-bordered input-disabled w-full\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var9 string
-		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(data.ImageName)
+		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(data.ImageID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 42, Col: 29}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 53, Col: 27}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "\" readonly></div><div class=\"md:col-span-2\"><label class=\"label\"><span class=\"label-text\">Image ID</span></label> <input type=\"text\" name=\"image_id\" class=\"input input-bordered input-disabled w-full\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "\" readonly></div></div><!-- Container Name --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Container name</span></label> <input type=\"text\" name=\"container_name\" class=\"input input-bordered w-full\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var10 string
-		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(data.ImageID)
+		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(data.ContainerName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 50, Col: 27}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 62, Col: 108}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "\" readonly></div></div><!-- Container Name --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Container name</span></label> <input type=\"text\" name=\"container_name\" class=\"input input-bordered w-full\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "\"></div><!-- Http(s) / Subdomain / Domain --><div class=\"grid grid-cols-1 md:grid-cols-12 gap-4 pb-4\"><!-- Protocol --><div class=\"md:col-span-3\"><label class=\"label\"><span class=\"label-text\">Protocol</span></label> <select name=\"container_protocol\" class=\"select select-bordered w-full\"><option value=\"https\">https</option> <option value=\"http\">http</option></select></div><!-- Subdomain --><div class=\"md:col-span-4\"><label class=\"label\"><span class=\"label-text\">Subdomain</span></label> <input type=\"text\" name=\"container_subdomain\" class=\"input input-bordered w-full\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var11 string
-		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(data.ContainerName)
+		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(data.ContainerSubdomain)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 59, Col: 108}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 83, Col: 119}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\"></div><!-- Http(s) / Subdomain / Domain --><div class=\"grid grid-cols-1 md:grid-cols-12 gap-4 pb-4\"><!-- Protocol --><div class=\"md:col-span-3\"><label class=\"label\"><span class=\"label-text\">Protocol</span></label> <select name=\"container_protocol\" class=\"select select-bordered w-full\"><option value=\"https\">https</option> <option value=\"http\">http</option></select></div><!-- Subdomain --><div class=\"md:col-span-4\"><label class=\"label\"><span class=\"label-text\">Subdomain</span></label> <input type=\"text\" name=\"container_subdomain\" class=\"input input-bordered w-full\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\"></div><!-- Domain --><div class=\"md:col-span-5\"><label class=\"label\"><span class=\"label-text\">Domain</span></label> <input type=\"text\" name=\"container_domain\" class=\"input input-bordered w-full\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var12 string
-		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(data.ContainerSubdomain)
+		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(data.ContainerDomain)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 80, Col: 119}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 91, Col: 113}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "\"></div><!-- Domain --><div class=\"md:col-span-5\"><label class=\"label\"><span class=\"label-text\">Domain</span></label> <input type=\"text\" name=\"container_domain\" class=\"input input-bordered w-full\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "\"></div></div><!-- Exposed Ports --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Exposed Ports (Optional)</span> <span class=\"label-text-alt\">eg: 8080:1887/tcp (You can specify multiple ports by separating them with a comma)</span></label> <input type=\"text\" name=\"ports\" class=\"input input-bordered w-full\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var13 string
-		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(data.ContainerDomain)
+		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(data.Ports)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 88, Col: 113}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 101, Col: 91}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "\"></div></div><!-- Exposed Ports --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Exposed Ports (Optional)</span> <span class=\"label-text-alt\">eg: 8080:1887/tcp (You can specify multiple ports by separating them with a comma)</span></label> <input type=\"text\" name=\"ports\" class=\"input input-bordered w-full\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "\"></div><!-- Proxy Port --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Container Proxy Port (Required)</span> <span class=\"label-text-alt\">Specify the internal container port that the proxy will route traffic to</span></label> <input type=\"text\" name=\"container_port\" class=\"input input-bordered w-full\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var14 string
-		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(data.Ports)
+		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(data.ProxyPort)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 98, Col: 91}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 110, Col: 104}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "\"></div><!-- Proxy Port --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Container Proxy Port (Required)</span> <span class=\"label-text-alt\">Specify the internal container port that the proxy will route traffic to</span></label> <input type=\"text\" name=\"container_port\" class=\"input input-bordered w-full\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "\" required></div><!-- Volumes --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Volumes</span> <span class=\"label-text-alt\">e.g. ./data:/container/data</span></label> <input type=\"text\" name=\"volumes\" class=\"input input-bordered w-full\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var15 string
-		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(data.ProxyPort)
+		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(data.Volumes)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 107, Col: 104}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 119, Col: 95}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "\" required></div><!-- Volumes --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Volumes</span> <span class=\"label-text-alt\">e.g. ./data:/container/data</span></label> <input type=\"text\" name=\"volumes\" class=\"input input-bordered w-full\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "\"></div><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Environment variables</span> <span class=\"label-text-alt\">e.g. KEY=VALUE</span></label> <textarea name=\"environment_variables\" class=\"textarea textarea-bordered w-full\" rows=\"4\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var16 string
-		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(data.Volumes)
+		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(data.EnvironmentVariables)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 116, Col: 95}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 128, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "\"></div><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Environment variables</span> <span class=\"label-text-alt\">e.g. KEY=VALUE</span></label> <textarea name=\"environment_variables\" class=\"textarea textarea-bordered w-full\" rows=\"4\">")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var17 string
-		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(data.EnvironmentVariables)
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 125, Col: 42}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "</textarea></div><!-- Restart: always/on-failure/only when stopped/never --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Restart</span></label> <select name=\"restart\" class=\"select select-bordered w-full\"><option value=\"always\">Always</option> <option value=\"on-failure\">On failure</option> <option value=\"unless-stopped\">Unless stopped</option> <option value=\"never\">Never</option></select></div><!-- Skip Proxy Setup Option --><div class=\"form-control pb-4\"><label class=\"label cursor-pointer justify-start gap-4\"><input type=\"checkbox\" name=\"skip_proxy_setup\" value=\"true\" class=\"checkbox checkbox-primary\"> <span>Skip proxy setup (create container only, don't set up domain/certificates)</span></label><div class=\"text-sm opacity-70 ml-10\">Use this option if you only want to create the container without triggering proxy setup,  certificate generation, and other related processes.</div></div><button type=\"submit\" id=\"create-container-submit\" class=\"btn btn-primary\">Create Container</button></form><div id=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var18 string
-		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs("error-message-create-container-" + data.ShortID)
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/createcontainer.templ`, Line: 157, Col: 61}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "\" class=\"text-error mt-4\"></div></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "</textarea></div><!-- Restart: always/on-failure/only when stopped/never --><div class=\"form-control pb-4\"><label class=\"label\"><span class=\"label-text\">Restart</span></label> <select name=\"restart\" class=\"select select-bordered w-full\"><option value=\"always\">Always</option> <option value=\"on-failure\">On failure</option> <option value=\"unless-stopped\">Unless stopped</option> <option value=\"never\">Never</option></select></div><!-- Skip Proxy Setup Option --><div class=\"form-control pb-4\"><label class=\"label cursor-pointer justify-start gap-4\"><input type=\"checkbox\" name=\"skip_proxy_setup\" value=\"true\" class=\"checkbox checkbox-primary\"> <span>Skip proxy setup (create container only, don't set up domain/certificates)</span></label><div class=\"text-sm opacity-70 ml-10\">Use this option if you only want to create the container without triggering proxy setup,  certificate generation, and other related processes.</div></div><button type=\"submit\" id=\"create-container-submit\" class=\"btn btn-primary\">Create Container</button></form></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
