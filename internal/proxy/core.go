@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -162,37 +160,38 @@ func NewProxy(app interfaces.AppInterface) (*Proxy, error) {
 		certDir = app.GetConfig().General.StorageDir + "/certs"
 	}
 
-	// Initial upstream proxy detection (before creating CertManager)
-	initialBehindTLSProxy := detectInitialUpstreamProxy(&config)
-
 	// Create Certificate Manager Config
 	certManagerConfig := CertManagerConfig{
 		CertDir:          certDir,
 		Email:            config.Email,
 		Mode:             config.LetsEncryptMode, // staging or production
 		SkipCertificates: config.SkipCertificates,
-		BehindTLSProxy:   initialBehindTLSProxy, // Pass initial detection result
 		AdminDomain:      app.GetConfig().Http.FullDomain(),
 		RootDomain:       app.GetConfig().Http.Domain,
 		HttpPort:         config.DefaultHttpChallengePort,
 		// RouteValidator: p.isHostInRoutes, // TODO: Pass a function if needed by hostPolicy
 	}
 
-	// Create the Certificate Manager
-	certMgr, err := NewCertificateManager(certManagerConfig, app, p.Queries)
-	if err != nil {
-		logger.Error("Failed to initialize Certificate Manager", "error", err)
-		// Return an error to prevent starting a broken proxy
-		return nil, fmt.Errorf("failed to initialize certificate manager: %w", err)
-	} else {
-		logger.Debug("Certificate manager successfully initialized")
-		p.certificateManager = certMgr // Store the new manager
-	}
+	// Only initialize Certificate Manager if SkipCertificates is false
+	if !config.SkipCertificates {
+		// Create the Certificate Manager
+		certMgr, err := NewCertificateManager(certManagerConfig, app, p.Queries)
+		if err != nil {
+			logger.Error("Failed to initialize Certificate Manager", "error", err)
+			// Return an error to prevent starting a broken proxy
+			return nil, fmt.Errorf("failed to initialize certificate manager: %w", err)
+		} else {
+			logger.Debug("Certificate manager successfully initialized")
+			p.certificateManager = certMgr // Store the new manager
+		}
 
-	// Ensure admin domain has proper ACME configuration
-	if err := p.ensureAdminDomainConfig(); err != nil {
-		logger.Error("Failed to ensure admin domain configuration", "error", err)
-		return nil, fmt.Errorf("failed to ensure admin domain configuration: %w", err)
+		// Ensure admin domain has proper ACME configuration only if manager was created
+		if err := p.ensureAdminDomainConfig(); err != nil {
+			logger.Error("Failed to ensure admin domain configuration", "error", err)
+			return nil, fmt.Errorf("failed to ensure admin domain configuration: %w", err)
+		}
+	} else {
+		logger.Info("Skipping certificate manager initialization because SkipCertificates is true")
 	}
 
 	// --- End Certificate Manager Setup ---
@@ -215,41 +214,6 @@ func (p *Proxy) Close() {
 	}
 
 	logger.Info("Proxy resources cleaned up")
-}
-
-// detectInitialUpstreamProxy checks environment variables for signs of an upstream proxy
-// This is used during initialization before the CertificateManager is created.
-func detectInitialUpstreamProxy(config *common.ReverseProxyConfig) bool {
-	// Check if detection is explicitly disabled
-	if !config.DetectUpstreamProxy {
-		logger.Debug("Upstream proxy detection disabled by config")
-		return false
-	}
-
-	// Check for common environment variables set by upstream proxies
-	if os.Getenv("HTTPS") == "on" ||
-		os.Getenv("HTTP_X_FORWARDED_PROTO") == "https" ||
-		os.Getenv("HTTP_X_FORWARDED_SSL") == "on" {
-		logger.Info("Initial upstream TLS-terminating proxy detected via environment variables",
-			"detection_method", "environment_variables",
-			"https", os.Getenv("HTTPS"),
-			"x_forwarded_proto", os.Getenv("HTTP_X_FORWARDED_PROTO"),
-			"x_forwarded_ssl", os.Getenv("HTTP_X_FORWARDED_SSL"))
-		return true
-	}
-
-	// Check Cloudflare headers
-	if cfVisitor := os.Getenv("HTTP_CF_VISITOR"); cfVisitor != "" {
-		if strings.Contains(cfVisitor, "\"scheme\":\"https\"") {
-			logger.Info("Initial Cloudflare proxy detected via environment variables",
-				"detection_method", "cloudflare_headers",
-				"cf_visitor", cfVisitor)
-			return true
-		}
-	}
-
-	logger.Debug("No initial upstream proxy detected via environment variables")
-	return false
 }
 
 // requestDomainCertificate requests a certificate for a domain

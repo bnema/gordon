@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bnema/gordon/pkg/logger"
@@ -27,6 +29,9 @@ func (p *Proxy) setupMiddleware() {
 
 	// Add UUID generator middleware for both HTTP and HTTPS servers
 	p.httpsServer.Use(p.createRequestIDMiddleware())
+
+	// Add middleware to log incoming headers (for debugging Cloudflare detection)
+	p.httpsServer.Use(logHeadersMiddleware())
 
 	// Check if rate limiting is disabled via configuration
 	if p.config.EnableRateLimit {
@@ -211,6 +216,22 @@ func (p *Proxy) createRequestIDMiddleware() echo.MiddlewareFunc {
 			c.Response().Header().Set(echo.HeaderXRequestID, requestID)
 
 			// Continue processing
+			return next(c)
+		}
+	}
+}
+
+// logHeadersMiddleware creates a middleware function to log request headers
+func logHeadersMiddleware() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			// Log all headers at DEBUG level
+			headerStrings := []string{}
+			for k, v := range c.Request().Header {
+				headerStrings = append(headerStrings, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
+			}
+			logger.Debug("Incoming Request Headers", "request_id", c.Get(RequestIDKey), "headers", strings.Join(headerStrings, " | "))
+
 			return next(c)
 		}
 	}

@@ -221,6 +221,10 @@ func bindHTMXEndpoints(e *echo.Echo, a *server.App) {
 	htmxGroup.DELETE("/image-manager/delete/:ID", func(c echo.Context) error {
 		return handlers.ImageManagerDelete(c, a)
 	})
+	// Purge unused images
+	htmxGroup.POST("/image-manager/prune", func(c echo.Context) error {
+		return handlers.ImageManagerPrune(c, a)
+	})
 
 	// List all containers
 	htmxGroup.GET("/container-manager", func(c echo.Context) error {

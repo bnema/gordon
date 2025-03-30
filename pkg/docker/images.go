@@ -13,8 +13,10 @@ import (
 	"github.com/bnema/gordon/pkg/verify"
 	"github.com/charmbracelet/log"
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/filters"
+	image "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-units"
 )
 
 func ListContainerImages() ([]image.Summary, error) {
@@ -324,4 +326,35 @@ func GetAllImages() ([]image.Summary, error) {
 	}
 
 	return images, nil
+}
+
+// PruneImages purges all unused (dangling) images from the Docker engine
+func PruneImages() (uint64, error) {
+	// Ensure the Docker client is initialized
+	if err := CheckIfInitialized(); err != nil {
+		return 0, fmt.Errorf("docker client not initialized: %w", err)
+	}
+
+	ctx := context.Background()
+	cli := dockerCli // Use the global client instance
+
+	// Define the filter to prune only dangling images (those without tags)
+	pruneFilters := filters.NewArgs()
+	pruneFilters.Add("dangling", "true")
+
+	// Prune the images
+	report, err := cli.ImagesPrune(ctx, pruneFilters)
+	if err != nil {
+		log.Error("Failed to prune images", "error", err)
+		return 0, fmt.Errorf("failed to prune images: %w", err)
+	}
+
+	// Log the results
+	log.Infof("Purged %d images, reclaimed %s space", len(report.ImagesDeleted), units.HumanSize(float64(report.SpaceReclaimed)))
+	for _, img := range report.ImagesDeleted {
+		log.Debugf("- Deleted: %s", img.Deleted)
+		log.Debugf("- Untagged: %s", img.Untagged)
+	}
+
+	return report.SpaceReclaimed, nil
 }

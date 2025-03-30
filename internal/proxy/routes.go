@@ -1971,44 +1971,6 @@ func (p *Proxy) doProxyRequest(c echo.Context, route *ProxyRouteInfo) error {
 		c.Response().Write([]byte("Bad Gateway: Container is unreachable"))
 	}
 
-	// For admin domain, ensure the connection succeeds
-	if isAdminDomain {
-		// Do a pre-check to make sure the admin service is reachable
-		testURL := fmt.Sprintf("http://%s:%s/admin/ping", containerIP, containerPort)
-		client := &http.Client{
-			Timeout: 2 * time.Second,
-			Transport: &http.Transport{
-				DialContext: (&net.Dialer{
-					Timeout: 1 * time.Second,
-				}).DialContext,
-			},
-		}
-
-		logger.Debug("Testing admin connection before proxying",
-			"test_url", testURL)
-
-		_, err := client.Get(testURL)
-		if err != nil {
-			logger.Warn("Admin service pre-check failed, trying alternative connection methods",
-				"error", err)
-
-			// Try alternative IPs for the admin domain if the container IP isn't working
-			altIPs := []string{"localhost", "127.0.0.1", p.app.GetConfig().Http.SubDomain}
-
-			for _, altIP := range altIPs {
-				testURL = fmt.Sprintf("http://%s:%s/admin/ping", altIP, containerPort)
-				_, err := client.Get(testURL)
-				if err == nil {
-					logger.Info("Found working admin connection with alternative IP",
-						"ip", altIP)
-					containerIP = altIP
-					targetURL.Host = fmt.Sprintf("%s:%s", containerIP, containerPort)
-					break
-				}
-			}
-		}
-	}
-
 	// Serve the request using the reverse proxy
 	logger.Debug("Serving proxy request",
 		"target", targetURL.String())
