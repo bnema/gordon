@@ -7,7 +7,6 @@
 /* Embeded path : assets/css/cutsom.css */
 
 @import "tailwindcss";
-@source "../../../templating/models/html/**/*.{gohtml,go}";
 @plugin "daisyui";
 
 /* Custom DaisyUI theme */
@@ -17,8 +16,8 @@
   prefersdark: true;
   color-scheme: "dark";
   --color-base-100: oklch(28% 0.091 267.935);
-  --color-base-200: oklch(13% 0.028 261.692);
-  --color-base-300: oklch(20% 0.042 265.755);
+  --color-base-200: oklch(20% 0.042 265.755);
+  --color-base-300: oklch(13% 0.028 261.692);
   --color-base-content: oklch(93% 0.034 272.788);
   --color-primary: oklch(87% 0 0);
   --color-primary-content: oklch(14% 0 0);
@@ -55,7 +54,7 @@
   }
   
   .btn-secondary {
-    @apply flex w-full justify-center border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2;
+    @apply flex w-full justify-center border border-secondary bg-secondary px-4 py-2 text-sm font-medium text-secondary-content hover:bg-secondary/90 focus:outline-none focus:ring-2 focus:ring-secondary focus:ring-offset-2;
   }
   
   .btn-danger {
@@ -89,7 +88,7 @@
   
   /* Card styles */
   .card {
-    @apply bg-white p-4 shadow mb-4;
+    @apply bg-base-100 p-4 shadow mb-4;
   }
   
   .card-header {
@@ -98,7 +97,7 @@
   
   /* Background styles */
   .bg-app {
-    @apply bg-indigo-50;
+    @apply bg-base-300;
   }
   
   .bg-sidebar {
@@ -106,7 +105,7 @@
   }
   
   .bg-card {
-    @apply bg-white;
+    @apply bg-base-100;
   }
   
   /* Text styles */
