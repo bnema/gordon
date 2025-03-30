@@ -29,6 +29,25 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 	// Language detection
 	e.Use(middleware.LanguageDetection)
 
+	log.Debug("Binding static routes under /assets/*")
+	// Middleware to set cache headers for static files
+	staticCacheMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			// Determine caching based on environment
+			if os.Getenv("RUN_ENV") != "dev" {
+				c.Response().Header().Set("Cache-Control", "public, max-age=86400") // Cache for 1 day in production
+			} else {
+				c.Response().Header().Set("Cache-Control", "no-cache") // No caching in development
+			}
+			return next(c)
+		}
+	}
+	// Use Echo's static file middleware to serve assets directly from the filesystem.
+	// The path is relative to the project root.
+	staticGroup := e.Group("/assets")
+	staticGroup.Use(staticCacheMiddleware)
+	staticGroup.Static("/", "internal/webui/public/assets")
+
 	AdminPath := a.Config.Admin.Path
 	log.Debug("Binding login routes with AdminPath", "path", AdminPath)
 	bindLoginRoute(e, a, AdminPath)
@@ -53,27 +72,6 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 
 	log.Debug("Binding admin routes with AdminPath", "path", AdminPath)
 	bindAdminRoute(e, a, AdminPath)
-
-	log.Debug("Binding static routes under /assets/*")
-
-	// Middleware to set cache headers for static files
-	staticCacheMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			// Determine caching based on environment
-			if os.Getenv("RUN_ENV") != "dev" {
-				c.Response().Header().Set("Cache-Control", "public, max-age=86400") // Cache for 1 day in production
-			} else {
-				c.Response().Header().Set("Cache-Control", "no-cache") // No caching in development
-			}
-			return next(c)
-		}
-	}
-
-	// Use Echo's static file middleware to serve assets directly from the filesystem.
-	// The path is relative to the project root.
-	staticGroup := e.Group("/assets")
-	staticGroup.Use(staticCacheMiddleware)
-	staticGroup.Static("/", "internal/webui/public/assets")
 
 	// Only bind HTMX endpoints if Admin WebUI is enabled
 	if a.Config.Admin.IsAdminWebUIEnabled() {
