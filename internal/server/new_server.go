@@ -1,7 +1,6 @@
 package server
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -9,8 +8,8 @@ import (
 	"github.com/bnema/gordon/internal/common"
 	"github.com/bnema/gordon/internal/proxy"
 	"github.com/bnema/gordon/internal/templating"
-	"github.com/bnema/gordon/internal/webui"
 	"github.com/bnema/gordon/pkg/logger"
+	"gopkg.in/yaml.v3"
 )
 
 func NewServerApp(buildConfig *common.BuildConfig) (*App, error) {
@@ -40,28 +39,24 @@ func NewServerApp(buildConfig *common.BuildConfig) (*App, error) {
 		}
 	}
 
-	// Open the strings.yml file containing the strings for the current language
-	file, err := templating.TemplateFS.Open("txt/locstrings.yml")
+	// Read the embedded localization file
+	locBytes, err := templating.LocFS.ReadFile("models/txt/locstrings.yml")
 	if err != nil {
-		logger.Fatalf("Failed to open strings.yml: %v", err)
+		logger.Fatalf("Failed to read embedded locstrings.yml: %v", err)
 	}
 
-	// Read the file content into a byte slice
-	bytes, err := io.ReadAll(file)
-	if err != nil {
-		logger.Fatalf("Failed to read strings.yml: %v", err)
+	// Parse the YAML content
+	var stringsMap map[string]interface{}
+	if err := yaml.Unmarshal(locBytes, &stringsMap); err != nil {
+		logger.Fatalf("Failed to parse locstrings.yml: %v", err)
 	}
-
-	file.Close()
 
 	// Initialize DB
 	DBDir := config.General.StorageDir + "/db"
 
 	// Initialize App
 	a := &App{
-		TemplateFS: templating.TemplateFS,
-		PublicFS:   webui.PublicFS,
-		LocYML:     bytes,
+		Strings:    stringsMap,
 		DBDir:      DBDir,
 		DBFilename: DBFilename,
 		Config:     *config,

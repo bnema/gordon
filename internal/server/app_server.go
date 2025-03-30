@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io/fs"
 	"time"
 
 	"github.com/bnema/gordon/internal/common"
@@ -14,9 +13,10 @@ import (
 )
 
 type App struct {
-	TemplateFS      fs.FS
-	PublicFS        fs.FS
-	LocYML          []byte // strings.yml contains the strings for the current language
+	// TemplateFS fs.FS // No longer needed
+	// PublicFS        fs.FS // Removed as we now serve assets directly
+	// LocYML          []byte // Replaced by parsed Strings map
+	Strings         map[string]interface{} // Parsed localization strings
 	DBDir           string
 	DBFilename      string
 	DBPath          string
