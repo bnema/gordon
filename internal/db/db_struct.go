@@ -26,7 +26,7 @@ type Sessions struct {
 	BrowserInfo string `sql:"browser_info"`
 	AccessToken string `sql:"access_token"`
 	Expires     string `sql:"expires"`
-	IsOnline    bool   `sql:"is_online"`
+	IsActive    bool   `sql:"is_active"`
 }
 
 type Provider struct {

@@ -630,7 +630,7 @@ func (p *ProviderWrapper) ScanFromRows(rows *sql.Rows) error {
 }
 
 func (s *SessionsWrapper) ScanFromRows(rows *sql.Rows) error {
-	return rows.Scan(&s.ID, &s.AccountID, &s.AccessToken, &s.BrowserInfo, &s.Expires, &s.IsOnline)
+	return rows.Scan(&s.ID, &s.AccountID, &s.AccessToken, &s.BrowserInfo, &s.Expires, &s.IsActive)
 }
 
 func (c *ClientsWrapper) ScanFromRows(rows *sql.Rows) error {
@@ -681,7 +681,7 @@ func PopulateStructWithTables(a *App) error {
 
 	// Populate the Sessions table
 	sessionsWrapper := &SessionsWrapper{Sessions: &a.DBTables.Sessions}
-	if err := populateTableFromDB(a, "SELECT id, account_id, browser_info, access_token, expires, is_online FROM sessions", sessionsWrapper); err != nil {
+	if err := populateTableFromDB(a, "SELECT id, account_id, browser_info, access_token, expires, is_active FROM sessions", sessionsWrapper); err != nil {
 		return err
 	}
 

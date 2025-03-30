@@ -9,6 +9,7 @@ import (
 
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/load"
+	components "github.com/bnema/gordon/internal/templating/models/templ/components"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/humanize"
@@ -88,35 +89,6 @@ type ContainerDisplay struct {
 	IsGordonContainer bool
 }
 
-// renderHTML is a generalized function to render HTML
-func renderHTML(c echo.Context, a *server.App, path, templateName string, data map[string]interface{}) error {
-	logger.Debug("Rendering HTML", "path", path, "template", templateName, "data_keys", getKeysFromMap(data))
-
-	rendererData, err := render.GetHTMLRenderer(path, templateName, a.TemplateFS, a)
-	if err != nil {
-		logger.Error("Error getting HTML renderer", "error", err)
-		return err
-	}
-
-	renderedHTML, err := rendererData.Render(data, a)
-	if err != nil {
-		logger.Error("Error rendering HTML", "error", err)
-		return err
-	}
-
-	logger.Debug("HTML rendered successfully", "content_length", len(renderedHTML))
-	return c.HTML(http.StatusOK, renderedHTML)
-}
-
-// getKeysFromMap returns a slice of keys from a map
-func getKeysFromMap(data map[string]interface{}) []string {
-	keys := make([]string, 0, len(data))
-	for k := range data {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // ActionSuccess returns the success HTML fragment
 func ActionSuccess(a *server.App) string {
 	// Create a data structure to pass to the template
@@ -135,60 +107,54 @@ func ActionSuccess(a *server.App) string {
 
 // ImageManagerComponent handles the /image-manager route (HTMX route)
 func ImageManagerComponent(c echo.Context, a *server.App) error {
-	logger.Debug("ImageManagerComponent called", "url", c.Request().URL.String())
-
 	images, err := docker.ListContainerImages()
 	if err != nil {
-		logger.Error("Error listing container images:", "error", err)
 		return sendError(c, err)
 	}
 
-	logger.Debug("Images found", "count", len(images))
-	for i, img := range images {
-		logger.Debug("Image details", "index", i, "id", img.ID, "repoTags", img.RepoTags)
-	}
-
-	var humanReadableImages []HumanReadableContainerImage
-
+	var humanReadableImages []components.HumanReadableImage
 	for _, img := range images {
-		shortID := img.ID[7:19]
+		shortID := img.ID[7:19] // Display a shorter version of the ID
 		safelyInteractWithIDMap(Update, shortID, img.ID)
-		createdTime := time.Unix(img.Created, 0)
-		createdStr := humanize.TimeAgo(createdTime)
+		createdStr := humanize.TimeAgo(time.Unix(img.Created, 0))
 		sizeStr := humanize.BytesToReadableSize(img.Size)
 
-		for _, repoTag := range img.RepoTags {
-			// Split the repo tag into repository and tag
+		// Parse RepoTags to extract repository and tag
+		var repository, tag string
+		repoTag := "<none>:<none>"
+		if len(img.RepoTags) > 0 {
+			repoTag = img.RepoTags[0]
 			parts := strings.Split(repoTag, ":")
-			repository := parts[0]
-			tag := "latest"
-			if len(parts) > 1 {
+			if len(parts) == 2 {
+				repository = parts[0]
 				tag = parts[1]
+			} else {
+				repository = repoTag // Handle cases like "image" without a tag
+				tag = "latest"
 			}
-
-			humanReadableImages = append(humanReadableImages, HumanReadableContainerImage{
-				ID:          img.ID,
-				ShortID:     shortID,
-				CreatedStr:  createdStr,
-				SizeStr:     sizeStr,
-				Name:        repoTag,
-				RepoDigests: img.RepoDigests,
-				RepoTags:    img.RepoTags,
-				// Add fields that match template expectations
-				Repository: repository,
-				Tag:        tag,
-				Size:       sizeStr,
-				Created:    createdStr,
-			})
 		}
-	}
 
-	data := map[string]interface{}{
-		"Images": humanReadableImages,
+		// Create instance of components.HumanReadableImage
+		humanReadableImages = append(humanReadableImages, components.HumanReadableImage{
+			ID:          img.ID,
+			ShortID:     shortID,
+			Created:     createdStr,
+			Size:        sizeStr,
+			Name:        repoTag,
+			RepoDigests: img.RepoDigests,
+			RepoTags:    img.RepoTags,
+			Repository:  repository,
+			Tag:         tag,
+		})
 	}
 
 	logger.Debug("Rendering imagelist template with", len(humanReadableImages), "images")
-	return renderHTML(c, a, "html/fragments", "imagelist.gohtml", data)
+
+	// Use the Templ renderer
+	renderer := render.NewTemplRenderer(a)
+	component := components.ImageList(humanReadableImages)
+
+	return renderer.RenderTempl(c, component)
 }
 
 // ImageManagerDelete handles the /image-manager/delete route
@@ -226,69 +192,11 @@ func ContainerManagerComponent(c echo.Context, a *server.App) error {
 		logger.Debug("Container details", "index", i, "id", container.ID, "names", container.Names, "state", container.State)
 	}
 
-	var humanReadableContainers []HumanReadableContainer
+	// Use the Templ renderer
+	renderer := render.NewTemplRenderer(a)
+	component := components.ContainerList(containers, len(containers) == 0)
 
-	for _, container := range containers {
-		localContainer := container // Make a local copy
-		sizeStr := humanize.BytesToReadableSize(container.SizeRw)
-		stateColor := "blue"
-
-		if container.State == "running" {
-			stateColor = "green"
-		} else if container.State == "exited" {
-			stateColor = "red"
-		}
-		var ports []string
-		for _, port := range container.Ports {
-			portStr := fmt.Sprintf("%d:%d", port.PublicPort, port.PrivatePort)
-			ports = append(ports, portStr)
-		}
-
-		for _, name := range container.Names {
-			name = name[1:]
-			humanReadableContainers = append(humanReadableContainers, HumanReadableContainer{
-				Container:  &localContainer,
-				SizeStr:    sizeStr,
-				UpSince:    humanize.TimeAgo(time.Unix(container.Created, 0)),
-				StateColor: stateColor,
-				Name:       name,
-				Ports:      ports,
-				ProxyPort:  extractProxyPort(container.Labels),
-				CreatedStr: humanize.TimeAgo(time.Unix(container.Created, 0)),
-			})
-		}
-	}
-	yamlData, err := GetLocalizedData(c, a)
-	if err != nil {
-		return err
-	}
-	data := map[string]interface{}{
-		"Lang":        yamlData["Lang"],
-		"Containers":  humanReadableContainers,
-		"NoContainer": len(humanReadableContainers) == 0,
-	}
-
-	logger.Debug("Rendering containerlist template",
-		"humanReadableContainers", len(humanReadableContainers),
-		"noContainer", len(humanReadableContainers) == 0)
-
-	return renderHTML(c, a, "html/fragments", "containerlist.gohtml", data)
-}
-
-func extractProxyPort(labels map[string]string) string {
-	// Check for the gordon proxy port label
-	if port, ok := labels["gordon.proxy.port"]; ok {
-		return port
-	}
-
-	// Backward compatibility for Traefik-labeled containers
-	for key, value := range labels {
-		if strings.Contains(key, "loadbalancer.server.port") {
-			return value
-		}
-	}
-
-	return ""
+	return renderer.RenderTempl(c, component)
 }
 
 // ContainerManagerDelete handles the /container-manager/delete route

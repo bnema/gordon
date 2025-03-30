@@ -49,13 +49,13 @@ func ValidateSessionAndUser(c echo.Context, a *server.App) error {
 		return fmt.Errorf("account does not exist")
 	}
 
-	isValidInDB, err := IsSessionValidInDB(a, sessionID)
+	isValidInDB, err := IsSessionActiveInDB(a, sessionID)
 	if err != nil {
 		logger.Error("Failed to check session validity in DB", "error", err, "sessionID", sessionID)
 		return fmt.Errorf("failed checking session validity in DB: %w", err)
 	}
 	if !isValidInDB {
-		logger.Warn("Session is invalid in DB (expired or not online)", "sessionID", sessionID)
+		logger.Warn("Session is invalid in DB (expired or not active)", "sessionID", sessionID)
 		return fmt.Errorf("session invalid or expired")
 	}
 
@@ -73,12 +73,12 @@ func ValidateSessionAndUser(c echo.Context, a *server.App) error {
 	return nil
 }
 
-func IsSessionValidInDB(a *server.App, sessionID string) (bool, error) {
+func IsSessionActiveInDB(a *server.App, sessionID string) (bool, error) {
 	var dbExpiresStr string
-	var isOnline bool
+	var isActive bool
 
-	query := "SELECT expires, is_online FROM sessions WHERE id = ?"
-	err := a.DB.QueryRow(query, sessionID).Scan(&dbExpiresStr, &isOnline)
+	query := "SELECT expires, is_active FROM sessions WHERE id = ?"
+	err := a.DB.QueryRow(query, sessionID).Scan(&dbExpiresStr, &isActive)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -89,8 +89,10 @@ func IsSessionValidInDB(a *server.App, sessionID string) (bool, error) {
 		return false, err
 	}
 
-	if !isOnline {
-		logger.Warn("Session found in DB but marked as not online", "sessionID", sessionID)
+	logger.Debug("Session validity check: Read DB values", "sessionID", sessionID, "isActive_read", isActive, "expires_read", dbExpiresStr)
+
+	if !isActive {
+		logger.Warn("Session found in DB but marked as not active", "sessionID", sessionID)
 		return false, nil
 	}
 

@@ -5,7 +5,6 @@ go 1.24.1
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7
 	github.com/Masterminds/semver/v3 v3.3.1
-	github.com/PuerkitoBio/goquery v1.10.2
 	github.com/a-h/templ v0.3.833
 	github.com/charmbracelet/bubbles v0.20.0
 	github.com/charmbracelet/lipgloss v1.0.0
@@ -24,6 +23,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.36.0
 )
+
+require github.com/PuerkitoBio/goquery v1.10.2 // indirect
 
 require (
 	cloud.google.com/go/auth v0.13.0 // indirect

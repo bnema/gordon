@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/bnema/gordon/internal/server"
+	"github.com/bnema/gordon/internal/templating/models/templ/components"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/filestore"
@@ -18,20 +19,11 @@ const MaxUploadSize = 10 * 1024 * 1024 * 1024 // 10GB
 
 // UploadImageHandler handles the /upload-image route to show the form
 func UploadImageGETHandler(c echo.Context, a *server.App) error {
-	data := map[string]interface{}{
-		"Title": "Upload Image",
-	}
+	// Use the Templ renderer
+	renderer := render.NewTemplRenderer(a)
+	component := components.UploadImageForm()
 
-	rendererData, err := render.GetHTMLRenderer("html/fragments", "uploadimage.gohtml", a.TemplateFS, a)
-	if err != nil {
-		return sendError(c, err)
-	}
-
-	renderedHTML, err := rendererData.Render(data, a)
-	if err != nil {
-		return err
-	}
-	return c.HTML(200, renderedHTML)
+	return renderer.RenderTempl(c, component)
 }
 
 // UploadImageHandler handles the /upload-image

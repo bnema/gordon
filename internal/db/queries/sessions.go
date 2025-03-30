@@ -20,19 +20,21 @@ type SessionQueries struct {
 	UpdateSessionExpiry string
 	CheckSessionExists  string
 	InvalidateSession   string
+	MarkSessionActive   string
 }
 
 // NewSessionQueries returns a new instance of SessionQueries
 func NewSessionQueries() *SessionQueries {
 	return &SessionQueries{
-		InsertSession:       "INSERT INTO sessions (id, account_id, access_token, browser_info, expires, is_online) VALUES (?, ?, ?, ?, ?, ?)",
-		GetSessionByToken:   "SELECT sessions.id, sessions.account_id, sessions.access_token, sessions.browser_info, sessions.expires, sessions.is_online FROM sessions INNER JOIN account ON sessions.account_id = account.id INNER JOIN provider ON account.id = provider.account_id WHERE sessions.access_token = ? AND sessions.browser_info = ?",
-		UpdateSessionToken:  "UPDATE sessions SET access_token = ?, expires = ? WHERE id = ?",
+		InsertSession:       "INSERT INTO sessions (id, account_id, access_token, browser_info, expires, is_active) VALUES (?, ?, ?, ?, ?, ?)",
+		GetSessionByToken:   "SELECT sessions.id, sessions.account_id, sessions.access_token, sessions.browser_info, sessions.expires, sessions.is_active FROM sessions INNER JOIN account ON sessions.account_id = account.id INNER JOIN provider ON account.id = provider.account_id WHERE sessions.access_token = ? AND sessions.browser_info = ?",
+		UpdateSessionToken:  "UPDATE sessions SET access_token = ?, expires = ?, is_active = true WHERE id = ?",
 		DeleteSession:       "DELETE FROM sessions WHERE account_id = ? AND id = ?",
 		GetSessionExpiry:    "SELECT expires FROM sessions WHERE account_id = ? AND id = ?",
 		UpdateSessionExpiry: "UPDATE sessions SET expires = ? WHERE account_id = ? AND id = ?",
 		CheckSessionExists:  "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)",
-		InvalidateSession:   "UPDATE sessions SET is_online = ? WHERE id = ?",
+		InvalidateSession:   "UPDATE sessions SET is_active = ? WHERE id = ?",
+		MarkSessionActive:   "UPDATE sessions SET is_active = true WHERE id = ?",
 	}
 }
 
@@ -58,7 +60,7 @@ func CreateDBSession(database *sql.DB, browserInfo string, accessToken string, a
 		AccessToken: accessToken,
 		BrowserInfo: browserInfo,
 		Expires:     expireTime,
-		IsOnline:    true,
+		IsActive:    true,
 	}
 
 	logger.Debug("Session created in database", "session_id", sessionID, "account_id", accountID, "expires", expireTime)
@@ -79,7 +81,7 @@ func GetDBUserSession(database *sql.DB, accessToken string, browserInfo string) 
 		&session.AccessToken,
 		&session.BrowserInfo,
 		&session.Expires,
-		&session.IsOnline,
+		&session.IsActive,
 	)
 
 	if err != nil {
@@ -130,12 +132,19 @@ func CreateOrUpdateSession(database *sql.DB, accountID string, accessToken strin
 	// If the session exists, update its token and expiry
 	if existingSession != nil {
 		logger.Debug("Existing session found, updating token and expiry", "sessionID", existingSession.ID, "accountID", accountID)
-		_, err := database.Exec(
-			NewSessionQueries().UpdateSessionToken,
-			accessToken,
-			expireTime,
-			existingSession.ID,
+		updateQuery := NewSessionQueries().UpdateSessionToken
+		updateParams := []interface{}{accessToken, expireTime, existingSession.ID}
+		logger.Debug("Executing session update", "query", updateQuery, "params", updateParams)
+		result, err := database.Exec(
+			updateQuery,
+			updateParams...,
 		)
+		if err != nil {
+			logger.Error("Database Exec failed during session update", "error", err, "session_id", existingSession.ID)
+		} else {
+			rowsAffected, _ := result.RowsAffected()
+			logger.Debug("Database Exec success during session update", "session_id", existingSession.ID, "rows_affected", rowsAffected)
+		}
 		if err != nil {
 			logger.Error("Failed to update existing session", "error", err, "session_id", existingSession.ID)
 			return nil, fmt.Errorf("error updating session: %w", err)
@@ -143,17 +152,27 @@ func CreateOrUpdateSession(database *sql.DB, accountID string, accessToken strin
 		// Update the struct we have in memory
 		existingSession.AccessToken = accessToken
 		existingSession.Expires = expireTime
-		existingSession.IsOnline = true // Ensure it's marked online
+		existingSession.IsActive = true // Ensure it's marked active
 		logger.Info("Session updated successfully", "sessionID", existingSession.ID)
 		return existingSession, nil
 	} else {
 		// If the session does not exist, create a new one
 		logger.Debug("No existing session found, creating new session", "accountID", accountID)
 		sessionID := uuid.NewString() // Use uuid directly
-		_, err := database.Exec(
-			NewSessionQueries().InsertSession,
-			sessionID, accountID, accessToken, browserInfo, expireTime, true,
+		insertQuery := NewSessionQueries().InsertSession
+		insertParams := []interface{}{sessionID, accountID, accessToken, browserInfo, expireTime, true}
+		logger.Debug("Executing session insert", "query", insertQuery, "params", insertParams)
+		result, err := database.Exec(
+			insertQuery,
+			insertParams...,
 		)
+		if err != nil {
+			logger.Error("Database Exec failed during session insert", "error", err, "accountID", accountID)
+		} else {
+			rowsAffected, _ := result.RowsAffected()
+			lastInsertId, _ := result.LastInsertId() // Might be 0/irrelevant for SQLite UUID PKs, but log anyway
+			logger.Debug("Database Exec success during session insert", "accountID", accountID, "rows_affected", rowsAffected, "last_insert_id", lastInsertId)
+		}
 		if err != nil {
 			logger.Error("Failed to create new session", "error", err, "accountID", accountID)
 			return nil, fmt.Errorf("error creating session: %w", err)
@@ -165,7 +184,7 @@ func CreateOrUpdateSession(database *sql.DB, accountID string, accessToken strin
 			AccessToken: accessToken,
 			BrowserInfo: browserInfo,
 			Expires:     expireTime,
-			IsOnline:    true,
+			IsActive:    true,
 		}
 		logger.Info("New session created successfully", "sessionID", newSession.ID)
 		return newSession, nil
@@ -176,14 +195,14 @@ func CreateOrUpdateSession(database *sql.DB, accountID string, accessToken strin
 func GetSessionByAccountAndBrowser(database *sql.DB, accountID string, browserInfo string) (*db.Sessions, error) {
 	session := &db.Sessions{}
 	// Define the query inline or add to SessionQueries struct
-	query := "SELECT id, account_id, access_token, browser_info, expires, is_online FROM sessions WHERE account_id = ? AND browser_info = ?"
+	query := "SELECT id, account_id, access_token, browser_info, expires, is_active FROM sessions WHERE account_id = ? AND browser_info = ?"
 	err := database.QueryRow(query, accountID, browserInfo).Scan(
 		&session.ID,
 		&session.AccountID,
 		&session.AccessToken,
 		&session.BrowserInfo,
 		&session.Expires,
-		&session.IsOnline,
+		&session.IsActive,
 	)
 	if err != nil {
 		// Return sql.ErrNoRows if not found
@@ -268,8 +287,8 @@ func CheckDBSessionExists(database *sql.DB, sessionID string) (bool, error) {
 	return sessionExists, nil
 }
 
-// InvalidateDBSession marks a session as offline
-func InvalidateDBSession(database *sql.DB, sessionID string) error {
+// MarkSessionInactive marks a session as inactive (sets is_active to false)
+func MarkSessionInactive(database *sql.DB, sessionID string) error {
 	_, err := database.Exec(
 		NewSessionQueries().InvalidateSession,
 		false,
@@ -277,10 +296,31 @@ func InvalidateDBSession(database *sql.DB, sessionID string) error {
 	)
 
 	if err != nil {
-		logger.Error("Failed to invalidate session", "error", err, "session_id", sessionID)
+		logger.Error("Failed to mark session inactive", "error", err, "session_id", sessionID)
 		return err
 	}
 
-	logger.Debug("Session invalidated", "sessionID", sessionID)
+	logger.Debug("Session marked as inactive", "sessionID", sessionID)
+	return nil
+}
+
+// MarkSessionActive sets the is_active flag to true for a given session ID.
+func MarkSessionActive(database *sql.DB, sessionID string) error {
+	query := NewSessionQueries().MarkSessionActive
+	result, err := database.Exec(query, sessionID)
+
+	if err != nil {
+		logger.Error("Failed to mark session active in database", "error", err, "session_id", sessionID)
+		return fmt.Errorf("failed to execute MarkSessionActive query: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		logger.Warn("MarkSessionActive query executed but did not affect any rows", "sessionID", sessionID)
+		// This might indicate the session ID didn't exist, though the query technically succeeded.
+		// Consider if this should return an error or not. For now, logging a warning.
+	}
+
+	logger.Debug("Marked session active in database", "sessionID", sessionID, "rows_affected", rowsAffected)
 	return nil
 }
