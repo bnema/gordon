@@ -2,12 +2,12 @@ package templating
 
 import (
 	"embed"
-
-	"github.com/labstack/echo/v4"
 )
 
-// Embedding templates directories
+// Embedding localization file
 
-//go:embed models/*
-var template embed.FS
-var TemplateFS = echo.MustSubFS(template, "models")
+//go:embed models/txt/locstrings.yml
+var locFS embed.FS
+
+// LocFS provides access to the embedded localization file.
+var LocFS = locFS

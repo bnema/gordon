@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/server"
-	"github.com/bnema/gordon/internal/templating/load"
 	components "github.com/bnema/gordon/internal/templating/models/templ/components"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
@@ -100,18 +99,9 @@ type ContainerDisplay struct {
 
 // ActionSuccess returns the success HTML fragment
 func ActionSuccess(a *server.App) string {
-	// Create a data structure to pass to the template
-	data := map[string]interface{}{
-		"Message": "Container deleted successfully!",
-	}
 
-	successFragment, err := load.Fragment(a, "success", data)
-	if err != nil {
-		fmt.Println(err)
-		return ""
-	}
-
-	return successFragment
+	// return just a string
+	return "success"
 }
 
 // ImageManagerComponent handles the /image-manager route (HTMX route)

@@ -56,25 +56,24 @@ func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 
 	log.Debug("Binding static routes under /assets/*")
 
-	// Setup static file server
-	httpFS := http.FS(a.PublicFS)
-	noDirFS := handlers.NewNoDirFileSys(httpFS)
-	fileServer := http.FileServer(noDirFS)
-
 	// Middleware to set cache headers for static files
 	staticCacheMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// Determine caching based on environment
 			if os.Getenv("RUN_ENV") != "dev" {
-				c.Response().Header().Set("Cache-Control", "public, max-age=86400") // 1 day
+				c.Response().Header().Set("Cache-Control", "public, max-age=86400") // Cache for 1 day in production
 			} else {
-				c.Response().Header().Set("Cache-Control", "no-cache")
+				c.Response().Header().Set("Cache-Control", "no-cache") // No caching in development
 			}
 			return next(c)
 		}
 	}
 
-	// Serve static files from /assets path
-	e.GET("/assets/*", echo.WrapHandler(http.StripPrefix("/assets/", fileServer)), staticCacheMiddleware, echomid.Gzip())
+	// Use Echo's static file middleware to serve assets directly from the filesystem.
+	// The path is relative to the project root.
+	staticGroup := e.Group("/assets")
+	staticGroup.Use(staticCacheMiddleware)
+	staticGroup.Static("/", "internal/webui/public/assets")
 
 	// Only bind HTMX endpoints if Admin WebUI is enabled
 	if a.Config.Admin.IsAdminWebUIEnabled() {
