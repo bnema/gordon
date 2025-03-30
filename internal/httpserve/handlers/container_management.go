@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -17,6 +18,14 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/labstack/echo/v4"
 )
+
+// Shared state for last prune result
+var lastPruneResult struct {
+	Done    bool
+	Success bool
+	Message string
+	mutex   sync.Mutex
+}
 
 type MapOperation string
 
@@ -107,6 +116,25 @@ func ActionSuccess(a *server.App) string {
 
 // ImageManagerComponent handles the /image-manager route (HTMX route)
 func ImageManagerComponent(c echo.Context, a *server.App) error {
+	// Check last prune status and add trigger header if needed
+	lastPruneResult.mutex.Lock()
+	if lastPruneResult.Done {
+		var level string
+		if lastPruneResult.Success {
+			level = "success"
+		} else {
+			level = "error"
+		}
+		// Prepare JSON payload for HX-Trigger
+		payload := map[string]string{"level": level, "message": lastPruneResult.Message}
+		jsonPayload, _ := json.Marshal(payload) // Error handling omitted for brevity
+		c.Response().Header().Set("HX-Trigger", fmt.Sprintf(`{"showMessage": %s}`, string(jsonPayload)))
+
+		// Reset the flag
+		lastPruneResult.Done = false
+	}
+	lastPruneResult.mutex.Unlock()
+
 	images, err := docker.ListContainerImages()
 	if err != nil {
 		return sendError(c, err)
@@ -179,11 +207,39 @@ func ImageManagerDelete(c echo.Context, a *server.App) error {
 
 // ImageManagerPrune handles the /image-manager/prune route
 func ImageManagerPrune(c echo.Context, a *server.App) error {
-	numPurged, err := docker.PruneImages()
-	if err != nil {
-		return sendError(c, err)
-	}
-	return c.String(http.StatusOK, fmt.Sprintf("Successfully purged %d images", numPurged))
+	// Run pruning in a background goroutine
+	go func() {
+		var success bool
+		var message string
+		logger.Info("Starting background image prune...")
+		numPurged, err := docker.PruneImages() // Remove context argument
+		if err != nil {
+			logger.Error("Background image prune failed", "error", err)
+			success = false
+			message = fmt.Sprintf("Image prune failed: %v", err)
+			// Optionally, notify the user or admin about the failure (e.g., via websocket, SSE, or a status endpoint)
+			return
+		} else {
+			logger.Info("Background image prune completed", "purged_count", numPurged)
+			success = true
+			message = fmt.Sprintf("Successfully purged %d images.", numPurged)
+			// Optionally, notify the user about completion (e.g., via websocket, SSE, or updating the UI)
+		}
+
+		// Update shared state
+		lastPruneResult.mutex.Lock()
+		lastPruneResult.Done = true
+		lastPruneResult.Success = success
+		lastPruneResult.Message = message
+		lastPruneResult.mutex.Unlock()
+	}()
+
+	// Immediately return 202 Accepted to the client
+	c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextHTML) // Set appropriate content type if needed for HTMX
+	c.Response().WriteHeader(http.StatusAccepted)
+	// Optionally, return a message or updated component indicating the process has started
+	// For now, just return a simple message in the response body
+	return c.String(http.StatusAccepted, "Image pruning started in the background.")
 }
 
 // ContainerManagerComponent handles the /container-manager route
