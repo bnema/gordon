@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -16,13 +17,35 @@ import (
 func SecureRoutes(a *server.App) echo.MiddlewareFunc {
 	proxyURL := a.Config.Build.ProxyURL
 	urlCheckVersion := a.Config.Build.ProxyURL + "/version"
+
+	// Base directives
+	defaultSrc := "'self'"
+	styleSrc := "'self' 'unsafe-inline'"
+	fontSrc := "'self' data:"
+	imgSrc := "'self' data:"
+	connectSrc := fmt.Sprintf("'self' %s %s", proxyURL, urlCheckVersion)
+
+	// Start building script-src
+	scriptSrc := "'self' 'unsafe-inline' 'unsafe-eval'"
+
+	// Conditionally add Cloudflare Insights if SkipCertificates is true
+	if a.Config.ReverseProxy.SkipCertificates {
+		scriptSrc += " https://static.cloudflareinsights.com"
+	}
+
+	// Construct the final CSP string
+	csp := fmt.Sprintf(
+		"default-src %s; style-src %s; font-src %s; img-src %s; script-src %s; connect-src %s",
+		defaultSrc, styleSrc, fontSrc, imgSrc, scriptSrc, connectSrc,
+	)
+
 	return middleware.SecureWithConfig(middleware.SecureConfig{
 		XSSProtection:         "1; mode=block",
 		ContentTypeNosniff:    "nosniff",
 		XFrameOptions:         "SAMEORIGIN",
 		HSTSMaxAge:            3600,
 		HSTSExcludeSubdomains: false,
-		ContentSecurityPolicy: "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' " + proxyURL + " " + urlCheckVersion,
+		ContentSecurityPolicy: csp, // Use the dynamically constructed CSP
 	})
 }
 

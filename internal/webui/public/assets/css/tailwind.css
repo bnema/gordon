@@ -3484,6 +3484,9 @@
       font-size: 0.625rem;
     }
   }
+  .bottom-4 {
+    bottom: calc(var(--spacing) * 4);
+  }
   .file-input {
     cursor: pointer;
     cursor: pointer;
@@ -4625,6 +4628,9 @@
   }
   .ml-10 {
     margin-left: calc(var(--spacing) * 10);
+  }
+  .ml-auto {
+    margin-left: auto;
   }
   .carousel-item {
     box-sizing: content-box;

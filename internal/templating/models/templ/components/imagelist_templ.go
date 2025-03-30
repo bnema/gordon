@@ -61,7 +61,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</h3><div class=\"flex gap-2\"><button class=\"btn btn-sm btn-secondary\" hx-get=\"/htmx/upload-image\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\"><span class=\"iconf\">\U000f0992</span> Upload</button> <button class=\"btn btn-sm btn-primary\" hx-get=\"/htmx/image-manager\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\"><span class=\"iconf\">\U000f0453</span> Refresh</button> <button class=\"btn btn-sm btn-warning\" hx-post=\"/htmx/image-manager/prune\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\" hx-confirm=\"Are you sure you want to delete all unused (dangling and unreferenced) images? This cannot be undone.\"><span class=\"iconf\">\U000f0a79</span> Purge Unused</button></div></div><!-- Image list --><table class=\"table\"><!-- head --><thead><tr><th>Repository</th><th>Tag</th><th>Size</th><th>Created</th><th>Actions</th></tr></thead> <tbody>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</h3><div class=\"flex gap-2\"><button class=\"btn btn-sm btn-secondary\" hx-get=\"/htmx/upload-image\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\"><span class=\"iconf\">\U000f0992</span> Upload</button> <button class=\"btn btn-sm btn-primary\" hx-get=\"/htmx/image-manager\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\"><span class=\"iconf\">\U000f0453</span> Refresh</button> <button id=\"purge-button\" class=\"btn btn-sm btn-warning\" hx-post=\"/htmx/image-manager/prune\" hx-target=\"#image-manager\" hx-swap=\"innerHTML\" hx-indicator=\"#purge-spinner\" hx-confirm=\"Are you sure you want to delete all unused (dangling and unreferenced) images? This cannot be undone.\"><span class=\"btn-content flex items-center\"><span class=\"iconf mr-1\">\U000f0a79</span> Purge Unused</span> <span class=\"loading loading-spinner loading-sm hidden\" id=\"purge-spinner\"></span></button></div></div><!-- Image list --><table class=\"table\"><!-- head --><thead><tr><th>Repository</th><th>Tag</th><th>Size</th><th>Created</th><th>Actions</th></tr></thead> <tbody>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -79,7 +79,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(img.Repository)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 86, Col: 50}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 91, Col: 50}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -92,7 +92,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var4 string
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(img.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 87, Col: 51}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 92, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 				if templ_7745c5c3_Err != nil {
@@ -105,7 +105,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var5 string
 				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(img.Tag)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 91, Col: 21}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 96, Col: 21}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 				if templ_7745c5c3_Err != nil {
@@ -118,7 +118,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var6 string
 				templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(img.Size)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 92, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 97, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 				if templ_7745c5c3_Err != nil {
@@ -131,7 +131,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var7 string
 				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(img.Created)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 93, Col: 25}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 98, Col: 25}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 				if templ_7745c5c3_Err != nil {
@@ -144,7 +144,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var8 string
 				templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/htmx/create-container/%s", img.ShortID))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 103, Col: 94}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 108, Col: 94}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 				if templ_7745c5c3_Err != nil {
@@ -157,7 +157,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var9 string
 				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs("#create-form-target-" + img.ShortID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 104, Col: 61}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 109, Col: 61}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 				if templ_7745c5c3_Err != nil {
@@ -170,7 +170,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var10 string
 				templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/htmx/image-manager/delete/%s", img.ShortID))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 113, Col: 101}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 118, Col: 101}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 				if templ_7745c5c3_Err != nil {
@@ -183,7 +183,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				var templ_7745c5c3_Var11 string
 				templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs("create-form-target-" + img.ShortID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 125, Col: 64}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/templating/models/templ/components/imagelist.templ`, Line: 130, Col: 64}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 				if templ_7745c5c3_Err != nil {
@@ -195,7 +195,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 				}
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</tbody></table></div></div><script>\n\tconsole.debug('Image list rendered');\n\t</script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</tbody></table></div></div><!-- Notification Area --><div id=\"image-prune-notifications\" class=\"fixed bottom-4 right-4 z-50 space-y-2\"></div><style>\n\t  #purge-button.htmx-request .btn-content {\n\t    display: none;\n\t  }\n\t  #purge-button.htmx-request #purge-spinner {\n\t    display: inline-block;\n\t  }\n\t</style><script>\n\tconsole.debug('Image list rendered');\n\n\tdocument.body.addEventListener('showMessage', function(evt) {\n\t\tconsole.debug('showMessage event received:', evt.detail);\n\t\tconst detail = evt.detail;\n\t\tconst notificationArea = document.getElementById('image-prune-notifications');\n\t\tif (!notificationArea || !detail || !detail.message) return;\n\n\t\tconst alertDiv = document.createElement('div');\n\t\tlet alertClass = 'alert-info'; // Default\n\t\tlet iconClass = 'ℹ️'; // Default icon\n\n\t\tif (detail.level === 'success') {\n\t\t\talertClass = 'alert-success';\n\t\t\ticonClass = '\U000f056c'; // Checkmark icon\n\t\t} else if (detail.level === 'error') {\n\t\t\talertClass = 'alert-error';\n\t\t\ticonClass = '\U000f015a'; // Error icon\n\t\t}\n\n\t\talertDiv.className = `alert ${alertClass} shadow-lg flex`;\n\t\talertDiv.innerHTML = `\n\t\t\t<span class=\"iconf text-xl\">${iconClass}</span>\n\t\t\t<span>${detail.message}</span>\n\t\t\t<button class=\"btn btn-sm btn-ghost ml-auto\" onclick=\"this.parentElement.remove()\">✕</button>\n\t\t`;\n\n\t\tnotificationArea.appendChild(alertDiv);\n\n\t\t// Automatically remove the alert after 5 seconds\n\t\tsetTimeout(() => {\n\t\t\talertDiv.remove();\n\t\t}, 5000);\n\t});\n\t</script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
