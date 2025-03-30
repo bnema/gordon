@@ -1,13 +1,15 @@
 package httpserve
 
 import (
+	"io/fs"
 	"net/http"
 	"os"
 
 	"github.com/bnema/gordon/internal/httpserve/handlers"
 	"github.com/bnema/gordon/internal/httpserve/middleware"
 	"github.com/bnema/gordon/internal/server"
-	"github.com/charmbracelet/log"
+	"github.com/bnema/gordon/internal/webui" // Import the webui package
+	log "github.com/bnema/gordon/pkg/logger"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
@@ -18,35 +20,30 @@ import (
 func RegisterRoutes(e *echo.Echo, a *server.App) *echo.Echo {
 	e.Use(echomid.Recover())
 
+	// Determine if running in live UI mode
+	useOS := os.Getenv("GORDON_LIVE_UI") == "true"
+	staticFileSystem := getStaticFileSystem(useOS)
+	assetHandler := http.FileServer(staticFileSystem)
+
+	// Serve static files using the asset handler
+	// We wrap the handler to ensure it works correctly with Echo
+	// We also need to strip the prefix if accessing assets directly (e.g. /assets/css/...)
+	// The root path "/" will serve index.html or equivalent by default if present.
+	e.GET("/*", echo.WrapHandler(assetHandler))
+
 	// Log admin status
 	log.Info("Admin WebUI status",
 		"enabled", a.Config.Admin.IsAdminWebUIEnabled(),
 		"path", a.Config.Admin.Path)
 
 	// Initiate the session middleware
-	e.Use(middleware.InitSessionMiddleware(a))
+	sessionMiddleware := middleware.InitSessionMiddleware(a)
+	// Apply session middleware *after* the static file handler setup
+	// It will only run for routes not handled by the static file server
+	e.Use(sessionMiddleware)
 
 	// Language detection
 	e.Use(middleware.LanguageDetection)
-
-	log.Debug("Binding static routes under /assets/*")
-	// Middleware to set cache headers for static files
-	staticCacheMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			// Determine caching based on environment
-			if os.Getenv("RUN_ENV") != "dev" {
-				c.Response().Header().Set("Cache-Control", "public, max-age=86400") // Cache for 1 day in production
-			} else {
-				c.Response().Header().Set("Cache-Control", "no-cache") // No caching in development
-			}
-			return next(c)
-		}
-	}
-	// Use Echo's static file middleware to serve assets directly from the filesystem.
-	// The path is relative to the project root.
-	staticGroup := e.Group("/assets")
-	staticGroup.Use(staticCacheMiddleware)
-	staticGroup.Static("/", "internal/webui/public/assets")
 
 	AdminPath := a.Config.Admin.Path
 	log.Debug("Binding login routes with AdminPath", "path", AdminPath)
@@ -277,4 +274,21 @@ func bindHTMXEndpoints(e *echo.Echo, a *server.App) {
 	htmxGroup.POST("/create-container/:ID", func(c echo.Context) error {
 		return handlers.CreateContainerPOST(c, a)
 	})
+}
+
+// getStaticFileSystem returns the appropriate http.FileSystem based on the GORDON_LIVE_UI env var.
+func getStaticFileSystem(useOS bool) http.FileSystem {
+	if useOS {
+		log.Info("Serving static files from OS filesystem (live mode)")
+		return http.FS(os.DirFS("internal/webui/public"))
+	}
+
+	log.Info("Serving static files from embedded filesystem")
+	// Use the PublicFS from the webui package
+	fsys, err := fs.Sub(webui.PublicFS, "public")
+	if err != nil {
+		panic(err) // Should not happen with embedded files
+	}
+
+	return http.FS(fsys)
 }

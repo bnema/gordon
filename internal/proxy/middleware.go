@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/gordon/pkg/logger"
@@ -22,6 +23,13 @@ var rateLimiterCleanup []func()
 // RequestIDKey is the key used to store the request ID in the context
 const RequestIDKey = "request_id"
 
+// Cooldown period for logging direct IP access warnings
+const logCooldown = 1 * time.Minute
+
+// Map to store the last log time for each IP address attempting direct access
+var ipLogTimes = make(map[string]time.Time)
+var ipLogMutex sync.Mutex // Mutex to protect access to ipLogTimes
+
 // isHostIPAddress checks if the host part of a string (like "1.2.3.4:80" or "1.2.3.4") is a valid IP address.
 func isHostIPAddress(host string) bool {
 	// Split host and port
@@ -36,22 +44,48 @@ func isHostIPAddress(host string) bool {
 }
 
 // blockDirectIPMiddleware rejects requests where the Host header is an IP address,
-// unless it's an ACME challenge request.
+// unless it's an ACME challenge request. It includes a log cooldown mechanism.
 func blockDirectIPMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			host := c.Request().Host
 			path := c.Request().URL.Path
+			realIP := c.RealIP() // Get the real IP once
 
 			if isHostIPAddress(host) {
 				// Allow ACME HTTP-01 challenges to proceed even via IP
 				if strings.HasPrefix(path, "/.well-known/acme-challenge/") {
-					logger.Debug("Allowing direct IP access for ACME challenge", "host", host, "path", path, "ip", c.RealIP())
+					logger.Debug("Allowing direct IP access for ACME challenge", "host", host, "path", path, "ip", realIP)
 					return next(c)
 				}
 
-				// Block other direct IP access attempts
-				logger.Warn("Blocking direct IP access attempt", "host", host, "path", path, "ip", c.RealIP(), "user_agent", c.Request().UserAgent())
+				// --- Log Cooldown Logic ---
+				now := time.Now()
+				logAllowed := false
+
+				ipLogMutex.Lock()
+				lastLogTime, exists := ipLogTimes[realIP]
+				if !exists || now.Sub(lastLogTime) > logCooldown {
+					// It's a new IP or the cooldown has passed
+					ipLogTimes[realIP] = now // Update the last log time
+					logAllowed = true
+				}
+				ipLogMutex.Unlock()
+
+				// Log only if allowed by the cooldown
+				if logAllowed {
+					logger.Warn("Blocking direct IP access attempt (log cooldown active)",
+						"host", host,
+						"path", path,
+						"ip", realIP,
+						"user_agent", c.Request().UserAgent())
+				} else {
+					// Optionally log at DEBUG level that we suppressed a log, useful for verifying
+					// logger.Debug("Suppressed duplicate direct IP access log due to cooldown", "ip", realIP, "host", host)
+				}
+				// --- End Log Cooldown Logic ---
+
+				// Block other direct IP access attempts regardless of logging
 				return echo.NewHTTPError(http.StatusForbidden, "Direct IP access is not permitted.")
 			}
 
