@@ -6,6 +6,7 @@ import (
 
 	"github.com/bnema/gordon/internal/server"
 	"github.com/bnema/gordon/internal/templating/cmdparams"
+	"github.com/bnema/gordon/internal/templating/models/templ/components"
 	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/docker"
 	"github.com/bnema/gordon/pkg/logger"
@@ -37,41 +38,35 @@ func generateOrderedYAML(infoMap map[string]interface{}) (string, error) {
 // ContainerManagerEditGET displays the edit container view
 func ContainerManagerEditGET(c echo.Context, a *server.App) error {
 	containerID := c.Param("ID")
-
-	// Get the container info
 	containerInfo, err := docker.GetContainerInfo(containerID)
 	if err != nil {
 		return sendError(c, err)
 	}
 
-	// Trim the slash from the container name
-	containerInfo.Name = strings.TrimPrefix(containerInfo.Name, "/")
-	// Get the network names
-	networkNames := make([]string, 0, len(containerInfo.NetworkSettings.Networks))
-	for networkName := range containerInfo.NetworkSettings.Networks {
-		networkNames = append(networkNames, networkName)
-	}
-
-	// Prepare Ports
-	portMappings := make([]string, 0)
-	for port, bindings := range containerInfo.HostConfig.PortBindings {
-		for _, binding := range bindings {
-			portMappings = append(portMappings, fmt.Sprintf("%s:%s/%s", binding.HostPort, port.Port(), port.Proto()))
+	portMappings := make(map[string]string)
+	for internalPort, hostBindings := range containerInfo.HostConfig.PortBindings {
+		if len(hostBindings) > 0 {
+			hostBinding := hostBindings[0]
+			portMappings[string(internalPort)] = fmt.Sprintf("%s:%s", hostBinding.HostIP, hostBinding.HostPort)
 		}
 	}
 
-	// Prepare Volumes (Mounts)
-	volumeMappings := make([]string, 0)
+	volumeMappings := make(map[string]string)
 	for _, mount := range containerInfo.Mounts {
-		volumeMappings = append(volumeMappings, fmt.Sprintf("%s:%s", mount.Source, mount.Destination))
+		volumeMappings[mount.Source] = mount.Destination
 	}
 
-	// Initialize a map to store the information from the container
-	infoMap := make(map[string]interface{})
+	networkNames := []string{}
+	for name := range containerInfo.NetworkSettings.Networks {
+		networkNames = append(networkNames, name)
+	}
 
-	// Populate the map with container details
-	infoMap["Name"] = containerInfo.Name
-	infoMap["Image"] = containerInfo.Config.Image
+	infoMap := map[string]interface{}{
+		"Name":       strings.TrimPrefix(containerInfo.Name, "/"),
+		"Image":      containerInfo.Config.Image,
+		"CMD":        containerInfo.Config.Cmd,
+		"Entrypoint": containerInfo.Config.Entrypoint,
+	}
 	infoMap["Hostname"] = containerInfo.Config.Hostname
 	infoMap["Ports"] = portMappings
 	infoMap["Volumes"] = volumeMappings
@@ -86,26 +81,11 @@ func ContainerManagerEditGET(c echo.Context, a *server.App) error {
 		return sendError(c, err)
 	}
 
-	// Pass the containerInfo to the data map
-	data := map[string]interface{}{
-		"Title":         "Edit container",
-		"ID":            containerID,
-		"ContainerInfo": yamlString,
-	}
+	// Use the Templ renderer
+	renderer := render.NewTemplRenderer(a)
+	component := components.EditContainer(containerID, yamlString)
 
-	rendererData, err := render.GetHTMLRenderer("html/fragments", "editcontainer.gohtml", a.TemplateFS, a)
-
-	if err != nil {
-		return sendError(c, err)
-	}
-
-	renderedHTML, err := rendererData.Render(data, a)
-
-	if err != nil {
-		return sendError(c, err)
-	}
-
-	return c.HTML(200, renderedHTML)
+	return renderer.RenderTempl(c, component)
 }
 
 type TransactionStep func() error

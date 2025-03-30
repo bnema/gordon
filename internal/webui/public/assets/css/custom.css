@@ -22,8 +22,8 @@
   --color-base-content: oklch(93% 0.034 272.788);
   --color-primary: oklch(87% 0 0);
   --color-primary-content: oklch(14% 0 0);
-  --color-secondary: oklch(83% 0.145 321.434);
-  --color-secondary-content: oklch(29% 0.136 325.661);
+  --color-secondary: oklch(80% 0.105 251.813);
+  --color-secondary-content: oklch(28% 0.091 267.935);
   --color-accent: oklch(80% 0.105 251.813);
   --color-accent-content: oklch(28% 0.091 267.935);
   --color-neutral: oklch(37% 0.034 259.733);
@@ -36,9 +36,9 @@
   --color-warning-content: oklch(98% 0.022 95.277);
   --color-error: oklch(64% 0.246 16.439);
   --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 1rem;
+  --radius-selector: 0rem;
   --radius-field: 0rem;
-  --radius-box: 0.25rem;
+  --radius-box: 0rem;
   --size-selector: 0.25rem;
   --size-field: 0.25rem;
   --border: 1px;
@@ -51,20 +51,20 @@
 @layer components {
   /* Button styles */
   .btn-primary {
-    @apply flex w-full justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2;
+    @apply flex w-full justify-center border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2;
   }
   
   .btn-secondary {
-    @apply flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2;
+    @apply flex w-full justify-center border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2;
   }
   
   .btn-danger {
-    @apply flex w-full justify-center rounded-md border border-transparent bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2;
+    @apply flex w-full justify-center border border-transparent bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2;
   }
   
   /* Alert styles */
   .alert-error {
-    @apply rounded-md bg-red-50 p-4 dark:bg-red-900/20;
+    @apply bg-red-50 p-4 dark:bg-red-900/20;
   }
   
   .alert-error-icon {
@@ -76,7 +76,7 @@
   }
   
   .alert-success {
-    @apply rounded-md bg-green-50 p-4 dark:bg-green-900/20;
+    @apply bg-green-50 p-4 dark:bg-green-900/20;
   }
   
   .alert-success-icon {
@@ -89,7 +89,7 @@
   
   /* Card styles */
   .card {
-    @apply bg-white p-4 rounded-md shadow mb-4;
+    @apply bg-white p-4 shadow mb-4;
   }
   
   .card-header {

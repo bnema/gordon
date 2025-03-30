@@ -4,16 +4,17 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bnema/gordon/internal/db"
 	"github.com/bnema/gordon/internal/db/queries"
 	"github.com/bnema/gordon/internal/server"
-	"github.com/bnema/gordon/internal/templating/render"
 	"github.com/bnema/gordon/pkg/logger"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/sessions"
@@ -26,47 +27,6 @@ import (
 type JwtCustomClaims struct {
 	AccountID string `json:"account_id"`
 	jwt.RegisteredClaims
-}
-
-// RenderLoginPage renders the login.html template (or redirects if already logged in)
-// NOTE: This function might be superseded by RenderTemplLoginPage depending on router setup.
-// Keeping it for now, but it needs adjustment if used.
-func RenderLoginPage(c echo.Context, a *server.App) error {
-	// Check if user is already authenticated via session
-	sess, _ := getSession(c) // Ignore error for check
-	if sess != nil && sess.Values != nil {
-		if authenticated, ok := sess.Values["authenticated"].(bool); ok && authenticated {
-			// If authenticated, redirect to admin panel
-			logger.Debug("User already authenticated, redirecting to admin panel")
-			return c.Redirect(http.StatusFound, a.Config.Admin.Path)
-		}
-	}
-
-	// Check for error message from previous attempts (e.g., GitHub auth failure)
-	errorMsg := c.QueryParam("error")
-
-	data := map[string]interface{}{
-		"Title": "Login",
-		"Error": errorMsg,
-		// Add other necessary data for the template
-	}
-
-	// Navigate inside the fs.FS to get the template
-	// TODO: Verify the correct template path and name (e.g., "html/login/index.gohtml")
-	path := "html/login"
-	rendererData, err := render.GetHTMLRenderer(path, "index.gohtml", a.TemplateFS, a)
-	if err != nil {
-		logger.Error("Failed to get HTML renderer for login page", "error", err)
-		return err // Or render a generic error page
-	}
-
-	renderedHTML, err := rendererData.Render(data, a)
-	if err != nil {
-		logger.Error("Failed to render login page HTML", "error", err)
-		return err // Or render a generic error page
-	}
-
-	return c.HTML(http.StatusOK, renderedHTML)
 }
 
 // StartOAuthGithub starts the Github OAuth flow.
@@ -119,6 +79,14 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 	if err != nil {
 		logger.Info("Error extending session expiration", "error", err)
 		return fmt.Errorf("could not extend session expiration: %w", err)
+	}
+
+	// Explicitly mark the session as online since we've validated it
+	logger.Info("Marking existing session as online", "sessionID", sessionID)
+	err = queries.MarkSessionActive(a.DB, sessionID)
+	if err != nil {
+		logger.Error("Failed to mark session as online", "error", err, "sessionID", sessionID)
+		return fmt.Errorf("failed to mark session online: %w", err)
 	}
 
 	logger.Info("Session is valid and extended. Redirecting to admin panel")
@@ -191,8 +159,43 @@ func OAuthCallback(c echo.Context, a *server.App) error {
 
 	user, accountID, session, err := handleUser(a, accessToken, browserInfo, userInfo)
 	if err != nil {
-		logger.Error("Failed to handle user", "error", err)
-		return err
+		logger.Error("Failed to handle user during OAuth callback", "error", err)
+
+		// --- MODIFIED: Redirect to login with specific error based on err type ---
+		loginPath := a.Config.Admin.Path + "/login"
+		errorParam := "error=unknown_error" // Default error
+
+		var httpErr *echo.HTTPError
+		if errors.As(err, &httpErr) {
+			switch httpErr.Code {
+			case http.StatusUnauthorized:
+				// Check the message to differentiate unauthorized reasons
+				if strings.Contains(httpErr.Message.(string), "does not match the allowed email") {
+					errorParam = "error=email_mismatch"
+				} else if strings.Contains(httpErr.Message.(string), "no public email address") {
+					errorParam = "error=no_email"
+				} else {
+					errorParam = "error=unauthorized"
+				}
+			case http.StatusInternalServerError:
+				// Check for specific internal errors if needed, e.g., config issue
+				if strings.Contains(httpErr.Message.(string), "Admin email not set") {
+					errorParam = "error=config_email_missing"
+				} else {
+					errorParam = "error=server_error"
+				}
+			default:
+				errorParam = "error=server_error" // Fallback for other HTTP errors
+			}
+		} else {
+			// Handle non-HTTP errors (like DB connection issues, etc.)
+			errorParam = "error=server_error"
+		}
+
+		redirectURL := loginPath + "?" + errorParam
+		logger.Debug("Redirecting user to login page with error", "url", redirectURL)
+		return c.Redirect(http.StatusSeeOther, redirectURL)
+		// --- END MODIFICATION ---
 	}
 	logger.Info("User handled successfully", "user_id", user.ID, "account_id", accountID)
 
@@ -200,7 +203,8 @@ func OAuthCallback(c echo.Context, a *server.App) error {
 	err = setSessionValues(c, sess, accountID, session)
 	if err != nil {
 		// Error is already logged within setSessionValues
-		return err // Return immediately if saving failed
+		// Redirect to login page with a server error message
+		return c.Redirect(http.StatusSeeOther, a.Config.Admin.Path+"/login?error=server_error")
 	}
 	// Log success ONLY after setSessionValues returns without error
 	logger.Info("Session values set and saved successfully")
@@ -260,7 +264,35 @@ func handleUser(a *server.App, accessToken, browserInfo string, userInfo *db.Git
 
 	// --- Case 2: Subsequent GitHub logins ---
 	if providerCount > 0 {
-		logger.Debug("Existing provider(s) found. Checking if incoming GitHub login matches.")
+		logger.Debug("Existing provider(s) found. Checking if incoming GitHub user matches.")
+
+		// --- ADDED: Check if incoming GitHub user email matches configured email ---
+		configuredEmail := a.Config.ReverseProxy.Email
+		if configuredEmail == "" {
+			logger.Error("Configuration Error: ReverseProxy.Email is not set in config.yml. Cannot validate user email.")
+			// Prevent login if the email isn't configured, as it's required for validation.
+			return nil, "", nil, echo.NewHTTPError(http.StatusInternalServerError, "Server configuration error: Admin email not set.")
+		}
+
+		githubEmail := ""
+		if len(userInfo.Emails) > 0 {
+			githubEmail = userInfo.Emails[0] // Assuming the first email is primary
+		}
+
+		if githubEmail == "" {
+			logger.Warn("Unauthorized GitHub login attempt: User has no public email address on GitHub.", "github_login", userInfo.Login)
+			return nil, "", nil, echo.NewHTTPError(http.StatusUnauthorized, "GitHub account must have a public primary email address.")
+		}
+
+		if !strings.EqualFold(githubEmail, configuredEmail) {
+			logger.Warn("Unauthorized GitHub login attempt: Email mismatch.",
+				"github_login", userInfo.Login,
+				"github_email", githubEmail,
+				"configured_email", configuredEmail)
+			return nil, "", nil, echo.NewHTTPError(http.StatusUnauthorized, fmt.Sprintf("This GitHub account's email (%s) does not match the allowed email.", githubEmail))
+		}
+		logger.Debug("GitHub user email matches configured admin email.", "email", githubEmail)
+		// --- END: Email Check ---
 
 		// --- Check if incoming GitHub user matches an existing provider ---
 		existingUser, existingAccountID, err := queries.GetUserByProviderLogin(a.DB, "github", userInfo.Login)
@@ -347,7 +379,7 @@ func setSessionValues(c echo.Context, sess *sessions.Session, accountID string, 
 	sess.Values["accountID"] = accountID
 	sess.Values["expires"] = session.Expires
 	sess.Values["sessionID"] = session.ID
-	sess.Values["isOnline"] = session.IsOnline
+	sess.Values["isActive"] = session.IsActive
 
 	if err := sess.Save(c.Request(), c.Response()); err != nil {
 		logger.Error("Failed to save session cookie", "error", err, "sessionID", session.ID)
