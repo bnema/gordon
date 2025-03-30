@@ -36,18 +36,19 @@ function initializeVersionCheck() {
   const init = () => {
     const currentVersionElement = document.getElementById("actual-version");
     if (!currentVersionElement) {
-      console.debug("Error: #actual-version element not found.");
-      return;
+      console.debug("Error: #actual-version element not found. Assuming not on admin page.");
+      return false; // Indicate element not found
     }
     const currentVersion = currentVersionElement.textContent.trim();
     if (!currentVersion) {
       console.debug("Dev mode detected, skipping version check.");
-      return;
+      return true; // Element found, but dev mode
     }
     fetchVersionInfo(currentVersion);
+    return true; // Indicate element found
   };
 
-  init();
+  return init(); // Return the result of init
 }
 
 // Initialize jQuery functionality for the admin dashboard
@@ -391,6 +392,11 @@ document.addEventListener("DOMContentLoaded", function() {
     console.debug('jQuery is loaded successfully');
   }
   
-  initializeVersionCheck();
-  initializeAdminDashboard();
+  // Run version check (which also checks if we're on an admin page)
+  const isAdminPage = initializeVersionCheck();
+
+  // Only initialize admin dashboard functions if jQuery is loaded AND we are on an admin page
+  if (typeof $ !== 'undefined' && isAdminPage) {
+    initializeAdminDashboard();
+  }
 });

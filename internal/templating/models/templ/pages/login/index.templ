@@ -17,9 +17,11 @@ templ LoginPage(title string, buildVersion string, errorMsg string) {
 	    <!-- HTMX SSE -->
 	    <script src="/libs/htmx-sse.js"></script>
 	    <!-- DaisyUI -->
-	    <script src="/libs/daisyui.js"></script>
+	    <script src="/libs/daisyui.js" type="module"></script>
+	    <!-- jQuery -->
+	    <script src="/libs/jquery.min.js"></script>
 	    <!-- Custom JS from assets/js -->
-	    <script src="/assets/js/custom.js"></script>
+	    <script src="/assets/js/custom.js" defer></script>
 	    
 	    <!-- daisyUI theme configuration -->
 	    <script>
@@ -65,16 +67,26 @@ templ LoginPage(title string, buildVersion string, errorMsg string) {
 	                <div class="alert alert-error mb-4">
 	                  <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
 	                  <span>
-	                    // Removed token-specific errors. Display generic or GitHub-related errors.
-	                    if errorMsg == "server_error" {
-	                      A server error occurred during login. Please try again later.
-	                    } else if errorMsg == "github_error" {
-	                      An error occurred during GitHub authentication. Please try again.
-	                    } else if errorMsg == "unauthorized" {
-	                      This GitHub account is not authorized.
-	                    } else {
-	                      An unknown login error occurred. Please try again.
+	                    // --- MODIFIED: Handle new error messages ---
+	                    switch errorMsg {
+	                        case "server_error":
+	                            A server error occurred during login. Please try again later or contact support.
+	                        case "github_error":	// Kept for potential future use
+	                            An error occurred during GitHub authentication. Please try again.
+	                        case "unauthorized":
+	                            This GitHub account is not authorized to access Gordon.
+	                        case "email_mismatch":
+	                            Login failed: Your GitHub email does not match the configured administrator email.
+	                        case "no_email":
+	                            Login failed: Your GitHub account must have a public primary email address configured.
+	                        case "config_email_missing":
+	                            Server Configuration Error: The administrator email is not set up. Please contact support.
+	                        case "session_invalid_or_expired": // Added from login page handler
+							Your session is invalid or has expired. Please log in again.
+	                        default:
+	                            An unknown login error occurred: { errorMsg }
 	                    }
+	                    // --- END MODIFICATION ---
 	                  </span>
 	                </div>
 	            }

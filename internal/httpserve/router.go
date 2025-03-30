@@ -132,14 +132,26 @@ func bindLoginRoute(e *echo.Echo, a *server.App, adminPath string) {
 	}
 
 	e.GET(adminPath+"/login", func(c echo.Context) error {
-		// Check if already logged in, if so redirect to admin panel, otherwise render login page
-		sess, _ := session.Get("session", c) // Use echo-contrib session
+		// Check if already logged in based on cookie
+		sess, _ := session.Get("session", c) // Ignore error for initial check
 		if sess != nil && sess.Values != nil {
 			if authenticated, ok := sess.Values["authenticated"].(bool); ok && authenticated {
-				return c.Redirect(http.StatusFound, a.Config.Admin.Path)
+				// Cookie claims authenticated. NOW, validate against the DB too.
+				err := handlers.ValidateSessionAndUser(c, a) // Use the same validation function as the middleware
+				if err == nil {
+					// Session is valid in BOTH cookie AND DB. Proceed to admin panel.
+					log.Debug("Login page check: Valid session found (cookie & DB), redirecting to admin panel")
+					return c.Redirect(http.StatusFound, a.Config.Admin.Path)
+				}
+				// If DB validation failed, log it and fall through to render login page
+				log.Warn("Login page check: Cookie session present but DB validation failed", "error", err)
+				// NOTE: Consider invalidating the inconsistent cookie here?
+				// handlers.InvalidateSessionCookie(c, sess) // Optional: Force cookie cleanup
 			}
 		}
-		// If not authenticated, render the login page (which should now only contain GitHub login)
+		// If no session cookie, not authenticated in cookie, or DB validation failed: render login page.
+		log.Debug("Login page check: No valid session found or DB validation failed, rendering login page")
+		// Always use the Templ-based login page renderer
 		return handlers.RenderTemplLoginPage(c, a)
 	})
 	// Removed POST /login/submit-token route

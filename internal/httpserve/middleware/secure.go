@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/bnema/gordon/internal/server"
@@ -38,6 +39,7 @@ func InitSessionMiddleware(a *server.App) echo.MiddlewareFunc {
 		HttpOnly: true,
 		Secure:   isHttps,
 		MaxAge:   86400,
+		SameSite: http.SameSiteLaxMode,
 	}
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
