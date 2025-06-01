@@ -7,7 +7,7 @@ templ AdminLayout(title string, buildVersion string, adminPath string, userSetti
 	<!DOCTYPE html>
 	<html lang="en" data-theme="gordon-dark">
 		@components.Header(title)
-		<body class="min-h-screen bg-base-100">
+		<body class="min-h-screen bg-base-250">
 			@components.Navbar(buildVersion, adminPath, userSettingsURL, logoutURL)
 			
 			<!-- Main content starts after navbar height -->

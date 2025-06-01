@@ -1196,19 +1196,53 @@ func (p *Proxy) StartContainerEventListener() error {
 					} else {
 						// Even if IP is the same, make sure the route is active
 						if !route.Active {
-							logger.Info("Reactivating route for restarted container",
+							logger.Info("Attempting to reactivate route for restarted container",
 								"container_id", containerID,
 								"container_name", containerName,
 								"domain", domain)
 
-							// Just reuse ForceUpdateRouteIP with the same IP to activate the route
-							p.ForceUpdateRouteIP(domain, containerIP)
+							// --- Add Health Check Before Activation ---
+							target := net.JoinHostPort(containerIP, route.ContainerPort)
+							maxRetries := 5
+							retryDelay := 2 * time.Second
+							healthy := false
+							for i := 0; i < maxRetries; i++ {
+								conn, err := net.DialTimeout("tcp", target, 1*time.Second)
+								if err == nil {
+									conn.Close()
+									healthy = true
+									logger.Info("Container health check successful", "target", target, "attempt", i+1)
+									break
+								}
+								logger.Debug("Container health check failed, retrying...",
+									"target", target,
+									"attempt", i+1,
+									"error", err)
+								time.Sleep(retryDelay)
+							}
+							// --- End Health Check ---
+
+							if healthy {
+								logger.Info("Container is healthy, proceeding with route activation", "domain", domain)
+								// Just reuse ForceUpdateRouteIP with the same IP to activate the route
+								err := p.ForceUpdateRouteIP(domain, containerIP)
+								if err != nil {
+									logger.Error("Failed to activate route after health check",
+										"domain", domain,
+										"error", err)
+								}
+							} else {
+								logger.Warn("Container did not become healthy after retries, route remains inactive",
+									"domain", domain,
+									"target", target)
+								// Route remains inactive, periodic check might pick it up later
+							}
 						}
 					}
 				}
 			}
 
-			// Call the standard recreation handler for additional checks
+			// Call the standard recreation handler for additional checks (might add the route if missing)
 			p.HandleContainerRecreation(containerID, containerName, containerIP)
 		}()
 	}

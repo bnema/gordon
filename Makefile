@@ -38,7 +38,7 @@ build: build-css build-templ
 # Build CSS with tailwindcss
 build-css:
 	@echo "Building CSS with tailwindcss..."
-	@bun run build:css
+	@tailwindcss -i internal/webui/public/assets/css/custom.css -o internal/webui/public/assets/css/tailwind.css
 	@echo "CSS built successfully"
 
 # Generate Go code from templ templates

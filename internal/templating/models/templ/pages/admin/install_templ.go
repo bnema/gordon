@@ -45,7 +45,7 @@ func InstallPage(title string, version string) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- Logo and Title --> <div id=\"logo-mascot\" class=\"flex flex-col justify-center items-center p-4 mb-4\"><div class=\"circle-shadow flex justify-center w-100\"><img src=\"/assets/imgs/gordon-mascot-hq-trsp.png\" alt=\"logo\" class=\"sm:h-24 h-32 xl:h-48\"></div><div class=\"flex justify-center mt-4\"><h1 class=\"gordon-title text-2xl lg:text-4xl xl:text-5xl text-indigo-800 tracking-tighter\">Gordon</h1><span class=\"gordon-v-subtitle text-indigo-600 text-sm ml-2\">v")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- Logo and Title --> <div id=\"logo-mascot\" class=\"flex flex-col justify-center items-center p-4 mb-4\"><div class=\"circle-shadow flex justify-center w-100\"><img src=\"/assets/imgs/gordon-mascot-mq-trsp.png\" alt=\"logo\" class=\"sm:h-24 h-32 xl:h-48\"></div><div class=\"flex justify-center mt-4\"><h1 class=\"gordon-title text-2xl lg:text-4xl xl:text-5xl text-indigo-800 tracking-tighter\">Gordon</h1><span class=\"gordon-v-subtitle text-indigo-600 text-sm ml-2\">v")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

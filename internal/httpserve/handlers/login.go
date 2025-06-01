@@ -81,12 +81,12 @@ func StartOAuthGithub(c echo.Context, a *server.App) error {
 		return fmt.Errorf("could not extend session expiration: %w", err)
 	}
 
-	// Explicitly mark the session as online since we've validated it
-	logger.Info("Marking existing session as online", "sessionID", sessionID)
+	// Explicitly mark the session as active since we've validated it
+	logger.Info("Marking existing session as active", "sessionID", sessionID)
 	err = queries.MarkSessionActive(a.DB, sessionID)
 	if err != nil {
-		logger.Error("Failed to mark session as online", "error", err, "sessionID", sessionID)
-		return fmt.Errorf("failed to mark session online: %w", err)
+		logger.Error("Failed to mark session as active", "error", err, "sessionID", sessionID)
+		return fmt.Errorf("failed to mark session active: %w", err)
 	}
 
 	logger.Info("Session is valid and extended. Redirecting to admin panel")

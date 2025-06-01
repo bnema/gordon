@@ -30,7 +30,7 @@ func Navbar(buildVersion string, adminPath string, userSettingsURL string, logou
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- DaisyUI Navbar --><div class=\"navbar bg-base-200 shadow-lg fixed top-0 z-50\"><div class=\"navbar-start\"><div class=\"flex items-center\"><h1 class=\"gordon-title text-2xl md:text-3xl text-primary tracking-tighter px-4\">Gordon</h1><span id=\"actual-version\" class=\"text-xs md:text-sm pr-1 JetBrainsMonoNF text-base-content/70\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- DaisyUI Navbar --><div class=\"navbar bg-base-100 shadow-lg fixed top-0 z-50\"><div class=\"navbar-start\"><div class=\"flex items-center\"><h1 class=\"gordon-title text-2xl md:text-3xl text-primary tracking-tighter px-4\">Gordon</h1><span id=\"actual-version\" class=\"text-xs md:text-sm pr-1 JetBrainsMonoNF text-base-content/70\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

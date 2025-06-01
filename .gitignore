@@ -1,9 +1,10 @@
 .env
-node_modules/
+# Node.js/Bun specific (removed)
+# node_modules/
 *tmp/
 tmp/*
 config.yml
-bun.lockb
+# bun.lockb
 *.log
 *.txt
 *sync-conflict*
@@ -16,3 +17,7 @@ setup.sh
 sqlite.db
 .vscode/
 admin-ui/
+
+# Standalone Tailwind/DaisyUI
+tailwindcss
+daisyui.js
