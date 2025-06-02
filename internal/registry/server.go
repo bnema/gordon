@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gordon/internal/config"
+	"gordon/internal/events"
 	"gordon/internal/middleware"
 )
 
@@ -18,9 +19,10 @@ type Server struct {
 	config  *config.Config
 	mux     *http.ServeMux
 	storage Storage
+	eventBus events.EventBus
 }
 
-func NewServer(cfg *config.Config) (*Server, error) {
+func NewServer(cfg *config.Config, eventBus events.EventBus) (*Server, error) {
 	// Initialize storage
 	storage, err := NewFilesystemStorage(cfg.Server.DataDir + "/registry")
 	if err != nil {
@@ -28,9 +30,10 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	}
 
 	s := &Server{
-		config:  cfg,
-		mux:     http.NewServeMux(),
-		storage: storage,
+		config:   cfg,
+		mux:      http.NewServeMux(),
+		storage:  storage,
+		eventBus: eventBus,
 	}
 	s.setupRoutes()
 	return s, nil
@@ -159,10 +162,8 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	
 	// Add registry authentication if enabled
-	if s.config.Auth.Enabled && s.config.Auth.RegistryAuth {
-		if s.config.Auth.Username != "" && s.config.Auth.Password != "" {
-			middlewares = append(middlewares, middleware.RegistryAuth(s.config.Auth.Username, s.config.Auth.Password))
-		}
+	if s.config.RegistryAuth.Enabled {
+		middlewares = append(middlewares, middleware.RegistryAuth(s.config.RegistryAuth.Username, s.config.RegistryAuth.Password))
 	}
 	
 	// Wrap the mux with middleware
@@ -243,8 +244,22 @@ func (s *Server) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, reference))
 	w.WriteHeader(http.StatusCreated)
 	
-	// TODO: Trigger deployment webhook
-	log.Info().Str("name", name).Str("reference", reference).Msg("Manifest stored - deployment should be triggered")
+	// Emit image pushed event
+	event := events.Event{
+		Type:      events.ImagePushed,
+		ImageName: name,
+		Tag:       reference,
+		Data: map[string]interface{}{
+			"digest": digest,
+			"size":   len(data),
+		},
+	}
+	
+	if err := s.eventBus.Publish(event); err != nil {
+		log.Error().Err(err).Str("name", name).Str("reference", reference).Msg("Failed to publish image pushed event")
+	} else {
+		log.Info().Str("name", name).Str("reference", reference).Msg("Image pushed event published")
+	}
 }
 
 func (s *Server) handleGetBlob(w http.ResponseWriter, r *http.Request) {
