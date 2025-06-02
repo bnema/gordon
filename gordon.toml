@@ -5,26 +5,10 @@ runtime = "docker"
 ssl_email = "admin@example.com"
 data_dir = "./data"
 
-# Authentication and Security Configuration
-[auth]
-enabled = false                       # Set to true to enable authentication
-method = "basic"                      # Authentication method: "jwt", "api_key", or "basic"
-
-# JWT Authentication (recommended for production)
-jwt_secret = ""                       # Generate with: gordon generate jwt-secret
-
-# API Key Authentication (simple but secure)
-api_key = ""                          # Generate with: gordon generate api-key
-
-# Basic Authentication (least secure, use only for development)
-username = ""                         # Username for Basic Auth
-password = ""                         # Password for Basic Auth
-
-# Registry Authentication
-registry_auth = false                 # Enable authentication for Docker registry push/pull
-
-# IP Whitelist (additional security layer)
-allowed_ips = ["127.0.0.1", "::1"]   # Whitelist of IPs allowed to access management API
+[registry_auth]
+enabled = true
+username = "gordon"
+password = "secret123"
 
 [routes]
 "example.com" = "nginx:latest"

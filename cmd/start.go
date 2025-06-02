@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"gordon/internal/config"
 	"gordon/internal/container"
+	"gordon/internal/events"
 	"gordon/internal/proxy"
 	"gordon/internal/registry"
 )
@@ -43,10 +44,22 @@ func runStart(cmd *cobra.Command, args []string) {
 	log.Info().Int("proxy_port", cfg.Server.Port).Msg("Proxy server")
 	log.Info().Str("runtime", cfg.Server.Runtime).Msg("Container runtime")
 
+	// Initialize event bus
+	eventBus := events.NewInMemoryEventBus(100)
+	if err := eventBus.Start(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to start event bus")
+	}
+
 	// Initialize container manager
 	manager, err := container.NewManager(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize container manager")
+	}
+
+	// Create and subscribe container event handler
+	containerHandler := events.NewContainerEventHandler(manager, cfg)
+	if err := eventBus.Subscribe(containerHandler); err != nil {
+		log.Fatal().Err(err).Msg("Failed to subscribe container event handler")
 	}
 
 	// Sync existing containers
@@ -58,7 +71,7 @@ func runStart(cmd *cobra.Command, args []string) {
 	var wg sync.WaitGroup
 
 	// Start registry server
-	registryServer, err := registry.NewServer(cfg)
+	registryServer, err := registry.NewServer(cfg, eventBus)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize registry server")
 	}
@@ -87,6 +100,11 @@ func runStart(cmd *cobra.Command, args []string) {
 
 	log.Info().Msg("Shutting down servers...")
 	cancel()
+
+	// Stop event bus
+	if err := eventBus.Stop(); err != nil {
+		log.Error().Err(err).Msg("Failed to stop event bus")
+	}
 
 	// Give servers time to shutdown gracefully
 	done := make(chan struct{})
