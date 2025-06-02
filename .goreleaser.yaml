@@ -4,7 +4,7 @@ before:
   hooks:
     - go mod tidy
     - templ generate
-    - bun run build:css
+    - tailwindcss -i internal/webui/public/assets/css/custom.css -o internal/webui/public/assets/css/tailwind.css
 
 release:
   draft: true

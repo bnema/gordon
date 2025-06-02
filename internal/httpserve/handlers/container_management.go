@@ -224,12 +224,108 @@ func ImageManagerPrune(c echo.Context, a *server.App) error {
 		lastPruneResult.mutex.Unlock()
 	}()
 
-	// Immediately return 202 Accepted to the client
-	c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextHTML) // Set appropriate content type if needed for HTMX
+	// Immediately return a placeholder that initiates polling
+	// Note: We need to modify imagelist.templ to handle this response properly
+	// For now, just return 202 Accepted and indicate work started.
+	// The actual polling trigger will be added in the template.
 	c.Response().WriteHeader(http.StatusAccepted)
-	// Optionally, return a message or updated component indicating the process has started
-	// For now, just return a simple message in the response body
-	return c.String(http.StatusAccepted, "Image pruning started in the background.")
+	// We'll return a small snippet that the template swap can use
+	// This snippet should include the polling mechanism itself.
+	// Example (needs refinement in the template):
+	return c.HTML(http.StatusAccepted, `<div id="prune-status-poller" hx-get="/htmx/image-manager/prune-status" hx-trigger="load, every 3s" hx-target="#prune-status-poller" hx-swap="outerHTML">Pruning images in background... Checking status.</div>`)
+}
+
+// ImageManagerPruneStatus checks the status of a background prune operation
+func ImageManagerPruneStatus(c echo.Context, a *server.App) error {
+	lastPruneResult.mutex.Lock()
+	defer lastPruneResult.mutex.Unlock()
+
+	// If prune is not done, return an empty response or keep the poller active
+	if !lastPruneResult.Done {
+		// Returning 204 No Content will stop polling if using hx-swap="none"
+		// However, our poller replaces itself, so we just return the same polling div
+		// or an updated status message within it.
+		// Let's keep the existing poller HTML but maybe update the text slightly.
+		return c.HTML(http.StatusOK, `<div id="prune-status-poller" hx-get="/htmx/image-manager/prune-status" hx-trigger="every 3s" hx-target="#prune-status-poller" hx-swap="outerHTML">Still pruning... Checking status.</div>`)
+	}
+
+	// Prune is done, prepare the final response
+	logger.Info("Prune complete, preparing final response for poller.")
+
+	// Prepare JSON payload for HX-Trigger toast message
+	var level string
+	if lastPruneResult.Success {
+		level = "success"
+	} else {
+		level = "error"
+	}
+	payload := map[string]string{"level": level, "message": lastPruneResult.Message}
+	jsonPayload, marshalErr := json.Marshal(payload)
+	if marshalErr != nil {
+		logger.Error("Failed to marshal prune result payload for poller", "error", marshalErr)
+		// Handle marshalling error - maybe return an error component
+	} else {
+		c.Response().Header().Set("HX-Trigger", fmt.Sprintf(`{"showMessage": %s}`, string(jsonPayload)))
+	}
+
+	// Reset the flag *after* preparing the response
+	lastPruneResult.Done = false
+	message := lastPruneResult.Message // Store message before resetting if needed
+	success := lastPruneResult.Success
+	// Reset message/success if needed, or maybe they are only relevant for the toast
+	// lastPruneResult.Message = ""
+	// lastPruneResult.Success = false
+
+	// Fetch the updated image list (copy logic from ImageManagerComponent)
+	images, listErr := docker.ListContainerImages()
+	if listErr != nil {
+		logger.Error("Failed to list images after prune for poller", "error", listErr)
+		// Return an error FRAGMENT instead of a full page.
+		// HX-Trigger for the prune status itself was already set.
+		pruneStatusMsg := "Prune finished but failed to refresh list."
+		if !success { // Add prune status detail if it also failed
+			pruneStatusMsg = fmt.Sprintf("Prune status: %s. Failed to refresh list.", message)
+		}
+		return c.HTML(http.StatusOK, fmt.Sprintf("<div class='alert alert-error'>%s Error: %v. Please refresh manually.</div>", pruneStatusMsg, listErr))
+	}
+
+	var humanReadableImages []components.HumanReadableImage
+	for _, img := range images {
+		shortID := img.ID[7:19]
+		safelyInteractWithIDMap(Update, shortID, img.ID)
+		createdStr := humanize.TimeAgo(time.Unix(img.Created, 0))
+		sizeStr := humanize.BytesToReadableSize(img.Size)
+		var repository, tag string
+		repoTag := "<none>:<none>"
+		if len(img.RepoTags) > 0 {
+			repoTag = img.RepoTags[0]
+			parts := strings.Split(repoTag, ":")
+			if len(parts) == 2 {
+				repository = parts[0]
+				tag = parts[1]
+			} else {
+				repository = repoTag
+				tag = "latest"
+			}
+		}
+		humanReadableImages = append(humanReadableImages, components.HumanReadableImage{
+			ID:          img.ID,
+			ShortID:     shortID,
+			Created:     createdStr,
+			Size:        sizeStr,
+			Name:        repoTag,
+			RepoDigests: img.RepoDigests,
+			RepoTags:    img.RepoTags,
+			Repository:  repository,
+			Tag:         tag,
+		})
+	}
+
+	// Render the final ImageList component to replace the poller
+	renderer := render.NewTemplRenderer(a)
+	component := components.ImageList(humanReadableImages)
+	logger.Debug("Rendering final ImageList for poller")
+	return renderer.RenderTempl(c, component)
 }
 
 // ContainerManagerComponent handles the /container-manager route

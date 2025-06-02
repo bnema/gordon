@@ -24,6 +24,15 @@ func generateOrderedYAML(infoMap map[string]interface{}) (string, error) {
 			continue
 		}
 
+		// Special handling for empty Ports and Volumes maps
+		if key == "Ports" || key == "Volumes" {
+			if mapVal, ok := value.(map[string]string); ok && len(mapVal) == 0 {
+				yamlString += key + ": []\n" // Output as empty list instead of map
+				continue                     // Skip normal marshalling for this key
+			}
+		}
+
+		// Default marshalling for other keys or non-empty maps
 		yamlBytes, err := yaml.Marshal(map[string]interface{}{key: value})
 		if err != nil {
 			return "", err

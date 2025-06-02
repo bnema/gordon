@@ -21,7 +21,7 @@ type ContainerFormData struct {
 templ CreateContainerForm(data ContainerFormData) {
 	<div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 flex-grow">
 		<!-- Left Side: Docker Run Options -->
-		<div class="flex-grow card p-6">
+		<div class="flex-grow card p-6 bg-base-100">
 			<h2 class="card-title pb-4">Deploy a container based on { data.ImageName }</h2>
 			if data.ErrorMessage != "" {
 				<div class="alert alert-error">
@@ -36,6 +36,7 @@ templ CreateContainerForm(data ContainerFormData) {
 				hx-swap="innerHTML" 
 				hx-target={ "#create-form-target-" + data.ShortID }>
 				<!-- Image Name -->
+				<input type="hidden" name="image_id" value={ data.ImageID } />
 				<div class="grid grid-cols-1 md:grid-cols-3 gap-4 pb-4">
 					<div class="md:col-span-1">
 						<label class="label">

@@ -40,7 +40,7 @@ func AdminLayout(title string, buildVersion string, adminPath string, userSettin
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<body class=\"min-h-screen bg-base-100\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<body class=\"min-h-screen bg-base-250\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

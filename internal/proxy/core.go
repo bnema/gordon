@@ -218,6 +218,12 @@ func (p *Proxy) Close() {
 
 // requestDomainCertificate requests a certificate for a domain
 func (p *Proxy) requestDomainCertificate(domainName string) error {
+	// If certificate acquisition is globally skipped, do nothing.
+	if p.config.SkipCertificates {
+		logger.Debug("Skipping certificate request because SkipCertificates is true", "domain", domainName)
+		return nil
+	}
+
 	logger.Debug("Requesting certificate for domain", "domain", domainName)
 
 	// Check if we're already processing this domain

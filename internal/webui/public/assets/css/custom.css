@@ -1,122 +1,41 @@
-/**
- * Path: internal/ui/public/assets/css/custom.css
- *
- * @format
- */
-
-/* Embeded path : assets/css/cutsom.css */
-
 @import "tailwindcss";
-@plugin "daisyui";
-
-/* Custom DaisyUI theme */
+/* Custom DaisyUI theme - Defined in tailwind.config.js */
 @plugin "daisyui/theme" {
   name: "gordon-dark";
   default: true;
   prefersdark: true;
   color-scheme: "dark";
-  --color-base-100: oklch(28% 0.091 267.935);
-  --color-base-200: oklch(20% 0.042 265.755);
-  --color-base-300: oklch(13% 0.028 261.692);
-  --color-base-content: oklch(93% 0.034 272.788);
-  --color-primary: oklch(87% 0 0);
-  --color-primary-content: oklch(14% 0 0);
-  --color-secondary: oklch(80% 0.105 251.813);
-  --color-secondary-content: oklch(28% 0.091 267.935);
-  --color-accent: oklch(80% 0.105 251.813);
-  --color-accent-content: oklch(28% 0.091 267.935);
-  --color-neutral: oklch(37% 0.034 259.733);
-  --color-neutral-content: oklch(98% 0.002 247.839);
+  --color-base-100: oklch(14% 0 0);
+  --color-base-200: oklch(21% 0.006 285.885);
+  --color-base-250: oklch(21% 0.006 285.885);
+  --color-base-300: oklch(26% 0 0);
+  --color-base-content: oklch(97% 0.001 106.424);
+  --color-primary: oklch(44% 0.043 257.281);
+  --color-primary-content: oklch(98% 0.003 247.858);
+  --color-secondary: oklch(66% 0.179 58.318);
+  --color-secondary-content: oklch(98% 0.022 95.277);
+  --color-accent: oklch(60% 0.118 184.704);
+  --color-accent-content: oklch(98% 0.014 180.72);
+  --color-neutral: oklch(42% 0.199 265.638);
+  --color-neutral-content: oklch(98% 0.001 106.423);
   --color-info: oklch(68% 0.169 237.323);
   --color-info-content: oklch(97% 0.013 236.62);
-  --color-success: oklch(70% 0.14 182.503);
-  --color-success-content: oklch(98% 0.014 180.72);
-  --color-warning: oklch(76% 0.188 70.08);
-  --color-warning-content: oklch(98% 0.022 95.277);
+  --color-success: oklch(69% 0.17 162.48);
+  --color-success-content: oklch(97% 0.021 166.113);
+  --color-warning: oklch(70% 0.213 47.604);
+  --color-warning-content: oklch(98% 0.016 73.684);
   --color-error: oklch(64% 0.246 16.439);
   --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 0rem;
-  --radius-field: 0rem;
-  --radius-box: 0rem;
+  --radius-selector: 1rem;
+  --radius-field: 0.5rem;
+  --radius-box: 1rem;
   --size-selector: 0.25rem;
-  --size-field: 0.25rem;
+  --size-field: 0.21875rem;
   --border: 1px;
   --depth: 0;
   --noise: 0;
 }
 
-
-/* Custom component classes */
-@layer components {
-  /* Button styles */
-  .btn-primary {
-    @apply flex w-full justify-center border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2;
-  }
-  
-  .btn-secondary {
-    @apply flex w-full justify-center border border-secondary bg-secondary px-4 py-2 text-sm font-medium text-secondary-content hover:bg-secondary/90 focus:outline-none focus:ring-2 focus:ring-secondary focus:ring-offset-2;
-  }
-  
-  .btn-danger {
-    @apply flex w-full justify-center border border-transparent bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2;
-  }
-  
-  /* Alert styles */
-  .alert-error {
-    @apply bg-red-50 p-4 dark:bg-red-900/20;
-  }
-  
-  .alert-error-icon {
-    @apply h-5 w-5 text-red-400;
-  }
-  
-  .alert-error-text {
-    @apply text-sm font-medium text-red-800 dark:text-red-300;
-  }
-  
-  .alert-success {
-    @apply bg-green-50 p-4 dark:bg-green-900/20;
-  }
-  
-  .alert-success-icon {
-    @apply h-5 w-5 text-green-400;
-  }
-  
-  .alert-success-text {
-    @apply text-sm font-medium text-green-800 dark:text-green-300;
-  }
-  
-  /* Card styles */
-  .card {
-    @apply bg-base-100 p-4 shadow mb-4;
-  }
-  
-  .card-header {
-    @apply text-lg font-semibold text-indigo-600 mb-2;
-  }
-  
-  /* Background styles */
-  .bg-app {
-    @apply bg-base-300;
-  }
-  
-  .bg-sidebar {
-    @apply bg-indigo-900;
-  }
-  
-  .bg-card {
-    @apply bg-base-100;
-  }
-  
-  /* Text styles */
-  .text-title {
-    @apply text-indigo-600 font-semibold;
-  }
-  
-  .text-subtitle {
-    @apply text-indigo-500;
-  }
-}
 
 /* Import IBM Plex Fonts */
 @font-face {

@@ -48,7 +48,7 @@ func ImageList(images []HumanReadableImage) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- Image list using daisyUI components --><div class=\"card w-full bg-base-300\"><div class=\"card-body p-4\"><!-- Action buttons --><div class=\"flex flex-col sm:flex-row sm:justify-start items-start sm:items-center gap-4 flex-wrap\"><h3 class=\"font-semibold text-base-content\">Available Images: ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- Image list using daisyUI components --><div class=\"card w-full bg-base-100\"><div class=\"card-body p-4\"><!-- Action buttons --><div class=\"flex flex-col sm:flex-row sm:justify-start items-start sm:items-center gap-4 flex-wrap\"><h3 class=\"font-semibold text-base-content\">Available Images: ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

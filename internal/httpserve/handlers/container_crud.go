@@ -1,8 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/bnema/gordon/internal/server"
@@ -126,25 +126,6 @@ func CreateContainerFullGET(c echo.Context, a *server.App) error {
 func CreateContainerPOST(c echo.Context, a *server.App) error {
 	log.Debug("CreateContainerPOST handler called")
 
-	// Retrieve the ShortID of the image from the URL
-	ShortID := c.Param("ID")
-	log.Debug("Received ShortID for container creation:", "ShortID", ShortID)
-
-	// Convert the ShortID to a full image ID
-	imageID, err := FromShortIDToImageID(ShortID)
-	if err != nil {
-		log.Error("Error converting ShortID to full image ID:", "error", err)
-		return sendError(c, err)
-	}
-	log.Debug("Converted ShortID to full image ID:", "imageID", imageID)
-
-	// Get the image info
-	_, err = docker.GetImageInfo(imageID)
-	if err != nil {
-		log.Error("Error getting image info:", "error", err)
-		return sendError(c, err)
-	}
-
 	// Retrieve all form parameters
 	formParams, err := c.FormParams()
 	if err != nil {
@@ -163,6 +144,22 @@ func CreateContainerPOST(c echo.Context, a *server.App) error {
 			}
 			sanitizedInputs[k] = sanitized
 		}
+	}
+
+	// Get the full image ID directly from the sanitized form inputs
+	imageID, ok := sanitizedInputs["image_id"]
+	if !ok || imageID == "" {
+		log.Error("Full image ID not found in form submission")
+		// You might want to return a more specific error message to the user here
+		return sendError(c, fmt.Errorf("missing image ID in form submission"))
+	}
+	log.Debug("Retrieved full image ID from form:", "imageID", imageID)
+
+	// Get the image info (Optional but good practice: verify the image ID still exists)
+	_, err = docker.GetImageInfo(imageID)
+	if err != nil {
+		log.Error("Error getting image info:", "error", err)
+		return sendError(c, err)
 	}
 
 	cmdParams, err := cmdparams.FromInputsToCmdParams(sanitizedInputs, a)
@@ -229,6 +226,21 @@ func CreateContainerPOST(c echo.Context, a *server.App) error {
 		log.Info("Skipping proxy setup as requested", "container_id", containerID, "container_name", containerName)
 	}
 
-	// Redirect to the container list page
-	return c.Redirect(http.StatusSeeOther, fmt.Sprintf("%s/containers", a.Config.Admin.Path))
+	// Prepare success message payload
+	successPayload := map[string]string{
+		"level":   "success",
+		"message": fmt.Sprintf("Container '%s' created successfully.", containerName),
+	}
+	jsonPayload, err := json.Marshal(successPayload)
+	if err != nil {
+		// Log the error, but proceed with redirect as container creation was likely successful
+		log.Error("Failed to marshal success payload for HX-Trigger", "error", err)
+	} else {
+		c.Response().Header().Set("HX-Trigger", fmt.Sprintf(`{"showMessage": %s}`, string(jsonPayload)))
+	}
+
+	// Render a success message fragment instead of redirecting
+	renderer := render.NewTemplRenderer(a)
+	successMsg := fmt.Sprintf("Container '%s' created successfully.", containerName)
+	return renderer.RenderTempl(c, templcomponents.Success(successMsg)) // Use the correct Success component
 }

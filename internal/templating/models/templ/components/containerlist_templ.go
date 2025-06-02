@@ -9,12 +9,12 @@ import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
 import (
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"strconv"
 )
 
 // ContainerList displays a list of containers
-func ContainerList(containers []types.Container, noContainer bool) templ.Component {
+func ContainerList(containers []container.Summary, noContainer bool) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -35,7 +35,7 @@ func ContainerList(containers []types.Container, noContainer bool) templ.Compone
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- Container list using daisyUI components --><div class=\"card w-full bg-base-300\"><div class=\"card-body p-4\"><!-- Action buttons --><div class=\"flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4\"><h3 class=\"font-semibold text-base-content\">Available Containers: ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!-- Container list using daisyUI components --><div class=\"card w-full bg-base-100\"><div class=\"card-body p-4\"><!-- Action buttons --><div class=\"flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4\"><h3 class=\"font-semibold text-base-content\">Available Containers: ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

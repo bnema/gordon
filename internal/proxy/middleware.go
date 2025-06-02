@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -114,7 +113,7 @@ func (p *Proxy) setupMiddleware() {
 	}
 
 	// Add middleware to log incoming headers (for debugging Cloudflare detection)
-	p.httpsServer.Use(logHeadersMiddleware())
+	// p.httpsServer.Use(logHeadersMiddleware())
 
 	// --- Rate Limiting Setup (Domain Only Now) ---
 	if p.config.EnableRateLimit {
@@ -250,17 +249,17 @@ func (p *Proxy) createRequestIDMiddleware() echo.MiddlewareFunc {
 }
 
 // logHeadersMiddleware creates a middleware function to log request headers
-func logHeadersMiddleware() echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			// Log all headers at DEBUG level
-			headerStrings := []string{}
-			for k, v := range c.Request().Header {
-				headerStrings = append(headerStrings, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
-			}
-			logger.Debug("Incoming Request Headers", "request_id", c.Get(RequestIDKey), "headers", strings.Join(headerStrings, " | "))
+// func logHeadersMiddleware() echo.MiddlewareFunc {
+// 	return func(next echo.HandlerFunc) echo.HandlerFunc {
+// 		return func(c echo.Context) error {
+// 			// Log all headers at DEBUG level
+// 			headerStrings := []string{}
+// 			for k, v := range c.Request().Header {
+// 				headerStrings = append(headerStrings, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
+// 			}
+// 			logger.Debug("Incoming Request Headers", "request_id", c.Get(RequestIDKey), "headers", strings.Join(headerStrings, " | "))
 
-			return next(c)
-		}
-	}
-}
+// 			return next(c)
+// 		}
+// 	}
+// }
