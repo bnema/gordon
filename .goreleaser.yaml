@@ -2,9 +2,6 @@ version: 2
 
 before:
   hooks:
-    - go mod tidy
-    - templ generate
-    - tailwindcss -i internal/webui/public/assets/css/custom.css -o internal/webui/public/assets/css/tailwind.css
 
 release:
   draft: true

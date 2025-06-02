@@ -1,15 +1,13 @@
 package main
 
 import (
-	"github.com/bnema/gordon/cmd"
-)
+	"os"
 
-var (
-	version string
-	commit  string
-	date    string
+	"gordon/cmd"
 )
 
 func main() {
-	cmd.ExecuteCLI(version, commit, date)
+	if err := cmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 }
