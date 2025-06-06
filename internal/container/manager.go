@@ -84,15 +84,23 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 		return nil, fmt.Errorf("failed to pull image %s: %w", route.Image, err)
 	}
 
+	// Get exposed ports from the image
+	exposedPorts, err := m.runtime.GetImageExposedPorts(ctx, route.Image)
+	if err != nil {
+		log.Warn().Err(err).Str("image", route.Image).Msg("Failed to get exposed ports from image, using defaults")
+		exposedPorts = []int{80, 8080, 3000} // Fallback to common web server ports
+	}
+
 	// Create container configuration
 	containerConfig := &runtime.ContainerConfig{
 		Image:      route.Image,
 		Name:       fmt.Sprintf("gordon-%s", route.Domain),
-		Ports:      []int{80, 8080, 3000}, // Common web server ports
+		Ports:      exposedPorts,
 		Labels: map[string]string{
 			"gordon.domain": route.Domain,
 			"gordon.image":  route.Image,
 			"gordon.managed": "true",
+			"gordon.route": route.Domain,
 		},
 		AutoRemove: false, // Keep containers for inspection
 	}
@@ -164,41 +172,84 @@ func (m *Manager) ListContainers() map[string]*runtime.Container {
 	return result
 }
 
-// StopContainer stops a container for a domain
-func (m *Manager) StopContainer(ctx context.Context, domain string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// FindContainerByDomain returns the container ID for a domain
+func (m *Manager) FindContainerByDomain(domain string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	
-	container, exists := m.containers[domain]
-	if !exists {
-		return fmt.Errorf("no container found for domain %s", domain)
+	if container, exists := m.containers[domain]; exists {
+		return container.ID, true
+	}
+	return "", false
+}
+
+// FindDomainByContainerID returns the domain for a container ID
+func (m *Manager) FindDomainByContainerID(containerID string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	for domain, container := range m.containers {
+		if container.ID == containerID {
+			return domain, true
+		}
+	}
+	return "", false
+}
+
+// StopContainer stops a container by ID
+func (m *Manager) StopContainer(ctx context.Context, containerID string) error {
+	if err := m.runtime.StopContainer(ctx, containerID); err != nil {
+		return fmt.Errorf("failed to stop container %s: %w", containerID, err)
 	}
 
-	if err := m.runtime.StopContainer(ctx, container.ID); err != nil {
-		return fmt.Errorf("failed to stop container for %s: %w", domain, err)
-	}
-
-	log.Info().Str("domain", domain).Str("container", container.ID).Msg("Container stopped")
+	log.Info().Str("container", containerID).Msg("Container stopped")
 	return nil
 }
 
-// RemoveContainer removes a container for a domain
-func (m *Manager) RemoveContainer(ctx context.Context, domain string, force bool) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	
+// StopContainerByDomain stops a container for a domain
+func (m *Manager) StopContainerByDomain(ctx context.Context, domain string) error {
+	m.mu.RLock()
 	container, exists := m.containers[domain]
+	m.mu.RUnlock()
+	
 	if !exists {
 		return fmt.Errorf("no container found for domain %s", domain)
 	}
 
-	if err := m.runtime.RemoveContainer(ctx, container.ID, force); err != nil {
-		return fmt.Errorf("failed to remove container for %s: %w", domain, err)
+	return m.StopContainer(ctx, container.ID)
+}
+
+// RemoveContainer removes a container by ID
+func (m *Manager) RemoveContainer(ctx context.Context, containerID string, force bool) error {
+	if err := m.runtime.RemoveContainer(ctx, containerID, force); err != nil {
+		return fmt.Errorf("failed to remove container %s: %w", containerID, err)
 	}
 
-	delete(m.containers, domain)
-	log.Info().Str("domain", domain).Str("container", container.ID).Msg("Container removed")
+	// Remove from our tracking map
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for domain, container := range m.containers {
+		if container.ID == containerID {
+			delete(m.containers, domain)
+			log.Info().Str("domain", domain).Str("container", containerID).Msg("Container removed")
+			break
+		}
+	}
+	
 	return nil
+}
+
+// RemoveContainerByDomain removes a container for a domain
+func (m *Manager) RemoveContainerByDomain(ctx context.Context, domain string, force bool) error {
+	m.mu.RLock()
+	container, exists := m.containers[domain]
+	m.mu.RUnlock()
+	
+	if !exists {
+		return fmt.Errorf("no container found for domain %s", domain)
+	}
+
+	return m.RemoveContainer(ctx, container.ID, force)
 }
 
 // SyncContainers synchronizes the internal state with the actual running containers

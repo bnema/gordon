@@ -53,4 +53,9 @@ type Runtime interface {
 	// Health and status
 	IsContainerRunning(ctx context.Context, containerID string) (bool, error)
 	GetContainerPort(ctx context.Context, containerID string, internalPort int) (int, error)
+	
+	// Image and port inspection
+	GetImageExposedPorts(ctx context.Context, imageRef string) ([]int, error)
+	GetContainerExposedPorts(ctx context.Context, containerID string) ([]int, error)
+	GetContainerNetworkInfo(ctx context.Context, containerID string) (string, int, error)
 }

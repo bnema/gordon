@@ -3,7 +3,6 @@ package middleware
 import (
 	"crypto/subtle"
 	"net/http"
-	"strings"
 
 	"github.com/rs/zerolog/log"
 )

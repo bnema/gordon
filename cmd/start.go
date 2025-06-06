@@ -8,9 +8,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"gordon/internal/config"
 	"gordon/internal/container"
 	"gordon/internal/events"
@@ -61,6 +64,45 @@ func runStart(cmd *cobra.Command, args []string) {
 	if err := eventBus.Subscribe(containerHandler); err != nil {
 		log.Fatal().Err(err).Msg("Failed to subscribe container event handler")
 	}
+
+	// Setup config file watching for live reload
+	viper.WatchConfig()
+	viper.OnConfigChange(func(e fsnotify.Event) {
+		log.Info().
+			Str("file", e.Name).
+			Str("op", e.Op.String()).
+			Msg("Configuration file changed, reloading...")
+
+		// Reload configuration
+		newCfg, err := config.Load()
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to reload configuration")
+			return
+		}
+
+		// Update the configuration reference
+		cfg = newCfg
+
+		// Update container handler config
+		containerHandler = events.NewContainerEventHandler(manager, cfg)
+		if err := eventBus.Subscribe(containerHandler); err != nil {
+			log.Error().Err(err).Msg("Failed to re-subscribe container event handler")
+			return
+		}
+
+		// Publish config reload event
+		configReloadEvent := events.Event{
+			ID:        uuid.New().String(),
+			Type:      events.ConfigReload,
+			Timestamp: time.Now(),
+		}
+
+		if err := eventBus.Publish(configReloadEvent); err != nil {
+			log.Error().Err(err).Msg("Failed to publish config reload event")
+		} else {
+			log.Info().Msg("Configuration reloaded successfully")
+		}
+	})
 
 	// Sync existing containers
 	ctx, cancel := context.WithCancel(context.Background())

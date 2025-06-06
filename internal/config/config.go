@@ -14,11 +14,12 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port         int    `mapstructure:"port"`
-	RegistryPort int    `mapstructure:"registry_port"`
-	Runtime      string `mapstructure:"runtime"`
-	SSLEmail     string `mapstructure:"ssl_email"`
-	DataDir      string `mapstructure:"data_dir"`
+	Port           int    `mapstructure:"port"`
+	RegistryPort   int    `mapstructure:"registry_port"`
+	RegistryDomain string `mapstructure:"registry_domain"`
+	Runtime        string `mapstructure:"runtime"`
+	SSLEmail       string `mapstructure:"ssl_email"`
+	DataDir        string `mapstructure:"data_dir"`
 }
 
 type RegistryAuthConfig struct {
@@ -81,6 +82,14 @@ func Load() (*Config, error) {
 	if cfg.RegistryAuth.Enabled {
 		if cfg.RegistryAuth.Username == "" || cfg.RegistryAuth.Password == "" {
 			return nil, fmt.Errorf("Registry auth enabled but username/password not provided")
+		}
+	}
+
+	// Validate registry domain if provided
+	if cfg.Server.RegistryDomain != "" {
+		// Basic domain validation - should not contain protocol or paths
+		if strings.Contains(cfg.Server.RegistryDomain, "://") || strings.Contains(cfg.Server.RegistryDomain, "/") {
+			return nil, fmt.Errorf("registry_domain should be just the domain name (e.g. 'registry.example.com')")
 		}
 	}
 
