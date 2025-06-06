@@ -1,0 +1,44 @@
+# Gordon v2 - Development Configuration Example
+# For local development and testing
+
+[server]
+port = 8080
+registry_port = 5000
+registry_domain = "localhost:8080"  # Use localhost for local development
+runtime = "docker"
+ssl_email = "dev@localhost"
+data_dir = "./dev-data"
+
+[registry_auth]
+enabled = false  # Disable auth for easier local development
+
+# Local development routes using .local domains
+[routes]
+"app.local" = "myapp:latest"           # Main app - latest build
+"api.local" = "myapi:latest"           # API service  
+"admin.local" = "admin:latest"         # Admin interface
+"docs.local" = "docs:latest"           # Documentation
+
+# Test different versions locally
+"app-v1.local" = "myapp:v1.0.0"        # Test older version
+"app-v2.local" = "myapp:v2.0.0"        # Test newer version
+
+# Third-party services for development
+"db-admin.local" = "phpmyadmin:latest" # Database admin
+"mail.local" = "mailhog/mailhog:latest" # Email testing
+
+# Local development workflow:
+# 1. Add to /etc/hosts:
+#    127.0.0.1    app.local
+#    127.0.0.1    api.local  
+#    127.0.0.1    admin.local
+#    127.0.0.1    docs.local
+#    127.0.0.1    localhost
+#
+# 2. Build your app: docker build -t myapp:latest .
+# 3. Push to local registry: 
+#    docker tag myapp:latest localhost:8080/myapp:latest
+#    docker push localhost:8080/myapp:latest
+# 4. Access at http://app.local:8080
+#
+# No Cloudflare needed - everything runs locally!

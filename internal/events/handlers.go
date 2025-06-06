@@ -95,10 +95,7 @@ func (h *ContainerEventHandler) handleConfigReload(event Event) error {
 	ctx := context.Background()
 	
 	// Get current containers managed by Gordon
-	currentContainers, err := h.manager.ListContainers(ctx, false)
-	if err != nil {
-		return fmt.Errorf("failed to list containers: %w", err)
-	}
+	currentContainers := h.manager.ListContainers()
 	
 	// Track which routes are currently active
 	activeRoutes := make(map[string]*runtime.Container)
@@ -200,12 +197,9 @@ func (h *ContainerEventHandler) handleContainerStart(event Event) error {
 		Str("event_id", event.ID).
 		Msg("Processing container start event")
 	
-	ctx := context.Background()
-	if err := h.manager.StartContainer(ctx, containerID); err != nil {
-		return fmt.Errorf("failed to start container %s: %w", containerID, err)
-	}
-	
-	return nil
+	// StartContainer method doesn't exist on Manager - containers are started via DeployContainer
+	// For manual start, we'd need to add this method or use the runtime directly
+	return fmt.Errorf("container start not implemented - use automatic deployment instead")
 }
 
 func (h *ContainerEventHandler) findRoutesForImage(imageName string) []string {
@@ -223,10 +217,7 @@ func (h *ContainerEventHandler) findRoutesForImage(imageName string) []string {
 func (h *ContainerEventHandler) deployContainerForRoute(route, imageName string) error {
 	ctx := context.Background()
 	
-	containers, err := h.manager.ListContainers(ctx, false)
-	if err != nil {
-		return fmt.Errorf("failed to list containers: %w", err)
-	}
+	containers := h.manager.ListContainers()
 	
 	containerName := fmt.Sprintf("gordon-%s", strings.ReplaceAll(route, ".", "-"))
 	
@@ -254,24 +245,16 @@ func (h *ContainerEventHandler) deployContainerForRoute(route, imageName string)
 		}
 	}
 	
-	containerConfig := &runtime.ContainerConfig{
-		Image:      imageName,
-		Name:       containerName,
-		AutoRemove: false,
-		Labels: map[string]string{
-			"gordon.route":   route,
-			"gordon.image":   imageName,
-			"gordon.managed": "true",
-		},
+	// Use DeployContainer which handles creation and starting
+	routeConfig := config.Route{
+		Domain: route,
+		Image:  imageName,
+		HTTPS:  true,
 	}
 	
-	container, err := h.manager.CreateContainer(ctx, containerConfig)
+	container, err := h.manager.DeployContainer(ctx, routeConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create container for route %s: %w", route, err)
-	}
-	
-	if err := h.manager.StartContainer(ctx, container.ID); err != nil {
-		return fmt.Errorf("failed to start container for route %s: %w", route, err)
+		return fmt.Errorf("failed to deploy container for route %s: %w", route, err)
 	}
 	
 	log.Info().

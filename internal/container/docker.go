@@ -311,3 +311,115 @@ func (d *DockerRuntime) GetContainerPort(ctx context.Context, containerID string
 
 	return hostPort, nil
 }
+
+// GetImageExposedPorts gets the exposed ports from an image
+func (d *DockerRuntime) GetImageExposedPorts(ctx context.Context, imageRef string) ([]int, error) {
+	imageInspect, err := d.client.ImageInspect(ctx, imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect image %s: %w", imageRef, err)
+	}
+
+	var ports []int
+	if imageInspect.Config != nil && imageInspect.Config.ExposedPorts != nil {
+		for portSpec := range imageInspect.Config.ExposedPorts {
+			// Parse port from format like "80/tcp"
+			portStr := strings.Split(string(portSpec), "/")[0]
+			if port, err := strconv.Atoi(portStr); err == nil {
+				ports = append(ports, port)
+			}
+		}
+	}
+
+	// If no exposed ports found, return common web ports as fallback
+	if len(ports) == 0 {
+		log.Warn().Str("image", imageRef).Msg("No EXPOSE directives found in image, using common web ports")
+		return []int{80, 8080, 3000}, nil
+	}
+
+	log.Info().Str("image", imageRef).Ints("exposed_ports", ports).Msg("Found exposed ports in image")
+	return ports, nil
+}
+
+// GetContainerExposedPorts gets all exposed ports from a running container
+func (d *DockerRuntime) GetContainerExposedPorts(ctx context.Context, containerID string) ([]int, error) {
+	resp, err := d.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect container %s: %w", containerID, err)
+	}
+
+	var ports []int
+	if resp.NetworkSettings != nil && resp.NetworkSettings.Ports != nil {
+		for portSpec := range resp.NetworkSettings.Ports {
+			// Parse port from format like "80/tcp"
+			portStr := strings.Split(string(portSpec), "/")[0]
+			if port, err := strconv.Atoi(portStr); err == nil {
+				ports = append(ports, port)
+			}
+		}
+	}
+
+	return ports, nil
+}
+
+// GetContainerNetworkInfo gets container's internal IP and automatically detects the best port to use
+func (d *DockerRuntime) GetContainerNetworkInfo(ctx context.Context, containerID string) (string, int, error) {
+	resp, err := d.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to inspect container %s: %w", containerID, err)
+	}
+
+	// Get container's internal IP address
+	var containerIP string
+	if resp.NetworkSettings != nil && resp.NetworkSettings.Networks != nil {
+		// Use the first available network (usually bridge or custom network)
+		for _, network := range resp.NetworkSettings.Networks {
+			if network.IPAddress != "" {
+				containerIP = network.IPAddress
+				break
+			}
+		}
+	}
+
+	if containerIP == "" {
+		return "", 0, fmt.Errorf("no IP address found for container %s", containerID)
+	}
+
+	// Get exposed ports and select the best one (Traefik-style logic)
+	var exposedPorts []int
+	if resp.NetworkSettings != nil && resp.NetworkSettings.Ports != nil {
+		for portSpec := range resp.NetworkSettings.Ports {
+			// Parse port from format like "80/tcp"
+			portStr := strings.Split(string(portSpec), "/")[0]
+			if port, err := strconv.Atoi(portStr); err == nil {
+				exposedPorts = append(exposedPorts, port)
+			}
+		}
+	}
+
+	if len(exposedPorts) == 0 {
+		return "", 0, fmt.Errorf("no exposed ports found for container %s", containerID)
+	}
+
+	// Sort ports and select the lowest one (Traefik strategy)
+	var selectedPort int
+	if len(exposedPorts) == 1 {
+		selectedPort = exposedPorts[0]
+	} else {
+		// Find the lowest port number
+		selectedPort = exposedPorts[0]
+		for _, port := range exposedPorts {
+			if port < selectedPort {
+				selectedPort = port
+			}
+		}
+	}
+
+	log.Info().
+		Str("container_id", containerID).
+		Str("ip", containerIP).
+		Int("selected_port", selectedPort).
+		Ints("available_ports", exposedPorts).
+		Msg("Container network info detected")
+
+	return containerIP, selectedPort, nil
+}

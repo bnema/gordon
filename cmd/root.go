@@ -31,7 +31,27 @@ func initConfig() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {
-		log.Fatal().Msg("config file not found")
+		// Search for config file in standard locations
+		viper.SetConfigName("gordon")
+		viper.SetConfigType("toml")
+		
+		// Current directory (highest priority)
+		viper.AddConfigPath(".")
+		
+		// User config directory
+		if userConfigDir, err := os.UserConfigDir(); err == nil {
+			viper.AddConfigPath(userConfigDir + "/gordon")
+		}
+		
+		// User home directory
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			viper.AddConfigPath(homeDir + "/.gordon")
+			viper.AddConfigPath(homeDir)
+		}
+		
+		// System-wide config directories
+		viper.AddConfigPath("/etc/gordon")
+		viper.AddConfigPath("/usr/local/etc/gordon")
 	}
 
 	viper.AutomaticEnv()
@@ -39,6 +59,10 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
 	} else {
-		fmt.Fprintf(os.Stderr, "Error reading config file: %v\n", err)
+		if cfgFile != "" {
+			fmt.Fprintf(os.Stderr, "Error reading config file: %v\n", err)
+		} else {
+			log.Fatal().Msg("config file not found - please specify with --config flag or ensure gordon.toml exists in current directory")
+		}
 	}
 }

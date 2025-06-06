@@ -1,0 +1,40 @@
+# Gordon v2 - Staging Configuration Example  
+# For testing and preview environments
+
+[server]
+port = 8080
+registry_port = 5000
+registry_domain = "staging-registry.company.com"
+runtime = "docker"
+ssl_email = "devops@company.com"
+data_dir = "./data"
+
+[registry_auth]
+enabled = true
+username = "staging-user"
+password = "staging-pass-123"
+
+# Staging environment routes - using branch-based deployments
+[routes]
+"staging.company.com" = "company-app:staging"         # Main staging branch
+"staging-api.company.com" = "company-api:staging"     # API staging
+
+# Feature branch testing
+"feature-auth.company.com" = "company-app:feature-auth"     # Feature branch: auth improvements
+"feature-ui.company.com" = "company-app:feature-ui-redesign" # Feature branch: UI updates
+"hotfix-123.company.com" = "company-app:hotfix-user-login"  # Hotfix branch
+
+# PR preview environments
+"pr-42.company.com" = "company-app:pr-42"            # Pull request #42 preview
+"pr-55.company.com" = "company-app:pr-55"            # Pull request #55 preview
+
+# Development tools
+"staging-admin.company.com" = "admin-panel:develop"   # Admin panel dev version
+
+# Staging workflow:
+# 1. Developer pushes feature branch
+# 2. CI builds and tags: company-app:feature-auth  
+# 3. CI pushes: docker push staging-registry.company.com/company-app:feature-auth
+# 4. Gordon auto-deploys to feature-auth.company.com
+# 5. Team tests at https://feature-auth.company.com
+# 6. Merge to staging → auto-deploy to staging.company.com
