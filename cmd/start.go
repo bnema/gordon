@@ -104,6 +104,12 @@ func runStart(cmd *cobra.Command, args []string) {
 		log.Warn().Err(err).Msg("Failed to sync existing containers")
 	}
 
+	// Auto-start containers that match config routes
+	log.Info().Msg("Auto-starting containers for configured routes...")
+	if err := manager.AutoStartContainers(ctx); err != nil {
+		log.Warn().Err(err).Msg("Failed to auto-start containers")
+	}
+
 	var wg sync.WaitGroup
 
 	// Start registry server
@@ -136,6 +142,15 @@ func runStart(cmd *cobra.Command, args []string) {
 
 	log.Info().Msg("Shutting down servers...")
 	cancel()
+
+	// Stop all managed containers with a separate context for shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+	
+	log.Info().Msg("Stopping all managed containers...")
+	if err := manager.StopAllManagedContainers(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("Failed to stop managed containers")
+	}
 
 	// Stop event bus
 	if err := eventBus.Stop(); err != nil {
