@@ -75,7 +75,7 @@ Push new versions anytime. Gordon handles graceful container swaps.
 Containers deploy instantly when you push new images. No manual deployment steps needed.
 
 ### Auto-Route Creation
-Automatically create routes from image names containing domains. Push an image named like `myapp.bamen.dev:latest` and Gordon creates the route automatically when enabled.
+Automatically create routes from image names containing domains. Push an image named like `myapp.mydomain.com:latest` and Gordon creates the route automatically when enabled.
 
 ## Quick Start (5 minutes)
 
@@ -295,11 +295,11 @@ When you push an image with a domain name as the image name, Gordon automaticall
 podman build -t myapp .
 
 # Tag with domain name as the image name
-podman tag myapp:latest registry.yourdomain.com/myapp.bamen.dev:latest
-podman push registry.yourdomain.com/myapp.bamen.dev:latest
+podman tag myapp:latest registry.yourdomain.com/myapp.mydomain.dev:latest
+podman push registry.yourdomain.com/myapp.mydomain.dev:latest
 
 # Gordon automatically creates:
-# "myapp.bamen.dev" = "myapp.bamen.dev:latest"
+# "myapp.mydomain.dev" = "myapp.mydomain.dev:latest"
 # The route is added to your config file and deployed instantly!
 ```
 
