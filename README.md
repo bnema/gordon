@@ -105,6 +105,8 @@ sudo mv gordon-linux-amd64 /usr/local/bin/gordon
 [server]
 port = 8080
 registry_domain = "registry.yourdomain.com"
+runtime = "auto"  # auto-detects Docker/Podman
+ssl_email = "you@yourdomain.com"
 
 [registry_auth]
 enabled = true
@@ -300,6 +302,34 @@ Your Machine → Docker Image → Gordon Registry → Auto-Deploy → Live App
 - **Fast**: Written in Go for minimal overhead
 
 ## 🚀 Advanced Usage
+
+### Container Runtime Configuration
+```toml
+[server]
+runtime = "auto"  # auto, docker, podman, podman-rootless
+socket_path = ""  # optional custom socket path
+
+# Examples:
+# runtime = "docker"
+# runtime = "podman"
+# socket_path = "unix:///run/user/1000/podman/podman.sock"
+```
+
+### Environment Override
+```bash
+# Override container socket with environment variable
+export CONTAINER_HOST=unix:///custom/path/container.sock
+export CONTAINER_HOST=tcp://remote-docker:2376
+
+# Works for both Docker and Podman
+gordon start
+```
+
+### Runtime Auto-Detection
+Gordon automatically detects available container runtimes in this order:
+1. **Docker** (`/var/run/docker.sock`)
+2. **Podman root** (`/run/podman/podman.sock`) 
+3. **Podman rootless** (`$XDG_RUNTIME_DIR/podman/podman.sock`)
 
 ### Custom Ports
 ```toml

@@ -2,7 +2,7 @@
 # Simplest possible setup to get started
 
 [server]
-runtime = "docker"
+runtime = "auto"  # auto-detects Docker/Podman
 ssl_email = "you@example.com"
 
 # Just one route - perfect for getting started

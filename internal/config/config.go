@@ -18,6 +18,7 @@ type ServerConfig struct {
 	RegistryPort   int    `mapstructure:"registry_port"`
 	RegistryDomain string `mapstructure:"registry_domain"`
 	Runtime        string `mapstructure:"runtime"`
+	SocketPath     string `mapstructure:"socket_path"`
 	SSLEmail       string `mapstructure:"ssl_email"`
 	DataDir        string `mapstructure:"data_dir"`
 }
@@ -40,7 +41,8 @@ func Load() (*Config, error) {
 	// Set defaults
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.registry_port", 5000)
-	viper.SetDefault("server.runtime", "docker")
+	viper.SetDefault("server.runtime", "auto")
+	viper.SetDefault("server.socket_path", "")
 	viper.SetDefault("server.data_dir", "./data")
 	viper.SetDefault("registry_auth.enabled", true)
 
@@ -74,8 +76,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("server.ssl_email is required")
 	}
 
-	if cfg.Server.Runtime != "docker" && cfg.Server.Runtime != "podman" {
-		return nil, fmt.Errorf("server.runtime must be 'docker' or 'podman'")
+	validRuntimes := []string{"auto", "docker", "podman", "podman-rootless"}
+	isValid := false
+	for _, valid := range validRuntimes {
+		if cfg.Server.Runtime == valid {
+			isValid = true
+			break
+		}
+	}
+	if !isValid {
+		return nil, fmt.Errorf("server.runtime must be one of: %s", strings.Join(validRuntimes, ", "))
 	}
 
 	// Validate registry auth config
