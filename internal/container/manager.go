@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -13,10 +14,10 @@ import (
 
 // Manager handles container lifecycle and management
 type Manager struct {
-	runtime   runtime.Runtime
-	config    *config.Config
+	runtime    runtime.Runtime
+	config     *config.Config
 	containers map[string]*runtime.Container // map[domain] -> container
-	mu        sync.RWMutex
+	mu         sync.RWMutex
 }
 
 // NewManager creates a new container manager
@@ -55,42 +56,63 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 	// Check if container already exists for this domain
 	if existing, exists := m.containers[route.Domain]; exists {
 		log.Info().Str("domain", route.Domain).Str("container", existing.ID).Msg("Container already exists, restarting")
-		
+
 		// Stop and remove existing container
 		if err := m.runtime.StopContainer(ctx, existing.ID); err != nil {
 			log.Warn().Err(err).Str("container", existing.ID).Msg("Failed to stop existing container")
 		}
-		
+
 		if err := m.runtime.RemoveContainer(ctx, existing.ID, true); err != nil {
 			log.Warn().Err(err).Str("container", existing.ID).Msg("Failed to remove existing container")
 		}
-		
+
 		delete(m.containers, route.Domain)
 	}
 
+	// Construct the full image reference
+	imageRef := route.Image
+
+	// If registry auth is enabled and image doesn't already contain a registry domain, prepend it
+	if m.config.RegistryAuth.Enabled && m.config.Server.RegistryDomain != "" {
+		// Check if image already contains a registry domain (has a '.' and doesn't start with official Docker Hub libraries)
+		if !strings.Contains(strings.Split(imageRef, ":")[0], ".") {
+			imageRef = fmt.Sprintf("%s/%s", m.config.Server.RegistryDomain, route.Image)
+		}
+	}
+
 	// Pull the image first
-	log.Info().Str("image", route.Image).Msg("Pulling image")
-	if err := m.runtime.PullImage(ctx, route.Image); err != nil {
-		return nil, fmt.Errorf("failed to pull image %s: %w", route.Image, err)
+	log.Info().Str("image", imageRef).Msg("Pulling image")
+
+	// Use authenticated pull if registry auth is configured
+	if m.config.RegistryAuth.Enabled {
+		err := m.runtime.PullImageWithAuth(ctx, imageRef, m.config.RegistryAuth.Username, m.config.RegistryAuth.Password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to pull image %s with auth: %w", imageRef, err)
+		}
+	} else {
+		err := m.runtime.PullImage(ctx, imageRef)
+		if err != nil {
+			return nil, fmt.Errorf("failed to pull image %s: %w", imageRef, err)
+		}
 	}
 
 	// Get exposed ports from the image
-	exposedPorts, err := m.runtime.GetImageExposedPorts(ctx, route.Image)
+	exposedPorts, err := m.runtime.GetImageExposedPorts(ctx, imageRef)
 	if err != nil {
-		log.Warn().Err(err).Str("image", route.Image).Msg("Failed to get exposed ports from image, using defaults")
+		log.Warn().Err(err).Str("image", imageRef).Msg("Failed to get exposed ports from image, using defaults")
 		exposedPorts = []int{80, 8080, 3000} // Fallback to common web server ports
 	}
 
 	// Create container configuration
 	containerConfig := &runtime.ContainerConfig{
-		Image:      route.Image,
-		Name:       fmt.Sprintf("gordon-%s", route.Domain),
-		Ports:      exposedPorts,
+		Image: imageRef,
+		Name:  fmt.Sprintf("gordon-%s", route.Domain),
+		Ports: exposedPorts,
 		Labels: map[string]string{
-			"gordon.domain": route.Domain,
-			"gordon.image":  route.Image,
+			"gordon.domain":  route.Domain,
+			"gordon.image":   route.Image,
 			"gordon.managed": "true",
-			"gordon.route": route.Domain,
+			"gordon.route":   route.Domain,
 		},
 		AutoRemove: false, // Keep containers for inspection
 	}
@@ -131,7 +153,7 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 func (m *Manager) GetContainer(domain string) (*runtime.Container, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	container, exists := m.containers[domain]
 	return container, exists
 }
@@ -141,7 +163,7 @@ func (m *Manager) GetContainerPort(ctx context.Context, domain string, internalP
 	m.mu.RLock()
 	container, exists := m.containers[domain]
 	m.mu.RUnlock()
-	
+
 	if !exists {
 		return 0, fmt.Errorf("no container found for domain %s", domain)
 	}
@@ -153,7 +175,7 @@ func (m *Manager) GetContainerPort(ctx context.Context, domain string, internalP
 func (m *Manager) ListContainers() map[string]*runtime.Container {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	// Return a copy of the map to avoid race conditions
 	result := make(map[string]*runtime.Container)
 	for domain, container := range m.containers {
@@ -166,7 +188,7 @@ func (m *Manager) ListContainers() map[string]*runtime.Container {
 func (m *Manager) FindContainerByDomain(domain string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	if container, exists := m.containers[domain]; exists {
 		return container.ID, true
 	}
@@ -177,7 +199,7 @@ func (m *Manager) FindContainerByDomain(domain string) (string, bool) {
 func (m *Manager) FindDomainByContainerID(containerID string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	for domain, container := range m.containers {
 		if container.ID == containerID {
 			return domain, true
@@ -201,7 +223,7 @@ func (m *Manager) StopContainerByDomain(ctx context.Context, domain string) erro
 	m.mu.RLock()
 	container, exists := m.containers[domain]
 	m.mu.RUnlock()
-	
+
 	if !exists {
 		return fmt.Errorf("no container found for domain %s", domain)
 	}
@@ -225,7 +247,7 @@ func (m *Manager) RemoveContainer(ctx context.Context, containerID string, force
 			break
 		}
 	}
-	
+
 	return nil
 }
 
@@ -234,7 +256,7 @@ func (m *Manager) RemoveContainerByDomain(ctx context.Context, domain string, fo
 	m.mu.RLock()
 	container, exists := m.containers[domain]
 	m.mu.RUnlock()
-	
+
 	if !exists {
 		return fmt.Errorf("no container found for domain %s", domain)
 	}

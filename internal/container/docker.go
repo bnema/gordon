@@ -2,6 +2,8 @@ package container
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog/log"
@@ -230,6 +233,42 @@ func (d *DockerRuntime) PullImage(ctx context.Context, imageRef string) error {
 	return nil
 }
 
+// PullImageWithAuth pulls an image with authentication
+func (d *DockerRuntime) PullImageWithAuth(ctx context.Context, imageRef, username, password string) error {
+	log.Info().Str("image", imageRef).Str("username", username).Msg("Pulling image with authentication")
+	
+	// Create authentication configuration
+	authConfig := registry.AuthConfig{
+		Username: username,
+		Password: password,
+	}
+	
+	// Encode authentication to base64 JSON
+	authConfigBytes, err := json.Marshal(authConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal auth config: %w", err)
+	}
+	authStr := base64.URLEncoding.EncodeToString(authConfigBytes)
+	
+	// Pull with authentication
+	reader, err := d.client.ImagePull(ctx, imageRef, image.PullOptions{
+		RegistryAuth: authStr,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to pull image %s with auth: %w", imageRef, err)
+	}
+	defer reader.Close()
+
+	// Read the response to completion (this is required for the pull to complete)
+	_, err = io.Copy(io.Discard, reader)
+	if err != nil {
+		return fmt.Errorf("failed to read pull response for image %s: %w", imageRef, err)
+	}
+
+	log.Info().Str("image", imageRef).Msg("Image pulled successfully with authentication")
+	return nil
+}
+
 // RemoveImage removes an image
 func (d *DockerRuntime) RemoveImage(ctx context.Context, imageRef string, force bool) error {
 	_, err := d.client.ImageRemove(ctx, imageRef, image.RemoveOptions{Force: force})
@@ -330,10 +369,8 @@ func (d *DockerRuntime) GetImageExposedPorts(ctx context.Context, imageRef strin
 		}
 	}
 
-	// If no exposed ports found, return common web ports as fallback
 	if len(ports) == 0 {
-		log.Warn().Str("image", imageRef).Msg("No EXPOSE directives found in image, using common web ports")
-		return []int{80, 8080, 3000}, nil
+		return nil, fmt.Errorf("no EXPOSE directives found in image %s - please add EXPOSE directive to Dockerfile", imageRef)
 	}
 
 	log.Info().Str("image", imageRef).Ints("exposed_ports", ports).Msg("Found exposed ports in image")
@@ -384,7 +421,7 @@ func (d *DockerRuntime) GetContainerNetworkInfo(ctx context.Context, containerID
 		return "", 0, fmt.Errorf("no IP address found for container %s", containerID)
 	}
 
-	// Get exposed ports and select the best one (Traefik-style logic)
+	// Get exposed ports from container
 	var exposedPorts []int
 	if resp.NetworkSettings != nil && resp.NetworkSettings.Ports != nil {
 		for portSpec := range resp.NetworkSettings.Ports {
@@ -397,29 +434,19 @@ func (d *DockerRuntime) GetContainerNetworkInfo(ctx context.Context, containerID
 	}
 
 	if len(exposedPorts) == 0 {
-		return "", 0, fmt.Errorf("no exposed ports found for container %s", containerID)
+		return "", 0, fmt.Errorf("no EXPOSE directives found for container %s - please add EXPOSE directive to Dockerfile", containerID)
 	}
 
-	// Sort ports and select the lowest one (Traefik strategy)
-	var selectedPort int
-	if len(exposedPorts) == 1 {
-		selectedPort = exposedPorts[0]
-	} else {
-		// Find the lowest port number
-		selectedPort = exposedPorts[0]
-		for _, port := range exposedPorts {
-			if port < selectedPort {
-				selectedPort = port
-			}
-		}
-	}
+	// Use the first exposed port
+	selectedPort := exposedPorts[0]
 
 	log.Info().
 		Str("container_id", containerID).
 		Str("ip", containerIP).
 		Int("selected_port", selectedPort).
-		Ints("available_ports", exposedPorts).
+		Ints("exposed_ports", exposedPorts).
 		Msg("Container network info detected")
 
 	return containerIP, selectedPort, nil
 }
+
