@@ -81,6 +81,14 @@ Containers deploy instantly when you push new images. No manual deployment steps
 # Any VPS provider: DigitalOcean, Linode, Vultr, Hetzner
 # Ubuntu/Debian recommended
 
+# Configure UFW firewall first
+sudo ufw --force enable
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+
 # Install Podman (more secure than Docker)
 sudo apt update
 sudo apt install -y podman
@@ -118,7 +126,9 @@ sudo mv gordon-linux-amd64 /usr/local/bin/gordon
 
 ### 3. Create Config
 ```toml
-# gordon.toml
+# Create gordon.toml in current directory (or use --config flag)
+# Gordon searches for config in: ./ → ~/.config/gordon/ → ~/.gordon/ → ~/ → /etc/gordon/
+
 [server]
 port = 8080
 registry_domain = "registry.yourdomain.com"
@@ -134,6 +144,9 @@ password = "your-secure-password"
 "app.yourdomain.com" = "myapp:latest"
 "api.yourdomain.com" = "api:v1"
 "blog.yourdomain.com" = "wordpress:latest"
+
+# Custom config file location (optional):
+# gordon --config /path/to/custom.toml start
 ```
 
 ### 4. Point Cloudflare DNS
@@ -176,22 +189,15 @@ sudo loginctl enable-linger $USER
 systemctl --user status gordon
 ```
 
-### 6. Configure Firewall
+### 6. Redirect Ports 80/443 to 8080
 ```bash
-# Set up port forwarding (choose one option)
-
-# Option A: iptables (most common)
+# Simple iptables redirect
 sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
 sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
 
-# Make iptables rules persistent
-sudo apt-get install iptables-persistent
+# Make rules persistent across reboots
+sudo apt install -y iptables-persistent
 sudo netfilter-persistent save
-
-# Option B: UFW with NAT (Ubuntu)
-sudo ufw allow 22,80,443,8080/tcp
-echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
 ```
 
 ### 7. Deploy Your First App
