@@ -71,6 +71,35 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 		delete(m.containers, route.Domain)
 	}
 
+	// Also check for orphaned containers with the same name in the runtime
+	expectedContainerName := fmt.Sprintf("gordon-%s", route.Domain)
+	allContainers, err := m.runtime.ListContainers(ctx, true) // include stopped containers
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to list all containers, proceeding with deployment")
+	} else {
+		for _, container := range allContainers {
+			if container.Name == expectedContainerName {
+				log.Info().
+					Str("domain", route.Domain).
+					Str("container", container.ID).
+					Str("status", container.Status).
+					Msg("Found orphaned container with same name, removing")
+
+				// Stop if running
+				if err := m.runtime.StopContainer(ctx, container.ID); err != nil {
+					log.Warn().Err(err).Str("container", container.ID).Msg("Failed to stop orphaned container")
+				}
+
+				// Force remove
+				if err := m.runtime.RemoveContainer(ctx, container.ID, true); err != nil {
+					log.Warn().Err(err).Str("container", container.ID).Msg("Failed to remove orphaned container")
+				} else {
+					log.Info().Str("container", container.ID).Msg("Successfully removed orphaned container")
+				}
+			}
+		}
+	}
+
 	// Construct the full image reference
 	imageRef := route.Image
 
@@ -82,19 +111,68 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 		}
 	}
 
-	// Pull the image first
-	log.Info().Str("image", imageRef).Msg("Pulling image")
-
-	// Use authenticated pull if registry auth is configured
-	if m.config.RegistryAuth.Enabled {
-		err := m.runtime.PullImageWithAuth(ctx, imageRef, m.config.RegistryAuth.Username, m.config.RegistryAuth.Password)
-		if err != nil {
-			return nil, fmt.Errorf("failed to pull image %s with auth: %w", imageRef, err)
-		}
+	// Check if image exists locally first
+	imageAvailable := false
+	localImages, err := m.runtime.ListImages(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to list local images, will attempt to pull from registry")
 	} else {
-		err := m.runtime.PullImage(ctx, imageRef)
-		if err != nil {
-			return nil, fmt.Errorf("failed to pull image %s: %w", imageRef, err)
+		// Normalize image references for comparison
+		normalizedImageRef := normalizeImageRef(imageRef)
+		
+		for _, localImage := range localImages {
+			if normalizeImageRef(localImage) == normalizedImageRef {
+				imageAvailable = true
+				log.Info().
+					Str("image", imageRef).
+					Msg("Image found locally, skipping pull")
+				break
+			}
+		}
+	}
+
+	// Pull the image only if not available locally
+	if !imageAvailable {
+		log.Info().Str("image", imageRef).Msg("Image not found locally, pulling from registry")
+
+		// Use authenticated pull if registry auth is configured
+		if m.config.RegistryAuth.Enabled {
+			log.Info().
+				Str("image", imageRef).
+				Str("username", m.config.RegistryAuth.Username).
+				Msg("Pulling image with authentication")
+			
+			err := m.runtime.PullImageWithAuth(ctx, imageRef, m.config.RegistryAuth.Username, m.config.RegistryAuth.Password)
+			if err != nil {
+				// Provide better error message with context
+				availableImages := make([]string, 0, len(localImages))
+				for _, img := range localImages {
+					availableImages = append(availableImages, img)
+				}
+				
+				return nil, fmt.Errorf("failed to pull image '%s' from registry '%s' with authentication. "+
+					"Please check: 1) Image name spelling, 2) Registry credentials, 3) Image exists in registry. "+
+					"Available local images: %v. Error: %w", 
+					imageRef, m.config.Server.RegistryDomain, availableImages, err)
+			}
+			log.Info().Str("image", imageRef).Msg("Image pulled successfully with authentication")
+		} else {
+			log.Info().Str("image", imageRef).Msg("Pulling image without authentication")
+			
+			err := m.runtime.PullImage(ctx, imageRef)
+			if err != nil {
+				// Provide better error message with context
+				availableImages := make([]string, 0, len(localImages))
+				for _, img := range localImages {
+					availableImages = append(availableImages, img)
+				}
+				
+				return nil, fmt.Errorf("failed to pull image '%s' from public registry. "+
+					"Please check: 1) Image name spelling, 2) Image exists in registry. "+
+					"Available local images: %v. Error: %w", 
+					imageRef, availableImages, err)
+			}
+			log.Info().Str("image", imageRef).Msg("Image pulled successfully")
 		}
 	}
 
@@ -507,4 +585,26 @@ func (m *Manager) HealthCheck(ctx context.Context) map[string]bool {
 // Runtime returns the underlying runtime interface
 func (m *Manager) Runtime() runtime.Runtime {
 	return m.runtime
+}
+
+// normalizeImageRef normalizes image references for comparison
+func normalizeImageRef(imageRef string) string {
+	// Split image and tag
+	parts := strings.Split(imageRef, ":")
+	image := parts[0]
+	tag := "latest"
+	if len(parts) > 1 {
+		tag = parts[1]
+	}
+
+	// Normalize Docker Hub references
+	if !strings.Contains(image, "/") {
+		// Official library image (e.g., "nginx" -> "docker.io/library/nginx")
+		image = "docker.io/library/" + image
+	} else if strings.Count(image, "/") == 1 && !strings.Contains(strings.Split(image, "/")[0], ".") {
+		// User repository (e.g., "user/repo" -> "docker.io/user/repo")
+		image = "docker.io/" + image
+	}
+
+	return image + ":" + tag
 }

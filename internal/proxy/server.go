@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gordon/internal/config"
 	"gordon/internal/container"
+	"gordon/internal/events"
 	"gordon/internal/middleware"
 )
 
@@ -212,6 +213,19 @@ func (s *Server) isRunningInContainer() bool {
 	return false
 }
 
+// UpdateConfig updates the config reference and refreshes routes
+func (s *Server) UpdateConfig(newConfig *config.Config) {
+	s.config = newConfig
+	s.routes = s.config.GetRoutes()
+	log.Debug().Int("route_count", len(s.routes)).Msg("Config and routes updated in proxy server")
+}
+
+// UpdateRoutes refreshes the routes from the current config
+func (s *Server) UpdateRoutes() {
+	s.routes = s.config.GetRoutes()
+	log.Debug().Int("route_count", len(s.routes)).Msg("Routes updated in proxy server")
+}
+
 func (s *Server) Start(ctx context.Context) error {
 	addr := ":" + strconv.Itoa(s.config.Server.Port)
 	
@@ -246,5 +260,28 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Info().Msg("Proxy server shutting down...")
 		return server.Shutdown(context.Background())
 	}
+}
+
+// ProxyEventHandler handles events for the proxy server
+type ProxyEventHandler struct {
+	server *Server
+}
+
+func NewProxyEventHandler(server *Server) *ProxyEventHandler {
+	return &ProxyEventHandler{
+		server: server,
+	}
+}
+
+func (h *ProxyEventHandler) CanHandle(eventType events.EventType) bool {
+	return eventType == events.ConfigReload
+}
+
+func (h *ProxyEventHandler) Handle(event events.Event) error {
+	if event.Type == events.ConfigReload {
+		h.server.UpdateRoutes()
+		return nil
+	}
+	return fmt.Errorf("unsupported event type: %s", event.Type)
 }
 

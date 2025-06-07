@@ -74,6 +74,9 @@ Push new versions anytime. Gordon handles graceful container swaps.
 ### Automatic Deployment
 Containers deploy instantly when you push new images. No manual deployment steps needed.
 
+### Auto-Route Creation
+Automatically create routes from image names containing domains. Push an image named like `myapp.bamen.dev:latest` and Gordon creates the route automatically when enabled.
+
 ## Quick Start (5 minutes)
 
 ### 1. Get a VPS, Install Podman and UFW
@@ -156,6 +159,9 @@ password = "your-secure-password"
 "app.yourdomain.com" = "myapp:latest"
 "api.yourdomain.com" = "api:v1"
 "blog.yourdomain.com" = "wordpress:latest"
+
+[auto_route]
+enabled = false  # Enable automatic route creation
 
 # Custom config file location (optional):
 # gordon --config /path/to/custom.toml start
@@ -279,6 +285,64 @@ podman push registry.yourdomain.com/myapp:latest
 "feature-xyz.yourdomain.com" = "myapp:feature-xyz"  # Feature branch
 ```
 
+### Auto-Route Creation for Testing
+
+Gordon can automatically create routes from image names that contain valid domain names. This is perfect for testing deployments without manually editing config files.
+
+#### Enable Auto-Routes
+```toml
+[auto_route]
+enabled = true  # Default: false
+```
+
+#### How It Works
+When you push an image with a domain name as the image name, Gordon automatically creates a route:
+
+```bash
+# Build your app normally
+podman build -t myapp .
+
+# Tag with domain name as the image name
+podman tag myapp:latest registry.yourdomain.com/myapp.bamen.dev:latest
+podman push registry.yourdomain.com/myapp.bamen.dev:latest
+
+# Gordon automatically creates:
+# "myapp.bamen.dev" = "myapp.bamen.dev:latest"
+# The route is added to your config file and deployed instantly!
+```
+
+#### Perfect for Testing Workflows
+```bash
+# Test different domains for the same app
+podman build -t myapp .
+
+# Push to different test domains using image names
+podman tag myapp:latest registry.yourdomain.com/staging.example.com:latest
+podman push registry.yourdomain.com/staging.example.com:latest
+
+podman tag myapp:latest registry.yourdomain.com/demo.example.com:v1.0.0
+podman push registry.yourdomain.com/demo.example.com:v1.0.0
+
+# Both automatically get their own routes:
+# staging.example.com -> staging.example.com:latest
+# demo.example.com -> demo.example.com:v1.0.0
+```
+
+#### Domain Validation
+Gordon only creates auto-routes for valid domain names in image names:
+- ✅ `api.example.com:latest` → Valid domain name, route created
+- ✅ `staging.dev:v1.0.0` → Valid subdomain name, route created  
+- ❌ `myapp:latest` → Not a domain, ignored
+- ❌ `myapp:v1.0.0` → Not a domain, ignored
+- ❌ `localhost:latest` → Not a valid domain, ignored
+
+#### Route Precedence
+- Existing routes in `[routes]` are never overwritten
+- Auto-routes are saved to your config file permanently
+- You can manually edit or remove auto-created routes anytime
+
+```
+
 ## FAQ
 
 **Q: How is this different from Traefik/Nginx Proxy Manager?**  
@@ -304,6 +368,9 @@ A: Runs comfortably on 1GB RAM VPS. Gordon itself uses <50MB.
 
 **Q: What about secrets?**  
 A: Use environment variables in your container or Docker secrets. Gordon doesn't interfere.
+
+**Q: How does auto-route creation work?**  
+A: When enabled, Gordon watches for pushed images with domain names as image names (like `staging.example.com:latest`) and automatically creates routes. Perfect for testing deployments without manual config edits.
 
 ## Philosophy: Build Local, Deploy Simple
 
