@@ -76,10 +76,14 @@ Containers deploy instantly when you push new images. No manual deployment steps
 
 ## Quick Start (5 minutes)
 
-### 1. Get a VPS & Install Podman (Rootless & Secure)
+### 1. Get a VPS, Install Podman and UFW
 ```bash
 # Any VPS provider: DigitalOcean, Linode, Vultr, Hetzner
 # Ubuntu/Debian recommended
+
+# Install Essentials 
+sudo apt update
+sudo apt install -y podman ufw
 
 # Configure UFW firewall first
 sudo ufw --force enable
@@ -88,12 +92,20 @@ sudo ufw default allow outgoing
 sudo ufw allow 22/tcp
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
+sudo ufw enable
+```
+### 2. Redirect Ports 80/443 to 8080
+```bash
+# Simple iptables redirect
+sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
 
-# Install Podman (more secure than Docker)
-sudo apt update
-sudo apt install -y podman
-
-# Enable rootless mode for enhanced security
+# Make rules persistent across reboots
+sudo apt install -y iptables-persistent
+sudo netfilter-persistent save
+```
+### 3. Enable rootless mode for enhanced security
+```
 echo 'user.max_user_namespaces=28633' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 
@@ -102,8 +114,10 @@ sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
 
 # Start user services (no root required!)
 systemctl --user enable --now podman.socket
+```
 
-# Configure registries for your Gordon registry
+### 4. Configure registries for your Gordon registry
+```
 mkdir -p ~/.config/containers
 tee ~/.config/containers/registries.conf > /dev/null <<EOF
 [registries.search]
@@ -117,23 +131,21 @@ registries = []
 EOF
 ```
 
-### 2. Install Gordon
+### 5. Install Gordon
 ```bash
 wget https://github.com/bnema/gordon/releases/latest/download/gordon-linux-amd64
 chmod +x gordon-linux-amd64
 sudo mv gordon-linux-amd64 /usr/local/bin/gordon
 ```
 
-### 3. Create Config
+### 6. Create Config
 ```toml
-# Create gordon.toml in current directory (or use --config flag)
 # Gordon searches for config in: ./ → ~/.config/gordon/ → ~/.gordon/ → ~/ → /etc/gordon/
-
+# (or use --config flag)
 [server]
 port = 8080
 registry_domain = "registry.yourdomain.com"
-runtime = "podman-rootless"  # Secure rootless mode
-ssl_email = "you@yourdomain.com"
+runtime = "podman-rootless"  # Can be auto, docker, podman, podman-rootless
 
 [registry_auth]
 enabled = true
@@ -149,13 +161,13 @@ password = "your-secure-password"
 # gordon --config /path/to/custom.toml start
 ```
 
-### 4. Point Cloudflare DNS
+### 7. Point Cloudflare DNS
 ```
 A    *.yourdomain.com    →    YOUR_VPS_IP
 A    yourdomain.com      →    YOUR_VPS_IP
 ```
 
-### 5. Create Systemd Service (Rootless)
+### 8. Create Systemd Service (Rootless)
 ```bash
 # Create user systemd service (no root privileges needed!)
 mkdir -p ~/.config/systemd/user
@@ -189,18 +201,7 @@ sudo loginctl enable-linger $USER
 systemctl --user status gordon
 ```
 
-### 6. Redirect Ports 80/443 to 8080
-```bash
-# Simple iptables redirect
-sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
-sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
-
-# Make rules persistent across reboots
-sudo apt install -y iptables-persistent
-sudo netfilter-persistent save
-```
-
-### 7. Deploy Your First App
+### 8. Deploy Your First App
 ```bash
 # Now from your local development machine:
 # Authenticate with your Gordon registry
@@ -215,50 +216,59 @@ podman push registry.yourdomain.com/myapp:latest
 
 ## Real-World Examples
 
-### Deploy a Node.js App
+### Deploy a Node.js App (The "Push-to-Deploy" Way)
+This is the simplest way to deploy. Your production environment is always in sync with your `latest` tag.
+
 ```bash
-# Build and test locally first
+# 1. Build and test locally first
 podman build -t myapp .
 podman run -p 3000:3000 myapp  # Test it!
 
-# Tag with registry prefix for both version and latest
-podman tag myapp registry.yourdomain.com/myapp:v1.0.0
+# 2. In gordon.toml, point your domain to the 'latest' tag
+# "app.yourdomain.com" = "myapp:latest"
+
+# 3. Tag your image as 'latest' for your registry
 podman tag myapp registry.yourdomain.com/myapp:latest
 
-# Push both tags to your Gordon registry
-podman push registry.yourdomain.com/myapp:v1.0.0
+# 4. Push to deploy
 podman push registry.yourdomain.com/myapp:latest
 
-# Gordon automatically detects the push and deploys to app.yourdomain.com
+# Gordon automatically detects the push and deploys the new 'latest' version.
 ```
 
 ### Smart Versioning Strategy
+For more control, especially in production, you can use a combination of version tags and the `latest` tag. This makes rollbacks trivial and allows for staging environments.
+
 ```bash
-# Always push versioned tags first
+# 1. Always push a specific version tag first. This creates a history.
 podman tag myapp registry.yourdomain.com/myapp:v1.0.1
 podman push registry.yourdomain.com/myapp:v1.0.1
 
-# Update config to test the new version
-# Edit gordon.toml:
-"app.yourdomain.com" = "myapp:v1.0.1"
+# 2. Test the new version on a staging domain.
+# In gordon.toml:
+"staging.yourdomain.com" = "myapp:v1.0.1"
 
-# Happy with the new version? Tag and push as latest
-podman tag registry.yourdomain.com/myapp:v1.0.1 registry.yourdomain.com/myapp:latest
+# 3. Once tested and confirmed, promote it to production by updating 'latest'.
+# This assumes 'myapp' still refers to the image for v1.0.1
+podman tag myapp registry.yourdomain.com/myapp:latest
 podman push registry.yourdomain.com/myapp:latest
+
+# Your production route, which follows 'latest', will now be updated automatically.
+# "app.yourdomain.com" = "myapp:latest"
 ```
 
 ### Instant Rollback When Things Break
 ```toml
-# Production broke after deploying v1.0.2?
-# Just edit gordon.toml:
+# Production broke after the latest push?
+# Just edit gordon.toml to point to a previously pushed, stable version tag:
 
 # From:
-"app.yourdomain.com" = "myapp:v1.0.2"
+"app.yourdomain.com" = "myapp:latest"
 
 # To:
-"app.yourdomain.com" = "myapp:v1.0.1"
+"app.yourdomain.com" = "myapp:v1.0.0"
 
-# Save. Fixed in seconds. No scripts, no drama.
+# Save the file. Gordon redeploys the stable version in seconds. No scripts, no drama.
 ```
 
 ### Multiple Environments
