@@ -259,44 +259,6 @@ podman push registry.yourdomain.com/myapp:latest
 "feature-xyz.yourdomain.com" = "myapp:feature-xyz"  # Feature branch
 ```
 
-## 🛡️ Production-Ready
-
-### Systemd Service
-```bash
-sudo tee /etc/systemd/system/gordon.service > /dev/null <<EOF
-[Unit]
-Description=Gordon Container Platform
-After=docker.service
-
-[Service]
-Type=simple
-Restart=always
-RestartSec=5
-ExecStart=/usr/local/bin/gordon start
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl enable --now gordon
-```
-
-### With Docker Compose
-```yaml
-version: '3.8'
-services:
-  gordon:
-    image: gordon:latest
-    ports:
-      - "80:8080"
-      - "443:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./gordon.toml:/app/gordon.toml:ro
-      - ./data:/data
-    restart: unless-stopped
-```
-
 ## 🤔 FAQ
 
 **Q: How is this different from Traefik/Nginx Proxy Manager?**  
@@ -312,10 +274,10 @@ A: Just edit gordon.toml to point to a previous version. Rollback takes seconds,
 A: Nope! Your laptop is the CI/CD. Build, test locally, push when ready. Keep it simple.
 
 **Q: Do I need Cloudflare?**  
-A: Recommended for free SSL and DDoS protection, but Gordon works with any DNS provider.
+A: Yes for SSL certificates. Gordon doesn't handle Let's Encrypt yet, so Cloudflare provides the SSL termination and DDoS protection.
 
 **Q: Can I run databases?**  
-A: Yes! Gordon manages any container. Use volumes for persistent data.
+A: You can in theory, but exposing databases on the internet is risky. Database/app isolation is coming soon for safer database deployments.
 
 **Q: Resource requirements?**  
 A: Runs comfortably on 1GB RAM VPS. Gordon itself uses <50MB.
@@ -402,9 +364,6 @@ curl -u admin:password https://registry.yourdomain.com/v2/_catalog
 # List tags
 curl -u admin:password https://registry.yourdomain.com/v2/myapp/tags/list
 ```
-
-### Multi-Server Setup
-Deploy Gordon on multiple VPS servers with different configs for geographic distribution or separation of concerns.
 
 ## 🤝 Contributing
 
