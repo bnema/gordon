@@ -8,7 +8,7 @@
 
 ## Why Gordon?
 
-**You have a $5 VPS. You want to run multiple apps. You don't want Kubernetes.**
+**You have a $5 VPS. You want to run multiple apps. You don't want complex CI/CD pipelines, expensive PaaS solutions, or overcomplicated orchestration.**
 
 Gordon is the missing piece that makes container deployment on budget VPS servers as simple as expensive PaaS solutions. One binary, one config file, unlimited apps.
 
