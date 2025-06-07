@@ -41,6 +41,10 @@ func RegistryAuth(username, password string) func(http.Handler) http.Handler {
 func isAuthenticated(r *http.Request, expectedUsername, expectedPassword string) bool {
 	username, password, ok := r.BasicAuth()
 	if !ok {
+		log.Debug().
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Msg("No basic auth provided")
 		return false
 	}
 	
@@ -48,5 +52,15 @@ func isAuthenticated(r *http.Request, expectedUsername, expectedPassword string)
 	usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(expectedUsername)) == 1
 	passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(expectedPassword)) == 1
 	
-	return usernameMatch && passwordMatch
+	authenticated := usernameMatch && passwordMatch
+	if !authenticated {
+		log.Debug().
+			Str("provided_username", username).
+			Str("expected_username", expectedUsername).
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Msg("Authentication failed")
+	}
+	
+	return authenticated
 }

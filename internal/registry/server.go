@@ -65,7 +65,7 @@ func (s *Server) handleV2Routes(w http.ResponseWriter, r *http.Request) {
 		s.handleGetManifest(w, r)
 	case method == "PUT" && matches(path, "/v2/.*/manifests/.*"):
 		s.handlePutManifest(w, r)
-	case method == "GET" && matches(path, "/v2/.*/blobs/.*"):
+	case (method == "GET" || method == "HEAD") && matches(path, "/v2/.*/blobs/.*"):
 		s.handleGetBlob(w, r)
 	case method == "POST" && matches(path, "/v2/.*/blobs/uploads/"):
 		s.handleStartBlobUpload(w, r)
@@ -268,7 +268,7 @@ func (s *Server) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetBlob(w http.ResponseWriter, r *http.Request) {
 	name, digest := s.parseBlobPath(r.URL.Path)
 	
-	log.Debug().Str("name", name).Str("digest", digest).Msg("GET blob")
+	log.Debug().Str("name", name).Str("digest", digest).Str("method", r.Method).Msg("Handle blob request")
 	
 	reader, err := s.storage.GetBlob(digest)
 	if err != nil {
@@ -280,6 +280,11 @@ func (s *Server) handleGetBlob(w http.ResponseWriter, r *http.Request) {
 	
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
+	
+	// For HEAD requests, don't send the body
+	if r.Method == "HEAD" {
+		return
+	}
 	
 	_, err = io.Copy(w, reader)
 	if err != nil {
