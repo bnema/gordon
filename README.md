@@ -1,7 +1,7 @@
 # Gordon
 
 <div align="center">
-  <img src="assets/gordon-mascot.png" alt="Gordon Mascot" width="200">
+  <img src="assets/gordon-mascot-hq-trsp.png" alt="Gordon Mascot" width="200">
   <h3>The Smart Way to Deploy Containers on Your VPS</h3>
   <p><em>Push code → Auto-deploy → Zero complexity</em></p>
 </div>
@@ -12,14 +12,14 @@
 
 Gordon is the missing piece that makes container deployment on budget VPS servers as simple as expensive PaaS solutions. One binary, one config file, unlimited apps.
 
-### 🎯 Perfect For
+### Perfect For
 
 - **Solo developers** with multiple side projects on one VPS
 - **Small teams** who want Heroku-like simplicity without the cost
 - **Agencies** deploying client apps across VPS servers
 - **Anyone** tired of complex deployment pipelines
 
-## 🚀 How It Works
+## How It Works
 
 ### Build Locally, Deploy Instantly
 
@@ -37,7 +37,7 @@ podman push registry.yourdomain.com/myapp:latest
 
 **No build servers. No CI/CD complexity. If it runs on your machine, it runs in production.**
 
-### 🔄 Instant Rollbacks
+### Instant Rollbacks
 
 Something broke? Just change your config:
 
@@ -51,30 +51,30 @@ Something broke? Just change your config:
 
 Save the file. Gordon redeploys the previous version. Problem solved in seconds.
 
-## ✨ Key Features
+## Key Features
 
-### 🏠 Local-First Development
+### Local-First Development
 **Your machine is the build server.** Test locally with Podman's rootless containers, push when ready. No waiting for remote builds.
 
-### 🏦 Built-in Container Registry
+### Built-in Container Registry
 Your VPS becomes a private container registry (Docker/Podman compatible). No Docker Hub subscription needed.
 
-### 🔄 Push-to-Deploy Magic
+### Push-to-Deploy Magic
 Gordon watches for new images and deploys them instantly to configured domains.
 
-### ⏮️ Version Control Built-In
+### Version Control Built-In
 Keep multiple versions in your registry. Switch between them instantly by editing the config.
 
-### 🌐 Multi-Domain Routing
+### Multi-Domain Routing
 Run unlimited apps on one server. Each gets its own domain with automatic HTTPS via Cloudflare.
 
-### 📦 Zero-Downtime Updates
+### Zero-Downtime Updates
 Push new versions anytime. Gordon handles graceful container swaps.
 
-### 🚀 Automatic Deployment
+### Automatic Deployment
 Containers deploy instantly when you push new images. No manual deployment steps needed.
 
-## 🚀 Quick Start (5 minutes)
+## Quick Start (5 minutes)
 
 ### 1. Get a VPS & Install Podman (Rootless & Secure)
 ```bash
@@ -192,7 +192,11 @@ sudo netfilter-persistent save
 sudo ufw allow 22,80,443,8080/tcp
 echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
+```
 
+### 7. Deploy Your First App
+```bash
+# Now from your local development machine:
 # Authenticate with your Gordon registry
 podman login registry.yourdomain.com
 # Use the username/password from your gordon.toml config
@@ -200,10 +204,10 @@ podman login registry.yourdomain.com
 # Deploy your first app (using podman)
 podman tag myapp:latest registry.yourdomain.com/myapp:latest
 podman push registry.yourdomain.com/myapp:latest
-# Visit https://app.yourdomain.com 🎉
+# Visit https://app.yourdomain.com
 ```
 
-## 🎯 Real-World Examples
+## Real-World Examples
 
 ### Deploy a Node.js App
 ```bash
@@ -259,10 +263,10 @@ podman push registry.yourdomain.com/myapp:latest
 "feature-xyz.yourdomain.com" = "myapp:feature-xyz"  # Feature branch
 ```
 
-## 🤔 FAQ
+## FAQ
 
 **Q: How is this different from Traefik/Nginx Proxy Manager?**  
-A: Gordon includes a Docker registry and automatic deployment. Push an image, get a deployment. No manual container management.
+A: Those are just reverse proxies - you still need to manually start/stop containers. Gordon is a complete deployment platform: built-in registry, automatic deployment on push, and container lifecycle management. It's the difference between a router and a full PaaS.
 
 **Q: Where do builds happen?**  
 A: On YOUR machine. If it runs locally, it'll run in production. No mysterious build server issues.
@@ -285,7 +289,7 @@ A: Runs comfortably on 1GB RAM VPS. Gordon itself uses <50MB.
 **Q: What about secrets?**  
 A: Use environment variables in your container or Docker secrets. Gordon doesn't interfere.
 
-## 💡 Philosophy: Build Local, Deploy Simple
+## Philosophy: Build Local, Deploy Simple
 
 ### Why No Build Servers?
 
@@ -304,7 +308,7 @@ push code → wait for build → hope it works → debug remotely → repeat
 podman build locally → test locally → push image → instant deploy
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 Your Machine → Docker Image → Gordon Registry → Auto-Deploy → Live App
@@ -320,7 +324,7 @@ Your Machine → Docker Image → Gordon Registry → Auto-Deploy → Live App
 - **Stateless**: Configuration is the only state
 - **Fast**: Written in Go for minimal overhead
 
-## 🚀 Advanced Usage
+## Advanced Usage
 
 ### Container Runtime Configuration
 ```toml
@@ -365,11 +369,11 @@ curl -u admin:password https://registry.yourdomain.com/v2/_catalog
 curl -u admin:password https://registry.yourdomain.com/v2/myapp/tags/list
 ```
 
-## 🤝 Contributing
+## Contributing
 
 Gordon is open source and we love contributions! Check out our [issues](https://github.com/yourusername/gordon/issues) or submit a PR.
 
-## 📄 License
+## License
 
 GPL-3.0 - Use freely, contribute back.
 
@@ -377,5 +381,5 @@ GPL-3.0 - Use freely, contribute back.
 
 <div align="center">
   <p><strong>Stop overcomplicating container deployment.</strong></p>
-  <p>Star ⭐ this repo if Gordon saves you money!</p>
+  <p>Star this repo if Gordon saves you money!</p>
 </div>
