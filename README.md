@@ -25,12 +25,12 @@ Gordon is the missing piece that makes container deployment on budget VPS server
 
 ```bash
 # 1. Build & test on YOUR machine
-docker build -t myapp .
-docker run -p 8080:8080 myapp  # Works? Great!
+podman build -t myapp .
+podman run -p 8080:8080 myapp  # Works? Great!
 
 # 2. Push to deploy
-docker tag myapp registry.yourdomain.com/myapp:latest
-docker push registry.yourdomain.com/myapp:latest
+podman tag myapp registry.yourdomain.com/myapp:latest
+podman push registry.yourdomain.com/myapp:latest
 
 # 3. That's it. Gordon deploys it automatically.
 ```
@@ -54,10 +54,10 @@ Save the file. Gordon redeploys the previous version. Problem solved in seconds.
 ## ✨ Key Features
 
 ### 🏠 Local-First Development
-**Your machine is the build server.** Test locally, push when ready. No waiting for remote builds.
+**Your machine is the build server.** Test locally with Podman's rootless containers, push when ready. No waiting for remote builds.
 
-### 🏦 Built-in Docker Registry
-Your VPS becomes a private Docker registry. No Docker Hub subscription needed.
+### 🏦 Built-in Container Registry
+Your VPS becomes a private container registry (Docker/Podman compatible). No Docker Hub subscription needed.
 
 ### 🔄 Push-to-Deploy Magic
 Gordon watches for new images and deploys them instantly to configured domains.
@@ -74,22 +74,39 @@ Push new versions anytime. Gordon handles graceful container swaps.
 ### 🚀 Automatic Deployment
 Containers deploy instantly when you push new images. No manual deployment steps needed.
 
-## 💰 Cost Comparison
-
-| Solution | Monthly Cost | Setup Complexity | # Apps |
-|----------|-------------|------------------|--------|
-| Heroku | $7-25/app | ⭐ | Limited |
-| AWS ECS | $50-200+ | ⭐⭐⭐⭐⭐ | Unlimited |
-| Kubernetes | $100+ | ⭐⭐⭐⭐⭐ | Unlimited |
-| **Gordon + VPS** | **$5-20 total** | **⭐⭐** | **Unlimited** |
-
 ## 🚀 Quick Start (5 minutes)
 
-### 1. Get a VPS & Install Docker
+### 1. Get a VPS & Install Podman (Rootless & Secure)
 ```bash
 # Any VPS provider: DigitalOcean, Linode, Vultr, Hetzner
 # Ubuntu/Debian recommended
-curl -fsSL https://get.docker.com | sh
+
+# Install Podman (more secure than Docker)
+sudo apt update
+sudo apt install -y podman
+
+# Enable rootless mode for enhanced security
+echo 'user.max_user_namespaces=28633' | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+# Configure user for rootless containers
+sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
+
+# Start user services (no root required!)
+systemctl --user enable --now podman.socket
+
+# Configure registries for your Gordon registry
+mkdir -p ~/.config/containers
+tee ~/.config/containers/registries.conf > /dev/null <<EOF
+[registries.search]
+registries = ['docker.io', 'registry.yourdomain.com']
+
+[registries.insecure]
+registries = ['registry.yourdomain.com']
+
+[registries.block]
+registries = []
+EOF
 ```
 
 ### 2. Install Gordon
@@ -105,7 +122,7 @@ sudo mv gordon-linux-amd64 /usr/local/bin/gordon
 [server]
 port = 8080
 registry_domain = "registry.yourdomain.com"
-runtime = "auto"  # auto-detects Docker/Podman
+runtime = "podman-rootless"  # Secure rootless mode
 ssl_email = "you@yourdomain.com"
 
 [registry_auth]
@@ -125,25 +142,64 @@ A    *.yourdomain.com    →    YOUR_VPS_IP
 A    yourdomain.com      →    YOUR_VPS_IP
 ```
 
-### 5. Start Gordon & Configure Firewall
+### 5. Create Systemd Service (Rootless)
 ```bash
-# Start Gordon
-sudo gordon start
+# Create user systemd service (no root privileges needed!)
+mkdir -p ~/.config/systemd/user
 
+tee ~/.config/systemd/user/gordon.service > /dev/null <<EOF
+[Unit]
+Description=Gordon Container Platform (Rootless)
+After=podman.socket
+Requires=podman.socket
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+Environment=CONTAINER_HOST=unix://%t/podman/podman.sock
+ExecStart=/usr/local/bin/gordon start
+WorkingDirectory=%h
+
+[Install]
+WantedBy=default.target
+EOF
+
+# Enable and start the user service
+systemctl --user daemon-reload
+systemctl --user enable --now gordon
+
+# Enable lingering to start service on boot
+sudo loginctl enable-linger $USER
+
+# Check service status
+systemctl --user status gordon
+```
+
+### 6. Configure Firewall
+```bash
 # Set up port forwarding (choose one option)
 
 # Option A: iptables (most common)
 sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
 sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
 
+# Make iptables rules persistent
+sudo apt-get install iptables-persistent
+sudo netfilter-persistent save
+
 # Option B: UFW with NAT (Ubuntu)
 sudo ufw allow 22,80,443,8080/tcp
 echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 
-# Deploy your first app
-docker tag myapp:latest registry.yourdomain.com/myapp:latest
-docker push registry.yourdomain.com/myapp:latest
+# Authenticate with your Gordon registry
+podman login registry.yourdomain.com
+# Use the username/password from your gordon.toml config
+
+# Deploy your first app (using podman)
+podman tag myapp:latest registry.yourdomain.com/myapp:latest
+podman push registry.yourdomain.com/myapp:latest
 # Visit https://app.yourdomain.com 🎉
 ```
 
@@ -152,32 +208,33 @@ docker push registry.yourdomain.com/myapp:latest
 ### Deploy a Node.js App
 ```bash
 # Build and test locally first
-docker build -t myapp .
-docker run -p 3000:3000 myapp  # Test it!
+podman build -t myapp .
+podman run -p 3000:3000 myapp  # Test it!
 
-# Tag with version AND latest
-docker tag myapp registry.yourdomain.com/myapp:v1.0.0
-docker tag myapp registry.yourdomain.com/myapp:latest
+# Tag with registry prefix for both version and latest
+podman tag myapp registry.yourdomain.com/myapp:v1.0.0
+podman tag myapp registry.yourdomain.com/myapp:latest
 
-# Push both tags
-docker push registry.yourdomain.com/myapp:v1.0.0
-docker push registry.yourdomain.com/myapp:latest
+# Push both tags to your Gordon registry
+podman push registry.yourdomain.com/myapp:v1.0.0
+podman push registry.yourdomain.com/myapp:latest
 
-# Auto-deployed to app.yourdomain.com
+# Gordon automatically detects the push and deploys to app.yourdomain.com
 ```
 
 ### Smart Versioning Strategy
 ```bash
-# Always push versioned tags
-docker tag myapp registry.yourdomain.com/myapp:v1.0.1
-docker push registry.yourdomain.com/myapp:v1.0.1
+# Always push versioned tags first
+podman tag myapp registry.yourdomain.com/myapp:v1.0.1
+podman push registry.yourdomain.com/myapp:v1.0.1
 
-# Update config to test
+# Update config to test the new version
+# Edit gordon.toml:
 "app.yourdomain.com" = "myapp:v1.0.1"
 
-# Happy? Update latest
-docker tag myapp registry.yourdomain.com/myapp:latest
-docker push registry.yourdomain.com/myapp:latest
+# Happy with the new version? Tag and push as latest
+podman tag registry.yourdomain.com/myapp:v1.0.1 registry.yourdomain.com/myapp:latest
+podman push registry.yourdomain.com/myapp:latest
 ```
 
 ### Instant Rollback When Things Break
@@ -281,8 +338,8 @@ A: Use environment variables in your container or Docker secrets. Gordon doesn't
 # Traditional CI/CD
 push code → wait for build → hope it works → debug remotely → repeat
 
-# The Gordon Way
-build locally → test locally → push image → instant deploy
+# The Gordon Way (with Podman)
+podman build locally → test locally → push image → instant deploy
 ```
 
 ## 🏗️ Architecture
