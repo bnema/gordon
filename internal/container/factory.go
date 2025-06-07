@@ -148,14 +148,10 @@ func tryCreateRuntime(socketPath string) (runtime.Runtime, *RuntimeInfo, error) 
 	}
 
 	// Determine runtime type based on socket path and server info
-	runtimeType := detectRuntimeType(socketPath, ping.APIVersion)
+	runtimeType := detectRuntimeType(socketPath)
 
-	var rt runtime.Runtime
-	if runtimeType == RuntimeDocker {
-		rt = &DockerRuntime{client: cli}
-	} else {
-		rt = &PodmanRuntime{client: cli}
-	}
+	// Since Podman uses Docker-compatible API, we can use DockerRuntime for both
+	rt := &DockerRuntime{client: cli}
 
 	info := &RuntimeInfo{
 		Type:       runtimeType,
@@ -167,7 +163,7 @@ func tryCreateRuntime(socketPath string) (runtime.Runtime, *RuntimeInfo, error) 
 }
 
 // detectRuntimeType determines if the socket is Docker or Podman
-func detectRuntimeType(socketPath, apiVersion string) RuntimeType {
+func detectRuntimeType(socketPath string) RuntimeType {
 	// Check socket path patterns
 	if strings.Contains(socketPath, "podman") {
 		if strings.Contains(socketPath, "/run/user/") || strings.Contains(socketPath, "$XDG_RUNTIME_DIR") {
@@ -250,7 +246,7 @@ func createPodmanRuntimeWithSocket(socketPath string) (runtime.Runtime, error) {
 		return nil, fmt.Errorf("Podman ping failed: %w", err)
 	}
 
-	return &PodmanRuntime{client: cli}, nil
+	return &DockerRuntime{client: cli}, nil
 }
 
 // GetAvailableRuntimes returns information about all available runtimes

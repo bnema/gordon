@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"gordon/internal/config"
@@ -72,19 +74,46 @@ func (s *Server) proxyToContainer(w http.ResponseWriter, r *http.Request, route 
 		return
 	}
 
-	// Get container's internal network info (Traefik-style automatic detection)
-	containerIP, containerPort, err := s.manager.Runtime().GetContainerNetworkInfo(ctx, container.ID)
-	if err != nil {
-		log.Error().Err(err).Str("domain", route.Domain).Str("container_id", container.ID).Msg("Failed to get container network info")
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	
-	target, err := url.Parse(fmt.Sprintf("http://%s:%d", containerIP, containerPort))
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to parse target URL")
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+	// Detect if Gordon is running in a container or on the host
+	var target *url.URL
+	if s.isRunningInContainer() {
+		// Gordon is in a container - use container network
+		containerIP, containerPort, err := s.manager.Runtime().GetContainerNetworkInfo(ctx, container.ID)
+		if err != nil {
+			log.Error().Err(err).Str("domain", route.Domain).Str("container_id", container.ID).Msg("Failed to get container network info")
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		target, err = url.Parse(fmt.Sprintf("http://%s:%d", containerIP, containerPort))
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to parse container target URL")
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		log.Debug().Str("mode", "container").Str("target", target.String()).Msg("Using container-to-container networking")
+	} else {
+		// Gordon is on the host - use host port mapping
+		exposedPorts, err := s.manager.Runtime().GetImageExposedPorts(ctx, route.Image)
+		if err != nil {
+			log.Error().Err(err).Str("domain", route.Domain).Str("image", route.Image).Msg("Failed to get exposed ports from image")
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		
+		hostPort, err := s.manager.Runtime().GetContainerPort(ctx, container.ID, exposedPorts[0])
+		if err != nil {
+			log.Error().Err(err).Str("domain", route.Domain).Str("container_id", container.ID).Int("internal_port", exposedPorts[0]).Msg("Failed to get host port mapping")
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		
+		target, err = url.Parse(fmt.Sprintf("http://localhost:%d", hostPort))
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to parse host target URL")
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		log.Debug().Str("mode", "host").Str("target", target.String()).Msg("Using host port mapping")
 	}
 	
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -144,6 +173,43 @@ func (s *Server) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 		Msg("Proxying request to registry")
 	
 	proxy.ServeHTTP(w, r)
+}
+
+// isRunningInContainer detects if Gordon is running inside a container
+func (s *Server) isRunningInContainer() bool {
+	// Check for common container indicators
+	
+	// 1. Check for /.dockerenv file (Docker creates this)
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	
+	// 2. Check cgroup for container indicators
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		content := string(data)
+		if strings.Contains(content, "docker") || 
+		   strings.Contains(content, "containerd") || 
+		   strings.Contains(content, "podman") {
+			return true
+		}
+	}
+	
+	// 3. Check if hostname matches container ID pattern (64 hex chars)
+	if hostname, err := os.Hostname(); err == nil {
+		if len(hostname) == 12 || len(hostname) == 64 {
+			// Container hostnames are typically 12 or 64 character hex strings
+			return true
+		}
+	}
+	
+	// 4. Check environment variables set by container runtimes
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" ||
+	   os.Getenv("DOCKER_CONTAINER") != "" ||
+	   os.Getenv("container") != "" {
+		return true
+	}
+	
+	return false
 }
 
 func (s *Server) Start(ctx context.Context) error {

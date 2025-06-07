@@ -8,17 +8,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
-	"github.com/google/uuid"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"gordon/internal/config"
 	"gordon/internal/container"
 	"gordon/internal/events"
 	"gordon/internal/proxy"
 	"gordon/internal/registry"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var startCmd = &cobra.Command{
@@ -91,13 +91,7 @@ func runStart(cmd *cobra.Command, args []string) {
 		}
 
 		// Publish config reload event
-		configReloadEvent := events.Event{
-			ID:        uuid.New().String(),
-			Type:      events.ConfigReload,
-			Timestamp: time.Now(),
-		}
-
-		if err := eventBus.Publish(configReloadEvent); err != nil {
+		if err := eventBus.Publish(events.ConfigReload, nil); err != nil {
 			log.Error().Err(err).Msg("Failed to publish config reload event")
 		} else {
 			log.Info().Msg("Configuration reloaded successfully")

@@ -43,6 +43,7 @@ type Runtime interface {
 	
 	// Image operations
 	PullImage(ctx context.Context, image string) error
+	PullImageWithAuth(ctx context.Context, image, username, password string) error
 	RemoveImage(ctx context.Context, image string, force bool) error
 	ListImages(ctx context.Context) ([]string, error)
 	
