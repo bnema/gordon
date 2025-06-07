@@ -3,7 +3,7 @@
 <div align="center">
   <img src="assets/gordon-mascot-hq-trsp.png" alt="Gordon Mascot" width="200">
   <h3>The Smart Way to Deploy Containers on Your VPS</h3>
-  <p><em>Push code → Auto-deploy → Zero complexity</em></p>
+  <p><em>Push image → Auto-deploy → Zero complexity</em></p>
 </div>
 
 ## Why Gordon?
@@ -141,9 +141,9 @@ chmod +x gordon-linux-amd64
 sudo mv gordon-linux-amd64 /usr/local/bin/gordon
 ```
 
-### 6. Create Config
+### 6. Create Config file
 ```toml
-# Gordon searches for config in: ./ → ~/.config/gordon/ → ~/.gordon/ → ~/ → /etc/gordon/
+# Gordon searches for `gordon.toml` config in: ./ → ~/.config/gordon/ → ~/.gordon/ → ~/ → /etc/gordon/
 # (or use --config flag)
 [server]
 port = 8080
@@ -277,14 +277,6 @@ podman push registry.yourdomain.com/myapp:latest
 # Save the file. Gordon redeploys the stable version in seconds. No scripts, no drama.
 ```
 
-### Multiple Environments
-```toml
-[routes]
-"app.yourdomain.com" = "myapp:v1.0.0"      # Stable production
-"staging.yourdomain.com" = "myapp:latest"   # Latest builds
-"feature-xyz.yourdomain.com" = "myapp:feature-xyz"  # Feature branch
-```
-
 ### Auto-Route Creation for Testing
 
 Gordon can automatically create routes from image names that contain valid domain names. This is perfect for testing deployments without manually editing config files.
@@ -330,8 +322,8 @@ podman push registry.yourdomain.com/demo.example.com:v1.0.0
 
 #### Domain Validation
 Gordon only creates auto-routes for valid domain names in image names:
-- ✅ `api.example.com:latest` → Valid domain name, route created
-- ✅ `staging.dev:v1.0.0` → Valid subdomain name, route created  
+- ✅ `api.example.com:latest` → Valid subdomain name, route created
+- ✅ `myapp.dev:v1.0.0` → Valid domain name, route created  
 - ❌ `myapp:latest` → Not a domain, ignored
 - ❌ `myapp:v1.0.0` → Not a domain, ignored
 - ❌ `localhost:latest` → Not a valid domain, ignored
@@ -341,7 +333,6 @@ Gordon only creates auto-routes for valid domain names in image names:
 - Auto-routes are saved to your config file permanently
 - You can manually edit or remove auto-created routes anytime
 
-```
 
 ## FAQ
 
@@ -392,14 +383,6 @@ podman build locally → test locally → push image → instant deploy
 ```
 
 ## Architecture
-
-```
-Your Machine → Docker Image → Gordon Registry → Auto-Deploy → Live App
-                                      ↓
-                               Event System
-                                      ↓
-                           Domain Router → Container
-```
 
 - **Event-Driven**: Push events trigger deployments automatically
 - **Config Hot-Reload**: Edit gordon.toml, changes apply instantly
