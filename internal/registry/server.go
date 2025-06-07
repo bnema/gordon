@@ -24,7 +24,10 @@ type Server struct {
 
 func NewServer(cfg *config.Config, eventBus events.EventBus) (*Server, error) {
 	// Initialize storage
-	storage, err := NewFilesystemStorage(cfg.Server.DataDir + "/registry")
+	registryPath := cfg.Server.DataDir + "/registry"
+	log.Debug().Str("data_dir", cfg.Server.DataDir).Str("registry_path", registryPath).Msg("Initializing registry storage")
+	
+	storage, err := NewFilesystemStorage(registryPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}

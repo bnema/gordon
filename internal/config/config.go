@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 )
 
@@ -57,6 +58,12 @@ func Load() (*Config, error) {
 	// Get server config first
 	if err := viper.UnmarshalKey("server", &cfg.Server); err != nil {
 		return nil, fmt.Errorf("unable to decode server config: %v", err)
+	}
+	
+	// If data_dir is empty after loading config, use the default
+	if cfg.Server.DataDir == "" {
+		cfg.Server.DataDir = defaultDataDir
+		log.Debug().Str("data_dir", cfg.Server.DataDir).Msg("Config had empty data_dir, using default")
 	}
 	
 	// Get registry auth config
@@ -136,12 +143,20 @@ func (c *Config) GetRoutes() []Route {
 
 // getDefaultDataDir returns a platform-appropriate default data directory
 func getDefaultDataDir() string {
+	uid := os.Getuid()
+	log.Debug().Int("uid", uid).Msg("Detecting default data directory")
+	
 	// Check if we're running in a rootless environment
-	if os.Getuid() != 0 {
+	if uid != 0 {
 		// For rootless environments, use user's home directory or current directory
 		if homeDir, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(homeDir, ".local/share/gordon")
+			dataDir := filepath.Join(homeDir, ".local/share/gordon")
+			log.Debug().Str("data_dir", dataDir).Msg("Using user data directory for rootless environment")
+			return dataDir
 		}
+		log.Debug().Msg("Failed to get user home directory, falling back to ./data")
+	} else {
+		log.Debug().Msg("Running as root, using ./data")
 	}
 	
 	// For root or when home directory is not available, use relative path
