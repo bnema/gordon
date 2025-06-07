@@ -346,7 +346,7 @@ A: On YOUR machine. If it runs locally, it'll run in production. No mysterious b
 A: Just edit gordon.toml to point to a previous version. Rollback takes seconds, not minutes.
 
 **Q: Do I need CI/CD?**  
-A: Nope! Your laptop is the CI/CD. Build, test locally, push when ready. Keep it simple.
+A: Nope! Your computer is the CI/CD. Build, test locally, push when ready. Keep it stupid simple.
 
 **Q: Do I need Cloudflare?**  
 A: Yes for SSL certificates. Gordon doesn't handle Let's Encrypt yet, so Cloudflare provides the SSL termination and DDoS protection.
@@ -355,7 +355,7 @@ A: Yes for SSL certificates. Gordon doesn't handle Let's Encrypt yet, so Cloudfl
 A: You can in theory, but exposing databases on the internet is risky. Database/app isolation is coming soon for safer database deployments.
 
 **Q: Resource requirements?**  
-A: Runs comfortably on 1GB RAM VPS. Gordon itself uses <50MB.
+A: Runs comfortably on 1GB RAM VPS. Gordon itself uses <15MB of RAM.
 
 **Q: What about secrets?**  
 A: Use environment variables in your container or Docker secrets. Gordon doesn't interfere.
@@ -417,13 +417,16 @@ gordon start
 ### Runtime Auto-Detection
 Gordon automatically detects available container runtimes in this order:
 1. **Docker** (`/var/run/docker.sock`)
-2. **Podman root** (`/run/podman/podman.sock`) 
-3. **Podman rootless** (`$XDG_RUNTIME_DIR/podman/podman.sock`)
+2. **Podman rootless** (`$XDG_RUNTIME_DIR/podman/podman.sock`)
+3. **Podman root** (`/run/podman/podman.sock`) 
 
-### Custom Ports
-```toml
-# Gordon auto-detects ports: 80, 8080, 3000
-# Or use EXPOSE in Dockerfile
+### Port binding
+Gordon requires your Dockerfile to explicitly expose ports using the `EXPOSE` instruction. When multiple ports are exposed, Gordon will use the first exposed port for HTTP traffic.
+
+Example Dockerfile:
+```
+ENTRYPOINT ["/myapp"]
+EXPOSE 8080
 ```
 
 ### Registry Operations

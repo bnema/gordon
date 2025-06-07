@@ -194,14 +194,16 @@ func detectRuntimeType(socketPath string) RuntimeType {
 // getDefaultSocketPaths returns the default socket paths to try
 func getDefaultSocketPaths() []string {
 	paths := []string{
-		"unix:///var/run/docker.sock",    // Docker
-		"unix:///run/podman/podman.sock", // Podman root
+		"unix:///var/run/docker.sock", // Docker
 	}
 
-	// Add Podman rootless socket
+	// Add Podman rootless socket first (preferred)
 	if rootlessSocket := getDefaultPodmanSocket(true); rootlessSocket != "" {
 		paths = append(paths, rootlessSocket)
 	}
+
+	// Add Podman root socket last
+	paths = append(paths, "unix:///run/podman/podman.sock")
 
 	return paths
 }
