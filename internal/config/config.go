@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -43,7 +45,10 @@ func Load() (*Config, error) {
 	viper.SetDefault("server.registry_port", 5000)
 	viper.SetDefault("server.runtime", "auto")
 	viper.SetDefault("server.socket_path", "")
-	viper.SetDefault("server.data_dir", "./data")
+	
+	// Set data_dir default based on environment
+	defaultDataDir := getDefaultDataDir()
+	viper.SetDefault("server.data_dir", defaultDataDir)
 	viper.SetDefault("registry_auth.enabled", true)
 
 	// Handle the routes manually since Viper struggles with domain names
@@ -127,4 +132,18 @@ func (c *Config) GetRoutes() []Route {
 	}
 	
 	return routes
+}
+
+// getDefaultDataDir returns a platform-appropriate default data directory
+func getDefaultDataDir() string {
+	// Check if we're running in a rootless environment
+	if os.Getuid() != 0 {
+		// For rootless environments, use user's home directory or current directory
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(homeDir, ".local/share/gordon")
+		}
+	}
+	
+	// For root or when home directory is not available, use relative path
+	return "./data"
 }
