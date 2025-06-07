@@ -22,14 +22,16 @@ type Manager struct {
 
 // NewManager creates a new container manager
 func NewManager(cfg *config.Config) (*Manager, error) {
+	// Test runtime connectivity with background context
+	ctx := context.Background()
+	
 	// Create runtime using the factory
-	rt, err := CreateRuntime(cfg)
+	rt, err := CreateRuntime(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container runtime: %w", err)
 	}
 
 	// Test runtime connectivity
-	ctx := context.Background()
 	if err := rt.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("runtime not available: %w", err)
 	}
