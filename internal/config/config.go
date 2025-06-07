@@ -66,6 +66,12 @@ func Load() (*Config, error) {
 		log.Debug().Str("data_dir", cfg.Server.DataDir).Msg("Config had empty data_dir, using default")
 	}
 	
+	// If registry_port is 0 after loading config, use the default
+	if cfg.Server.RegistryPort == 0 {
+		cfg.Server.RegistryPort = 5000
+		log.Debug().Int("registry_port", cfg.Server.RegistryPort).Msg("Config had empty registry_port, using default")
+	}
+	
 	// Get registry auth config
 	if err := viper.UnmarshalKey("registry_auth", &cfg.RegistryAuth); err != nil {
 		return nil, fmt.Errorf("unable to decode registry auth config: %v", err)
