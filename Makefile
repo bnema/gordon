@@ -2,6 +2,7 @@
 # Variables
 REPO := ghcr.io/bnema/gordon
 TAG := v2-dev
+DEV_TAG := v2-dev-$(shell date +%Y%m%d-%H%M%S)
 DIST_DIR := ./dist
 ENGINE := podman
 
@@ -20,7 +21,7 @@ LDFLAGS := -s -w \
 ARCHS := amd64 arm64
 
 # Phony targets
-.PHONY: all build build-push clean
+.PHONY: all build build-push clean dev-release
 
 # Default target
 all: build
@@ -67,6 +68,29 @@ build-push: build
 	@$(ENGINE) manifest push --all $(REPO):$(TAG)
 
 	@echo "Script completed successfully."
+
+# Create dev GitHub release (separate from GoReleaser)
+dev-release: build
+	@echo "Creating dev GitHub release..."
+	@if [ -z "$(shell which gh)" ]; then \
+		echo "Error: GitHub CLI (gh) is not installed. Please install it first."; \
+		exit 1; \
+	fi
+	@echo "Creating dev release $(DEV_TAG)..."
+	@gh release create $(DEV_TAG) \
+		--title "Gordon Dev Build $(DEV_TAG)" \
+		--notes "🚧 **Development Build** 🚧\n\nThis is an automated development build for testing purposes.\n\n**Commit:** $(COMMIT)\n**Build Date:** $(BUILD_DATE)\n\n⚠️ This is not a stable release. Use at your own risk." \
+		--prerelease \
+		--draft=false \
+		$(DIST_DIR)/gordon-linux-amd64 \
+		$(DIST_DIR)/gordon-linux-arm64
+	@echo "Dev release created successfully!"
+	@echo ""
+	@echo "📦 Download URLs:"
+	@echo "  AMD64: wget https://github.com/bnema/gordon/releases/download/$(DEV_TAG)/gordon-linux-amd64"
+	@echo "  ARM64: wget https://github.com/bnema/gordon/releases/download/$(DEV_TAG)/gordon-linux-arm64"
+	@echo ""
+	@echo "🔗 Release page: https://github.com/bnema/gordon/releases/tag/$(DEV_TAG)"
 
 # Clean up
 clean:
