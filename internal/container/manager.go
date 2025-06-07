@@ -292,6 +292,197 @@ func (m *Manager) SyncContainers(ctx context.Context) error {
 	return nil
 }
 
+// AutoStartContainers automatically starts containers that match configured routes
+func (m *Manager) AutoStartContainers(ctx context.Context) error {
+	routes := m.config.GetRoutes()
+	if len(routes) == 0 {
+		log.Info().Msg("No routes configured, skipping auto-start")
+		return nil
+	}
+
+	// Get all containers (including stopped ones) to check for matches
+	allContainers, err := m.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return fmt.Errorf("failed to list all containers: %w", err)
+	}
+
+	// Create maps for quick lookup
+	gordonManagedContainers := make(map[string]*runtime.Container) // domain -> container
+	containersByImage := make(map[string][]*runtime.Container)      // image -> containers
+
+	for _, container := range allContainers {
+		// Track Gordon-managed containers by domain
+		if container.Labels != nil && container.Labels["gordon.managed"] == "true" {
+			if domain, exists := container.Labels["gordon.domain"]; exists {
+				gordonManagedContainers[domain] = container
+			}
+		}
+		
+		// Track all containers by image (normalize image name)
+		normalizedImage := m.normalizeImageName(container.Image)
+		containersByImage[normalizedImage] = append(containersByImage[normalizedImage], container)
+	}
+
+	startedCount := 0
+	for _, route := range routes {
+		// Build the expected image reference
+		expectedImage := route.Image
+		if m.config.RegistryAuth.Enabled && m.config.Server.RegistryDomain != "" {
+			if !strings.Contains(strings.Split(expectedImage, ":")[0], ".") {
+				expectedImage = fmt.Sprintf("%s/%s", m.config.Server.RegistryDomain, route.Image)
+			}
+		}
+
+		// First, check if we already have a Gordon-managed container for this domain
+		if existingContainer, exists := gordonManagedContainers[route.Domain]; exists {
+			isRunning, err := m.runtime.IsContainerRunning(ctx, existingContainer.ID)
+			if err != nil {
+				log.Warn().Err(err).Str("domain", route.Domain).Str("container", existingContainer.ID).Msg("Failed to check container status")
+				continue
+			}
+
+			if isRunning {
+				log.Info().Str("domain", route.Domain).Str("container", existingContainer.ID).Msg("Gordon-managed container already running")
+				m.mu.Lock()
+				m.containers[route.Domain] = existingContainer
+				m.mu.Unlock()
+				continue
+			}
+
+			// Container exists but is stopped, start it
+			log.Info().Str("domain", route.Domain).Str("container", existingContainer.ID).Msg("Starting existing Gordon-managed container")
+			if err := m.runtime.StartContainer(ctx, existingContainer.ID); err != nil {
+				log.Error().Err(err).Str("domain", route.Domain).Str("container", existingContainer.ID).Msg("Failed to start existing container")
+				continue
+			}
+
+			// Re-inspect to get updated information
+			container, err := m.runtime.InspectContainer(ctx, existingContainer.ID)
+			if err != nil {
+				log.Error().Err(err).Str("container", existingContainer.ID).Msg("Failed to inspect started container")
+				continue
+			}
+
+			m.mu.Lock()
+			m.containers[route.Domain] = container
+			m.mu.Unlock()
+			startedCount++
+			
+			log.Info().Str("domain", route.Domain).Str("container", existingContainer.ID).Msg("Existing Gordon-managed container started successfully")
+			continue
+		}
+
+		// Second, check if there are existing containers with the same image and clean them up
+		normalizedExpectedImage := m.normalizeImageName(expectedImage)
+		if containers, exists := containersByImage[normalizedExpectedImage]; exists {
+			// Stop and remove existing containers with the same image to avoid conflicts
+			for _, container := range containers {
+				// Skip Gordon-managed containers (already handled above)
+				if container.Labels != nil && container.Labels["gordon.managed"] == "true" {
+					continue
+				}
+
+				log.Info().Str("domain", route.Domain).Str("container", container.ID).Str("image", container.Image).Msg("Stopping existing container with same image to avoid conflicts")
+				
+				// Stop the container if it's running
+				isRunning, err := m.runtime.IsContainerRunning(ctx, container.ID)
+				if err != nil {
+					log.Warn().Err(err).Str("container", container.ID).Msg("Failed to check container status")
+					continue
+				}
+
+				if isRunning {
+					if err := m.runtime.StopContainer(ctx, container.ID); err != nil {
+						log.Warn().Err(err).Str("container", container.ID).Msg("Failed to stop existing container")
+						continue
+					}
+				}
+
+				// Remove the container to clean up
+				if err := m.runtime.RemoveContainer(ctx, container.ID, true); err != nil {
+					log.Warn().Err(err).Str("container", container.ID).Msg("Failed to remove existing container")
+				} else {
+					log.Info().Str("container", container.ID).Msg("Removed existing container with same image")
+				}
+			}
+		}
+
+		// No existing container found, deploy a new one
+		log.Info().Str("domain", route.Domain).Str("image", route.Image).Msg("Deploying new container for route")
+		
+		_, err := m.DeployContainer(ctx, route)
+		if err != nil {
+			log.Error().Err(err).Str("domain", route.Domain).Str("image", route.Image).Msg("Failed to deploy container for route")
+			continue
+		}
+		startedCount++
+	}
+
+	log.Info().Int("started", startedCount).Int("total_routes", len(routes)).Msg("Auto-start completed")
+	return nil
+}
+
+// normalizeImageName normalizes image names for comparison
+func (m *Manager) normalizeImageName(image string) string {
+	// Remove tag if present, keep only repository name
+	parts := strings.Split(image, ":")
+	repo := parts[0]
+	
+	// If no registry domain and it's a simple name, it's from Docker Hub
+	if !strings.Contains(repo, "/") {
+		return "docker.io/library/" + repo
+	}
+	
+	// If it has one slash and no domain, it's a user repo on Docker Hub
+	if strings.Count(repo, "/") == 1 && !strings.Contains(strings.Split(repo, "/")[0], ".") {
+		return "docker.io/" + repo
+	}
+	
+	return repo
+}
+
+// StopAllManagedContainers stops all containers managed by Gordon
+func (m *Manager) StopAllManagedContainers(ctx context.Context) error {
+	m.mu.RLock()
+	containers := make(map[string]*runtime.Container)
+	for domain, container := range m.containers {
+		containers[domain] = container
+	}
+	m.mu.RUnlock()
+
+	if len(containers) == 0 {
+		log.Info().Msg("No managed containers to stop")
+		return nil
+	}
+
+	log.Info().Int("count", len(containers)).Msg("Stopping all managed containers...")
+
+	var errors []error
+	for domain, container := range containers {
+		log.Info().Str("domain", domain).Str("container", container.ID).Msg("Stopping managed container")
+		
+		if err := m.runtime.StopContainer(ctx, container.ID); err != nil {
+			log.Error().Err(err).Str("domain", domain).Str("container", container.ID).Msg("Failed to stop managed container")
+			errors = append(errors, fmt.Errorf("failed to stop container %s for domain %s: %w", container.ID, domain, err))
+			continue
+		}
+
+		// Remove from tracking
+		m.mu.Lock()
+		delete(m.containers, domain)
+		m.mu.Unlock()
+
+		log.Info().Str("domain", domain).Str("container", container.ID).Msg("Managed container stopped successfully")
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to stop %d containers: %v", len(errors), errors)
+	}
+
+	log.Info().Msg("All managed containers stopped successfully")
+	return nil
+}
+
 // HealthCheck checks the health of all managed containers
 func (m *Manager) HealthCheck(ctx context.Context) map[string]bool {
 	m.mu.RLock()
