@@ -5,7 +5,7 @@
 port = 8080
 registry_port = 5000
 registry_domain = "staging-registry.company.com"
-runtime = "docker"
+runtime = "auto"  # auto-detects Docker/Podman
 ssl_email = "devops@company.com"
 data_dir = "./data"
 

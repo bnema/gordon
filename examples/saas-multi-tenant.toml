@@ -5,7 +5,7 @@
 port = 8080
 registry_port = 5000
 registry_domain = "registry.saas-platform.com" 
-runtime = "docker"
+runtime = "auto"  # auto-detects Docker/Podman
 ssl_email = "ops@saas-platform.com"
 data_dir = "/var/lib/gordon"
 

@@ -74,6 +74,28 @@ username = "your-username"
 password = "your-secure-password"
 ```
 
+### Container Runtime Setup
+Gordon supports Docker and Podman with automatic detection:
+```toml
+[server]
+runtime = "auto"  # auto, docker, podman, podman-rootless
+socket_path = ""  # optional custom socket path
+
+# Examples:
+# runtime = "docker"          # Force Docker
+# runtime = "podman"          # Force Podman root
+# runtime = "podman-rootless" # Force Podman rootless
+# socket_path = "unix:///run/user/1000/podman/podman.sock"
+```
+
+Override with environment variables:
+```bash
+# Works for both Docker and Podman
+export CONTAINER_HOST=unix:///custom/path/container.sock
+export CONTAINER_HOST=tcp://remote-docker:2376
+gordon start
+```
+
 ### Environment Variables
 For production, use environment variables for sensitive data:
 ```bash

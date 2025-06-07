@@ -5,7 +5,7 @@
 port = 8080
 registry_port = 5000
 registry_domain = "localhost:8080"  # Use localhost for local development
-runtime = "docker"
+runtime = "auto"  # auto-detects Docker/Podman
 ssl_email = "dev@localhost"
 data_dir = "./dev-data"
 

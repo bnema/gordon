@@ -21,20 +21,10 @@ type Manager struct {
 
 // NewManager creates a new container manager
 func NewManager(cfg *config.Config) (*Manager, error) {
-	var rt runtime.Runtime
-	var err error
-
-	switch cfg.Server.Runtime {
-	case "docker":
-		rt, err = NewDockerRuntime()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create Docker runtime: %w", err)
-		}
-	case "podman":
-		// TODO: Implement Podman runtime
-		return nil, fmt.Errorf("Podman runtime not yet implemented")
-	default:
-		return nil, fmt.Errorf("unsupported runtime: %s", cfg.Server.Runtime)
+	// Create runtime using the factory
+	rt, err := CreateRuntime(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create container runtime: %w", err)
 	}
 
 	// Test runtime connectivity
