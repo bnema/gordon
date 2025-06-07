@@ -119,7 +119,7 @@ EOF
 
 ### 2. Install Gordon
 ```bash
-wget https://github.com/yourusername/gordon/releases/latest/download/gordon-linux-amd64
+wget https://github.com/bnema/gordon/releases/latest/download/gordon-linux-amd64
 chmod +x gordon-linux-amd64
 sudo mv gordon-linux-amd64 /usr/local/bin/gordon
 ```
