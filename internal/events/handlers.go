@@ -266,3 +266,76 @@ func (h *ContainerEventHandler) deployContainerForRoute(route, imageName string)
 	
 	return nil
 }
+
+type AutoRouteHandler struct {
+	config  *config.Config
+	manager *container.Manager
+}
+
+func NewAutoRouteHandler(cfg *config.Config, manager *container.Manager) *AutoRouteHandler {
+	return &AutoRouteHandler{
+		config:  cfg,
+		manager: manager,
+	}
+}
+
+func (h *AutoRouteHandler) CanHandle(eventType EventType) bool {
+	return eventType == ImagePushed
+}
+
+func (h *AutoRouteHandler) Handle(event Event) error {
+	if !h.config.AutoRoute.Enabled {
+		return nil
+	}
+
+	if event.Type != ImagePushed {
+		return nil
+	}
+
+	payload, ok := event.Data.(ImagePushedPayload)
+	if !ok {
+		return fmt.Errorf("invalid payload type for ImagePushed event")
+	}
+
+	imageName := payload.Name
+	reference := payload.Reference
+	fullImageName := fmt.Sprintf("%s:%s", imageName, reference)
+	
+	// Build the full registry image path for deployment
+	registryImageName := fullImageName
+	if h.config.Server.RegistryDomain != "" {
+		registryImageName = fmt.Sprintf("%s/%s", h.config.Server.RegistryDomain, fullImageName)
+	}
+
+	// Try to extract domain from the image name part (before the colon)
+	domain, isDomain := config.ExtractDomainFromImageName(imageName)
+	if !isDomain {
+		log.Debug().
+			Str("image", imageName).
+			Msg("Image name does not contain a valid domain, skipping auto-route creation")
+		return nil
+	}
+
+	// Check if route already exists
+	if _, exists := h.config.Routes[domain]; exists {
+		log.Debug().
+			Str("domain", domain).
+			Str("existing_image", h.config.Routes[domain]).
+			Str("new_image", fullImageName).
+			Msg("Route already exists for domain, skipping auto-route creation")
+		return nil
+	}
+
+	// Add the route to config with the full registry image path
+	if err := h.config.AddRoute(domain, registryImageName); err != nil {
+		return fmt.Errorf("failed to add auto-route for domain %s: %w", domain, err)
+	}
+
+	log.Info().
+		Str("domain", domain).
+		Str("image", registryImageName).
+		Msg("Successfully auto-created route - deployment will be handled by config reload event")
+
+	return nil
+}
+
