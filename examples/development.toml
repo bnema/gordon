@@ -94,4 +94,22 @@ providers = ["pass"]  # For development secrets
 #    VOLUME ["/app/data", "/app/uploads"]
 # Gordon automatically creates and mounts persistent volumes - no config needed!
 #
+# ENV DIRECTIVE FEATURE:
+# Add ENV directives to your Dockerfile for default environment variables:
+#    ENV NODE_ENV=production
+#    ENV PORT=3000
+#    ENV LOG_LEVEL=info
+# Gordon automatically reads these and merges them with your .env files!
+# Your .env files always override Dockerfile ENV directives.
+#
+# Example Dockerfile with both features:
+#    FROM node:18-alpine
+#    WORKDIR /app
+#    ENV NODE_ENV=production
+#    ENV PORT=3000
+#    VOLUME ["/app/data", "/app/logs"]
+#    COPY . .
+#    EXPOSE 3000
+#    CMD ["npm", "start"]
+#
 # Cloudflare handles SSL and DNS for your remote Gordon server!

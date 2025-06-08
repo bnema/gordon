@@ -529,3 +529,24 @@ func (d *DockerRuntime) RemoveVolume(ctx context.Context, volumeName string, for
 	log.Info().Str("volume", volumeName).Msg("Volume removed")
 	return nil
 }
+
+// InspectImageEnv gets the environment variables declared in the image
+func (d *DockerRuntime) InspectImageEnv(ctx context.Context, imageRef string) ([]string, error) {
+	imageInspect, err := d.client.ImageInspect(ctx, imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect image %s: %w", imageRef, err)
+	}
+
+	var envVars []string
+	if imageInspect.Config != nil && imageInspect.Config.Env != nil {
+		envVars = imageInspect.Config.Env
+	}
+
+	if len(envVars) > 0 {
+		log.Debug().Str("image", imageRef).Strs("env_vars", envVars).Msg("Found ENV directives in image")
+	} else {
+		log.Debug().Str("image", imageRef).Msg("No ENV directives found in image")
+	}
+
+	return envVars, nil
+}

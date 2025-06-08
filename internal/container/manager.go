@@ -216,11 +216,23 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 	}
 
 	// Load environment variables for this route
-	envVars, err := m.envLoader.LoadEnvForRoute(route.Domain)
+	userEnvVars, err := m.envLoader.LoadEnvForRoute(route.Domain)
 	if err != nil {
 		log.Error().Err(err).Str("domain", route.Domain).Msg("Failed to load environment variables for route")
 		return nil, fmt.Errorf("failed to load environment variables for %s: %w", route.Domain, err)
 	}
+
+	// Get environment variables from image ENV directives
+	dockerfileEnvVars, err := m.runtime.InspectImageEnv(ctx, imageRef)
+	if err != nil {
+		log.Warn().Err(err).Str("image", imageRef).Msg("Failed to inspect image environment variables, proceeding without them")
+		dockerfileEnvVars = []string{}
+	} else if len(dockerfileEnvVars) > 0 {
+		log.Info().Str("image", imageRef).Strs("dockerfile_env", dockerfileEnvVars).Msg("Found ENV directives in image")
+	}
+
+	// Merge Dockerfile ENV with user-provided env vars (user env takes precedence)
+	envVars := mergeEnvironmentVariables(dockerfileEnvVars, userEnvVars)
 
 	// Handle volume auto-creation if enabled
 	volumes := make(map[string]string)

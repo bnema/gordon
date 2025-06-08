@@ -43,6 +43,7 @@ podman push registry.mydomain.com/myapp:latest
 - **Zero-Downtime Updates**: Graceful container swaps
 - **Auto-Route Creation** (Optional): Push `myapp.mydomain.com:latest` → route created automatically
 - **Auto-Volume Management**: Zero-config persistent storage from Dockerfile VOLUME directives
+- **Auto-Environment Injection**: Dockerfile ENV directives automatically merge with your custom environment variables
 
 ## Quick Start (5 minutes)
 
@@ -291,6 +292,22 @@ preserve = true       # Default: true (keep volumes when removing containers)
 
 **Most users never need to touch this configuration** - the defaults work perfectly for 99% of use cases.
 
+## Smart Environment & Volume Management
+
+Gordon automatically handles both environment variables and persistent storage with zero configuration:
+
+### Environment Variables
+- **Auto-Detection**: Reads `ENV` directives from your Dockerfile
+- **Smart Merging**: Your `.env` files override Dockerfile ENV values
+- **Secret Integration**: Supports `pass` and `SOPS` for sensitive data
+
+### Persistent Volumes  
+- **Auto-Detection**: Reads `VOLUME` directives from your Dockerfile
+- **Zero Configuration**: Creates and manages volumes automatically
+- **Data Persistence**: Survives container updates and reboots
+
+See [examples/](examples/) for detailed configuration examples.
+
 ## Advanced Configuration
 
 ### Full Config Structure (with default values)
@@ -377,6 +394,18 @@ A: Volumes are preserved by default. Your data persists across updates and reboo
 
 **Q: How do I backup volume data?**  
 A: Volumes are regular Docker/Podman volumes - use standard backup tools like `docker run --rm -v volume_name:/data -v $(pwd):/backup alpine tar czf /backup/backup.tar.gz -C /data .`
+
+**Q: Do Dockerfile ENV directives work automatically?**  
+A: Yes! Gordon reads ENV directives from your images and merges them with your custom .env files.
+
+**Q: What happens if I set the same environment variable in both Dockerfile and .env?**  
+A: Your .env file always wins - custom environment variables override Dockerfile ENV directives.
+
+**Q: Can I see what environment variables are being applied?**  
+A: Yes, check Gordon's logs - it shows both Dockerfile ENV and final merged environment variables.
+
+**Q: Do I need to rebuild my images to change environment variables?**  
+A: No! Just update your .env files and reload Gordon. Dockerfile ENV provides defaults; .env provides overrides.
 
 ## Philosophy
 
