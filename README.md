@@ -42,6 +42,7 @@ podman push registry.mydomain.com/myapp:latest
 - **Multi-Domain Routing**: Unlimited apps with automatic HTTPS via Cloudflare
 - **Zero-Downtime Updates**: Graceful container swaps
 - **Auto-Route Creation** (Optional): Push `myapp.mydomain.com:latest` → route created automatically
+- **Auto-Volume Management**: Zero-config persistent storage from Dockerfile VOLUME directives
 
 ## Quick Start (5 minutes)
 
@@ -220,6 +221,76 @@ podman push registry.mydomain.com/staging.example.com:latest
 # Creates: "staging.example.com" = "staging.example.com:latest"
 ```
 
+## Persistent Data with Volumes
+
+Gordon automatically detects `VOLUME` directives in your Dockerfiles and creates persistent named volumes for your containers. **Zero configuration required** - just add `VOLUME` instructions to your Dockerfile.
+
+### How It Works
+
+```dockerfile
+# In your Dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+
+# Gordon automatically creates volumes for these paths
+VOLUME ["/app/data", "/app/uploads"]
+
+EXPOSE 3000
+CMD ["npm", "start"]
+```
+
+When you deploy this image, Gordon will:
+1. **Detect** the `VOLUME ["/app/data", "/app/uploads"]` directive
+2. **Create** named volumes like `gordon-app-example-com-a1b2c3d4` (one per path)
+3. **Mount** them to your container automatically
+4. **Preserve** data across container restarts and updates
+
+### Volume Features
+
+- **Automatic Detection**: No config needed - Gordon reads VOLUME directives from your images
+- **Persistent Storage**: Data survives container restarts, updates, and VPS reboots
+- **Zero Downtime**: Volumes re-attach instantly when containers restart
+- **Predictable Naming**: `gordon-{domain}-{path-hash}` format for easy identification
+- **Cross-Platform**: Works with Docker and Podman
+
+### Example Workflows
+
+#### Database Container
+```dockerfile
+FROM postgres:15
+# Gordon auto-creates persistent volume for PostgreSQL data
+VOLUME ["/var/lib/postgresql/data"]
+```
+
+#### Web App with File Uploads
+```dockerfile
+FROM nginx:alpine
+COPY dist/ /usr/share/nginx/html/
+# Gordon auto-creates persistent volume for user uploads
+VOLUME ["/usr/share/nginx/html/uploads"]
+```
+
+#### Multi-Volume Application
+```dockerfile
+FROM myapp:latest
+# Gordon creates separate volumes for each path
+VOLUME ["/app/data", "/app/logs", "/app/cache"]
+```
+
+### Volume Configuration (Optional)
+
+```toml
+[volumes]
+auto_create = true    # Default: true (set to false to disable)
+prefix = "gordon"     # Default: "gordon" (volume name prefix)
+preserve = true       # Default: true (keep volumes when removing containers)
+```
+
+**Most users never need to touch this configuration** - the defaults work perfectly for 99% of use cases.
+
 ## Advanced Configuration
 
 ### Full Config Structure (with default values)
@@ -247,6 +318,13 @@ password = "your-secure-password"    # No default (required when enabled)
 
 [auto_route]
 enabled = false                      # Default: false
+
+[volumes]
+auto_create = true                   # Default: true (automatically create volumes from VOLUME directives)
+prefix = "gordon"                    # Default: "gordon" (volume name prefix)
+preserve = true                      # Default: true (keep volumes when containers are removed)
+# Volumes are auto-created from Dockerfile VOLUME directives
+# Naming: gordon-{domain}-{path-hash} (e.g., gordon-app-example-com-a1b2c3d4)
 
 [env]
 dir = "{data_dir}/env"              # Default: {data_dir}/env
@@ -287,6 +365,18 @@ A: Yes, for SSL certificates and DDoS protection.
 
 **Q: Resource requirements?**  
 A: Runs on 1GB RAM VPS. Gordon uses <15MB RAM.
+
+**Q: How do I check if volumes are working?**  
+A: Use `docker volume ls` or `podman volume ls` to see Gordon-managed volumes (named `gordon-*`).
+
+**Q: Can I disable automatic volumes?**  
+A: Yes, set `volumes.auto_create = false` in your gordon.toml config.
+
+**Q: What happens to my data when I update containers?**  
+A: Volumes are preserved by default. Your data persists across updates and reboots.
+
+**Q: How do I backup volume data?**  
+A: Volumes are regular Docker/Podman volumes - use standard backup tools like `docker run --rm -v volume_name:/data -v $(pwd):/backup alpine tar czf /backup/backup.tar.gz -C /data .`
 
 ## Philosophy
 

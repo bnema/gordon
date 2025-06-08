@@ -18,6 +18,7 @@ type Config struct {
 	AutoRoute    AutoRouteConfig    `mapstructure:"auto_route"`
 	Env          EnvConfig          `mapstructure:"env"`
 	Logging      LoggingConfig      `mapstructure:"logging"`
+	Volumes      VolumeConfig       `mapstructure:"volumes"`
 }
 
 type ServerConfig struct {
@@ -56,6 +57,12 @@ type LoggingConfig struct {
 	MaxBackups      int    `mapstructure:"max_backups"`
 	MaxAge          int    `mapstructure:"max_age"`
 	Compress        bool   `mapstructure:"compress"`
+}
+
+type VolumeConfig struct {
+	AutoCreate bool   `mapstructure:"auto_create"`
+	Prefix     string `mapstructure:"prefix"`
+	Preserve   bool   `mapstructure:"preserve"`
 }
 
 type SecretProvider struct {
@@ -97,6 +104,11 @@ func Load() (*Config, error) {
 	viper.SetDefault("logging.max_backups", 3) // Keep 3 old files
 	viper.SetDefault("logging.max_age", 28)    // 28 days
 	viper.SetDefault("logging.compress", true)
+
+	// Volume defaults
+	viper.SetDefault("volumes.auto_create", true)
+	viper.SetDefault("volumes.prefix", "gordon")
+	viper.SetDefault("volumes.preserve", true)
 
 	// Handle the routes manually since Viper struggles with domain names
 	cfg.Routes = make(map[string]string)
@@ -148,6 +160,11 @@ func Load() (*Config, error) {
 	if cfg.Logging.Dir == "" {
 		cfg.Logging.Dir = filepath.Join(cfg.Server.DataDir, "logs")
 		log.Debug().Str("logging_dir", cfg.Logging.Dir).Msg("Config had empty logging.dir, using default")
+	}
+
+	// Get volumes config
+	if err := viper.UnmarshalKey("volumes", &cfg.Volumes); err != nil {
+		return nil, fmt.Errorf("unable to decode volumes config: %v", err)
 	}
 
 	// Get routes manually from the raw config

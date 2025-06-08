@@ -28,7 +28,7 @@ type Manager struct {
 func NewManager(cfg *config.Config) (*Manager, error) {
 	// Test runtime connectivity with background context
 	ctx := context.Background()
-	
+
 	// Create runtime using the factory
 	rt, err := CreateRuntime(ctx, cfg)
 	if err != nil {
@@ -49,7 +49,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 
 	// Create environment loader
 	envLoader := env.NewLoader(cfg)
-	
+
 	// Register secret providers based on config
 	for _, providerName := range cfg.Env.Providers {
 		switch providerName {
@@ -59,7 +59,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 			envLoader.RegisterSecretProvider("sops", env.NewSopsProvider())
 		}
 	}
-	
+
 	// Ensure env directory exists
 	if err := envLoader.EnsureEnvDir(); err != nil {
 		log.Warn().Err(err).Msg("Failed to ensure env directory exists")
@@ -151,7 +151,7 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 	} else {
 		// Normalize image references for comparison
 		normalizedImageRef := normalizeImageRef(imageRef)
-		
+
 		for _, localImage := range localImages {
 			if normalizeImageRef(localImage) == normalizedImageRef {
 				imageAvailable = true
@@ -173,7 +173,7 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 				Str("image", imageRef).
 				Str("username", m.config.RegistryAuth.Username).
 				Msg("Pulling image with authentication")
-			
+
 			err := m.runtime.PullImageWithAuth(ctx, imageRef, m.config.RegistryAuth.Username, m.config.RegistryAuth.Password)
 			if err != nil {
 				// Provide better error message with context
@@ -181,16 +181,16 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 				for _, img := range localImages {
 					availableImages = append(availableImages, img)
 				}
-				
+
 				return nil, fmt.Errorf("failed to pull image '%s' from registry '%s' with authentication. "+
 					"Please check: 1) Image name spelling, 2) Registry credentials, 3) Image exists in registry. "+
-					"Available local images: %v. Error: %w", 
+					"Available local images: %v. Error: %w",
 					imageRef, m.config.Server.RegistryDomain, availableImages, err)
 			}
 			log.Info().Str("image", imageRef).Msg("Image pulled successfully with authentication")
 		} else {
 			log.Info().Str("image", imageRef).Msg("Pulling image without authentication")
-			
+
 			err := m.runtime.PullImage(ctx, imageRef)
 			if err != nil {
 				// Provide better error message with context
@@ -198,10 +198,10 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 				for _, img := range localImages {
 					availableImages = append(availableImages, img)
 				}
-				
+
 				return nil, fmt.Errorf("failed to pull image '%s' from public registry. "+
 					"Please check: 1) Image name spelling, 2) Image exists in registry. "+
-					"Available local images: %v. Error: %w", 
+					"Available local images: %v. Error: %w",
 					imageRef, availableImages, err)
 			}
 			log.Info().Str("image", imageRef).Msg("Image pulled successfully")
@@ -222,12 +222,48 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 		return nil, fmt.Errorf("failed to load environment variables for %s: %w", route.Domain, err)
 	}
 
+	// Handle volume auto-creation if enabled
+	volumes := make(map[string]string)
+	if m.config.Volumes.AutoCreate {
+		// Get volume paths from image VOLUME directives
+		volumePaths, err := m.runtime.InspectImageVolumes(ctx, imageRef)
+		if err != nil {
+			log.Warn().Err(err).Str("image", imageRef).Msg("Failed to inspect image volumes, proceeding without volumes")
+		} else if len(volumePaths) > 0 {
+			log.Info().Str("image", imageRef).Strs("volume_paths", volumePaths).Msg("Found VOLUME directives in image")
+
+			for _, volumePath := range volumePaths {
+				volumeName := generateVolumeName(m.config.Volumes.Prefix, route.Domain, volumePath)
+
+				// Check if volume exists, create if it doesn't
+				exists, err := m.runtime.VolumeExists(ctx, volumeName)
+				if err != nil {
+					log.Warn().Err(err).Str("volume", volumeName).Msg("Failed to check if volume exists")
+					continue
+				}
+
+				if !exists {
+					if err := m.runtime.CreateVolume(ctx, volumeName); err != nil {
+						log.Error().Err(err).Str("volume", volumeName).Msg("Failed to create volume")
+						continue
+					}
+					log.Info().Str("volume", volumeName).Str("path", volumePath).Msg("Created volume for container")
+				} else {
+					log.Debug().Str("volume", volumeName).Str("path", volumePath).Msg("Volume already exists, reusing")
+				}
+
+				volumes[volumePath] = volumeName
+			}
+		}
+	}
+
 	// Create container configuration
 	containerConfig := &runtime.ContainerConfig{
-		Image: imageRef,
-		Name:  fmt.Sprintf("gordon-%s", route.Domain),
-		Ports: exposedPorts,
-		Env:   envVars,
+		Image:   imageRef,
+		Name:    fmt.Sprintf("gordon-%s", route.Domain),
+		Ports:   exposedPorts,
+		Env:     envVars,
+		Volumes: volumes,
 		Labels: map[string]string{
 			"gordon.domain":  route.Domain,
 			"gordon.image":   route.Image,
@@ -369,12 +405,30 @@ func (m *Manager) StopContainerByDomain(ctx context.Context, domain string) erro
 
 // RemoveContainer removes a container by ID
 func (m *Manager) RemoveContainer(ctx context.Context, containerID string, force bool) error {
+	// Find the domain for this container before removal for volume cleanup
+	var containerDomain string
+	m.mu.RLock()
+	for domain, container := range m.containers {
+		if container.ID == containerID {
+			containerDomain = domain
+			break
+		}
+	}
+	m.mu.RUnlock()
+
 	if err := m.runtime.RemoveContainer(ctx, containerID, force); err != nil {
 		return fmt.Errorf("failed to remove container %s: %w", containerID, err)
 	}
 
 	// Stop log collection for the container
 	m.logManager.StopCollection(containerID)
+
+	// Clean up volumes if preserve is disabled and we found the domain
+	if containerDomain != "" && !m.config.Volumes.Preserve {
+		if err := m.cleanupVolumesForDomain(ctx, containerDomain); err != nil {
+			log.Warn().Err(err).Str("domain", containerDomain).Msg("Failed to cleanup volumes during container removal")
+		}
+	}
 
 	// Remove from our tracking map
 	m.mu.Lock()
@@ -447,7 +501,7 @@ func (m *Manager) AutoStartContainers(ctx context.Context) error {
 
 	// Create maps for quick lookup
 	gordonManagedContainers := make(map[string]*runtime.Container) // domain -> container
-	containersByImage := make(map[string][]*runtime.Container)      // image -> containers
+	containersByImage := make(map[string][]*runtime.Container)     // image -> containers
 
 	for _, container := range allContainers {
 		// Track Gordon-managed containers by domain
@@ -456,7 +510,7 @@ func (m *Manager) AutoStartContainers(ctx context.Context) error {
 				gordonManagedContainers[domain] = container
 			}
 		}
-		
+
 		// Track all containers by image (normalize image name)
 		normalizedImage := m.normalizeImageName(container.Image)
 		containersByImage[normalizedImage] = append(containersByImage[normalizedImage], container)
@@ -519,7 +573,7 @@ func (m *Manager) AutoStartContainers(ctx context.Context) error {
 					Str("domain", route.Domain).
 					Msg("Failed to start log collection for auto-started container")
 			}
-			
+
 			log.Info().Str("domain", route.Domain).Str("container", existingContainer.ID).Msg("Existing Gordon-managed container started successfully")
 			continue
 		}
@@ -535,7 +589,7 @@ func (m *Manager) AutoStartContainers(ctx context.Context) error {
 				}
 
 				log.Info().Str("domain", route.Domain).Str("container", container.ID).Str("image", container.Image).Msg("Stopping existing container with same image to avoid conflicts")
-				
+
 				// Stop the container if it's running
 				isRunning, err := m.runtime.IsContainerRunning(ctx, container.ID)
 				if err != nil {
@@ -561,7 +615,7 @@ func (m *Manager) AutoStartContainers(ctx context.Context) error {
 
 		// No existing container found, deploy a new one
 		log.Info().Str("domain", route.Domain).Str("image", route.Image).Msg("Deploying new container for route")
-		
+
 		_, err := m.DeployContainer(ctx, route)
 		if err != nil {
 			log.Error().Err(err).Str("domain", route.Domain).Str("image", route.Image).Msg("Failed to deploy container for route")
@@ -579,17 +633,17 @@ func (m *Manager) normalizeImageName(image string) string {
 	// Remove tag if present, keep only repository name
 	parts := strings.Split(image, ":")
 	repo := parts[0]
-	
+
 	// If no registry domain and it's a simple name, it's from Docker Hub
 	if !strings.Contains(repo, "/") {
 		return "docker.io/library/" + repo
 	}
-	
+
 	// If it has one slash and no domain, it's a user repo on Docker Hub
 	if strings.Count(repo, "/") == 1 && !strings.Contains(strings.Split(repo, "/")[0], ".") {
 		return "docker.io/" + repo
 	}
-	
+
 	return repo
 }
 
@@ -612,7 +666,7 @@ func (m *Manager) StopAllManagedContainers(ctx context.Context) error {
 	var errors []error
 	for domain, container := range containers {
 		log.Info().Str("domain", domain).Str("container", container.ID).Msg("Stopping managed container")
-		
+
 		if err := m.runtime.StopContainer(ctx, container.ID); err != nil {
 			log.Error().Err(err).Str("domain", domain).Str("container", container.ID).Msg("Failed to stop managed container")
 			errors = append(errors, fmt.Errorf("failed to stop container %s for domain %s: %w", container.ID, domain, err))
@@ -665,36 +719,14 @@ func (m *Manager) Runtime() runtime.Runtime {
 // UpdateConfig updates the manager's configuration and creates env files for new routes
 func (m *Manager) UpdateConfig(cfg *config.Config) {
 	m.config = cfg
-	
+
 	// Update env loader config
 	m.envLoader.UpdateConfig(cfg)
-	
+
 	// Create env files for any new routes
 	if err := m.envLoader.CreateEnvFilesForRoutes(); err != nil {
 		log.Warn().Err(err).Msg("Failed to create env files for new routes during config update")
 	}
-}
-
-// normalizeImageRef normalizes image references for comparison
-func normalizeImageRef(imageRef string) string {
-	// Split image and tag
-	parts := strings.Split(imageRef, ":")
-	image := parts[0]
-	tag := "latest"
-	if len(parts) > 1 {
-		tag = parts[1]
-	}
-
-	// Normalize Docker Hub references
-	if !strings.Contains(image, "/") {
-		// Official library image (e.g., "nginx" -> "docker.io/library/nginx")
-		image = "docker.io/library/" + image
-	} else if strings.Count(image, "/") == 1 && !strings.Contains(strings.Split(image, "/")[0], ".") {
-		// User repository (e.g., "user/repo" -> "docker.io/user/repo")
-		image = "docker.io/" + image
-	}
-
-	return image + ":" + tag
 }
 
 // Shutdown gracefully shuts down the container manager
@@ -710,5 +742,71 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	m.logManager.StopAll()
 
 	log.Info().Msg("Container manager shutdown complete")
+	return nil
+}
+
+// cleanupVolumesForDomain removes all volumes associated with a domain
+func (m *Manager) cleanupVolumesForDomain(ctx context.Context, domain string) error {
+	log.Info().Str("domain", domain).Msg("Cleaning up volumes for domain")
+
+	// We need to get the route to know what image was used to determine volume paths
+	var route *config.Route
+	for _, r := range m.config.GetRoutes() {
+		if r.Domain == domain {
+			route = &r
+			break
+		}
+	}
+
+	if route == nil {
+		log.Debug().Str("domain", domain).Msg("No route found for domain, skipping volume cleanup")
+		return nil
+	}
+
+	// Construct the full image reference like we do in DeployContainer
+	imageRef := route.Image
+	if m.config.RegistryAuth.Enabled && m.config.Server.RegistryDomain != "" {
+		if !strings.Contains(strings.Split(imageRef, ":")[0], ".") {
+			imageRef = fmt.Sprintf("%s/%s", m.config.Server.RegistryDomain, route.Image)
+		}
+	}
+
+	// Get volume paths from image VOLUME directives
+	volumePaths, err := m.runtime.InspectImageVolumes(ctx, imageRef)
+	if err != nil {
+		log.Warn().Err(err).Str("image", imageRef).Msg("Failed to inspect image volumes during cleanup")
+		return err
+	}
+
+	if len(volumePaths) == 0 {
+		log.Debug().Str("domain", domain).Msg("No volumes found for cleanup")
+		return nil
+	}
+
+	var errors []error
+	for _, volumePath := range volumePaths {
+		volumeName := generateVolumeName(m.config.Volumes.Prefix, domain, volumePath)
+
+		// Check if volume exists before trying to remove
+		exists, err := m.runtime.VolumeExists(ctx, volumeName)
+		if err != nil {
+			log.Warn().Err(err).Str("volume", volumeName).Msg("Failed to check if volume exists during cleanup")
+			continue
+		}
+
+		if exists {
+			if err := m.runtime.RemoveVolume(ctx, volumeName, true); err != nil {
+				log.Error().Err(err).Str("volume", volumeName).Str("domain", domain).Msg("Failed to remove volume during cleanup")
+				errors = append(errors, err)
+			} else {
+				log.Info().Str("volume", volumeName).Str("domain", domain).Msg("Volume cleaned up successfully")
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to cleanup %d volumes for domain %s", len(errors), domain)
+	}
+
 	return nil
 }

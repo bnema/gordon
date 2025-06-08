@@ -25,6 +25,7 @@ type ContainerConfig struct {
 	WorkingDir  string
 	Cmd         []string
 	AutoRemove  bool
+	Volumes     map[string]string // map[containerPath]volumeName
 }
 
 // Runtime interface defines the contract for container runtime implementations
@@ -59,4 +60,10 @@ type Runtime interface {
 	GetImageExposedPorts(ctx context.Context, imageRef string) ([]int, error)
 	GetContainerExposedPorts(ctx context.Context, containerID string) ([]int, error)
 	GetContainerNetworkInfo(ctx context.Context, containerID string) (string, int, error)
+	
+	// Volume management
+	InspectImageVolumes(ctx context.Context, imageRef string) ([]string, error)
+	VolumeExists(ctx context.Context, volumeName string) (bool, error)
+	CreateVolume(ctx context.Context, volumeName string) error
+	RemoveVolume(ctx context.Context, volumeName string, force bool) error
 }

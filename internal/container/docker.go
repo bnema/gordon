@@ -12,7 +12,9 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog/log"
 
@@ -41,17 +43,27 @@ func (d *DockerRuntime) CreateContainer(ctx context.Context, config *runtime.Con
 	// Convert ports to Docker format
 	exposedPorts := make(nat.PortSet)
 	portBindings := make(nat.PortMap)
-	
+
 	for _, port := range config.Ports {
 		containerPort := nat.Port(fmt.Sprintf("%d/tcp", port))
 		exposedPorts[containerPort] = struct{}{}
-		
+
 		// Bind to random available port on host
 		portBindings[containerPort] = []nat.PortBinding{
 			{
 				HostIP:   "0.0.0.0",
 				HostPort: "0", // Docker will assign a random available port
 			},
+		}
+	}
+
+	// Convert volumes to Docker format
+	var binds []string
+	if config.Volumes != nil {
+		for containerPath, volumeName := range config.Volumes {
+			bind := fmt.Sprintf("%s:%s", volumeName, containerPath)
+			binds = append(binds, bind)
+			log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("Adding volume mount")
 		}
 	}
 
@@ -68,6 +80,7 @@ func (d *DockerRuntime) CreateContainer(ctx context.Context, config *runtime.Con
 	hostConfig := &container.HostConfig{
 		PortBindings: portBindings,
 		AutoRemove:   config.AutoRemove,
+		Binds:        binds,
 	}
 
 	// Create the container
@@ -216,7 +229,7 @@ func (d *DockerRuntime) GetContainerLogs(ctx context.Context, containerID string
 // PullImage pulls an image
 func (d *DockerRuntime) PullImage(ctx context.Context, imageRef string) error {
 	log.Info().Str("image", imageRef).Msg("Pulling image")
-	
+
 	reader, err := d.client.ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to pull image %s: %w", imageRef, err)
@@ -236,20 +249,20 @@ func (d *DockerRuntime) PullImage(ctx context.Context, imageRef string) error {
 // PullImageWithAuth pulls an image with authentication
 func (d *DockerRuntime) PullImageWithAuth(ctx context.Context, imageRef, username, password string) error {
 	log.Info().Str("image", imageRef).Str("username", username).Msg("Pulling image with authentication")
-	
+
 	// Create authentication configuration
 	authConfig := registry.AuthConfig{
 		Username: username,
 		Password: password,
 	}
-	
+
 	// Encode authentication to base64 JSON
 	authConfigBytes, err := json.Marshal(authConfig)
 	if err != nil {
 		return fmt.Errorf("failed to marshal auth config: %w", err)
 	}
 	authStr := base64.URLEncoding.EncodeToString(authConfigBytes)
-	
+
 	// Pull with authentication
 	reader, err := d.client.ImagePull(ctx, imageRef, image.PullOptions{
 		RegistryAuth: authStr,
@@ -450,3 +463,69 @@ func (d *DockerRuntime) GetContainerNetworkInfo(ctx context.Context, containerID
 	return containerIP, selectedPort, nil
 }
 
+// InspectImageVolumes gets the volume mount points declared in the image
+func (d *DockerRuntime) InspectImageVolumes(ctx context.Context, imageRef string) ([]string, error) {
+	imageInspect, err := d.client.ImageInspect(ctx, imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect image %s: %w", imageRef, err)
+	}
+
+	var volumes []string
+	if imageInspect.Config != nil && imageInspect.Config.Volumes != nil {
+		for volumePath := range imageInspect.Config.Volumes {
+			volumes = append(volumes, volumePath)
+		}
+	}
+
+	if len(volumes) > 0 {
+		log.Info().Str("image", imageRef).Strs("volumes", volumes).Msg("Found VOLUME directives in image")
+	} else {
+		log.Debug().Str("image", imageRef).Msg("No VOLUME directives found in image")
+	}
+
+	return volumes, nil
+}
+
+// VolumeExists checks if a Docker volume exists
+func (d *DockerRuntime) VolumeExists(ctx context.Context, volumeName string) (bool, error) {
+	_, err := d.client.VolumeInspect(ctx, volumeName)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to inspect volume %s: %w", volumeName, err)
+	}
+	return true, nil
+}
+
+// CreateVolume creates a new Docker volume
+func (d *DockerRuntime) CreateVolume(ctx context.Context, volumeName string) error {
+	_, err := d.client.VolumeCreate(ctx, volume.CreateOptions{
+		Name: volumeName,
+		Labels: map[string]string{
+			"gordon.managed": "true",
+			"gordon.created": "auto",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create volume %s: %w", volumeName, err)
+	}
+
+	log.Info().Str("volume", volumeName).Msg("Volume created")
+	return nil
+}
+
+// RemoveVolume removes a Docker volume
+func (d *DockerRuntime) RemoveVolume(ctx context.Context, volumeName string, force bool) error {
+	err := d.client.VolumeRemove(ctx, volumeName, force)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			log.Debug().Str("volume", volumeName).Msg("Volume not found, already removed")
+			return nil
+		}
+		return fmt.Errorf("failed to remove volume %s: %w", volumeName, err)
+	}
+
+	log.Info().Str("volume", volumeName).Msg("Volume removed")
+	return nil
+}
