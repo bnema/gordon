@@ -13,6 +13,7 @@ import (
 	"gordon/internal/config"
 	"gordon/internal/container"
 	"gordon/internal/events"
+	"gordon/internal/logging"
 	"gordon/internal/proxy"
 	"gordon/internal/registry"
 
@@ -35,14 +36,20 @@ func init() {
 }
 
 func runStart(cmd *cobra.Command, args []string) {
-	// Configure zerolog
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-
+	// Load configuration first
 	cfg, err := config.Load()
 	if err != nil {
+		// Use basic console logging for config errors
+		zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 		log.Fatal().Err(err).Msg("Failed to load config")
 	}
+
+	// Initialize logging system
+	if err := logging.Setup(cfg); err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize logging")
+	}
+	defer logging.Close()
 
 	log.Info().Msg("Starting Gordon server...")
 	log.Info().Int("registry_port", cfg.Server.RegistryPort).Msg("Registry server")
@@ -122,6 +129,11 @@ func runStart(cmd *cobra.Command, args []string) {
 
 			// Update the configuration reference
 			cfg = newCfg
+
+			// Reinitialize logging with new config
+			if err := logging.Setup(cfg); err != nil {
+				log.Error().Err(err).Msg("Failed to reinitialize logging after config reload")
+			}
 
 			// Update proxy server config
 			proxyServer.UpdateConfig(cfg)
@@ -237,9 +249,9 @@ shutdown:
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	log.Info().Msg("Stopping all managed containers...")
-	if err := manager.StopAllManagedContainers(shutdownCtx); err != nil {
-		log.Error().Err(err).Msg("Failed to stop managed containers")
+	log.Info().Msg("Shutting down container manager...")
+	if err := manager.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("Failed to shutdown container manager")
 	}
 
 	// Stop event bus

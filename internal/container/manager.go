@@ -10,6 +10,7 @@ import (
 
 	"gordon/internal/config"
 	"gordon/internal/env"
+	"gordon/internal/logging"
 	"gordon/pkg/runtime"
 )
 
@@ -19,6 +20,7 @@ type Manager struct {
 	config     *config.Config
 	containers map[string]*runtime.Container // map[domain] -> container
 	envLoader  *env.Loader
+	logManager *logging.LogManager
 	mu         sync.RWMutex
 }
 
@@ -68,11 +70,15 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		log.Warn().Err(err).Msg("Failed to create env files for routes")
 	}
 
+	// Create log manager
+	logManager := logging.NewLogManager(cfg, rt)
+
 	return &Manager{
 		runtime:    rt,
 		config:     cfg,
 		containers: make(map[string]*runtime.Container),
 		envLoader:  envLoader,
+		logManager: logManager,
 	}, nil
 }
 
@@ -253,6 +259,19 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 	// Store the container mapping
 	m.containers[route.Domain] = container
 
+	// Start log collection for the container
+	containerName := container.Name
+	if containerName == "" {
+		containerName = route.Domain
+	}
+	if err := m.logManager.StartCollection(container.ID, containerName); err != nil {
+		log.Warn().
+			Err(err).
+			Str("container", container.ID).
+			Str("domain", route.Domain).
+			Msg("Failed to start log collection for container")
+	}
+
 	log.Info().
 		Str("domain", route.Domain).
 		Str("image", route.Image).
@@ -328,6 +347,9 @@ func (m *Manager) StopContainer(ctx context.Context, containerID string) error {
 		return fmt.Errorf("failed to stop container %s: %w", containerID, err)
 	}
 
+	// Stop log collection for the container
+	m.logManager.StopCollection(containerID)
+
 	log.Info().Str("container", containerID).Msg("Container stopped")
 	return nil
 }
@@ -350,6 +372,9 @@ func (m *Manager) RemoveContainer(ctx context.Context, containerID string, force
 	if err := m.runtime.RemoveContainer(ctx, containerID, force); err != nil {
 		return fmt.Errorf("failed to remove container %s: %w", containerID, err)
 	}
+
+	// Stop log collection for the container
+	m.logManager.StopCollection(containerID)
 
 	// Remove from our tracking map
 	m.mu.Lock()
@@ -481,6 +506,19 @@ func (m *Manager) AutoStartContainers(ctx context.Context) error {
 			m.containers[route.Domain] = container
 			m.mu.Unlock()
 			startedCount++
+
+			// Start log collection for the container
+			containerName := container.Name
+			if containerName == "" {
+				containerName = route.Domain
+			}
+			if err := m.logManager.StartCollection(container.ID, containerName); err != nil {
+				log.Warn().
+					Err(err).
+					Str("container", container.ID).
+					Str("domain", route.Domain).
+					Msg("Failed to start log collection for auto-started container")
+			}
 			
 			log.Info().Str("domain", route.Domain).Str("container", existingContainer.ID).Msg("Existing Gordon-managed container started successfully")
 			continue
@@ -581,6 +619,9 @@ func (m *Manager) StopAllManagedContainers(ctx context.Context) error {
 			continue
 		}
 
+		// Stop log collection for the container
+		m.logManager.StopCollection(container.ID)
+
 		// Remove from tracking
 		m.mu.Lock()
 		delete(m.containers, domain)
@@ -654,4 +695,20 @@ func normalizeImageRef(imageRef string) string {
 	}
 
 	return image + ":" + tag
+}
+
+// Shutdown gracefully shuts down the container manager
+func (m *Manager) Shutdown(ctx context.Context) error {
+	log.Info().Msg("Shutting down container manager...")
+
+	// Stop all managed containers (this also stops log collection for each)
+	if err := m.StopAllManagedContainers(ctx); err != nil {
+		log.Error().Err(err).Msg("Failed to stop all managed containers during shutdown")
+	}
+
+	// Stop all remaining log collection
+	m.logManager.StopAll()
+
+	log.Info().Msg("Container manager shutdown complete")
+	return nil
 }
