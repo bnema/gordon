@@ -12,11 +12,11 @@ import (
 )
 
 type ContainerEventHandler struct {
-	manager *container.Manager
+	manager container.ManagerInterface
 	config  *config.Config
 }
 
-func NewContainerEventHandler(manager *container.Manager, config *config.Config) *ContainerEventHandler {
+func NewContainerEventHandler(manager container.ManagerInterface, config *config.Config) *ContainerEventHandler {
 	return &ContainerEventHandler{
 		manager: manager,
 		config:  config,
@@ -312,10 +312,10 @@ func (h *ContainerEventHandler) deployContainerForRoute(route, imageName string)
 
 type AutoRouteHandler struct {
 	config  *config.Config
-	manager *container.Manager
+	manager container.ManagerInterface
 }
 
-func NewAutoRouteHandler(cfg *config.Config, manager *container.Manager) *AutoRouteHandler {
+func NewAutoRouteHandler(cfg *config.Config, manager container.ManagerInterface) *AutoRouteHandler {
 	return &AutoRouteHandler{
 		config:  cfg,
 		manager: manager,

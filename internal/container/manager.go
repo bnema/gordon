@@ -135,10 +135,14 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 	// Construct the full image reference
 	imageRef := route.Image
 
-	// If registry auth is enabled and image doesn't already contain a registry domain, prepend it
+	// If registry auth is enabled and image doesn't already start with our registry domain, prepend it
 	if m.config.RegistryAuth.Enabled && m.config.Server.RegistryDomain != "" {
-		// Check if image already contains a registry domain (has a '.' and doesn't start with official Docker Hub libraries)
-		if !strings.Contains(strings.Split(imageRef, ":")[0], ".") {
+		repoPart := strings.Split(imageRef, ":")[0]
+		// Don't prepend if:
+		// 1. Image already starts with our registry domain
+		// 2. Image looks like an external registry (contains both dots and slashes, indicating registry.com/repo format)
+		if !strings.HasPrefix(repoPart, m.config.Server.RegistryDomain+"/") && 
+		   !(strings.Contains(repoPart, ".") && strings.Contains(repoPart, "/")) {
 			imageRef = fmt.Sprintf("%s/%s", m.config.Server.RegistryDomain, route.Image)
 		}
 	}

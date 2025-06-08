@@ -21,10 +21,10 @@ type Server struct {
 	config   *config.Config
 	mux      *http.ServeMux
 	routes   []config.Route
-	manager  *container.Manager
+	manager  container.ManagerInterface
 }
 
-func NewServer(cfg *config.Config, manager *container.Manager) *Server {
+func NewServer(cfg *config.Config, manager container.ManagerInterface) *Server {
 	s := &Server{
 		config:  cfg,
 		mux:     http.NewServeMux(),
@@ -33,6 +33,14 @@ func NewServer(cfg *config.Config, manager *container.Manager) *Server {
 	}
 	s.setupRoutes()
 	return s
+}
+
+// Handler returns the HTTP handler for testing
+func (s *Server) Handler() http.Handler {
+	return middleware.Chain(
+		middleware.PanicRecovery,
+		middleware.RequestLogger,
+	)(s.mux)
 }
 
 func (s *Server) setupRoutes() {

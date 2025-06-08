@@ -13,12 +13,12 @@ import (
 
 // VersionHandler handles version deployments based on manifest annotations
 type VersionHandler struct {
-	manager *container.Manager
+	manager container.ManagerInterface
 	config  *config.Config
 }
 
 // NewVersionHandler creates a new version handler
-func NewVersionHandler(manager *container.Manager, config *config.Config) *VersionHandler {
+func NewVersionHandler(manager container.ManagerInterface, config *config.Config) *VersionHandler {
 	return &VersionHandler{
 		manager: manager,
 		config:  config,

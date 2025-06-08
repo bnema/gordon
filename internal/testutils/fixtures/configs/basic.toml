@@ -1,0 +1,27 @@
+[server]
+port = 8080
+registry_port = 5000
+registry_domain = "registry.example.com"
+runtime = "docker"
+
+[registry_auth]
+enabled = true
+username = "admin"
+password = "password123"
+
+[routes]
+"app.example.com" = "nginx:latest"
+"api.example.com" = "myapi:v1"
+
+[volumes]
+auto_create = true
+prefix = "gordon"
+preserve = true
+
+[env]
+dir = "/tmp/env"
+providers = ["pass", "sops"]
+
+[logging]
+enabled = true
+level = "info"

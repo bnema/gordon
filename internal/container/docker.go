@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"gordon/pkg/runtime"
 	"io"
 	"strconv"
 	"strings"
@@ -18,8 +19,6 @@ import (
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog/log"
-
-	"gordon/pkg/runtime"
 )
 
 // DockerRuntime implements the Runtime interface using Docker API
@@ -37,6 +36,13 @@ func NewDockerRuntime() (*DockerRuntime, error) {
 	return &DockerRuntime{
 		client: cli,
 	}, nil
+}
+
+// NewDockerRuntimeWithClient creates a new Docker runtime instance with a custom client (for testing)
+func NewDockerRuntimeWithClient(cli *client.Client) *DockerRuntime {
+	return &DockerRuntime{
+		client: cli,
+	}
 }
 
 // CreateContainer creates a new container
@@ -383,7 +389,7 @@ func (d *DockerRuntime) GetContainerPort(ctx context.Context, containerID string
 
 // GetImageExposedPorts gets the exposed ports from an image
 func (d *DockerRuntime) GetImageExposedPorts(ctx context.Context, imageRef string) ([]int, error) {
-	imageInspect, err := d.client.ImageInspect(ctx, imageRef)
+	imageInspect, _, err := d.client.ImageInspectWithRaw(ctx, imageRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect image %s: %w", imageRef, err)
 	}
@@ -482,7 +488,7 @@ func (d *DockerRuntime) GetContainerNetworkInfo(ctx context.Context, containerID
 
 // InspectImageVolumes gets the volume mount points declared in the image
 func (d *DockerRuntime) InspectImageVolumes(ctx context.Context, imageRef string) ([]string, error) {
-	imageInspect, err := d.client.ImageInspect(ctx, imageRef)
+	imageInspect, _, err := d.client.ImageInspectWithRaw(ctx, imageRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect image %s: %w", imageRef, err)
 	}
@@ -549,7 +555,7 @@ func (d *DockerRuntime) RemoveVolume(ctx context.Context, volumeName string, for
 
 // InspectImageEnv gets the environment variables declared in the image
 func (d *DockerRuntime) InspectImageEnv(ctx context.Context, imageRef string) ([]string, error) {
-	imageInspect, err := d.client.ImageInspect(ctx, imageRef)
+	imageInspect, _, err := d.client.ImageInspectWithRaw(ctx, imageRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect image %s: %w", imageRef, err)
 	}
