@@ -46,6 +46,12 @@ This directory contains configuration examples for different use cases and envir
 - Production and development logging strategies
 - Log rotation and monitoring examples
 
+### 🔄 [`rollback-workflow-example.md`](rollback-workflow-example.md)
+**Simple version deployment and rollback workflow**
+- Manifest annotation-based deployments
+- Simple version changes for deployments and rollbacks
+- Version tracking and deployment strategies
+
 ## 🚀 Quick Start
 
 1. **Choose an example** that matches your use case
@@ -161,26 +167,51 @@ For the development example, add to `/etc/hosts`:
 ### Simple Deployment
 ```bash
 # Build your app
-docker build -t myapp:latest .
-
-# Tag for registry  
-docker tag myapp:latest registry.your-domain.com/myapp:latest
+export VERSION=latest
+docker build --tag myapp:$VERSION --tag registry.your-domain.com/myapp:$VERSION .
 
 # Push to deploy
-docker push registry.your-domain.com/myapp:latest
+docker push registry.your-domain.com/myapp:$VERSION
 ```
 
 ### Version Management
 ```bash
-# Tag with version
-docker tag myapp:latest registry.your-domain.com/myapp:v1.2.0
+# Build and push specific version
+export VERSION=v1.2.0
+docker build --tag myapp:$VERSION --tag registry.your-domain.com/myapp:$VERSION .
+docker push registry.your-domain.com/myapp:$VERSION
 
 # Update config
 # "app.your-domain.com" = "myapp:v1.2.0"
-
-# Push to deploy specific version
-docker push registry.your-domain.com/myapp:v1.2.0
 ```
+
+### Simple Version Deployment with Manifest Annotations
+```bash
+# Build and push your versions first
+export VERSION=v1.1.0
+podman build --tag myapp:$VERSION --tag registry.your-domain.com/myapp:$VERSION .
+podman push registry.your-domain.com/myapp:$VERSION
+
+export VERSION=v1.2.0
+podman build --tag myapp:$VERSION --tag registry.your-domain.com/myapp:$VERSION .
+podman push registry.your-domain.com/myapp:$VERSION
+
+# Deploy v1.2.0
+export VERSION=v1.2.0
+podman manifest create myapp:latest
+podman manifest add myapp:latest registry.your-domain.com/myapp:$VERSION
+podman manifest annotate myapp:latest --annotation version=$VERSION registry.your-domain.com/myapp:$VERSION
+podman manifest push myapp:latest registry.your-domain.com/myapp:latest
+
+# Rollback to v1.1.0 (just change the version)
+export VERSION=v1.1.0
+podman manifest create myapp:latest --amend
+podman manifest add myapp:latest registry.your-domain.com/myapp:$VERSION
+podman manifest annotate myapp:latest --annotation version=$VERSION registry.your-domain.com/myapp:$VERSION
+podman manifest push myapp:latest registry.your-domain.com/myapp:latest
+```
+
+See [`rollback-workflow-example.md`](rollback-workflow-example.md) for complete version deployment workflow documentation.
 
 ## 🤝 Need Help?
 

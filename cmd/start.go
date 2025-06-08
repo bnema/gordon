@@ -87,6 +87,13 @@ func runStart(cmd *cobra.Command, args []string) {
 		log.Fatal().Err(err).Msg("Failed to subscribe auto-route event handler")
 	}
 
+	// Create and subscribe version event handler
+	var versionHandler *events.VersionHandler
+	versionHandler = events.NewVersionHandler(manager, cfg)
+	if err := eventBus.Subscribe(versionHandler); err != nil {
+		log.Fatal().Err(err).Msg("Failed to subscribe version event handler")
+	}
+
 	// Start proxy server (needs to be accessible for config reload)
 	proxyServer := proxy.NewServer(cfg, manager)
 
@@ -148,6 +155,9 @@ func runStart(cmd *cobra.Command, args []string) {
 			if err := eventBus.Unsubscribe(autoRouteHandler); err != nil {
 				log.Warn().Err(err).Msg("Failed to unsubscribe old auto-route event handler")
 			}
+			if err := eventBus.Unsubscribe(versionHandler); err != nil {
+				log.Warn().Err(err).Msg("Failed to unsubscribe old version event handler")
+			}
 			if err := eventBus.Unsubscribe(proxyHandler); err != nil {
 				log.Warn().Err(err).Msg("Failed to unsubscribe old proxy event handler")
 			}
@@ -163,6 +173,13 @@ func runStart(cmd *cobra.Command, args []string) {
 			autoRouteHandler = events.NewAutoRouteHandler(cfg, manager)
 			if err := eventBus.Subscribe(autoRouteHandler); err != nil {
 				log.Error().Err(err).Msg("Failed to re-subscribe auto-route event handler")
+				return
+			}
+
+			// Update version handler config
+			versionHandler = events.NewVersionHandler(manager, cfg)
+			if err := eventBus.Subscribe(versionHandler); err != nil {
+				log.Error().Err(err).Msg("Failed to re-subscribe version event handler")
 				return
 			}
 

@@ -28,9 +28,10 @@ type Event struct {
 }
 
 type ImagePushedPayload struct {
-	Name      string `json:"name"`
-	Reference string `json:"reference"`
-	Manifest  []byte `json:"-"`
+	Name        string            `json:"name"`
+	Reference   string            `json:"reference"`
+	Manifest    []byte            `json:"-"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 type EventHandler interface {

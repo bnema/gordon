@@ -11,6 +11,7 @@ import (
 	"gordon/internal/config"
 	"gordon/internal/events"
 	"gordon/internal/middleware"
+	"gordon/pkg/manifest"
 
 	"github.com/rs/zerolog/log"
 )
@@ -130,11 +131,28 @@ func (s *Server) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, reference))
 	w.WriteHeader(http.StatusCreated)
 
+	// Parse manifest annotations
+	annotations, err := manifest.ParseManifestAnnotations(data, contentType)
+	if err != nil {
+		log.Warn().Err(err).Str("name", name).Str("reference", reference).Msg("Failed to parse manifest annotations, continuing without them")
+		annotations = map[string]string{}
+	}
+
+	// Log discovered annotations
+	if len(annotations) > 0 {
+		log.Info().
+			Str("name", name).
+			Str("reference", reference).
+			Interface("annotations", annotations).
+			Msg("Manifest annotations discovered")
+	}
+
 	// Emit image pushed event
 	s.eventBus.Publish(events.ImagePushed, events.ImagePushedPayload{
-		Name:      name,
-		Reference: reference,
-		Manifest:  data,
+		Name:        name,
+		Reference:   reference,
+		Manifest:    data,
+		Annotations: annotations,
 	})
 }
 

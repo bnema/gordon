@@ -340,6 +340,15 @@ func (h *AutoRouteHandler) Handle(event Event) error {
 		return fmt.Errorf("invalid payload type for ImagePushed event")
 	}
 
+	// Log annotations if present
+	if len(payload.Annotations) > 0 {
+		log.Debug().
+			Str("image", payload.Name).
+			Str("reference", payload.Reference).
+			Interface("annotations", payload.Annotations).
+			Msg("Image pushed with annotations - auto-route processing")
+	}
+
 	imageName := payload.Name
 	reference := payload.Reference
 	fullImageName := fmt.Sprintf("%s:%s", imageName, reference)

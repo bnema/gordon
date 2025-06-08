@@ -41,7 +41,7 @@ podman push registry.mydomain.com/myapp:latest
 - **Push-to-Deploy**: New images deploy instantly
 - **Multi-Domain Routing**: Unlimited apps with automatic HTTPS via Cloudflare
 - **Zero-Downtime Updates**: Graceful container swaps
-- **Auto-Route Creation**: Push `myapp.mydomain.com:latest` → route created automatically
+- **Auto-Route Creation** (Optional): Push `myapp.mydomain.com:latest` → route created automatically
 
 ## Quick Start (5 minutes)
 
@@ -160,14 +160,53 @@ podman push registry.mydomain.com/myapp:latest
 ```
 
 ### Version Control & Rollbacks
+
+Gordon supports multiple rollback strategies. Choose the approach that fits your workflow:
+
+#### Method 1: Tag-Based Rollbacks (Simple)
 ```bash
-# Push versioned releases
+# Tag and push a specific version
+podman tag myapp:v1.0.1 registry.mydomain.com/myapp:v1.0.1
 podman push registry.mydomain.com/myapp:v1.0.1
 
-# Instant rollback in gordon.toml:
+# Tag and push latest (v1.0.2 in this example)
+podman tag myapp:v1.0.2 registry.mydomain.com/myapp:v1.0.2 && podman tag myapp:v1.0.2 registry.mydomain.com/myapp:latest
+podman push registry.mydomain.com/myapp:v1.0.2 && podman push registry.mydomain.com/myapp:latest
+
+# Rollback: Update gordon.toml and reload
 # From: "app.mydomain.com" = "myapp:latest"
-# To:   "app.mydomain.com" = "myapp:v1.0.0"
+# To:   "app.mydomain.com" = "myapp:v1.0.1"
+# Then: systemctl --user reload gordon
 ```
+
+#### Method 2: Manifest Annotation Deployment (Advanced)
+```bash
+# Build and push your versioned images first
+export VERSION=v1.0.1
+podman build --tag myapp:$VERSION --tag registry.mydomain.com/myapp:$VERSION .
+podman push registry.mydomain.com/myapp:$VERSION
+
+export VERSION=v1.0.2
+podman build --tag myapp:$VERSION --tag registry.mydomain.com/myapp:$VERSION .
+podman push registry.mydomain.com/myapp:$VERSION
+
+# Deploy v1.0.2 with version annotation
+export VERSION=v1.0.2
+podman manifest create myapp:latest
+podman manifest add myapp:latest registry.mydomain.com/myapp:$VERSION
+podman manifest annotate myapp:latest --annotation version=$VERSION registry.mydomain.com/myapp:$VERSION
+podman manifest push myapp:latest registry.mydomain.com/myapp:latest
+
+# Rollback to v1.0.1 (just change the version)
+export VERSION=v1.0.1
+podman manifest create myapp:latest --amend
+podman manifest add myapp:latest registry.mydomain.com/myapp:$VERSION
+podman manifest annotate myapp:latest --annotation version=$VERSION registry.mydomain.com/myapp:$VERSION
+podman manifest push myapp:latest registry.mydomain.com/myapp:latest
+# Gordon automatically deploys the specified version
+```
+
+**Recommendation**: Use Method 2 for instant deployments without config file edits. Method 1 is best for simple workflows.
 
 ### Auto-Route Creation
 ```toml
@@ -183,30 +222,35 @@ podman push registry.mydomain.com/staging.example.com:latest
 
 ## Advanced Configuration
 
-### Full Config Structure
+### Full Config Structure (with default values)
 ```toml
 # gordon.toml - Auto-generated on first run
 [server]
-port = 8080
-registry_domain = "registry.mydomain.com"
-runtime = "podman-rootless"  # auto, docker, podman, podman-rootless
+port = 8080                          # Default: 8080
+registry_port = 5000                 # Default: 5000  
+registry_domain = "registry.mydomain.com"  # No default (required)
+runtime = "auto"                     # Default: "auto" (auto, docker, podman, podman-rootless)
+socket_path = ""                     # Default: "" (auto-detected)
+data_dir = "~/.local/share/gordon"   # Default: ~/.local/share/gordon (or ./data for root)
+ssl_email = ""                       # No default (optional)
 # runtime auto-detects: docker → podman-rootless → podman
 # Override with env: CONTAINER_HOST=unix:///custom/socket
 
 [registry_auth]
-enabled = true
-username = "admin"
-password = "your-secure-password"
+enabled = true                       # Default: true
+username = "admin"                   # No default (required when enabled)
+password = "your-secure-password"    # No default (required when enabled)
 
 [routes]
-"app.mydomain.com" = "myapp:latest"
+"app.mydomain.com" = "myapp:latest"  # Default: {} (empty map)
+# Routes default to HTTPS unless prefixed with http://
 
 [auto_route]
-enabled = false  # Auto-create routes from image names
+enabled = false                      # Default: false
 
 [env]
-dir = "./data/env"  # Gordon auto-creates env files here
-providers = ["pass", "sops"]  # Optional secret management
+dir = "{data_dir}/env"              # Default: {data_dir}/env
+providers = ["pass", "sops"]        # Default: ["pass", "sops"]
 # Example env file: ./data/env/app_mydomain_com.env
 # NODE_ENV=production
 # DATABASE_URL=postgresql://localhost:5432/prod
@@ -214,16 +258,16 @@ providers = ["pass", "sops"]  # Optional secret management
 # JWT_SECRET=${sops:secrets.yaml:jwt}  # SOPS integration
 
 [logging]
-enabled = false
-level = "info"              # trace, debug, info, warn, error
-dir = "./logs"              # Log directory
-main_log_file = "gordon.log"     # Main app log
-proxy_log_file = "proxy.log"     # HTTP traffic log
-container_log_dir = "containers" # Container logs subdirectory
-max_size = 100              # MB before rotation
-max_backups = 3             # Number of old files to keep
-max_age = 28                # Days to keep old files
-compress = true             # Gzip rotated logs
+enabled = true                       # Default: true
+level = "info"                       # Default: "info" (debug, info, warn, error, fatal, panic)
+dir = "{data_dir}/logs"             # Default: {data_dir}/logs
+main_log_file = "gordon.log"        # Default: "gordon.log"
+proxy_log_file = "proxy.log"        # Default: "proxy.log"
+container_log_dir = "containers"    # Default: "containers"
+max_size = 100                      # Default: 100 (MB before rotation)
+max_backups = 3                     # Default: 3 (old files to keep)
+max_age = 28                        # Default: 28 (days to keep old files)
+compress = true                     # Default: true (gzip rotated logs)
 # Creates: gordon.log, proxy.log, containers/*.log
 ```
 
@@ -236,7 +280,7 @@ A: Those are just reverse proxies. Gordon is a complete deployment platform with
 A: On YOUR machine. If it runs locally, it runs in production.
 
 **Q: How do I rollback?**  
-A: Edit gordon.toml to point to a previous version. Takes seconds.
+A: Change the version annotation in your manifest and push, or edit gordon.toml. Takes seconds.
 
 **Q: Do I need Cloudflare?**  
 A: Yes, for SSL certificates and DDoS protection.
