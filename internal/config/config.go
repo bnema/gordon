@@ -339,6 +339,80 @@ func (c *Config) AddRoute(domain, image string) error {
 	return nil
 }
 
+// UpdateRoute updates an existing route configuration
+func (c *Config) UpdateRoute(domain, image string) error {
+	if c.Routes == nil {
+		c.Routes = make(map[string]string)
+	}
+
+	// Check if route exists
+	if _, exists := c.Routes[domain]; !exists {
+		return fmt.Errorf("route %s does not exist", domain)
+	}
+
+	c.Routes[domain] = image
+
+	// Read the current config file to preserve formatting
+	configFile := viper.ConfigFileUsed()
+	if configFile == "" {
+		return fmt.Errorf("no config file path available")
+	}
+
+	// Read existing content
+	content, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Parse and update only the routes section while preserving other formatting
+	lines := strings.Split(string(content), "\n")
+	var newLines []string
+	inRoutesSection := false
+	routeUpdated := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Check if we're entering or leaving the routes section
+		if trimmed == "[routes]" {
+			inRoutesSection = true
+			newLines = append(newLines, line)
+			continue
+		}
+
+		// Check if we're entering a new section
+		if strings.HasPrefix(trimmed, "[") && trimmed != "[routes]" {
+			inRoutesSection = false
+		}
+
+		// If we're in routes section, check if this route matches (check both quote styles)
+		if inRoutesSection && (strings.Contains(trimmed, fmt.Sprintf("'%s'", domain)) || strings.Contains(trimmed, fmt.Sprintf("\"%s\"", domain))) {
+			// Update existing route using double quotes for consistency
+			newLines = append(newLines, fmt.Sprintf("\"%s\" = \"%s\"", domain, image))
+			routeUpdated = true
+		} else {
+			newLines = append(newLines, line)
+		}
+	}
+
+	if !routeUpdated {
+		return fmt.Errorf("route %s not found in config file", domain)
+	}
+
+	// Write the updated content back
+	newContent := strings.Join(newLines, "\n")
+	if err := os.WriteFile(configFile, []byte(newContent), 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	log.Info().
+		Str("domain", domain).
+		Str("image", image).
+		Msg("Updated route configuration")
+
+	return nil
+}
+
 // validateEnvConfig validates the environment configuration
 func validateEnvConfig(envCfg *EnvConfig) error {
 	// Validate env directory path
