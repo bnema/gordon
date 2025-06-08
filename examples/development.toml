@@ -58,6 +58,28 @@ providers = ["pass"]  # For development secrets
 "db-admin.yourdomain.com" = "phpmyadmin:latest" # Database admin
 "mail.yourdomain.com" = "mailhog/mailhog:latest" # Email testing
 
+# Network isolation configuration
+[network_isolation]
+enabled = true                    # Enable per-app network isolation
+network_prefix = "gordon"         # Default prefix for network names
+dns_suffix = ".internal"          # DNS suffix for internal services
+
+# Service attachments - each app gets its own isolated network with attached services
+[attachments]
+"app.yourdomain.com" = ["my-postgres:latest", "my-redis:latest"]      # App with database and cache
+"api.yourdomain.com" = ["my-postgres:latest"]                         # API with its own database
+"admin.yourdomain.com" = ["my-mysql:latest"]                          # Admin with different database
+
+# Optional: Network groups for shared services between apps
+# [network_groups]
+# "backend" = ["app.yourdomain.com", "api.yourdomain.com"]             # Share services between app and api
+# 
+# [attachments]
+# "backend" = ["my-redis:latest", "rabbitmq:latest"]                   # Shared cache and queue
+# "app.yourdomain.com" = ["my-postgres:latest"]                        # App-specific database
+# "api.yourdomain.com" = ["my-postgres:latest"]                        # API-specific database
+# "admin.yourdomain.com" = ["my-mysql:latest"]                         # Admin gets its own isolated network
+
 # Environment Variables Usage:
 # 
 # For development, create .env files for your routes:
@@ -113,3 +135,23 @@ providers = ["pass"]  # For development secrets
 #    CMD ["npm", "start"]
 #
 # Cloudflare handles SSL and DNS for your remote Gordon server!
+#
+# NETWORK ISOLATION FEATURE:
+# With attachments, each app gets its own isolated network with attached services.
+# Services are accessible by their simple names within the network:
+#   - postgresql://postgres:5432/mydb
+#   - redis://redis:6379
+#   - mysql://mysql:3306/mydb
+#
+# To use persistent storage with attachments, create custom Dockerfiles:
+#
+# Example my-postgres Dockerfile:
+#   FROM postgres:15
+#   VOLUME ["/var/lib/postgresql/data"]
+#   ENV POSTGRES_DB=myapp
+#   ENV POSTGRES_USER=appuser
+#   ENV POSTGRES_PASSWORD=secret
+#
+# Build and push to registry:
+#   docker build -f Dockerfile.postgres -t registry.yourdomain.com/my-postgres:latest .
+#   docker push registry.yourdomain.com/my-postgres:latest

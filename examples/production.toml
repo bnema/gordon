@@ -49,6 +49,28 @@ providers = ["pass", "sops"]
 "grafana.company.com" = "grafana/grafana:latest"   # Metrics dashboard
 "prometheus.company.com" = "prom/prometheus:latest" # Metrics collection
 
+# Network isolation for production security
+[network_isolation]
+enabled = true                    # Enable per-app network isolation
+network_prefix = "prod"           # Production network prefix
+dns_suffix = ".internal"          # Internal DNS suffix
+
+# Network groups for microservices that need to communicate
+[network_groups]
+"backend" = ["app.company.com", "api.company.com"]        # App and API share services
+"monitoring" = ["grafana.company.com", "prometheus.company.com"]  # Monitoring stack
+
+# Service attachments with isolated networks
+[attachments]
+# Shared backend services
+"backend" = ["company-redis:latest", "company-rabbitmq:latest"]
+# Individual databases for isolation
+"app.company.com" = ["company-postgres:latest"]
+"api.company.com" = ["company-postgres:latest"] 
+"admin.company.com" = ["company-mysql:latest"]
+# Monitoring services get their own network
+"monitoring" = ["company-prometheus-data:latest"]
+
 # Environment Variables Usage:
 # 
 # For each route, create a .env file named after the domain:
@@ -73,3 +95,23 @@ providers = ["pass", "sops"]
 # 5. Restart Gordon to reload config
 # 6. Push to deploy: docker push registry.company.com/company-app:v2.1.1
 # 7. Gordon automatically deploys to app.company.com with environment variables!
+#
+# NETWORK ISOLATION IN PRODUCTION:
+# - Each app gets its own isolated network (prod-app-company-com, prod-admin-company-com)
+# - Network groups allow controlled sharing (prod-backend, prod-monitoring)
+# - Services communicate via simple DNS names (redis:6379, postgres:5432)
+# - Complete isolation between tenant/service boundaries
+#
+# Example service Dockerfiles for persistent storage:
+#
+# company-postgres/Dockerfile:
+#   FROM postgres:15
+#   VOLUME ["/var/lib/postgresql/data"]
+#   ENV POSTGRES_DB=production
+#   ENV POSTGRES_USER=app
+#   ENV POSTGRES_PASSWORD=supersecret
+#
+# company-redis/Dockerfile:
+#   FROM redis:7-alpine  
+#   VOLUME ["/data"]
+#   CMD ["redis-server", "--appendonly", "yes"]

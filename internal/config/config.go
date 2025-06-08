@@ -12,13 +12,16 @@ import (
 )
 
 type Config struct {
-	Server       ServerConfig       `mapstructure:"server"`
-	RegistryAuth RegistryAuthConfig `mapstructure:"registry_auth"`
-	Routes       map[string]string  `mapstructure:"routes"`
-	AutoRoute    AutoRouteConfig    `mapstructure:"auto_route"`
-	Env          EnvConfig          `mapstructure:"env"`
-	Logging      LoggingConfig      `mapstructure:"logging"`
-	Volumes      VolumeConfig       `mapstructure:"volumes"`
+	Server           ServerConfig            `mapstructure:"server"`
+	RegistryAuth     RegistryAuthConfig      `mapstructure:"registry_auth"`
+	Routes           map[string]string       `mapstructure:"routes"`
+	AutoRoute        AutoRouteConfig         `mapstructure:"auto_route"`
+	Env              EnvConfig               `mapstructure:"env"`
+	Logging          LoggingConfig           `mapstructure:"logging"`
+	Volumes          VolumeConfig            `mapstructure:"volumes"`
+	Attachments      map[string][]string     `mapstructure:"attachments"`
+	NetworkGroups    map[string][]string     `mapstructure:"network_groups"`
+	NetworkIsolation NetworkIsolationConfig  `mapstructure:"network_isolation"`
 }
 
 type ServerConfig struct {
@@ -63,6 +66,12 @@ type VolumeConfig struct {
 	AutoCreate bool   `mapstructure:"auto_create"`
 	Prefix     string `mapstructure:"prefix"`
 	Preserve   bool   `mapstructure:"preserve"`
+}
+
+type NetworkIsolationConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`
+	NetworkPrefix string `mapstructure:"network_prefix"`
+	DNSSuffix     string `mapstructure:"dns_suffix"`
 }
 
 type SecretProvider struct {
@@ -110,8 +119,15 @@ func Load() (*Config, error) {
 	viper.SetDefault("volumes.prefix", "gordon")
 	viper.SetDefault("volumes.preserve", true)
 
+	// Network isolation defaults
+	viper.SetDefault("network_isolation.enabled", true)
+	viper.SetDefault("network_isolation.network_prefix", "gordon")
+	viper.SetDefault("network_isolation.dns_suffix", ".internal")
+
 	// Handle the routes manually since Viper struggles with domain names
 	cfg.Routes = make(map[string]string)
+	cfg.Attachments = make(map[string][]string)
+	cfg.NetworkGroups = make(map[string][]string)
 
 	// Get server config first
 	if err := viper.UnmarshalKey("server", &cfg.Server); err != nil {
@@ -167,6 +183,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("unable to decode volumes config: %v", err)
 	}
 
+	// Get network isolation config
+	if err := viper.UnmarshalKey("network_isolation", &cfg.NetworkIsolation); err != nil {
+		return nil, fmt.Errorf("unable to decode network isolation config: %v", err)
+	}
+
 	// Get routes manually from the raw config
 	routesRaw := viper.Get("routes")
 	if routesRaw != nil {
@@ -174,6 +195,42 @@ func Load() (*Config, error) {
 			for domain, image := range routes {
 				if imageStr, ok := image.(string); ok {
 					cfg.Routes[domain] = imageStr
+				}
+			}
+		}
+	}
+
+	// Get attachments manually from the raw config
+	attachmentsRaw := viper.Get("attachments")
+	if attachmentsRaw != nil {
+		if attachments, ok := attachmentsRaw.(map[string]interface{}); ok {
+			for identifier, services := range attachments {
+				if servicesList, ok := services.([]interface{}); ok {
+					var serviceStrings []string
+					for _, service := range servicesList {
+						if serviceStr, ok := service.(string); ok {
+							serviceStrings = append(serviceStrings, serviceStr)
+						}
+					}
+					cfg.Attachments[identifier] = serviceStrings
+				}
+			}
+		}
+	}
+
+	// Get network_groups manually from the raw config
+	networkGroupsRaw := viper.Get("network_groups")
+	if networkGroupsRaw != nil {
+		if networkGroups, ok := networkGroupsRaw.(map[string]interface{}); ok {
+			for groupName, domains := range networkGroups {
+				if domainsList, ok := domains.([]interface{}); ok {
+					var domainStrings []string
+					for _, domain := range domainsList {
+						if domainStr, ok := domain.(string); ok {
+							domainStrings = append(domainStrings, domainStr)
+						}
+					}
+					cfg.NetworkGroups[groupName] = domainStrings
 				}
 			}
 		}
