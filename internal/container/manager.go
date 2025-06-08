@@ -269,13 +269,23 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 		}
 	}
 
+	// Determine which network to use for this app
+	networkName := m.GetNetworkForApp(route.Domain)
+	
+	// Create network if it doesn't exist
+	if err := m.CreateNetworkIfNeeded(ctx, networkName); err != nil {
+		return nil, fmt.Errorf("failed to create network for %s: %w", route.Domain, err)
+	}
+
 	// Create container configuration
 	containerConfig := &runtime.ContainerConfig{
-		Image:   imageRef,
-		Name:    fmt.Sprintf("gordon-%s", route.Domain),
-		Ports:   exposedPorts,
-		Env:     envVars,
-		Volumes: volumes,
+		Image:       imageRef,
+		Name:        fmt.Sprintf("gordon-%s", route.Domain),
+		Ports:       exposedPorts,
+		Env:         envVars,
+		Volumes:     volumes,
+		NetworkMode: networkName,
+		Hostname:    route.Domain,
 		Labels: map[string]string{
 			"gordon.domain":  route.Domain,
 			"gordon.image":   route.Image,
@@ -325,7 +335,36 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 		Str("image", route.Image).
 		Str("container", container.ID).
 		Ints("ports", container.Ports).
+		Str("network", networkName).
 		Msg("Container deployed successfully")
+
+	// Deploy attachments for this specific app
+	if attachments, ok := m.config.Attachments[route.Domain]; ok {
+		for _, serviceImage := range attachments {
+			if err := m.DeployAttachedService(ctx, route.Domain, serviceImage); err != nil {
+				log.Error().Err(err).Str("service", serviceImage).Str("domain", route.Domain).Msg("Failed to deploy attachment")
+				// Don't fail the main deployment if attachment fails
+			}
+		}
+	}
+	
+	// Check if app is part of a network group with attachments
+	for groupName, domains := range m.config.NetworkGroups {
+		for _, d := range domains {
+			if d == route.Domain {
+				// Deploy group attachments if not already deployed
+				if attachments, ok := m.config.Attachments[groupName]; ok {
+					for _, serviceImage := range attachments {
+						if err := m.DeployAttachedService(ctx, groupName, serviceImage); err != nil {
+							log.Error().Err(err).Str("service", serviceImage).Str("group", groupName).Msg("Failed to deploy group attachment")
+							// Don't fail the main deployment if attachment fails
+						}
+					}
+				}
+				break
+			}
+		}
+	}
 
 	return container, nil
 }
@@ -442,14 +481,24 @@ func (m *Manager) RemoveContainer(ctx context.Context, containerID string, force
 		}
 	}
 
-	// Remove from our tracking map
+	// Remove from our tracking map and cleanup network if needed
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var removedDomain string
 	for domain, container := range m.containers {
 		if container.ID == containerID {
 			delete(m.containers, domain)
+			removedDomain = domain
 			log.Info().Str("domain", domain).Str("container", containerID).Msg("Container removed")
 			break
+		}
+	}
+	m.mu.Unlock()
+
+	// If we removed an app container, check if we need to cleanup its network
+	if removedDomain != "" && m.config.NetworkIsolation.Enabled {
+		networkName := m.GetNetworkForApp(removedDomain)
+		if err := m.cleanupNetworkIfEmpty(ctx, networkName); err != nil {
+			log.Warn().Err(err).Str("network", networkName).Msg("Failed to cleanup network after container removal")
 		}
 	}
 
@@ -818,6 +867,235 @@ func (m *Manager) cleanupVolumesForDomain(ctx context.Context, domain string) er
 
 	if len(errors) > 0 {
 		return fmt.Errorf("failed to cleanup %d volumes for domain %s", len(errors), domain)
+	}
+
+	return nil
+}
+
+// cleanupNetworkIfEmpty removes a network if it has no containers
+func (m *Manager) cleanupNetworkIfEmpty(ctx context.Context, networkName string) error {
+	if networkName == "bridge" || networkName == "default" {
+		return nil // Don't try to remove default networks
+	}
+
+	networks, err := m.runtime.ListNetworks(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list networks: %w", err)
+	}
+
+	for _, network := range networks {
+		if network.Name == networkName {
+			// Check if network has any containers
+			if len(network.Containers) == 0 {
+				// Network is empty, remove it
+				if err := m.runtime.RemoveNetwork(ctx, networkName); err != nil {
+					log.Warn().Err(err).Str("network", networkName).Msg("Failed to cleanup empty network")
+					return err
+				}
+				log.Info().Str("network", networkName).Msg("Cleaned up empty network")
+			}
+			break
+		}
+	}
+
+	return nil
+}
+
+// DeployAttachedService deploys a service attached to an app or network group
+func (m *Manager) DeployAttachedService(ctx context.Context, identifier, serviceImage string) error {
+	networkName := m.generateNetworkName(identifier)
+	
+	// Extract service name from image for container naming
+	serviceName := strings.Split(serviceImage, ":")[0]
+	if strings.Contains(serviceName, "/") {
+		parts := strings.Split(serviceName, "/")
+		serviceName = parts[len(parts)-1]
+	}
+	
+	// For network groups, we need a different container naming scheme
+	apps := m.GetAppsForNetwork(identifier)
+	var containerName string
+	
+	if len(apps) > 1 {
+		// Shared service for network group
+		containerName = fmt.Sprintf("%s-shared-%s", m.config.NetworkIsolation.NetworkPrefix, serviceName)
+	} else {
+		// App-specific service
+		containerName = fmt.Sprintf("%s-%s", strings.ReplaceAll(identifier, ".", "-"), serviceName)
+	}
+	
+	// Check if service is already running
+	containers, err := m.runtime.ListContainers(ctx, false)
+	if err != nil {
+		return fmt.Errorf("failed to list containers: %w", err)
+	}
+	
+	for _, container := range containers {
+		if container.Name == containerName {
+			log.Info().Str("service", containerName).Msg("Service already running")
+			return nil
+		}
+	}
+	
+	// Get exposed ports from the service image
+	exposedPorts, err := m.runtime.GetImageExposedPorts(ctx, serviceImage)
+	if err != nil {
+		log.Warn().Err(err).Str("image", serviceImage).Msg("Failed to get exposed ports from service image, using empty ports")
+		exposedPorts = []int{} // Services don't need external ports by default
+	}
+	
+	// Load environment for service (inherit from first app in group or specific app)
+	var envVars []string
+	if len(apps) > 0 {
+		userEnvVars, err := m.envLoader.LoadEnvForRoute(apps[0])
+		if err != nil {
+			log.Warn().Err(err).Str("domain", apps[0]).Msg("Failed to load environment for service, using empty env")
+			userEnvVars = []string{}
+		}
+		
+		// Get environment variables from image ENV directives
+		dockerfileEnvVars, err := m.runtime.InspectImageEnv(ctx, serviceImage)
+		if err != nil {
+			log.Warn().Err(err).Str("image", serviceImage).Msg("Failed to inspect service image environment variables")
+			dockerfileEnvVars = []string{}
+		}
+		
+		// Merge environments
+		envVars = mergeEnvironmentVariables(dockerfileEnvVars, userEnvVars)
+	}
+	
+	// Handle volumes for the service
+	volumes := make(map[string]string)
+	if m.config.Volumes.AutoCreate {
+		volumePaths, err := m.runtime.InspectImageVolumes(ctx, serviceImage)
+		if err != nil {
+			log.Warn().Err(err).Str("image", serviceImage).Msg("Failed to inspect service image volumes")
+		} else if len(volumePaths) > 0 {
+			for _, volumePath := range volumePaths {
+				volumeName := fmt.Sprintf("%s-%s-%s", 
+					m.config.Volumes.Prefix,
+					strings.ReplaceAll(identifier, ".", "-"),
+					strings.ReplaceAll(strings.Trim(volumePath, "/"), "/", "-"))
+				
+				// Create volume if it doesn't exist
+				exists, err := m.runtime.VolumeExists(ctx, volumeName)
+				if err != nil {
+					log.Warn().Err(err).Str("volume", volumeName).Msg("Failed to check service volume")
+					continue
+				}
+				
+				if !exists {
+					if err := m.runtime.CreateVolume(ctx, volumeName); err != nil {
+						log.Error().Err(err).Str("volume", volumeName).Msg("Failed to create service volume")
+						continue
+					}
+					log.Info().Str("volume", volumeName).Str("path", volumePath).Msg("Created volume for service")
+				}
+				
+				volumes[volumePath] = volumeName
+			}
+		}
+	}
+	
+	// Create service container configuration
+	serviceConfig := &runtime.ContainerConfig{
+		Image:       serviceImage,
+		Name:        containerName,
+		Ports:       exposedPorts,
+		Env:         envVars,
+		Volumes:     volumes,
+		NetworkMode: networkName,
+		Hostname:    serviceName,
+		Labels: map[string]string{
+			"gordon.managed":    "true",
+			"gordon.service":    "true",
+			"gordon.attached":   identifier,
+			"gordon.image":      serviceImage,
+		},
+		AutoRemove: false,
+	}
+	
+	// Create and start the service container
+	container, err := m.runtime.CreateContainer(ctx, serviceConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create service container %s: %w", containerName, err)
+	}
+	
+	if err := m.runtime.StartContainer(ctx, container.ID); err != nil {
+		m.runtime.RemoveContainer(ctx, container.ID, true)
+		return fmt.Errorf("failed to start service container %s: %w", containerName, err)
+	}
+	
+	log.Info().
+		Str("service", containerName).
+		Str("image", serviceImage).
+		Str("network", networkName).
+		Str("attached_to", identifier).
+		Msg("Service deployed successfully")
+	
+	return nil
+}
+
+// GetNetworkForApp determines which network an app should use
+func (m *Manager) GetNetworkForApp(domain string) string {
+	if !m.config.NetworkIsolation.Enabled {
+		return "bridge" // Use default Docker bridge network
+	}
+
+	// Check if domain is part of a network group
+	for groupName, domains := range m.config.NetworkGroups {
+		for _, d := range domains {
+			if d == domain {
+				return m.generateNetworkName(groupName)
+			}
+		}
+	}
+	
+	// Default: app gets its own network
+	return m.generateNetworkName(domain)
+}
+
+// generateNetworkName creates a network name from an identifier
+func (m *Manager) generateNetworkName(identifier string) string {
+	// "myapp.example.com" -> "gordon-myapp-example-com"
+	// "backend" -> "gordon-backend"
+	return fmt.Sprintf("%s-%s", 
+		m.config.NetworkIsolation.NetworkPrefix,
+		strings.ReplaceAll(identifier, ".", "-"))
+}
+
+// GetAppsForNetwork returns all apps that should have access to a network
+func (m *Manager) GetAppsForNetwork(identifier string) []string {
+	// Check if it's a network group
+	if apps, ok := m.config.NetworkGroups[identifier]; ok {
+		return apps
+	}
+	
+	// Single app network
+	return []string{identifier}
+}
+
+// CreateNetworkIfNeeded creates a network if it doesn't exist
+func (m *Manager) CreateNetworkIfNeeded(ctx context.Context, networkName string) error {
+	if networkName == "bridge" || networkName == "default" {
+		return nil // Don't try to create default networks
+	}
+
+	exists, err := m.runtime.NetworkExists(ctx, networkName)
+	if err != nil {
+		return fmt.Errorf("failed to check if network exists: %w", err)
+	}
+
+	if !exists {
+		options := map[string]string{
+			"driver": "bridge",
+		}
+		
+		if err := m.runtime.CreateNetwork(ctx, networkName, options); err != nil {
+			return fmt.Errorf("failed to create network %s: %w", networkName, err)
+		}
+		
+		log.Info().Str("network", networkName).Msg("Created network for app isolation")
 	}
 
 	return nil

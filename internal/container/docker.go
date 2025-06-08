@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
@@ -81,10 +82,26 @@ func (d *DockerRuntime) CreateContainer(ctx context.Context, config *runtime.Con
 		PortBindings: portBindings,
 		AutoRemove:   config.AutoRemove,
 		Binds:        binds,
+		NetworkMode:  container.NetworkMode(config.NetworkMode),
+	}
+
+	// Create network configuration for container
+	var networkConfig *network.NetworkingConfig
+	if config.NetworkMode != "" && config.NetworkMode != "default" && config.NetworkMode != "bridge" {
+		networkConfig = &network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{
+				config.NetworkMode: {
+					Aliases: config.Aliases,
+				},
+			},
+		}
+		if config.Hostname != "" {
+			networkConfig.EndpointsConfig[config.NetworkMode].NetworkID = config.NetworkMode
+		}
 	}
 
 	// Create the container
-	resp, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, config.Name)
+	resp, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, networkConfig, nil, config.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
@@ -549,4 +566,110 @@ func (d *DockerRuntime) InspectImageEnv(ctx context.Context, imageRef string) ([
 	}
 
 	return envVars, nil
+}
+
+// CreateNetwork creates a new Docker network
+func (d *DockerRuntime) CreateNetwork(ctx context.Context, name string, options map[string]string) error {
+	// Set default driver to bridge if not specified
+	driver := "bridge"
+	if driverOption, exists := options["driver"]; exists {
+		driver = driverOption
+	}
+
+	createOptions := network.CreateOptions{
+		Driver: driver,
+		Labels: map[string]string{
+			"gordon.managed": "true",
+		},
+	}
+
+	// Add any additional options to labels
+	for key, value := range options {
+		if key != "driver" {
+			createOptions.Labels["gordon."+key] = value
+		}
+	}
+
+	_, err := d.client.NetworkCreate(ctx, name, createOptions)
+	if err != nil {
+		return fmt.Errorf("failed to create network %s: %w", name, err)
+	}
+
+	log.Info().Str("network", name).Str("driver", driver).Msg("Network created")
+	return nil
+}
+
+// RemoveNetwork removes a Docker network
+func (d *DockerRuntime) RemoveNetwork(ctx context.Context, name string) error {
+	err := d.client.NetworkRemove(ctx, name)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			log.Debug().Str("network", name).Msg("Network not found, already removed")
+			return nil
+		}
+		return fmt.Errorf("failed to remove network %s: %w", name, err)
+	}
+
+	log.Info().Str("network", name).Msg("Network removed")
+	return nil
+}
+
+// ListNetworks lists all Docker networks
+func (d *DockerRuntime) ListNetworks(ctx context.Context) ([]*runtime.NetworkInfo, error) {
+	networks, err := d.client.NetworkList(ctx, network.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list networks: %w", err)
+	}
+
+	var result []*runtime.NetworkInfo
+	for _, net := range networks {
+		var containers []string
+		for containerID := range net.Containers {
+			containers = append(containers, containerID)
+		}
+
+		result = append(result, &runtime.NetworkInfo{
+			ID:         net.ID,
+			Name:       net.Name,
+			Driver:     net.Driver,
+			Containers: containers,
+			Labels:     net.Labels,
+		})
+	}
+
+	return result, nil
+}
+
+// NetworkExists checks if a Docker network exists
+func (d *DockerRuntime) NetworkExists(ctx context.Context, name string) (bool, error) {
+	_, err := d.client.NetworkInspect(ctx, name, network.InspectOptions{})
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to inspect network %s: %w", name, err)
+	}
+	return true, nil
+}
+
+// ConnectContainerToNetwork connects a container to a network
+func (d *DockerRuntime) ConnectContainerToNetwork(ctx context.Context, containerName, networkName string) error {
+	err := d.client.NetworkConnect(ctx, networkName, containerName, &network.EndpointSettings{})
+	if err != nil {
+		return fmt.Errorf("failed to connect container %s to network %s: %w", containerName, networkName, err)
+	}
+
+	log.Info().Str("container", containerName).Str("network", networkName).Msg("Container connected to network")
+	return nil
+}
+
+// DisconnectContainerFromNetwork disconnects a container from a network
+func (d *DockerRuntime) DisconnectContainerFromNetwork(ctx context.Context, containerName, networkName string) error {
+	err := d.client.NetworkDisconnect(ctx, networkName, containerName, false)
+	if err != nil {
+		return fmt.Errorf("failed to disconnect container %s from network %s: %w", containerName, networkName, err)
+	}
+
+	log.Info().Str("container", containerName).Str("network", networkName).Msg("Container disconnected from network")
+	return nil
 }

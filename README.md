@@ -41,6 +41,7 @@ podman push registry.mydomain.com/myapp:latest
 - **Push-to-Deploy**: New images deploy instantly
 - **Multi-Domain Routing**: Unlimited apps with automatic HTTPS via Cloudflare
 - **Zero-Downtime Updates**: Graceful container swaps
+- **Network Isolation**: Each app gets its own isolated network with attached services (databases, caches, etc.)
 - **Auto-Route Creation** (Optional): Push `myapp.mydomain.com:latest` → route created automatically
 - **Auto-Volume Management**: Zero-config persistent storage from Dockerfile VOLUME directives
 - **Auto-Environment Injection**: Dockerfile ENV directives automatically merge with your custom environment variables
@@ -332,6 +333,12 @@ password = "your-secure-password"    # No default (required when enabled)
 [routes]
 "app.mydomain.com" = "myapp:latest"  # Default: {} (empty map)
 # Routes default to HTTPS unless prefixed with http://
+
+# Network isolation - each app gets its own isolated network
+[attachments]
+"app.mydomain.com" = ["my-postgres:latest", "my-redis:latest"]
+# Services accessible via: postgres:5432, redis:6379 (internal DNS)
+# Create custom Dockerfiles with VOLUME directives for persistence
 
 [auto_route]
 enabled = false                      # Default: false

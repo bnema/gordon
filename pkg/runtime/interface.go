@@ -15,6 +15,15 @@ type Container struct {
 	Labels   map[string]string
 }
 
+// NetworkInfo represents a network
+type NetworkInfo struct {
+	ID          string
+	Name        string
+	Driver      string
+	Containers  []string
+	Labels      map[string]string
+}
+
 // ContainerConfig holds configuration for creating a container
 type ContainerConfig struct {
 	Image       string
@@ -26,6 +35,9 @@ type ContainerConfig struct {
 	Cmd         []string
 	AutoRemove  bool
 	Volumes     map[string]string // map[containerPath]volumeName
+	NetworkMode string            // Network to join
+	Hostname    string            // Container hostname for DNS
+	Aliases     []string          // Additional network aliases
 }
 
 // Runtime interface defines the contract for container runtime implementations
@@ -69,4 +81,12 @@ type Runtime interface {
 	
 	// Environment inspection
 	InspectImageEnv(ctx context.Context, imageRef string) ([]string, error)
+	
+	// Network management
+	CreateNetwork(ctx context.Context, name string, options map[string]string) error
+	RemoveNetwork(ctx context.Context, name string) error
+	ListNetworks(ctx context.Context) ([]*NetworkInfo, error)
+	NetworkExists(ctx context.Context, name string) (bool, error)
+	ConnectContainerToNetwork(ctx context.Context, containerName, networkName string) error
+	DisconnectContainerFromNetwork(ctx context.Context, containerName, networkName string) error
 }
