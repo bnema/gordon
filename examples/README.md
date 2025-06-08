@@ -130,11 +130,119 @@ compress = true                  # Compress old log files
 See [`logging.toml`](logging.toml) for comprehensive logging examples.
 
 ### Environment Variables
-For production, use environment variables for sensitive data:
+Gordon intelligently merges environment variables from multiple sources:
+
+1. **Dockerfile ENV directives** (automatically detected)
+2. **Your .env files** (override Dockerfile ENV)
+3. **Runtime environment** (lowest priority)
+
+#### Dockerfile ENV (Automatic Detection)
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+
+# Gordon automatically reads these ENV directives
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV LOG_LEVEL=info
+ENV DATABASE_HOST=localhost
+
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]
+```
+
+#### Custom Environment Files
+Create `.env` files for each route: `./data/env/app_yourdomain_com.env`
+```bash
+# Your custom overrides (these take precedence over Dockerfile ENV)
+DATABASE_HOST=db.mydomain.com
+DATABASE_USER=myapp
+DATABASE_PASSWORD=${pass:myapp/db-password}
+API_KEY=${sops:secrets.yaml:api_key}
+# NODE_ENV, PORT, LOG_LEVEL from Dockerfile are preserved
+```
+
+#### Final Applied Environment
+```bash
+NODE_ENV=production          # From Dockerfile ENV
+PORT=3000                    # From Dockerfile ENV
+LOG_LEVEL=info              # From Dockerfile ENV
+DATABASE_HOST=db.mydomain.com # From .env (overridden)
+DATABASE_USER=myapp         # From .env (new)
+DATABASE_PASSWORD=secret123  # From .env via pass
+API_KEY=abc123              # From .env via SOPS
+```
+
+#### Production Environment Variables
+For sensitive production data:
 ```bash
 export GORDON_REGISTRY_PASSWORD="your-secure-password"
 export GORDON_SSL_EMAIL="admin@your-domain.com"
 ```
+
+### Volume Management
+Gordon automatically creates persistent volumes from Dockerfile VOLUME directives:
+
+#### Dockerfile VOLUME (Automatic Detection)
+```dockerfile
+FROM postgres:15
+# Gordon automatically creates persistent volumes for these paths
+VOLUME ["/var/lib/postgresql/data"]
+
+# Multi-volume example
+FROM myapp:latest
+VOLUME ["/app/data", "/app/logs", "/app/uploads"]
+```
+
+#### Volume Features
+- **Zero Configuration**: Reads VOLUME directives automatically
+- **Persistent Storage**: Data survives container restarts and updates
+- **Predictable Naming**: `gordon-{domain}-{path-hash}` format
+- **Cross-Platform**: Works with Docker and Podman
+
+#### Volume Configuration (Optional)
+```toml
+[volumes]
+auto_create = true    # Default: true (automatically handle VOLUME directives)
+prefix = "gordon"     # Default: "gordon" (volume name prefix)
+preserve = true       # Default: true (keep volumes when containers are removed)
+```
+
+#### Complete Dockerfile Example
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+
+# Environment variables (automatically merged with your .env files)
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV LOG_LEVEL=info
+
+# Install dependencies
+COPY package*.json ./
+RUN npm install
+
+# Copy application code
+COPY . .
+
+# Persistent storage (automatically managed by Gordon)
+VOLUME ["/app/data", "/app/logs"]
+
+# Network configuration
+EXPOSE 3000
+
+# Start command
+CMD ["npm", "start"]
+```
+
+When you deploy this image:
+- Gordon reads ENV directives and merges with your .env files
+- Gordon creates volumes for `/app/data` and `/app/logs`
+- Your data persists across deployments and reboots
+- Environment variables are intelligently managed
 
 ## 🌐 DNS Configuration
 

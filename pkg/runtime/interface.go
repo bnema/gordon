@@ -66,4 +66,7 @@ type Runtime interface {
 	VolumeExists(ctx context.Context, volumeName string) (bool, error)
 	CreateVolume(ctx context.Context, volumeName string) error
 	RemoveVolume(ctx context.Context, volumeName string, force bool) error
+	
+	// Environment inspection
+	InspectImageEnv(ctx context.Context, imageRef string) ([]string, error)
 }
