@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gordon/internal/config"
+	"gordon/internal/env"
 	"gordon/pkg/runtime"
 )
 
@@ -17,6 +18,7 @@ type Manager struct {
 	runtime    runtime.Runtime
 	config     *config.Config
 	containers map[string]*runtime.Container // map[domain] -> container
+	envLoader  *env.Loader
 	mu         sync.RWMutex
 }
 
@@ -43,10 +45,34 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		log.Info().Str("runtime", cfg.Server.Runtime).Str("version", version).Msg("Container runtime connected")
 	}
 
+	// Create environment loader
+	envLoader := env.NewLoader(cfg)
+	
+	// Register secret providers based on config
+	for _, providerName := range cfg.Env.Providers {
+		switch providerName {
+		case "pass":
+			envLoader.RegisterSecretProvider("pass", env.NewPassProvider())
+		case "sops":
+			envLoader.RegisterSecretProvider("sops", env.NewSopsProvider())
+		}
+	}
+	
+	// Ensure env directory exists
+	if err := envLoader.EnsureEnvDir(); err != nil {
+		log.Warn().Err(err).Msg("Failed to ensure env directory exists")
+	}
+
+	// Create empty env files for all configured routes (if they don't exist)
+	if err := envLoader.CreateEnvFilesForRoutes(); err != nil {
+		log.Warn().Err(err).Msg("Failed to create env files for routes")
+	}
+
 	return &Manager{
 		runtime:    rt,
 		config:     cfg,
 		containers: make(map[string]*runtime.Container),
+		envLoader:  envLoader,
 	}, nil
 }
 
@@ -183,11 +209,19 @@ func (m *Manager) DeployContainer(ctx context.Context, route config.Route) (*run
 		exposedPorts = []int{80, 8080, 3000} // Fallback to common web server ports
 	}
 
+	// Load environment variables for this route
+	envVars, err := m.envLoader.LoadEnvForRoute(route.Domain)
+	if err != nil {
+		log.Error().Err(err).Str("domain", route.Domain).Msg("Failed to load environment variables for route")
+		return nil, fmt.Errorf("failed to load environment variables for %s: %w", route.Domain, err)
+	}
+
 	// Create container configuration
 	containerConfig := &runtime.ContainerConfig{
 		Image: imageRef,
 		Name:  fmt.Sprintf("gordon-%s", route.Domain),
 		Ports: exposedPorts,
+		Env:   envVars,
 		Labels: map[string]string{
 			"gordon.domain":  route.Domain,
 			"gordon.image":   route.Image,
@@ -585,6 +619,19 @@ func (m *Manager) HealthCheck(ctx context.Context) map[string]bool {
 // Runtime returns the underlying runtime interface
 func (m *Manager) Runtime() runtime.Runtime {
 	return m.runtime
+}
+
+// UpdateConfig updates the manager's configuration and creates env files for new routes
+func (m *Manager) UpdateConfig(cfg *config.Config) {
+	m.config = cfg
+	
+	// Update env loader config
+	m.envLoader.UpdateConfig(cfg)
+	
+	// Create env files for any new routes
+	if err := m.envLoader.CreateEnvFilesForRoutes(); err != nil {
+		log.Warn().Err(err).Msg("Failed to create env files for new routes during config update")
+	}
 }
 
 // normalizeImageRef normalizes image references for comparison

@@ -1,0 +1,41 @@
+# Gordon v2 - Minimal Configuration Example
+# Perfect for getting started
+
+[server]
+port = 8080
+registry_port = 5000
+registry_domain = "registry.local"
+
+[registry_auth]
+enabled = false  # Disabled for simplicity
+
+# Environment variables (optional)
+[env]
+dir = "./data/env"  # Default location
+
+# Simple routes
+[routes]
+"app.local" = "myapp:latest"
+"api.local" = "myapi:latest"
+
+# Usage:
+# 1. Create env files (optional):
+#    ./data/env/app_local.env
+#    ./data/env/api_local.env
+#
+# 2. Example env file content:
+#    NODE_ENV=production
+#    PORT=3000
+#    DATABASE_URL=postgresql://localhost:5432/app
+#
+# 3. Add to /etc/hosts:
+#    127.0.0.1  app.local
+#    127.0.0.1  api.local
+#    127.0.0.1  registry.local
+#
+# 4. Build and push:
+#    docker build -t myapp:latest .
+#    docker tag myapp:latest registry.local/myapp:latest
+#    docker push registry.local/myapp:latest
+#
+# 5. Access at http://app.local:8080

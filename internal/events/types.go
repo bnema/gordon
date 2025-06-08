@@ -10,6 +10,7 @@ const (
 	ImagePushed          EventType = "image.pushed"
 	ImageDeleted         EventType = "image.deleted"
 	ConfigReload         EventType = "config.reload"
+	ManualReload         EventType = "manual.reload"
 	ContainerStop        EventType = "container.stop"
 	ContainerStart       EventType = "container.start"
 	ContainerHealthCheck EventType = "container.health_check"

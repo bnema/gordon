@@ -15,6 +15,13 @@ enabled = false  # Disable auth for easier local development
 [auto_route]
 enabled = true  # Enable automatic route creation from image names
 
+# Environment variables configuration
+[env]
+# Directory where .env files are stored for each route
+dir = "./dev-data/env"
+# Secret providers (optional for development)
+providers = ["pass"]  # For development secrets
+
 # Development routes using your domain
 [routes]
 "app.yourdomain.com" = "myapp:latest"           # Main app - latest build
@@ -30,16 +37,29 @@ enabled = true  # Enable automatic route creation from image names
 "db-admin.yourdomain.com" = "phpmyadmin:latest" # Database admin
 "mail.yourdomain.com" = "mailhog/mailhog:latest" # Email testing
 
+# Environment Variables Usage:
+# 
+# For development, create .env files for your routes:
+# ./dev-data/env/app_yourdomain_com.env
+# ./dev-data/env/api_yourdomain_com.env
+# 
+# Example env file content:
+# NODE_ENV=development
+# DEBUG=true
+# DATABASE_URL=postgresql://localhost:5432/dev
+# API_KEY=${pass:dev/api-key}  # Optional: use pass for dev secrets
+
 # Development workflow:
 # 1. Point DNS to your Gordon server:
 #    A    *.yourdomain.com    →    YOUR_GORDON_SERVER_IP
 #    A    yourdomain.com      →    YOUR_GORDON_SERVER_IP
 #
 # 2. Build your app: docker build -t myapp:latest .
-# 3. Push to Gordon registry: 
+# 3. Create env file: ./dev-data/env/app_yourdomain_com.env
+# 4. Push to Gordon registry: 
 #    docker tag myapp:latest registry.yourdomain.com/myapp:latest
 #    docker push registry.yourdomain.com/myapp:latest
-# 4. Access at https://app.yourdomain.com
+# 5. Access at https://app.yourdomain.com
 #
 # AUTO-ROUTE FEATURE:
 # With auto_route.enabled = true, you can also push images with domain names as image names:

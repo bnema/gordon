@@ -29,8 +29,8 @@ podman build -t myapp .
 podman run -p 8080:8080 myapp  # Works? Great!
 
 # 2. Push to deploy
-podman tag myapp registry.yourdomain.com/myapp:latest
-podman push registry.yourdomain.com/myapp:latest
+podman tag myapp registry.mydomain.com/myapp:latest
+podman push registry.mydomain.com/myapp:latest
 
 # 3. That's it. Gordon deploys it automatically.
 ```
@@ -43,10 +43,10 @@ Something broke? Just change your config:
 
 ```toml
 # Before (in gordon.toml)
-"app.yourdomain.com" = "myapp:latest"
+"app.mydomain.com" = "myapp:latest"
 
 # After - instant rollback!
-"app.yourdomain.com" = "myapp:v1.2.3"
+"app.mydomain.com" = "myapp:v1.2.3"
 ```
 
 Save the file. Gordon redeploys the previous version. Problem solved in seconds.
@@ -54,7 +54,7 @@ Save the file. Gordon redeploys the previous version. Problem solved in seconds.
 ## Key Features
 
 ### Local-First Development
-**Your machine is the build server.** Test locally with Podman's rootless containers, push when ready. No waiting for remote builds.
+**Your machine is the build server.** Test locally with your favorite container engine, push when ready. No waiting for remote builds.
 
 ### Built-in Container Registry
 Your VPS becomes a private container registry (Docker/Podman compatible). No Docker Hub subscription needed.
@@ -124,10 +124,10 @@ systemctl --user enable --now podman.socket
 mkdir -p ~/.config/containers
 tee ~/.config/containers/registries.conf > /dev/null <<EOF
 [registries.search]
-registries = ['docker.io', 'registry.yourdomain.com']
+registries = ['docker.io', 'registry.mydomain.com']
 
 [registries.insecure]
-registries = ['registry.yourdomain.com']
+registries = ['registry.mydomain.com']
 
 [registries.block]
 registries = []
@@ -147,7 +147,7 @@ sudo mv gordon-linux-amd64 /usr/local/bin/gordon
 # (or use --config flag)
 [server]
 port = 8080
-registry_domain = "registry.yourdomain.com"
+registry_domain = "registry.mydomain.com"
 runtime = "podman-rootless"  # Can be auto, docker, podman, podman-rootless
 
 [registry_auth]
@@ -156,9 +156,9 @@ username = "admin"
 password = "your-secure-password"
 
 [routes]
-"app.yourdomain.com" = "myapp:latest"
-"api.yourdomain.com" = "api:v1"
-"blog.yourdomain.com" = "wordpress:latest"
+"app.mydomain.com" = "myapp:latest"
+"api.mydomain.com" = "api:v1"
+"blog.mydomain.com" = "wordpress:latest"
 
 [auto_route]
 enabled = false  # Enable automatic route creation
@@ -169,8 +169,8 @@ enabled = false  # Enable automatic route creation
 
 ### 7. Point Cloudflare DNS
 ```
-A    *.yourdomain.com    →    YOUR_VPS_IP
-A    yourdomain.com      →    YOUR_VPS_IP
+A    *.mydomain.com    →    YOUR_VPS_IP
+A    mydomain.com      →    YOUR_VPS_IP
 ```
 
 ### 8. Create Systemd Service (Rootless)
@@ -211,13 +211,13 @@ systemctl --user status gordon
 ```bash
 # Now from your local development machine:
 # Authenticate with your Gordon registry
-podman login registry.yourdomain.com
+podman login registry.mydomain.com
 # Use the username/password from your gordon.toml config
 
 # Deploy your first app (using podman)
-podman tag myapp:latest registry.yourdomain.com/myapp:latest
-podman push registry.yourdomain.com/myapp:latest
-# Visit https://app.yourdomain.com
+podman tag myapp:latest registry.mydomain.com/myapp:latest
+podman push registry.mydomain.com/myapp:latest
+# Visit https://app.mydomain.com
 ```
 
 ## Real-World Examples
@@ -231,13 +231,13 @@ podman build -t myapp .
 podman run -p 3000:3000 myapp  # Test it!
 
 # 2. In gordon.toml, point your domain to the 'latest' tag
-# "app.yourdomain.com" = "myapp:latest"
+# "app.mydomain.com" = "myapp:latest"
 
 # 3. Tag your image as 'latest' for your registry
-podman tag myapp registry.yourdomain.com/myapp:latest
+podman tag myapp registry.mydomain.com/myapp:latest
 
 # 4. Push to deploy
-podman push registry.yourdomain.com/myapp:latest
+podman push registry.mydomain.com/myapp:latest
 
 # Gordon automatically detects the push and deploys the new 'latest' version.
 ```
@@ -247,20 +247,18 @@ For more control, especially in production, you can use a combination of version
 
 ```bash
 # 1. Always push a specific version tag first. This creates a history.
-podman tag myapp registry.yourdomain.com/myapp:v1.0.1
-podman push registry.yourdomain.com/myapp:v1.0.1
+podman tag myapp registry.mydomain.com/myapp:v1.0.1
+podman push registry.mydomain.com/myapp:v1.0.1
 
 # 2. Test the new version on a staging domain.
 # In gordon.toml:
-"staging.yourdomain.com" = "myapp:v1.0.1"
+"staging.mydomain.com" = "myapp:v1.0.1"
+# Get your production route ready :
+"app.mydomain.com" = "myapp:latest"
 
 # 3. Once tested and confirmed, promote it to production by updating 'latest'.
-# This assumes 'myapp' still refers to the image for v1.0.1
-podman tag myapp registry.yourdomain.com/myapp:latest
-podman push registry.yourdomain.com/myapp:latest
-
-# Your production route, which follows 'latest', will now be updated automatically.
-# "app.yourdomain.com" = "myapp:latest"
+podman tag myapp registry.mydomain.com/myapp:latest
+podman push registry.mydomain.com/myapp:latest
 ```
 
 ### Instant Rollback When Things Break
@@ -269,10 +267,10 @@ podman push registry.yourdomain.com/myapp:latest
 # Just edit gordon.toml to point to a previously pushed, stable version tag:
 
 # From:
-"app.yourdomain.com" = "myapp:latest"
+"app.mydomain.com" = "myapp:latest"
 
 # To:
-"app.yourdomain.com" = "myapp:v1.0.0"
+"app.mydomain.com" = "myapp:v1.0.0"
 
 # Save the file. Gordon redeploys the stable version in seconds. No scripts, no drama.
 ```
@@ -295,8 +293,8 @@ When you push an image with a domain name as the image name, Gordon automaticall
 podman build -t myapp .
 
 # Tag with domain name as the image name
-podman tag myapp:latest registry.yourdomain.com/myapp.mydomain.dev:latest
-podman push registry.yourdomain.com/myapp.mydomain.dev:latest
+podman tag myapp:latest registry.mydomain.com/myapp.mydomain.dev:latest
+podman push registry.mydomain.com/myapp.mydomain.dev:latest
 
 # Gordon automatically creates:
 # "myapp.mydomain.dev" = "myapp.mydomain.dev:latest"
@@ -309,11 +307,11 @@ podman push registry.yourdomain.com/myapp.mydomain.dev:latest
 podman build -t myapp .
 
 # Push to different test domains using image names
-podman tag myapp:latest registry.yourdomain.com/staging.example.com:latest
-podman push registry.yourdomain.com/staging.example.com:latest
+podman tag myapp:latest registry.mydomain.com/staging.example.com:latest
+podman push registry.mydomain.com/staging.example.com:latest
 
-podman tag myapp:latest registry.yourdomain.com/demo.example.com:v1.0.0
-podman push registry.yourdomain.com/demo.example.com:v1.0.0
+podman tag myapp:latest registry.mydomain.com/demo.example.com:v1.0.0
+podman push registry.mydomain.com/demo.example.com:v1.0.0
 
 # Both automatically get their own routes:
 # staging.example.com -> staging.example.com:latest
@@ -358,7 +356,7 @@ A: You can in theory, but exposing databases on the internet is risky. Database/
 A: Runs comfortably on 1GB RAM VPS. Gordon itself uses <15MB of RAM.
 
 **Q: What about secrets?**  
-A: Use environment variables in your container or Docker secrets. Gordon doesn't interfere.
+A: Gordon provides built-in environment variable support with secret management via `pass` and `sops`. See the Environment Variables section below.
 
 **Q: How does auto-route creation work?**  
 A: When enabled, Gordon watches for pushed images with domain names as image names (like `staging.example.com:latest`) and automatically creates routes. Perfect for testing deployments without manual config edits.
@@ -420,7 +418,126 @@ Gordon automatically detects available container runtimes in this order:
 2. **Podman rootless** (`$XDG_RUNTIME_DIR/podman/podman.sock`)
 3. **Podman root** (`/run/podman/podman.sock`) 
 
-### Port binding
+### Environment Variables & Secret Management
+
+Gordon supports per-route environment variables with secure secret management.
+
+#### Configuration
+```toml
+[env]
+# Directory where .env files are stored for each route
+dir = "./data/env"  # Default location
+# Secret providers for secure credential management
+providers = ["pass", "sops"]  # Unix password manager and SOPS
+```
+
+#### Creating Environment Files
+Gordon automatically creates empty `.env` files for all configured routes when it starts up. The files are named after the domain with special characters replaced by underscores:
+
+```bash
+# Gordon automatically creates these files for you:
+# For route "app.mydomain.com"
+./data/env/app_mydomain_com.env
+
+# For route "api-v2.mydomain.com" 
+./data/env/api-v2_mydomain_com.env
+```
+
+#### Environment File Format
+When Gordon creates env files automatically, they include helpful comments and examples.
+
+**Security:** Gordon creates the env directory with `0700` permissions and env files with `0600` permissions (owner read/write only) to protect sensitive information.
+
+```bash
+# ./data/env/app_mydomain_com.env (automatically created by Gordon)
+# Environment variables for route: app.mydomain.com
+# Image: myapp:latest
+
+NODE_ENV=production
+PORT=3000
+DATABASE_URL=postgresql://localhost:5432/prod
+
+# Secret references (resolved at container start)
+API_KEY=${pass:company/api-key}
+JWT_SECRET=${sops:secrets.yaml:app.jwt_secret}
+```
+
+#### Secret Providers
+
+**Unix Password Manager (pass)**
+```bash
+# Store secrets with pass
+pass insert company/api-key
+pass insert company/database-password
+
+# Reference in .env files
+API_KEY=${pass:company/api-key}
+DB_PASSWORD=${pass:company/database-password}
+```
+
+**SOPS (Secrets OPerationS)**
+```bash
+# Create encrypted YAML file
+sops secrets.yaml
+
+# secrets.yaml content:
+# app:
+#   jwt_secret: "super-secret-key"
+#   database_url: "postgresql://user:pass@db:5432/prod"
+
+# Reference in .env files
+JWT_SECRET=${sops:secrets.yaml:app.jwt_secret}
+DATABASE_URL=${sops:secrets.yaml:app.database_url}
+```
+
+#### How It Works
+1. Gordon loads the `.env` file for each route during container deployment
+2. Secret references (`${provider:path}`) are resolved using the configured providers
+3. Environment variables are passed to the container at startup
+4. Missing env files are silently ignored (optional env vars)
+5. Secret resolution failures cause deployment to fail for security
+
+#### Examples
+
+**Development Setup**
+```toml
+# gordon.toml
+[env]
+dir = "./dev-data/env"
+providers = ["pass"]  # Optional for dev secrets
+
+[routes]
+"app.local" = "myapp:latest"
+```
+
+```bash
+# ./dev-data/env/app_local.env
+NODE_ENV=development
+DEBUG=true
+DATABASE_URL=postgresql://localhost:5432/dev
+API_KEY=${pass:dev/api-key}  # Optional: use pass for dev secrets
+```
+
+**Production Setup**
+```toml
+# gordon.toml
+[env]
+dir = "/var/lib/gordon/env"
+providers = ["pass", "sops"]
+
+[routes]
+"app.company.com" = "company-app:v2.1.0"
+```
+
+```bash
+# /var/lib/gordon/env/app_company_com.env
+NODE_ENV=production
+DATABASE_URL=postgresql://user:${pass:company/db-password}@db:5432/prod
+API_KEY=${sops:company-secrets.yaml:api.key}
+JWT_SECRET=${sops:company-secrets.yaml:jwt.secret}
+```
+
+### Port Binding
 Gordon requires your Dockerfile to explicitly expose ports using the `EXPOSE` instruction. When multiple ports are exposed, Gordon will use the first exposed port for HTTP traffic.
 
 Example Dockerfile:
@@ -432,10 +549,10 @@ EXPOSE 8080
 ### Registry Operations
 ```bash
 # List images
-curl -u admin:password https://registry.yourdomain.com/v2/_catalog
+curl -u admin:password https://registry.mydomain.com/v2/_catalog
 
 # List tags
-curl -u admin:password https://registry.yourdomain.com/v2/myapp/tags/list
+curl -u admin:password https://registry.mydomain.com/v2/myapp/tags/list
 ```
 
 ## Contributing

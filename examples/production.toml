@@ -15,6 +15,13 @@ enabled = true
 username = "deploy-bot"
 password = "CHANGE-THIS-IN-PRODUCTION"  # Use environment variables in production!
 
+# Environment variables configuration
+[env]
+# Directory where .env files are stored for each route
+dir = "/var/lib/gordon/env"
+# Secret providers for secure credential management
+providers = ["pass", "sops"]
+
 # Production service routes
 [routes]
 "app.company.com" = "company-app:v2.1.0"           # Main app with pinned version
@@ -27,10 +34,27 @@ password = "CHANGE-THIS-IN-PRODUCTION"  # Use environment variables in productio
 "grafana.company.com" = "grafana/grafana:latest"   # Metrics dashboard
 "prometheus.company.com" = "prom/prometheus:latest" # Metrics collection
 
+# Environment Variables Usage:
+# 
+# For each route, create a .env file named after the domain:
+# /var/lib/gordon/env/app_company_com.env
+# /var/lib/gordon/env/api_company_com.env
+# 
+# Example env file content:
+# NODE_ENV=production
+# DATABASE_URL=postgresql://user:pass@db:5432/prod
+# API_KEY=${pass:company/api-key}              # From pass
+# SECRET_KEY=${sops:secrets.yaml:app.secret}   # From sops
+# 
+# Secret syntax:
+# ${pass:path/to/secret}        - Unix password manager
+# ${sops:file.yaml:key.path}    - SOPS encrypted file
+
 # Production deployment workflow:
 # 1. Build and tag: docker build -t company-app:v2.1.1 .
 # 2. Tag for registry: docker tag company-app:v2.1.1 registry.company.com/company-app:v2.1.1  
 # 3. Update this config: "app.company.com" = "company-app:v2.1.1"
-# 4. Restart Gordon to reload config
-# 5. Push to deploy: docker push registry.company.com/company-app:v2.1.1
-# 6. Gordon automatically deploys to app.company.com!
+# 4. Create/update env file: /var/lib/gordon/env/app_company_com.env
+# 5. Restart Gordon to reload config
+# 6. Push to deploy: docker push registry.company.com/company-app:v2.1.1
+# 7. Gordon automatically deploys to app.company.com with environment variables!
