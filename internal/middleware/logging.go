@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"gordon/internal/logging"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,8 +58,8 @@ func RequestLogger(next http.Handler) http.Handler {
 		// Calculate duration
 		duration := time.Since(start)
 		
-		// Log the request
-		log.Info().
+		// Log the request using proxy logger
+		logging.ProxyLogger.Info().
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Str("query", r.URL.RawQuery).
@@ -119,8 +120,8 @@ func ContainerRequestLogger(containerID string, domain string) func(http.Handler
 			// Calculate duration
 			duration := time.Since(start)
 			
-			// Log the request with container information
-			log.Info().
+			// Log the request with container information using proxy logger
+			logging.ProxyLogger.Info().
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Str("query", r.URL.RawQuery).

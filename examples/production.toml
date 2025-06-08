@@ -15,6 +15,21 @@ enabled = true
 username = "deploy-bot"
 password = "CHANGE-THIS-IN-PRODUCTION"  # Use environment variables in production!
 
+# Production logging configuration
+[logging]
+enabled = true                    # Enable comprehensive logging
+level = "info"                    # Standard production logging level
+dir = "/var/log/gordon"           # System log directory
+main_log_file = "gordon.log"      # Main application logs
+proxy_log_file = "proxy.log"      # HTTP proxy traffic logs
+container_log_dir = "containers"  # Container logs subdirectory
+
+# Production log rotation settings
+max_size = 100                    # Max 100MB per log file
+max_backups = 10                  # Keep 10 old files for history
+max_age = 90                      # Keep logs for 3 months
+compress = true                   # Compress old logs to save space
+
 # Environment variables configuration
 [env]
 # Directory where .env files are stored for each route

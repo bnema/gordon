@@ -9,6 +9,12 @@ registry_domain = "registry.local"
 [registry_auth]
 enabled = false  # Disabled for simplicity
 
+# Optional: Enable basic logging
+# [logging]
+# enabled = true
+# level = "info"
+# dir = "./logs"
+
 # Environment variables (optional)
 [env]
 dir = "./data/env"  # Default location

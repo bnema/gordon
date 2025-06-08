@@ -39,6 +39,13 @@ This directory contains configuration examples for different use cases and envir
 - Shared application architecture
 - Enterprise features
 
+### 📊 [`logging.toml`](logging.toml)
+**Comprehensive logging configuration**
+- Complete logging setup examples
+- Different logging levels and configurations
+- Production and development logging strategies
+- Log rotation and monitoring examples
+
 ## 🚀 Quick Start
 
 1. **Choose an example** that matches your use case
@@ -95,6 +102,26 @@ export CONTAINER_HOST=unix:///custom/path/container.sock
 export CONTAINER_HOST=tcp://remote-docker:2376
 gordon start
 ```
+
+### Logging Configuration
+Enable comprehensive logging to monitor your deployments:
+```toml
+[logging]
+enabled = true                    # Enable file-based logging
+level = "info"                   # Log level: trace, debug, info, warn, error
+dir = "./logs"                   # Directory for log files
+main_log_file = "gordon.log"     # Main application logs
+proxy_log_file = "proxy.log"     # HTTP proxy traffic logs
+container_log_dir = "containers" # Container logs subdirectory
+
+# Log rotation settings
+max_size = 100                   # Max log file size in MB
+max_backups = 5                  # Number of old log files to keep
+max_age = 30                     # Max age in days
+compress = true                  # Compress old log files
+```
+
+See [`logging.toml`](logging.toml) for comprehensive logging examples.
 
 ### Environment Variables
 For production, use environment variables for sensitive data:

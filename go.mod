@@ -10,6 +10,8 @@ require (
 	github.com/spf13/viper v1.20.1
 )
 
+require gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+
 require (
 	github.com/Microsoft/go-winio v0.4.14 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
