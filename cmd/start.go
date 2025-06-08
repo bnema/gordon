@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -46,6 +48,12 @@ func runStart(cmd *cobra.Command, args []string) {
 	log.Info().Int("registry_port", cfg.Server.RegistryPort).Msg("Registry server")
 	log.Info().Int("proxy_port", cfg.Server.Port).Msg("Proxy server")
 	log.Info().Str("runtime", cfg.Server.Runtime).Msg("Container runtime")
+	
+	// Create PID file for reload command
+	pidFile := createPidFile()
+	if pidFile != "" {
+		defer removePidFile(pidFile)
+	}
 
 	// Initialize event bus
 	eventBus := events.NewInMemoryEventBus(100)
@@ -117,6 +125,9 @@ func runStart(cmd *cobra.Command, args []string) {
 
 			// Update proxy server config
 			proxyServer.UpdateConfig(cfg)
+
+			// Update container manager config (includes env file creation for new routes)
+			manager.UpdateConfig(cfg)
 
 			// Unsubscribe old handlers before creating new ones
 			if err := eventBus.Unsubscribe(containerHandler); err != nil {
@@ -194,10 +205,30 @@ func runStart(cmd *cobra.Command, args []string) {
 		}
 	}()
 
-	// Wait for interrupt signal
+	// Wait for interrupt or reload signals
 	sigChan := make(chan os.Signal, 1)
+	reloadChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
+	signal.Notify(reloadChan, syscall.SIGUSR1)
+	
+	// Handle signals in a loop
+	for {
+		select {
+		case <-sigChan:
+			log.Info().Msg("Received shutdown signal")
+			goto shutdown
+		case <-reloadChan:
+			log.Info().Msg("Received manual reload signal (SIGUSR1)")
+			// Trigger manual reload event
+			if err := eventBus.Publish(events.ManualReload, nil); err != nil {
+				log.Error().Err(err).Msg("Failed to publish manual reload event")
+			} else {
+				log.Info().Msg("Manual reload event published successfully")
+			}
+		}
+	}
+
+shutdown:
 
 	log.Info().Msg("Shutting down servers...")
 	cancel()
@@ -228,5 +259,40 @@ func runStart(cmd *cobra.Command, args []string) {
 		log.Info().Msg("Servers stopped gracefully")
 	case <-time.After(10 * time.Second):
 		log.Warn().Msg("Force shutdown after timeout")
+	}
+}
+
+// createPidFile creates a PID file for the Gordon process
+func createPidFile() string {
+	pid := os.Getpid()
+	
+	// Try multiple locations for the PID file
+	locations := []string{
+		"/tmp/gordon.pid",
+		filepath.Join(os.TempDir(), "gordon.pid"),
+	}
+	
+	// Also try user's home directory
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		locations = append(locations, filepath.Join(homeDir, ".gordon.pid"))
+	}
+	
+	for _, location := range locations {
+		if err := os.WriteFile(location, []byte(fmt.Sprintf("%d", pid)), 0644); err == nil {
+			log.Debug().Str("pid_file", location).Int("pid", pid).Msg("Created PID file")
+			return location
+		}
+	}
+	
+	log.Warn().Int("pid", pid).Msg("Failed to create PID file in any location")
+	return ""
+}
+
+// removePidFile removes the PID file
+func removePidFile(pidFile string) {
+	if err := os.Remove(pidFile); err != nil {
+		log.Warn().Err(err).Str("pid_file", pidFile).Msg("Failed to remove PID file")
+	} else {
+		log.Debug().Str("pid_file", pidFile).Msg("Removed PID file")
 	}
 }

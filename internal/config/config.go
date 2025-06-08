@@ -16,6 +16,7 @@ type Config struct {
 	RegistryAuth RegistryAuthConfig `mapstructure:"registry_auth"`
 	Routes       map[string]string `mapstructure:"routes"`
 	AutoRoute    AutoRouteConfig   `mapstructure:"auto_route"`
+	Env          EnvConfig         `mapstructure:"env"`
 }
 
 type ServerConfig struct {
@@ -38,6 +39,16 @@ type AutoRouteConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 }
 
+type EnvConfig struct {
+	Dir       string   `mapstructure:"dir"`
+	Providers []string `mapstructure:"providers"`
+}
+
+type SecretProvider struct {
+	Type   string            `mapstructure:"type"`
+	Config map[string]string `mapstructure:"config"`
+}
+
 type Route struct {
 	Domain string
 	Image  string
@@ -58,6 +69,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("server.data_dir", defaultDataDir)
 	viper.SetDefault("registry_auth.enabled", true)
 	viper.SetDefault("auto_route.enabled", false)
+	viper.SetDefault("env.dir", filepath.Join(defaultDataDir, "env"))
+	viper.SetDefault("env.providers", []string{"pass", "sops"})
 
 	// Handle the routes manually since Viper struggles with domain names
 	cfg.Routes = make(map[string]string)
@@ -87,6 +100,17 @@ func Load() (*Config, error) {
 	// Get auto route config
 	if err := viper.UnmarshalKey("auto_route", &cfg.AutoRoute); err != nil {
 		return nil, fmt.Errorf("unable to decode auto route config: %v", err)
+	}
+
+	// Get env config
+	if err := viper.UnmarshalKey("env", &cfg.Env); err != nil {
+		return nil, fmt.Errorf("unable to decode env config: %v", err)
+	}
+
+	// If env.dir is empty after loading config, use the default
+	if cfg.Env.Dir == "" {
+		cfg.Env.Dir = filepath.Join(cfg.Server.DataDir, "env")
+		log.Debug().Str("env_dir", cfg.Env.Dir).Msg("Config had empty env.dir, using default")
 	}
 	
 	// Get routes manually from the raw config
@@ -129,6 +153,11 @@ func Load() (*Config, error) {
 		if strings.Contains(cfg.Server.RegistryDomain, "://") || strings.Contains(cfg.Server.RegistryDomain, "/") {
 			return nil, fmt.Errorf("registry_domain should be just the domain name (e.g. 'registry.example.com')")
 		}
+	}
+
+	// Validate env config
+	if err := validateEnvConfig(&cfg.Env); err != nil {
+		return nil, fmt.Errorf("invalid env config: %w", err)
 	}
 
 	return &cfg, nil
@@ -266,6 +295,50 @@ func (c *Config) AddRoute(domain, image string) error {
 		Str("domain", domain).
 		Str("image", image).
 		Msg("Auto-added route to configuration")
+
+	// Create env file for the new route (if env loader is available)
+	// This will be called from the auto-route handler which has access to the env loader
 	
+	return nil
+}
+
+// validateEnvConfig validates the environment configuration
+func validateEnvConfig(envCfg *EnvConfig) error {
+	// Validate env directory path
+	if envCfg.Dir != "" {
+		if filepath.IsAbs(envCfg.Dir) {
+			// For absolute paths, check if the directory is accessible
+			if info, err := os.Stat(envCfg.Dir); err != nil {
+				if !os.IsNotExist(err) {
+					return fmt.Errorf("env.dir path is not accessible: %w", err)
+				}
+				// Directory doesn't exist - that's okay, it will be created
+			} else if !info.IsDir() {
+				return fmt.Errorf("env.dir path exists but is not a directory: %s", envCfg.Dir)
+			}
+		}
+		// For relative paths, we can't easily validate without changing working directory
+	}
+
+	// Validate secret providers configuration
+	validProviders := []string{"pass", "sops"}
+	for _, providerName := range envCfg.Providers {
+		if providerName == "" {
+			return fmt.Errorf("empty provider name in env.providers")
+		}
+		
+		isValid := false
+		for _, validType := range validProviders {
+			if providerName == validType {
+				isValid = true
+				break
+			}
+		}
+		if !isValid {
+			return fmt.Errorf("unsupported provider '%s' in env.providers. Supported providers: %s", 
+				providerName, strings.Join(validProviders, ", "))
+		}
+	}
+
 	return nil
 }

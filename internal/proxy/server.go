@@ -285,3 +285,4 @@ func (h *ProxyEventHandler) Handle(event events.Event) error {
 	return fmt.Errorf("unsupported event type: %s", event.Type)
 }
 
+

@@ -25,7 +25,7 @@ func NewContainerEventHandler(manager *container.Manager, config *config.Config)
 
 func (h *ContainerEventHandler) CanHandle(eventType EventType) bool {
 	switch eventType {
-	case ImagePushed, ConfigReload, ContainerStop, ContainerStart:
+	case ImagePushed, ConfigReload, ManualReload, ContainerStop, ContainerStart:
 		return true
 	default:
 		return false
@@ -38,6 +38,8 @@ func (h *ContainerEventHandler) Handle(event Event) error {
 		return h.handleImagePushed(event)
 	case ConfigReload:
 		return h.handleConfigReload(event)
+	case ManualReload:
+		return h.handleManualReload(event)
 	case ContainerStop:
 		return h.handleContainerStop(event)
 	case ContainerStart:
@@ -164,6 +166,47 @@ func (h *ContainerEventHandler) handleConfigReload(event Event) error {
 		}
 	}
 	
+	return nil
+}
+
+func (h *ContainerEventHandler) handleManualReload(event Event) error {
+	log.Info().
+		Str("event_id", event.ID).
+		Msg("Processing manual reload event - redeploying all containers with updated environment variables")
+	
+	ctx := context.Background()
+	routes := h.config.GetRoutes()
+	redeployedCount := 0
+	var errors []error
+	
+	// Redeploy each container to pick up new environment variables
+	for _, route := range routes {
+		// Check if container exists for this route
+		if _, exists := h.manager.GetContainer(route.Domain); !exists {
+			log.Debug().Str("domain", route.Domain).Msg("No container found for route, skipping")
+			continue
+		}
+		
+		log.Info().Str("domain", route.Domain).Str("image", route.Image).Msg("Redeploying container with updated environment variables")
+		
+		// Deploy container (this will stop the old one and start a new one with updated env vars)
+		_, err := h.manager.DeployContainer(ctx, route)
+		if err != nil {
+			log.Error().Str("domain", route.Domain).Err(err).Msg("Failed to redeploy container during manual reload")
+			errors = append(errors, fmt.Errorf("failed to redeploy container for %s: %w", route.Domain, err))
+			continue
+		}
+		
+		redeployedCount++
+		log.Info().Str("domain", route.Domain).Msg("Container redeployed successfully with updated environment variables")
+	}
+	
+	if len(errors) > 0 {
+		log.Warn().Int("redeployed", redeployedCount).Int("errors", len(errors)).Msg("Manual reload completed with some errors")
+		return fmt.Errorf("manual reload completed with %d errors: %v", len(errors), errors)
+	}
+	
+	log.Info().Int("redeployed", redeployedCount).Int("total", len(routes)).Msg("Manual reload completed successfully")
 	return nil
 }
 
