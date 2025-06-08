@@ -15,6 +15,12 @@ enabled = false  # Disable auth for easier local development
 [auto_route]
 enabled = true  # Enable automatic route creation from image names
 
+# Volume configuration - auto-creates persistent storage from VOLUME directives
+[volumes]
+auto_create = true    # Default: true (automatically handle VOLUME directives)
+prefix = "gordon"     # Default: "gordon" (volume name prefix)
+preserve = true       # Default: true (keep volumes when containers are removed)
+
 # Logging configuration for development
 [logging]
 enabled = true                    # Enable file-based logging
@@ -82,5 +88,10 @@ providers = ["pass"]  # For development secrets
 #    docker tag myapp:latest registry.yourdomain.com/mytestapp.bamen.dev:latest  
 #    docker push registry.yourdomain.com/mytestapp.bamen.dev:latest
 # Gordon will automatically create a route for mytestapp.bamen.dev -> mytestapp.bamen.dev:latest
+#
+# VOLUME FEATURE:
+# Add VOLUME directives to your Dockerfile for automatic persistent storage:
+#    VOLUME ["/app/data", "/app/uploads"]
+# Gordon automatically creates and mounts persistent volumes - no config needed!
 #
 # Cloudflare handles SSL and DNS for your remote Gordon server!
