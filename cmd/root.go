@@ -4,12 +4,18 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 var cfgFile string
+
+// Version information set by main.go from goreleaser
+var (
+	BuildVersion = "dev"
+	BuildCommit  = "unknown"
+	BuildDate    = "unknown"
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "gordon",
@@ -20,6 +26,13 @@ with an intelligent reverse proxy and automated deployment system.`,
 
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+// SetVersionInfo sets the build information from main.go
+func SetVersionInfo(version, commit, date string) {
+	BuildVersion = version
+	BuildCommit = commit
+	BuildDate = date
 }
 
 func init() {
@@ -61,8 +74,8 @@ func initConfig() {
 	} else {
 		if cfgFile != "" {
 			fmt.Fprintf(os.Stderr, "Error reading config file: %v\n", err)
-		} else {
-			log.Fatal().Msg("config file not found - please specify with --config flag or ensure gordon.toml exists in current directory")
 		}
+		// Don't fatal for version command - config not needed
+		// Other commands will check for config when needed
 	}
 }
