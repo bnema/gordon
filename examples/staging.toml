@@ -1,0 +1,55 @@
+# Gordon v2 - Staging Configuration Example  
+# For testing and preview environments
+
+[server]
+port = 8080
+registry_port = 5000
+registry_domain = "staging-registry.company.com"
+runtime = "auto"  # auto-detects Docker/Podman
+ssl_email = "devops@company.com"
+data_dir = "./data"
+
+[registry_auth]
+enabled = true
+username = "staging-user"
+password = "staging-pass-123"
+
+# Staging logging configuration
+[logging]
+enabled = true                    # Enable logging for staging debugging
+level = "debug"                   # Verbose logging for troubleshooting
+dir = "./staging-logs"            # Staging-specific log directory
+main_log_file = "gordon.log"      # Main application logs
+proxy_log_file = "proxy.log"      # HTTP proxy traffic logs
+container_log_dir = "containers"  # Container logs subdirectory
+
+# Staging log rotation settings
+max_size = 50                     # Moderate file sizes for staging
+max_backups = 5                   # Keep reasonable history
+max_age = 30                      # Keep logs for 1 month
+compress = true                   # Compress to save space
+
+# Staging environment routes - using branch-based deployments
+[routes]
+"staging.company.com" = "company-app:staging"         # Main staging branch
+"staging-api.company.com" = "company-api:staging"     # API staging
+
+# Feature branch testing
+"feature-auth.company.com" = "company-app:feature-auth"     # Feature branch: auth improvements
+"feature-ui.company.com" = "company-app:feature-ui-redesign" # Feature branch: UI updates
+"hotfix-123.company.com" = "company-app:hotfix-user-login"  # Hotfix branch
+
+# PR preview environments
+"pr-42.company.com" = "company-app:pr-42"            # Pull request #42 preview
+"pr-55.company.com" = "company-app:pr-55"            # Pull request #55 preview
+
+# Development tools
+"staging-admin.company.com" = "admin-panel:develop"   # Admin panel dev version
+
+# Staging workflow:
+# 1. Developer pushes feature branch
+# 2. CI builds and tags: company-app:feature-auth  
+# 3. CI pushes: docker push staging-registry.company.com/company-app:feature-auth
+# 4. Gordon auto-deploys to feature-auth.company.com
+# 5. Team tests at https://feature-auth.company.com
+# 6. Merge to staging → auto-deploy to staging.company.com

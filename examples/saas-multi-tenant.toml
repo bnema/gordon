@@ -1,0 +1,51 @@
+# Gordon v2 - Multi-Tenant SaaS Configuration Example
+# For SaaS platforms with customer subdomains
+
+[server]
+port = 8080
+registry_port = 5000
+registry_domain = "registry.saas-platform.com" 
+runtime = "auto"  # auto-detects Docker/Podman
+ssl_email = "ops@saas-platform.com"
+data_dir = "/var/lib/gordon"
+
+[registry_auth]
+enabled = true
+username = "deploy"
+password = "secure-deployment-key"
+
+# Multi-tenant customer routes
+[routes]
+# Main platform services
+"app.saas-platform.com" = "saas-frontend:v2.1.0"      # Marketing site
+"admin.saas-platform.com" = "saas-admin:v1.5.0"       # Admin dashboard
+"api.saas-platform.com" = "saas-api:v3.2.1"           # Main API
+
+# Customer tenant subdomains
+"acme-corp.saas-platform.com" = "saas-app:v2.1.0"      # Customer: Acme Corp
+"beta-inc.saas-platform.com" = "saas-app:v2.1.0"       # Customer: Beta Inc  
+"gamma-llc.saas-platform.com" = "saas-app:v2.1.0"      # Customer: Gamma LLC
+
+# Enterprise customers with custom domains
+"portal.acme-corp.com" = "saas-app:v2.1.0"             # Acme's custom domain
+"app.beta-inc.com" = "saas-app:v2.1.0"                 # Beta's custom domain
+
+# Staging/testing tenants
+"demo.saas-platform.com" = "saas-app:latest"           # Demo environment
+"staging-tenant.saas-platform.com" = "saas-app:staging" # Staging tests
+
+# Support tools
+"status.saas-platform.com" = "status-page:v1.0.0"      # Status page
+"docs.saas-platform.com" = "documentation:v2.0.0"      # Customer docs
+
+# Multi-tenant deployment strategy:
+# 1. Single application image serves all tenants
+# 2. Tenant identification via subdomain/domain
+# 3. Application handles tenant routing internally
+# 4. Each tenant gets isolated data/configuration
+# 5. Rolling updates deploy to all tenants simultaneously
+#
+# Scaling strategy:
+# - Start with shared containers (same image, tenant routing)
+# - Move to dedicated containers per tenant if needed
+# - Use Gordon's event system for tenant provisioning automation
