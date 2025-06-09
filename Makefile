@@ -21,7 +21,7 @@ LDFLAGS := -s -w \
 ARCHS := amd64 arm64
 
 # Phony targets
-.PHONY: all build build-push clean dev-release
+.PHONY: all build build-push clean dev-release test test-unit test-coverage test-race clean-test
 
 # Default target
 all: build
@@ -91,6 +91,24 @@ dev-release: build
 	@echo "  ARM64: wget https://github.com/bnema/gordon/releases/download/$(DEV_TAG)/gordon-linux-arm64"
 	@echo ""
 	@echo "🔗 Release page: https://github.com/bnema/gordon/releases/tag/$(DEV_TAG)"
+
+# Test targets
+test: test-unit
+
+test-unit:
+	go test -v ./...
+
+test-race:
+	go test -race -v ./...
+
+test-coverage:
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
+
+clean-test:
+	rm -f coverage.out coverage.html
 
 # Clean up
 clean:

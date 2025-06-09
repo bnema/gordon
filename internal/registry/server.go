@@ -3,10 +3,12 @@ package registry
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"gordon/internal/config"
 	"gordon/internal/events"
@@ -44,17 +46,145 @@ func NewServer(cfg *config.Config, eventBus events.EventBus) (*Server, error) {
 }
 
 func (s *Server) setupRoutes() {
-	// Docker Registry API v2 endpoints using Go 1.22+ ServeMux patterns
-	s.mux.HandleFunc("GET /v2/", s.handleBase)
-	s.mux.HandleFunc("HEAD /v2/{name}/manifests/{reference}", s.handleGetManifest)
-	s.mux.HandleFunc("GET /v2/{name}/manifests/{reference}", s.handleGetManifest)
-	s.mux.HandleFunc("PUT /v2/{name}/manifests/{reference}", s.handlePutManifest)
-	s.mux.HandleFunc("HEAD /v2/{name}/blobs/{digest}", s.handleGetBlob)
-	s.mux.HandleFunc("GET /v2/{name}/blobs/{digest}", s.handleGetBlob)
-	s.mux.HandleFunc("POST /v2/{name}/blobs/uploads/", s.handleStartBlobUpload)
-	s.mux.HandleFunc("PATCH /v2/{name}/blobs/uploads/{uuid}", s.handleBlobUpload)
-	s.mux.HandleFunc("PUT /v2/{name}/blobs/uploads/{uuid}", s.handleBlobUpload)
-	s.mux.HandleFunc("GET /v2/{name}/tags/list", s.handleListTags)
+	// Docker Registry API v2 endpoints
+	// Use traditional patterns since repository names can contain slashes
+	s.mux.HandleFunc("/v2/", s.handleRegistryRoutes)
+}
+
+func (s *Server) handleRegistryRoutes(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	
+	// Route manifest operations: /v2/{name}/manifests/{reference}
+	if strings.Contains(path, "/manifests/") {
+		s.handleManifestRoutes(w, r)
+		return
+	}
+	
+	// Route blob operations: /v2/{name}/blobs/{digest}
+	if strings.Contains(path, "/blobs/") && !strings.Contains(path, "/uploads/") {
+		s.handleBlobRoutes(w, r)
+		return
+	}
+	
+	// Route blob upload operations: /v2/{name}/blobs/uploads/
+	if strings.Contains(path, "/blobs/uploads/") {
+		s.handleBlobUploadRoutes(w, r)
+		return
+	}
+	
+	// Route tag list operations: /v2/{name}/tags/list
+	if strings.Contains(path, "/tags/list") {
+		s.handleTagListRoutes(w, r)
+		return
+	}
+	
+	// Base endpoint: /v2/
+	if path == "/v2/" {
+		s.handleBase(w, r)
+		return
+	}
+	
+	http.NotFound(w, r)
+}
+
+func (s *Server) handleManifestRoutes(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /v2/{name}/manifests/{reference}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v2/"), "/")
+	if len(parts) < 3 || parts[len(parts)-2] != "manifests" {
+		http.NotFound(w, r)
+		return
+	}
+	
+	reference := parts[len(parts)-1]
+	name := strings.Join(parts[:len(parts)-2], "/")
+	
+	// Set path values for compatibility with existing handlers
+	r.SetPathValue("name", name)
+	r.SetPathValue("reference", reference)
+	
+	switch r.Method {
+	case "HEAD", "GET":
+		s.handleGetManifest(w, r)
+	case "PUT":
+		s.handlePutManifest(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleBlobRoutes(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /v2/{name}/blobs/{digest}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v2/"), "/")
+	if len(parts) < 3 || parts[len(parts)-2] != "blobs" {
+		http.NotFound(w, r)
+		return
+	}
+	
+	digest := parts[len(parts)-1]
+	name := strings.Join(parts[:len(parts)-2], "/")
+	
+	r.SetPathValue("name", name)
+	r.SetPathValue("digest", digest)
+	
+	switch r.Method {
+	case "HEAD", "GET":
+		s.handleGetBlob(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleBlobUploadRoutes(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /v2/{name}/blobs/uploads/{uuid?}
+	path := strings.TrimPrefix(r.URL.Path, "/v2/")
+	uploadIndex := strings.Index(path, "/blobs/uploads/")
+	if uploadIndex == -1 {
+		http.NotFound(w, r)
+		return
+	}
+	
+	name := path[:uploadIndex]
+	uploadPart := path[uploadIndex+15:] // len("/blobs/uploads/") = 15
+	
+	r.SetPathValue("name", name)
+	
+	if uploadPart == "" {
+		// POST /v2/{name}/blobs/uploads/
+		switch r.Method {
+		case "POST":
+			s.handleStartBlobUpload(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	} else {
+		// PATCH/PUT /v2/{name}/blobs/uploads/{uuid}
+		r.SetPathValue("uuid", uploadPart)
+		switch r.Method {
+		case "PATCH", "PUT":
+			s.handleBlobUpload(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func (s *Server) handleTagListRoutes(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /v2/{name}/tags/list
+	path := strings.TrimPrefix(r.URL.Path, "/v2/")
+	if !strings.HasSuffix(path, "/tags/list") {
+		http.NotFound(w, r)
+		return
+	}
+	
+	name := strings.TrimSuffix(path, "/tags/list")
+	r.SetPathValue("name", name)
+	
+	switch r.Method {
+	case "GET":
+		s.handleListTags(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleBase(w http.ResponseWriter, r *http.Request) {
@@ -255,8 +385,15 @@ func (s *Server) handleListTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Construct the response JSON
-	response := fmt.Sprintf(`{"name":"%s","tags":%s}`, name, tags)
+	// Construct the response JSON properly
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		log.Error().Err(err).Str("name", name).Msg("Failed to marshal tags to JSON")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	
+	response := fmt.Sprintf(`{"name":"%s","tags":%s}`, name, string(tagsJSON))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(response)))
@@ -304,4 +441,26 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Info().Msg("Registry server shutting down...")
 		return server.Shutdown(context.Background())
 	}
+}
+
+// ServeHTTP implements http.Handler interface
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mux.ServeHTTP(w, r)
+}
+
+// GetHandler returns the handler with middleware applied (for testing)
+func (s *Server) GetHandler() http.Handler {
+	// Build middleware chain
+	middlewares := []func(http.Handler) http.Handler{
+		middleware.PanicRecovery,
+		middleware.RequestLogger,
+	}
+
+	// Add registry authentication if enabled
+	if s.config.RegistryAuth.Enabled {
+		middlewares = append(middlewares, middleware.RegistryAuth(s.config.RegistryAuth.Username, s.config.RegistryAuth.Password))
+	}
+
+	// Wrap the mux with middleware
+	return middleware.Chain(middlewares...)(s.mux)
 }
