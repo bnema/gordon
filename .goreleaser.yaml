@@ -24,7 +24,7 @@ builds:
 dockers:
   - image_templates:
       - "ghcr.io/bnema/gordon:{{ .Tag }}-amd64"
-    use: buildx
+    use: podman
     dockerfile: Dockerfile
     goarch: amd64
     build_flag_templates:
@@ -38,7 +38,7 @@ dockers:
       - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
   - image_templates:
       - "ghcr.io/bnema/gordon:{{ .Tag }}-arm64"
-    use: buildx
+    use: podman
     dockerfile: Dockerfile
     goarch: arm64
     build_flag_templates:
