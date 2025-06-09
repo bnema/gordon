@@ -21,45 +21,9 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 
-dockers:
-  - image_templates:
-      - "ghcr.io/bnema/gordon:{{ .Tag }}-amd64"
-    use: podman
-    dockerfile: Dockerfile
-    goarch: amd64
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/amd64"
-      - "--build-arg=ARCH=amd64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
-  - image_templates:
-      - "ghcr.io/bnema/gordon:{{ .Tag }}-arm64"
-    use: podman
-    dockerfile: Dockerfile
-    goarch: arm64
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/arm64"
-      - "--build-arg=ARCH=arm64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.source=https://github.com/bnema/gordon"
-
-docker_manifests:
-  - name_template: ghcr.io/bnema/gordon:{{ .Tag }}
-    image_templates:
-      - ghcr.io/bnema/gordon:{{ .Tag }}-amd64
-      - ghcr.io/bnema/gordon:{{ .Tag }}-arm64
-  - name_template: ghcr.io/bnema/gordon:latest
-    image_templates:
-      - ghcr.io/bnema/gordon:{{ .Tag }}-amd64
-      - ghcr.io/bnema/gordon:{{ .Tag }}-arm64
+# Docker builds disabled for v2.0.0 release (will add back with proper buildx setup)
+# dockers:
+# docker_manifests:
 
 archives:
   - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
