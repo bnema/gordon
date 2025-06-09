@@ -1,6 +1,70 @@
-# Gordon v2 Configuration Examples
+# Gordon Configuration Examples
 
 This directory contains configuration examples for different use cases and environments.
+
+## Full Configuration Reference
+
+Here's the complete Gordon configuration with all default values:
+
+```toml
+# gordon.toml - Complete configuration reference with defaults
+
+[server]
+port = 8080                          # HTTP/HTTPS proxy port (default: 8080)
+registry_port = 5000                 # Container registry port (default: 5000)
+registry_domain = ""                 # REQUIRED - Your registry domain (no default)
+runtime = "auto"                     # Container runtime (default: "auto")
+                                    # Options: auto, docker, podman, podman-rootless
+socket_path = ""                     # Custom socket path (default: "" - auto-detected)
+data_dir = "~/.local/share/gordon"   # Data directory (default: ~/.local/share/gordon)
+                                    # Root user default: ./data
+ssl_email = ""                       # Email for Let's Encrypt (default: "" - uses Cloudflare)
+
+[registry_auth]
+enabled = true                       # Enable registry authentication (default: true)
+username = ""                        # REQUIRED when enabled (no default)
+password = ""                        # REQUIRED when enabled (no default)
+
+[routes]
+# Domain to image mappings (default: empty)
+# "app.example.com" = "myapp:latest"
+# "api.example.com" = "myapi:v1.0.0"
+
+[network_groups]
+# Group domains for shared networking (default: empty)
+# "backend" = ["app.example.com", "api.example.com"]
+# "monitoring" = ["grafana.example.com", "prometheus.example.com"]
+
+[attachments]
+# Attach services to apps or groups (default: empty)
+# "app.example.com" = ["postgres:latest", "redis:latest"]
+# "backend" = ["shared-cache:latest", "message-queue:latest"]
+
+[auto_route]
+enabled = false                      # Auto-create routes from image names (default: false)
+
+[volumes]
+auto_create = true                   # Auto-create volumes from VOLUME directives (default: true)
+prefix = "gordon"                    # Volume name prefix (default: "gordon")
+preserve = true                      # Keep volumes when removing containers (default: true)
+
+[env]
+dir = "{data_dir}/env"              # Environment files directory (default: {data_dir}/env)
+providers = ["pass", "sops"]        # Secret providers (default: ["pass", "sops"])
+
+[logging]
+enabled = true                       # Enable file logging (default: true)
+level = "info"                      # Log level (default: "info")
+                                    # Options: trace, debug, info, warn, error, fatal, panic
+dir = "{data_dir}/logs"             # Log directory (default: {data_dir}/logs)
+main_log_file = "gordon.log"        # Main log file (default: "gordon.log")
+proxy_log_file = "proxy.log"        # Proxy log file (default: "proxy.log")
+container_log_dir = "containers"    # Container logs subdirectory (default: "containers")
+max_size = 100                      # Max log size in MB (default: 100)
+max_backups = 3                     # Number of old logs to keep (default: 3)
+max_age = 28                        # Days to keep old logs (default: 28)
+compress = true                     # Compress rotated logs (default: true)
+```
 
 ## 📁 Available Examples
 

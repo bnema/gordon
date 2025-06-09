@@ -1,22 +1,34 @@
 # Gordon
 
+> Deploy containers to your VPS in seconds, not hours. One push, zero complexity.
+
 <div align="center">
   <img src="assets/gordon-mascot-hq-trsp.png" alt="Gordon Mascot" width="200">
   <h3>The Smart Way to Deploy Containers on Your VPS</h3>
-  <p><em>Push image → Auto-deploy → Zero complexity</em></p>
+  <p><em>Push image → Auto-deploy → Zero downtime</em></p>
 </div>
 
-## Why Gordon?
+## What is Gordon?
 
-**You have a $5 VPS. You want to run multiple apps. You don't want complex CI/CD pipelines, expensive PaaS solutions, or overcomplicated orchestration.**
+Gordon is a lightweight deployment system that turns any VPS into a container hosting platform with push-to-deploy capabilities. It combines a private container registry with an intelligent reverse proxy to create a self-hosted alternative to complex orchestration systems.
 
-Gordon is the missing piece that makes container deployment on budget VPS servers as simple as expensive PaaS solutions. One binary, one config file, unlimited apps.
+### Key Features
+
+- **Built-in Container Registry**: Your VPS becomes a private registry
+- **Push-to-Deploy**: Pushing an image triggers automatic deployment
+- **Smart Routing**: Multi-domain support with automatic HTTPS
+- **Zero-Downtime Updates**: Graceful container swaps on new pushes
+- **Network Isolation**: Each app gets its own network with attached services
+- **Auto-Volume Management**: Persistent storage from Dockerfile VOLUME directives
+- **Environment Merging**: Dockerfile ENV + your custom variables
+- **Minimal Footprint**: ~15MB RAM usage, single binary
 
 ### Perfect For
-- **Solo developers** with multiple side projects on one VPS
-- **Small teams** who want Heroku-like simplicity without the cost
-- **Agencies** deploying client apps across VPS servers
-- **Anyone** tired of complex deployment pipelines
+
+- **Solo developers** running multiple projects on one VPS
+- **Small teams** wanting simple, reliable deployments
+- **Agencies** managing client applications across servers
+- **Anyone** tired of overengineered deployment solutions
 
 ## How It Works
 
@@ -29,96 +41,171 @@ podman run -p 8080:8080 myapp  # Works? Great!
 podman tag myapp registry.mydomain.com/myapp:latest
 podman push registry.mydomain.com/myapp:latest
 
-# 3. That's it. Gordon deploys it automatically.
+# 3. That's it. Gordon handles the rest.
 ```
 
-**No build servers. No CI/CD complexity. If it runs on your machine, it runs in production.**
-
-## Key Features
-
-- **Local-First Development**: Your machine is the build server
-- **Built-in Container Registry**: Your VPS becomes a private registry
-- **Push-to-Deploy**: New images deploy instantly
-- **Multi-Domain Routing**: Unlimited apps with automatic HTTPS via Cloudflare
-- **Zero-Downtime Updates**: Graceful container swaps
-- **Network Isolation**: Each app gets its own isolated network with attached services (databases, caches, etc.)
-- **Auto-Route Creation** (Optional): Push `myapp.mydomain.com:latest` → route created automatically
-- **Auto-Volume Management**: Zero-config persistent storage from Dockerfile VOLUME directives
-- **Auto-Environment Injection**: Dockerfile ENV directives automatically merge with your custom environment variables
+**Your machine is the build server. If it runs locally, it runs in production.**
 
 ## Quick Start (5 minutes)
 
-### 1. Setup VPS
-```bash
-# Install essentials on Ubuntu/Debian
-sudo apt update && sudo apt install -y podman ufw
+### Prerequisites
+- Ubuntu/Debian VPS with root access
+- Domain pointing to your VPS
+- Cloudflare account (free tier works)
 
-# Configure firewall
-sudo ufw --force enable
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow 22/tcp 80/tcp 443/tcp
-sudo ufw enable
+### Installation
+
+```bash
+# Download Gordon from the releases page
+# https://github.com/bnema/gordon/releases/latest
+# Example: wget https://github.com/bnema/gordon/releases/download/v2.0.0/gordon_2.0.0_linux_amd64.tar.gz
+# Then extract:
+tar -xzf gordon_*.tar.gz
+chmod +x gordon
+sudo mv gordon /usr/local/bin/
+
+# Create initial config
+gordon start
+# Press Ctrl+C after config is created
 ```
 
-### 2. Redirect Ports
+**Important:** This is just the binary installation. For a complete working setup including networking, firewall, and systemd service, follow the [detailed setup guide](#detailed-setup-guide) below.
+
+## Core Concepts
+
+### Local-First Development
+Your dev machine likely has 8-16 cores and 16-32GB RAM. Your VPS has 1-2 cores and 1-4GB RAM. Why build containers on the weak machine? Gordon lets you build locally and deploy the finished product.
+
+### Push-to-Deploy Workflow
 ```bash
-# Redirect 80/443 to 8080
+# Initial deployment
+podman build -t myapp .
+podman push registry.mydomain.com/myapp:latest
+# Visit https://app.mydomain.com
+
+# Update deployment
+podman build -t myapp .
+podman push registry.mydomain.com/myapp:latest
+# Zero-downtime update applied automatically
+```
+
+### Automatic Volume Management
+```dockerfile
+# In your Dockerfile
+FROM postgres:15
+VOLUME ["/var/lib/postgresql/data"]  # Gordon creates persistent storage
+
+FROM node:18
+VOLUME ["/app/uploads", "/app/data"]  # Multiple volumes supported
+```
+
+### Environment Configuration
+Gordon automatically creates and loads env files based on domain names:
+```bash
+# Auto-created on first run: ~/.local/share/gordon/env/app_mydomain_com.env
+# Just add your variables:
+DATABASE_URL=postgresql://localhost:5432/myapp
+API_KEY=sk-1234567890
+NODE_ENV=production
+```
+Supports secrets from `pass` and `SOPS`. See [examples/](examples/) for advanced usage.
+
+### Network Isolation
+Each app runs in its own isolated network by default. Attach services for internal communication:
+```toml
+[attachments]
+"app.mydomain.com" = ["my-postgres:latest", "my-redis:latest"]
+# Access services via hostname: my-postgres:5432, my-redis:6379
+```
+Gordon also supports network groups, see [examples/](examples/) for advanced usage.
+
+### Persistent Storage
+- **Volumes**: Automatically created from Dockerfile VOLUME directives, persist across updates
+
+### Production ready logging
+- **Logs**: All container output saved to `~/.local/share/gordon/logs/containers/`
+- **Rotation**: Logs rotate at 100MB, keeping 3 backups for 28 days
+
+## Configuration
+
+Gordon uses a single TOML file for all configuration:
+
+```toml
+# ~/.config/gordon/gordon.toml
+[server]
+registry_domain = "registry.mydomain.com"  # Required
+
+[registry_auth]
+username = "admin"                         # Choose your credentials
+password = "your-secure-password"          
+
+[routes]
+"app.mydomain.com" = "myapp:latest"        # Domain → Image mapping
+"api.mydomain.com" = "myapi:v2.1.0"        # Pin specific versions
+
+# Optional: Attach services to apps
+[attachments]
+"app.mydomain.com" = ["postgres:latest", "redis:latest"]
+# Services accessible via internal DNS: postgres:5432, redis:6379
+```
+
+See [examples/](examples/) for advanced configurations including network groups and more.
+
+## Detailed Setup Guide (Using podman in rootless mode)
+Note: Refer to Quick Start for the binary installation.
+
+### 1. VPS Preparation
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install podman and firewall
+sudo apt install -y podman ufw
+
+# Configure firewall
+sudo ufw allow 22/tcp 80/tcp 443/tcp
+sudo default deny
+sudo ufw --force enable
+```
+
+### 2. Enable Port Forwarding
+```bash
+# Forward 80/443 to unprivileged port 8080
 sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
 sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
+
+# Make persistent
 sudo apt install -y iptables-persistent
 sudo netfilter-persistent save
 ```
 
-### 3. Enable Rootless Containers
+### 3. Configure Rootless Containers
 ```bash
+# Enable user namespaces
 echo 'user.max_user_namespaces=28633' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
+
+# Setup subuid/subgid
 sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
+
+# Enable podman socket
 systemctl --user enable --now podman.socket
 ```
 
-### 4. Configure Registry
+### 4. Registry Configuration
 ```bash
 mkdir -p ~/.config/containers
-tee ~/.config/containers/registries.conf > /dev/null <<EOF
-[registries.search]
-registries = ['docker.io', 'registry.mydomain.com']
-
+cat > ~/.config/containers/registries.conf <<EOF
 [registries.insecure]
-registries = ['registry.mydomain.com']
+registries = ['localhost:5000']
 EOF
 ```
 
-### 5. Install Gordon
+### 5. Create Systemd Service
 ```bash
-wget https://github.com/bnema/gordon/releases/latest/download/gordon-linux-amd64
-chmod +x gordon-linux-amd64
-sudo mv gordon-linux-amd64 /usr/local/bin/gordon
-```
-
-### 6. Configure Gordon
-```bash
-# Gordon creates a default config file on first run
-# Edit it to set your registry domain and credentials:
-# gordon.toml location: ./ → ~/.config/gordon/ → ~/.gordon/ → ~/ → /etc/gordon/
-
-# Key settings to update:
-# - registry_domain = "registry.mydomain.com"
-# - registry_auth username/password
-# - routes for your domains
-```
-
-### 7. Point DNS
-```
-A    *.mydomain.com    →    YOUR_VPS_IP
-A    mydomain.com      →    YOUR_VPS_IP
-```
-
-### 8. Create Service
-```bash
+# Create user service
 mkdir -p ~/.config/systemd/user
-tee ~/.config/systemd/user/gordon.service > /dev/null <<EOF
+cat > ~/.config/systemd/user/gordon.service <<EOF
 [Unit]
 Description=Gordon Container Platform
 After=podman.socket
@@ -127,7 +214,6 @@ After=podman.socket
 Type=simple
 Restart=always
 RestartSec=5
-Environment=CONTAINER_HOST=unix://%t/podman/podman.sock
 ExecStart=/usr/local/bin/gordon start
 WorkingDirectory=%h
 
@@ -135,296 +221,67 @@ WorkingDirectory=%h
 WantedBy=default.target
 EOF
 
+# Enable and start service
 systemctl --user daemon-reload
 systemctl --user enable --now gordon
 sudo loginctl enable-linger $USER
+
+# Verify it's running
+systemctl --user status gordon
 ```
 
-### 9. Deploy Your First App
-```bash
-# From your dev machine:
-podman login registry.mydomain.com
-# (Use the credentials from your gordon.toml)
+## Deployment Strategies
 
-podman tag myapp:latest registry.mydomain.com/myapp:latest
-podman push registry.mydomain.com/myapp:latest
-# Visit https://app.mydomain.com
-```
-
-## Real-World Examples
-
-### Push-to-Deploy Workflow
+### Simple Deployment
 ```bash
 # Build locally
 podman build -t myapp .
 
-# Push latest = instant deploy
+# Test locally
+podman run -p 8080:8080 myapp
+
+# Push to registry
+podman tag myapp registry.mydomain.com/myapp:latest
 podman push registry.mydomain.com/myapp:latest
+
+# Profit!
 ```
 
-### Version Control & Rollbacks
-
-Gordon supports multiple rollback strategies. Choose the approach that fits your workflow:
-
-#### Method 1: Tag-Based Rollbacks (Simple)
+### Versioned Deployment
 ```bash
-# Tag and push a specific version
-podman tag myapp:v1.0.1 registry.mydomain.com/myapp:v1.0.1
-podman push registry.mydomain.com/myapp:v1.0.1
+# Deploy specific version
+podman tag myapp:v1.2.0 registry.mydomain.com/myapp:v1.2.0
+podman push registry.mydomain.com/myapp:v1.2.0
 
-# Tag and push latest (v1.0.2 in this example)
-podman tag myapp:v1.0.2 registry.mydomain.com/myapp:v1.0.2 && podman tag myapp:v1.0.2 registry.mydomain.com/myapp:latest
-podman push registry.mydomain.com/myapp:v1.0.2 && podman push registry.mydomain.com/myapp:latest
-
-# Rollback: Update gordon.toml and reload
-# From: "app.mydomain.com" = "myapp:latest"
-# To:   "app.mydomain.com" = "myapp:v1.0.1"
-# Then: systemctl --user reload gordon
+# Update route in gordon.toml
+# "app.mydomain.com" = "myapp:v1.2.0"
 ```
 
-#### Method 2: Manifest Annotation Deployment (Advanced)
+### Advanced: Manifest Annotations
 ```bash
-# Build and push your versioned images first
-export VERSION=v1.0.1
-podman build --tag myapp:$VERSION --tag registry.mydomain.com/myapp:$VERSION .
-podman push registry.mydomain.com/myapp:$VERSION
-
-export VERSION=v1.0.2
-podman build --tag myapp:$VERSION --tag registry.mydomain.com/myapp:$VERSION .
-podman push registry.mydomain.com/myapp:$VERSION
-
-# Deploy v1.0.2 with version annotation
-export VERSION=v1.0.2
+# Deploy with metadata
+export VERSION=v1.2.0
 podman manifest create myapp:latest
 podman manifest add myapp:latest registry.mydomain.com/myapp:$VERSION
 podman manifest annotate myapp:latest --annotation version=$VERSION registry.mydomain.com/myapp:$VERSION
 podman manifest push myapp:latest registry.mydomain.com/myapp:latest
-
-# Rollback to v1.0.1 (just change the version)
-export VERSION=v1.0.1
-podman manifest create myapp:latest --amend
-podman manifest add myapp:latest registry.mydomain.com/myapp:$VERSION
-podman manifest annotate myapp:latest --annotation version=$VERSION registry.mydomain.com/myapp:$VERSION
-podman manifest push myapp:latest registry.mydomain.com/myapp:latest
-# Gordon automatically deploys the specified version
 ```
 
-**Recommendation**: Use Method 2 for instant deployments without config file edits. Method 1 is best for simple workflows.
+## Community
 
-### Auto-Route Creation
-```toml
-[auto_route]
-enabled = true
-```
-
-```bash
-# Image name becomes route automatically
-podman push registry.mydomain.com/staging.example.com:latest
-# Creates: "staging.example.com" = "staging.example.com:latest"
-```
-
-## Persistent Data with Volumes
-
-Gordon automatically detects `VOLUME` directives in your Dockerfiles and creates persistent named volumes for your containers. **Zero configuration required** - just add `VOLUME` instructions to your Dockerfile.
-
-### How It Works
-
-```dockerfile
-# In your Dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-
-# Gordon automatically creates volumes for these paths
-VOLUME ["/app/data", "/app/uploads"]
-
-EXPOSE 3000
-CMD ["npm", "start"]
-```
-
-When you deploy this image, Gordon will:
-1. **Detect** the `VOLUME ["/app/data", "/app/uploads"]` directive
-2. **Create** named volumes like `gordon-app-example-com-a1b2c3d4` (one per path)
-3. **Mount** them to your container automatically
-4. **Preserve** data across container restarts and updates
-
-### Volume Features
-
-- **Automatic Detection**: No config needed - Gordon reads VOLUME directives from your images
-- **Persistent Storage**: Data survives container restarts, updates, and VPS reboots
-- **Zero Downtime**: Volumes re-attach instantly when containers restart
-- **Predictable Naming**: `gordon-{domain}-{path-hash}` format for easy identification
-- **Cross-Platform**: Works with Docker and Podman
-
-### Example Workflows
-
-#### Database Container
-```dockerfile
-FROM postgres:15
-# Gordon auto-creates persistent volume for PostgreSQL data
-VOLUME ["/var/lib/postgresql/data"]
-```
-
-#### Web App with File Uploads
-```dockerfile
-FROM nginx:alpine
-COPY dist/ /usr/share/nginx/html/
-# Gordon auto-creates persistent volume for user uploads
-VOLUME ["/usr/share/nginx/html/uploads"]
-```
-
-#### Multi-Volume Application
-```dockerfile
-FROM myapp:latest
-# Gordon creates separate volumes for each path
-VOLUME ["/app/data", "/app/logs", "/app/cache"]
-```
-
-### Volume Configuration (Optional)
-
-```toml
-[volumes]
-auto_create = true    # Default: true (set to false to disable)
-prefix = "gordon"     # Default: "gordon" (volume name prefix)
-preserve = true       # Default: true (keep volumes when removing containers)
-```
-
-**Most users never need to touch this configuration** - the defaults work perfectly for 99% of use cases.
-
-## Smart Environment & Volume Management
-
-Gordon automatically handles both environment variables and persistent storage with zero configuration:
-
-### Environment Variables
-- **Auto-Detection**: Reads `ENV` directives from your Dockerfile
-- **Smart Merging**: Your `.env` files override Dockerfile ENV values
-- **Secret Integration**: Supports `pass` and `SOPS` for sensitive data
-
-### Persistent Volumes  
-- **Auto-Detection**: Reads `VOLUME` directives from your Dockerfile
-- **Zero Configuration**: Creates and manages volumes automatically
-- **Data Persistence**: Survives container updates and reboots
-
-See [examples/](examples/) for detailed configuration examples.
-
-## Advanced Configuration
-
-### Full Config Structure (with default values)
-```toml
-# gordon.toml - Auto-generated on first run
-[server]
-port = 8080                          # Default: 8080
-registry_port = 5000                 # Default: 5000  
-registry_domain = "registry.mydomain.com"  # No default (required)
-runtime = "auto"                     # Default: "auto" (auto, docker, podman, podman-rootless)
-socket_path = ""                     # Default: "" (auto-detected)
-data_dir = "~/.local/share/gordon"   # Default: ~/.local/share/gordon (or ./data for root)
-ssl_email = ""                       # No default (optional)
-# runtime auto-detects: docker → podman-rootless → podman
-# Override with env: CONTAINER_HOST=unix:///custom/socket
-
-[registry_auth]
-enabled = true                       # Default: true
-username = "admin"                   # No default (required when enabled)
-password = "your-secure-password"    # No default (required when enabled)
-
-[routes]
-"app.mydomain.com" = "myapp:latest"  # Default: {} (empty map)
-# Routes default to HTTPS unless prefixed with http://
-
-# Network isolation - each app gets its own isolated network
-[attachments]
-"app.mydomain.com" = ["my-postgres:latest", "my-redis:latest"]
-# Services accessible via: postgres:5432, redis:6379 (internal DNS)
-# Create custom Dockerfiles with VOLUME directives for persistence
-
-[auto_route]
-enabled = false                      # Default: false
-
-[volumes]
-auto_create = true                   # Default: true (automatically create volumes from VOLUME directives)
-prefix = "gordon"                    # Default: "gordon" (volume name prefix)
-preserve = true                      # Default: true (keep volumes when containers are removed)
-# Volumes are auto-created from Dockerfile VOLUME directives
-# Naming: gordon-{domain}-{path-hash} (e.g., gordon-app-example-com-a1b2c3d4)
-
-[env]
-dir = "{data_dir}/env"              # Default: {data_dir}/env
-providers = ["pass", "sops"]        # Default: ["pass", "sops"]
-# Example env file: ./data/env/app_mydomain_com.env
-# NODE_ENV=production
-# DATABASE_URL=postgresql://localhost:5432/prod
-# API_KEY=${pass:company/api-key}      # Unix pass integration
-# JWT_SECRET=${sops:secrets.yaml:jwt}  # SOPS integration
-
-[logging]
-enabled = true                       # Default: true
-level = "info"                       # Default: "info" (debug, info, warn, error, fatal, panic)
-dir = "{data_dir}/logs"             # Default: {data_dir}/logs
-main_log_file = "gordon.log"        # Default: "gordon.log"
-proxy_log_file = "proxy.log"        # Default: "proxy.log"
-container_log_dir = "containers"    # Default: "containers"
-max_size = 100                      # Default: 100 (MB before rotation)
-max_backups = 3                     # Default: 3 (old files to keep)
-max_age = 28                        # Default: 28 (days to keep old files)
-compress = true                     # Default: true (gzip rotated logs)
-# Creates: gordon.log, proxy.log, containers/*.log
-```
-
-## FAQ
-
-**Q: How is this different from Traefik/Nginx Proxy Manager?**  
-A: Those are just reverse proxies. Gordon is a complete deployment platform with built-in registry, automatic deployment, and container lifecycle management.
-
-**Q: Where do builds happen?**  
-A: On YOUR machine. If it runs locally, it runs in production.
-
-**Q: How do I rollback?**  
-A: Change the version annotation in your manifest and push, or edit gordon.toml. Takes seconds.
-
-**Q: Do I need Cloudflare?**  
-A: Yes, for SSL certificates and DDoS protection.
-
-**Q: Resource requirements?**  
-A: Runs on 1GB RAM VPS. Gordon uses <15MB RAM.
-
-**Q: How do I check if volumes are working?**  
-A: Use `docker volume ls` or `podman volume ls` to see Gordon-managed volumes (named `gordon-*`).
-
-**Q: Can I disable automatic volumes?**  
-A: Yes, set `volumes.auto_create = false` in your gordon.toml config.
-
-**Q: What happens to my data when I update containers?**  
-A: Volumes are preserved by default. Your data persists across updates and reboots.
-
-**Q: How do I backup volume data?**  
-A: Volumes are regular Docker/Podman volumes - use standard backup tools like `docker run --rm -v volume_name:/data -v $(pwd):/backup alpine tar czf /backup/backup.tar.gz -C /data .`
-
-**Q: Do Dockerfile ENV directives work automatically?**  
-A: Yes! Gordon reads ENV directives from your images and merges them with your custom .env files.
-
-**Q: What happens if I set the same environment variable in both Dockerfile and .env?**  
-A: Your .env file always wins - custom environment variables override Dockerfile ENV directives.
-
-**Q: Can I see what environment variables are being applied?**  
-A: Yes, check Gordon's logs - it shows both Dockerfile ENV and final merged environment variables.
-
-**Q: Do I need to rebuild my images to change environment variables?**  
-A: No! Just update your .env files and reload Gordon. Dockerfile ENV provides defaults; .env provides overrides.
+Gordon is open source and welcomes contributions:
+- [Report bugs](https://github.com/bnema/gordon/issues)
+- [Suggest features](https://github.com/bnema/gordon/discussions)
+- [Submit PRs](https://github.com/bnema/gordon/pulls)
 
 ## Philosophy
 
+Traditional deployment pipelines recreate your development environment in CI/CD systems, adding complexity and points of failure. Gordon takes a different approach: **your development machine is already a perfect build environment**.
+
 ```bash
-# Traditional CI/CD
-push code → wait for build → hope it works → debug remotely → repeat
-
-# The Gordon Way
-build locally → test locally → push image → instant deploy
+# Traditional: Code → CI/CD → Build → Test → Deploy → Hope
+# Gordon:     Code → Build → Test → Push → Done
 ```
-
-Your machine already works. Why replicate it in CI/CD?
 
 ## License
 
@@ -432,7 +289,4 @@ GPL-3.0 - Use freely, contribute back.
 
 ---
 
-<div align="center">
-  <p><strong>Stop overcomplicating container deployment.</strong></p>
-  <p>Star this repo if Gordon saves you money!</p>
-</div>
+**Built for developers who ship.** If Gordon helps you deploy faster, [give it a star](https://github.com/bnema/gordon).
