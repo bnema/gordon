@@ -12,7 +12,6 @@ builds:
     binary: gordon
     goos:
       - linux
-      - windows
       - darwin
     goarch:
       - amd64
@@ -63,8 +62,7 @@ docker_manifests:
       - ghcr.io/bnema/gordon:{{ .Tag }}-arm64
 
 archives:
-  - format: zip
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 changelog:
   sort: asc
