@@ -1,0 +1,108 @@
+# Gordon v2 - Docker Compose Deployment Example
+# Complete containerized deployment with proper networking
+
+version: '3.8'
+
+services:
+  # Main Gordon service
+  gordon:
+    image: gordon:latest
+    container_name: gordon
+    restart: unless-stopped
+    
+    # Port mapping for Cloudflare → Gordon
+    ports:
+      - "80:8080"    # HTTP traffic (Cloudflare terminates SSL)
+      - "443:8080"   # HTTPS traffic (Cloudflare → HTTP to Gordon)
+    
+    volumes:
+      # Docker socket access for container management
+      - /var/run/docker.sock:/var/run/docker.sock
+      
+      # Data persistence
+      - ./gordon-data:/data
+      
+      # Configuration
+      - ./gordon.toml:/app/gordon.toml:ro
+      
+      # Optional: Mount Docker registry data
+      - ./registry-data:/data/registry
+    
+    environment:
+      - GORDON_LOG_LEVEL=info
+      - GORDON_CONFIG=/app/gordon.toml
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    networks:
+      - gordon-network
+    
+    # Security
+    user: "1000:1000"  # Run as non-root user
+    
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Optional: Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: gordon-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - gordon-network
+
+  # Optional: Grafana dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: gordon-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    networks:
+      - gordon-network
+
+networks:
+  gordon-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  prometheus-data:
+  grafana-data:
+
+# Usage:
+# 1. Create gordon.toml with your configuration
+# 2. Run: docker-compose up -d
+# 3. Check health: docker-compose ps
+# 4. View logs: docker-compose logs -f gordon
+# 5. Scale if needed: docker-compose up -d --scale gordon=2
