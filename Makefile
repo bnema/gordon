@@ -21,13 +21,65 @@ LDFLAGS := -s -w \
 ARCHS := amd64 arm64
 
 # Phony targets
-.PHONY: all build build-push clean dev-release test test-unit test-coverage test-race clean-test
+.PHONY: all build build-push clean dev-release \
+	test test-short test-race test-coverage \
+	lint fmt check mocks clean-test help
 
 # Default target
 all: build
 
-# Build binaries
-build:
+##@ Development
+
+help: ## Show this help
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+fmt: ## Format Go code
+	@echo "Formatting Go code..."
+	@go fmt ./...
+
+lint: ## Run golangci-lint
+	@echo "Running linter..."
+	@golangci-lint run ./...
+
+mocks: ## Generate mocks using mockery
+	@echo "Generating mocks..."
+	@mockery
+	@echo "Mocks generated successfully"
+
+check: lint test ## Run lint and tests
+
+##@ Testing
+
+test: ## Run all tests
+	@echo "Running tests..."
+	@go test ./...
+
+test-v: ## Run all tests with verbose output
+	@go test -v ./...
+
+test-short: ## Run tests (skip long-running tests)
+	@go test -short ./...
+
+test-race: ## Run tests with race detector
+	@echo "Running tests with race detector..."
+	@go test -race ./...
+
+test-coverage: ## Run tests with coverage report
+	@echo "Running tests with coverage..."
+	@go test -coverprofile=coverage.out ./...
+	@go tool cover -func=coverage.out
+	@go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
+test-usecase: ## Run usecase layer tests only
+	@go test -v ./internal/usecase/...
+
+test-adapter: ## Run adapter layer tests only
+	@go test -v ./internal/adapters/...
+
+##@ Build
+
+build: ## Build binaries for linux (amd64 and arm64)
 	@echo "Building Go binaries..."
 	@mkdir -p $(DIST_DIR)
 	@rm -f $(DIST_DIR)/*
@@ -36,8 +88,14 @@ build:
 	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/gordon-linux-arm64 ./main.go
 	@echo "Go binaries built successfully"
 
-# Build and push Docker images
-build-push: build
+build-local: ## Build binary for current platform
+	@echo "Building for current platform..."
+	@go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/gordon ./main.go
+	@echo "Binary built: $(DIST_DIR)/gordon"
+
+##@ Release
+
+build-push: build ## Build and push Docker images
 	@echo "Cleaning up dangling images..."
 	@$(ENGINE) image prune -f
 
@@ -69,8 +127,7 @@ build-push: build
 
 	@echo "Script completed successfully."
 
-# Create dev GitHub release (separate from GoReleaser)
-dev-release: build
+dev-release: build ## Create dev GitHub release
 	@echo "Creating dev GitHub release..."
 	@if [ -z "$(shell which gh)" ]; then \
 		echo "Error: GitHub CLI (gh) is not installed. Please install it first."; \
@@ -92,27 +149,15 @@ dev-release: build
 	@echo ""
 	@echo "🔗 Release page: https://github.com/bnema/gordon/releases/tag/$(DEV_TAG)"
 
-# Test targets
-test: test-unit
+##@ Cleanup
 
-test-unit:
-	go test -v ./...
-
-test-race:
-	go test -race -v ./...
-
-test-coverage:
-	go test -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report generated: coverage.html"
-
-
-clean-test:
-	rm -f coverage.out coverage.html
-
-# Clean up
-clean:
+clean: ## Clean build artifacts
 	@echo "Cleaning up..."
 	@rm -rf $(DIST_DIR)
-	@$(ENGINE) system prune -f
 	@echo "Cleanup completed."
+
+clean-all: clean clean-test ## Clean all artifacts including test files
+	@$(ENGINE) system prune -f
+
+clean-test: ## Clean test artifacts
+	@rm -f coverage.out coverage.html
