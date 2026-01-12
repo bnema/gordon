@@ -73,7 +73,7 @@ gordon start
 # Press Ctrl+C after config is created
 ```
 
-**Important:** This is just the binary installation. For a complete working setup including networking, firewall, and systemd service, follow the [detailed setup guide](#detailed-setup-guide) below.
+**Important:** This is just the binary installation. For a complete working setup including networking, firewall, and systemd service, follow the [detailed setup guide](#detailed-setup-guide-podman-rootless-mode) below.
 
 ## Core Concepts
 
