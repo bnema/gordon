@@ -13,6 +13,7 @@ const (
 	EventContainerStop        EventType = "container.stop"
 	EventContainerStart       EventType = "container.start"
 	EventContainerHealthCheck EventType = "container.health_check"
+	EventContainerDeployed    EventType = "container.deployed"
 )
 
 // Event represents a domain event that occurred in the system.
