@@ -33,16 +33,18 @@ Gordon is a lightweight deployment system that turns any VPS into a container ho
 ## How It Works
 
 ```bash
-# 1. Build & test locally
-podman build -t myapp .
-podman run -p 8080:8080 myapp  # Works? Great!
+# 1. Build & test locally (Docker or Podman)
+docker build -t myapp .
+docker run -p 8080:8080 myapp  # Works? Great!
 
 # 2. Push to deploy
-podman tag myapp registry.mydomain.com/myapp:latest
-podman push registry.mydomain.com/myapp:latest
+docker tag myapp registry.mydomain.com/myapp:latest
+docker push registry.mydomain.com/myapp:latest
 
 # 3. That's it. Gordon handles the rest.
 ```
+
+> **Note:** All examples use `docker` commands, but `podman` works as a drop-in replacement. Just substitute `docker` with `podman` in any command.
 
 **Your machine is the build server. If it runs locally, it runs in production.**
 
@@ -51,7 +53,9 @@ podman push registry.mydomain.com/myapp:latest
 ### Prerequisites
 - Ubuntu/Debian VPS with root access
 - Domain pointing to your VPS
-- Cloudflare account (free tier works)
+- Cloudflare account (free tier works) - **Required for HTTPS**
+
+> **HTTPS Architecture:** Cloudflare terminates HTTPS and proxies to Gordon over HTTP internally. Gordon doesn't handle TLS certificates directly (no Let's Encrypt support yet).
 
 ### Installation
 
@@ -79,13 +83,13 @@ Your dev machine likely has 8-16 cores and 16-32GB RAM. Your VPS has 1-2 cores a
 ### Push-to-Deploy Workflow
 ```bash
 # Initial deployment
-podman build -t myapp .
-podman push registry.mydomain.com/myapp:latest
+docker build -t myapp .
+docker push registry.mydomain.com/myapp:latest
 # Visit https://app.mydomain.com
 
 # Update deployment
-podman build -t myapp .
-podman push registry.mydomain.com/myapp:latest
+docker build -t myapp .
+docker push registry.mydomain.com/myapp:latest
 # Zero-downtime update applied automatically
 ```
 
@@ -151,8 +155,9 @@ password = "your-secure-password"
 
 See [examples/](examples/) for advanced configurations including network groups and more.
 
-## Detailed Setup Guide (Using podman in rootless mode)
-Note: Refer to Quick Start for the binary installation.
+## Detailed Setup Guide (Podman Rootless Mode)
+
+> **Note:** This guide uses Podman in rootless mode for enhanced security. Docker users can follow similar steps - Gordon works with any OCI-compatible runtime. Refer to Quick Start for the binary installation.
 
 ### 1. VPS Preparation
 ```bash
@@ -235,14 +240,14 @@ systemctl --user status gordon
 ### Simple Deployment
 ```bash
 # Build locally
-podman build -t myapp .
+docker build -t myapp .
 
 # Test locally
-podman run -p 8080:8080 myapp
+docker run -p 8080:8080 myapp
 
 # Push to registry
-podman tag myapp registry.mydomain.com/myapp:latest
-podman push registry.mydomain.com/myapp:latest
+docker tag myapp registry.mydomain.com/myapp:latest
+docker push registry.mydomain.com/myapp:latest
 
 # Profit!
 ```
@@ -250,8 +255,8 @@ podman push registry.mydomain.com/myapp:latest
 ### Versioned Deployment
 ```bash
 # Deploy specific version
-podman tag myapp:v1.2.0 registry.mydomain.com/myapp:v1.2.0
-podman push registry.mydomain.com/myapp:v1.2.0
+docker tag myapp:v1.2.0 registry.mydomain.com/myapp:v1.2.0
+docker push registry.mydomain.com/myapp:v1.2.0
 
 # Update route in gordon.toml
 # "app.mydomain.com" = "myapp:v1.2.0"
@@ -261,10 +266,10 @@ podman push registry.mydomain.com/myapp:v1.2.0
 ```bash
 # Deploy with metadata
 export VERSION=v1.2.0
-podman manifest create myapp:latest
-podman manifest add myapp:latest registry.mydomain.com/myapp:$VERSION
-podman manifest annotate myapp:latest --annotation version=$VERSION registry.mydomain.com/myapp:$VERSION
-podman manifest push myapp:latest registry.mydomain.com/myapp:latest
+docker manifest create myapp:latest
+docker manifest add myapp:latest registry.mydomain.com/myapp:$VERSION
+docker manifest annotate myapp:latest --annotation version=$VERSION registry.mydomain.com/myapp:$VERSION
+docker manifest push myapp:latest registry.mydomain.com/myapp:latest
 ```
 
 ## Community
