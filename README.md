@@ -40,20 +40,19 @@ Build on your machine, push to deploy. Works from your laptop or CI.
 ### Installation
 
 ```bash
-# Download Gordon from the releases page
-# https://github.com/bnema/gordon/releases/latest
-# Example: wget https://github.com/bnema/gordon/releases/download/v2.0.0/gordon_2.0.0_linux_amd64.tar.gz
-# Then extract:
-tar -xzf gordon_*.tar.gz
+# Download from releases
+wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
+tar -xzf gordon_linux_amd64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
 
-# Create initial config
-gordon start
-# Press Ctrl+C after config is created
+# Create config
+mkdir -p ~/.config/gordon
+cp examples/minimal.toml ~/.config/gordon/gordon.toml
+# Edit gordon.toml with your domain
 ```
 
-**Important:** This is just the binary installation. For a complete working setup including networking, firewall, and systemd service, follow the [detailed setup guide](#detailed-setup-guide-podman-rootless-mode) below.
+**Important:** For a complete working setup including networking, firewall, and systemd service, follow the [detailed setup guide](#detailed-setup-guide-podman-rootless-mode) below.
 
 ## Core Concepts
 
@@ -86,7 +85,7 @@ VOLUME ["/app/uploads", "/app/data"]  # Multiple volumes supported
 ### Environment Configuration
 Gordon automatically creates and loads env files based on domain names:
 ```bash
-# Auto-created on first run: ~/.local/share/gordon/env/app_mydomain_com.env
+# Auto-created on first run: ~/.gordon/env/app_mydomain_com.env
 # Just add your variables:
 DATABASE_URL=postgresql://localhost:5432/myapp
 API_KEY=sk-1234567890
@@ -107,7 +106,7 @@ Gordon also supports network groups, see [examples/](examples/) for advanced usa
 - **Volumes**: Automatically created from Dockerfile VOLUME directives, persist across updates
 
 ### Production ready logging
-- **Logs**: All container output saved to `~/.local/share/gordon/logs/containers/`
+- **Logs**: All container output saved to `~/.gordon/logs/containers/`
 - **Rotation**: Logs rotate at 100MB, keeping 3 backups for 28 days
 
 ## Configuration
@@ -204,9 +203,9 @@ See [examples/github-workflow.yml](examples/github-workflow.yml) and [.github/ac
 
 ## Detailed Setup Guide (Podman Rootless Mode)
 
-> **Note:** This guide uses Podman in rootless mode for enhanced security. Docker users can follow similar steps - Gordon works with any OCI-compatible runtime. Refer to Quick Start for the binary installation.
+> **Note:** This guide uses Podman in rootless mode for enhanced security. Docker users can follow similar steps. Gordon works with any OCI-compatible runtime.
 
-### 1. VPS Preparation
+### 1. System Preparation
 ```bash
 # Update system
 sudo apt update && sudo apt upgrade -y
@@ -216,11 +215,11 @@ sudo apt install -y podman ufw
 
 # Configure firewall
 sudo ufw allow 22/tcp 80/tcp 443/tcp
-sudo default deny
+sudo ufw default deny incoming
 sudo ufw --force enable
 ```
 
-### 2. Enable Port Forwarding
+### 2. Port Forwarding (rootless requires this)
 ```bash
 # Forward 80/443 to unprivileged port 8080
 sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
@@ -231,21 +230,19 @@ sudo apt install -y iptables-persistent
 sudo netfilter-persistent save
 ```
 
-### 3. Configure Rootless Containers
+### 3. Rootless Container Setup
 ```bash
 # Enable user namespaces
 echo 'user.max_user_namespaces=28633' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 
-# Setup subuid/subgid
+# Setup subuid/subgid for your user
 sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
 
 # Enable podman socket
 systemctl --user enable --now podman.socket
-```
 
-### 4. Registry Configuration
-```bash
+# Allow localhost registry (podman config)
 mkdir -p ~/.config/containers
 cat > ~/.config/containers/registries.conf <<EOF
 [registries.insecure]
@@ -253,9 +250,40 @@ registries = ['localhost:5000']
 EOF
 ```
 
-### 5. Create Systemd Service
+### 4. Install Gordon
 ```bash
-# Create user service
+# Download from releases
+wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
+tar -xzf gordon_linux_amd64.tar.gz
+chmod +x gordon
+sudo mv gordon /usr/local/bin/
+```
+
+### 5. Configure Gordon
+```bash
+# Create config directory and file
+mkdir -p ~/.config/gordon
+cat > ~/.config/gordon/gordon.toml <<EOF
+[server]
+port = 8080
+registry_port = 5000
+registry_domain = "registry.yourdomain.com"
+
+[secrets]
+backend = "unsafe"  # Use "pass" or "sops" for production
+
+[registry_auth]
+enabled = false  # Enable after testing
+
+[routes]
+"app.yourdomain.com" = "myapp:latest"
+EOF
+```
+
+Data is stored in `~/.gordon/` (registry, env files, logs, secrets).
+
+### 6. Create Systemd Service
+```bash
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/gordon.service <<EOF
 [Unit]
@@ -267,19 +295,19 @@ Type=simple
 Restart=always
 RestartSec=5
 ExecStart=/usr/local/bin/gordon start
-WorkingDirectory=%h
 
 [Install]
 WantedBy=default.target
 EOF
 
-# Enable and start service
+# Enable and start
 systemctl --user daemon-reload
 systemctl --user enable --now gordon
 sudo loginctl enable-linger $USER
 
-# Verify it's running
+# Verify
 systemctl --user status gordon
+journalctl --user -u gordon -f  # Watch logs
 ```
 
 ## Deployment Strategies

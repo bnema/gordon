@@ -276,7 +276,7 @@ func createOutputAdapters(ctx context.Context, log zerowrap.Logger) (*docker.Run
 func createStorage(cfg Config, log zerowrap.Logger) (*filesystem.BlobStorage, *filesystem.ManifestStorage, error) {
 	dataDir := cfg.Server.DataDir
 	if dataDir == "" {
-		dataDir = "/var/lib/gordon"
+		dataDir = DefaultDataDir()
 	}
 
 	registryDir := filepath.Join(dataDir, "registry")
@@ -298,7 +298,7 @@ func createStorage(cfg Config, log zerowrap.Logger) (*filesystem.BlobStorage, *f
 func createEnvLoader(cfg Config, log zerowrap.Logger) (*envloader.FileLoader, error) {
 	dataDir := cfg.Server.DataDir
 	if dataDir == "" {
-		dataDir = "/var/lib/gordon"
+		dataDir = DefaultDataDir()
 	}
 
 	envDir := cfg.Env.Dir
@@ -339,7 +339,7 @@ func createLogWriter(cfg Config, log zerowrap.Logger) (*logwriter.LogWriter, err
 	if logDir == "" {
 		dataDir := cfg.Server.DataDir
 		if dataDir == "" {
-			dataDir = "/var/lib/gordon"
+			dataDir = DefaultDataDir()
 		}
 		logDir = filepath.Join(dataDir, "logs", "containers")
 	}
@@ -384,7 +384,7 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 	// Get data directory
 	dataDir := cfg.Server.DataDir
 	if dataDir == "" {
-		dataDir = "/var/lib/gordon"
+		dataDir = DefaultDataDir()
 	}
 
 	// Create token store (needed for token auth or to store revocations)
@@ -723,7 +723,7 @@ func findPidFile() string {
 func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.port", 80)
 	v.SetDefault("server.registry_port", 5000)
-	v.SetDefault("server.data_dir", "/var/lib/gordon")
+	v.SetDefault("server.data_dir", DefaultDataDir())
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "console")
 	v.SetDefault("logging.file.enabled", false)
@@ -735,21 +735,13 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("logging.container_logs.max_size", 100)
 	v.SetDefault("logging.container_logs.max_backups", 3)
 	v.SetDefault("logging.container_logs.max_age", 28)
-	v.SetDefault("env.dir", "/var/lib/gordon/env")
+	v.SetDefault("env.dir", "") // defaults to {data_dir}/env when empty
 	v.SetDefault("secrets.backend", "unsafe")
 	v.SetDefault("registry_auth.enabled", false)
 	v.SetDefault("registry_auth.type", "password")
 	v.SetDefault("registry_auth.token_expiry", "720h")
 
-	if configPath != "" {
-		v.SetConfigFile(configPath)
-	} else {
-		v.SetConfigName("gordon")
-		v.SetConfigType("yaml")
-		v.AddConfigPath("/etc/gordon")
-		v.AddConfigPath("$HOME/.gordon")
-		v.AddConfigPath(".")
-	}
+	ConfigureViper(v, configPath)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {

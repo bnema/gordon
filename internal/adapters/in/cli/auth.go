@@ -15,6 +15,7 @@ import (
 	"golang.org/x/term"
 
 	"gordon/internal/adapters/out/tokenstore"
+	"gordon/internal/app"
 	"gordon/internal/domain"
 	"gordon/internal/usecase/auth"
 )
@@ -318,18 +319,10 @@ func loadAuthConfig(configPath string) (*cliConfig, error) {
 	v := viper.New()
 
 	// Set defaults
-	v.SetDefault("server.data_dir", "/var/lib/gordon")
+	v.SetDefault("server.data_dir", app.DefaultDataDir())
 	v.SetDefault("secrets.backend", "unsafe")
 
-	if configPath != "" {
-		v.SetConfigFile(configPath)
-	} else {
-		v.SetConfigName("gordon")
-		v.SetConfigType("yaml")
-		v.AddConfigPath("/etc/gordon")
-		v.AddConfigPath("$HOME/.gordon")
-		v.AddConfigPath(".")
-	}
+	app.ConfigureViper(v, configPath)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
