@@ -47,4 +47,11 @@ var (
 	ErrEnvFileNotFound  = errors.New("environment file not found")
 	ErrSecretNotFound   = errors.New("secret not found")
 	ErrProviderNotFound = errors.New("secret provider not found")
+
+	// Authentication errors
+	ErrInvalidToken       = errors.New("invalid token")
+	ErrExpiredToken       = errors.New("token has expired")
+	ErrRevokedToken       = errors.New("token has been revoked")
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrTokenNotFound      = errors.New("token not found")
 )
