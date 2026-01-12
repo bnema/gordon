@@ -179,6 +179,15 @@ func (s *Service) UnregisterTarget(_ context.Context, domainName string) error {
 	return nil
 }
 
+// InvalidateTarget removes a cached proxy target, forcing re-lookup on next request.
+// This is used during zero-downtime deployments to switch traffic to a new container.
+func (s *Service) InvalidateTarget(_ context.Context, domainName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.targets, domainName)
+}
+
 // RefreshTargets refreshes all proxy targets from container state.
 func (s *Service) RefreshTargets(ctx context.Context) error {
 	s.mu.Lock()

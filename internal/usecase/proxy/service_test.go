@@ -173,3 +173,102 @@ func TestService_isRunningInContainer(t *testing.T) {
 	result := svc.isRunningInContainer()
 	assert.IsType(t, true, result) // Just verify it returns a bool
 }
+
+func TestService_InvalidateTarget(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	// Pre-populate cache with target
+	svc.targets["app.example.com"] = &domain.ProxyTarget{
+		Host:        "192.168.1.100",
+		Port:        8080,
+		ContainerID: "old-container",
+	}
+
+	// Invalidate the target
+	svc.InvalidateTarget(ctx, "app.example.com")
+
+	// Verify target is removed from cache
+	svc.mu.RLock()
+	_, exists := svc.targets["app.example.com"]
+	svc.mu.RUnlock()
+
+	assert.False(t, exists, "target should be removed from cache after invalidation")
+}
+
+func TestContainerDeployedHandler_CanHandle(t *testing.T) {
+	handler := NewContainerDeployedHandler(testContext(), nil)
+
+	assert.True(t, handler.CanHandle(domain.EventContainerDeployed))
+	assert.False(t, handler.CanHandle(domain.EventImagePushed))
+	assert.False(t, handler.CanHandle(domain.EventConfigReload))
+}
+
+func TestContainerDeployedHandler_Handle_InvalidatesCache(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	// Pre-populate cache
+	svc.targets["app.example.com"] = &domain.ProxyTarget{
+		Host:        "192.168.1.100",
+		Port:        8080,
+		ContainerID: "old-container",
+	}
+
+	// Create handler with service as invalidator
+	handler := NewContainerDeployedHandler(ctx, svc)
+
+	// Simulate container deployed event
+	event := domain.Event{
+		ID:    "event-123",
+		Type:  domain.EventContainerDeployed,
+		Route: "app.example.com",
+		Data: &domain.ContainerEventPayload{
+			ContainerID: "new-container",
+			Domain:      "app.example.com",
+		},
+	}
+
+	err := handler.Handle(event)
+
+	assert.NoError(t, err)
+
+	// Verify target was invalidated
+	svc.mu.RLock()
+	_, exists := svc.targets["app.example.com"]
+	svc.mu.RUnlock()
+
+	assert.False(t, exists, "cache should be invalidated after container deployed event")
+}
+
+func TestContainerDeployedHandler_Handle_NoDomain(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	handler := NewContainerDeployedHandler(ctx, svc)
+
+	// Event with no domain
+	event := domain.Event{
+		ID:   "event-123",
+		Type: domain.EventContainerDeployed,
+		Data: &domain.ContainerEventPayload{
+			ContainerID: "new-container",
+		},
+	}
+
+	// Should not error, just skip
+	err := handler.Handle(event)
+	assert.NoError(t, err)
+}
