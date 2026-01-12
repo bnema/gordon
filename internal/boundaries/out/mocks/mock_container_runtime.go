@@ -1658,6 +1658,69 @@ func (_c *MockContainerRuntime_RemoveVolume_Call) RunAndReturn(run func(ctx cont
 	return _c
 }
 
+// RenameContainer provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) RenameContainer(ctx context.Context, containerID string, newName string) error {
+	ret := _mock.Called(ctx, containerID, newName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RenameContainer")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
+		r0 = returnFunc(ctx, containerID, newName)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockContainerRuntime_RenameContainer_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenameContainer'
+type MockContainerRuntime_RenameContainer_Call struct {
+	*mock.Call
+}
+
+// RenameContainer is a helper method to define mock.On call
+//   - ctx context.Context
+//   - containerID string
+//   - newName string
+func (_e *MockContainerRuntime_Expecter) RenameContainer(ctx interface{}, containerID interface{}, newName interface{}) *MockContainerRuntime_RenameContainer_Call {
+	return &MockContainerRuntime_RenameContainer_Call{Call: _e.mock.On("RenameContainer", ctx, containerID, newName)}
+}
+
+func (_c *MockContainerRuntime_RenameContainer_Call) Run(run func(ctx context.Context, containerID string, newName string)) *MockContainerRuntime_RenameContainer_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_RenameContainer_Call) Return(err error) *MockContainerRuntime_RenameContainer_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_RenameContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, newName string) error) *MockContainerRuntime_RenameContainer_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RestartContainer provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) RestartContainer(ctx context.Context, containerID string) error {
 	ret := _mock.Called(ctx, containerID)

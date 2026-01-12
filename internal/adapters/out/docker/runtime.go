@@ -208,6 +208,26 @@ func (r *Runtime) RemoveContainer(ctx context.Context, containerID string, force
 	return nil
 }
 
+// RenameContainer renames a container.
+func (r *Runtime) RenameContainer(ctx context.Context, containerID, newName string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "docker",
+		zerowrap.FieldAction:   "RenameContainer",
+		zerowrap.FieldEntityID: containerID,
+		"new_name":             newName,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	err := r.client.ContainerRename(ctx, containerID, newName)
+	if err != nil {
+		return log.WrapErr(err, "failed to rename container")
+	}
+
+	log.Info().Msg("container renamed")
+	return nil
+}
+
 // ListContainers lists containers.
 func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Container, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
