@@ -1,34 +1,32 @@
 # Gordon
 
-Your VPS already runs Docker. Gordon makes it deploy on push.
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bnema/gordon)](https://goreportcard.com/report/github.com/bnema/gordon)
+
+Self-hosted web app deployments. Push to your registry, Gordon does the rest.
+
+- Website: https://github.com/bnema/gordon
+- Documentation: [Configuration](examples/) | [Setup Guide](#detailed-setup-guide-podman-rootless-mode)
+- Discuss: [GitHub Discussions](https://github.com/bnema/gordon/discussions)
+
+---
+
+Gordon is a private container registry + HTTP reverse proxy for your VPS. Push a container image exposing a web port, it deploys automatically with zero downtime.
 
 ```bash
 docker build -t myapp .
 docker push registry.your-server.com/myapp:latest
-# Live at https://app.your-server.com
+# → Live at https://app.your-server.com
 ```
 
-> docker push → live in production. From your laptop or CI. Your choice.
+Build on your machine, push to deploy. Works from your laptop or CI.
 
-Gordon combines a private container registry with a reverse proxy. Push an image, it deploys. Handles multiple domains, zero downtime updates, persistent volumes, and environment merging. Single binary, ~15MB RAM.
-
-## How It Works
-
-```bash
-# 1. Build & test locally (Docker or Podman)
-docker build -t myapp .
-docker run -p 8080:8080 myapp  # Works? Great!
-
-# 2. Push to deploy
-docker tag myapp registry.mydomain.com/myapp:latest
-docker push registry.mydomain.com/myapp:latest
-
-# 3. That's it. Gordon handles the rest.
-```
-
-> **Note:** All examples use `docker` commands, but `podman` works as a drop-in replacement. Just substitute `docker` with `podman` in any command.
-
-**Your machine is the build server. If it runs locally, it runs in production.**
+**What it does:**
+- Runs a private Docker registry on your VPS
+- Routes domains to containers via HTTP reverse proxy
+- Deploys automatically when you push a new image
+- Zero downtime updates, persistent volumes, environment merging
+- Single binary, ~15MB RAM
 
 ## Quick Start (5 minutes)
 
