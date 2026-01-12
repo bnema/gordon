@@ -360,6 +360,12 @@ func registerEventHandlers(ctx context.Context, svc *services) error {
 		return fmt.Errorf("failed to subscribe config reload handler: %w", err)
 	}
 
+	// Proxy cache invalidation on container deployment (for zero-downtime)
+	containerDeployedHandler := proxy.NewContainerDeployedHandler(ctx, svc.proxySvc)
+	if err := svc.eventBus.Subscribe(containerDeployedHandler); err != nil {
+		return fmt.Errorf("failed to subscribe container deployed handler: %w", err)
+	}
+
 	return nil
 }
 
