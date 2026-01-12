@@ -458,8 +458,8 @@ func TestManifestDescriptor_JSON(t *testing.T) {
 					Variant:      "power9",
 				},
 				Annotations: map[string]string{
-					"build.date":   "2023-01-01T00:00:00Z",
-					"maintainer":   "gordon-team",
+					"build.date":         "2023-01-01T00:00:00Z",
+					"maintainer":         "gordon-team",
 					"io.buildah.version": "1.23.0",
 				},
 			},
@@ -493,13 +493,13 @@ func TestManifestTypes_EdgeCases(t *testing.T) {
 				Digest:    "sha256:config",
 				Size:      100,
 			},
-			Layers: []OCIDescriptor{},
+			Layers:      []OCIDescriptor{},
 			Annotations: map[string]string{}, // Empty map should be omitted
 		}
 
 		jsonData, err := json.Marshal(manifest)
 		require.NoError(t, err)
-		
+
 		// Should not contain "annotations" field
 		assert.NotContains(t, string(jsonData), "annotations")
 	})
@@ -519,7 +519,7 @@ func TestManifestTypes_EdgeCases(t *testing.T) {
 
 		jsonData, err := json.Marshal(manifest)
 		require.NoError(t, err)
-		
+
 		// Should not contain "annotations" field
 		assert.NotContains(t, string(jsonData), "annotations")
 	})
@@ -534,7 +534,7 @@ func TestManifestTypes_EdgeCases(t *testing.T) {
 
 		jsonData, err := json.Marshal(descriptor)
 		require.NoError(t, err)
-		
+
 		// Should not contain "platform" field
 		assert.NotContains(t, string(jsonData), "platform")
 	})
@@ -549,7 +549,7 @@ func TestManifestTypes_EdgeCases(t *testing.T) {
 
 		jsonData, err := json.Marshal(platform)
 		require.NoError(t, err)
-		
+
 		// Empty strings should be preserved
 		assert.Contains(t, string(jsonData), `"architecture":""`)
 		assert.Contains(t, string(jsonData), `"os":""`)

@@ -14,7 +14,7 @@ func ParseManifestAnnotations(manifestData []byte, contentType string) (map[stri
 		// Docker v2.2 manifests don't support annotations at manifest level
 		return map[string]string{}, nil
 	case "application/vnd.oci.image.index.v1+json",
-		 "application/vnd.docker.distribution.manifest.list.v2+json":
+		"application/vnd.docker.distribution.manifest.list.v2+json":
 		return parseManifestListAnnotations(manifestData)
 	default:
 		return map[string]string{}, fmt.Errorf("unsupported manifest media type: %s", contentType)
@@ -27,11 +27,11 @@ func parseOCIManifestAnnotations(manifestData []byte) (map[string]string, error)
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		return nil, fmt.Errorf("failed to parse OCI manifest: %w", err)
 	}
-	
+
 	if manifest.Annotations == nil {
 		return map[string]string{}, nil
 	}
-	
+
 	return manifest.Annotations, nil
 }
 
@@ -41,11 +41,11 @@ func parseManifestListAnnotations(manifestData []byte) (map[string]string, error
 	if err := json.Unmarshal(manifestData, &manifestList); err != nil {
 		return nil, fmt.Errorf("failed to parse manifest list: %w", err)
 	}
-	
+
 	if manifestList.Annotations == nil {
 		return map[string]string{}, nil
 	}
-	
+
 	return manifestList.Annotations, nil
 }
 
@@ -62,7 +62,6 @@ func GetDeploymentVersion(annotations map[string]string) string {
 	if version, exists := annotations["version"]; exists && version != "" {
 		return version
 	}
-	
+
 	return ""
 }
-
