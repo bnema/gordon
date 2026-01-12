@@ -139,9 +139,21 @@ Gordon uses a single TOML file for all configuration:
 [server]
 registry_domain = "registry.mydomain.com"  # Required
 
+# Secrets backend for sensitive data (tokens, passwords)
+[secrets]
+backend = "pass"  # "pass", "sops", or "unsafe" (plain text in data_dir)
+
+# Registry authentication (choose password or token type)
 [registry_auth]
-username = "admin"                         # Choose your credentials
-password = "your-secure-password"          
+enabled = true
+type = "password"                          # "password" or "token"
+
+# Password auth: bcrypt hash stored in secrets backend
+username = "deploy"
+password_hash = "gordon/registry/password_hash"  # path in secrets backend
+
+# Token auth: JWT-based authentication
+# token_secret = "gordon/registry/token_secret"  # path in secrets backend
 
 [routes]
 "app.mydomain.com" = "myapp:latest"        # Domain → Image mapping
@@ -154,6 +166,63 @@ password = "your-secure-password"
 ```
 
 See [examples/](examples/) for advanced configurations including network groups and more.
+
+### Authentication Types
+
+**Password Authentication** (simple):
+```bash
+# Generate a bcrypt hash for your password
+gordon auth password hash
+# Store the hash in your secrets backend, then reference it in config
+```
+
+**Token Authentication** (recommended for CI/CD):
+```bash
+# Generate a never-expiring token for CI
+gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
+
+# List all tokens
+gordon auth token list
+
+# Revoke a compromised token
+gordon auth token revoke <token-id>
+```
+
+Tokens are stored in your configured secrets backend and are unique to each Gordon instance (different `token_secret` = incompatible tokens).
+
+### GitHub Actions Integration
+
+Gordon provides an official GitHub Action for automated deployments on tag push:
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to Gordon
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Deploy to Gordon
+        uses: bnema/gordon/.github/actions/deploy@main
+        with:
+          registry: ${{ secrets.GORDON_REGISTRY }}
+          username: ${{ secrets.GORDON_USERNAME }}
+          password: ${{ secrets.GORDON_TOKEN }}
+```
+
+**Setup:**
+1. Generate a CI token: `gordon auth token generate --subject github-actions --scopes push,pull --expiry 0`
+2. Add secrets to your GitHub repository: `GORDON_REGISTRY`, `GORDON_USERNAME`, `GORDON_TOKEN`
+3. Push a tag to deploy: `git tag v1.0.0 && git push origin v1.0.0`
+
+See [examples/github-workflow.yml](examples/github-workflow.yml) and [.github/actions/deploy/README.md](.github/actions/deploy/README.md) for advanced options.
 
 ## Detailed Setup Guide (Podman Rootless Mode)
 

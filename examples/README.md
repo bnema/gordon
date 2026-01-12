@@ -20,10 +20,24 @@ data_dir = "~/.local/share/gordon"   # Data directory (default: ~/.local/share/g
                                     # Root user default: ./data
 ssl_email = ""                       # Email for Let's Encrypt (default: "" - uses Cloudflare)
 
+[secrets]
+backend = "pass"                     # Secrets backend (default: "pass")
+                                    # Options: pass, sops, unsafe
+                                    # "unsafe" stores secrets in plain text (dev only)
+
 [registry_auth]
 enabled = true                       # Enable registry authentication (default: true)
-username = ""                        # REQUIRED when enabled (no default)
-password = ""                        # REQUIRED when enabled (no default)
+type = "password"                    # Auth type (default: "password")
+                                    # Options: password, token
+
+# Password auth settings (when type = "password")
+username = ""                        # REQUIRED - username for docker login
+password_hash = ""                   # REQUIRED - path to bcrypt hash in secrets backend
+                                    # Example: "gordon/registry/password_hash"
+
+# Token auth settings (when type = "token")
+# token_secret = ""                  # REQUIRED - path to JWT signing secret
+                                    # Example: "gordon/registry/token_secret"
 
 [routes]
 # Domain to image mappings (default: empty)
@@ -50,7 +64,7 @@ preserve = true                      # Keep volumes when removing containers (de
 
 [env]
 dir = "{data_dir}/env"              # Environment files directory (default: {data_dir}/env)
-providers = ["pass", "sops"]        # Secret providers (default: ["pass", "sops"])
+# Note: Secret providers are now configured via [secrets].backend
 
 [logging]
 enabled = true                       # Enable file logging (default: true)
@@ -66,57 +80,64 @@ max_age = 28                        # Days to keep old logs (default: 28)
 compress = true                     # Compress rotated logs (default: true)
 ```
 
-## 📁 Available Examples
+## Available Examples
 
-### 🚀 [`minimal.toml`](minimal.toml)
+### [`minimal.toml`](minimal.toml)
 **Perfect for getting started**
 - Single route configuration
 - Default settings
 - No authentication
 - Ideal for testing and learning
 
-### 🏠 [`development.toml`](development.toml)
+### [`development.toml`](development.toml)
 **Local development setup**
 - Multiple .local domains
 - No authentication for ease of use
 - Third-party development tools
 - localhost registry
 
-### 🧪 [`staging.toml`](staging.toml)
+### [`staging.toml`](staging.toml)
 **Staging and preview environments**
 - Branch-based deployments
 - Feature branch testing
 - PR preview environments
 - Separate staging registry
 
-### 🏭 [`production.toml`](production.toml)
+### [`production.toml`](production.toml)
 **Production-ready configuration**
 - Pinned image versions
 - Registry authentication
 - Multiple production services
 - Monitoring tools included
 
-### 🏢 [`saas-multi-tenant.toml`](saas-multi-tenant.toml)
+### [`saas-multi-tenant.toml`](saas-multi-tenant.toml)
 **Multi-tenant SaaS platform**
 - Customer subdomains
 - Custom domains
 - Shared application architecture
 - Enterprise features
 
-### 📊 [`logging.toml`](logging.toml)
+### [`logging.toml`](logging.toml)
 **Comprehensive logging configuration**
 - Complete logging setup examples
 - Different logging levels and configurations
 - Production and development logging strategies
 - Log rotation and monitoring examples
 
-### 🔄 [`rollback-workflow-example.md`](rollback-workflow-example.md)
+### [`rollback-workflow-example.md`](rollback-workflow-example.md)
 **Simple version deployment and rollback workflow**
 - Manifest annotation-based deployments
 - Simple version changes for deployments and rollbacks
 - Version tracking and deployment strategies
 
-## 🚀 Quick Start
+### [`github-workflow.yml`](github-workflow.yml)
+**GitHub Actions CI/CD workflow**
+- Automatic deployment on tag push
+- Uses official Gordon deploy action
+- Build arguments and multi-platform support
+- Monorepo configurations
+
+## Quick Start
 
 1. **Choose an example** that matches your use case
 2. **Copy the config file** to your Gordon directory:
@@ -129,7 +150,7 @@ compress = true                     # Compress rotated logs (default: true)
    gordon start
    ```
 
-## 🔧 Customization Tips
+## Customization Tips
 
 ### Domain Configuration
 Update the `[routes]` section with your actual domains:
@@ -145,10 +166,31 @@ Configure your registry domain and authentication:
 [server]
 registry_domain = "registry.your-domain.com"
 
+[secrets]
+backend = "pass"  # or "sops", or "unsafe" for development
+
 [registry_auth]
 enabled = true
-username = "your-username"
-password = "your-secure-password"
+type = "password"  # or "token"
+
+# For password auth:
+username = "deploy"
+password_hash = "gordon/registry/password_hash"  # path in secrets backend
+
+# For token auth (recommended for CI/CD):
+# type = "token"
+# token_secret = "gordon/registry/token_secret"
+```
+
+**Token Management CLI:**
+```bash
+# Generate a bcrypt hash for password auth
+gordon auth password hash
+
+# Generate tokens for CI/CD (token auth type)
+gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
+gordon auth token list
+gordon auth token revoke <token-id>
 ```
 
 ### Container Runtime Setup
@@ -308,7 +350,7 @@ When you deploy this image:
 - Your data persists across deployments and reboots
 - Environment variables are intelligently managed
 
-## 🌐 DNS Configuration
+## DNS Configuration
 
 ### Cloudflare Setup (Recommended)
 For all examples except development, set up these DNS records:
@@ -334,7 +376,7 @@ For the development example, add to `/etc/hosts`:
 127.0.0.1  admin.local
 ```
 
-## 🔄 Workflow Examples
+## Workflow Examples
 
 ### Simple Deployment
 ```bash
@@ -385,12 +427,12 @@ podman manifest push myapp:latest registry.your-domain.com/myapp:latest
 
 See [`rollback-workflow-example.md`](rollback-workflow-example.md) for complete version deployment workflow documentation.
 
-## 🤝 Need Help?
+## Need Help?
 
-- 📖 **Read the main [README](../README.md)** for detailed documentation
-- 🔍 **Check the logs** for deployment issues
-- 🐛 **Open an issue** if you find problems with these examples
-- 💡 **Contribute** your own configuration examples!
+- **Read the main [README](../README.md)** for detailed documentation
+- **Check the logs** for deployment issues
+- **Open an issue** if you find problems with these examples
+- **Contribute** your own configuration examples!
 
 ---
 *These examples are starting points - customize them for your specific needs!*
