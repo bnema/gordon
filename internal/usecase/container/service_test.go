@@ -25,6 +25,7 @@ func TestService_Deploy_Success(t *testing.T) {
 	config := Config{
 		NetworkIsolation: false,
 		VolumeAutoCreate: false,
+		ReadinessDelay:   0, // No delay for tests
 	}
 
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
@@ -63,6 +64,9 @@ func TestService_Deploy_Success(t *testing.T) {
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(createdContainer, nil)
 	runtime.EXPECT().StartContainer(mock.Anything, "container-123").Return(nil)
 
+	// Wait for ready: IsContainerRunning (first check returns true) + verify after delay
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-123").Return(true, nil).Times(2)
+
 	// Re-inspect after start
 	runningContainer := &domain.Container{
 		ID:     "container-123",
@@ -72,6 +76,9 @@ func TestService_Deploy_Success(t *testing.T) {
 		Ports:  []int{8080},
 	}
 	runtime.EXPECT().InspectContainer(mock.Anything, "container-123").Return(runningContainer, nil)
+
+	// Publish container deployed event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
 
 	result, err := svc.Deploy(ctx, route)
 
@@ -116,7 +123,9 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	config := Config{}
+	config := Config{
+		ReadinessDelay: 0, // No delay for tests
+	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
@@ -133,10 +142,6 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 		Image:  "myapp:v2",
 	}
 
-	// Stop and remove existing container
-	runtime.EXPECT().StopContainer(mock.Anything, "old-container").Return(nil)
-	runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil)
-
 	// Cleanup orphans
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 
@@ -149,14 +154,31 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
 
-	// Create new container
-	newContainer := &domain.Container{ID: "new-container", Status: "created"}
-	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(newContainer, nil)
+	// Create new container (with -new suffix for zero-downtime)
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-test.example.com-new"
+	})).Return(newContainer, nil)
 	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+
+	// Wait for ready
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+
+	// Inspect after ready
 	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
 		ID:     "new-container",
 		Status: "running",
 	}, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// Now cleanup old container (after new one is ready)
+	runtime.EXPECT().StopContainer(mock.Anything, "old-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil)
+
+	// Rename new container to canonical name
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
 
 	result, err := svc.Deploy(ctx, route)
 
@@ -177,6 +199,7 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 	config := Config{
 		NetworkIsolation: true,
 		NetworkPrefix:    "gordon",
+		ReadinessDelay:   0, // No delay for tests
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -201,10 +224,17 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 		return cfg.NetworkMode == "gordon-test-example-com"
 	})).Return(container, nil)
 	runtime.EXPECT().StartContainer(mock.Anything, "container-123").Return(nil)
+
+	// Wait for ready
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-123").Return(true, nil).Times(2)
+
 	runtime.EXPECT().InspectContainer(mock.Anything, "container-123").Return(&domain.Container{
 		ID:     "container-123",
 		Status: "running",
 	}, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
 
 	result, err := svc.Deploy(ctx, route)
 
@@ -220,6 +250,7 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 	config := Config{
 		VolumeAutoCreate: true,
 		VolumePrefix:     "gordon",
+		ReadinessDelay:   0, // No delay for tests
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -246,10 +277,17 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 		return len(cfg.Volumes) == 2
 	})).Return(container, nil)
 	runtime.EXPECT().StartContainer(mock.Anything, "container-123").Return(nil)
+
+	// Wait for ready
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-123").Return(true, nil).Times(2)
+
 	runtime.EXPECT().InspectContainer(mock.Anything, "container-123").Return(&domain.Container{
 		ID:     "container-123",
 		Status: "running",
 	}, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
 
 	result, err := svc.Deploy(ctx, route)
 

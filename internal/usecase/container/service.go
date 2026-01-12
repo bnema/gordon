@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bnema/zerowrap"
 
@@ -29,17 +30,19 @@ type Config struct {
 	DNSSuffix           string
 	NetworkGroups       map[string][]string
 	Attachments         map[string][]string
+	ReadinessDelay      time.Duration // Delay after container starts before considering it ready
 }
 
 // Service implements the ContainerService interface.
 type Service struct {
-	runtime    out.ContainerRuntime
-	envLoader  out.EnvLoader
-	eventBus   out.EventPublisher
-	logWriter  out.ContainerLogWriter
-	config     Config
-	containers map[string]*domain.Container
-	mu         sync.RWMutex
+	runtime     out.ContainerRuntime
+	envLoader   out.EnvLoader
+	eventBus    out.EventPublisher
+	logWriter   out.ContainerLogWriter
+	config      Config
+	containers  map[string]*domain.Container
+	attachments map[string][]string // ownerDomain → []containerIDs
+	mu          sync.RWMutex
 }
 
 // NewService creates a new container service.
@@ -51,16 +54,18 @@ func NewService(
 	config Config,
 ) *Service {
 	return &Service{
-		runtime:    runtime,
-		envLoader:  envLoader,
-		eventBus:   eventBus,
-		logWriter:  logWriter,
-		config:     config,
-		containers: make(map[string]*domain.Container),
+		runtime:     runtime,
+		envLoader:   envLoader,
+		eventBus:    eventBus,
+		logWriter:   logWriter,
+		config:      config,
+		containers:  make(map[string]*domain.Container),
+		attachments: make(map[string][]string),
 	}
 }
 
 // Deploy creates and starts a container for the given route.
+// Implements zero-downtime deployment: new container starts before old one stops.
 func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Container, error) {
 	// Enrich context with use case fields for all downstream logs
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -70,25 +75,12 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Get existing container (if any) without holding lock
+	s.mu.RLock()
+	existing, hasExisting := s.containers[route.Domain]
+	s.mu.RUnlock()
 
-	// Check if container already exists for this domain
-	if existing, exists := s.containers[route.Domain]; exists {
-		log.Info().Str(zerowrap.FieldEntityID, existing.ID).Msg("container already exists, restarting")
-
-		if err := s.runtime.StopContainer(ctx, existing.ID); err != nil {
-			log.WrapErrWithFields(err, "failed to stop existing container", map[string]any{zerowrap.FieldEntityID: existing.ID})
-		}
-
-		if err := s.runtime.RemoveContainer(ctx, existing.ID, true); err != nil {
-			log.WrapErrWithFields(err, "failed to remove existing container", map[string]any{zerowrap.FieldEntityID: existing.ID})
-		}
-
-		delete(s.containers, route.Domain)
-	}
-
-	// Clean up orphaned containers
+	// Clean up orphaned containers (containers with same name but not tracked)
 	if err := s.cleanupOrphanedContainers(ctx, route.Domain); err != nil {
 		log.WrapErr(err, "failed to cleanup orphaned containers")
 	}
@@ -97,6 +89,17 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	imageRef := s.buildImageRef(route.Image)
 	if err := s.ensureImage(ctx, imageRef); err != nil {
 		return nil, err
+	}
+
+	// Setup network FIRST (attachments need it)
+	networkName := s.getNetworkForApp(route.Domain)
+	if err := s.createNetworkIfNeeded(ctx, networkName); err != nil {
+		return nil, log.WrapErr(err, "failed to create network")
+	}
+
+	// Deploy attachments BEFORE main container (dependencies first)
+	if err := s.deployAttachments(ctx, route.Domain, networkName); err != nil {
+		log.WrapErr(err, "failed to deploy some attachments")
 	}
 
 	// Get exposed ports
@@ -118,16 +121,16 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		return nil, err
 	}
 
-	// Setup network
-	networkName := s.getNetworkForApp(route.Domain)
-	if err := s.createNetworkIfNeeded(ctx, networkName); err != nil {
-		return nil, log.WrapErr(err, "failed to create network")
+	// Determine container name (use temp suffix for zero-downtime if existing)
+	containerName := fmt.Sprintf("gordon-%s", route.Domain)
+	if hasExisting {
+		containerName = fmt.Sprintf("gordon-%s-new", route.Domain)
 	}
 
 	// Create container
 	containerConfig := &domain.ContainerConfig{
 		Image:       imageRef,
-		Name:        fmt.Sprintf("gordon-%s", route.Domain),
+		Name:        containerName,
 		Ports:       exposedPorts,
 		Env:         envVars,
 		Volumes:     volumes,
@@ -142,41 +145,54 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		AutoRemove: false,
 	}
 
-	container, err := s.runtime.CreateContainer(ctx, containerConfig)
+	newContainer, err := s.runtime.CreateContainer(ctx, containerConfig)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to create container")
 	}
 
-	// Start container
-	if err := s.runtime.StartContainer(ctx, container.ID); err != nil {
-		s.runtime.RemoveContainer(ctx, container.ID, true)
+	// Start new container
+	if err := s.runtime.StartContainer(ctx, newContainer.ID); err != nil {
+		s.runtime.RemoveContainer(ctx, newContainer.ID, true)
 		return nil, log.WrapErr(err, "failed to start container")
 	}
 
-	// Re-inspect for updated info
-	container, err = s.runtime.InspectContainer(ctx, container.ID)
+	// Wait for new container to be ready
+	if err := s.waitForReady(ctx, newContainer.ID); err != nil {
+		s.cleanupFailedContainer(ctx, newContainer.ID)
+		return nil, log.WrapErr(err, "container failed readiness check")
+	}
+
+	// Re-inspect for updated info (ports, etc.)
+	newContainer, err = s.runtime.InspectContainer(ctx, newContainer.ID)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to inspect started container")
 	}
 
-	// Start container log collection (non-blocking, errors don't fail deployment)
-	s.startLogCollection(ctx, container.ID, route.Domain)
+	// ATOMIC SWITCH: Update tracking first (proxy will now route to new container)
+	s.mu.Lock()
+	s.containers[route.Domain] = newContainer
+	s.mu.Unlock()
 
-	s.containers[route.Domain] = container
+	// Publish container deployed event (proxy will invalidate cache)
+	s.publishContainerDeployed(ctx, route.Domain, newContainer.ID)
+
+	// NOW stop and remove old container (traffic already going to new one)
+	if hasExisting {
+		s.cleanupOldContainer(ctx, existing, newContainer.ID, route.Domain)
+	}
+
+	// Start container log collection (non-blocking, errors don't fail deployment)
+	s.startLogCollection(ctx, newContainer.ID, route.Domain)
 
 	log.Info().
 		Str("image", route.Image).
-		Str(zerowrap.FieldEntityID, container.ID).
-		Ints("ports", container.Ports).
+		Str(zerowrap.FieldEntityID, newContainer.ID).
+		Ints("ports", newContainer.Ports).
 		Str("network", networkName).
+		Bool("zero_downtime", hasExisting).
 		Msg("container deployed successfully")
 
-	// Deploy attachments
-	if err := s.deployAttachments(ctx, route.Domain); err != nil {
-		log.WrapErr(err, "failed to deploy some attachments")
-	}
-
-	return container, nil
+	return newContainer, nil
 }
 
 // Stop stops a running container.
@@ -372,6 +388,44 @@ func (s *Service) UpdateConfig(config Config) {
 }
 
 // Helper methods
+
+// cleanupFailedContainer stops and removes a container that failed to start properly.
+func (s *Service) cleanupFailedContainer(ctx context.Context, containerID string) {
+	log := zerowrap.FromCtx(ctx)
+	if err := s.runtime.StopContainer(ctx, containerID); err != nil {
+		log.Warn().Err(err).Str(zerowrap.FieldEntityID, containerID).Msg("failed to stop container after failure")
+	}
+	if err := s.runtime.RemoveContainer(ctx, containerID, true); err != nil {
+		log.Warn().Err(err).Str(zerowrap.FieldEntityID, containerID).Msg("failed to remove container after failure")
+	}
+}
+
+// cleanupOldContainer stops and removes an old container after zero-downtime switch.
+// It also renames the new container to the canonical name.
+func (s *Service) cleanupOldContainer(ctx context.Context, old *domain.Container, newContainerID, domainName string) {
+	log := zerowrap.FromCtx(ctx)
+	log.Info().Str(zerowrap.FieldEntityID, old.ID).Msg("stopping old container after zero-downtime switch")
+
+	if s.logWriter != nil {
+		if err := s.logWriter.StopLogging(old.ID); err != nil {
+			log.Warn().Err(err).Str(zerowrap.FieldEntityID, old.ID).Msg("failed to stop logging for old container")
+		}
+	}
+
+	if err := s.runtime.StopContainer(ctx, old.ID); err != nil {
+		log.Warn().Err(err).Str(zerowrap.FieldEntityID, old.ID).Msg("failed to stop old container")
+	}
+
+	if err := s.runtime.RemoveContainer(ctx, old.ID, true); err != nil {
+		log.Warn().Err(err).Str(zerowrap.FieldEntityID, old.ID).Msg("failed to remove old container")
+	}
+
+	// Rename new container to canonical name
+	canonicalName := fmt.Sprintf("gordon-%s", domainName)
+	if err := s.runtime.RenameContainer(ctx, newContainerID, canonicalName); err != nil {
+		log.Warn().Err(err).Str("canonical_name", canonicalName).Msg("failed to rename container to canonical name")
+	}
+}
 
 // startLogCollection starts log collection for a container in the background.
 // Errors are logged but don't fail the calling operation.
@@ -595,7 +649,7 @@ func (s *Service) cleanupNetworkIfEmpty(ctx context.Context, networkName string)
 	return nil
 }
 
-func (s *Service) deployAttachments(ctx context.Context, domainName string) error {
+func (s *Service) deployAttachments(ctx context.Context, domainName, networkName string) error {
 	attachments, ok := s.config.Attachments[domainName]
 	if !ok {
 		return nil
@@ -603,7 +657,7 @@ func (s *Service) deployAttachments(ctx context.Context, domainName string) erro
 
 	log := zerowrap.FromCtx(ctx)
 	for _, svc := range attachments {
-		if err := s.deployAttachedService(ctx, domainName, svc); err != nil {
+		if err := s.deployAttachedService(ctx, domainName, svc, networkName); err != nil {
 			log.WrapErrWithFields(err, "failed to deploy attachment", map[string]any{zerowrap.FieldService: svc, "domain": domainName})
 		}
 	}
@@ -611,9 +665,100 @@ func (s *Service) deployAttachments(ctx context.Context, domainName string) erro
 	return nil
 }
 
-func (s *Service) deployAttachedService(ctx context.Context, identifier, serviceImage string) error {
+func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, serviceImage, networkName string) error {
 	log := zerowrap.FromCtx(ctx)
-	log.Info().Str("identifier", identifier).Str(zerowrap.FieldService, serviceImage).Msg("deploying attached service")
+
+	// Parse service name from image (e.g., "my-postgres:latest" → "postgres")
+	serviceName := extractServiceName(serviceImage)
+	containerName := fmt.Sprintf("gordon-%s-%s", sanitizeName(ownerDomain), serviceName)
+
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		"attachment":     serviceName,
+		"container_name": containerName,
+		"owner_domain":   ownerDomain,
+	})
+
+	// Check if already running (idempotent)
+	existingContainer := s.findContainerByName(ctx, containerName)
+	if existingContainer != nil && existingContainer.Status == string(domain.ContainerStatusRunning) {
+		log.Debug().Str("container_name", containerName).Msg("attachment already running, skipping")
+		return nil
+	}
+
+	// Remove existing stopped container if present
+	if existingContainer != nil {
+		log.Info().Str("container_name", containerName).Msg("removing stopped attachment container")
+		if err := s.runtime.RemoveContainer(ctx, existingContainer.ID, true); err != nil {
+			log.WrapErr(err, "failed to remove existing attachment container")
+		}
+	}
+
+	log.Info().Str(zerowrap.FieldService, serviceImage).Msg("deploying attached service")
+
+	// Ensure image
+	imageRef := s.buildImageRef(serviceImage)
+	if err := s.ensureImage(ctx, imageRef); err != nil {
+		return err
+	}
+
+	// Get image metadata
+	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, imageRef)
+	if err != nil {
+		log.WrapErr(err, "failed to get exposed ports for attachment, using defaults")
+		exposedPorts = []int{}
+	}
+
+	// Setup volumes (attachments need persistent data)
+	volumes, err := s.setupVolumes(ctx, containerName, imageRef)
+	if err != nil {
+		log.WrapErr(err, "failed to setup volumes for attachment")
+		volumes = make(map[string]string)
+	}
+
+	// Load environment (attachment-specific env file)
+	envVars, err := s.loadEnvironment(ctx, containerName, imageRef)
+	if err != nil {
+		log.WrapErr(err, "failed to load environment for attachment")
+		envVars = []string{}
+	}
+
+	// Create container with attachment labels
+	config := &domain.ContainerConfig{
+		Image:       imageRef,
+		Name:        containerName,
+		Hostname:    serviceName, // Internal DNS: postgres, redis, etc.
+		Ports:       exposedPorts,
+		Env:         envVars,
+		Volumes:     volumes,
+		NetworkMode: networkName, // Same network as main app
+		Labels: map[string]string{
+			"gordon.managed":     "true",
+			"gordon.attachment":  "true",
+			"gordon.attached-to": ownerDomain,
+			"gordon.image":       serviceImage,
+		},
+	}
+
+	container, err := s.runtime.CreateContainer(ctx, config)
+	if err != nil {
+		return log.WrapErr(err, "failed to create attachment container")
+	}
+
+	// Start container
+	if err := s.runtime.StartContainer(ctx, container.ID); err != nil {
+		s.runtime.RemoveContainer(ctx, container.ID, true)
+		return log.WrapErr(err, "failed to start attachment container")
+	}
+
+	// Track attachment
+	s.mu.Lock()
+	s.attachments[ownerDomain] = append(s.attachments[ownerDomain], container.ID)
+	s.mu.Unlock()
+
+	// Start log collection for attachment
+	s.startLogCollection(ctx, container.ID, containerName)
+
+	log.Info().Str(zerowrap.FieldEntityID, container.ID).Msg("attachment deployed successfully")
 	return nil
 }
 
@@ -702,4 +847,102 @@ func mergeEnvironmentVariables(dockerfileEnv, userEnv []string) []string {
 	}
 
 	return result
+}
+
+// extractServiceName gets service name from image reference.
+// "my-postgres:latest" → "postgres", "redis:7" → "redis"
+func extractServiceName(image string) string {
+	// Remove tag
+	parts := strings.Split(image, ":")
+	name := parts[0]
+
+	// Remove registry prefix if present
+	if strings.Contains(name, "/") {
+		nameParts := strings.Split(name, "/")
+		name = nameParts[len(nameParts)-1]
+	}
+
+	// Remove common prefixes like "my-"
+	name = strings.TrimPrefix(name, "my-")
+
+	return name
+}
+
+// sanitizeName makes a domain safe for container naming.
+func sanitizeName(domain string) string {
+	// Replace dots and other special chars with dashes
+	result := strings.ReplaceAll(domain, ".", "-")
+	result = strings.ReplaceAll(result, ":", "-")
+	result = strings.ReplaceAll(result, "/", "-")
+	return result
+}
+
+// findContainerByName finds a container by its name.
+func (s *Service) findContainerByName(ctx context.Context, name string) *domain.Container {
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return nil
+	}
+
+	for _, c := range containers {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// waitForReady waits for a container to be ready.
+// Uses simple "running + delay" approach for universal compatibility.
+func (s *Service) waitForReady(ctx context.Context, containerID string) error {
+	log := zerowrap.FromCtx(ctx)
+
+	// Poll for container to be running (max 30 seconds)
+	for i := 0; i < 30; i++ {
+		running, err := s.runtime.IsContainerRunning(ctx, containerID)
+		if err != nil {
+			return err
+		}
+		if running {
+			break
+		}
+		if i == 29 {
+			return fmt.Errorf("container did not start within 30 seconds")
+		}
+		time.Sleep(time.Second)
+	}
+
+	// Additional readiness delay (configurable, default 5 seconds)
+	delay := s.config.ReadinessDelay
+	if delay == 0 {
+		delay = 5 * time.Second
+	}
+
+	log.Debug().Dur("delay", delay).Msg("waiting for container readiness")
+	time.Sleep(delay)
+
+	// Verify still running after delay
+	running, err := s.runtime.IsContainerRunning(ctx, containerID)
+	if err != nil {
+		return err
+	}
+	if !running {
+		return fmt.Errorf("container stopped during readiness delay")
+	}
+
+	return nil
+}
+
+// publishContainerDeployed publishes a container.deployed event.
+func (s *Service) publishContainerDeployed(ctx context.Context, domainName, containerID string) {
+	payload := &domain.ContainerEventPayload{
+		ContainerID: containerID,
+		Domain:      domainName,
+		Action:      "deployed",
+	}
+
+	if err := s.eventBus.Publish(domain.EventContainerDeployed, payload); err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Warn().Err(err).Msg("failed to publish container deployed event")
+	}
 }
