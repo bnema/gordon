@@ -1,9 +1,9 @@
 # Examples
 
-Copy an example and edit:
+Config is auto-generated on first `gordon start`. Use these examples as reference or replace the generated config:
 
 ```bash
-cp examples/minimal.toml ~/.config/gordon/gordon.toml
+cp examples/production.toml ~/.config/gordon/gordon.toml
 ```
 
 ## Configurations
