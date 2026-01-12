@@ -20,6 +20,7 @@ import (
 	"gordon/internal/adapters/out/envloader"
 	"gordon/internal/adapters/out/eventbus"
 	"gordon/internal/adapters/out/filesystem"
+	"gordon/internal/adapters/out/logwriter"
 	"gordon/internal/adapters/out/secrets"
 
 	// Adapters - Input
@@ -52,6 +53,13 @@ type Config struct {
 			MaxBackups int    `mapstructure:"max_backups"`
 			MaxAge     int    `mapstructure:"max_age"`
 		} `mapstructure:"file"`
+		ContainerLogs struct {
+			Enabled    bool   `mapstructure:"enabled"`
+			Dir        string `mapstructure:"dir"`
+			MaxSize    int    `mapstructure:"max_size"`
+			MaxBackups int    `mapstructure:"max_backups"`
+			MaxAge     int    `mapstructure:"max_age"`
+		} `mapstructure:"container_logs"`
 	} `mapstructure:"logging"`
 
 	Env struct {
@@ -72,6 +80,7 @@ type services struct {
 	blobStorage     *filesystem.BlobStorage
 	manifestStorage *filesystem.ManifestStorage
 	envLoader       *envloader.FileLoader
+	logWriter       *logwriter.LogWriter
 	configSvc       *config.Service
 	containerSvc    *container.Service
 	registrySvc     *registrySvc.Service
@@ -194,6 +203,11 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
+	// Create log writer
+	if svc.logWriter, err = createLogWriter(cfg, log); err != nil {
+		return nil, err
+	}
+
 	// Create use case services
 	svc.configSvc = config.NewService(v, svc.eventBus)
 	if err := svc.configSvc.Load(ctx); err != nil {
@@ -284,6 +298,37 @@ func createEnvLoader(cfg Config, log zerowrap.Logger) (*envloader.FileLoader, er
 	return envLoader, nil
 }
 
+// createLogWriter creates the container log writer.
+func createLogWriter(cfg Config, log zerowrap.Logger) (*logwriter.LogWriter, error) {
+	if !cfg.Logging.ContainerLogs.Enabled {
+		log.Debug().Msg("container log collection disabled")
+		return nil, nil
+	}
+
+	// Determine log directory
+	logDir := cfg.Logging.ContainerLogs.Dir
+	if logDir == "" {
+		dataDir := cfg.Server.DataDir
+		if dataDir == "" {
+			dataDir = "/var/lib/gordon"
+		}
+		logDir = filepath.Join(dataDir, "logs", "containers")
+	}
+
+	writer, err := logwriter.New(logwriter.Config{
+		Dir:        logDir,
+		MaxSize:    cfg.Logging.ContainerLogs.MaxSize,
+		MaxBackups: cfg.Logging.ContainerLogs.MaxBackups,
+		MaxAge:     cfg.Logging.ContainerLogs.MaxAge,
+	})
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to create container log writer")
+	}
+
+	log.Info().Str("dir", logDir).Msg("container log collection enabled")
+	return writer, nil
+}
+
 // createContainerService creates the container service with configuration.
 func createContainerService(v *viper.Viper, cfg Config, svc *services) *container.Service {
 	containerConfig := container.Config{
@@ -300,7 +345,7 @@ func createContainerService(v *viper.Viper, cfg Config, svc *services) *containe
 		NetworkGroups:       svc.configSvc.GetNetworkGroups(),
 		Attachments:         svc.configSvc.GetAttachments(),
 	}
-	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, containerConfig)
+	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig)
 }
 
 // registerEventHandlers registers all event handlers.
@@ -521,6 +566,11 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("logging.file.max_size", 100)
 	v.SetDefault("logging.file.max_backups", 3)
 	v.SetDefault("logging.file.max_age", 28)
+	v.SetDefault("logging.container_logs.enabled", true)
+	v.SetDefault("logging.container_logs.dir", "")
+	v.SetDefault("logging.container_logs.max_size", 100)
+	v.SetDefault("logging.container_logs.max_backups", 3)
+	v.SetDefault("logging.container_logs.max_age", 28)
 	v.SetDefault("env.dir", "/var/lib/gordon/env")
 	v.SetDefault("registry_auth.enabled", false)
 

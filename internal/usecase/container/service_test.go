@@ -27,7 +27,7 @@ func TestService_Deploy_Success(t *testing.T) {
 		VolumeAutoCreate: false,
 	}
 
-	svc := NewService(runtime, envLoader, eventBus, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -92,7 +92,7 @@ func TestService_Deploy_ImagePullFailure(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{}
-	svc := NewService(runtime, envLoader, eventBus, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -117,7 +117,7 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{}
-	svc := NewService(runtime, envLoader, eventBus, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
 	// Pre-populate with existing container
@@ -178,7 +178,7 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 		NetworkIsolation: true,
 		NetworkPrefix:    "gordon",
 	}
-	svc := NewService(runtime, envLoader, eventBus, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -221,7 +221,7 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 		VolumeAutoCreate: true,
 		VolumePrefix:     "gordon",
 	}
-	svc := NewService(runtime, envLoader, eventBus, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -262,7 +262,7 @@ func TestService_Stop(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	runtime.EXPECT().StopContainer(mock.Anything, "container-123").Return(nil)
@@ -277,7 +277,7 @@ func TestService_Stop_Error(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	runtime.EXPECT().StopContainer(mock.Anything, "container-123").Return(errors.New("container not found"))
@@ -293,7 +293,7 @@ func TestService_Remove(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	// Add tracked container
@@ -322,7 +322,7 @@ func TestService_Remove_WithNetworkCleanup(t *testing.T) {
 		NetworkIsolation: true,
 		NetworkPrefix:    "gordon",
 	}
-	svc := NewService(runtime, envLoader, eventBus, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
 	svc.containers["test.example.com"] = &domain.Container{
@@ -346,7 +346,7 @@ func TestService_Get(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	container := &domain.Container{ID: "container-123"}
@@ -363,7 +363,7 @@ func TestService_Get_NotFound(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	result, exists := svc.Get(ctx, "nonexistent.example.com")
@@ -377,7 +377,7 @@ func TestService_List(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	svc.containers["app1.example.com"] = &domain.Container{ID: "container-1"}
@@ -395,7 +395,7 @@ func TestService_HealthCheck(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	svc.containers["healthy.example.com"] = &domain.Container{ID: "healthy-container"}
@@ -415,7 +415,7 @@ func TestService_SyncContainers(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
@@ -455,7 +455,7 @@ func TestService_Shutdown(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	svc.containers["app1.example.com"] = &domain.Container{ID: "container-1"}
@@ -475,7 +475,7 @@ func TestService_Shutdown_PartialFailure(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
 	ctx := testContext()
 
 	svc.containers["app1.example.com"] = &domain.Container{ID: "container-1"}

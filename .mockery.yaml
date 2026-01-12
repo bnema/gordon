@@ -18,6 +18,7 @@ packages:
       EventHandler:
       SecretProvider:
       EnvLoader:
+      ContainerLogWriter:
   gordon/internal/boundaries/in:
     interfaces:
       ContainerService:

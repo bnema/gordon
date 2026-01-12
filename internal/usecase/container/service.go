@@ -36,6 +36,7 @@ type Service struct {
 	runtime    out.ContainerRuntime
 	envLoader  out.EnvLoader
 	eventBus   out.EventPublisher
+	logWriter  out.ContainerLogWriter
 	config     Config
 	containers map[string]*domain.Container
 	mu         sync.RWMutex
@@ -46,12 +47,14 @@ func NewService(
 	runtime out.ContainerRuntime,
 	envLoader out.EnvLoader,
 	eventBus out.EventPublisher,
+	logWriter out.ContainerLogWriter,
 	config Config,
 ) *Service {
 	return &Service{
 		runtime:    runtime,
 		envLoader:  envLoader,
 		eventBus:   eventBus,
+		logWriter:  logWriter,
 		config:     config,
 		containers: make(map[string]*domain.Container),
 	}
@@ -156,6 +159,9 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		return nil, log.WrapErr(err, "failed to inspect started container")
 	}
 
+	// Start container log collection (non-blocking, errors don't fail deployment)
+	s.startLogCollection(ctx, container.ID, route.Domain)
+
 	s.containers[route.Domain] = container
 
 	log.Info().
@@ -182,6 +188,13 @@ func (s *Service) Stop(ctx context.Context, containerID string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	// Stop log collection before stopping container
+	if s.logWriter != nil {
+		if err := s.logWriter.StopLogging(containerID); err != nil {
+			log.Warn().Err(err).Msg("failed to stop container log collection")
+		}
+	}
+
 	if err := s.runtime.StopContainer(ctx, containerID); err != nil {
 		return log.WrapErr(err, "failed to stop container")
 	}
@@ -198,6 +211,13 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 		zerowrap.FieldEntityID: containerID,
 	})
 	log := zerowrap.FromCtx(ctx)
+
+	// Stop log collection before removing container
+	if s.logWriter != nil {
+		if err := s.logWriter.StopLogging(containerID); err != nil {
+			log.Warn().Err(err).Msg("failed to stop container log collection")
+		}
+	}
 
 	// Find domain for cleanup
 	var containerDomain string
@@ -335,6 +355,13 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		log.WrapErr(err, "failed to stop all containers during shutdown")
 	}
 
+	// Close log writer to stop all log collection
+	if s.logWriter != nil {
+		if err := s.logWriter.Close(); err != nil {
+			log.Warn().Err(err).Msg("failed to close container log writer")
+		}
+	}
+
 	log.Info().Msg("container manager shutdown complete")
 	return nil
 }
@@ -345,6 +372,27 @@ func (s *Service) UpdateConfig(config Config) {
 }
 
 // Helper methods
+
+// startLogCollection starts log collection for a container in the background.
+// Errors are logged but don't fail the calling operation.
+func (s *Service) startLogCollection(ctx context.Context, containerID, domainName string) {
+	if s.logWriter == nil {
+		return
+	}
+
+	log := zerowrap.FromCtx(ctx)
+
+	logStream, err := s.runtime.GetContainerLogs(ctx, containerID, true)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get container logs for collection")
+		return
+	}
+
+	if err := s.logWriter.StartLogging(ctx, containerID, domainName, logStream); err != nil {
+		log.Warn().Err(err).Msg("failed to start container log collection")
+		logStream.Close()
+	}
+}
 
 func (s *Service) buildImageRef(image string) string {
 	if !s.config.RegistryAuthEnabled || s.config.RegistryDomain == "" {
