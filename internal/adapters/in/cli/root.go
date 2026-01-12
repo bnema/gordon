@@ -33,6 +33,7 @@ configuration rules, making it ideal for single-server deployments.`,
 	rootCmd.AddCommand(newStartCmd())
 	rootCmd.AddCommand(newReloadCmd())
 	rootCmd.AddCommand(newVersionCmd())
+	rootCmd.AddCommand(newAuthCmd())
 
 	return rootCmd
 }

@@ -22,12 +22,20 @@ import (
 	"gordon/internal/adapters/out/filesystem"
 	"gordon/internal/adapters/out/logwriter"
 	"gordon/internal/adapters/out/secrets"
+	"gordon/internal/adapters/out/tokenstore"
 
 	// Adapters - Input
 	"gordon/internal/adapters/in/http/middleware"
 	"gordon/internal/adapters/in/http/registry"
 
+	// Boundaries
+	"gordon/internal/boundaries/out"
+
+	// Domain
+	"gordon/internal/domain"
+
 	// Use cases
+	"gordon/internal/usecase/auth"
 	"gordon/internal/usecase/config"
 	"gordon/internal/usecase/container"
 	"gordon/internal/usecase/proxy"
@@ -66,10 +74,18 @@ type Config struct {
 		Dir string `mapstructure:"dir"`
 	} `mapstructure:"env"`
 
+	Secrets struct {
+		Backend string `mapstructure:"backend"` // "pass", "sops", or "unsafe"
+	} `mapstructure:"secrets"`
+
 	RegistryAuth struct {
-		Enabled  bool   `mapstructure:"enabled"`
-		Username string `mapstructure:"username"`
-		Password string `mapstructure:"password"`
+		Enabled      bool   `mapstructure:"enabled"`
+		Type         string `mapstructure:"type"` // "password" or "token"
+		Username     string `mapstructure:"username"`
+		Password     string `mapstructure:"password"`      // deprecated: use password_hash
+		PasswordHash string `mapstructure:"password_hash"` // path in secrets backend
+		TokenSecret  string `mapstructure:"token_secret"`  // path in secrets backend
+		TokenExpiry  string `mapstructure:"token_expiry"`  // e.g., "720h"
 	} `mapstructure:"registry_auth"`
 }
 
@@ -81,10 +97,13 @@ type services struct {
 	manifestStorage *filesystem.ManifestStorage
 	envLoader       *envloader.FileLoader
 	logWriter       *logwriter.LogWriter
+	tokenStore      out.TokenStore
 	configSvc       *config.Service
 	containerSvc    *container.Service
 	registrySvc     *registrySvc.Service
 	proxySvc        *proxy.Service
+	authSvc         *auth.Service
+	tokenHandler    *registry.TokenHandler
 }
 
 // Run initializes and starts the Gordon application.
@@ -208,6 +227,11 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
+	// Create auth service (if enabled)
+	if svc.tokenStore, svc.authSvc, err = createAuthService(ctx, cfg, log); err != nil {
+		return nil, err
+	}
+
 	// Create use case services
 	svc.configSvc = config.NewService(v, svc.eventBus)
 	if err := svc.configSvc.Load(ctx); err != nil {
@@ -220,6 +244,11 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		RegistryDomain: cfg.Server.RegistryDomain,
 		RegistryPort:   cfg.Server.RegistryPort,
 	})
+
+	// Create token handler for registry token endpoint
+	if svc.authSvc != nil {
+		svc.tokenHandler = registry.NewTokenHandler(svc.authSvc, log)
+	}
 
 	return svc, nil
 }
@@ -329,6 +358,122 @@ func createLogWriter(cfg Config, log zerowrap.Logger) (*logwriter.LogWriter, err
 	return writer, nil
 }
 
+// createAuthService creates the authentication service and token store.
+func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (out.TokenStore, *auth.Service, error) {
+	if !cfg.RegistryAuth.Enabled {
+		return nil, nil, nil
+	}
+
+	// Determine auth type
+	authType := domain.AuthTypePassword
+	if cfg.RegistryAuth.Type == "token" {
+		authType = domain.AuthTypeToken
+	}
+
+	// Determine secrets backend
+	backend := domain.SecretsBackendUnsafe // default
+	switch cfg.Secrets.Backend {
+	case "pass":
+		backend = domain.SecretsBackendPass
+	case "sops":
+		backend = domain.SecretsBackendSops
+	case "unsafe", "":
+		backend = domain.SecretsBackendUnsafe
+	}
+
+	// Get data directory
+	dataDir := cfg.Server.DataDir
+	if dataDir == "" {
+		dataDir = "/var/lib/gordon"
+	}
+
+	// Create token store (needed for token auth or to store revocations)
+	var store out.TokenStore
+	var err error
+	if authType == domain.AuthTypeToken {
+		store, err = tokenstore.NewStore(backend, dataDir, log)
+		if err != nil {
+			return nil, nil, log.WrapErr(err, "failed to create token store")
+		}
+	}
+
+	// Build auth config
+	authConfig := auth.Config{
+		Enabled:  cfg.RegistryAuth.Enabled,
+		AuthType: authType,
+		Username: cfg.RegistryAuth.Username,
+	}
+
+	// Load secrets based on auth type
+	if authType == domain.AuthTypePassword {
+		// For password auth, we need the bcrypt hash
+		if cfg.RegistryAuth.PasswordHash != "" {
+			// Load from secrets backend
+			hash, err := loadSecret(ctx, backend, cfg.RegistryAuth.PasswordHash, dataDir, log)
+			if err != nil {
+				return nil, nil, log.WrapErr(err, "failed to load password hash")
+			}
+			authConfig.PasswordHash = hash
+		} else if cfg.RegistryAuth.Password != "" {
+			// Backward compatibility: use plain password (will be hashed on validation)
+			// This is less secure but maintains backward compatibility
+			log.Warn().Msg("using plain password in config is deprecated, use password_hash with a secrets backend")
+			authConfig.PasswordHash = cfg.RegistryAuth.Password
+		}
+	} else {
+		// For token auth, we need the signing secret
+		if cfg.RegistryAuth.TokenSecret != "" {
+			secret, err := loadSecret(ctx, backend, cfg.RegistryAuth.TokenSecret, dataDir, log)
+			if err != nil {
+				return nil, nil, log.WrapErr(err, "failed to load token secret")
+			}
+			authConfig.TokenSecret = []byte(secret)
+		} else {
+			return nil, nil, fmt.Errorf("token_secret is required for token authentication")
+		}
+
+		// Parse token expiry
+		if cfg.RegistryAuth.TokenExpiry != "" {
+			expiry, err := time.ParseDuration(cfg.RegistryAuth.TokenExpiry)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid token_expiry: %w", err)
+			}
+			authConfig.TokenExpiry = expiry
+		}
+	}
+
+	authSvc := auth.NewService(authConfig, store, log)
+
+	log.Info().
+		Str("type", string(authType)).
+		Str("backend", string(backend)).
+		Msg("registry authentication enabled")
+
+	return store, authSvc, nil
+}
+
+// loadSecret loads a secret from the configured backend.
+func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDir string, log zerowrap.Logger) (string, error) {
+	switch backend {
+	case domain.SecretsBackendPass:
+		provider := secrets.NewPassProvider(log)
+		return provider.GetSecret(ctx, path)
+	case domain.SecretsBackendSops:
+		provider := secrets.NewSopsProvider(log)
+		return provider.GetSecret(ctx, path)
+	case domain.SecretsBackendUnsafe:
+		// For unsafe backend, path is relative to dataDir/secrets/
+		secretFile := filepath.Join(dataDir, "secrets", path)
+		data, err := os.ReadFile(secretFile)
+		if err != nil {
+			return "", fmt.Errorf("failed to read secret file: %w", err)
+		}
+		return string(data), nil
+	default:
+		return "", fmt.Errorf("unknown secrets backend: %s", backend)
+	}
+}
+
 // createContainerService creates the container service with configuration.
 func createContainerService(v *viper.Viper, cfg Config, svc *services) *container.Service {
 	containerConfig := container.Config{
@@ -414,12 +559,25 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		middleware.RequestLogger(log),
 	}
 
-	if cfg.RegistryAuth.Enabled {
+	if cfg.RegistryAuth.Enabled && svc.authSvc != nil {
 		registryMiddlewares = append(registryMiddlewares,
-			middleware.RegistryAuth(cfg.RegistryAuth.Username, cfg.RegistryAuth.Password, log))
+			middleware.RegistryAuthV2(svc.authSvc, log))
 	}
 
 	registryWithMiddleware := middleware.Chain(registryMiddlewares...)(registryHandler)
+
+	// Create a mux that routes /v2/token to the token handler (no auth required)
+	// and all other /v2/* routes to the registry handler (with auth)
+	registryMux := http.NewServeMux()
+	if svc.tokenHandler != nil {
+		// Token endpoint is NOT protected by auth - it's where clients get tokens
+		tokenWithLogging := middleware.Chain(
+			middleware.PanicRecovery(log),
+			middleware.RequestLogger(log),
+		)(svc.tokenHandler)
+		registryMux.Handle("/v2/token", tokenWithLogging)
+	}
+	registryMux.Handle("/v2/", registryWithMiddleware)
 
 	proxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
@@ -429,7 +587,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 
 	proxyWithMiddleware := middleware.Chain(proxyMiddlewares...)(svc.proxySvc)
 
-	return registryWithMiddleware, proxyWithMiddleware
+	return registryMux, proxyWithMiddleware
 }
 
 // runServers starts the HTTP servers and waits for shutdown.
@@ -578,7 +736,10 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("logging.container_logs.max_backups", 3)
 	v.SetDefault("logging.container_logs.max_age", 28)
 	v.SetDefault("env.dir", "/var/lib/gordon/env")
+	v.SetDefault("secrets.backend", "unsafe")
 	v.SetDefault("registry_auth.enabled", false)
+	v.SetDefault("registry_auth.type", "password")
+	v.SetDefault("registry_auth.token_expiry", "720h")
 
 	if configPath != "" {
 		v.SetConfigFile(configPath)
