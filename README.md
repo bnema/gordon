@@ -28,7 +28,7 @@ Build on your machine, push to deploy. Works from your laptop or CI.
 - Zero downtime updates, persistent volumes, environment merging
 - Single binary, ~15MB RAM
 
-## Quick Start (5 minutes)
+## Quick Start
 
 ### Prerequisites
 - Ubuntu/Debian VPS with root access
@@ -126,12 +126,10 @@ backend = "pass"  # "pass", "sops", or "unsafe" (plain text in data_dir)
 # Registry authentication (choose password or token type)
 [registry_auth]
 enabled = true
-type = "password"                          # "password" or "token"
-
+type = "password"  # "password" or "token"
 # Password auth: bcrypt hash stored in secrets backend
 username = "deploy"
 password_hash = "gordon/registry/password_hash"  # path in secrets backend
-
 # Token auth: JWT-based authentication
 # token_secret = "gordon/registry/token_secret"  # path in secrets backend
 
@@ -328,16 +326,6 @@ Gordon is open source and welcomes contributions:
 - [Suggest features](https://github.com/bnema/gordon/discussions)
 - [Submit PRs](https://github.com/bnema/gordon/pulls)
 
-## Why Gordon?
-
-Most deployment tools require a CI/CD pipeline before you can ship anything. Gordon works the other way: push from your laptop on day one, add GitHub Actions when the project grows.
-
-Your dev machine has 16 cores and 32GB RAM. Your VPS has 2 cores and 2GB. Why rebuild everything on the weak machine? Build locally, push the result.
-
 ## License
 
 GPL-3.0 - Use freely, contribute back.
-
----
-
-If your deployment process has more YAML than application code, something went wrong.
