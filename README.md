@@ -1,34 +1,16 @@
 # Gordon
 
-> Deploy containers to your VPS in seconds, not hours. One push, zero complexity.
+Your VPS already runs Docker. Gordon makes it deploy on push.
 
-<div align="center">
-  <img src="assets/gordon-mascot-hq-trsp.png" alt="Gordon Mascot" width="200">
-  <h3>The Smart Way to Deploy Containers on Your VPS</h3>
-  <p><em>Push image → Auto-deploy → Zero downtime</em></p>
-</div>
+```bash
+docker build -t myapp .
+docker push registry.your-server.com/myapp:latest
+# Live at https://app.your-server.com
+```
 
-## What is Gordon?
+> docker push → live in production. From your laptop or CI. Your choice.
 
-Gordon is a lightweight deployment system that turns any VPS into a container hosting platform with push-to-deploy capabilities. It combines a private container registry with an intelligent reverse proxy to create a self-hosted alternative to complex orchestration systems.
-
-### Key Features
-
-- **Built-in Container Registry**: Your VPS becomes a private registry
-- **Push-to-Deploy**: Pushing an image triggers automatic deployment
-- **Smart Routing**: Multi-domain support with automatic HTTPS
-- **Zero-Downtime Updates**: Graceful container swaps on new pushes
-- **Network Isolation**: Each app gets its own network with attached services
-- **Auto-Volume Management**: Persistent storage from Dockerfile VOLUME directives
-- **Environment Merging**: Dockerfile ENV + your custom variables
-- **Minimal Footprint**: ~15MB RAM usage, single binary
-
-### Perfect For
-
-- **Solo developers** running multiple projects on one VPS
-- **Small teams** wanting simple, reliable deployments
-- **Agencies** managing client applications across servers
-- **Anyone** tired of overengineered deployment solutions
+Gordon combines a private container registry with a reverse proxy. Push an image, it deploys. Handles multiple domains, zero downtime updates, persistent volumes, and environment merging. Single binary, ~15MB RAM.
 
 ## How It Works
 
@@ -348,14 +330,11 @@ Gordon is open source and welcomes contributions:
 - [Suggest features](https://github.com/bnema/gordon/discussions)
 - [Submit PRs](https://github.com/bnema/gordon/pulls)
 
-## Philosophy
+## Why Gordon?
 
-Traditional deployment pipelines recreate your development environment in CI/CD systems, adding complexity and points of failure. Gordon takes a different approach: **your development machine is already a perfect build environment**.
+Most deployment tools require a CI/CD pipeline before you can ship anything. Gordon works the other way: push from your laptop on day one, add GitHub Actions when the project grows.
 
-```bash
-# Traditional: Code → CI/CD → Build → Test → Deploy → Hope
-# Gordon:     Code → Build → Test → Push → Done
-```
+Your dev machine has 16 cores and 32GB RAM. Your VPS has 2 cores and 2GB. Why rebuild everything on the weak machine? Build locally, push the result.
 
 ## License
 
@@ -363,4 +342,4 @@ GPL-3.0 - Use freely, contribute back.
 
 ---
 
-**Built for developers who ship.** If Gordon helps you deploy faster, [give it a star](https://github.com/bnema/gordon).
+If your deployment process has more YAML than application code, something went wrong.
