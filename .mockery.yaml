@@ -19,9 +19,11 @@ packages:
       SecretProvider:
       EnvLoader:
       ContainerLogWriter:
+      TokenStore:
   gordon/internal/boundaries/in:
     interfaces:
       ContainerService:
       RegistryService:
       ProxyService:
       ConfigService:
+      AuthService:
