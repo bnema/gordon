@@ -85,6 +85,7 @@ jobs:
 | `username` | Registry username (token subject for token auth) | Yes | - |
 | `password` | Registry password or token | Yes | - |
 | `image` | Image name | No | Repository name |
+| `tag` | Override image tag | No | Git tag or short SHA |
 | `dockerfile` | Path to Dockerfile | No | `./Dockerfile` |
 | `context` | Build context path | No | `.` |
 | `build-args` | Build arguments (one per line) | No | - |
@@ -163,6 +164,7 @@ jobs:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
           password: ${{ secrets.GORDON_TOKEN }}
+          tag: ${{ github.event.inputs.tag }}
 ```
 
 ### Monorepo with Multiple Services
