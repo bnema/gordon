@@ -395,82 +395,18 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 		return nil, nil, nil
 	}
 
-	// Determine auth type
-	authType := domain.AuthTypePassword
-	if cfg.RegistryAuth.Type == "token" {
-		authType = domain.AuthTypeToken
+	authType := resolveAuthType(cfg.RegistryAuth.Type)
+	backend := resolveSecretsBackend(cfg.Secrets.Backend)
+	dataDir := resolveDataDir(cfg.Server.DataDir)
+
+	store, err := createTokenStore(authType, backend, dataDir, log)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	// Determine secrets backend
-	backend := domain.SecretsBackendUnsafe // default
-	switch cfg.Secrets.Backend {
-	case "pass":
-		backend = domain.SecretsBackendPass
-	case "sops":
-		backend = domain.SecretsBackendSops
-	case "unsafe", "":
-		backend = domain.SecretsBackendUnsafe
-	}
-
-	// Get data directory
-	dataDir := cfg.Server.DataDir
-	if dataDir == "" {
-		dataDir = DefaultDataDir()
-	}
-
-	// Create token store (needed for token auth or to store revocations)
-	var store out.TokenStore
-	var err error
-	if authType == domain.AuthTypeToken {
-		store, err = tokenstore.NewStore(backend, dataDir, log)
-		if err != nil {
-			return nil, nil, log.WrapErr(err, "failed to create token store")
-		}
-	}
-
-	// Build auth config
-	authConfig := auth.Config{
-		Enabled:  cfg.RegistryAuth.Enabled,
-		AuthType: authType,
-		Username: cfg.RegistryAuth.Username,
-	}
-
-	// Load secrets based on auth type
-	if authType == domain.AuthTypePassword {
-		// For password auth, we need the bcrypt hash
-		if cfg.RegistryAuth.PasswordHash != "" {
-			// Load from secrets backend
-			hash, err := loadSecret(ctx, backend, cfg.RegistryAuth.PasswordHash, dataDir, log)
-			if err != nil {
-				return nil, nil, log.WrapErr(err, "failed to load password hash")
-			}
-			authConfig.PasswordHash = hash
-		} else if cfg.RegistryAuth.Password != "" {
-			// Backward compatibility: use plain password (will be hashed on validation)
-			// This is less secure but maintains backward compatibility
-			log.Warn().Msg("using plain password in config is deprecated, use password_hash with a secrets backend")
-			authConfig.PasswordHash = cfg.RegistryAuth.Password
-		}
-	} else {
-		// For token auth, we need the signing secret
-		if cfg.RegistryAuth.TokenSecret != "" {
-			secret, err := loadSecret(ctx, backend, cfg.RegistryAuth.TokenSecret, dataDir, log)
-			if err != nil {
-				return nil, nil, log.WrapErr(err, "failed to load token secret")
-			}
-			authConfig.TokenSecret = []byte(secret)
-		} else {
-			return nil, nil, fmt.Errorf("token_secret is required for token authentication")
-		}
-
-		// Parse token expiry
-		if cfg.RegistryAuth.TokenExpiry != "" {
-			expiry, err := time.ParseDuration(cfg.RegistryAuth.TokenExpiry)
-			if err != nil {
-				return nil, nil, fmt.Errorf("invalid token_expiry: %w", err)
-			}
-			authConfig.TokenExpiry = expiry
-		}
+	authConfig, err := buildAuthConfig(ctx, cfg, authType, backend, dataDir, log)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	authSvc := auth.NewService(authConfig, store, log)
@@ -481,6 +417,128 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 		Msg("registry authentication enabled")
 
 	return store, authSvc, nil
+}
+
+func resolveAuthType(authType string) domain.AuthType {
+	if authType == "token" {
+		return domain.AuthTypeToken
+	}
+	return domain.AuthTypePassword
+}
+
+func resolveSecretsBackend(backend string) domain.SecretsBackend {
+	switch backend {
+	case "pass":
+		return domain.SecretsBackendPass
+	case "sops":
+		return domain.SecretsBackendSops
+	case "unsafe", "":
+		return domain.SecretsBackendUnsafe
+	default:
+		return domain.SecretsBackendUnsafe
+	}
+}
+
+func resolveDataDir(dataDir string) string {
+	if dataDir == "" {
+		return DefaultDataDir()
+	}
+	return dataDir
+}
+
+func createTokenStore(authType domain.AuthType, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (out.TokenStore, error) {
+	if authType != domain.AuthTypeToken {
+		return nil, nil
+	}
+
+	store, err := tokenstore.NewStore(backend, dataDir, log)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to create token store")
+	}
+	return store, nil
+}
+
+func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (auth.Config, error) {
+	authConfig := auth.Config{
+		Enabled:  cfg.RegistryAuth.Enabled,
+		AuthType: authType,
+		Username: cfg.RegistryAuth.Username,
+	}
+
+	switch authType {
+	case domain.AuthTypePassword:
+		hash, err := loadPasswordHash(ctx, cfg, backend, dataDir, log)
+		if err != nil {
+			return auth.Config{}, err
+		}
+		authConfig.PasswordHash = hash
+	case domain.AuthTypeToken:
+		secret, expiry, err := loadTokenConfig(ctx, cfg, backend, dataDir, log)
+		if err != nil {
+			return auth.Config{}, err
+		}
+		authConfig.TokenSecret = secret
+		authConfig.TokenExpiry = expiry
+	}
+
+	return authConfig, nil
+}
+
+func loadPasswordHash(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (string, error) {
+	if cfg.RegistryAuth.PasswordHash != "" {
+		hash, err := loadSecret(ctx, backend, cfg.RegistryAuth.PasswordHash, dataDir, log)
+		if err != nil {
+			return "", log.WrapErr(err, "failed to load password hash")
+		}
+		return hash, nil
+	}
+
+	if cfg.RegistryAuth.Password != "" {
+		log.Warn().Msg("using plain password in config is deprecated, use password_hash with a secrets backend")
+		return cfg.RegistryAuth.Password, nil
+	}
+
+	return "", nil
+}
+
+func loadTokenConfig(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) ([]byte, time.Duration, error) {
+	secret, err := loadTokenSecret(ctx, cfg, backend, dataDir, log)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	expiry, err := parseTokenExpiry(cfg.RegistryAuth.TokenExpiry)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return secret, expiry, nil
+}
+
+func loadTokenSecret(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) ([]byte, error) {
+	if cfg.RegistryAuth.TokenSecret == "" {
+		return nil, fmt.Errorf("token_secret is required for token authentication")
+	}
+
+	secret, err := loadSecret(ctx, backend, cfg.RegistryAuth.TokenSecret, dataDir, log)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to load token secret")
+	}
+
+	return []byte(secret), nil
+}
+
+func parseTokenExpiry(expiry string) (time.Duration, error) {
+	if expiry == "" {
+		return 0, nil
+	}
+
+	parsed, err := time.ParseDuration(expiry)
+	if err != nil {
+		return 0, fmt.Errorf("invalid token_expiry: %w", err)
+	}
+
+	return parsed, nil
 }
 
 // loadSecret loads a secret from the configured backend.

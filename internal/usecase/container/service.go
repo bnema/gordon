@@ -468,6 +468,13 @@ func (s *Service) buildImageRef(image string) string {
 	return fmt.Sprintf("%s/%s", s.config.RegistryDomain, image)
 }
 
+func (s *Service) pullRefForDeploy(ctx context.Context, imageRef string) (string, bool) {
+	if !domain.IsInternalDeploy(ctx) {
+		return imageRef, false
+	}
+	return rewriteToLocalRegistry(imageRef, s.config.RegistryDomain, s.config.RegistryPort), true
+}
+
 // ensureImage ensures the image is available locally, pulling if needed.
 // Returns the canonical image reference to use for container operations.
 func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, error) {
@@ -475,11 +482,7 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 	log := zerowrap.FromCtx(ctx)
 
 	// Determine if this is an internal deploy and what reference to use for pulls.
-	pullRef := imageRef
-	isInternal := domain.IsInternalDeploy(ctx)
-	if isInternal {
-		pullRef = rewriteToLocalRegistry(imageRef, s.config.RegistryDomain, s.config.RegistryPort)
-	}
+	pullRef, isInternal := s.pullRefForDeploy(ctx, imageRef)
 	if pullRef != imageRef {
 		log.Info().
 			Str("original_ref", imageRef).
@@ -487,64 +490,96 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 			Msg("internal deploy: using localhost registry for pull")
 	}
 
-	// Check local images using the canonical reference or pull reference.
-	localImages, err := s.runtime.ListImages(ctx)
+	found, err := s.ensureLocalImage(ctx, imageRef, pullRef)
 	if err != nil {
-		log.WrapErr(err, "failed to list local images, will attempt pull")
-	} else {
-		normalizedRef := normalizeImageRef(imageRef)
-		normalizedPullRef := normalizeImageRef(pullRef)
-		for _, img := range localImages {
-			normalizedImage := normalizeImageRef(img)
-			if normalizedImage == normalizedRef {
-				log.Info().Msg("image found locally, skipping pull")
-				return imageRef, nil
-			}
-			if normalizedImage == normalizedPullRef {
-				if pullRef != imageRef {
-					if err := s.runtime.TagImage(ctx, pullRef, imageRef); err != nil {
-						return "", log.WrapErr(err, "failed to tag image from pull reference")
-					}
-				}
-				log.Info().Msg("image found locally, skipping pull")
-				return imageRef, nil
-			}
-		}
+		return "", err
+	}
+	if found {
+		return imageRef, nil
 	}
 
 	// Pull image
 	log.Info().Msg("pulling image from registry")
 
-	switch {
-	case isInternal && s.config.RegistryAuthEnabled:
-		if s.config.InternalRegistryUsername == "" || s.config.InternalRegistryPassword == "" {
-			return "", log.WrapErr(fmt.Errorf("internal registry auth not configured"), "failed to pull image for internal deploy")
-		}
-		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.InternalRegistryUsername, s.config.InternalRegistryPassword); err != nil {
-			return "", log.WrapErr(err, "failed to pull image with internal auth")
-		}
-	case isInternal:
-		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
-			return "", log.WrapErr(err, "failed to pull image")
-		}
-	case s.config.RegistryAuthEnabled:
-		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.RegistryUsername, s.config.RegistryPassword); err != nil {
-			return "", log.WrapErr(err, "failed to pull image with auth")
-		}
-	default:
-		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
-			return "", log.WrapErr(err, "failed to pull image")
-		}
+	if err := s.pullImage(ctx, pullRef, isInternal); err != nil {
+		return "", err
 	}
 
-	if pullRef != imageRef {
-		if err := s.runtime.TagImage(ctx, pullRef, imageRef); err != nil {
-			return "", log.WrapErr(err, "failed to tag image from pull reference")
-		}
+	if err := s.tagImageIfNeeded(ctx, pullRef, imageRef); err != nil {
+		return "", err
 	}
 
 	log.Info().Msg("image pulled successfully")
 	return imageRef, nil
+}
+
+func (s *Service) ensureLocalImage(ctx context.Context, imageRef, pullRef string) (bool, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	localImages, err := s.runtime.ListImages(ctx)
+	if err != nil {
+		log.WrapErr(err, "failed to list local images, will attempt pull")
+		return false, nil
+	}
+
+	normalizedRef := normalizeImageRef(imageRef)
+	normalizedPullRef := normalizeImageRef(pullRef)
+	for _, img := range localImages {
+		normalizedImage := normalizeImageRef(img)
+		if normalizedImage == normalizedRef {
+			log.Info().Msg("image found locally, skipping pull")
+			return true, nil
+		}
+		if normalizedImage == normalizedPullRef {
+			if err := s.tagImageIfNeeded(ctx, pullRef, imageRef); err != nil {
+				return false, err
+			}
+			log.Info().Msg("image found locally, skipping pull")
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (s *Service) pullImage(ctx context.Context, pullRef string, isInternal bool) error {
+	log := zerowrap.FromCtx(ctx)
+
+	switch {
+	case isInternal && s.config.RegistryAuthEnabled:
+		if s.config.InternalRegistryUsername == "" || s.config.InternalRegistryPassword == "" {
+			return log.WrapErr(fmt.Errorf("internal registry auth not configured"), "failed to pull image for internal deploy")
+		}
+		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.InternalRegistryUsername, s.config.InternalRegistryPassword); err != nil {
+			return log.WrapErr(err, "failed to pull image with internal auth")
+		}
+	case isInternal:
+		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
+			return log.WrapErr(err, "failed to pull image")
+		}
+	case s.config.RegistryAuthEnabled:
+		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.RegistryUsername, s.config.RegistryPassword); err != nil {
+			return log.WrapErr(err, "failed to pull image with auth")
+		}
+	default:
+		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
+			return log.WrapErr(err, "failed to pull image")
+		}
+	}
+
+	return nil
+}
+
+func (s *Service) tagImageIfNeeded(ctx context.Context, sourceRef, targetRef string) error {
+	if sourceRef == targetRef {
+		return nil
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	if err := s.runtime.TagImage(ctx, sourceRef, targetRef); err != nil {
+		return log.WrapErr(err, "failed to tag image from pull reference")
+	}
+	return nil
 }
 
 func (s *Service) loadEnvironment(ctx context.Context, domainName, imageRef string) ([]string, error) {
@@ -1021,16 +1056,12 @@ func rewriteToLocalRegistry(imageRef, registryDomain string, registryPort int) s
 
 	localRegistry := fmt.Sprintf("localhost:%d", registryPort)
 	localPrefix := localRegistry + "/"
-	if strings.HasPrefix(imageRef, localPrefix) {
-		return imageRef
-	}
+	imageRef = strings.TrimPrefix(imageRef, localPrefix)
 
 	registryDomain = strings.TrimSuffix(registryDomain, "/")
 	if registryDomain != "" {
 		prefix := registryDomain + "/"
-		if strings.HasPrefix(imageRef, prefix) {
-			imageRef = strings.TrimPrefix(imageRef, prefix)
-		}
+		imageRef = strings.TrimPrefix(imageRef, prefix)
 	}
 
 	return localPrefix + imageRef
