@@ -40,17 +40,17 @@ Build on your machine, push to deploy. Works from your laptop or CI.
 ### Installation
 
 ```bash
-# Download from releases
+# Download and install
 wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
 tar -xzf gordon_linux_amd64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
 
-# Create config
-mkdir -p ~/.config/gordon
-cp examples/minimal.toml ~/.config/gordon/gordon.toml
-# Edit gordon.toml with your domain
+# Start Gordon (generates config on first run)
+gordon start
 ```
+
+Config is created at `~/.config/gordon/gordon.toml` on first start. Edit it to set your `registry_domain` and routes.
 
 **Important:** For a complete working setup including networking, firewall, and systemd service, follow the [detailed setup guide](#detailed-setup-guide-podman-rootless-mode) below.
 
@@ -261,26 +261,14 @@ sudo mv gordon /usr/local/bin/
 
 ### 5. Configure Gordon
 ```bash
-# Create config directory and file
-mkdir -p ~/.config/gordon
-cat > ~/.config/gordon/gordon.toml <<EOF
-[server]
-port = 8080
-registry_port = 5000
-registry_domain = "registry.yourdomain.com"
+# Run once to generate config, then stop with Ctrl+C
+gordon start
 
-[secrets]
-backend = "unsafe"  # Use "pass" or "sops" for production
-
-[registry_auth]
-enabled = false  # Enable after testing
-
-[routes]
-"app.yourdomain.com" = "myapp:latest"
-EOF
+# Edit the generated config
+nano ~/.config/gordon/gordon.toml
 ```
 
-Data is stored in `~/.gordon/` (registry, env files, logs, secrets).
+Set your `registry_domain` and add routes. Data is stored in `~/.gordon/`.
 
 ### 6. Create Systemd Service
 ```bash
