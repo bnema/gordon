@@ -88,8 +88,8 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		log.WrapErr(err, "failed to cleanup orphaned containers")
 	}
 
-	// Build image reference and ensure it's available
-	// ensureImage returns the actual image reference used (may be rewritten for internal pulls)
+	// Build image reference and ensure it's available.
+	// ensureImage returns the canonical reference; internal pulls may use the local registry.
 	imageRef := s.buildImageRef(route.Image)
 	actualImageRef, err := s.ensureImage(ctx, imageRef)
 	if err != nil {
@@ -469,33 +469,45 @@ func (s *Service) buildImageRef(image string) string {
 }
 
 // ensureImage ensures the image is available locally, pulling if needed.
-// Returns the actual image reference to use for container operations (may differ
-// from input if localhost rewrite was applied for internal pulls).
+// Returns the canonical image reference to use for container operations.
 func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, error) {
 	ctx = zerowrap.CtxWithField(ctx, "image", imageRef)
 	log := zerowrap.FromCtx(ctx)
 
-	// Determine if this is an internal deploy and what reference to use
+	// Determine if this is an internal deploy and what reference to use for pulls.
 	pullRef := imageRef
 	isInternal := domain.IsInternalDeploy(ctx)
-	if isInternal && s.config.RegistryDomain != "" {
-		pullRef = rewriteToRegistryDomain(imageRef, s.config.RegistryDomain)
+	if isInternal {
+		pullRef = rewriteToLocalRegistry(imageRef, s.config.RegistryDomain, s.config.RegistryPort)
+	}
+	if pullRef != imageRef {
 		log.Info().
 			Str("original_ref", imageRef).
-			Str("registry_ref", pullRef).
-			Msg("internal deploy: using registry domain for pull")
+			Str("pull_ref", pullRef).
+			Msg("internal deploy: using localhost registry for pull")
 	}
 
-	// Check local images using the reference we'll actually use
+	// Check local images using the canonical reference or pull reference.
 	localImages, err := s.runtime.ListImages(ctx)
 	if err != nil {
 		log.WrapErr(err, "failed to list local images, will attempt pull")
 	} else {
-		normalizedRef := normalizeImageRef(pullRef)
+		normalizedRef := normalizeImageRef(imageRef)
+		normalizedPullRef := normalizeImageRef(pullRef)
 		for _, img := range localImages {
-			if normalizeImageRef(img) == normalizedRef {
+			normalizedImage := normalizeImageRef(img)
+			if normalizedImage == normalizedRef {
 				log.Info().Msg("image found locally, skipping pull")
-				return pullRef, nil
+				return imageRef, nil
+			}
+			if normalizedImage == normalizedPullRef {
+				if pullRef != imageRef {
+					if err := s.runtime.TagImage(ctx, pullRef, imageRef); err != nil {
+						return "", log.WrapErr(err, "failed to tag image from pull reference")
+					}
+				}
+				log.Info().Msg("image found locally, skipping pull")
+				return imageRef, nil
 			}
 		}
 	}
@@ -525,8 +537,14 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 		}
 	}
 
+	if pullRef != imageRef {
+		if err := s.runtime.TagImage(ctx, pullRef, imageRef); err != nil {
+			return "", log.WrapErr(err, "failed to tag image from pull reference")
+		}
+	}
+
 	log.Info().Msg("image pulled successfully")
-	return pullRef, nil
+	return imageRef, nil
 }
 
 func (s *Service) loadEnvironment(ctx context.Context, domainName, imageRef string) ([]string, error) {
@@ -726,7 +744,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 
 	log.Info().Str(zerowrap.FieldService, serviceImage).Msg("deploying attached service")
 
-	// Ensure image (get actual image ref, may be rewritten for internal pulls)
+	// Ensure image (canonical ref is returned; internal pulls may use the local registry).
 	imageRef := s.buildImageRef(serviceImage)
 	actualImageRef, err := s.ensureImage(ctx, imageRef)
 	if err != nil {
@@ -992,4 +1010,28 @@ func rewriteToRegistryDomain(imageRef, registryDomain string) string {
 	}
 
 	return prefix + imageRef
+}
+
+// rewriteToLocalRegistry rewrites an image reference to use the local registry address.
+// e.g., "registry.example.com/myapp:latest" -> "localhost:5000/myapp:latest"
+func rewriteToLocalRegistry(imageRef, registryDomain string, registryPort int) string {
+	if imageRef == "" {
+		return imageRef
+	}
+
+	localRegistry := fmt.Sprintf("localhost:%d", registryPort)
+	localPrefix := localRegistry + "/"
+	if strings.HasPrefix(imageRef, localPrefix) {
+		return imageRef
+	}
+
+	registryDomain = strings.TrimSuffix(registryDomain, "/")
+	if registryDomain != "" {
+		prefix := registryDomain + "/"
+		if strings.HasPrefix(imageRef, prefix) {
+			imageRef = strings.TrimPrefix(imageRef, prefix)
+		}
+	}
+
+	return localPrefix + imageRef
 }

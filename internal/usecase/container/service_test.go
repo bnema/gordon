@@ -650,3 +650,49 @@ func TestRewriteToRegistryDomain(t *testing.T) {
 		})
 	}
 }
+
+func TestRewriteToLocalRegistry(t *testing.T) {
+	tests := []struct {
+		name           string
+		imageRef       string
+		registryDomain string
+		registryPort   int
+		wantRef        string
+	}{
+		{
+			name:           "rewrites registry domain prefix",
+			imageRef:       "registry.example.com/myapp:latest",
+			registryDomain: "registry.example.com",
+			registryPort:   5000,
+			wantRef:        "localhost:5000/myapp:latest",
+		},
+		{
+			name:           "prefixes local registry when no domain",
+			imageRef:       "myapp:v1.0",
+			registryDomain: "registry.example.com",
+			registryPort:   5000,
+			wantRef:        "localhost:5000/myapp:v1.0",
+		},
+		{
+			name:           "keeps existing localhost prefix",
+			imageRef:       "localhost:5000/myapp:latest",
+			registryDomain: "registry.example.com",
+			registryPort:   5000,
+			wantRef:        "localhost:5000/myapp:latest",
+		},
+		{
+			name:           "prefixes external image path",
+			imageRef:       "docker.io/library/nginx:latest",
+			registryDomain: "registry.example.com",
+			registryPort:   5000,
+			wantRef:        "localhost:5000/docker.io/library/nginx:latest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotRef := rewriteToLocalRegistry(tt.imageRef, tt.registryDomain, tt.registryPort)
+			assert.Equal(t, tt.wantRef, gotRef, "unexpected rewritten reference")
+		})
+	}
+}
