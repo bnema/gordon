@@ -378,18 +378,33 @@ func (r *Runtime) PullImageWithAuth(ctx context.Context, imageRef, username, pas
 
 	log.Info().Msg("pulling image with authentication")
 
+	// Extract registry server address from image reference
+	// e.g., "registry.bnema.dev/image:tag" -> "registry.bnema.dev"
+	serverAddress := imageRef
+	if idx := strings.Index(imageRef, "/"); idx > 0 {
+		serverAddress = imageRef[:idx]
+	}
+
 	// Create authentication configuration
 	authConfig := registry.AuthConfig{
-		Username: username,
-		Password: password,
+		Username:      username,
+		Password:      password,
+		ServerAddress: serverAddress,
 	}
 
 	// Encode authentication to base64 JSON
+	// Note: Docker API accepts both StdEncoding and URLEncoding, but Podman
+	// may be more strict. Using StdEncoding for maximum compatibility.
 	authConfigBytes, err := json.Marshal(authConfig)
 	if err != nil {
 		return log.WrapErr(err, "failed to marshal auth config")
 	}
-	authStr := base64.URLEncoding.EncodeToString(authConfigBytes)
+	authStr := base64.StdEncoding.EncodeToString(authConfigBytes)
+
+	log.Debug().
+		Str("server_address", serverAddress).
+		Str("auth_json", string(authConfigBytes)).
+		Msg("auth config for pull")
 
 	// Pull with authentication
 	reader, err := r.client.ImagePull(ctx, imageRef, image.PullOptions{

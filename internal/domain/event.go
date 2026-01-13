@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // EventType defines the type of event that occurred.
 type EventType string
@@ -50,4 +53,25 @@ type ConfigReloadPayload struct {
 	AddedRoutes   []string
 	RemovedRoutes []string
 	UpdatedRoutes []string
+}
+
+// Context keys for domain-level concerns.
+type contextKey string
+
+const (
+	// ContextKeyInternalDeploy indicates the deployment is triggered internally
+	// (e.g., from our own registry's image.pushed event) and should bypass
+	// external authentication for image pulls.
+	ContextKeyInternalDeploy contextKey = "internal_deploy"
+)
+
+// IsInternalDeploy checks if the context indicates an internal deployment.
+func IsInternalDeploy(ctx context.Context) bool {
+	v, ok := ctx.Value(ContextKeyInternalDeploy).(bool)
+	return ok && v
+}
+
+// WithInternalDeploy returns a context marked as an internal deployment.
+func WithInternalDeploy(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ContextKeyInternalDeploy, true)
 }

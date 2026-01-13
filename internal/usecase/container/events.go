@@ -56,8 +56,12 @@ func (h *ImagePushedHandler) Handle(event domain.Event) error {
 		return nil
 	}
 
+	// Mark context as internal deploy - the event originated from our own registry,
+	// so we can bypass external auth when pulling images (use localhost instead).
+	internalCtx := domain.WithInternalDeploy(ctx)
+
 	for _, route := range routes {
-		if _, err := h.containerSvc.Deploy(ctx, route); err != nil {
+		if _, err := h.containerSvc.Deploy(internalCtx, route); err != nil {
 			log.WrapErrWithFields(err, "failed to deploy container for route", map[string]any{"domain": route.Domain})
 		}
 	}

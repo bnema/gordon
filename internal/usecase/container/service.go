@@ -20,6 +20,7 @@ import (
 type Config struct {
 	RegistryAuthEnabled bool
 	RegistryDomain      string
+	RegistryPort        int
 	RegistryUsername    string
 	RegistryPassword    string
 	VolumeAutoCreate    bool
@@ -86,8 +87,10 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	}
 
 	// Build image reference and ensure it's available
+	// ensureImage returns the actual image reference used (may be rewritten for internal pulls)
 	imageRef := s.buildImageRef(route.Image)
-	if err := s.ensureImage(ctx, imageRef); err != nil {
+	actualImageRef, err := s.ensureImage(ctx, imageRef)
+	if err != nil {
 		return nil, err
 	}
 
@@ -102,21 +105,21 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		log.WrapErr(err, "failed to deploy some attachments")
 	}
 
-	// Get exposed ports
-	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, imageRef)
+	// Get exposed ports (use actual image ref from pull)
+	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, actualImageRef)
 	if err != nil {
 		log.WrapErr(err, "failed to get exposed ports, using defaults")
 		exposedPorts = []int{80, 8080, 3000}
 	}
 
 	// Load environment
-	envVars, err := s.loadEnvironment(ctx, route.Domain, imageRef)
+	envVars, err := s.loadEnvironment(ctx, route.Domain, actualImageRef)
 	if err != nil {
 		return nil, err
 	}
 
-	// Setup volumes
-	volumes, err := s.setupVolumes(ctx, route.Domain, imageRef)
+	// Setup volumes (use actual image ref from pull)
+	volumes, err := s.setupVolumes(ctx, route.Domain, actualImageRef)
 	if err != nil {
 		return nil, err
 	}
@@ -127,9 +130,9 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		containerName = fmt.Sprintf("gordon-%s-new", route.Domain)
 	}
 
-	// Create container
+	// Create container (use actual image ref from pull, but track original in labels)
 	containerConfig := &domain.ContainerConfig{
-		Image:       imageRef,
+		Image:       actualImageRef,
 		Name:        containerName,
 		Ports:       exposedPorts,
 		Env:         envVars,
@@ -463,20 +466,34 @@ func (s *Service) buildImageRef(image string) string {
 	return fmt.Sprintf("%s/%s", s.config.RegistryDomain, image)
 }
 
-func (s *Service) ensureImage(ctx context.Context, imageRef string) error {
+// ensureImage ensures the image is available locally, pulling if needed.
+// Returns the actual image reference to use for container operations (may differ
+// from input if localhost rewrite was applied for internal pulls).
+func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, error) {
 	ctx = zerowrap.CtxWithField(ctx, "image", imageRef)
 	log := zerowrap.FromCtx(ctx)
 
-	// Check local images
+	// Determine if this is an internal deploy and what reference to use
+	pullRef := imageRef
+	isInternal := domain.IsInternalDeploy(ctx)
+	if isInternal && s.config.RegistryPort > 0 {
+		pullRef = rewriteToLocalhost(imageRef, s.config.RegistryDomain, s.config.RegistryPort)
+		log.Info().
+			Str("original_ref", imageRef).
+			Str("local_ref", pullRef).
+			Msg("internal deploy: using localhost for pull")
+	}
+
+	// Check local images using the reference we'll actually use
 	localImages, err := s.runtime.ListImages(ctx)
 	if err != nil {
 		log.WrapErr(err, "failed to list local images, will attempt pull")
 	} else {
-		normalizedRef := normalizeImageRef(imageRef)
+		normalizedRef := normalizeImageRef(pullRef)
 		for _, img := range localImages {
 			if normalizeImageRef(img) == normalizedRef {
 				log.Info().Msg("image found locally, skipping pull")
-				return nil
+				return pullRef, nil
 			}
 		}
 	}
@@ -484,18 +501,18 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) error {
 	// Pull image
 	log.Info().Msg("pulling image from registry")
 
-	if s.config.RegistryAuthEnabled {
-		if err := s.runtime.PullImageWithAuth(ctx, imageRef, s.config.RegistryUsername, s.config.RegistryPassword); err != nil {
-			return log.WrapErr(err, "failed to pull image with auth")
+	if s.config.RegistryAuthEnabled && !isInternal {
+		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.RegistryUsername, s.config.RegistryPassword); err != nil {
+			return "", log.WrapErr(err, "failed to pull image with auth")
 		}
 	} else {
-		if err := s.runtime.PullImage(ctx, imageRef); err != nil {
-			return log.WrapErr(err, "failed to pull image")
+		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
+			return "", log.WrapErr(err, "failed to pull image")
 		}
 	}
 
 	log.Info().Msg("image pulled successfully")
-	return nil
+	return pullRef, nil
 }
 
 func (s *Service) loadEnvironment(ctx context.Context, domainName, imageRef string) ([]string, error) {
@@ -695,36 +712,37 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 
 	log.Info().Str(zerowrap.FieldService, serviceImage).Msg("deploying attached service")
 
-	// Ensure image
+	// Ensure image (get actual image ref, may be rewritten for internal pulls)
 	imageRef := s.buildImageRef(serviceImage)
-	if err := s.ensureImage(ctx, imageRef); err != nil {
+	actualImageRef, err := s.ensureImage(ctx, imageRef)
+	if err != nil {
 		return err
 	}
 
 	// Get image metadata
-	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, imageRef)
+	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, actualImageRef)
 	if err != nil {
 		log.WrapErr(err, "failed to get exposed ports for attachment, using defaults")
 		exposedPorts = []int{}
 	}
 
 	// Setup volumes (attachments need persistent data)
-	volumes, err := s.setupVolumes(ctx, containerName, imageRef)
+	volumes, err := s.setupVolumes(ctx, containerName, actualImageRef)
 	if err != nil {
 		log.WrapErr(err, "failed to setup volumes for attachment")
 		volumes = make(map[string]string)
 	}
 
 	// Load environment (attachment-specific env file)
-	envVars, err := s.loadEnvironment(ctx, containerName, imageRef)
+	envVars, err := s.loadEnvironment(ctx, containerName, actualImageRef)
 	if err != nil {
 		log.WrapErr(err, "failed to load environment for attachment")
 		envVars = []string{}
 	}
 
-	// Create container with attachment labels
+	// Create container with attachment labels (use actual ref, track original in labels)
 	config := &domain.ContainerConfig{
-		Image:       imageRef,
+		Image:       actualImageRef,
 		Name:        containerName,
 		Hostname:    serviceName, // Internal DNS: postgres, redis, etc.
 		Ports:       exposedPorts,
@@ -945,4 +963,21 @@ func (s *Service) publishContainerDeployed(ctx context.Context, domainName, cont
 		log := zerowrap.FromCtx(ctx)
 		log.Warn().Err(err).Msg("failed to publish container deployed event")
 	}
+}
+
+// rewriteToLocalhost rewrites an image reference to use localhost for internal pulls.
+// e.g., "registry.example.com/myapp:latest" -> "localhost:5000/myapp:latest"
+func rewriteToLocalhost(imageRef, registryDomain string, registryPort int) string {
+	if registryDomain == "" {
+		return imageRef
+	}
+
+	// Strip the registry domain prefix if present
+	prefix := registryDomain + "/"
+	imagePath := imageRef
+	if strings.HasPrefix(imageRef, prefix) {
+		imagePath = strings.TrimPrefix(imageRef, prefix)
+	}
+
+	return fmt.Sprintf("localhost:%d/%s", registryPort, imagePath)
 }
