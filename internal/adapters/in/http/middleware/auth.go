@@ -84,6 +84,19 @@ func isAuthenticated(r *http.Request, expectedUsername, expectedPassword string,
 func RegistryAuthV2(authSvc in.AuthService, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Allow localhost requests without auth (internal pulls from Gordon itself)
+			if isLocalhostRequest(r) {
+				log.Debug().
+					Str(zerowrap.FieldLayer, "adapter").
+					Str(zerowrap.FieldAdapter, "http").
+					Str(zerowrap.FieldMethod, r.Method).
+					Str(zerowrap.FieldPath, r.URL.Path).
+					Str(zerowrap.FieldClientIP, r.RemoteAddr).
+					Msg("localhost request - skipping auth")
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			// Warn if not using TLS
 			if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" {
 				log.Warn().
@@ -220,6 +233,20 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 		Str(zerowrap.FieldPath, r.URL.Path).
 		Msg("token-as-password authentication successful")
 	return true
+}
+
+// isLocalhostRequest checks if the request originates from localhost.
+// This is used to allow Gordon to pull from its own registry without auth.
+func isLocalhostRequest(r *http.Request) bool {
+	host := r.RemoteAddr
+	// RemoteAddr includes port, e.g., "127.0.0.1:12345" or "[::1]:12345"
+	if strings.HasPrefix(host, "127.") ||
+		strings.HasPrefix(host, "[::1]") ||
+		strings.HasPrefix(host, "::1") ||
+		strings.HasPrefix(host, "localhost") {
+		return true
+	}
+	return false
 }
 
 // sendUnauthorized sends an HTTP 401 response with appropriate headers.

@@ -479,6 +479,7 @@ func createContainerService(v *viper.Viper, cfg Config, svc *services) *containe
 	containerConfig := container.Config{
 		RegistryAuthEnabled: cfg.RegistryAuth.Enabled,
 		RegistryDomain:      cfg.Server.RegistryDomain,
+		RegistryPort:        cfg.Server.RegistryPort,
 		RegistryUsername:    cfg.RegistryAuth.Username,
 		RegistryPassword:    cfg.RegistryAuth.Password,
 		VolumeAutoCreate:    v.GetBool("volumes.auto_create"),
