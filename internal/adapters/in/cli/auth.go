@@ -272,7 +272,7 @@ func runPasswordHash() error {
 	fmt.Print("Enter password: ")
 
 	// Read password without echo
-	passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+	passwordBytes, err := term.ReadPassword(syscall.Stdin)
 	if err != nil {
 		// Fallback for non-terminal input
 		reader := bufio.NewReader(os.Stdin)

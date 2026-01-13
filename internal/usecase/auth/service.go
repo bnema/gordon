@@ -91,37 +91,54 @@ func (s *Service) ValidateToken(ctx context.Context, tokenString string) (*domai
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Parse the token
+	claims, err := s.parseTokenClaims(tokenString)
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to parse token")
+		return nil, err
+	}
+
+	tokenClaims := buildTokenClaims(claims)
+
+	if err := s.ensureTokenNotRevoked(ctx, tokenClaims, log); err != nil {
+		return nil, err
+	}
+
+	if err := ensureTokenNotExpired(tokenClaims, log); err != nil {
+		return nil, err
+	}
+
+	log.Debug().Str("subject", tokenClaims.Subject).Msg("token validation successful")
+	return tokenClaims, nil
+}
+
+func (s *Service) parseTokenClaims(tokenString string) (jwt.MapClaims, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
-		// Validate signing method
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, domain.ErrInvalidToken
 		}
 		return s.config.TokenSecret, nil
 	})
 	if err != nil {
-		log.Debug().Err(err).Msg("failed to parse token")
 		return nil, domain.ErrInvalidToken
 	}
 
 	if !token.Valid {
-		log.Debug().Msg("token is invalid")
 		return nil, domain.ErrInvalidToken
 	}
 
-	// Extract claims
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		log.Debug().Msg("failed to extract claims")
 		return nil, domain.ErrInvalidToken
 	}
 
-	// Build TokenClaims from JWT claims
+	return claims, nil
+}
+
+func buildTokenClaims(claims jwt.MapClaims) *domain.TokenClaims {
 	tokenClaims := &domain.TokenClaims{
 		Issuer: getStringClaim(claims, "iss"),
 	}
 
-	// Get standard claims
 	if jti, ok := claims["jti"].(string); ok {
 		tokenClaims.ID = jti
 	}
@@ -142,27 +159,34 @@ func (s *Service) ValidateToken(ctx context.Context, tokenString string) (*domai
 		}
 	}
 
-	// Check if token is revoked
+	return tokenClaims
+}
+
+func (s *Service) ensureTokenNotRevoked(ctx context.Context, tokenClaims *domain.TokenClaims, log zerowrap.Logger) error {
 	revoked, err := s.tokenStore.IsRevoked(ctx, tokenClaims.ID)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to check token revocation")
-		// Continue anyway - revocation check is best effort
+		return nil
 	}
 	if revoked {
 		log.Debug().Str("token_id", tokenClaims.ID).Msg("token has been revoked")
-		return nil, domain.ErrRevokedToken
+		return domain.ErrRevokedToken
 	}
 
-	// Check expiry (if set)
-	if tokenClaims.ExpiresAt > 0 {
-		if time.Now().Unix() > tokenClaims.ExpiresAt {
-			log.Debug().Str("token_id", tokenClaims.ID).Msg("token has expired")
-			return nil, domain.ErrExpiredToken
-		}
+	return nil
+}
+
+func ensureTokenNotExpired(tokenClaims *domain.TokenClaims, log zerowrap.Logger) error {
+	if tokenClaims.ExpiresAt <= 0 {
+		return nil
 	}
 
-	log.Debug().Str("subject", tokenClaims.Subject).Msg("token validation successful")
-	return tokenClaims, nil
+	if time.Now().Unix() > tokenClaims.ExpiresAt {
+		log.Debug().Str("token_id", tokenClaims.ID).Msg("token has expired")
+		return domain.ErrExpiredToken
+	}
+
+	return nil
 }
 
 // GenerateToken creates a new JWT token for the given subject.
