@@ -79,20 +79,27 @@ func isAuthenticated(r *http.Request, expectedUsername, expectedPassword string,
 	return authenticated
 }
 
+// InternalRegistryAuth holds the credentials used for loopback-only registry access.
+// These are generated per Gordon instance and are never exposed in config.
+type InternalRegistryAuth struct {
+	Username string
+	Password string
+}
+
 // RegistryAuthV2 middleware provides enhanced Docker Registry authentication
 // supporting both password and token-based authentication.
-func RegistryAuthV2(authSvc in.AuthService, log zerowrap.Logger) func(http.Handler) http.Handler {
+func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Allow localhost requests without auth (internal pulls from Gordon itself)
-			if isLocalhostRequest(r) {
+			// Allow localhost requests only with internal instance credentials.
+			if isLocalhostRequest(r) && isInternalRegistryAuth(r, internalAuth) {
 				log.Debug().
 					Str(zerowrap.FieldLayer, "adapter").
 					Str(zerowrap.FieldAdapter, "http").
 					Str(zerowrap.FieldMethod, r.Method).
 					Str(zerowrap.FieldPath, r.URL.Path).
 					Str(zerowrap.FieldClientIP, r.RemoteAddr).
-					Msg("localhost request - skipping auth")
+					Msg("localhost request with internal auth - skipping auth")
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -236,7 +243,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 }
 
 // isLocalhostRequest checks if the request originates from localhost.
-// This is used to allow Gordon to pull from its own registry without auth.
+// This is used to allow Gordon to pull from its own registry with internal auth.
 func isLocalhostRequest(r *http.Request) bool {
 	host := r.RemoteAddr
 	// RemoteAddr includes port, e.g., "127.0.0.1:12345" or "[::1]:12345"
@@ -247,6 +254,21 @@ func isLocalhostRequest(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+func isInternalRegistryAuth(r *http.Request, internalAuth InternalRegistryAuth) bool {
+	if internalAuth.Username == "" || internalAuth.Password == "" {
+		return false
+	}
+
+	username, password, ok := r.BasicAuth()
+	if !ok {
+		return false
+	}
+
+	usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(internalAuth.Username)) == 1
+	passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(internalAuth.Password)) == 1
+	return usernameMatch && passwordMatch
 }
 
 // sendUnauthorized sends an HTTP 401 response with appropriate headers.

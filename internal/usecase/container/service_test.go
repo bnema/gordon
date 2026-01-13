@@ -610,54 +610,42 @@ func TestMergeEnvironmentVariables(t *testing.T) {
 	assert.Contains(t, result, "BAZ=user")
 }
 
-func TestRewriteToLocalhost(t *testing.T) {
+func TestRewriteToRegistryDomain(t *testing.T) {
 	tests := []struct {
 		name           string
 		imageRef       string
 		registryDomain string
-		registryPort   int
 		wantRef        string
 	}{
 		{
-			name:           "rewrites registry domain to localhost",
+			name:           "keeps registry domain prefix",
 			imageRef:       "registry.example.com/myapp:latest",
 			registryDomain: "registry.example.com",
-			registryPort:   5000,
-			wantRef:        "localhost:5000/myapp:latest",
+			wantRef:        "registry.example.com/myapp:latest",
 		},
 		{
-			name:           "rewrites with nested path",
-			imageRef:       "registry.example.com/org/myapp:v1.0",
+			name:           "prefixes registry domain",
+			imageRef:       "myapp:v1.0",
 			registryDomain: "registry.example.com",
-			registryPort:   5000,
-			wantRef:        "localhost:5000/org/myapp:v1.0",
+			wantRef:        "registry.example.com/myapp:v1.0",
 		},
 		{
-			name:           "rewrites external image to localhost with port",
+			name:           "prefixes external image",
 			imageRef:       "docker.io/library/nginx:latest",
 			registryDomain: "registry.example.com",
-			registryPort:   5000,
-			wantRef:        "localhost:5000/docker.io/library/nginx:latest",
+			wantRef:        "registry.example.com/docker.io/library/nginx:latest",
 		},
 		{
 			name:           "empty registry domain returns original",
 			imageRef:       "registry.example.com/myapp:latest",
 			registryDomain: "",
-			registryPort:   5000,
 			wantRef:        "registry.example.com/myapp:latest",
-		},
-		{
-			name:           "custom port in config",
-			imageRef:       "registry.example.com/myapp:latest",
-			registryDomain: "registry.example.com",
-			registryPort:   5001,
-			wantRef:        "localhost:5001/myapp:latest",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotRef := rewriteToLocalhost(tt.imageRef, tt.registryDomain, tt.registryPort)
+			gotRef := rewriteToRegistryDomain(tt.imageRef, tt.registryDomain)
 			assert.Equal(t, tt.wantRef, gotRef, "unexpected rewritten reference")
 		})
 	}

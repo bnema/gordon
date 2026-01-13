@@ -60,8 +60,8 @@ type contextKey string
 
 const (
 	// ContextKeyInternalDeploy indicates the deployment is triggered internally
-	// (e.g., from our own registry's image.pushed event) and should bypass
-	// external authentication for image pulls.
+	// (e.g., from our own registry's image.pushed event) and should use
+	// internal registry authentication for image pulls.
 	ContextKeyInternalDeploy contextKey = "internal_deploy"
 )
 

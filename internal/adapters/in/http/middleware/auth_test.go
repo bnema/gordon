@@ -1,13 +1,18 @@
 package middleware
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
+
+	"gordon/internal/domain"
 )
 
 func testLogger() zerowrap.Logger {
@@ -346,4 +351,144 @@ func TestRegistryAuth_Base64EdgeCases(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, rec.Code)
 		})
 	}
+}
+
+func TestRegistryAuthV2_LocalhostBypassRequiresInternalAuth(t *testing.T) {
+	log := testLogger()
+	called := false
+	authSvc := stubAuthService{
+		enabled:  true,
+		authType: domain.AuthTypePassword,
+		validatePassword: func(_ context.Context, _ string, _ string) bool {
+			called = true
+			return false
+		},
+	}
+	internalAuth := InternalRegistryAuth{
+		Username: "internal",
+		Password: "secret",
+	}
+
+	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/v2/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.SetBasicAuth("internal", "secret")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.False(t, called, "auth service should not be used for internal loopback auth")
+}
+
+func TestRegistryAuthV2_LocalhostWrongInternalAuthFallsBack(t *testing.T) {
+	log := testLogger()
+	called := false
+	authSvc := stubAuthService{
+		enabled:  true,
+		authType: domain.AuthTypePassword,
+		validatePassword: func(_ context.Context, _ string, _ string) bool {
+			called = true
+			return false
+		},
+	}
+	internalAuth := InternalRegistryAuth{
+		Username: "internal",
+		Password: "secret",
+	}
+
+	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/v2/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.SetBasicAuth("internal", "wrong")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, `Basic realm="Gordon Registry"`, rec.Header().Get("WWW-Authenticate"))
+	assert.True(t, called, "auth service should be used when internal auth fails")
+}
+
+func TestRegistryAuthV2_NonLocalhostIgnoresInternalAuth(t *testing.T) {
+	log := testLogger()
+	called := false
+	authSvc := stubAuthService{
+		enabled:  true,
+		authType: domain.AuthTypePassword,
+		validatePassword: func(_ context.Context, _ string, _ string) bool {
+			called = true
+			return false
+		},
+	}
+	internalAuth := InternalRegistryAuth{
+		Username: "internal",
+		Password: "secret",
+	}
+
+	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/v2/", nil)
+	req.RemoteAddr = "192.168.1.10:12345"
+	req.SetBasicAuth("internal", "secret")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, `Basic realm="Gordon Registry"`, rec.Header().Get("WWW-Authenticate"))
+	assert.True(t, called, "auth service should be used for non-localhost requests")
+}
+
+type stubAuthService struct {
+	enabled          bool
+	authType         domain.AuthType
+	validatePassword func(ctx context.Context, username, password string) bool
+	validateToken    func(ctx context.Context, tokenString string) (*domain.TokenClaims, error)
+}
+
+func (s stubAuthService) GetAuthType() domain.AuthType {
+	return s.authType
+}
+
+func (s stubAuthService) IsEnabled() bool {
+	return s.enabled
+}
+
+func (s stubAuthService) ValidatePassword(ctx context.Context, username, password string) bool {
+	if s.validatePassword != nil {
+		return s.validatePassword(ctx, username, password)
+	}
+	return false
+}
+
+func (s stubAuthService) ValidateToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
+	if s.validateToken != nil {
+		return s.validateToken(ctx, tokenString)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (s stubAuthService) GenerateToken(context.Context, string, []string, time.Duration) (string, error) {
+	return "", errors.New("not implemented")
+}
+
+func (s stubAuthService) RevokeToken(context.Context, string) error {
+	return errors.New("not implemented")
+}
+
+func (s stubAuthService) ListTokens(context.Context) ([]domain.Token, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s stubAuthService) GeneratePasswordHash(string) (string, error) {
+	return "", errors.New("not implemented")
 }

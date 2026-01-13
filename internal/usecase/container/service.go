@@ -18,20 +18,22 @@ import (
 
 // Config holds configuration needed by the container service.
 type Config struct {
-	RegistryAuthEnabled bool
-	RegistryDomain      string
-	RegistryPort        int
-	RegistryUsername    string
-	RegistryPassword    string
-	VolumeAutoCreate    bool
-	VolumePrefix        string
-	VolumePreserve      bool
-	NetworkIsolation    bool
-	NetworkPrefix       string
-	DNSSuffix           string
-	NetworkGroups       map[string][]string
-	Attachments         map[string][]string
-	ReadinessDelay      time.Duration // Delay after container starts before considering it ready
+	RegistryAuthEnabled      bool
+	RegistryDomain           string
+	RegistryPort             int
+	RegistryUsername         string
+	RegistryPassword         string
+	InternalRegistryUsername string
+	InternalRegistryPassword string
+	VolumeAutoCreate         bool
+	VolumePrefix             string
+	VolumePreserve           bool
+	NetworkIsolation         bool
+	NetworkPrefix            string
+	DNSSuffix                string
+	NetworkGroups            map[string][]string
+	Attachments              map[string][]string
+	ReadinessDelay           time.Duration // Delay after container starts before considering it ready
 }
 
 // Service implements the ContainerService interface.
@@ -476,12 +478,12 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 	// Determine if this is an internal deploy and what reference to use
 	pullRef := imageRef
 	isInternal := domain.IsInternalDeploy(ctx)
-	if isInternal && s.config.RegistryPort > 0 {
-		pullRef = rewriteToLocalhost(imageRef, s.config.RegistryDomain, s.config.RegistryPort)
+	if isInternal && s.config.RegistryDomain != "" {
+		pullRef = rewriteToRegistryDomain(imageRef, s.config.RegistryDomain)
 		log.Info().
 			Str("original_ref", imageRef).
-			Str("local_ref", pullRef).
-			Msg("internal deploy: using localhost for pull")
+			Str("registry_ref", pullRef).
+			Msg("internal deploy: using registry domain for pull")
 	}
 
 	// Check local images using the reference we'll actually use
@@ -501,11 +503,23 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 	// Pull image
 	log.Info().Msg("pulling image from registry")
 
-	if s.config.RegistryAuthEnabled && !isInternal {
+	switch {
+	case isInternal && s.config.RegistryAuthEnabled:
+		if s.config.InternalRegistryUsername == "" || s.config.InternalRegistryPassword == "" {
+			return "", log.WrapErr(fmt.Errorf("internal registry auth not configured"), "failed to pull image for internal deploy")
+		}
+		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.InternalRegistryUsername, s.config.InternalRegistryPassword); err != nil {
+			return "", log.WrapErr(err, "failed to pull image with internal auth")
+		}
+	case isInternal:
+		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
+			return "", log.WrapErr(err, "failed to pull image")
+		}
+	case s.config.RegistryAuthEnabled:
 		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.RegistryUsername, s.config.RegistryPassword); err != nil {
 			return "", log.WrapErr(err, "failed to pull image with auth")
 		}
-	} else {
+	default:
 		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
 			return "", log.WrapErr(err, "failed to pull image")
 		}
@@ -965,19 +979,17 @@ func (s *Service) publishContainerDeployed(ctx context.Context, domainName, cont
 	}
 }
 
-// rewriteToLocalhost rewrites an image reference to use localhost for internal pulls.
-// e.g., "registry.example.com/myapp:latest" -> "localhost:5000/myapp:latest"
-func rewriteToLocalhost(imageRef, registryDomain string, registryPort int) string {
+// rewriteToRegistryDomain rewrites an image reference to use the configured registry domain.
+// e.g., "myapp:latest" -> "registry.example.com/myapp:latest"
+func rewriteToRegistryDomain(imageRef, registryDomain string) string {
 	if registryDomain == "" {
 		return imageRef
 	}
 
-	// Strip the registry domain prefix if present
 	prefix := registryDomain + "/"
-	imagePath := imageRef
 	if strings.HasPrefix(imageRef, prefix) {
-		imagePath = strings.TrimPrefix(imageRef, prefix)
+		return imageRef
 	}
 
-	return fmt.Sprintf("localhost:%d/%s", registryPort, imagePath)
+	return prefix + imageRef
 }
