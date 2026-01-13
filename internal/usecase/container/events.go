@@ -77,14 +77,32 @@ func (h *ImagePushedHandler) CanHandle(eventType domain.EventType) bool {
 func (h *ImagePushedHandler) findRoutesForImage(imageName string) []domain.Route {
 	var routes []domain.Route
 
+	registryDomain := h.configSvc.GetRegistryDomain()
+	normalizedImage := normalizeRegistryImage(imageName, registryDomain)
+
 	configuredRoutes := h.configSvc.GetRoutes(h.ctx)
 	for _, route := range configuredRoutes {
-		if strings.EqualFold(route.Image, imageName) {
+		normalizedRouteImage := normalizeRegistryImage(route.Image, registryDomain)
+		if strings.EqualFold(normalizedRouteImage, normalizedImage) {
 			routes = append(routes, route)
 		}
 	}
 
 	return routes
+}
+
+func normalizeRegistryImage(imageName, registryDomain string) string {
+	registryDomain = strings.TrimSuffix(registryDomain, "/")
+	if registryDomain == "" {
+		return imageName
+	}
+
+	prefix := registryDomain + "/"
+	if strings.HasPrefix(imageName, prefix) {
+		return strings.TrimPrefix(imageName, prefix)
+	}
+
+	return imageName
 }
 
 // ConfigReloadHandler handles config.reload events.

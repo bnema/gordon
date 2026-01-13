@@ -425,6 +425,25 @@ func (r *Runtime) PullImageWithAuth(ctx context.Context, imageRef, username, pas
 	return nil
 }
 
+// TagImage tags a locally available image with a new reference.
+func (r *Runtime) TagImage(ctx context.Context, sourceRef, targetRef string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "TagImage",
+		"source":              sourceRef,
+		"target":              targetRef,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	if err := r.client.ImageTag(ctx, sourceRef, targetRef); err != nil {
+		return log.WrapErr(err, "failed to tag image")
+	}
+
+	log.Info().Msg("image tagged successfully")
+	return nil
+}
+
 // RemoveImage removes an image.
 func (r *Runtime) RemoveImage(ctx context.Context, imageRef string, force bool) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{

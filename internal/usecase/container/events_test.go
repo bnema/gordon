@@ -36,6 +36,8 @@ func TestImagePushedHandler_Handle_DeploysMatchingRoutes(t *testing.T) {
 
 	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
 
+	configSvc.EXPECT().GetRegistryDomain().Return("")
+
 	// Configure routes that match the pushed image
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
 		{Domain: "app1.example.com", Image: "myapp:latest"},
@@ -71,6 +73,8 @@ func TestImagePushedHandler_Handle_NoMatchingRoutes(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 
 	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
+
+	configSvc.EXPECT().GetRegistryDomain().Return("")
 
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
 		{Domain: "other.example.com", Image: "otherapp:latest"},
@@ -114,6 +118,8 @@ func TestImagePushedHandler_Handle_DefaultTag(t *testing.T) {
 
 	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
 
+	configSvc.EXPECT().GetRegistryDomain().Return("")
+
 	// Image name "myapp" with empty tag should become "myapp:latest"
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
 		{Domain: "app.example.com", Image: "myapp:latest"},
@@ -142,6 +148,8 @@ func TestImagePushedHandler_Handle_DeployError(t *testing.T) {
 
 	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
 
+	configSvc.EXPECT().GetRegistryDomain().Return("")
+
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
 		{Domain: "app.example.com", Image: "myapp:latest"},
 	})
@@ -156,6 +164,34 @@ func TestImagePushedHandler_Handle_DeployError(t *testing.T) {
 	}
 
 	// Handler logs error but doesn't fail
+	err := handler.Handle(event)
+
+	assert.NoError(t, err)
+}
+
+func TestImagePushedHandler_Handle_StripsRegistryDomain(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
+
+	configSvc.EXPECT().GetRegistryDomain().Return("registry.example.com")
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "app.example.com", Image: "registry.example.com/docker.io/library/nginx:latest"},
+	})
+
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
+		Domain: "app.example.com",
+		Image:  "registry.example.com/docker.io/library/nginx:latest",
+	}).Return(&domain.Container{ID: "container-1"}, nil)
+
+	event := domain.Event{
+		ID:        "event-123",
+		Type:      domain.EventImagePushed,
+		ImageName: "docker.io/library/nginx",
+		Tag:       "latest",
+	}
+
 	err := handler.Handle(event)
 
 	assert.NoError(t, err)
