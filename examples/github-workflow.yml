@@ -48,6 +48,7 @@ jobs:
           registry: ${{ secrets.GORDON_REGISTRY }}
           username: ${{ secrets.GORDON_USERNAME }}
           password: ${{ secrets.GORDON_TOKEN }}
+          tag: ${{ github.event.inputs.tag }}
           # Optional customizations:
           # image: myapp                    # Custom image name (defaults to repo name)
           # dockerfile: ./Dockerfile        # Custom Dockerfile path

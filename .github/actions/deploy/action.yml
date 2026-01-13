@@ -20,6 +20,10 @@ inputs:
     description: 'Image name (defaults to repository name)'
     required: false
     default: ''
+  tag:
+    description: 'Override image tag (defaults to git tag or short SHA)'
+    required: false
+    default: ''
   dockerfile:
     description: 'Path to Dockerfile (defaults to ./Dockerfile)'
     required: false
@@ -81,11 +85,13 @@ runs:
           IMAGE_NAME="${GITHUB_REPOSITORY#*/}"
         fi
 
-        # Extract tag from ref
-        if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+        # Extract tag from ref (or override)
+        if [[ -n "${{ inputs.tag }}" ]]; then
+          TAG="${{ inputs.tag }}"
+        elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
           TAG="${GITHUB_REF#refs/tags/}"
         else
-          TAG="$(echo $GITHUB_SHA | head -c 7)"
+          TAG="$(echo "$GITHUB_SHA" | head -c 7)"
         fi
 
         # Full image reference
@@ -98,6 +104,9 @@ runs:
 
         echo "Building: ${FULL_IMAGE}"
 
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
@@ -108,6 +117,16 @@ runs:
         username: ${{ inputs.username }}
         password: ${{ inputs.password }}
 
+    - name: Build tags
+      id: tags
+      shell: bash
+      run: |
+        TAGS="${{ steps.meta.outputs.image }}"
+        if [[ "${{ inputs.push-latest }}" == "true" ]]; then
+          TAGS="${TAGS}"$'\n'"${{ inputs.registry }}/${{ steps.meta.outputs.image_name }}:latest"
+        fi
+        printf "tags<<EOF\n%s\nEOF\n" "$TAGS" >> "$GITHUB_OUTPUT"
+
     - name: Build and push
       id: push
       uses: docker/build-push-action@v6
@@ -117,9 +136,7 @@ runs:
         context: ${{ inputs.context }}
         file: ${{ inputs.dockerfile }}
         push: true
-        tags: |
-          ${{ steps.meta.outputs.image }}
-          ${{ inputs.push-latest == 'true' && format('{0}/{1}:latest', inputs.registry, steps.meta.outputs.image_name) || '' }}
+        tags: ${{ steps.tags.outputs.tags }}
         build-args: ${{ inputs.build-args }}
         platforms: ${{ inputs.platforms }}
         cache-from: ${{ inputs.cache-from }}
