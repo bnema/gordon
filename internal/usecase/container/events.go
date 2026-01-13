@@ -57,7 +57,7 @@ func (h *ImagePushedHandler) Handle(event domain.Event) error {
 	}
 
 	// Mark context as internal deploy - the event originated from our own registry,
-	// so we can bypass external auth when pulling images (use localhost instead).
+	// so we can use internal registry auth when pulling images.
 	internalCtx := domain.WithInternalDeploy(ctx)
 
 	for _, route := range routes {

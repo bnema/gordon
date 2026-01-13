@@ -3,6 +3,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -104,6 +106,8 @@ type services struct {
 	proxySvc        *proxy.Service
 	authSvc         *auth.Service
 	tokenHandler    *registry.TokenHandler
+	internalRegUser string
+	internalRegPass string
 }
 
 // Run initializes and starts the Gordon application.
@@ -232,6 +236,15 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
+	// Generate internal registry credentials for loopback-only pulls
+	if cfg.RegistryAuth.Enabled {
+		svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to generate internal registry credentials")
+		}
+		log.Debug().Msg("internal registry auth generated for loopback pulls")
+	}
+
 	// Create use case services
 	svc.configSvc = config.NewService(v, svc.eventBus)
 	if err := svc.configSvc.Load(ctx); err != nil {
@@ -358,6 +371,24 @@ func createLogWriter(cfg Config, log zerowrap.Logger) (*logwriter.LogWriter, err
 	return writer, nil
 }
 
+const internalRegistryUsername = "gordon-internal"
+
+func generateInternalRegistryAuth() (string, string, error) {
+	password, err := randomTokenHex(32)
+	if err != nil {
+		return "", "", err
+	}
+	return internalRegistryUsername, password, nil
+}
+
+func randomTokenHex(size int) (string, error) {
+	buf := make([]byte, size)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
 // createAuthService creates the authentication service and token store.
 func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (out.TokenStore, *auth.Service, error) {
 	if !cfg.RegistryAuth.Enabled {
@@ -477,19 +508,21 @@ func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDi
 // createContainerService creates the container service with configuration.
 func createContainerService(v *viper.Viper, cfg Config, svc *services) *container.Service {
 	containerConfig := container.Config{
-		RegistryAuthEnabled: cfg.RegistryAuth.Enabled,
-		RegistryDomain:      cfg.Server.RegistryDomain,
-		RegistryPort:        cfg.Server.RegistryPort,
-		RegistryUsername:    cfg.RegistryAuth.Username,
-		RegistryPassword:    cfg.RegistryAuth.Password,
-		VolumeAutoCreate:    v.GetBool("volumes.auto_create"),
-		VolumePrefix:        v.GetString("volumes.prefix"),
-		VolumePreserve:      v.GetBool("volumes.preserve"),
-		NetworkIsolation:    v.GetBool("network_isolation.enabled"),
-		NetworkPrefix:       v.GetString("network_isolation.network_prefix"),
-		DNSSuffix:           v.GetString("network_isolation.dns_suffix"),
-		NetworkGroups:       svc.configSvc.GetNetworkGroups(),
-		Attachments:         svc.configSvc.GetAttachments(),
+		RegistryAuthEnabled:      cfg.RegistryAuth.Enabled,
+		RegistryDomain:           cfg.Server.RegistryDomain,
+		RegistryPort:             cfg.Server.RegistryPort,
+		RegistryUsername:         cfg.RegistryAuth.Username,
+		RegistryPassword:         cfg.RegistryAuth.Password,
+		InternalRegistryUsername: svc.internalRegUser,
+		InternalRegistryPassword: svc.internalRegPass,
+		VolumeAutoCreate:         v.GetBool("volumes.auto_create"),
+		VolumePrefix:             v.GetString("volumes.prefix"),
+		VolumePreserve:           v.GetBool("volumes.preserve"),
+		NetworkIsolation:         v.GetBool("network_isolation.enabled"),
+		NetworkPrefix:            v.GetString("network_isolation.network_prefix"),
+		DNSSuffix:                v.GetString("network_isolation.dns_suffix"),
+		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
+		Attachments:              svc.configSvc.GetAttachments(),
 	}
 	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig)
 }
@@ -561,8 +594,12 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	}
 
 	if cfg.RegistryAuth.Enabled && svc.authSvc != nil {
+		internalAuth := middleware.InternalRegistryAuth{
+			Username: svc.internalRegUser,
+			Password: svc.internalRegPass,
+		}
 		registryMiddlewares = append(registryMiddlewares,
-			middleware.RegistryAuthV2(svc.authSvc, log))
+			middleware.RegistryAuthV2(svc.authSvc, internalAuth, log))
 	}
 
 	registryWithMiddleware := middleware.Chain(registryMiddlewares...)(registryHandler)
