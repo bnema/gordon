@@ -67,5 +67,4 @@ issues:
   max-same-issues: 50
 
 severity:
-  default-severity: error
-  case-sensitive: false
+  default: error
