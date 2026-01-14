@@ -82,6 +82,24 @@ FROM node:18
 VOLUME ["/app/uploads", "/app/data"]  # Multiple volumes supported
 ```
 
+### Proxy Port Selection
+When an image exposes multiple ports, Gordon needs to know which one to proxy HTTP traffic to. By default, Gordon uses the first exposed port, but you can specify the exact port with a label:
+
+```dockerfile
+# Gitea exposes both SSH (22) and HTTP (3000)
+FROM gitea/gitea:latest
+LABEL gordon.proxy.port=3000
+EXPOSE 22
+EXPOSE 3000
+```
+
+Without the label, Gordon would proxy to port 22 (SSH), which would fail. The `gordon.proxy.port` label tells Gordon to route HTTP traffic to port 3000.
+
+**When to use this label:**
+- Images that expose multiple ports (web + SSH, web + metrics, etc.)
+- When the first exposed port isn't the HTTP service
+- To be explicit about which port serves your web application
+
 ### Environment Configuration
 Gordon automatically creates and loads env files based on domain names:
 ```bash
