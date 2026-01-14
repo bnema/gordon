@@ -232,6 +232,40 @@ func TestService_GetAttachments(t *testing.T) {
 	assert.ElementsMatch(t, []string{"redis:latest", "postgres:15"}, attachments["app.example.com"])
 }
 
+func TestService_GetExternalRoutes(t *testing.T) {
+	v := viper.New()
+	v.Set("external_routes", map[string]interface{}{
+		"reg.example.com":   "localhost:5000",
+		"cache.example.com": "127.0.0.1:6379",
+	})
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	_ = svc.Load(ctx)
+
+	routes := svc.GetExternalRoutes()
+
+	assert.Len(t, routes, 2)
+	assert.Equal(t, "localhost:5000", routes["reg.example.com"])
+	assert.Equal(t, "127.0.0.1:6379", routes["cache.example.com"])
+}
+
+func TestService_GetExternalRoutes_Empty(t *testing.T) {
+	v := viper.New()
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	_ = svc.Load(ctx)
+
+	routes := svc.GetExternalRoutes()
+
+	assert.Empty(t, routes)
+}
+
 func TestExtractDomainFromImageName(t *testing.T) {
 	tests := []struct {
 		name          string

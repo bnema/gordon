@@ -47,4 +47,7 @@ type ConfigService interface {
 
 	// GetNetworkPrefix returns the prefix for created networks.
 	GetNetworkPrefix() string
+
+	// GetExternalRoutes returns all configured external routes.
+	GetExternalRoutes() map[string]string
 }

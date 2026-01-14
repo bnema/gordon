@@ -24,6 +24,7 @@ type Config struct {
 	NetworkIsolation     bool
 	NetworkPrefix        string
 	Routes               map[string]string
+	ExternalRoutes       map[string]string // domain -> "host:port"
 	RegistryAuthEnabled  bool
 	RegistryAuthUsername string
 	RegistryAuthPassword string
@@ -66,6 +67,7 @@ func (s *Service) Load(ctx context.Context) error {
 
 	// Load complex nested structures
 	s.config.Routes = loadStringMap(s.viper.Get("routes"))
+	s.config.ExternalRoutes = loadStringMap(s.viper.Get("external_routes"))
 	s.config.NetworkGroups = loadStringArrayMap(s.viper.Get("network_groups"))
 	s.config.Attachments = loadStringArrayMap(s.viper.Get("attachments"))
 
@@ -95,6 +97,7 @@ func (s *Service) loadConfigValues() Config {
 		VolumePrefix:         s.viper.GetString("volumes.prefix"),
 		VolumePreserve:       s.viper.GetBool("volumes.preserve"),
 		Routes:               make(map[string]string),
+		ExternalRoutes:       make(map[string]string),
 		NetworkGroups:        make(map[string][]string),
 		Attachments:          make(map[string][]string),
 	}
@@ -361,6 +364,18 @@ func (s *Service) GetAttachments() map[string][]string {
 	result := make(map[string][]string)
 	for k, v := range s.config.Attachments {
 		result[k] = append([]string{}, v...)
+	}
+	return result
+}
+
+// GetExternalRoutes returns all configured external routes.
+func (s *Service) GetExternalRoutes() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string]string)
+	for k, v := range s.config.ExternalRoutes {
+		result[k] = v
 	}
 	return result
 }

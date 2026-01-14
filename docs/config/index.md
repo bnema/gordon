@@ -115,6 +115,7 @@ enabled = false                          # Auto-create routes from image names
 | `[network_isolation]` | Network isolation settings | [Network Isolation](./network-isolation.md) |
 | `[auto_route]` | Automatic route creation | [Auto Route](./auto-route.md) |
 | `[routes]` | Domain to image mapping | [Routes](./routes.md) |
+| `[external_routes]` | Non-containerized service proxying | [External Routes](./external-routes.md) |
 | `[network_groups]` | Shared service networks | [Network Groups](./network-groups.md) |
 | `[attachments]` | Service dependencies | [Attachments](./attachments.md) |
 
@@ -173,4 +174,5 @@ Pattern: `GORDON_SECTION_KEY` (uppercase, underscores instead of dots)
 
 - [Server Configuration](./server.md)
 - [Routes Configuration](./routes.md)
+- [External Routes](./external-routes.md)
 - [Registry Authentication](./registry-auth.md)
