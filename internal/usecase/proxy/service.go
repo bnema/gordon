@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -79,6 +80,12 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Debug().
+		Str("host", target.Host).
+		Int("port", target.Port).
+		Str("container_id", target.ContainerID).
+		Msg("resolved proxy target")
+
 	s.proxyToTarget(w, r, target)
 }
 
@@ -95,6 +102,11 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 	s.mu.RLock()
 	if target, exists := s.targets[domainName]; exists {
 		s.mu.RUnlock()
+		log.Debug().
+			Str("host", target.Host).
+			Int("port", target.Port).
+			Str("container_id", target.ContainerID).
+			Msg("using cached proxy target")
 		return target, nil
 	}
 	s.mu.RUnlock()
@@ -102,8 +114,10 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 	// Get container for this domain
 	container, exists := s.containerSvc.Get(ctx, domainName)
 	if !exists {
+		log.Debug().Msg("container not found for domain")
 		return nil, domain.ErrNoTargetAvailable
 	}
+	log.Debug().Str("container_id", container.ID).Str("image", container.Image).Msg("found container for domain")
 
 	// Build target based on runtime mode
 	var target *domain.ProxyTarget
@@ -135,14 +149,16 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 			return nil, domain.ErrRouteNotFound
 		}
 
-		exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, route.Image)
-		if err != nil || len(exposedPorts) == 0 {
-			return nil, log.WrapErr(err, "failed to get exposed ports")
+		// Determine target port: check for label first, then fall back to first exposed port
+		// Use container.Image (the actual running image) instead of route.Image (config shorthand)
+		targetPort, err := s.getProxyPort(ctx, container.Image)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to determine proxy port")
 		}
 
-		hostPort, err := s.runtime.GetContainerPort(ctx, container.ID, exposedPorts[0])
+		hostPort, err := s.runtime.GetContainerPort(ctx, container.ID, targetPort)
 		if err != nil {
-			return nil, log.WrapErrWithFields(err, "failed to get host port mapping", map[string]any{"internal_port": exposedPorts[0]})
+			return nil, log.WrapErrWithFields(err, "failed to get host port mapping", map[string]any{"internal_port": targetPort})
 		}
 
 		target = &domain.ProxyTarget{
@@ -296,4 +312,37 @@ func (s *Service) isRunningInContainer() bool {
 	}
 
 	return false
+}
+
+// getProxyPort determines the port to proxy to for an image.
+// It checks for the gordon.proxy.port label first, then falls back to the first exposed port.
+func (s *Service) getProxyPort(ctx context.Context, imageRef string) (int, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	log.Debug().Str("image_ref", imageRef).Msg("determining proxy port for image")
+
+	// Check for explicit port label
+	labels, err := s.runtime.GetImageLabels(ctx, imageRef)
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to get image labels, falling back to exposed ports")
+	} else if portStr, ok := labels[domain.LabelProxyPort]; ok {
+		port, err := strconv.Atoi(portStr)
+		if err == nil && port > 0 {
+			log.Debug().Int("port", port).Msg("using proxy port from image label")
+			return port, nil
+		}
+		log.Warn().Str("port_value", portStr).Msg("invalid gordon.proxy.port label value")
+	}
+
+	// Fall back to first exposed port
+	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, imageRef)
+	if err != nil {
+		return 0, err
+	}
+	if len(exposedPorts) == 0 {
+		return 0, fmt.Errorf("no exposed ports found for image %s", imageRef)
+	}
+
+	log.Debug().Int("port", exposedPorts[0]).Msg("using first exposed port")
+	return exposedPorts[0], nil
 }
