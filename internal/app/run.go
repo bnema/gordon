@@ -695,6 +695,11 @@ func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, lo
 			RegistryPort:   v.GetInt("server.registry_port"),
 		})
 
+		// Clear proxy target cache to pick up external route changes
+		if err := svc.proxySvc.RefreshTargets(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to refresh proxy targets")
+		}
+
 		// Publish config reload event to trigger container updates
 		if err := svc.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
 			log.Error().Err(err).Msg("failed to publish config reload event")
