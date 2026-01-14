@@ -12,6 +12,12 @@ import (
 	"gordon/internal/domain"
 )
 
+// contextKey is a type for context keys used by this package.
+type contextKey string
+
+// TokenClaimsKey is the context key for storing token claims.
+const TokenClaimsKey contextKey = "tokenClaims"
+
 // RegistryAuth middleware provides Docker Registry authentication.
 func RegistryAuth(username, password string, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -125,11 +131,12 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 
 			// Authenticate based on auth type
 			var authenticated bool
+			var tokenClaims *domain.TokenClaims
 			switch authSvc.GetAuthType() {
 			case domain.AuthTypePassword:
 				authenticated = authenticatePassword(ctx, r, authSvc, log)
 			case domain.AuthTypeToken:
-				authenticated = authenticateToken(ctx, r, authSvc, log)
+				authenticated, tokenClaims = authenticateToken(ctx, r, authSvc, log)
 			default:
 				log.Error().
 					Str("auth_type", string(authSvc.GetAuthType())).
@@ -140,6 +147,17 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 			if !authenticated {
 				sendUnauthorized(w, authSvc.GetAuthType(), r.Host, log, r)
 				return
+			}
+
+			// SECURITY: Check scopes for token auth (per-repo access control)
+			if tokenClaims != nil {
+				if !checkScopeAccess(r, tokenClaims, log) {
+					sendForbidden(w, log, r)
+					return
+				}
+				// Store claims in context for downstream use
+				ctx = context.WithValue(ctx, TokenClaimsKey, tokenClaims)
+				r = r.WithContext(ctx)
 			}
 
 			next.ServeHTTP(w, r)
@@ -177,7 +195,8 @@ func authenticatePassword(ctx context.Context, r *http.Request, authSvc in.AuthS
 
 // authenticateToken handles token-based authentication.
 // It supports both Bearer token in Authorization header and token-as-password for CI.
-func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthService, log zerowrap.Logger) bool {
+// Returns (authenticated, tokenClaims) where tokenClaims may be nil on failure.
+func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthService, log zerowrap.Logger) (bool, *domain.TokenClaims) {
 	// First, check for Bearer token
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
@@ -189,7 +208,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 				Str(zerowrap.FieldMethod, r.Method).
 				Str(zerowrap.FieldPath, r.URL.Path).
 				Msg("bearer token validation failed")
-			return false
+			return false, nil
 		}
 
 		log.Debug().
@@ -197,7 +216,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("bearer token authentication successful")
-		return true
+		return true, claims
 	}
 
 	// Fall back to token-as-password (for CI/automation)
@@ -208,7 +227,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("no auth credentials provided")
-		return false
+		return false, nil
 	}
 
 	// Try to validate the password as a JWT token
@@ -220,7 +239,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("token-as-password validation failed")
-		return false
+		return false, nil
 	}
 
 	// Verify the username matches the token subject
@@ -231,7 +250,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("username does not match token subject")
-		return false
+		return false, nil
 	}
 
 	log.Debug().
@@ -239,7 +258,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 		Str(zerowrap.FieldMethod, r.Method).
 		Str(zerowrap.FieldPath, r.URL.Path).
 		Msg("token-as-password authentication successful")
-	return true
+	return true, claims
 }
 
 // isLocalhostRequest checks if the request originates from localhost.
@@ -269,6 +288,90 @@ func isInternalRegistryAuth(r *http.Request, internalAuth InternalRegistryAuth) 
 	usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(internalAuth.Username)) == 1
 	passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(internalAuth.Password)) == 1
 	return usernameMatch && passwordMatch
+}
+
+// checkScopeAccess verifies the token has permission for the requested operation.
+// Maps HTTP method to registry action and checks if any token scope grants access.
+func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.Logger) bool {
+	// Determine required action from HTTP method
+	var action string
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		action = domain.ScopeActionPull
+	case http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete:
+		action = domain.ScopeActionPush
+	default:
+		action = domain.ScopeActionPull // Default to pull for unknown methods
+	}
+
+	// Extract repository name from URL path
+	// Paths are like /v2/{name}/manifests/{reference} or /v2/{name}/blobs/{digest}
+	path := r.URL.Path
+	if !strings.HasPrefix(path, "/v2/") {
+		// Not a registry path, allow
+		return true
+	}
+
+	// Remove /v2/ prefix and find repository name
+	pathParts := strings.Split(strings.TrimPrefix(path, "/v2/"), "/")
+	if len(pathParts) < 2 {
+		// Malformed path or /v2/ root, allow
+		return true
+	}
+
+	// Find the boundary between repo name and route (manifests, blobs, tags)
+	var repoNameParts []string
+	for i, part := range pathParts {
+		if part == "manifests" || part == "blobs" || part == "tags" || part == "_catalog" {
+			repoNameParts = pathParts[:i]
+			break
+		}
+	}
+	if len(repoNameParts) == 0 {
+		// Could be a special route like /v2/token, allow
+		return true
+	}
+
+	repoName := strings.Join(repoNameParts, "/")
+
+	// Check if any token scope grants access
+	for _, scopeStr := range claims.Scopes {
+		scope, err := domain.ParseScope(scopeStr)
+		if err != nil {
+			log.Debug().Err(err).Str("scope", scopeStr).Msg("failed to parse scope")
+			continue
+		}
+
+		if scope.CanAccess(repoName, action) {
+			log.Debug().
+				Str("repo", repoName).
+				Str("action", action).
+				Str("scope", scopeStr).
+				Msg("scope access granted")
+			return true
+		}
+	}
+
+	log.Debug().
+		Str("repo", repoName).
+		Str("action", action).
+		Strs("scopes", claims.Scopes).
+		Msg("no scope grants access")
+	return false
+}
+
+// sendForbidden sends an HTTP 403 response.
+func sendForbidden(w http.ResponseWriter, log zerowrap.Logger, r *http.Request) {
+	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
+	http.Error(w, "Forbidden: insufficient scope", http.StatusForbidden)
+
+	log.Warn().
+		Str(zerowrap.FieldLayer, "adapter").
+		Str(zerowrap.FieldAdapter, "http").
+		Str(zerowrap.FieldMethod, r.Method).
+		Str(zerowrap.FieldPath, r.URL.Path).
+		Str(zerowrap.FieldClientIP, r.RemoteAddr).
+		Msg("forbidden: insufficient scope for operation")
 }
 
 // sendUnauthorized sends an HTTP 401 response with appropriate headers.
