@@ -9,10 +9,25 @@ runtime = "auto"  # auto-detects Docker/Podman
 ssl_email = "devops@company.com"
 data_dir = "./data"
 
+# Secrets backend for staging
+[secrets]
+backend = "pass"  # Use pass for secure secret storage
+
 [registry_auth]
 enabled = true
-username = "staging-user"
-password = "staging-pass-123"
+type = "token"  # Token auth for CI/CD pipelines
+
+# JWT signing secret stored in pass
+token_secret = "gordon/staging/token_secret"
+
+# Generate CI tokens with:
+#   gordon auth token generate --subject ci-staging --scopes push,pull --expiry 0
+# Tokens are unique to this Gordon instance (different token_secret = incompatible tokens)
+
+# Alternative: Password auth
+# type = "password"
+# username = "staging-user"
+# password_hash = "gordon/staging/password_hash"  # bcrypt hash in pass
 
 # Staging logging configuration
 [logging]

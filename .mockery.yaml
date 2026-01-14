@@ -1,0 +1,29 @@
+template: testify
+formatter: goimports
+force-file-write: true
+dir: '{{.InterfaceDir}}/mocks'
+filename: 'mock_{{.InterfaceName | snakecase}}.go'
+structname: 'Mock{{.InterfaceName}}'
+pkgname: 'mocks'
+
+packages:
+  gordon/internal/boundaries/out:
+    interfaces:
+      ContainerRuntime:
+      BlobStorage:
+      ManifestStorage:
+      EventBus:
+      EventPublisher:
+      EventSubscriber:
+      EventHandler:
+      SecretProvider:
+      EnvLoader:
+      ContainerLogWriter:
+      TokenStore:
+  gordon/internal/boundaries/in:
+    interfaces:
+      ContainerService:
+      RegistryService:
+      ProxyService:
+      ConfigService:
+      AuthService:

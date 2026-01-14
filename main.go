@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"gordon/cmd"
+	"gordon/internal/adapters/in/cli"
 )
 
 // Build information set by goreleaser via ldflags
@@ -15,9 +15,9 @@ var (
 
 func main() {
 	// Set version information for the CLI
-	cmd.SetVersionInfo(version, commit, date)
-	
-	if err := cmd.Execute(); err != nil {
+	cli.SetVersionInfo(version, commit, date)
+
+	if err := cli.NewRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
 }

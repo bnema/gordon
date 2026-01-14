@@ -8,10 +8,15 @@ registry_domain = "registry.yourdomain.com"
 runtime = "auto"
 data_dir = "./data"
 
+# Secrets backend
+[secrets]
+backend = "pass"  # "pass", "sops", or "unsafe"
+
 [registry_auth]
 enabled = true
+type = "password"  # or "token"
 username = "admin"
-password = "secure-password"
+password_hash = "gordon/registry/password_hash"  # bcrypt hash in secrets backend
 
 # ============================================================================
 # LOGGING CONFIGURATION EXAMPLES

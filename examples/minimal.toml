@@ -6,8 +6,23 @@ port = 8080
 registry_port = 5000
 registry_domain = "registry.local"
 
+# Secrets backend (optional, defaults to "pass")
+# [secrets]
+# backend = "unsafe"  # Use "unsafe" for local dev without pass/sops
+
 [registry_auth]
-enabled = false  # Disabled for simplicity
+enabled = false  # Disabled for local development
+
+# To enable auth, choose a type:
+# enabled = true
+# type = "password"  # Simple username/password
+# username = "dev"
+# password_hash = "gordon/registry/password_hash"  # Generate with: gordon auth password hash
+#
+# OR for token auth (better for CI):
+# type = "token"
+# token_secret = "gordon/registry/token_secret"
+# Generate tokens with: gordon auth token generate --subject dev --expiry 0
 
 # Optional: Enable basic logging
 # [logging]

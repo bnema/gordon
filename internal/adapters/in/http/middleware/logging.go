@@ -1,0 +1,163 @@
+// Package middleware provides HTTP middleware for the adapters layer.
+package middleware
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/bnema/zerowrap"
+)
+
+// ResponseWriter wraps http.ResponseWriter to capture status code and bytes written.
+type ResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+	bytes      int
+}
+
+// NewResponseWriter creates a new wrapped response writer.
+func NewResponseWriter(w http.ResponseWriter) *ResponseWriter {
+	return &ResponseWriter{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK, // Default status code
+	}
+}
+
+// WriteHeader captures the status code.
+func (rw *ResponseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+// Write captures bytes written.
+func (rw *ResponseWriter) Write(b []byte) (int, error) {
+	n, err := rw.ResponseWriter.Write(b)
+	rw.bytes += n
+	return n, err
+}
+
+// StatusCode returns the captured status code.
+func (rw *ResponseWriter) StatusCode() int {
+	return rw.statusCode
+}
+
+// BytesWritten returns the number of bytes written.
+func (rw *ResponseWriter) BytesWritten() int {
+	return rw.bytes
+}
+
+// RequestLogger is a middleware that logs HTTP requests using zerowrap.
+func RequestLogger(log zerowrap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+
+			// Wrap the response writer to capture status and bytes
+			rw := NewResponseWriter(w)
+
+			// Get client IP (handle X-Forwarded-For and X-Real-IP headers)
+			clientIP := getClientIP(r)
+
+			// Call the next handler
+			next.ServeHTTP(rw, r)
+
+			// Calculate duration
+			duration := time.Since(start)
+
+			// Log the request
+			log.Info().
+				Str(zerowrap.FieldLayer, "adapter").
+				Str(zerowrap.FieldAdapter, "http").
+				Str(zerowrap.FieldMethod, r.Method).
+				Str(zerowrap.FieldPath, r.URL.Path).
+				Str("query", r.URL.RawQuery).
+				Str(zerowrap.FieldHost, r.Host).
+				Str("user_agent", r.UserAgent()).
+				Str("referer", r.Referer()).
+				Str(zerowrap.FieldClientIP, clientIP).
+				Int(zerowrap.FieldStatus, rw.StatusCode()).
+				Int("bytes", rw.BytesWritten()).
+				Dur(zerowrap.FieldDuration, duration).
+				Str("proto", r.Proto).
+				Msg("HTTP request")
+		})
+	}
+}
+
+// getClientIP extracts the client IP from various headers.
+func getClientIP(r *http.Request) string {
+	// Check X-Forwarded-For header (comma-separated list, first is original client)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Take the first IP (original client)
+		for idx := 0; idx < len(xff); idx++ {
+			if xff[idx] == ',' {
+				return xff[:idx]
+			}
+		}
+		return xff
+	}
+
+	// Check X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+
+	// Check X-Forwarded header (less common)
+	if xf := r.Header.Get("X-Forwarded"); xf != "" {
+		return xf
+	}
+
+	// Fallback to RemoteAddr
+	return r.RemoteAddr
+}
+
+// PanicRecovery middleware recovers from panics and logs them.
+func PanicRecovery(log zerowrap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if err := recover(); err != nil {
+					log.Error().
+						Str(zerowrap.FieldLayer, "adapter").
+						Str(zerowrap.FieldAdapter, "http").
+						Interface("panic", err).
+						Str(zerowrap.FieldMethod, r.Method).
+						Str(zerowrap.FieldPath, r.URL.Path).
+						Str(zerowrap.FieldHost, r.Host).
+						Msg("panic recovered")
+
+					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				}
+			}()
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// CORS middleware adds CORS headers.
+func CORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		// Handle preflight OPTIONS request
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Chain combines multiple middleware functions.
+func Chain(middlewares ...func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(final http.Handler) http.Handler {
+		for i := len(middlewares) - 1; i >= 0; i-- {
+			final = middlewares[i](final)
+		}
+		return final
+	}
+}

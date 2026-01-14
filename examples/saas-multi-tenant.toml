@@ -9,10 +9,20 @@ runtime = "auto"  # auto-detects Docker/Podman
 ssl_email = "ops@saas-platform.com"
 data_dir = "/var/lib/gordon"
 
+# Secrets backend for secure credential storage
+[secrets]
+backend = "pass"  # Production should use "pass" or "sops"
+
 [registry_auth]
 enabled = true
-username = "deploy"
-password = "secure-deployment-key"
+type = "token"  # Token auth for automated deployments
+
+# JWT signing secret (unique to this Gordon instance)
+token_secret = "gordon/saas/token_secret"
+
+# Generate deployment tokens:
+#   gordon auth token generate --subject deploy-bot --scopes push,pull --expiry 0
+# Each Gordon instance has unique tokens (prevents cross-instance token reuse)
 
 # Multi-tenant customer routes
 [routes]
