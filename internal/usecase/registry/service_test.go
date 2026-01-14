@@ -189,9 +189,9 @@ func TestService_GetBlob_Success(t *testing.T) {
 	ctx := testContext()
 
 	blobData := []byte("blob content")
-	blobStorage.EXPECT().GetBlob("sha256:abc123").Return(io.NopCloser(bytes.NewReader(blobData)), nil)
+	blobStorage.EXPECT().GetBlob("sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(io.NopCloser(bytes.NewReader(blobData)), nil)
 
-	reader, err := svc.GetBlob(ctx, "sha256:abc123")
+	reader, err := svc.GetBlob(ctx, "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
 
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
@@ -228,9 +228,9 @@ func TestService_PutBlob_Success(t *testing.T) {
 	blobData := []byte("blob content")
 	reader := bytes.NewReader(blobData)
 
-	blobStorage.EXPECT().PutBlob("sha256:abc123", mock.Anything, int64(len(blobData))).Return(nil)
+	blobStorage.EXPECT().PutBlob("sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", mock.Anything, int64(len(blobData))).Return(nil)
 
-	err := svc.PutBlob(ctx, "sha256:abc123", reader, int64(len(blobData)))
+	err := svc.PutBlob(ctx, "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", reader, int64(len(blobData)))
 
 	assert.NoError(t, err)
 }
@@ -246,9 +246,9 @@ func TestService_PutBlob_Error(t *testing.T) {
 	blobData := []byte("blob content")
 	reader := bytes.NewReader(blobData)
 
-	blobStorage.EXPECT().PutBlob("sha256:abc123", mock.Anything, int64(len(blobData))).Return(errors.New("storage full"))
+	blobStorage.EXPECT().PutBlob("sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", mock.Anything, int64(len(blobData))).Return(errors.New("storage full"))
 
-	err := svc.PutBlob(ctx, "sha256:abc123", reader, int64(len(blobData)))
+	err := svc.PutBlob(ctx, "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", reader, int64(len(blobData)))
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to store blob")
@@ -277,12 +277,12 @@ func TestService_StartUpload_Success(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	blobStorage.EXPECT().StartBlobUpload("myapp").Return("upload-uuid-123", nil)
+	blobStorage.EXPECT().StartBlobUpload("myapp").Return("1234567890-myapp", nil)
 
 	uuid, err := svc.StartUpload(ctx, "myapp")
 
 	assert.NoError(t, err)
-	assert.Equal(t, "upload-uuid-123", uuid)
+	assert.Equal(t, "1234567890-myapp", uuid)
 }
 
 func TestService_StartUpload_Error(t *testing.T) {
@@ -310,9 +310,9 @@ func TestService_FinishUpload_Success(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	blobStorage.EXPECT().FinishBlobUpload("upload-uuid-123", "sha256:abc123").Return(nil)
+	blobStorage.EXPECT().FinishBlobUpload("1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
 
-	err := svc.FinishUpload(ctx, "upload-uuid-123", "sha256:abc123")
+	err := svc.FinishUpload(ctx, "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
 
 	assert.NoError(t, err)
 }
@@ -325,9 +325,9 @@ func TestService_FinishUpload_Error(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	blobStorage.EXPECT().FinishBlobUpload("upload-uuid-123", "sha256:abc123").Return(errors.New("digest mismatch"))
+	blobStorage.EXPECT().FinishBlobUpload("1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(errors.New("digest mismatch"))
 
-	err := svc.FinishUpload(ctx, "upload-uuid-123", "sha256:abc123")
+	err := svc.FinishUpload(ctx, "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to finish blob upload")
@@ -341,9 +341,9 @@ func TestService_CancelUpload_Success(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	blobStorage.EXPECT().CancelBlobUpload("upload-uuid-123").Return(nil)
+	blobStorage.EXPECT().CancelBlobUpload("1234567890-myapp").Return(nil)
 
-	err := svc.CancelUpload(ctx, "upload-uuid-123")
+	err := svc.CancelUpload(ctx, "1234567890-myapp")
 
 	assert.NoError(t, err)
 }
@@ -356,9 +356,9 @@ func TestService_CancelUpload_Error(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	blobStorage.EXPECT().CancelBlobUpload("upload-uuid-123").Return(errors.New("upload not found"))
+	blobStorage.EXPECT().CancelBlobUpload("1234567890-myapp").Return(errors.New("upload not found"))
 
-	err := svc.CancelUpload(ctx, "upload-uuid-123")
+	err := svc.CancelUpload(ctx, "1234567890-myapp")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to cancel blob upload")

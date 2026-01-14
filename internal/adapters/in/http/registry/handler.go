@@ -16,6 +16,14 @@ import (
 	"gordon/internal/boundaries/out"
 	"gordon/internal/domain"
 	"gordon/pkg/manifest"
+	"gordon/pkg/validation"
+)
+
+const (
+	// MaxManifestSize limits manifest uploads to 10MB.
+	MaxManifestSize = 10 * 1024 * 1024
+	// MaxBlobChunkSize limits individual blob chunks to 100MB.
+	MaxBlobChunkSize = 100 * 1024 * 1024
 )
 
 // Handler implements the HTTP handler for Docker Registry API v2.
@@ -107,6 +115,16 @@ func (h *Handler) handleManifestRoutes(w http.ResponseWriter, r *http.Request) {
 	reference := parts[len(parts)-1]
 	name := strings.Join(parts[:len(parts)-2], "/")
 
+	// Validate inputs to prevent path traversal
+	if err := validation.ValidateRepositoryName(name); err != nil {
+		h.sendRegistryError(w, http.StatusBadRequest, "NAME_INVALID", err.Error())
+		return
+	}
+	if err := validation.ValidateReference(reference); err != nil {
+		h.sendRegistryError(w, http.StatusBadRequest, "TAG_INVALID", err.Error())
+		return
+	}
+
 	r.SetPathValue("name", name)
 	r.SetPathValue("reference", reference)
 
@@ -131,6 +149,16 @@ func (h *Handler) handleBlobRoutes(w http.ResponseWriter, r *http.Request) {
 	digest := parts[len(parts)-1]
 	name := strings.Join(parts[:len(parts)-2], "/")
 
+	// Validate inputs to prevent path traversal
+	if err := validation.ValidateRepositoryName(name); err != nil {
+		h.sendRegistryError(w, http.StatusBadRequest, "NAME_INVALID", err.Error())
+		return
+	}
+	if err := validation.ValidateDigest(digest); err != nil {
+		h.sendRegistryError(w, http.StatusBadRequest, "DIGEST_INVALID", err.Error())
+		return
+	}
+
 	r.SetPathValue("name", name)
 	r.SetPathValue("digest", digest)
 
@@ -154,6 +182,12 @@ func (h *Handler) handleBlobUploadRoutes(w http.ResponseWriter, r *http.Request)
 	name := path[:uploadIndex]
 	uploadPart := path[uploadIndex+15:] // len("/blobs/uploads/") = 15
 
+	// Validate repository name to prevent path traversal
+	if err := validation.ValidateRepositoryName(name); err != nil {
+		h.sendRegistryError(w, http.StatusBadRequest, "NAME_INVALID", err.Error())
+		return
+	}
+
 	r.SetPathValue("name", name)
 
 	if uploadPart == "" {
@@ -165,6 +199,11 @@ func (h *Handler) handleBlobUploadRoutes(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	} else {
+		// Validate UUID to prevent path traversal
+		if err := validation.ValidateUUID(uploadPart); err != nil {
+			h.sendRegistryError(w, http.StatusBadRequest, "BLOB_UPLOAD_INVALID", err.Error())
+			return
+		}
 		// PATCH/PUT /v2/{name}/blobs/uploads/{uuid}
 		r.SetPathValue("uuid", uploadPart)
 		switch r.Method {
@@ -185,6 +224,13 @@ func (h *Handler) handleTagListRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := strings.TrimSuffix(path, "/tags/list")
+
+	// Validate repository name to prevent path traversal
+	if err := validation.ValidateRepositoryName(name); err != nil {
+		h.sendRegistryError(w, http.StatusBadRequest, "NAME_INVALID", err.Error())
+		return
+	}
+
 	r.SetPathValue("name", name)
 
 	switch r.Method {
@@ -198,6 +244,18 @@ func (h *Handler) handleTagListRoutes(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleBase(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 	w.WriteHeader(http.StatusOK)
+}
+
+// sendRegistryError sends a Docker Registry V2 formatted error response.
+func (h *Handler) sendRegistryError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"errors": []map[string]string{
+			{"code": code, "message": message},
+		},
+	})
 }
 
 func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
@@ -239,9 +297,17 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit manifest size to prevent memory exhaustion
+	r.Body = http.MaxBytesReader(w, r.Body, MaxManifestSize)
+
 	// Read manifest data
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
+		if err.Error() == "http: request body too large" {
+			log.Warn().Int64("max_size", MaxManifestSize).Msg("manifest too large")
+			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "manifest exceeds maximum size")
+			return
+		}
 		log.Error().Err(err).Msg("failed to read manifest data")
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
@@ -328,9 +394,25 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		Str(zerowrap.FieldMethod, r.Method).
 		Msg("handling blob upload chunk")
 
+	// Validate digest if provided (for PUT finalization)
+	if digest != "" {
+		if err := validation.ValidateDigest(digest); err != nil {
+			h.sendRegistryError(w, http.StatusBadRequest, "DIGEST_INVALID", err.Error())
+			return
+		}
+	}
+
+	// Limit blob chunk size to prevent memory exhaustion
+	r.Body = http.MaxBytesReader(w, r.Body, MaxBlobChunkSize)
+
 	// Read the chunk from the request body
 	chunk, err := io.ReadAll(r.Body)
 	if err != nil {
+		if err.Error() == "http: request body too large" {
+			log.Warn().Int64("max_size", MaxBlobChunkSize).Msg("blob chunk too large")
+			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob chunk exceeds maximum size")
+			return
+		}
 		log.Error().Err(err).Msg("failed to read blob chunk")
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return

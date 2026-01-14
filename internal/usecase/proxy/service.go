@@ -4,6 +4,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bnema/zerowrap"
 
@@ -18,6 +20,20 @@ import (
 	"gordon/internal/boundaries/out"
 	"gordon/internal/domain"
 )
+
+// proxyTransport is a shared HTTP transport with proper timeouts.
+// This prevents resource exhaustion from slow backends or network issues.
+var proxyTransport = &http.Transport{
+	DialContext: (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ResponseHeaderTimeout: 30 * time.Second,
+	MaxIdleConns:          100,
+	MaxIdleConnsPerHost:   10,
+	IdleConnTimeout:       90 * time.Second,
+}
 
 // Config holds configuration needed by the proxy service.
 type Config struct {
@@ -233,6 +249,7 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.Transport = proxyTransport
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		log.Error().Err(err).Str("target", targetURL.String()).Msg("proxy error")
@@ -264,6 +281,7 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.Transport = proxyTransport
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		log.Error().Err(err).Int("registry_port", s.config.RegistryPort).Msg("registry proxy error")

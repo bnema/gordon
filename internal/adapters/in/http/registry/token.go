@@ -3,6 +3,7 @@ package registry
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -106,8 +107,12 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse requested scopes from query parameter
+	// Format: scope=repository:name:action1,action2 (can appear multiple times)
+	requestedScopes := h.parseRequestedScopes(r, log)
+
 	// Generate a short-lived access token (5 minutes)
-	accessToken, err := h.authSvc.GenerateToken(ctx, username, []string{"push", "pull"}, 5*time.Minute)
+	accessToken, err := h.authSvc.GenerateToken(ctx, username, requestedScopes, 5*time.Minute)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to generate access token")
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -152,13 +157,62 @@ func (h *TokenHandler) sendAnonymousToken(w http.ResponseWriter, log zerowrap.Lo
 	log.Debug().Msg("anonymous token issued")
 }
 
-// isLocalhostRequest checks if the request is from localhost.
+// isLocalhostRequest checks if the request originates from localhost.
+// SECURITY: Uses RemoteAddr (server-set) instead of Host header (client-spoofable).
 func isLocalhostRequest(r *http.Request) bool {
-	host := r.Host
-	if host == "" {
-		host = r.URL.Host
+	host := r.RemoteAddr
+	// RemoteAddr includes port, e.g., "127.0.0.1:12345" or "[::1]:12345"
+	return strings.HasPrefix(host, "127.") ||
+		strings.HasPrefix(host, "[::1]") ||
+		strings.HasPrefix(host, "::1")
+}
+
+// parseRequestedScopes extracts and validates scope parameters from the request.
+// Per Docker Registry v2 auth spec, scope format is: repository:name:actions
+// Example: GET /v2/token?scope=repository:myrepo:push,pull&scope=repository:other:pull
+func (h *TokenHandler) parseRequestedScopes(r *http.Request, log zerowrap.Logger) []string {
+	scopeParams := r.URL.Query()["scope"]
+
+	if len(scopeParams) == 0 {
+		// Default scope: pull from any repository for backward compatibility
+		log.Debug().Msg("no scope requested, using default pull scope")
+		return []string{"repository:*:pull"}
 	}
-	return host == "localhost:5000" || host == "127.0.0.1:5000" || host == "[::1]:5000"
+
+	var validScopes []string
+	for _, scopeStr := range scopeParams {
+		// Validate the scope format
+		scope, err := domain.ParseScope(scopeStr)
+		if err != nil {
+			log.Debug().
+				Err(err).
+				Str("scope", scopeStr).
+				Msg("invalid scope format, skipping")
+			continue
+		}
+
+		// Only allow repository scopes
+		if scope.Type != "repository" {
+			log.Debug().
+				Str("scope_type", scope.Type).
+				Str("scope", scopeStr).
+				Msg("unsupported scope type, skipping")
+			continue
+		}
+
+		validScopes = append(validScopes, scopeStr)
+	}
+
+	if len(validScopes) == 0 {
+		// All requested scopes were invalid, return default
+		log.Debug().Msg("all requested scopes invalid, using default pull scope")
+		return []string{"repository:*:pull"}
+	}
+
+	log.Debug().
+		Strs("scopes", validScopes).
+		Msg("parsed requested scopes")
+	return validScopes
 }
 
 // isInternalAuth checks if the credentials match internal registry auth.

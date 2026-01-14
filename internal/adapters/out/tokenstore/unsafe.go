@@ -2,6 +2,8 @@ package tokenstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +14,13 @@ import (
 
 	"gordon/internal/domain"
 )
+
+// sanitizeSubject creates a safe filename from a subject by hashing it.
+// This prevents path traversal attacks where subject contains "../" sequences.
+func sanitizeSubject(subject string) string {
+	hash := sha256.Sum256([]byte(subject))
+	return hex.EncodeToString(hash[:])
+}
 
 const (
 	// unsafeTokenDir is the subdirectory for tokens in the data directory.
@@ -62,7 +71,7 @@ func (s *UnsafeStore) SaveToken(_ context.Context, token *domain.Token, jwt stri
 		JWT: jwt,
 		Metadata: tokenMetadata{
 			ID:        token.ID,
-			Subject:   token.Subject,
+			Subject:   token.Subject, // Store original subject in metadata
 			Scopes:    token.Scopes,
 			IssuedAt:  token.IssuedAt,
 			ExpiresAt: token.ExpiresAt,
@@ -75,7 +84,9 @@ func (s *UnsafeStore) SaveToken(_ context.Context, token *domain.Token, jwt stri
 		return fmt.Errorf("failed to marshal token data: %w", err)
 	}
 
-	tokenFile := filepath.Join(tokenDir, token.Subject+".json")
+	// SECURITY: Use sanitized filename to prevent path traversal
+	safeFilename := sanitizeSubject(token.Subject)
+	tokenFile := filepath.Join(tokenDir, safeFilename+".json")
 	if err := os.WriteFile(tokenFile, dataJSON, 0600); err != nil {
 		return fmt.Errorf("failed to write token file: %w", err)
 	}
@@ -92,7 +103,9 @@ func (s *UnsafeStore) SaveToken(_ context.Context, token *domain.Token, jwt stri
 
 // GetToken retrieves token JWT by subject from file.
 func (s *UnsafeStore) GetToken(_ context.Context, subject string) (string, *domain.Token, error) {
-	tokenFile := filepath.Join(s.dataDir, unsafeTokenDir, subject+".json")
+	// SECURITY: Use sanitized filename to prevent path traversal
+	safeFilename := sanitizeSubject(subject)
+	tokenFile := filepath.Join(s.dataDir, unsafeTokenDir, safeFilename+".json")
 
 	dataJSON, err := os.ReadFile(tokenFile)
 	if err != nil {
@@ -120,7 +133,7 @@ func (s *UnsafeStore) GetToken(_ context.Context, subject string) (string, *doma
 }
 
 // ListTokens returns all stored tokens from files.
-func (s *UnsafeStore) ListTokens(ctx context.Context) ([]domain.Token, error) {
+func (s *UnsafeStore) ListTokens(_ context.Context) ([]domain.Token, error) {
 	tokenDir := filepath.Join(s.dataDir, unsafeTokenDir)
 
 	entries, err := os.ReadDir(tokenDir)
@@ -137,14 +150,30 @@ func (s *UnsafeStore) ListTokens(ctx context.Context) ([]domain.Token, error) {
 			continue
 		}
 
-		subject := strings.TrimSuffix(entry.Name(), ".json")
-		_, token, err := s.GetToken(ctx, subject)
+		// Read file directly since filenames are now hashed
+		tokenFile := filepath.Join(tokenDir, entry.Name())
+		dataJSON, err := os.ReadFile(tokenFile)
 		if err != nil {
-			s.log.Warn().Err(err).Str("subject", subject).Msg("failed to get token")
+			s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to read token file")
 			continue
 		}
 
-		tokens = append(tokens, *token)
+		var data unsafeTokenData
+		if err := json.Unmarshal(dataJSON, &data); err != nil {
+			s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to unmarshal token data")
+			continue
+		}
+
+		token := domain.Token{
+			ID:        data.Metadata.ID,
+			Subject:   data.Metadata.Subject,
+			Scopes:    data.Metadata.Scopes,
+			IssuedAt:  data.Metadata.IssuedAt,
+			ExpiresAt: data.Metadata.ExpiresAt,
+			Revoked:   data.Metadata.Revoked,
+		}
+
+		tokens = append(tokens, token)
 	}
 
 	return tokens, nil
@@ -210,7 +239,9 @@ func (s *UnsafeStore) IsRevoked(_ context.Context, tokenID string) (bool, error)
 
 // DeleteToken removes token file.
 func (s *UnsafeStore) DeleteToken(_ context.Context, subject string) error {
-	tokenFile := filepath.Join(s.dataDir, unsafeTokenDir, subject+".json")
+	// SECURITY: Use sanitized filename to prevent path traversal
+	safeFilename := sanitizeSubject(subject)
+	tokenFile := filepath.Join(s.dataDir, unsafeTokenDir, safeFilename+".json")
 
 	if err := os.Remove(tokenFile); err != nil {
 		if os.IsNotExist(err) {
