@@ -509,6 +509,14 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 		return "", err
 	}
 
+	// Clean up the temporary pull reference tag to avoid duplicate entries
+	if pullRef != imageRef {
+		if err := s.runtime.UntagImage(ctx, pullRef); err != nil {
+			// Log but don't fail - the canonical tag is already applied
+			log.Debug().Err(err).Str("pull_ref", pullRef).Msg("failed to remove temporary pull tag")
+		}
+	}
+
 	log.Info().Msg("image pulled successfully")
 	return imageRef, nil
 }
@@ -533,6 +541,12 @@ func (s *Service) ensureLocalImage(ctx context.Context, imageRef, pullRef string
 		if normalizedImage == normalizedPullRef {
 			if err := s.tagImageIfNeeded(ctx, pullRef, imageRef); err != nil {
 				return false, err
+			}
+			// Clean up the temporary pull reference tag
+			if pullRef != imageRef {
+				if err := s.runtime.UntagImage(ctx, pullRef); err != nil {
+					log.Debug().Err(err).Str("pull_ref", pullRef).Msg("failed to remove temporary pull tag")
+				}
 			}
 			log.Info().Msg("image found locally, skipping pull")
 			return true, nil
@@ -890,14 +904,30 @@ func (s *Service) stopAllManagedContainers(ctx context.Context) error {
 // Utility functions
 
 func normalizeImageRef(image string) string {
-	parts := strings.Split(image, ":")
-	repo := parts[0]
+	// Extract repository from image reference, handling port numbers correctly.
+	// Examples:
+	//   nginx:latest -> docker.io/library/nginx
+	//   user/repo:tag -> docker.io/user/repo
+	//   localhost:5000/image:tag -> localhost:5000/image
+	//   registry.example.com/image:tag -> registry.example.com/image
+
+	// Find the tag separator: the last colon that isn't part of a port number.
+	// A colon is part of a port if there's no slash after it until the next colon.
+	repo := image
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon != -1 {
+		afterColon := image[lastColon+1:]
+		// If there's no slash after the colon, it's the tag separator
+		if !strings.Contains(afterColon, "/") {
+			repo = image[:lastColon]
+		}
+	}
 
 	if !strings.Contains(repo, "/") {
 		return "docker.io/library/" + repo
 	}
 
-	if strings.Count(repo, "/") == 1 && !strings.Contains(strings.Split(repo, "/")[0], ".") {
+	if strings.Count(repo, "/") == 1 && !strings.Contains(strings.Split(repo, "/")[0], ".") && !strings.Contains(strings.Split(repo, "/")[0], ":") {
 		return "docker.io/" + repo
 	}
 

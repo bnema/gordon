@@ -556,6 +556,21 @@ func TestNormalizeImageRef(t *testing.T) {
 			input:    "nginx:latest",
 			expected: "docker.io/library/nginx",
 		},
+		{
+			name:     "localhost with port",
+			input:    "localhost:5000/myapp:latest",
+			expected: "localhost:5000/myapp",
+		},
+		{
+			name:     "localhost with port no tag",
+			input:    "localhost:5000/myapp",
+			expected: "localhost:5000/myapp",
+		},
+		{
+			name:     "registry domain with port",
+			input:    "registry.example.com:5000/image:v1.0",
+			expected: "registry.example.com:5000/image",
+		},
 	}
 
 	for _, tt := range tests {
