@@ -220,15 +220,29 @@ sudo ufw --force enable
 ```
 
 ### 2. Port Forwarding (rootless requires this)
-```bash
-# Forward 80/443 to unprivileged port 8080
-sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
-sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
 
-# Make persistent
-sudo apt install -y iptables-persistent
-sudo netfilter-persistent save
+Rootless containers can't bind to privileged ports (< 1024). Redirect 80/443 to unprivileged ports:
+
+```bash
+# Add NAT rules to UFW's before.rules (persists across reboots)
+sudo tee -a /etc/ufw/before.rules > /dev/null << 'EOF'
+
+# NAT rules for rootless container port redirection
+*nat
+:PREROUTING ACCEPT [0:0]
+-A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+-A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
+COMMIT
+EOF
+
+# Reload UFW to apply
+sudo ufw reload
+
+# Verify rules are active
+sudo iptables -t nat -L PREROUTING -n
 ```
+
+> **Warning:** Do NOT use `iptables-persistent` - it conflicts with UFW and will remove it. The method above integrates with UFW properly.
 
 ### 3. Rootless Container Setup
 ```bash
