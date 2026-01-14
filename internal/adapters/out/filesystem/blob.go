@@ -2,7 +2,11 @@
 package filesystem
 
 import (
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +14,8 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+
+	"gordon/pkg/validation"
 )
 
 // BlobStorage implements the BlobStorage interface using the local filesystem.
@@ -46,7 +52,10 @@ func NewBlobStorage(rootDir string, log zerowrap.Logger) (*BlobStorage, error) {
 
 // GetBlob retrieves a blob by digest.
 func (s *BlobStorage) GetBlob(digest string) (io.ReadCloser, error) {
-	blobPath := s.getBlobPath(digest)
+	blobPath, err := s.getBlobPath(digest)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path: %w", err)
+	}
 
 	file, err := os.Open(blobPath)
 	if err != nil {
@@ -61,7 +70,10 @@ func (s *BlobStorage) GetBlob(digest string) (io.ReadCloser, error) {
 
 // GetBlobPath returns the filesystem path to a blob.
 func (s *BlobStorage) GetBlobPath(digest string) (string, error) {
-	path := s.getBlobPath(digest)
+	path, err := s.getBlobPath(digest)
+	if err != nil {
+		return "", fmt.Errorf("invalid path: %w", err)
+	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return "", fmt.Errorf("blob not found: %s", digest)
@@ -73,7 +85,10 @@ func (s *BlobStorage) GetBlobPath(digest string) (string, error) {
 
 // PutBlob stores a blob with the given digest.
 func (s *BlobStorage) PutBlob(digest string, data io.Reader, size int64) error {
-	blobPath := s.getBlobPath(digest)
+	blobPath, err := s.getBlobPath(digest)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
 
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(blobPath), 0750); err != nil {
@@ -119,7 +134,10 @@ func (s *BlobStorage) PutBlob(digest string, data io.Reader, size int64) error {
 
 // DeleteBlob removes a blob by digest.
 func (s *BlobStorage) DeleteBlob(digest string) error {
-	blobPath := s.getBlobPath(digest)
+	blobPath, err := s.getBlobPath(digest)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
 
 	if err := os.Remove(blobPath); err != nil {
 		if os.IsNotExist(err) {
@@ -139,8 +157,11 @@ func (s *BlobStorage) DeleteBlob(digest string) error {
 
 // BlobExists checks if a blob exists.
 func (s *BlobStorage) BlobExists(digest string) bool {
-	blobPath := s.getBlobPath(digest)
-	_, err := os.Stat(blobPath)
+	blobPath, err := s.getBlobPath(digest)
+	if err != nil {
+		return false // Invalid path means blob doesn't exist
+	}
+	_, err = os.Stat(blobPath)
 	return err == nil
 }
 
@@ -149,7 +170,10 @@ func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
 	// Generate UUID-like upload ID using timestamp
 	uuid := fmt.Sprintf("%d-%s", time.Now().UnixNano(), strings.ReplaceAll(name, "/", "_"))
 
-	uploadPath := s.getUploadPath(uuid)
+	uploadPath, err := s.getUploadPath(uuid)
+	if err != nil {
+		return "", fmt.Errorf("invalid upload path: %w", err)
+	}
 
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(uploadPath), 0750); err != nil {
@@ -175,7 +199,10 @@ func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
 
 // AppendBlobChunk appends data to an in-progress upload.
 func (s *BlobStorage) AppendBlobChunk(name, uuid string, chunk []byte) (int64, error) {
-	uploadPath := s.getUploadPath(uuid)
+	uploadPath, err := s.getUploadPath(uuid)
+	if err != nil {
+		return 0, fmt.Errorf("invalid upload path: %w", err)
+	}
 
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
@@ -210,7 +237,10 @@ func (s *BlobStorage) AppendBlobChunk(name, uuid string, chunk []byte) (int64, e
 
 // GetBlobUpload returns a writer for the upload.
 func (s *BlobStorage) GetBlobUpload(uuid string) (io.WriteCloser, error) {
-	uploadPath := s.getUploadPath(uuid)
+	uploadPath, err := s.getUploadPath(uuid)
+	if err != nil {
+		return nil, fmt.Errorf("invalid upload path: %w", err)
+	}
 
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
@@ -225,8 +255,19 @@ func (s *BlobStorage) GetBlobUpload(uuid string) (io.WriteCloser, error) {
 
 // FinishBlobUpload completes an upload and moves it to blob storage.
 func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
-	uploadPath := s.getUploadPath(uuid)
-	blobPath := s.getBlobPath(digest)
+	uploadPath, err := s.getUploadPath(uuid)
+	if err != nil {
+		return fmt.Errorf("invalid upload path: %w", err)
+	}
+	blobPath, err := s.getBlobPath(digest)
+	if err != nil {
+		return fmt.Errorf("invalid blob path: %w", err)
+	}
+
+	// Verify digest before moving to ensure integrity
+	if err := s.verifyUploadDigest(uploadPath, digest); err != nil {
+		return fmt.Errorf("digest verification failed: %w", err)
+	}
 
 	// Create blob directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(blobPath), 0750); err != nil {
@@ -250,7 +291,10 @@ func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
 
 // CancelBlobUpload cancels an in-progress upload.
 func (s *BlobStorage) CancelBlobUpload(uuid string) error {
-	uploadPath := s.getUploadPath(uuid)
+	uploadPath, err := s.getUploadPath(uuid)
+	if err != nil {
+		return fmt.Errorf("invalid upload path: %w", err)
+	}
 
 	if err := os.Remove(uploadPath); err != nil {
 		if os.IsNotExist(err) {
@@ -268,27 +312,89 @@ func (s *BlobStorage) CancelBlobUpload(uuid string) error {
 	return nil
 }
 
-// Helper methods for path generation
+// Helper methods for path generation with security validation
 
-func (s *BlobStorage) getBlobPath(digest string) string {
+func (s *BlobStorage) getBlobPath(digest string) (string, error) {
+	// Validate digest to prevent path traversal (defense in depth)
+	if err := validation.ValidateDigest(digest); err != nil {
+		return "", fmt.Errorf("invalid digest: %w", err)
+	}
+
 	// Split digest into directory structure (e.g., sha256:abc123... -> sha256/ab/abc123...)
 	parts := strings.SplitN(digest, ":", 2)
 	if len(parts) != 2 {
-		// Fallback if digest format is unexpected
-		return filepath.Join(s.rootDir, "blobs", digest)
+		return "", fmt.Errorf("invalid digest format: missing algorithm separator")
 	}
 
 	algorithm := parts[0]
-	hash := parts[1]
+	hashPart := parts[1]
 
+	var path string
 	// Create two-level directory structure for better performance
-	if len(hash) >= 2 {
-		return filepath.Join(s.rootDir, "blobs", algorithm, hash[:2], hash)
+	if len(hashPart) >= 2 {
+		path = filepath.Join(s.rootDir, "blobs", algorithm, hashPart[:2], hashPart)
+	} else {
+		path = filepath.Join(s.rootDir, "blobs", algorithm, hashPart)
 	}
 
-	return filepath.Join(s.rootDir, "blobs", algorithm, hash)
+	// Verify the path stays within root directory
+	if err := validation.ValidatePathWithinRoot(s.rootDir, path); err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
+
+	return path, nil
 }
 
-func (s *BlobStorage) getUploadPath(uuid string) string {
-	return filepath.Join(s.rootDir, "uploads", uuid)
+func (s *BlobStorage) getUploadPath(uuid string) (string, error) {
+	// Validate UUID to prevent path traversal
+	if err := validation.ValidateUUID(uuid); err != nil {
+		return "", fmt.Errorf("invalid UUID: %w", err)
+	}
+
+	path := filepath.Join(s.rootDir, "uploads", uuid)
+
+	// Verify the path stays within root directory
+	if err := validation.ValidatePathWithinRoot(s.rootDir, path); err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
+
+	return path, nil
+}
+
+// verifyUploadDigest computes and verifies the digest of an uploaded file.
+func (s *BlobStorage) verifyUploadDigest(uploadPath, expectedDigest string) error {
+	parts := strings.SplitN(expectedDigest, ":", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid digest format")
+	}
+
+	algorithm := parts[0]
+	expectedHash := parts[1]
+
+	var hasher hash.Hash
+	switch algorithm {
+	case "sha256":
+		hasher = sha256.New()
+	case "sha512":
+		hasher = sha512.New()
+	default:
+		return fmt.Errorf("unsupported hash algorithm: %s", algorithm)
+	}
+
+	file, err := os.Open(uploadPath)
+	if err != nil {
+		return fmt.Errorf("failed to open upload file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(hasher, file); err != nil {
+		return fmt.Errorf("failed to compute digest: %w", err)
+	}
+
+	actualHash := hex.EncodeToString(hasher.Sum(nil))
+	if actualHash != expectedHash {
+		return fmt.Errorf("digest mismatch: expected %s, got %s", expectedHash, actualHash)
+	}
+
+	return nil
 }

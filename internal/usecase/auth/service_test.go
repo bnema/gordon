@@ -205,6 +205,18 @@ func TestService_ValidateToken_Success(t *testing.T) {
 	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, time.Hour)
 	require.NoError(t, err)
 
+	// Expect GetToken to be called to verify token exists
+	tokenStore.EXPECT().
+		GetToken(
+			mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }),
+			"testsubject",
+		).
+		Return(tokenStr, &domain.Token{
+			ID:      savedTokenID,
+			Subject: "testsubject",
+			Scopes:  []string{"push", "pull"},
+		}, nil)
+
 	// Expect IsRevoked to be called with the same token ID
 	tokenStore.EXPECT().
 		IsRevoked(
@@ -250,6 +262,18 @@ func TestService_ValidateToken_Revoked(t *testing.T) {
 	ctx := testContext()
 	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, time.Hour)
 	require.NoError(t, err)
+
+	// Expect GetToken to be called to verify token exists
+	tokenStore.EXPECT().
+		GetToken(
+			mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }),
+			"testsubject",
+		).
+		Return(tokenStr, &domain.Token{
+			ID:      savedTokenID,
+			Subject: "testsubject",
+			Scopes:  []string{"push", "pull"},
+		}, nil)
 
 	// Token is revoked
 	tokenStore.EXPECT().

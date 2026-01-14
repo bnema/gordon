@@ -54,4 +54,10 @@ var (
 	ErrRevokedToken       = errors.New("token has been revoked")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrTokenNotFound      = errors.New("token not found")
+
+	// Security errors
+	ErrPathTraversal     = errors.New("path traversal not allowed")
+	ErrInvalidPath       = errors.New("invalid path format")
+	ErrInsufficientScope = errors.New("insufficient scope for operation")
+	ErrInvalidScope      = errors.New("invalid scope format")
 )

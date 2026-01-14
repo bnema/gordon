@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 
 	"github.com/bnema/zerowrap"
+
+	"gordon/pkg/validation"
 )
 
 // ManifestStorage implements the ManifestStorage interface using the local filesystem.
@@ -38,7 +40,10 @@ func NewManifestStorage(rootDir string, log zerowrap.Logger) (*ManifestStorage, 
 // GetManifest retrieves a manifest by name and reference.
 // Returns the manifest data and content type.
 func (s *ManifestStorage) GetManifest(name, reference string) ([]byte, string, error) {
-	manifestPath := s.getManifestPath(name, reference)
+	manifestPath, err := s.getManifestPath(name, reference)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid path: %w", err)
+	}
 
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -66,7 +71,10 @@ func (s *ManifestStorage) GetManifest(name, reference string) ([]byte, string, e
 
 // PutManifest stores a manifest.
 func (s *ManifestStorage) PutManifest(name, reference, contentType string, data []byte) error {
-	manifestPath := s.getManifestPath(name, reference)
+	manifestPath, err := s.getManifestPath(name, reference)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
 
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0750); err != nil {
@@ -113,7 +121,10 @@ func (s *ManifestStorage) PutManifest(name, reference, contentType string, data 
 
 // DeleteManifest removes a manifest.
 func (s *ManifestStorage) DeleteManifest(name, reference string) error {
-	manifestPath := s.getManifestPath(name, reference)
+	manifestPath, err := s.getManifestPath(name, reference)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
 
 	if err := os.Remove(manifestPath); err != nil {
 		if os.IsNotExist(err) {
@@ -156,7 +167,10 @@ func (s *ManifestStorage) DeleteManifest(name, reference string) error {
 
 // ListTags returns all tags for a repository.
 func (s *ManifestStorage) ListTags(name string) ([]string, error) {
-	tagsPath := s.getTagsPath(name)
+	tagsPath, err := s.getTagsPath(name)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path: %w", err)
+	}
 
 	data, err := os.ReadFile(tagsPath)
 	if err != nil {
@@ -208,24 +222,58 @@ func (s *ManifestStorage) ListRepositories() ([]string, error) {
 	return repositories, nil
 }
 
-// Helper methods for path generation
+// Helper methods for path generation with security validation
 
-func (s *ManifestStorage) getManifestPath(name, reference string) string {
-	return filepath.Join(s.rootDir, "repositories", name, "manifests", reference)
+func (s *ManifestStorage) getManifestPath(name, reference string) (string, error) {
+	// Validate name to prevent path traversal (defense in depth)
+	if _, err := validation.ValidatePath(name); err != nil {
+		return "", fmt.Errorf("invalid repository name: %w", err)
+	}
+	if _, err := validation.ValidatePath(reference); err != nil {
+		return "", fmt.Errorf("invalid reference: %w", err)
+	}
+
+	path := filepath.Join(s.rootDir, "repositories", name, "manifests", reference)
+
+	// Verify the path stays within root directory
+	if err := validation.ValidatePathWithinRoot(s.rootDir, path); err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
+
+	return path, nil
 }
 
-func (s *ManifestStorage) getManifestContentTypePath(name, reference string) string {
-	return s.getManifestPath(name, reference) + ".contenttype"
+func (s *ManifestStorage) getManifestContentTypePath(name, reference string) (string, error) {
+	manifestPath, err := s.getManifestPath(name, reference)
+	if err != nil {
+		return "", err
+	}
+	return manifestPath + ".contenttype", nil
 }
 
-func (s *ManifestStorage) getTagsPath(name string) string {
-	return filepath.Join(s.rootDir, "repositories", name, "tags.json")
+func (s *ManifestStorage) getTagsPath(name string) (string, error) {
+	// Validate name to prevent path traversal
+	if _, err := validation.ValidatePath(name); err != nil {
+		return "", fmt.Errorf("invalid repository name: %w", err)
+	}
+
+	path := filepath.Join(s.rootDir, "repositories", name, "tags.json")
+
+	// Verify the path stays within root directory
+	if err := validation.ValidatePathWithinRoot(s.rootDir, path); err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
+
+	return path, nil
 }
 
 // Content type helpers
 
 func (s *ManifestStorage) getManifestContentType(name, reference string) (string, error) {
-	contentTypePath := s.getManifestContentTypePath(name, reference)
+	contentTypePath, err := s.getManifestContentTypePath(name, reference)
+	if err != nil {
+		return "", err
+	}
 	data, err := os.ReadFile(contentTypePath)
 	if err != nil {
 		return "", err
@@ -234,13 +282,19 @@ func (s *ManifestStorage) getManifestContentType(name, reference string) (string
 }
 
 func (s *ManifestStorage) putManifestContentType(name, reference, contentType string) error {
-	contentTypePath := s.getManifestContentTypePath(name, reference)
+	contentTypePath, err := s.getManifestContentTypePath(name, reference)
+	if err != nil {
+		return err
+	}
 	return os.WriteFile(contentTypePath, []byte(contentType), 0600)
 }
 
 func (s *ManifestStorage) deleteManifestContentType(name, reference string) error {
-	contentTypePath := s.getManifestContentTypePath(name, reference)
-	err := os.Remove(contentTypePath)
+	contentTypePath, err := s.getManifestContentTypePath(name, reference)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(contentTypePath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -284,7 +338,10 @@ func (s *ManifestStorage) removeFromTagsList(name, reference string) error {
 }
 
 func (s *ManifestStorage) saveTagsList(name string, tags []string) error {
-	tagsPath := s.getTagsPath(name)
+	tagsPath, err := s.getTagsPath(name)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
 
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(tagsPath), 0750); err != nil {
