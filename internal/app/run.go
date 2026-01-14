@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -242,6 +243,12 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		if err != nil {
 			return nil, log.WrapErr(err, "failed to generate internal registry credentials")
 		}
+
+		// Persist credentials to file for CLI access (gordon auth internal)
+		if err := persistInternalCredentials(svc.internalRegUser, svc.internalRegPass); err != nil {
+			log.Warn().Err(err).Msg("failed to persist internal credentials for CLI access")
+		}
+
 		log.Debug().Msg("internal registry auth generated for loopback pulls")
 	}
 
@@ -391,6 +398,54 @@ func randomTokenHex(size int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+// InternalCredentials holds the internal registry credentials for CLI access.
+type InternalCredentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// getInternalCredentialsFile returns the path to the internal credentials file.
+func getInternalCredentialsFile() string {
+	return filepath.Join(os.TempDir(), "gordon-internal-creds.json")
+}
+
+// persistInternalCredentials saves the internal registry credentials to a file.
+func persistInternalCredentials(username, password string) error {
+	creds := InternalCredentials{
+		Username: username,
+		Password: password,
+	}
+	data, err := json.Marshal(creds)
+	if err != nil {
+		return fmt.Errorf("failed to marshal credentials: %w", err)
+	}
+	credFile := getInternalCredentialsFile()
+	if err := os.WriteFile(credFile, data, 0600); err != nil {
+		return fmt.Errorf("failed to write credentials file: %w", err)
+	}
+	return nil
+}
+
+// cleanupInternalCredentials removes the internal credentials file.
+func cleanupInternalCredentials() {
+	_ = os.Remove(getInternalCredentialsFile())
+}
+
+// GetInternalCredentials reads the internal registry credentials from file.
+// This is used by the CLI to display credentials for manual recovery.
+func GetInternalCredentials() (*InternalCredentials, error) {
+	credFile := getInternalCredentialsFile()
+	data, err := os.ReadFile(credFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read credentials file (is Gordon running?): %w", err)
+	}
+	var creds InternalCredentials
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return nil, fmt.Errorf("failed to parse credentials: %w", err)
+	}
+	return &creds, nil
 }
 
 // createAuthService creates the authentication service and token store.
@@ -606,6 +661,11 @@ func registerEventHandlers(ctx context.Context, svc *services) error {
 		return fmt.Errorf("failed to subscribe manual reload handler: %w", err)
 	}
 
+	manualDeployHandler := container.NewManualDeployHandler(ctx, svc.containerSvc, svc.configSvc)
+	if err := svc.eventBus.Subscribe(manualDeployHandler); err != nil {
+		return fmt.Errorf("failed to subscribe manual deploy handler: %w", err)
+	}
+
 	// Proxy cache invalidation on container deployment (for zero-downtime)
 	containerDeployedHandler := proxy.NewContainerDeployedHandler(ctx, svc.proxySvc)
 	if err := svc.eventBus.Subscribe(containerDeployedHandler); err != nil {
@@ -650,7 +710,8 @@ func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
 	}
 
 	if svc.configSvc.IsAutoRouteEnabled() {
-		if err := svc.containerSvc.AutoStart(ctx); err != nil {
+		routes := svc.configSvc.GetRoutes(ctx)
+		if err := svc.containerSvc.AutoStart(ctx, routes); err != nil {
 			log.Warn().Err(err).Msg("failed to auto-start containers")
 		}
 	}
@@ -704,7 +765,8 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 // Signal handling notes:
 // - SIGINT/SIGTERM: Triggers graceful shutdown via signal.NotifyContext
 // - SIGUSR1: Triggers config reload without restart
-// The deferred signal.Stop(reloadChan) ensures the signal handler is properly
+// - SIGUSR2: Triggers manual deploy for a specific route
+// The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
 func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -716,6 +778,11 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 	reloadChan := make(chan os.Signal, 1)
 	signal.Notify(reloadChan, syscall.SIGUSR1)
 	defer signal.Stop(reloadChan)
+
+	// Set up SIGUSR2 for manual deploy.
+	deployChan := make(chan os.Signal, 1)
+	signal.Notify(deployChan, syscall.SIGUSR2)
+	defer signal.Stop(deployChan)
 
 	errChan := make(chan error, 2)
 
@@ -736,6 +803,17 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 			if err := eventBus.Publish(domain.EventManualReload, nil); err != nil {
 				log.Error().Err(err).Msg("failed to publish manual reload event")
 			}
+		case <-deployChan:
+			log.Info().Msg("deploy signal received (SIGUSR2)")
+			domainName, err := readDeployRequest()
+			if err != nil {
+				log.Error().Err(err).Msg("failed to read deploy request")
+				continue
+			}
+			payload := &domain.ManualDeployPayload{Domain: domainName}
+			if err := eventBus.Publish(domain.EventManualDeploy, payload); err != nil {
+				log.Error().Err(err).Str("domain", domainName).Msg("failed to publish manual deploy event")
+			}
 		case <-ctx.Done():
 			log.Info().Msg("shutdown signal received")
 			goto shutdown
@@ -748,6 +826,9 @@ shutdown:
 	if err := containerSvc.Shutdown(ctx); err != nil {
 		log.Warn().Err(err).Msg("error during container shutdown")
 	}
+
+	// Clean up internal credentials file
+	cleanupInternalCredentials()
 
 	log.Info().Msg("Gordon stopped")
 	return nil
@@ -799,6 +880,64 @@ func SendReloadSignal() error {
 	}
 
 	return nil
+}
+
+// getDeployRequestFile returns the path to the deploy request file.
+func getDeployRequestFile() string {
+	return filepath.Join(os.TempDir(), "gordon-deploy-request")
+}
+
+// SendDeploySignal triggers a manual deploy for a specific route via SIGUSR2.
+func SendDeploySignal(domain string) error {
+	// Write the domain to the deploy request file
+	deployFile := getDeployRequestFile()
+	if err := os.WriteFile(deployFile, []byte(domain), 0600); err != nil {
+		return fmt.Errorf("failed to write deploy request: %w", err)
+	}
+
+	// Find PID and send SIGUSR2
+	pidFile := findPidFile()
+	if pidFile == "" {
+		_ = os.Remove(deployFile) // Clean up on error
+		return fmt.Errorf("gordon PID file not found, is Gordon running?")
+	}
+
+	pidBytes, err := os.ReadFile(pidFile)
+	if err != nil {
+		_ = os.Remove(deployFile)
+		return fmt.Errorf("failed to read PID file: %w", err)
+	}
+
+	var pid int
+	if _, err := fmt.Sscanf(string(pidBytes), "%d", &pid); err != nil {
+		_ = os.Remove(deployFile)
+		return fmt.Errorf("failed to parse PID: %w", err)
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		_ = os.Remove(deployFile)
+		return fmt.Errorf("failed to find process: %w", err)
+	}
+
+	if err := process.Signal(syscall.SIGUSR2); err != nil {
+		_ = os.Remove(deployFile)
+		return fmt.Errorf("failed to send deploy signal: %w", err)
+	}
+
+	fmt.Printf("Deploy signal sent for domain: %s\n", domain)
+	return nil
+}
+
+// readDeployRequest reads and removes the deploy request file.
+func readDeployRequest() (string, error) {
+	deployFile := getDeployRequestFile()
+	data, err := os.ReadFile(deployFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to read deploy request: %w", err)
+	}
+	_ = os.Remove(deployFile) // Clean up after reading
+	return string(data), nil
 }
 
 // createPidFile creates a PID file for the Gordon process.

@@ -208,6 +208,7 @@ Gordon uses an internal event system for coordination:
 | `image.pushed` | Image pushed to registry | Deploy container |
 | `config.reload` | Config file changed | Sync containers |
 | `manual.reload` | `gordon reload` command | Sync containers |
+| `manual.deploy` | `gordon deploy <domain>` command | Deploy specific route |
 | `container.deployed` | Container started | Update proxy cache |
 
 ## Container Labels

@@ -197,5 +197,5 @@ Gordon generates internal credentials automatically when auth is enabled. These 
 ## Related
 
 - [Secrets Configuration](./secrets.md)
-- [CLI Auth Commands](../cli/auth.md)
+- [CLI Commands](../cli/commands.md)
 - [GitHub Actions Deployment](../deployment/github-actions.md)

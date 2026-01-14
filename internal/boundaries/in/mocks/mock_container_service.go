@@ -39,16 +39,16 @@ func (_m *MockContainerService) EXPECT() *MockContainerService_Expecter {
 }
 
 // AutoStart provides a mock function for the type MockContainerService
-func (_mock *MockContainerService) AutoStart(ctx context.Context) error {
-	ret := _mock.Called(ctx)
+func (_mock *MockContainerService) AutoStart(ctx context.Context, routes []domain.Route) error {
+	ret := _mock.Called(ctx, routes)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AutoStart")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) error); ok {
-		r0 = returnFunc(ctx)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []domain.Route) error); ok {
+		r0 = returnFunc(ctx, routes)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -62,18 +62,24 @@ type MockContainerService_AutoStart_Call struct {
 
 // AutoStart is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerService_Expecter) AutoStart(ctx interface{}) *MockContainerService_AutoStart_Call {
-	return &MockContainerService_AutoStart_Call{Call: _e.mock.On("AutoStart", ctx)}
+//   - routes []domain.Route
+func (_e *MockContainerService_Expecter) AutoStart(ctx interface{}, routes interface{}) *MockContainerService_AutoStart_Call {
+	return &MockContainerService_AutoStart_Call{Call: _e.mock.On("AutoStart", ctx, routes)}
 }
 
-func (_c *MockContainerService_AutoStart_Call) Run(run func(ctx context.Context)) *MockContainerService_AutoStart_Call {
+func (_c *MockContainerService_AutoStart_Call) Run(run func(ctx context.Context, routes []domain.Route)) *MockContainerService_AutoStart_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
+		var arg1 []domain.Route
+		if args[1] != nil {
+			arg1 = args[1].([]domain.Route)
+		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
@@ -84,7 +90,7 @@ func (_c *MockContainerService_AutoStart_Call) Return(err error) *MockContainerS
 	return _c
 }
 
-func (_c *MockContainerService_AutoStart_Call) RunAndReturn(run func(ctx context.Context) error) *MockContainerService_AutoStart_Call {
+func (_c *MockContainerService_AutoStart_Call) RunAndReturn(run func(ctx context.Context, routes []domain.Route) error) *MockContainerService_AutoStart_Call {
 	_c.Call.Return(run)
 	return _c
 }
