@@ -210,6 +210,8 @@ func NewManualReloadHandler(ctx context.Context, containerSvc in.ContainerServic
 }
 
 // Handle handles an event.
+// It starts containers for configured routes that don't have a running container.
+// Running containers are NEVER restarted to ensure 100% uptime.
 func (h *ManualReloadHandler) Handle(event domain.Event) error {
 	ctx := zerowrap.CtxWithFields(h.ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -219,43 +221,47 @@ func (h *ManualReloadHandler) Handle(event domain.Event) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	log.Info().Msg("processing manual reload event - redeploying all containers")
+	log.Info().Msg("processing manual reload event - starting missing containers")
 
 	routes := h.configSvc.GetRoutes(ctx)
-	redeployedCount := 0
+	startedCount := 0
+	skippedCount := 0
 	errorCount := 0
 
 	for _, route := range routes {
-		if _, exists := h.containerSvc.Get(ctx, route.Domain); !exists {
-			log.Debug().Str("domain", route.Domain).Msg("no container found for route, skipping")
+		if _, exists := h.containerSvc.Get(ctx, route.Domain); exists {
+			log.Debug().Str("domain", route.Domain).Msg("container already running, skipping")
+			skippedCount++
 			continue
 		}
 
 		log.Info().
 			Str("domain", route.Domain).
 			Str("image", route.Image).
-			Msg("redeploying container with updated environment")
+			Msg("starting container for route")
 
 		if _, err := h.containerSvc.Deploy(ctx, route); err != nil {
-			log.WrapErrWithFields(err, "failed to redeploy container", map[string]any{"domain": route.Domain})
+			log.WrapErrWithFields(err, "failed to start container", map[string]any{"domain": route.Domain})
 			errorCount++
 			continue
 		}
 
-		redeployedCount++
-		log.Info().Str("domain", route.Domain).Msg("container redeployed successfully")
+		startedCount++
+		log.Info().Str("domain", route.Domain).Msg("container started successfully")
 	}
 
 	if errorCount > 0 {
 		log.Warn().
-			Int("redeployed", redeployedCount).
+			Int("started", startedCount).
+			Int("skipped", skippedCount).
 			Int("errors", errorCount).
 			Msg("manual reload completed with some errors")
 		return fmt.Errorf("manual reload completed with %d errors", errorCount)
 	}
 
 	log.Info().
-		Int("redeployed", redeployedCount).
+		Int("started", startedCount).
+		Int("skipped", skippedCount).
 		Int("total", len(routes)).
 		Msg("manual reload completed successfully")
 	return nil
