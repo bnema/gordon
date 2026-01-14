@@ -754,6 +754,10 @@ func startServer(addr string, handler http.Handler, name string, errChan chan<- 
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,   // Timeout for reading entire request
+		WriteTimeout:      5 * time.Minute,   // Timeout for writing response
+		IdleTimeout:       120 * time.Second, // Timeout for idle keep-alive connections
+		MaxHeaderBytes:    1 << 20,           // 1MB max header size
 	}
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

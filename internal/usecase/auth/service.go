@@ -4,6 +4,8 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -99,6 +101,11 @@ func (s *Service) ValidateToken(ctx context.Context, tokenString string) (*domai
 
 	tokenClaims := buildTokenClaims(claims)
 
+	// SECURITY: Verify token exists in store (prevents use of externally-created tokens)
+	if err := s.ensureTokenExists(ctx, tokenClaims, log); err != nil {
+		return nil, err
+	}
+
 	if err := s.ensureTokenNotRevoked(ctx, tokenClaims, log); err != nil {
 		return nil, err
 	}
@@ -111,13 +118,39 @@ func (s *Service) ValidateToken(ctx context.Context, tokenString string) (*domai
 	return tokenClaims, nil
 }
 
+// ensureTokenExists verifies the token exists in the store and the JTI matches.
+func (s *Service) ensureTokenExists(ctx context.Context, tokenClaims *domain.TokenClaims, log zerowrap.Logger) error {
+	_, storedToken, err := s.tokenStore.GetToken(ctx, tokenClaims.Subject)
+	if err != nil {
+		if errors.Is(err, domain.ErrTokenNotFound) {
+			log.Debug().Str("subject", tokenClaims.Subject).Msg("token not found in store")
+			return domain.ErrInvalidToken
+		}
+		// SECURITY: Fail closed on store errors
+		log.Error().Err(err).Msg("failed to verify token existence")
+		return fmt.Errorf("unable to verify token: %w", err)
+	}
+
+	// Verify the token ID matches the stored token
+	if storedToken.ID != tokenClaims.ID {
+		log.Debug().
+			Str("expected_id", storedToken.ID).
+			Str("actual_id", tokenClaims.ID).
+			Msg("token ID mismatch")
+		return domain.ErrInvalidToken
+	}
+
+	return nil
+}
+
 func (s *Service) parseTokenClaims(tokenString string) (jwt.MapClaims, error) {
+	// Parse token with issuer validation
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, domain.ErrInvalidToken
 		}
 		return s.config.TokenSecret, nil
-	})
+	}, jwt.WithIssuer(TokenIssuer)) // SECURITY: Enforce issuer validation
 	if err != nil {
 		return nil, domain.ErrInvalidToken
 	}
@@ -128,6 +161,11 @@ func (s *Service) parseTokenClaims(tokenString string) (jwt.MapClaims, error) {
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
+		return nil, domain.ErrInvalidToken
+	}
+
+	// SECURITY: Double-check issuer claim matches expected value
+	if iss, ok := claims["iss"].(string); !ok || iss != TokenIssuer {
 		return nil, domain.ErrInvalidToken
 	}
 
@@ -165,8 +203,9 @@ func buildTokenClaims(claims jwt.MapClaims) *domain.TokenClaims {
 func (s *Service) ensureTokenNotRevoked(ctx context.Context, tokenClaims *domain.TokenClaims, log zerowrap.Logger) error {
 	revoked, err := s.tokenStore.IsRevoked(ctx, tokenClaims.ID)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to check token revocation")
-		return nil
+		// SECURITY: Fail closed - deny access on revocation check error
+		log.Error().Err(err).Str("token_id", tokenClaims.ID).Msg("failed to check token revocation, denying access")
+		return fmt.Errorf("unable to verify token status: %w", err)
 	}
 	if revoked {
 		log.Debug().Str("token_id", tokenClaims.ID).Msg("token has been revoked")
