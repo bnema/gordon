@@ -30,6 +30,7 @@ type ContainerRuntime interface {
 	PullImage(ctx context.Context, image string) error
 	PullImageWithAuth(ctx context.Context, image, username, password string) error
 	TagImage(ctx context.Context, sourceRef, targetRef string) error
+	UntagImage(ctx context.Context, imageRef string) error
 	RemoveImage(ctx context.Context, image string, force bool) error
 	ListImages(ctx context.Context) ([]string, error)
 
@@ -54,6 +55,9 @@ type ContainerRuntime interface {
 
 	// Environment inspection
 	InspectImageEnv(ctx context.Context, imageRef string) ([]string, error)
+
+	// Label inspection
+	GetImageLabels(ctx context.Context, imageRef string) (map[string]string, error)
 
 	// Network management
 	CreateNetwork(ctx context.Context, name string, options map[string]string) error

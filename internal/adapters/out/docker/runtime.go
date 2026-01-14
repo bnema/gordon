@@ -88,6 +88,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	// Create container configuration
 	containerConfig := &container.Config{
 		Image:        config.Image,
+		Hostname:     config.Hostname,
 		Env:          config.Env,
 		ExposedPorts: exposedPorts,
 		WorkingDir:   config.WorkingDir,
@@ -441,6 +442,29 @@ func (r *Runtime) TagImage(ctx context.Context, sourceRef, targetRef string) err
 	}
 
 	log.Info().Msg("image tagged successfully")
+	return nil
+}
+
+// UntagImage removes a tag from an image without deleting the underlying image layers.
+func (r *Runtime) UntagImage(ctx context.Context, imageRef string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "UntagImage",
+		"image":               imageRef,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	// ImageRemove with PruneChildren=false only removes the tag, not the image layers
+	_, err := r.client.ImageRemove(ctx, imageRef, image.RemoveOptions{
+		Force:         false,
+		PruneChildren: false,
+	})
+	if err != nil {
+		return log.WrapErr(err, "failed to untag image")
+	}
+
+	log.Debug().Msg("image untagged successfully")
 	return nil
 }
 
@@ -814,6 +838,30 @@ func (r *Runtime) InspectImageEnv(ctx context.Context, imageRef string) ([]strin
 	}
 
 	return envVars, nil
+}
+
+// GetImageLabels returns the labels defined on an image.
+func (r *Runtime) GetImageLabels(ctx context.Context, imageRef string) (map[string]string, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "GetImageLabels",
+		"image":               imageRef,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	imageInspect, err := r.client.ImageInspect(ctx, imageRef)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to inspect image")
+	}
+
+	labels := make(map[string]string)
+	if imageInspect.Config != nil && imageInspect.Config.Labels != nil {
+		labels = imageInspect.Config.Labels
+	}
+
+	log.Debug().Int("label_count", len(labels)).Msg("retrieved image labels")
+	return labels, nil
 }
 
 // CreateNetwork creates a new Docker network.
