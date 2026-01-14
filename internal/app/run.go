@@ -411,7 +411,10 @@ func getInternalCredentialsFile() string {
 	return filepath.Join(os.TempDir(), "gordon-internal-creds.json")
 }
 
-// persistInternalCredentials saves the internal registry credentials to a file.
+// persistInternalCredentials saves the internal registry credentials to a temp file.
+// Security note: Credentials are stored in the system temp directory with 0600 permissions.
+// The file is cleaned up on graceful shutdown but may persist if Gordon crashes.
+// These credentials are for internal loopback communication only and are regenerated on each start.
 func persistInternalCredentials(username, password string) error {
 	creds := InternalCredentials{
 		Username: username,
@@ -892,56 +895,96 @@ func getDeployRequestFile() string {
 	return filepath.Join(os.TempDir(), "gordon-deploy-request")
 }
 
+// writeDeployRequestFile creates the deploy request file exclusively with retry.
+// This prevents race conditions when multiple deploy commands run simultaneously.
+func writeDeployRequestFile(path string, data []byte, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for {
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err == nil {
+			_, writeErr := f.Write(data)
+			f.Close()
+			if writeErr != nil {
+				_ = os.Remove(path)
+				return writeErr
+			}
+			return nil
+		}
+
+		if os.IsExist(err) {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("deploy request file still present after timeout; another deploy may be in progress")
+			}
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		return err
+	}
+}
+
 // SendDeploySignal triggers a manual deploy for a specific route via SIGUSR2.
-func SendDeploySignal(domain string) error {
-	// Write the domain to the deploy request file
+// Returns the domain name on success for the caller to display.
+func SendDeploySignal(domain string) (string, error) {
 	deployFile := getDeployRequestFile()
-	if err := os.WriteFile(deployFile, []byte(domain), 0600); err != nil {
-		return fmt.Errorf("failed to write deploy request: %w", err)
+	if err := writeDeployRequestFile(deployFile, []byte(domain), 5*time.Second); err != nil {
+		return "", fmt.Errorf("failed to write deploy request: %w", err)
 	}
 
 	// Find PID and send SIGUSR2
 	pidFile := findPidFile()
 	if pidFile == "" {
-		_ = os.Remove(deployFile) // Clean up on error
-		return fmt.Errorf("gordon PID file not found, is Gordon running?")
+		_ = os.Remove(deployFile)
+		return "", fmt.Errorf("gordon PID file not found, is Gordon running?")
 	}
 
 	pidBytes, err := os.ReadFile(pidFile)
 	if err != nil {
 		_ = os.Remove(deployFile)
-		return fmt.Errorf("failed to read PID file: %w", err)
+		return "", fmt.Errorf("failed to read PID file: %w", err)
 	}
 
 	var pid int
 	if _, err := fmt.Sscanf(string(pidBytes), "%d", &pid); err != nil {
 		_ = os.Remove(deployFile)
-		return fmt.Errorf("failed to parse PID: %w", err)
+		return "", fmt.Errorf("failed to parse PID: %w", err)
 	}
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		_ = os.Remove(deployFile)
-		return fmt.Errorf("failed to find process: %w", err)
+		return "", fmt.Errorf("failed to find process: %w", err)
 	}
 
 	if err := process.Signal(syscall.SIGUSR2); err != nil {
 		_ = os.Remove(deployFile)
-		return fmt.Errorf("failed to send deploy signal: %w", err)
+		return "", fmt.Errorf("failed to send deploy signal: %w", err)
 	}
 
-	fmt.Printf("Deploy signal sent for domain: %s\n", domain)
-	return nil
+	return domain, nil
 }
 
-// readDeployRequest reads and removes the deploy request file.
+// readDeployRequest reads and removes the deploy request file atomically.
+// Returns empty string if file doesn't exist (may have been consumed by another handler).
 func readDeployRequest() (string, error) {
 	deployFile := getDeployRequestFile()
-	data, err := os.ReadFile(deployFile)
+
+	// Rename to a temp file first to make the read-and-delete atomic
+	tmpFile := deployFile + ".processing"
+	if err := os.Rename(deployFile, tmpFile); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("deploy request file not found (may have been processed already)")
+		}
+		return "", fmt.Errorf("failed to acquire deploy request: %w", err)
+	}
+
+	data, err := os.ReadFile(tmpFile)
+	_ = os.Remove(tmpFile) // Always clean up
 	if err != nil {
 		return "", fmt.Errorf("failed to read deploy request: %w", err)
 	}
-	_ = os.Remove(deployFile) // Clean up after reading
+
 	return string(data), nil
 }
 
