@@ -1,75 +1,58 @@
 # Gordon
 
-> Deploy containers to your VPS in seconds, not hours. One push, zero complexity.
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bnema/gordon)](https://goreportcard.com/report/github.com/bnema/gordon)
 
-<div align="center">
-  <img src="assets/gordon-mascot-hq-trsp.png" alt="Gordon Mascot" width="200">
-  <h3>The Smart Way to Deploy Containers on Your VPS</h3>
-  <p><em>Push image → Auto-deploy → Zero downtime</em></p>
-</div>
+Self-hosted web app deployments. Push to your registry, Gordon does the rest.
 
-## What is Gordon?
+- Website: https://github.com/bnema/gordon
+- Documentation: [Configuration](examples/) | [Setup Guide](#detailed-setup-guide-podman-rootless-mode)
+- Discuss: [GitHub Discussions](https://github.com/bnema/gordon/discussions)
 
-Gordon is a lightweight deployment system that turns any VPS into a container hosting platform with push-to-deploy capabilities. It combines a private container registry with an intelligent reverse proxy to create a self-hosted alternative to complex orchestration systems.
+---
 
-### Key Features
-
-- **Built-in Container Registry**: Your VPS becomes a private registry
-- **Push-to-Deploy**: Pushing an image triggers automatic deployment
-- **Smart Routing**: Multi-domain support with automatic HTTPS
-- **Zero-Downtime Updates**: Graceful container swaps on new pushes
-- **Network Isolation**: Each app gets its own network with attached services
-- **Auto-Volume Management**: Persistent storage from Dockerfile VOLUME directives
-- **Environment Merging**: Dockerfile ENV + your custom variables
-- **Minimal Footprint**: ~15MB RAM usage, single binary
-
-### Perfect For
-
-- **Solo developers** running multiple projects on one VPS
-- **Small teams** wanting simple, reliable deployments
-- **Agencies** managing client applications across servers
-- **Anyone** tired of overengineered deployment solutions
-
-## How It Works
+Gordon is a private container registry + HTTP reverse proxy for your VPS. Push a container image exposing a web port, it deploys automatically with zero downtime.
 
 ```bash
-# 1. Build & test locally
-podman build -t myapp .
-podman run -p 8080:8080 myapp  # Works? Great!
-
-# 2. Push to deploy
-podman tag myapp registry.mydomain.com/myapp:latest
-podman push registry.mydomain.com/myapp:latest
-
-# 3. That's it. Gordon handles the rest.
+docker build -t myapp .
+docker push registry.your-server.com/myapp:latest
+# → Live at https://app.your-server.com
 ```
 
-**Your machine is the build server. If it runs locally, it runs in production.**
+Build on your machine, push to deploy. Works from your laptop or CI.
 
-## Quick Start (5 minutes)
+**What it does:**
+- Runs a private Docker registry on your VPS
+- Routes domains to containers via HTTP reverse proxy
+- Deploys automatically when you push a new image
+- Zero downtime updates, persistent volumes, environment merging
+- Single binary, ~15MB RAM
+
+## Quick Start
 
 ### Prerequisites
 - Ubuntu/Debian VPS with root access
 - Domain pointing to your VPS
-- Cloudflare account (free tier works)
+- Cloudflare account (free tier works) - **Required for HTTPS**
+
+> **HTTPS Architecture:** Cloudflare terminates HTTPS and proxies to Gordon over HTTP internally. Gordon doesn't handle TLS certificates directly (no Let's Encrypt support yet).
 
 ### Installation
 
 ```bash
-# Download Gordon from the releases page
-# https://github.com/bnema/gordon/releases/latest
-# Example: wget https://github.com/bnema/gordon/releases/download/v2.0.0/gordon_2.0.0_linux_amd64.tar.gz
-# Then extract:
-tar -xzf gordon_*.tar.gz
+# Download and install
+wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
+tar -xzf gordon_linux_amd64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
 
-# Create initial config
+# Start Gordon (generates config on first run)
 gordon start
-# Press Ctrl+C after config is created
 ```
 
-**Important:** This is just the binary installation. For a complete working setup including networking, firewall, and systemd service, follow the [detailed setup guide](#detailed-setup-guide) below.
+Config is created at `~/.config/gordon/gordon.toml` on first start. Edit it to set your `registry_domain` and routes.
+
+**Important:** For a complete working setup including networking, firewall, and systemd service, follow the [detailed setup guide](#detailed-setup-guide-podman-rootless-mode) below.
 
 ## Core Concepts
 
@@ -79,13 +62,13 @@ Your dev machine likely has 8-16 cores and 16-32GB RAM. Your VPS has 1-2 cores a
 ### Push-to-Deploy Workflow
 ```bash
 # Initial deployment
-podman build -t myapp .
-podman push registry.mydomain.com/myapp:latest
+docker build -t myapp .
+docker push registry.mydomain.com/myapp:latest
 # Visit https://app.mydomain.com
 
 # Update deployment
-podman build -t myapp .
-podman push registry.mydomain.com/myapp:latest
+docker build -t myapp .
+docker push registry.mydomain.com/myapp:latest
 # Zero-downtime update applied automatically
 ```
 
@@ -99,10 +82,28 @@ FROM node:18
 VOLUME ["/app/uploads", "/app/data"]  # Multiple volumes supported
 ```
 
+### Proxy Port Selection
+When an image exposes multiple ports, Gordon needs to know which one to proxy HTTP traffic to. By default, Gordon uses the first exposed port, but you can specify the exact port with a label:
+
+```dockerfile
+# Gitea exposes both SSH (22) and HTTP (3000)
+FROM gitea/gitea:latest
+LABEL gordon.proxy.port=3000
+EXPOSE 22
+EXPOSE 3000
+```
+
+Without the label, Gordon would proxy to port 22 (SSH), which would fail. The `gordon.proxy.port` label tells Gordon to route HTTP traffic to port 3000.
+
+**When to use this label:**
+- Images that expose multiple ports (web + SSH, web + metrics, etc.)
+- When the first exposed port isn't the HTTP service
+- To be explicit about which port serves your web application
+
 ### Environment Configuration
 Gordon automatically creates and loads env files based on domain names:
 ```bash
-# Auto-created on first run: ~/.local/share/gordon/env/app_mydomain_com.env
+# Auto-created on first run: ~/.gordon/env/app_mydomain_com.env
 # Just add your variables:
 DATABASE_URL=postgresql://localhost:5432/myapp
 API_KEY=sk-1234567890
@@ -123,7 +124,7 @@ Gordon also supports network groups, see [examples/](examples/) for advanced usa
 - **Volumes**: Automatically created from Dockerfile VOLUME directives, persist across updates
 
 ### Production ready logging
-- **Logs**: All container output saved to `~/.local/share/gordon/logs/containers/`
+- **Logs**: All container output saved to `~/.gordon/logs/containers/`
 - **Rotation**: Logs rotate at 100MB, keeping 3 backups for 28 days
 
 ## Configuration
@@ -135,9 +136,19 @@ Gordon uses a single TOML file for all configuration:
 [server]
 registry_domain = "registry.mydomain.com"  # Required
 
+# Secrets backend for sensitive data (tokens, passwords)
+[secrets]
+backend = "pass"  # "pass", "sops", or "unsafe" (plain text in data_dir)
+
+# Registry authentication (choose password or token type)
 [registry_auth]
-username = "admin"                         # Choose your credentials
-password = "your-secure-password"          
+enabled = true
+type = "password"  # "password" or "token"
+# Password auth: bcrypt hash stored in secrets backend
+username = "deploy"
+password_hash = "gordon/registry/password_hash"  # path in secrets backend
+# Token auth: JWT-based authentication
+# token_secret = "gordon/registry/token_secret"  # path in secrets backend
 
 [routes]
 "app.mydomain.com" = "myapp:latest"        # Domain → Image mapping
@@ -151,49 +162,122 @@ password = "your-secure-password"
 
 See [examples/](examples/) for advanced configurations including network groups and more.
 
-## Detailed Setup Guide (Using podman in rootless mode)
-Note: Refer to Quick Start for the binary installation.
+### Authentication Types
 
-### 1. VPS Preparation
+**Password Authentication** (simple):
+```bash
+# Generate a bcrypt hash for your password
+gordon auth password hash
+# Store the hash in your secrets backend, then reference it in config
+```
+
+**Token Authentication** (recommended for CI/CD):
+```bash
+# Generate a never-expiring token for CI
+gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
+
+# List all tokens
+gordon auth token list
+
+# Revoke a compromised token
+gordon auth token revoke <token-id>
+```
+
+Tokens are stored in your configured secrets backend and are unique to each Gordon instance (different `token_secret` = incompatible tokens).
+
+### GitHub Actions Integration
+
+Gordon provides an official GitHub Action for automated deployments on tag push:
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to Gordon
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Deploy to Gordon
+        uses: bnema/gordon/.github/actions/deploy@main
+        with:
+          registry: ${{ secrets.GORDON_REGISTRY }}
+          username: ${{ secrets.GORDON_USERNAME }}
+          password: ${{ secrets.GORDON_TOKEN }}
+```
+
+**Setup:**
+1. Generate a CI token: `gordon auth token generate --subject github-actions --scopes push,pull --expiry 0`
+2. Add secrets to your GitHub repository: `GORDON_REGISTRY`, `GORDON_USERNAME`, `GORDON_TOKEN`
+3. Push a tag to deploy: `git tag v1.0.0 && git push origin v1.0.0`
+
+See [examples/github-workflow.yml](examples/github-workflow.yml) and [.github/actions/deploy/README.md](.github/actions/deploy/README.md) for advanced options.
+
+## Detailed Setup Guide (Podman Rootless Mode)
+
+> **Note:** This guide uses Podman in rootless mode for enhanced security. Docker users can follow similar steps. Gordon works with any OCI-compatible runtime.
+
+### 1. System Preparation
 ```bash
 # Update system
 sudo apt update && sudo apt upgrade -y
 
-# Install podman and firewall
-sudo apt install -y podman ufw
+# Install podman and firewalld
+sudo apt install -y podman firewalld
 
-# Configure firewall
-sudo ufw allow 22/tcp 80/tcp 443/tcp
-sudo default deny
-sudo ufw --force enable
+# Enable and start firewalld
+sudo systemctl enable --now firewalld
 ```
 
-### 2. Enable Port Forwarding
+### 2. Firewall & Port Forwarding (rootless requires this)
+
+Rootless containers can't bind to privileged ports (< 1024). Use firewalld to redirect 80/443 to unprivileged ports:
+
 ```bash
-# Forward 80/443 to unprivileged port 8080
-sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
-sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
+# Allow HTTP and HTTPS traffic
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
 
-# Make persistent
-sudo apt install -y iptables-persistent
-sudo netfilter-persistent save
+# Port forward 80/443 to rootless container ports
+sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8080
+sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=8443
+
+# Set default policy to drop incoming traffic
+sudo firewall-cmd --permanent --zone=public --set-target=DROP
+
+# Reload to apply
+sudo firewall-cmd --reload
+
+# Verify rules
+sudo firewall-cmd --list-all
 ```
 
-### 3. Configure Rootless Containers
+> **Note:** If using Tailscale for management, add its interface to the trusted zone:
+> ```bash
+> sudo firewall-cmd --permanent --zone=trusted --add-interface=tailscale0
+> sudo firewall-cmd --permanent --add-port=41641/udp  # Tailscale WireGuard
+> sudo firewall-cmd --reload
+> ```
+
+### 3. Rootless Container Setup
 ```bash
 # Enable user namespaces
 echo 'user.max_user_namespaces=28633' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 
-# Setup subuid/subgid
+# Setup subuid/subgid for your user
 sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
 
 # Enable podman socket
 systemctl --user enable --now podman.socket
-```
 
-### 4. Registry Configuration
-```bash
+# Allow localhost registry (podman config)
 mkdir -p ~/.config/containers
 cat > ~/.config/containers/registries.conf <<EOF
 [registries.insecure]
@@ -201,9 +285,28 @@ registries = ['localhost:5000']
 EOF
 ```
 
-### 5. Create Systemd Service
+### 4. Install Gordon
 ```bash
-# Create user service
+# Download from releases
+wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
+tar -xzf gordon_linux_amd64.tar.gz
+chmod +x gordon
+sudo mv gordon /usr/local/bin/
+```
+
+### 5. Configure Gordon
+```bash
+# Run once to generate config, then stop with Ctrl+C
+gordon start
+
+# Edit the generated config
+nano ~/.config/gordon/gordon.toml
+```
+
+Set your `registry_domain` and add routes. Data is stored in `~/.gordon/`.
+
+### 6. Create Systemd Service
+```bash
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/gordon.service <<EOF
 [Unit]
@@ -215,19 +318,19 @@ Type=simple
 Restart=always
 RestartSec=5
 ExecStart=/usr/local/bin/gordon start
-WorkingDirectory=%h
 
 [Install]
 WantedBy=default.target
 EOF
 
-# Enable and start service
+# Enable and start
 systemctl --user daemon-reload
 systemctl --user enable --now gordon
 sudo loginctl enable-linger $USER
 
-# Verify it's running
+# Verify
 systemctl --user status gordon
+journalctl --user -u gordon -f  # Watch logs
 ```
 
 ## Deployment Strategies
@@ -235,14 +338,14 @@ systemctl --user status gordon
 ### Simple Deployment
 ```bash
 # Build locally
-podman build -t myapp .
+docker build -t myapp .
 
 # Test locally
-podman run -p 8080:8080 myapp
+docker run -p 8080:8080 myapp
 
 # Push to registry
-podman tag myapp registry.mydomain.com/myapp:latest
-podman push registry.mydomain.com/myapp:latest
+docker tag myapp registry.mydomain.com/myapp:latest
+docker push registry.mydomain.com/myapp:latest
 
 # Profit!
 ```
@@ -250,8 +353,8 @@ podman push registry.mydomain.com/myapp:latest
 ### Versioned Deployment
 ```bash
 # Deploy specific version
-podman tag myapp:v1.2.0 registry.mydomain.com/myapp:v1.2.0
-podman push registry.mydomain.com/myapp:v1.2.0
+docker tag myapp:v1.2.0 registry.mydomain.com/myapp:v1.2.0
+docker push registry.mydomain.com/myapp:v1.2.0
 
 # Update route in gordon.toml
 # "app.mydomain.com" = "myapp:v1.2.0"
@@ -261,10 +364,10 @@ podman push registry.mydomain.com/myapp:v1.2.0
 ```bash
 # Deploy with metadata
 export VERSION=v1.2.0
-podman manifest create myapp:latest
-podman manifest add myapp:latest registry.mydomain.com/myapp:$VERSION
-podman manifest annotate myapp:latest --annotation version=$VERSION registry.mydomain.com/myapp:$VERSION
-podman manifest push myapp:latest registry.mydomain.com/myapp:latest
+docker manifest create myapp:latest
+docker manifest add myapp:latest registry.mydomain.com/myapp:$VERSION
+docker manifest annotate myapp:latest --annotation version=$VERSION registry.mydomain.com/myapp:$VERSION
+docker manifest push myapp:latest registry.mydomain.com/myapp:latest
 ```
 
 ## Community
@@ -274,19 +377,6 @@ Gordon is open source and welcomes contributions:
 - [Suggest features](https://github.com/bnema/gordon/discussions)
 - [Submit PRs](https://github.com/bnema/gordon/pulls)
 
-## Philosophy
-
-Traditional deployment pipelines recreate your development environment in CI/CD systems, adding complexity and points of failure. Gordon takes a different approach: **your development machine is already a perfect build environment**.
-
-```bash
-# Traditional: Code → CI/CD → Build → Test → Deploy → Hope
-# Gordon:     Code → Build → Test → Push → Done
-```
-
 ## License
 
 GPL-3.0 - Use freely, contribute back.
-
----
-
-**Built for developers who ship.** If Gordon helps you deploy faster, [give it a star](https://github.com/bnema/gordon).

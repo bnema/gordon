@@ -1,0 +1,395 @@
+// Package registry implements the HTTP adapter for the registry API.
+package registry
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/bnema/zerowrap"
+
+	"gordon/internal/boundaries/in"
+	"gordon/internal/boundaries/out"
+	"gordon/internal/domain"
+	"gordon/pkg/manifest"
+)
+
+// Handler implements the HTTP handler for Docker Registry API v2.
+type Handler struct {
+	registrySvc in.RegistryService
+	blobStorage out.BlobStorage
+	eventBus    out.EventPublisher
+	log         zerowrap.Logger
+}
+
+// NewHandler creates a new registry HTTP handler.
+func NewHandler(
+	registrySvc in.RegistryService,
+	blobStorage out.BlobStorage,
+	eventBus out.EventPublisher,
+	log zerowrap.Logger,
+) *Handler {
+	return &Handler{
+		registrySvc: registrySvc,
+		blobStorage: blobStorage,
+		eventBus:    eventBus,
+		log:         log,
+	}
+}
+
+// RegisterRoutes registers the registry routes on the given mux.
+func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/v2/", h.handleRegistryRoutes)
+}
+
+// ServeHTTP implements http.Handler.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.handleRegistryRoutes(w, r)
+}
+
+func (h *Handler) handleRegistryRoutes(w http.ResponseWriter, r *http.Request) {
+	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "http",
+		zerowrap.FieldHandler: "registry",
+		zerowrap.FieldMethod:  r.Method,
+		zerowrap.FieldPath:    r.URL.Path,
+	})
+	r = r.WithContext(ctx)
+
+	path := r.URL.Path
+
+	// Route manifest operations: /v2/{name}/manifests/{reference}
+	if strings.Contains(path, "/manifests/") {
+		h.handleManifestRoutes(w, r)
+		return
+	}
+
+	// Route blob operations: /v2/{name}/blobs/{digest}
+	if strings.Contains(path, "/blobs/") && !strings.Contains(path, "/uploads/") {
+		h.handleBlobRoutes(w, r)
+		return
+	}
+
+	// Route blob upload operations: /v2/{name}/blobs/uploads/
+	if strings.Contains(path, "/blobs/uploads/") {
+		h.handleBlobUploadRoutes(w, r)
+		return
+	}
+
+	// Route tag list operations: /v2/{name}/tags/list
+	if strings.Contains(path, "/tags/list") {
+		h.handleTagListRoutes(w, r)
+		return
+	}
+
+	// Base endpoint: /v2/
+	if path == "/v2/" {
+		h.handleBase(w, r)
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
+func (h *Handler) handleManifestRoutes(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /v2/{name}/manifests/{reference}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v2/"), "/")
+	if len(parts) < 3 || parts[len(parts)-2] != "manifests" {
+		http.NotFound(w, r)
+		return
+	}
+
+	reference := parts[len(parts)-1]
+	name := strings.Join(parts[:len(parts)-2], "/")
+
+	r.SetPathValue("name", name)
+	r.SetPathValue("reference", reference)
+
+	switch r.Method {
+	case "HEAD", "GET":
+		h.handleGetManifest(w, r)
+	case "PUT":
+		h.handlePutManifest(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) handleBlobRoutes(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /v2/{name}/blobs/{digest}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v2/"), "/")
+	if len(parts) < 3 || parts[len(parts)-2] != "blobs" {
+		http.NotFound(w, r)
+		return
+	}
+
+	digest := parts[len(parts)-1]
+	name := strings.Join(parts[:len(parts)-2], "/")
+
+	r.SetPathValue("name", name)
+	r.SetPathValue("digest", digest)
+
+	switch r.Method {
+	case "HEAD", "GET":
+		h.handleGetBlob(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) handleBlobUploadRoutes(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /v2/{name}/blobs/uploads/{uuid?}
+	path := strings.TrimPrefix(r.URL.Path, "/v2/")
+	uploadIndex := strings.Index(path, "/blobs/uploads/")
+	if uploadIndex == -1 {
+		http.NotFound(w, r)
+		return
+	}
+
+	name := path[:uploadIndex]
+	uploadPart := path[uploadIndex+15:] // len("/blobs/uploads/") = 15
+
+	r.SetPathValue("name", name)
+
+	if uploadPart == "" {
+		// POST /v2/{name}/blobs/uploads/
+		switch r.Method {
+		case "POST":
+			h.handleStartBlobUpload(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	} else {
+		// PATCH/PUT /v2/{name}/blobs/uploads/{uuid}
+		r.SetPathValue("uuid", uploadPart)
+		switch r.Method {
+		case "PATCH", "PUT":
+			h.handleBlobUpload(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func (h *Handler) handleTagListRoutes(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /v2/{name}/tags/list
+	path := strings.TrimPrefix(r.URL.Path, "/v2/")
+	if !strings.HasSuffix(path, "/tags/list") {
+		http.NotFound(w, r)
+		return
+	}
+
+	name := strings.TrimSuffix(path, "/tags/list")
+	r.SetPathValue("name", name)
+
+	switch r.Method {
+	case "GET":
+		h.handleListTags(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) handleBase(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+	name := r.PathValue("name")
+	reference := r.PathValue("reference")
+
+	log.Debug().Str("name", name).Str("reference", reference).Msg("GET manifest")
+
+	manifestData, err := h.registrySvc.GetManifest(ctx, name, reference)
+	if err != nil {
+		log.Warn().Err(err).Str("name", name).Str("reference", reference).Msg("manifest not found")
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", manifestData.ContentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(manifestData.Data)))
+	w.WriteHeader(http.StatusOK)
+
+	if r.Method == "GET" {
+		_, _ = w.Write(manifestData.Data)
+	}
+}
+
+func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+	name := r.PathValue("name")
+	reference := r.PathValue("reference")
+
+	contentType := r.Header.Get("Content-Type")
+	log.Debug().Str("name", name).Str("reference", reference).Str("content_type", contentType).Msg("PUT manifest")
+
+	if contentType == "" {
+		log.Warn().Str("name", name).Str("reference", reference).Msg("Content-Type header missing")
+		http.Error(w, "Content-Type header required", http.StatusBadRequest)
+		return
+	}
+
+	// Read manifest data
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to read manifest data")
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	// Parse manifest annotations
+	annotations, err := manifest.ParseManifestAnnotations(data, contentType)
+	if err != nil {
+		log.Warn().Err(err).Str("name", name).Str("reference", reference).Msg("failed to parse manifest annotations")
+		annotations = map[string]string{}
+	}
+
+	// Store manifest via service
+	manifestObj := &domain.Manifest{
+		Name:        name,
+		Reference:   reference,
+		ContentType: contentType,
+		Data:        data,
+		Annotations: annotations,
+	}
+
+	if err := h.registrySvc.PutManifest(ctx, manifestObj); err != nil {
+		log.Error().Err(err).Str("name", name).Str("reference", reference).Msg("failed to store manifest")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Calculate digest for Docker-Content-Digest header
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+	w.Header().Set("Docker-Content-Digest", digest)
+	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, reference))
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+	name := r.PathValue("name")
+	digest := r.PathValue("digest")
+
+	log.Debug().Str("name", name).Str("digest", digest).Msg("GET blob")
+
+	path, err := h.blobStorage.GetBlobPath(digest)
+	if err != nil {
+		log.Warn().Err(err).Str("name", name).Str("digest", digest).Msg("blob not found")
+		http.NotFound(w, r)
+		return
+	}
+
+	// Serve the file directly
+	http.ServeFile(w, r, path)
+}
+
+func (h *Handler) handleStartBlobUpload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+	name := r.PathValue("name")
+
+	log.Debug().Str("name", name).Msg("starting blob upload")
+
+	uuid, err := h.registrySvc.StartUpload(ctx, name)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to start blob upload")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uuid))
+	w.Header().Set("Range", "0-0")
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+	name := r.PathValue("name")
+	uuid := r.PathValue("uuid")
+	digest := r.URL.Query().Get("digest")
+
+	log.Debug().
+		Str("name", name).
+		Str("uuid", uuid).
+		Str("digest", digest).
+		Str(zerowrap.FieldMethod, r.Method).
+		Msg("handling blob upload chunk")
+
+	// Read the chunk from the request body
+	chunk, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to read blob chunk")
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	// Append the chunk to the upload
+	length, err := h.blobStorage.AppendBlobChunk(name, uuid, chunk)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to append blob chunk")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// If this is the final chunk (PUT request with digest), finalize the upload
+	if r.Method == "PUT" && digest != "" {
+		if err := h.registrySvc.FinishUpload(ctx, uuid, digest); err != nil {
+			log.Error().Err(err).Str("digest", digest).Msg("failed to finalize blob upload")
+			_ = h.registrySvc.CancelUpload(ctx, uuid)
+			http.Error(w, "Bad Request: digest mismatch", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/%s", name, digest))
+		w.Header().Set("Docker-Content-Digest", digest)
+		w.WriteHeader(http.StatusCreated)
+		return
+	}
+
+	// For PATCH requests, respond with 202 Accepted
+	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uuid))
+	w.Header().Set("Range", fmt.Sprintf("0-%d", length-1))
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+	name := r.PathValue("name")
+
+	log.Debug().Str("name", name).Msg("listing tags")
+
+	tags, err := h.registrySvc.ListTags(ctx, name)
+	if err != nil {
+		log.Warn().Err(err).Str("name", name).Msg("tags not found")
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		log.Error().Err(err).Str("name", name).Msg("failed to marshal tags")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	response := fmt.Sprintf(`{"name":"%s","tags":%s}`, name, string(tagsJSON))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(response)))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(response))
+}

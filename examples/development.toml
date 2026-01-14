@@ -9,8 +9,18 @@ runtime = "auto"  # auto-detects Docker/Podman
 ssl_email = "dev@localhost"
 data_dir = "./dev-data"
 
+# Secrets backend for development
+[secrets]
+backend = "unsafe"  # Plain text storage for local development
+
 [registry_auth]
 enabled = false  # Disable auth for easier local development
+
+# To enable auth for development:
+# enabled = true
+# type = "password"
+# username = "dev"
+# password_hash = "gordon/registry/password_hash"  # Generate: gordon auth password hash
 
 [auto_route]
 enabled = true  # Enable automatic route creation from image names
@@ -40,8 +50,7 @@ compress = true                   # Compress old logs
 [env]
 # Directory where .env files are stored for each route
 dir = "./dev-data/env"
-# Secret providers (optional for development)
-providers = ["pass"]  # For development secrets
+# Note: Secret providers use [secrets].backend configuration
 
 # Development routes using your domain
 [routes]

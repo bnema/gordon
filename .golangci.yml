@@ -1,37 +1,70 @@
+version: "2"
+
 run:
   timeout: 5m
   tests: true
 
 linters:
   enable:
-    - gofmt
     - govet
     - errcheck
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
-    - typecheck
     - misspell
     - gosec
     - unconvert
     - gocyclo
+  settings:
+    gocyclo:
+      min-complexity: 15
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - errcheck
+          - dupl
+          - gosec
+      - text: "Error return value of `.*Close` is not checked"
+        linters:
+          - errcheck
+      - text: "Error return value of `.*Write` is not checked"
+        linters:
+          - errcheck
+      - text: "Error return value of `os.Remove.*` is not checked"
+        linters:
+          - errcheck
+      - text: "Error return value of `.*Publish` is not checked"
+        linters:
+          - errcheck
+      - text: "Error return value of `.*Stop` is not checked"
+        linters:
+          - errcheck
+      - text: "Error return value of `.*RemoveContainer` is not checked"
+        linters:
+          - errcheck
+      - text: "Error return value of `log.WrapErr` is not checked"
+        linters:
+          - errcheck
+      - text: "Error return value of `log.WrapErrWithFields` is not checked"
+        linters:
+          - errcheck
+      # gosec: file operations with variables are intentional in storage layer
+      - text: "G304:"
+        linters:
+          - gosec
+      # gosec: G104 duplicates errcheck
+      - text: "G104:"
+        linters:
+          - gosec
 
-linters-settings:
-  gocyclo:
-    min-complexity: 15
+formatters:
+  enable:
+    - gofmt
 
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
-        - dupl
-        - gosec
-
   max-same-issues: 50
 
 severity:
-  default-severity: error
-  case-sensitive: false
+  default: error

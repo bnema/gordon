@@ -10,12 +10,12 @@ import (
 
 func TestParseManifestAnnotations(t *testing.T) {
 	tests := []struct {
-		name           string
-		manifestData   []byte
-		contentType    string
+		name                string
+		manifestData        []byte
+		contentType         string
 		expectedAnnotations map[string]string
-		expectedError  bool
-		errorContains  string
+		expectedError       bool
+		errorContains       string
 	}{
 		{
 			name: "OCI manifest with annotations",
@@ -53,7 +53,7 @@ func TestParseManifestAnnotations(t *testing.T) {
 				},
 				"layers": []
 			}`),
-			contentType: "application/vnd.oci.image.manifest.v1+json",
+			contentType:         "application/vnd.oci.image.manifest.v1+json",
 			expectedAnnotations: map[string]string{},
 		},
 		{
@@ -69,7 +69,7 @@ func TestParseManifestAnnotations(t *testing.T) {
 				"layers": [],
 				"annotations": {}
 			}`),
-			contentType: "application/vnd.oci.image.manifest.v1+json",
+			contentType:         "application/vnd.oci.image.manifest.v1+json",
 			expectedAnnotations: map[string]string{},
 		},
 		{
@@ -84,7 +84,7 @@ func TestParseManifestAnnotations(t *testing.T) {
 				},
 				"layers": []
 			}`),
-			contentType: "application/vnd.docker.distribution.manifest.v2+json",
+			contentType:         "application/vnd.docker.distribution.manifest.v2+json",
 			expectedAnnotations: map[string]string{},
 		},
 		{
@@ -126,7 +126,7 @@ func TestParseManifestAnnotations(t *testing.T) {
 				"mediaType": "application/vnd.oci.image.index.v1+json",
 				"manifests": []
 			}`),
-			contentType: "application/vnd.oci.image.index.v1+json",
+			contentType:         "application/vnd.oci.image.index.v1+json",
 			expectedAnnotations: map[string]string{},
 		},
 		{
@@ -208,11 +208,11 @@ func TestParseManifestAnnotations(t *testing.T) {
 
 func TestParseOCIManifestAnnotations(t *testing.T) {
 	tests := []struct {
-		name           string
-		manifestData   []byte
+		name                string
+		manifestData        []byte
 		expectedAnnotations map[string]string
-		expectedError  bool
-		errorContains  string
+		expectedError       bool
+		errorContains       string
 	}{
 		{
 			name: "valid OCI manifest with annotations",
@@ -259,8 +259,8 @@ func TestParseOCIManifestAnnotations(t *testing.T) {
 			errorContains: "failed to parse OCI manifest",
 		},
 		{
-			name: "empty manifest data",
-			manifestData: []byte(`{}`),
+			name:                "empty manifest data",
+			manifestData:        []byte(`{}`),
 			expectedAnnotations: map[string]string{},
 		},
 	}
@@ -284,11 +284,11 @@ func TestParseOCIManifestAnnotations(t *testing.T) {
 
 func TestParseManifestListAnnotations(t *testing.T) {
 	tests := []struct {
-		name           string
-		manifestData   []byte
+		name                string
+		manifestData        []byte
 		expectedAnnotations map[string]string
-		expectedError  bool
-		errorContains  string
+		expectedError       bool
+		errorContains       string
 	}{
 		{
 			name: "valid manifest list with annotations",
@@ -325,8 +325,8 @@ func TestParseManifestListAnnotations(t *testing.T) {
 			errorContains: "failed to parse manifest list",
 		},
 		{
-			name: "empty manifest list",
-			manifestData: []byte(`{}`),
+			name:                "empty manifest list",
+			manifestData:        []byte(`{}`),
 			expectedAnnotations: map[string]string{},
 		},
 	}
@@ -406,9 +406,9 @@ func TestIsVersionedDeployment(t *testing.T) {
 		{
 			name: "multiple version-like annotations",
 			annotations: map[string]string{
-				"app-version":    "1.0.0",
-				"image-version":  "2.0.0",
-				"semver":         "3.0.0",
+				"app-version":   "1.0.0",
+				"image-version": "2.0.0",
+				"semver":        "3.0.0",
 			},
 			expected: false, // Only exact "version" key should match
 		},
@@ -638,8 +638,8 @@ func TestAnnotations_Integration(t *testing.T) {
 			},
 			Layers: []OCIDescriptor{},
 			Annotations: map[string]string{
-				"version":      "1.0.0",
-				"description":  "Round trip test",
+				"version":     "1.0.0",
+				"description": "Round trip test",
 			},
 		}
 

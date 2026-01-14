@@ -10,10 +10,26 @@ runtime = "auto"  # auto-detects Docker/Podman
 ssl_email = "devops@company.com"
 data_dir = "/var/lib/gordon"
 
+# Secrets backend for sensitive data
+[secrets]
+backend = "pass"  # "pass" (recommended), "sops", or "unsafe"
+
 [registry_auth]
 enabled = true
-username = "deploy-bot"
-password = "CHANGE-THIS-IN-PRODUCTION"  # Use environment variables in production!
+type = "token"  # "token" (recommended for CI/CD) or "password"
+
+# Token auth: JWT-based, ideal for CI pipelines
+token_secret = "gordon/registry/token_secret"  # path in secrets backend
+
+# Generate tokens with:
+#   gordon auth token generate --subject deploy-bot --scopes push,pull --expiry 0
+# Each Gordon instance has unique tokens (different token_secret = incompatible tokens)
+
+# Alternative: Password auth (simpler but less flexible)
+# type = "password"
+# username = "deploy-bot"
+# password_hash = "gordon/registry/password_hash"  # bcrypt hash in secrets backend
+# Generate hash with: gordon auth password hash
 
 # Production logging configuration
 [logging]
@@ -34,8 +50,7 @@ compress = true                   # Compress old logs to save space
 [env]
 # Directory where .env files are stored for each route
 dir = "/var/lib/gordon/env"
-# Secret providers for secure credential management
-providers = ["pass", "sops"]
+# Note: Secret providers now use [secrets].backend configuration
 
 # Production service routes
 [routes]
