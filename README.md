@@ -210,39 +210,42 @@ See [examples/github-workflow.yml](examples/github-workflow.yml) and [.github/ac
 # Update system
 sudo apt update && sudo apt upgrade -y
 
-# Install podman and firewall
-sudo apt install -y podman ufw
+# Install podman and firewalld
+sudo apt install -y podman firewalld
 
-# Configure firewall
-sudo ufw allow 22/tcp 80/tcp 443/tcp
-sudo ufw default deny incoming
-sudo ufw --force enable
+# Enable and start firewalld
+sudo systemctl enable --now firewalld
 ```
 
-### 2. Port Forwarding (rootless requires this)
+### 2. Firewall & Port Forwarding (rootless requires this)
 
-Rootless containers can't bind to privileged ports (< 1024). Redirect 80/443 to unprivileged ports:
+Rootless containers can't bind to privileged ports (< 1024). Use firewalld to redirect 80/443 to unprivileged ports:
 
 ```bash
-# Add NAT rules to UFW's before.rules (persists across reboots)
-sudo tee -a /etc/ufw/before.rules > /dev/null << 'EOF'
+# Allow HTTP and HTTPS traffic
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
 
-# NAT rules for rootless container port redirection
-*nat
-:PREROUTING ACCEPT [0:0]
--A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
--A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443
-COMMIT
-EOF
+# Port forward 80/443 to rootless container ports
+sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8080
+sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=8443
 
-# Reload UFW to apply
-sudo ufw reload
+# Set default policy to drop incoming traffic
+sudo firewall-cmd --permanent --zone=public --set-target=DROP
 
-# Verify rules are active
-sudo iptables -t nat -L PREROUTING -n
+# Reload to apply
+sudo firewall-cmd --reload
+
+# Verify rules
+sudo firewall-cmd --list-all
 ```
 
-> **Warning:** Do NOT use `iptables-persistent` - it conflicts with UFW and will remove it. The method above integrates with UFW properly.
+> **Note:** If using Tailscale for management, add its interface to the trusted zone:
+> ```bash
+> sudo firewall-cmd --permanent --zone=trusted --add-interface=tailscale0
+> sudo firewall-cmd --permanent --add-port=41641/udp  # Tailscale WireGuard
+> sudo firewall-cmd --reload
+> ```
 
 ### 3. Rootless Container Setup
 ```bash
