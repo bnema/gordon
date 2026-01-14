@@ -910,6 +910,11 @@ func normalizeImageRef(image string) string {
 	//   user/repo:tag -> docker.io/user/repo
 	//   localhost:5000/image:tag -> localhost:5000/image
 	//   registry.example.com/image:tag -> registry.example.com/image
+	//
+	// Note: This function assumes valid Docker image references. Edge cases like
+	// "registry.com:5000" (registry with port but no image name) are not valid
+	// image references per Docker's naming conventions, which require at least
+	// one path component after the registry (e.g., "registry.com:5000/image").
 
 	// Find the tag separator: the last colon that isn't part of a port number.
 	// A colon is part of a port if there's no slash after it until the next colon.
