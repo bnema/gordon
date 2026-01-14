@@ -163,7 +163,7 @@ func Run(ctx context.Context, configPath string) error {
 	registryHandler, proxyHandler := createHTTPHandlers(svc, cfg, log)
 
 	// Start servers and wait for shutdown
-	return runServers(ctx, cfg, registryHandler, proxyHandler, svc.containerSvc, log)
+	return runServers(ctx, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, log)
 }
 
 // initConfig loads configuration from file.
@@ -601,6 +601,11 @@ func registerEventHandlers(ctx context.Context, svc *services) error {
 		return fmt.Errorf("failed to subscribe config reload handler: %w", err)
 	}
 
+	manualReloadHandler := container.NewManualReloadHandler(ctx, svc.containerSvc, svc.configSvc)
+	if err := svc.eventBus.Subscribe(manualReloadHandler); err != nil {
+		return fmt.Errorf("failed to subscribe manual reload handler: %w", err)
+	}
+
 	// Proxy cache invalidation on container deployment (for zero-downtime)
 	containerDeployedHandler := proxy.NewContainerDeployedHandler(ctx, svc.proxySvc)
 	if err := svc.eventBus.Subscribe(containerDeployedHandler); err != nil {
@@ -629,6 +634,11 @@ func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, lo
 			RegistryDomain: v.GetString("server.registry_domain"),
 			RegistryPort:   v.GetInt("server.registry_port"),
 		})
+
+		// Publish config reload event to trigger container updates
+		if err := svc.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
+			log.Error().Err(err).Msg("failed to publish config reload event")
+		}
 	})
 	v.WatchConfig()
 }
@@ -691,9 +701,14 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 }
 
 // runServers starts the HTTP servers and waits for shutdown.
-func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, log zerowrap.Logger) error {
+func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// Set up SIGUSR1 for reload
+	reloadChan := make(chan os.Signal, 1)
+	signal.Notify(reloadChan, syscall.SIGUSR1)
+	defer signal.Stop(reloadChan)
 
 	errChan := make(chan error, 2)
 
@@ -705,13 +720,22 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 		Int("registry_port", cfg.Server.RegistryPort).
 		Msg("Gordon is running")
 
-	select {
-	case err := <-errChan:
-		return err
-	case <-ctx.Done():
-		log.Info().Msg("shutdown signal received")
+	for {
+		select {
+		case err := <-errChan:
+			return err
+		case <-reloadChan:
+			log.Info().Msg("reload signal received (SIGUSR1)")
+			if err := eventBus.Publish(domain.EventManualReload, nil); err != nil {
+				log.Error().Err(err).Msg("failed to publish manual reload event")
+			}
+		case <-ctx.Done():
+			log.Info().Msg("shutdown signal received")
+			goto shutdown
+		}
 	}
 
+shutdown:
 	log.Info().Msg("shutting down Gordon...")
 
 	if err := containerSvc.Shutdown(ctx); err != nil {

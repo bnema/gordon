@@ -32,6 +32,7 @@ configuration rules, making it ideal for single-server deployments.`,
 	// Add subcommands
 	rootCmd.AddCommand(newStartCmd())
 	rootCmd.AddCommand(newReloadCmd())
+	rootCmd.AddCommand(newLogsCmd())
 	rootCmd.AddCommand(newVersionCmd())
 	rootCmd.AddCommand(newAuthCmd())
 
@@ -61,9 +62,12 @@ func newStartCmd() *cobra.Command {
 func newReloadCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reload",
-		Short: "Reload containers with updated environment",
-		Long: `Triggers a reload of all managed containers with updated environment
-variables from their respective .env files.`,
+		Short: "Start containers for configured routes",
+		Long: `Starts containers for routes defined in config.toml that don't have
+a running container. Running containers are never restarted to ensure 100% uptime.
+
+Use this command after editing config.toml to add new routes, or after pushing
+images to the registry when the route was not yet configured.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReload()
 		},
@@ -86,6 +90,30 @@ func newVersionCmd() *cobra.Command {
 // runReload sends SIGUSR1 to the running Gordon process.
 func runReload() error {
 	return app.SendReloadSignal()
+}
+
+// newLogsCmd creates the logs command.
+func newLogsCmd() *cobra.Command {
+	var follow bool
+	var lines int
+	var configPath string
+
+	cmd := &cobra.Command{
+		Use:   "logs",
+		Short: "Show Gordon process logs",
+		Long: `Shows logs from the Gordon process. By default reads from the log file
+configured in config.toml. If file logging is not enabled, falls back to
+journalctl (if running as a systemd service).`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return app.ShowLogs(configPath, follow, lines)
+		},
+	}
+
+	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Follow log output")
+	cmd.Flags().IntVarP(&lines, "lines", "n", 50, "Number of lines to show")
+
+	return cmd
 }
 
 // SetVersionInfo sets the version information for the CLI.
