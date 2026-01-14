@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/spf13/viper"
@@ -91,37 +93,59 @@ func showFileLog(logPath string, follow bool, lines int) error {
 	return followFile(logPath)
 }
 
-// tailFile reads the last N lines from a file.
+// tailFile reads the last N lines from a file using a ring buffer.
+// This is memory-efficient as it only keeps the last N lines in memory,
+// regardless of total file size.
 func tailFile(path string, lines int) error {
+	if lines <= 0 {
+		return nil
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
 	defer file.Close()
 
-	// Read all lines into a buffer
-	var allLines []string
 	scanner := bufio.NewScanner(file)
+
+	// Use a ring buffer to store only the last N lines in memory
+	buffer := make([]string, lines)
+	index := 0
+	total := 0
+
 	for scanner.Scan() {
-		allLines = append(allLines, scanner.Text())
+		buffer[index] = scanner.Text()
+		index = (index + 1) % lines
+		total++
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("failed to read log file: %w", err)
 	}
 
-	// Print last N lines
-	start := 0
-	if len(allLines) > lines {
-		start = len(allLines) - lines
+	if total == 0 {
+		return nil
 	}
-	for _, line := range allLines[start:] {
-		fmt.Println(line)
+
+	// Print lines in correct order
+	if total <= lines {
+		// Fewer than N lines read; buffer is partially filled, in order from index 0
+		for i := 0; i < total; i++ {
+			fmt.Println(buffer[i])
+		}
+	} else {
+		// More than N lines read; buffer is full ring starting at index
+		for i := 0; i < lines; i++ {
+			pos := (index + i) % lines
+			fmt.Println(buffer[pos])
+		}
 	}
 
 	return nil
 }
 
 // followFile watches a file for new content and prints it.
+// It handles interrupt signals (Ctrl+C) gracefully to ensure proper cleanup.
 func followFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -135,17 +159,29 @@ func followFile(path string) error {
 		return fmt.Errorf("failed to seek to end of file: %w", err)
 	}
 
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
 	reader := bufio.NewReader(file)
 
-	// Poll for new content
+	// Poll for new content with signal checking
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			// No new content, wait and retry
-			time.Sleep(100 * time.Millisecond)
-			continue
+		select {
+		case <-sigChan:
+			// Graceful exit on interrupt
+			fmt.Println() // Print newline for cleaner terminal output
+			return nil
+		default:
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				// No new content, wait and retry
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			fmt.Print(line)
 		}
-		fmt.Print(line)
 	}
 }
 
