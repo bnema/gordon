@@ -21,3 +21,10 @@ type RouteMatch struct {
 	Container *Container
 	Target    *ProxyTarget
 }
+
+// ExternalRoute represents a mapping from a domain to an external (non-container) service.
+type ExternalRoute struct {
+	Domain string // e.g., "reg.bnema.dev"
+	Host   string // e.g., "localhost"
+	Port   int    // e.g., 5000
+}

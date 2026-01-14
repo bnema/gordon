@@ -194,8 +194,13 @@ Add to `/etc/hosts`:
 "portal.acme-corp.com" = "saas-app:v2.1.0"
 ```
 
+## External Services
+
+For non-containerized services (databases, legacy apps, etc.), see [External Routes](./external-routes.md).
+
 ## Related
 
 - [Configuration Overview](./index.md)
 - [Auto Route](./auto-route.md)
 - [Attachments](./attachments.md)
+- [External Routes](./external-routes.md)
