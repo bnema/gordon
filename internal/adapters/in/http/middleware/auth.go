@@ -278,7 +278,14 @@ func sendUnauthorized(w http.ResponseWriter, authType domain.AuthType, host stri
 	switch authType {
 	case domain.AuthTypeToken:
 		// For token auth, indicate the token server endpoint
-		realm := "https://" + host + "/v2/token"
+		// Detect scheme from request (TLS or X-Forwarded-Proto header)
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		} else if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+			scheme = proto
+		}
+		realm := scheme + "://" + host + "/v2/token"
 		w.Header().Set("WWW-Authenticate", `Bearer realm="`+realm+`",service="gordon-registry"`)
 	default:
 		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon Registry"`)

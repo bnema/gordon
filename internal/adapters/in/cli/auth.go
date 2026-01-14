@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
+	"gordon/internal/adapters/out/secrets"
 	"gordon/internal/adapters/out/tokenstore"
 	"gordon/internal/app"
 	"gordon/internal/domain"
@@ -345,12 +346,25 @@ func loadAuthConfig(configPath string) (*cliConfig, error) {
 		cfg.Backend = domain.SecretsBackendUnsafe
 	}
 
-	// Load token secret if specified
+	// Load token secret from secrets backend
 	tokenSecretPath := v.GetString("registry_auth.token_secret")
 	if tokenSecretPath != "" {
-		// For CLI, we generate a default secret if not available
-		// In production, the secret should be loaded from the secrets backend
-		cfg.TokenSecret = []byte(tokenSecretPath) // Use path as seed for now
+		// Load actual secret from the configured backend
+		ctx := context.Background()
+		log := zerowrap.New(zerowrap.Config{Level: "warn"})
+
+		switch cfg.Backend {
+		case domain.SecretsBackendPass:
+			provider := secrets.NewPassProvider(log)
+			secret, err := provider.GetSecret(ctx, tokenSecretPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load token secret from pass: %w", err)
+			}
+			cfg.TokenSecret = []byte(secret)
+		default:
+			// For unsafe backend, use the path as the secret (backwards compatible)
+			cfg.TokenSecret = []byte(tokenSecretPath)
+		}
 	} else {
 		// Generate a default secret for CLI token generation
 		cfg.TokenSecret = []byte("gordon-cli-default-secret")
