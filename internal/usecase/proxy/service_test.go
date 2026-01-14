@@ -55,11 +55,96 @@ func TestService_GetTarget_ContainerNotFound(t *testing.T) {
 	svc := NewService(runtime, containerSvc, configSvc, config)
 	ctx := testContext()
 
+	// Mock external routes (empty - no match)
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
 	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(nil, false)
 
 	result, err := svc.GetTarget(ctx, "app.example.com")
 
 	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
+	assert.Nil(t, result)
+}
+
+func TestService_GetTarget_ExternalRoute(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	// Mock external routes
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
+		"reg.example.com": "localhost:5000",
+	})
+
+	result, err := svc.GetTarget(ctx, "reg.example.com")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "localhost", result.Host)
+	assert.Equal(t, 5000, result.Port)
+	assert.Equal(t, "", result.ContainerID)
+	assert.Equal(t, "http", result.Scheme)
+}
+
+func TestService_GetTarget_ExternalRoute_Cached(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	// First call - should resolve external route
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
+		"reg.example.com": "localhost:5000",
+	}).Once()
+
+	result1, err := svc.GetTarget(ctx, "reg.example.com")
+	assert.NoError(t, err)
+	assert.Equal(t, "localhost", result1.Host)
+
+	// Second call - should return from cache (no mock call needed)
+	result2, err := svc.GetTarget(ctx, "reg.example.com")
+	assert.NoError(t, err)
+	assert.Equal(t, result1, result2)
+}
+
+func TestService_GetTarget_ExternalRoute_InvalidTarget(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	// Mock external routes with invalid format (missing port)
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
+		"invalid.example.com": "not-valid-format",
+	})
+
+	result, err := svc.GetTarget(ctx, "invalid.example.com")
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestService_GetTarget_ExternalRoute_InvalidPort(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	// Mock external routes with invalid port
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
+		"invalid.example.com": "localhost:abc",
+	})
+
+	result, err := svc.GetTarget(ctx, "invalid.example.com")
+
+	assert.Error(t, err)
 	assert.Nil(t, result)
 }
 

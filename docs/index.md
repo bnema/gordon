@@ -55,9 +55,7 @@ Gordon runs on your VPS and provides:
 
 ### CLI Reference
 
-- [CLI Overview](./cli/index.md) - Available commands
-- [gordon start](./cli/start.md) - Start the server
-- [gordon auth](./cli/auth.md) - Manage authentication
+- [CLI Commands](./cli/commands.md) - All available commands
 
 ### Deployment
 

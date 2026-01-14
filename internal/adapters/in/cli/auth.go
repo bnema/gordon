@@ -30,6 +30,7 @@ func newAuthCmd() *cobra.Command {
 
 	cmd.AddCommand(newAuthTokenCmd())
 	cmd.AddCommand(newAuthPasswordCmd())
+	cmd.AddCommand(newAuthInternalCmd())
 
 	return cmd
 }
@@ -130,6 +131,44 @@ func newAuthPasswordCmd() *cobra.Command {
 	cmd.AddCommand(newPasswordHashCmd())
 
 	return cmd
+}
+
+// newAuthInternalCmd creates the internal credentials command.
+func newAuthInternalCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "internal",
+		Short: "Show internal registry credentials for manual recovery",
+		Long: `Display the auto-generated internal registry credentials.
+
+These credentials are used by Gordon for pulling images from the local registry
+(localhost:5000) during internal deploys. You can use them for manual recovery:
+
+  docker login localhost:5000 -u gordon-internal -p <password>
+
+Note: Credentials are regenerated each time Gordon starts, and are only
+available while Gordon is running.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runShowInternalAuth()
+		},
+	}
+}
+
+// runShowInternalAuth displays the internal registry credentials.
+func runShowInternalAuth() error {
+	creds, err := app.GetInternalCredentials()
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Internal Registry Credentials")
+	fmt.Println("==============================")
+	fmt.Printf("Username: %s\n", creds.Username)
+	fmt.Printf("Password: %s\n", creds.Password)
+	fmt.Println()
+	fmt.Println("Usage:")
+	fmt.Printf("  docker login localhost:5000 -u %s -p %s\n", creds.Username, creds.Password)
+
+	return nil
 }
 
 // newPasswordHashCmd creates the password hash command.
