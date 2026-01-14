@@ -133,6 +133,12 @@ func (h *ConfigReloadHandler) Handle(event domain.Event) error {
 
 	log.Info().Msg("processing configuration reload event")
 
+	// Sync containers first to ensure we have accurate state
+	// This removes tracking for containers that were stopped externally
+	if err := h.containerSvc.SyncContainers(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to sync containers before reload, proceeding with current state")
+	}
+
 	currentContainers := h.containerSvc.List(ctx)
 
 	activeRoutes := make(map[string]*domain.Container)
@@ -159,13 +165,14 @@ func (h *ConfigReloadHandler) Handle(event domain.Event) error {
 			}
 			delete(activeRoutes, route.Domain)
 		} else {
+			// Route exists in config but no running container (new route or missing container)
 			log.Info().
 				Str("domain", route.Domain).
 				Str("image", route.Image).
-				Msg("new route detected, deploying container")
+				Msg("route missing container, deploying")
 
 			if _, err := h.containerSvc.Deploy(ctx, route); err != nil {
-				log.WrapErrWithFields(err, "failed to deploy container for new route", map[string]any{"domain": route.Domain})
+				log.WrapErrWithFields(err, "failed to deploy container for route", map[string]any{"domain": route.Domain})
 			}
 		}
 	}
@@ -223,6 +230,12 @@ func (h *ManualReloadHandler) Handle(event domain.Event) error {
 
 	log.Info().Msg("processing manual reload event - starting missing containers")
 
+	// Sync containers first to ensure we have accurate state
+	// This removes tracking for containers that were stopped externally
+	if err := h.containerSvc.SyncContainers(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to sync containers before reload, proceeding with current state")
+	}
+
 	routes := h.configSvc.GetRoutes(ctx)
 	startedCount := 0
 	skippedCount := 0
@@ -270,4 +283,65 @@ func (h *ManualReloadHandler) Handle(event domain.Event) error {
 // CanHandle returns whether this handler can handle the given event type.
 func (h *ManualReloadHandler) CanHandle(eventType domain.EventType) bool {
 	return eventType == domain.EventManualReload
+}
+
+// ManualDeployHandler handles manual.deploy events for specific routes.
+type ManualDeployHandler struct {
+	containerSvc in.ContainerService
+	configSvc    in.ConfigService
+	ctx          context.Context
+}
+
+// NewManualDeployHandler creates a new ManualDeployHandler.
+func NewManualDeployHandler(ctx context.Context, containerSvc in.ContainerService, configSvc in.ConfigService) *ManualDeployHandler {
+	return &ManualDeployHandler{
+		containerSvc: containerSvc,
+		configSvc:    configSvc,
+		ctx:          ctx,
+	}
+}
+
+// Handle handles a manual deploy event for a specific route.
+func (h *ManualDeployHandler) Handle(event domain.Event) error {
+	ctx := zerowrap.CtxWithFields(h.ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldHandler: "ManualDeployHandler",
+		zerowrap.FieldEvent:   string(event.Type),
+		"event_id":            event.ID,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	payload, ok := event.Data.(*domain.ManualDeployPayload)
+	if !ok || payload == nil || payload.Domain == "" {
+		return fmt.Errorf("invalid manual deploy payload")
+	}
+
+	log.Info().Str("domain", payload.Domain).Msg("processing manual deploy event")
+
+	// Find the route in configuration
+	routes := h.configSvc.GetRoutes(ctx)
+	var targetRoute *domain.Route
+	for _, r := range routes {
+		if r.Domain == payload.Domain {
+			targetRoute = &r
+			break
+		}
+	}
+
+	if targetRoute == nil {
+		return fmt.Errorf("route not found for domain: %s", payload.Domain)
+	}
+
+	// Deploy the container (this will replace any existing container)
+	if _, err := h.containerSvc.Deploy(ctx, *targetRoute); err != nil {
+		return log.WrapErr(err, "failed to deploy container")
+	}
+
+	log.Info().Str("domain", payload.Domain).Msg("manual deploy completed successfully")
+	return nil
+}
+
+// CanHandle returns whether this handler can handle the given event type.
+func (h *ManualDeployHandler) CanHandle(eventType domain.EventType) bool {
+	return eventType == domain.EventManualDeploy
 }

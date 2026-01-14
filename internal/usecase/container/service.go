@@ -358,8 +358,48 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	return nil
 }
 
-// AutoStart starts containers for configured routes.
-func (s *Service) AutoStart(_ context.Context) error {
+// AutoStart starts containers for the provided routes that aren't running.
+func (s *Service) AutoStart(ctx context.Context, routes []domain.Route) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "AutoStart",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	log.Info().Int("route_count", len(routes)).Msg("auto-starting containers for configured routes")
+
+	var started, skipped, errors int
+	for _, route := range routes {
+		// Check if container already exists and is running
+		if _, exists := s.Get(ctx, route.Domain); exists {
+			log.Debug().Str("domain", route.Domain).Msg("container already running, skipping")
+			skipped++
+			continue
+		}
+
+		log.Info().
+			Str("domain", route.Domain).
+			Str("image", route.Image).
+			Msg("auto-starting container for route")
+
+		if _, err := s.Deploy(ctx, route); err != nil {
+			log.Warn().Err(err).Str("domain", route.Domain).Msg("failed to auto-start container")
+			errors++
+			continue
+		}
+
+		started++
+	}
+
+	log.Info().
+		Int("started", started).
+		Int("skipped", skipped).
+		Int("errors", errors).
+		Msg("auto-start completed")
+
+	if errors > 0 {
+		return fmt.Errorf("auto-start completed with %d errors", errors)
+	}
 	return nil
 }
 
@@ -523,6 +563,13 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 
 func (s *Service) ensureLocalImage(ctx context.Context, imageRef, pullRef string) (bool, error) {
 	log := zerowrap.FromCtx(ctx)
+
+	// For internal deploys (image push events), always pull fresh image
+	// because the same tag may reference new content (e.g., latest tag updated)
+	if domain.IsInternalDeploy(ctx) {
+		log.Info().Msg("internal deploy detected, forcing image pull to ensure latest content")
+		return false, nil
+	}
 
 	localImages, err := s.runtime.ListImages(ctx)
 	if err != nil {

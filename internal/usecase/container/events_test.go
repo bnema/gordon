@@ -216,6 +216,9 @@ func TestConfigReloadHandler_Handle_DeploysNewRoutes(t *testing.T) {
 
 	handler := NewConfigReloadHandler(testCtx(), containerSvc, configSvc)
 
+	// SyncContainers is called first
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
+
 	// No existing containers
 	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{})
 
@@ -244,6 +247,9 @@ func TestConfigReloadHandler_Handle_StopsRemovedRoutes(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 
 	handler := NewConfigReloadHandler(testCtx(), containerSvc, configSvc)
+
+	// SyncContainers is called first
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
 
 	// Existing container for a route that's no longer configured
 	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
@@ -277,6 +283,9 @@ func TestConfigReloadHandler_Handle_RedeploysChangedImage(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 
 	handler := NewConfigReloadHandler(testCtx(), containerSvc, configSvc)
+
+	// SyncContainers is called first
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
 
 	// Existing container with old image
 	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
@@ -314,6 +323,9 @@ func TestConfigReloadHandler_Handle_NoChanges(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 
 	handler := NewConfigReloadHandler(testCtx(), containerSvc, configSvc)
+
+	// SyncContainers is called first
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
 
 	// Existing container matches config
 	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
@@ -361,6 +373,9 @@ func TestManualReloadHandler_Handle_StartsOnlyMissingContainers(t *testing.T) {
 
 	handler := NewManualReloadHandler(testCtx(), containerSvc, configSvc)
 
+	// SyncContainers is called first
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
+
 	// Routes in config
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
 		{Domain: "app1.example.com", Image: "app1:latest"},
@@ -393,6 +408,9 @@ func TestManualReloadHandler_Handle_StartsMissingContainer(t *testing.T) {
 
 	handler := NewManualReloadHandler(testCtx(), containerSvc, configSvc)
 
+	// SyncContainers is called first
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
+
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
 		{Domain: "app.example.com", Image: "app:latest"},
 	})
@@ -420,6 +438,9 @@ func TestManualReloadHandler_Handle_DeployErrors(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 
 	handler := NewManualReloadHandler(testCtx(), containerSvc, configSvc)
+
+	// SyncContainers is called first
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
 
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
 		{Domain: "app1.example.com", Image: "app1:latest"},
@@ -459,6 +480,9 @@ func TestManualReloadHandler_Handle_DoesNotRestartRunningContainers(t *testing.T
 
 	handler := NewManualReloadHandler(testCtx(), containerSvc, configSvc)
 
+	// SyncContainers is called first
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
+
 	// Route with running container
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
 		{Domain: "app.example.com", Image: "app:latest"},
@@ -476,4 +500,131 @@ func TestManualReloadHandler_Handle_DoesNotRestartRunningContainers(t *testing.T
 	err := handler.Handle(event)
 
 	assert.NoError(t, err)
+}
+
+// ManualDeployHandler tests
+
+func TestManualDeployHandler_CanHandle(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	handler := NewManualDeployHandler(testCtx(), containerSvc, configSvc)
+
+	assert.True(t, handler.CanHandle(domain.EventManualDeploy))
+	assert.False(t, handler.CanHandle(domain.EventImagePushed))
+	assert.False(t, handler.CanHandle(domain.EventManualReload))
+}
+
+func TestManualDeployHandler_Handle_DeploysSpecificRoute(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	handler := NewManualDeployHandler(testCtx(), containerSvc, configSvc)
+
+	// Configure routes
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "app1.example.com", Image: "app1:latest"},
+		{Domain: "app2.example.com", Image: "app2:latest"},
+	})
+
+	// Only the requested route should be deployed
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
+		Domain: "app1.example.com",
+		Image:  "app1:latest",
+	}).Return(&domain.Container{ID: "container-1"}, nil)
+
+	event := domain.Event{
+		ID:   "event-123",
+		Type: domain.EventManualDeploy,
+		Data: &domain.ManualDeployPayload{Domain: "app1.example.com"},
+	}
+
+	err := handler.Handle(event)
+
+	assert.NoError(t, err)
+}
+
+func TestManualDeployHandler_Handle_RouteNotFound(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	handler := NewManualDeployHandler(testCtx(), containerSvc, configSvc)
+
+	// No matching routes
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "other.example.com", Image: "other:latest"},
+	})
+
+	event := domain.Event{
+		ID:   "event-123",
+		Type: domain.EventManualDeploy,
+		Data: &domain.ManualDeployPayload{Domain: "unknown.example.com"},
+	}
+
+	err := handler.Handle(event)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "route not found")
+}
+
+func TestManualDeployHandler_Handle_InvalidPayload(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	handler := NewManualDeployHandler(testCtx(), containerSvc, configSvc)
+
+	// Event with nil payload
+	event := domain.Event{
+		ID:   "event-123",
+		Type: domain.EventManualDeploy,
+		Data: nil,
+	}
+
+	err := handler.Handle(event)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid manual deploy payload")
+}
+
+func TestManualDeployHandler_Handle_EmptyDomain(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	handler := NewManualDeployHandler(testCtx(), containerSvc, configSvc)
+
+	// Event with empty domain
+	event := domain.Event{
+		ID:   "event-123",
+		Type: domain.EventManualDeploy,
+		Data: &domain.ManualDeployPayload{Domain: ""},
+	}
+
+	err := handler.Handle(event)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid manual deploy payload")
+}
+
+func TestManualDeployHandler_Handle_DeployError(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	handler := NewManualDeployHandler(testCtx(), containerSvc, configSvc)
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "app.example.com", Image: "app:latest"},
+	})
+
+	containerSvc.EXPECT().Deploy(mock.Anything, mock.Anything).Return(nil, errors.New("deploy failed"))
+
+	event := domain.Event{
+		ID:   "event-123",
+		Type: domain.EventManualDeploy,
+		Data: &domain.ManualDeployPayload{Domain: "app.example.com"},
+	}
+
+	err := handler.Handle(event)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to deploy")
 }

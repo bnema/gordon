@@ -711,3 +711,187 @@ func TestRewriteToLocalRegistry(t *testing.T) {
 		})
 	}
 }
+
+func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		RegistryAuthEnabled:      true,
+		RegistryDomain:           "registry.example.com",
+		RegistryPort:             5000,
+		InternalRegistryUsername: "internal",
+		InternalRegistryPassword: "secret",
+		ReadinessDelay:           0,
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+
+	// Use internal deploy context (simulating image push event)
+	ctx := domain.WithInternalDeploy(testContext())
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	// Setup mocks - no orphaned containers
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+
+	// Even though image exists locally, internal deploy should force pull
+	// Note: ensureLocalImage returns false for internal deploy, skipping the ListImages check
+	runtime.EXPECT().PullImageWithAuth(mock.Anything, "localhost:5000/myapp:latest", "internal", "secret").Return(nil)
+
+	// Tag image to canonical name
+	runtime.EXPECT().TagImage(mock.Anything, "localhost:5000/myapp:latest", "registry.example.com/myapp:latest").Return(nil)
+	runtime.EXPECT().UntagImage(mock.Anything, "localhost:5000/myapp:latest").Return(nil)
+
+	// Get exposed ports
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "registry.example.com/myapp:latest").Return([]int{8080}, nil)
+
+	// Load environment
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "registry.example.com/myapp:latest").Return([]string{}, nil)
+
+	// Create and start container
+	createdContainer := &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "created",
+	}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(createdContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "container-123").Return(nil)
+
+	// Wait for ready
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-123").Return(true, nil).Times(2)
+
+	// Re-inspect after start
+	runningContainer := &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+		Ports:  []int{8080},
+	}
+	runtime.EXPECT().InspectContainer(mock.Anything, "container-123").Return(runningContainer, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "container-123", result.ID)
+}
+
+func TestService_AutoStart_StartsNewContainers(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: 0,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	routes := []domain.Route{
+		{Domain: "app1.example.com", Image: "myapp1:latest"},
+		{Domain: "app2.example.com", Image: "myapp2:latest"},
+	}
+
+	// Setup mocks for first route deployment
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Times(2)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp1:latest", "myapp2:latest"}, nil).Times(2)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, mock.AnythingOfType("string")).Return([]int{8080}, nil).Times(2)
+	envLoader.EXPECT().LoadEnv(mock.Anything, mock.AnythingOfType("string")).Return([]string{}, nil).Times(2)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, mock.AnythingOfType("string")).Return([]string{}, nil).Times(2)
+
+	// Create and start containers
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{
+		ID: "container-1", Name: "gordon-app1.example.com", Status: "created",
+	}, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{
+		ID: "container-2", Name: "gordon-app2.example.com", Status: "created",
+	}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, mock.AnythingOfType("string")).Return(nil).Times(2)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, mock.AnythingOfType("string")).Return(true, nil).Times(4)
+	runtime.EXPECT().InspectContainer(mock.Anything, mock.AnythingOfType("string")).Return(&domain.Container{
+		Status: "running",
+	}, nil).Times(2)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil).Times(2)
+
+	err := svc.AutoStart(ctx, routes)
+
+	assert.NoError(t, err)
+	assert.Len(t, svc.containers, 2)
+}
+
+func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: 0,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// Pre-populate with existing container
+	svc.containers["app1.example.com"] = &domain.Container{
+		ID: "existing-container",
+	}
+
+	routes := []domain.Route{
+		{Domain: "app1.example.com", Image: "myapp1:latest"}, // Already exists
+		{Domain: "app2.example.com", Image: "myapp2:latest"}, // New route
+	}
+
+	// Only deploy for app2 (app1 is skipped)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp2:latest"}, nil).Once()
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp2:latest").Return([]int{8080}, nil).Once()
+	envLoader.EXPECT().LoadEnv(mock.Anything, "app2.example.com").Return([]string{}, nil).Once()
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp2:latest").Return([]string{}, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{
+		ID: "container-2", Status: "created",
+	}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "container-2").Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-2").Return(true, nil).Times(2)
+	runtime.EXPECT().InspectContainer(mock.Anything, "container-2").Return(&domain.Container{
+		Status: "running",
+	}, nil).Once()
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil).Once()
+
+	err := svc.AutoStart(ctx, routes)
+
+	assert.NoError(t, err)
+	assert.Len(t, svc.containers, 2)
+}
+
+func TestService_AutoStart_HandlesDeployErrors(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	routes := []domain.Route{
+		{Domain: "app1.example.com", Image: "myapp1:latest"},
+	}
+
+	// Setup mocks for failure
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp1:latest").Return(errors.New("image not found"))
+
+	err := svc.AutoStart(ctx, routes)
+
+	// AutoStart should return error when some deployments fail
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "auto-start completed with 1 errors")
+}
