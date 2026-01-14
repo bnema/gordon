@@ -19,17 +19,25 @@ type TokenResponse struct {
 	IssuedAt    string `json:"issued_at,omitempty"`
 }
 
+// InternalAuth holds credentials for internal loopback registry access.
+type InternalAuth struct {
+	Username string
+	Password string
+}
+
 // TokenHandler handles token server requests for Docker Registry authentication.
 type TokenHandler struct {
-	authSvc in.AuthService
-	log     zerowrap.Logger
+	authSvc      in.AuthService
+	internalAuth InternalAuth
+	log          zerowrap.Logger
 }
 
 // NewTokenHandler creates a new token handler.
-func NewTokenHandler(authSvc in.AuthService, log zerowrap.Logger) *TokenHandler {
+func NewTokenHandler(authSvc in.AuthService, internalAuth InternalAuth, log zerowrap.Logger) *TokenHandler {
 	return &TokenHandler{
-		authSvc: authSvc,
-		log:     log,
+		authSvc:      authSvc,
+		internalAuth: internalAuth,
+		log:          log,
 	}
 }
 
@@ -70,16 +78,22 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate credentials based on auth type
+	// Check for internal registry auth (localhost requests with internal creds)
 	var authenticated bool
-	switch h.authSvc.GetAuthType() {
-	case domain.AuthTypePassword:
-		authenticated = h.authSvc.ValidatePassword(ctx, username, password)
-	case domain.AuthTypeToken:
-		// For token auth, the password might be an existing JWT
-		claims, err := h.authSvc.ValidateToken(ctx, password)
-		if err == nil && claims.Subject == username {
-			authenticated = true
+	if isLocalhostRequest(r) && h.isInternalAuth(username, password) {
+		authenticated = true
+		log.Debug().Str("username", username).Msg("internal registry auth accepted")
+	} else {
+		// Validate credentials based on auth type
+		switch h.authSvc.GetAuthType() {
+		case domain.AuthTypePassword:
+			authenticated = h.authSvc.ValidatePassword(ctx, username, password)
+		case domain.AuthTypeToken:
+			// For token auth, the password might be an existing JWT
+			claims, err := h.authSvc.ValidateToken(ctx, password)
+			if err == nil && claims.Subject == username {
+				authenticated = true
+			}
 		}
 	}
 
@@ -136,4 +150,21 @@ func (h *TokenHandler) sendAnonymousToken(w http.ResponseWriter, log zerowrap.Lo
 	}
 
 	log.Debug().Msg("anonymous token issued")
+}
+
+// isLocalhostRequest checks if the request is from localhost.
+func isLocalhostRequest(r *http.Request) bool {
+	host := r.Host
+	if host == "" {
+		host = r.URL.Host
+	}
+	return host == "localhost:5000" || host == "127.0.0.1:5000" || host == "[::1]:5000"
+}
+
+// isInternalAuth checks if the credentials match internal registry auth.
+func (h *TokenHandler) isInternalAuth(username, password string) bool {
+	if h.internalAuth.Username == "" || h.internalAuth.Password == "" {
+		return false
+	}
+	return username == h.internalAuth.Username && password == h.internalAuth.Password
 }

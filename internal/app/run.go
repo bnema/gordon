@@ -260,7 +260,11 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 	// Create token handler for registry token endpoint
 	if svc.authSvc != nil {
-		svc.tokenHandler = registry.NewTokenHandler(svc.authSvc, log)
+		internalAuth := registry.InternalAuth{
+			Username: svc.internalRegUser,
+			Password: svc.internalRegPass,
+		}
+		svc.tokenHandler = registry.NewTokenHandler(svc.authSvc, internalAuth, log)
 	}
 
 	return svc, nil
