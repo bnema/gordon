@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -272,8 +271,8 @@ func runTokenRevoke(tokenID, configPath string) error {
 func runPasswordHash() error {
 	fmt.Print("Enter password: ")
 
-	// Read password without echo
-	passwordBytes, err := term.ReadPassword(syscall.Stdin)
+	// Read password without echo (use os.Stdin.Fd() for better compatibility)
+	passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
 		// Fallback for non-terminal input
 		reader := bufio.NewReader(os.Stdin)

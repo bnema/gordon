@@ -701,11 +701,18 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 }
 
 // runServers starts the HTTP servers and waits for shutdown.
+// Signal handling notes:
+// - SIGINT/SIGTERM: Triggers graceful shutdown via signal.NotifyContext
+// - SIGUSR1: Triggers config reload without restart
+// The deferred signal.Stop(reloadChan) ensures the signal handler is properly
+// cleaned up before program exit, preventing signal handler leaks.
 func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// Set up SIGUSR1 for reload
+	// Set up SIGUSR1 for reload.
+	// Note: signal.Stop must be called (via defer) to release the channel
+	// and prevent signal handler leaks when the function returns.
 	reloadChan := make(chan os.Signal, 1)
 	signal.Notify(reloadChan, syscall.SIGUSR1)
 	defer signal.Stop(reloadChan)
