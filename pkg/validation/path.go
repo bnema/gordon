@@ -16,8 +16,9 @@ import (
 var repoNameRegex = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$`)
 
 // Reference (tag) validation per Docker spec:
-// - Alphanumeric, dots, underscores, hyphens
-// - Must start with alphanumeric
+// - Case-sensitive alphanumeric (both uppercase and lowercase allowed)
+// - Dots, underscores, and hyphens allowed after first character
+// - Must start with an alphanumeric character
 // - Max 128 characters
 var referenceRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 

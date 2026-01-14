@@ -4,6 +4,7 @@ package registry
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -303,7 +304,8 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 	// Read manifest data
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		if err.Error() == "http: request body too large" {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
 			log.Warn().Int64("max_size", MaxManifestSize).Msg("manifest too large")
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "manifest exceeds maximum size")
 			return
@@ -408,7 +410,8 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	// Read the chunk from the request body
 	chunk, err := io.ReadAll(r.Body)
 	if err != nil {
-		if err.Error() == "http: request body too large" {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
 			log.Warn().Int64("max_size", MaxBlobChunkSize).Msg("blob chunk too large")
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob chunk exceeds maximum size")
 			return

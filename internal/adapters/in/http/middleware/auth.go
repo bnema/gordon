@@ -155,7 +155,8 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 					sendForbidden(w, log, r)
 					return
 				}
-				// Store claims in context for downstream use
+				// Store claims in context for downstream handlers that need access to token metadata
+				// (e.g., audit logging, rate limiting by subject, or future per-user quotas)
 				ctx = context.WithValue(ctx, TokenClaimsKey, tokenClaims)
 				r = r.WithContext(ctx)
 			}
