@@ -22,6 +22,11 @@ const (
 	TokenIssuer = "gordon-registry"
 	// DefaultBcryptCost is the default cost for bcrypt hashing.
 	DefaultBcryptCost = 12
+	// MaxAccessTokenLifetime is the maximum lifetime for ephemeral access tokens.
+	// Tokens with this lifetime or less skip store validation.
+	MaxAccessTokenLifetime = 5 * time.Minute
+	// maxAccessTokenLifetimeSecs is MaxAccessTokenLifetime in seconds for JWT comparisons.
+	maxAccessTokenLifetimeSecs = int64(MaxAccessTokenLifetime / time.Second)
 )
 
 // Config holds the authentication configuration.
@@ -101,13 +106,19 @@ func (s *Service) ValidateToken(ctx context.Context, tokenString string) (*domai
 
 	tokenClaims := buildTokenClaims(claims)
 
-	// SECURITY: Verify token exists in store (prevents use of externally-created tokens)
-	if err := s.ensureTokenExists(ctx, tokenClaims, log); err != nil {
-		return nil, err
-	}
+	// Access tokens (short-lived, ≤5min, recently issued) skip store validation.
+	// CLI-generated tokens must exist in store to prevent use of externally-created tokens.
+	// Security: require token to be recently issued (within MaxAccessTokenLifetime) to prevent
+	// attackers with stolen secrets from creating arbitrary short-lived tokens.
+	isAccessToken := s.isEphemeralAccessToken(tokenClaims)
 
-	if err := s.ensureTokenNotRevoked(ctx, tokenClaims, log); err != nil {
-		return nil, err
+	if !isAccessToken {
+		if err := s.ensureTokenExists(ctx, tokenClaims, log); err != nil {
+			return nil, err
+		}
+		if err := s.ensureTokenNotRevoked(ctx, tokenClaims, log); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := ensureTokenNotExpired(tokenClaims, log); err != nil {
@@ -228,6 +239,32 @@ func ensureTokenNotExpired(tokenClaims *domain.TokenClaims, log zerowrap.Logger)
 	return nil
 }
 
+// isEphemeralAccessToken checks if a token is a short-lived access token that
+// doesn't require store validation. Access tokens must:
+// 1. Have a positive expiry (not never-expiring)
+// 2. Have lifetime ≤ MaxAccessTokenLifetime
+// 3. Be recently issued (within MaxAccessTokenLifetime) to prevent replay attacks
+func (s *Service) isEphemeralAccessToken(claims *domain.TokenClaims) bool {
+	if claims.ExpiresAt <= 0 {
+		return false // Never-expiring tokens require store validation
+	}
+
+	lifetime := claims.ExpiresAt - claims.IssuedAt
+	if lifetime > maxAccessTokenLifetimeSecs {
+		return false // Long-lived tokens require store validation
+	}
+
+	// Security: ensure token was recently issued to prevent attackers with
+	// stolen secrets from creating arbitrary short-lived tokens
+	now := time.Now().Unix()
+	tokenAge := now - claims.IssuedAt
+	if tokenAge > maxAccessTokenLifetimeSecs {
+		return false // Old tokens require store validation
+	}
+
+	return true
+}
+
 // GenerateToken creates a new JWT token for the given subject.
 func (s *Service) GenerateToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -283,6 +320,51 @@ func (s *Service) GenerateToken(ctx context.Context, subject string, scopes []st
 		Str("subject", subject).
 		Time("expires_at", token.ExpiresAt).
 		Msg("token generated")
+
+	return tokenString, nil
+}
+
+// GenerateAccessToken creates a short-lived JWT for registry access without storing it.
+// Used by /v2/token endpoint - these tokens don't need persistence.
+// Expiry must be > 0 and <= MaxAccessTokenLifetime to prevent misuse.
+func (s *Service) GenerateAccessToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "GenerateAccessToken",
+		"subject":             subject,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	// Enforce expiry constraints to prevent misuse
+	if expiry <= 0 {
+		return "", fmt.Errorf("access token expiry must be positive")
+	}
+	if expiry > MaxAccessTokenLifetime {
+		return "", fmt.Errorf("access token expiry exceeds maximum of %v", MaxAccessTokenLifetime)
+	}
+
+	tokenID := uuid.New().String()
+	now := time.Now()
+
+	claims := jwt.MapClaims{
+		"jti":    tokenID,
+		"sub":    subject,
+		"iss":    TokenIssuer,
+		"iat":    now.Unix(),
+		"scopes": scopes,
+		"exp":    now.Add(expiry).Unix(),
+	}
+
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := jwtToken.SignedString(s.config.TokenSecret)
+	if err != nil {
+		return "", log.WrapErr(err, "failed to sign access token")
+	}
+
+	log.Debug().
+		Str("token_id", tokenID).
+		Str("subject", subject).
+		Msg("access token generated")
 
 	return tokenString, nil
 }

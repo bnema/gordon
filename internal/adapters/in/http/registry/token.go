@@ -111,8 +111,8 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 	// Format: scope=repository:name:action1,action2 (can appear multiple times)
 	requestedScopes := h.parseRequestedScopes(r, log)
 
-	// Generate a short-lived access token (5 minutes)
-	accessToken, err := h.authSvc.GenerateToken(ctx, username, requestedScopes, 5*time.Minute)
+	// Generate a short-lived access token (5 minutes) - not stored
+	accessToken, err := h.authSvc.GenerateAccessToken(ctx, username, requestedScopes, 5*time.Minute)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to generate access token")
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
