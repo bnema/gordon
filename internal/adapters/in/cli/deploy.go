@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 
 	"gordon/internal/app"
@@ -22,7 +24,12 @@ Examples:
   gordon deploy api.example.com`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return app.SendDeploySignal(args[0])
+			domain, err := app.SendDeploySignal(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Deploy signal sent for domain: %s\n", domain)
+			return nil
 		},
 	}
 }
