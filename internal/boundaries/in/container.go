@@ -32,8 +32,8 @@ type ContainerService interface {
 	// SyncContainers synchronizes containers with configured routes.
 	SyncContainers(ctx context.Context) error
 
-	// AutoStart starts containers for all configured routes.
-	AutoStart(ctx context.Context) error
+	// AutoStart starts containers for the provided routes that aren't running.
+	AutoStart(ctx context.Context, routes []domain.Route) error
 
 	// Shutdown gracefully shuts down all managed containers.
 	Shutdown(ctx context.Context) error
