@@ -20,6 +20,12 @@ In-depth guides for specific setups:
 - [Using Pass for Secrets](./guides/secrets-pass.md) - Unix password manager integration
 - [Using SOPS for Secrets](./guides/secrets-sops.md) - Encrypted secrets with SOPS
 
+## Agents
+
+Guides for AI coding assistants:
+
+- [Deployment Workflow](./agents/deploy.md) - Structured deployment guide for AI agents
+
 ## Examples
 
 Configuration examples explained:
