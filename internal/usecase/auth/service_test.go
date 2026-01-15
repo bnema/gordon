@@ -179,6 +179,32 @@ func TestService_GenerateToken_NeverExpires(t *testing.T) {
 	assert.NotEmpty(t, token)
 }
 
+func TestService_GenerateAccessToken_NoStorage(t *testing.T) {
+	// Access tokens should NOT be stored - this is the fix for the 401 bug
+	tokenStore := mocks.NewMockTokenStore(t)
+	// No SaveToken expectation - it should NOT be called
+
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+
+	ctx := testContext()
+	token, err := svc.GenerateAccessToken(ctx, "testuser", []string{"repository:myrepo:push,pull"}, 5*time.Minute)
+
+	assert.NoError(t, err)
+	assert.NotEmpty(t, token)
+
+	// Verify the token is valid and has correct claims
+	claims, err := svc.ValidateToken(ctx, token)
+	assert.NoError(t, err)
+	assert.Equal(t, "testuser", claims.Subject)
+	assert.Contains(t, claims.Scopes, "repository:myrepo:push,pull")
+	// Access token should have short expiry (5 min = 300 seconds)
+	assert.True(t, claims.ExpiresAt-claims.IssuedAt <= 300)
+}
+
 func TestService_ValidateToken_Success(t *testing.T) {
 	tokenStore := mocks.NewMockTokenStore(t)
 

@@ -481,6 +481,10 @@ func (s stubAuthService) GenerateToken(context.Context, string, []string, time.D
 	return "", errors.New("not implemented")
 }
 
+func (s stubAuthService) GenerateAccessToken(context.Context, string, []string, time.Duration) (string, error) {
+	return "", errors.New("not implemented")
+}
+
 func (s stubAuthService) RevokeToken(context.Context, string) error {
 	return errors.New("not implemented")
 }

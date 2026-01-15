@@ -39,6 +39,84 @@ func (_m *MockAuthService) EXPECT() *MockAuthService_Expecter {
 	return &MockAuthService_Expecter{mock: &_m.Mock}
 }
 
+// GenerateAccessToken provides a mock function for the type MockAuthService
+func (_mock *MockAuthService) GenerateAccessToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error) {
+	ret := _mock.Called(ctx, subject, scopes, expiry)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GenerateAccessToken")
+	}
+
+	var r0 string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string, time.Duration) (string, error)); ok {
+		return returnFunc(ctx, subject, scopes, expiry)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string, time.Duration) string); ok {
+		r0 = returnFunc(ctx, subject, scopes, expiry)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, []string, time.Duration) error); ok {
+		r1 = returnFunc(ctx, subject, scopes, expiry)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAuthService_GenerateAccessToken_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GenerateAccessToken'
+type MockAuthService_GenerateAccessToken_Call struct {
+	*mock.Call
+}
+
+// GenerateAccessToken is a helper method to define mock.On call
+//   - ctx context.Context
+//   - subject string
+//   - scopes []string
+//   - expiry time.Duration
+func (_e *MockAuthService_Expecter) GenerateAccessToken(ctx interface{}, subject interface{}, scopes interface{}, expiry interface{}) *MockAuthService_GenerateAccessToken_Call {
+	return &MockAuthService_GenerateAccessToken_Call{Call: _e.mock.On("GenerateAccessToken", ctx, subject, scopes, expiry)}
+}
+
+func (_c *MockAuthService_GenerateAccessToken_Call) Run(run func(ctx context.Context, subject string, scopes []string, expiry time.Duration)) *MockAuthService_GenerateAccessToken_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 []string
+		if args[2] != nil {
+			arg2 = args[2].([]string)
+		}
+		var arg3 time.Duration
+		if args[3] != nil {
+			arg3 = args[3].(time.Duration)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAuthService_GenerateAccessToken_Call) Return(s string, err error) *MockAuthService_GenerateAccessToken_Call {
+	_c.Call.Return(s, err)
+	return _c
+}
+
+func (_c *MockAuthService_GenerateAccessToken_Call) RunAndReturn(run func(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error)) *MockAuthService_GenerateAccessToken_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GeneratePasswordHash provides a mock function for the type MockAuthService
 func (_mock *MockAuthService) GeneratePasswordHash(password string) (string, error) {
 	ret := _mock.Called(password)
