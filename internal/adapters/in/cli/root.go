@@ -32,6 +32,7 @@ configuration rules, making it ideal for single-server deployments.`,
 	// Add subcommands
 	rootCmd.AddCommand(newStartCmd())
 	rootCmd.AddCommand(newReloadCmd())
+	rootCmd.AddCommand(newDeployCmd())
 	rootCmd.AddCommand(newLogsCmd())
 	rootCmd.AddCommand(newVersionCmd())
 	rootCmd.AddCommand(newAuthCmd())

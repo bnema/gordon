@@ -334,4 +334,4 @@ curl -v http://localhost:8080/
 
 - [Installation](../installation.md)
 - [Configuration](../config/index.md)
-- [CLI Reference](../cli/index.md)
+- [CLI Commands](../cli/commands.md)
