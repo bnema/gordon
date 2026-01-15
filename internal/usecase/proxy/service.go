@@ -127,6 +127,37 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 	}
 	s.mu.RUnlock()
 
+	// Check if this is an external route
+	externalRoutes := s.configSvc.GetExternalRoutes()
+	if targetAddr, ok := externalRoutes[domainName]; ok {
+		host, portStr, err := net.SplitHostPort(targetAddr)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid external route target", map[string]any{"target": targetAddr})
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
+		}
+
+		target := &domain.ProxyTarget{
+			Host:        host,
+			Port:        port,
+			ContainerID: "", // Not a container
+			Scheme:      "http",
+		}
+
+		// Cache external route target
+		s.mu.Lock()
+		s.targets[domainName] = target
+		s.mu.Unlock()
+
+		log.Debug().
+			Str("host", host).
+			Int("port", port).
+			Msg("using external route target")
+		return target, nil
+	}
+
 	// Get container for this domain
 	container, exists := s.containerSvc.Get(ctx, domainName)
 	if !exists {

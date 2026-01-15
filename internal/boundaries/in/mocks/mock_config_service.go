@@ -139,6 +139,52 @@ func (_c *MockConfigService_GetDataDir_Call) RunAndReturn(run func() string) *Mo
 	return _c
 }
 
+// GetExternalRoutes provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) GetExternalRoutes() map[string]string {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetExternalRoutes")
+	}
+
+	var r0 map[string]string
+	if returnFunc, ok := ret.Get(0).(func() map[string]string); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]string)
+		}
+	}
+	return r0
+}
+
+// MockConfigService_GetExternalRoutes_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetExternalRoutes'
+type MockConfigService_GetExternalRoutes_Call struct {
+	*mock.Call
+}
+
+// GetExternalRoutes is a helper method to define mock.On call
+func (_e *MockConfigService_Expecter) GetExternalRoutes() *MockConfigService_GetExternalRoutes_Call {
+	return &MockConfigService_GetExternalRoutes_Call{Call: _e.mock.On("GetExternalRoutes")}
+}
+
+func (_c *MockConfigService_GetExternalRoutes_Call) Run(run func()) *MockConfigService_GetExternalRoutes_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockConfigService_GetExternalRoutes_Call) Return(stringToString map[string]string) *MockConfigService_GetExternalRoutes_Call {
+	_c.Call.Return(stringToString)
+	return _c
+}
+
+func (_c *MockConfigService_GetExternalRoutes_Call) RunAndReturn(run func() map[string]string) *MockConfigService_GetExternalRoutes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetNetworkPrefix provides a mock function for the type MockConfigService
 func (_mock *MockConfigService) GetNetworkPrefix() string {
 	ret := _mock.Called()
