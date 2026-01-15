@@ -179,6 +179,134 @@ func TestService_GenerateToken_NeverExpires(t *testing.T) {
 	assert.NotEmpty(t, token)
 }
 
+func TestService_GenerateAccessToken_NoStorage(t *testing.T) {
+	// Access tokens should NOT be stored - this is the fix for the 401 bug
+	tokenStore := mocks.NewMockTokenStore(t)
+	// No SaveToken expectation - it should NOT be called
+
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+
+	ctx := testContext()
+	token, err := svc.GenerateAccessToken(ctx, "testuser", []string{"repository:myrepo:push,pull"}, 5*time.Minute)
+
+	assert.NoError(t, err)
+	assert.NotEmpty(t, token)
+
+	// Verify the token is valid and has correct claims
+	claims, err := svc.ValidateToken(ctx, token)
+	assert.NoError(t, err)
+	assert.Equal(t, "testuser", claims.Subject)
+	assert.Contains(t, claims.Scopes, "repository:myrepo:push,pull")
+	// Access token should have exactly 5 min expiry (allow 2 sec tolerance for test execution)
+	assert.InDelta(t, 300, claims.ExpiresAt-claims.IssuedAt, 2)
+}
+
+func TestService_GenerateAccessToken_RejectsInvalidExpiry(t *testing.T) {
+	tokenStore := mocks.NewMockTokenStore(t)
+
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+
+	ctx := testContext()
+
+	// Zero expiry should be rejected
+	_, err := svc.GenerateAccessToken(ctx, "testuser", []string{"repository:myrepo:pull"}, 0)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "expiry must be positive")
+
+	// Negative expiry should be rejected
+	_, err = svc.GenerateAccessToken(ctx, "testuser", []string{"repository:myrepo:pull"}, -time.Minute)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "expiry must be positive")
+
+	// Expiry exceeding max should be rejected
+	_, err = svc.GenerateAccessToken(ctx, "testuser", []string{"repository:myrepo:pull"}, 10*time.Minute)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
+func TestService_ValidateToken_LongLivedRequiresStore(t *testing.T) {
+	// Tokens with expiry > 5 minutes must exist in store
+	tokenStore := mocks.NewMockTokenStore(t)
+
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+
+	ctx := testContext()
+
+	// Generate a long-lived token (stored)
+	var capturedToken *domain.Token
+	tokenStore.EXPECT().
+		SaveToken(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, t *domain.Token, _ string) {
+			capturedToken = t
+		}).
+		Return(nil)
+
+	token, err := svc.GenerateToken(ctx, "testuser", []string{"push", "pull"}, time.Hour)
+	assert.NoError(t, err)
+
+	// Validation should call GetToken and IsRevoked
+	tokenStore.EXPECT().
+		GetToken(mock.Anything, "testuser").
+		Return(token, capturedToken, nil)
+	tokenStore.EXPECT().
+		IsRevoked(mock.Anything, capturedToken.ID).
+		Return(false, nil)
+
+	claims, err := svc.ValidateToken(ctx, token)
+	assert.NoError(t, err)
+	assert.Equal(t, "testuser", claims.Subject)
+}
+
+func TestService_ValidateToken_NeverExpiringRequiresStore(t *testing.T) {
+	// Tokens with ExpiresAt = 0 (never expires) must exist in store
+	tokenStore := mocks.NewMockTokenStore(t)
+
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+
+	ctx := testContext()
+
+	// Generate a never-expiring token (stored)
+	var capturedToken *domain.Token
+	tokenStore.EXPECT().
+		SaveToken(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, t *domain.Token, _ string) {
+			capturedToken = t
+		}).
+		Return(nil)
+
+	token, err := svc.GenerateToken(ctx, "ci-bot", []string{"push", "pull"}, 0)
+	assert.NoError(t, err)
+
+	// Validation should call GetToken and IsRevoked (not bypass store)
+	tokenStore.EXPECT().
+		GetToken(mock.Anything, "ci-bot").
+		Return(token, capturedToken, nil)
+	tokenStore.EXPECT().
+		IsRevoked(mock.Anything, capturedToken.ID).
+		Return(false, nil)
+
+	claims, err := svc.ValidateToken(ctx, token)
+	assert.NoError(t, err)
+	assert.Equal(t, "ci-bot", claims.Subject)
+	assert.Equal(t, int64(0), claims.ExpiresAt) // Never expires
+}
+
 func TestService_ValidateToken_Success(t *testing.T) {
 	tokenStore := mocks.NewMockTokenStore(t)
 

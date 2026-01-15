@@ -23,9 +23,13 @@ type AuthService interface {
 	// ValidateToken validates a JWT token and returns its claims.
 	ValidateToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error)
 
-	// GenerateToken creates a new JWT token for the given subject.
+	// GenerateToken creates a new JWT token for the given subject and stores it.
 	// If expiry is 0, the token never expires.
 	GenerateToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error)
+
+	// GenerateAccessToken creates a short-lived JWT for registry access without storing it.
+	// Used by /v2/token endpoint for Docker client sessions.
+	GenerateAccessToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error)
 
 	// RevokeToken revokes a token by its ID.
 	RevokeToken(ctx context.Context, tokenID string) error
