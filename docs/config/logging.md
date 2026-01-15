@@ -70,10 +70,8 @@ max_age = 28
 ├── gordon.log              # Main application logs
 ├── gordon.log.1            # Rotated log
 ├── gordon.log.2.gz         # Compressed old log
-├── proxy.log               # HTTP proxy traffic
 └── containers/
-    ├── abc123def.log       # Container by ID
-    ├── app_mydomain_com.log  # Symlink by domain
+    ├── app_mydomain_com.log  # Container logs by domain
     └── api_mydomain_com.log
 ```
 
