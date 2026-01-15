@@ -101,13 +101,18 @@ func (s *Service) ValidateToken(ctx context.Context, tokenString string) (*domai
 
 	tokenClaims := buildTokenClaims(claims)
 
-	// SECURITY: Verify token exists in store (prevents use of externally-created tokens)
-	if err := s.ensureTokenExists(ctx, tokenClaims, log); err != nil {
-		return nil, err
-	}
+	// Access tokens (short-lived, ≤5min) are not stored - skip store validation
+	// CLI-generated tokens must exist in store to prevent use of externally-created tokens
+	isAccessToken := tokenClaims.ExpiresAt > 0 &&
+		(tokenClaims.ExpiresAt-tokenClaims.IssuedAt) <= 300
 
-	if err := s.ensureTokenNotRevoked(ctx, tokenClaims, log); err != nil {
-		return nil, err
+	if !isAccessToken {
+		if err := s.ensureTokenExists(ctx, tokenClaims, log); err != nil {
+			return nil, err
+		}
+		if err := s.ensureTokenNotRevoked(ctx, tokenClaims, log); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := ensureTokenNotExpired(tokenClaims, log); err != nil {
@@ -283,6 +288,45 @@ func (s *Service) GenerateToken(ctx context.Context, subject string, scopes []st
 		Str("subject", subject).
 		Time("expires_at", token.ExpiresAt).
 		Msg("token generated")
+
+	return tokenString, nil
+}
+
+// GenerateAccessToken creates a short-lived JWT for registry access without storing it.
+// Used by /v2/token endpoint - these tokens don't need persistence.
+func (s *Service) GenerateAccessToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "GenerateAccessToken",
+		"subject":             subject,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	tokenID := uuid.New().String()
+	now := time.Now()
+
+	claims := jwt.MapClaims{
+		"jti":    tokenID,
+		"sub":    subject,
+		"iss":    TokenIssuer,
+		"iat":    now.Unix(),
+		"scopes": scopes,
+	}
+
+	if expiry > 0 {
+		claims["exp"] = now.Add(expiry).Unix()
+	}
+
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := jwtToken.SignedString(s.config.TokenSecret)
+	if err != nil {
+		return "", log.WrapErr(err, "failed to sign access token")
+	}
+
+	log.Debug().
+		Str("token_id", tokenID).
+		Str("subject", subject).
+		Msg("access token generated")
 
 	return tokenString, nil
 }
