@@ -269,6 +269,23 @@ func (s *Service) UpdateConfig(config Config) {
 
 // Helper methods
 
+// newReverseProxy creates a reverse proxy using Rewrite instead of Director to prevent
+// hop-by-hop header attacks. A malicious client could send "Connection: Authorization"
+// to strip the Authorization header when using the default Director. Rewrite processes
+// headers after hop-by-hop removal, ensuring headers like Authorization are preserved.
+func newReverseProxy(targetURL *url.URL, errorHandler func(http.ResponseWriter, *http.Request, error), modifyResponse func(*http.Response) error) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(targetURL)
+			pr.SetXForwarded()
+			pr.Out.Host = targetURL.Host
+		},
+		Transport:      proxyTransport,
+		ErrorHandler:   errorHandler,
+		ModifyResponse: modifyResponse,
+	}
+}
+
 func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *domain.ProxyTarget) {
 	log := zerowrap.FromCtx(r.Context())
 
@@ -279,19 +296,17 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 		return
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	proxy.Transport = proxyTransport
-
-	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
-		log.Error().Err(err).Str("target", targetURL.String()).Msg("proxy error")
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
-	}
-
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		resp.Header.Set("X-Proxied-By", "Gordon")
-		resp.Header.Set("X-Container-ID", target.ContainerID)
-		return nil
-	}
+	proxy := newReverseProxy(targetURL,
+		func(w http.ResponseWriter, _ *http.Request, err error) {
+			log.Error().Err(err).Str("target", targetURL.String()).Msg("proxy error")
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		},
+		func(resp *http.Response) error {
+			resp.Header.Set("X-Proxied-By", "Gordon")
+			resp.Header.Set("X-Container-ID", target.ContainerID)
+			return nil
+		},
+	)
 
 	log.Debug().
 		Str("target", targetURL.String()).
@@ -311,19 +326,17 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	proxy.Transport = proxyTransport
-
-	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
-		log.Error().Err(err).Int("registry_port", s.config.RegistryPort).Msg("registry proxy error")
-		http.Error(w, "Registry Unavailable", http.StatusServiceUnavailable)
-	}
-
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		resp.Header.Set("X-Proxied-By", "Gordon")
-		resp.Header.Set("X-Registry-Backend", "gordon-registry")
-		return nil
-	}
+	proxy := newReverseProxy(targetURL,
+		func(w http.ResponseWriter, _ *http.Request, err error) {
+			log.Error().Err(err).Int("registry_port", s.config.RegistryPort).Msg("registry proxy error")
+			http.Error(w, "Registry Unavailable", http.StatusServiceUnavailable)
+		},
+		func(resp *http.Response) error {
+			resp.Header.Set("X-Proxied-By", "Gordon")
+			resp.Header.Set("X-Registry-Backend", "gordon-registry")
+			return nil
+		},
+	)
 
 	log.Debug().Str("target", targetURL.String()).Msg("proxying request to registry")
 
