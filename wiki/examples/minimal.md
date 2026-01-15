@@ -93,5 +93,4 @@ enabled = true
 
 ## Related
 
-- [Development Configuration](./development.md)
 - [Production Configuration](./production.md)
