@@ -6,7 +6,7 @@ External routes allow proxying to non-containerized services running on the host
 
 ```toml
 [external_routes]
-"service.mydomain.com" = "localhost:5000"
+"service.mydomain.com" = "localhost:3000"
 "cache.mydomain.com" = "192.168.1.100:6379"
 ```
 
@@ -24,15 +24,6 @@ External routes allow proxying to non-containerized services running on the host
 | `port` | Target port number |
 
 ## Use Cases
-
-### Docker Registry
-
-Proxy to a Docker registry running outside of Gordon:
-
-```toml
-[external_routes]
-"registry.mydomain.com" = "localhost:5000"
-```
 
 ### Database Admin Tools
 
