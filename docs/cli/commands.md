@@ -190,6 +190,8 @@ Sends `SIGUSR1` to the running Gordon process, triggering:
 ### Example
 
 ```bash
+# After editing gordon.toml, apply changes without restart
+vim ~/.config/gordon/gordon.toml
 gordon reload
 ```
 
