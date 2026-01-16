@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -1072,6 +1073,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	}
 
 	v.SetEnvPrefix("GORDON")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
 	return nil
