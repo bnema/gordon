@@ -14,6 +14,9 @@ type ConfigService interface {
 	// GetRoutes returns all configured routes.
 	GetRoutes(ctx context.Context) []domain.Route
 
+	// GetRoute returns a single route by domain.
+	GetRoute(ctx context.Context, domain string) (*domain.Route, error)
+
 	// AddRoute adds a new route to the configuration.
 	AddRoute(ctx context.Context, route domain.Route) error
 

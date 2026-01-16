@@ -590,9 +590,9 @@ func TestHandler_RoutesGet_SingleRoute(t *testing.T) {
 
 	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, testLogger())
 
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "app.example.com", Image: "app:latest"},
-	})
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{
+		Domain: "app.example.com", Image: "app:latest",
+	}, nil)
 
 	req := httptest.NewRequest("GET", "/admin/routes/app.example.com", nil)
 	req = req.WithContext(ctxWithScopes("admin:routes:read"))
@@ -617,7 +617,7 @@ func TestHandler_RoutesGet_NotFound(t *testing.T) {
 
 	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, testLogger())
 
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
+	configSvc.EXPECT().GetRoute(mock.Anything, "nonexistent.example.com").Return(nil, domain.ErrRouteNotFound)
 
 	req := httptest.NewRequest("GET", "/admin/routes/nonexistent.example.com", nil)
 	req = req.WithContext(ctxWithScopes("admin:routes:read"))
@@ -629,33 +629,39 @@ func TestHandler_RoutesGet_NotFound(t *testing.T) {
 }
 
 func TestHandler_RoutesPost_MissingFields(t *testing.T) {
-	configSvc := inmocks.NewMockConfigService(t)
-	authSvc := inmocks.NewMockAuthService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
-
-	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, testLogger())
-
 	tests := []struct {
-		name string
-		body string
+		name    string
+		body    string
+		mockErr error
 	}{
 		{
-			name: "missing domain",
-			body: `{"image": "app:latest"}`,
+			name:    "missing domain",
+			body:    `{"image": "app:latest"}`,
+			mockErr: domain.ErrRouteDomainEmpty,
 		},
 		{
-			name: "missing image",
-			body: `{"domain": "app.example.com"}`,
+			name:    "missing image",
+			body:    `{"domain": "app.example.com"}`,
+			mockErr: domain.ErrRouteImageEmpty,
 		},
 		{
-			name: "empty object",
-			body: `{}`,
+			name:    "empty object",
+			body:    `{}`,
+			mockErr: domain.ErrRouteDomainEmpty,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			configSvc := inmocks.NewMockConfigService(t)
+			authSvc := inmocks.NewMockAuthService(t)
+			containerSvc := inmocks.NewMockContainerService(t)
+			secretSvc := inmocks.NewMockSecretService(t)
+
+			handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, testLogger())
+
+			configSvc.EXPECT().AddRoute(mock.Anything, mock.Anything).Return(tt.mockErr)
+
 			req := httptest.NewRequest("POST", "/admin/routes", bytes.NewBufferString(tt.body))
 			req = req.WithContext(ctxWithScopes("admin:routes:write"))
 			rec := httptest.NewRecorder()

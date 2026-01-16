@@ -182,6 +182,31 @@ func (s *Service) GetRoutes(_ context.Context) []domain.Route {
 	return routes
 }
 
+// GetRoute returns a single route by domain.
+func (s *Service) GetRoute(_ context.Context, domainName string) (*domain.Route, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	image, exists := s.config.Routes[domainName]
+	if !exists {
+		return nil, domain.ErrRouteNotFound
+	}
+
+	route := &domain.Route{
+		Domain: domainName,
+		Image:  image,
+		HTTPS:  true,
+	}
+
+	// Check if domain has http:// prefix
+	if strings.HasPrefix(domainName, "http://") {
+		route.Domain = strings.TrimPrefix(domainName, "http://")
+		route.HTTPS = false
+	}
+
+	return route, nil
+}
+
 // AddRoute adds a new route to the configuration and persists it.
 func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -190,6 +215,14 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 		"domain":              route.Domain,
 	})
 	log := zerowrap.FromCtx(ctx)
+
+	// Validate route
+	if route.Domain == "" {
+		return domain.ErrRouteDomainEmpty
+	}
+	if route.Image == "" {
+		return domain.ErrRouteImageEmpty
+	}
 
 	// Store previous value for rollback
 	s.mu.Lock()
@@ -225,6 +258,14 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 		"domain":              route.Domain,
 	})
 	log := zerowrap.FromCtx(ctx)
+
+	// Validate route
+	if route.Domain == "" {
+		return domain.ErrRouteDomainEmpty
+	}
+	if route.Image == "" {
+		return domain.ErrRouteImageEmpty
+	}
 
 	// Store previous value for rollback
 	s.mu.Lock()
