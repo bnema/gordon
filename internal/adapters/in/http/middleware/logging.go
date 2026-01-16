@@ -47,6 +47,7 @@ func (rw *ResponseWriter) BytesWritten() int {
 }
 
 // RequestLogger is a middleware that logs HTTP requests using zerowrap.
+// It also attaches the logger to the request context for downstream handlers.
 func RequestLogger(log zerowrap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +58,10 @@ func RequestLogger(log zerowrap.Logger) func(http.Handler) http.Handler {
 
 			// Get client IP (handle X-Forwarded-For and X-Real-IP headers)
 			clientIP := getClientIP(r)
+
+			// Attach the logger to the request context for downstream handlers
+			ctx := zerowrap.WithCtx(r.Context(), log)
+			r = r.WithContext(ctx)
 
 			// Call the next handler
 			next.ServeHTTP(rw, r)
