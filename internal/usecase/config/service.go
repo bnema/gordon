@@ -217,7 +217,7 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	return nil
 }
 
-// UpdateRoute updates an existing route.
+// UpdateRoute updates an existing route and persists it.
 func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -226,20 +226,30 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	// Store previous value for rollback
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.config.Routes[route.Domain]; !exists {
+	previousImage, exists := s.config.Routes[route.Domain]
+	if !exists {
+		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-
 	s.config.Routes[route.Domain] = route.Image
+	s.mu.Unlock()
+
+	// Persist to disk - rollback on failure
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist route update to disk, rolling back")
+		s.mu.Lock()
+		s.config.Routes[route.Domain] = previousImage
+		s.mu.Unlock()
+		return err
+	}
 
 	log.Info().Str("image", route.Image).Msg("route updated")
 	return nil
 }
 
-// RemoveRoute removes a route from the configuration.
+// RemoveRoute removes a route from the configuration and persists it.
 func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -248,14 +258,24 @@ func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	// Store previous value for rollback
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.config.Routes[domainName]; !exists {
+	previousImage, exists := s.config.Routes[domainName]
+	if !exists {
+		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-
 	delete(s.config.Routes, domainName)
+	s.mu.Unlock()
+
+	// Persist to disk - rollback on failure
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist route removal to disk, rolling back")
+		s.mu.Lock()
+		s.config.Routes[domainName] = previousImage
+		s.mu.Unlock()
+		return err
+	}
 
 	log.Info().Msg("route removed")
 	return nil

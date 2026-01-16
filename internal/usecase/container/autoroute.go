@@ -132,9 +132,36 @@ func (h *AutoRouteHandler) buildImageName(name, reference string) string {
 	return fmt.Sprintf("%s:%s", name, reference)
 }
 
+// buildFullImageRef constructs a fully qualified image reference with registry domain.
+// This is needed for Docker operations since images are stored with the registry prefix.
+func (h *AutoRouteHandler) buildFullImageRef(imageName string) string {
+	if h.registryDomain == "" {
+		return imageName
+	}
+
+	// Don't prefix if already has registry domain
+	if strings.HasPrefix(imageName, h.registryDomain+"/") {
+		return imageName
+	}
+
+	// Don't prefix if it's an external registry reference (contains dots and slashes)
+	repoPart := strings.Split(imageName, ":")[0]
+	if strings.Contains(repoPart, "@") {
+		repoPart = strings.Split(imageName, "@")[0]
+	}
+	if strings.Contains(repoPart, ".") && strings.Contains(repoPart, "/") {
+		return imageName
+	}
+
+	return fmt.Sprintf("%s/%s", h.registryDomain, imageName)
+}
+
 // processRoutes processes each domain and creates/updates routes.
 func (h *AutoRouteHandler) processRoutes(ctx context.Context, domains []string, imageName string, labels *domain.ImageLabels) {
 	log := zerowrap.FromCtx(ctx)
+
+	// Build full image reference for env extraction (Docker needs fully qualified name)
+	fullImageRef := h.buildFullImageRef(imageName)
 
 	for _, routeDomain := range domains {
 		routeDomain = strings.TrimSpace(routeDomain)
@@ -145,7 +172,8 @@ func (h *AutoRouteHandler) processRoutes(ctx context.Context, domains []string, 
 		h.createOrUpdateRoute(ctx, routeDomain, imageName)
 
 		if labels.EnvFile != "" && h.extractor != nil && h.envDir != "" {
-			if err := h.extractAndMergeEnvFile(ctx, imageName, routeDomain, labels.EnvFile); err != nil {
+			// Use full image ref for extraction (Docker knows image by this name)
+			if err := h.extractAndMergeEnvFile(ctx, fullImageRef, routeDomain, labels.EnvFile); err != nil {
 				log.Warn().
 					Err(err).
 					Str("domain", routeDomain).
