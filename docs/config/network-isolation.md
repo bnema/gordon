@@ -54,14 +54,14 @@ Networks are named: `{prefix}-{domain-with-dashes}`
 All containers can potentially communicate:
 
 ```
-┌──────────────────────────────────────────────┐
-│ Default Bridge Network                        │
-│                                              │
-│  App A ←──────→ App B ←──────→ App C        │
-│    ↕              ↕              ↕           │
-│  DB A ←──────→ DB B ←──────→ DB C           │
-│                                              │
-└──────────────────────────────────────────────┘
+┌───────────────────────────────────────┐
+│ Default Bridge Network                │
+│                                       │
+│  App A ←──────→ App B ←──────→ App C  │
+│    ↕              ↕              ↕    │
+│  DB A ←──────→ DB B  ←──────→  DB C   │
+│                                       │
+└───────────────────────────────────────┘
 ```
 
 ### With Network Isolation
@@ -72,7 +72,7 @@ Each app is isolated with its dependencies:
 ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
 │ gordon-app-a    │  │ gordon-app-b    │  │ gordon-app-c    │
 │                 │  │                 │  │                 │
-│  App A ←→ DB A │  │  App B ←→ DB B │  │  App C ←→ DB C │
+│  App A ←→ DB A  │  │  App B ←→ DB B  │  │  App C ←→ DB C  │
 │                 │  │                 │  │                 │
 └─────────────────┘  └─────────────────┘  └─────────────────┘
         ↑                   ↑                   ↑
