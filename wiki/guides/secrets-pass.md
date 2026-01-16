@@ -89,9 +89,7 @@ This creates `~/.password-store/`.
 pass insert gordon/registry/password_hash
 
 # Token secret (random 32+ chars for JWT signing)
-pass insert gordon/registry/token_secret
-# Or generate automatically:
-openssl rand -base64 32 | pass insert -m gordon/registry/token_secret
+pass generate gordon/registry/token_secret 32
 ```
 
 ## Gordon Configuration
