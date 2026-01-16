@@ -25,6 +25,7 @@ type Config struct {
 	RegistryPassword         string
 	InternalRegistryUsername string
 	InternalRegistryPassword string
+	PullPolicy               string
 	VolumeAutoCreate         bool
 	VolumePrefix             string
 	VolumePreserve           bool
@@ -35,6 +36,12 @@ type Config struct {
 	Attachments              map[string][]string
 	ReadinessDelay           time.Duration // Delay after container starts before considering it ready
 }
+
+const (
+	PullPolicyAlways       = "always"
+	PullPolicyIfNotPresent = "if-not-present"
+	PullPolicyIfTagChanged = "if-tag-changed"
+)
 
 // Service implements the ContainerService interface.
 type Service struct {
@@ -513,6 +520,23 @@ func (s *Service) buildImageRef(image string) string {
 	return fmt.Sprintf("%s/%s", s.config.RegistryDomain, image)
 }
 
+func normalizePullPolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case PullPolicyAlways:
+		return PullPolicyAlways
+	case PullPolicyIfTagChanged:
+		return PullPolicyIfTagChanged
+	case PullPolicyIfNotPresent:
+		return PullPolicyIfNotPresent
+	default:
+		return PullPolicyIfNotPresent
+	}
+}
+
+func isDigestRef(imageRef string) bool {
+	return strings.Contains(imageRef, "@sha256:")
+}
+
 func (s *Service) pullRefForDeploy(ctx context.Context, imageRef string) (string, bool) {
 	if !domain.IsInternalDeploy(ctx) {
 		return imageRef, false
@@ -521,7 +545,7 @@ func (s *Service) pullRefForDeploy(ctx context.Context, imageRef string) (string
 }
 
 // ensureImage ensures the image is available locally, pulling if needed.
-// Returns the canonical image reference to use for container operations.
+// Returns the image reference to use for container operations.
 func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, error) {
 	ctx = zerowrap.CtxWithField(ctx, "image", imageRef)
 	log := zerowrap.FromCtx(ctx)
@@ -550,6 +574,15 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 		return "", err
 	}
 
+	// For digest references, we can't create a tag (Docker doesn't allow it).
+	// In this case, use the pullRef directly since the image is available under that reference.
+	if strings.Contains(imageRef, "@sha256:") {
+		log.Info().
+			Str("pull_ref", pullRef).
+			Msg("digest reference: using pull reference for container operations")
+		return pullRef, nil
+	}
+
 	if err := s.tagImageIfNeeded(ctx, pullRef, imageRef); err != nil {
 		return "", err
 	}
@@ -574,6 +607,18 @@ func (s *Service) ensureLocalImage(ctx context.Context, imageRef, pullRef string
 	if domain.IsInternalDeploy(ctx) {
 		log.Info().Msg("internal deploy detected, forcing image pull to ensure latest content")
 		return false, nil
+	}
+
+	pullPolicy := normalizePullPolicy(s.config.PullPolicy)
+	switch pullPolicy {
+	case PullPolicyAlways:
+		log.Info().Str("pull_policy", pullPolicy).Msg("pull policy forces image pull")
+		return false, nil
+	case PullPolicyIfTagChanged:
+		if !isDigestRef(imageRef) {
+			log.Info().Str("pull_policy", pullPolicy).Msg("tag reference detected, pulling to check for updates")
+			return false, nil
+		}
 	}
 
 	localImages, err := s.runtime.ListImages(ctx)
@@ -638,6 +683,13 @@ func (s *Service) pullImage(ctx context.Context, pullRef string, isInternal bool
 
 func (s *Service) tagImageIfNeeded(ctx context.Context, sourceRef, targetRef string) error {
 	if sourceRef == targetRef {
+		return nil
+	}
+
+	// Cannot create a tag with a digest reference - Docker/Podman doesn't allow it.
+	// When using digest references (image@sha256:...), skip tagging as the image
+	// is already available by its digest.
+	if strings.Contains(targetRef, "@sha256:") {
 		return nil
 	}
 
