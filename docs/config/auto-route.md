@@ -1,6 +1,9 @@
 # Auto Route Configuration
 
-Automatically create routes from image names that contain domains.
+Gordon supports two methods for automatic route creation:
+
+1. **Image Name Detection** - Routes from domain-like image names
+2. **Image Labels** - Routes from Dockerfile labels (recommended)
 
 ## Configuration
 
@@ -152,14 +155,125 @@ enabled = true
 # Other services can use auto-route
 ```
 
-## Limitations
+## Limitations (Image Name Detection)
 
 - Auto-routes always use the pushed image tag
 - No support for HTTP-only routes (all HTTPS)
 - No automatic attachment configuration
 - Cannot pin versions (always uses pushed tag)
 
-For more control, define routes manually in `[routes]`.
+For more control, define routes manually in `[routes]` or use image labels.
+
+---
+
+## Image Labels (Recommended)
+
+The preferred method for automatic routing uses Dockerfile labels. This gives you full control over routing behavior directly in your application.
+
+### Supported Labels
+
+| Label | Description | Example |
+|-------|-------------|---------|
+| `gordon.domains` | Comma-separated list of domains | `app.example.com,www.app.example.com` |
+| `gordon.port` | Container port to proxy | `3000` |
+| `gordon.health` | Health check endpoint path | `/health` |
+| `gordon.env-file` | Path to .env file in image | `/app/.env.example` |
+
+### Dockerfile Example
+
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY . .
+RUN npm install
+
+# Gordon routing labels
+LABEL gordon.domains="myapp.example.com,www.myapp.example.com"
+LABEL gordon.port="3000"
+LABEL gordon.health="/api/health"
+LABEL gordon.env-file="/app/.env.example"
+
+EXPOSE 3000
+CMD ["npm", "start"]
+```
+
+### How It Works
+
+When you push an image with Gordon labels:
+
+1. Gordon reads the `gordon.domains` label
+2. Creates routes for each domain automatically
+3. Uses `gordon.port` for the proxy target (or first EXPOSE port)
+4. Configures health checks if `gordon.health` is set
+5. Extracts environment variables from `gordon.env-file` if specified
+
+### Label Priority
+
+Labels take precedence over image name detection:
+
+1. **Labels present** → Use `gordon.domains` for routing
+2. **No labels** → Fall back to image name detection (if enabled)
+3. **Manual routes** → Always take highest priority
+
+### Multi-Domain Example
+
+```dockerfile
+# Single image serving multiple domains
+LABEL gordon.domains="api.example.com,api.staging.example.com"
+```
+
+Both domains will route to the same container.
+
+### Environment File Extraction
+
+The `gordon.env-file` label tells Gordon where to find a template `.env` file:
+
+```dockerfile
+# Include a .env.example in your image
+COPY .env.example /app/.env.example
+LABEL gordon.env-file="/app/.env.example"
+```
+
+Gordon will:
+1. Extract the file from the image
+2. Store it in the env directory
+3. Use the variables for container deployment
+
+### Best Practices
+
+1. **Always set `gordon.port`** - Don't rely on EXPOSE detection
+2. **Use `gordon.health`** - Enables reliable deployment verification
+3. **Include `.env.example`** - Self-documenting environment requirements
+4. **Separate domains with commas** - No spaces around commas
+
+### Example: Complete Setup
+
+```dockerfile
+FROM golang:1.21-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o server
+
+FROM alpine:3.19
+WORKDIR /app
+COPY --from=builder /app/server .
+COPY .env.example .
+
+# Gordon labels
+LABEL gordon.domains="api.mycompany.com"
+LABEL gordon.port="8080"
+LABEL gordon.health="/health"
+LABEL gordon.env-file="/app/.env.example"
+
+EXPOSE 8080
+CMD ["./server"]
+```
+
+```bash
+# Push and Gordon handles everything
+docker push registry.mycompany.com/api:latest
+# Route automatically created: api.mycompany.com → container:8080
+```
 
 ## Related
 
