@@ -12,7 +12,15 @@ Detailed installation guide for production environments.
 
 ## Download Gordon
 
-### From GitHub Releases
+### Quick Install (Recommended)
+
+```bash
+curl -fsSL https://gordon.bnema.dev/install | bash
+```
+
+This script automatically detects your OS (Linux/macOS) and architecture (amd64/arm64), downloads the appropriate binary from GitHub releases, and installs it to `/usr/local/bin`.
+
+### Manual Installation
 
 **Linux (x86_64)**
 ```bash
