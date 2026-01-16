@@ -3,8 +3,7 @@
 package cli
 
 import (
-	"context"
-
+	"gordon/internal/adapters/in/cli/remote"
 	"gordon/internal/app"
 
 	"github.com/spf13/cobra"
@@ -15,6 +14,10 @@ var (
 	Version   = "dev"
 	Commit    = "unknown"
 	BuildDate = "unknown"
+
+	// Global flags for remote targeting
+	targetFlag string
+	tokenFlag  string
 )
 
 // NewRootCmd creates the root command for Gordon CLI.
@@ -26,37 +29,50 @@ func NewRootCmd() *cobra.Command {
 a Docker registry with automatic container deployment capabilities.
 
 It listens for image pushes and automatically deploys containers based on
-configuration rules, making it ideal for single-server deployments.`,
+configuration rules, making it ideal for single-server deployments.
+
+The CLI can target remote Gordon instances using the --target flag or
+GORDON_TARGET environment variable.`,
 	}
 
-	// Add subcommands
-	rootCmd.AddCommand(newStartCmd())
+	// Add persistent flags for remote targeting
+	rootCmd.PersistentFlags().StringVar(&targetFlag, "target", "", "Remote Gordon URL (e.g., https://gordon.mydomain.com)")
+	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "Authentication token for remote target")
+
+	// Server commands
+	rootCmd.AddCommand(newServeCmd())
+	rootCmd.AddCommand(newStartCmd()) // Deprecated alias for serve
 	rootCmd.AddCommand(newReloadCmd())
 	rootCmd.AddCommand(newDeployCmd())
 	rootCmd.AddCommand(newLogsCmd())
 	rootCmd.AddCommand(newVersionCmd())
 	rootCmd.AddCommand(newAuthCmd())
 
+	// Remote management commands
+	rootCmd.AddCommand(newRoutesCmd())
+	rootCmd.AddCommand(newSecretsCmd())
+	rootCmd.AddCommand(newTargetsCmd())
+	rootCmd.AddCommand(newStatusCmd())
+
 	return rootCmd
 }
 
-// newStartCmd creates the start command.
-func newStartCmd() *cobra.Command {
-	var configPath string
-
-	cmd := &cobra.Command{
-		Use:   "start",
-		Short: "Start the Gordon server",
-		Long:  `Start the Gordon server, including the registry and proxy components.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return app.Run(context.Background(), configPath)
-		},
+// GetRemoteClient returns a remote client if targeting a remote instance,
+// or nil if running locally.
+func GetRemoteClient() (*remote.Client, bool) {
+	url, token, isRemote := remote.ResolveTarget(targetFlag, tokenFlag)
+	if !isRemote {
+		return nil, false
 	}
 
-	// Add flags
-	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	client := remote.NewClient(url, remote.WithToken(token))
+	return client, true
+}
 
-	return cmd
+// IsRemoteMode returns true if CLI is targeting a remote Gordon instance.
+func IsRemoteMode() bool {
+	_, _, isRemote := remote.ResolveTarget(targetFlag, tokenFlag)
+	return isRemote
 }
 
 // newReloadCmd creates the reload command.
