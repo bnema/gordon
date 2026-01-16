@@ -84,7 +84,12 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	s.mu.RUnlock()
 
 	// Clean up orphaned containers (containers with same name but not tracked)
-	if err := s.cleanupOrphanedContainers(ctx, route.Domain); err != nil {
+	// Skip the currently tracked container to preserve zero-downtime deployment
+	existingID := ""
+	if hasExisting {
+		existingID = existing.ID
+	}
+	if err := s.cleanupOrphanedContainers(ctx, route.Domain, existingID); err != nil {
 		log.WrapErr(err, "failed to cleanup orphaned containers")
 	}
 
@@ -738,7 +743,7 @@ func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string)
 	return nil
 }
 
-func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName string) error {
+func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName string, skipContainerID string) error {
 	log := zerowrap.FromCtx(ctx)
 	expectedName := fmt.Sprintf("gordon-%s", domainName)
 
@@ -748,7 +753,7 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 	}
 
 	for _, c := range allContainers {
-		if c.Name == expectedName {
+		if c.Name == expectedName && c.ID != skipContainerID {
 			log.Info().Str(zerowrap.FieldEntityID, c.ID).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
 
 			if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
