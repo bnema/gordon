@@ -13,6 +13,9 @@ import (
 	"gordon/internal/domain"
 )
 
+// maxAdminRequestSize is the maximum allowed size for admin API request bodies.
+const maxAdminRequestSize = 1 << 20 // 1MB
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc    in.ConfigService
@@ -157,6 +160,9 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit request body size
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+
 	var route domain.Route
 	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
 		log.Warn().Err(err).Msg("invalid route JSON")
@@ -171,7 +177,7 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.configSvc.AddRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", route.Domain).Msg("failed to add route")
-		h.sendError(w, http.StatusInternalServerError, err.Error())
+		h.sendError(w, http.StatusInternalServerError, "failed to add route")
 		return
 	}
 
@@ -194,6 +200,9 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 		return
 	}
 
+	// Limit request body size
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+
 	var route domain.Route
 	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
 		log.Warn().Err(err).Msg("invalid route JSON")
@@ -205,7 +214,7 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 
 	if err := h.configSvc.UpdateRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to update route")
-		h.sendError(w, http.StatusInternalServerError, err.Error())
+		h.sendError(w, http.StatusInternalServerError, "failed to update route")
 		return
 	}
 
@@ -230,7 +239,7 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 
 	if err := h.configSvc.RemoveRoute(ctx, routeDomain); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to remove route")
-		h.sendError(w, http.StatusInternalServerError, err.Error())
+		h.sendError(w, http.StatusInternalServerError, "failed to remove route")
 		return
 	}
 
@@ -267,7 +276,7 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 		secrets, err := h.listSecrets(secretDomain)
 		if err != nil {
 			log.Error().Err(err).Str("domain", secretDomain).Msg("failed to list secrets")
-			h.sendError(w, http.StatusInternalServerError, err.Error())
+			h.sendError(w, http.StatusInternalServerError, "failed to list secrets")
 			return
 		}
 		h.sendJSON(w, http.StatusOK, map[string]any{"domain": secretDomain, "keys": secrets})
@@ -278,6 +287,10 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 			h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
 			return
 		}
+
+		// Limit request body size
+		r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+
 		// Set secret(s)
 		var data map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
@@ -288,7 +301,7 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 
 		if err := h.setSecrets(secretDomain, data); err != nil {
 			log.Error().Err(err).Str("domain", secretDomain).Msg("failed to set secrets")
-			h.sendError(w, http.StatusInternalServerError, err.Error())
+			h.sendError(w, http.StatusInternalServerError, "failed to set secrets")
 			return
 		}
 
@@ -308,7 +321,7 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 
 		if err := h.deleteSecret(secretDomain, secretKey); err != nil {
 			log.Error().Err(err).Str("domain", secretDomain).Str("key", secretKey).Msg("failed to delete secret")
-			h.sendError(w, http.StatusInternalServerError, err.Error())
+			h.sendError(w, http.StatusInternalServerError, "failed to delete secret")
 			return
 		}
 
@@ -414,7 +427,7 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 	// Reload configuration from file into memory
 	if err := h.configSvc.Load(ctx); err != nil {
 		log.Error().Err(err).Msg("failed to reload config")
-		h.sendError(w, http.StatusInternalServerError, err.Error())
+		h.sendError(w, http.StatusInternalServerError, "failed to reload config")
 		return
 	}
 

@@ -12,6 +12,9 @@ import (
 	"gordon/internal/domain"
 )
 
+// maxConcurrentProbes limits the number of concurrent health probes to prevent resource exhaustion.
+const maxConcurrentProbes = 10
+
 // Service implements the HealthService interface.
 type Service struct {
 	configSvc    in.ConfigService
@@ -105,14 +108,18 @@ func (s *Service) CheckAllRoutes(ctx context.Context) map[string]*domain.RouteHe
 		return results
 	}
 
-	// Check routes concurrently
+	// Check routes concurrently with semaphore to limit resource usage
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrentProbes)
 
 	for _, route := range routes {
 		wg.Add(1)
 		go func(r domain.Route) {
 			defer wg.Done()
+			sem <- struct{}{}        // Acquire semaphore
+			defer func() { <-sem }() // Release semaphore
+
 			health := s.CheckRoute(ctx, r)
 			mu.Lock()
 			results[r.Domain] = health

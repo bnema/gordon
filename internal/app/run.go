@@ -29,6 +29,8 @@ import (
 	"gordon/internal/adapters/out/secrets"
 	"gordon/internal/adapters/out/tokenstore"
 
+	"golang.org/x/time/rate"
+
 	// Adapters - Input
 	"gordon/internal/adapters/in/http/admin"
 	"gordon/internal/adapters/in/http/middleware"
@@ -800,7 +802,9 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		}
 		// Add admin auth middleware if auth is enabled
 		if svc.authSvc != nil {
-			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, log))
+			// Rate limiter for admin API: 10 req/s with burst of 20
+			adminLimiter := rate.NewLimiter(rate.Limit(10), 20)
+			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, adminLimiter, log))
 		}
 		adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
 		registryMux.Handle("/admin/", adminWithMiddleware)
