@@ -89,15 +89,15 @@ By default, routes expect HTTPS (terminated by Cloudflare). For HTTP-only routes
 Each app runs in its own isolated Docker network:
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ gordon-app-mydomain-com                             │
-│                                                     │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐     │
-│  │   App    │───>│ Postgres │    │  Redis   │     │
-│  │ :3000    │    │ :5432    │    │ :6379    │     │
-│  └──────────┘    └──────────┘    └──────────┘     │
-│                                                     │
-└─────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────┐
+│ gordon-app-mydomain-com                        │
+│                                                │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐  │
+│  │   App    │───>│ Postgres │    │  Redis   │  │
+│  │ :3000    │    │ :5432    │    │ :6379    │  │
+│  └──────────┘    └──────────┘    └──────────┘  │
+│                                                │
+└────────────────────────────────────────────────┘
 ```
 
 Benefits:
@@ -241,4 +241,4 @@ Without the label, Gordon uses the first exposed port.
 
 - [Configuration Reference](./config/index.md)
 - [Docker Labels Reference](./reference/docker-labels.md)
-- [Environment Variables](./config/env.md)
+- [Environment Variables](./config/env.md) 
