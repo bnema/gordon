@@ -213,18 +213,23 @@ systemctl --user enable --now gordon
 
 ### Environment Variables
 
-All configuration options can be set via environment variables with `GORDON_` prefix:
+Some configuration options can be set via environment variables with `GORDON_` prefix.
+
+> **Note**: Environment variables work best for simple options. For nested configuration like `registry_auth`, use a mounted config file instead.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `GORDON_SERVER_PORT` | Proxy port | `8080` |
-| `GORDON_SERVER_REGISTRY_PORT` | Registry port | `5000` |
 | `GORDON_SERVER_REGISTRY_DOMAIN` | Registry domain (required) | `registry.mydomain.com` |
-| `GORDON_SERVER_DATA_DIR` | Data directory | `/data` |
 | `GORDON_LOGGING_LEVEL` | Log level | `debug`, `info`, `warn`, `error` |
-| `GORDON_REGISTRY_AUTH_ENABLED` | Enable registry auth | `true` |
-| `GORDON_REGISTRY_AUTH_USERNAME` | Registry username | `admin` |
-| `GORDON_REGISTRY_AUTH_PASSWORD` | Registry password | `secret` |
+
+For registry authentication and other nested options, use a config file:
+
+```toml
+[registry_auth]
+enabled = true
+username = "admin"
+password = "secret"
+```
 
 ## Security Considerations
 
