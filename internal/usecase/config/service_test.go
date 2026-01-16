@@ -128,7 +128,14 @@ func TestService_AddRoute(t *testing.T) {
 }
 
 func TestService_UpdateRoute(t *testing.T) {
+	// Create temp config file for Save() to work
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:v1\"\n"), 0600)
+	require.NoError(t, err)
+
 	v := viper.New()
+	v.SetConfigFile(configFile)
 	v.Set("routes", map[string]interface{}{
 		"app.example.com": "myapp:v1",
 	})
@@ -144,7 +151,7 @@ func TestService_UpdateRoute(t *testing.T) {
 		Image:  "myapp:v2",
 	}
 
-	err := svc.UpdateRoute(ctx, route)
+	err = svc.UpdateRoute(ctx, route)
 
 	assert.NoError(t, err)
 
@@ -171,7 +178,14 @@ func TestService_UpdateRoute_NotFound(t *testing.T) {
 }
 
 func TestService_RemoveRoute(t *testing.T) {
+	// Create temp config file for Save() to work
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:latest\"\n"), 0600)
+	require.NoError(t, err)
+
 	v := viper.New()
+	v.SetConfigFile(configFile)
 	v.Set("routes", map[string]interface{}{
 		"app.example.com": "myapp:latest",
 	})
@@ -182,7 +196,7 @@ func TestService_RemoveRoute(t *testing.T) {
 
 	_ = svc.Load(ctx)
 
-	err := svc.RemoveRoute(ctx, "app.example.com")
+	err = svc.RemoveRoute(ctx, "app.example.com")
 
 	assert.NoError(t, err)
 

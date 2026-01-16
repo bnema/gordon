@@ -825,3 +825,64 @@ func TestAutoRouteHandler_BuildImageName(t *testing.T) {
 		})
 	}
 }
+
+// buildFullImageRef tests
+
+func TestAutoRouteHandler_BuildFullImageRef(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+
+	tests := []struct {
+		name           string
+		registryDomain string
+		imageName      string
+		expected       string
+	}{
+		{
+			name:           "simple image with registry",
+			registryDomain: "registry.example.com",
+			imageName:      "myapp:latest",
+			expected:       "registry.example.com/myapp:latest",
+		},
+		{
+			name:           "already has registry prefix",
+			registryDomain: "registry.example.com",
+			imageName:      "registry.example.com/myapp:latest",
+			expected:       "registry.example.com/myapp:latest",
+		},
+		{
+			name:           "external registry reference",
+			registryDomain: "registry.example.com",
+			imageName:      "docker.io/library/nginx:latest",
+			expected:       "docker.io/library/nginx:latest",
+		},
+		{
+			name:           "digest reference",
+			registryDomain: "registry.example.com",
+			imageName:      "myapp@sha256:abc123def456",
+			expected:       "registry.example.com/myapp@sha256:abc123def456",
+		},
+		{
+			name:           "empty registry domain",
+			registryDomain: "",
+			imageName:      "myapp:latest",
+			expected:       "myapp:latest",
+		},
+		{
+			name:           "image without tag",
+			registryDomain: "registry.example.com",
+			imageName:      "myapp",
+			expected:       "registry.example.com/myapp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, tt.registryDomain)
+			result := handler.buildFullImageRef(tt.imageName)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
