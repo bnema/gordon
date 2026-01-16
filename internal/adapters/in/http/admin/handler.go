@@ -22,8 +22,8 @@ type Handler struct {
 	authSvc      in.AuthService
 	containerSvc in.ContainerService
 	healthSvc    in.HealthService
+	secretSvc    in.SecretService
 	eventBus     out.EventPublisher
-	envDir       string
 	log          zerowrap.Logger
 }
 
@@ -33,8 +33,8 @@ func NewHandler(
 	authSvc in.AuthService,
 	containerSvc in.ContainerService,
 	healthSvc in.HealthService,
+	secretSvc in.SecretService,
 	eventBus out.EventPublisher,
-	envDir string,
 	log zerowrap.Logger,
 ) *Handler {
 	return &Handler{
@@ -42,8 +42,8 @@ func NewHandler(
 		authSvc:      authSvc,
 		containerSvc: containerSvc,
 		healthSvc:    healthSvc,
+		secretSvc:    secretSvc,
 		eventBus:     eventBus,
-		envDir:       envDir,
 		log:          log,
 	}
 }
@@ -273,13 +273,13 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 			return
 		}
 		// List secrets for domain (names only, not values)
-		secrets, err := h.listSecrets(secretDomain)
+		keys, err := h.secretSvc.ListKeys(ctx, secretDomain)
 		if err != nil {
 			log.Error().Err(err).Str("domain", secretDomain).Msg("failed to list secrets")
-			h.sendError(w, http.StatusInternalServerError, "failed to list secrets")
+			h.sendError(w, http.StatusBadRequest, "invalid domain")
 			return
 		}
-		h.sendJSON(w, http.StatusOK, map[string]any{"domain": secretDomain, "keys": secrets})
+		h.sendJSON(w, http.StatusOK, map[string]any{"domain": secretDomain, "keys": keys})
 
 	case http.MethodPost:
 		// Check write permission
@@ -299,9 +299,9 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 			return
 		}
 
-		if err := h.setSecrets(secretDomain, data); err != nil {
+		if err := h.secretSvc.Set(ctx, secretDomain, data); err != nil {
 			log.Error().Err(err).Str("domain", secretDomain).Msg("failed to set secrets")
-			h.sendError(w, http.StatusInternalServerError, "failed to set secrets")
+			h.sendError(w, http.StatusBadRequest, "invalid domain")
 			return
 		}
 
@@ -319,9 +319,9 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 			return
 		}
 
-		if err := h.deleteSecret(secretDomain, secretKey); err != nil {
+		if err := h.secretSvc.Delete(ctx, secretDomain, secretKey); err != nil {
 			log.Error().Err(err).Str("domain", secretDomain).Str("key", secretKey).Msg("failed to delete secret")
-			h.sendError(w, http.StatusInternalServerError, "failed to delete secret")
+			h.sendError(w, http.StatusBadRequest, "invalid domain")
 			return
 		}
 
