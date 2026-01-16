@@ -3,6 +3,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -192,8 +193,57 @@ func hasJournalctl() bool {
 }
 
 // showJournalctlLog displays logs from journalctl.
+// It first tries user service, then falls back to system service.
 func showJournalctlLog(follow bool, lines int) error {
+	var userErr, systemErr error
+
+	// Try user service first (works without special permissions)
+	hasLogs, err := hasJournalctlLogs(true)
+	if err != nil {
+		userErr = err
+	} else if hasLogs {
+		return runJournalctl(follow, lines, true)
+	}
+
+	// Fall back to system service
+	hasLogs, err = hasJournalctlLogs(false)
+	if err != nil {
+		systemErr = err
+	} else if hasLogs {
+		return runJournalctl(follow, lines, false)
+	}
+
+	// If either check failed with an error, include that information
+	if userErr != nil || systemErr != nil {
+		return fmt.Errorf("gordon service not found in journalctl (user: %v, system: %v)", userErr, systemErr)
+	}
+
+	return fmt.Errorf("gordon service not found in journalctl: enable file logging in config.toml or run gordon as a systemd service")
+}
+
+// hasJournalctlLogs checks if there are any logs for the gordon service.
+func hasJournalctlLogs(userService bool) (bool, error) {
+	args := []string{"-u", "gordon", "-n", "1", "--no-pager", "-q"}
+	if userService {
+		args = append([]string{"--user"}, args...)
+	}
+
+	// #nosec G204 -- args are constructed internally with controlled values
+	cmd := exec.Command("journalctl", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+
+	return len(bytes.TrimSpace(output)) > 0, nil
+}
+
+// runJournalctl runs journalctl and displays the output.
+func runJournalctl(follow bool, lines int, userService bool) error {
 	args := []string{"-u", "gordon", "-n", fmt.Sprintf("%d", lines), "--no-pager"}
+	if userService {
+		args = append([]string{"--user"}, args...)
+	}
 	if follow {
 		args = append(args, "-f")
 	}
@@ -203,14 +253,5 @@ func showJournalctlLog(follow bool, lines int) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	err := cmd.Run()
-	if err != nil {
-		// Check if it's because the service doesn't exist
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 0 {
-			return fmt.Errorf("gordon service not found in journalctl: enable file logging in config.toml or run gordon as a systemd service")
-		}
-		return fmt.Errorf("failed to run journalctl: %w", err)
-	}
-
-	return nil
+	return cmd.Run()
 }
