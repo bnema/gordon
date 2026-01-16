@@ -895,3 +895,163 @@ func TestService_AutoStart_HandlesDeployErrors(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "auto-start completed with 1 errors")
 }
+
+// TestService_Deploy_OrphanCleanupSkipsTrackedContainer verifies that the orphan cleanup
+// does not remove the currently tracked container during zero-downtime deployment.
+// This is critical for preventing downtime - the old container must stay running
+// until the new container is ready and traffic is switched.
+func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: 0, // No delay for tests
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// Pre-populate with existing tracked container
+	existingContainer := &domain.Container{
+		ID:     "tracked-container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:v2",
+	}
+
+	// ListContainers returns the tracked container - this simulates the orphan check
+	// finding a container with the same name. The bug was that it would remove this
+	// container BEFORE the new one was ready, causing downtime.
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		{
+			ID:     "tracked-container-123",
+			Name:   "gordon-test.example.com",
+			Status: "running",
+		},
+	}, nil)
+
+	// Image operations
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+
+	// Environment
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
+
+	// Create new container with -new suffix for zero-downtime
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-test.example.com-new"
+	})).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+
+	// Wait for ready
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+
+	// Inspect after ready
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID:     "new-container",
+		Status: "running",
+	}, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// NOW (after new container is ready) the old container should be stopped and removed
+	// This is the correct zero-downtime sequence - not during orphan cleanup
+	runtime.EXPECT().StopContainer(mock.Anything, "tracked-container-123").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "tracked-container-123", true).Return(nil)
+
+	// Rename new container to canonical name
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
+
+	// Verify new container is now tracked
+	tracked, exists := svc.Get(ctx, "test.example.com")
+	assert.True(t, exists)
+	assert.Equal(t, "new-container", tracked.ID)
+}
+
+// TestService_Deploy_OrphanCleanupRemovesTrueOrphans verifies that containers
+// with the same name but NOT tracked are properly removed as orphans.
+func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: 0, // No delay for tests
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// NO tracked container - service is empty for this domain
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:v1",
+	}
+
+	// ListContainers returns an orphaned container (same name, but not tracked)
+	// This could happen if Gordon crashed and restarted, or container was created manually
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		{
+			ID:     "orphan-container",
+			Name:   "gordon-test.example.com",
+			Status: "running",
+		},
+	}, nil)
+
+	// Orphan should be stopped and removed BEFORE we proceed
+	runtime.EXPECT().StopContainer(mock.Anything, "orphan-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "orphan-container", true).Return(nil)
+
+	// Image operations
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:v1").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v1").Return([]int{8080}, nil)
+
+	// Environment
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v1").Return([]string{}, nil)
+
+	// Create container (no -new suffix since no existing tracked container)
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-test.example.com"
+	})).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+
+	// Wait for ready
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+
+	// Inspect after ready
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID:     "new-container",
+		Status: "running",
+		Ports:  []int{8080},
+	}, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
+
+	// Verify new container is tracked
+	tracked, exists := svc.Get(ctx, "test.example.com")
+	assert.True(t, exists)
+	assert.Equal(t, "new-container", tracked.ID)
+}
