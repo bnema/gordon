@@ -387,12 +387,12 @@ func sendUnauthorized(w http.ResponseWriter, authType domain.AuthType, host stri
 		if realmHost == "" {
 			realmHost = host
 		}
-		// Detect scheme from request (TLS or X-Forwarded-Proto header)
+		// Detect scheme: prioritize X-Forwarded-Proto (set by reverse proxies like Cloudflare)
 		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		} else if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
 			scheme = proto
+		} else if r.TLS != nil {
+			scheme = "https"
 		}
 		realm := scheme + "://" + realmHost + "/v2/token"
 		w.Header().Set("WWW-Authenticate", `Bearer realm="`+realm+`",service="gordon-registry"`)

@@ -277,7 +277,13 @@ func newReverseProxy(targetURL *url.URL, errorHandler func(http.ResponseWriter, 
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(targetURL)
+			// Preserve original X-Forwarded-Proto from upstream proxy (e.g., Cloudflare)
+			// before SetXForwarded overwrites it based on local connection
+			origProto := pr.In.Header.Get("X-Forwarded-Proto")
 			pr.SetXForwarded()
+			if origProto != "" {
+				pr.Out.Header.Set("X-Forwarded-Proto", origProto)
+			}
 			pr.Out.Host = targetURL.Host
 		},
 		Transport:      proxyTransport,
