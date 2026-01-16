@@ -44,7 +44,7 @@ Full documentation is available at **[gordon.bnema.dev](https://gordon.bnema.dev
 
 ```bash
 # Install Gordon
-curl -fsSL https://gordon.bnema.dev/install | sh
+curl -fsSL https://gordon.bnema.dev/install.sh | sh
 # Or: curl -fsSL https://raw.githubusercontent.com/bnema/gordon/main/install.sh | sh
 
 # Start Gordon (generates config on first run)
