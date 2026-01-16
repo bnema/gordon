@@ -1098,6 +1098,13 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("registry_auth.enabled", false)
 	v.SetDefault("registry_auth.type", "password")
 	v.SetDefault("registry_auth.token_expiry", "720h")
+	v.SetDefault("auto_route.enabled", false)
+	v.SetDefault("network_isolation.enabled", false)
+	v.SetDefault("network_isolation.network_prefix", "gordon")
+	v.SetDefault("network_isolation.dns_suffix", ".internal")
+	v.SetDefault("volumes.auto_create", true)
+	v.SetDefault("volumes.prefix", "gordon")
+	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
 
 	ConfigureViper(v, configPath)

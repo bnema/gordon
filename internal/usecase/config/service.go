@@ -185,16 +185,26 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	// Store previous value for rollback
 	s.mu.Lock()
+	previousImage, existed := s.config.Routes[route.Domain]
 	if s.config.Routes == nil {
 		s.config.Routes = make(map[string]string)
 	}
 	s.config.Routes[route.Domain] = route.Image
 	s.mu.Unlock()
 
-	// Persist to disk
+	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to persist route to disk")
+		log.Warn().Err(err).Msg("failed to persist route to disk, rolling back")
+		s.mu.Lock()
+		if existed {
+			s.config.Routes[route.Domain] = previousImage
+		} else {
+			delete(s.config.Routes, route.Domain)
+		}
+		s.mu.Unlock()
+		return err
 	}
 
 	log.Info().Str("image", route.Image).Msg("route added to configuration")

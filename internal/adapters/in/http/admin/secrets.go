@@ -127,7 +127,7 @@ func (h *Handler) deleteSecret(domain, key string) error {
 }
 
 // writeSecrets writes all secrets to the domain's env file.
-func (h *Handler) writeSecrets(domain string, secrets map[string]string) error {
+func (h *Handler) writeSecrets(domain string, secrets map[string]string) (err error) {
 	envFile := h.domainToEnvFile(domain)
 
 	// Create/truncate file with secure permissions
@@ -135,7 +135,11 @@ func (h *Handler) writeSecrets(domain string, secrets map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create env file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if cerr := file.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("failed to close env file: %w", cerr)
+		}
+	}()
 
 	// Write header comment
 	if _, err := fmt.Fprintf(file, "# Environment variables for %s\n", domain); err != nil {

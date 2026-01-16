@@ -545,7 +545,9 @@ func (s *Service) pullRefForDeploy(ctx context.Context, imageRef string) (string
 }
 
 // ensureImage ensures the image is available locally, pulling if needed.
-// Returns the image reference to use for container operations.
+// Returns the image reference to use for container operations:
+//   - For digest references (@sha256:...), returns the pullRef since Docker can't tag digests
+//   - For tagged images, returns the original imageRef after tagging the pulled image
 func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, error) {
 	ctx = zerowrap.CtxWithField(ctx, "image", imageRef)
 	log := zerowrap.FromCtx(ctx)
