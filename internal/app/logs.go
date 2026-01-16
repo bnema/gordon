@@ -195,14 +195,27 @@ func hasJournalctl() bool {
 // showJournalctlLog displays logs from journalctl.
 // It first tries user service, then falls back to system service.
 func showJournalctlLog(follow bool, lines int) error {
+	var userErr, systemErr error
+
 	// Try user service first (works without special permissions)
-	if hasLogs, _ := hasJournalctlLogs(true); hasLogs {
+	hasLogs, err := hasJournalctlLogs(true)
+	if err != nil {
+		userErr = err
+	} else if hasLogs {
 		return runJournalctl(follow, lines, true)
 	}
 
 	// Fall back to system service
-	if hasLogs, _ := hasJournalctlLogs(false); hasLogs {
+	hasLogs, err = hasJournalctlLogs(false)
+	if err != nil {
+		systemErr = err
+	} else if hasLogs {
 		return runJournalctl(follow, lines, false)
+	}
+
+	// If either check failed with an error, include that information
+	if userErr != nil || systemErr != nil {
+		return fmt.Errorf("gordon service not found in journalctl (user: %v, system: %v)", userErr, systemErr)
 	}
 
 	return fmt.Errorf("gordon service not found in journalctl: enable file logging in config.toml or run gordon as a systemd service")
