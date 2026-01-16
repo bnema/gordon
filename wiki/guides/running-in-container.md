@@ -227,6 +227,131 @@ All configuration options can be set via environment variables with `GORDON_` pr
 
 > **Note**: For registry passwords, using plain `password` is deprecated. Use `password_hash` with a secrets backend instead. See [Registry Auth](/docs/config/registry-auth.md) for secure setup.
 
+## Using Pass Secrets Backend
+
+To use the `pass` secrets backend in a container, you need to mount GPG keys and the password store.
+
+### Prerequisites on Host
+
+```bash
+# Install pass and initialize (if not already done)
+sudo apt install pass gnupg
+gpg --gen-key
+pass init <your-gpg-key-id>
+
+# Store Gordon secrets
+pass insert gordon/registry/password_hash
+pass insert gordon/registry/token_secret
+```
+
+### Custom Dockerfile
+
+The default Gordon image doesn't include `pass`. Create a custom Dockerfile:
+
+```dockerfile
+FROM ghcr.io/bnema/gordon:latest
+
+USER root
+RUN apk add --no-cache pass gnupg
+USER gordon
+```
+
+Build it:
+
+```bash
+docker build -t gordon-with-pass .
+```
+
+### Docker Run with Pass
+
+```bash
+docker run -d \
+  --name gordon \
+  -p 80:8080 \
+  -p 5000:5000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v gordon-data:/data \
+  -v $HOME/.gnupg:/home/gordon/.gnupg:ro \
+  -v $HOME/.password-store:/home/gordon/.password-store:ro \
+  -v $(pwd)/gordon.toml:/etc/gordon/gordon.toml:ro \
+  gordon-with-pass
+```
+
+### Docker Compose with Pass
+
+```yaml
+services:
+  gordon:
+    build:
+      context: .
+      dockerfile: Dockerfile.gordon
+    container_name: gordon
+    restart: unless-stopped
+    ports:
+      - "80:8080"
+      - "5000:5000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gordon-data:/data
+      - ./gordon.toml:/etc/gordon/gordon.toml:ro
+      # GPG and pass mounts
+      - ~/.gnupg:/home/gordon/.gnupg:ro
+      - ~/.password-store:/home/gordon/.password-store:ro
+    environment:
+      - GORDON_SECRETS_BACKEND=pass
+
+volumes:
+  gordon-data:
+```
+
+### Configuration
+
+```toml
+[secrets]
+backend = "pass"
+
+[registry_auth]
+enabled = true
+type = "token"
+username = "admin"
+password_hash = "gordon/registry/password_hash"
+token_secret = "gordon/registry/token_secret"
+```
+
+### GPG Agent (Optional)
+
+For GPG keys with passphrases, you may need to forward the GPG agent socket:
+
+```bash
+-v $(gpgconf --list-dirs agent-socket):/home/gordon/.gnupg/S.gpg-agent:ro
+```
+
+Or use a passphrase-less GPG key for automated deployments.
+
+### Troubleshooting Pass
+
+**"gpg: decryption failed: No secret key"**
+
+The GPG private key isn't accessible. Verify mounts:
+
+```bash
+docker exec gordon gpg --list-secret-keys
+```
+
+**"pass: command not found"**
+
+Use the custom Dockerfile with pass installed.
+
+**Permission denied on .gnupg**
+
+Ensure the gordon user (UID 1000) can read the mounted directories:
+
+```bash
+# On host, check permissions
+ls -la ~/.gnupg
+ls -la ~/.password-store
+```
+
 ## Security Considerations
 
 ### Docker Socket Access
