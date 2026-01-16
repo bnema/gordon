@@ -23,6 +23,9 @@ type ConfigService interface {
 	// RemoveRoute removes a route from the configuration.
 	RemoveRoute(ctx context.Context, domain string) error
 
+	// Save persists the current configuration to disk.
+	Save(ctx context.Context) error
+
 	// Watch starts watching for configuration changes.
 	// The onChange callback is called when configuration changes are detected.
 	Watch(ctx context.Context, onChange func()) error
