@@ -27,3 +27,5 @@ packages:
       ProxyService:
       ConfigService:
       AuthService:
+      HealthService:
+      HTTPProber:

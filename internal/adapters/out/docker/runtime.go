@@ -267,7 +267,7 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 			ID:     c.ID,
 			Image:  c.Image,
 			Name:   name,
-			Status: c.Status,
+			Status: c.State, // Use State (e.g., "running") not Status (e.g., "Up 2 days")
 			Ports:  ports,
 			Labels: c.Labels,
 		})

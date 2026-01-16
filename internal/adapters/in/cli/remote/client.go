@@ -243,6 +243,32 @@ func (c *Client) GetStatus(ctx context.Context) (*Status, error) {
 	return &status, nil
 }
 
+// RouteHealth represents the health status of a route.
+type RouteHealth struct {
+	ContainerStatus string `json:"container_status"`
+	HTTPStatus      int    `json:"http_status"`
+	ResponseTimeMs  int64  `json:"response_time_ms"`
+	Healthy         bool   `json:"healthy"`
+	Error           string `json:"error"`
+}
+
+// GetHealth returns health status for all routes with HTTP probing.
+func (c *Client) GetHealth(ctx context.Context) (map[string]*RouteHealth, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/health", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Health map[string]*RouteHealth `json:"health"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Health, nil
+}
+
 // Reload triggers a configuration reload.
 func (c *Client) Reload(ctx context.Context) error {
 	resp, err := c.request(ctx, http.MethodPost, "/reload", nil)

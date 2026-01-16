@@ -24,6 +24,7 @@ import (
 	"gordon/internal/adapters/out/envloader"
 	"gordon/internal/adapters/out/eventbus"
 	"gordon/internal/adapters/out/filesystem"
+	"gordon/internal/adapters/out/httpprober"
 	"gordon/internal/adapters/out/logwriter"
 	"gordon/internal/adapters/out/secrets"
 	"gordon/internal/adapters/out/tokenstore"
@@ -43,6 +44,7 @@ import (
 	"gordon/internal/usecase/auth"
 	"gordon/internal/usecase/config"
 	"gordon/internal/usecase/container"
+	"gordon/internal/usecase/health"
 	"gordon/internal/usecase/proxy"
 	registrySvc "gordon/internal/usecase/registry"
 )
@@ -294,8 +296,12 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		svc.envDir = filepath.Join(dataDir, "env")
 	}
 
+	// Create health service for route health checking
+	prober := httpprober.New()
+	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
+
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, svc.eventBus, svc.envDir, log)
+	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, svc.eventBus, svc.envDir, log)
 
 	return svc, nil
 }

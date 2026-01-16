@@ -18,6 +18,7 @@ type Handler struct {
 	configSvc    in.ConfigService
 	authSvc      in.AuthService
 	containerSvc in.ContainerService
+	healthSvc    in.HealthService
 	eventBus     out.EventPublisher
 	envDir       string
 	log          zerowrap.Logger
@@ -28,6 +29,7 @@ func NewHandler(
 	configSvc in.ConfigService,
 	authSvc in.AuthService,
 	containerSvc in.ContainerService,
+	healthSvc in.HealthService,
 	eventBus out.EventPublisher,
 	envDir string,
 	log zerowrap.Logger,
@@ -36,6 +38,7 @@ func NewHandler(
 		configSvc:    configSvc,
 		authSvc:      authSvc,
 		containerSvc: containerSvc,
+		healthSvc:    healthSvc,
 		eventBus:     eventBus,
 		envDir:       envDir,
 		log:          log,
@@ -72,6 +75,8 @@ func (h *Handler) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleSecrets(w, r, path)
 	case path == "/status":
 		h.handleStatus(w, r)
+	case path == "/health":
+		h.handleHealth(w, r)
 	case path == "/reload":
 		h.handleReload(w, r)
 	case path == "/config":
@@ -313,6 +318,39 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleHealth handles /admin/health endpoint.
+// Returns detailed health status for all routes including HTTP probe results.
+func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Check read permission
+	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+
+	health := h.healthSvc.CheckAllRoutes(ctx)
+
+	// Convert to JSON-friendly format
+	result := make(map[string]any, len(health))
+	for domain, h := range health {
+		result[domain] = map[string]any{
+			"container_status": h.ContainerStatus,
+			"http_status":      h.HTTPStatus,
+			"response_time_ms": h.ResponseTimeMs,
+			"healthy":          h.Healthy,
+			"error":            h.Error,
+		}
+	}
+
+	h.sendJSON(w, http.StatusOK, map[string]any{"health": result})
 }
 
 // handleStatus handles /admin/status endpoint.
