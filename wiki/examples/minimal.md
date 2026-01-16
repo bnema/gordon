@@ -38,7 +38,7 @@ echo "127.0.0.1 app.local registry.local" | sudo tee -a /etc/hosts
 ### 2. Start Gordon
 
 ```bash
-gordon start
+gordon serve
 ```
 
 ### 3. Build and Deploy
