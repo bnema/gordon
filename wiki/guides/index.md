@@ -4,6 +4,7 @@ In-depth guides for specific Gordon setups and integrations.
 
 ## Server Setup
 
+- [Running Gordon in a Container](./running-in-container.md) - Deploy Gordon itself in Docker or Podman
 - [Podman Rootless Setup](./podman-rootless.md) - Enhanced security with rootless containers
 
 ## External Services

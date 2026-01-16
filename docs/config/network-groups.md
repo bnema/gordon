@@ -58,10 +58,16 @@ Applications in the same group can communicate using container names:
 "services" = ["app.mydomain.com", "api.mydomain.com"]
 ```
 
-The frontend can reach the backend:
+Server-side code (SSR, API routes) can reach other containers by name:
 ```javascript
-// In frontend app
+// In server-side code (SSR / API route) - NOT browser JavaScript
 const response = await fetch("http://backend:8080/api/data");
+```
+
+Browser clients should use the public route instead:
+```javascript
+// In browser JavaScript
+const response = await fetch("https://api.mydomain.com/api/data");
 ```
 
 ## Shared Attachments

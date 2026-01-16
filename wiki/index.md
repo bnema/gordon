@@ -15,6 +15,7 @@ Step-by-step guides for common tasks:
 
 In-depth guides for specific setups:
 
+- [Running Gordon in a Container](./guides/running-in-container.md) - Deploy Gordon itself in Docker or Podman
 - [Podman Rootless Setup](./guides/podman-rootless.md) - Enhanced security with rootless containers
 - [Cloudflare DNS & Proxy Setup](./guides/cloudflare-setup.md) - HTTPS termination with Cloudflare
 - [Using Pass for Secrets](./guides/secrets-pass.md) - Unix password manager integration
