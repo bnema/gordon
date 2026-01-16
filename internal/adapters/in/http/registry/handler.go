@@ -2,7 +2,6 @@
 package registry
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"gordon/internal/boundaries/in"
-	"gordon/internal/boundaries/out"
 	"gordon/internal/domain"
 	"gordon/pkg/manifest"
 	"gordon/pkg/validation"
@@ -30,22 +28,16 @@ const (
 // Handler implements the HTTP handler for Docker Registry API v2.
 type Handler struct {
 	registrySvc in.RegistryService
-	blobStorage out.BlobStorage
-	eventBus    out.EventPublisher
 	log         zerowrap.Logger
 }
 
 // NewHandler creates a new registry HTTP handler.
 func NewHandler(
 	registrySvc in.RegistryService,
-	blobStorage out.BlobStorage,
-	eventBus out.EventPublisher,
 	log zerowrap.Logger,
 ) *Handler {
 	return &Handler{
 		registrySvc: registrySvc,
-		blobStorage: blobStorage,
-		eventBus:    eventBus,
 		log:         log,
 	}
 }
@@ -331,14 +323,13 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 		Annotations: annotations,
 	}
 
-	if err := h.registrySvc.PutManifest(ctx, manifestObj); err != nil {
+	digest, err := h.registrySvc.PutManifest(ctx, manifestObj)
+	if err != nil {
 		log.Error().Err(err).Str("name", name).Str("reference", reference).Msg("failed to store manifest")
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	// Calculate digest for Docker-Content-Digest header
-	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, reference))
 	w.WriteHeader(http.StatusCreated)
@@ -352,7 +343,7 @@ func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request) {
 
 	log.Debug().Str("name", name).Str("digest", digest).Msg("GET blob")
 
-	path, err := h.blobStorage.GetBlobPath(digest)
+	path, err := h.registrySvc.GetBlobPath(ctx, digest)
 	if err != nil {
 		log.Warn().Err(err).Str("name", name).Str("digest", digest).Msg("blob not found")
 		http.NotFound(w, r)
@@ -422,7 +413,7 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Append the chunk to the upload
-	length, err := h.blobStorage.AppendBlobChunk(name, uuid, chunk)
+	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, chunk)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to append blob chunk")
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)

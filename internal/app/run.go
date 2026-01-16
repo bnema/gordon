@@ -772,7 +772,7 @@ func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
 
 // createHTTPHandlers creates HTTP handlers with middleware.
 func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler) {
-	registryHandler := registry.NewHandler(svc.registrySvc, svc.blobStorage, svc.eventBus, log)
+	registryHandler := registry.NewHandler(svc.registrySvc, log)
 
 	registryMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),

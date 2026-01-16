@@ -98,46 +98,11 @@ func TestService_GetRoutes(t *testing.T) {
 	assert.False(t, routeMap["insecure.example"].HTTPS)
 }
 
-func TestService_AddRoute(t *testing.T) {
-	// Create temp config file for Save() to work
-	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "gordon.toml")
-	err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)
-	require.NoError(t, err)
-
+func TestService_GetRoute(t *testing.T) {
 	v := viper.New()
-	v.SetConfigFile(configFile)
-	eventBus := mocks.NewMockEventPublisher(t)
-	svc := NewService(v, eventBus)
-	ctx := testContext()
-
-	_ = svc.Load(ctx)
-
-	route := domain.Route{
-		Domain: "new.example.com",
-		Image:  "newapp:latest",
-	}
-
-	err = svc.AddRoute(ctx, route)
-
-	assert.NoError(t, err)
-
-	// Verify route was added
-	config := svc.GetConfig()
-	assert.Equal(t, "newapp:latest", config.Routes["new.example.com"])
-}
-
-func TestService_UpdateRoute(t *testing.T) {
-	// Create temp config file for Save() to work
-	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "gordon.toml")
-	err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:v1\"\n"), 0600)
-	require.NoError(t, err)
-
-	v := viper.New()
-	v.SetConfigFile(configFile)
 	v.Set("routes", map[string]interface{}{
-		"app.example.com": "myapp:v1",
+		"app.example.com":         "myapp:latest",
+		"http://insecure.example": "insecureapp:latest",
 	})
 
 	eventBus := mocks.NewMockEventPublisher(t)
@@ -146,35 +111,161 @@ func TestService_UpdateRoute(t *testing.T) {
 
 	_ = svc.Load(ctx)
 
-	route := domain.Route{
-		Domain: "app.example.com",
-		Image:  "myapp:v2",
-	}
+	t.Run("existing route", func(t *testing.T) {
+		route, err := svc.GetRoute(ctx, "app.example.com")
+		require.NoError(t, err)
+		assert.Equal(t, "app.example.com", route.Domain)
+		assert.Equal(t, "myapp:latest", route.Image)
+		assert.True(t, route.HTTPS)
+	})
 
-	err = svc.UpdateRoute(ctx, route)
-
-	assert.NoError(t, err)
-
-	config := svc.GetConfig()
-	assert.Equal(t, "myapp:v2", config.Routes["app.example.com"])
+	t.Run("non-existent route", func(t *testing.T) {
+		route, err := svc.GetRoute(ctx, "notfound.example.com")
+		assert.ErrorIs(t, err, domain.ErrRouteNotFound)
+		assert.Nil(t, route)
+	})
 }
 
-func TestService_UpdateRoute_NotFound(t *testing.T) {
-	v := viper.New()
-	eventBus := mocks.NewMockEventPublisher(t)
-	svc := NewService(v, eventBus)
-	ctx := testContext()
+func TestService_AddRoute(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		// Create temp config file for Save() to work
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)
+		require.NoError(t, err)
 
-	_ = svc.Load(ctx)
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
 
-	route := domain.Route{
-		Domain: "nonexistent.example.com",
-		Image:  "myapp:latest",
-	}
+		_ = svc.Load(ctx)
 
-	err := svc.UpdateRoute(ctx, route)
+		route := domain.Route{
+			Domain: "new.example.com",
+			Image:  "newapp:latest",
+		}
 
-	assert.ErrorIs(t, err, domain.ErrRouteNotFound)
+		err = svc.AddRoute(ctx, route)
+
+		assert.NoError(t, err)
+
+		// Verify route was added
+		config := svc.GetConfig()
+		assert.Equal(t, "newapp:latest", config.Routes["new.example.com"])
+	})
+
+	t.Run("empty domain", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainEmpty)
+	})
+
+	t.Run("empty image", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "example.com",
+			Image:  "",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteImageEmpty)
+	})
+}
+
+func TestService_UpdateRoute(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		// Create temp config file for Save() to work
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:v1\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("routes", map[string]any{
+			"app.example.com": "myapp:v1",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "app.example.com",
+			Image:  "myapp:v2",
+		}
+
+		err = svc.UpdateRoute(ctx, route)
+
+		assert.NoError(t, err)
+
+		config := svc.GetConfig()
+		assert.Equal(t, "myapp:v2", config.Routes["app.example.com"])
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "nonexistent.example.com",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteNotFound)
+	})
+
+	t.Run("empty domain", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainEmpty)
+	})
+
+	t.Run("empty image", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "example.com",
+			Image:  "",
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteImageEmpty)
+	})
 }
 
 func TestService_RemoveRoute(t *testing.T) {

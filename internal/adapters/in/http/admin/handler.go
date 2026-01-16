@@ -3,6 +3,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -134,20 +135,18 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		return
 	}
 
-	routes := h.configSvc.GetRoutes(ctx)
-
 	if routeDomain == "" {
+		routes := h.configSvc.GetRoutes(ctx)
 		h.sendJSON(w, http.StatusOK, map[string]any{"routes": routes})
 		return
 	}
 
-	for _, route := range routes {
-		if route.Domain == routeDomain {
-			h.sendJSON(w, http.StatusOK, route)
-			return
-		}
+	route, err := h.configSvc.GetRoute(ctx, routeDomain)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, "route not found")
+		return
 	}
-	h.sendError(w, http.StatusNotFound, "route not found")
+	h.sendJSON(w, http.StatusOK, route)
 }
 
 func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
@@ -170,14 +169,14 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if route.Domain == "" || route.Image == "" {
-		h.sendError(w, http.StatusBadRequest, "domain and image are required")
-		return
-	}
-
 	if err := h.configSvc.AddRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", route.Domain).Msg("failed to add route")
-		h.sendError(w, http.StatusInternalServerError, "failed to add route")
+		switch {
+		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+			h.sendError(w, http.StatusBadRequest, err.Error())
+		default:
+			h.sendError(w, http.StatusInternalServerError, "failed to add route")
+		}
 		return
 	}
 
@@ -214,7 +213,14 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 
 	if err := h.configSvc.UpdateRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to update route")
-		h.sendError(w, http.StatusInternalServerError, "failed to update route")
+		switch {
+		case errors.Is(err, domain.ErrRouteNotFound):
+			h.sendError(w, http.StatusNotFound, "route not found")
+		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+			h.sendError(w, http.StatusBadRequest, err.Error())
+		default:
+			h.sendError(w, http.StatusInternalServerError, "failed to update route")
+		}
 		return
 	}
 
