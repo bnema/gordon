@@ -55,10 +55,12 @@ gordon auth internal
 
 ### Remote Targeting
 
-The CLI can target remote Gordon instances using the `--remote` flag or `GORDON_REMOTE` environment variable:
+The CLI can target remote Gordon instances using the `--remote` flag or `GORDON_REMOTE` environment variable.
+
+**Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
 
 ```bash
-# Using flags
+# Using flags (use the gordon_domain from remote Gordon config)
 gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
 
 # Using environment variables
