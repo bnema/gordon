@@ -224,7 +224,8 @@ All configuration options can be set via environment variables with `GORDON_` pr
 | `GORDON_LOGGING_LEVEL` | Log level | `debug`, `info`, `warn`, `error` |
 | `GORDON_REGISTRY_AUTH_ENABLED` | Enable registry auth | `true` |
 | `GORDON_REGISTRY_AUTH_USERNAME` | Registry username | `admin` |
-| `GORDON_REGISTRY_AUTH_PASSWORD` | Registry password | `secret` |
+
+> **Note**: For registry passwords, using plain `password` is deprecated. Use `password_hash` with a secrets backend instead. See [Registry Auth](/docs/config/registry-auth.md) for secure setup.
 
 ## Security Considerations
 
