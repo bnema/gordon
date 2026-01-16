@@ -16,6 +16,18 @@ Manage Gordon instances remotely using the CLI with the `--remote` flag or saved
 - A remote Gordon instance running with admin API enabled
 - Authentication token for the remote instance
 
+## Understanding the Remote URL
+
+The `--remote` URL must be the `gordon_domain` configured on the remote Gordon instance. This domain serves both the container registry and the Admin API.
+
+```toml
+# On the remote Gordon server
+[server]
+gordon_domain = "gordon.example.com"  # Use this as --remote URL
+```
+
+The CLI connects to `https://gordon.example.com/admin/*` endpoints.
+
 ## Quick Start
 
 ### One-off Remote Command

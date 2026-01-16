@@ -8,7 +8,7 @@ Core server settings for Gordon.
 [server]
 port = 8080                              # HTTP proxy port
 registry_port = 5000                     # Container registry port
-registry_domain = "registry.mydomain.com" # Registry domain (required)
+gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 # data_dir = "~/.gordon"                 # Data storage directory (default)
 ```
 
@@ -18,7 +18,8 @@ registry_domain = "registry.mydomain.com" # Registry domain (required)
 |--------|------|---------|-------------|
 | `port` | int | `80` | HTTP proxy port for routing traffic to containers |
 | `registry_port` | int | `5000` | Docker registry port for image push/pull |
-| `registry_domain` | string | **required** | Domain for the container registry |
+| `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
+| `registry_domain` | string | - | Deprecated alias for `gordon_domain` |
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
 
 ## Port Configuration
@@ -54,19 +55,24 @@ Docker/Podman clients push to this port:
 docker push registry.mydomain.com:5000/myapp:latest
 ```
 
-## Registry Domain
+## Gordon Domain
 
-The `registry_domain` is required and must match your DNS configuration:
+The `gordon_domain` is required and must match your DNS configuration:
 
 ```toml
 [server]
-registry_domain = "registry.mydomain.com"
+gordon_domain = "gordon.mydomain.com"
 ```
 
 This domain is used for:
-- Docker login authentication
-- Image push/pull operations
-- Internal registry references
+- Docker login and image push/pull operations
+- Admin API access (`/admin/*` endpoints)
+- CLI remote targeting (`gordon routes --remote https://gordon.mydomain.com`)
+- Token endpoint for authentication (`/v2/token`)
+
+When requests arrive on the proxy port with this domain as the Host header, Gordon routes them to the backend services (registry and admin API).
+
+> **Note:** `registry_domain` is supported as a deprecated alias for backwards compatibility.
 
 ## Data Directory
 
@@ -108,7 +114,7 @@ Gordon creates directories with secure permissions:
 [server]
 port = 8080
 registry_port = 5000
-registry_domain = "registry.local"
+gordon_domain = "gordon.local"
 data_dir = "./dev-data"
 ```
 
@@ -118,7 +124,7 @@ data_dir = "./dev-data"
 [server]
 port = 8080
 registry_port = 5000
-registry_domain = "registry.company.com"
+gordon_domain = "gordon.company.com"
 data_dir = "/var/lib/gordon"
 ```
 
@@ -128,7 +134,7 @@ data_dir = "/var/lib/gordon"
 [server]
 port = 8080      # High port for rootless
 registry_port = 5000
-registry_domain = "registry.mydomain.com"
+gordon_domain = "gordon.mydomain.com"
 ```
 
 With firewall port forwarding:

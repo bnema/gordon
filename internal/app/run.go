@@ -52,7 +52,8 @@ type Config struct {
 	Server struct {
 		Port           int    `mapstructure:"port"`
 		RegistryPort   int    `mapstructure:"registry_port"`
-		RegistryDomain string `mapstructure:"registry_domain"`
+		GordonDomain   string `mapstructure:"gordon_domain"`
+		RegistryDomain string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
 		DataDir        string `mapstructure:"data_dir"`
 	} `mapstructure:"server"`
 
@@ -181,6 +182,11 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, Config{}, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	// Normalize domain config: prefer gordon_domain over registry_domain
+	if cfg.Server.GordonDomain != "" {
+		cfg.Server.RegistryDomain = cfg.Server.GordonDomain
 	}
 
 	return v, cfg, nil
