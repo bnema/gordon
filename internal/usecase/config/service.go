@@ -87,10 +87,16 @@ func (s *Service) Load(ctx context.Context) error {
 
 // loadConfigValues loads simple config values from viper.
 func (s *Service) loadConfigValues() Config {
+	// Prefer gordon_domain over registry_domain
+	registryDomain := s.viper.GetString("server.gordon_domain")
+	if registryDomain == "" {
+		registryDomain = s.viper.GetString("server.registry_domain")
+	}
+
 	return Config{
 		ServerPort:           s.viper.GetInt("server.port"),
 		RegistryPort:         s.viper.GetInt("server.registry_port"),
-		RegistryDomain:       s.viper.GetString("server.registry_domain"),
+		RegistryDomain:       registryDomain,
 		DataDir:              s.viper.GetString("server.data_dir"),
 		AutoRouteEnabled:     s.viper.GetBool("auto_route.enabled"),
 		NetworkIsolation:     s.viper.GetBool("network_isolation.enabled"),

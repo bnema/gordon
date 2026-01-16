@@ -15,7 +15,7 @@ Gordon uses a single TOML configuration file located at `~/.config/gordon/gordon
 [server]
 port = 8080
 registry_port = 5000
-registry_domain = "registry.mydomain.com"
+gordon_domain = "gordon.mydomain.com"
 
 [routes]
 "app.mydomain.com" = "myapp:latest"
@@ -30,7 +30,7 @@ registry_domain = "registry.mydomain.com"
 [server]
 port = 8080                              # HTTP proxy port (default: 80)
 registry_port = 5000                     # Registry port (default: 5000)
-registry_domain = "registry.mydomain.com" # Required: registry domain
+gordon_domain = "gordon.mydomain.com"    # Required: Gordon domain (registry + API)
 # data_dir = "~/.gordon"                 # Default for user installations
 
 # Secrets backend

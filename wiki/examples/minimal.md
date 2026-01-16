@@ -16,7 +16,7 @@ The simplest working Gordon configuration.
 [server]
 port = 8080
 registry_port = 5000
-registry_domain = "registry.local"
+gordon_domain = "gordon.local"
 
 # Authentication disabled for simplicity
 [registry_auth]
@@ -32,7 +32,7 @@ enabled = false
 ### 1. Add to /etc/hosts
 
 ```bash
-echo "127.0.0.1 app.local registry.local" | sudo tee -a /etc/hosts
+echo "127.0.0.1 app.local gordon.local" | sudo tee -a /etc/hosts
 ```
 
 ### 2. Start Gordon
@@ -45,8 +45,8 @@ gordon serve
 
 ```bash
 docker build -t myapp .
-docker tag myapp registry.local:5000/myapp:latest
-docker push registry.local:5000/myapp:latest
+docker tag myapp gordon.local:5000/myapp:latest
+docker push gordon.local:5000/myapp:latest
 ```
 
 ### 4. Access

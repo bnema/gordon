@@ -119,7 +119,7 @@ Edit `~/.config/gordon/gordon.toml`:
 [server]
 port = 8080                              # Must match firewall forward (80 → 8080)
 registry_port = 5000
-registry_domain = "registry.mydomain.com"
+gordon_domain = "gordon.mydomain.com"
 
 [routes]
 "app.mydomain.com" = "myapp:latest"

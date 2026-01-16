@@ -166,7 +166,7 @@ Minimum required configuration:
 [server]
 port = 8080
 registry_port = 5000
-registry_domain = "registry.yourdomain.com"
+gordon_domain = "gordon.yourdomain.com"
 
 [routes]
 "app.yourdomain.com" = "myapp:latest"
