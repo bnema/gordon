@@ -1,0 +1,380 @@
+# Remote CLI Management
+
+Manage Gordon instances remotely using the CLI with the `--remote` flag or saved remotes.
+
+## What You'll Learn
+
+- Using global `--remote` and `--token` flags
+- Saving and managing remote connections
+- Environment variable configuration
+- Token security best practices
+- Remote command workflows
+
+## Prerequisites
+
+- Gordon CLI installed
+- A remote Gordon instance running with admin API enabled
+- Authentication token for the remote instance
+
+## Quick Start
+
+### One-off Remote Command
+
+```bash
+gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### Using Environment Variables
+
+```bash
+export GORDON_REMOTE=https://gordon.mydomain.com
+export GORDON_TOKEN=$TOKEN
+gordon routes list
+```
+
+### Using Saved Remotes
+
+```bash
+# Add a remote
+gordon remotes add prod https://gordon.mydomain.com --token-env PROD_TOKEN
+
+# Set as active
+gordon remotes use prod
+
+# Now use without flags
+gordon routes list
+```
+
+## Global Flags
+
+These flags are available on all commands:
+
+| Flag | Description |
+|------|-------------|
+| `--remote <URL>` | Remote Gordon URL |
+| `--token <TOKEN>` | Authentication token |
+
+```bash
+# List routes on remote
+gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
+
+# Manage secrets on remote
+gordon secrets list myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `GORDON_REMOTE` | Remote Gordon URL |
+| `GORDON_TOKEN` | Authentication token |
+
+Environment variables are useful for CI/CD pipelines and shell sessions:
+
+```bash
+# Set for current session
+export GORDON_REMOTE=https://gordon.mydomain.com
+export GORDON_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Commands automatically use these
+gordon routes list
+gordon secrets list myapp.example.com
+```
+
+## Saved Remotes
+
+Save frequently used remotes to avoid repeating URLs and tokens.
+
+### Configuration File
+
+Remotes are stored in `~/.config/gordon/remotes.toml`:
+
+```toml
+active = "prod"
+
+[remotes.prod]
+url = "https://gordon.mydomain.com"
+token_env = "PROD_TOKEN"
+
+[remotes.staging]
+url = "https://staging.mydomain.com"
+token = "eyJ..."
+```
+
+### Managing Remotes
+
+#### List Remotes
+
+```bash
+gordon remotes list
+```
+
+Output:
+
+```
+Saved Remotes
+
+Name            URL                                    Token           Status
+──────────────────────────────────────────────────────────────────────────────
+prod            https://gordon.mydomain.com            $PROD_TOKEN     active
+staging         https://staging.mydomain.com           set
+dev             https://dev.mydomain.com               none
+```
+
+#### Add a Remote
+
+```bash
+# Basic (no token)
+gordon remotes add prod https://gordon.mydomain.com
+
+# With direct token
+gordon remotes add prod https://gordon.mydomain.com --token eyJ...
+
+# With environment variable reference (recommended)
+gordon remotes add prod https://gordon.mydomain.com --token-env PROD_TOKEN
+```
+
+| Flag | Description |
+|------|-------------|
+| `--token <TOKEN>` | Store token directly in config |
+| `--token-env <VAR>` | Store env variable name (token resolved at runtime) |
+
+#### Remove a Remote
+
+```bash
+# With confirmation prompt
+gordon remotes remove staging
+
+# Skip confirmation
+gordon remotes remove staging --force
+```
+
+#### Set Active Remote
+
+```bash
+gordon remotes use prod
+```
+
+When a remote is active, it's used automatically for all remote-capable commands:
+
+```bash
+gordon remotes use prod
+gordon routes list              # Uses prod remote
+gordon secrets list app.com     # Uses prod remote
+```
+
+## Resolution Precedence
+
+When multiple sources specify remote or token, the CLI uses this priority order:
+
+**Remote URL:**
+1. `--remote` flag
+2. `GORDON_REMOTE` environment variable
+3. Active remote from `remotes.toml`
+
+**Token:**
+1. `--token` flag
+2. `GORDON_TOKEN` environment variable
+3. Token from active remote in `remotes.toml`
+
+This allows overriding specific values while keeping defaults:
+
+```bash
+# Active remote is prod, but use different token
+gordon routes list --token $TEMPORARY_TOKEN
+```
+
+## Commands Supporting Remote
+
+These commands work with remote targeting:
+
+| Command | Description |
+|---------|-------------|
+| `gordon routes list` | List all routes |
+| `gordon routes add <domain> <image>` | Add a route |
+| `gordon routes remove <domain>` | Remove a route |
+| `gordon routes deploy <domain>` | Deploy/redeploy a route |
+| `gordon secrets list <domain>` | List secrets for a domain |
+| `gordon secrets set <domain> KEY=value` | Set secrets |
+| `gordon secrets remove <domain> <key>` | Remove a secret |
+| `gordon status` | Show server status |
+
+## Token Security
+
+### Option 1: Environment Variable Reference (Recommended)
+
+Store the environment variable name, not the actual token:
+
+```bash
+gordon remotes add prod https://gordon.mydomain.com --token-env PROD_TOKEN
+```
+
+The `remotes.toml` stores only:
+
+```toml
+[remotes.prod]
+url = "https://gordon.mydomain.com"
+token_env = "PROD_TOKEN"
+```
+
+At runtime, Gordon reads `$PROD_TOKEN` from the environment.
+
+**Benefits:**
+- Token not stored in plaintext config
+- Works with secret managers that inject env vars
+- Easy rotation without editing config
+
+### Option 2: Direct Token Storage
+
+```bash
+gordon remotes add prod https://gordon.mydomain.com --token eyJ...
+```
+
+The token is stored directly in `remotes.toml`:
+
+```toml
+[remotes.prod]
+url = "https://gordon.mydomain.com"
+token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+**Security note:** Ensure `remotes.toml` has restricted permissions:
+
+```bash
+chmod 600 ~/.config/gordon/remotes.toml
+```
+
+### Option 3: Environment Variables Only
+
+For maximum security, don't save tokens at all:
+
+```bash
+# Add remote without token
+gordon remotes add prod https://gordon.mydomain.com
+
+# Set token via environment
+export GORDON_TOKEN=$TOKEN
+
+# Use normally
+gordon remotes use prod
+gordon routes list
+```
+
+## Workflow Examples
+
+### Development Workflow
+
+```bash
+# Add dev and staging remotes
+gordon remotes add dev https://gordon.dev.local --token-env DEV_TOKEN
+gordon remotes add staging https://gordon.staging.example.com --token-env STAGING_TOKEN
+
+# Work with dev
+gordon remotes use dev
+gordon routes list
+gordon routes add myapp.dev.local myapp:latest
+
+# Switch to staging
+gordon remotes use staging
+gordon routes list
+```
+
+### CI/CD Pipeline
+
+```yaml
+# GitHub Actions example
+env:
+  GORDON_REMOTE: ${{ secrets.GORDON_URL }}
+  GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
+
+steps:
+  - name: Deploy to Gordon
+    run: |
+      gordon routes deploy myapp.example.com
+```
+
+```bash
+# GitLab CI example
+deploy:
+  script:
+    - export GORDON_REMOTE=$GORDON_URL
+    - export GORDON_TOKEN=$GORDON_TOKEN
+    - gordon routes deploy myapp.example.com
+```
+
+### Multi-Environment Management
+
+```bash
+# Add all environments
+gordon remotes add prod https://gordon.example.com --token-env PROD_TOKEN
+gordon remotes add staging https://gordon.staging.example.com --token-env STAGING_TOKEN
+gordon remotes add dev https://gordon.dev.example.com --token-env DEV_TOKEN
+
+# Compare routes across environments
+gordon routes list --remote https://gordon.example.com --token $PROD_TOKEN
+gordon routes list --remote https://gordon.staging.example.com --token $STAGING_TOKEN
+
+# Or switch active
+gordon remotes use prod && gordon routes list
+gordon remotes use staging && gordon routes list
+```
+
+## Troubleshooting
+
+### "unauthorized" Error
+
+Token is missing, expired, or invalid.
+
+```bash
+# Check if token is set
+echo $GORDON_TOKEN
+
+# Verify token works
+gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### "connection refused" Error
+
+Remote Gordon isn't running or URL is wrong.
+
+```bash
+# Verify URL is correct
+curl https://gordon.mydomain.com/health
+
+# Check if admin API is enabled on remote
+# The remote gordon.toml needs:
+# [admin]
+# enabled = true
+```
+
+### Remote Not Found
+
+The specified remote doesn't exist in `remotes.toml`.
+
+```bash
+# List available remotes
+gordon remotes list
+
+# Add the remote
+gordon remotes add myremote https://gordon.mydomain.com
+```
+
+### Active Remote Cleared
+
+After removing the active remote, you need to set a new active:
+
+```bash
+gordon remotes use prod
+```
+
+Or use explicit flags:
+
+```bash
+gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+## Related
+
+- [CLI Commands](/docs/cli/commands.md)
+- [Authentication](/docs/config/registry-auth.md)
+- [Admin API](/docs/config/admin.md)
