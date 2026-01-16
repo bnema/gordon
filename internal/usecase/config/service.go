@@ -5,6 +5,8 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/fsnotify/fsnotify"
@@ -37,17 +39,20 @@ type Config struct {
 
 // Service implements the ConfigService interface.
 type Service struct {
-	viper    *viper.Viper
-	eventBus out.EventPublisher
-	config   Config
-	mu       sync.RWMutex
+	viper         *viper.Viper
+	eventBus      out.EventPublisher
+	config        Config
+	mu            sync.RWMutex
+	lastSaveTime  int64 // Unix nano timestamp of last save (to debounce file watcher)
+	debounceDelay int64 // Debounce delay in nanoseconds (default 500ms)
 }
 
 // NewService creates a new config service.
 func NewService(v *viper.Viper, eventBus out.EventPublisher) *Service {
 	return &Service{
-		viper:    v,
-		eventBus: eventBus,
+		viper:         v,
+		eventBus:      eventBus,
+		debounceDelay: int64(500 * time.Millisecond), // 500ms debounce for file watcher
 	}
 }
 
@@ -171,7 +176,7 @@ func (s *Service) GetRoutes(_ context.Context) []domain.Route {
 	return routes
 }
 
-// AddRoute adds a new route to the configuration.
+// AddRoute adds a new route to the configuration and persists it.
 func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -181,13 +186,16 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	log := zerowrap.FromCtx(ctx)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.config.Routes == nil {
 		s.config.Routes = make(map[string]string)
 	}
-
 	s.config.Routes[route.Domain] = route.Image
+	s.mu.Unlock()
+
+	// Persist to disk
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist route to disk")
+	}
 
 	log.Info().Str("image", route.Image).Msg("route added to configuration")
 	return nil
@@ -237,11 +245,44 @@ func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 	return nil
 }
 
+// Save persists the current configuration to disk.
+func (s *Service) Save(ctx context.Context) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "SaveConfig",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Update viper with current routes
+	s.viper.Set("routes", s.config.Routes)
+
+	// Record save time to debounce file watcher events
+	atomic.StoreInt64(&s.lastSaveTime, time.Now().UnixNano())
+
+	// Write config to disk
+	if err := s.viper.WriteConfig(); err != nil {
+		return log.WrapErr(err, "failed to write config")
+	}
+
+	log.Info().Msg("configuration saved to disk")
+	return nil
+}
+
 // Watch starts watching for configuration changes.
 func (s *Service) Watch(ctx context.Context, onChange func()) error {
 	log := zerowrap.FromCtx(ctx)
 
 	s.viper.OnConfigChange(func(e fsnotify.Event) {
+		// Check if this event is within the debounce window of our own Save
+		lastSave := atomic.LoadInt64(&s.lastSaveTime)
+		if lastSave > 0 && time.Now().UnixNano()-lastSave < s.debounceDelay {
+			log.Debug().Str("file", e.Name).Msg("skipping config reload (triggered by save)")
+			return
+		}
+
 		log.Info().Str("file", e.Name).Msg("config file changed")
 
 		if err := s.viper.ReadInConfig(); err != nil {
