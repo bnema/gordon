@@ -16,7 +16,7 @@ var (
 	BuildDate = "unknown"
 
 	// Global flags for remote targeting
-	targetFlag string
+	remoteFlag string
 	tokenFlag  string
 )
 
@@ -31,13 +31,13 @@ a Docker registry with automatic container deployment capabilities.
 It listens for image pushes and automatically deploys containers based on
 configuration rules, making it ideal for single-server deployments.
 
-The CLI can target remote Gordon instances using the --target flag or
-GORDON_TARGET environment variable.`,
+The CLI can target remote Gordon instances using the --remote flag or
+GORDON_REMOTE environment variable.`,
 	}
 
 	// Add persistent flags for remote targeting
-	rootCmd.PersistentFlags().StringVar(&targetFlag, "target", "", "Remote Gordon URL (e.g., https://gordon.mydomain.com)")
-	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "Authentication token for remote target")
+	rootCmd.PersistentFlags().StringVar(&remoteFlag, "remote", "", "Remote Gordon URL (e.g., https://gordon.mydomain.com)")
+	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "Authentication token for remote")
 
 	// Server commands
 	rootCmd.AddCommand(newServeCmd())
@@ -51,7 +51,7 @@ GORDON_TARGET environment variable.`,
 	// Remote management commands
 	rootCmd.AddCommand(newRoutesCmd())
 	rootCmd.AddCommand(newSecretsCmd())
-	rootCmd.AddCommand(newTargetsCmd())
+	rootCmd.AddCommand(newRemotesCmd())
 	rootCmd.AddCommand(newStatusCmd())
 
 	return rootCmd
@@ -60,7 +60,7 @@ GORDON_TARGET environment variable.`,
 // GetRemoteClient returns a remote client if targeting a remote instance,
 // or nil if running locally.
 func GetRemoteClient() (*remote.Client, bool) {
-	url, token, isRemote := remote.ResolveTarget(targetFlag, tokenFlag)
+	url, token, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag)
 	if !isRemote {
 		return nil, false
 	}
@@ -71,7 +71,7 @@ func GetRemoteClient() (*remote.Client, bool) {
 
 // IsRemoteMode returns true if CLI is targeting a remote Gordon instance.
 func IsRemoteMode() bool {
-	_, _, isRemote := remote.ResolveTarget(targetFlag, tokenFlag)
+	_, _, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag)
 	return isRemote
 }
 

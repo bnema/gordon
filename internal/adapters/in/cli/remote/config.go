@@ -11,20 +11,20 @@ import (
 // ClientConfig represents the client-mode configuration.
 type ClientConfig struct {
 	Client  ClientSettings         `toml:"client"`
-	Targets map[string]TargetEntry `toml:"targets"`
-	Active  string                 `toml:"active"` // Active target name
+	Remotes map[string]RemoteEntry `toml:"remotes"`
+	Active  string                 `toml:"active"` // Active remote name
 }
 
 // ClientSettings represents the [client] section.
 type ClientSettings struct {
 	Mode     string `toml:"mode"`      // "local" (default) or "remote"
-	Target   string `toml:"target"`    // Remote Gordon URL
+	Remote   string `toml:"remote"`    // Remote Gordon URL
 	Token    string `toml:"token"`     // Auth token
 	TokenEnv string `toml:"token_env"` // Env var name for token
 }
 
-// TargetEntry represents a saved target in [targets.*].
-type TargetEntry struct {
+// RemoteEntry represents a saved remote in [remotes.*].
+type RemoteEntry struct {
 	URL      string `toml:"url"`
 	Token    string `toml:"token,omitempty"`
 	TokenEnv string `toml:"token_env,omitempty"`
@@ -39,13 +39,13 @@ func DefaultClientConfigPath() string {
 	return filepath.Join(configDir, "gordon", "gordon.toml")
 }
 
-// DefaultTargetsPath returns the default targets config path.
-func DefaultTargetsPath() string {
+// DefaultRemotesPath returns the default remotes config path.
+func DefaultRemotesPath() string {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		configDir = os.Getenv("HOME")
 	}
-	return filepath.Join(configDir, "gordon", "targets.toml")
+	return filepath.Join(configDir, "gordon", "remotes.toml")
 }
 
 // LoadClientConfig loads the client configuration.
@@ -62,7 +62,7 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 				Client: ClientSettings{
 					Mode: "local",
 				},
-				Targets: make(map[string]TargetEntry),
+				Remotes: make(map[string]RemoteEntry),
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to read config: %w", err)
@@ -73,45 +73,45 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	if config.Targets == nil {
-		config.Targets = make(map[string]TargetEntry)
+	if config.Remotes == nil {
+		config.Remotes = make(map[string]RemoteEntry)
 	}
 
 	return &config, nil
 }
 
-// LoadTargets loads the targets configuration.
-func LoadTargets(path string) (*ClientConfig, error) {
+// LoadRemotes loads the remotes configuration.
+func LoadRemotes(path string) (*ClientConfig, error) {
 	if path == "" {
-		path = DefaultTargetsPath()
+		path = DefaultRemotesPath()
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &ClientConfig{
-				Targets: make(map[string]TargetEntry),
+				Remotes: make(map[string]RemoteEntry),
 			}, nil
 		}
-		return nil, fmt.Errorf("failed to read targets: %w", err)
+		return nil, fmt.Errorf("failed to read remotes: %w", err)
 	}
 
 	var config ClientConfig
 	if err := toml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse targets: %w", err)
+		return nil, fmt.Errorf("failed to parse remotes: %w", err)
 	}
 
-	if config.Targets == nil {
-		config.Targets = make(map[string]TargetEntry)
+	if config.Remotes == nil {
+		config.Remotes = make(map[string]RemoteEntry)
 	}
 
 	return &config, nil
 }
 
-// SaveTargets saves the targets configuration.
-func SaveTargets(path string, config *ClientConfig) error {
+// SaveRemotes saves the remotes configuration.
+func SaveRemotes(path string, config *ClientConfig) error {
 	if path == "" {
-		path = DefaultTargetsPath()
+		path = DefaultRemotesPath()
 	}
 
 	// Ensure directory exists
@@ -122,51 +122,51 @@ func SaveTargets(path string, config *ClientConfig) error {
 
 	data, err := toml.Marshal(config)
 	if err != nil {
-		return fmt.Errorf("failed to marshal targets: %w", err)
+		return fmt.Errorf("failed to marshal remotes: %w", err)
 	}
 
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("failed to write targets: %w", err)
+		return fmt.Errorf("failed to write remotes: %w", err)
 	}
 
 	return nil
 }
 
-// ResolveTarget resolves the target URL and token from configuration.
-// Precedence: flag > env > config > active target
-func ResolveTarget(flagTarget, flagToken string) (url, token string, isRemote bool) {
+// ResolveRemote resolves the remote URL and token from configuration.
+// Precedence: flag > env > config > active remote
+func ResolveRemote(flagRemote, flagToken string) (url, token string, isRemote bool) {
 	config, _ := LoadClientConfig("")
-	targets, _ := LoadTargets("")
+	remotes, _ := LoadRemotes("")
 
-	url, isRemote = resolveTargetURL(flagTarget, config, targets)
+	url, isRemote = resolveRemoteURL(flagRemote, config, remotes)
 	if isRemote {
-		token = resolveToken(flagToken, config, targets)
+		token = resolveToken(flagToken, config, remotes)
 	}
 
 	return url, token, isRemote
 }
 
-// resolveTargetURL resolves the target URL from various sources.
-func resolveTargetURL(flagTarget string, config *ClientConfig, targets *ClientConfig) (string, bool) {
+// resolveRemoteURL resolves the remote URL from various sources.
+func resolveRemoteURL(flagRemote string, config *ClientConfig, remotes *ClientConfig) (string, bool) {
 	// 1. Check flag
-	if flagTarget != "" {
-		return flagTarget, true
+	if flagRemote != "" {
+		return flagRemote, true
 	}
 
 	// 2. Check environment variable
-	if envTarget := os.Getenv("GORDON_TARGET"); envTarget != "" {
-		return envTarget, true
+	if envRemote := os.Getenv("GORDON_REMOTE"); envRemote != "" {
+		return envRemote, true
 	}
 
 	// 3. Check client config
-	if config != nil && config.Client.Mode == "remote" && config.Client.Target != "" {
-		return config.Client.Target, true
+	if config != nil && config.Client.Mode == "remote" && config.Client.Remote != "" {
+		return config.Client.Remote, true
 	}
 
-	// 4. Check active target
-	if targets != nil && targets.Active != "" {
-		if target, ok := targets.Targets[targets.Active]; ok {
-			return target.URL, true
+	// 4. Check active remote
+	if remotes != nil && remotes.Active != "" {
+		if remote, ok := remotes.Remotes[remotes.Active]; ok {
+			return remote.URL, true
 		}
 	}
 
@@ -174,7 +174,7 @@ func resolveTargetURL(flagTarget string, config *ClientConfig, targets *ClientCo
 }
 
 // resolveToken resolves the authentication token from various sources.
-func resolveToken(flagToken string, config *ClientConfig, targets *ClientConfig) string {
+func resolveToken(flagToken string, config *ClientConfig, remotes *ClientConfig) string {
 	// 1. Flag token takes precedence
 	if flagToken != "" {
 		return flagToken
@@ -195,14 +195,14 @@ func resolveToken(flagToken string, config *ClientConfig, targets *ClientConfig)
 		}
 	}
 
-	// 4. Active target token
-	if targets != nil && targets.Active != "" {
-		if target, ok := targets.Targets[targets.Active]; ok {
-			if target.Token != "" {
-				return target.Token
+	// 4. Active remote token
+	if remotes != nil && remotes.Active != "" {
+		if remote, ok := remotes.Remotes[remotes.Active]; ok {
+			if remote.Token != "" {
+				return remote.Token
 			}
-			if target.TokenEnv != "" {
-				return os.Getenv(target.TokenEnv)
+			if remote.TokenEnv != "" {
+				return os.Getenv(remote.TokenEnv)
 			}
 		}
 	}
@@ -210,61 +210,61 @@ func resolveToken(flagToken string, config *ClientConfig, targets *ClientConfig)
 	return ""
 }
 
-// AddTarget adds a new target to the targets configuration.
-func AddTarget(name, url, token string) error {
-	config, err := LoadTargets("")
+// AddRemote adds a new remote to the remotes configuration.
+func AddRemote(name, url, token string) error {
+	config, err := LoadRemotes("")
 	if err != nil {
 		return err
 	}
 
-	config.Targets[name] = TargetEntry{
+	config.Remotes[name] = RemoteEntry{
 		URL:   url,
 		Token: token,
 	}
 
-	return SaveTargets("", config)
+	return SaveRemotes("", config)
 }
 
-// RemoveTarget removes a target from the targets configuration.
-func RemoveTarget(name string) error {
-	config, err := LoadTargets("")
+// RemoveRemote removes a remote from the remotes configuration.
+func RemoveRemote(name string) error {
+	config, err := LoadRemotes("")
 	if err != nil {
 		return err
 	}
 
-	delete(config.Targets, name)
+	delete(config.Remotes, name)
 
-	// Clear active if it was the removed target
+	// Clear active if it was the removed remote
 	if config.Active == name {
 		config.Active = ""
 	}
 
-	return SaveTargets("", config)
+	return SaveRemotes("", config)
 }
 
-// SetActiveTarget sets the active target.
-func SetActiveTarget(name string) error {
-	config, err := LoadTargets("")
+// SetActiveRemote sets the active remote.
+func SetActiveRemote(name string) error {
+	config, err := LoadRemotes("")
 	if err != nil {
 		return err
 	}
 
-	// Verify target exists
-	if _, ok := config.Targets[name]; !ok {
-		return fmt.Errorf("target '%s' not found", name)
+	// Verify remote exists
+	if _, ok := config.Remotes[name]; !ok {
+		return fmt.Errorf("remote '%s' not found", name)
 	}
 
 	config.Active = name
 
-	return SaveTargets("", config)
+	return SaveRemotes("", config)
 }
 
-// ListTargets returns all saved targets.
-func ListTargets() (map[string]TargetEntry, string, error) {
-	config, err := LoadTargets("")
+// ListRemotes returns all saved remotes.
+func ListRemotes() (map[string]RemoteEntry, string, error) {
+	config, err := LoadRemotes("")
 	if err != nil {
 		return nil, "", err
 	}
 
-	return config.Targets, config.Active, nil
+	return config.Remotes, config.Active, nil
 }

@@ -14,7 +14,7 @@ Gordon provides a command-line interface for server management, deployment, and 
 | `gordon auth` | Manage registry authentication |
 | `gordon routes` | Manage routes (local or remote) |
 | `gordon secrets` | Manage secrets (remote only) |
-| `gordon targets` | Manage remote Gordon targets |
+| `gordon remotes` | Manage saved remote Gordon instances |
 
 ## Quick Reference
 
@@ -50,19 +50,19 @@ gordon auth internal
 | Option | Description |
 |--------|-------------|
 | `-c, --config` | Path to configuration file |
-| `--target` | Remote Gordon URL (e.g., `https://gordon.mydomain.com`) |
-| `--token` | Authentication token for remote target |
+| `--remote` | Remote Gordon URL (e.g., `https://gordon.mydomain.com`) |
+| `--token` | Authentication token for remote |
 
 ### Remote Targeting
 
-The CLI can target remote Gordon instances using the `--target` flag or `GORDON_TARGET` environment variable:
+The CLI can target remote Gordon instances using the `--remote` flag or `GORDON_REMOTE` environment variable:
 
 ```bash
 # Using flags
-gordon routes list --target https://gordon.mydomain.com --token $TOKEN
+gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
 
 # Using environment variables
-export GORDON_TARGET=https://gordon.mydomain.com
+export GORDON_REMOTE=https://gordon.mydomain.com
 export GORDON_TOKEN=$TOKEN
 gordon routes list
 ```
@@ -567,7 +567,7 @@ List all configured routes.
 
 ```bash
 gordon routes list
-gordon routes list --target https://gordon.mydomain.com --token $TOKEN
+gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ### gordon routes add
@@ -616,46 +616,46 @@ Manage secrets on remote Gordon instances. Requires remote targeting.
 
 ```bash
 # List secrets
-gordon secrets list --target https://gordon.mydomain.com --token $TOKEN
+gordon secrets list --remote https://gordon.mydomain.com --token $TOKEN
 
 # Set a secret
-gordon secrets set DATABASE_URL "postgres://..." --target ... --token ...
+gordon secrets set DATABASE_URL "postgres://..." --remote ... --token ...
 
 # Get a secret
-gordon secrets get DATABASE_URL --target ... --token ...
+gordon secrets get DATABASE_URL --remote ... --token ...
 
 # Delete a secret
-gordon secrets delete DATABASE_URL --target ... --token ...
+gordon secrets delete DATABASE_URL --remote ... --token ...
 ```
 
 ---
 
-## gordon targets
+## gordon remotes
 
-Manage saved remote Gordon targets for easier CLI usage.
+Manage saved remote Gordon instances for easier CLI usage.
 
 ### Subcommands
 
 | Subcommand | Description |
 |------------|-------------|
-| `list` | List saved targets |
-| `add` | Add a new target |
-| `remove` | Remove a saved target |
-| `set-default` | Set default target |
+| `list` | List saved remotes |
+| `add` | Add a new remote |
+| `remove` | Remove a saved remote |
+| `use` | Set active remote |
 
 ### Examples
 
 ```bash
-# Add a target
-gordon targets add prod https://gordon.mydomain.com $TOKEN
+# Add a remote
+gordon remotes add prod https://gordon.mydomain.com --token $TOKEN
 
-# List saved targets
-gordon targets list
+# List saved remotes
+gordon remotes list
 
-# Set default target
-gordon targets set-default prod
+# Set active remote
+gordon remotes use prod
 
-# Now use without --target flag
+# Now use without --remote flag
 gordon routes list
 ```
 
