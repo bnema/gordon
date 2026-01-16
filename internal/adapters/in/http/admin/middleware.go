@@ -2,10 +2,12 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/bnema/zerowrap"
+	"golang.org/x/time/rate"
 
 	"gordon/internal/boundaries/in"
 	"gordon/internal/domain"
@@ -22,14 +24,29 @@ const (
 )
 
 // AuthMiddleware creates middleware that validates admin API authentication.
-func AuthMiddleware(authSvc in.AuthService, log zerowrap.Logger) func(http.Handler) http.Handler {
+// The limiter parameter is optional and can be nil to disable rate limiting.
+func AuthMiddleware(authSvc in.AuthService, limiter *rate.Limiter, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 
+			// Rate limit check (before any auth processing)
+			if limiter != nil && !limiter.Allow() {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
+				return
+			}
+
 			// Check if auth is enabled
 			if !authSvc.IsEnabled() {
-				// Auth disabled, allow all requests
+				// Auth disabled, log warning and allow all requests
+				log.Warn().
+					Str("path", r.URL.Path).
+					Str("method", r.Method).
+					Str("remote_addr", r.RemoteAddr).
+					Msg("auth disabled - allowing unauthenticated admin API access")
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -125,11 +142,11 @@ func sendUnauthorized(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("WWW-Authenticate", `Bearer realm="gordon-admin"`)
 	w.WriteHeader(http.StatusUnauthorized)
-	w.Write([]byte(`{"error":"` + message + `"}`))
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 func sendForbidden(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	w.Write([]byte(`{"error":"` + message + `"}`))
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

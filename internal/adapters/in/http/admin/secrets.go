@@ -11,17 +11,41 @@ import (
 // domainToEnvFile converts a domain to its env file path.
 // Example: app.mydomain.com -> app_mydomain_com.env
 // Must match the naming convention in envloader.FileLoader.getEnvFilePath
-func (h *Handler) domainToEnvFile(domain string) string {
+// Returns an error if the domain contains path traversal attempts or is invalid.
+func (h *Handler) domainToEnvFile(domain string) (string, error) {
+	// Reject path traversal attempts
+	if strings.Contains(domain, "..") {
+		return "", fmt.Errorf("invalid domain: path traversal not allowed")
+	}
+
+	// Validate domain length (max DNS name length is 253)
+	if len(domain) == 0 || len(domain) > 253 {
+		return "", fmt.Errorf("invalid domain length")
+	}
+
 	// Replace special characters with underscores (matches envloader)
 	filename := strings.ReplaceAll(domain, ".", "_")
 	filename = strings.ReplaceAll(filename, ":", "_")
 	filename = strings.ReplaceAll(filename, "/", "_")
-	return filepath.Join(h.envDir, filename+".env")
+
+	fullPath := filepath.Join(h.envDir, filename+".env")
+
+	// Verify path stays within envDir after cleaning
+	cleanPath := filepath.Clean(fullPath)
+	cleanEnvDir := filepath.Clean(h.envDir)
+	if !strings.HasPrefix(cleanPath, cleanEnvDir+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid domain: path escapes env directory")
+	}
+
+	return cleanPath, nil
 }
 
 // listSecrets returns the list of secret keys for a domain (not values).
 func (h *Handler) listSecrets(domain string) ([]string, error) {
-	envFile := h.domainToEnvFile(domain)
+	envFile, err := h.domainToEnvFile(domain)
+	if err != nil {
+		return nil, err
+	}
 
 	file, err := os.Open(envFile)
 	if err != nil {
@@ -55,7 +79,10 @@ func (h *Handler) listSecrets(domain string) ([]string, error) {
 
 // getSecrets returns all secrets for a domain as a map.
 func (h *Handler) getSecrets(domain string) (map[string]string, error) {
-	envFile := h.domainToEnvFile(domain)
+	envFile, err := h.domainToEnvFile(domain)
+	if err != nil {
+		return nil, err
+	}
 
 	file, err := os.Open(envFile)
 	if err != nil {
@@ -126,34 +153,59 @@ func (h *Handler) deleteSecret(domain, key string) error {
 	return h.writeSecrets(domain, existing)
 }
 
-// writeSecrets writes all secrets to the domain's env file.
-func (h *Handler) writeSecrets(domain string, secrets map[string]string) (err error) {
-	envFile := h.domainToEnvFile(domain)
-
-	// Create/truncate file with secure permissions
-	file, err := os.OpenFile(envFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+// writeSecrets writes all secrets to the domain's env file atomically.
+// It writes to a temporary file first, syncs it, then renames to the final path.
+func (h *Handler) writeSecrets(domain string, secrets map[string]string) error {
+	envFile, err := h.domainToEnvFile(domain)
 	if err != nil {
-		return fmt.Errorf("failed to create env file: %w", err)
+		return err
 	}
-	defer func() {
-		if cerr := file.Close(); cerr != nil && err == nil {
-			err = fmt.Errorf("failed to close env file: %w", cerr)
-		}
-	}()
+
+	// Write to temp file for atomic operation
+	tmpFile := envFile + ".tmp"
+
+	file, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create temp env file: %w", err)
+	}
 
 	// Write header comment
 	if _, err := fmt.Fprintf(file, "# Environment variables for %s\n", domain); err != nil {
+		file.Close()
+		os.Remove(tmpFile)
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 	if _, err := fmt.Fprintf(file, "# Managed by Gordon admin API\n\n"); err != nil {
+		file.Close()
+		os.Remove(tmpFile)
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
 	// Write each secret
 	for key, value := range secrets {
 		if _, err := fmt.Fprintf(file, "%s=%s\n", key, value); err != nil {
+			file.Close()
+			os.Remove(tmpFile)
 			return fmt.Errorf("failed to write secret %s: %w", key, err)
 		}
+	}
+
+	// Sync to ensure data is on disk before rename
+	if err := file.Sync(); err != nil {
+		file.Close()
+		os.Remove(tmpFile)
+		return fmt.Errorf("failed to sync env file: %w", err)
+	}
+
+	if err := file.Close(); err != nil {
+		os.Remove(tmpFile)
+		return fmt.Errorf("failed to close env file: %w", err)
+	}
+
+	// Atomic rename
+	if err := os.Rename(tmpFile, envFile); err != nil {
+		os.Remove(tmpFile)
+		return fmt.Errorf("failed to rename env file: %w", err)
 	}
 
 	return nil
