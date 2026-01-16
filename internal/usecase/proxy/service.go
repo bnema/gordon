@@ -307,7 +307,7 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 
 	proxy := newReverseProxy(targetURL,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
-			log.Error().Err(err).Str("target", targetURL.String()).Msg("PROXY ERROR - connection failed")
+			log.Error().Err(err).Str("target", targetURL.String()).Msg("proxy error: connection failed")
 			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		},
 		func(resp *http.Response) error {

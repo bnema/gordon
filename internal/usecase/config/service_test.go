@@ -2,11 +2,14 @@ package config
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/bnema/zerowrap"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"gordon/internal/boundaries/out/mocks"
 	"gordon/internal/domain"
@@ -96,7 +99,14 @@ func TestService_GetRoutes(t *testing.T) {
 }
 
 func TestService_AddRoute(t *testing.T) {
+	// Create temp config file for Save() to work
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)
+	require.NoError(t, err)
+
 	v := viper.New()
+	v.SetConfigFile(configFile)
 	eventBus := mocks.NewMockEventPublisher(t)
 	svc := NewService(v, eventBus)
 	ctx := testContext()
@@ -108,7 +118,7 @@ func TestService_AddRoute(t *testing.T) {
 		Image:  "newapp:latest",
 	}
 
-	err := svc.AddRoute(ctx, route)
+	err = svc.AddRoute(ctx, route)
 
 	assert.NoError(t, err)
 
