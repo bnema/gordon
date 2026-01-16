@@ -89,6 +89,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get target for this domain
+	log.Info().Str("resolving_target_for", r.Host).Msg("looking up proxy target")
 	target, err := s.GetTarget(ctx, r.Host)
 	if err != nil {
 		log.Warn().Err(err).Msg("no route found for domain")
@@ -96,7 +97,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Debug().
+	log.Info().
 		Str("host", target.Host).
 		Int("port", target.Port).
 		Str("container_id", target.ContainerID).
@@ -302,9 +303,11 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 		return
 	}
 
+	log.Info().Str("target_url", targetURL.String()).Msg("proxying to target")
+
 	proxy := newReverseProxy(targetURL,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
-			log.Error().Err(err).Str("target", targetURL.String()).Msg("proxy error")
+			log.Error().Err(err).Str("target", targetURL.String()).Msg("PROXY ERROR - connection failed")
 			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		},
 		func(resp *http.Response) error {
