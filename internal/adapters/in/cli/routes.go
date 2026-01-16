@@ -50,7 +50,7 @@ func newRoutesCmd() *cobra.Command {
 		Short: "Manage routes",
 		Long: `Manage Gordon routes. Routes map domains to container images.
 
-When targeting a remote Gordon instance (via --target flag or GORDON_TARGET env var),
+When targeting a remote Gordon instance (via --remote flag or GORDON_REMOTE env var),
 these commands operate on the remote server. Otherwise, they require access to
 the local Gordon configuration.`,
 	}
@@ -72,7 +72,7 @@ func newRoutesListCmd() *cobra.Command {
 
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				fmt.Println(styles.RenderError("routes command requires --target flag or GORDON_TARGET env var"))
+				fmt.Println(styles.RenderError("routes command requires --remote flag or GORDON_REMOTE env var"))
 				fmt.Println(styles.Theme.Muted.Render("Local route management is not yet supported. Use the config file directly."))
 				return nil
 			}
@@ -137,7 +137,7 @@ func newRoutesAddCmd() *cobra.Command {
 
 Examples:
   gordon routes add app.mydomain.com --image myapp:latest
-  gordon --target https://gordon.mydomain.com routes add api.mydomain.com --image api:v2`,
+  gordon --remote https://gordon.mydomain.com routes add api.mydomain.com --image api:v2`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
@@ -145,7 +145,7 @@ Examples:
 
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				fmt.Println(styles.RenderError("routes command requires --target flag or GORDON_TARGET env var"))
+				fmt.Println(styles.RenderError("routes command requires --remote flag or GORDON_REMOTE env var"))
 				return nil
 			}
 
@@ -193,7 +193,7 @@ Examples:
 
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				fmt.Println(styles.RenderError("routes command requires --target flag or GORDON_TARGET env var"))
+				fmt.Println(styles.RenderError("routes command requires --remote flag or GORDON_REMOTE env var"))
 				return nil
 			}
 
@@ -236,7 +236,7 @@ func newStatusCmd() *cobra.Command {
 
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				fmt.Println(styles.RenderError("status command requires --target flag or GORDON_TARGET env var"))
+				fmt.Println(styles.RenderError("status command requires --remote flag or GORDON_REMOTE env var"))
 				os.Exit(1)
 			}
 

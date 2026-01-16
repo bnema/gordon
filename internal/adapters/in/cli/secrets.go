@@ -20,7 +20,7 @@ func newSecretsCmd() *cobra.Command {
 
 Secrets are stored per-domain and injected into containers as environment variables.
 
-When targeting a remote Gordon instance (via --target flag or GORDON_TARGET env var),
+When targeting a remote Gordon instance (via --remote flag or GORDON_REMOTE env var),
 these commands operate on the remote server.`,
 	}
 
@@ -42,7 +42,7 @@ Note: Only secret keys are shown, not values (for security).
 
 Examples:
   gordon secrets list app.mydomain.com
-  gordon --target https://gordon.mydomain.com secrets list api.mydomain.com`,
+  gordon --remote https://gordon.mydomain.com secrets list api.mydomain.com`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
@@ -50,7 +50,7 @@ Examples:
 
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				fmt.Println(styles.RenderError("secrets command requires --target flag or GORDON_TARGET env var"))
+				fmt.Println(styles.RenderError("secrets command requires --remote flag or GORDON_REMOTE env var"))
 				fmt.Println(styles.Theme.Muted.Render("Local secret management is not yet supported."))
 				return nil
 			}
@@ -102,7 +102,7 @@ Secrets are specified as KEY=value pairs. Multiple secrets can be set at once.
 Examples:
   gordon secrets set app.mydomain.com DATABASE_URL=postgres://localhost/db
   gordon secrets set app.mydomain.com API_KEY=secret123 DEBUG=false
-  gordon --target https://gordon.mydomain.com secrets set api.mydomain.com TOKEN=abc`,
+  gordon --remote https://gordon.mydomain.com secrets set api.mydomain.com TOKEN=abc`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
@@ -111,7 +111,7 @@ Examples:
 
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				fmt.Println(styles.RenderError("secrets command requires --target flag or GORDON_TARGET env var"))
+				fmt.Println(styles.RenderError("secrets command requires --remote flag or GORDON_REMOTE env var"))
 				return nil
 			}
 
@@ -163,7 +163,7 @@ Examples:
 
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				fmt.Println(styles.RenderError("secrets command requires --target flag or GORDON_TARGET env var"))
+				fmt.Println(styles.RenderError("secrets command requires --remote flag or GORDON_REMOTE env var"))
 				return nil
 			}
 
