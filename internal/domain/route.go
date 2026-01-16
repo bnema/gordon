@@ -28,3 +28,13 @@ type ExternalRoute struct {
 	Host   string // e.g., "localhost"
 	Port   int    // e.g., 5000
 }
+
+// RouteHealth represents the health status of a route.
+type RouteHealth struct {
+	Domain          string // The route domain
+	ContainerStatus string // Container state: "running", "stopped", etc.
+	HTTPStatus      int    // HTTP status code from probe (0 if unreachable)
+	ResponseTimeMs  int64  // Response time in milliseconds
+	Healthy         bool   // True if container running AND HTTP 2xx/3xx
+	Error           string // Error message if probe failed
+}

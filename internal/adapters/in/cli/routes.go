@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"gordon/internal/adapters/in/cli/remote"
 	"gordon/internal/adapters/in/cli/ui/components"
 	"gordon/internal/adapters/in/cli/ui/styles"
 	"gordon/internal/domain"
@@ -62,6 +63,27 @@ the local Gordon configuration.`,
 	return cmd
 }
 
+// formatHTTPStatus formats the HTTP status for display.
+func formatHTTPStatus(health *remote.RouteHealth) string {
+	if health == nil {
+		return styles.Theme.Muted.Render("-")
+	}
+	if health.HTTPStatus == 0 {
+		if health.Error != "" {
+			return styles.Theme.BadgeError.Render("err")
+		}
+		return styles.Theme.Muted.Render("-")
+	}
+	status := fmt.Sprintf("%d", health.HTTPStatus)
+	if health.ResponseTimeMs > 0 {
+		status = fmt.Sprintf("%d (%dms)", health.HTTPStatus, health.ResponseTimeMs)
+	}
+	if health.HTTPStatus >= 200 && health.HTTPStatus < 400 {
+		return styles.Theme.BadgeSuccess.Render(status)
+	}
+	return styles.Theme.BadgeError.Render(status)
+}
+
 // newRoutesListCmd creates the routes list command.
 func newRoutesListCmd() *cobra.Command {
 	return &cobra.Command{
@@ -87,24 +109,30 @@ func newRoutesListCmd() *cobra.Command {
 				return nil
 			}
 
-			// Get status for each route
-			status, _ := client.GetStatus(ctx)
-			containerStatus := make(map[string]string)
-			if status != nil {
-				containerStatus = status.ContainerStatus
+			// Get health status for each route (includes container status and HTTP probe)
+			health, _ := client.GetHealth(ctx)
+			if health == nil {
+				health = make(map[string]*remote.RouteHealth)
 			}
 
 			// Build table rows
 			const imageColWidth = 35
 			rows := make([][]string, len(routes))
 			for i, route := range routes {
-				routeStatus := containerStatus[route.Domain]
-				if routeStatus == "" {
-					routeStatus = "unknown"
+				routeHealth := health[route.Domain]
+
+				// Container status column
+				containerStatus := "unknown"
+				if routeHealth != nil {
+					containerStatus = routeHealth.ContainerStatus
 				}
-				statusBadge := components.ContainerStatusBadge(routeStatus)
+				containerBadge := components.ContainerStatusBadge(containerStatus)
+
+				// HTTP status column
+				httpStatus := formatHTTPStatus(routeHealth)
+
 				displayImage := truncateImage(route.Image, imageColWidth)
-				rows[i] = []string{route.Domain, displayImage, statusBadge}
+				rows[i] = []string{route.Domain, displayImage, containerBadge, httpStatus}
 			}
 
 			// Render table
@@ -112,7 +140,8 @@ func newRoutesListCmd() *cobra.Command {
 				components.WithColumns([]components.TableColumn{
 					{Title: "Domain", Width: 25},
 					{Title: "Image", Width: imageColWidth},
-					{Title: "Status", Width: 12},
+					{Title: "Container", Width: 12},
+					{Title: "HTTP", Width: 14},
 				}),
 				components.WithRows(rows),
 			)
