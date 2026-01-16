@@ -249,7 +249,7 @@ func newStatusCmd() *cobra.Command {
 			fmt.Println(styles.Theme.Title.Render("Gordon Status"))
 			fmt.Println()
 
-			fmt.Printf("%s %s\n", styles.Theme.Bold.Render("Registry:"), status.RegistryDomain)
+			fmt.Printf("%s %s\n", styles.Theme.Bold.Render("Domain:"), status.RegistryDomain)
 			fmt.Printf("%s %d\n", styles.Theme.Bold.Render("Registry Port:"), status.RegistryPort)
 			fmt.Printf("%s %d\n", styles.Theme.Bold.Render("Server Port:"), status.ServerPort)
 			fmt.Printf("%s %d\n", styles.Theme.Bold.Render("Routes:"), status.Routes)

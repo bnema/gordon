@@ -126,7 +126,7 @@ enabled = true
 
 ```toml
 [server]
-registry_domain = "registry.local"
+gordon_domain = "gordon.local"
 
 [auto_route]
 enabled = true
@@ -136,8 +136,8 @@ enabled = true
 
 Usage:
 ```bash
-docker push registry.local/myapp.local:latest
-docker push registry.local/api.local:latest
+docker push gordon.local/myapp.local:latest
+docker push gordon.local/api.local:latest
 # Both routes created automatically
 ```
 
