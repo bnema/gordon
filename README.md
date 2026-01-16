@@ -43,11 +43,9 @@ Full documentation is available at **[gordon.bnema.dev](https://gordon.bnema.dev
 ## Quick Start
 
 ```bash
-# Download and install
-wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
-tar -xzf gordon_linux_amd64.tar.gz
-chmod +x gordon
-sudo mv gordon /usr/local/bin/
+# Install Gordon
+curl -fsSL https://gordon.bnema.dev/install | sh
+# Or: curl -fsSL https://raw.githubusercontent.com/bnema/gordon/main/install.sh | sh
 
 # Start Gordon (generates config on first run)
 gordon start
