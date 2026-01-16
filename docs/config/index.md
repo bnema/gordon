@@ -7,7 +7,7 @@ Gordon uses a single TOML configuration file located at `~/.config/gordon/gordon
 | Location | Purpose |
 |----------|---------|
 | `~/.config/gordon/gordon.toml` | Default configuration file |
-| Custom path via `--config` flag | `gordon start --config /path/to/config.toml` |
+| Custom path via `--config` flag | `gordon serve --config /path/to/config.toml` |
 
 ## Minimal Configuration
 
@@ -47,6 +47,10 @@ type = "token"                           # "password" or "token"
 # Token auth:
 token_secret = "gordon/registry/token_secret"
 token_expiry = "720h"                    # Duration or 0 for never
+
+# Deploy behavior
+[deploy]
+pull_policy = "if-tag-changed"           # always, if-not-present, if-tag-changed
 
 # Logging
 [logging]
@@ -109,6 +113,7 @@ enabled = false                          # Auto-create routes from image names
 | `[server]` | Core server settings | [Server](./server.md) |
 | `[secrets]` | Secrets backend configuration | [Secrets](./secrets.md) |
 | `[registry_auth]` | Registry authentication | [Registry Auth](./registry-auth.md) |
+| `[deploy]` | Deployment behavior | [Deploy](./deploy.md) |
 | `[logging]` | Logging configuration | [Logging](./logging.md) |
 | `[env]` | Environment variable settings | [Environment](./env.md) |
 | `[volumes]` | Volume management | [Volumes](./volumes.md) |
@@ -130,6 +135,7 @@ enabled = false                          # Auto-create routes from image names
 | `registry_auth.enabled` | `false` |
 | `registry_auth.type` | `"password"` |
 | `registry_auth.token_expiry` | `"720h"` |
+| `deploy.pull_policy` | `"if-tag-changed"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |
 | `logging.file.enabled` | `false` |
@@ -158,14 +164,15 @@ The following settings require a restart to take effect:
 - `server.data_dir`
 - `secrets.backend`
 - `registry_auth` settings
+- `deploy.pull_policy`
 
 ## Environment Variable Override
 
 Configuration values can be overridden with environment variables:
 
 ```bash
-GORDON_SERVER_PORT=8080 gordon start
-GORDON_LOGGING_LEVEL=debug gordon start
+GORDON_SERVER_PORT=8080 gordon serve
+GORDON_LOGGING_LEVEL=debug gordon serve
 ```
 
 Pattern: `GORDON_SECTION_KEY` (uppercase, underscores instead of dots)
