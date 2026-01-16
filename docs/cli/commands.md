@@ -6,7 +6,7 @@ Gordon provides a command-line interface for server management, deployment, and 
 
 | Command | Description |
 |---------|-------------|
-| `gordon start` | Start the Gordon server |
+| `gordon serve` | Start the Gordon server |
 | `gordon reload` | Reload configuration and sync containers |
 | `gordon deploy` | Manually deploy or redeploy a specific route |
 | `gordon logs` | Display Gordon process logs |
@@ -17,8 +17,8 @@ Gordon provides a command-line interface for server management, deployment, and 
 
 ```bash
 # Start Gordon
-gordon start
-gordon start --config /path/to/config.toml
+gordon serve
+gordon serve --config /path/to/config.toml
 
 # Reload configuration
 gordon reload
@@ -50,14 +50,14 @@ gordon auth internal
 
 ---
 
-## gordon start
+## gordon serve
 
 Start the Gordon server with registry and proxy components.
 
 ### Synopsis
 
 ```bash
-gordon start [options]
+gordon serve [options]
 ```
 
 ### Options
@@ -90,7 +90,7 @@ On first run without a config file, Gordon creates a default configuration at `~
 
 ```bash
 # First run - creates default config
-gordon start
+gordon serve
 # Edit the config, then restart
 ```
 
@@ -98,15 +98,15 @@ gordon start
 
 ```bash
 # Basic start
-gordon start
+gordon serve
 
 # With custom config
-gordon start --config /path/to/gordon.toml
-gordon start -c ./my-config.toml
+gordon serve --config /path/to/gordon.toml
+gordon serve -c ./my-config.toml
 
 # With environment override
-GORDON_SERVER_PORT=8080 gordon start
-GORDON_LOGGING_LEVEL=debug gordon start
+GORDON_SERVER_PORT=8080 gordon serve
+GORDON_LOGGING_LEVEL=debug gordon serve
 ```
 
 ### Signals
@@ -132,7 +132,7 @@ Description=Gordon Container Platform
 [Service]
 Type=simple
 Restart=always
-ExecStart=/usr/local/bin/gordon start
+ExecStart=/usr/local/bin/gordon serve
 
 [Install]
 WantedBy=default.target

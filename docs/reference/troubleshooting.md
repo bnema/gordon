@@ -35,7 +35,7 @@ Common issues and solutions when using Gordon.
    ```bash
    systemctl --user status gordon
    # or
-   pgrep -f "gordon start"
+   pgrep -f "gordon serve"
    ```
 
 2. Check registry port is accessible:

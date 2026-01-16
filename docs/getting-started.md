@@ -20,7 +20,7 @@ This script automatically detects your OS and architecture, downloads the approp
 
 ```bash
 # First run creates the default config
-gordon start
+gordon serve
 # Press Ctrl+C to stop
 ```
 
@@ -63,7 +63,7 @@ Description=Gordon Container Platform
 [Service]
 Type=simple
 Restart=always
-ExecStart=/usr/local/bin/gordon start
+ExecStart=/usr/local/bin/gordon serve
 
 [Install]
 WantedBy=default.target

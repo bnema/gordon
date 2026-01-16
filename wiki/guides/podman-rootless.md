@@ -109,7 +109,7 @@ sudo mv gordon /usr/local/bin/
 Generate initial config:
 
 ```bash
-gordon start
+gordon serve
 # Press Ctrl+C after config is created
 ```
 
@@ -138,7 +138,7 @@ After=podman.socket
 Type=simple
 Restart=always
 RestartSec=5
-ExecStart=/usr/local/bin/gordon start
+ExecStart=/usr/local/bin/gordon serve
 
 [Install]
 WantedBy=default.target
