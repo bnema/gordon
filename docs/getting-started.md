@@ -11,18 +11,10 @@ Deploy your first app with Gordon in under 5 minutes.
 ## 1. Install Gordon
 
 ```bash
-# Download the latest release (choose your architecture)
-# For x86_64:
-wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
-tar -xzf gordon_linux_amd64.tar.gz
-
-# For ARM64 (Raspberry Pi 4, AWS Graviton, etc.):
-# wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_arm64.tar.gz
-# tar -xzf gordon_linux_arm64.tar.gz
-
-chmod +x gordon
-sudo mv gordon /usr/local/bin/
+curl -fsSL https://gordon.bnema.dev/install | bash
 ```
+
+This script automatically detects your OS and architecture, downloads the appropriate binary, and installs it to `/usr/local/bin`.
 
 ## 2. Start Gordon
 
