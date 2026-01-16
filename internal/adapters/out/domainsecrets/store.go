@@ -1,4 +1,5 @@
-package admin
+// Package domainsecrets implements the DomainSecretStore adapter using filesystem-based env files.
+package domainsecrets
 
 import (
 	"bufio"
@@ -6,46 +7,40 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/bnema/zerowrap"
 )
 
-// domainToEnvFile converts a domain to its env file path.
-// Example: app.mydomain.com -> app_mydomain_com.env
-// Must match the naming convention in envloader.FileLoader.getEnvFilePath
-// Returns an error if the domain contains path traversal attempts or is invalid.
-func (h *Handler) domainToEnvFile(domain string) (string, error) {
-	// Reject path traversal attempts
-	if strings.Contains(domain, "..") {
-		return "", fmt.Errorf("invalid domain: path traversal not allowed")
-	}
-
-	// Validate domain length (max DNS name length is 253)
-	if len(domain) == 0 || len(domain) > 253 {
-		return "", fmt.Errorf("invalid domain length")
-	}
-
-	// Replace special characters with underscores (matches envloader)
-	filename := strings.ReplaceAll(domain, ".", "_")
-	filename = strings.ReplaceAll(filename, ":", "_")
-	filename = strings.ReplaceAll(filename, "/", "_")
-
-	fullPath := filepath.Join(h.envDir, filename+".env")
-
-	// Verify path stays within envDir after cleaning
-	cleanPath := filepath.Clean(fullPath)
-	cleanEnvDir := filepath.Clean(h.envDir)
-	if !strings.HasPrefix(cleanPath, cleanEnvDir+string(filepath.Separator)) {
-		return "", fmt.Errorf("invalid domain: path escapes env directory")
-	}
-
-	return cleanPath, nil
+// FileStore implements the DomainSecretStore interface using filesystem-based env files.
+// This adapter is responsible only for file I/O operations; domain validation
+// should be performed by the use case layer before calling these methods.
+type FileStore struct {
+	envDir string
+	log    zerowrap.Logger
 }
 
-// listSecrets returns the list of secret keys for a domain (not values).
-func (h *Handler) listSecrets(domain string) ([]string, error) {
-	envFile, err := h.domainToEnvFile(domain)
-	if err != nil {
-		return nil, err
+// NewFileStore creates a new file-based domain secret store.
+func NewFileStore(envDir string, log zerowrap.Logger) (*FileStore, error) {
+	// Ensure env directory exists
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create env directory %s: %w", envDir, err)
 	}
+
+	log.Debug().
+		Str(zerowrap.FieldLayer, "adapter").
+		Str(zerowrap.FieldAdapter, "domainsecrets").
+		Str("env_dir", envDir).
+		Msg("domain secret store initialized")
+
+	return &FileStore{
+		envDir: envDir,
+		log:    log,
+	}, nil
+}
+
+// ListKeys returns the list of secret keys for a domain (not values).
+func (s *FileStore) ListKeys(domain string) ([]string, error) {
+	envFile := s.getEnvFilePath(domain)
 
 	file, err := os.Open(envFile)
 	if err != nil {
@@ -77,12 +72,9 @@ func (h *Handler) listSecrets(domain string) ([]string, error) {
 	return keys, nil
 }
 
-// getSecrets returns all secrets for a domain as a map.
-func (h *Handler) getSecrets(domain string) (map[string]string, error) {
-	envFile, err := h.domainToEnvFile(domain)
-	if err != nil {
-		return nil, err
-	}
+// GetAll returns all secrets for a domain as a key-value map.
+func (s *FileStore) GetAll(domain string) (map[string]string, error) {
+	envFile := s.getEnvFilePath(domain)
 
 	file, err := os.Open(envFile)
 	if err != nil {
@@ -116,32 +108,32 @@ func (h *Handler) getSecrets(domain string) (map[string]string, error) {
 	return secrets, nil
 }
 
-// setSecrets sets multiple secrets for a domain, merging with existing.
-func (h *Handler) setSecrets(domain string, newSecrets map[string]string) error {
+// Set sets or updates multiple secrets for a domain, merging with existing.
+func (s *FileStore) Set(domain string, secrets map[string]string) error {
 	// Ensure env directory exists
-	if err := os.MkdirAll(h.envDir, 0700); err != nil {
+	if err := os.MkdirAll(s.envDir, 0700); err != nil {
 		return fmt.Errorf("failed to create env directory: %w", err)
 	}
 
 	// Read existing secrets
-	existing, err := h.getSecrets(domain)
+	existing, err := s.GetAll(domain)
 	if err != nil {
 		return err
 	}
 
 	// Merge new secrets with existing
-	for key, value := range newSecrets {
+	for key, value := range secrets {
 		existing[key] = value
 	}
 
-	// Write back
-	return h.writeSecrets(domain, existing)
+	// Write back atomically
+	return s.writeSecretsAtomic(domain, existing)
 }
 
-// deleteSecret removes a secret from a domain's env file.
-func (h *Handler) deleteSecret(domain, key string) error {
+// Delete removes a specific secret key from a domain.
+func (s *FileStore) Delete(domain, key string) error {
 	// Read existing secrets
-	existing, err := h.getSecrets(domain)
+	existing, err := s.GetAll(domain)
 	if err != nil {
 		return err
 	}
@@ -149,19 +141,14 @@ func (h *Handler) deleteSecret(domain, key string) error {
 	// Remove the key
 	delete(existing, key)
 
-	// Write back
-	return h.writeSecrets(domain, existing)
+	// Write back atomically
+	return s.writeSecretsAtomic(domain, existing)
 }
 
-// writeSecrets writes all secrets to the domain's env file atomically.
+// writeSecretsAtomic writes all secrets to the domain's env file atomically.
 // It writes to a temporary file first, syncs it, then renames to the final path.
-func (h *Handler) writeSecrets(domain string, secrets map[string]string) error {
-	envFile, err := h.domainToEnvFile(domain)
-	if err != nil {
-		return err
-	}
-
-	// Write to temp file for atomic operation
+func (s *FileStore) writeSecretsAtomic(domain string, secrets map[string]string) error {
+	envFile := s.getEnvFilePath(domain)
 	tmpFile := envFile + ".tmp"
 
 	file, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
@@ -209,4 +196,14 @@ func (h *Handler) writeSecrets(domain string, secrets map[string]string) error {
 	}
 
 	return nil
+}
+
+// getEnvFilePath converts a domain to its env file path.
+// This must match the naming convention in envloader.FileLoader.getEnvFilePath.
+func (s *FileStore) getEnvFilePath(domain string) string {
+	// Create domain-safe filename (replace dots and other chars with underscores)
+	safeDomain := strings.ReplaceAll(domain, ".", "_")
+	safeDomain = strings.ReplaceAll(safeDomain, ":", "_")
+	safeDomain = strings.ReplaceAll(safeDomain, "/", "_")
+	return filepath.Join(s.envDir, safeDomain+".env")
 }

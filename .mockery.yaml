@@ -20,6 +20,7 @@ packages:
       EnvLoader:
       ContainerLogWriter:
       TokenStore:
+      DomainSecretStore:
   gordon/internal/boundaries/in:
     interfaces:
       ContainerService:
@@ -29,3 +30,4 @@ packages:
       AuthService:
       HealthService:
       HTTPProber:
+      SecretService:

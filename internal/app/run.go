@@ -21,6 +21,7 @@ import (
 
 	// Adapters - Output
 	"gordon/internal/adapters/out/docker"
+	"gordon/internal/adapters/out/domainsecrets"
 	"gordon/internal/adapters/out/envloader"
 	"gordon/internal/adapters/out/eventbus"
 	"gordon/internal/adapters/out/filesystem"
@@ -49,6 +50,7 @@ import (
 	"gordon/internal/usecase/health"
 	"gordon/internal/usecase/proxy"
 	registrySvc "gordon/internal/usecase/registry"
+	secretsSvc "gordon/internal/usecase/secrets"
 )
 
 // Config holds the application configuration.
@@ -298,12 +300,19 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		svc.envDir = filepath.Join(dataDir, "env")
 	}
 
+	// Create domain secret store and service
+	domainSecretStore, err := domainsecrets.NewFileStore(svc.envDir, log)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to create domain secret store")
+	}
+	secretSvc := secretsSvc.NewService(domainSecretStore, log)
+
 	// Create health service for route health checking
 	prober := httpprober.New()
 	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
 
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, svc.eventBus, svc.envDir, log)
+	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, svc.eventBus, log)
 
 	return svc, nil
 }
