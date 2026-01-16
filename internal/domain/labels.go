@@ -13,4 +13,14 @@ const (
 
 	// Image labels (set in Dockerfile)
 	LabelProxyPort = "gordon.proxy.port"
+
+	// Auto-route image labels (for automatic route discovery)
+	// LabelDomains specifies multiple route domains (comma-separated).
+	LabelDomains = "gordon.domains"
+	// LabelHealth specifies the health check endpoint path.
+	LabelHealth = "gordon.health"
+	// LabelPort specifies the container port to proxy.
+	LabelPort = "gordon.port"
+	// LabelEnvFile specifies the path to .env file inside the image.
+	LabelEnvFile = "gordon.env-file"
 )
