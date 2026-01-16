@@ -814,7 +814,7 @@ func TestAutoRouteHandler_BuildImageName(t *testing.T) {
 			name:      "with digest",
 			imageName: "myapp",
 			reference: "sha256:abc123",
-			expected:  "myapp:sha256:abc123",
+			expected:  "myapp@sha256:abc123",
 		},
 	}
 
