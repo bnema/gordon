@@ -46,7 +46,7 @@ type = "token"                           # "password" or "token"
 # password_hash = "gordon/registry/password_hash"
 # Token auth:
 token_secret = "gordon/registry/token_secret"
-token_expiry = "720h"                    # Duration or 0 for never
+token_expiry = "30d"                     # Duration (1y, 30d, 2w) or 0 for never
 
 # Deploy behavior
 [deploy]
@@ -134,7 +134,7 @@ enabled = false                          # Auto-create routes from image names
 | `secrets.backend` | `"unsafe"` |
 | `registry_auth.enabled` | `false` |
 | `registry_auth.type` | `"password"` |
-| `registry_auth.token_expiry` | `"720h"` |
+| `registry_auth.token_expiry` | `"30d"` |
 | `deploy.pull_policy` | `"if-tag-changed"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |
