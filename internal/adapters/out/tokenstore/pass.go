@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 
 	"gordon/internal/domain"
 )
+
+// ansiRegex matches ANSI escape sequences for stripping from pass output.
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 const (
 	// passTokenPath is the base path for tokens in pass.
@@ -139,13 +143,24 @@ func (s *PassStore) ListTokens(ctx context.Context) ([]domain.Token, error) {
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		// Skip tree formatting characters and empty lines
+
+		// Strip ANSI escape sequences (pass outputs colored text on TTY)
+		line = ansiRegex.ReplaceAllString(line, "")
+
+		// Skip tree formatting characters (both Unicode and ASCII variants)
+		// Unicode: ├── └── │
 		line = strings.TrimPrefix(line, "├── ")
 		line = strings.TrimPrefix(line, "└── ")
 		line = strings.TrimPrefix(line, "│   ")
+		// ASCII: |-- `-- |
+		line = strings.TrimPrefix(line, "|-- ")
+		line = strings.TrimPrefix(line, "`-- ")
+		line = strings.TrimPrefix(line, "|   ")
 
-		// Skip .meta files and empty lines
-		if line == "" || strings.HasSuffix(line, ".meta") {
+		line = strings.TrimSpace(line)
+
+		// Skip .meta files, empty lines, and the header line
+		if line == "" || strings.HasSuffix(line, ".meta") || line == passTokenPath {
 			continue
 		}
 
