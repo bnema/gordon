@@ -4,7 +4,9 @@ package admin
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bnema/zerowrap"
@@ -17,6 +19,9 @@ import (
 // maxAdminRequestSize is the maximum allowed size for admin API request bodies.
 const maxAdminRequestSize = 1 << 20 // 1MB
 
+// maxLogLines is the maximum allowed number of log lines that can be requested.
+const maxLogLines = 10000
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc    in.ConfigService
@@ -24,6 +29,7 @@ type Handler struct {
 	containerSvc in.ContainerService
 	healthSvc    in.HealthService
 	secretSvc    in.SecretService
+	logSvc       in.LogService
 	eventBus     out.EventPublisher
 	log          zerowrap.Logger
 }
@@ -35,6 +41,7 @@ func NewHandler(
 	containerSvc in.ContainerService,
 	healthSvc in.HealthService,
 	secretSvc in.SecretService,
+	logSvc in.LogService,
 	eventBus out.EventPublisher,
 	log zerowrap.Logger,
 ) *Handler {
@@ -44,6 +51,7 @@ func NewHandler(
 		containerSvc: containerSvc,
 		healthSvc:    healthSvc,
 		secretSvc:    secretSvc,
+		logSvc:       logSvc,
 		eventBus:     eventBus,
 		log:          log,
 	}
@@ -77,6 +85,10 @@ func (h *Handler) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleRoutes(w, r, path)
 	case path == "/secrets" || strings.HasPrefix(path, "/secrets/"):
 		h.handleSecrets(w, r, path)
+	case path == "/deploy" || strings.HasPrefix(path, "/deploy/"):
+		h.handleDeploy(w, r, path)
+	case path == "/logs" || strings.HasPrefix(path, "/logs/"):
+		h.handleLogs(w, r, path)
 	case path == "/status":
 		h.handleStatus(w, r)
 	case path == "/health":
@@ -483,4 +495,234 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.sendJSON(w, http.StatusOK, config)
+}
+
+// handleDeploy handles /admin/deploy/:domain endpoint.
+// POST triggers a deployment for the specified domain.
+func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	// Check write permission
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+
+	// Parse domain from path
+	deployDomain := strings.TrimPrefix(path, "/deploy/")
+	if deployDomain == "" || deployDomain == "/deploy" {
+		h.sendError(w, http.StatusBadRequest, "domain required in path")
+		return
+	}
+
+	// Get the route for this domain
+	route, err := h.configSvc.GetRoute(ctx, deployDomain)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, "route not found")
+		return
+	}
+
+	// Deploy the container
+	container, err := h.containerSvc.Deploy(ctx, *route)
+	if err != nil {
+		log.Error().Err(err).Str("domain", deployDomain).Msg("failed to deploy container")
+		h.sendError(w, http.StatusInternalServerError, "failed to deploy container")
+		return
+	}
+
+	log.Info().Str("domain", deployDomain).Str("container_id", container.ID).Msg("container deployed via admin API")
+	h.sendJSON(w, http.StatusOK, map[string]any{
+		"status":       "deployed",
+		"container_id": container.ID,
+		"domain":       deployDomain,
+	})
+}
+
+// handleLogs handles /admin/logs endpoints.
+// GET /admin/logs - Gordon process logs
+// GET /admin/logs/:domain - Container logs for a specific domain
+func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	// Check read permission
+	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+
+	// Check if LogService is available
+	if h.logSvc == nil {
+		h.sendError(w, http.StatusServiceUnavailable, "log service not available")
+		return
+	}
+
+	// Parse query parameters
+	lines := 50 // default
+	if linesStr := r.URL.Query().Get("lines"); linesStr != "" {
+		if n, err := strconv.Atoi(linesStr); err == nil && n > 0 {
+			lines = n
+		}
+	}
+	if lines > maxLogLines {
+		lines = maxLogLines
+	}
+	follow := r.URL.Query().Get("follow") == "true"
+
+	// Parse domain from path
+	logDomain := strings.TrimPrefix(path, "/logs/")
+	if logDomain == "/logs" {
+		logDomain = ""
+	}
+
+	if logDomain == "" {
+		// Gordon process logs
+		h.handleProcessLogs(w, r, lines, follow)
+	} else {
+		// Container logs
+		h.handleContainerLogs(w, r, logDomain, lines, follow)
+	}
+
+	// Prevent unused variable warning when follow is implemented
+	_ = log
+}
+
+// handleProcessLogs handles Gordon process logs.
+func (h *Handler) handleProcessLogs(w http.ResponseWriter, r *http.Request, lines int, follow bool) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	if follow {
+		// SSE streaming
+		h.streamProcessLogs(w, r, lines)
+		return
+	}
+
+	// Return last N lines as JSON
+	logLines, err := h.logSvc.GetProcessLogs(ctx, lines)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get process logs")
+		h.sendError(w, http.StatusInternalServerError, "failed to get logs")
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, map[string]any{
+		"lines": logLines,
+	})
+}
+
+// handleContainerLogs handles container logs for a specific domain.
+func (h *Handler) handleContainerLogs(w http.ResponseWriter, r *http.Request, logDomain string, lines int, follow bool) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	if follow {
+		// SSE streaming
+		h.streamContainerLogs(w, r, logDomain, lines)
+		return
+	}
+
+	// Return last N lines as JSON
+	logLines, err := h.logSvc.GetContainerLogs(ctx, logDomain, lines)
+	if err != nil {
+		log.Warn().Err(err).Str("domain", logDomain).Msg("failed to get container logs")
+		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get logs: %v", err))
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, map[string]any{
+		"domain": logDomain,
+		"lines":  logLines,
+	})
+}
+
+// streamProcessLogs streams Gordon process logs via SSE.
+func (h *Handler) streamProcessLogs(w http.ResponseWriter, r *http.Request, lines int) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	// Check for flusher support before setting up SSE
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		h.sendError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	// Set up SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	ch, err := h.logSvc.FollowProcessLogs(ctx, lines)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to follow process logs")
+		_, _ = fmt.Fprintf(w, "event: error\ndata: failed to stream logs\n\n")
+		flusher.Flush()
+		return
+	}
+
+	for {
+		select {
+		case line, ok := <-ch:
+			if !ok {
+				return
+			}
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
+			flusher.Flush()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// streamContainerLogs streams container logs via SSE.
+func (h *Handler) streamContainerLogs(w http.ResponseWriter, r *http.Request, logDomain string, lines int) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	// Check for flusher support before setting up SSE
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		h.sendError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	// Set up SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	ch, err := h.logSvc.FollowContainerLogs(ctx, logDomain, lines)
+	if err != nil {
+		log.Warn().Err(err).Str("domain", logDomain).Msg("failed to follow container logs")
+		_, _ = fmt.Fprintf(w, "event: error\ndata: failed to stream container logs\n\n")
+		flusher.Flush()
+		return
+	}
+
+	for {
+		select {
+		case line, ok := <-ch:
+			if !ok {
+				return
+			}
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
+			flusher.Flush()
+		case <-ctx.Done():
+			return
+		}
+	}
 }

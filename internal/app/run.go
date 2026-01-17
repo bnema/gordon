@@ -48,6 +48,7 @@ import (
 	"gordon/internal/usecase/config"
 	"gordon/internal/usecase/container"
 	"gordon/internal/usecase/health"
+	"gordon/internal/usecase/logs"
 	"gordon/internal/usecase/proxy"
 	registrySvc "gordon/internal/usecase/registry"
 	secretsSvc "gordon/internal/usecase/secrets"
@@ -311,8 +312,12 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	prober := httpprober.New()
 	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
 
+	// Create log service for accessing logs via admin API
+	logFilePath := cfg.Logging.File.Path
+	logSvc := logs.NewService(logFilePath, svc.containerSvc, svc.runtime, log)
+
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, svc.eventBus, log)
+	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.eventBus, log)
 
 	return svc, nil
 }

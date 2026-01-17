@@ -46,26 +46,36 @@ Examples:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			domain := args[0]
+			secretDomain := args[0]
+
+			var keys []string
+			var err error
 
 			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				fmt.Println(styles.RenderError("secrets command requires --remote flag or GORDON_REMOTE env var"))
-				fmt.Println(styles.Theme.Muted.Render("Local secret management is not yet supported."))
-				return nil
+			if isRemote {
+				keys, err = client.ListSecrets(ctx, secretDomain)
+			} else {
+				local, localErr := GetLocalServices(configPath)
+				if localErr != nil {
+					return fmt.Errorf("failed to initialize local services: %w", localErr)
+				}
+				keys, err = local.GetSecretService().ListKeys(ctx, secretDomain)
 			}
 
-			keys, err := client.ListSecrets(ctx, domain)
 			if err != nil {
 				return fmt.Errorf("failed to list secrets: %w", err)
 			}
 
 			if len(keys) == 0 {
-				fmt.Println(styles.Theme.Muted.Render(fmt.Sprintf("No secrets configured for %s", domain)))
+				fmt.Println(styles.Theme.Muted.Render(fmt.Sprintf("No secrets configured for %s", secretDomain)))
 				return nil
 			}
 
-			fmt.Println(styles.Theme.Title.Render(fmt.Sprintf("Secrets for %s", domain)))
+			title := fmt.Sprintf("Secrets for %s", secretDomain)
+			if !isRemote {
+				title = fmt.Sprintf("Secrets for %s (local)", secretDomain)
+			}
+			fmt.Println(styles.Theme.Title.Render(title))
 			fmt.Println()
 
 			// Build table rows
@@ -106,14 +116,8 @@ Examples:
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			domain := args[0]
+			secretDomain := args[0]
 			pairs := args[1:]
-
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				fmt.Println(styles.RenderError("secrets command requires --remote flag or GORDON_REMOTE env var"))
-				return nil
-			}
 
 			// Parse KEY=value pairs
 			secrets := make(map[string]string)
@@ -126,8 +130,19 @@ Examples:
 				secrets[parts[0]] = parts[1]
 			}
 
-			if err := client.SetSecrets(ctx, domain, secrets); err != nil {
-				return fmt.Errorf("failed to set secrets: %w", err)
+			client, isRemote := GetRemoteClient()
+			if isRemote {
+				if err := client.SetSecrets(ctx, secretDomain, secrets); err != nil {
+					return fmt.Errorf("failed to set secrets: %w", err)
+				}
+			} else {
+				local, err := GetLocalServices(configPath)
+				if err != nil {
+					return fmt.Errorf("failed to initialize local services: %w", err)
+				}
+				if err := local.GetSecretService().Set(ctx, secretDomain, secrets); err != nil {
+					return fmt.Errorf("failed to set secrets: %w", err)
+				}
 			}
 
 			if len(secrets) == 1 {
@@ -135,7 +150,7 @@ Examples:
 					fmt.Println(styles.RenderSuccess(fmt.Sprintf("Secret set: %s", key)))
 				}
 			} else {
-				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Set %d secrets for %s", len(secrets), domain)))
+				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Set %d secrets for %s", len(secrets), secretDomain)))
 			}
 
 			return nil
@@ -158,19 +173,13 @@ Examples:
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			domain := args[0]
+			secretDomain := args[0]
 			key := args[1]
-
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				fmt.Println(styles.RenderError("secrets command requires --remote flag or GORDON_REMOTE env var"))
-				return nil
-			}
 
 			// Confirm unless --force
 			if !force {
 				confirmed, err := components.RunConfirm(
-					fmt.Sprintf("Remove secret '%s' from %s?", key, domain),
+					fmt.Sprintf("Remove secret '%s' from %s?", key, secretDomain),
 				)
 				if err != nil {
 					return err
@@ -181,8 +190,19 @@ Examples:
 				}
 			}
 
-			if err := client.DeleteSecret(ctx, domain, key); err != nil {
-				return fmt.Errorf("failed to remove secret: %w", err)
+			client, isRemote := GetRemoteClient()
+			if isRemote {
+				if err := client.DeleteSecret(ctx, secretDomain, key); err != nil {
+					return fmt.Errorf("failed to remove secret: %w", err)
+				}
+			} else {
+				local, err := GetLocalServices(configPath)
+				if err != nil {
+					return fmt.Errorf("failed to initialize local services: %w", err)
+				}
+				if err := local.GetSecretService().Delete(ctx, secretDomain, key); err != nil {
+					return fmt.Errorf("failed to remove secret: %w", err)
+				}
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Secret removed: %s", key)))

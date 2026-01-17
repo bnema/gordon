@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -137,7 +138,7 @@ func (c *Client) ListRoutes(ctx context.Context) ([]domain.Route, error) {
 
 // GetRoute returns a specific route by domain.
 func (c *Client) GetRoute(ctx context.Context, routeDomain string) (*domain.Route, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/routes/"+routeDomain, nil)
+	resp, err := c.request(ctx, http.MethodGet, "/routes/"+url.PathEscape(routeDomain), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +162,7 @@ func (c *Client) AddRoute(ctx context.Context, route domain.Route) error {
 
 // UpdateRoute updates an existing route.
 func (c *Client) UpdateRoute(ctx context.Context, route domain.Route) error {
-	resp, err := c.request(ctx, http.MethodPut, "/routes/"+route.Domain, route)
+	resp, err := c.request(ctx, http.MethodPut, "/routes/"+url.PathEscape(route.Domain), route)
 	if err != nil {
 		return err
 	}
@@ -170,7 +171,7 @@ func (c *Client) UpdateRoute(ctx context.Context, route domain.Route) error {
 
 // RemoveRoute removes a route by domain.
 func (c *Client) RemoveRoute(ctx context.Context, routeDomain string) error {
-	resp, err := c.request(ctx, http.MethodDelete, "/routes/"+routeDomain, nil)
+	resp, err := c.request(ctx, http.MethodDelete, "/routes/"+url.PathEscape(routeDomain), nil)
 	if err != nil {
 		return err
 	}
@@ -181,7 +182,7 @@ func (c *Client) RemoveRoute(ctx context.Context, routeDomain string) error {
 
 // ListSecrets returns the list of secret keys for a domain.
 func (c *Client) ListSecrets(ctx context.Context, secretDomain string) ([]string, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/secrets/"+secretDomain, nil)
+	resp, err := c.request(ctx, http.MethodGet, "/secrets/"+url.PathEscape(secretDomain), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +200,7 @@ func (c *Client) ListSecrets(ctx context.Context, secretDomain string) ([]string
 
 // SetSecrets sets secrets for a domain.
 func (c *Client) SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error {
-	resp, err := c.request(ctx, http.MethodPost, "/secrets/"+secretDomain, secrets)
+	resp, err := c.request(ctx, http.MethodPost, "/secrets/"+url.PathEscape(secretDomain), secrets)
 	if err != nil {
 		return err
 	}
@@ -208,7 +209,7 @@ func (c *Client) SetSecrets(ctx context.Context, secretDomain string, secrets ma
 
 // DeleteSecret removes a secret from a domain.
 func (c *Client) DeleteSecret(ctx context.Context, secretDomain, key string) error {
-	resp, err := c.request(ctx, http.MethodDelete, "/secrets/"+secretDomain+"/"+key, nil)
+	resp, err := c.request(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(secretDomain)+"/"+url.PathEscape(key), nil)
 	if err != nil {
 		return err
 	}
@@ -318,4 +319,162 @@ func (c *Client) GetConfig(ctx context.Context) (*Config, error) {
 func (c *Client) Ping(ctx context.Context) error {
 	_, err := c.GetStatus(ctx)
 	return err
+}
+
+// Deploy API
+
+// DeployResult contains the result of a deployment.
+type DeployResult struct {
+	Status      string `json:"status"`
+	ContainerID string `json:"container_id"`
+	Domain      string `json:"domain"`
+}
+
+// Deploy triggers a deployment for the specified domain.
+func (c *Client) Deploy(ctx context.Context, deployDomain string) (*DeployResult, error) {
+	resp, err := c.request(ctx, http.MethodPost, "/deploy/"+url.PathEscape(deployDomain), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result DeployResult
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// Logs API
+
+// GetProcessLogs returns Gordon process logs.
+func (c *Client) GetProcessLogs(ctx context.Context, lines int) ([]string, error) {
+	path := fmt.Sprintf("/logs?lines=%d", lines)
+	resp, err := c.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Lines []string `json:"lines"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Lines, nil
+}
+
+// GetContainerLogs returns container logs for a specific domain.
+func (c *Client) GetContainerLogs(ctx context.Context, logDomain string, lines int) ([]string, error) {
+	path := fmt.Sprintf("/logs/%s?lines=%d", url.PathEscape(logDomain), lines)
+	resp, err := c.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Domain string   `json:"domain"`
+		Lines  []string `json:"lines"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Lines, nil
+}
+
+// StreamProcessLogs returns a channel that streams Gordon process log lines via SSE.
+// The caller is responsible for reading from the channel until it's closed.
+func (c *Client) StreamProcessLogs(ctx context.Context, lines int) (<-chan string, error) {
+	path := fmt.Sprintf("/logs?lines=%d&follow=true", lines)
+	return c.streamLogs(ctx, path)
+}
+
+// StreamContainerLogs returns a channel that streams container log lines via SSE.
+// The caller is responsible for reading from the channel until it's closed.
+func (c *Client) StreamContainerLogs(ctx context.Context, logDomain string, lines int) (<-chan string, error) {
+	path := fmt.Sprintf("/logs/%s?lines=%d&follow=true", url.PathEscape(logDomain), lines)
+	return c.streamLogs(ctx, path)
+}
+
+// streamLogs handles SSE streaming for log endpoints.
+func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, error) {
+	url := c.baseURL + "/admin" + path
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "text/event-stream")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	// Use a client without timeout for streaming
+	streamClient := &http.Client{}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("%s: %s", resp.Status, string(body))
+	}
+
+	ch := make(chan string, 100)
+
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+
+		buf := make([]byte, 4096)
+		var lineBuffer strings.Builder
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			n, err := resp.Body.Read(buf)
+			if err != nil {
+				// EOF is expected when stream ends, other errors are ignored
+				return
+			}
+
+			lineBuffer.Write(buf[:n])
+
+			// Process complete SSE events
+			for {
+				data := lineBuffer.String()
+				idx := strings.Index(data, "\n\n")
+				if idx == -1 {
+					break
+				}
+
+				event := data[:idx]
+				lineBuffer.Reset()
+				lineBuffer.WriteString(data[idx+2:])
+
+				// Parse SSE data lines
+				for _, line := range strings.Split(event, "\n") {
+					if strings.HasPrefix(line, "data: ") {
+						logLine := strings.TrimPrefix(line, "data: ")
+						select {
+						case ch <- logLine:
+						case <-ctx.Done():
+							return
+						}
+					}
+				}
+			}
+		}
+	}()
+
+	return ch, nil
 }

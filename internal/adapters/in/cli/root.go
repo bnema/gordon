@@ -3,10 +3,13 @@
 package cli
 
 import (
-	"gordon/internal/adapters/in/cli/remote"
-	"gordon/internal/app"
+	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"gordon/internal/adapters/in/cli/remote"
+	"gordon/internal/app"
 )
 
 var (
@@ -113,24 +116,125 @@ func runReload() error {
 func newLogsCmd() *cobra.Command {
 	var follow bool
 	var lines int
-	var configPath string
+	var logsConfigPath string
 
 	cmd := &cobra.Command{
-		Use:   "logs",
-		Short: "Show Gordon process logs",
-		Long: `Shows logs from the Gordon process. By default reads from the log file
-configured in config.toml. If file logging is not enabled, falls back to
-journalctl (if running as a systemd service).`,
+		Use:   "logs [domain]",
+		Short: "Show logs (Gordon process or container)",
+		Long: `Shows logs from the Gordon process or a specific container.
+
+Without a domain argument, shows Gordon process logs.
+With a domain argument, shows container logs for that domain.
+
+Examples:
+  gordon logs                    # Gordon process logs
+  gordon logs -f                 # Follow process logs
+  gordon logs myapp.local        # Container logs for myapp.local
+  gordon logs myapp.local -f     # Follow container logs
+
+Remote mode:
+  gordon logs --remote https://gordon.mydomain.com --token $TOKEN
+  gordon logs myapp.local --remote https://gordon.mydomain.com --token $TOKEN`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return app.ShowLogs(configPath, follow, lines)
+			logDomain := ""
+			if len(args) > 0 {
+				logDomain = args[0]
+			}
+			return runLogs(logsConfigPath, logDomain, follow, lines)
 		},
 	}
 
-	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	cmd.Flags().StringVarP(&logsConfigPath, "config", "c", "", "Path to config file")
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Follow log output")
 	cmd.Flags().IntVarP(&lines, "lines", "n", 50, "Number of lines to show")
 
 	return cmd
+}
+
+// runLogs handles the logs command logic.
+func runLogs(logsConfigPath, logDomain string, follow bool, lines int) error {
+	client, isRemote := GetRemoteClient()
+	if isRemote {
+		return runLogsRemote(client, logDomain, follow, lines)
+	}
+	return runLogsLocal(logsConfigPath, logDomain, follow, lines)
+}
+
+// runLogsRemote fetches logs from a remote Gordon instance.
+func runLogsRemote(client *remote.Client, logDomain string, follow bool, lines int) error {
+	ctx := context.Background()
+
+	if follow {
+		return streamLogsRemote(ctx, client, logDomain, lines)
+	}
+
+	if logDomain == "" {
+		// Process logs
+		logLines, err := client.GetProcessLogs(ctx, lines)
+		if err != nil {
+			return fmt.Errorf("failed to get process logs: %w", err)
+		}
+		for _, line := range logLines {
+			fmt.Println(line)
+		}
+	} else {
+		// Container logs
+		logLines, err := client.GetContainerLogs(ctx, logDomain, lines)
+		if err != nil {
+			return fmt.Errorf("failed to get container logs: %w", err)
+		}
+		for _, line := range logLines {
+			fmt.Println(line)
+		}
+	}
+	return nil
+}
+
+// streamLogsRemote streams logs from a remote Gordon instance.
+func streamLogsRemote(ctx context.Context, client *remote.Client, logDomain string, lines int) error {
+	var ch <-chan string
+	var err error
+
+	if logDomain == "" {
+		ch, err = client.StreamProcessLogs(ctx, lines)
+	} else {
+		ch, err = client.StreamContainerLogs(ctx, logDomain, lines)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to stream logs: %w", err)
+	}
+
+	for line := range ch {
+		fmt.Println(line)
+	}
+	return nil
+}
+
+// runLogsLocal shows logs from a local Gordon instance.
+func runLogsLocal(logsConfigPath, logDomain string, follow bool, lines int) error {
+	if logDomain == "" {
+		// Process logs - use existing app.ShowLogs
+		return app.ShowLogs(logsConfigPath, follow, lines)
+	}
+
+	// Container logs - use local services
+	return showContainerLogsLocal(logsConfigPath, logDomain, follow, lines)
+}
+
+// showContainerLogsLocal shows container logs using local Docker access.
+func showContainerLogsLocal(logsConfigPath, logDomain string, follow bool, lines int) error {
+	// For local container logs, we need Docker access which requires
+	// the runtime to be initialized. For now, suggest using remote mode
+	// or direct docker logs command.
+	fmt.Printf("Container logs for %s\n", logDomain)
+	fmt.Println("To view container logs locally, use:")
+	fmt.Printf("  docker logs --tail %d %s\n", lines, logDomain)
+	if follow {
+		fmt.Printf("  docker logs -f --tail %d %s\n", lines, logDomain)
+	}
+	fmt.Println("\nOr use remote mode to access logs via the admin API.")
+	return nil
 }
 
 // SetVersionInfo sets the version information for the CLI.
