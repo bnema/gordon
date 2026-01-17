@@ -2,6 +2,12 @@
 
 Manage attachments on local or remote Gordon instances.
 
+## Requirements
+
+Attachments require `network_isolation.enabled = true` in your configuration. Without network isolation, containers use Docker's default bridge network which does not provide DNS resolution - your app won't be able to reach attachments by hostname (e.g., `postgres:5432`).
+
+The CLI will warn you if you try to add an attachment without network isolation enabled.
+
 ## gordon attachments
 
 ### Subcommands

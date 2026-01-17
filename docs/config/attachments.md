@@ -2,6 +2,17 @@
 
 Attach service dependencies (databases, caches, queues) to your applications.
 
+## Requirements
+
+**Network isolation must be enabled** for attachments to work properly:
+
+```toml
+[network_isolation]
+enabled = true
+```
+
+Without network isolation, containers run on Docker's default bridge network which **does not provide DNS resolution**. Your application won't be able to reach attachments by hostname (e.g., `postgres:5432`).
+
 ## Configuration
 
 ```toml

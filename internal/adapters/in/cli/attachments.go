@@ -180,8 +180,13 @@ func newAttachmentsAddCmd() *cobra.Command {
 		Short: "Add an attachment",
 		Long: `Add a container attachment to a domain or network group.
 
+Note: Attachments require network_isolation.enabled = true in your configuration.
+Without network isolation, containers use Docker's default bridge network which
+does not provide DNS resolution - your app won't be able to reach attachments
+by hostname (e.g., 'postgres:5432').
+
 Examples:
-  gordon attachments add app.example.com postgres:15
+  gordon attachments add app.example.com postgres:18
   gordon attachments add backend redis:7-alpine
   gordon --remote https://gordon.mydomain.com attachments add api.mydomain.com memcached:latest`,
 		Args: cobra.ExactArgs(2),
@@ -200,6 +205,16 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("failed to initialize local services: %w", err)
 				}
+
+				// Warn if network isolation is disabled
+				if !local.GetConfigService().IsNetworkIsolationEnabled() {
+					fmt.Println(styles.RenderWarning("network_isolation.enabled = false"))
+					fmt.Println(styles.Theme.Muted.Render("  Attachments require network isolation for DNS resolution."))
+					fmt.Println(styles.Theme.Muted.Render("  Without it, your app cannot reach attachments by hostname."))
+					fmt.Println(styles.Theme.Muted.Render("  Enable with: [network_isolation] enabled = true"))
+					fmt.Println()
+				}
+
 				if err := local.GetConfigService().AddAttachment(ctx, target, image); err != nil {
 					return fmt.Errorf("failed to add attachment: %w", err)
 				}
