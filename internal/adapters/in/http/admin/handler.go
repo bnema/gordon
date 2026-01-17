@@ -361,12 +361,19 @@ func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
 		if network == nil {
 			continue
 		}
+		var labelsCopy map[string]string
+		if network.Labels != nil {
+			labelsCopy = make(map[string]string, len(network.Labels))
+			for key, value := range network.Labels {
+				labelsCopy[key] = value
+			}
+		}
 		response = append(response, dto.Network{
 			ID:         network.ID,
 			Name:       network.Name,
 			Driver:     network.Driver,
 			Containers: append([]string{}, network.Containers...),
-			Labels:     network.Labels,
+			Labels:     labelsCopy,
 		})
 	}
 

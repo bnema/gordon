@@ -94,8 +94,6 @@ func TestHandler_GetManifest_NotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-
-	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
 func TestHandler_BlobRoutes_MethodNotAllowed(t *testing.T) {

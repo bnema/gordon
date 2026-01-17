@@ -23,6 +23,10 @@ var configPath string
 // For tags, truncates to maxLen with ellipsis if needed.
 func truncateImage(image string, maxLen int) string {
 	// Handle digest references: image@sha256:abc123...
+	if maxLen <= 0 {
+		return ""
+	}
+
 	if idx := strings.Index(image, "@sha256:"); idx != -1 {
 		name := image[:idx]
 		digest := image[idx+8:] // Skip "@sha256:"
@@ -33,7 +37,13 @@ func truncateImage(image string, maxLen int) string {
 		if len(short) > maxLen {
 			// Truncate from the end to maintain valid reference format
 			if maxLen <= 3 {
+				if len(short) < maxLen {
+					return short
+				}
 				return short[:maxLen]
+			}
+			if len(short) <= maxLen {
+				return short
 			}
 			return short[:maxLen-3] + "..."
 		}
@@ -43,6 +53,9 @@ func truncateImage(image string, maxLen int) string {
 	// Regular tag: truncate if needed
 	if len(image) > maxLen {
 		if maxLen <= 3 {
+			if len(image) < maxLen {
+				return image
+			}
 			return image[:maxLen]
 		}
 		return image[:maxLen-3] + "..."
@@ -54,8 +67,14 @@ func truncateNetwork(network string, maxLen int) string {
 	if network == "" || network == "-" {
 		return "-"
 	}
+	if maxLen <= 0 {
+		return ""
+	}
 	if len(network) > maxLen {
 		if maxLen <= 3 {
+			if len(network) < maxLen {
+				return network
+			}
 			return network[:maxLen]
 		}
 		return network[:maxLen-3] + "..."
