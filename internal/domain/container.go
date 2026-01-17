@@ -21,6 +21,24 @@ type NetworkInfo struct {
 	Labels     map[string]string
 }
 
+// Attachment represents an attached service container.
+type Attachment struct {
+	Name        string
+	Image       string
+	ContainerID string
+	Status      string
+}
+
+// RouteInfo combines route configuration with runtime state.
+type RouteInfo struct {
+	Domain          string
+	Image           string
+	ContainerID     string
+	ContainerStatus string
+	Network         string
+	Attachments     []Attachment
+}
+
 // ContainerConfig holds configuration for creating a container.
 type ContainerConfig struct {
 	Image       string

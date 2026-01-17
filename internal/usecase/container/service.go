@@ -316,6 +316,71 @@ func (s *Service) List(_ context.Context) map[string]*domain.Container {
 	return result
 }
 
+// ListRoutesWithDetails returns routes with network and attachment info.
+// Note: Container map is copied under lock, then external calls are made without lock.
+// If containers are removed between copy and runtime calls, errors are handled gracefully
+// (network becomes empty string). This trade-off avoids holding locks during I/O.
+func (s *Service) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo {
+	s.mu.RLock()
+	containers := make(map[string]*domain.Container, len(s.containers))
+	maps.Copy(containers, s.containers)
+	s.mu.RUnlock()
+
+	results := make([]domain.RouteInfo, 0, len(containers))
+	for domainName, container := range containers {
+		network := ""
+		image := ""
+		containerID := ""
+		status := ""
+		if container != nil {
+			containerID = container.ID
+			status = container.Status
+			image = container.Image
+			if container.Labels != nil {
+				if labelImage, ok := container.Labels[domain.LabelImage]; ok && labelImage != "" {
+					image = labelImage
+				}
+			}
+			if networkName, err := s.runtime.GetContainerNetwork(ctx, container.ID); err == nil {
+				network = networkName
+			}
+		}
+
+		results = append(results, domain.RouteInfo{
+			Domain:          domainName,
+			Image:           image,
+			ContainerID:     containerID,
+			ContainerStatus: status,
+			Network:         network,
+			Attachments:     s.getAttachmentsForDomain(ctx, domainName),
+		})
+	}
+
+	return results
+}
+
+// ListAttachments returns attachments for a domain.
+func (s *Service) ListAttachments(ctx context.Context, domainName string) []domain.Attachment {
+	return s.getAttachmentsForDomain(ctx, domainName)
+}
+
+// ListNetworks returns Gordon-managed networks.
+func (s *Service) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error) {
+	networks, err := s.runtime.ListNetworks(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var filtered []*domain.NetworkInfo
+	for _, network := range networks {
+		if strings.HasPrefix(network.Name, s.config.NetworkPrefix+"-") {
+			filtered = append(filtered, network)
+		}
+	}
+
+	return filtered, nil
+}
+
 // HealthCheck performs health checks on all containers.
 func (s *Service) HealthCheck(ctx context.Context) map[string]bool {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -867,6 +932,41 @@ func (s *Service) deployAttachments(ctx context.Context, domainName, networkName
 	}
 
 	return nil
+}
+
+func (s *Service) getAttachmentsForDomain(ctx context.Context, domainName string) []domain.Attachment {
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return nil
+	}
+
+	attachments := make([]domain.Attachment, 0)
+	for _, container := range containers {
+		if container.Labels == nil {
+			continue
+		}
+		if container.Labels[domain.LabelAttachment] != "true" {
+			continue
+		}
+		if container.Labels[domain.LabelAttachedTo] != domainName {
+			continue
+		}
+		image := container.Image
+		serviceName := container.Name
+		if labelImage, ok := container.Labels[domain.LabelImage]; ok && labelImage != "" {
+			image = labelImage
+			serviceName = extractServiceName(labelImage)
+		}
+		attachment := domain.Attachment{
+			Name:        serviceName,
+			Image:       image,
+			ContainerID: container.ID,
+			Status:      container.Status,
+		}
+		attachments = append(attachments, attachment)
+	}
+
+	return attachments
 }
 
 func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, serviceImage, networkName string) error {
