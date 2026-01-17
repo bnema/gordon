@@ -34,6 +34,9 @@ type AuthService interface {
 	// RevokeToken revokes a token by its ID.
 	RevokeToken(ctx context.Context, tokenID string) error
 
+	// RevokeAllTokens revokes all stored tokens.
+	RevokeAllTokens(ctx context.Context) (int, error)
+
 	// ListTokens returns all stored tokens.
 	ListTokens(ctx context.Context) ([]domain.Token, error)
 

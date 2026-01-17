@@ -386,6 +386,35 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string) error {
 	return nil
 }
 
+// RevokeAllTokens revokes all stored tokens and returns the count of revoked tokens.
+func (s *Service) RevokeAllTokens(ctx context.Context) (int, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "RevokeAllTokens",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	tokens, err := s.tokenStore.ListTokens(ctx)
+	if err != nil {
+		return 0, log.WrapErr(err, "failed to list tokens")
+	}
+
+	revoked := 0
+	for _, token := range tokens {
+		if token.Revoked {
+			continue // Already revoked
+		}
+		if err := s.tokenStore.Revoke(ctx, token.ID); err != nil {
+			log.Warn().Err(err).Str("token_id", token.ID).Msg("failed to revoke token")
+			continue
+		}
+		revoked++
+	}
+
+	log.Info().Int("count", revoked).Msg("all tokens revoked")
+	return revoked, nil
+}
+
 // ListTokens returns all stored tokens.
 func (s *Service) ListTokens(ctx context.Context) ([]domain.Token, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{

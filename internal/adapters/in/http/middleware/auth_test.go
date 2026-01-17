@@ -489,6 +489,10 @@ func (s stubAuthService) RevokeToken(context.Context, string) error {
 	return errors.New("not implemented")
 }
 
+func (s stubAuthService) RevokeAllTokens(context.Context) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
 func (s stubAuthService) ListTokens(context.Context) ([]domain.Token, error) {
 	return nil, errors.New("not implemented")
 }

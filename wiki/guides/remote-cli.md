@@ -210,6 +210,33 @@ These commands work with remote targeting:
 | `gordon secrets set <domain> KEY=value` | Set secrets |
 | `gordon secrets remove <domain> <key>` | Remove a secret |
 | `gordon status` | Show server status |
+| `gordon reload` | Reload config and start new routes |
+| `gordon logs` | View Gordon process logs |
+| `gordon logs <domain>` | View container logs |
+
+### Remote Logs Requirement
+
+The `gordon logs` command requires **file logging to be enabled** on the remote server. Without it, you'll get a "failed to get logs" error.
+
+On the remote Gordon server, add to `config.toml`:
+
+```toml
+[logging.file]
+enabled = true
+# path is optional - defaults to {data_dir}/logs/gordon.log
+# path = "/var/log/gordon/gordon.log"
+```
+
+Then restart Gordon. The log directory will be created automatically in your data directory (e.g., `~/.gordon/logs/`).
+
+If you specify a custom path, ensure the directory exists and is writable:
+
+```bash
+sudo mkdir -p /var/log/gordon
+sudo chown gordon:gordon /var/log/gordon  # adjust user as needed
+```
+
+> **Note:** When running as a systemd service, Gordon logs to journalctl by default. However, the remote admin API cannot read from journalctl—it reads from the configured log file. Both can be used simultaneously.
 
 ## Token Security
 
@@ -384,6 +411,24 @@ Or use explicit flags:
 ```bash
 gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
 ```
+
+### "failed to get logs" Error
+
+The remote Gordon server doesn't have file logging enabled.
+
+```bash
+# Error: failed to get process logs: 500 Internal Server Error: failed to get logs
+```
+
+On the remote server, enable file logging in `config.toml`:
+
+```toml
+[logging.file]
+enabled = true
+path = "/var/log/gordon/gordon.log"
+```
+
+See [Remote Logs Requirement](#remote-logs-requirement) for details.
 
 ## Related
 

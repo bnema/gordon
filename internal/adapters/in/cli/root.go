@@ -89,6 +89,10 @@ a running container. Running containers are never restarted to ensure 100% uptim
 Use this command after editing config.toml to add new routes, or after pushing
 images to the registry when the route was not yet configured.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			client, isRemote := GetRemoteClient()
+			if isRemote {
+				return runReloadRemote(cmd.Context(), client)
+			}
 			return runReload()
 		},
 	}
@@ -110,6 +114,15 @@ func newVersionCmd() *cobra.Command {
 // runReload sends SIGUSR1 to the running Gordon process.
 func runReload() error {
 	return app.SendReloadSignal()
+}
+
+// runReloadRemote triggers a reload on a remote Gordon instance.
+func runReloadRemote(ctx context.Context, client *remote.Client) error {
+	if err := client.Reload(ctx); err != nil {
+		return fmt.Errorf("failed to reload: %w", err)
+	}
+	fmt.Println("Configuration reloaded successfully")
+	return nil
 }
 
 // newLogsCmd creates the logs command.
