@@ -17,7 +17,7 @@ A complete Gordon configuration for production environments.
 [server]
 port = 8080                              # Cloudflare forwards 443 → 8080
 registry_port = 5000
-registry_domain = "registry.company.com"
+gordon_domain = "gordon.company.com"
 
 # Use pass for secrets (recommended)
 [secrets]
@@ -161,10 +161,10 @@ systemctl --user enable --now gordon
 docker build -t company-app .
 
 # Tag with version
-docker tag company-app registry.company.com/company-app:v2.2.0
+docker tag company-app gordon.company.com/company-app:v2.2.0
 
 # Push to deploy
-docker push registry.company.com/company-app:v2.2.0
+docker push gordon.company.com/company-app:v2.2.0
 
 # Update config with new version
 vim ~/.config/gordon/gordon.toml

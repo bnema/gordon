@@ -5,6 +5,8 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/fsnotify/fsnotify"
@@ -37,17 +39,20 @@ type Config struct {
 
 // Service implements the ConfigService interface.
 type Service struct {
-	viper    *viper.Viper
-	eventBus out.EventPublisher
-	config   Config
-	mu       sync.RWMutex
+	viper         *viper.Viper
+	eventBus      out.EventPublisher
+	config        Config
+	mu            sync.RWMutex
+	lastSaveTime  int64 // Unix nano timestamp of last save (to debounce file watcher)
+	debounceDelay int64 // Debounce delay in nanoseconds (default 500ms)
 }
 
 // NewService creates a new config service.
 func NewService(v *viper.Viper, eventBus out.EventPublisher) *Service {
 	return &Service{
-		viper:    v,
-		eventBus: eventBus,
+		viper:         v,
+		eventBus:      eventBus,
+		debounceDelay: int64(500 * time.Millisecond), // 500ms debounce for file watcher
 	}
 }
 
@@ -82,10 +87,16 @@ func (s *Service) Load(ctx context.Context) error {
 
 // loadConfigValues loads simple config values from viper.
 func (s *Service) loadConfigValues() Config {
+	// Prefer gordon_domain over registry_domain
+	registryDomain := s.viper.GetString("server.gordon_domain")
+	if registryDomain == "" {
+		registryDomain = s.viper.GetString("server.registry_domain")
+	}
+
 	return Config{
 		ServerPort:           s.viper.GetInt("server.port"),
 		RegistryPort:         s.viper.GetInt("server.registry_port"),
-		RegistryDomain:       s.viper.GetString("server.registry_domain"),
+		RegistryDomain:       registryDomain,
 		DataDir:              s.viper.GetString("server.data_dir"),
 		AutoRouteEnabled:     s.viper.GetBool("auto_route.enabled"),
 		NetworkIsolation:     s.viper.GetBool("network_isolation.enabled"),
@@ -171,7 +182,32 @@ func (s *Service) GetRoutes(_ context.Context) []domain.Route {
 	return routes
 }
 
-// AddRoute adds a new route to the configuration.
+// GetRoute returns a single route by domain.
+func (s *Service) GetRoute(_ context.Context, domainName string) (*domain.Route, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	image, exists := s.config.Routes[domainName]
+	if !exists {
+		return nil, domain.ErrRouteNotFound
+	}
+
+	route := &domain.Route{
+		Domain: domainName,
+		Image:  image,
+		HTTPS:  true,
+	}
+
+	// Check if domain has http:// prefix
+	if strings.HasPrefix(domainName, "http://") {
+		route.Domain = strings.TrimPrefix(domainName, "http://")
+		route.HTTPS = false
+	}
+
+	return route, nil
+}
+
+// AddRoute adds a new route to the configuration and persists it.
 func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -180,20 +216,41 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Validate route
+	if route.Domain == "" {
+		return domain.ErrRouteDomainEmpty
+	}
+	if route.Image == "" {
+		return domain.ErrRouteImageEmpty
+	}
 
+	// Store previous value for rollback
+	s.mu.Lock()
+	previousImage, existed := s.config.Routes[route.Domain]
 	if s.config.Routes == nil {
 		s.config.Routes = make(map[string]string)
 	}
-
 	s.config.Routes[route.Domain] = route.Image
+	s.mu.Unlock()
+
+	// Persist to disk - rollback on failure
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist route to disk, rolling back")
+		s.mu.Lock()
+		if existed {
+			s.config.Routes[route.Domain] = previousImage
+		} else {
+			delete(s.config.Routes, route.Domain)
+		}
+		s.mu.Unlock()
+		return err
+	}
 
 	log.Info().Str("image", route.Image).Msg("route added to configuration")
 	return nil
 }
 
-// UpdateRoute updates an existing route.
+// UpdateRoute updates an existing route and persists it.
 func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -202,20 +259,38 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.config.Routes[route.Domain]; !exists {
-		return domain.ErrRouteNotFound
+	// Validate route
+	if route.Domain == "" {
+		return domain.ErrRouteDomainEmpty
+	}
+	if route.Image == "" {
+		return domain.ErrRouteImageEmpty
 	}
 
+	// Store previous value for rollback
+	s.mu.Lock()
+	previousImage, exists := s.config.Routes[route.Domain]
+	if !exists {
+		s.mu.Unlock()
+		return domain.ErrRouteNotFound
+	}
 	s.config.Routes[route.Domain] = route.Image
+	s.mu.Unlock()
+
+	// Persist to disk - rollback on failure
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist route update to disk, rolling back")
+		s.mu.Lock()
+		s.config.Routes[route.Domain] = previousImage
+		s.mu.Unlock()
+		return err
+	}
 
 	log.Info().Str("image", route.Image).Msg("route updated")
 	return nil
 }
 
-// RemoveRoute removes a route from the configuration.
+// RemoveRoute removes a route from the configuration and persists it.
 func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -224,16 +299,52 @@ func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	// Store previous value for rollback
+	s.mu.Lock()
+	previousImage, exists := s.config.Routes[domainName]
+	if !exists {
+		s.mu.Unlock()
+		return domain.ErrRouteNotFound
+	}
+	delete(s.config.Routes, domainName)
+	s.mu.Unlock()
+
+	// Persist to disk - rollback on failure
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist route removal to disk, rolling back")
+		s.mu.Lock()
+		s.config.Routes[domainName] = previousImage
+		s.mu.Unlock()
+		return err
+	}
+
+	log.Info().Msg("route removed")
+	return nil
+}
+
+// Save persists the current configuration to disk.
+func (s *Service) Save(ctx context.Context) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "SaveConfig",
+	})
+	log := zerowrap.FromCtx(ctx)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.config.Routes[domainName]; !exists {
-		return domain.ErrRouteNotFound
+	// Update viper with current routes
+	s.viper.Set("routes", s.config.Routes)
+
+	// Record save time to debounce file watcher events
+	atomic.StoreInt64(&s.lastSaveTime, time.Now().UnixNano())
+
+	// Write config to disk
+	if err := s.viper.WriteConfig(); err != nil {
+		return log.WrapErr(err, "failed to write config")
 	}
 
-	delete(s.config.Routes, domainName)
-
-	log.Info().Msg("route removed")
+	log.Info().Msg("configuration saved to disk")
 	return nil
 }
 
@@ -242,6 +353,13 @@ func (s *Service) Watch(ctx context.Context, onChange func()) error {
 	log := zerowrap.FromCtx(ctx)
 
 	s.viper.OnConfigChange(func(e fsnotify.Event) {
+		// Check if this event is within the debounce window of our own Save
+		lastSave := atomic.LoadInt64(&s.lastSaveTime)
+		if lastSave > 0 && time.Now().UnixNano()-lastSave < s.debounceDelay {
+			log.Debug().Str("file", e.Name).Msg("skipping config reload (triggered by save)")
+			return
+		}
+
 		log.Info().Str("file", e.Name).Msg("config file changed")
 
 		if err := s.viper.ReadInConfig(); err != nil {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/bnema/zerowrap"
@@ -75,9 +76,11 @@ func TestService_PutManifest_Success(t *testing.T) {
 	manifestStorage.EXPECT().PutManifest("myapp", "latest", "application/vnd.docker.distribution.manifest.v2+json", manifest.Data).Return(nil)
 	eventBus.EXPECT().Publish(domain.EventImagePushed, mock.AnythingOfType("domain.ImagePushedPayload")).Return(nil)
 
-	err := svc.PutManifest(ctx, manifest)
+	digest, err := svc.PutManifest(ctx, manifest)
 
 	assert.NoError(t, err)
+	assert.NotEmpty(t, digest)
+	assert.True(t, strings.HasPrefix(digest, "sha256:"))
 }
 
 func TestService_PutManifest_StorageError(t *testing.T) {
@@ -97,7 +100,7 @@ func TestService_PutManifest_StorageError(t *testing.T) {
 
 	manifestStorage.EXPECT().PutManifest("myapp", "latest", "application/vnd.docker.distribution.manifest.v2+json", manifest.Data).Return(errors.New("storage full"))
 
-	err := svc.PutManifest(ctx, manifest)
+	_, err := svc.PutManifest(ctx, manifest)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to store manifest")
@@ -122,7 +125,7 @@ func TestService_PutManifest_EventPublishError(t *testing.T) {
 	eventBus.EXPECT().Publish(domain.EventImagePushed, mock.Anything).Return(errors.New("event bus error"))
 
 	// Should still succeed - event publish error is logged but doesn't fail the operation
-	err := svc.PutManifest(ctx, manifest)
+	_, err := svc.PutManifest(ctx, manifest)
 
 	assert.NoError(t, err)
 }
@@ -144,7 +147,7 @@ func TestService_PutManifest_NilEventBus(t *testing.T) {
 
 	manifestStorage.EXPECT().PutManifest("myapp", "latest", "application/vnd.docker.distribution.manifest.v2+json", manifest.Data).Return(nil)
 
-	err := svc.PutManifest(ctx, manifest)
+	_, err := svc.PutManifest(ctx, manifest)
 
 	assert.NoError(t, err)
 }

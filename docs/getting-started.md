@@ -20,7 +20,7 @@ This script automatically detects your OS and architecture, downloads the approp
 
 ```bash
 # First run creates the default config
-gordon start
+gordon serve
 # Press Ctrl+C to stop
 ```
 
@@ -34,7 +34,7 @@ Edit `~/.config/gordon/gordon.toml`:
 [server]
 port = 8080                              # Proxy port (use with Cloudflare)
 registry_port = 5000                     # Registry port
-registry_domain = "registry.mydomain.com"  # Your registry domain
+gordon_domain = "gordon.mydomain.com"      # Your Gordon domain
 
 [routes]
 "app.mydomain.com" = "myapp:latest"      # Domain → Image mapping
@@ -63,7 +63,7 @@ Description=Gordon Container Platform
 [Service]
 Type=simple
 Restart=always
-ExecStart=/usr/local/bin/gordon start
+ExecStart=/usr/local/bin/gordon serve
 
 [Install]
 WantedBy=default.target

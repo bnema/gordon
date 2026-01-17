@@ -6,19 +6,22 @@ Gordon provides a command-line interface for server management, deployment, and 
 
 | Command | Description |
 |---------|-------------|
-| `gordon start` | Start the Gordon server |
+| `gordon serve` | Start the Gordon server |
 | `gordon reload` | Reload configuration and sync containers |
 | `gordon deploy` | Manually deploy or redeploy a specific route |
 | `gordon logs` | Display Gordon process logs |
 | `gordon version` | Print version information |
 | `gordon auth` | Manage registry authentication |
+| `gordon routes` | Manage routes (local or remote) |
+| `gordon secrets` | Manage secrets (remote only) |
+| `gordon remotes` | Manage saved remote Gordon instances |
 
 ## Quick Reference
 
 ```bash
 # Start Gordon
-gordon start
-gordon start --config /path/to/config.toml
+gordon serve
+gordon serve --config /path/to/config.toml
 
 # Reload configuration
 gordon reload
@@ -47,17 +50,35 @@ gordon auth internal
 | Option | Description |
 |--------|-------------|
 | `-c, --config` | Path to configuration file |
+| `--remote` | Remote Gordon URL (e.g., `https://gordon.mydomain.com`) |
+| `--token` | Authentication token for remote |
+
+### Remote Targeting
+
+The CLI can target remote Gordon instances using the `--remote` flag or `GORDON_REMOTE` environment variable.
+
+**Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
+
+```bash
+# Using flags (use the gordon_domain from remote Gordon config)
+gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
+
+# Using environment variables
+export GORDON_REMOTE=https://gordon.mydomain.com
+export GORDON_TOKEN=$TOKEN
+gordon routes list
+```
 
 ---
 
-## gordon start
+## gordon serve
 
 Start the Gordon server with registry and proxy components.
 
 ### Synopsis
 
 ```bash
-gordon start [options]
+gordon serve [options]
 ```
 
 ### Options
@@ -90,7 +111,7 @@ On first run without a config file, Gordon creates a default configuration at `~
 
 ```bash
 # First run - creates default config
-gordon start
+gordon serve
 # Edit the config, then restart
 ```
 
@@ -98,15 +119,15 @@ gordon start
 
 ```bash
 # Basic start
-gordon start
+gordon serve
 
 # With custom config
-gordon start --config /path/to/gordon.toml
-gordon start -c ./my-config.toml
+gordon serve --config /path/to/gordon.toml
+gordon serve -c ./my-config.toml
 
 # With environment override
-GORDON_SERVER_PORT=8080 gordon start
-GORDON_LOGGING_LEVEL=debug gordon start
+GORDON_SERVER_PORT=8080 gordon serve
+GORDON_LOGGING_LEVEL=debug gordon serve
 ```
 
 ### Signals
@@ -132,7 +153,7 @@ Description=Gordon Container Platform
 [Service]
 Type=simple
 Restart=always
-ExecStart=/usr/local/bin/gordon start
+ExecStart=/usr/local/bin/gordon serve
 
 [Install]
 WantedBy=default.target
@@ -529,6 +550,119 @@ password_hash = "gordon/registry/password_hash"
 
 ---
 
+## gordon routes
+
+Manage routes on local or remote Gordon instances.
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all routes |
+| `add` | Add a new route |
+| `remove` | Remove a route |
+| `deploy` | Deploy a specific route |
+
+### gordon routes list
+
+List all configured routes.
+
+```bash
+gordon routes list
+gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### gordon routes add
+
+Add a new route.
+
+```bash
+gordon routes add <domain> <image>
+gordon routes add myapp.example.com myapp:latest
+```
+
+### gordon routes remove
+
+Remove a route.
+
+```bash
+gordon routes remove <domain>
+gordon routes remove myapp.example.com
+```
+
+### gordon routes deploy
+
+Deploy or redeploy a specific route.
+
+```bash
+gordon routes deploy <domain>
+gordon routes deploy myapp.example.com
+```
+
+---
+
+## gordon secrets
+
+Manage secrets on remote Gordon instances. Requires remote targeting.
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all secrets |
+| `get` | Get a secret value |
+| `set` | Set a secret value |
+| `delete` | Delete a secret |
+
+### Examples
+
+```bash
+# List secrets
+gordon secrets list --remote https://gordon.mydomain.com --token $TOKEN
+
+# Set a secret
+gordon secrets set DATABASE_URL "postgres://..." --remote ... --token ...
+
+# Get a secret
+gordon secrets get DATABASE_URL --remote ... --token ...
+
+# Delete a secret
+gordon secrets delete DATABASE_URL --remote ... --token ...
+```
+
+---
+
+## gordon remotes
+
+Manage saved remote Gordon instances for easier CLI usage.
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List saved remotes |
+| `add` | Add a new remote |
+| `remove` | Remove a saved remote |
+| `use` | Set active remote |
+
+### Examples
+
+```bash
+# Add a remote
+gordon remotes add prod https://gordon.mydomain.com --token $TOKEN
+
+# List saved remotes
+gordon remotes list
+
+# Set active remote
+gordon remotes use prod
+
+# Now use without --remote flag
+gordon routes list
+```
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -542,8 +676,8 @@ password_hash = "gordon/registry/password_hash"
 Gordon reads configuration from environment variables:
 
 ```bash
-GORDON_SERVER_PORT=8080 gordon start
-GORDON_LOGGING_LEVEL=debug gordon start
+GORDON_SERVER_PORT=8080 gordon serve
+GORDON_LOGGING_LEVEL=debug gordon serve
 ```
 
 Pattern: `GORDON_SECTION_KEY` (uppercase, underscores)

@@ -39,6 +39,84 @@ func (_m *MockRegistryService) EXPECT() *MockRegistryService_Expecter {
 	return &MockRegistryService_Expecter{mock: &_m.Mock}
 }
 
+// AppendBlobChunk provides a mock function for the type MockRegistryService
+func (_mock *MockRegistryService) AppendBlobChunk(ctx context.Context, name string, uuid string, chunk []byte) (int64, error) {
+	ret := _mock.Called(ctx, name, uuid, chunk)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AppendBlobChunk")
+	}
+
+	var r0 int64
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, []byte) (int64, error)); ok {
+		return returnFunc(ctx, name, uuid, chunk)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, []byte) int64); ok {
+		r0 = returnFunc(ctx, name, uuid, chunk)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, []byte) error); ok {
+		r1 = returnFunc(ctx, name, uuid, chunk)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockRegistryService_AppendBlobChunk_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AppendBlobChunk'
+type MockRegistryService_AppendBlobChunk_Call struct {
+	*mock.Call
+}
+
+// AppendBlobChunk is a helper method to define mock.On call
+//   - ctx context.Context
+//   - name string
+//   - uuid string
+//   - chunk []byte
+func (_e *MockRegistryService_Expecter) AppendBlobChunk(ctx interface{}, name interface{}, uuid interface{}, chunk interface{}) *MockRegistryService_AppendBlobChunk_Call {
+	return &MockRegistryService_AppendBlobChunk_Call{Call: _e.mock.On("AppendBlobChunk", ctx, name, uuid, chunk)}
+}
+
+func (_c *MockRegistryService_AppendBlobChunk_Call) Run(run func(ctx context.Context, name string, uuid string, chunk []byte)) *MockRegistryService_AppendBlobChunk_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 []byte
+		if args[3] != nil {
+			arg3 = args[3].([]byte)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockRegistryService_AppendBlobChunk_Call) Return(n int64, err error) *MockRegistryService_AppendBlobChunk_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockRegistryService_AppendBlobChunk_Call) RunAndReturn(run func(ctx context.Context, name string, uuid string, chunk []byte) (int64, error)) *MockRegistryService_AppendBlobChunk_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // BlobExists provides a mock function for the type MockRegistryService
 func (_mock *MockRegistryService) BlobExists(ctx context.Context, digest string) bool {
 	ret := _mock.Called(ctx, digest)
@@ -347,6 +425,72 @@ func (_c *MockRegistryService_GetBlob_Call) RunAndReturn(run func(ctx context.Co
 	return _c
 }
 
+// GetBlobPath provides a mock function for the type MockRegistryService
+func (_mock *MockRegistryService) GetBlobPath(ctx context.Context, digest string) (string, error) {
+	ret := _mock.Called(ctx, digest)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBlobPath")
+	}
+
+	var r0 string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (string, error)); ok {
+		return returnFunc(ctx, digest)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) string); ok {
+		r0 = returnFunc(ctx, digest)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, digest)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockRegistryService_GetBlobPath_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBlobPath'
+type MockRegistryService_GetBlobPath_Call struct {
+	*mock.Call
+}
+
+// GetBlobPath is a helper method to define mock.On call
+//   - ctx context.Context
+//   - digest string
+func (_e *MockRegistryService_Expecter) GetBlobPath(ctx interface{}, digest interface{}) *MockRegistryService_GetBlobPath_Call {
+	return &MockRegistryService_GetBlobPath_Call{Call: _e.mock.On("GetBlobPath", ctx, digest)}
+}
+
+func (_c *MockRegistryService_GetBlobPath_Call) Run(run func(ctx context.Context, digest string)) *MockRegistryService_GetBlobPath_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockRegistryService_GetBlobPath_Call) Return(s string, err error) *MockRegistryService_GetBlobPath_Call {
+	_c.Call.Return(s, err)
+	return _c
+}
+
+func (_c *MockRegistryService_GetBlobPath_Call) RunAndReturn(run func(ctx context.Context, digest string) (string, error)) *MockRegistryService_GetBlobPath_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetManifest provides a mock function for the type MockRegistryService
 func (_mock *MockRegistryService) GetManifest(ctx context.Context, name string, reference string) (*domain.Manifest, error) {
 	ret := _mock.Called(ctx, name, reference)
@@ -621,20 +765,29 @@ func (_c *MockRegistryService_PutBlob_Call) RunAndReturn(run func(ctx context.Co
 }
 
 // PutManifest provides a mock function for the type MockRegistryService
-func (_mock *MockRegistryService) PutManifest(ctx context.Context, manifest *domain.Manifest) error {
+func (_mock *MockRegistryService) PutManifest(ctx context.Context, manifest *domain.Manifest) (string, error) {
 	ret := _mock.Called(ctx, manifest)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PutManifest")
 	}
 
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, *domain.Manifest) error); ok {
+	var r0 string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *domain.Manifest) (string, error)); ok {
+		return returnFunc(ctx, manifest)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *domain.Manifest) string); ok {
 		r0 = returnFunc(ctx, manifest)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(string)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(1).(func(context.Context, *domain.Manifest) error); ok {
+		r1 = returnFunc(ctx, manifest)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
 }
 
 // MockRegistryService_PutManifest_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PutManifest'
@@ -667,12 +820,12 @@ func (_c *MockRegistryService_PutManifest_Call) Run(run func(ctx context.Context
 	return _c
 }
 
-func (_c *MockRegistryService_PutManifest_Call) Return(err error) *MockRegistryService_PutManifest_Call {
-	_c.Call.Return(err)
+func (_c *MockRegistryService_PutManifest_Call) Return(digest string, err error) *MockRegistryService_PutManifest_Call {
+	_c.Call.Return(digest, err)
 	return _c
 }
 
-func (_c *MockRegistryService_PutManifest_Call) RunAndReturn(run func(ctx context.Context, manifest *domain.Manifest) error) *MockRegistryService_PutManifest_Call {
+func (_c *MockRegistryService_PutManifest_Call) RunAndReturn(run func(ctx context.Context, manifest *domain.Manifest) (string, error)) *MockRegistryService_PutManifest_Call {
 	_c.Call.Return(run)
 	return _c
 }

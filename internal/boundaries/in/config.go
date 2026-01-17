@@ -14,6 +14,9 @@ type ConfigService interface {
 	// GetRoutes returns all configured routes.
 	GetRoutes(ctx context.Context) []domain.Route
 
+	// GetRoute returns a single route by domain.
+	GetRoute(ctx context.Context, domain string) (*domain.Route, error)
+
 	// AddRoute adds a new route to the configuration.
 	AddRoute(ctx context.Context, route domain.Route) error
 
@@ -22,6 +25,9 @@ type ConfigService interface {
 
 	// RemoveRoute removes a route from the configuration.
 	RemoveRoute(ctx context.Context, domain string) error
+
+	// Save persists the current configuration to disk.
+	Save(ctx context.Context) error
 
 	// Watch starts watching for configuration changes.
 	// The onChange callback is called when configuration changes are detected.

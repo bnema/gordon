@@ -14,7 +14,7 @@ Annotated Gordon configuration examples for common scenarios.
 
 ```toml
 [server]
-registry_domain = "registry.local"
+gordon_domain = "gordon.local"
 
 [routes]
 "app.local" = "myapp:latest"
@@ -25,7 +25,7 @@ registry_domain = "registry.local"
 ```toml
 [server]
 port = 8080
-registry_domain = "registry.local"
+gordon_domain = "gordon.local"
 
 [registry_auth]
 enabled = false
@@ -42,7 +42,7 @@ enabled = true
 ```toml
 [server]
 port = 8080
-registry_domain = "registry.company.com"
+gordon_domain = "gordon.company.com"
 
 [secrets]
 backend = "pass"

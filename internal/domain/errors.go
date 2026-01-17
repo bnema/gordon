@@ -20,6 +20,8 @@ var (
 	ErrRouteNotFound     = errors.New("route not found")
 	ErrRouteExists       = errors.New("route already exists")
 	ErrInvalidRoute      = errors.New("invalid route configuration")
+	ErrRouteDomainEmpty  = errors.New("route domain cannot be empty")
+	ErrRouteImageEmpty   = errors.New("route image cannot be empty")
 	ErrNoTargetAvailable = errors.New("no target available for route")
 
 	// Registry errors

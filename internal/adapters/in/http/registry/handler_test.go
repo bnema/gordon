@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	inmocks "gordon/internal/boundaries/in/mocks"
-	"gordon/internal/boundaries/out/mocks"
 	"gordon/internal/domain"
 )
 
@@ -22,10 +21,8 @@ func testLogger() zerowrap.Logger {
 
 func TestHandler_Base(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	req := httptest.NewRequest("GET", "/v2/", nil)
 	rec := httptest.NewRecorder()
@@ -38,10 +35,8 @@ func TestHandler_Base(t *testing.T) {
 
 func TestHandler_NotFound(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	req := httptest.NewRequest("GET", "/v2/unknown/path", nil)
 	rec := httptest.NewRecorder()
@@ -53,10 +48,8 @@ func TestHandler_NotFound(t *testing.T) {
 
 func TestHandler_GetManifest_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 	registrySvc.EXPECT().GetManifest(mock.Anything, "myapp", "latest").Return(&domain.Manifest{
@@ -78,10 +71,8 @@ func TestHandler_GetManifest_Success(t *testing.T) {
 
 func TestHandler_GetManifest_HEAD(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 	registrySvc.EXPECT().GetManifest(mock.Anything, "myapp", "latest").Return(&domain.Manifest{
@@ -104,10 +95,8 @@ func TestHandler_GetManifest_HEAD(t *testing.T) {
 
 func TestHandler_GetManifest_NotFound(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	registrySvc.EXPECT().GetManifest(mock.Anything, "myapp", "notexists").Return(nil, assert.AnError)
 
@@ -121,10 +110,8 @@ func TestHandler_GetManifest_NotFound(t *testing.T) {
 
 func TestHandler_GetManifest_NestedName(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 	registrySvc.EXPECT().GetManifest(mock.Anything, "org/project/app", "v1.0").Return(&domain.Manifest{
@@ -144,15 +131,13 @@ func TestHandler_GetManifest_NestedName(t *testing.T) {
 
 func TestHandler_PutManifest_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 	registrySvc.EXPECT().PutManifest(mock.Anything, mock.MatchedBy(func(m *domain.Manifest) bool {
 		return m.Name == "myapp" && m.Reference == "latest" && m.ContentType == "application/vnd.docker.distribution.manifest.v2+json"
-	})).Return(nil)
+	})).Return("sha256:abc123", nil)
 
 	req := httptest.NewRequest("PUT", "/v2/myapp/manifests/latest", bytes.NewReader(manifestData))
 	req.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
@@ -161,16 +146,14 @@ func TestHandler_PutManifest_Success(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
-	assert.NotEmpty(t, rec.Header().Get("Docker-Content-Digest"))
+	assert.Equal(t, "sha256:abc123", rec.Header().Get("Docker-Content-Digest"))
 	assert.Contains(t, rec.Header().Get("Location"), "/v2/myapp/manifests/latest")
 }
 
 func TestHandler_PutManifest_MissingContentType(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 
@@ -185,13 +168,11 @@ func TestHandler_PutManifest_MissingContentType(t *testing.T) {
 
 func TestHandler_PutManifest_StorageError(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
-	registrySvc.EXPECT().PutManifest(mock.Anything, mock.Anything).Return(assert.AnError)
+	registrySvc.EXPECT().PutManifest(mock.Anything, mock.Anything).Return("", assert.AnError)
 
 	req := httptest.NewRequest("PUT", "/v2/myapp/manifests/latest", bytes.NewReader(manifestData))
 	req.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
@@ -204,10 +185,8 @@ func TestHandler_PutManifest_StorageError(t *testing.T) {
 
 func TestHandler_ManifestRoutes_MethodNotAllowed(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	req := httptest.NewRequest("DELETE", "/v2/myapp/manifests/latest", nil)
 	rec := httptest.NewRecorder()
@@ -219,10 +198,8 @@ func TestHandler_ManifestRoutes_MethodNotAllowed(t *testing.T) {
 
 func TestHandler_GetBlob_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	// Create a temp file for http.ServeFile
 	tmpFile, err := os.CreateTemp("", "blob-*")
@@ -233,7 +210,7 @@ func TestHandler_GetBlob_Success(t *testing.T) {
 	_, err = tmpFile.Write(blobContent)
 	assert.NoError(t, err)
 
-	blobStorage.EXPECT().GetBlobPath("sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(tmpFile.Name(), nil)
+	registrySvc.EXPECT().GetBlobPath(mock.Anything, "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(tmpFile.Name(), nil)
 
 	req := httptest.NewRequest("GET", "/v2/myapp/blobs/sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", nil)
 	rec := httptest.NewRecorder()
@@ -246,12 +223,10 @@ func TestHandler_GetBlob_Success(t *testing.T) {
 
 func TestHandler_GetBlob_NotFound(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
-	blobStorage.EXPECT().GetBlobPath("sha256:0000000000000000000000000000000000000000000000000000000000000000").Return("", assert.AnError)
+	registrySvc.EXPECT().GetBlobPath(mock.Anything, "sha256:0000000000000000000000000000000000000000000000000000000000000000").Return("", assert.AnError)
 
 	req := httptest.NewRequest("GET", "/v2/myapp/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000", nil)
 	rec := httptest.NewRecorder()
@@ -263,10 +238,8 @@ func TestHandler_GetBlob_NotFound(t *testing.T) {
 
 func TestHandler_BlobRoutes_MethodNotAllowed(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	req := httptest.NewRequest("POST", "/v2/myapp/blobs/sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", nil)
 	rec := httptest.NewRecorder()
@@ -278,10 +251,8 @@ func TestHandler_BlobRoutes_MethodNotAllowed(t *testing.T) {
 
 func TestHandler_StartBlobUpload_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	registrySvc.EXPECT().StartUpload(mock.Anything, "myapp").Return("1234567890-myapp", nil)
 
@@ -297,10 +268,8 @@ func TestHandler_StartBlobUpload_Success(t *testing.T) {
 
 func TestHandler_StartBlobUpload_Error(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	registrySvc.EXPECT().StartUpload(mock.Anything, "myapp").Return("", assert.AnError)
 
@@ -314,13 +283,11 @@ func TestHandler_StartBlobUpload_Error(t *testing.T) {
 
 func TestHandler_BlobUpload_PATCH(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	chunkData := []byte("chunk content")
-	blobStorage.EXPECT().AppendBlobChunk("myapp", "1234567890-myapp", chunkData).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "1234567890-myapp", chunkData).Return(int64(len(chunkData)), nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/1234567890-myapp", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
@@ -333,13 +300,11 @@ func TestHandler_BlobUpload_PATCH(t *testing.T) {
 
 func TestHandler_BlobUpload_PUT_Finalize(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	chunkData := []byte("final chunk")
-	blobStorage.EXPECT().AppendBlobChunk("myapp", "1234567890-myapp", chunkData).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "1234567890-myapp", chunkData).Return(int64(len(chunkData)), nil)
 	registrySvc.EXPECT().FinishUpload(mock.Anything, "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
 
 	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/1234567890-myapp?digest=sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", bytes.NewReader(chunkData))
@@ -354,10 +319,8 @@ func TestHandler_BlobUpload_PUT_Finalize(t *testing.T) {
 
 func TestHandler_BlobUpload_PUT_DigestMismatch(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	chunkData := []byte("final chunk")
 	// Note: Invalid digest format is rejected by validation before reaching storage layer
@@ -373,10 +336,8 @@ func TestHandler_BlobUpload_PUT_DigestMismatch(t *testing.T) {
 
 func TestHandler_ListTags_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	registrySvc.EXPECT().ListTags(mock.Anything, "myapp").Return([]string{"latest", "v1.0", "v2.0"}, nil)
 
@@ -393,10 +354,8 @@ func TestHandler_ListTags_Success(t *testing.T) {
 
 func TestHandler_ListTags_NotFound(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	registrySvc.EXPECT().ListTags(mock.Anything, "notexists").Return(nil, assert.AnError)
 
@@ -410,10 +369,8 @@ func TestHandler_ListTags_NotFound(t *testing.T) {
 
 func TestHandler_ListTags_MethodNotAllowed(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	req := httptest.NewRequest("POST", "/v2/myapp/tags/list", nil)
 	rec := httptest.NewRecorder()
@@ -425,10 +382,8 @@ func TestHandler_ListTags_MethodNotAllowed(t *testing.T) {
 
 func TestHandler_RegisterRoutes(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	blobStorage := mocks.NewMockBlobStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
 
-	handler := NewHandler(registrySvc, blobStorage, eventBus, testLogger())
+	handler := NewHandler(registrySvc, testLogger())
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)

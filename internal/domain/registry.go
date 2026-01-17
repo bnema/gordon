@@ -2,6 +2,15 @@ package domain
 
 import "time"
 
+// ImageLabels represents extracted Gordon labels from an image.
+type ImageLabels struct {
+	Domain  string   // Primary domain
+	Domains []string // Additional domains
+	Health  string   // Health check path
+	Port    string   // Container port
+	EnvFile string   // Env file path in image
+}
+
 // Manifest represents an OCI image manifest.
 type Manifest struct {
 	Name        string

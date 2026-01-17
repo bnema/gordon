@@ -109,7 +109,7 @@ sudo mv gordon /usr/local/bin/
 Generate initial config:
 
 ```bash
-gordon start
+gordon serve
 # Press Ctrl+C after config is created
 ```
 
@@ -119,7 +119,7 @@ Edit `~/.config/gordon/gordon.toml`:
 [server]
 port = 8080                              # Must match firewall forward (80 → 8080)
 registry_port = 5000
-registry_domain = "registry.mydomain.com"
+gordon_domain = "gordon.mydomain.com"
 
 [routes]
 "app.mydomain.com" = "myapp:latest"
@@ -138,7 +138,7 @@ After=podman.socket
 Type=simple
 Restart=always
 RestartSec=5
-ExecStart=/usr/local/bin/gordon start
+ExecStart=/usr/local/bin/gordon serve
 
 [Install]
 WantedBy=default.target

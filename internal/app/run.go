@@ -21,14 +21,19 @@ import (
 
 	// Adapters - Output
 	"gordon/internal/adapters/out/docker"
+	"gordon/internal/adapters/out/domainsecrets"
 	"gordon/internal/adapters/out/envloader"
 	"gordon/internal/adapters/out/eventbus"
 	"gordon/internal/adapters/out/filesystem"
+	"gordon/internal/adapters/out/httpprober"
 	"gordon/internal/adapters/out/logwriter"
 	"gordon/internal/adapters/out/secrets"
 	"gordon/internal/adapters/out/tokenstore"
 
+	"golang.org/x/time/rate"
+
 	// Adapters - Input
+	"gordon/internal/adapters/in/http/admin"
 	"gordon/internal/adapters/in/http/middleware"
 	"gordon/internal/adapters/in/http/registry"
 
@@ -42,8 +47,10 @@ import (
 	"gordon/internal/usecase/auth"
 	"gordon/internal/usecase/config"
 	"gordon/internal/usecase/container"
+	"gordon/internal/usecase/health"
 	"gordon/internal/usecase/proxy"
 	registrySvc "gordon/internal/usecase/registry"
+	secretsSvc "gordon/internal/usecase/secrets"
 )
 
 // Config holds the application configuration.
@@ -51,7 +58,8 @@ type Config struct {
 	Server struct {
 		Port           int    `mapstructure:"port"`
 		RegistryPort   int    `mapstructure:"registry_port"`
-		RegistryDomain string `mapstructure:"registry_domain"`
+		GordonDomain   string `mapstructure:"gordon_domain"`
+		RegistryDomain string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
 		DataDir        string `mapstructure:"data_dir"`
 	} `mapstructure:"server"`
 
@@ -108,8 +116,10 @@ type services struct {
 	proxySvc        *proxy.Service
 	authSvc         *auth.Service
 	tokenHandler    *registry.TokenHandler
+	adminHandler    *admin.Handler
 	internalRegUser string
 	internalRegPass string
+	envDir          string
 }
 
 // Run initializes and starts the Gordon application.
@@ -145,7 +155,7 @@ func Run(ctx context.Context, configPath string) error {
 	}
 
 	// Register event handlers
-	if err := registerEventHandlers(ctx, svc); err != nil {
+	if err := registerEventHandlers(ctx, svc, cfg); err != nil {
 		return err
 	}
 
@@ -178,6 +188,11 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, Config{}, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	// Normalize domain config: prefer gordon_domain over registry_domain
+	if cfg.Server.GordonDomain != "" {
+		cfg.Server.RegistryDomain = cfg.Server.GordonDomain
 	}
 
 	return v, cfg, nil
@@ -274,6 +289,30 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		}
 		svc.tokenHandler = registry.NewTokenHandler(svc.authSvc, internalAuth, log)
 	}
+
+	// Determine env directory for admin API
+	dataDir := cfg.Server.DataDir
+	if dataDir == "" {
+		dataDir = DefaultDataDir()
+	}
+	svc.envDir = cfg.Env.Dir
+	if svc.envDir == "" {
+		svc.envDir = filepath.Join(dataDir, "env")
+	}
+
+	// Create domain secret store and service
+	domainSecretStore, err := domainsecrets.NewFileStore(svc.envDir, log)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to create domain secret store")
+	}
+	secretSvc := secretsSvc.NewService(domainSecretStore, log)
+
+	// Create health service for route health checking
+	prober := httpprober.New()
+	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
+
+	// Create admin handler for admin API
+	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, svc.eventBus, log)
 
 	return svc, nil
 }
@@ -636,6 +675,7 @@ func createContainerService(v *viper.Viper, cfg Config, svc *services) *containe
 		RegistryPassword:         cfg.RegistryAuth.Password,
 		InternalRegistryUsername: svc.internalRegUser,
 		InternalRegistryPassword: svc.internalRegPass,
+		PullPolicy:               v.GetString("deploy.pull_policy"),
 		VolumeAutoCreate:         v.GetBool("volumes.auto_create"),
 		VolumePrefix:             v.GetString("volumes.prefix"),
 		VolumePreserve:           v.GetBool("volumes.preserve"),
@@ -649,10 +689,17 @@ func createContainerService(v *viper.Viper, cfg Config, svc *services) *containe
 }
 
 // registerEventHandlers registers all event handlers.
-func registerEventHandlers(ctx context.Context, svc *services) error {
+func registerEventHandlers(ctx context.Context, svc *services, cfg Config) error {
 	imagePushedHandler := container.NewImagePushedHandler(ctx, svc.containerSvc, svc.configSvc)
 	if err := svc.eventBus.Subscribe(imagePushedHandler); err != nil {
 		return fmt.Errorf("failed to subscribe image pushed handler: %w", err)
+	}
+
+	// Auto-route handler for creating routes from image labels
+	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, cfg.Server.RegistryDomain).
+		WithEnvExtractor(svc.runtime, svc.envDir)
+	if err := svc.eventBus.Subscribe(autoRouteHandler); err != nil {
+		return fmt.Errorf("failed to subscribe auto-route handler: %w", err)
 	}
 
 	configReloadHandler := container.NewConfigReloadHandler(ctx, svc.containerSvc, svc.configSvc)
@@ -680,6 +727,10 @@ func registerEventHandlers(ctx context.Context, svc *services) error {
 }
 
 // setupConfigHotReload sets up Viper config hot reload.
+// NOTE: This does NOT reload routes into memory. Routes are managed via API
+// (AddRoute/UpdateRoute/RemoveRoute) and memory is the source of truth.
+// The file watcher only updates proxy config and refreshes targets.
+// Manual config file edits to routes require a server restart.
 func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, log zerowrap.Logger) {
 	v.OnConfigChange(func(e fsnotify.Event) {
 		log.Info().Str("file", e.Name).Msg("config file changed")
@@ -689,11 +740,7 @@ func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, lo
 			return
 		}
 
-		if err := svc.configSvc.Load(ctx); err != nil {
-			log.Error().Err(err).Msg("failed to reload configuration")
-			return
-		}
-
+		// Update proxy config from viper (reads directly from viper, not memory)
 		svc.proxySvc.UpdateConfig(proxy.Config{
 			RegistryDomain: v.GetString("server.registry_domain"),
 			RegistryPort:   v.GetInt("server.registry_port"),
@@ -704,10 +751,7 @@ func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, lo
 			log.Warn().Err(err).Msg("failed to refresh proxy targets")
 		}
 
-		// Publish config reload event to trigger container updates
-		if err := svc.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
-			log.Error().Err(err).Msg("failed to publish config reload event")
-		}
+		log.Debug().Msg("config hot reload complete (routes unchanged, memory is source of truth)")
 	})
 	v.WatchConfig()
 }
@@ -728,7 +772,7 @@ func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
 
 // createHTTPHandlers creates HTTP handlers with middleware.
 func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler) {
-	registryHandler := registry.NewHandler(svc.registrySvc, svc.blobStorage, svc.eventBus, log)
+	registryHandler := registry.NewHandler(svc.registrySvc, log)
 
 	registryMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
@@ -758,6 +802,22 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		registryMux.Handle("/v2/token", tokenWithLogging)
 	}
 	registryMux.Handle("/v2/", registryWithMiddleware)
+
+	// Add admin API handler with auth middleware
+	if svc.adminHandler != nil {
+		adminMiddlewares := []func(http.Handler) http.Handler{
+			middleware.PanicRecovery(log),
+			middleware.RequestLogger(log),
+		}
+		// Add admin auth middleware if auth is enabled
+		if svc.authSvc != nil {
+			// Rate limiter for admin API: 10 req/s with burst of 20
+			adminLimiter := rate.NewLimiter(rate.Limit(10), 20)
+			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, adminLimiter, log))
+		}
+		adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
+		registryMux.Handle("/admin/", adminWithMiddleware)
+	}
 
 	proxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
@@ -1063,6 +1123,14 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("registry_auth.enabled", false)
 	v.SetDefault("registry_auth.type", "password")
 	v.SetDefault("registry_auth.token_expiry", "720h")
+	v.SetDefault("auto_route.enabled", false)
+	v.SetDefault("network_isolation.enabled", false)
+	v.SetDefault("network_isolation.network_prefix", "gordon")
+	v.SetDefault("network_isolation.dns_suffix", ".internal")
+	v.SetDefault("volumes.auto_create", true)
+	v.SetDefault("volumes.prefix", "gordon")
+	v.SetDefault("volumes.preserve", true)
+	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
 
 	ConfigureViper(v, configPath)
 

@@ -317,6 +317,74 @@ func (_c *MockConfigService_GetRegistryPort_Call) RunAndReturn(run func() int) *
 	return _c
 }
 
+// GetRoute provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) GetRoute(ctx context.Context, domain1 string) (*domain.Route, error) {
+	ret := _mock.Called(ctx, domain1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetRoute")
+	}
+
+	var r0 *domain.Route
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*domain.Route, error)); ok {
+		return returnFunc(ctx, domain1)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *domain.Route); ok {
+		r0 = returnFunc(ctx, domain1)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.Route)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, domain1)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockConfigService_GetRoute_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetRoute'
+type MockConfigService_GetRoute_Call struct {
+	*mock.Call
+}
+
+// GetRoute is a helper method to define mock.On call
+//   - ctx context.Context
+//   - domain1 string
+func (_e *MockConfigService_Expecter) GetRoute(ctx interface{}, domain1 interface{}) *MockConfigService_GetRoute_Call {
+	return &MockConfigService_GetRoute_Call{Call: _e.mock.On("GetRoute", ctx, domain1)}
+}
+
+func (_c *MockConfigService_GetRoute_Call) Run(run func(ctx context.Context, domain1 string)) *MockConfigService_GetRoute_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockConfigService_GetRoute_Call) Return(route *domain.Route, err error) *MockConfigService_GetRoute_Call {
+	_c.Call.Return(route, err)
+	return _c
+}
+
+func (_c *MockConfigService_GetRoute_Call) RunAndReturn(run func(ctx context.Context, domain1 string) (*domain.Route, error)) *MockConfigService_GetRoute_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetRoutes provides a mock function for the type MockConfigService
 func (_mock *MockConfigService) GetRoutes(ctx context.Context) []domain.Route {
 	ret := _mock.Called(ctx)
@@ -606,6 +674,57 @@ func (_c *MockConfigService_RemoveRoute_Call) Return(err error) *MockConfigServi
 }
 
 func (_c *MockConfigService_RemoveRoute_Call) RunAndReturn(run func(ctx context.Context, domain1 string) error) *MockConfigService_RemoveRoute_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Save provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) Save(ctx context.Context) error {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Save")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockConfigService_Save_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Save'
+type MockConfigService_Save_Call struct {
+	*mock.Call
+}
+
+// Save is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockConfigService_Expecter) Save(ctx interface{}) *MockConfigService_Save_Call {
+	return &MockConfigService_Save_Call{Call: _e.mock.On("Save", ctx)}
+}
+
+func (_c *MockConfigService_Save_Call) Run(run func(ctx context.Context)) *MockConfigService_Save_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockConfigService_Save_Call) Return(err error) *MockConfigService_Save_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockConfigService_Save_Call) RunAndReturn(run func(ctx context.Context) error) *MockConfigService_Save_Call {
 	_c.Call.Return(run)
 	return _c
 }
