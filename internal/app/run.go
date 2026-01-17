@@ -467,13 +467,44 @@ type InternalCredentials struct {
 	Password string `json:"password"`
 }
 
-// getInternalCredentialsFile returns the path to the internal credentials file.
-func getInternalCredentialsFile() string {
-	return filepath.Join(os.TempDir(), "gordon-internal-creds.json")
+// getSecureRuntimeDir returns a secure directory for runtime files.
+// Priority: XDG_RUNTIME_DIR > ~/.gordon/run
+func getSecureRuntimeDir() (string, error) {
+	// Try XDG_RUNTIME_DIR first (typically /run/user/<uid> on Linux)
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		gordonDir := filepath.Join(runtimeDir, "gordon")
+		if err := os.MkdirAll(gordonDir, 0700); err == nil {
+			return gordonDir, nil
+		}
+	}
+
+	// Fall back to ~/.gordon/run
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	gordonDir := filepath.Join(homeDir, ".gordon", "run")
+	if err := os.MkdirAll(gordonDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create runtime directory: %w", err)
+	}
+
+	return gordonDir, nil
 }
 
-// persistInternalCredentials saves the internal registry credentials to a temp file.
-// Security note: Credentials are stored in the system temp directory with 0600 permissions.
+// getInternalCredentialsFile returns the path to the internal credentials file.
+// SECURITY: Credentials are stored in a secure location with restricted permissions.
+func getInternalCredentialsFile() string {
+	runtimeDir, err := getSecureRuntimeDir()
+	if err != nil {
+		// Fall back to temp dir if we can't get secure dir (shouldn't happen)
+		return filepath.Join(os.TempDir(), "gordon-internal-creds.json")
+	}
+	return filepath.Join(runtimeDir, "internal-creds.json")
+}
+
+// persistInternalCredentials saves the internal registry credentials to a secure file.
+// SECURITY: Credentials are stored in XDG_RUNTIME_DIR or ~/.gordon/run with 0600 permissions.
 // The file is cleaned up on graceful shutdown but may persist if Gordon crashes.
 // These credentials are for internal loopback communication only and are regenerated on each start.
 func persistInternalCredentials(username, password string) error {
@@ -485,7 +516,15 @@ func persistInternalCredentials(username, password string) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
+
 	credFile := getInternalCredentialsFile()
+
+	// Ensure parent directory exists with secure permissions
+	if err := os.MkdirAll(filepath.Dir(credFile), 0700); err != nil {
+		return fmt.Errorf("failed to create credentials directory: %w", err)
+	}
+
+	// Write file with restrictive permissions (owner read/write only)
 	if err := os.WriteFile(credFile, data, 0600); err != nil {
 		return fmt.Errorf("failed to write credentials file: %w", err)
 	}
@@ -646,9 +685,25 @@ func loadTokenConfig(ctx context.Context, cfg Config, backend domain.SecretsBack
 	return secret, expiry, nil
 }
 
+// TokenSecretEnvVar is the environment variable for the JWT signing secret.
+// SECURITY: This takes priority over config file to allow secure secret injection.
+const TokenSecretEnvVar = "GORDON_AUTH_TOKEN_SECRET" //nolint:gosec // This is an env var name, not a credential
+
 func loadTokenSecret(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) ([]byte, error) {
+	// SECURITY: Priority order for token secret:
+	// 1. Environment variable (most secure - no disk exposure)
+	// 2. Secrets backend (pass/sops - encrypted)
+	// 3. Config file path (least preferred)
+
+	// Check environment variable first
+	if envSecret := os.Getenv(TokenSecretEnvVar); envSecret != "" {
+		log.Debug().Msg("using token secret from environment variable")
+		return []byte(envSecret), nil
+	}
+
+	// Fall back to config-specified path via secrets backend
 	if cfg.Auth.TokenSecret == "" {
-		return nil, fmt.Errorf("token_secret is required for token authentication")
+		return nil, fmt.Errorf("token_secret is required for token authentication; set %s environment variable or configure auth.token_secret", TokenSecretEnvVar)
 	}
 
 	secret, err := loadSecret(ctx, backend, cfg.Auth.TokenSecret, dataDir, log)
@@ -1079,19 +1134,32 @@ func readDeployRequest() (string, error) {
 }
 
 // createPidFile creates a PID file for the Gordon process.
+// SECURITY: Prefers secure locations (XDG_RUNTIME_DIR, ~/.gordon/run) over /tmp
+// to prevent symlink attacks and unauthorized access.
 func createPidFile(log zerowrap.Logger) string {
 	pid := os.Getpid()
 
-	locations := []string{
-		"/tmp/gordon.pid",
-		filepath.Join(os.TempDir(), "gordon.pid"),
+	// SECURITY: Prioritize secure locations over /tmp
+	var locations []string
+
+	// Try secure runtime directory first
+	if runtimeDir, err := getSecureRuntimeDir(); err == nil {
+		locations = append(locations, filepath.Join(runtimeDir, "gordon.pid"))
 	}
 
+	// Fall back to home directory
 	if homeDir, err := os.UserHomeDir(); err == nil {
-		locations = append(locations, filepath.Join(homeDir, ".gordon.pid"))
+		locations = append(locations, filepath.Join(homeDir, ".gordon", "gordon.pid"))
 	}
+
+	// Last resort: /tmp (least secure due to world-writable)
+	locations = append(locations, filepath.Join(os.TempDir(), "gordon.pid"))
 
 	for _, location := range locations {
+		// Ensure parent directory exists with secure permissions
+		if err := os.MkdirAll(filepath.Dir(location), 0700); err != nil {
+			continue
+		}
 		if err := os.WriteFile(location, []byte(fmt.Sprintf("%d", pid)), 0600); err == nil {
 			log.Debug().Str("pid_file", location).Int("pid", pid).Msg("created PID file")
 			return location
@@ -1112,15 +1180,25 @@ func removePidFile(pidFile string, log zerowrap.Logger) {
 }
 
 // findPidFile finds the Gordon PID file.
+// Checks secure locations first, then falls back to legacy /tmp location.
 func findPidFile() string {
-	locations := []string{
-		"/tmp/gordon.pid",
-		filepath.Join(os.TempDir(), "gordon.pid"),
+	var locations []string
+
+	// Check secure runtime directory first
+	if runtimeDir, err := getSecureRuntimeDir(); err == nil {
+		locations = append(locations, filepath.Join(runtimeDir, "gordon.pid"))
 	}
 
+	// Check home directory
 	if homeDir, err := os.UserHomeDir(); err == nil {
+		locations = append(locations, filepath.Join(homeDir, ".gordon", "gordon.pid"))
+		// Legacy location for backward compatibility
 		locations = append(locations, filepath.Join(homeDir, ".gordon.pid"))
 	}
+
+	// Legacy /tmp locations for backward compatibility
+	locations = append(locations, filepath.Join(os.TempDir(), "gordon.pid"))
+	locations = append(locations, "/tmp/gordon.pid")
 
 	for _, location := range locations {
 		if _, err := os.Stat(location); err == nil {
