@@ -326,6 +326,9 @@ func (s *Service) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo 
 	maps.Copy(containers, s.containers)
 	s.mu.RUnlock()
 
+	// Fetch all attachments once to avoid N+1 queries
+	attachmentsByDomain := s.getAllAttachments(ctx)
+
 	results := make([]domain.RouteInfo, 0, len(containers))
 	for domainName, container := range containers {
 		network := ""
@@ -352,7 +355,7 @@ func (s *Service) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo 
 			ContainerID:     containerID,
 			ContainerStatus: status,
 			Network:         network,
-			Attachments:     s.getAttachmentsForDomain(ctx, domainName),
+			Attachments:     attachmentsByDomain[domainName],
 		})
 	}
 
@@ -940,6 +943,49 @@ func (s *Service) getAttachmentsForDomain(ctx context.Context, domainName string
 		return nil
 	}
 
+	return s.filterAttachments(containers, domainName)
+}
+
+// getAllAttachments fetches all containers once and returns attachments grouped by domain.
+// This avoids N+1 queries when listing multiple routes.
+func (s *Service) getAllAttachments(ctx context.Context) map[string][]domain.Attachment {
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return nil
+	}
+
+	result := make(map[string][]domain.Attachment)
+	for _, container := range containers {
+		if container.Labels == nil {
+			continue
+		}
+		if container.Labels[domain.LabelAttachment] != "true" {
+			continue
+		}
+		ownerDomain := container.Labels[domain.LabelAttachedTo]
+		if ownerDomain == "" {
+			continue
+		}
+		image := container.Image
+		serviceName := container.Name
+		if labelImage, ok := container.Labels[domain.LabelImage]; ok && labelImage != "" {
+			image = labelImage
+			serviceName = extractServiceName(labelImage)
+		}
+		attachment := domain.Attachment{
+			Name:        serviceName,
+			Image:       image,
+			ContainerID: container.ID,
+			Status:      container.Status,
+		}
+		result[ownerDomain] = append(result[ownerDomain], attachment)
+	}
+
+	return result
+}
+
+// filterAttachments extracts attachments for a specific domain from a container list.
+func (s *Service) filterAttachments(containers []*domain.Container, domainName string) []domain.Attachment {
 	attachments := make([]domain.Attachment, 0)
 	for _, container := range containers {
 		if container.Labels == nil {

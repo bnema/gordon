@@ -79,6 +79,9 @@ func TestService_ListRoutesWithDetails_Empty(t *testing.T) {
 	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"})
 	ctx := testContext()
 
+	// getAllAttachments is called even with empty containers
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+
 	results := svc.ListRoutesWithDetails(ctx)
 
 	assert.Empty(t, results)

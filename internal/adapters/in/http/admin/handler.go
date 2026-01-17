@@ -38,6 +38,7 @@ type Handler struct {
 // Type aliases for API responses using shared DTO types.
 type routeInfoResponse = dto.RouteInfo
 type attachmentResponse = dto.Attachment
+type routeResponse = dto.Route
 
 // toAttachmentResponse converts a domain.Attachment to a dto.Attachment.
 func toAttachmentResponse(a domain.Attachment) dto.Attachment {
@@ -62,6 +63,15 @@ func toRouteInfoResponse(r domain.RouteInfo) dto.RouteInfo {
 		ContainerStatus: r.ContainerStatus,
 		Network:         r.Network,
 		Attachments:     attachments,
+	}
+}
+
+// toRouteResponse converts a domain.Route to a dto.Route.
+func toRouteResponse(r domain.Route) dto.Route {
+	return dto.Route{
+		Domain: r.Domain,
+		Image:  r.Image,
+		HTTPS:  r.HTTPS,
 	}
 }
 
@@ -131,7 +141,7 @@ func (h *Handler) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 	case path == "/config":
 		h.handleConfig(w, r)
 	default:
-		http.NotFound(w, r)
+		h.sendError(w, http.StatusNotFound, "route not found")
 	}
 }
 
@@ -146,7 +156,7 @@ func (h *Handler) sendJSON(w http.ResponseWriter, status int, data any) {
 
 // sendError sends an error response.
 func (h *Handler) sendError(w http.ResponseWriter, status int, message string) {
-	h.sendJSON(w, status, map[string]string{"error": message})
+	h.sendJSON(w, status, dto.ErrorResponse{Error: message})
 }
 
 // handleRoutes handles /admin/routes endpoints.
@@ -187,12 +197,16 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 			for _, route := range routes {
 				response = append(response, toRouteInfoResponse(route))
 			}
-			h.sendJSON(w, http.StatusOK, map[string]any{"routes": response})
+			h.sendJSON(w, http.StatusOK, dto.RoutesDetailResponse{Routes: response})
 			return
 		}
 
 		routes := h.configSvc.GetRoutes(ctx)
-		h.sendJSON(w, http.StatusOK, map[string]any{"routes": routes})
+		response := make([]routeResponse, 0, len(routes))
+		for _, route := range routes {
+			response = append(response, toRouteResponse(route))
+		}
+		h.sendJSON(w, http.StatusOK, dto.RoutesResponse{Routes: response})
 		return
 	}
 
@@ -207,7 +221,7 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		for _, attachment := range attachments {
 			response = append(response, toAttachmentResponse(attachment))
 		}
-		h.sendJSON(w, http.StatusOK, map[string]any{"attachments": response})
+		h.sendJSON(w, http.StatusOK, dto.AttachmentsResponse{Attachments: response})
 		return
 	}
 
@@ -216,7 +230,7 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		h.sendError(w, http.StatusNotFound, "route not found")
 		return
 	}
-	h.sendJSON(w, http.StatusOK, route)
+	h.sendJSON(w, http.StatusOK, toRouteResponse(*route))
 }
 
 func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +265,7 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info().Str("domain", route.Domain).Str("image", route.Image).Msg("route added")
-	h.sendJSON(w, http.StatusCreated, route)
+	h.sendJSON(w, http.StatusCreated, toRouteResponse(route))
 }
 
 func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeDomain string) {
@@ -295,7 +309,7 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 	}
 
 	log.Info().Str("domain", route.Domain).Str("image", route.Image).Msg("route updated")
-	h.sendJSON(w, http.StatusOK, route)
+	h.sendJSON(w, http.StatusOK, toRouteResponse(route))
 }
 
 func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, routeDomain string) {
@@ -320,7 +334,7 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 	}
 
 	log.Info().Str("domain", routeDomain).Msg("route removed")
-	h.sendJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+	h.sendJSON(w, http.StatusOK, dto.RouteDeleteResponse{Status: "removed"})
 }
 
 func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
@@ -342,7 +356,28 @@ func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.sendJSON(w, http.StatusOK, map[string]any{"networks": networks})
+	response := make([]dto.Network, 0, len(networks))
+	for _, network := range networks {
+		if network == nil {
+			continue
+		}
+		var labelsCopy map[string]string
+		if network.Labels != nil {
+			labelsCopy = make(map[string]string, len(network.Labels))
+			for key, value := range network.Labels {
+				labelsCopy[key] = value
+			}
+		}
+		response = append(response, dto.Network{
+			ID:         network.ID,
+			Name:       network.Name,
+			Driver:     network.Driver,
+			Containers: append([]string{}, network.Containers...),
+			Labels:     labelsCopy,
+		})
+	}
+
+	h.sendJSON(w, http.StatusOK, dto.NetworksResponse{Networks: response})
 }
 
 // handleSecrets handles /admin/secrets endpoints.
@@ -377,7 +412,7 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 			h.sendError(w, http.StatusBadRequest, "invalid domain")
 			return
 		}
-		h.sendJSON(w, http.StatusOK, map[string]any{"domain": secretDomain, "keys": keys})
+		h.sendJSON(w, http.StatusOK, dto.SecretsListResponse{Domain: secretDomain, Keys: keys})
 
 	case http.MethodPost:
 		// Check write permission
@@ -404,7 +439,7 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 		}
 
 		log.Info().Str("domain", secretDomain).Int("count", len(data)).Msg("secrets set")
-		h.sendJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+		h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "updated"})
 
 	case http.MethodDelete:
 		// Check write permission
@@ -424,7 +459,7 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 		}
 
 		log.Info().Str("domain", secretDomain).Str("key", secretKey).Msg("secret deleted")
-		h.sendJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+		h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "deleted"})
 
 	default:
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -449,19 +484,21 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	health := h.healthSvc.CheckAllRoutes(ctx)
 
-	// Convert to JSON-friendly format
-	result := make(map[string]any, len(health))
-	for domain, h := range health {
-		result[domain] = map[string]any{
-			"container_status": h.ContainerStatus,
-			"http_status":      h.HTTPStatus,
-			"response_time_ms": h.ResponseTimeMs,
-			"healthy":          h.Healthy,
-			"error":            h.Error,
+	response := make(map[string]dto.HealthStatus, len(health))
+	for domain, healthStatus := range health {
+		if healthStatus == nil {
+			continue
+		}
+		response[domain] = dto.HealthStatus{
+			ContainerStatus: healthStatus.ContainerStatus,
+			HTTPStatus:      healthStatus.HTTPStatus,
+			ResponseTimeMs:  healthStatus.ResponseTimeMs,
+			Healthy:         healthStatus.Healthy,
+			Error:           healthStatus.Error,
 		}
 	}
 
-	h.sendJSON(w, http.StatusOK, map[string]any{"health": result})
+	h.sendJSON(w, http.StatusOK, dto.HealthResponse{Health: response})
 }
 
 // handleStatus handles /admin/status endpoint.
@@ -492,14 +529,14 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		statuses[route.Domain] = status
 	}
 
-	status := map[string]any{
-		"routes":            len(routes),
-		"registry_domain":   h.configSvc.GetRegistryDomain(),
-		"registry_port":     h.configSvc.GetRegistryPort(),
-		"server_port":       h.configSvc.GetServerPort(),
-		"auto_route":        h.configSvc.IsAutoRouteEnabled(),
-		"network_isolation": h.configSvc.IsNetworkIsolationEnabled(),
-		"container_status":  statuses,
+	status := dto.StatusResponse{
+		Routes:            len(routes),
+		RegistryDomain:    h.configSvc.GetRegistryDomain(),
+		RegistryPort:      h.configSvc.GetRegistryPort(),
+		ServerPort:        h.configSvc.GetServerPort(),
+		AutoRoute:         h.configSvc.IsAutoRouteEnabled(),
+		NetworkIsolation:  h.configSvc.IsNetworkIsolationEnabled(),
+		ContainerStatuses: statuses,
 	}
 
 	h.sendJSON(w, http.StatusOK, status)
@@ -538,7 +575,7 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info().Msg("config reloaded via admin API")
-	h.sendJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
+	h.sendJSON(w, http.StatusOK, dto.ReloadResponse{Status: "reloaded"})
 }
 
 // handleConfig handles /admin/config endpoint.
@@ -556,22 +593,37 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config := map[string]any{
-		"server": map[string]any{
-			"port":            h.configSvc.GetServerPort(),
-			"registry_port":   h.configSvc.GetRegistryPort(),
-			"registry_domain": h.configSvc.GetRegistryDomain(),
-			"data_dir":        h.configSvc.GetDataDir(),
+	routes := h.configSvc.GetRoutes(ctx)
+	routeResponses := make([]dto.Route, 0, len(routes))
+	for _, route := range routes {
+		routeResponses = append(routeResponses, toRouteResponse(route))
+	}
+
+	externalRoutes := h.configSvc.GetExternalRoutes()
+	externalResponses := make([]dto.ExternalRoute, 0, len(externalRoutes))
+	for domain, target := range externalRoutes {
+		externalResponses = append(externalResponses, dto.ExternalRoute{
+			Domain: domain,
+			Target: target,
+		})
+	}
+
+	config := dto.ConfigResponse{
+		Server: dto.ServerConfig{
+			Port:           h.configSvc.GetServerPort(),
+			RegistryPort:   h.configSvc.GetRegistryPort(),
+			RegistryDomain: h.configSvc.GetRegistryDomain(),
+			DataDir:        h.configSvc.GetDataDir(),
 		},
-		"auto_route": map[string]any{
-			"enabled": h.configSvc.IsAutoRouteEnabled(),
+		AutoRoute: dto.AutoRouteConfig{
+			Enabled: h.configSvc.IsAutoRouteEnabled(),
 		},
-		"network_isolation": map[string]any{
-			"enabled": h.configSvc.IsNetworkIsolationEnabled(),
-			"prefix":  h.configSvc.GetNetworkPrefix(),
+		NetworkIsolation: dto.NetworkIsolationConfig{
+			Enabled: h.configSvc.IsNetworkIsolationEnabled(),
+			Prefix:  h.configSvc.GetNetworkPrefix(),
 		},
-		"routes":          h.configSvc.GetRoutes(ctx),
-		"external_routes": h.configSvc.GetExternalRoutes(),
+		Routes:         routeResponses,
+		ExternalRoutes: externalResponses,
 	}
 
 	h.sendJSON(w, http.StatusOK, config)
@@ -617,10 +669,10 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 	}
 
 	log.Info().Str("domain", deployDomain).Str("container_id", container.ID).Msg("container deployed via admin API")
-	h.sendJSON(w, http.StatusOK, map[string]any{
-		"status":       "deployed",
-		"container_id": container.ID,
-		"domain":       deployDomain,
+	h.sendJSON(w, http.StatusOK, dto.DeployResponse{
+		Status:      "deployed",
+		ContainerID: container.ID,
+		Domain:      deployDomain,
 	})
 }
 
@@ -697,9 +749,7 @@ func (h *Handler) handleProcessLogs(w http.ResponseWriter, r *http.Request, line
 		return
 	}
 
-	h.sendJSON(w, http.StatusOK, map[string]any{
-		"lines": logLines,
-	})
+	h.sendJSON(w, http.StatusOK, dto.ProcessLogsResponse{Lines: logLines})
 }
 
 // handleContainerLogs handles container logs for a specific domain.
@@ -721,9 +771,9 @@ func (h *Handler) handleContainerLogs(w http.ResponseWriter, r *http.Request, lo
 		return
 	}
 
-	h.sendJSON(w, http.StatusOK, map[string]any{
-		"domain": logDomain,
-		"lines":  logLines,
+	h.sendJSON(w, http.StatusOK, dto.ContainerLogsResponse{
+		Domain: logDomain,
+		Lines:  logLines,
 	})
 }
 

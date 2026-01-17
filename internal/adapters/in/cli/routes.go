@@ -23,6 +23,10 @@ var configPath string
 // For tags, truncates to maxLen with ellipsis if needed.
 func truncateImage(image string, maxLen int) string {
 	// Handle digest references: image@sha256:abc123...
+	if maxLen <= 0 {
+		return ""
+	}
+
 	if idx := strings.Index(image, "@sha256:"); idx != -1 {
 		name := image[:idx]
 		digest := image[idx+8:] // Skip "@sha256:"
@@ -30,37 +34,40 @@ func truncateImage(image string, maxLen int) string {
 			digest = digest[:12]
 		}
 		short := fmt.Sprintf("%s@sha256:%s", name, digest)
-		if len(short) > maxLen {
-			// Truncate from the end to maintain valid reference format
-			if maxLen <= 3 {
-				return short[:maxLen]
-			}
-			return short[:maxLen-3] + "..."
+		if len(short) <= maxLen {
+			return short
 		}
-		return short
+		// Truncate from the end to maintain valid reference format
+		if maxLen <= 3 {
+			return short[:maxLen]
+		}
+		return short[:maxLen-3] + "..."
 	}
 
 	// Regular tag: truncate if needed
-	if len(image) > maxLen {
-		if maxLen <= 3 {
-			return image[:maxLen]
-		}
-		return image[:maxLen-3] + "..."
+	if len(image) <= maxLen {
+		return image
 	}
-	return image
+	if maxLen <= 3 {
+		return image[:maxLen]
+	}
+	return image[:maxLen-3] + "..."
 }
 
 func truncateNetwork(network string, maxLen int) string {
 	if network == "" || network == "-" {
 		return "-"
 	}
-	if len(network) > maxLen {
-		if maxLen <= 3 {
-			return network[:maxLen]
-		}
-		return network[:maxLen-3] + "..."
+	if maxLen <= 0 {
+		return ""
 	}
-	return network
+	if len(network) <= maxLen {
+		return network
+	}
+	if maxLen <= 3 {
+		return network[:maxLen]
+	}
+	return network[:maxLen-3] + "..."
 }
 
 // newRoutesCmd creates the routes command group.
