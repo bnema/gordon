@@ -25,8 +25,8 @@ import (
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
-		Short: "Manage registry authentication",
-		Long:  `Commands for managing registry authentication tokens and passwords.`,
+		Short: "Manage Gordon server authentication",
+		Long:  `Commands for managing Gordon server authentication tokens and passwords.`,
 	}
 
 	cmd.AddCommand(newAuthTokenCmd())
