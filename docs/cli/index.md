@@ -55,8 +55,8 @@ gordon routes deploy myapp.example.com
 
 # Attachments
 gordon attachments list
-gordon attachments add app.example.com postgres:15
-gordon attachments remove app.example.com postgres:15
+gordon attachments add app.example.com postgres:18
+gordon attachments remove app.example.com postgres:18
 
 # Secrets
 gordon secrets list myapp.local

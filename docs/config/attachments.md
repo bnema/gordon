@@ -65,7 +65,7 @@ Use Dockerfile VOLUME directives for persistent data:
 
 ```dockerfile
 # postgres.Dockerfile
-FROM postgres:15
+FROM postgres:18
 VOLUME ["/var/lib/postgresql/data"]
 ENV POSTGRES_DB=myapp
 ENV POSTGRES_USER=app
@@ -143,7 +143,7 @@ Multiple apps share the same service instances:
 "app.mydomain.com" = "myapp:latest"
 
 [attachments]
-"app.mydomain.com" = ["postgres:15", "redis:7-alpine"]
+"app.mydomain.com" = ["postgres:18", "redis:7-alpine"]
 ```
 
 ### Microservices with Shared Queue
@@ -169,7 +169,7 @@ Build custom service images with your configuration:
 
 ```dockerfile
 # my-postgres.Dockerfile
-FROM postgres:15
+FROM postgres:18
 VOLUME ["/var/lib/postgresql/data"]
 ENV POSTGRES_DB=production
 ENV POSTGRES_USER=appuser
@@ -226,26 +226,26 @@ gordon attachments list --remote https://gordon.mydomain.com --token $TOKEN
 
 ```bash
 # Add attachment to a domain
-gordon attachments add app.mydomain.com postgres:15
+gordon attachments add app.mydomain.com postgres:18
 
 # Add attachment to a network group
 gordon attachments add backend redis:7-alpine
 
 # Remote mode
-gordon attachments add app.mydomain.com postgres:15 --remote https://gordon.mydomain.com --token $TOKEN
+gordon attachments add app.mydomain.com postgres:18 --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ### Remove Attachments
 
 ```bash
 # Remove attachment from a domain
-gordon attachments remove app.mydomain.com postgres:15
+gordon attachments remove app.mydomain.com postgres:18
 
 # Remove from network group
 gordon attachments remove backend redis:7-alpine
 
 # Remote mode
-gordon attachments remove app.mydomain.com postgres:15 --remote https://gordon.mydomain.com --token $TOKEN
+gordon attachments remove app.mydomain.com postgres:18 --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ### Alias
@@ -254,8 +254,8 @@ The `gordon attach` command is an alias for `gordon attachments`:
 
 ```bash
 gordon attach list
-gordon attach add app.mydomain.com postgres:15
-gordon attach remove app.mydomain.com postgres:15
+gordon attach add app.mydomain.com postgres:18
+gordon attach remove app.mydomain.com postgres:18
 ```
 
 ## Related

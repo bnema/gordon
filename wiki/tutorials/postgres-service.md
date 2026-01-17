@@ -20,7 +20,7 @@ Add a PostgreSQL database as an attachment to your application.
 Create `postgres.Dockerfile`:
 
 ```dockerfile
-FROM postgres:15-alpine
+FROM postgres:18-alpine
 
 # Persistent data directory
 VOLUME ["/var/lib/postgresql/data"]
