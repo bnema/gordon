@@ -594,6 +594,9 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 		if err != nil {
 			return auth.Config{}, err
 		}
+		if hash == "" {
+			return auth.Config{}, errAuthNotConfigured()
+		}
 		authConfig.PasswordHash = hash
 	case domain.AuthTypeToken:
 		secret, expiry, err := loadTokenConfig(ctx, cfg, backend, dataDir, log)
@@ -605,6 +608,11 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 	}
 
 	return authConfig, nil
+}
+
+// errAuthNotConfigured returns an error when auth is enabled but credentials are not configured.
+func errAuthNotConfigured() error {
+	return fmt.Errorf("auth is enabled by default, configure auth type and secrets backend. See: https://gordon.bnema.dev/docs/config/auth")
 }
 
 func loadPasswordHash(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (string, error) {
