@@ -31,15 +31,11 @@ func truncateImage(image string, maxLen int) string {
 		}
 		short := fmt.Sprintf("%s@sha256:%s", name, digest)
 		if len(short) > maxLen {
-			// Truncate name if still too long
-			available := maxLen - len("@sha256:") - len(digest) - 3 // 3 for ellipsis
-			if available > 0 {
-				if len(name) > available {
-					name = name[:available]
-				}
-				name = name + "..."
-				short = fmt.Sprintf("%s@sha256:%s", name, digest)
+			// Truncate from the end to maintain valid reference format
+			if maxLen <= 3 {
+				return short[:maxLen]
 			}
+			return short[:maxLen-3] + "..."
 		}
 		return short
 	}
