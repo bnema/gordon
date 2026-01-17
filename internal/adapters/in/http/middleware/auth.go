@@ -3,11 +3,13 @@ package middleware
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/bnema/zerowrap"
 
+	"gordon/internal/adapters/dto"
 	"gordon/internal/boundaries/in"
 	"gordon/internal/domain"
 )
@@ -26,7 +28,9 @@ func RegistryAuth(username, password string, log zerowrap.Logger) func(http.Hand
 			if !isAuthenticated(r, username, password, log) {
 				w.Header().Set("WWW-Authenticate", `Basic realm="Gordon Registry"`)
 				w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Unauthorized"})
 
 				log.Warn().
 					Str(zerowrap.FieldLayer, "adapter").
@@ -364,7 +368,9 @@ func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.
 // sendForbidden sends an HTTP 403 response.
 func sendForbidden(w http.ResponseWriter, log zerowrap.Logger, r *http.Request) {
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
-	http.Error(w, "Forbidden: insufficient scope", http.StatusForbidden)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden: insufficient scope"})
 
 	log.Warn().
 		Str(zerowrap.FieldLayer, "adapter").
@@ -400,7 +406,9 @@ func sendUnauthorized(w http.ResponseWriter, authType domain.AuthType, host stri
 		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon Registry"`)
 	}
 
-	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Unauthorized"})
 
 	log.Warn().
 		Str(zerowrap.FieldLayer, "adapter").

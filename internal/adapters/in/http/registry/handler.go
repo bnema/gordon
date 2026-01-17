@@ -12,6 +12,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"gordon/internal/adapters/dto"
 	"gordon/internal/boundaries/in"
 	"gordon/internal/domain"
 	"gordon/pkg/manifest"
@@ -93,15 +94,15 @@ func (h *Handler) handleRegistryRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleBase(w, r)
 		return
 	}
+	h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
 
-	http.NotFound(w, r)
 }
 
 func (h *Handler) handleManifestRoutes(w http.ResponseWriter, r *http.Request) {
 	// Parse path: /v2/{name}/manifests/{reference}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v2/"), "/")
 	if len(parts) < 3 || parts[len(parts)-2] != "manifests" {
-		http.NotFound(w, r)
+		h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
 		return
 	}
 
@@ -127,7 +128,7 @@ func (h *Handler) handleManifestRoutes(w http.ResponseWriter, r *http.Request) {
 	case "PUT":
 		h.handlePutManifest(w, r)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendRegistryError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 	}
 }
 
@@ -135,7 +136,7 @@ func (h *Handler) handleBlobRoutes(w http.ResponseWriter, r *http.Request) {
 	// Parse path: /v2/{name}/blobs/{digest}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v2/"), "/")
 	if len(parts) < 3 || parts[len(parts)-2] != "blobs" {
-		http.NotFound(w, r)
+		h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
 		return
 	}
 
@@ -159,7 +160,7 @@ func (h *Handler) handleBlobRoutes(w http.ResponseWriter, r *http.Request) {
 	case "HEAD", "GET":
 		h.handleGetBlob(w, r)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendRegistryError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 	}
 }
 
@@ -168,7 +169,7 @@ func (h *Handler) handleBlobUploadRoutes(w http.ResponseWriter, r *http.Request)
 	path := strings.TrimPrefix(r.URL.Path, "/v2/")
 	uploadIndex := strings.Index(path, "/blobs/uploads/")
 	if uploadIndex == -1 {
-		http.NotFound(w, r)
+		h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
 		return
 	}
 
@@ -189,7 +190,7 @@ func (h *Handler) handleBlobUploadRoutes(w http.ResponseWriter, r *http.Request)
 		case "POST":
 			h.handleStartBlobUpload(w, r)
 		default:
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			h.sendRegistryError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		}
 	} else {
 		// Validate UUID to prevent path traversal
@@ -203,7 +204,7 @@ func (h *Handler) handleBlobUploadRoutes(w http.ResponseWriter, r *http.Request)
 		case "PATCH", "PUT":
 			h.handleBlobUpload(w, r)
 		default:
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			h.sendRegistryError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		}
 	}
 }
@@ -212,7 +213,7 @@ func (h *Handler) handleTagListRoutes(w http.ResponseWriter, r *http.Request) {
 	// Parse path: /v2/{name}/tags/list
 	path := strings.TrimPrefix(r.URL.Path, "/v2/")
 	if !strings.HasSuffix(path, "/tags/list") {
-		http.NotFound(w, r)
+		h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
 		return
 	}
 
@@ -230,7 +231,7 @@ func (h *Handler) handleTagListRoutes(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		h.handleListTags(w, r)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendRegistryError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 	}
 }
 
@@ -244,10 +245,11 @@ func (h *Handler) sendRegistryError(w http.ResponseWriter, status int, code, mes
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"errors": []map[string]string{
-			{"code": code, "message": message},
-		},
+	_ = json.NewEncoder(w).Encode(dto.RegistryErrorResponse{
+		Errors: []dto.RegistryErrorItem{{
+			Code:    code,
+			Message: message,
+		}},
 	})
 }
 
@@ -262,7 +264,7 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 	manifestData, err := h.registrySvc.GetManifest(ctx, name, reference)
 	if err != nil {
 		log.Warn().Err(err).Str("name", name).Str("reference", reference).Msg("manifest not found")
-		http.NotFound(w, r)
+		h.sendRegistryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest not found")
 		return
 	}
 
@@ -286,7 +288,7 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 
 	if contentType == "" {
 		log.Warn().Str("name", name).Str("reference", reference).Msg("Content-Type header missing")
-		http.Error(w, "Content-Type header required", http.StatusBadRequest)
+		h.sendRegistryError(w, http.StatusBadRequest, "MANIFEST_INVALID", "Content-Type header required")
 		return
 	}
 
@@ -303,7 +305,7 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Error().Err(err).Msg("failed to read manifest data")
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		h.sendRegistryError(w, http.StatusBadRequest, "MANIFEST_INVALID", "invalid manifest data")
 		return
 	}
 
@@ -326,7 +328,7 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 	digest, err := h.registrySvc.PutManifest(ctx, manifestObj)
 	if err != nil {
 		log.Error().Err(err).Str("name", name).Str("reference", reference).Msg("failed to store manifest")
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		h.sendRegistryError(w, http.StatusInternalServerError, "MANIFEST_INVALID", "failed to store manifest")
 		return
 	}
 
@@ -346,7 +348,7 @@ func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request) {
 	path, err := h.registrySvc.GetBlobPath(ctx, digest)
 	if err != nil {
 		log.Warn().Err(err).Str("name", name).Str("digest", digest).Msg("blob not found")
-		http.NotFound(w, r)
+		h.sendRegistryError(w, http.StatusNotFound, "BLOB_UNKNOWN", "blob not found")
 		return
 	}
 
@@ -364,7 +366,7 @@ func (h *Handler) handleStartBlobUpload(w http.ResponseWriter, r *http.Request) 
 	uuid, err := h.registrySvc.StartUpload(ctx, name)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to start blob upload")
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		h.sendRegistryError(w, http.StatusInternalServerError, "BLOB_UPLOAD_UNKNOWN", "failed to start upload")
 		return
 	}
 
@@ -408,7 +410,7 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Error().Err(err).Msg("failed to read blob chunk")
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		h.sendRegistryError(w, http.StatusBadRequest, "BLOB_UPLOAD_INVALID", "invalid blob chunk")
 		return
 	}
 
@@ -416,7 +418,7 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, chunk)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to append blob chunk")
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		h.sendRegistryError(w, http.StatusInternalServerError, "BLOB_UPLOAD_UNKNOWN", "failed to append blob chunk")
 		return
 	}
 
@@ -425,7 +427,7 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		if err := h.registrySvc.FinishUpload(ctx, uuid, digest); err != nil {
 			log.Error().Err(err).Str("digest", digest).Msg("failed to finalize blob upload")
 			_ = h.registrySvc.CancelUpload(ctx, uuid)
-			http.Error(w, "Bad Request: digest mismatch", http.StatusBadRequest)
+			h.sendRegistryError(w, http.StatusBadRequest, "DIGEST_INVALID", "digest mismatch")
 			return
 		}
 
@@ -451,21 +453,19 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 	tags, err := h.registrySvc.ListTags(ctx, name)
 	if err != nil {
 		log.Warn().Err(err).Str("name", name).Msg("tags not found")
-		w.WriteHeader(http.StatusNotFound)
+		h.sendRegistryError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
 		return
 	}
 
-	tagsJSON, err := json.Marshal(tags)
-	if err != nil {
-		log.Error().Err(err).Str("name", name).Msg("failed to marshal tags")
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+	response := dto.TagListResponse{
+		Name: name,
+		Tags: tags,
 	}
-
-	response := fmt.Sprintf(`{"name":"%s","tags":%s}`, name, string(tagsJSON))
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(response)))
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(response))
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Error().Err(err).Str("name", name).Msg("failed to encode tags")
+	}
 }
