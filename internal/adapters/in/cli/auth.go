@@ -18,6 +18,7 @@ import (
 	"gordon/internal/app"
 	"gordon/internal/domain"
 	"gordon/internal/usecase/auth"
+	"gordon/pkg/duration"
 )
 
 // newAuthCmd creates the auth command group.
@@ -67,7 +68,14 @@ func newTokenGenerateCmd() *cobra.Command {
 The token will be stored in the configured secrets backend and can be used
 for docker login as: docker login -u <subject> -p <token>
 
-Use --expiry=0 to generate a token that never expires (useful for CI).`,
+Expiry supports human-friendly durations:
+  - d (days):   1d = 24 hours
+  - w (weeks):  1w = 7 days
+  - M (months): 1M = 30 days
+  - y (years):  1y = 365 days
+
+Examples: 1y, 30d, 2w, 6M, 1y6M, 2w3d
+Use --expiry=0 for a token that never expires (useful for CI).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTokenGenerate(subject, scopes, expiry, configPath)
 		},
@@ -75,7 +83,7 @@ Use --expiry=0 to generate a token that never expires (useful for CI).`,
 
 	cmd.Flags().StringVar(&subject, "subject", "", "Subject/username for the token (required)")
 	cmd.Flags().StringVar(&scopes, "scopes", "push,pull", "Comma-separated list of scopes")
-	cmd.Flags().StringVar(&expiry, "expiry", "720h", "Token expiry duration (e.g., 720h, 24h, 0 for never)")
+	cmd.Flags().StringVar(&expiry, "expiry", "30d", "Token expiry duration (e.g., 1y, 30d, 2w, 24h, 0 for never)")
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
 
 	_ = cmd.MarkFlagRequired("subject")
@@ -196,10 +204,10 @@ func runTokenGenerate(subject, scopesStr, expiryStr, configPath string) error {
 		return err
 	}
 
-	// Parse expiry
+	// Parse expiry (supports human-friendly units: d, w, M, y)
 	var expiry time.Duration
 	if expiryStr != "0" {
-		expiry, err = time.ParseDuration(expiryStr)
+		expiry, err = duration.Parse(expiryStr)
 		if err != nil {
 			return fmt.Errorf("invalid expiry duration: %w", err)
 		}
