@@ -210,9 +210,15 @@ func initLogger(cfg Config) (zerowrap.Logger, func(), error) {
 	}
 
 	if cfg.Logging.File.Enabled {
+		logPath := cfg.Logging.File.Path
+		if logPath == "" {
+			// Default to {data_dir}/logs/gordon.log
+			logPath = filepath.Join(cfg.Server.DataDir, "logs", "gordon.log")
+		}
+
 		log, cleanup, err := zerowrap.NewWithFile(logConfig, zerowrap.FileConfig{
 			Enabled:    true,
-			Path:       cfg.Logging.File.Path,
+			Path:       logPath,
 			MaxSize:    cfg.Logging.File.MaxSize,
 			MaxBackups: cfg.Logging.File.MaxBackups,
 			MaxAge:     cfg.Logging.File.MaxAge,
@@ -316,13 +322,23 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
 
 	// Create log service for accessing logs via admin API
-	logFilePath := cfg.Logging.File.Path
-	logSvc := logs.NewService(logFilePath, svc.containerSvc, svc.runtime, log)
+	logSvc := logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API
 	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.eventBus, log)
 
 	return svc, nil
+}
+
+// resolveLogFilePath returns the configured log file path or a default.
+func resolveLogFilePath(cfg Config) string {
+	if cfg.Logging.File.Path != "" {
+		return cfg.Logging.File.Path
+	}
+	if cfg.Logging.File.Enabled {
+		return filepath.Join(cfg.Server.DataDir, "logs", "gordon.log")
+	}
+	return ""
 }
 
 // createOutputAdapters creates the Docker runtime and event bus.
