@@ -14,6 +14,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// configPath is set by the root command
+var configPath string
+
 // truncateImage shortens long image references for display.
 // For digests (image@sha256:...), shows first 12 chars of digest.
 // For tags, truncates to maxLen with ellipsis if needed.
@@ -93,66 +96,106 @@ func newRoutesListCmd() *cobra.Command {
 			ctx := context.Background()
 
 			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				fmt.Println(styles.RenderError("routes command requires --remote flag or GORDON_REMOTE env var"))
-				fmt.Println(styles.Theme.Muted.Render("Local route management is not yet supported. Use the config file directly."))
-				return nil
+			if isRemote {
+				return runRoutesListRemote(ctx, client)
 			}
-
-			routes, err := client.ListRoutes(ctx)
-			if err != nil {
-				return fmt.Errorf("failed to list routes: %w", err)
-			}
-
-			if len(routes) == 0 {
-				fmt.Println(styles.Theme.Muted.Render("No routes configured"))
-				return nil
-			}
-
-			// Get health status for each route (includes container status and HTTP probe)
-			health, _ := client.GetHealth(ctx)
-			if health == nil {
-				health = make(map[string]*remote.RouteHealth)
-			}
-
-			// Build table rows
-			const imageColWidth = 35
-			rows := make([][]string, len(routes))
-			for i, route := range routes {
-				routeHealth := health[route.Domain]
-
-				// Container status column
-				containerStatus := "unknown"
-				if routeHealth != nil {
-					containerStatus = routeHealth.ContainerStatus
-				}
-				containerBadge := components.ContainerStatusBadge(containerStatus)
-
-				// HTTP status column
-				httpStatus := formatHTTPStatus(routeHealth)
-
-				displayImage := truncateImage(route.Image, imageColWidth)
-				rows[i] = []string{route.Domain, displayImage, containerBadge, httpStatus}
-			}
-
-			// Render table
-			table := components.NewTable(
-				components.WithColumns([]components.TableColumn{
-					{Title: "Domain", Width: 25},
-					{Title: "Image", Width: imageColWidth},
-					{Title: "Container", Width: 12},
-					{Title: "HTTP", Width: 14},
-				}),
-				components.WithRows(rows),
-			)
-
-			fmt.Println(styles.Theme.Title.Render("Routes"))
-			fmt.Println()
-			fmt.Println(table.View())
-
-			return nil
+			return runRoutesListLocal(ctx, configPath)
 		},
 	}
+}
+
+// runRoutesListRemote lists routes from a remote Gordon instance.
+func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
+	routes, err := client.ListRoutes(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list routes: %w", err)
+	}
+
+	if len(routes) == 0 {
+		fmt.Println(styles.Theme.Muted.Render("No routes configured"))
+		return nil
+	}
+
+	// Get health status for each route (includes container status and HTTP probe)
+	health, _ := client.GetHealth(ctx)
+	if health == nil {
+		health = make(map[string]*remote.RouteHealth)
+	}
+
+	// Build table rows
+	const imageColWidth = 35
+	rows := make([][]string, len(routes))
+	for i, route := range routes {
+		routeHealth := health[route.Domain]
+
+		// Container status column
+		containerStatus := "unknown"
+		if routeHealth != nil {
+			containerStatus = routeHealth.ContainerStatus
+		}
+		containerBadge := components.ContainerStatusBadge(containerStatus)
+
+		// HTTP status column
+		httpStatus := formatHTTPStatus(routeHealth)
+
+		displayImage := truncateImage(route.Image, imageColWidth)
+		rows[i] = []string{route.Domain, displayImage, containerBadge, httpStatus}
+	}
+
+	// Render table
+	table := components.NewTable(
+		components.WithColumns([]components.TableColumn{
+			{Title: "Domain", Width: 25},
+			{Title: "Image", Width: imageColWidth},
+			{Title: "Container", Width: 12},
+			{Title: "HTTP", Width: 14},
+		}),
+		components.WithRows(rows),
+	)
+
+	fmt.Println(styles.Theme.Title.Render("Routes"))
+	fmt.Println()
+	fmt.Println(table.View())
+
+	return nil
+}
+
+// runRoutesListLocal lists routes from local configuration.
+func runRoutesListLocal(ctx context.Context, cfgPath string) error {
+	local, err := GetLocalServices(cfgPath)
+	if err != nil {
+		return fmt.Errorf("failed to initialize local services: %w", err)
+	}
+
+	routes := local.GetConfigService().GetRoutes(ctx)
+
+	if len(routes) == 0 {
+		fmt.Println(styles.Theme.Muted.Render("No routes configured"))
+		return nil
+	}
+
+	// Build table rows (no health info in local mode)
+	const imageColWidth = 45
+	rows := make([][]string, len(routes))
+	for i, route := range routes {
+		displayImage := truncateImage(route.Image, imageColWidth)
+		rows[i] = []string{route.Domain, displayImage}
+	}
+
+	// Render table
+	table := components.NewTable(
+		components.WithColumns([]components.TableColumn{
+			{Title: "Domain", Width: 30},
+			{Title: "Image", Width: imageColWidth},
+		}),
+		components.WithRows(rows),
+	)
+
+	fmt.Println(styles.Theme.Title.Render("Routes (local)"))
+	fmt.Println()
+	fmt.Println(table.View())
+
+	return nil
 }
 
 // newRoutesAddCmd creates the routes add command.
@@ -172,12 +215,6 @@ Examples:
 			ctx := context.Background()
 			routeDomain := args[0]
 
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				fmt.Println(styles.RenderError("routes command requires --remote flag or GORDON_REMOTE env var"))
-				return nil
-			}
-
 			if image == "" {
 				fmt.Println(styles.RenderError("--image flag is required"))
 				return nil
@@ -188,8 +225,19 @@ Examples:
 				Image:  image,
 			}
 
-			if err := client.AddRoute(ctx, route); err != nil {
-				return fmt.Errorf("failed to add route: %w", err)
+			client, isRemote := GetRemoteClient()
+			if isRemote {
+				if err := client.AddRoute(ctx, route); err != nil {
+					return fmt.Errorf("failed to add route: %w", err)
+				}
+			} else {
+				local, err := GetLocalServices(configPath)
+				if err != nil {
+					return fmt.Errorf("failed to initialize local services: %w", err)
+				}
+				if err := local.GetConfigService().AddRoute(ctx, route); err != nil {
+					return fmt.Errorf("failed to add route: %w", err)
+				}
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route added: %s -> %s", routeDomain, image)))
@@ -220,12 +268,6 @@ Examples:
 			ctx := context.Background()
 			routeDomain := args[0]
 
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				fmt.Println(styles.RenderError("routes command requires --remote flag or GORDON_REMOTE env var"))
-				return nil
-			}
-
 			// Confirm unless --force
 			if !force {
 				confirmed, err := components.RunConfirm(
@@ -241,8 +283,19 @@ Examples:
 				}
 			}
 
-			if err := client.RemoveRoute(ctx, routeDomain); err != nil {
-				return fmt.Errorf("failed to remove route: %w", err)
+			client, isRemote := GetRemoteClient()
+			if isRemote {
+				if err := client.RemoveRoute(ctx, routeDomain); err != nil {
+					return fmt.Errorf("failed to remove route: %w", err)
+				}
+			} else {
+				local, err := GetLocalServices(configPath)
+				if err != nil {
+					return fmt.Errorf("failed to initialize local services: %w", err)
+				}
+				if err := local.GetConfigService().RemoveRoute(ctx, routeDomain); err != nil {
+					return fmt.Errorf("failed to remove route: %w", err)
+				}
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route removed: %s", routeDomain)))

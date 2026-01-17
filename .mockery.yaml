@@ -31,3 +31,4 @@ packages:
       HealthService:
       HTTPProber:
       SecretService:
+      LogService:
