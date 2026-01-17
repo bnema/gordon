@@ -23,6 +23,8 @@ gordon_domain = "gordon.mydomain.com"
 
 ## Full Configuration Reference
 
+For a complete list of all configuration options with their default values, see the [Configuration Reference](./reference.md).
+
 > **Note:** This example shows production-style paths. Default paths use `~/.gordon/` for user installations.
 
 ```toml
