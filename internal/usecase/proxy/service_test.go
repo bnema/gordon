@@ -73,15 +73,15 @@ func TestService_GetTarget_ExternalRoute(t *testing.T) {
 	svc := NewService(runtime, containerSvc, configSvc, Config{})
 	ctx := testContext()
 
-	// Mock external routes
+	// Mock external routes - use public IP to pass SSRF check
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
-		"reg.example.com": "localhost:5000",
+		"reg.example.com": "203.0.113.10:5000", // TEST-NET-3 (RFC 5737) - documentation range
 	})
 
 	result, err := svc.GetTarget(ctx, "reg.example.com")
 
 	assert.NoError(t, err)
-	assert.Equal(t, "localhost", result.Host)
+	assert.Equal(t, "203.0.113.10", result.Host)
 	assert.Equal(t, 5000, result.Port)
 	assert.Equal(t, "", result.ContainerID)
 	assert.Equal(t, "http", result.Scheme)
@@ -95,19 +95,57 @@ func TestService_GetTarget_ExternalRoute_Cached(t *testing.T) {
 	svc := NewService(runtime, containerSvc, configSvc, Config{})
 	ctx := testContext()
 
-	// First call - should resolve external route
+	// First call - should resolve external route (use public IP)
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
-		"reg.example.com": "localhost:5000",
+		"reg.example.com": "203.0.113.10:5000",
 	}).Once()
 
 	result1, err := svc.GetTarget(ctx, "reg.example.com")
 	assert.NoError(t, err)
-	assert.Equal(t, "localhost", result1.Host)
+	assert.Equal(t, "203.0.113.10", result1.Host)
 
 	// Second call - should return from cache (no mock call needed)
 	result2, err := svc.GetTarget(ctx, "reg.example.com")
 	assert.NoError(t, err)
 	assert.Equal(t, result1, result2)
+}
+
+func TestService_GetTarget_ExternalRoute_SSRFBlocked(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{"localhost", "localhost:5000"},
+		{"loopback IP", "127.0.0.1:5000"},
+		{"private network 10.x", "10.0.0.1:5000"},
+		{"private network 172.x", "172.16.0.1:5000"},
+		{"private network 192.168.x", "192.168.1.1:5000"},
+		{"AWS metadata", "169.254.169.254:80"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear cache
+			svc.targets = make(map[string]*domain.ProxyTarget)
+
+			configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
+				"ssrf.example.com": tt.target,
+			}).Once()
+
+			result, err := svc.GetTarget(ctx, "ssrf.example.com")
+
+			assert.Error(t, err)
+			assert.ErrorIs(t, err, domain.ErrSSRFBlocked)
+			assert.Nil(t, result)
+		})
+	}
 }
 
 func TestService_GetTarget_ExternalRoute_InvalidTarget(t *testing.T) {
