@@ -386,8 +386,23 @@ gordon auth token generate --subject <name> [options]
 |--------|---------|-------------|
 | `--subject` | (required) | Username/subject for the token |
 | `--scopes` | `push,pull` | Comma-separated scopes |
-| `--expiry` | `720h` | Duration until expiry (0 = never) |
+| `--expiry` | `30d` | Duration until expiry (0 = never) |
 | `-c, --config` | Auto | Path to config file |
+
+**Duration format:**
+
+Supports human-friendly duration units:
+
+| Unit | Description | Example |
+|------|-------------|---------|
+| `d` | Days (24 hours) | `30d` |
+| `w` | Weeks (7 days) | `2w` |
+| `M` | Months (30 days) | `6M` |
+| `y` | Years (365 days) | `1y` |
+
+Compound durations are also supported: `1y6M`, `2w3d`, `1d12h`
+
+Standard Go durations also work: `24h`, `30m`, `1h30m`
 
 **Examples:**
 
@@ -395,14 +410,17 @@ gordon auth token generate --subject <name> [options]
 # CI token that never expires
 gordon auth token generate --subject github-actions --expiry 0
 
-# Read-only token
-gordon auth token generate --subject reader --scopes pull --expiry 720h
+# Read-only token for 30 days
+gordon auth token generate --subject reader --scopes pull --expiry 30d
 
-# Push-only token for build system
-gordon auth token generate --subject builder --scopes push --expiry 0
+# Push-only token for 1 year
+gordon auth token generate --subject builder --scopes push --expiry 1y
 
 # Temporary token (24 hours)
 gordon auth token generate --subject temp --expiry 24h
+
+# Token for 6 months
+gordon auth token generate --subject deploy --expiry 6M
 ```
 
 **Output:**

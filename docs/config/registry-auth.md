@@ -27,7 +27,7 @@ token_expiry = "720h"                          # Duration or 0 for never
 | `username` | string | - | Username for password auth |
 | `password_hash` | string | - | Path to bcrypt hash in secrets backend |
 | `token_secret` | string | - | Path to JWT signing secret in secrets backend |
-| `token_expiry` | string | `"720h"` | Token validity duration (0 = never expires) |
+| `token_expiry` | string | `"30d"` | Token validity duration (0 = never expires). Supports: d (days), w (weeks), M (months), y (years) |
 
 ## Authentication Types
 
@@ -43,7 +43,7 @@ backend = "pass"
 enabled = true
 type = "token"
 token_secret = "gordon/registry/token_secret"
-token_expiry = "720h"  # 30 days, or "0" for never
+token_expiry = "30d"  # 30 days, or "0" for never. Also: 1y, 2w, 6M
 ```
 
 **Setup:**
@@ -113,7 +113,7 @@ Tokens can have different permission levels:
 
 ```bash
 # Pull-only token (for read-only access)
-gordon auth token generate --subject reader --scopes pull --expiry 720h
+gordon auth token generate --subject reader --scopes pull --expiry 30d
 
 # Push-only token (for CI builds)
 gordon auth token generate --subject builder --scopes push --expiry 0
@@ -121,17 +121,26 @@ gordon auth token generate --subject builder --scopes push --expiry 0
 
 ## Token Expiry
 
-Control how long tokens remain valid:
+Control how long tokens remain valid. Supports human-friendly units:
+- `d` - days (24 hours)
+- `w` - weeks (7 days)
+- `M` - months (30 days)
+- `y` - years (365 days)
+
+Compound durations work too: `1y6M`, `2w3d`
 
 ```bash
 # Never expires (for CI/CD)
 gordon auth token generate --subject ci --expiry 0
 
-# Expires in 30 days
-gordon auth token generate --subject temp --expiry 720h
+# Expires in 1 year
+gordon auth token generate --subject deploy --expiry 1y
 
-# Expires in 24 hours
-gordon auth token generate --subject short --expiry 24h
+# Expires in 30 days
+gordon auth token generate --subject temp --expiry 30d
+
+# Expires in 2 weeks
+gordon auth token generate --subject short --expiry 2w
 ```
 
 ## Instance-Specific Tokens
