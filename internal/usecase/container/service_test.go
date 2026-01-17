@@ -1056,3 +1056,65 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 	assert.True(t, exists)
 	assert.Equal(t, "new-container", tracked.ID)
 }
+
+func TestService_StripRegistryPrefix(t *testing.T) {
+	tests := []struct {
+		name           string
+		registryDomain string
+		image          string
+		expected       string
+	}{
+		{
+			name:           "strips registry prefix",
+			registryDomain: "reg.example.com",
+			image:          "reg.example.com/myapp:latest",
+			expected:       "myapp:latest",
+		},
+		{
+			name:           "strips registry prefix with trailing slash in domain",
+			registryDomain: "reg.example.com/",
+			image:          "reg.example.com/myapp:v1.0",
+			expected:       "myapp:v1.0",
+		},
+		{
+			name:           "preserves image without registry prefix",
+			registryDomain: "reg.example.com",
+			image:          "nginx:latest",
+			expected:       "nginx:latest",
+		},
+		{
+			name:           "preserves image with different registry",
+			registryDomain: "reg.example.com",
+			image:          "gcr.io/project/image:latest",
+			expected:       "gcr.io/project/image:latest",
+		},
+		{
+			name:           "handles empty registry domain",
+			registryDomain: "",
+			image:          "reg.example.com/myapp:latest",
+			expected:       "reg.example.com/myapp:latest",
+		},
+		{
+			name:           "handles nested paths",
+			registryDomain: "reg.example.com",
+			image:          "reg.example.com/org/repo/app:latest",
+			expected:       "org/repo/app:latest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := mocks.NewMockContainerRuntime(t)
+			envLoader := mocks.NewMockEnvLoader(t)
+			eventBus := mocks.NewMockEventPublisher(t)
+
+			config := Config{
+				RegistryDomain: tt.registryDomain,
+			}
+			svc := NewService(runtime, envLoader, eventBus, nil, config)
+
+			result := svc.stripRegistryPrefix(tt.image)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

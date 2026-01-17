@@ -170,17 +170,21 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 		rows = append(rows, []string{route.Domain, displayImage, displayNetwork, containerBadge, httpStatus})
 
 		for i, attachment := range route.Attachments {
-			prefix := "|-"
+			// Unicode box-drawing tree structure for nested attachments
+			prefix := styles.IconTreeBranch + styles.IconTreeLine
 			if i == len(route.Attachments)-1 {
-				prefix = "`-"
+				prefix = styles.IconTreeLast + styles.IconTreeLine
 			}
 			attachmentName := prefix + " " + attachment.Name
-			if len(attachmentName) > 25 {
-				attachmentName = attachmentName[:22] + "..."
+			runes := []rune(attachmentName)
+			if len(runes) > 25 {
+				attachmentName = string(runes[:22]) + "..."
 			}
 			attachmentStatus := components.ContainerStatusBadge(attachment.Status)
 			attachmentImage := truncateImage(attachment.Image, imageColWidth)
-			rows = append(rows, []string{attachmentName, attachmentImage, "-", attachmentStatus, "-"})
+			// Display the attachment's actual network in the routes table
+			attachmentNetwork := truncateNetwork(attachment.Network, networkColWidth)
+			rows = append(rows, []string{attachmentName, attachmentImage, attachmentNetwork, attachmentStatus, "-"})
 		}
 	}
 
