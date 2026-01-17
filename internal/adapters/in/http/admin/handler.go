@@ -34,6 +34,22 @@ type Handler struct {
 	log          zerowrap.Logger
 }
 
+type routeInfoResponse struct {
+	Domain          string               `json:"domain"`
+	Image           string               `json:"image"`
+	ContainerID     string               `json:"container_id"`
+	ContainerStatus string               `json:"container_status"`
+	Network         string               `json:"network"`
+	Attachments     []attachmentResponse `json:"attachments"`
+}
+
+type attachmentResponse struct {
+	Name        string `json:"name"`
+	Image       string `json:"image"`
+	ContainerID string `json:"container_id"`
+	Status      string `json:"status"`
+}
+
 // NewHandler creates a new admin HTTP handler.
 func NewHandler(
 	configSvc in.ConfigService,
@@ -83,6 +99,8 @@ func (h *Handler) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/routes" || strings.HasPrefix(path, "/routes/"):
 		h.handleRoutes(w, r, path)
+	case path == "/networks":
+		h.handleNetworks(w, r)
 	case path == "/secrets" || strings.HasPrefix(path, "/secrets/"):
 		h.handleSecrets(w, r, path)
 	case path == "/deploy" || strings.HasPrefix(path, "/deploy/"):
@@ -148,8 +166,54 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 	}
 
 	if routeDomain == "" {
+		if r.URL.Query().Get("detailed") == "true" {
+			routes := h.containerSvc.ListRoutesWithDetails(ctx)
+			response := make([]routeInfoResponse, 0, len(routes))
+			for _, route := range routes {
+				attachments := make([]attachmentResponse, 0, len(route.Attachments))
+				for _, attachment := range route.Attachments {
+					attachments = append(attachments, attachmentResponse{
+						Name:        attachment.Name,
+						Image:       attachment.Image,
+						ContainerID: attachment.ContainerID,
+						Status:      attachment.Status,
+					})
+				}
+				response = append(response, routeInfoResponse{
+					Domain:          route.Domain,
+					Image:           route.Image,
+					ContainerID:     route.ContainerID,
+					ContainerStatus: route.ContainerStatus,
+					Network:         route.Network,
+					Attachments:     attachments,
+				})
+			}
+			h.sendJSON(w, http.StatusOK, map[string]any{"routes": response})
+			return
+		}
+
 		routes := h.configSvc.GetRoutes(ctx)
 		h.sendJSON(w, http.StatusOK, map[string]any{"routes": routes})
+		return
+	}
+
+	if strings.HasSuffix(routeDomain, "/attachments") {
+		parentDomain := strings.TrimSuffix(routeDomain, "/attachments")
+		if parentDomain == "" {
+			h.sendError(w, http.StatusBadRequest, "domain required in path")
+			return
+		}
+		attachments := h.containerSvc.ListAttachments(ctx, parentDomain)
+		response := make([]attachmentResponse, 0, len(attachments))
+		for _, attachment := range attachments {
+			response = append(response, attachmentResponse{
+				Name:        attachment.Name,
+				Image:       attachment.Image,
+				ContainerID: attachment.ContainerID,
+				Status:      attachment.Status,
+			})
+		}
+		h.sendJSON(w, http.StatusOK, map[string]any{"attachments": response})
 		return
 	}
 
@@ -263,6 +327,28 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 
 	log.Info().Str("domain", routeDomain).Msg("route removed")
 	h.sendJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+
+	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+
+	networks, err := h.containerSvc.ListNetworks(ctx)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "failed to list networks")
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, map[string]any{"networks": networks})
 }
 
 // handleSecrets handles /admin/secrets endpoints.

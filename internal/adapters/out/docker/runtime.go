@@ -746,6 +746,45 @@ func (r *Runtime) GetContainerNetworkInfo(ctx context.Context, containerID strin
 	return containerIP, selectedPort, nil
 }
 
+// GetContainerNetwork returns the network name a container is connected to.
+func (r *Runtime) GetContainerNetwork(ctx context.Context, containerID string) (string, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "docker",
+		zerowrap.FieldAction:   "GetContainerNetwork",
+		zerowrap.FieldEntityID: containerID,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	resp, err := r.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "", log.WrapErr(err, "failed to inspect container")
+	}
+
+	networks := resp.NetworkSettings
+	if networks == nil || networks.Networks == nil || len(networks.Networks) == 0 {
+		return "bridge", nil
+	}
+
+	selected := ""
+	for name := range networks.Networks {
+		if strings.HasPrefix(name, "gordon-") {
+			selected = name
+			break
+		}
+		if selected == "" {
+			selected = name
+		}
+	}
+
+	if selected == "" {
+		return "bridge", nil
+	}
+
+	log.Debug().Str("network", selected).Msg("container network detected")
+	return selected, nil
+}
+
 // InspectImageVolumes gets the volume mount points declared in the image.
 func (r *Runtime) InspectImageVolumes(ctx context.Context, imageRef string) ([]string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{

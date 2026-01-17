@@ -46,6 +46,7 @@ type ContainerRuntime interface {
 	GetImageExposedPorts(ctx context.Context, imageRef string) ([]int, error)
 	GetContainerExposedPorts(ctx context.Context, containerID string) ([]int, error)
 	GetContainerNetworkInfo(ctx context.Context, containerID string) (string, int, error)
+	GetContainerNetwork(ctx context.Context, containerID string) (string, error)
 
 	// Volume management
 	InspectImageVolumes(ctx context.Context, imageRef string) ([]string, error)
