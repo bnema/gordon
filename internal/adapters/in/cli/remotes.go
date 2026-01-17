@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"gordon/internal/adapters/in/cli/remote"
 	"gordon/internal/adapters/in/cli/ui/components"
@@ -107,7 +108,7 @@ Examples:
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			url := args[1]
+			url := normalizeURL(args[1])
 
 			// If token-env is provided, use that instead of token
 			finalToken := token
@@ -243,4 +244,12 @@ Examples:
 			return nil
 		},
 	}
+}
+
+// normalizeURL ensures the URL has a protocol scheme, defaulting to https.
+func normalizeURL(url string) string {
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		return url
+	}
+	return "https://" + url
 }
