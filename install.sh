@@ -49,8 +49,52 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${TARBALL}"
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Download checksums file
+CHECKSUMS_URL="https://github.com/${REPO}/releases/latest/download/checksums.txt"
+echo "Downloading checksums..."
+if ! curl -fsSL "$CHECKSUMS_URL" -o "$TMP_DIR/checksums.txt"; then
+    echo "Error: Failed to download checksums file"
+    exit 1
+fi
+
 echo "Downloading ${TARBALL}..."
-curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/$TARBALL"
+if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/$TARBALL"; then
+    echo "Error: Failed to download ${TARBALL}"
+    exit 1
+fi
+
+# Verify checksum
+echo "Verifying checksum..."
+EXPECTED_CHECKSUM=$(grep -E "[[:space:]]${TARBALL}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}')
+if [ -z "$EXPECTED_CHECKSUM" ]; then
+    echo "Error: Could not find checksum for ${TARBALL} in checksums.txt"
+    exit 1
+fi
+
+# Calculate actual checksum (works on both Linux and macOS)
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL_CHECKSUM=$(sha256sum "$TMP_DIR/$TARBALL" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL_CHECKSUM=$(shasum -a 256 "$TMP_DIR/$TARBALL" | awk '{print $1}')
+else
+    echo "Error: Neither 'sha256sum' nor 'shasum' was found. Cannot verify checksum."
+    echo ""
+    echo "Please install one of these tools:"
+    echo "  Debian/Ubuntu: sudo apt-get install coreutils"
+    echo "  Fedora/RHEL:   sudo dnf install coreutils"
+    echo "  Alpine:        apk add coreutils"
+    echo "  macOS:         shasum should be pre-installed"
+    exit 1
+fi
+
+if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
+    echo "Error: Checksum verification failed!"
+    echo "Expected: $EXPECTED_CHECKSUM"
+    echo "Actual:   $ACTUAL_CHECKSUM"
+    echo "The downloaded file may be corrupted or tampered with."
+    exit 1
+fi
+echo "Checksum verified successfully."
 
 echo "Extracting..."
 tar -xzf "$TMP_DIR/$TARBALL" -C "$TMP_DIR"
