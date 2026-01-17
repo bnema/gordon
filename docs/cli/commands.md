@@ -9,11 +9,11 @@ Gordon provides a command-line interface for server management, deployment, and 
 | `gordon serve` | Start the Gordon server |
 | `gordon reload` | Reload configuration and sync containers |
 | `gordon deploy` | Manually deploy or redeploy a specific route |
-| `gordon logs` | Display Gordon process logs |
+| `gordon logs` | Display Gordon process or container logs |
 | `gordon version` | Print version information |
 | `gordon auth` | Manage registry authentication |
 | `gordon routes` | Manage routes (local or remote) |
-| `gordon secrets` | Manage secrets (remote only) |
+| `gordon secrets` | Manage secrets (local or remote) |
 | `gordon remotes` | Manage saved remote Gordon instances |
 
 ## Quick Reference
@@ -30,9 +30,11 @@ gordon reload
 gordon deploy myapp.example.com
 
 # View logs
-gordon logs
-gordon logs -f
-gordon logs -n 100
+gordon logs                          # Gordon process logs
+gordon logs -f                       # Follow process logs
+gordon logs -n 100                   # Last 100 lines
+gordon logs myapp.local              # Container logs for myapp.local
+gordon logs myapp.local -f           # Follow container logs
 
 # Check version
 gordon version
@@ -225,7 +227,7 @@ Manually deploy or redeploy a specific route.
 ### Synopsis
 
 ```bash
-gordon deploy <domain>
+gordon deploy <domain> [options]
 ```
 
 ### Arguments
@@ -234,9 +236,20 @@ gordon deploy <domain>
 |----------|-------------|
 | `<domain>` | The domain name of the route to deploy (required) |
 
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--remote` | Remote Gordon URL |
+| `--token` | Authentication token for remote |
+
 ### Description
 
-Sends `SIGUSR2` to the Gordon process with the specified domain, triggering:
+**Local mode:** Sends `SIGUSR2` to the Gordon process with the specified domain.
+
+**Remote mode:** Calls the remote Gordon Admin API to trigger deployment.
+
+Both modes trigger:
 
 - Fresh image pull (always pulls latest, ignoring cache)
 - Container redeployment for the specified route
@@ -244,8 +257,12 @@ Sends `SIGUSR2` to the Gordon process with the specified domain, triggering:
 ### Examples
 
 ```bash
+# Local deployment
 gordon deploy myapp.example.com
 gordon deploy api.example.com
+
+# Remote deployment
+gordon deploy myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ### Use Cases
@@ -253,18 +270,25 @@ gordon deploy api.example.com
 - Recover from a failed deployment
 - Force redeploy without pushing a new image
 - Manual deployment when automatic deploy didn't trigger
+- Trigger deployments on remote Gordon instances from CI/CD
 
 ---
 
 ## gordon logs
 
-Display Gordon process logs.
+Display Gordon process logs or container logs.
 
 ### Synopsis
 
 ```bash
-gordon logs [options]
+gordon logs [domain] [options]
 ```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `[domain]` | Optional. Container domain to view logs for. Without this, shows Gordon process logs. |
 
 ### Options
 
@@ -273,14 +297,26 @@ gordon logs [options]
 | `--config` | `-c` | Auto | Path to config file |
 | `--follow` | `-f` | false | Follow log output (like `tail -f`) |
 | `--lines` | `-n` | 50 | Number of lines to show |
+| `--remote` | | | Remote Gordon URL |
+| `--token` | | | Authentication token for remote |
 
 ### Examples
 
 ```bash
+# Gordon process logs
 gordon logs              # Last 50 lines
 gordon logs -f           # Follow logs
 gordon logs -n 100       # Last 100 lines
 gordon logs -f -n 200    # Follow, starting from last 200 lines
+
+# Container logs
+gordon logs myapp.local           # Last 50 lines from container
+gordon logs myapp.local -f        # Follow container logs
+gordon logs myapp.local -n 100    # Last 100 lines from container
+
+# Remote mode
+gordon logs --remote https://gordon.mydomain.com --token $TOKEN
+gordon logs myapp.local --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ### Log Locations
@@ -294,6 +330,10 @@ tail -f ~/.gordon/logs/gordon.log
 
 # With systemd
 journalctl --user -u gordon -f
+
+# Container logs via docker (local alternative)
+docker logs --tail 50 myapp.local
+docker logs -f myapp.local
 ```
 
 ---
@@ -603,31 +643,28 @@ gordon routes deploy myapp.example.com
 
 ## gordon secrets
 
-Manage secrets on remote Gordon instances. Requires remote targeting.
+Manage secrets on local or remote Gordon instances.
 
 ### Subcommands
 
 | Subcommand | Description |
 |------------|-------------|
-| `list` | List all secrets |
-| `get` | Get a secret value |
+| `list` | List all secrets for a domain |
 | `set` | Set a secret value |
-| `delete` | Delete a secret |
+| `remove` | Remove a secret |
 
 ### Examples
 
 ```bash
-# List secrets
-gordon secrets list --remote https://gordon.mydomain.com --token $TOKEN
+# Local mode (reads/writes secrets directly)
+gordon secrets list myapp.local
+gordon secrets set myapp.local DATABASE_URL "postgres://..."
+gordon secrets remove myapp.local DATABASE_URL
 
-# Set a secret
-gordon secrets set DATABASE_URL "postgres://..." --remote ... --token ...
-
-# Get a secret
-gordon secrets get DATABASE_URL --remote ... --token ...
-
-# Delete a secret
-gordon secrets delete DATABASE_URL --remote ... --token ...
+# Remote mode
+gordon secrets list myapp.local --remote https://gordon.mydomain.com --token $TOKEN
+gordon secrets set myapp.local DATABASE_URL "postgres://..." --remote ... --token ...
+gordon secrets remove myapp.local DATABASE_URL --remote ... --token ...
 ```
 
 ---

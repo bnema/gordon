@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
+	"gordon/internal/adapters/in/cli/ui/styles"
 	"gordon/internal/app"
 )
 
@@ -21,14 +23,34 @@ even if a container is already running.
 
 Examples:
   gordon deploy myapp.example.com
-  gordon deploy api.example.com`,
+  gordon deploy api.example.com
+  gordon deploy myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			domain, err := app.SendDeploySignal(args[0])
+			ctx := context.Background()
+			deployDomain := args[0]
+
+			client, isRemote := GetRemoteClient()
+			if isRemote {
+				// Remote deployment via admin API
+				result, err := client.Deploy(ctx, deployDomain)
+				if err != nil {
+					return fmt.Errorf("failed to deploy: %w", err)
+				}
+				containerID := result.ContainerID
+				if len(containerID) > 12 {
+					containerID = containerID[:12]
+				}
+				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", deployDomain, containerID)))
+				return nil
+			}
+
+			// Local deployment via signal
+			domain, err := app.SendDeploySignal(deployDomain)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Deploy signal sent for domain: %s\n", domain)
+			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
 			return nil
 		},
 	}
