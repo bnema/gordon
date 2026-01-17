@@ -27,6 +27,8 @@ Build on your machine, push to deploy. Works from your laptop or CI.
 - Private Docker registry on your VPS
 - Domain-to-container routing via HTTP reverse proxy
 - Automatic deployment on image push
+- Auto-routing from image labels
+- Remote CLI management
 - Zero downtime updates
 - Persistent volumes from Dockerfile VOLUME directives
 - Environment variable management with secrets support
