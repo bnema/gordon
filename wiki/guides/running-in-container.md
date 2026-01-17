@@ -240,8 +240,8 @@ gpg --gen-key
 pass init <your-gpg-key-id>
 
 # Store Gordon secrets
-pass insert gordon/registry/password_hash
-pass insert gordon/registry/token_secret
+pass insert gordon/auth/password_hash
+pass insert gordon/auth/token_secret
 ```
 
 ### Custom Dockerfile
@@ -307,15 +307,13 @@ volumes:
 ### Configuration
 
 ```toml
-[secrets]
-backend = "pass"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "token"
+secrets_backend = "pass"
 username = "admin"
-password_hash = "gordon/registry/password_hash"
-token_secret = "gordon/registry/token_secret"
+password_hash = "gordon/auth/password_hash"
+token_secret = "gordon/auth/token_secret"
 ```
 
 ### GPG Agent (Optional)

@@ -163,6 +163,20 @@ GORDON_LOGGING_FILE_MAX_SIZE=200
 GORDON_LOGGING_CONTAINER_LOGS_ENABLED=false
 ```
 
+### Security Environment Variables
+
+These special environment variables take priority over config file values:
+
+| Variable | Description |
+|----------|-------------|
+| `GORDON_AUTH_TOKEN_SECRET` | JWT signing secret (avoids storing secret on disk) |
+
+Example:
+```bash
+export GORDON_AUTH_TOKEN_SECRET="your-secure-32-char-secret-here"
+gordon serve
+```
+
 ## Pull Policy Options
 
 | Value | Behavior |

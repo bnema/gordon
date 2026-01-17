@@ -27,7 +27,7 @@ gordon_domain = "gordon.local"
 port = 8080
 gordon_domain = "gordon.local"
 
-[registry_auth]
+[auth]
 enabled = false
 
 [auto_route]
@@ -44,13 +44,11 @@ enabled = true
 port = 8080
 gordon_domain = "gordon.company.com"
 
-[secrets]
-backend = "pass"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "token"
-token_secret = "gordon/registry/token_secret"
+secrets_backend = "pass"
+token_secret = "gordon/auth/token_secret"
 
 [network_isolation]
 enabled = true
