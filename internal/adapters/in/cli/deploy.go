@@ -37,7 +37,11 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("failed to deploy: %w", err)
 				}
-				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", deployDomain, result.ContainerID[:12])))
+				containerID := result.ContainerID
+				if len(containerID) > 12 {
+					containerID = containerID[:12]
+				}
+				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", deployDomain, containerID)))
 				return nil
 			}
 

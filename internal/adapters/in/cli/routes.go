@@ -14,7 +14,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// configPath is set by the root command
+// configPath for local operations. If empty, config is auto-discovered
+// from standard locations (/etc/gordon/gordon.toml, ~/.config/gordon/gordon.toml, ./gordon.toml).
 var configPath string
 
 // truncateImage shortens long image references for display.
