@@ -19,6 +19,10 @@ const (
 	StatusPending
 	StatusRunning
 	StatusStopped
+	StatusPaused
+	StatusRestarting
+	StatusExited
+	StatusUnknown
 )
 
 // StatusConfig holds configuration for status rendering.
@@ -54,12 +58,28 @@ var DefaultStatusConfigs = map[Status]StatusConfig{
 		Style: styles.Theme.Muted,
 	},
 	StatusRunning: {
-		Icon:  styles.IconSuccess,
+		Icon:  styles.IconRunning,
 		Style: styles.Theme.Success,
 	},
 	StatusStopped: {
-		Icon:  styles.IconError,
+		Icon:  styles.IconStopped,
 		Style: styles.Theme.Error,
+	},
+	StatusPaused: {
+		Icon:  styles.IconPaused,
+		Style: styles.Theme.Warning,
+	},
+	StatusRestarting: {
+		Icon:  styles.IconRestarting,
+		Style: styles.Theme.Warning,
+	},
+	StatusExited: {
+		Icon:  styles.IconExited,
+		Style: styles.Theme.Error,
+	},
+	StatusUnknown: {
+		Icon:  styles.IconUnknown,
+		Style: styles.Theme.Muted,
 	},
 }
 
@@ -72,22 +92,25 @@ func RenderStatus(status Status, label string) string {
 	return config.Style.Render(config.Icon + " " + label)
 }
 
-// RenderStatusBadge renders a status as a badge with background.
-func RenderStatusBadge(status Status, label string) string {
+// RenderStatusBadge renders a status as a badge with background and icon.
+func RenderStatusBadge(status Status, _ string) string {
+	config := DefaultStatusConfigs[status]
 	var badgeStyle lipgloss.Style
 	switch status {
 	case StatusSuccess, StatusRunning:
 		badgeStyle = styles.Theme.BadgeSuccess
-	case StatusError, StatusStopped:
+	case StatusError, StatusStopped, StatusExited:
 		badgeStyle = styles.Theme.BadgeError
-	case StatusWarning:
+	case StatusWarning, StatusPaused, StatusRestarting:
 		badgeStyle = styles.Theme.BadgeWarning
 	case StatusPending:
 		badgeStyle = styles.Theme.BadgePending
+	case StatusUnknown:
+		badgeStyle = styles.Theme.Muted
 	default:
 		badgeStyle = styles.Theme.BadgeInfo
 	}
-	return badgeStyle.Render(label)
+	return badgeStyle.Render(config.Icon)
 }
 
 // ParseStatus converts a string status to Status type.
@@ -101,14 +124,22 @@ func ParseStatus(s string) Status {
 		return StatusWarning
 	case "info":
 		return StatusInfo
-	case "pending", "starting", "waiting":
+	case "pending", "starting", "waiting", "created":
 		return StatusPending
 	case "running", "up":
 		return StatusRunning
-	case "stopped", "down", "exited":
+	case "stopped", "down":
 		return StatusStopped
+	case "paused":
+		return StatusPaused
+	case "restarting":
+		return StatusRestarting
+	case "exited", "dead":
+		return StatusExited
+	case "unknown":
+		return StatusUnknown
 	default:
-		return StatusInfo
+		return StatusUnknown
 	}
 }
 

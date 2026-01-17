@@ -2,78 +2,101 @@ package styles
 
 // Nerd Font icons for terminal UI.
 // These icons require a Nerd Font compatible terminal font.
+// All icons are defined using Unicode escape sequences for portability.
 // Fallback ASCII alternatives are provided where practical.
 const (
 	// Status indicators
-	IconSuccess = "" // nf-fa-check (U+F00C)
-	IconError   = "" // nf-fa-times (U+F00D)
-	IconWarning = "" // nf-fa-exclamation_triangle (U+F071)
-	IconInfo    = "" // nf-fa-info_circle (U+F05A)
-	IconPending = "" // nf-fa-clock_o (U+F017)
+	IconSuccess = "\uf00c" // nf-fa-check
+	IconError   = "\uf00d" // nf-fa-times
+	IconWarning = "\uf071" // nf-fa-exclamation_triangle
+	IconInfo    = "\uf05a" // nf-fa-info_circle
+	IconPending = "\uf017" // nf-fa-clock
+
+	// Container status icons
+	IconRunning    = "\uf00c" // nf-fa-check (green)
+	IconStopped    = "\uf04d" // nf-fa-stop
+	IconExited     = "\uf00d" // nf-fa-times
+	IconPaused     = "\uf04c" // nf-fa-pause
+	IconRestarting = "\uf021" // nf-fa-refresh
+	IconUnknown    = "\uf071" // nf-fa-exclamation_triangle
 
 	// Objects
-	IconRoute     = ""  // nf-fa-sitemap (U+F0E8)
-	IconSecret    = ""  // nf-fa-lock (U+F023)
-	IconToken     = ""  // nf-fa-key (U+F084)
-	IconContainer = ""  // nf-oct-container (U+F489)
-	IconServer    = ""  // nf-fa-server (U+F233)
-	IconNetwork   = "󰛳" // nf-md-lan (U+F06F3)
-	IconVolume    = ""  // nf-fa-database (U+F1C0)
-	IconImage     = ""  // nf-fa-archive (U+F187)
+	IconRoute     = "\uf0e8"     // nf-fa-sitemap
+	IconSecret    = "\uf023"     // nf-fa-lock
+	IconToken     = "\uf084"     // nf-fa-key
+	IconContainer = "\uf4b7"     // nf-oct-container
+	IconServer    = "\uf233"     // nf-fa-server
+	IconNetwork   = "\U000f0317" // nf-md-lan
+	IconVolume    = "\uf1c0"     // nf-fa-database
+	IconImage     = "\uf187"     // nf-fa-archive
+	IconDocker    = "\ue7b0"     // nf-dev-docker
 
 	// Actions
-	IconAdd     = "" // nf-fa-plus (U+F067)
-	IconRemove  = "" // nf-fa-minus (U+F068)
-	IconEdit    = "" // nf-fa-pencil (U+F040)
-	IconRefresh = "" // nf-fa-refresh (U+F021)
-	IconUpload  = "" // nf-fa-cloud_upload (U+F0EE)
-	IconDelete  = "" // nf-fa-trash (U+F1F8)
+	IconAdd     = "\uf067" // nf-fa-plus
+	IconRemove  = "\uf068" // nf-fa-minus
+	IconEdit    = "\uf040" // nf-fa-pencil
+	IconRefresh = "\uf021" // nf-fa-refresh
+	IconUpload  = "\uf0ee" // nf-fa-cloud_upload
+	IconDelete  = "\uf1f8" // nf-fa-trash
 
 	// Navigation
-	IconArrowRight = "" // nf-fa-arrow_right (U+F061)
-	IconArrowLeft  = "" // nf-fa-arrow_left (U+F060)
-	IconArrowUp    = "" // nf-fa-arrow_up (U+F062)
-	IconArrowDown  = "" // nf-fa-arrow_down (U+F063)
-	IconChevron    = "" // nf-fa-chevron_right (U+F054)
+	IconArrowRight = "\uf061" // nf-fa-arrow_right
+	IconArrowLeft  = "\uf060" // nf-fa-arrow_left
+	IconArrowUp    = "\uf062" // nf-fa-arrow_up
+	IconArrowDown  = "\uf063" // nf-fa-arrow_down
+	IconChevron    = "\uf054" // nf-fa-chevron_right
 
 	// UI elements
-	IconBullet     = "▸" // Simple triangle bullet
-	IconDot        = "●" // Filled circle
-	IconDotEmpty   = "○" // Empty circle
-	IconCheckbox   = ""  // nf-fa-square_o (U+F096)
-	IconChecked    = ""  // nf-fa-check_square_o (U+F046)
-	IconRadio      = ""  // nf-fa-circle_o (U+F10C)
-	IconRadioCheck = ""  // nf-fa-dot_circle_o (U+F192)
+	IconBullet     = "\u25b8" // ▸ Simple triangle bullet
+	IconDot        = "\u25cf" // ● Filled circle
+	IconDotEmpty   = "\u25cb" // ○ Empty circle
+	IconCheckbox   = "\uf096" // nf-fa-square_o
+	IconChecked    = "\uf046" // nf-fa-check_square_o
+	IconRadio      = "\uf10c" // nf-fa-circle_o
+	IconRadioCheck = "\uf192" // nf-fa-dot_circle_o
+	IconPlay       = "\uf04b" // nf-fa-play
+	IconStop       = "\uf04d" // nf-fa-stop
+	IconPause      = "\uf04c" // nf-fa-pause
+
+	// Tree structure
+	IconTreeBranch = "\u251c" // ├
+	IconTreeLast   = "\u2514" // └
+	IconTreeLine   = "\u2500" // ─
+	IconTreeVert   = "\u2502" // │
 
 	// Spinners (individual frames)
-	SpinnerDot    = "⣾⣽⣻⢿⡿⣟⣯⣷"
+	SpinnerDot    = "\u28fe\u28fd\u28fb\u28bf\u287f\u28df\u28ef\u28f7"
 	SpinnerLine   = "|/-\\"
-	SpinnerCircle = "◐◓◑◒"
-	SpinnerBrail  = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+	SpinnerCircle = "\u25d0\u25d3\u25d1\u25d2"
+	SpinnerBrail  = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 
 	// Borders and decorations
-	BorderHorizontal = "─"
-	BorderVertical   = "│"
-	BorderCornerTL   = "┌"
-	BorderCornerTR   = "┐"
-	BorderCornerBL   = "└"
-	BorderCornerBR   = "┘"
-	BorderT          = "┬"
-	BorderB          = "┴"
-	BorderL          = "├"
-	BorderR          = "┤"
-	BorderCross      = "┼"
+	BorderHorizontal = "\u2500" // ─
+	BorderVertical   = "\u2502" // │
+	BorderCornerTL   = "\u250c" // ┌
+	BorderCornerTR   = "\u2510" // ┐
+	BorderCornerBL   = "\u2514" // └
+	BorderCornerBR   = "\u2518" // ┘
+	BorderT          = "\u252c" // ┬
+	BorderB          = "\u2534" // ┴
+	BorderL          = "\u251c" // ├
+	BorderR          = "\u2524" // ┤
+	BorderCross      = "\u253c" // ┼
 
 	// Gordon branding
-	IconGordon = "" // nf-fa-cube (U+F1B2)
+	IconGordon = "\uf1b2" // nf-fa-cube
 )
 
 // ASCII fallback alternatives for terminals without Nerd Fonts.
 const (
-	AsciiSuccess = "[OK]"
-	AsciiError   = "[X]"
-	AsciiWarning = "[!]"
-	AsciiInfo    = "[i]"
-	AsciiBullet  = ">"
-	AsciiDot     = "*"
+	AsciiSuccess    = "[OK]"
+	AsciiError      = "[X]"
+	AsciiWarning    = "[!]"
+	AsciiInfo       = "[i]"
+	AsciiBullet     = ">"
+	AsciiDot        = "*"
+	AsciiRunning    = "[R]"
+	AsciiStopped    = "[S]"
+	AsciiTreeBranch = "|-"
+	AsciiTreeLast   = "`-"
 )

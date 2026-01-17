@@ -45,7 +45,7 @@ func NewTable(opts ...TableOption) *TableModel {
 			Foreground(styles.ColorText).
 			Padding(0, 1),
 		evenStyle: lipgloss.NewStyle().
-			Foreground(styles.ColorTextMuted).
+			Foreground(styles.ColorText).
 			Padding(0, 1),
 	}
 
