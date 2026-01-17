@@ -15,15 +15,15 @@ gordon_domain = ""                           # Required: Gordon domain (registry
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
 
 # =============================================================================
-# AUTHENTICATION
+# AUTHENTICATION (required - Gordon won't start without credentials configured)
 # =============================================================================
 [auth]
-enabled = true                               # Enable registry authentication
+enabled = true                               # Enable registry authentication (default: true)
 type = "password"                            # "password" or "token"
 secrets_backend = "unsafe"                   # "pass", "sops", or "unsafe"
 username = ""                                # Username for password auth
-password_hash = ""                           # Path in secrets backend to bcrypt hash
-token_secret = ""                            # Path in secrets backend to JWT signing key
+password_hash = ""                           # Path in secrets backend to bcrypt hash (REQUIRED for password type)
+token_secret = ""                            # Path in secrets backend to JWT signing key (REQUIRED for token type)
 token_expiry = "720h"                        # Token expiry duration (720h = 30 days)
 
 # =============================================================================

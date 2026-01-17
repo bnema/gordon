@@ -2,6 +2,33 @@
 
 Configure authentication for the Gordon registry and Admin API.
 
+## Quick Start
+
+Authentication is **enabled by default** for security. Gordon will not start without authentication configured.
+
+**Option 1: Password Authentication (simplest)**
+```bash
+# 1. Generate password hash
+gordon auth password hash
+# Enter your password, copy the bcrypt hash
+
+# 2. Save hash to secrets file
+mkdir -p ~/.gordon/secrets
+echo '$2a$10$...' > ~/.gordon/secrets/password_hash
+
+# 3. Add to config.toml
+cat >> ~/.gordon/config.toml << 'EOF'
+[auth]
+password_hash = "password_hash"
+EOF
+```
+
+**Option 2: Disable Authentication (development only)**
+```toml
+[auth]
+enabled = false
+```
+
 ## Configuration
 
 ```toml
@@ -12,8 +39,6 @@ secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"
 ```
-
-> **Note:** Authentication is enabled by default for security. For local development without auth, explicitly set `enabled = false`.
 
 ## Options
 
