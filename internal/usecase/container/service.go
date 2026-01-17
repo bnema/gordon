@@ -987,14 +987,14 @@ func (s *Service) getAllAttachments(ctx context.Context) map[string][]domain.Att
 			image = labelImage
 			serviceName = extractServiceName(labelImage)
 		}
-		// Get the container's network for debugging/verification
+		// Get the container's network for display in the routes table
 		network := ""
 		if networkName, err := s.runtime.GetContainerNetwork(ctx, container.ID); err == nil {
 			network = networkName
 		}
 		attachment := domain.Attachment{
 			Name:        serviceName,
-			Image:       image,
+			Image:       s.stripRegistryPrefix(image),
 			ContainerID: container.ID,
 			Status:      container.Status,
 			Network:     network,
@@ -1024,14 +1024,14 @@ func (s *Service) filterAttachments(ctx context.Context, containers []*domain.Co
 			image = labelImage
 			serviceName = extractServiceName(labelImage)
 		}
-		// Get the container's network for debugging/verification
+		// Get the container's network for display in the routes table
 		network := ""
 		if networkName, err := s.runtime.GetContainerNetwork(ctx, container.ID); err == nil {
 			network = networkName
 		}
 		attachment := domain.Attachment{
 			Name:        serviceName,
-			Image:       image,
+			Image:       s.stripRegistryPrefix(image),
 			ContainerID: container.ID,
 			Status:      container.Status,
 			Network:     network,
