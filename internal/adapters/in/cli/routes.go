@@ -34,33 +34,24 @@ func truncateImage(image string, maxLen int) string {
 			digest = digest[:12]
 		}
 		short := fmt.Sprintf("%s@sha256:%s", name, digest)
-		if len(short) > maxLen {
-			// Truncate from the end to maintain valid reference format
-			if maxLen <= 3 {
-				if len(short) < maxLen {
-					return short
-				}
-				return short[:maxLen]
-			}
-			if len(short) <= maxLen {
-				return short
-			}
-			return short[:maxLen-3] + "..."
+		if len(short) <= maxLen {
+			return short
 		}
-		return short
+		// Truncate from the end to maintain valid reference format
+		if maxLen <= 3 {
+			return short[:maxLen]
+		}
+		return short[:maxLen-3] + "..."
 	}
 
 	// Regular tag: truncate if needed
-	if len(image) > maxLen {
-		if maxLen <= 3 {
-			if len(image) < maxLen {
-				return image
-			}
-			return image[:maxLen]
-		}
-		return image[:maxLen-3] + "..."
+	if len(image) <= maxLen {
+		return image
 	}
-	return image
+	if maxLen <= 3 {
+		return image[:maxLen]
+	}
+	return image[:maxLen-3] + "..."
 }
 
 func truncateNetwork(network string, maxLen int) string {
@@ -70,16 +61,13 @@ func truncateNetwork(network string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
 	}
-	if len(network) > maxLen {
-		if maxLen <= 3 {
-			if len(network) < maxLen {
-				return network
-			}
-			return network[:maxLen]
-		}
-		return network[:maxLen-3] + "..."
+	if len(network) <= maxLen {
+		return network
 	}
-	return network
+	if maxLen <= 3 {
+		return network[:maxLen]
+	}
+	return network[:maxLen-3] + "..."
 }
 
 // newRoutesCmd creates the routes command group.
