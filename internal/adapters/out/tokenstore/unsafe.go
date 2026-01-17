@@ -29,6 +29,10 @@ const (
 	unsafeRevokedFile = "secrets/gordon/registry/revoked.json"
 )
 
+// UnsafeEnvVar is the environment variable that must be set to "true"
+// to enable the unsafe token store.
+const UnsafeEnvVar = "GORDON_ALLOW_UNSAFE_SECRETS"
+
 // UnsafeStore implements TokenStore using plain text files.
 // WARNING: This store does not encrypt secrets. Only use when pass/sops are unavailable.
 type UnsafeStore struct {
@@ -38,7 +42,20 @@ type UnsafeStore struct {
 
 // NewUnsafeStore creates a new file-based token store.
 // dataDir is the base directory for storing secrets (typically gordon's data_dir).
-func NewUnsafeStore(dataDir string, log zerowrap.Logger) *UnsafeStore {
+//
+// SECURITY: Requires GORDON_ALLOW_UNSAFE_SECRETS=true environment variable.
+// Returns an error if the environment variable is not set, preventing
+// accidental use of plaintext secret storage in production.
+func NewUnsafeStore(dataDir string, log zerowrap.Logger) (*UnsafeStore, error) {
+	// SECURITY: Require explicit opt-in for plaintext storage
+	if os.Getenv(UnsafeEnvVar) != "true" {
+		return nil, fmt.Errorf(
+			"unsafe token store is disabled by default; "+
+				"set %s=true to enable plaintext secret storage (NOT recommended for production)",
+			UnsafeEnvVar,
+		)
+	}
+
 	store := &UnsafeStore{
 		dataDir: dataDir,
 		log:     log,
@@ -49,9 +66,9 @@ func NewUnsafeStore(dataDir string, log zerowrap.Logger) *UnsafeStore {
 		Str(zerowrap.FieldAdapter, "tokenstore").
 		Str("provider", "unsafe").
 		Str("data_dir", dataDir).
-		Msg("using unsafe secrets backend - secrets are stored in plain text")
+		Msg("SECURITY WARNING: using unsafe secrets backend - secrets are stored in plain text")
 
-	return store
+	return store, nil
 }
 
 // unsafeTokenData holds both JWT and metadata in a single file.
