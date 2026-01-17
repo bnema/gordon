@@ -65,7 +65,7 @@ fi
 
 # Verify checksum
 echo "Verifying checksum..."
-EXPECTED_CHECKSUM=$(grep "${TARBALL}" "$TMP_DIR/checksums.txt" | awk '{print $1}')
+EXPECTED_CHECKSUM=$(grep -E "[[:space:]]${TARBALL}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}')
 if [ -z "$EXPECTED_CHECKSUM" ]; then
     echo "Error: Could not find checksum for ${TARBALL} in checksums.txt"
     exit 1
@@ -77,7 +77,13 @@ if command -v sha256sum >/dev/null 2>&1; then
 elif command -v shasum >/dev/null 2>&1; then
     ACTUAL_CHECKSUM=$(shasum -a 256 "$TMP_DIR/$TARBALL" | awk '{print $1}')
 else
-    echo "Error: Neither sha256sum nor shasum found. Cannot verify checksum."
+    echo "Error: Neither 'sha256sum' nor 'shasum' was found. Cannot verify checksum."
+    echo ""
+    echo "Please install one of these tools:"
+    echo "  Debian/Ubuntu: sudo apt-get install coreutils"
+    echo "  Fedora/RHEL:   sudo dnf install coreutils"
+    echo "  Alpine:        apk add coreutils"
+    echo "  macOS:         shasum should be pre-installed"
     exit 1
 fi
 
