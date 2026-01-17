@@ -2,20 +2,38 @@
 
 Gordon provides a command-line interface for server management, deployment, and authentication.
 
-## Commands Overview
+Commands are organized by where they run:
+
+- **Server Commands** - Must run on the machine hosting Gordon
+- **Management Commands** - Work locally or remotely via `--remote` flag
+- **Client Commands** - CLI utilities that don't require a running Gordon server
+
+## Server Commands (local only)
 
 | Command | Description | Documentation |
 |---------|-------------|---------------|
 | `gordon serve` | Start the Gordon server | [serve](./serve.md) |
-| `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
-| `gordon deploy` | Manually deploy or redeploy a specific route | [serve](./serve.md#gordon-deploy) |
-| `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
-| `gordon version` | Print version information | [serve](./serve.md#gordon-version) |
 | `gordon auth` | Manage Gordon server authentication | [auth](./auth.md) |
-| `gordon routes` | Manage routes (local or remote) | [routes](./routes.md) |
-| `gordon attachments` | Manage attachments (local or remote) | [attachments](./attachments.md) |
-| `gordon secrets` | Manage secrets (local or remote) | [secrets](./secrets.md) |
+
+## Management Commands (local or --remote)
+
+| Command | Description | Documentation |
+|---------|-------------|---------------|
+| `gordon routes` | Manage routes | [routes](./routes.md) |
+| `gordon attachments` | Manage container attachments | [attachments](./attachments.md) |
+| `gordon secrets` | Manage secrets | [secrets](./secrets.md) |
+| `gordon deploy` | Manually deploy or redeploy a route | [serve](./serve.md#gordon-deploy) |
+| `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
+| `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
+| `gordon status` | Show Gordon server status | - |
+
+## Client Commands
+
+| Command | Description | Documentation |
+|---------|-------------|---------------|
 | `gordon remotes` | Manage saved remote Gordon instances | [remotes](./remotes.md) |
+| `gordon version` | Print version information | [serve](./serve.md#gordon-version) |
+| `gordon completion` | Generate shell autocompletion scripts | - |
 
 ## Quick Reference
 
