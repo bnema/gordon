@@ -317,6 +317,9 @@ func (s *Service) List(_ context.Context) map[string]*domain.Container {
 }
 
 // ListRoutesWithDetails returns routes with network and attachment info.
+// Note: Container map is copied under lock, then external calls are made without lock.
+// If containers are removed between copy and runtime calls, errors are handled gracefully
+// (network becomes empty string). This trade-off avoids holding locks during I/O.
 func (s *Service) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo {
 	s.mu.RLock()
 	containers := make(map[string]*domain.Container, len(s.containers))
