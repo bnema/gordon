@@ -13,6 +13,7 @@ Gordon provides a command-line interface for server management, deployment, and 
 | `gordon version` | Print version information |
 | `gordon auth` | Manage registry authentication |
 | `gordon routes` | Manage routes (local or remote) |
+| `gordon attachments` | Manage attachments (local or remote) |
 | `gordon secrets` | Manage secrets (local or remote) |
 | `gordon remotes` | Manage saved remote Gordon instances |
 
@@ -368,7 +369,7 @@ Manage registry authentication tokens and passwords.
 |------------|-------------|
 | `token generate` | Generate a new JWT token |
 | `token list` | List all stored tokens |
-| `token revoke` | Revoke a token by ID |
+| `token revoke` | Revoke a token by ID (use `--all` to revoke all tokens) |
 | `password hash` | Generate bcrypt password hash |
 | `internal` | Show internal registry credentials |
 
@@ -494,9 +495,9 @@ Bcrypt hash (store in your secrets backend):
 $2a$10$N9qo8uLOickgx2ZMRZoMye...
 
 Then reference the path in your config:
-  [registry_auth]
+  [auth]
   type = "password"
-  password_hash = "gordon/registry/password_hash"
+  password_hash = "gordon/auth/password_hash"
 ```
 
 ### gordon auth internal
@@ -595,15 +596,16 @@ gordon auth password hash
 # Enter: mypassword
 
 # Store in pass
-pass insert gordon/registry/password_hash
+pass insert gordon/auth/password_hash
 # Paste: $2a$10$...
 
 # Configure gordon.toml
-[registry_auth]
+[auth]
 enabled = true
 type = "password"
+secrets_backend = "pass"
 username = "deploy"
-password_hash = "gordon/registry/password_hash"
+password_hash = "gordon/auth/password_hash"
 ```
 
 ---
@@ -655,6 +657,65 @@ Deploy or redeploy a specific route.
 ```bash
 gordon routes deploy <domain>
 gordon routes deploy myapp.example.com
+```
+
+---
+
+## gordon attachments
+
+Manage attachments on local or remote Gordon instances.
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all attachments or attachments for a specific target |
+| `add` | Add an attachment to a domain or network group |
+| `remove` | Remove an attachment from a domain or network group |
+
+### gordon attachments list
+
+List all configured attachments.
+
+```bash
+# List all attachments
+gordon attachments list
+
+# List attachments for a specific domain or group
+gordon attachments list app.example.com
+gordon attachments list backend
+
+# Remote mode
+gordon attachments list --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### gordon attachments add
+
+Add an attachment to a domain or network group.
+
+```bash
+gordon attachments add <domain-or-group> <image>
+gordon attachments add app.example.com postgres:15
+gordon attachments add backend redis:7-alpine
+```
+
+### gordon attachments remove
+
+Remove an attachment.
+
+```bash
+gordon attachments remove <domain-or-group> <image>
+gordon attachments remove app.example.com postgres:15
+```
+
+### Alias
+
+`gordon attach` is an alias for `gordon attachments`:
+
+```bash
+gordon attach list
+gordon attach add app.example.com postgres:15
+gordon attach remove app.example.com postgres:15
 ```
 
 ---

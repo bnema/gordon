@@ -33,19 +33,16 @@ registry_port = 5000                     # Registry port (default: 5000)
 gordon_domain = "gordon.mydomain.com"    # Required: Gordon domain (registry + API)
 # data_dir = "~/.gordon"                 # Default for user installations
 
-# Secrets backend
-[secrets]
-backend = "pass"                         # "pass", "sops", or "unsafe"
-
-# Registry authentication
-[registry_auth]
-enabled = true
+# Authentication (includes secrets backend)
+[auth]
+enabled = true                           # Enable registry authentication (default: true)
 type = "token"                           # "password" or "token"
+secrets_backend = "pass"                 # "pass", "sops", or "unsafe"
 # Password auth:
 # username = "deploy"
-# password_hash = "gordon/registry/password_hash"
+# password_hash = "gordon/auth/password_hash"
 # Token auth:
-token_secret = "gordon/registry/token_secret"
+token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"                     # Duration (1y, 30d, 2w) or 0 for never
 
 # Deploy behavior
@@ -111,8 +108,7 @@ enabled = false                          # Auto-create routes from image names
 | Section | Description | Documentation |
 |---------|-------------|---------------|
 | `[server]` | Core server settings | [Server](./server.md) |
-| `[secrets]` | Secrets backend configuration | [Secrets](./secrets.md) |
-| `[registry_auth]` | Registry authentication | [Registry Auth](./registry-auth.md) |
+| `[auth]` | Authentication and secrets backend | [Auth](./auth.md) |
 | `[deploy]` | Deployment behavior | [Deploy](./deploy.md) |
 | `[logging]` | Logging configuration | [Logging](./logging.md) |
 | `[env]` | Environment variable settings | [Environment](./env.md) |
@@ -131,10 +127,10 @@ enabled = false                          # Auto-create routes from image names
 | `server.port` | `80` |
 | `server.registry_port` | `5000` |
 | `server.data_dir` | `~/.gordon` |
-| `secrets.backend` | `"unsafe"` |
-| `registry_auth.enabled` | `false` |
-| `registry_auth.type` | `"password"` |
-| `registry_auth.token_expiry` | `"30d"` |
+| `auth.enabled` | `true` |
+| `auth.type` | `"password"` |
+| `auth.secrets_backend` | `"unsafe"` |
+| `auth.token_expiry` | `"30d"` |
 | `deploy.pull_policy` | `"if-tag-changed"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |
@@ -162,8 +158,7 @@ The following settings require a restart to take effect:
 - `server.port`
 - `server.registry_port`
 - `server.data_dir`
-- `secrets.backend`
-- `registry_auth` settings
+- `auth` settings
 - `deploy.pull_policy`
 
 ## Environment Variable Override
@@ -182,4 +177,4 @@ Pattern: `GORDON_SECTION_KEY` (uppercase, underscores instead of dots)
 - [Server Configuration](./server.md)
 - [Routes Configuration](./routes.md)
 - [External Routes](./external-routes.md)
-- [Registry Authentication](./registry-auth.md)
+- [Authentication](./auth.md)

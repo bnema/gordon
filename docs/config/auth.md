@@ -1,33 +1,43 @@
-# Registry Authentication
+# Authentication
 
-Secure your container registry with password or token-based authentication.
+Configure authentication for the Gordon registry and Admin API.
 
 ## Configuration
 
 ```toml
-[registry_auth]
+[auth]
 enabled = true
-type = "token"  # "password" or "token"
-
-# For token auth:
-token_secret = "gordon/registry/token_secret"  # Path in secrets backend
-token_expiry = "720h"                          # Duration or 0 for never
-
-# For password auth:
-# username = "deploy"
-# password_hash = "gordon/registry/password_hash"  # Path in secrets backend
+type = "token"
+secrets_backend = "pass"
+token_secret = "gordon/auth/token_secret"
+token_expiry = "30d"
 ```
+
+> **Note:** Authentication is enabled by default for security. For local development without auth, explicitly set `enabled = false`.
 
 ## Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable registry authentication |
+| `enabled` | bool | `true` | Enable authentication |
 | `type` | string | `"password"` | Auth type: `"password"` or `"token"` |
+| `secrets_backend` | string | `"unsafe"` | Secrets backend: `"pass"`, `"sops"`, or `"unsafe"` |
 | `username` | string | - | Username for password auth |
 | `password_hash` | string | - | Path to bcrypt hash in secrets backend |
 | `token_secret` | string | - | Path to JWT signing secret in secrets backend |
-| `token_expiry` | string | `"30d"` | Token validity duration (0 = never expires). Supports: d (days), w (weeks), M (months), y (years) |
+| `token_expiry` | string | `"30d"` | Token validity duration (0 = never expires) |
+
+## Secrets Backend
+
+The `secrets_backend` option determines how Gordon retrieves sensitive values like `token_secret` and `password_hash`:
+
+| Backend | Description |
+|---------|-------------|
+| `pass` | Unix password manager (GPG-encrypted) |
+| `sops` | Mozilla SOPS encrypted files |
+| `unsafe` | Plain text files (development only) |
+
+See [Secret Providers](./secrets.md) for detailed configuration of each backend.
 
 ## Authentication Types
 
@@ -36,20 +46,18 @@ token_expiry = "720h"                          # Duration or 0 for never
 JWT-based authentication, ideal for CI/CD pipelines:
 
 ```toml
-[secrets]
-backend = "pass"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "token"
-token_secret = "gordon/registry/token_secret"
-token_expiry = "30d"  # 30 days, or "0" for never. Also: 1y, 2w, 6M
+secrets_backend = "pass"
+token_secret = "gordon/auth/token_secret"
+token_expiry = "30d"
 ```
 
 **Setup:**
 ```bash
 # Create token secret (random 32+ characters)
-pass insert gordon/registry/token_secret
+pass insert gordon/auth/token_secret
 
 # Generate a token
 gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
@@ -66,8 +74,11 @@ docker login -u ci-bot -p <token> registry.mydomain.com
 # List all tokens
 gordon auth token list
 
-# Revoke a token
+# Revoke a specific token
 gordon auth token revoke <token-id>
+
+# Revoke all tokens
+gordon auth token revoke --all
 ```
 
 ### Password Authentication
@@ -75,14 +86,12 @@ gordon auth token revoke <token-id>
 Simple username/password authentication:
 
 ```toml
-[secrets]
-backend = "pass"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "password"
+secrets_backend = "pass"
 username = "deploy"
-password_hash = "gordon/registry/password_hash"
+password_hash = "gordon/auth/password_hash"
 ```
 
 **Setup:**
@@ -92,7 +101,7 @@ gordon auth password hash
 # Enter password when prompted
 
 # Store hash in secrets backend
-pass insert gordon/registry/password_hash
+pass insert gordon/auth/password_hash
 # Paste the bcrypt hash
 ```
 
@@ -105,27 +114,51 @@ docker login -u deploy -p <password> registry.mydomain.com
 
 Tokens can have different permission levels:
 
+### Registry Scopes
+
 | Scope | Permission |
 |-------|------------|
 | `push` | Push images to registry |
 | `pull` | Pull images from registry |
 | `push,pull` | Both push and pull (default) |
 
+### Admin Scopes
+
+For remote CLI access via the Admin API:
+
+| Scope | Permission |
+|-------|------------|
+| `admin:*:*` | Full admin access |
+| `admin:routes:read` | Read-only routes access |
+| `admin:routes:write` | Routes write access |
+| `admin:config:read` | Read-only config access |
+| `admin:config:write` | Config write access |
+| `admin:status:read` | Read-only status/health |
+| `admin:secrets:read` | List secret keys |
+| `admin:secrets:write` | Set/delete secrets |
+
+**Examples:**
 ```bash
 # Pull-only token (for read-only access)
 gordon auth token generate --subject reader --scopes pull --expiry 30d
 
 # Push-only token (for CI builds)
 gordon auth token generate --subject builder --scopes push --expiry 0
+
+# Full admin access (for remote CLI)
+gordon auth token generate --subject admin --scopes "push,pull,admin:*:*" --expiry 0
 ```
 
 ## Token Expiry
 
 Control how long tokens remain valid. Supports human-friendly units:
-- `d` - days (24 hours)
-- `w` - weeks (7 days)
-- `M` - months (30 days)
-- `y` - years (365 days)
+
+| Unit | Description |
+|------|-------------|
+| `d` | days (24 hours) |
+| `w` | weeks (7 days) |
+| `M` | months (30 days) |
+| `y` | years (365 days) |
 
 Compound durations work too: `1y6M`, `2w3d`
 
@@ -138,39 +171,40 @@ gordon auth token generate --subject deploy --expiry 1y
 
 # Expires in 30 days
 gordon auth token generate --subject temp --expiry 30d
-
-# Expires in 2 weeks
-gordon auth token generate --subject short --expiry 2w
 ```
 
 ## Instance-Specific Tokens
 
-Tokens are signed with the `token_secret`, which is unique to each Gordon instance. This means:
+Tokens are signed with the `token_secret`, which is unique to each Gordon instance:
 
 - Tokens from one Gordon instance won't work on another
 - Changing the `token_secret` invalidates all existing tokens
 - Each environment (dev, staging, prod) should have different secrets
+
+## Development Setup
+
+For local development without authentication:
+
+```toml
+[auth]
+enabled = false
+```
 
 ## Examples
 
 ### CI/CD Setup
 
 ```toml
-[secrets]
-backend = "pass"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "token"
-token_secret = "gordon/registry/token_secret"
+secrets_backend = "pass"
+token_secret = "gordon/auth/token_secret"
 ```
 
 ```bash
 # Generate CI token
 gordon auth token generate --subject github-actions --scopes push,pull --expiry 0
-
-# Token output:
-# eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
 In GitHub Actions:
@@ -179,32 +213,38 @@ In GitHub Actions:
   run: docker login -u github-actions -p ${{ secrets.GORDON_TOKEN }} ${{ secrets.GORDON_REGISTRY }}
 ```
 
-### Development Setup
-
-```toml
-[registry_auth]
-enabled = false  # Disable for local development
-```
-
 ### Production with Password
 
 ```toml
-[secrets]
-backend = "pass"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "password"
+secrets_backend = "pass"
 username = "deploy"
-password_hash = "gordon/registry/password_hash"
+password_hash = "gordon/auth/password_hash"
+```
+
+### Enterprise with SOPS
+
+```toml
+[auth]
+enabled = true
+type = "token"
+secrets_backend = "sops"
+token_secret = "gordon/auth/token_secret"
 ```
 
 ## Internal Registry Auth
 
 Gordon generates internal credentials automatically when auth is enabled. These are used for loopback pulls when deploying containers and are regenerated on each restart.
 
+To view internal credentials (for troubleshooting):
+```bash
+gordon auth internal
+```
+
 ## Related
 
-- [Secrets Configuration](./secrets.md)
+- [Secret Providers](./secrets.md)
 - [CLI Commands](../cli/commands.md)
 - [GitHub Actions Deployment](../deployment/github-actions.md)

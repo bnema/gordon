@@ -204,8 +204,63 @@ Gordon adds labels to attachment containers:
 | `gordon.attachment` | `true` |
 | `gordon.attached-to` | Domain or group name |
 
+## CLI Management
+
+Manage attachments via the CLI without editing configuration files.
+
+### List Attachments
+
+```bash
+# List all attachments
+gordon attachments list
+
+# List attachments for a specific domain or network group
+gordon attachments list app.mydomain.com
+gordon attachments list backend
+
+# Remote mode
+gordon attachments list --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### Add Attachments
+
+```bash
+# Add attachment to a domain
+gordon attachments add app.mydomain.com postgres:15
+
+# Add attachment to a network group
+gordon attachments add backend redis:7-alpine
+
+# Remote mode
+gordon attachments add app.mydomain.com postgres:15 --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### Remove Attachments
+
+```bash
+# Remove attachment from a domain
+gordon attachments remove app.mydomain.com postgres:15
+
+# Remove from network group
+gordon attachments remove backend redis:7-alpine
+
+# Remote mode
+gordon attachments remove app.mydomain.com postgres:15 --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### Alias
+
+The `gordon attach` command is an alias for `gordon attachments`:
+
+```bash
+gordon attach list
+gordon attach add app.mydomain.com postgres:15
+gordon attach remove app.mydomain.com postgres:15
+```
+
 ## Related
 
 - [Network Isolation](./network-isolation.md)
 - [Network Groups](./network-groups.md)
 - [Routes](./routes.md)
+- [CLI Commands](/docs/cli/commands.md)
