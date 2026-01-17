@@ -140,8 +140,29 @@ func (s *Service) FollowProcessLogs(ctx context.Context, initialLines int) (<-ch
 	return ch, nil
 }
 
+// validateDomain checks that domain is safe for use in logs and error messages.
+func validateDomain(domain string) error {
+	if domain == "" {
+		return fmt.Errorf("domain cannot be empty")
+	}
+	if len(domain) > 253 {
+		return fmt.Errorf("domain too long")
+	}
+	if strings.Contains(domain, "..") {
+		return fmt.Errorf("invalid domain")
+	}
+	if strings.ContainsAny(domain, "\x00\n\r") {
+		return fmt.Errorf("invalid domain")
+	}
+	return nil
+}
+
 // GetContainerLogs returns the last N lines of container logs for a domain.
 func (s *Service) GetContainerLogs(ctx context.Context, domain string, lines int) ([]string, error) {
+	if err := validateDomain(domain); err != nil {
+		return nil, err
+	}
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "GetContainerLogs",
@@ -179,6 +200,10 @@ func (s *Service) GetContainerLogs(ctx context.Context, domain string, lines int
 
 // FollowContainerLogs returns a channel that streams container log lines.
 func (s *Service) FollowContainerLogs(ctx context.Context, domain string, initialLines int) (<-chan string, error) {
+	if err := validateDomain(domain); err != nil {
+		return nil, err
+	}
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "FollowContainerLogs",
