@@ -19,15 +19,12 @@ port = 8080                              # Cloudflare forwards 443 → 8080
 registry_port = 5000
 gordon_domain = "gordon.company.com"
 
-# Use pass for secrets (recommended)
-[secrets]
-backend = "pass"
-
-# Token authentication for CI/CD
-[registry_auth]
+# Authentication with pass backend (recommended)
+[auth]
 enabled = true
 type = "token"
-token_secret = "gordon/registry/token_secret"
+secrets_backend = "pass"
+token_secret = "gordon/auth/token_secret"
 
 # File-based logging with rotation
 [logging]
@@ -96,7 +93,7 @@ pass init your-gpg-key-id
 
 ```bash
 # Generate random secret
-openssl rand -base64 32 | pass insert -m gordon/registry/token_secret
+openssl rand -base64 32 | pass insert -m gordon/auth/token_secret
 ```
 
 ### 3. Generate CI Token

@@ -2,6 +2,17 @@
 
 Attach service dependencies (databases, caches, queues) to your applications.
 
+## Requirements
+
+**Network isolation must be enabled** for attachments to work properly:
+
+```toml
+[network_isolation]
+enabled = true
+```
+
+Without network isolation, containers run on Docker's default bridge network which **does not provide DNS resolution**. Your application won't be able to reach attachments by hostname (e.g., `postgres:5432`).
+
 ## Configuration
 
 ```toml
@@ -65,7 +76,7 @@ Use Dockerfile VOLUME directives for persistent data:
 
 ```dockerfile
 # postgres.Dockerfile
-FROM postgres:15
+FROM postgres:18
 VOLUME ["/var/lib/postgresql/data"]
 ENV POSTGRES_DB=myapp
 ENV POSTGRES_USER=app
@@ -143,7 +154,7 @@ Multiple apps share the same service instances:
 "app.mydomain.com" = "myapp:latest"
 
 [attachments]
-"app.mydomain.com" = ["postgres:15", "redis:7-alpine"]
+"app.mydomain.com" = ["postgres:18", "redis:7-alpine"]
 ```
 
 ### Microservices with Shared Queue
@@ -169,7 +180,7 @@ Build custom service images with your configuration:
 
 ```dockerfile
 # my-postgres.Dockerfile
-FROM postgres:15
+FROM postgres:18
 VOLUME ["/var/lib/postgresql/data"]
 ENV POSTGRES_DB=production
 ENV POSTGRES_USER=appuser
@@ -204,8 +215,63 @@ Gordon adds labels to attachment containers:
 | `gordon.attachment` | `true` |
 | `gordon.attached-to` | Domain or group name |
 
+## CLI Management
+
+Manage attachments via the CLI without editing configuration files.
+
+### List Attachments
+
+```bash
+# List all attachments
+gordon attachments list
+
+# List attachments for a specific domain or network group
+gordon attachments list app.mydomain.com
+gordon attachments list backend
+
+# Remote mode
+gordon attachments list --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### Add Attachments
+
+```bash
+# Add attachment to a domain
+gordon attachments add app.mydomain.com postgres:18
+
+# Add attachment to a network group
+gordon attachments add backend redis:7-alpine
+
+# Remote mode
+gordon attachments add app.mydomain.com postgres:18 --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### Remove Attachments
+
+```bash
+# Remove attachment from a domain
+gordon attachments remove app.mydomain.com postgres:18
+
+# Remove from network group
+gordon attachments remove backend redis:7-alpine
+
+# Remote mode
+gordon attachments remove app.mydomain.com postgres:18 --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### Alias
+
+The `gordon attach` command is an alias for `gordon attachments`:
+
+```bash
+gordon attach list
+gordon attach add app.mydomain.com postgres:18
+gordon attach remove app.mydomain.com postgres:18
+```
+
 ## Related
 
 - [Network Isolation](./network-isolation.md)
 - [Network Groups](./network-groups.md)
 - [Routes](./routes.md)
+- [CLI Commands](/docs/cli/index.md)

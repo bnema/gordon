@@ -62,4 +62,10 @@ var (
 	ErrInvalidPath       = errors.New("invalid path format")
 	ErrInsufficientScope = errors.New("insufficient scope for operation")
 	ErrInvalidScope      = errors.New("invalid scope format")
+
+	// Attachment errors
+	ErrAttachmentNotFound    = errors.New("attachment not found")
+	ErrAttachmentExists      = errors.New("attachment already exists")
+	ErrAttachmentImageEmpty  = errors.New("attachment image cannot be empty")
+	ErrAttachmentTargetEmpty = errors.New("attachment target (domain or group) cannot be empty")
 )

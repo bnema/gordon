@@ -142,7 +142,7 @@ Both `app.mydomain.com` and `api.mydomain.com` can access the shared services.
 Gordon automatically creates persistent storage from Dockerfile `VOLUME` directives:
 
 ```dockerfile
-FROM postgres:15
+FROM postgres:18
 VOLUME ["/var/lib/postgresql/data"]
 ```
 

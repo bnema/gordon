@@ -28,9 +28,9 @@ func TestService_Load(t *testing.T) {
 	v.Set("auto_route.enabled", true)
 	v.Set("network_isolation.enabled", true)
 	v.Set("network_isolation.network_prefix", "gordon")
-	v.Set("registry_auth.enabled", true)
-	v.Set("registry_auth.username", "admin")
-	v.Set("registry_auth.password", "secret")
+	v.Set("auth.enabled", true)
+	v.Set("auth.username", "admin")
+	v.Set("auth.password", "secret")
 	v.Set("volumes.auto_create", true)
 	v.Set("volumes.prefix", "gordon")
 	v.Set("volumes.preserve", false)
@@ -332,7 +332,7 @@ func TestService_GetNetworkGroups(t *testing.T) {
 func TestService_GetAttachments(t *testing.T) {
 	v := viper.New()
 	v.Set("attachments", map[string]interface{}{
-		"app.example.com": []interface{}{"redis:latest", "postgres:15"},
+		"app.example.com": []interface{}{"redis:latest", "postgres:18"},
 	})
 
 	eventBus := mocks.NewMockEventPublisher(t)
@@ -344,7 +344,381 @@ func TestService_GetAttachments(t *testing.T) {
 	attachments := svc.GetAttachments()
 
 	assert.Len(t, attachments, 1)
-	assert.ElementsMatch(t, []string{"redis:latest", "postgres:15"}, attachments["app.example.com"])
+	assert.ElementsMatch(t, []string{"redis:latest", "postgres:18"}, attachments["app.example.com"])
+}
+
+func TestService_GetAllAttachments(t *testing.T) {
+	t.Run("returns all attachments", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest", "postgres:18"},
+			"api.example.com": []interface{}{"rabbitmq:3"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		attachments := svc.GetAllAttachments(ctx)
+
+		assert.Len(t, attachments, 2)
+		assert.ElementsMatch(t, []string{"redis:latest", "postgres:18"}, attachments["app.example.com"])
+		assert.ElementsMatch(t, []string{"rabbitmq:3"}, attachments["api.example.com"])
+	})
+
+	t.Run("returns empty map when no attachments", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		attachments := svc.GetAllAttachments(ctx)
+
+		assert.Empty(t, attachments)
+	})
+
+	t.Run("returns copy not reference", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		attachments := svc.GetAllAttachments(ctx)
+		// Modify the returned map
+		attachments["app.example.com"] = append(attachments["app.example.com"], "postgres:18")
+
+		// Original should be unchanged
+		original := svc.GetAllAttachments(ctx)
+		assert.Len(t, original["app.example.com"], 1)
+	})
+}
+
+func TestService_GetAttachmentsFor(t *testing.T) {
+	t.Run("existing domain", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest", "postgres:18"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		images, err := svc.GetAttachmentsFor(ctx, "app.example.com")
+
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"redis:latest", "postgres:18"}, images)
+	})
+
+	t.Run("existing network group", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"backend": []interface{}{"rabbitmq:3", "redis:latest"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		images, err := svc.GetAttachmentsFor(ctx, "backend")
+
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"rabbitmq:3", "redis:latest"}, images)
+	})
+
+	t.Run("non-existent target", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		images, err := svc.GetAttachmentsFor(ctx, "notfound.example.com")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentNotFound)
+		assert.Nil(t, images)
+	})
+
+	t.Run("returns copy not reference", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		images, err := svc.GetAttachmentsFor(ctx, "app.example.com")
+		require.NoError(t, err)
+
+		// Modify the returned slice (use _ to satisfy linter)
+		_ = append(images, "postgres:18")
+
+		// Original should be unchanged
+		original, _ := svc.GetAttachmentsFor(ctx, "app.example.com")
+		assert.Len(t, original, 1)
+	})
+}
+
+func TestService_AddAttachment(t *testing.T) {
+	t.Run("success - new target", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[attachments]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		err = svc.AddAttachment(ctx, "app.example.com", "postgres:18")
+
+		assert.NoError(t, err)
+
+		// Verify attachment was added
+		config := svc.GetConfig()
+		assert.Contains(t, config.Attachments["app.example.com"], "postgres:18")
+	})
+
+	t.Run("success - existing target", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[attachments]\n\"app.example.com\" = [\"redis:latest\"]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		err = svc.AddAttachment(ctx, "app.example.com", "postgres:18")
+
+		assert.NoError(t, err)
+
+		// Verify attachment was added alongside existing
+		config := svc.GetConfig()
+		assert.ElementsMatch(t, []string{"redis:latest", "postgres:18"}, config.Attachments["app.example.com"])
+	})
+
+	t.Run("duplicate attachment", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		err := svc.AddAttachment(ctx, "app.example.com", "redis:latest")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentExists)
+	})
+
+	t.Run("empty target", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err := svc.AddAttachment(ctx, "", "postgres:18")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentTargetEmpty)
+	})
+
+	t.Run("empty image", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err := svc.AddAttachment(ctx, "app.example.com", "")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentImageEmpty)
+	})
+
+	t.Run("network group target", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[attachments]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		err = svc.AddAttachment(ctx, "backend", "rabbitmq:3")
+
+		assert.NoError(t, err)
+
+		config := svc.GetConfig()
+		assert.Contains(t, config.Attachments["backend"], "rabbitmq:3")
+	})
+}
+
+func TestService_RemoveAttachment(t *testing.T) {
+	t.Run("success - single attachment", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[attachments]\n\"app.example.com\" = [\"redis:latest\"]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		err = svc.RemoveAttachment(ctx, "app.example.com", "redis:latest")
+
+		assert.NoError(t, err)
+
+		// Verify target was removed (no attachments left)
+		config := svc.GetConfig()
+		_, exists := config.Attachments["app.example.com"]
+		assert.False(t, exists)
+	})
+
+	t.Run("success - multiple attachments", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[attachments]\n\"app.example.com\" = [\"redis:latest\", \"postgres:18\"]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest", "postgres:18"},
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		err = svc.RemoveAttachment(ctx, "app.example.com", "redis:latest")
+
+		assert.NoError(t, err)
+
+		// Verify only redis was removed
+		config := svc.GetConfig()
+		assert.Equal(t, []string{"postgres:18"}, config.Attachments["app.example.com"])
+	})
+
+	t.Run("target not found", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		err := svc.RemoveAttachment(ctx, "notfound.example.com", "redis:latest")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentNotFound)
+	})
+
+	t.Run("image not found in target", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		err := svc.RemoveAttachment(ctx, "app.example.com", "postgres:18")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentNotFound)
+	})
+
+	t.Run("empty target", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err := svc.RemoveAttachment(ctx, "", "redis:latest")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentTargetEmpty)
+	})
+
+	t.Run("empty image", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err := svc.RemoveAttachment(ctx, "app.example.com", "")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentImageEmpty)
+	})
+
+	t.Run("network group target", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[attachments]\n\"backend\" = [\"rabbitmq:3\"]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("attachments", map[string]interface{}{
+			"backend": []interface{}{"rabbitmq:3"},
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		err = svc.RemoveAttachment(ctx, "backend", "rabbitmq:3")
+
+		assert.NoError(t, err)
+
+		config := svc.GetConfig()
+		_, exists := config.Attachments["backend"]
+		assert.False(t, exists)
+	})
 }
 
 func TestService_GetExternalRoutes(t *testing.T) {

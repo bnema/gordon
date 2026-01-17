@@ -136,7 +136,7 @@ sops edit secrets.yaml
 This opens your editor. Add secrets in YAML format:
 
 ```yaml
-registry:
+auth:
   password_hash: "$2y$10$..."
   token_secret: "your-random-32-char-string-here"
 database:
@@ -156,7 +156,7 @@ cat secrets.yaml
 Output shows encrypted values:
 
 ```yaml
-registry:
+auth:
     password_hash: ENC[AES256_GCM,data:...,iv:...,tag:...]
     token_secret: ENC[AES256_GCM,data:...,iv:...,tag:...]
 database:
@@ -195,15 +195,13 @@ sops edit secrets.yaml
 ### Enable SOPS Backend
 
 ```toml
-[secrets]
-backend = "sops"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "token"
+secrets_backend = "sops"
 username = "admin"
-password_hash = "secrets.yaml:registry.password_hash"
-token_secret = "secrets.yaml:registry.token_secret"
+password_hash = "secrets.yaml:auth.password_hash"
+token_secret = "secrets.yaml:auth.token_secret"
 ```
 
 The path format is `file:key.path` where:
@@ -424,6 +422,6 @@ ls -la ~/.config/sops/age/keys.txt
 ## Related
 
 - [Secrets Configuration](/docs/config/secrets.md)
-- [Registry Authentication](/docs/config/registry-auth.md)
+- [Authentication](/docs/config/auth.md)
 - [Running in Containers](/wiki/guides/running-in-container.md)
 - [Using Pass for Secrets](./secrets-pass.md)

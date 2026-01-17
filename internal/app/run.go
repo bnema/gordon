@@ -90,19 +90,16 @@ type Config struct {
 		Dir string `mapstructure:"dir"`
 	} `mapstructure:"env"`
 
-	Secrets struct {
-		Backend string `mapstructure:"backend"` // "pass", "sops", or "unsafe"
-	} `mapstructure:"secrets"`
-
-	RegistryAuth struct {
-		Enabled      bool   `mapstructure:"enabled"`
-		Type         string `mapstructure:"type"` // "password" or "token"
-		Username     string `mapstructure:"username"`
-		Password     string `mapstructure:"password"`      // deprecated: use password_hash
-		PasswordHash string `mapstructure:"password_hash"` // path in secrets backend
-		TokenSecret  string `mapstructure:"token_secret"`  // path in secrets backend
-		TokenExpiry  string `mapstructure:"token_expiry"`  // e.g., "720h"
-	} `mapstructure:"registry_auth"`
+	Auth struct {
+		Enabled        bool   `mapstructure:"enabled"`
+		Type           string `mapstructure:"type"`            // "password" or "token"
+		SecretsBackend string `mapstructure:"secrets_backend"` // "pass", "sops", or "unsafe"
+		Username       string `mapstructure:"username"`
+		Password       string `mapstructure:"password"`      // deprecated: use password_hash
+		PasswordHash   string `mapstructure:"password_hash"` // path in secrets backend
+		TokenSecret    string `mapstructure:"token_secret"`  // path in secrets backend
+		TokenExpiry    string `mapstructure:"token_expiry"`  // e.g., "720h", "30d"
+	} `mapstructure:"auth"`
 }
 
 // services holds all the services used by the application.
@@ -264,7 +261,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	}
 
 	// Generate internal registry credentials for loopback-only pulls
-	if cfg.RegistryAuth.Enabled {
+	if cfg.Auth.Enabled {
 		svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
 		if err != nil {
 			return nil, log.WrapErr(err, "failed to generate internal registry credentials")
@@ -517,12 +514,12 @@ func GetInternalCredentials() (*InternalCredentials, error) {
 
 // createAuthService creates the authentication service and token store.
 func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (out.TokenStore, *auth.Service, error) {
-	if !cfg.RegistryAuth.Enabled {
+	if !cfg.Auth.Enabled {
 		return nil, nil, nil
 	}
 
-	authType := resolveAuthType(cfg.RegistryAuth.Type)
-	backend := resolveSecretsBackend(cfg.Secrets.Backend)
+	authType := resolveAuthType(cfg.Auth.Type)
+	backend := resolveSecretsBackend(cfg.Auth.SecretsBackend)
 	dataDir := resolveDataDir(cfg.Server.DataDir)
 
 	store, err := createTokenStore(authType, backend, dataDir, log)
@@ -586,9 +583,9 @@ func createTokenStore(authType domain.AuthType, backend domain.SecretsBackend, d
 
 func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (auth.Config, error) {
 	authConfig := auth.Config{
-		Enabled:  cfg.RegistryAuth.Enabled,
+		Enabled:  cfg.Auth.Enabled,
 		AuthType: authType,
-		Username: cfg.RegistryAuth.Username,
+		Username: cfg.Auth.Username,
 	}
 
 	switch authType {
@@ -596,6 +593,9 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 		hash, err := loadPasswordHash(ctx, cfg, backend, dataDir, log)
 		if err != nil {
 			return auth.Config{}, err
+		}
+		if hash == "" {
+			return auth.Config{}, errAuthNotConfigured()
 		}
 		authConfig.PasswordHash = hash
 	case domain.AuthTypeToken:
@@ -610,18 +610,23 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 	return authConfig, nil
 }
 
+// errAuthNotConfigured returns an error when auth is enabled but credentials are not configured.
+func errAuthNotConfigured() error {
+	return fmt.Errorf("auth is enabled by default, configure auth type and secrets backend. See: https://gordon.bnema.dev/docs/config/auth")
+}
+
 func loadPasswordHash(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (string, error) {
-	if cfg.RegistryAuth.PasswordHash != "" {
-		hash, err := loadSecret(ctx, backend, cfg.RegistryAuth.PasswordHash, dataDir, log)
+	if cfg.Auth.PasswordHash != "" {
+		hash, err := loadSecret(ctx, backend, cfg.Auth.PasswordHash, dataDir, log)
 		if err != nil {
 			return "", log.WrapErr(err, "failed to load password hash")
 		}
 		return hash, nil
 	}
 
-	if cfg.RegistryAuth.Password != "" {
+	if cfg.Auth.Password != "" {
 		log.Warn().Msg("using plain password in config is deprecated, use password_hash with a secrets backend")
-		return cfg.RegistryAuth.Password, nil
+		return cfg.Auth.Password, nil
 	}
 
 	return "", nil
@@ -633,7 +638,7 @@ func loadTokenConfig(ctx context.Context, cfg Config, backend domain.SecretsBack
 		return nil, 0, err
 	}
 
-	expiry, err := parseTokenExpiry(cfg.RegistryAuth.TokenExpiry)
+	expiry, err := parseTokenExpiry(cfg.Auth.TokenExpiry)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -642,11 +647,11 @@ func loadTokenConfig(ctx context.Context, cfg Config, backend domain.SecretsBack
 }
 
 func loadTokenSecret(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) ([]byte, error) {
-	if cfg.RegistryAuth.TokenSecret == "" {
+	if cfg.Auth.TokenSecret == "" {
 		return nil, fmt.Errorf("token_secret is required for token authentication")
 	}
 
-	secret, err := loadSecret(ctx, backend, cfg.RegistryAuth.TokenSecret, dataDir, log)
+	secret, err := loadSecret(ctx, backend, cfg.Auth.TokenSecret, dataDir, log)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to load token secret")
 	}
@@ -692,11 +697,11 @@ func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDi
 // createContainerService creates the container service with configuration.
 func createContainerService(v *viper.Viper, cfg Config, svc *services) *container.Service {
 	containerConfig := container.Config{
-		RegistryAuthEnabled:      cfg.RegistryAuth.Enabled,
+		RegistryAuthEnabled:      cfg.Auth.Enabled,
 		RegistryDomain:           cfg.Server.RegistryDomain,
 		RegistryPort:             cfg.Server.RegistryPort,
-		RegistryUsername:         cfg.RegistryAuth.Username,
-		RegistryPassword:         cfg.RegistryAuth.Password,
+		RegistryUsername:         cfg.Auth.Username,
+		RegistryPassword:         cfg.Auth.Password,
 		InternalRegistryUsername: svc.internalRegUser,
 		InternalRegistryPassword: svc.internalRegPass,
 		PullPolicy:               v.GetString("deploy.pull_policy"),
@@ -803,7 +808,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		middleware.RequestLogger(log),
 	}
 
-	if cfg.RegistryAuth.Enabled && svc.authSvc != nil {
+	if cfg.Auth.Enabled && svc.authSvc != nil {
 		internalAuth := middleware.InternalRegistryAuth{
 			Username: svc.internalRegUser,
 			Password: svc.internalRegPass,
@@ -1143,10 +1148,10 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("logging.container_logs.max_backups", 3)
 	v.SetDefault("logging.container_logs.max_age", 28)
 	v.SetDefault("env.dir", "") // defaults to {data_dir}/env when empty
-	v.SetDefault("secrets.backend", "unsafe")
-	v.SetDefault("registry_auth.enabled", false)
-	v.SetDefault("registry_auth.type", "password")
-	v.SetDefault("registry_auth.token_expiry", "720h")
+	v.SetDefault("auth.enabled", true)
+	v.SetDefault("auth.type", "password")
+	v.SetDefault("auth.secrets_backend", "unsafe")
+	v.SetDefault("auth.token_expiry", "720h")
 	v.SetDefault("auto_route.enabled", false)
 	v.SetDefault("network_isolation.enabled", false)
 	v.SetDefault("network_isolation.network_prefix", "gordon")
