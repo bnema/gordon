@@ -23,6 +23,13 @@ var (
 	tokenFlag  string
 )
 
+// Command group IDs
+const (
+	groupServer = "server"
+	groupManage = "manage"
+	groupClient = "client"
+)
+
 // NewRootCmd creates the root command for Gordon CLI.
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
@@ -34,29 +41,77 @@ a Docker registry with automatic container deployment capabilities.
 It listens for image pushes and automatically deploys containers based on
 configuration rules, making it ideal for single-server deployments.
 
-The CLI can target remote Gordon instances using the --remote flag or
-GORDON_REMOTE environment variable.`,
+Commands are organized by where they run:
+  Server-only:  Run on the machine hosting Gordon (serve, auth, reload)
+  Management:   Work locally or remotely via --remote flag (routes, secrets, etc.)
+  Client-only:  CLI utilities that don't require a running Gordon server`,
 	}
+
+	// Define command groups (order matters for help output)
+	rootCmd.AddGroup(
+		&cobra.Group{ID: groupServer, Title: "Server Commands (local only):"},
+		&cobra.Group{ID: groupManage, Title: "Management Commands (local or --remote):"},
+		&cobra.Group{ID: groupClient, Title: "Client Commands:"},
+	)
 
 	// Add persistent flags for remote targeting
 	rootCmd.PersistentFlags().StringVar(&remoteFlag, "remote", "", "Remote Gordon URL (e.g., https://gordon.mydomain.com)")
 	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "Authentication token for remote")
 
-	// Server commands
-	rootCmd.AddCommand(newServeCmd())
-	rootCmd.AddCommand(newStartCmd()) // Deprecated alias for serve
-	rootCmd.AddCommand(newReloadCmd())
-	rootCmd.AddCommand(newDeployCmd())
-	rootCmd.AddCommand(newLogsCmd())
-	rootCmd.AddCommand(newVersionCmd())
-	rootCmd.AddCommand(newAuthCmd())
+	// Server-only commands (must run on the Gordon host)
+	serveCmd := newServeCmd()
+	serveCmd.GroupID = groupServer
+	rootCmd.AddCommand(serveCmd)
 
-	// Remote management commands
-	rootCmd.AddCommand(newRoutesCmd())
-	rootCmd.AddCommand(newAttachmentsCmd())
-	rootCmd.AddCommand(newSecretsCmd())
-	rootCmd.AddCommand(newRemotesCmd())
-	rootCmd.AddCommand(newStatusCmd())
+	startCmd := newStartCmd() // Deprecated alias for serve
+	startCmd.GroupID = groupServer
+	rootCmd.AddCommand(startCmd)
+
+	authCmd := newAuthCmd()
+	authCmd.GroupID = groupServer
+	rootCmd.AddCommand(authCmd)
+
+	// Management commands (work locally or via --remote)
+	routesCmd := newRoutesCmd()
+	routesCmd.GroupID = groupManage
+	rootCmd.AddCommand(routesCmd)
+
+	attachmentsCmd := newAttachmentsCmd()
+	attachmentsCmd.GroupID = groupManage
+	rootCmd.AddCommand(attachmentsCmd)
+
+	secretsCmd := newSecretsCmd()
+	secretsCmd.GroupID = groupManage
+	rootCmd.AddCommand(secretsCmd)
+
+	deployCmd := newDeployCmd()
+	deployCmd.GroupID = groupManage
+	rootCmd.AddCommand(deployCmd)
+
+	reloadCmd := newReloadCmd()
+	reloadCmd.GroupID = groupManage
+	rootCmd.AddCommand(reloadCmd)
+
+	logsCmd := newLogsCmd()
+	logsCmd.GroupID = groupManage
+	rootCmd.AddCommand(logsCmd)
+
+	statusCmd := newStatusCmd()
+	statusCmd.GroupID = groupManage
+	rootCmd.AddCommand(statusCmd)
+
+	// Client-only commands (no server needed)
+	remotesCmd := newRemotesCmd()
+	remotesCmd.GroupID = groupClient
+	rootCmd.AddCommand(remotesCmd)
+
+	versionCmd := newVersionCmd()
+	versionCmd.GroupID = groupClient
+	rootCmd.AddCommand(versionCmd)
+
+	// Put help and completion in the client group
+	rootCmd.SetHelpCommandGroupID(groupClient)
+	rootCmd.SetCompletionCommandGroupID(groupClient)
 
 	return rootCmd
 }
