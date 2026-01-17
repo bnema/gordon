@@ -646,17 +646,18 @@ func (h *Handler) streamProcessLogs(w http.ResponseWriter, r *http.Request, line
 	ctx := r.Context()
 	log := zerowrap.FromCtx(ctx)
 
-	// Set up SSE
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-
+	// Check for flusher support before setting up SSE
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		h.sendError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
+
+	// Set up SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
 
 	ch, err := h.logSvc.FollowProcessLogs(ctx, lines)
 	if err != nil {
@@ -685,17 +686,18 @@ func (h *Handler) streamContainerLogs(w http.ResponseWriter, r *http.Request, lo
 	ctx := r.Context()
 	log := zerowrap.FromCtx(ctx)
 
-	// Set up SSE
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-
+	// Check for flusher support before setting up SSE
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		h.sendError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
+
+	// Set up SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
 
 	ch, err := h.logSvc.FollowContainerLogs(ctx, logDomain, lines)
 	if err != nil {

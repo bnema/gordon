@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -249,7 +250,7 @@ func TestTailLines(t *testing.T) {
 type mockReader struct{}
 
 func (m *mockReader) Read(p []byte) (n int, err error) {
-	return 0, os.ErrNotExist // Return EOF immediately
+	return 0, io.EOF
 }
 
 func (m *mockReader) Close() error {
