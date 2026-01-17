@@ -435,6 +435,6 @@ See [Remote Logs Requirement](#remote-logs-requirement) for details.
 
 ## Related
 
-- [CLI Commands](/docs/cli/commands.md)
+- [CLI Commands](/docs/cli/index.md)
 - [Authentication](/docs/config/auth.md)
 - [Attachments](/docs/config/attachments.md)
