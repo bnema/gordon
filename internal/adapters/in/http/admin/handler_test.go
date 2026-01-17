@@ -573,13 +573,17 @@ func TestHandler_RoutesGet_ReturnsRoutes(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var response map[string]any
+	var response struct {
+		Routes []struct {
+			Domain string `json:"domain"`
+			Image  string `json:"image"`
+			HTTPS  bool   `json:"https"`
+		} `json:"routes"`
+	}
 	err := json.NewDecoder(rec.Body).Decode(&response)
 	assert.NoError(t, err)
 
-	routes, ok := response["routes"].([]any)
-	assert.True(t, ok)
-	assert.Len(t, routes, 2)
+	assert.Len(t, response.Routes, 2)
 }
 
 func TestHandler_RoutesGet_SingleRoute(t *testing.T) {
@@ -602,7 +606,11 @@ func TestHandler_RoutesGet_SingleRoute(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var route domain.Route
+	var route struct {
+		Domain string `json:"domain"`
+		Image  string `json:"image"`
+		HTTPS  bool   `json:"https"`
+	}
 	err := json.NewDecoder(rec.Body).Decode(&route)
 	assert.NoError(t, err)
 	assert.Equal(t, "app.example.com", route.Domain)

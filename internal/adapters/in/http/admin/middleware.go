@@ -9,6 +9,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"golang.org/x/time/rate"
 
+	"gordon/internal/adapters/dto"
 	"gordon/internal/boundaries/in"
 	"gordon/internal/domain"
 )
@@ -35,7 +36,7 @@ func AuthMiddleware(authSvc in.AuthService, limiter *rate.Limiter, log zerowrap.
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
+				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "rate limit exceeded"})
 				return
 			}
 
@@ -142,11 +143,11 @@ func sendUnauthorized(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("WWW-Authenticate", `Bearer realm="gordon-admin"`)
 	w.WriteHeader(http.StatusUnauthorized)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: message})
 }
 
 func sendForbidden(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: message})
 }

@@ -8,17 +8,10 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"gordon/internal/adapters/dto"
 	"gordon/internal/boundaries/in"
 	"gordon/internal/domain"
 )
-
-// TokenResponse represents the response from the token server.
-type TokenResponse struct {
-	Token       string `json:"token"`
-	AccessToken string `json:"access_token,omitempty"`
-	ExpiresIn   int    `json:"expires_in,omitempty"`
-	IssuedAt    string `json:"issued_at,omitempty"`
-}
 
 // InternalAuth holds credentials for internal loopback registry access.
 type InternalAuth struct {
@@ -60,7 +53,9 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 	log := zerowrap.FromCtx(ctx)
 
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Method not allowed"})
 		return
 	}
 
@@ -103,7 +98,9 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 			Str("username", username).
 			Msg("token request authentication failed")
 		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon Registry"`)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Unauthorized"})
 		return
 	}
 
@@ -115,11 +112,13 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 	accessToken, err := h.authSvc.GenerateAccessToken(ctx, username, requestedScopes, 5*time.Minute)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to generate access token")
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Internal Server Error"})
 		return
 	}
 
-	response := TokenResponse{
+	response := dto.TokenResponse{
 		Token:     accessToken,
 		ExpiresIn: 300, // 5 minutes in seconds
 		IssuedAt:  time.Now().Format(time.RFC3339),
@@ -141,7 +140,7 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 // sendAnonymousToken sends a token for anonymous/unauthenticated access.
 func (h *TokenHandler) sendAnonymousToken(w http.ResponseWriter, log zerowrap.Logger) {
 	// For anonymous access, we issue a very short-lived token with limited scope
-	response := TokenResponse{
+	response := dto.TokenResponse{
 		Token:     "", // Empty token indicates limited access
 		ExpiresIn: 60, // 1 minute
 		IssuedAt:  time.Now().Format(time.RFC3339),
