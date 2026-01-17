@@ -274,4 +274,4 @@ gordon attach remove app.mydomain.com postgres:18
 - [Network Isolation](./network-isolation.md)
 - [Network Groups](./network-groups.md)
 - [Routes](./routes.md)
-- [CLI Commands](/docs/cli/commands.md)
+- [CLI Commands](/docs/cli/index.md)
