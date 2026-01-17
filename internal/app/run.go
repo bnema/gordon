@@ -100,6 +100,15 @@ type Config struct {
 		TokenSecret    string `mapstructure:"token_secret"`  // path in secrets backend
 		TokenExpiry    string `mapstructure:"token_expiry"`  // e.g., "720h", "30d"
 	} `mapstructure:"auth"`
+
+	API struct {
+		RateLimit struct {
+			Enabled   bool    `mapstructure:"enabled"`
+			GlobalRPS float64 `mapstructure:"global_rps"`
+			PerIPRPS  float64 `mapstructure:"per_ip_rps"`
+			Burst     int     `mapstructure:"burst"`
+		} `mapstructure:"rate_limit"`
+	} `mapstructure:"api"`
 }
 
 // services holds all the services used by the application.
@@ -863,6 +872,15 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		middleware.RequestLogger(log),
 	}
 
+	// Add rate limiting middleware
+	rateLimitConfig := registry.RateLimitConfig{
+		Enabled:   cfg.API.RateLimit.Enabled,
+		GlobalRPS: cfg.API.RateLimit.GlobalRPS,
+		PerIPRPS:  cfg.API.RateLimit.PerIPRPS,
+		Burst:     cfg.API.RateLimit.Burst,
+	}
+	registryMiddlewares = append(registryMiddlewares, registry.RateLimitMiddleware(rateLimitConfig))
+
 	if cfg.Auth.Enabled && svc.authSvc != nil {
 		internalAuth := middleware.InternalRegistryAuth{
 			Username: svc.internalRegUser,
@@ -895,8 +913,11 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		}
 		// Add admin auth middleware if auth is enabled
 		if svc.authSvc != nil {
-			// Rate limiter for admin API: 10 req/s with burst of 20
-			adminLimiter := rate.NewLimiter(rate.Limit(10), 20)
+			// Rate limiter for admin API uses per-IP rate from config
+			var adminLimiter *rate.Limiter
+			if cfg.API.RateLimit.Enabled {
+				adminLimiter = rate.NewLimiter(rate.Limit(cfg.API.RateLimit.PerIPRPS), cfg.API.RateLimit.Burst)
+			}
 			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, adminLimiter, log))
 		}
 		adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
@@ -1230,6 +1251,10 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("auth.type", "password")
 	v.SetDefault("auth.secrets_backend", "unsafe")
 	v.SetDefault("auth.token_expiry", "720h")
+	v.SetDefault("api.rate_limit.enabled", true)
+	v.SetDefault("api.rate_limit.global_rps", 500)
+	v.SetDefault("api.rate_limit.per_ip_rps", 50)
+	v.SetDefault("api.rate_limit.burst", 100)
 	v.SetDefault("auto_route.enabled", false)
 	v.SetDefault("network_isolation.enabled", false)
 	v.SetDefault("network_isolation.network_prefix", "gordon")
