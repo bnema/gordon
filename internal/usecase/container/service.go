@@ -344,6 +344,8 @@ func (s *Service) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo 
 					image = labelImage
 				}
 			}
+			// Strip registry domain prefix from image for cleaner display
+			image = s.stripRegistryPrefix(image)
 			if networkName, err := s.runtime.GetContainerNetwork(ctx, container.ID); err == nil {
 				network = networkName
 			}
@@ -360,6 +362,19 @@ func (s *Service) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo 
 	}
 
 	return results
+}
+
+// stripRegistryPrefix removes the configured registry domain prefix from an image reference.
+// For example, "reg.example.com/myapp:latest" becomes "myapp:latest" if registry domain is "reg.example.com".
+func (s *Service) stripRegistryPrefix(image string) string {
+	if s.config.RegistryDomain == "" {
+		return image
+	}
+	prefix := strings.TrimSuffix(s.config.RegistryDomain, "/") + "/"
+	if strings.HasPrefix(image, prefix) {
+		return strings.TrimPrefix(image, prefix)
+	}
+	return image
 }
 
 // ListAttachments returns attachments for a domain.
