@@ -11,7 +11,7 @@ Gordon provides a command-line interface for server management, deployment, and 
 | `gordon deploy` | Manually deploy or redeploy a specific route | [serve](./serve.md#gordon-deploy) |
 | `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
 | `gordon version` | Print version information | [serve](./serve.md#gordon-version) |
-| `gordon auth` | Manage registry authentication | [auth](./auth.md) |
+| `gordon auth` | Manage Gordon server authentication | [auth](./auth.md) |
 | `gordon routes` | Manage routes (local or remote) | [routes](./routes.md) |
 | `gordon attachments` | Manage attachments (local or remote) | [attachments](./attachments.md) |
 | `gordon secrets` | Manage secrets (local or remote) | [secrets](./secrets.md) |

@@ -1,6 +1,6 @@
 # Authentication Commands
 
-Manage registry authentication tokens and passwords.
+Manage Gordon server authentication tokens and passwords.
 
 ## gordon auth
 
