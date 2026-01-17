@@ -19,6 +19,9 @@ import (
 // maxAdminRequestSize is the maximum allowed size for admin API request bodies.
 const maxAdminRequestSize = 1 << 20 // 1MB
 
+// maxLogLines is the maximum allowed number of log lines that can be requested.
+const maxLogLines = 10000
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc    in.ConfigService
@@ -529,7 +532,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 	container, err := h.containerSvc.Deploy(ctx, *route)
 	if err != nil {
 		log.Error().Err(err).Str("domain", deployDomain).Msg("failed to deploy container")
-		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to deploy: %v", err))
+		h.sendError(w, http.StatusInternalServerError, "failed to deploy container")
 		return
 	}
 
@@ -571,6 +574,9 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request, path string
 		if n, err := strconv.Atoi(linesStr); err == nil && n > 0 {
 			lines = n
 		}
+	}
+	if lines > maxLogLines {
+		lines = maxLogLines
 	}
 	follow := r.URL.Query().Get("follow") == "true"
 
@@ -662,7 +668,7 @@ func (h *Handler) streamProcessLogs(w http.ResponseWriter, r *http.Request, line
 	ch, err := h.logSvc.FollowProcessLogs(ctx, lines)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to follow process logs")
-		_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+		_, _ = fmt.Fprintf(w, "event: error\ndata: failed to stream logs\n\n")
 		flusher.Flush()
 		return
 	}
@@ -702,7 +708,7 @@ func (h *Handler) streamContainerLogs(w http.ResponseWriter, r *http.Request, lo
 	ch, err := h.logSvc.FollowContainerLogs(ctx, logDomain, lines)
 	if err != nil {
 		log.Warn().Err(err).Str("domain", logDomain).Msg("failed to follow container logs")
-		_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+		_, _ = fmt.Fprintf(w, "event: error\ndata: failed to stream container logs\n\n")
 		flusher.Flush()
 		return
 	}

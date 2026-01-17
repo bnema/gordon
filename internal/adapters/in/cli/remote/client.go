@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -137,7 +138,7 @@ func (c *Client) ListRoutes(ctx context.Context) ([]domain.Route, error) {
 
 // GetRoute returns a specific route by domain.
 func (c *Client) GetRoute(ctx context.Context, routeDomain string) (*domain.Route, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/routes/"+routeDomain, nil)
+	resp, err := c.request(ctx, http.MethodGet, "/routes/"+url.PathEscape(routeDomain), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +162,7 @@ func (c *Client) AddRoute(ctx context.Context, route domain.Route) error {
 
 // UpdateRoute updates an existing route.
 func (c *Client) UpdateRoute(ctx context.Context, route domain.Route) error {
-	resp, err := c.request(ctx, http.MethodPut, "/routes/"+route.Domain, route)
+	resp, err := c.request(ctx, http.MethodPut, "/routes/"+url.PathEscape(route.Domain), route)
 	if err != nil {
 		return err
 	}
@@ -170,7 +171,7 @@ func (c *Client) UpdateRoute(ctx context.Context, route domain.Route) error {
 
 // RemoveRoute removes a route by domain.
 func (c *Client) RemoveRoute(ctx context.Context, routeDomain string) error {
-	resp, err := c.request(ctx, http.MethodDelete, "/routes/"+routeDomain, nil)
+	resp, err := c.request(ctx, http.MethodDelete, "/routes/"+url.PathEscape(routeDomain), nil)
 	if err != nil {
 		return err
 	}
@@ -181,7 +182,7 @@ func (c *Client) RemoveRoute(ctx context.Context, routeDomain string) error {
 
 // ListSecrets returns the list of secret keys for a domain.
 func (c *Client) ListSecrets(ctx context.Context, secretDomain string) ([]string, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/secrets/"+secretDomain, nil)
+	resp, err := c.request(ctx, http.MethodGet, "/secrets/"+url.PathEscape(secretDomain), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +200,7 @@ func (c *Client) ListSecrets(ctx context.Context, secretDomain string) ([]string
 
 // SetSecrets sets secrets for a domain.
 func (c *Client) SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error {
-	resp, err := c.request(ctx, http.MethodPost, "/secrets/"+secretDomain, secrets)
+	resp, err := c.request(ctx, http.MethodPost, "/secrets/"+url.PathEscape(secretDomain), secrets)
 	if err != nil {
 		return err
 	}
@@ -208,7 +209,7 @@ func (c *Client) SetSecrets(ctx context.Context, secretDomain string, secrets ma
 
 // DeleteSecret removes a secret from a domain.
 func (c *Client) DeleteSecret(ctx context.Context, secretDomain, key string) error {
-	resp, err := c.request(ctx, http.MethodDelete, "/secrets/"+secretDomain+"/"+key, nil)
+	resp, err := c.request(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(secretDomain)+"/"+url.PathEscape(key), nil)
 	if err != nil {
 		return err
 	}
@@ -331,7 +332,7 @@ type DeployResult struct {
 
 // Deploy triggers a deployment for the specified domain.
 func (c *Client) Deploy(ctx context.Context, deployDomain string) (*DeployResult, error) {
-	resp, err := c.request(ctx, http.MethodPost, "/deploy/"+deployDomain, nil)
+	resp, err := c.request(ctx, http.MethodPost, "/deploy/"+url.PathEscape(deployDomain), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -366,7 +367,7 @@ func (c *Client) GetProcessLogs(ctx context.Context, lines int) ([]string, error
 
 // GetContainerLogs returns container logs for a specific domain.
 func (c *Client) GetContainerLogs(ctx context.Context, logDomain string, lines int) ([]string, error) {
-	path := fmt.Sprintf("/logs/%s?lines=%d", logDomain, lines)
+	path := fmt.Sprintf("/logs/%s?lines=%d", url.PathEscape(logDomain), lines)
 	resp, err := c.request(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
@@ -393,7 +394,7 @@ func (c *Client) StreamProcessLogs(ctx context.Context, lines int) (<-chan strin
 // StreamContainerLogs returns a channel that streams container log lines via SSE.
 // The caller is responsible for reading from the channel until it's closed.
 func (c *Client) StreamContainerLogs(ctx context.Context, logDomain string, lines int) (<-chan string, error) {
-	path := fmt.Sprintf("/logs/%s?lines=%d&follow=true", logDomain, lines)
+	path := fmt.Sprintf("/logs/%s?lines=%d&follow=true", url.PathEscape(logDomain), lines)
 	return c.streamLogs(ctx, path)
 }
 
