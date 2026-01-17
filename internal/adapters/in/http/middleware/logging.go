@@ -2,10 +2,13 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/bnema/zerowrap"
+
+	"gordon/internal/adapters/dto"
 )
 
 // ResponseWriter wraps http.ResponseWriter to capture status code and bytes written.
@@ -131,7 +134,9 @@ func PanicRecovery(log zerowrap.Logger) func(http.Handler) http.Handler {
 						Str(zerowrap.FieldHost, r.Host).
 						Msg("panic recovered")
 
-					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusInternalServerError)
+					_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Internal Server Error"})
 				}
 			}()
 

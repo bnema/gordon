@@ -2,6 +2,7 @@ package registry
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -106,6 +107,7 @@ func TestHandler_GetManifest_NotFound(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
 func TestHandler_GetManifest_NestedName(t *testing.T) {
@@ -247,6 +249,7 @@ func TestHandler_BlobRoutes_MethodNotAllowed(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
 func TestHandler_StartBlobUpload_Success(t *testing.T) {
@@ -279,6 +282,7 @@ func TestHandler_StartBlobUpload_Error(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
 func TestHandler_BlobUpload_PATCH(t *testing.T) {
@@ -332,6 +336,7 @@ func TestHandler_BlobUpload_PUT_DigestMismatch(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
 func TestHandler_ListTags_Success(t *testing.T) {
@@ -348,8 +353,14 @@ func TestHandler_ListTags_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-	assert.Contains(t, rec.Body.String(), "myapp")
-	assert.Contains(t, rec.Body.String(), "latest")
+
+	var response struct {
+		Name string   `json:"name"`
+		Tags []string `json:"tags"`
+	}
+	assert.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	assert.Equal(t, "myapp", response.Name)
+	assert.Contains(t, response.Tags, "latest")
 }
 
 func TestHandler_ListTags_NotFound(t *testing.T) {
@@ -365,6 +376,7 @@ func TestHandler_ListTags_NotFound(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
 func TestHandler_ListTags_MethodNotAllowed(t *testing.T) {
@@ -378,6 +390,7 @@ func TestHandler_ListTags_MethodNotAllowed(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
 func TestHandler_RegisterRoutes(t *testing.T) {
