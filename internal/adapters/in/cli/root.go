@@ -53,6 +53,7 @@ GORDON_REMOTE environment variable.`,
 
 	// Remote management commands
 	rootCmd.AddCommand(newRoutesCmd())
+	rootCmd.AddCommand(newAttachmentsCmd())
 	rootCmd.AddCommand(newSecretsCmd())
 	rootCmd.AddCommand(newRemotesCmd())
 	rootCmd.AddCommand(newStatusCmd())

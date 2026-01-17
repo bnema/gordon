@@ -4,16 +4,18 @@ Configure how Gordon stores and retrieves sensitive data.
 
 ## Configuration
 
+The secrets backend is configured within the `[auth]` section:
+
 ```toml
-[secrets]
-backend = "pass"  # "pass", "sops", or "unsafe"
+[auth]
+secrets_backend = "pass"  # "pass", "sops", or "unsafe"
 ```
 
 ## Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `backend` | string | `"unsafe"` | Secrets storage backend |
+| `secrets_backend` | string | `"unsafe"` | Secrets storage backend |
 
 ## Backends
 
@@ -22,8 +24,8 @@ backend = "pass"  # "pass", "sops", or "unsafe"
 Uses the Unix password manager (`pass`) for secure secret storage:
 
 ```toml
-[secrets]
-backend = "pass"
+[auth]
+secrets_backend = "pass"
 ```
 
 **Setup:**
@@ -35,15 +37,15 @@ sudo apt install pass
 pass init your-gpg-key-id
 
 # Store secrets
-pass insert gordon/registry/password_hash
-pass insert gordon/registry/token_secret
+pass insert gordon/auth/password_hash
+pass insert gordon/auth/token_secret
 ```
 
 **Usage in config:**
 ```toml
-[registry_auth]
-password_hash = "gordon/registry/password_hash"  # Path in pass store
-token_secret = "gordon/registry/token_secret"
+[auth]
+password_hash = "gordon/auth/password_hash"  # Path in pass store
+token_secret = "gordon/auth/token_secret"
 ```
 
 **Benefits:**
@@ -57,8 +59,8 @@ token_secret = "gordon/registry/token_secret"
 Uses Mozilla SOPS for encrypted file-based secrets:
 
 ```toml
-[secrets]
-backend = "sops"
+[auth]
+secrets_backend = "sops"
 ```
 
 **Setup:**
@@ -88,15 +90,15 @@ DB_PASSWORD=${sops:secrets.yaml:database.password}
 Stores secrets as plain text files:
 
 ```toml
-[secrets]
-backend = "unsafe"
+[auth]
+secrets_backend = "unsafe"
 ```
 
 **Storage location:**
 ```
 {data_dir}/secrets/
 ├── gordon/
-│   └── registry/
+│   └── auth/
 │       ├── password_hash
 │       └── token_secret
 ```
@@ -104,8 +106,8 @@ backend = "unsafe"
 **Usage:**
 ```bash
 # Create secret
-mkdir -p ~/.gordon/secrets/gordon/registry
-echo "your-bcrypt-hash" > ~/.gordon/secrets/gordon/registry/password_hash
+mkdir -p ~/.gordon/secrets/gordon/auth
+echo "your-bcrypt-hash" > ~/.gordon/secrets/gordon/auth/password_hash
 ```
 
 > **Warning:** Only use for local development. Secrets are stored in plain text.
@@ -135,18 +137,16 @@ API_SECRET=${sops:production.yaml:api.secret.key}
 ### Production with Pass
 
 ```toml
-[secrets]
-backend = "pass"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "token"
-token_secret = "gordon/registry/token_secret"
+secrets_backend = "pass"
+token_secret = "gordon/auth/token_secret"
 ```
 
 ```bash
 # Setup
-pass insert gordon/registry/token_secret
+pass insert gordon/auth/token_secret
 # Enter a random 32+ character string
 
 # Generate tokens
@@ -156,23 +156,19 @@ gordon auth token generate --subject deploy --expiry 0
 ### Development with Unsafe
 
 ```toml
-[secrets]
-backend = "unsafe"
-
-[registry_auth]
+[auth]
 enabled = false
+secrets_backend = "unsafe"
 ```
 
 ### Enterprise with SOPS
 
 ```toml
-[secrets]
-backend = "sops"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "token"
-token_secret = "gordon/registry/token_secret"
+secrets_backend = "sops"
+token_secret = "gordon/auth/token_secret"
 ```
 
 Environment file:
@@ -194,6 +190,6 @@ JWT_SECRET=${sops:secrets.yaml:jwt.secret}
 
 ## Related
 
-- [Registry Authentication](./registry-auth.md)
+- [Authentication](./auth.md)
 - [Environment Variables](./env.md)
 - [Configuration Overview](./index.md)

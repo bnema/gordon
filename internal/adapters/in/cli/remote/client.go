@@ -458,6 +458,81 @@ func (c *Client) StreamContainerLogs(ctx context.Context, logDomain string, line
 	return c.streamLogs(ctx, path)
 }
 
+// Attachments Config API
+
+// GetAllAttachmentsConfig returns all configured attachments.
+func (c *Client) GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/attachments", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Attachments map[string][]string `json:"attachments"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Attachments, nil
+}
+
+// GetAttachmentsConfig returns attachments for a specific domain/group from config.
+func (c *Client) GetAttachmentsConfig(ctx context.Context, domainOrGroup string) ([]string, error) {
+	if domainOrGroup == "" {
+		return nil, fmt.Errorf("domain or group is required")
+	}
+	path := "/attachments/" + url.PathEscape(domainOrGroup)
+	resp, err := c.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Target string   `json:"target"`
+		Images []string `json:"images"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Images, nil
+}
+
+// AddAttachment adds an attachment to a domain/group.
+func (c *Client) AddAttachment(ctx context.Context, domainOrGroup, image string) error {
+	if domainOrGroup == "" {
+		return fmt.Errorf("domain or group is required")
+	}
+	if image == "" {
+		return fmt.Errorf("image is required")
+	}
+	path := "/attachments/" + url.PathEscape(domainOrGroup)
+	resp, err := c.request(ctx, http.MethodPost, path, struct {
+		Image string `json:"image"`
+	}{Image: image})
+	if err != nil {
+		return err
+	}
+	return parseResponse(resp, nil)
+}
+
+// RemoveAttachment removes an attachment from a domain/group.
+func (c *Client) RemoveAttachment(ctx context.Context, domainOrGroup, image string) error {
+	if domainOrGroup == "" {
+		return fmt.Errorf("domain or group is required")
+	}
+	if image == "" {
+		return fmt.Errorf("image is required")
+	}
+	path := "/attachments/" + url.PathEscape(domainOrGroup) + "/" + url.PathEscape(image)
+	resp, err := c.request(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	return parseResponse(resp, nil)
+}
+
 // streamLogs handles SSE streaming for log endpoints.
 func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, error) {
 	url := c.baseURL + "/admin" + path

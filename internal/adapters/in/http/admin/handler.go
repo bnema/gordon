@@ -123,6 +123,8 @@ func (h *Handler) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 
 	// Route to appropriate handler
 	switch {
+	case path == "/attachments" || strings.HasPrefix(path, "/attachments/"):
+		h.handleAttachmentsConfig(w, r, path)
 	case path == "/routes" || strings.HasPrefix(path, "/routes/"):
 		h.handleRoutes(w, r, path)
 	case path == "/networks":
@@ -856,4 +858,143 @@ func (h *Handler) streamContainerLogs(w http.ResponseWriter, r *http.Request, lo
 			return
 		}
 	}
+}
+
+// handleAttachmentsConfig handles /admin/attachments endpoints for config-level attachments.
+func (h *Handler) handleAttachmentsConfig(w http.ResponseWriter, r *http.Request, path string) {
+	// Parse target (domain or group) from path
+	target := strings.TrimPrefix(path, "/attachments/")
+	if target == "/attachments" {
+		target = ""
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		h.handleAttachmentsConfigGet(w, r, target)
+	case http.MethodPost:
+		h.handleAttachmentsConfigPost(w, r, target)
+	case http.MethodDelete:
+		h.handleAttachmentsConfigDelete(w, r, target)
+	default:
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (h *Handler) handleAttachmentsConfigGet(w http.ResponseWriter, r *http.Request, target string) {
+	ctx := r.Context()
+
+	// Check read permission
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
+		return
+	}
+
+	if target == "" {
+		// List all attachments
+		attachments := h.configSvc.GetAllAttachments(ctx)
+		h.sendJSON(w, http.StatusOK, dto.AttachmentsConfigResponse{Attachments: attachments})
+		return
+	}
+
+	// List attachments for specific target
+	images, err := h.configSvc.GetAttachmentsFor(ctx, target)
+	if err != nil {
+		if errors.Is(err, domain.ErrAttachmentNotFound) {
+			h.sendError(w, http.StatusNotFound, "no attachments found for target")
+			return
+		}
+		h.sendError(w, http.StatusInternalServerError, "failed to get attachments")
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, dto.AttachmentConfigResponse{Target: target, Images: images})
+}
+
+func (h *Handler) handleAttachmentsConfigPost(w http.ResponseWriter, r *http.Request, target string) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	// Check write permission
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+
+	if target == "" {
+		h.sendError(w, http.StatusBadRequest, "target (domain or group) required in path")
+		return
+	}
+
+	// Limit request body size
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+
+	var req dto.AttachmentAddRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Warn().Err(err).Msg("invalid attachment JSON")
+		h.sendError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if err := h.configSvc.AddAttachment(ctx, target, req.Image); err != nil {
+		log.Error().Err(err).Str("target", target).Str("image", req.Image).Msg("failed to add attachment")
+		switch {
+		case errors.Is(err, domain.ErrAttachmentExists):
+			h.sendError(w, http.StatusConflict, "attachment already exists")
+		case errors.Is(err, domain.ErrAttachmentImageEmpty):
+			h.sendError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, domain.ErrAttachmentTargetEmpty):
+			h.sendError(w, http.StatusBadRequest, err.Error())
+		default:
+			h.sendError(w, http.StatusInternalServerError, "failed to add attachment")
+		}
+		return
+	}
+
+	log.Info().Str("target", target).Str("image", req.Image).Msg("attachment added")
+	h.sendJSON(w, http.StatusCreated, dto.AttachmentStatusResponse{Status: "added"})
+}
+
+func (h *Handler) handleAttachmentsConfigDelete(w http.ResponseWriter, r *http.Request, target string) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	// Check write permission
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+
+	if target == "" {
+		h.sendError(w, http.StatusBadRequest, "target (domain or group) required in path")
+		return
+	}
+
+	// Parse image from path: /attachments/{target}/{image}
+	// target at this point contains "{domain}/{image}" or just "{domain}"
+	parts := strings.SplitN(target, "/", 2)
+	if len(parts) != 2 {
+		h.sendError(w, http.StatusBadRequest, "image required in path: /attachments/{target}/{image}")
+		return
+	}
+
+	domainOrGroup := parts[0]
+	image := parts[1]
+
+	if err := h.configSvc.RemoveAttachment(ctx, domainOrGroup, image); err != nil {
+		log.Error().Err(err).Str("target", domainOrGroup).Str("image", image).Msg("failed to remove attachment")
+		switch {
+		case errors.Is(err, domain.ErrAttachmentNotFound):
+			h.sendError(w, http.StatusNotFound, "attachment not found")
+		case errors.Is(err, domain.ErrAttachmentImageEmpty):
+			h.sendError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, domain.ErrAttachmentTargetEmpty):
+			h.sendError(w, http.StatusBadRequest, err.Error())
+		default:
+			h.sendError(w, http.StatusInternalServerError, "failed to remove attachment")
+		}
+		return
+	}
+
+	log.Info().Str("target", domainOrGroup).Str("image", image).Msg("attachment removed")
+	h.sendJSON(w, http.StatusOK, dto.AttachmentStatusResponse{Status: "removed"})
 }

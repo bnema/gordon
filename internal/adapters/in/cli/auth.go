@@ -224,9 +224,9 @@ func newPasswordHashCmd() *cobra.Command {
 
 The hash can be stored in your secrets backend and referenced in the config:
 
-  [registry_auth]
+  [auth]
   type = "password"
-  password_hash = "gordon/registry/password_hash"`,
+  password_hash = "gordon/auth/password_hash"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPasswordHash()
 		},
@@ -410,9 +410,9 @@ func runPasswordHash() error {
 	fmt.Println(hash)
 	fmt.Println()
 	fmt.Println("Then reference the path in your config:")
-	fmt.Println("  [registry_auth]")
+	fmt.Println("  [auth]")
 	fmt.Println("  type = \"password\"")
-	fmt.Println("  password_hash = \"gordon/registry/password_hash\"")
+	fmt.Println("  password_hash = \"gordon/auth/password_hash\"")
 
 	return nil
 }
@@ -430,7 +430,7 @@ func loadAuthConfig(configPath string) (*cliConfig, error) {
 
 	// Set defaults
 	v.SetDefault("server.data_dir", app.DefaultDataDir())
-	v.SetDefault("secrets.backend", "unsafe")
+	v.SetDefault("auth.secrets_backend", "unsafe")
 
 	app.ConfigureViper(v, configPath)
 
@@ -446,7 +446,7 @@ func loadAuthConfig(configPath string) (*cliConfig, error) {
 	}
 
 	// Determine backend
-	switch v.GetString("secrets.backend") {
+	switch v.GetString("auth.secrets_backend") {
 	case "pass":
 		cfg.Backend = domain.SecretsBackendPass
 	case "sops":
@@ -456,7 +456,7 @@ func loadAuthConfig(configPath string) (*cliConfig, error) {
 	}
 
 	// Load token secret from secrets backend
-	tokenSecretPath := v.GetString("registry_auth.token_secret")
+	tokenSecretPath := v.GetString("auth.token_secret")
 	if tokenSecretPath != "" {
 		// Load actual secret from the configured backend
 		ctx := context.Background()

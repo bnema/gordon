@@ -86,10 +86,10 @@ This creates `~/.password-store/`.
 ```bash
 # Registry password hash (bcrypt)
 # Generate with: htpasswd -nbB admin yourpassword | cut -d: -f2
-pass insert gordon/registry/password_hash
+pass insert gordon/auth/password_hash
 
 # Token secret (random 32+ chars for JWT signing)
-pass generate gordon/registry/token_secret 32
+pass generate gordon/auth/token_secret 32
 ```
 
 ## Gordon Configuration
@@ -97,15 +97,13 @@ pass generate gordon/registry/token_secret 32
 ### Enable Pass Backend
 
 ```toml
-[secrets]
-backend = "pass"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "token"
+secrets_backend = "pass"
 username = "admin"
-password_hash = "gordon/registry/password_hash"
-token_secret = "gordon/registry/token_secret"
+password_hash = "gordon/auth/password_hash"
+token_secret = "gordon/auth/token_secret"
 ```
 
 ### Using Secrets in Environment Files
@@ -126,7 +124,7 @@ Recommended directory structure in pass:
 ```
 ~/.password-store/
 ├── gordon/
-│   └── registry/
+│   └── auth/
 │       ├── password_hash.gpg
 │       └── token_secret.gpg
 ├── myapp/
@@ -286,6 +284,6 @@ chmod 700 ~/.password-store
 ## Related
 
 - [Secrets Configuration](/docs/config/secrets.md)
-- [Registry Authentication](/docs/config/registry-auth.md)
+- [Authentication](/docs/config/auth.md)
 - [Running in Containers](/wiki/guides/running-in-container.md)
 - [Using SOPS for Secrets](./secrets-sops.md)
