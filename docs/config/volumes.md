@@ -24,7 +24,7 @@ preserve = true
 Gordon automatically creates Docker volumes from Dockerfile `VOLUME` directives:
 
 ```dockerfile
-FROM postgres:15
+FROM postgres:18
 VOLUME ["/var/lib/postgresql/data"]
 ```
 
@@ -76,7 +76,7 @@ With `preserve = false`:
 
 ```dockerfile
 # my-postgres.Dockerfile
-FROM postgres:15
+FROM postgres:18
 VOLUME ["/var/lib/postgresql/data"]
 ENV POSTGRES_DB=myapp
 ENV POSTGRES_USER=app

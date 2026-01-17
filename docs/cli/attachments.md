@@ -18,8 +18,8 @@ Manage attachments on local or remote Gordon instances.
 
 ```bash
 gordon attach list
-gordon attach add app.example.com postgres:15
-gordon attach remove app.example.com postgres:15
+gordon attach add app.example.com postgres:18
+gordon attach remove app.example.com postgres:18
 ```
 
 ---
@@ -45,8 +45,8 @@ gordon attachments list --remote https://gordon.mydomain.com --token $TOKEN
 ```
 Target                    Attachments
 --------------------------------------------------------------------------------
-app.example.com           postgres:15, redis:7-alpine
-api.example.com           postgres:15
+app.example.com           postgres:18, redis:7-alpine
+api.example.com           postgres:18
 backend (group)           rabbitmq:3-management
 ```
 
@@ -58,7 +58,7 @@ Add an attachment to a domain or network group.
 
 ```bash
 gordon attachments add <domain-or-group> <image>
-gordon attachments add app.example.com postgres:15
+gordon attachments add app.example.com postgres:18
 gordon attachments add backend redis:7-alpine
 ```
 
@@ -80,13 +80,13 @@ gordon attachments add backend redis:7-alpine
 
 ```bash
 # Add database to a domain
-gordon attachments add app.example.com postgres:15
+gordon attachments add app.example.com postgres:18
 
 # Add cache to a network group (shared by all domains in the group)
 gordon attachments add backend redis:7-alpine
 
 # Remote
-gordon attachments add app.example.com postgres:15 --remote https://gordon.mydomain.com --token $TOKEN
+gordon attachments add app.example.com postgres:18 --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ---
@@ -97,7 +97,7 @@ Remove an attachment.
 
 ```bash
 gordon attachments remove <domain-or-group> <image>
-gordon attachments remove app.example.com postgres:15
+gordon attachments remove app.example.com postgres:18
 ```
 
 ### Arguments
@@ -118,13 +118,13 @@ gordon attachments remove app.example.com postgres:15
 
 ```bash
 # Remove database from a domain
-gordon attachments remove app.example.com postgres:15
+gordon attachments remove app.example.com postgres:18
 
 # Remove from network group
 gordon attachments remove backend redis:7-alpine
 
 # Remote
-gordon attachments remove app.example.com postgres:15 --remote https://gordon.mydomain.com --token $TOKEN
+gordon attachments remove app.example.com postgres:18 --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ---
@@ -135,7 +135,7 @@ gordon attachments remove app.example.com postgres:15 --remote https://gordon.my
 
 ```bash
 # Add PostgreSQL database
-gordon attachments add app.example.com postgres:15
+gordon attachments add app.example.com postgres:18
 
 # Add Redis cache
 gordon attachments add app.example.com redis:7-alpine
