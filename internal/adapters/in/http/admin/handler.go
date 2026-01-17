@@ -47,6 +47,7 @@ func toAttachmentResponse(a domain.Attachment) dto.Attachment {
 		Image:       a.Image,
 		ContainerID: a.ContainerID,
 		Status:      a.Status,
+		Network:     a.Network,
 	}
 }
 

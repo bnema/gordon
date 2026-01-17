@@ -181,7 +181,9 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 			}
 			attachmentStatus := components.ContainerStatusBadge(attachment.Status)
 			attachmentImage := truncateImage(attachment.Image, imageColWidth)
-			rows = append(rows, []string{attachmentName, attachmentImage, "-", attachmentStatus, "-"})
+			// Show attachment's actual network for debugging/verification
+			attachmentNetwork := truncateNetwork(attachment.Network, networkColWidth)
+			rows = append(rows, []string{attachmentName, attachmentImage, attachmentNetwork, attachmentStatus, "-"})
 		}
 	}
 

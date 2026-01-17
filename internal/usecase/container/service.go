@@ -958,7 +958,7 @@ func (s *Service) getAttachmentsForDomain(ctx context.Context, domainName string
 		return nil
 	}
 
-	return s.filterAttachments(containers, domainName)
+	return s.filterAttachments(ctx, containers, domainName)
 }
 
 // getAllAttachments fetches all containers once and returns attachments grouped by domain.
@@ -987,11 +987,17 @@ func (s *Service) getAllAttachments(ctx context.Context) map[string][]domain.Att
 			image = labelImage
 			serviceName = extractServiceName(labelImage)
 		}
+		// Get the container's network for debugging/verification
+		network := ""
+		if networkName, err := s.runtime.GetContainerNetwork(ctx, container.ID); err == nil {
+			network = networkName
+		}
 		attachment := domain.Attachment{
 			Name:        serviceName,
 			Image:       image,
 			ContainerID: container.ID,
 			Status:      container.Status,
+			Network:     network,
 		}
 		result[ownerDomain] = append(result[ownerDomain], attachment)
 	}
@@ -1000,7 +1006,7 @@ func (s *Service) getAllAttachments(ctx context.Context) map[string][]domain.Att
 }
 
 // filterAttachments extracts attachments for a specific domain from a container list.
-func (s *Service) filterAttachments(containers []*domain.Container, domainName string) []domain.Attachment {
+func (s *Service) filterAttachments(ctx context.Context, containers []*domain.Container, domainName string) []domain.Attachment {
 	attachments := make([]domain.Attachment, 0)
 	for _, container := range containers {
 		if container.Labels == nil {
@@ -1018,11 +1024,17 @@ func (s *Service) filterAttachments(containers []*domain.Container, domainName s
 			image = labelImage
 			serviceName = extractServiceName(labelImage)
 		}
+		// Get the container's network for debugging/verification
+		network := ""
+		if networkName, err := s.runtime.GetContainerNetwork(ctx, container.ID); err == nil {
+			network = networkName
+		}
 		attachment := domain.Attachment{
 			Name:        serviceName,
 			Image:       image,
 			ContainerID: container.ID,
 			Status:      container.Status,
+			Network:     network,
 		}
 		attachments = append(attachments, attachment)
 	}

@@ -25,6 +25,9 @@ func TestService_ListRoutesWithDetails(t *testing.T) {
 	}
 
 	runtime.EXPECT().GetContainerNetwork(mock.Anything, "container-1").Return("gordon-app-example-com", nil)
+	// getAllAttachments calls GetContainerNetwork for each attachment
+	runtime.EXPECT().GetContainerNetwork(mock.Anything, "attach-1").Return("gordon-app-example-com", nil)
+	runtime.EXPECT().GetContainerNetwork(mock.Anything, "attach-2").Return("gordon-other-example-com", nil)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
 		{
 			ID:     "attach-1",
@@ -71,6 +74,7 @@ func TestService_ListRoutesWithDetails(t *testing.T) {
 		assert.Equal(t, "postgres", results[0].Attachments[0].Name)
 		assert.Equal(t, "postgres:15", results[0].Attachments[0].Image)
 		assert.Equal(t, "attach-1", results[0].Attachments[0].ContainerID)
+		assert.Equal(t, "gordon-app-example-com", results[0].Attachments[0].Network)
 	}
 }
 
@@ -136,6 +140,7 @@ func TestService_ListAttachments(t *testing.T) {
 			},
 		},
 	}, nil)
+	runtime.EXPECT().GetContainerNetwork(mock.Anything, "attach-1").Return("gordon-app-example-com", nil)
 
 	attachments := svc.ListAttachments(ctx, "app.example.com")
 
@@ -143,6 +148,7 @@ func TestService_ListAttachments(t *testing.T) {
 	assert.Equal(t, "postgres", attachments[0].Name)
 	assert.Equal(t, "postgres:15", attachments[0].Image)
 	assert.Equal(t, "attach-1", attachments[0].ContainerID)
+	assert.Equal(t, "gordon-app-example-com", attachments[0].Network)
 }
 
 func TestService_ListNetworks(t *testing.T) {

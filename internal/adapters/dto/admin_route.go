@@ -24,6 +24,7 @@ type Attachment struct {
 	Image       string `json:"image"`
 	ContainerID string `json:"container_id"`
 	Status      string `json:"status"`
+	Network     string `json:"network"`
 }
 
 // RoutesResponse represents a list of routes.
