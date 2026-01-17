@@ -937,8 +937,9 @@ func (s *Service) cleanupNetworkIfEmpty(ctx context.Context, networkName string)
 }
 
 func (s *Service) deployAttachments(ctx context.Context, domainName, networkName string) error {
-	attachments, ok := s.config.Attachments[domainName]
-	if !ok {
+	// Collect attachments from both domain-specific and network group configs
+	attachments := s.resolveAttachmentsForDomain(domainName)
+	if len(attachments) == 0 {
 		return nil
 	}
 
@@ -950,6 +951,41 @@ func (s *Service) deployAttachments(ctx context.Context, domainName, networkName
 	}
 
 	return nil
+}
+
+// resolveAttachmentsForDomain returns attachments for a domain by checking:
+// 1. Direct domain attachments (attachments[domain])
+// 2. Network group attachments (attachments[group] where domain is in network_groups[group])
+func (s *Service) resolveAttachmentsForDomain(domainName string) []string {
+	seen := make(map[string]bool)
+	var result []string
+
+	// First, add domain-specific attachments
+	if domainAttachments, ok := s.config.Attachments[domainName]; ok {
+		for _, img := range domainAttachments {
+			if !seen[img] {
+				seen[img] = true
+				result = append(result, img)
+			}
+		}
+	}
+
+	// Then, find which network group this domain belongs to and add group attachments
+	for groupName, domains := range s.config.NetworkGroups {
+		if slices.Contains(domains, domainName) {
+			if groupAttachments, ok := s.config.Attachments[groupName]; ok {
+				for _, img := range groupAttachments {
+					if !seen[img] {
+						seen[img] = true
+						result = append(result, img)
+					}
+				}
+			}
+			break // Domain can only be in one network group
+		}
+	}
+
+	return result
 }
 
 func (s *Service) getAttachmentsForDomain(ctx context.Context, domainName string) []domain.Attachment {

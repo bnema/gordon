@@ -101,9 +101,9 @@ func (s *Service) loadConfigValues() Config {
 		AutoRouteEnabled:     s.viper.GetBool("auto_route.enabled"),
 		NetworkIsolation:     s.viper.GetBool("network_isolation.enabled"),
 		NetworkPrefix:        s.viper.GetString("network_isolation.network_prefix"),
-		RegistryAuthEnabled:  s.viper.GetBool("registry_auth.enabled"),
-		RegistryAuthUsername: s.viper.GetString("registry_auth.username"),
-		RegistryAuthPassword: s.viper.GetString("registry_auth.password"),
+		RegistryAuthEnabled:  s.viper.GetBool("auth.enabled"),
+		RegistryAuthUsername: s.viper.GetString("auth.username"),
+		RegistryAuthPassword: s.viper.GetString("auth.password"),
 		VolumeAutoCreate:     s.viper.GetBool("volumes.auto_create"),
 		VolumePrefix:         s.viper.GetString("volumes.prefix"),
 		VolumePreserve:       s.viper.GetBool("volumes.preserve"),
@@ -333,8 +333,9 @@ func (s *Service) Save(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Update viper with current routes
+	// Update viper with current config
 	s.viper.Set("routes", s.config.Routes)
+	s.viper.Set("attachments", s.config.Attachments)
 
 	// Record save time to debounce file watcher events
 	atomic.StoreInt64(&s.lastSaveTime, time.Now().UnixNano())
@@ -475,6 +476,7 @@ func (s *Service) GetNetworkGroups() map[string][]string {
 }
 
 // GetAttachments returns attachment configuration.
+// Deprecated: Use GetAllAttachments instead.
 func (s *Service) GetAttachments() map[string][]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -484,6 +486,156 @@ func (s *Service) GetAttachments() map[string][]string {
 		result[k] = append([]string{}, v...)
 	}
 	return result
+}
+
+// GetAllAttachments returns all configured attachments.
+func (s *Service) GetAllAttachments(_ context.Context) map[string][]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string][]string)
+	for k, v := range s.config.Attachments {
+		result[k] = append([]string{}, v...)
+	}
+	return result
+}
+
+// GetAttachmentsFor returns attachments for a specific domain or network group.
+func (s *Service) GetAttachmentsFor(_ context.Context, domainOrGroup string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	images, exists := s.config.Attachments[domainOrGroup]
+	if !exists {
+		return nil, domain.ErrAttachmentNotFound
+	}
+
+	return append([]string{}, images...), nil
+}
+
+// AddAttachment adds an image to a domain/group's attachments.
+func (s *Service) AddAttachment(ctx context.Context, domainOrGroup, image string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "AddAttachment",
+		"target":              domainOrGroup,
+		"image":               image,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	// Validate input
+	if domainOrGroup == "" {
+		return domain.ErrAttachmentTargetEmpty
+	}
+	if image == "" {
+		return domain.ErrAttachmentImageEmpty
+	}
+
+	s.mu.Lock()
+
+	// Initialize map if needed
+	if s.config.Attachments == nil {
+		s.config.Attachments = make(map[string][]string)
+	}
+
+	// Check if already exists
+	existing := s.config.Attachments[domainOrGroup]
+	for _, img := range existing {
+		if img == image {
+			s.mu.Unlock()
+			return domain.ErrAttachmentExists
+		}
+	}
+
+	// Store previous value for rollback
+	previousImages := append([]string{}, existing...)
+	hadKey := len(existing) > 0
+
+	// Add the image
+	s.config.Attachments[domainOrGroup] = append(existing, image)
+	s.mu.Unlock()
+
+	// Persist to disk - rollback on failure
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist attachment to disk, rolling back")
+		s.mu.Lock()
+		if hadKey {
+			s.config.Attachments[domainOrGroup] = previousImages
+		} else {
+			delete(s.config.Attachments, domainOrGroup)
+		}
+		s.mu.Unlock()
+		return err
+	}
+
+	log.Info().Msg("attachment added to configuration")
+	return nil
+}
+
+// RemoveAttachment removes an image from a domain/group's attachments.
+func (s *Service) RemoveAttachment(ctx context.Context, domainOrGroup, image string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "RemoveAttachment",
+		"target":              domainOrGroup,
+		"image":               image,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	// Validate input
+	if domainOrGroup == "" {
+		return domain.ErrAttachmentTargetEmpty
+	}
+	if image == "" {
+		return domain.ErrAttachmentImageEmpty
+	}
+
+	s.mu.Lock()
+
+	existing, exists := s.config.Attachments[domainOrGroup]
+	if !exists {
+		s.mu.Unlock()
+		return domain.ErrAttachmentNotFound
+	}
+
+	// Find and remove the image
+	found := false
+	newImages := make([]string, 0, len(existing))
+	for _, img := range existing {
+		if img == image {
+			found = true
+		} else {
+			newImages = append(newImages, img)
+		}
+	}
+
+	if !found {
+		s.mu.Unlock()
+		return domain.ErrAttachmentNotFound
+	}
+
+	// Store previous value for rollback
+	previousImages := existing
+
+	// Update or remove the key
+	if len(newImages) == 0 {
+		delete(s.config.Attachments, domainOrGroup)
+	} else {
+		s.config.Attachments[domainOrGroup] = newImages
+	}
+	s.mu.Unlock()
+
+	// Persist to disk - rollback on failure
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist attachment removal to disk, rolling back")
+		s.mu.Lock()
+		s.config.Attachments[domainOrGroup] = previousImages
+		s.mu.Unlock()
+		return err
+	}
+
+	log.Info().Msg("attachment removed from configuration")
+	return nil
 }
 
 // GetExternalRoutes returns all configured external routes.

@@ -206,6 +206,9 @@ These commands work with remote targeting:
 | `gordon routes add <domain> <image>` | Add a route |
 | `gordon routes remove <domain>` | Remove a route |
 | `gordon routes deploy <domain>` | Deploy/redeploy a route |
+| `gordon attachments list [target]` | List all or targeted attachments |
+| `gordon attachments add <target> <image>` | Add an attachment |
+| `gordon attachments remove <target> <image>` | Remove an attachment |
 | `gordon secrets list <domain>` | List secrets for a domain |
 | `gordon secrets set <domain> KEY=value` | Set secrets |
 | `gordon secrets remove <domain> <key>` | Remove a secret |
@@ -432,6 +435,6 @@ See [Remote Logs Requirement](#remote-logs-requirement) for details.
 
 ## Related
 
-- [CLI Commands](/docs/cli/commands.md)
-- [Authentication](/docs/config/registry-auth.md)
-- [Admin API](/docs/config/admin.md)
+- [CLI Commands](/docs/cli/index.md)
+- [Authentication](/docs/config/auth.md)
+- [Attachments](/docs/config/attachments.md)

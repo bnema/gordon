@@ -44,8 +44,9 @@ registry_port = 5000
 registry_domain = "registry.example.com"
 runtime = "docker"
 
-[registry_auth]
+[auth]
 enabled = true
+secrets_backend = "unsafe"
 username = "admin"
 password = "password123"
 
@@ -72,7 +73,7 @@ level = "info"`
 registry_domain = "registry.example.com"
 runtime = "docker"
 
-[registry_auth]
+[auth]
 enabled = false`
 	case "invalid.toml":
 		return `[server

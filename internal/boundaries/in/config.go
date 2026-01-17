@@ -56,4 +56,16 @@ type ConfigService interface {
 
 	// GetExternalRoutes returns all configured external routes.
 	GetExternalRoutes() map[string]string
+
+	// GetAllAttachments returns all configured attachments.
+	GetAllAttachments(ctx context.Context) map[string][]string
+
+	// GetAttachmentsFor returns attachments for a specific domain or network group.
+	GetAttachmentsFor(ctx context.Context, domainOrGroup string) ([]string, error)
+
+	// AddAttachment adds an image to a domain/group's attachments.
+	AddAttachment(ctx context.Context, domainOrGroup, image string) error
+
+	// RemoveAttachment removes an image from a domain/group's attachments.
+	RemoveAttachment(ctx context.Context, domainOrGroup, image string) error
 }
