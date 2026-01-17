@@ -172,8 +172,10 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 		for _, attachment := range route.Attachments {
 			// Use container icon with indent for attachment tree display
 			attachmentName := "  " + styles.IconContainer + " " + attachment.Name
-			if len(attachmentName) > 25 {
-				attachmentName = attachmentName[:22] + "..."
+			// Use rune count for proper Unicode handling (icons are multi-byte)
+			runes := []rune(attachmentName)
+			if len(runes) > 25 {
+				attachmentName = string(runes[:22]) + "..."
 			}
 			attachmentStatus := components.ContainerStatusBadge(attachment.Status)
 			attachmentImage := truncateImage(attachment.Image, imageColWidth)

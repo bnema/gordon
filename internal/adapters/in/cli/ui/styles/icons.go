@@ -24,9 +24,9 @@ const (
 	IconRoute     = "\uf0e8"     // nf-fa-sitemap
 	IconSecret    = "\uf023"     // nf-fa-lock
 	IconToken     = "\uf084"     // nf-fa-key
-	IconContainer = "\uf4b7"     // nf-oct-container
+	IconContainer = "\uf489"     // nf-oct-container (U+F489)
 	IconServer    = "\uf233"     // nf-fa-server
-	IconNetwork   = "\U000f0317" // nf-md-lan
+	IconNetwork   = "\U000f06f3" // nf-md-lan (U+F06F3)
 	IconVolume    = "\uf1c0"     // nf-fa-database
 	IconImage     = "\uf187"     // nf-fa-archive
 	IconDocker    = "\ue7b0"     // nf-dev-docker

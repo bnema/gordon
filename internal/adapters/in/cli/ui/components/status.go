@@ -92,8 +92,9 @@ func RenderStatus(status Status, label string) string {
 	return config.Style.Render(config.Icon + " " + label)
 }
 
-// RenderStatusBadge renders a status as a badge with background and icon.
-func RenderStatusBadge(status Status, _ string) string {
+// RenderStatusBadge renders a status as a compact icon badge with background.
+// It displays only the icon (no label) for minimal width in table columns.
+func RenderStatusBadge(status Status) string {
 	config := DefaultStatusConfigs[status]
 	var badgeStyle lipgloss.Style
 	switch status {
@@ -171,7 +172,7 @@ func NewStatusBadge(status Status, label string) StatusIndicator {
 // View renders the status indicator.
 func (s StatusIndicator) View() string {
 	if s.Badge {
-		return RenderStatusBadge(s.Status, s.Label)
+		return RenderStatusBadge(s.Status)
 	}
 	return RenderStatus(s.Status, s.Label)
 }
@@ -185,5 +186,5 @@ func ContainerStatusIndicator(status string) string {
 // ContainerStatusBadge renders container status as a badge.
 func ContainerStatusBadge(status string) string {
 	parsed := ParseStatus(status)
-	return RenderStatusBadge(parsed, status)
+	return RenderStatusBadge(parsed)
 }
