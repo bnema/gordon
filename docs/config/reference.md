@@ -27,6 +27,15 @@ token_secret = ""                            # Path in secrets backend to JWT si
 token_expiry = "720h"                        # Token expiry duration (720h = 30 days)
 
 # =============================================================================
+# API (applies to both Registry and Admin endpoints)
+# =============================================================================
+[api.rate_limit]
+enabled = true                               # Enable rate limiting (default: true)
+global_rps = 500                             # Max requests/second globally
+per_ip_rps = 50                              # Max requests/second per client IP
+burst = 100                                  # Burst size for rate limiters
+
+# =============================================================================
 # LOGGING
 # =============================================================================
 [logging]
@@ -119,6 +128,10 @@ preserve = true                              # Keep volumes when containers are 
 | `auth.type` | `"password"` | Auth type |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |
+| `api.rate_limit.enabled` | `true` | Enable rate limiting |
+| `api.rate_limit.global_rps` | `500` | Global requests/second |
+| `api.rate_limit.per_ip_rps` | `50` | Per-IP requests/second |
+| `api.rate_limit.burst` | `100` | Burst size |
 | `logging.level` | `"info"` | Log level |
 | `logging.format` | `"console"` | Log format |
 | `logging.file.enabled` | `false` | File logging disabled |
