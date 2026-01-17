@@ -337,6 +337,180 @@ func (_c *MockContainerService_List_Call) RunAndReturn(run func(ctx context.Cont
 	return _c
 }
 
+// ListAttachments provides a mock function for the type MockContainerService
+func (_mock *MockContainerService) ListAttachments(ctx context.Context, domain1 string) []domain.Attachment {
+	ret := _mock.Called(ctx, domain1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListAttachments")
+	}
+
+	var r0 []domain.Attachment
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []domain.Attachment); ok {
+		r0 = returnFunc(ctx, domain1)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]domain.Attachment)
+		}
+	}
+	return r0
+}
+
+// MockContainerService_ListAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListAttachments'
+type MockContainerService_ListAttachments_Call struct {
+	*mock.Call
+}
+
+// ListAttachments is a helper method to define mock.On call
+//   - ctx context.Context
+//   - domain1 string
+func (_e *MockContainerService_Expecter) ListAttachments(ctx interface{}, domain1 interface{}) *MockContainerService_ListAttachments_Call {
+	return &MockContainerService_ListAttachments_Call{Call: _e.mock.On("ListAttachments", ctx, domain1)}
+}
+
+func (_c *MockContainerService_ListAttachments_Call) Run(run func(ctx context.Context, domain1 string)) *MockContainerService_ListAttachments_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerService_ListAttachments_Call) Return(attachments []domain.Attachment) *MockContainerService_ListAttachments_Call {
+	_c.Call.Return(attachments)
+	return _c
+}
+
+func (_c *MockContainerService_ListAttachments_Call) RunAndReturn(run func(ctx context.Context, domain1 string) []domain.Attachment) *MockContainerService_ListAttachments_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListNetworks provides a mock function for the type MockContainerService
+func (_mock *MockContainerService) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListNetworks")
+	}
+
+	var r0 []*domain.NetworkInfo
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]*domain.NetworkInfo, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []*domain.NetworkInfo); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*domain.NetworkInfo)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerService_ListNetworks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListNetworks'
+type MockContainerService_ListNetworks_Call struct {
+	*mock.Call
+}
+
+// ListNetworks is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockContainerService_Expecter) ListNetworks(ctx interface{}) *MockContainerService_ListNetworks_Call {
+	return &MockContainerService_ListNetworks_Call{Call: _e.mock.On("ListNetworks", ctx)}
+}
+
+func (_c *MockContainerService_ListNetworks_Call) Run(run func(ctx context.Context)) *MockContainerService_ListNetworks_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerService_ListNetworks_Call) Return(networkInfos []*domain.NetworkInfo, err error) *MockContainerService_ListNetworks_Call {
+	_c.Call.Return(networkInfos, err)
+	return _c
+}
+
+func (_c *MockContainerService_ListNetworks_Call) RunAndReturn(run func(ctx context.Context) ([]*domain.NetworkInfo, error)) *MockContainerService_ListNetworks_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListRoutesWithDetails provides a mock function for the type MockContainerService
+func (_mock *MockContainerService) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListRoutesWithDetails")
+	}
+
+	var r0 []domain.RouteInfo
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []domain.RouteInfo); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]domain.RouteInfo)
+		}
+	}
+	return r0
+}
+
+// MockContainerService_ListRoutesWithDetails_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListRoutesWithDetails'
+type MockContainerService_ListRoutesWithDetails_Call struct {
+	*mock.Call
+}
+
+// ListRoutesWithDetails is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockContainerService_Expecter) ListRoutesWithDetails(ctx interface{}) *MockContainerService_ListRoutesWithDetails_Call {
+	return &MockContainerService_ListRoutesWithDetails_Call{Call: _e.mock.On("ListRoutesWithDetails", ctx)}
+}
+
+func (_c *MockContainerService_ListRoutesWithDetails_Call) Run(run func(ctx context.Context)) *MockContainerService_ListRoutesWithDetails_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerService_ListRoutesWithDetails_Call) Return(routeInfos []domain.RouteInfo) *MockContainerService_ListRoutesWithDetails_Call {
+	_c.Call.Return(routeInfos)
+	return _c
+}
+
+func (_c *MockContainerService_ListRoutesWithDetails_Call) RunAndReturn(run func(ctx context.Context) []domain.RouteInfo) *MockContainerService_ListRoutesWithDetails_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Remove provides a mock function for the type MockContainerService
 func (_mock *MockContainerService) Remove(ctx context.Context, containerID string, force bool) error {
 	ret := _mock.Called(ctx, containerID, force)
