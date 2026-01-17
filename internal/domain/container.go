@@ -27,6 +27,7 @@ type Attachment struct {
 	Image       string
 	ContainerID string
 	Status      string
+	Network     string
 }
 
 // RouteInfo combines route configuration with runtime state.
