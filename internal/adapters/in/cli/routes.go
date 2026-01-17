@@ -169,13 +169,15 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 		displayNetwork := truncateNetwork(route.Network, networkColWidth)
 		rows = append(rows, []string{route.Domain, displayImage, displayNetwork, containerBadge, httpStatus})
 
-		for _, attachment := range route.Attachments {
-			// Use container icon with indent for attachment tree display
-			attachmentName := "  " + styles.IconContainer + " " + attachment.Name
-			// Use rune count for proper Unicode handling (icons are multi-byte)
-			runes := []rune(attachmentName)
-			if len(runes) > 25 {
-				attachmentName = string(runes[:22]) + "..."
+		for i, attachment := range route.Attachments {
+			// ASCII tree structure for nested attachments
+			prefix := "├─"
+			if i == len(route.Attachments)-1 {
+				prefix = "└─"
+			}
+			attachmentName := prefix + " " + attachment.Name
+			if len(attachmentName) > 25 {
+				attachmentName = attachmentName[:22] + "..."
 			}
 			attachmentStatus := components.ContainerStatusBadge(attachment.Status)
 			attachmentImage := truncateImage(attachment.Image, imageColWidth)
