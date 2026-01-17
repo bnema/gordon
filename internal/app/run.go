@@ -210,9 +210,15 @@ func initLogger(cfg Config) (zerowrap.Logger, func(), error) {
 	}
 
 	if cfg.Logging.File.Enabled {
+		logPath := cfg.Logging.File.Path
+		if logPath == "" {
+			// Default to {data_dir}/logs/gordon.log
+			logPath = filepath.Join(cfg.Server.DataDir, "logs", "gordon.log")
+		}
+
 		log, cleanup, err := zerowrap.NewWithFile(logConfig, zerowrap.FileConfig{
 			Enabled:    true,
-			Path:       cfg.Logging.File.Path,
+			Path:       logPath,
 			MaxSize:    cfg.Logging.File.MaxSize,
 			MaxBackups: cfg.Logging.File.MaxBackups,
 			MaxAge:     cfg.Logging.File.MaxAge,
@@ -317,6 +323,10 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 	// Create log service for accessing logs via admin API
 	logFilePath := cfg.Logging.File.Path
+	if logFilePath == "" && cfg.Logging.File.Enabled {
+		// Default to {data_dir}/logs/gordon.log when file logging enabled but no path specified
+		logFilePath = filepath.Join(cfg.Server.DataDir, "logs", "gordon.log")
+	}
 	logSvc := logs.NewService(logFilePath, svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API

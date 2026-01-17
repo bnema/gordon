@@ -63,16 +63,38 @@ func newTokenGenerateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "generate",
 		Short: "Generate a new authentication token",
-		Long: `Generate a new JWT authentication token for registry access.
+		Long: `Generate a new JWT authentication token for registry and/or admin access.
 
 The token will be stored in the configured secrets backend and can be used
 for docker login as: docker login -u <subject> -p <token>
 
-Expiry supports human-friendly durations:
-  - d (days):   1d = 24 hours
-  - w (weeks):  1w = 7 days
-  - M (months): 1M = 30 days
-  - y (years):  1y = 365 days
+SCOPES:
+
+Registry scopes (for Docker push/pull):
+  push              Push images to registry
+  pull              Pull images from registry
+
+Admin scopes (for remote CLI access):
+  Format: admin:<resource>:<actions>
+
+  Resources: routes, secrets, config, status, * (all)
+  Actions:   read, write, * (all)
+
+  Examples:
+    admin:*:*              Full admin access (recommended for CLI)
+    admin:routes:read      Read-only routes access
+    admin:status:read      Read-only status access
+
+Combined examples:
+  --scopes "push,pull"                Registry only (default)
+  --scopes "admin:*:*"                Admin CLI only
+  --scopes "push,pull,admin:*:*"      Registry + full admin
+
+EXPIRY:
+
+Supports human-friendly durations:
+  d (days):   1d = 24 hours      w (weeks):  1w = 7 days
+  M (months): 1M = 30 days       y (years):  1y = 365 days
 
 Examples: 1y, 30d, 2w, 6M, 1y6M, 2w3d
 Use --expiry=0 for a token that never expires (useful for CI).`,
@@ -111,19 +133,33 @@ func newTokenListCmd() *cobra.Command {
 
 // newTokenRevokeCmd creates the token revoke command.
 func newTokenRevokeCmd() *cobra.Command {
-	var configPath string
+	var (
+		configPath string
+		all        bool
+	)
 
 	cmd := &cobra.Command{
-		Use:   "revoke <token-id>",
-		Short: "Revoke an authentication token",
-		Long:  `Revoke a token by its ID. The token will no longer be valid for authentication.`,
-		Args:  cobra.ExactArgs(1),
+		Use:   "revoke [token-id]",
+		Short: "Revoke authentication token(s)",
+		Long: `Revoke a token by its ID, or all tokens with --all.
+
+Examples:
+  gordon auth token revoke abc123-def456    Revoke specific token
+  gordon auth token revoke --all            Revoke all tokens`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if all {
+				return runTokenRevokeAll(configPath)
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("token ID required (or use --all to revoke all tokens)")
+			}
 			return runTokenRevoke(args[0], configPath)
 		},
 	}
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	cmd.Flags().BoolVar(&all, "all", false, "Revoke all tokens")
 
 	return cmd
 }
@@ -311,6 +347,33 @@ func runTokenRevoke(tokenID, configPath string) error {
 	}
 
 	fmt.Printf("Token %s has been revoked.\n", tokenID)
+	return nil
+}
+
+// runTokenRevokeAll revokes all tokens.
+func runTokenRevokeAll(configPath string) error {
+	cfg, err := loadAuthConfig(configPath)
+	if err != nil {
+		return err
+	}
+
+	log := zerowrap.New(zerowrap.Config{Level: "warn"})
+	authSvc, err := createAuthServiceForCLI(cfg, log)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	count, err := authSvc.RevokeAllTokens(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to revoke tokens: %w", err)
+	}
+
+	if count == 0 {
+		fmt.Println("No tokens to revoke.")
+	} else {
+		fmt.Printf("Revoked %d token(s).\n", count)
+	}
 	return nil
 }
 
