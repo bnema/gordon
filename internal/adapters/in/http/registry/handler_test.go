@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/bnema/zerowrap"
@@ -31,6 +32,19 @@ func TestHandler_Base(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "registry/2.0", rec.Header().Get("Docker-Distribution-API-Version"))
+}
+
+func TestHandler_NotFound(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(registrySvc, testLogger())
+
+	req := httptest.NewRequest("GET", "/v2/unknown/path", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestHandler_GetManifest_Success(t *testing.T) {
@@ -94,6 +108,134 @@ func TestHandler_GetManifest_NotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+}
+
+func TestHandler_GetManifest_NestedName(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(registrySvc, testLogger())
+
+	manifestData := []byte(`{"schemaVersion": 2}`)
+	registrySvc.EXPECT().GetManifest(mock.Anything, "org/project/app", "v1.0").Return(&domain.Manifest{
+		Name:        "org/project/app",
+		Reference:   "v1.0",
+		ContentType: "application/vnd.docker.distribution.manifest.v2+json",
+		Data:        manifestData,
+	}, nil)
+
+	req := httptest.NewRequest("GET", "/v2/org/project/app/manifests/v1.0", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHandler_PutManifest_Success(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(registrySvc, testLogger())
+
+	manifestData := []byte(`{"schemaVersion": 2}`)
+	registrySvc.EXPECT().PutManifest(mock.Anything, mock.MatchedBy(func(m *domain.Manifest) bool {
+		return m.Name == "myapp" && m.Reference == "latest" && m.ContentType == "application/vnd.docker.distribution.manifest.v2+json"
+	})).Return("sha256:abc123", nil)
+
+	req := httptest.NewRequest("PUT", "/v2/myapp/manifests/latest", bytes.NewReader(manifestData))
+	req.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, "sha256:abc123", rec.Header().Get("Docker-Content-Digest"))
+	assert.Contains(t, rec.Header().Get("Location"), "/v2/myapp/manifests/latest")
+}
+
+func TestHandler_PutManifest_MissingContentType(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(registrySvc, testLogger())
+
+	manifestData := []byte(`{"schemaVersion": 2}`)
+
+	req := httptest.NewRequest("PUT", "/v2/myapp/manifests/latest", bytes.NewReader(manifestData))
+	// No Content-Type header
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestHandler_PutManifest_StorageError(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(registrySvc, testLogger())
+
+	manifestData := []byte(`{"schemaVersion": 2}`)
+	registrySvc.EXPECT().PutManifest(mock.Anything, mock.Anything).Return("", assert.AnError)
+
+	req := httptest.NewRequest("PUT", "/v2/myapp/manifests/latest", bytes.NewReader(manifestData))
+	req.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestHandler_ManifestRoutes_MethodNotAllowed(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(registrySvc, testLogger())
+
+	req := httptest.NewRequest("DELETE", "/v2/myapp/manifests/latest", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestHandler_GetBlob_Success(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(registrySvc, testLogger())
+
+	// Create a temp file for http.ServeFile
+	tmpFile, err := os.CreateTemp("", "blob-*")
+	assert.NoError(t, err)
+	defer tmpFile.Close()
+
+	blobContent := []byte("blob content here")
+	_, err = tmpFile.Write(blobContent)
+	assert.NoError(t, err)
+
+	registrySvc.EXPECT().GetBlobPath(mock.Anything, "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(tmpFile.Name(), nil)
+
+	req := httptest.NewRequest("GET", "/v2/myapp/blobs/sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, blobContent, rec.Body.Bytes())
+}
+
+func TestHandler_GetBlob_NotFound(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(registrySvc, testLogger())
+
+	registrySvc.EXPECT().GetBlobPath(mock.Anything, "sha256:0000000000000000000000000000000000000000000000000000000000000000").Return("", assert.AnError)
+
+	req := httptest.NewRequest("GET", "/v2/myapp/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestHandler_BlobRoutes_MethodNotAllowed(t *testing.T) {
