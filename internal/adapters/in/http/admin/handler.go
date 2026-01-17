@@ -122,30 +122,48 @@ func (h *Handler) handleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/admin")
 
 	// Route to appropriate handler
-	switch {
-	case path == "/attachments" || strings.HasPrefix(path, "/attachments/"):
-		h.handleAttachmentsConfig(w, r, path)
-	case path == "/routes" || strings.HasPrefix(path, "/routes/"):
-		h.handleRoutes(w, r, path)
-	case path == "/networks":
-		h.handleNetworks(w, r)
-	case path == "/secrets" || strings.HasPrefix(path, "/secrets/"):
-		h.handleSecrets(w, r, path)
-	case path == "/deploy" || strings.HasPrefix(path, "/deploy/"):
-		h.handleDeploy(w, r, path)
-	case path == "/logs" || strings.HasPrefix(path, "/logs/"):
-		h.handleLogs(w, r, path)
-	case path == "/status":
-		h.handleStatus(w, r)
-	case path == "/health":
-		h.handleHealth(w, r)
-	case path == "/reload":
-		h.handleReload(w, r)
-	case path == "/config":
-		h.handleConfig(w, r)
-	default:
-		h.sendError(w, http.StatusNotFound, "route not found")
+	if handler, ok := h.matchRoute(path); ok {
+		handler(w, r, path)
+		return
 	}
+	h.sendError(w, http.StatusNotFound, "route not found")
+}
+
+// routeHandler is the signature for path-based route handlers.
+type routeHandler func(w http.ResponseWriter, r *http.Request, path string)
+
+// matchRoute returns the handler for a given path, or false if not found.
+func (h *Handler) matchRoute(path string) (routeHandler, bool) {
+	// Exact match routes
+	exactRoutes := map[string]routeHandler{
+		"/networks": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
+		"/status":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
+		"/health":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
+		"/reload":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
+		"/config":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
+	}
+	if handler, ok := exactRoutes[path]; ok {
+		return handler, true
+	}
+
+	// Prefix match routes
+	prefixRoutes := []struct {
+		prefix  string
+		handler routeHandler
+	}{
+		{"/attachments", h.handleAttachmentsConfig},
+		{"/routes", h.handleRoutes},
+		{"/secrets", h.handleSecrets},
+		{"/deploy", h.handleDeploy},
+		{"/logs", h.handleLogs},
+	}
+	for _, route := range prefixRoutes {
+		if path == route.prefix || strings.HasPrefix(path, route.prefix+"/") {
+			return route.handler, true
+		}
+	}
+
+	return nil, false
 }
 
 // sendJSON sends a JSON response.
