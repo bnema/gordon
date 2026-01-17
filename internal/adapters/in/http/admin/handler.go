@@ -11,6 +11,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"gordon/internal/adapters/dto"
 	"gordon/internal/boundaries/in"
 	"gordon/internal/boundaries/out"
 	"gordon/internal/domain"
@@ -34,20 +35,34 @@ type Handler struct {
 	log          zerowrap.Logger
 }
 
-type routeInfoResponse struct {
-	Domain          string               `json:"domain"`
-	Image           string               `json:"image"`
-	ContainerID     string               `json:"container_id"`
-	ContainerStatus string               `json:"container_status"`
-	Network         string               `json:"network"`
-	Attachments     []attachmentResponse `json:"attachments"`
+// Type aliases for API responses using shared DTO types.
+type routeInfoResponse = dto.RouteInfo
+type attachmentResponse = dto.Attachment
+
+// toAttachmentResponse converts a domain.Attachment to a dto.Attachment.
+func toAttachmentResponse(a domain.Attachment) dto.Attachment {
+	return dto.Attachment{
+		Name:        a.Name,
+		Image:       a.Image,
+		ContainerID: a.ContainerID,
+		Status:      a.Status,
+	}
 }
 
-type attachmentResponse struct {
-	Name        string `json:"name"`
-	Image       string `json:"image"`
-	ContainerID string `json:"container_id"`
-	Status      string `json:"status"`
+// toRouteInfoResponse converts a domain.RouteInfo to a dto.RouteInfo.
+func toRouteInfoResponse(r domain.RouteInfo) dto.RouteInfo {
+	attachments := make([]dto.Attachment, 0, len(r.Attachments))
+	for _, a := range r.Attachments {
+		attachments = append(attachments, toAttachmentResponse(a))
+	}
+	return dto.RouteInfo{
+		Domain:          r.Domain,
+		Image:           r.Image,
+		ContainerID:     r.ContainerID,
+		ContainerStatus: r.ContainerStatus,
+		Network:         r.Network,
+		Attachments:     attachments,
+	}
 }
 
 // NewHandler creates a new admin HTTP handler.
@@ -152,7 +167,7 @@ func (h *Handler) handleRoutes(w http.ResponseWriter, r *http.Request, path stri
 	case http.MethodDelete:
 		h.handleRoutesDelete(w, r, routeDomain)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -170,23 +185,7 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 			routes := h.containerSvc.ListRoutesWithDetails(ctx)
 			response := make([]routeInfoResponse, 0, len(routes))
 			for _, route := range routes {
-				attachments := make([]attachmentResponse, 0, len(route.Attachments))
-				for _, attachment := range route.Attachments {
-					attachments = append(attachments, attachmentResponse{
-						Name:        attachment.Name,
-						Image:       attachment.Image,
-						ContainerID: attachment.ContainerID,
-						Status:      attachment.Status,
-					})
-				}
-				response = append(response, routeInfoResponse{
-					Domain:          route.Domain,
-					Image:           route.Image,
-					ContainerID:     route.ContainerID,
-					ContainerStatus: route.ContainerStatus,
-					Network:         route.Network,
-					Attachments:     attachments,
-				})
+				response = append(response, toRouteInfoResponse(route))
 			}
 			h.sendJSON(w, http.StatusOK, map[string]any{"routes": response})
 			return
@@ -206,12 +205,7 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		attachments := h.containerSvc.ListAttachments(ctx, parentDomain)
 		response := make([]attachmentResponse, 0, len(attachments))
 		for _, attachment := range attachments {
-			response = append(response, attachmentResponse{
-				Name:        attachment.Name,
-				Image:       attachment.Image,
-				ContainerID: attachment.ContainerID,
-				Status:      attachment.Status,
-			})
+			response = append(response, toAttachmentResponse(attachment))
 		}
 		h.sendJSON(w, http.StatusOK, map[string]any{"attachments": response})
 		return
@@ -331,7 +325,7 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 
 func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -433,7 +427,7 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 		h.sendJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -441,7 +435,7 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 // Returns detailed health status for all routes including HTTP probe results.
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -473,7 +467,7 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 // handleStatus handles /admin/status endpoint.
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -515,7 +509,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 // This reloads configuration from file into memory and triggers container sync.
 func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -550,7 +544,7 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 // handleConfig handles /admin/config endpoint.
 func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -587,7 +581,7 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 // POST triggers a deployment for the specified domain.
 func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -635,7 +629,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 // GET /admin/logs/:domain - Container logs for a specific domain
 func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 

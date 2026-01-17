@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"gordon/internal/adapters/dto"
 	"gordon/internal/domain"
 )
 
@@ -119,21 +120,9 @@ func parseResponse(resp *http.Response, target any) error {
 
 // Routes API
 
-type RouteInfo struct {
-	Domain          string       `json:"domain"`
-	Image           string       `json:"image"`
-	ContainerID     string       `json:"container_id"`
-	ContainerStatus string       `json:"container_status"`
-	Network         string       `json:"network"`
-	Attachments     []Attachment `json:"attachments"`
-}
-
-type Attachment struct {
-	Name        string `json:"name"`
-	Image       string `json:"image"`
-	ContainerID string `json:"container_id"`
-	Status      string `json:"status"`
-}
+// Type aliases for API types using shared DTO package.
+type RouteInfo = dto.RouteInfo
+type Attachment = dto.Attachment
 
 // ListRoutes returns all configured routes.
 func (c *Client) ListRoutes(ctx context.Context) ([]domain.Route, error) {
@@ -188,6 +177,9 @@ func (c *Client) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error
 
 // ListAttachments returns attachments for a domain.
 func (c *Client) ListAttachments(ctx context.Context, routeDomain string) ([]Attachment, error) {
+	if routeDomain == "" {
+		return nil, fmt.Errorf("domain is required")
+	}
 	path := "/routes/" + url.PathEscape(routeDomain) + "/attachments"
 	resp, err := c.request(ctx, http.MethodGet, path, nil)
 	if err != nil {
