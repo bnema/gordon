@@ -11,6 +11,10 @@ In-depth guides for specific Gordon setups and integrations.
 
 - [Cloudflare DNS & Proxy Setup](./cloudflare-setup.md) - HTTPS termination with Cloudflare
 
+## Remote Management
+
+- [Remote CLI Management](./remote-cli.md) - Manage Gordon instances remotely
+
 ## Secrets Management
 
 - [Using Pass for Secrets](./secrets-pass.md) - Unix password manager integration

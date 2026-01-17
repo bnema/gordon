@@ -153,7 +153,7 @@ Gordon creates a default configuration on first run:
 
 ```bash
 # Run once to generate config, then stop
-gordon start
+gordon serve
 # Press Ctrl+C
 
 # Edit configuration
@@ -166,7 +166,7 @@ Minimum required configuration:
 [server]
 port = 8080
 registry_port = 5000
-registry_domain = "registry.yourdomain.com"
+gordon_domain = "gordon.yourdomain.com"
 
 [routes]
 "app.yourdomain.com" = "myapp:latest"
@@ -189,7 +189,7 @@ After=podman.socket
 Type=simple
 Restart=always
 RestartSec=5
-ExecStart=/usr/local/bin/gordon start
+ExecStart=/usr/local/bin/gordon serve
 
 [Install]
 WantedBy=default.target
@@ -219,7 +219,7 @@ Requires=docker.service
 Type=simple
 Restart=always
 RestartSec=5
-ExecStart=/usr/local/bin/gordon start
+ExecStart=/usr/local/bin/gordon serve
 User=root
 
 [Install]

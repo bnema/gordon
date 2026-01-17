@@ -2,11 +2,14 @@
 package docker
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -264,7 +267,7 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 			ID:     c.ID,
 			Image:  c.Image,
 			Name:   name,
-			Status: c.Status,
+			Status: c.State, // Use State (e.g., "running") not Status (e.g., "Up 2 days")
 			Ports:  ports,
 			Labels: c.Labels,
 		})
@@ -619,8 +622,40 @@ func (r *Runtime) GetImageExposedPorts(ctx context.Context, imageRef string) ([]
 		return nil, fmt.Errorf("no EXPOSE directives found in image %s - please add EXPOSE directive to Dockerfile", imageRef)
 	}
 
+	// Sort ports with HTTP-friendly ports first (avoid SSH port 22, etc.)
+	// Priority: 80, 8080, 3000, 8000, 5000, then others sorted ascending
+	sortPortsHTTPFirst(ports)
+
 	log.Info().Ints("exposed_ports", ports).Msg("found exposed ports in image")
 	return ports, nil
+}
+
+// sortPortsHTTPFirst sorts ports with common HTTP ports first, avoiding SSH (22).
+func sortPortsHTTPFirst(ports []int) {
+	priority := map[int]int{
+		80: 0, 443: 1, 8080: 2, 3000: 3, 8000: 4, 5000: 5, 9000: 6,
+	}
+	sort.Slice(ports, func(i, j int) bool {
+		pi, oki := priority[ports[i]]
+		pj, okj := priority[ports[j]]
+		if oki && okj {
+			return pi < pj
+		}
+		if oki {
+			return true
+		}
+		if okj {
+			return false
+		}
+		// Neither is a priority port - sort ascending but push 22 to the end
+		if ports[i] == 22 {
+			return false
+		}
+		if ports[j] == 22 {
+			return true
+		}
+		return ports[i] < ports[j]
+	})
 }
 
 // GetContainerExposedPorts gets all exposed ports from a running container.
@@ -1017,4 +1052,110 @@ func (r *Runtime) DisconnectContainerFromNetwork(ctx context.Context, containerN
 
 	log.Info().Msg("container disconnected from network")
 	return nil
+}
+
+// CopyFromContainer copies a file from a container to the host.
+// Returns the file contents as a byte slice.
+func (r *Runtime) CopyFromContainer(ctx context.Context, containerID, srcPath string) ([]byte, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "docker",
+		zerowrap.FieldAction:   "CopyFromContainer",
+		zerowrap.FieldEntityID: containerID,
+		"src_path":             srcPath,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	reader, _, err := r.client.CopyFromContainer(ctx, containerID, srcPath)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to copy from container")
+	}
+	defer reader.Close()
+
+	// The response is a tar archive - we need to extract the file
+	data, err := extractFileFromTar(reader, srcPath)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to extract file from tar")
+	}
+
+	log.Debug().Int("size", len(data)).Msg("file copied from container")
+	return data, nil
+}
+
+// extractFileFromTar extracts a single file from a tar archive.
+func extractFileFromTar(reader io.Reader, targetPath string) ([]byte, error) {
+	tr := tar.NewReader(reader)
+
+	// The path in the tar may be relative or absolute
+	// We need to match based on the filename
+	targetName := filepath.Base(targetPath)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		// Check if this is our target file
+		if header.Typeflag == tar.TypeReg {
+			headerName := filepath.Base(header.Name)
+			if headerName == targetName {
+				data, err := io.ReadAll(tr)
+				if err != nil {
+					return nil, err
+				}
+				return data, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("file not found in container: %s", targetPath)
+}
+
+// ExtractEnvFileFromImage extracts an env file from an image.
+// This creates a temporary container, copies the file, and removes the container.
+func (r *Runtime) ExtractEnvFileFromImage(ctx context.Context, imageRef, envFilePath string) ([]byte, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "ExtractEnvFileFromImage",
+		"image":               imageRef,
+		"env_file":            envFilePath,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	log.Info().Msg("extracting env file from image")
+
+	// Create a temporary container without starting it
+	containerConfig := &container.Config{
+		Image: imageRef,
+		Cmd:   []string{"true"}, // Dummy command
+	}
+
+	resp, err := r.client.ContainerCreate(ctx, containerConfig, nil, nil, nil, "")
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to create temporary container")
+	}
+
+	tempContainerID := resp.ID
+	log.Debug().Str("temp_container_id", tempContainerID).Msg("created temporary container")
+
+	// Ensure cleanup
+	defer func() {
+		if err := r.client.ContainerRemove(ctx, tempContainerID, container.RemoveOptions{Force: true}); err != nil {
+			log.Warn().Err(err).Str("temp_container_id", tempContainerID).Msg("failed to remove temporary container")
+		}
+	}()
+
+	// Copy the env file from the container
+	data, err := r.CopyFromContainer(ctx, tempContainerID, envFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info().Int("size", len(data)).Msg("env file extracted from image")
+	return data, nil
 }

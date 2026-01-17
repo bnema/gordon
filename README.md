@@ -27,6 +27,8 @@ Build on your machine, push to deploy. Works from your laptop or CI.
 - Private Docker registry on your VPS
 - Domain-to-container routing via HTTP reverse proxy
 - Automatic deployment on image push
+- Auto-routing from image labels
+- Remote CLI management
 - Zero downtime updates
 - Persistent volumes from Dockerfile VOLUME directives
 - Environment variable management with secrets support
@@ -48,7 +50,7 @@ curl -fsSL https://gordon.bnema.dev/install.sh | sh
 # Or: curl -fsSL https://raw.githubusercontent.com/bnema/gordon/main/install.sh | sh
 
 # Start Gordon (generates config on first run)
-gordon start
+gordon serve
 ```
 
 Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started guide](https://gordon.bnema.dev/docs/getting-started) for complete setup instructions.

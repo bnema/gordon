@@ -3,6 +3,8 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"io"
 
 	"github.com/bnema/zerowrap"
@@ -54,8 +56,8 @@ func (s *Service) GetManifest(ctx context.Context, name, reference string) (*dom
 	}, nil
 }
 
-// PutManifest stores a manifest.
-func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) error {
+// PutManifest stores a manifest and returns the calculated digest.
+func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "PutManifest",
@@ -64,8 +66,11 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) er
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	// Calculate digest
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(manifest.Data))
+
 	if err := s.manifestStorage.PutManifest(manifest.Name, manifest.Reference, manifest.ContentType, manifest.Data); err != nil {
-		return log.WrapErr(err, "failed to store manifest")
+		return "", log.WrapErr(err, "failed to store manifest")
 	}
 
 	// Publish image pushed event
@@ -80,8 +85,8 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) er
 		}
 	}
 
-	log.Info().Msg("manifest stored")
-	return nil
+	log.Info().Str("digest", digest).Msg("manifest stored")
+	return digest, nil
 }
 
 // DeleteManifest removes a manifest.
@@ -117,6 +122,23 @@ func (s *Service) GetBlob(ctx context.Context, digest string) (io.ReadCloser, er
 	}
 
 	return reader, nil
+}
+
+// GetBlobPath returns the filesystem path to a blob for direct serving.
+func (s *Service) GetBlobPath(ctx context.Context, digest string) (string, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "GetBlobPath",
+		"digest":              digest,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	path, err := s.blobStorage.GetBlobPath(digest)
+	if err != nil {
+		return "", log.WrapErr(err, "failed to get blob path")
+	}
+
+	return path, nil
 }
 
 // PutBlob stores a blob with the given digest.
@@ -158,6 +180,25 @@ func (s *Service) StartUpload(ctx context.Context, name string) (string, error) 
 
 	log.Info().Str("uuid", uuid).Msg("blob upload started")
 	return uuid, nil
+}
+
+// AppendBlobChunk appends data to an in-progress blob upload.
+func (s *Service) AppendBlobChunk(ctx context.Context, name, uuid string, chunk []byte) (int64, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "AppendBlobChunk",
+		"name":                name,
+		"uuid":                uuid,
+		zerowrap.FieldSize:    len(chunk),
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	length, err := s.blobStorage.AppendBlobChunk(name, uuid, chunk)
+	if err != nil {
+		return 0, log.WrapErr(err, "failed to append blob chunk")
+	}
+
+	return length, nil
 }
 
 // FinishUpload completes a blob upload.
