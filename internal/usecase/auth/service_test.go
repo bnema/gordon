@@ -755,3 +755,64 @@ func TestService_GeneratePasswordHash_DifferentHashesForSamePassword(t *testing.
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash1), []byte(password)))
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash2), []byte(password)))
 }
+
+func TestService_GenerateToken_HasNbfClaim(t *testing.T) {
+	// Test that generated tokens include the nbf (not-before) claim
+	// This is a security requirement per SEC-MED-006
+	tokenStore := mocks.NewMockTokenStore(t)
+
+	tokenStore.EXPECT().
+		SaveToken(mock.Anything, mock.Anything, mock.Anything).
+		Return(nil)
+
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+
+	ctx := testContext()
+	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push"}, time.Hour)
+	require.NoError(t, err)
+
+	// Parse the token to verify nbf claim
+	claims, err := svc.parseTokenClaims(tokenStr)
+	require.NoError(t, err)
+
+	// Verify nbf claim exists and is valid
+	nbf, ok := claims["nbf"].(float64)
+	require.True(t, ok, "nbf claim should exist and be a number")
+
+	iat, ok := claims["iat"].(float64)
+	require.True(t, ok, "iat claim should exist")
+
+	// nbf should equal iat for immediate validity
+	assert.Equal(t, iat, nbf, "nbf should equal iat")
+	assert.InDelta(t, time.Now().Unix(), int64(nbf), 5, "nbf should be current time")
+}
+
+func TestService_GenerateAccessToken_HasNbfClaim(t *testing.T) {
+	// Test that access tokens also include the nbf claim
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, nil, zerowrap.Default())
+
+	ctx := testContext()
+	tokenStr, err := svc.GenerateAccessToken(ctx, "testsubject", []string{"pull"}, time.Minute)
+	require.NoError(t, err)
+
+	// Parse the token to verify nbf claim
+	claims, err := svc.parseTokenClaims(tokenStr)
+	require.NoError(t, err)
+
+	// Verify nbf claim exists
+	nbf, ok := claims["nbf"].(float64)
+	require.True(t, ok, "nbf claim should exist and be a number")
+
+	iat, ok := claims["iat"].(float64)
+	require.True(t, ok, "iat claim should exist")
+
+	assert.Equal(t, iat, nbf, "nbf should equal iat for access tokens")
+}
