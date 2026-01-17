@@ -29,23 +29,38 @@ func truncateImage(image string, maxLen int) string {
 		if len(digest) > 12 {
 			digest = digest[:12]
 		}
-		short := fmt.Sprintf("%s@sha256:%s…", name, digest)
+		short := fmt.Sprintf("%s@sha256:%s", name, digest)
 		if len(short) > maxLen {
-			// Truncate name if still too long
-			available := maxLen - len("@sha256:") - 12 - 1 // 1 for ellipsis
-			if available > 3 {
-				name = name[:available-1] + "…"
+			// Truncate from the end to maintain valid reference format
+			if maxLen <= 3 {
+				return short[:maxLen]
 			}
-			short = fmt.Sprintf("%s@sha256:%s…", name, digest)
+			return short[:maxLen-3] + "..."
 		}
 		return short
 	}
 
 	// Regular tag: truncate if needed
 	if len(image) > maxLen {
-		return image[:maxLen-1] + "…"
+		if maxLen <= 3 {
+			return image[:maxLen]
+		}
+		return image[:maxLen-3] + "..."
 	}
 	return image
+}
+
+func truncateNetwork(network string, maxLen int) string {
+	if network == "" || network == "-" {
+		return "-"
+	}
+	if len(network) > maxLen {
+		if maxLen <= 3 {
+			return network[:maxLen]
+		}
+		return network[:maxLen-3] + "..."
+	}
+	return network
 }
 
 // newRoutesCmd creates the routes command group.
@@ -107,7 +122,7 @@ func newRoutesListCmd() *cobra.Command {
 
 // runRoutesListRemote lists routes from a remote Gordon instance.
 func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
-	routes, err := client.ListRoutes(ctx)
+	routes, err := client.ListRoutesWithDetails(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list routes: %w", err)
 	}
@@ -123,16 +138,20 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 		health = make(map[string]*remote.RouteHealth)
 	}
 
-	// Build table rows
 	const imageColWidth = 35
-	rows := make([][]string, len(routes))
-	for i, route := range routes {
+	const networkColWidth = 22
+	rows := make([][]string, 0, len(routes))
+	for _, route := range routes {
 		routeHealth := health[route.Domain]
 
 		// Container status column
-		containerStatus := "unknown"
-		if routeHealth != nil {
-			containerStatus = routeHealth.ContainerStatus
+		containerStatus := route.ContainerStatus
+		if containerStatus == "" {
+			if routeHealth != nil {
+				containerStatus = routeHealth.ContainerStatus
+			} else {
+				containerStatus = "unknown"
+			}
 		}
 		containerBadge := components.ContainerStatusBadge(containerStatus)
 
@@ -140,7 +159,22 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 		httpStatus := formatHTTPStatus(routeHealth)
 
 		displayImage := truncateImage(route.Image, imageColWidth)
-		rows[i] = []string{route.Domain, displayImage, containerBadge, httpStatus}
+		displayNetwork := truncateNetwork(route.Network, networkColWidth)
+		rows = append(rows, []string{route.Domain, displayImage, displayNetwork, containerBadge, httpStatus})
+
+		for i, attachment := range route.Attachments {
+			prefix := "|-"
+			if i == len(route.Attachments)-1 {
+				prefix = "`-"
+			}
+			attachmentName := prefix + " " + attachment.Name
+			if len(attachmentName) > 25 {
+				attachmentName = attachmentName[:22] + "..."
+			}
+			attachmentStatus := components.ContainerStatusBadge(attachment.Status)
+			attachmentImage := truncateImage(attachment.Image, imageColWidth)
+			rows = append(rows, []string{attachmentName, attachmentImage, "-", attachmentStatus, "-"})
+		}
 	}
 
 	// Render table
@@ -148,6 +182,7 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 		components.WithColumns([]components.TableColumn{
 			{Title: "Domain", Width: 25},
 			{Title: "Image", Width: imageColWidth},
+			{Title: "Network", Width: networkColWidth},
 			{Title: "Container", Width: 12},
 			{Title: "HTTP", Width: 14},
 		}),

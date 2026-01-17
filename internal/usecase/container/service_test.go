@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -25,7 +26,7 @@ func TestService_Deploy_Success(t *testing.T) {
 	config := Config{
 		NetworkIsolation: false,
 		VolumeAutoCreate: false,
-		ReadinessDelay:   0, // No delay for tests
+		ReadinessDelay:   time.Millisecond, // Minimal delay for tests
 	}
 
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
@@ -124,7 +125,7 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: 0, // No delay for tests
+		ReadinessDelay: time.Millisecond, // Minimal delay for tests
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -199,7 +200,7 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 	config := Config{
 		NetworkIsolation: true,
 		NetworkPrefix:    "gordon",
-		ReadinessDelay:   0, // No delay for tests
+		ReadinessDelay:   time.Millisecond, // Minimal delay for tests
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -250,7 +251,7 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 	config := Config{
 		VolumeAutoCreate: true,
 		VolumePrefix:     "gordon",
-		ReadinessDelay:   0, // No delay for tests
+		ReadinessDelay:   time.Millisecond, // Minimal delay for tests
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -723,7 +724,7 @@ func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 		RegistryPort:             5000,
 		InternalRegistryUsername: "internal",
 		InternalRegistryPassword: "secret",
-		ReadinessDelay:           0,
+		ReadinessDelay:           time.Millisecond,
 	}
 
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
@@ -791,7 +792,7 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: 0,
+		ReadinessDelay: time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -834,7 +835,7 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: 0,
+		ReadinessDelay: time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -906,7 +907,7 @@ func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: 0, // No delay for tests
+		ReadinessDelay: time.Millisecond, // Minimal delay for tests
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -990,7 +991,7 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: 0, // No delay for tests
+		ReadinessDelay: time.Millisecond, // Minimal delay for tests
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()

@@ -26,6 +26,15 @@ type ContainerService interface {
 	// List returns all managed containers.
 	List(ctx context.Context) map[string]*domain.Container
 
+	// ListRoutesWithDetails returns routes with network and attachment info.
+	ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo
+
+	// ListAttachments returns attachments for a domain.
+	ListAttachments(ctx context.Context, domain string) []domain.Attachment
+
+	// ListNetworks returns Gordon-managed networks.
+	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
+
 	// HealthCheck performs health checks on all containers.
 	HealthCheck(ctx context.Context) map[string]bool
 

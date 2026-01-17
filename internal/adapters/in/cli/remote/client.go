@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"gordon/internal/adapters/dto"
 	"gordon/internal/domain"
 )
 
@@ -119,6 +120,10 @@ func parseResponse(resp *http.Response, target any) error {
 
 // Routes API
 
+// Type aliases for API types using shared DTO package.
+type RouteInfo = dto.RouteInfo
+type Attachment = dto.Attachment
+
 // ListRoutes returns all configured routes.
 func (c *Client) ListRoutes(ctx context.Context) ([]domain.Route, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/routes", nil)
@@ -134,6 +139,61 @@ func (c *Client) ListRoutes(ctx context.Context) ([]domain.Route, error) {
 	}
 
 	return result.Routes, nil
+}
+
+// ListRoutesWithDetails returns routes with network and attachment info.
+func (c *Client) ListRoutesWithDetails(ctx context.Context) ([]RouteInfo, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/routes?detailed=true", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Routes []RouteInfo `json:"routes"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Routes, nil
+}
+
+// ListNetworks returns Gordon-managed networks.
+func (c *Client) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/networks", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Networks []*domain.NetworkInfo `json:"networks"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Networks, nil
+}
+
+// ListAttachments returns attachments for a domain.
+func (c *Client) ListAttachments(ctx context.Context, routeDomain string) ([]Attachment, error) {
+	if routeDomain == "" {
+		return nil, fmt.Errorf("domain is required")
+	}
+	path := "/routes/" + url.PathEscape(routeDomain) + "/attachments"
+	resp, err := c.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Attachments []Attachment `json:"attachments"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Attachments, nil
 }
 
 // GetRoute returns a specific route by domain.
