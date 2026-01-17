@@ -52,6 +52,9 @@ import (
 	"gordon/internal/usecase/proxy"
 	registrySvc "gordon/internal/usecase/registry"
 	secretsSvc "gordon/internal/usecase/secrets"
+
+	// Pkg
+	"gordon/pkg/duration"
 )
 
 // Config holds the application configuration.
@@ -640,7 +643,7 @@ func parseTokenExpiry(expiry string) (time.Duration, error) {
 		return 0, nil
 	}
 
-	parsed, err := time.ParseDuration(expiry)
+	parsed, err := duration.Parse(expiry)
 	if err != nil {
 		return 0, fmt.Errorf("invalid token_expiry: %w", err)
 	}
