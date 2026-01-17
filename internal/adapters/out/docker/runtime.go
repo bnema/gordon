@@ -766,14 +766,25 @@ func (r *Runtime) GetContainerNetwork(ctx context.Context, containerID string) (
 		return "bridge", nil
 	}
 
+	// Priority: gordon-* networks first, then bridge, then any other
 	selected := ""
+	hasBridge := false
 	for name := range networks.Networks {
 		if strings.HasPrefix(name, "gordon-") {
 			selected = name
 			break
 		}
-		if selected == "" {
+		if name == "bridge" {
+			hasBridge = true
+		} else if selected == "" {
 			selected = name
+		}
+	}
+
+	// If no gordon-* network found, prefer bridge over random network
+	if selected == "" || (hasBridge && !strings.HasPrefix(selected, "gordon-")) {
+		if hasBridge {
+			selected = "bridge"
 		}
 	}
 
