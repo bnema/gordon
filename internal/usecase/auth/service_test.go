@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -615,6 +616,65 @@ func TestService_RevokeAllTokens(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, 0, count)
+	})
+
+	t.Run("returns error when ListTokens fails", func(t *testing.T) {
+		tokenStore := mocks.NewMockTokenStore(t)
+
+		tokenStore.EXPECT().
+			ListTokens(mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil })).
+			Return(nil, errors.New("storage unavailable"))
+
+		svc := NewService(Config{
+			Enabled:  true,
+			AuthType: domain.AuthTypeToken,
+		}, tokenStore, zerowrap.Default())
+
+		ctx := testContext()
+		count, err := svc.RevokeAllTokens(ctx)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to list tokens")
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("continues on partial revoke failure", func(t *testing.T) {
+		tokenStore := mocks.NewMockTokenStore(t)
+
+		tokens := []domain.Token{
+			{ID: "token-1", Subject: "user1", Revoked: false},
+			{ID: "token-2", Subject: "user2", Revoked: false},
+			{ID: "token-3", Subject: "user3", Revoked: false},
+		}
+
+		tokenStore.EXPECT().
+			ListTokens(mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil })).
+			Return(tokens, nil)
+
+		// First token succeeds
+		tokenStore.EXPECT().
+			Revoke(mock.Anything, "token-1").
+			Return(nil)
+		// Second token fails
+		tokenStore.EXPECT().
+			Revoke(mock.Anything, "token-2").
+			Return(errors.New("revoke failed"))
+		// Third token succeeds
+		tokenStore.EXPECT().
+			Revoke(mock.Anything, "token-3").
+			Return(nil)
+
+		svc := NewService(Config{
+			Enabled:  true,
+			AuthType: domain.AuthTypeToken,
+		}, tokenStore, zerowrap.Default())
+
+		ctx := testContext()
+		count, err := svc.RevokeAllTokens(ctx)
+
+		// Should not return error, but count only successful revokes
+		require.NoError(t, err)
+		assert.Equal(t, 2, count)
 	})
 }
 
