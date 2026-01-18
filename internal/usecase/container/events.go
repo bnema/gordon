@@ -7,8 +7,8 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/boundaries/in"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // ImagePushedHandler handles image.pushed events.

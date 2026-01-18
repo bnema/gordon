@@ -1,7 +1,7 @@
 package out
 
 import (
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // EventHandler defines the contract for handling events.

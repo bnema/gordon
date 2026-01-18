@@ -9,9 +9,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"gordon/internal/adapters/in/http/middleware"
-	"gordon/internal/adapters/out/ratelimit"
-	outmocks "gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	"github.com/bnema/gordon/internal/adapters/out/ratelimit"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 )
 
 func TestRateLimitMiddleware_Disabled(t *testing.T) {

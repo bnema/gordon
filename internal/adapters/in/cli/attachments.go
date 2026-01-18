@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"gordon/internal/adapters/in/cli/remote"
-	"gordon/internal/adapters/in/cli/ui/components"
-	"gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 
 	"github.com/spf13/cobra"
 )

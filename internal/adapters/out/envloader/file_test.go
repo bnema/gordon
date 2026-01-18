@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 )
 
 func TestFileLoader_ResolveSecrets(t *testing.T) {

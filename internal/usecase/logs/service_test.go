@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"gordon/internal/boundaries/in/mocks"
-	outMocks "gordon/internal/boundaries/out/mocks"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/boundaries/in/mocks"
+	outMocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestService_GetProcessLogs(t *testing.T) {

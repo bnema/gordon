@@ -5,7 +5,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // TargetInvalidator defines the interface for invalidating proxy targets.

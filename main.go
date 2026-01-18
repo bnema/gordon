@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"gordon/internal/adapters/in/cli"
+	"github.com/bnema/gordon/internal/adapters/in/cli"
 )
 
 // Build information set by goreleaser via ldflags

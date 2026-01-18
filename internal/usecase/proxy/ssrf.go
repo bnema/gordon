@@ -6,7 +6,7 @@ import (
 	"net"
 	"sync"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // blockedCIDRStrings contains CIDR blocks that should never be proxied to.

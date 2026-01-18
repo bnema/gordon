@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

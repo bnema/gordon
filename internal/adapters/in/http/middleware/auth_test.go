@@ -12,7 +12,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func testLogger() zerowrap.Logger {

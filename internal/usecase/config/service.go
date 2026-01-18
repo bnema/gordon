@@ -12,8 +12,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 
-	"gordon/internal/boundaries/out"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // Config holds the loaded configuration.

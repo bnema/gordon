@@ -11,7 +11,7 @@ package mocks
 
 import (
 	context "context"
-	runtime "gordon/pkg/runtime"
+	runtime "github.com/bnema/gordon/pkg/runtime"
 	io "io"
 	reflect "reflect"
 

@@ -12,11 +12,11 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/adapters/dto"
-	"gordon/internal/boundaries/in"
-	"gordon/internal/domain"
-	"gordon/pkg/manifest"
-	"gordon/pkg/validation"
+	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/manifest"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 const (

@@ -15,7 +15,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/pkg/validation"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 // BlobStorage implements the BlobStorage interface using the local filesystem.

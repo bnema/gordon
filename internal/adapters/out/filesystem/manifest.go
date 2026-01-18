@@ -8,7 +8,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/pkg/validation"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 // ManifestStorage implements the ManifestStorage interface using the local filesystem.
