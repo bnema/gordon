@@ -27,6 +27,16 @@ token_secret = ""                            # Path in secrets backend to JWT si
 token_expiry = "720h"                        # Token expiry duration (720h = 30 days)
 
 # =============================================================================
+# API (applies to both Registry and Admin endpoints)
+# =============================================================================
+[api.rate_limit]
+enabled = true                               # Enable rate limiting (default: true)
+global_rps = 500                             # Max requests/second globally
+per_ip_rps = 50                              # Max requests/second per client IP
+burst = 100                                  # Burst size for rate limiters
+trusted_proxies = []                         # IPs/CIDRs trusted to set X-Forwarded-For
+
+# =============================================================================
 # LOGGING
 # =============================================================================
 [logging]
@@ -119,6 +129,11 @@ preserve = true                              # Keep volumes when containers are 
 | `auth.type` | `"password"` | Auth type |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |
+| `api.rate_limit.enabled` | `true` | Enable rate limiting |
+| `api.rate_limit.global_rps` | `500` | Global requests/second |
+| `api.rate_limit.per_ip_rps` | `50` | Per-IP requests/second |
+| `api.rate_limit.burst` | `100` | Burst size |
+| `api.rate_limit.trusted_proxies` | `[]` | IPs/CIDRs trusted for X-Forwarded-For |
 | `logging.level` | `"info"` | Log level |
 | `logging.format` | `"console"` | Log format |
 | `logging.file.enabled` | `false` | File logging disabled |
@@ -161,6 +176,20 @@ Nested keys use underscores:
 GORDON_LOGGING_FILE_ENABLED=true
 GORDON_LOGGING_FILE_MAX_SIZE=200
 GORDON_LOGGING_CONTAINER_LOGS_ENABLED=false
+```
+
+### Security Environment Variables
+
+These special environment variables take priority over config file values:
+
+| Variable | Description |
+|----------|-------------|
+| `GORDON_AUTH_TOKEN_SECRET` | JWT signing secret (avoids storing secret on disk) |
+
+Example:
+```bash
+export GORDON_AUTH_TOKEN_SECRET="your-secure-32-char-secret-here"
+gordon serve
 ```
 
 ## Pull Policy Options

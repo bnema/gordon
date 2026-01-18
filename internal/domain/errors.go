@@ -62,6 +62,7 @@ var (
 	ErrInvalidPath       = errors.New("invalid path format")
 	ErrInsufficientScope = errors.New("insufficient scope for operation")
 	ErrInvalidScope      = errors.New("invalid scope format")
+	ErrSSRFBlocked       = errors.New("request to internal/blocked network not allowed")
 
 	// Attachment errors
 	ErrAttachmentNotFound    = errors.New("attachment not found")

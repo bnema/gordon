@@ -47,6 +47,14 @@ secrets_backend = "pass"                 # "pass", "sops", or "unsafe"
 token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"                     # Duration (1y, 30d, 2w) or 0 for never
 
+# API rate limiting
+[api.rate_limit]
+enabled = true                           # Enable rate limiting (default: true)
+global_rps = 500                         # Max requests/second globally
+per_ip_rps = 50                          # Max requests/second per IP
+burst = 100                              # Burst size
+trusted_proxies = []                     # IPs/CIDRs trusted for X-Forwarded-For
+
 # Deploy behavior
 [deploy]
 pull_policy = "if-tag-changed"           # always, if-not-present, if-tag-changed
@@ -111,6 +119,7 @@ enabled = false                          # Auto-create routes from image names
 |---------|-------------|---------------|
 | `[server]` | Core server settings | [Server](./server.md) |
 | `[auth]` | Authentication and secrets backend | [Auth](./auth.md) |
+| `[api.rate_limit]` | Rate limiting configuration | [Rate Limiting](./rate-limiting.md) |
 | `[deploy]` | Deployment behavior | [Deploy](./deploy.md) |
 | `[logging]` | Logging configuration | [Logging](./logging.md) |
 | `[env]` | Environment variable settings | [Environment](./env.md) |
@@ -133,6 +142,11 @@ enabled = false                          # Auto-create routes from image names
 | `auth.type` | `"password"` |
 | `auth.secrets_backend` | `"unsafe"` |
 | `auth.token_expiry` | `"30d"` |
+| `api.rate_limit.enabled` | `true` |
+| `api.rate_limit.global_rps` | `500` |
+| `api.rate_limit.per_ip_rps` | `50` |
+| `api.rate_limit.burst` | `100` |
+| `api.rate_limit.trusted_proxies` | `[]` |
 | `deploy.pull_policy` | `"if-tag-changed"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |

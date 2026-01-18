@@ -52,6 +52,21 @@ token_expiry = "30d"
 | `token_secret` | string | - | Path to JWT signing secret in secrets backend |
 | `token_expiry` | string | `"30d"` | Token validity duration (0 = never expires) |
 
+## Environment Variables
+
+Gordon supports environment variables for sensitive configuration:
+
+| Variable | Description |
+|----------|-------------|
+| `GORDON_AUTH_TOKEN_SECRET` | JWT signing secret (takes priority over config file) |
+
+Using environment variables is recommended for production as it avoids storing secrets on disk:
+
+```bash
+export GORDON_AUTH_TOKEN_SECRET="your-32-character-secret-here"
+gordon serve
+```
+
 ## Secrets Backend
 
 The `secrets_backend` option determines how Gordon retrieves sensitive values like `token_secret` and `password_hash`:

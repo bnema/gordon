@@ -74,19 +74,29 @@ func isAuthenticated(r *http.Request, expectedUsername, expectedPassword string,
 	authenticated := usernameMatch && passwordMatch
 	if !authenticated {
 		log.Debug().
-			Str("provided_username", username).
+			Str("provided_username", redactUsername(username)).
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("authentication failed")
 	} else {
 		log.Debug().
-			Str("username", username).
+			Str("username", redactUsername(username)).
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("authentication successful")
 	}
 
 	return authenticated
+}
+
+// redactUsername partially redacts a username for logging.
+// Shows first and last character with asterisks in between.
+// SECURITY: Prevents full username exposure in logs.
+func redactUsername(username string) string {
+	if len(username) <= 2 {
+		return "***"
+	}
+	return username[:1] + "***" + username[len(username)-1:]
 }
 
 // InternalRegistryAuth holds the credentials used for loopback-only registry access.
@@ -191,7 +201,7 @@ func authenticatePassword(ctx context.Context, r *http.Request, authSvc in.AuthS
 	}
 
 	log.Debug().
-		Str("provided_username", username).
+		Str("provided_username", redactUsername(username)).
 		Str(zerowrap.FieldMethod, r.Method).
 		Str(zerowrap.FieldPath, r.URL.Path).
 		Msg("password authentication failed")
@@ -240,7 +250,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 	if err != nil {
 		log.Debug().
 			Err(err).
-			Str("provided_username", username).
+			Str("provided_username", redactUsername(username)).
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("token-as-password validation failed")
@@ -250,8 +260,8 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 	// Verify the username matches the token subject
 	if claims.Subject != username {
 		log.Debug().
-			Str("provided_username", username).
-			Str("token_subject", claims.Subject).
+			Str("provided_username", redactUsername(username)).
+			Str("token_subject", redactUsername(claims.Subject)).
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("username does not match token subject")
