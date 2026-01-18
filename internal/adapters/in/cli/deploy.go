@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gordon/internal/adapters/in/cli/ui/styles"
-	"gordon/internal/app"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/app"
 )
 
 // newDeployCmd creates the deploy command.

@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	inmocks "gordon/internal/boundaries/in/mocks"
-	"gordon/internal/boundaries/out/mocks"
-	"gordon/internal/domain"
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
+	"github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // domainToEnvFileName tests

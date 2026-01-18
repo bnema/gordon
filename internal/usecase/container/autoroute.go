@@ -14,9 +14,9 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/boundaries/in"
-	"gordon/internal/boundaries/out"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // EnvFileExtractor defines the interface for extracting env files from images.

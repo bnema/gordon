@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"gordon/internal/adapters/dto"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // Client is an HTTP client for the Gordon admin API.

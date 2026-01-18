@@ -7,9 +7,9 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/adapters/dto"
-	"gordon/internal/adapters/in/http/middleware"
-	"gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	"github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // RateLimitMiddleware creates rate limiting middleware for the registry API.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // ProxyService defines the contract for reverse proxy operations.

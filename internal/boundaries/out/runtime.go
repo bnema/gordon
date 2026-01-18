@@ -7,7 +7,7 @@ import (
 	"context"
 	"io"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // ContainerRuntime defines the contract for container runtime operations.

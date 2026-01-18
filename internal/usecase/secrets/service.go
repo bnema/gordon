@@ -8,7 +8,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // Domain validation errors.

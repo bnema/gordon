@@ -13,8 +13,8 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/boundaries/in"
-	"gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // Service implements the LogService interface.

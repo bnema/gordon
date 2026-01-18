@@ -6,7 +6,7 @@ package in
 import (
 	"context"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // HealthService defines the contract for route health checking operations.

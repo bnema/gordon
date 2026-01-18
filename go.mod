@@ -1,6 +1,6 @@
-module gordon
+module github.com/bnema/gordon
 
-go 1.25.5
+go 1.25.6
 
 require (
 	github.com/bnema/zerowrap v1.3.0

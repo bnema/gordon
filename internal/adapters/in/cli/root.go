@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gordon/internal/adapters/in/cli/remote"
-	"gordon/internal/app"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/app"
 )
 
 var (

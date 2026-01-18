@@ -8,8 +8,8 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/boundaries/in"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // maxConcurrentProbes limits the number of concurrent health probes to prevent resource exhaustion.

@@ -2,7 +2,7 @@
 package components
 
 import (
-	"gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"

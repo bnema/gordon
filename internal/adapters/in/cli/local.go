@@ -9,11 +9,11 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/spf13/viper"
 
-	"gordon/internal/adapters/out/domainsecrets"
-	"gordon/internal/app"
-	"gordon/internal/boundaries/in"
-	"gordon/internal/usecase/config"
-	secretsSvc "gordon/internal/usecase/secrets"
+	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
+	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/usecase/config"
+	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 )
 
 // LocalServices provides direct access to local services for CLI operations.

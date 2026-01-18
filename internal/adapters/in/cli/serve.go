@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"gordon/internal/app"
+	"github.com/bnema/gordon/internal/app"
 
 	"github.com/spf13/cobra"
 )
