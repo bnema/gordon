@@ -39,9 +39,6 @@ var proxyTransport = &http.Transport{
 type Config struct {
 	RegistryDomain string
 	RegistryPort   int
-	// ExposeContainerID controls whether to add X-Container-ID header to responses.
-	// Default: false (disabled for security - prevents container enumeration)
-	ExposeContainerID bool
 }
 
 // Service implements the ProxyService interface.
@@ -325,11 +322,6 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 		},
 		func(resp *http.Response) error {
 			resp.Header.Set("X-Proxied-By", "Gordon")
-			// SECURITY: Only expose container ID if explicitly enabled
-			// This prevents container enumeration attacks
-			if s.config.ExposeContainerID && target.ContainerID != "" {
-				resp.Header.Set("X-Container-ID", target.ContainerID)
-			}
 			return nil
 		},
 	)

@@ -151,6 +151,37 @@ gordon remotes add prod https://gordon.mydomain.com --token-env PROD_TOKEN
 | `--token <TOKEN>` | Store token directly in config |
 | `--token-env <VAR>` | Store env variable name (token resolved at runtime) |
 
+#### Authenticate with Password Auth
+
+For servers using password authentication, you can log in interactively:
+
+```bash
+# Login to active remote
+gordon auth login
+
+# Login to specific remote
+gordon auth login --remote prod
+
+# Pre-fill username
+gordon auth login --username admin
+```
+
+This prompts for your username and password, authenticates with the remote server, and stores the returned token automatically.
+
+> **Note:** Only works with servers that have password authentication enabled (`username` + `password_hash` configured). For token-only servers, use `gordon remotes set-token` instead.
+
+#### Set Token Manually
+
+For servers using token-based auth, or to update a token manually:
+
+```bash
+# Set token directly
+gordon remotes set-token prod eyJhbGciOiJIUzI1NiIs...
+
+# Set token from file
+gordon remotes set-token staging $(cat token.txt)
+```
+
 #### Remove a Remote
 
 ```bash

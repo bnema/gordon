@@ -8,11 +8,62 @@ Manage Gordon server authentication tokens and passwords.
 
 | Subcommand | Description |
 |------------|-------------|
+| `login` | Authenticate with a remote Gordon server |
 | `token generate` | Generate a new JWT token |
 | `token list` | List all stored tokens |
 | `token revoke` | Revoke a token by ID (use `--all` to revoke all tokens) |
 | `password hash` | Generate bcrypt password hash |
 | `internal` | Show internal registry credentials |
+
+---
+
+## gordon auth login
+
+Authenticate with a remote Gordon server using password authentication.
+
+```bash
+gordon auth login [options]
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `-r, --remote` | Remote to authenticate with (defaults to active remote) |
+| `-u, --username` | Username for authentication |
+
+### Description
+
+This command prompts for your username and password, authenticates with the remote server's `/auth/password` endpoint, and stores the returned token in your remotes configuration.
+
+The token is a long-lived JWT (7 days) that's used for subsequent CLI operations against the remote.
+
+> **Note:** This command only works with servers that have password authentication configured (`username` + `password_hash`). For token-only servers, use `gordon remotes set-token` instead.
+
+### Examples
+
+```bash
+# Login using active remote
+gordon auth login
+
+# Login to specific remote
+gordon auth login --remote prod
+
+# Pre-fill username
+gordon auth login --username admin
+```
+
+### Output
+
+```
+Username: admin
+Password: ********
+Authenticating with prod...
+
+✓ Authentication successful!
+Token stored for remote 'prod'
+Expires in: 604800 seconds
+```
 
 ---
 
@@ -146,8 +197,9 @@ $2a$10$N9qo8uLOickgx2ZMRZoMye...
 
 Then reference the path in your config:
   [auth]
-  type = "password"
+  username = "deploy"
   password_hash = "gordon/auth/password_hash"
+  token_secret = "gordon/auth/token_secret"
 ```
 
 ---
@@ -253,13 +305,17 @@ gordon auth password hash
 pass insert gordon/auth/password_hash
 # Paste: $2a$10$...
 
+# Create token secret
+pass insert gordon/auth/token_secret
+# Enter a random 32+ character string
+
 # Configure gordon.toml
 [auth]
 enabled = true
-type = "password"
 secrets_backend = "pass"
 username = "deploy"
 password_hash = "gordon/auth/password_hash"
+token_secret = "gordon/auth/token_secret"
 ```
 
 ## Related
