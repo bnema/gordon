@@ -277,6 +277,6 @@ Error: unauthorized: authentication required
 
 ## Related
 
-- [Registry Authentication](../config/registry-auth.md)
+- [Authentication](../config/auth.md)
 - [Deployment Overview](./index.md)
 - [Rollback](./rollback.md)

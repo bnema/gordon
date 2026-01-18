@@ -47,7 +47,7 @@ Gordon runs on your VPS and provides:
 - [Configuration Overview](./config/index.md) - All configuration options
 - [Server Settings](./config/server.md) - Ports, domains, and runtime
 - [Routes](./config/routes.md) - Domain to container mapping
-- [Registry Auth](./config/registry-auth.md) - Password and token authentication
+- [Authentication](./config/auth.md) - Password and token authentication
 - [Secrets](./config/secrets.md) - Secure credential storage
 - [Network Isolation](./config/network-isolation.md) - Per-app network isolation
 - [Attachments](./config/attachments.md) - Service dependencies
@@ -56,7 +56,7 @@ Gordon runs on your VPS and provides:
 
 ### CLI Reference
 
-- [CLI Commands](./cli/commands.md) - All available commands
+- [CLI Commands](./cli/index.md) - All available commands
 
 ### Deployment
 

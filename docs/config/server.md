@@ -68,7 +68,7 @@ This domain is used for:
 - Docker login and image push/pull operations
 - Admin API access (`/admin/*` endpoints)
 - CLI remote targeting (`gordon routes --remote https://gordon.mydomain.com`)
-- Token endpoint for authentication (`/v2/token`)
+- Authentication endpoints (`/auth/*`)
 
 When requests arrive on the proxy port with this domain as the Host header, Gordon routes them to the backend services (registry and admin API).
 

@@ -222,10 +222,10 @@ All configuration options can be set via environment variables with `GORDON_` pr
 | `GORDON_SERVER_REGISTRY_DOMAIN` | Registry domain (required) | `registry.mydomain.com` |
 | `GORDON_SERVER_DATA_DIR` | Data directory | `/data` |
 | `GORDON_LOGGING_LEVEL` | Log level | `debug`, `info`, `warn`, `error` |
-| `GORDON_REGISTRY_AUTH_ENABLED` | Enable registry auth | `true` |
-| `GORDON_REGISTRY_AUTH_USERNAME` | Registry username | `admin` |
+| `GORDON_AUTH_ENABLED` | Enable authentication | `true` |
+| `GORDON_AUTH_USERNAME` | Username for password auth | `admin` |
 
-> **Note**: For registry passwords, using plain `password` is deprecated. Use `password_hash` with a secrets backend instead. See [Registry Auth](/docs/config/registry-auth.md) for secure setup.
+> **Note**: For registry passwords, using plain `password` is deprecated. Use `password_hash` with a secrets backend instead. See [Authentication](/docs/config/auth.md) for secure setup.
 
 ## Using Pass Secrets Backend
 
@@ -365,7 +365,7 @@ Mounting the Docker/Podman socket grants Gordon full access to the container run
 1. **Use a dedicated host**: Run Gordon on a dedicated server or VM
 2. **Limit network exposure**: Only expose ports 80/443 publicly
 3. **Use TLS**: Put Gordon behind a reverse proxy with TLS (Cloudflare, Caddy, nginx)
-4. **Enable registry auth**: Always enable authentication for the registry
+4. **Enable authentication**: Always enable authentication for the registry
 
 ## Troubleshooting
 
@@ -414,4 +414,4 @@ docker exec gordon wget -q -O- http://localhost:8080/health
 
 - [Configure routes](/docs/config/routes.md)
 - [Set up network groups](/docs/config/network-groups.md)
-- [Enable registry authentication](/docs/config/registry-auth.md)
+- [Enable authentication](/docs/config/auth.md)
