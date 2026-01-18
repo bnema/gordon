@@ -279,7 +279,7 @@ func TestHandler_SecretsGet_RequiresReadScope(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
-				secretSvc.EXPECT().ListKeys(mock.Anything, "app.example.com").Return([]string{}, nil).Maybe()
+				secretSvc.EXPECT().ListKeysWithAttachments(mock.Anything, "app.example.com").Return([]string{}, nil, nil).Maybe()
 			}
 
 			req := httptest.NewRequest("GET", "/admin/secrets/app.example.com", nil)
@@ -535,7 +535,7 @@ func TestHandler_Reload_RequiresWriteScope(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
-				configSvc.EXPECT().Load(mock.Anything).Return(nil).Maybe()
+				configSvc.EXPECT().Reload(mock.Anything).Return(nil).Maybe()
 			}
 
 			req := httptest.NewRequest("POST", "/admin/reload", nil)
