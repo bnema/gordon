@@ -202,5 +202,5 @@ Sensitive values (passwords, tokens) are automatically redacted.
 ## Related
 
 - [Configuration Overview](./index.md)
-- [CLI Commands](../cli/commands.md)
+- [CLI Commands](../cli/index.md)
 - [Troubleshooting](../reference/troubleshooting.md)

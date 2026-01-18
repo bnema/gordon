@@ -321,5 +321,5 @@ gordon auth internal
 ## Related
 
 - [Secret Providers](./secrets.md)
-- [CLI Commands](../cli/commands.md)
+- [CLI Commands](../cli/index.md)
 - [GitHub Actions Deployment](../deployment/github-actions.md)

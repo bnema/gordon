@@ -113,7 +113,7 @@ Gordon automatically:
 
 - [Installation Guide](./installation.md) - Production setup with firewall and rootless containers
 - [Configuration Reference](./config/index.md) - All configuration options
-- [Registry Authentication](./config/registry-auth.md) - Secure your registry
+- [Authentication](./config/auth.md) - Secure your registry
 - [Environment Variables](./config/env.md) - Configure per-app settings
 
 ## Related

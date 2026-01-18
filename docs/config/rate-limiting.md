@@ -12,8 +12,8 @@ Rate limiting prevents:
 
 Rate limiting applies to:
 - **Registry API** (`/v2/*`) — Global + per-IP limits
-- **Token endpoint** (`/v2/token`) — Same limiter as registry (Global + per-IP)
-- **Admin API** (`/admin/*`) — Separate per-IP limit only
+- **Auth endpoints** (`/auth/*`) — Same limiter as registry (Global + per-IP)
+- **Admin API** (`/admin/*`) — Global + per-IP limits (separate limiter instances)
 
 ## Quick Start
 
@@ -60,35 +60,36 @@ Gordon uses two separate rate limiters:
 │                     Incoming Request                     │
 └─────────────────────────────────────────────────────────┘
                             │
-            ┌───────────────┴───────────────┐
-            ▼                               ▼
-    ┌───────────────┐               ┌───────────────┐
-    │  /v2/* routes │               │ /admin/* routes│
-    └───────────────┘               └───────────────┘
-            │                               │
-            ▼                               ▼
-┌─────────────────────────┐     ┌─────────────────────────┐
-│   Registry Rate Limiter  │     │   Admin Rate Limiter    │
-│  ┌───────────────────┐  │     │  ┌───────────────────┐  │
-│  │   Global Limiter   │  │     │  │   Per-IP Limiter  │  │
-│  │   (global_rps)     │  │     │  │   (per_ip_rps)    │  │
-│  └───────────────────┘  │     │  └───────────────────┘  │
-│  ┌───────────────────┐  │     └─────────────────────────┘
-│  │  Per-IP Limiters   │  │
-│  │   (per_ip_rps)     │  │
-│  └───────────────────┘  │
-└─────────────────────────┘
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+┌───────────────┐   ┌───────────────┐   ┌───────────────┐
+│  /v2/* routes │   │ /auth/* routes│   │ /admin/* routes│
+└───────────────┘   └───────────────┘   └───────────────┘
+        │                   │                   │
+        ▼                   ▼                   ▼
+┌─────────────────────────────────┐   ┌─────────────────────────┐
+│   Registry Rate Limiter          │   │   Admin Rate Limiter    │
+│  ┌───────────────────┐           │   │  ┌───────────────────┐  │
+│  │   Global Limiter   │          │   │  │   Global Limiter   │  │
+│  │   (global_rps)     │          │   │  │   (global_rps)     │  │
+│  └───────────────────┘           │   │  └───────────────────┘  │
+│  ┌───────────────────┐           │   │  ┌───────────────────┐  │
+│  │  Per-IP Limiters   │          │   │  │  Per-IP Limiters   │  │
+│  │   (per_ip_rps)     │          │   │  │   (per_ip_rps)     │  │
+│  └───────────────────┘           │   │  └───────────────────┘  │
+└─────────────────────────────────┘   └─────────────────────────┘
 ```
 
-**Registry Limiter** (for `/v2/*` and `/v2/token`):
+**Registry Limiter** (for `/v2/*` and `/auth/*`):
 - Checks global limit first (all clients combined)
 - Then checks per-IP limit
 - Both must pass for the request to proceed
+- Auth endpoints share this limiter to prevent brute force attacks
 
 **Admin Limiter** (for `/admin/*`):
-- Per-IP limit only
-- No global limit (admin traffic is typically low volume)
-- Separate from registry to avoid CI/CD traffic affecting admin access
+- Separate global + per-IP limiters (independent instances)
+- Isolates admin traffic from registry traffic
+- Prevents CI/CD bursts from affecting admin access
 
 ## Option Details
 
@@ -324,10 +325,10 @@ All authenticated endpoints are protected:
 | Endpoint | Rate Limiter | Limits Applied |
 |----------|--------------|----------------|
 | `/v2/*` (registry) | Registry limiter | Global RPS + Per-IP RPS |
-| `/v2/token` | Registry limiter | Global RPS + Per-IP RPS |
-| `/admin/*` | Admin limiter | Per-IP RPS only |
+| `/auth/*` (authentication) | Registry limiter | Global RPS + Per-IP RPS |
+| `/admin/*` (management) | Admin limiter | Global RPS + Per-IP RPS |
 
-The token endpoint shares the registry limiter, preventing brute force attacks on credentials. The admin API uses a separate per-IP limiter to avoid interference with registry traffic.
+The auth endpoints share the registry limiter, preventing brute force attacks on credentials. The admin API uses separate limiter instances to avoid CI/CD traffic affecting admin access.
 
 ### Recommended Production Settings
 
