@@ -38,14 +38,12 @@ gordon_domain = "gordon.mydomain.com"    # Required: Gordon domain (registry + A
 # Authentication (includes secrets backend)
 [auth]
 enabled = true                           # Enable registry authentication (default: true)
-type = "token"                           # "password" or "token"
 secrets_backend = "pass"                 # "pass", "sops", or "unsafe"
-# Password auth:
+token_secret = "gordon/auth/token_secret"  # Required: JWT signing secret
+token_expiry = "30d"                     # Duration (1y, 30d, 2w) or 0 for never
+# Optional: enable password authentication (for interactive login)
 # username = "deploy"
 # password_hash = "gordon/auth/password_hash"
-# Token auth:
-token_secret = "gordon/auth/token_secret"
-token_expiry = "30d"                     # Duration (1y, 30d, 2w) or 0 for never
 
 # API rate limiting
 [api.rate_limit]
@@ -139,7 +137,6 @@ enabled = false                          # Auto-create routes from image names
 | `server.registry_port` | `5000` |
 | `server.data_dir` | `~/.gordon` |
 | `auth.enabled` | `true` |
-| `auth.type` | `"password"` |
 | `auth.secrets_backend` | `"unsafe"` |
 | `auth.token_expiry` | `"30d"` |
 | `api.rate_limit.enabled` | `true` |

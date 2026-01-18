@@ -28,6 +28,7 @@ Configuration is stored in ~/.config/gordon/remotes.toml`,
 	cmd.AddCommand(newRemotesAddCmd())
 	cmd.AddCommand(newRemotesRemoveCmd())
 	cmd.AddCommand(newRemotesUseCmd())
+	cmd.AddCommand(newRemotesSetTokenCmd())
 
 	return cmd
 }
@@ -241,6 +242,49 @@ Examples:
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Active remote set to '%s'", name)))
+			return nil
+		},
+	}
+}
+
+// newRemotesSetTokenCmd creates the remotes set-token command.
+func newRemotesSetTokenCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-token <name> <token>",
+		Short: "Set the token for a remote",
+		Long: `Set or update the authentication token for a saved remote.
+
+This is useful when:
+- The server uses token-based authentication (not password auth)
+- You have a pre-generated token from 'gordon auth token generate'
+- You want to update an expired token
+
+For servers with password authentication, use 'gordon auth login' instead.
+
+Examples:
+  gordon remotes set-token prod eyJhbGciOiJIUzI1NiIs...
+  gordon remotes set-token staging $(cat token.txt)`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			token := args[1]
+
+			// Verify remote exists
+			remotes, _, err := remote.ListRemotes()
+			if err != nil {
+				return fmt.Errorf("failed to list remotes: %w", err)
+			}
+
+			if _, exists := remotes[name]; !exists {
+				fmt.Println(styles.RenderError(fmt.Sprintf("Remote '%s' not found", name)))
+				return nil
+			}
+
+			if err := remote.UpdateRemoteToken(name, token); err != nil {
+				return fmt.Errorf("failed to update token: %w", err)
+			}
+
+			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Token updated for remote '%s'", name)))
 			return nil
 		},
 	}

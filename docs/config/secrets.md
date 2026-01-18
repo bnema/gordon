@@ -139,7 +139,6 @@ API_SECRET=${sops:production.yaml:api.secret.key}
 ```toml
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 ```
@@ -166,7 +165,6 @@ secrets_backend = "unsafe"
 ```toml
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "sops"
 token_secret = "gordon/auth/token_secret"
 ```

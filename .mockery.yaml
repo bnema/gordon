@@ -21,6 +21,7 @@ packages:
       ContainerLogWriter:
       TokenStore:
       DomainSecretStore:
+      RateLimiter:
   gordon/internal/boundaries/in:
     interfaces:
       ContainerService:

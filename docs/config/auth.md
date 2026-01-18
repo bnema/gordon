@@ -34,10 +34,13 @@ enabled = false
 ```toml
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"
+
+# Optional: enable password authentication
+username = "deploy"
+password_hash = "gordon/auth/password_hash"
 ```
 
 ## Options
@@ -45,12 +48,22 @@ token_expiry = "30d"
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable authentication |
-| `type` | string | `"password"` | Auth type: `"password"` or `"token"` |
 | `secrets_backend` | string | `"unsafe"` | Secrets backend: `"pass"`, `"sops"`, or `"unsafe"` |
-| `username` | string | - | Username for password auth |
-| `password_hash` | string | - | Path to bcrypt hash in secrets backend |
-| `token_secret` | string | - | Path to JWT signing secret in secrets backend |
+| `token_secret` | string | - | **Required.** Path to JWT signing secret in secrets backend |
 | `token_expiry` | string | `"30d"` | Token validity duration (0 = never expires) |
+| `username` | string | - | Username for password auth (optional) |
+| `password_hash` | string | - | Path to bcrypt hash in secrets backend (optional) |
+
+## Authentication Modes
+
+Gordon infers the authentication mode from your configuration:
+
+| Config | Mode | Description |
+|--------|------|-------------|
+| Only `token_secret` | Token-only | JWT tokens for all access |
+| `token_secret` + `username` + `password_hash` | Password + Token | Password for interactive login, tokens for CI/CD |
+
+Tokens always work regardless of mode. The difference is whether password authentication is available.
 
 ## Environment Variables
 
@@ -81,14 +94,13 @@ See [Secret Providers](./secrets.md) for detailed configuration of each backend.
 
 ## Authentication Types
 
-### Token Authentication (Recommended)
+### Token-Only Mode
 
-JWT-based authentication, ideal for CI/CD pipelines:
+JWT-based authentication, ideal for CI/CD pipelines when you don't need interactive login:
 
 ```toml
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"
@@ -121,18 +133,20 @@ gordon auth token revoke <token-id>
 gordon auth token revoke --all
 ```
 
-### Password Authentication
+### Password + Token Mode
 
-Simple username/password authentication:
+Password authentication for interactive login, plus tokens for CI/CD:
 
 ```toml
 [auth]
 enabled = true
-type = "password"
 secrets_backend = "pass"
 username = "deploy"
 password_hash = "gordon/auth/password_hash"
+token_secret = "gordon/auth/token_secret"
 ```
+
+When `username` and `password_hash` are configured, both password and token authentication work.
 
 **Setup:**
 ```bash
@@ -143,12 +157,35 @@ gordon auth password hash
 # Store hash in secrets backend
 pass insert gordon/auth/password_hash
 # Paste the bcrypt hash
+
+# Create token secret (for CI/CD token generation)
+pass insert gordon/auth/token_secret
+# Enter a random 32+ character string
 ```
 
 **Usage:**
 ```bash
+# Docker registry access
 docker login -u deploy -p <password> registry.mydomain.com
+
+# Remote CLI authentication
+gordon auth login --remote prod
+# Enter username and password when prompted
 ```
+
+**Remote CLI Authentication:**
+
+With password authentication enabled, you can use `gordon auth login` to obtain a token for remote CLI operations:
+
+```bash
+gordon auth login --remote prod
+# Username: deploy
+# Password: ********
+# ✓ Authentication successful!
+# Token stored for remote 'prod'
+```
+
+The returned token is stored automatically and used for subsequent CLI commands.
 
 ## Token Scopes
 
@@ -232,12 +269,11 @@ enabled = false
 
 ## Examples
 
-### CI/CD Setup
+### CI/CD Setup (Token-Only)
 
 ```toml
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 ```
@@ -253,15 +289,15 @@ In GitHub Actions:
   run: docker login -u github-actions -p ${{ secrets.GORDON_TOKEN }} ${{ secrets.GORDON_REGISTRY }}
 ```
 
-### Production with Password
+### Production with Password + Token
 
 ```toml
 [auth]
 enabled = true
-type = "password"
 secrets_backend = "pass"
 username = "deploy"
 password_hash = "gordon/auth/password_hash"
+token_secret = "gordon/auth/token_secret"
 ```
 
 ### Enterprise with SOPS
@@ -269,7 +305,6 @@ password_hash = "gordon/auth/password_hash"
 ```toml
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "sops"
 token_secret = "gordon/auth/token_secret"
 ```

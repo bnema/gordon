@@ -144,11 +144,18 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 			ctx := r.Context()
 
 			// Authenticate based on auth type
+			// When auth type is "password", accept BOTH password and token auth
+			// (allows CI/CD tokens while still supporting interactive password login)
 			var authenticated bool
 			var tokenClaims *domain.TokenClaims
 			switch authSvc.GetAuthType() {
 			case domain.AuthTypePassword:
+				// Try password auth first
 				authenticated = authenticatePassword(ctx, r, authSvc, log)
+				if !authenticated {
+					// Fall back to token auth (for CI/CD tokens)
+					authenticated, tokenClaims = authenticateToken(ctx, r, authSvc, log)
+				}
 			case domain.AuthTypeToken:
 				authenticated, tokenClaims = authenticateToken(ctx, r, authSvc, log)
 			default:
@@ -410,7 +417,7 @@ func sendUnauthorized(w http.ResponseWriter, authType domain.AuthType, host stri
 		} else if r.TLS != nil {
 			scheme = "https"
 		}
-		realm := scheme + "://" + realmHost + "/v2/token"
+		realm := scheme + "://" + realmHost + "/auth/token"
 		w.Header().Set("WWW-Authenticate", `Bearer realm="`+realm+`",service="gordon-registry"`)
 	default:
 		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon Registry"`)

@@ -19,12 +19,12 @@ data_dir = "~/.gordon"                       # Data directory (varies by install
 # =============================================================================
 [auth]
 enabled = true                               # Enable registry authentication (default: true)
-type = "password"                            # "password" or "token"
 secrets_backend = "unsafe"                   # "pass", "sops", or "unsafe"
-username = ""                                # Username for password auth
-password_hash = ""                           # Path in secrets backend to bcrypt hash (REQUIRED for password type)
-token_secret = ""                            # Path in secrets backend to JWT signing key (REQUIRED for token type)
+token_secret = ""                            # Path in secrets backend to JWT signing key (REQUIRED)
 token_expiry = "720h"                        # Token expiry duration (720h = 30 days)
+# Optional: enable password authentication (for interactive login)
+# username = ""                              # Username for password auth
+# password_hash = ""                         # Path in secrets backend to bcrypt hash
 
 # =============================================================================
 # API (applies to both Registry and Admin endpoints)
@@ -126,7 +126,6 @@ preserve = true                              # Keep volumes when containers are 
 | `server.gordon_domain` | `""` | **Required** - Gordon domain |
 | `server.data_dir` | `~/.gordon` | Data directory |
 | `auth.enabled` | `true` | Enable authentication |
-| `auth.type` | `"password"` | Auth type |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |
 | `api.rate_limit.enabled` | `true` | Enable rate limiting |
@@ -166,7 +165,6 @@ Examples:
 GORDON_SERVER_PORT=8080
 GORDON_SERVER_GORDON_DOMAIN=gordon.example.com
 GORDON_AUTH_ENABLED=true
-GORDON_AUTH_TYPE=token
 GORDON_LOGGING_LEVEL=debug
 GORDON_NETWORK_ISOLATION_ENABLED=true
 ```
@@ -199,13 +197,6 @@ gordon serve
 | `"always"` | Always pull image before deploying |
 | `"if-tag-changed"` | Pull only if image tag differs from running container |
 | `"never"` | Never pull, use local image only |
-
-## Auth Type Options
-
-| Value | Description |
-|-------|-------------|
-| `"password"` | HTTP Basic authentication with username/password |
-| `"token"` | JWT token authentication |
 
 ## Secrets Backend Options
 
