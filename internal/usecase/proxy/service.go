@@ -352,6 +352,16 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 		func(resp *http.Response) error {
 			resp.Header.Set("X-Proxied-By", "Gordon")
 			resp.Header.Set("X-Registry-Backend", "gordon-registry")
+
+			// Remove security headers from registry response to prevent duplicates.
+			// The proxy middleware already adds these headers, so the registry's
+			// copies would create duplicates in the final response.
+			resp.Header.Del("X-Content-Type-Options")
+			resp.Header.Del("X-Frame-Options")
+			resp.Header.Del("X-XSS-Protection")
+			resp.Header.Del("Referrer-Policy")
+			resp.Header.Del("Permissions-Policy")
+
 			return nil
 		},
 	)
