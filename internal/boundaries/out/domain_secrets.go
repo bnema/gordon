@@ -1,5 +1,13 @@
 package out
 
+// AttachmentSecrets represents secrets for an attachment container.
+type AttachmentSecrets struct {
+	// Service is the attachment service name (e.g., "gitea-postgres")
+	Service string
+	// Keys is the list of secret keys for this attachment
+	Keys []string
+}
+
 // DomainSecretStore defines the contract for managing domain-scoped secrets.
 // These are environment variables stored per-domain for container injection.
 type DomainSecretStore interface {
@@ -14,4 +22,9 @@ type DomainSecretStore interface {
 
 	// Delete removes a specific secret key from a domain.
 	Delete(domain, key string) error
+
+	// ListAttachmentKeys finds and returns secret keys for attachment containers
+	// associated with the given domain. Returns a list of AttachmentSecrets, one
+	// for each attachment that has secrets configured.
+	ListAttachmentKeys(domain string) ([]AttachmentSecrets, error)
 }
