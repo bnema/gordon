@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
+	"gordon/internal/adapters/in/cli/remote"
+	"gordon/internal/adapters/in/cli/ui/styles"
 	"gordon/internal/adapters/out/secrets"
 	"gordon/internal/adapters/out/tokenstore"
 	"gordon/internal/app"
@@ -32,6 +34,7 @@ func newAuthCmd() *cobra.Command {
 	cmd.AddCommand(newAuthTokenCmd())
 	cmd.AddCommand(newAuthPasswordCmd())
 	cmd.AddCommand(newAuthInternalCmd())
+	cmd.AddCommand(newAuthLoginCmd())
 
 	return cmd
 }
@@ -195,6 +198,121 @@ available while Gordon is running.`,
 			return runShowInternalAuth()
 		},
 	}
+}
+
+// newAuthLoginCmd creates the login command for remote authentication.
+func newAuthLoginCmd() *cobra.Command {
+	var (
+		remoteName string
+		username   string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "login",
+		Short: "Authenticate with a Gordon server",
+		Long: `Authenticate with a Gordon server using password authentication.
+
+This command prompts for your username and password, authenticates with the
+remote server's /auth/password endpoint, and stores the returned token.
+
+The token is stored in your remote configuration and used for subsequent
+CLI operations.
+
+Note: This command only works with servers configured for password authentication.
+For servers using token-based auth, use 'gordon remote set-token' instead.
+
+Examples:
+  gordon auth login                    Login using active remote
+  gordon auth login --remote prod      Login to specific remote
+  gordon auth login --username admin   Pre-fill username`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthLogin(remoteName, username)
+		},
+	}
+
+	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to authenticate with (defaults to active remote)")
+	cmd.Flags().StringVarP(&username, "username", "u", "", "Username for authentication")
+
+	return cmd
+}
+
+// runAuthLogin authenticates with a remote Gordon server.
+func runAuthLogin(remoteName, username string) error {
+	// Load remotes config
+	config, err := remote.LoadRemotes("")
+	if err != nil {
+		return fmt.Errorf("failed to load remotes: %w", err)
+	}
+
+	// Determine which remote to use
+	if remoteName == "" {
+		remoteName = config.Active
+	}
+	if remoteName == "" {
+		return fmt.Errorf("no remote specified and no active remote set. Use --remote or 'gordon remote use <name>'")
+	}
+
+	remoteConfig, ok := config.Remotes[remoteName]
+	if !ok {
+		return fmt.Errorf("remote '%s' not found", remoteName)
+	}
+
+	// Prompt for username if not provided
+	if username == "" {
+		fmt.Print("Username: ")
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read username: %w", err)
+		}
+		username = strings.TrimSpace(input)
+	}
+
+	if username == "" {
+		return fmt.Errorf("username cannot be empty")
+	}
+
+	// Prompt for password (hidden input)
+	fmt.Print("Password: ")
+	passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	if err != nil {
+		// Fallback for non-terminal input
+		reader := bufio.NewReader(os.Stdin)
+		password, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			return fmt.Errorf("failed to read password: %w", readErr)
+		}
+		passwordBytes = []byte(strings.TrimSpace(password))
+	}
+	fmt.Println() // newline after hidden password input
+
+	if len(passwordBytes) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Create remote client
+	client := remote.NewClient(remoteConfig.URL)
+
+	// Authenticate
+	ctx := context.Background()
+	fmt.Printf("Authenticating with %s...\n", remoteName)
+
+	resp, err := client.Authenticate(ctx, username, string(passwordBytes))
+	if err != nil {
+		return fmt.Errorf("authentication failed: %w", err)
+	}
+
+	// Update remote config with new token
+	if err := remote.UpdateRemoteToken(remoteName, resp.Token); err != nil {
+		return fmt.Errorf("failed to save token: %w", err)
+	}
+
+	fmt.Println()
+	fmt.Println(styles.RenderSuccess("Authentication successful!"))
+	fmt.Printf("Token stored for remote '%s'\n", remoteName)
+	fmt.Printf("Expires in: %d seconds\n", resp.ExpiresIn)
+
+	return nil
 }
 
 // runShowInternalAuth displays the internal registry credentials.
