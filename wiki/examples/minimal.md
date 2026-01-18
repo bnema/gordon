@@ -19,7 +19,7 @@ registry_port = 5000
 gordon_domain = "gordon.local"
 
 # Authentication disabled for simplicity
-[registry_auth]
+[auth]
 enabled = false
 
 # Simple route

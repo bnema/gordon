@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/bnema/zerowrap"
+
+	"gordon/internal/domain"
 )
 
 // FileStore implements the DomainSecretStore interface using filesystem-based env files.
@@ -39,8 +42,11 @@ func NewFileStore(envDir string, log zerowrap.Logger) (*FileStore, error) {
 }
 
 // ListKeys returns the list of secret keys for a domain (not values).
-func (s *FileStore) ListKeys(domain string) ([]string, error) {
-	envFile := s.getEnvFilePath(domain)
+func (s *FileStore) ListKeys(domainName string) ([]string, error) {
+	envFile, err := s.validateEnvFilePath(domainName)
+	if err != nil {
+		return nil, err
+	}
 
 	file, err := os.Open(envFile)
 	if err != nil {
@@ -73,8 +79,11 @@ func (s *FileStore) ListKeys(domain string) ([]string, error) {
 }
 
 // GetAll returns all secrets for a domain as a key-value map.
-func (s *FileStore) GetAll(domain string) (map[string]string, error) {
-	envFile := s.getEnvFilePath(domain)
+func (s *FileStore) GetAll(domainName string) (map[string]string, error) {
+	envFile, err := s.validateEnvFilePath(domainName)
+	if err != nil {
+		return nil, err
+	}
 
 	file, err := os.Open(envFile)
 	if err != nil {
@@ -109,14 +118,19 @@ func (s *FileStore) GetAll(domain string) (map[string]string, error) {
 }
 
 // Set sets or updates multiple secrets for a domain, merging with existing.
-func (s *FileStore) Set(domain string, secrets map[string]string) error {
+func (s *FileStore) Set(domainName string, secrets map[string]string) error {
+	// Validate domain first
+	if _, err := s.validateEnvFilePath(domainName); err != nil {
+		return err
+	}
+
 	// Ensure env directory exists
 	if err := os.MkdirAll(s.envDir, 0700); err != nil {
 		return fmt.Errorf("failed to create env directory: %w", err)
 	}
 
 	// Read existing secrets
-	existing, err := s.GetAll(domain)
+	existing, err := s.GetAll(domainName)
 	if err != nil {
 		return err
 	}
@@ -127,13 +141,18 @@ func (s *FileStore) Set(domain string, secrets map[string]string) error {
 	}
 
 	// Write back atomically
-	return s.writeSecretsAtomic(domain, existing)
+	return s.writeSecretsAtomic(domainName, existing)
 }
 
 // Delete removes a specific secret key from a domain.
-func (s *FileStore) Delete(domain, key string) error {
+func (s *FileStore) Delete(domainName, key string) error {
+	// Validate domain first
+	if _, err := s.validateEnvFilePath(domainName); err != nil {
+		return err
+	}
+
 	// Read existing secrets
-	existing, err := s.GetAll(domain)
+	existing, err := s.GetAll(domainName)
 	if err != nil {
 		return err
 	}
@@ -142,13 +161,16 @@ func (s *FileStore) Delete(domain, key string) error {
 	delete(existing, key)
 
 	// Write back atomically
-	return s.writeSecretsAtomic(domain, existing)
+	return s.writeSecretsAtomic(domainName, existing)
 }
 
 // writeSecretsAtomic writes all secrets to the domain's env file atomically.
 // It writes to a temporary file first, syncs it, then renames to the final path.
-func (s *FileStore) writeSecretsAtomic(domain string, secrets map[string]string) error {
-	envFile := s.getEnvFilePath(domain)
+func (s *FileStore) writeSecretsAtomic(domainName string, secrets map[string]string) error {
+	envFile, err := s.validateEnvFilePath(domainName)
+	if err != nil {
+		return err
+	}
 	tmpFile := envFile + ".tmp"
 
 	file, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
@@ -157,7 +179,7 @@ func (s *FileStore) writeSecretsAtomic(domain string, secrets map[string]string)
 	}
 
 	// Write header comment
-	if _, err := fmt.Fprintf(file, "# Environment variables for %s\n", domain); err != nil {
+	if _, err := fmt.Fprintf(file, "# Environment variables for %s\n", domainName); err != nil {
 		file.Close()
 		os.Remove(tmpFile)
 		return fmt.Errorf("failed to write header: %w", err)
@@ -198,12 +220,64 @@ func (s *FileStore) writeSecretsAtomic(domain string, secrets map[string]string)
 	return nil
 }
 
+// domainRegex validates domain names to prevent path injection.
+// Allows: alphanumeric, dots, hyphens, colons (for ports), and forward slashes (for paths).
+var domainRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$`)
+
 // getEnvFilePath converts a domain to its env file path.
 // This must match the naming convention in envloader.FileLoader.getEnvFilePath.
-func (s *FileStore) getEnvFilePath(domain string) string {
+//
+// SECURITY: Validates domain and ensures the resulting path stays within envDir.
+func (s *FileStore) getEnvFilePath(domainName string) string {
+	// SECURITY: Reject domains that look like path traversal attempts
+	if strings.Contains(domainName, "..") {
+		s.log.Warn().
+			Str(zerowrap.FieldLayer, "adapter").
+			Str(zerowrap.FieldAdapter, "domainsecrets").
+			Str("domain", domainName).
+			Msg("rejected domain with path traversal sequence")
+		return ""
+	}
+
+	// SECURITY: Validate domain format
+	if !domainRegex.MatchString(domainName) {
+		s.log.Warn().
+			Str(zerowrap.FieldLayer, "adapter").
+			Str(zerowrap.FieldAdapter, "domainsecrets").
+			Str("domain", domainName).
+			Msg("rejected invalid domain format")
+		return ""
+	}
+
 	// Create domain-safe filename (replace dots and other chars with underscores)
-	safeDomain := strings.ReplaceAll(domain, ".", "_")
+	safeDomain := strings.ReplaceAll(domainName, ".", "_")
 	safeDomain = strings.ReplaceAll(safeDomain, ":", "_")
 	safeDomain = strings.ReplaceAll(safeDomain, "/", "_")
-	return filepath.Join(s.envDir, safeDomain+".env")
+
+	fullPath := filepath.Join(s.envDir, safeDomain+".env")
+
+	// SECURITY: Final validation - ensure path stays within envDir
+	cleanPath := filepath.Clean(fullPath)
+	cleanEnvDir := filepath.Clean(s.envDir)
+	if !strings.HasPrefix(cleanPath, cleanEnvDir+string(filepath.Separator)) {
+		s.log.Error().
+			Str(zerowrap.FieldLayer, "adapter").
+			Str(zerowrap.FieldAdapter, "domainsecrets").
+			Str("domain", domainName).
+			Str("attempted_path", fullPath).
+			Msg("path traversal attempt blocked - path escapes env directory")
+		return ""
+	}
+
+	return fullPath
+}
+
+// validateEnvFilePath validates that a domain produces a valid env file path.
+// Returns an error if the domain is invalid or would result in path traversal.
+func (s *FileStore) validateEnvFilePath(domainName string) (string, error) {
+	path := s.getEnvFilePath(domainName)
+	if path == "" {
+		return "", domain.ErrPathTraversal
+	}
+	return path, nil
 }

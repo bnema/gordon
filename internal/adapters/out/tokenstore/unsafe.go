@@ -38,7 +38,10 @@ type UnsafeStore struct {
 
 // NewUnsafeStore creates a new file-based token store.
 // dataDir is the base directory for storing secrets (typically gordon's data_dir).
-func NewUnsafeStore(dataDir string, log zerowrap.Logger) *UnsafeStore {
+//
+// WARNING: Secrets are stored in plain text. The user has explicitly chosen
+// secrets_backend = "unsafe" in config, so they accept this tradeoff.
+func NewUnsafeStore(dataDir string, log zerowrap.Logger) (*UnsafeStore, error) {
 	store := &UnsafeStore{
 		dataDir: dataDir,
 		log:     log,
@@ -51,7 +54,7 @@ func NewUnsafeStore(dataDir string, log zerowrap.Logger) *UnsafeStore {
 		Str("data_dir", dataDir).
 		Msg("using unsafe secrets backend - secrets are stored in plain text")
 
-	return store
+	return store, nil
 }
 
 // unsafeTokenData holds both JWT and metadata in a single file.

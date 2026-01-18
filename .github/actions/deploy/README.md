@@ -125,13 +125,11 @@ In your repository settings, add:
 Ensure your Gordon config uses token authentication:
 
 ```toml
-[secrets]
-backend = "pass"  # or "sops"
-
-[registry_auth]
+[auth]
 enabled = true
 type = "token"
-token_secret = "gordon/registry/token_secret"
+secrets_backend = "pass"  # or "sops"
+token_secret = "gordon/auth/token_secret"
 ```
 
 ## Examples

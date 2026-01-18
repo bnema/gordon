@@ -28,7 +28,7 @@ func NewStore(backend domain.SecretsBackend, dataDir string, log zerowrap.Logger
 		if dataDir == "" {
 			return nil, fmt.Errorf("data_dir is required for unsafe backend")
 		}
-		return NewUnsafeStore(dataDir, log), nil
+		return NewUnsafeStore(dataDir, log)
 
 	default:
 		return nil, fmt.Errorf("unknown secrets backend: %s", backend)

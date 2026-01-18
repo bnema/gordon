@@ -292,6 +292,7 @@ func (s *Service) GenerateToken(ctx context.Context, subject string, scopes []st
 		"sub":    subject,
 		"iss":    TokenIssuer,
 		"iat":    now.Unix(),
+		"nbf":    now.Unix(), // SECURITY: Not-before claim for clock skew protection
 		"scopes": scopes,
 	}
 
@@ -351,6 +352,7 @@ func (s *Service) GenerateAccessToken(ctx context.Context, subject string, scope
 		"sub":    subject,
 		"iss":    TokenIssuer,
 		"iat":    now.Unix(),
+		"nbf":    now.Unix(), // SECURITY: Not-before claim for clock skew protection
 		"scopes": scopes,
 		"exp":    now.Add(expiry).Unix(),
 	}

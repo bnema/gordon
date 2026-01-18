@@ -39,6 +39,9 @@ var proxyTransport = &http.Transport{
 type Config struct {
 	RegistryDomain string
 	RegistryPort   int
+	// ExposeContainerID controls whether to add X-Container-ID header to responses.
+	// Default: false (disabled for security - prevents container enumeration)
+	ExposeContainerID bool
 }
 
 // Service implements the ProxyService interface.
@@ -138,6 +141,16 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 		port, err := strconv.Atoi(portStr)
 		if err != nil {
 			return nil, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
+		}
+
+		// SECURITY: Validate target is not an internal/blocked network (SSRF protection)
+		if err := ValidateExternalRouteTarget(host); err != nil {
+			log.Warn().
+				Err(err).
+				Str("host", host).
+				Str("domain", domainName).
+				Msg("SSRF protection: blocked external route to internal network")
+			return nil, err
 		}
 
 		target := &domain.ProxyTarget{
@@ -312,7 +325,11 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 		},
 		func(resp *http.Response) error {
 			resp.Header.Set("X-Proxied-By", "Gordon")
-			resp.Header.Set("X-Container-ID", target.ContainerID)
+			// SECURITY: Only expose container ID if explicitly enabled
+			// This prevents container enumeration attacks
+			if s.config.ExposeContainerID && target.ContainerID != "" {
+				resp.Header.Set("X-Container-ID", target.ContainerID)
+			}
 			return nil
 		},
 	)
