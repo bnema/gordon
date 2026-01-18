@@ -1,4 +1,5 @@
-package registry
+// Package auth implements the HTTP adapter for authentication endpoints.
+package auth
 
 import (
 	"encoding/json"
@@ -19,34 +20,157 @@ type InternalAuth struct {
 	Password string
 }
 
-// TokenHandler handles token server requests for Docker Registry authentication.
-type TokenHandler struct {
+// Handler handles authentication requests at /auth/*.
+type Handler struct {
 	authSvc      in.AuthService
 	internalAuth InternalAuth
 	log          zerowrap.Logger
 }
 
-// NewTokenHandler creates a new token handler.
-func NewTokenHandler(authSvc in.AuthService, internalAuth InternalAuth, log zerowrap.Logger) *TokenHandler {
-	return &TokenHandler{
+// NewHandler creates a new auth handler.
+func NewHandler(authSvc in.AuthService, internalAuth InternalAuth, log zerowrap.Logger) *Handler {
+	return &Handler{
 		authSvc:      authSvc,
 		internalAuth: internalAuth,
 		log:          log,
 	}
 }
 
-// ServeHTTP implements http.Handler for the token endpoint.
-func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.handleToken(w, r)
+// PasswordRequest represents the request body for POST /auth/password.
+type PasswordRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
-// handleToken handles GET /v2/token requests.
-// This endpoint issues short-lived access tokens per the Docker Registry auth spec.
-func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
+// PasswordResponse represents the response from POST /auth/password.
+type PasswordResponse struct {
+	Token     string `json:"token"`
+	ExpiresIn int    `json:"expires_in"`
+	IssuedAt  string `json:"issued_at"`
+}
+
+// ServeHTTP routes requests to the appropriate handler.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/auth"), "/")
+
+	switch path {
+	case "/password":
+		h.handlePassword(w, r)
+	case "/token":
+		h.handleToken(w, r)
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "not found"})
+	}
+}
+
+// handlePassword handles POST /auth/password requests.
+// Validates username/password and returns a long-lived JWT (7 days).
+// Only works when auth type is "password" - returns error for "token" auth type.
+func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request) {
 	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
 		zerowrap.FieldLayer:   "adapter",
 		zerowrap.FieldAdapter: "http",
-		zerowrap.FieldHandler: "token",
+		zerowrap.FieldHandler: "auth",
+		zerowrap.FieldMethod:  r.Method,
+		zerowrap.FieldPath:    r.URL.Path,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "method not allowed"})
+		return
+	}
+
+	// Check if auth is enabled
+	if h.authSvc == nil || !h.authSvc.IsEnabled() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication is disabled"})
+		return
+	}
+
+	// Password endpoint only works with password auth type
+	if h.authSvc.GetAuthType() != domain.AuthTypePassword {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{
+			Error: "password authentication not configured, use token-based auth",
+		})
+		return
+	}
+
+	// Parse request body
+	var req PasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "invalid request body"})
+		return
+	}
+
+	if req.Username == "" || req.Password == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "username and password are required"})
+		return
+	}
+
+	// Validate password
+	if !h.authSvc.ValidatePassword(ctx, req.Username, req.Password) {
+		log.Debug().
+			Str("username", req.Username).
+			Msg("password authentication failed")
+		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "invalid credentials"})
+		return
+	}
+
+	// Generate 7-day token with full access (push, pull, admin)
+	expiry := 7 * 24 * time.Hour
+	scopes := []string{"push", "pull", "admin:*:*"}
+
+	token, err := h.authSvc.GenerateToken(ctx, req.Username, scopes, expiry)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to generate token")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "failed to generate token"})
+		return
+	}
+
+	response := PasswordResponse{
+		Token:     token,
+		ExpiresIn: int(expiry.Seconds()),
+		IssuedAt:  time.Now().Format(time.RFC3339),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Error().Err(err).Msg("failed to encode password response")
+	}
+
+	log.Debug().
+		Str("username", req.Username).
+		Int("expires_in", response.ExpiresIn).
+		Msg("long-lived token issued via password auth")
+}
+
+// handleToken handles GET /auth/token requests.
+// This is the Docker Registry v2 token server endpoint.
+// Issues short-lived access tokens for registry access.
+func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
+	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "http",
+		zerowrap.FieldHandler: "auth",
 		zerowrap.FieldMethod:  r.Method,
 		zerowrap.FieldPath:    r.URL.Path,
 	})
@@ -55,7 +179,7 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Method not allowed"})
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "method not allowed"})
 		return
 	}
 
@@ -100,12 +224,11 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon Registry"`)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Unauthorized"})
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "unauthorized"})
 		return
 	}
 
 	// Parse requested scopes from query parameter
-	// Format: scope=repository:name:action1,action2 (can appear multiple times)
 	requestedScopes := h.parseRequestedScopes(r, log)
 
 	// Generate a short-lived access token (5 minutes) - not stored
@@ -114,7 +237,7 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 		log.Error().Err(err).Msg("failed to generate access token")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Internal Server Error"})
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "internal server error"})
 		return
 	}
 
@@ -138,7 +261,7 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // sendAnonymousToken sends a token for anonymous/unauthenticated access.
-func (h *TokenHandler) sendAnonymousToken(w http.ResponseWriter, log zerowrap.Logger) {
+func (h *Handler) sendAnonymousToken(w http.ResponseWriter, log zerowrap.Logger) {
 	// For anonymous access, we issue a very short-lived token with limited scope
 	response := dto.TokenResponse{
 		Token:     "", // Empty token indicates limited access
@@ -168,8 +291,8 @@ func isLocalhostRequest(r *http.Request) bool {
 
 // parseRequestedScopes extracts and validates scope parameters from the request.
 // Per Docker Registry v2 auth spec, scope format is: repository:name:actions
-// Example: GET /v2/token?scope=repository:myrepo:push,pull&scope=repository:other:pull
-func (h *TokenHandler) parseRequestedScopes(r *http.Request, log zerowrap.Logger) []string {
+// Example: GET /auth/token?scope=repository:myrepo:push,pull&scope=repository:other:pull
+func (h *Handler) parseRequestedScopes(r *http.Request, log zerowrap.Logger) []string {
 	scopeParams := r.URL.Query()["scope"]
 
 	if len(scopeParams) == 0 {
@@ -215,7 +338,7 @@ func (h *TokenHandler) parseRequestedScopes(r *http.Request, log zerowrap.Logger
 }
 
 // isInternalAuth checks if the credentials match internal registry auth.
-func (h *TokenHandler) isInternalAuth(username, password string) bool {
+func (h *Handler) isInternalAuth(username, password string) bool {
 	if h.internalAuth.Username == "" || h.internalAuth.Password == "" {
 		return false
 	}
