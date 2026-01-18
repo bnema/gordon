@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,10 +32,9 @@ import (
 	"gordon/internal/adapters/out/secrets"
 	"gordon/internal/adapters/out/tokenstore"
 
-	"golang.org/x/time/rate"
-
 	// Adapters - Input
 	"gordon/internal/adapters/in/http/admin"
+	authhandler "gordon/internal/adapters/in/http/auth"
 	"gordon/internal/adapters/in/http/middleware"
 	"gordon/internal/adapters/in/http/registry"
 
@@ -127,7 +127,7 @@ type services struct {
 	registrySvc     *registrySvc.Service
 	proxySvc        *proxy.Service
 	authSvc         *auth.Service
-	tokenHandler    *registry.TokenHandler
+	authHandler     *authhandler.Handler
 	adminHandler    *admin.Handler
 	internalRegUser string
 	internalRegPass string
@@ -301,11 +301,11 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 	// Create token handler for registry token endpoint
 	if svc.authSvc != nil {
-		internalAuth := registry.InternalAuth{
+		internalAuth := authhandler.InternalAuth{
 			Username: svc.internalRegUser,
 			Password: svc.internalRegPass,
 		}
-		svc.tokenHandler = registry.NewTokenHandler(svc.authSvc, internalAuth, log)
+		svc.authHandler = authhandler.NewHandler(svc.authSvc, internalAuth, log)
 	}
 
 	// Determine env directory for admin API
@@ -568,11 +568,11 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 		return nil, nil, nil
 	}
 
-	authType := resolveAuthType(cfg.Auth.Type)
+	authType := resolveAuthType(cfg)
 	backend := resolveSecretsBackend(cfg.Auth.SecretsBackend)
 	dataDir := resolveDataDir(cfg.Server.DataDir)
 
-	store, err := createTokenStore(authType, backend, dataDir, log)
+	store, err := createTokenStore(backend, dataDir, log)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -592,11 +592,26 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 	return store, authSvc, nil
 }
 
-func resolveAuthType(authType string) domain.AuthType {
-	if authType == "token" {
+// resolveAuthType determines the auth type from config.
+// If password_hash is configured, password auth is available (plus tokens).
+// If only token_secret is configured, token-only mode.
+// The explicit "type" field is deprecated but still respected for backwards compat.
+func resolveAuthType(cfg Config) domain.AuthType {
+	// Explicit type takes precedence (backwards compatibility)
+	if cfg.Auth.Type == "token" {
 		return domain.AuthTypeToken
 	}
-	return domain.AuthTypePassword
+	if cfg.Auth.Type == "password" {
+		return domain.AuthTypePassword
+	}
+
+	// Infer from config: password auth if password_hash is configured
+	if cfg.Auth.PasswordHash != "" || cfg.Auth.Password != "" {
+		return domain.AuthTypePassword
+	}
+
+	// Default to token-only
+	return domain.AuthTypeToken
 }
 
 func resolveSecretsBackend(backend string) domain.SecretsBackend {
@@ -619,11 +634,8 @@ func resolveDataDir(dataDir string) string {
 	return dataDir
 }
 
-func createTokenStore(authType domain.AuthType, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (out.TokenStore, error) {
-	if authType != domain.AuthTypeToken {
-		return nil, nil
-	}
-
+func createTokenStore(backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (out.TokenStore, error) {
+	// Token store is always created since tokens work in both auth modes
 	store, err := tokenstore.NewStore(backend, dataDir, log)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to create token store")
@@ -638,8 +650,16 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 		Username: cfg.Auth.Username,
 	}
 
-	switch authType {
-	case domain.AuthTypePassword:
+	// Token config is always required (tokens work in all auth modes)
+	secret, expiry, err := loadTokenConfig(ctx, cfg, backend, dataDir, log)
+	if err != nil {
+		return auth.Config{}, err
+	}
+	authConfig.TokenSecret = secret
+	authConfig.TokenExpiry = expiry
+
+	// Password config only needed for password auth mode
+	if authType == domain.AuthTypePassword {
 		hash, err := loadPasswordHash(ctx, cfg, backend, dataDir, log)
 		if err != nil {
 			return auth.Config{}, err
@@ -648,13 +668,6 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 			return auth.Config{}, errAuthNotConfigured()
 		}
 		authConfig.PasswordHash = hash
-	case domain.AuthTypeToken:
-		secret, expiry, err := loadTokenConfig(ctx, cfg, backend, dataDir, log)
-		if err != nil {
-			return auth.Config{}, err
-		}
-		authConfig.TokenSecret = secret
-		authConfig.TokenExpiry = expiry
 	}
 
 	return authConfig, nil
@@ -714,7 +727,7 @@ func loadTokenSecret(ctx context.Context, cfg Config, backend domain.SecretsBack
 
 	// Fall back to config-specified path via secrets backend
 	if cfg.Auth.TokenSecret == "" {
-		return nil, fmt.Errorf("token_secret is required for token authentication; set %s environment variable or configure auth.token_secret", TokenSecretEnvVar)
+		return nil, fmt.Errorf("token_secret is required for JWT token generation; set %s environment variable or configure auth.token_secret", TokenSecretEnvVar)
 	}
 
 	secret, err := loadSecret(ctx, backend, cfg.Auth.TokenSecret, dataDir, log)
@@ -902,19 +915,21 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 
 	registryWithMiddleware := middleware.Chain(registryMiddlewares...)(registryHandler)
 
-	// Create a mux that routes /v2/token to the token handler (no auth required)
-	// and all other /v2/* routes to the registry handler (with auth)
+	// Create a mux that routes:
+	// - /auth/* to auth handler (no auth required, for password login and token exchange)
+	// - /v2/* to registry handler (with auth)
+	// - /admin/* to admin handler (with auth)
 	registryMux := http.NewServeMux()
-	if svc.tokenHandler != nil {
-		// Token endpoint is NOT protected by auth - it's where clients get tokens
-		// but it still needs rate limiting to prevent brute force attacks
-		tokenWithMiddleware := middleware.Chain(
+	if svc.authHandler != nil {
+		// Auth endpoints are NOT protected by auth - they're where clients authenticate
+		// but still need rate limiting to prevent brute force attacks
+		authWithMiddleware := middleware.Chain(
 			middleware.PanicRecovery(log),
 			middleware.RequestLogger(log),
 			middleware.SecurityHeaders,
 			rateLimitMiddleware,
-		)(svc.tokenHandler)
-		registryMux.Handle("/v2/token", tokenWithMiddleware)
+		)(svc.authHandler)
+		registryMux.Handle("/auth/", authWithMiddleware)
 	}
 	registryMux.Handle("/v2/", registryWithMiddleware)
 
@@ -927,12 +942,15 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		}
 		// Add admin auth middleware if auth is enabled
 		if svc.authSvc != nil {
-			// Rate limiter for admin API uses per-IP rate from config
-			var adminLimiter *rate.Limiter
+			// Create rate limiters for admin API - uses same config as registry
+			var globalLimiter, ipLimiter out.RateLimiter
+			var trustedNets []*net.IPNet
 			if cfg.API.RateLimit.Enabled {
-				adminLimiter = rate.NewLimiter(rate.Limit(cfg.API.RateLimit.PerIPRPS), cfg.API.RateLimit.Burst)
+				globalLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
+				ipLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
+				trustedNets = middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 			}
-			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, adminLimiter, log))
+			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, globalLimiter, ipLimiter, trustedNets, log))
 		}
 		adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
 		registryMux.Handle("/admin/", adminWithMiddleware)
