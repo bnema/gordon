@@ -242,7 +242,10 @@ func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
 	// Update cache
 	s.cacheMu.Lock()
 	s.revokedList = revokedList
-	s.revokedSet[tokenID] = struct{}{}
+	s.revokedSet = make(map[string]struct{}, len(revokedList))
+	for _, id := range revokedList {
+		s.revokedSet[id] = struct{}{}
+	}
 	s.cacheMu.Unlock()
 
 	s.log.Info().
@@ -280,9 +283,9 @@ func (s *PassStore) IsRevoked(ctx context.Context, tokenID string) (bool, error)
 	for _, id := range revokedList {
 		s.revokedSet[id] = struct{}{}
 	}
+	_, revoked := s.revokedSet[tokenID]
 	s.cacheMu.Unlock()
 
-	_, revoked := s.revokedSet[tokenID]
 	return revoked, nil
 }
 
