@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"gordon/internal/boundaries/out"
 	outmocks "gordon/internal/boundaries/out/mocks"
 )
 
@@ -166,6 +167,108 @@ func TestService_ListKeys_Success(t *testing.T) {
 	keys, err := svc.ListKeys(context.Background(), "app.example.com")
 	assert.NoError(t, err)
 	assert.Equal(t, expectedKeys, keys)
+}
+
+func TestService_ListKeysWithAttachments_ValidationErrors(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	tests := []struct {
+		name    string
+		domain  string
+		wantErr error
+	}{
+		{
+			name:    "empty domain",
+			domain:  "",
+			wantErr: ErrDomainEmpty,
+		},
+		{
+			name:    "path traversal",
+			domain:  "../etc/passwd",
+			wantErr: ErrDomainPathTraversal,
+		},
+		{
+			name:    "domain too long",
+			domain:  strings.Repeat("a", 300),
+			wantErr: ErrDomainTooLong,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys, attachments, err := svc.ListKeysWithAttachments(context.Background(), tt.domain)
+			assert.Nil(t, keys)
+			assert.Nil(t, attachments)
+			assert.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestService_ListKeysWithAttachments_Success(t *testing.T) {
+	t.Run("returns both domain and attachment secrets", func(t *testing.T) {
+		store := outmocks.NewMockDomainSecretStore(t)
+		svc := NewService(store, testLogger())
+
+		expectedKeys := []string{"API_KEY", "DB_PASSWORD"}
+		expectedAttachments := []out.AttachmentSecrets{
+			{Service: "postgres", Keys: []string{"POSTGRES_PASSWORD"}},
+			{Service: "redis", Keys: []string{"REDIS_PASSWORD", "REDIS_USER"}},
+		}
+
+		store.EXPECT().ListKeys("app.example.com").Return(expectedKeys, nil)
+		store.EXPECT().ListAttachmentKeys("app.example.com").Return(expectedAttachments, nil)
+
+		keys, attachments, err := svc.ListKeysWithAttachments(context.Background(), "app.example.com")
+		assert.NoError(t, err)
+		assert.Equal(t, expectedKeys, keys)
+		assert.Equal(t, expectedAttachments, attachments)
+	})
+
+	t.Run("returns empty attachments when none exist", func(t *testing.T) {
+		store := outmocks.NewMockDomainSecretStore(t)
+		svc := NewService(store, testLogger())
+
+		expectedKeys := []string{"API_KEY"}
+
+		store.EXPECT().ListKeys("app.example.com").Return(expectedKeys, nil)
+		store.EXPECT().ListAttachmentKeys("app.example.com").Return(nil, nil)
+
+		keys, attachments, err := svc.ListKeysWithAttachments(context.Background(), "app.example.com")
+		assert.NoError(t, err)
+		assert.Equal(t, expectedKeys, keys)
+		assert.Nil(t, attachments)
+	})
+
+	t.Run("continues without attachments on attachment error", func(t *testing.T) {
+		store := outmocks.NewMockDomainSecretStore(t)
+		svc := NewService(store, testLogger())
+
+		expectedKeys := []string{"API_KEY"}
+		attachmentErr := assert.AnError
+
+		store.EXPECT().ListKeys("app.example.com").Return(expectedKeys, nil)
+		store.EXPECT().ListAttachmentKeys("app.example.com").Return(nil, attachmentErr)
+
+		// Should still succeed, just without attachments
+		keys, attachments, err := svc.ListKeysWithAttachments(context.Background(), "app.example.com")
+		assert.NoError(t, err)
+		assert.Equal(t, expectedKeys, keys)
+		assert.Nil(t, attachments)
+	})
+}
+
+func TestService_ListKeysWithAttachments_StoreError(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	storeErr := assert.AnError
+	store.EXPECT().ListKeys("app.example.com").Return(nil, storeErr)
+
+	keys, attachments, err := svc.ListKeysWithAttachments(context.Background(), "app.example.com")
+	assert.Nil(t, keys)
+	assert.Nil(t, attachments)
+	assert.ErrorIs(t, err, storeErr)
 }
 
 func TestService_GetAll_ValidationErrors(t *testing.T) {
