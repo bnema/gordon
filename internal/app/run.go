@@ -1281,7 +1281,8 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("logging.container_logs.max_age", 28)
 	v.SetDefault("env.dir", "") // defaults to {data_dir}/env when empty
 	v.SetDefault("auth.enabled", true)
-	v.SetDefault("auth.type", "password")
+	// Note: auth.type is intentionally not set - it's inferred from config
+	// If password_hash is set -> password mode, otherwise -> token mode
 	v.SetDefault("auth.secrets_backend", "unsafe")
 	v.SetDefault("auth.token_expiry", "720h")
 	v.SetDefault("api.rate_limit.enabled", true)
