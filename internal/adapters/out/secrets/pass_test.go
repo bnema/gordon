@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestValidatePath(t *testing.T) {
@@ -22,7 +22,7 @@ func TestValidatePath(t *testing.T) {
 		// Valid paths
 		{
 			name:    "simple path",
-			path:    "gordon/registry/secret",
+			path:    "github.com/bnema/gordon/registry/secret",
 			wantErr: false,
 		},
 		{
@@ -168,7 +168,7 @@ func TestPassProvider_GetSecret_PathValidation(t *testing.T) {
 	}{
 		{
 			name:    "valid path rejected due to pass not installed",
-			path:    "gordon/test/secret",
+			path:    "github.com/bnema/gordon/test/secret",
 			wantErr: true, // Will fail because pass command doesn't exist in test, but path is valid
 		},
 		{

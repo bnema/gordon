@@ -9,7 +9,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"golang.org/x/time/rate"
 
-	"gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // Ensure MemoryStore implements out.RateLimiter.

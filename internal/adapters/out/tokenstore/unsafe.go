@@ -12,7 +12,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // sanitizeSubject creates a safe filename from a subject by hashing it.

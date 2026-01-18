@@ -13,14 +13,14 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
-	"gordon/internal/adapters/in/cli/remote"
-	"gordon/internal/adapters/in/cli/ui/styles"
-	"gordon/internal/adapters/out/secrets"
-	"gordon/internal/adapters/out/tokenstore"
-	"gordon/internal/app"
-	"gordon/internal/domain"
-	"gordon/internal/usecase/auth"
-	"gordon/pkg/duration"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/adapters/out/secrets"
+	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
+	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/auth"
+	"github.com/bnema/gordon/pkg/duration"
 )
 
 // newAuthCmd creates the auth command group.
@@ -344,7 +344,7 @@ The hash can be stored in your secrets backend and referenced in the config:
 
   [auth]
   type = "password"
-  password_hash = "gordon/auth/password_hash"`,
+  password_hash = "github.com/bnema/gordon/auth/password_hash"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPasswordHash()
 		},
@@ -564,7 +564,7 @@ func runPasswordHash() error {
 	fmt.Println("Then reference the path in your config:")
 	fmt.Println("  [auth]")
 	fmt.Println("  type = \"password\"")
-	fmt.Println("  password_hash = \"gordon/auth/password_hash\"")
+	fmt.Println("  password_hash = \"github.com/bnema/gordon/auth/password_hash\"")
 
 	return nil
 }

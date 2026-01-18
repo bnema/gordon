@@ -8,7 +8,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/dto"
 )
 
 // ResponseWriter wraps http.ResponseWriter to capture status code and bytes written.

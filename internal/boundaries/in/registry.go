@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // RegistryService defines the contract for container registry operations.

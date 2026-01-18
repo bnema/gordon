@@ -13,7 +13,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // ansiRegex matches ANSI escape sequences for stripping from pass output.
@@ -21,9 +21,9 @@ var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 const (
 	// passTokenPath is the base path for tokens in pass.
-	passTokenPath = "gordon/registry/tokens"
+	passTokenPath = "gordon/registry/tokens" //nolint:gosec // Not a credential, this is a pass store path
 	// passRevokedPath is the path for the revocation list in pass.
-	passRevokedPath = "gordon/registry/revoked"
+	passRevokedPath = "gordon/registry/revoked" //nolint:gosec // Not a credential, this is a pass store path
 )
 
 // cachedToken holds a token and its JWT in memory.

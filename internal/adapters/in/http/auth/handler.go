@@ -9,9 +9,9 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/adapters/dto"
-	"gordon/internal/boundaries/in"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // InternalAuth holds credentials for internal loopback registry access.

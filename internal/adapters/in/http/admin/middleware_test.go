@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"gordon/internal/adapters/in/http/middleware"
-	inmocks "gordon/internal/boundaries/in/mocks"
-	outmocks "gordon/internal/boundaries/out/mocks"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func adminTestLogger() zerowrap.Logger {

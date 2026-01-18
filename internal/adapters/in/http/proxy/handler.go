@@ -9,7 +9,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/in"
 )
 
 // Handler wraps the proxy service for HTTP.

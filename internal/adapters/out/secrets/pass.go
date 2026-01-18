@@ -11,7 +11,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // passPathRegex validates pass paths.

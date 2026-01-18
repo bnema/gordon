@@ -5,7 +5,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // NewStore creates a RateLimiter based on the configured backend.

@@ -3,7 +3,7 @@ package out
 import (
 	"context"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // TokenStore defines the contract for storing and managing authentication tokens.

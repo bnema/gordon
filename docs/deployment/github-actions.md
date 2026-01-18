@@ -46,7 +46,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Deploy to Gordon
         uses: bnema/gordon/.github/actions/deploy@main
@@ -103,7 +103,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Deploy to Gordon
         uses: bnema/gordon/.github/actions/deploy@main
@@ -129,7 +129,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Deploy to Gordon
         uses: bnema/gordon/.github/actions/deploy@main
@@ -158,7 +158,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
@@ -187,7 +187,7 @@ jobs:
   deploy-api:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: bnema/gordon/.github/actions/deploy@main
         with:
           registry: ${{ secrets.GORDON_REGISTRY }}
@@ -200,7 +200,7 @@ jobs:
   deploy-web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: bnema/gordon/.github/actions/deploy@main
         with:
           registry: ${{ secrets.GORDON_REGISTRY }}
