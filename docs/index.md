@@ -39,6 +39,7 @@ Gordon runs on your VPS and provides:
 
 - [Getting Started](./getting-started.md) - Deploy your first app in minutes
 - [Installation](./installation.md) - Detailed installation instructions
+- [Upgrading](./upgrading.md) - Migration guide for breaking changes
 - [Concepts](./concepts.md) - Core concepts and architecture
 
 ### Configuration
