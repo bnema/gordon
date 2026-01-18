@@ -10,8 +10,8 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/google/uuid"
 
-	"gordon/internal/boundaries/out"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // InMemory implements the EventBus interface using in-memory channels.

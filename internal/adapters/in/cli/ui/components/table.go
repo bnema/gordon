@@ -1,7 +1,7 @@
 package components
 
 import (
-	"gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"

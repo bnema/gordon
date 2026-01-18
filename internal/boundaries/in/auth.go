@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // AuthService defines the contract for registry authentication operations.

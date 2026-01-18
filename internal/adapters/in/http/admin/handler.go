@@ -11,10 +11,10 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"gordon/internal/adapters/dto"
-	"gordon/internal/boundaries/in"
-	"gordon/internal/boundaries/out"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // maxAdminRequestSize is the maximum allowed size for admin API request bodies.

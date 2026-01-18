@@ -6,7 +6,7 @@ package in
 import (
 	"context"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // ContainerService defines the contract for container management operations.

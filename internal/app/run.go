@@ -21,41 +21,41 @@ import (
 	"github.com/spf13/viper"
 
 	// Adapters - Output
-	"gordon/internal/adapters/out/docker"
-	"gordon/internal/adapters/out/domainsecrets"
-	"gordon/internal/adapters/out/envloader"
-	"gordon/internal/adapters/out/eventbus"
-	"gordon/internal/adapters/out/filesystem"
-	"gordon/internal/adapters/out/httpprober"
-	"gordon/internal/adapters/out/logwriter"
-	"gordon/internal/adapters/out/ratelimit"
-	"gordon/internal/adapters/out/secrets"
-	"gordon/internal/adapters/out/tokenstore"
+	"github.com/bnema/gordon/internal/adapters/out/docker"
+	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
+	"github.com/bnema/gordon/internal/adapters/out/envloader"
+	"github.com/bnema/gordon/internal/adapters/out/eventbus"
+	"github.com/bnema/gordon/internal/adapters/out/filesystem"
+	"github.com/bnema/gordon/internal/adapters/out/httpprober"
+	"github.com/bnema/gordon/internal/adapters/out/logwriter"
+	"github.com/bnema/gordon/internal/adapters/out/ratelimit"
+	"github.com/bnema/gordon/internal/adapters/out/secrets"
+	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 
 	// Adapters - Input
-	"gordon/internal/adapters/in/http/admin"
-	authhandler "gordon/internal/adapters/in/http/auth"
-	"gordon/internal/adapters/in/http/middleware"
-	"gordon/internal/adapters/in/http/registry"
+	"github.com/bnema/gordon/internal/adapters/in/http/admin"
+	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
+	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 
 	// Boundaries
-	"gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/boundaries/out"
 
 	// Domain
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 
 	// Use cases
-	"gordon/internal/usecase/auth"
-	"gordon/internal/usecase/config"
-	"gordon/internal/usecase/container"
-	"gordon/internal/usecase/health"
-	"gordon/internal/usecase/logs"
-	"gordon/internal/usecase/proxy"
-	registrySvc "gordon/internal/usecase/registry"
-	secretsSvc "gordon/internal/usecase/secrets"
+	"github.com/bnema/gordon/internal/usecase/auth"
+	"github.com/bnema/gordon/internal/usecase/config"
+	"github.com/bnema/gordon/internal/usecase/container"
+	"github.com/bnema/gordon/internal/usecase/health"
+	"github.com/bnema/gordon/internal/usecase/logs"
+	"github.com/bnema/gordon/internal/usecase/proxy"
+	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
+	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 
 	// Pkg
-	"gordon/pkg/duration"
+	"github.com/bnema/gordon/pkg/duration"
 )
 
 // Config holds the application configuration.

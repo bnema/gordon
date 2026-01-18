@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"gordon/internal/boundaries/out"
-	outmocks "gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/boundaries/out"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 )
 
 func testLogger() zerowrap.Logger {

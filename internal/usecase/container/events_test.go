@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	inmocks "gordon/internal/boundaries/in/mocks"
-	"gordon/internal/domain"
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func testCtx() context.Context {

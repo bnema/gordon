@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
-	"gordon/internal/boundaries/out/mocks"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func testContext() context.Context {

@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"gordon/internal/adapters/in/cli/remote"
-	"gordon/internal/adapters/in/cli/ui/components"
-	"gordon/internal/adapters/in/cli/ui/styles"
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/domain"
 
 	"github.com/spf13/cobra"
 )

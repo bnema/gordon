@@ -3,7 +3,7 @@ package in
 import (
 	"context"
 
-	"gordon/internal/domain"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // ConfigService defines the contract for configuration management.
