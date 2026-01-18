@@ -5,6 +5,8 @@
 package mocks
 
 import (
+	"gordon/internal/boundaries/out"
+
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -150,6 +152,68 @@ func (_c *MockDomainSecretStore_GetAll_Call) Return(stringToString map[string]st
 }
 
 func (_c *MockDomainSecretStore_GetAll_Call) RunAndReturn(run func(domain string) (map[string]string, error)) *MockDomainSecretStore_GetAll_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListAttachmentKeys provides a mock function for the type MockDomainSecretStore
+func (_mock *MockDomainSecretStore) ListAttachmentKeys(domain string) ([]out.AttachmentSecrets, error) {
+	ret := _mock.Called(domain)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListAttachmentKeys")
+	}
+
+	var r0 []out.AttachmentSecrets
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]out.AttachmentSecrets, error)); ok {
+		return returnFunc(domain)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []out.AttachmentSecrets); ok {
+		r0 = returnFunc(domain)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]out.AttachmentSecrets)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(domain)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockDomainSecretStore_ListAttachmentKeys_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListAttachmentKeys'
+type MockDomainSecretStore_ListAttachmentKeys_Call struct {
+	*mock.Call
+}
+
+// ListAttachmentKeys is a helper method to define mock.On call
+//   - domain string
+func (_e *MockDomainSecretStore_Expecter) ListAttachmentKeys(domain interface{}) *MockDomainSecretStore_ListAttachmentKeys_Call {
+	return &MockDomainSecretStore_ListAttachmentKeys_Call{Call: _e.mock.On("ListAttachmentKeys", domain)}
+}
+
+func (_c *MockDomainSecretStore_ListAttachmentKeys_Call) Run(run func(domain string)) *MockDomainSecretStore_ListAttachmentKeys_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockDomainSecretStore_ListAttachmentKeys_Call) Return(attachmentSecretss []out.AttachmentSecrets, err error) *MockDomainSecretStore_ListAttachmentKeys_Call {
+	_c.Call.Return(attachmentSecretss, err)
+	return _c
+}
+
+func (_c *MockDomainSecretStore_ListAttachmentKeys_Call) RunAndReturn(run func(domain string) ([]out.AttachmentSecrets, error)) *MockDomainSecretStore_ListAttachmentKeys_Call {
 	_c.Call.Return(run)
 	return _c
 }

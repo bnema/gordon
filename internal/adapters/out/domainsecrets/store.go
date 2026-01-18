@@ -11,6 +11,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"gordon/internal/boundaries/out"
 	"gordon/internal/domain"
 )
 
@@ -280,4 +281,103 @@ func (s *FileStore) validateEnvFilePath(domainName string) (string, error) {
 		return "", domain.ErrPathTraversal
 	}
 	return path, nil
+}
+
+// ListAttachmentKeys finds attachment env files for a domain and returns their keys.
+// Attachment env files follow the naming pattern: gordon-{sanitized-domain}-{service}.env
+func (s *FileStore) ListAttachmentKeys(domainName string) ([]out.AttachmentSecrets, error) {
+	// Sanitize domain the same way container service does
+	sanitized := sanitizeDomainForContainer(domainName)
+	prefix := "gordon-" + sanitized + "-"
+
+	// List all files in env directory
+	entries, err := os.ReadDir(s.envDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read env directory: %w", err)
+	}
+
+	var results []out.AttachmentSecrets
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Check if this is an attachment file for the domain
+		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".env") {
+			// Extract service name from filename
+			// e.g., "gordon-git-bnema-dev-gitea-postgres.env" → "gitea-postgres"
+			serviceName := strings.TrimPrefix(name, prefix)
+			serviceName = strings.TrimSuffix(serviceName, ".env")
+			if serviceName == "" {
+				continue
+			}
+
+			// The full container name is the filename without .env
+			containerName := strings.TrimSuffix(name, ".env")
+
+			// Read keys from this file using existing method
+			// Note: We use the container name directly since it matches the env file naming
+			keys, err := s.listKeysFromFile(filepath.Join(s.envDir, name))
+			if err != nil {
+				s.log.Warn().
+					Err(err).
+					Str("file", name).
+					Str("domain", domainName).
+					Msg("failed to read attachment secrets file")
+				continue
+			}
+
+			if len(keys) > 0 {
+				results = append(results, out.AttachmentSecrets{
+					Service: containerName,
+					Keys:    keys,
+				})
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// sanitizeDomainForContainer matches the sanitizeName function in container service.
+func sanitizeDomainForContainer(domain string) string {
+	result := strings.ReplaceAll(domain, ".", "-")
+	result = strings.ReplaceAll(result, ":", "-")
+	result = strings.ReplaceAll(result, "/", "-")
+	return result
+}
+
+// listKeysFromFile reads secret keys from a specific env file path.
+func (s *FileStore) listKeysFromFile(filePath string) ([]string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("failed to open env file: %w", err)
+	}
+	defer file.Close()
+
+	var keys []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Extract key from KEY=value
+		if idx := strings.Index(line, "="); idx > 0 {
+			keys = append(keys, line[:idx])
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read env file: %w", err)
+	}
+
+	return keys, nil
 }
