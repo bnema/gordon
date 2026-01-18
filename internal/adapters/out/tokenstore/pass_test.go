@@ -234,9 +234,9 @@ func TestPassStore_IsRevoked_ConcurrentAccess(t *testing.T) {
 func TestPassStore_RevokeUpdatesCache(t *testing.T) {
 	store := newTestPassStore()
 
-	// Initialize empty revocation cache
+	// Initialize revocation cache with an older revoked token
 	store.cacheMu.Lock()
-	store.revokedList = []string{}
+	store.revokedList = []string{"oldly-revoked"}
 	store.revokedSet = make(map[string]struct{})
 	store.cacheMu.Unlock()
 
@@ -244,11 +244,17 @@ func TestPassStore_RevokeUpdatesCache(t *testing.T) {
 	tokenID := "newly-revoked"
 	store.cacheMu.Lock()
 	store.revokedList = append(store.revokedList, tokenID)
-	store.revokedSet[tokenID] = struct{}{}
+	store.revokedSet = make(map[string]struct{}, len(store.revokedList))
+	for _, id := range store.revokedList {
+		store.revokedSet[id] = struct{}{}
+	}
 	store.cacheMu.Unlock()
 
 	// Verify IsRevoked now returns true from cache
 	revoked, err := store.IsRevoked(context.Background(), tokenID)
+	require.NoError(t, err)
+	assert.True(t, revoked)
+	revoked, err = store.IsRevoked(context.Background(), "oldly-revoked")
 	require.NoError(t, err)
 	assert.True(t, revoked)
 }
