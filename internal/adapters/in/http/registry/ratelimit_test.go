@@ -1,29 +1,29 @@
 package registry
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"gordon/internal/adapters/out/ratelimit"
+	outmocks "gordon/internal/boundaries/out/mocks"
 )
 
 func TestRateLimitMiddleware_Disabled(t *testing.T) {
-	config := RateLimitConfig{
-		Enabled: false,
-	}
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// When limiters are nil, middleware should pass through
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := RateLimitMiddleware(config)
+	middleware := RateLimitMiddleware(nil, nil, nil, testLogger())
 	wrappedHandler := middleware(handler)
 
 	// Should pass through without rate limiting
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 100; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
 		rec := httptest.NewRecorder()
 		wrappedHandler.ServeHTTP(rec, req)
@@ -31,99 +31,191 @@ func TestRateLimitMiddleware_Disabled(t *testing.T) {
 	}
 }
 
-func TestRateLimitMiddleware_PerIPLimit(t *testing.T) {
-	config := RateLimitConfig{
-		Enabled:   true,
-		GlobalRPS: 1000, // High global limit
-		PerIPRPS:  1,    // Very low per-IP limit for testing
-		Burst:     100,  // High burst to not interfere
-	}
+func TestRateLimitMiddleware_GlobalLimitHit(t *testing.T) {
+	globalLimiter := outmocks.NewMockRateLimiter(t)
+	ipLimiter := outmocks.NewMockRateLimiter(t)
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Global limiter returns false (rate limited)
+	globalLimiter.EXPECT().Allow(context.Background(), "global").Return(false)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := RateLimitMiddleware(config)
+	middleware := RateLimitMiddleware(globalLimiter, ipLimiter, nil, testLogger())
 	wrappedHandler := middleware(handler)
 
-	// First request should succeed
-	req1 := httptest.NewRequest(http.MethodGet, "/v2/", nil)
-	req1.RemoteAddr = "192.168.1.100:12345"
-	rec1 := httptest.NewRecorder()
-	wrappedHandler.ServeHTTP(rec1, req1)
-	assert.Equal(t, http.StatusOK, rec1.Code)
+	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
 
-	// Request from different IP should succeed (independent rate limiter)
-	req2 := httptest.NewRequest(http.MethodGet, "/v2/", nil)
-	req2.RemoteAddr = "192.168.1.101:12345"
-	rec2 := httptest.NewRecorder()
-	wrappedHandler.ServeHTTP(rec2, req2)
-	assert.Equal(t, http.StatusOK, rec2.Code)
+	// Should return 429 when global limit hit
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.Contains(t, rec.Body.String(), "TOOMANYREQUESTS")
 }
 
-func TestRateLimitMiddleware_GlobalLimit(t *testing.T) {
-	config := RateLimitConfig{
-		Enabled:   true,
-		GlobalRPS: 1, // Very low global limit for testing
-		PerIPRPS:  100,
-		Burst:     1,
-	}
+func TestRateLimitMiddleware_PerIPLimitHit(t *testing.T) {
+	globalLimiter := outmocks.NewMockRateLimiter(t)
+	ipLimiter := outmocks.NewMockRateLimiter(t)
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Global limiter allows, IP limiter denies
+	globalLimiter.EXPECT().Allow(context.Background(), "global").Return(true)
+	ipLimiter.EXPECT().Allow(context.Background(), "ip:192.168.1.100").Return(false)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := RateLimitMiddleware(config)
+	middleware := RateLimitMiddleware(globalLimiter, ipLimiter, nil, testLogger())
 	wrappedHandler := middleware(handler)
 
-	// First request should succeed
-	req1 := httptest.NewRequest(http.MethodGet, "/v2/", nil)
-	req1.RemoteAddr = "192.168.1.100:12345"
-	rec1 := httptest.NewRecorder()
-	wrappedHandler.ServeHTTP(rec1, req1)
-	assert.Equal(t, http.StatusOK, rec1.Code)
+	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
 
-	// Second request should hit global limit even from different IP
-	req2 := httptest.NewRequest(http.MethodGet, "/v2/", nil)
-	req2.RemoteAddr = "192.168.1.101:12345"
-	rec2 := httptest.NewRecorder()
-	wrappedHandler.ServeHTTP(rec2, req2)
-	assert.Equal(t, http.StatusTooManyRequests, rec2.Code)
+	// Should return 429 when per-IP limit hit
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+}
+
+func TestRateLimitMiddleware_BothLimitsPass(t *testing.T) {
+	globalLimiter := outmocks.NewMockRateLimiter(t)
+	ipLimiter := outmocks.NewMockRateLimiter(t)
+
+	// Both limiters allow
+	globalLimiter.EXPECT().Allow(context.Background(), "global").Return(true)
+	ipLimiter.EXPECT().Allow(context.Background(), "ip:192.168.1.100").Return(true)
+
+	handlerCalled := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware := RateLimitMiddleware(globalLimiter, ipLimiter, nil, testLogger())
+	wrappedHandler := middleware(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
+
+	// Should pass through to handler
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, handlerCalled, "handler should have been called")
+}
+
+func TestRateLimitMiddleware_TrustedProxy(t *testing.T) {
+	globalLimiter := outmocks.NewMockRateLimiter(t)
+	ipLimiter := outmocks.NewMockRateLimiter(t)
+
+	// Request comes from trusted proxy (127.0.0.1) with XFF header
+	// Should use the X-Forwarded-For IP (203.0.113.50) for rate limiting
+	globalLimiter.EXPECT().Allow(context.Background(), "global").Return(true)
+	ipLimiter.EXPECT().Allow(context.Background(), "ip:203.0.113.50").Return(true)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware := RateLimitMiddleware(globalLimiter, ipLimiter, []string{"127.0.0.1"}, testLogger())
+	wrappedHandler := middleware(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestRateLimitMiddleware_UntrustedProxy(t *testing.T) {
+	globalLimiter := outmocks.NewMockRateLimiter(t)
+	ipLimiter := outmocks.NewMockRateLimiter(t)
+
+	// Request from untrusted IP with XFF header should use RemoteAddr IP
+	globalLimiter.EXPECT().Allow(context.Background(), "global").Return(true)
+	ipLimiter.EXPECT().Allow(context.Background(), "ip:192.168.1.100").Return(true)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware := RateLimitMiddleware(globalLimiter, ipLimiter, []string{"127.0.0.1"}, testLogger())
+	wrappedHandler := middleware(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.50") // Should be ignored
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestRateLimitMiddleware_ResponseFormat(t *testing.T) {
-	config := RateLimitConfig{
-		Enabled:   true,
-		GlobalRPS: 1,
-		PerIPRPS:  1,
-		Burst:     1,
-	}
+	globalLimiter := outmocks.NewMockRateLimiter(t)
+	ipLimiter := outmocks.NewMockRateLimiter(t)
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	globalLimiter.EXPECT().Allow(context.Background(), "global").Return(false)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := RateLimitMiddleware(config)
+	middleware := RateLimitMiddleware(globalLimiter, ipLimiter, nil, testLogger())
 	wrappedHandler := middleware(handler)
 
-	// First request succeeds
-	req1 := httptest.NewRequest(http.MethodGet, "/v2/", nil)
-	req1.RemoteAddr = "192.168.1.100:12345"
-	rec1 := httptest.NewRecorder()
-	wrappedHandler.ServeHTTP(rec1, req1)
-
-	// Second request gets rate limited
-	req2 := httptest.NewRequest(http.MethodGet, "/v2/", nil)
-	req2.RemoteAddr = "192.168.1.100:12346"
-	rec2 := httptest.NewRecorder()
-	wrappedHandler.ServeHTTP(rec2, req2)
+	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
 
 	// Verify response format
-	assert.Equal(t, http.StatusTooManyRequests, rec2.Code)
-	assert.Equal(t, "application/json", rec2.Header().Get("Content-Type"))
-	assert.Equal(t, "registry/2.0", rec2.Header().Get("Docker-Distribution-API-Version"))
-	assert.Equal(t, "1", rec2.Header().Get("Retry-After"))
-	assert.Contains(t, rec2.Body.String(), "TOOMANYREQUESTS")
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.Equal(t, "registry/2.0", rec.Header().Get("Docker-Distribution-API-Version"))
+	assert.Equal(t, "1", rec.Header().Get("Retry-After"))
+	assert.Contains(t, rec.Body.String(), "TOOMANYREQUESTS")
+}
+
+// Integration test using real MemoryStore implementation
+func TestRateLimitMiddleware_Integration(t *testing.T) {
+	log := testLogger()
+	globalLimiter := ratelimit.NewMemoryStore(1000, 100, log) // High global limit
+	ipLimiter := ratelimit.NewMemoryStore(2, 2, log)          // Low per-IP limit
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware := RateLimitMiddleware(globalLimiter, ipLimiter, nil, log)
+	wrappedHandler := middleware(handler)
+
+	// First 2 requests from same IP should succeed (burst)
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+		req.RemoteAddr = "192.168.1.100:12345"
+		rec := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code, "request %d should succeed", i+1)
+	}
+
+	// 3rd request from same IP should be rate limited
+	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "3rd request should be rate limited")
+
+	// Request from different IP should still succeed (independent limit)
+	req2 := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+	req2.RemoteAddr = "192.168.1.101:12345"
+	rec2 := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusOK, rec2.Code, "different IP should succeed")
 }
 
 func TestGetClientIP(t *testing.T) {
@@ -285,13 +377,4 @@ func TestParseTrustedProxies(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
-}
-
-func TestDefaultRateLimitConfig(t *testing.T) {
-	config := DefaultRateLimitConfig()
-
-	require.True(t, config.Enabled)
-	assert.Equal(t, float64(500), config.GlobalRPS)
-	assert.Equal(t, float64(50), config.PerIPRPS)
-	assert.Equal(t, 100, config.Burst)
 }

@@ -27,6 +27,7 @@ import (
 	"gordon/internal/adapters/out/filesystem"
 	"gordon/internal/adapters/out/httpprober"
 	"gordon/internal/adapters/out/logwriter"
+	"gordon/internal/adapters/out/ratelimit"
 	"gordon/internal/adapters/out/secrets"
 	"gordon/internal/adapters/out/tokenstore"
 
@@ -873,15 +874,20 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		middleware.RequestLogger(log),
 	}
 
-	// Add rate limiting middleware
-	rateLimitConfig := registry.RateLimitConfig{
-		Enabled:        cfg.API.RateLimit.Enabled,
-		GlobalRPS:      cfg.API.RateLimit.GlobalRPS,
-		PerIPRPS:       cfg.API.RateLimit.PerIPRPS,
-		Burst:          cfg.API.RateLimit.Burst,
-		TrustedProxies: cfg.API.RateLimit.TrustedProxies,
+	// Create rate limiters using the factory
+	var rateLimitMiddleware func(http.Handler) http.Handler
+	if cfg.API.RateLimit.Enabled {
+		globalLimiter := ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
+		ipLimiter := ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
+		rateLimitMiddleware = registry.RateLimitMiddleware(
+			globalLimiter,
+			ipLimiter,
+			cfg.API.RateLimit.TrustedProxies,
+			log,
+		)
+	} else {
+		rateLimitMiddleware = registry.RateLimitMiddleware(nil, nil, nil, log)
 	}
-	rateLimitMiddleware := registry.RateLimitMiddleware(rateLimitConfig)
 	registryMiddlewares = append(registryMiddlewares, rateLimitMiddleware)
 
 	if cfg.Auth.Enabled && svc.authSvc != nil {
