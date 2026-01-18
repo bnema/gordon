@@ -180,12 +180,19 @@ func extractServiceName(containerName string) string {
 
 	serviceName := parts[1]
 	allParts := strings.Split(serviceName, "-")
-	if len(allParts) > 2 {
-		// Take last 2 parts as service name (e.g., "gitea-postgres")
-		return strings.Join(allParts[len(allParts)-2:], "-")
+
+	// Handle service names based on the number of segments explicitly
+	if len(allParts) < 2 {
+		// No additional segments; use the service name as-is.
+		return serviceName
+	}
+	if len(allParts) == 2 {
+		// Exactly two segments; the service name is already in the desired form.
+		return strings.Join(allParts, "-")
 	}
 
-	return serviceName
+	// More than two segments: take the last two as the short service name (e.g., "gitea-postgres").
+	return strings.Join(allParts[len(allParts)-2:], "-")
 }
 
 // getKeyPrefix returns the tree prefix for a key based on its position.
