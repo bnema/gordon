@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -25,17 +26,31 @@ const (
 	passRevokedPath = "gordon/registry/revoked"
 )
 
+// cachedToken holds a token and its JWT in memory.
+type cachedToken struct {
+	jwt   string
+	token *domain.Token
+}
+
 // PassStore implements TokenStore using the pass password manager.
 type PassStore struct {
 	timeout time.Duration
 	log     zerowrap.Logger
+
+	// In-memory cache to avoid repeated pass calls
+	cacheMu     sync.RWMutex
+	tokenCache  map[string]*cachedToken // keyed by subject
+	revokedList []string                // cached revocation list
+	revokedSet  map[string]struct{}     // for O(1) lookup
 }
 
 // NewPassStore creates a new pass-based token store.
 func NewPassStore(log zerowrap.Logger) *PassStore {
 	return &PassStore{
-		timeout: 10 * time.Second,
-		log:     log,
+		timeout:    10 * time.Second,
+		log:        log,
+		tokenCache: make(map[string]*cachedToken),
+		revokedSet: make(map[string]struct{}),
 	}
 }
 
@@ -79,6 +94,11 @@ func (s *PassStore) SaveToken(ctx context.Context, token *domain.Token, jwt stri
 		return fmt.Errorf("failed to store token metadata: %w", err)
 	}
 
+	// Update cache
+	s.cacheMu.Lock()
+	s.tokenCache[token.Subject] = &cachedToken{jwt: jwt, token: token}
+	s.cacheMu.Unlock()
+
 	s.log.Debug().
 		Str(zerowrap.FieldLayer, "adapter").
 		Str(zerowrap.FieldAdapter, "tokenstore").
@@ -91,6 +111,14 @@ func (s *PassStore) SaveToken(ctx context.Context, token *domain.Token, jwt stri
 
 // GetToken retrieves token JWT by subject from pass.
 func (s *PassStore) GetToken(ctx context.Context, subject string) (string, *domain.Token, error) {
+	// Check cache first
+	s.cacheMu.RLock()
+	if cached, ok := s.tokenCache[subject]; ok {
+		s.cacheMu.RUnlock()
+		return cached.jwt, cached.token, nil
+	}
+	s.cacheMu.RUnlock()
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -121,6 +149,11 @@ func (s *PassStore) GetToken(ctx context.Context, subject string) (string, *doma
 		ExpiresAt: meta.ExpiresAt,
 		Revoked:   meta.Revoked,
 	}
+
+	// Cache the token
+	s.cacheMu.Lock()
+	s.tokenCache[subject] = &cachedToken{jwt: jwt, token: token}
+	s.cacheMu.Unlock()
 
 	return jwt, token, nil
 }
@@ -206,6 +239,12 @@ func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
 		return fmt.Errorf("failed to store revocation list: %w", err)
 	}
 
+	// Update cache
+	s.cacheMu.Lock()
+	s.revokedList = revokedList
+	s.revokedSet[tokenID] = struct{}{}
+	s.cacheMu.Unlock()
+
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
 		Str(zerowrap.FieldAdapter, "tokenstore").
@@ -217,6 +256,15 @@ func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
 
 // IsRevoked checks if token ID is in revocation list.
 func (s *PassStore) IsRevoked(ctx context.Context, tokenID string) (bool, error) {
+	// Check cache first
+	s.cacheMu.RLock()
+	if s.revokedList != nil {
+		_, revoked := s.revokedSet[tokenID]
+		s.cacheMu.RUnlock()
+		return revoked, nil
+	}
+	s.cacheMu.RUnlock()
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -225,13 +273,17 @@ func (s *PassStore) IsRevoked(ctx context.Context, tokenID string) (bool, error)
 		return false, err
 	}
 
+	// Cache the revocation list
+	s.cacheMu.Lock()
+	s.revokedList = revokedList
+	s.revokedSet = make(map[string]struct{}, len(revokedList))
 	for _, id := range revokedList {
-		if id == tokenID {
-			return true, nil
-		}
+		s.revokedSet[id] = struct{}{}
 	}
+	s.cacheMu.Unlock()
 
-	return false, nil
+	_, revoked := s.revokedSet[tokenID]
+	return revoked, nil
 }
 
 // DeleteToken removes token from pass.
@@ -255,6 +307,11 @@ func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
 	if err := cmd.Run(); err != nil {
 		s.log.Warn().Err(err).Msg("failed to delete token metadata")
 	}
+
+	// Clear from cache
+	s.cacheMu.Lock()
+	delete(s.tokenCache, subject)
+	s.cacheMu.Unlock()
 
 	s.log.Debug().
 		Str(zerowrap.FieldLayer, "adapter").

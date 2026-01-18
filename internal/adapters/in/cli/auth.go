@@ -367,10 +367,40 @@ func runTokenGenerate(subject, scopesStr, expiryStr, configPath string) error {
 		}
 	}
 
-	// Parse scopes
-	scopes := strings.Split(scopesStr, ",")
-	for i := range scopes {
-		scopes[i] = strings.TrimSpace(scopes[i])
+	// Parse scopes and convert simple scopes to Docker v2 format
+	// Simple scopes like "push,pull" become "repository:*:push,pull"
+	rawScopes := strings.Split(scopesStr, ",")
+	for i := range rawScopes {
+		rawScopes[i] = strings.TrimSpace(rawScopes[i])
+	}
+
+	// Check if scopes are already in v2 format (contain colons)
+	// or if they're simple scopes that need conversion
+	var scopes []string
+	hasSimpleScope := false
+	for _, s := range rawScopes {
+		if !strings.Contains(s, ":") && (s == "push" || s == "pull" || s == "*") {
+			hasSimpleScope = true
+			break
+		}
+	}
+
+	if hasSimpleScope {
+		// Convert simple scopes to v2 format: repository:*:push,pull
+		var actions []string
+		for _, s := range rawScopes {
+			if s == "push" || s == "pull" || s == "*" {
+				actions = append(actions, s)
+			} else {
+				// Keep non-simple scopes as-is (e.g., admin scopes)
+				scopes = append(scopes, s)
+			}
+		}
+		if len(actions) > 0 {
+			scopes = append(scopes, "repository:*:"+strings.Join(actions, ","))
+		}
+	} else {
+		scopes = rawScopes
 	}
 
 	// Create auth service
