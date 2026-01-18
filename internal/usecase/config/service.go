@@ -85,6 +85,25 @@ func (s *Service) Load(ctx context.Context) error {
 	return nil
 }
 
+// Reload re-reads the configuration file from disk and loads it into memory.
+// This should be used when you want to pick up external changes to the config file.
+// It differs from Load() which only loads from cached viper values.
+func (s *Service) Reload(ctx context.Context) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "Reload",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	// Re-read the config file from disk
+	if err := s.viper.ReadInConfig(); err != nil {
+		return log.WrapErr(err, "failed to read config file")
+	}
+
+	// Load the values into memory
+	return s.Load(ctx)
+}
+
 // loadConfigValues loads simple config values from viper.
 func (s *Service) loadConfigValues() Config {
 	// Prefer gordon_domain over registry_domain
