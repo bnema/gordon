@@ -11,6 +11,10 @@ type ConfigService interface {
 	// Load loads the configuration from the configured source.
 	Load(ctx context.Context) error
 
+	// Reload re-reads the configuration file from disk and loads it into memory.
+	// This is different from Load() which only loads from the cached viper values.
+	Reload(ctx context.Context) error
+
 	// GetRoutes returns all configured routes.
 	GetRoutes(ctx context.Context) []domain.Route
 

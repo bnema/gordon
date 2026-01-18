@@ -240,22 +240,41 @@ func (c *Client) RemoveRoute(ctx context.Context, routeDomain string) error {
 
 // Secrets API
 
+// AttachmentSecrets represents secrets for an attachment container.
+type AttachmentSecrets struct {
+	Service string   `json:"service"`
+	Keys    []string `json:"keys"`
+}
+
+// SecretsListResult contains domain secrets and any attachment secrets.
+type SecretsListResult struct {
+	Domain      string              `json:"domain"`
+	Keys        []string            `json:"keys"`
+	Attachments []AttachmentSecrets `json:"attachments,omitempty"`
+}
+
 // ListSecrets returns the list of secret keys for a domain.
 func (c *Client) ListSecrets(ctx context.Context, secretDomain string) ([]string, error) {
+	result, err := c.ListSecretsWithAttachments(ctx, secretDomain)
+	if err != nil {
+		return nil, err
+	}
+	return result.Keys, nil
+}
+
+// ListSecretsWithAttachments returns domain secrets and attachment secrets.
+func (c *Client) ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*SecretsListResult, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/secrets/"+url.PathEscape(secretDomain), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		Domain string   `json:"domain"`
-		Keys   []string `json:"keys"`
-	}
+	var result SecretsListResult
 	if err := parseResponse(resp, &result); err != nil {
 		return nil, err
 	}
 
-	return result.Keys, nil
+	return &result, nil
 }
 
 // SetSecrets sets secrets for a domain.

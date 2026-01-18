@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"gordon/internal/adapters/in/cli/remote"
 	"gordon/internal/adapters/in/cli/ui/components"
 	"gordon/internal/adapters/in/cli/ui/styles"
 
@@ -39,65 +40,175 @@ func newSecretsListCmd() *cobra.Command {
 		Long: `List all secret keys configured for a domain.
 
 Note: Only secret keys are shown, not values (for security).
+Attachment secrets (for services like databases) are also displayed.
 
 Examples:
   gordon secrets list app.mydomain.com
   gordon --remote https://gordon.mydomain.com secrets list api.mydomain.com`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
-			secretDomain := args[0]
-
-			var keys []string
-			var err error
-
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				keys, err = client.ListSecrets(ctx, secretDomain)
-			} else {
-				local, localErr := GetLocalServices(configPath)
-				if localErr != nil {
-					return fmt.Errorf("failed to initialize local services: %w", localErr)
-				}
-				keys, err = local.GetSecretService().ListKeys(ctx, secretDomain)
-			}
-
-			if err != nil {
-				return fmt.Errorf("failed to list secrets: %w", err)
-			}
-
-			if len(keys) == 0 {
-				fmt.Println(styles.Theme.Muted.Render(fmt.Sprintf("No secrets configured for %s", secretDomain)))
-				return nil
-			}
-
-			title := fmt.Sprintf("Secrets for %s", secretDomain)
-			if !isRemote {
-				title = fmt.Sprintf("Secrets for %s (local)", secretDomain)
-			}
-			fmt.Println(styles.Theme.Title.Render(title))
-			fmt.Println()
-
-			// Build table rows
-			rows := make([][]string, len(keys))
-			for i, key := range keys {
-				rows[i] = []string{key, styles.Theme.Muted.Render("(hidden)")}
-			}
-
-			// Render table
-			table := components.NewTable(
-				components.WithColumns([]components.TableColumn{
-					{Title: "Key", Width: 30},
-					{Title: "Value", Width: 20},
-				}),
-				components.WithRows(rows),
-			)
-
-			fmt.Println(table.View())
-
-			return nil
-		},
+		RunE: runSecretsListCmd,
 	}
+}
+
+// runSecretsListCmd executes the secrets list command.
+func runSecretsListCmd(_ *cobra.Command, args []string) error {
+	ctx := context.Background()
+	secretDomain := args[0]
+
+	keys, attachments, isRemote, err := fetchSecretsWithAttachments(ctx, secretDomain)
+	if err != nil {
+		return err
+	}
+
+	totalSecrets := len(keys)
+	for _, att := range attachments {
+		totalSecrets += len(att.Keys)
+	}
+
+	if totalSecrets == 0 {
+		fmt.Println(styles.Theme.Muted.Render(fmt.Sprintf("No secrets configured for %s", secretDomain)))
+		return nil
+	}
+
+	title := fmt.Sprintf("Secrets for %s", secretDomain)
+	if !isRemote {
+		title = fmt.Sprintf("Secrets for %s (local)", secretDomain)
+	}
+	fmt.Println(styles.Theme.Title.Render(title))
+	fmt.Println()
+
+	rows := buildSecretsTableRows(keys, attachments)
+
+	table := components.NewTable(
+		components.WithColumns([]components.TableColumn{
+			{Title: "Key", Width: 45},
+			{Title: "Value", Width: 10},
+		}),
+		components.WithRows(rows),
+	)
+
+	fmt.Println(table.View())
+	return nil
+}
+
+// fetchSecretsWithAttachments retrieves secrets from remote or local source.
+func fetchSecretsWithAttachments(ctx context.Context, secretDomain string) ([]string, []remote.AttachmentSecrets, bool, error) {
+	client, isRemote := GetRemoteClient()
+	if isRemote {
+		result, err := client.ListSecretsWithAttachments(ctx, secretDomain)
+		if err != nil {
+			return nil, nil, isRemote, fmt.Errorf("failed to list secrets: %w", err)
+		}
+		return result.Keys, result.Attachments, isRemote, nil
+	}
+
+	local, err := GetLocalServices(configPath)
+	if err != nil {
+		return nil, nil, isRemote, fmt.Errorf("failed to initialize local services: %w", err)
+	}
+
+	keys, domainAttachments, err := local.GetSecretService().ListKeysWithAttachments(ctx, secretDomain)
+	if err != nil {
+		return nil, nil, isRemote, fmt.Errorf("failed to list secrets: %w", err)
+	}
+
+	// Convert to remote.AttachmentSecrets format
+	var attachments []remote.AttachmentSecrets
+	for _, att := range domainAttachments {
+		attachments = append(attachments, remote.AttachmentSecrets{
+			Service: att.Service,
+			Keys:    att.Keys,
+		})
+	}
+
+	return keys, attachments, isRemote, nil
+}
+
+// buildSecretsTableRows builds table rows with tree structure for attachments.
+func buildSecretsTableRows(keys []string, attachments []remote.AttachmentSecrets) [][]string {
+	var rows [][]string
+
+	// Domain secrets first
+	for _, key := range keys {
+		rows = append(rows, []string{key, styles.Theme.Muted.Render("(hidden)")})
+	}
+
+	// Attachment secrets with tree structure
+	for i, att := range attachments {
+		isLastAttachment := i == len(attachments)-1
+		rows = append(rows, buildAttachmentRows(att, isLastAttachment)...)
+	}
+
+	return rows
+}
+
+// buildAttachmentRows builds table rows for a single attachment with tree structure.
+func buildAttachmentRows(att remote.AttachmentSecrets, isLastAttachment bool) [][]string {
+	var rows [][]string
+
+	// Attachment header with tree prefix
+	prefix := styles.IconTreeBranch + styles.IconTreeLine
+	if isLastAttachment {
+		prefix = styles.IconTreeLast + styles.IconTreeLine
+	}
+
+	serviceName := extractServiceName(att.Service)
+	attachmentHeader := fmt.Sprintf("%s %s", prefix, styles.Theme.Muted.Render(fmt.Sprintf("[%s]", serviceName)))
+	rows = append(rows, []string{attachmentHeader, ""})
+
+	// Keys for this attachment with nested tree structure
+	for j, key := range att.Keys {
+		isLastKey := j == len(att.Keys)-1
+		keyPrefix := getKeyPrefix(isLastAttachment, isLastKey)
+		rows = append(rows, []string{keyPrefix + " " + key, styles.Theme.Muted.Render("(hidden)")})
+	}
+
+	return rows
+}
+
+// extractServiceName extracts a short service name from a container name.
+// e.g., "gordon-git-bnema-dev-gitea-postgres" → "gitea-postgres"
+func extractServiceName(containerName string) string {
+	if !strings.HasPrefix(containerName, "gordon-") {
+		return containerName
+	}
+
+	parts := strings.SplitN(containerName, "-", 2)
+	if len(parts) <= 1 {
+		return containerName
+	}
+
+	serviceName := parts[1]
+	allParts := strings.Split(serviceName, "-")
+
+	// Handle service names based on the number of segments explicitly
+	if len(allParts) < 2 {
+		// No additional segments; use the service name as-is.
+		return serviceName
+	}
+	if len(allParts) == 2 {
+		// Exactly two segments; the service name is already in the desired form.
+		return strings.Join(allParts, "-")
+	}
+
+	// More than two segments: take the last two as the short service name (e.g., "gitea-postgres").
+	return strings.Join(allParts[len(allParts)-2:], "-")
+}
+
+// getKeyPrefix returns the tree prefix for a key based on its position.
+func getKeyPrefix(isLastAttachment, isLastKey bool) string {
+	if isLastAttachment {
+		// Parent is last, use space continuation
+		if isLastKey {
+			return "   " + styles.IconTreeLast + styles.IconTreeLine
+		}
+		return "   " + styles.IconTreeBranch + styles.IconTreeLine
+	}
+	// Parent has siblings, use vertical line continuation
+	if isLastKey {
+		return styles.IconTreeVert + "  " + styles.IconTreeLast + styles.IconTreeLine
+	}
+	return styles.IconTreeVert + "  " + styles.IconTreeBranch + styles.IconTreeLine
 }
 
 // newSecretsSetCmd creates the secrets set command.
