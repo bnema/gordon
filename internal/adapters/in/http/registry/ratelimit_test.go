@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -126,47 +127,86 @@ func TestRateLimitMiddleware_ResponseFormat(t *testing.T) {
 }
 
 func TestGetClientIP(t *testing.T) {
+	// Parse trusted proxies for tests
+	trustedNets := parseTrustedProxies([]string{"127.0.0.1", "10.0.0.0/8"})
+	noTrustedNets := []*net.IPNet{}
+
 	tests := []struct {
-		name       string
-		remoteAddr string
-		xff        string
-		xRealIP    string
-		wantIP     string
+		name        string
+		remoteAddr  string
+		xff         string
+		xRealIP     string
+		trustedNets []*net.IPNet
+		wantIP      string
 	}{
 		{
-			name:       "from RemoteAddr with port",
-			remoteAddr: "192.168.1.100:12345",
-			wantIP:     "192.168.1.100",
+			name:        "from RemoteAddr with port",
+			remoteAddr:  "192.168.1.100:12345",
+			trustedNets: noTrustedNets,
+			wantIP:      "192.168.1.100",
 		},
 		{
-			name:       "from RemoteAddr without port",
-			remoteAddr: "192.168.1.100",
-			wantIP:     "192.168.1.100",
+			name:        "from RemoteAddr without port",
+			remoteAddr:  "192.168.1.100",
+			trustedNets: noTrustedNets,
+			wantIP:      "192.168.1.100",
 		},
 		{
-			name:       "from X-Forwarded-For single IP",
-			remoteAddr: "127.0.0.1:12345",
-			xff:        "203.0.113.50",
-			wantIP:     "203.0.113.50",
+			name:        "XFF ignored when no trusted proxies",
+			remoteAddr:  "192.168.1.100:12345",
+			xff:         "203.0.113.50",
+			trustedNets: noTrustedNets,
+			wantIP:      "192.168.1.100",
 		},
 		{
-			name:       "from X-Forwarded-For multiple IPs",
-			remoteAddr: "127.0.0.1:12345",
-			xff:        "203.0.113.50, 10.0.0.1, 172.16.0.1",
-			wantIP:     "203.0.113.50",
+			name:        "XFF ignored when remote is not trusted",
+			remoteAddr:  "192.168.1.100:12345",
+			xff:         "203.0.113.50",
+			trustedNets: trustedNets, // trusts 127.0.0.1 and 10.0.0.0/8
+			wantIP:      "192.168.1.100",
 		},
 		{
-			name:       "from X-Real-IP",
-			remoteAddr: "127.0.0.1:12345",
-			xRealIP:    "203.0.113.50",
-			wantIP:     "203.0.113.50",
+			name:        "XFF honored from trusted proxy (single IP)",
+			remoteAddr:  "127.0.0.1:12345",
+			xff:         "203.0.113.50",
+			trustedNets: trustedNets,
+			wantIP:      "203.0.113.50",
 		},
 		{
-			name:       "X-Forwarded-For takes precedence",
-			remoteAddr: "127.0.0.1:12345",
-			xff:        "203.0.113.50",
-			xRealIP:    "203.0.113.60",
-			wantIP:     "203.0.113.50",
+			name:        "XFF honored from trusted proxy (multiple IPs)",
+			remoteAddr:  "127.0.0.1:12345",
+			xff:         "203.0.113.50, 10.0.0.1, 172.16.0.1",
+			trustedNets: trustedNets,
+			wantIP:      "203.0.113.50",
+		},
+		{
+			name:        "XFF honored from trusted CIDR",
+			remoteAddr:  "10.1.2.3:12345",
+			xff:         "203.0.113.50",
+			trustedNets: trustedNets,
+			wantIP:      "203.0.113.50",
+		},
+		{
+			name:        "X-Real-IP honored from trusted proxy",
+			remoteAddr:  "127.0.0.1:12345",
+			xRealIP:     "203.0.113.50",
+			trustedNets: trustedNets,
+			wantIP:      "203.0.113.50",
+		},
+		{
+			name:        "X-Real-IP ignored when not trusted",
+			remoteAddr:  "192.168.1.100:12345",
+			xRealIP:     "203.0.113.50",
+			trustedNets: trustedNets,
+			wantIP:      "192.168.1.100",
+		},
+		{
+			name:        "XFF takes precedence over X-Real-IP",
+			remoteAddr:  "127.0.0.1:12345",
+			xff:         "203.0.113.50",
+			xRealIP:     "203.0.113.60",
+			trustedNets: trustedNets,
+			wantIP:      "203.0.113.50",
 		},
 	}
 
@@ -181,8 +221,68 @@ func TestGetClientIP(t *testing.T) {
 				req.Header.Set("X-Real-IP", tt.xRealIP)
 			}
 
-			ip := getClientIP(req)
+			ip := getClientIP(req, tt.trustedNets)
 			assert.Equal(t, tt.wantIP, ip)
+		})
+	}
+}
+
+func TestParseTrustedProxies(t *testing.T) {
+	tests := []struct {
+		name    string
+		proxies []string
+		testIP  string
+		want    bool
+	}{
+		{
+			name:    "empty list",
+			proxies: []string{},
+			testIP:  "192.168.1.1",
+			want:    false,
+		},
+		{
+			name:    "single IP match",
+			proxies: []string{"192.168.1.1"},
+			testIP:  "192.168.1.1",
+			want:    true,
+		},
+		{
+			name:    "single IP no match",
+			proxies: []string{"192.168.1.1"},
+			testIP:  "192.168.1.2",
+			want:    false,
+		},
+		{
+			name:    "CIDR match",
+			proxies: []string{"10.0.0.0/8"},
+			testIP:  "10.1.2.3",
+			want:    true,
+		},
+		{
+			name:    "CIDR no match",
+			proxies: []string{"10.0.0.0/8"},
+			testIP:  "192.168.1.1",
+			want:    false,
+		},
+		{
+			name:    "mixed IP and CIDR",
+			proxies: []string{"127.0.0.1", "10.0.0.0/8", "172.16.0.0/12"},
+			testIP:  "172.20.1.1",
+			want:    true,
+		},
+		{
+			name:    "invalid entries ignored",
+			proxies: []string{"not-an-ip", "10.0.0.0/8"},
+			testIP:  "10.1.2.3",
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nets := parseTrustedProxies(tt.proxies)
+			got := isTrustedProxy(tt.testIP, nets)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
