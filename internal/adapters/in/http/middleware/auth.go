@@ -358,9 +358,21 @@ func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.
 
 	// Check if any token scope grants access
 	for _, scopeStr := range claims.Scopes {
+		// Handle simple scopes (e.g., "push", "pull") for backwards compatibility
+		// with tokens generated before v2 scope format was enforced
+		if scopeStr == action || scopeStr == "*" {
+			log.Debug().
+				Str("repo", repoName).
+				Str("action", action).
+				Str("scope", scopeStr).
+				Msg("simple scope access granted")
+			return true
+		}
+
+		// Handle Docker v2 format scopes (e.g., "repository:myrepo:push,pull")
 		scope, err := domain.ParseScope(scopeStr)
 		if err != nil {
-			log.Debug().Err(err).Str("scope", scopeStr).Msg("failed to parse scope")
+			log.Debug().Err(err).Str("scope", scopeStr).Msg("scope not in v2 format, skipping")
 			continue
 		}
 
