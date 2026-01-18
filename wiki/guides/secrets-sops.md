@@ -197,11 +197,11 @@ sops edit secrets.yaml
 ```toml
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "sops"
-username = "admin"
-password_hash = "secrets.yaml:auth.password_hash"
 token_secret = "secrets.yaml:auth.token_secret"
+# Optional: enable password auth for interactive login
+# username = "admin"
+# password_hash = "secrets.yaml:auth.password_hash"
 ```
 
 The path format is `file:key.path` where:

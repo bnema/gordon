@@ -12,6 +12,7 @@ Manage saved remote Gordon instances for easier CLI usage.
 | `add` | Add a new remote |
 | `remove` | Remove a saved remote |
 | `use` | Set active remote |
+| `set-token` | Set or update token for a remote |
 
 ---
 
@@ -161,6 +162,52 @@ gordon secrets list app.com     # Uses prod remote automatically
 
 ```bash
 gordon remotes use prod
+```
+
+---
+
+## gordon remotes set-token
+
+Set or update the authentication token for a saved remote.
+
+```bash
+gordon remotes set-token <name> <token>
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<name>` | Name of the remote |
+| `<token>` | The JWT token to set |
+
+### Description
+
+This command is useful when:
+
+- The server uses token-based authentication (not password auth)
+- You have a pre-generated token from `gordon auth token generate`
+- You want to update an expired token
+
+For servers with password authentication, use `gordon auth login` instead.
+
+### Examples
+
+```bash
+# Set token for prod remote
+gordon remotes set-token prod eyJhbGciOiJIUzI1NiIs...
+
+# Set token from file
+gordon remotes set-token staging $(cat token.txt)
+
+# Set token from environment variable
+gordon remotes set-token prod "$GORDON_TOKEN"
+```
+
+### Output
+
+```
+✓ Token updated for remote 'prod'
 ```
 
 ---

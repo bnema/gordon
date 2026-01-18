@@ -122,12 +122,11 @@ In your repository settings, add:
 
 ### 3. Configure Gordon
 
-Ensure your Gordon config uses token authentication:
+Ensure your Gordon config has authentication enabled:
 
 ```toml
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "pass"  # or "sops"
 token_secret = "gordon/auth/token_secret"
 ```

@@ -22,7 +22,6 @@ gordon_domain = "gordon.company.com"
 # Authentication with pass backend (recommended)
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 

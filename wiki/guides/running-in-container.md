@@ -309,11 +309,11 @@ volumes:
 ```toml
 [auth]
 enabled = true
-type = "token"
 secrets_backend = "pass"
-username = "admin"
-password_hash = "gordon/auth/password_hash"
 token_secret = "gordon/auth/token_secret"
+# Optional: enable password auth for interactive login
+# username = "admin"
+# password_hash = "gordon/auth/password_hash"
 ```
 
 ### GPG Agent (Optional)
