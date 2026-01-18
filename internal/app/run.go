@@ -103,10 +103,11 @@ type Config struct {
 
 	API struct {
 		RateLimit struct {
-			Enabled   bool    `mapstructure:"enabled"`
-			GlobalRPS float64 `mapstructure:"global_rps"`
-			PerIPRPS  float64 `mapstructure:"per_ip_rps"`
-			Burst     int     `mapstructure:"burst"`
+			Enabled        bool     `mapstructure:"enabled"`
+			GlobalRPS      float64  `mapstructure:"global_rps"`
+			PerIPRPS       float64  `mapstructure:"per_ip_rps"`
+			Burst          int      `mapstructure:"burst"`
+			TrustedProxies []string `mapstructure:"trusted_proxies"`
 		} `mapstructure:"rate_limit"`
 	} `mapstructure:"api"`
 }
@@ -874,12 +875,14 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 
 	// Add rate limiting middleware
 	rateLimitConfig := registry.RateLimitConfig{
-		Enabled:   cfg.API.RateLimit.Enabled,
-		GlobalRPS: cfg.API.RateLimit.GlobalRPS,
-		PerIPRPS:  cfg.API.RateLimit.PerIPRPS,
-		Burst:     cfg.API.RateLimit.Burst,
+		Enabled:        cfg.API.RateLimit.Enabled,
+		GlobalRPS:      cfg.API.RateLimit.GlobalRPS,
+		PerIPRPS:       cfg.API.RateLimit.PerIPRPS,
+		Burst:          cfg.API.RateLimit.Burst,
+		TrustedProxies: cfg.API.RateLimit.TrustedProxies,
 	}
-	registryMiddlewares = append(registryMiddlewares, registry.RateLimitMiddleware(rateLimitConfig))
+	rateLimitMiddleware := registry.RateLimitMiddleware(rateLimitConfig)
+	registryMiddlewares = append(registryMiddlewares, rateLimitMiddleware)
 
 	if cfg.Auth.Enabled && svc.authSvc != nil {
 		internalAuth := middleware.InternalRegistryAuth{
@@ -897,11 +900,13 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	registryMux := http.NewServeMux()
 	if svc.tokenHandler != nil {
 		// Token endpoint is NOT protected by auth - it's where clients get tokens
-		tokenWithLogging := middleware.Chain(
+		// but it still needs rate limiting to prevent brute force attacks
+		tokenWithMiddleware := middleware.Chain(
 			middleware.PanicRecovery(log),
 			middleware.RequestLogger(log),
+			rateLimitMiddleware,
 		)(svc.tokenHandler)
-		registryMux.Handle("/v2/token", tokenWithLogging)
+		registryMux.Handle("/v2/token", tokenWithMiddleware)
 	}
 	registryMux.Handle("/v2/", registryWithMiddleware)
 

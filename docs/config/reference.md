@@ -34,6 +34,7 @@ enabled = true                               # Enable rate limiting (default: tr
 global_rps = 500                             # Max requests/second globally
 per_ip_rps = 50                              # Max requests/second per client IP
 burst = 100                                  # Burst size for rate limiters
+trusted_proxies = []                         # IPs/CIDRs trusted to set X-Forwarded-For
 
 # =============================================================================
 # LOGGING
@@ -132,6 +133,7 @@ preserve = true                              # Keep volumes when containers are 
 | `api.rate_limit.global_rps` | `500` | Global requests/second |
 | `api.rate_limit.per_ip_rps` | `50` | Per-IP requests/second |
 | `api.rate_limit.burst` | `100` | Burst size |
+| `api.rate_limit.trusted_proxies` | `[]` | IPs/CIDRs trusted for X-Forwarded-For |
 | `logging.level` | `"info"` | Log level |
 | `logging.format` | `"console"` | Log format |
 | `logging.file.enabled` | `false` | File logging disabled |

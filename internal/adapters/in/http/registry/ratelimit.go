@@ -31,6 +31,12 @@ type RateLimitConfig struct {
 	// Burst is the maximum burst size for rate limiters.
 	// Default: 100
 	Burst int
+
+	// TrustedProxies is a list of IP addresses or CIDR ranges that are trusted
+	// to set X-Forwarded-For and X-Real-IP headers. If empty, these headers are
+	// ignored and RemoteAddr is always used (secure default for direct exposure).
+	// Example: ["127.0.0.1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+	TrustedProxies []string
 }
 
 // DefaultRateLimitConfig returns sensible default rate limiting configuration.
@@ -93,6 +99,9 @@ func RateLimitMiddleware(config RateLimitConfig) func(http.Handler) http.Handler
 	globalLimiter := rate.NewLimiter(rate.Limit(config.GlobalRPS), config.Burst)
 	ipLimiter := newIPRateLimiter(config.PerIPRPS, config.Burst)
 
+	// Parse trusted proxy CIDRs once at middleware creation
+	trustedNets := parseTrustedProxies(config.TrustedProxies)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Check global rate limit
@@ -102,7 +111,7 @@ func RateLimitMiddleware(config RateLimitConfig) func(http.Handler) http.Handler
 			}
 
 			// Check per-IP rate limit
-			ip := getClientIP(r)
+			ip := getClientIP(r, trustedNets)
 			if !ipLimiter.getLimiter(ip).Allow() {
 				sendRateLimitError(w)
 				return
@@ -111,6 +120,47 @@ func RateLimitMiddleware(config RateLimitConfig) func(http.Handler) http.Handler
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// parseTrustedProxies converts a list of IP addresses and CIDR ranges to net.IPNet.
+func parseTrustedProxies(proxies []string) []*net.IPNet {
+	var nets []*net.IPNet
+	for _, proxy := range proxies {
+		// Try parsing as CIDR
+		_, ipNet, err := net.ParseCIDR(proxy)
+		if err == nil {
+			nets = append(nets, ipNet)
+			continue
+		}
+		// Try parsing as single IP
+		ip := net.ParseIP(proxy)
+		if ip != nil {
+			// Convert single IP to /32 or /128 CIDR
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+		}
+	}
+	return nets
+}
+
+// isTrustedProxy checks if the given IP is from a trusted proxy.
+func isTrustedProxy(ip string, trustedNets []*net.IPNet) bool {
+	if len(trustedNets) == 0 {
+		return false
+	}
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return false
+	}
+	for _, ipNet := range trustedNets {
+		if ipNet.Contains(parsedIP) {
+			return true
+		}
+	}
+	return false
 }
 
 // sendRateLimitError sends an HTTP 429 response in Docker Registry API format.
@@ -128,26 +178,33 @@ func sendRateLimitError(w http.ResponseWriter) {
 }
 
 // getClientIP extracts the client IP address from the request.
-// It checks X-Forwarded-For and X-Real-IP headers for proxied requests.
-func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For for proxied requests
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take first IP in chain (original client)
-		if idx := strings.Index(xff, ","); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return strings.TrimSpace(xff)
-	}
-
-	// Check X-Real-IP
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-
-	// Fall back to RemoteAddr
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+// It only honors X-Forwarded-For and X-Real-IP headers when the request
+// originates from a trusted proxy. This prevents attackers from spoofing
+// their IP address when Gordon is exposed directly without a reverse proxy.
+func getClientIP(r *http.Request, trustedNets []*net.IPNet) string {
+	// Extract the direct connection IP from RemoteAddr
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		remoteIP = r.RemoteAddr
 	}
-	return ip
+
+	// Only honor proxy headers if the request comes from a trusted proxy
+	if isTrustedProxy(remoteIP, trustedNets) {
+		// Check X-Forwarded-For for proxied requests
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// Take first IP in chain (original client)
+			if first, _, found := strings.Cut(xff, ","); found {
+				return strings.TrimSpace(first)
+			}
+			return strings.TrimSpace(xff)
+		}
+
+		// Check X-Real-IP
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return xri
+		}
+	}
+
+	// Fall back to RemoteAddr (direct connection IP)
+	return remoteIP
 }
