@@ -3,14 +3,16 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 
 	"github.com/bnema/zerowrap"
-	"golang.org/x/time/rate"
 
 	"gordon/internal/adapters/dto"
+	"gordon/internal/adapters/in/http/middleware"
 	"gordon/internal/boundaries/in"
+	"gordon/internal/boundaries/out"
 	"gordon/internal/domain"
 )
 
@@ -25,19 +27,38 @@ const (
 )
 
 // AuthMiddleware creates middleware that validates admin API authentication.
-// The limiter parameter is optional and can be nil to disable rate limiting.
-func AuthMiddleware(authSvc in.AuthService, limiter *rate.Limiter, log zerowrap.Logger) func(http.Handler) http.Handler {
+// Both globalLimiter and ipLimiter can be nil to disable rate limiting.
+// The trustedNets parameter is used for proper IP extraction behind reverse proxies.
+func AuthMiddleware(
+	authSvc in.AuthService,
+	globalLimiter out.RateLimiter,
+	ipLimiter out.RateLimiter,
+	trustedNets []*net.IPNet,
+	log zerowrap.Logger,
+) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 
-			// Rate limit check (before any auth processing)
-			if limiter != nil && !limiter.Allow() {
+			// Check global rate limit
+			if globalLimiter != nil && !globalLimiter.Allow(ctx, "global") {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
 				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "rate limit exceeded"})
 				return
+			}
+
+			// Check per-IP rate limit
+			if ipLimiter != nil {
+				ip := middleware.GetClientIP(r, trustedNets)
+				if !ipLimiter.Allow(ctx, "ip:"+ip) {
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Retry-After", "1")
+					w.WriteHeader(http.StatusTooManyRequests)
+					_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "rate limit exceeded"})
+					return
+				}
 			}
 
 			// Check if auth is enabled
