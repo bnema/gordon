@@ -872,6 +872,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	registryMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log),
+		middleware.SecurityHeaders,
 	}
 
 	// Create rate limiters using the factory
@@ -910,6 +911,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		tokenWithMiddleware := middleware.Chain(
 			middleware.PanicRecovery(log),
 			middleware.RequestLogger(log),
+			middleware.SecurityHeaders,
 			rateLimitMiddleware,
 		)(svc.tokenHandler)
 		registryMux.Handle("/v2/token", tokenWithMiddleware)
@@ -921,6 +923,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		adminMiddlewares := []func(http.Handler) http.Handler{
 			middleware.PanicRecovery(log),
 			middleware.RequestLogger(log),
+			middleware.SecurityHeaders,
 		}
 		// Add admin auth middleware if auth is enabled
 		if svc.authSvc != nil {
@@ -938,6 +941,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	proxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log),
+		middleware.SecurityHeaders,
 		middleware.CORS,
 	}
 
