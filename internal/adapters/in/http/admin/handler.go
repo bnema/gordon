@@ -350,7 +350,11 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 
 	if err := h.configSvc.RemoveRoute(ctx, routeDomain); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to remove route")
-		h.sendError(w, http.StatusInternalServerError, "failed to remove route")
+		if errors.Is(err, domain.ErrRouteNotFound) {
+			h.sendError(w, http.StatusNotFound, "route not found")
+		} else {
+			h.sendError(w, http.StatusInternalServerError, "failed to remove route")
+		}
 		return
 	}
 
@@ -421,19 +425,7 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 
 	switch r.Method {
 	case http.MethodGet:
-		// Check read permission
-		if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionRead) {
-			h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:read")
-			return
-		}
-		// List secrets for domain (names only, not values)
-		keys, err := h.secretSvc.ListKeys(ctx, secretDomain)
-		if err != nil {
-			log.Error().Err(err).Str("domain", secretDomain).Msg("failed to list secrets")
-			h.sendError(w, http.StatusBadRequest, "invalid domain")
-			return
-		}
-		h.sendJSON(w, http.StatusOK, dto.SecretsListResponse{Domain: secretDomain, Keys: keys})
+		h.handleSecretsGet(w, r, secretDomain)
 
 	case http.MethodPost:
 		// Check write permission
@@ -485,6 +477,41 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 	default:
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleSecretsGet handles GET /admin/secrets/{domain} - list secrets.
+func (h *Handler) handleSecretsGet(w http.ResponseWriter, r *http.Request, secretDomain string) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	// Check read permission
+	if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:read")
+		return
+	}
+
+	// List secrets for domain (names only, not values) including attachments
+	keys, attachments, err := h.secretSvc.ListKeysWithAttachments(ctx, secretDomain)
+	if err != nil {
+		log.Error().Err(err).Str("domain", secretDomain).Msg("failed to list secrets")
+		h.sendError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
+
+	// Convert attachments to DTO format
+	var attachmentDTOs []dto.AttachmentSecretsResponse
+	for _, att := range attachments {
+		attachmentDTOs = append(attachmentDTOs, dto.AttachmentSecretsResponse{
+			Service: att.Service,
+			Keys:    att.Keys,
+		})
+	}
+
+	h.sendJSON(w, http.StatusOK, dto.SecretsListResponse{
+		Domain:      secretDomain,
+		Keys:        keys,
+		Attachments: attachmentDTOs,
+	})
 }
 
 // handleHealth handles /admin/health endpoint.
@@ -581,7 +608,8 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reload configuration from file into memory
-	if err := h.configSvc.Load(ctx); err != nil {
+	// Using Reload() instead of Load() to ensure we re-read the file from disk
+	if err := h.configSvc.Reload(ctx); err != nil {
 		log.Error().Err(err).Msg("failed to reload config")
 		h.sendError(w, http.StatusInternalServerError, "failed to reload config")
 		return

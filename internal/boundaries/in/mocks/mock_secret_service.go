@@ -6,6 +6,7 @@ package mocks
 
 import (
 	"context"
+	"gordon/internal/boundaries/out"
 
 	mock "github.com/stretchr/testify/mock"
 )
@@ -232,6 +233,82 @@ func (_c *MockSecretService_ListKeys_Call) Return(strings []string, err error) *
 }
 
 func (_c *MockSecretService_ListKeys_Call) RunAndReturn(run func(ctx context.Context, domain string) ([]string, error)) *MockSecretService_ListKeys_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListKeysWithAttachments provides a mock function for the type MockSecretService
+func (_mock *MockSecretService) ListKeysWithAttachments(ctx context.Context, domain string) ([]string, []out.AttachmentSecrets, error) {
+	ret := _mock.Called(ctx, domain)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListKeysWithAttachments")
+	}
+
+	var r0 []string
+	var r1 []out.AttachmentSecrets
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]string, []out.AttachmentSecrets, error)); ok {
+		return returnFunc(ctx, domain)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []string); ok {
+		r0 = returnFunc(ctx, domain)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) []out.AttachmentSecrets); ok {
+		r1 = returnFunc(ctx, domain)
+	} else {
+		if ret.Get(1) != nil {
+			r1 = ret.Get(1).([]out.AttachmentSecrets)
+		}
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, domain)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockSecretService_ListKeysWithAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListKeysWithAttachments'
+type MockSecretService_ListKeysWithAttachments_Call struct {
+	*mock.Call
+}
+
+// ListKeysWithAttachments is a helper method to define mock.On call
+//   - ctx context.Context
+//   - domain string
+func (_e *MockSecretService_Expecter) ListKeysWithAttachments(ctx interface{}, domain interface{}) *MockSecretService_ListKeysWithAttachments_Call {
+	return &MockSecretService_ListKeysWithAttachments_Call{Call: _e.mock.On("ListKeysWithAttachments", ctx, domain)}
+}
+
+func (_c *MockSecretService_ListKeysWithAttachments_Call) Run(run func(ctx context.Context, domain string)) *MockSecretService_ListKeysWithAttachments_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockSecretService_ListKeysWithAttachments_Call) Return(strings []string, attachmentSecretss []out.AttachmentSecrets, err error) *MockSecretService_ListKeysWithAttachments_Call {
+	_c.Call.Return(strings, attachmentSecretss, err)
+	return _c
+}
+
+func (_c *MockSecretService_ListKeysWithAttachments_Call) RunAndReturn(run func(ctx context.Context, domain string) ([]string, []out.AttachmentSecrets, error)) *MockSecretService_ListKeysWithAttachments_Call {
 	_c.Call.Return(run)
 	return _c
 }

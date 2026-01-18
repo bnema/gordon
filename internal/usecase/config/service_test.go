@@ -64,6 +64,115 @@ func TestService_Load(t *testing.T) {
 	assert.False(t, preserve)
 }
 
+func TestService_Reload(t *testing.T) {
+	t.Run("success - picks up config file changes", func(t *testing.T) {
+		// Create temp config file
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `[server]
+port = 8080
+
+[routes]
+"app.example.com" = "myapp:v1"
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		// Initial load
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 8080, svc.GetServerPort())
+		assert.Equal(t, "myapp:v1", svc.GetConfig().Routes["app.example.com"])
+
+		// Modify config file on disk
+		updatedConfig := `[server]
+port = 9090
+
+[routes]
+"app.example.com" = "myapp:v2"
+"new.example.com" = "newapp:latest"
+`
+		err = os.WriteFile(configFile, []byte(updatedConfig), 0600)
+		require.NoError(t, err)
+
+		// Reload should pick up new values
+		err = svc.Reload(ctx)
+		require.NoError(t, err)
+
+		assert.Equal(t, 9090, svc.GetServerPort())
+		assert.Equal(t, "myapp:v2", svc.GetConfig().Routes["app.example.com"])
+		assert.Equal(t, "newapp:latest", svc.GetConfig().Routes["new.example.com"])
+	})
+
+	t.Run("error - config file not found", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+
+		// Create config, load it, then delete it
+		err := os.WriteFile(configFile, []byte("[server]\nport = 8080\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		// Delete the config file
+		err = os.Remove(configFile)
+		require.NoError(t, err)
+
+		// Reload should fail
+		err = svc.Reload(ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read config file")
+	})
+
+	t.Run("error - invalid config syntax", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+
+		// Create valid config initially
+		err := os.WriteFile(configFile, []byte("[server]\nport = 8080\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		// Write invalid TOML
+		err = os.WriteFile(configFile, []byte("[server\nport = invalid syntax"), 0600)
+		require.NoError(t, err)
+
+		// Reload should fail
+		err = svc.Reload(ctx)
+		assert.Error(t, err)
+	})
+}
+
 func TestService_GetRoutes(t *testing.T) {
 	v := viper.New()
 	v.Set("routes", map[string]interface{}{

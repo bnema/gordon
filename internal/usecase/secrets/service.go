@@ -57,6 +57,43 @@ func (s *Service) ListKeys(ctx context.Context, domain string) ([]string, error)
 	return keys, nil
 }
 
+// ListKeysWithAttachments returns the list of secret keys for a domain
+// along with any attachment secrets for containers associated with the domain.
+func (s *Service) ListKeysWithAttachments(ctx context.Context, domain string) ([]string, []out.AttachmentSecrets, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "ListKeysWithAttachments",
+		"domain":              domain,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	if err := ValidateDomain(domain); err != nil {
+		log.Warn().Err(err).Msg("domain validation failed")
+		return nil, nil, err
+	}
+
+	// Get domain secrets
+	keys, err := s.store.ListKeys(domain)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to list secret keys")
+		return nil, nil, err
+	}
+
+	// Get attachment secrets
+	attachments, err := s.store.ListAttachmentKeys(domain)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list attachment secrets, continuing without them")
+		attachments = nil // Don't fail, just return empty attachments
+	}
+
+	log.Debug().
+		Int("domain_keys", len(keys)).
+		Int("attachments", len(attachments)).
+		Msg("listed secret keys with attachments")
+
+	return keys, attachments, nil
+}
+
 // GetAll returns all secrets for a domain as a key-value map.
 func (s *Service) GetAll(ctx context.Context, domain string) (map[string]string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
