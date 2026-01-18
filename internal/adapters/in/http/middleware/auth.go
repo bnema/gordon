@@ -312,33 +312,28 @@ func isInternalRegistryAuth(r *http.Request, internalAuth InternalRegistryAuth) 
 	return usernameMatch && passwordMatch
 }
 
-// checkScopeAccess verifies the token has permission for the requested operation.
-// Maps HTTP method to registry action and checks if any token scope grants access.
-func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.Logger) bool {
-	// Determine required action from HTTP method
-	var action string
-	switch r.Method {
+// actionFromMethod returns the registry action for an HTTP method.
+func actionFromMethod(method string) string {
+	switch method {
 	case http.MethodGet, http.MethodHead:
-		action = domain.ScopeActionPull
+		return domain.ScopeActionPull
 	case http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete:
-		action = domain.ScopeActionPush
+		return domain.ScopeActionPush
 	default:
-		action = domain.ScopeActionPull // Default to pull for unknown methods
+		return domain.ScopeActionPull
 	}
+}
 
-	// Extract repository name from URL path
-	// Paths are like /v2/{name}/manifests/{reference} or /v2/{name}/blobs/{digest}
-	path := r.URL.Path
+// extractRepoName extracts the repository name from a registry path.
+// Returns empty string if the path is not a valid registry path or should be allowed.
+func extractRepoName(path string) (repoName string, shouldAllow bool) {
 	if !strings.HasPrefix(path, "/v2/") {
-		// Not a registry path, allow
-		return true
+		return "", true // Not a registry path, allow
 	}
 
-	// Remove /v2/ prefix and find repository name
 	pathParts := strings.Split(strings.TrimPrefix(path, "/v2/"), "/")
 	if len(pathParts) < 2 {
-		// Malformed path or /v2/ root, allow
-		return true
+		return "", true // Malformed path or /v2/ root, allow
 	}
 
 	// Find the boundary between repo name and route (manifests, blobs, tags)
@@ -350,17 +345,37 @@ func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.
 		}
 	}
 	if len(repoNameParts) == 0 {
-		// Could be a special route like /v2/token, allow
+		return "", true // Special route like /v2/token, allow
+	}
+
+	return strings.Join(repoNameParts, "/"), false
+}
+
+// checkScopeAccess verifies the token has permission for the requested operation.
+// Maps HTTP method to registry action and checks if any token scope grants access.
+func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.Logger) bool {
+	action := actionFromMethod(r.Method)
+
+	repoName, shouldAllow := extractRepoName(r.URL.Path)
+	if shouldAllow {
 		return true
 	}
 
-	repoName := strings.Join(repoNameParts, "/")
-
 	// Check if any token scope grants access
 	for _, scopeStr := range claims.Scopes {
+		// Handle simple scopes (e.g., "push", "pull") for backwards compatibility
+		if scopeStr == action || scopeStr == "*" {
+			log.Debug().
+				Str("repo", repoName).
+				Str("action", action).
+				Str("scope", scopeStr).
+				Msg("simple scope access granted")
+			return true
+		}
+
+		// Handle Docker v2 format scopes (e.g., "repository:myrepo:push,pull")
 		scope, err := domain.ParseScope(scopeStr)
 		if err != nil {
-			log.Debug().Err(err).Str("scope", scopeStr).Msg("failed to parse scope")
 			continue
 		}
 
