@@ -4,12 +4,12 @@ In-depth guides for specific Gordon setups and integrations.
 
 ## Server Setup
 
+- [Secure VPS Setup](./secure-vps-setup.md) - Tailscale SSH, firewalld, and CrowdSec
 - [Running Gordon in a Container](./running-in-container.md) - Deploy Gordon itself in Docker or Podman
 - [Podman Rootless Setup](./podman-rootless.md) - Enhanced security with rootless containers
 
 ## TLS & Load Balancing
 
-- [Cloudflare DNS & Proxy Setup](./cloudflare-setup.md) - HTTPS termination with Cloudflare (recommended)
 - [AWS Application Load Balancer](./aws-alb.md) - Deploy behind AWS ALB
 - [Kubernetes Ingress](./kubernetes-ingress.md) - Deploy behind Kubernetes ingress controller
 
