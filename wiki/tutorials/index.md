@@ -1,8 +1,8 @@
 # Tutorials
 
-Step-by-step guides to help you get started with Gordon.
+Step-by-step guides for common Gordon tasks.
 
-## Getting Started
+> **New to Gordon?** Start with the [Getting Started guide](/docs/getting-started.md) in the official docs.
 
 - [Deploy Your First App](./first-deploy.md) - Deploy a simple web app in minutes
 
