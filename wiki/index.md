@@ -34,7 +34,6 @@ Configuration examples explained:
 
 - [Minimal Configuration](./examples/minimal.md) - Simplest working setup
 - [Production Configuration](./examples/production.md) - Full production setup
-- [Development Configuration](./examples/development.md) - Local development setup
 
 ## Quick Links
 
