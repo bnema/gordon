@@ -25,7 +25,7 @@ Commands are organized by where they run:
 | `gordon deploy` | Manually deploy or redeploy a route | [serve](./serve.md#gordon-deploy) |
 | `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
 | `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
-| `gordon status` | Show Gordon server status | - |
+| `gordon status` | Show Gordon server status | [status](./status.md) |
 
 ## Client Commands
 

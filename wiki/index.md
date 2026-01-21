@@ -6,18 +6,19 @@ Community tutorials, guides, and examples for Gordon.
 
 Step-by-step guides for common tasks:
 
-- [Deploy Your First App](./tutorials/first-deploy.md) - Get started with Gordon
-- [Deploy a Next.js App](./tutorials/nextjs-deploy.md) - Full-stack JavaScript deployment
+- [Deploy Your First App](./tutorials/first-deploy.md) - Deploy a simple web app in minutes
 - [Add PostgreSQL to Your App](./tutorials/postgres-service.md) - Database attachments
-- [Deploy Multi-Service Applications](./tutorials/multi-service-app.md) - Microservices setup
+
+> **New to Gordon?** Start with the [Getting Started guide](/docs/getting-started.md) in the official docs.
 
 ## Guides
 
 In-depth guides for specific setups:
 
+- [Secure VPS Setup](./guides/secure-vps-setup.md) - Tailscale SSH, firewalld, and CrowdSec
 - [Running Gordon in a Container](./guides/running-in-container.md) - Deploy Gordon itself in Docker or Podman
 - [Podman Rootless Setup](./guides/podman-rootless.md) - Enhanced security with rootless containers
-- [Cloudflare DNS & Proxy Setup](./guides/cloudflare-setup.md) - HTTPS termination with Cloudflare
+- [Remote CLI Management](./guides/remote-cli.md) - Manage Gordon instances remotely
 - [Using Pass for Secrets](./guides/secrets-pass.md) - Unix password manager integration
 - [Using SOPS for Secrets](./guides/secrets-sops.md) - Encrypted secrets with SOPS
 
