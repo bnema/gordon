@@ -15,6 +15,7 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 // maxAdminRequestSize is the maximum allowed size for admin API request bodies.
@@ -31,6 +32,7 @@ type Handler struct {
 	healthSvc    in.HealthService
 	secretSvc    in.SecretService
 	logSvc       in.LogService
+	registrySvc  in.RegistryService
 	eventBus     out.EventPublisher
 	log          zerowrap.Logger
 }
@@ -84,6 +86,7 @@ func NewHandler(
 	healthSvc in.HealthService,
 	secretSvc in.SecretService,
 	logSvc in.LogService,
+	registrySvc in.RegistryService,
 	eventBus out.EventPublisher,
 	log zerowrap.Logger,
 ) *Handler {
@@ -94,6 +97,7 @@ func NewHandler(
 		healthSvc:    healthSvc,
 		secretSvc:    secretSvc,
 		logSvc:       logSvc,
+		registrySvc:  registrySvc,
 		eventBus:     eventBus,
 		log:          log,
 	}
@@ -274,6 +278,21 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate image exists in registry before adding route
+	if h.registrySvc != nil {
+		imageName, imageRef := validation.ParseImageReference(route.Image)
+		if _, err := h.registrySvc.GetManifest(ctx, imageName, imageRef); err != nil {
+			if errors.Is(err, domain.ErrManifestNotFound) {
+				log.Error().Err(err).Str("image", route.Image).Msg("image not found in registry")
+				h.sendError(w, http.StatusBadRequest, fmt.Sprintf("image '%s' not found in Gordon's registry. Please push it first using: gordon push %s", route.Image, route.Image))
+			} else {
+				log.Error().Err(err).Str("image", route.Image).Msg("failed to check image in registry")
+				h.sendError(w, http.StatusServiceUnavailable, "failed to verify image in registry")
+			}
+			return
+		}
+	}
+
 	if err := h.configSvc.AddRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", route.Domain).Msg("failed to add route")
 		switch {
@@ -315,6 +334,21 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 	}
 
 	route.Domain = routeDomain
+
+	// Validate image exists in registry before updating route
+	if h.registrySvc != nil && route.Image != "" {
+		imageName, imageRef := validation.ParseImageReference(route.Image)
+		if _, err := h.registrySvc.GetManifest(ctx, imageName, imageRef); err != nil {
+			if errors.Is(err, domain.ErrManifestNotFound) {
+				log.Error().Err(err).Str("image", route.Image).Msg("image not found in registry")
+				h.sendError(w, http.StatusBadRequest, fmt.Sprintf("image '%s' not found in Gordon's registry. Please push it first using: gordon push %s", route.Image, route.Image))
+			} else {
+				log.Error().Err(err).Str("image", route.Image).Msg("failed to check image in registry")
+				h.sendError(w, http.StatusServiceUnavailable, "failed to verify image in registry")
+			}
+			return
+		}
+	}
 
 	if err := h.configSvc.UpdateRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to update route")
