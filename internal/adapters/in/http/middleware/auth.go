@@ -14,11 +14,9 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// contextKey is a type for context keys used by this package.
-type contextKey string
-
-// TokenClaimsKey is the context key for storing token claims.
-const TokenClaimsKey contextKey = "tokenClaims"
+// TokenClaimsKey is context key for storing token claims.
+// Using domain key for consistency across all auth flows.
+const TokenClaimsKey = domain.TokenClaimsKey
 
 // RegistryAuth middleware provides Docker Registry authentication.
 func RegistryAuth(username, password string, log zerowrap.Logger) func(http.Handler) http.Handler {

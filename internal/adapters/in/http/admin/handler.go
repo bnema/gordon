@@ -1085,6 +1085,13 @@ func (h *Handler) handleAttachmentsConfigDelete(w http.ResponseWriter, r *http.R
 func (h *Handler) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// Only allow GET method
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
 	// Call use case to get auth status
 	status, err := h.authSvc.GetAuthStatus(ctx)
 	if err != nil {

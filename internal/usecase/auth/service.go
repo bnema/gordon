@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -465,8 +464,8 @@ func (s *Service) GetAuthStatus(ctx context.Context) (*domain.AuthStatus, error)
 	}
 
 	// Extract claims from context (set by AdminAuth middleware)
-	claims, ok := ctx.Value(middleware.TokenClaimsKey).(*domain.TokenClaims)
-	if !ok || claims == nil {
+	claims := domain.GetTokenClaims(ctx)
+	if claims == nil {
 		return &domain.AuthStatus{Valid: false}, nil
 	}
 

@@ -656,7 +656,8 @@ func createAuthServiceForCLI(cfg *cliConfig, log zerowrap.Logger) (*auth.Service
 
 // newAuthStatusCmd creates the auth status command.
 func newAuthStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var remoteNameFlag string
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Check authentication session status",
 		Long: `Verify if stored authentication session is still valid.
@@ -667,21 +668,26 @@ Examples:
   gordon auth status              Check status of active remote
   gordon auth status --remote prod  Check specific remote`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthStatus()
+			return runAuthStatus(remoteNameFlag)
 		},
 	}
+	cmd.Flags().StringVar(&remoteNameFlag, "remote", "", "Check specific remote")
+	return cmd
 }
 
 // runAuthStatus checks authentication status for the active remote.
-func runAuthStatus() error {
+func runAuthStatus(remoteNameArg string) error {
 	// Load remotes config
 	config, err := remote.LoadRemotes("")
 	if err != nil {
 		return fmt.Errorf("failed to load remotes: %w", err)
 	}
 
-	// Determine active remote
-	remoteName := config.Active
+	// Determine remote name
+	remoteName := remoteNameArg
+	if remoteName == "" {
+		remoteName = config.Active
+	}
 	if remoteName == "" {
 		return fmt.Errorf("no active remote configured. Use 'gordon remote use <name>' or --remote flag")
 	}
