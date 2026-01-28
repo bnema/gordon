@@ -7,7 +7,6 @@ package mocks
 import (
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
-
 	mock "github.com/stretchr/testify/mock"
 )
 

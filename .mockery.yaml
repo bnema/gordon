@@ -7,7 +7,7 @@ structname: 'Mock{{.InterfaceName}}'
 pkgname: 'mocks'
 
 packages:
-  gordon/internal/boundaries/out:
+  github.com/bnema/gordon/internal/boundaries/out:
     interfaces:
       ContainerRuntime:
       BlobStorage:
@@ -22,7 +22,7 @@ packages:
       TokenStore:
       DomainSecretStore:
       RateLimiter:
-  gordon/internal/boundaries/in:
+  github.com/bnema/gordon/internal/boundaries/in:
     interfaces:
       ContainerService:
       RegistryService:

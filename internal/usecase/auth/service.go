@@ -449,3 +449,31 @@ func getStringClaim(claims jwt.MapClaims, key string) string {
 	}
 	return ""
 }
+
+// GetAuthStatus returns authentication status from context.
+// Claims are already validated by AdminAuth middleware and stored in context.
+func (s *Service) GetAuthStatus(ctx context.Context) (*domain.AuthStatus, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "GetAuthStatus",
+	})
+
+	// If auth is disabled, return valid status with no claims
+	if !s.IsEnabled() {
+		return &domain.AuthStatus{Valid: true}, nil
+	}
+
+	// Extract claims from context (set by AdminAuth middleware)
+	claims := domain.GetTokenClaims(ctx)
+	if claims == nil {
+		return &domain.AuthStatus{Valid: false}, nil
+	}
+
+	return &domain.AuthStatus{
+		Valid:     true,
+		Subject:   claims.Subject,
+		Scopes:    claims.Scopes,
+		ExpiresAt: claims.ExpiresAt,
+		IssuedAt:  claims.IssuedAt,
+	}, nil
+}

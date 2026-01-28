@@ -16,16 +16,6 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// contextKey is a custom type for context keys to avoid collisions.
-type contextKey string
-
-const (
-	// ContextKeyScopes is the context key for storing token scopes.
-	ContextKeyScopes contextKey = "admin_scopes"
-	// ContextKeySubject is the context key for storing token subject.
-	ContextKeySubject contextKey = "admin_subject"
-)
-
 // AuthMiddleware creates middleware that validates admin API authentication.
 // Both globalLimiter and ipLimiter can be nil to disable rate limiting.
 // The trustedNets parameter is used for proper IP extraction behind reverse proxies.
@@ -110,8 +100,9 @@ func AuthMiddleware(
 			}
 
 			// Add claims to context for downstream handlers
-			ctx = context.WithValue(ctx, ContextKeyScopes, claims.Scopes)
-			ctx = context.WithValue(ctx, ContextKeySubject, claims.Subject)
+			ctx = context.WithValue(ctx, domain.ContextKeyScopes, claims.Scopes)
+			ctx = context.WithValue(ctx, domain.ContextKeySubject, claims.Subject)
+			ctx = context.WithValue(ctx, domain.TokenClaimsKey, claims)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -125,7 +116,7 @@ func RequireScope(resource, action string) func(http.Handler) http.Handler {
 			ctx := r.Context()
 
 			// Get scopes from context
-			scopes, ok := ctx.Value(ContextKeyScopes).([]string)
+			scopes, ok := ctx.Value(domain.ContextKeyScopes).([]string)
 			if !ok {
 				sendForbidden(w, "no scopes in context")
 				return
@@ -144,13 +135,13 @@ func RequireScope(resource, action string) func(http.Handler) http.Handler {
 
 // GetSubject retrieves the authenticated subject from the context.
 func GetSubject(ctx context.Context) string {
-	subject, _ := ctx.Value(ContextKeySubject).(string)
+	subject, _ := ctx.Value(domain.ContextKeySubject).(string)
 	return subject
 }
 
 // GetScopes retrieves the token scopes from the context.
 func GetScopes(ctx context.Context) []string {
-	scopes, _ := ctx.Value(ContextKeyScopes).([]string)
+	scopes, _ := ctx.Value(domain.ContextKeyScopes).([]string)
 	return scopes
 }
 

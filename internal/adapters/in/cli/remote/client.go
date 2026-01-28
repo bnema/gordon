@@ -632,3 +632,18 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 
 	return ch, nil
 }
+
+// VerifyAuth checks if authentication session is valid.
+func (c *Client) VerifyAuth(ctx context.Context) (*dto.AuthVerifyResponse, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/auth/verify", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.AuthVerifyResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}

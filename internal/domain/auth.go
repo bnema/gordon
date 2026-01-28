@@ -2,6 +2,7 @@
 package domain
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -263,4 +264,36 @@ func AdminScopeConfig(actions ...string) string {
 // AdminScopeStatus creates an admin scope for status with the given actions.
 func AdminScopeStatus(actions ...string) string {
 	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceStatus, strings.Join(actions, ","))
+}
+
+// AuthStatus represents status of an authentication session.
+type AuthStatus struct {
+	Valid     bool
+	Subject   string
+	Scopes    []string
+	ExpiresAt int64 // Unix timestamp, 0 if never expires
+	IssuedAt  int64 // Unix timestamp
+}
+
+// Context keys for auth-related domain concerns.
+type authContextKey string
+
+const (
+	// TokenClaimsKey is the context key for storing TokenClaims.
+	// Allows use cases and adapters to access validated token claims from context.
+	TokenClaimsKey authContextKey = "token_claims"
+	// ContextKeyScopes is the context key for storing token scopes.
+	ContextKeyScopes authContextKey = "token_scopes"
+	// ContextKeySubject is the context key for storing token subject.
+	ContextKeySubject authContextKey = "token_subject"
+)
+
+// GetTokenClaims extracts TokenClaims from context.
+// Returns nil if claims are not present or type assertion fails.
+func GetTokenClaims(ctx context.Context) *TokenClaims {
+	claims, ok := ctx.Value(TokenClaimsKey).(*TokenClaims)
+	if !ok {
+		return nil
+	}
+	return claims
 }
