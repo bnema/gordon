@@ -264,3 +264,12 @@ func AdminScopeConfig(actions ...string) string {
 func AdminScopeStatus(actions ...string) string {
 	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceStatus, strings.Join(actions, ","))
 }
+
+// AuthStatus represents status of an authentication session.
+type AuthStatus struct {
+	Valid     bool
+	Subject   string
+	Scopes    []string
+	ExpiresAt int64 // Unix timestamp, 0 if never expires
+	IssuedAt  int64 // Unix timestamp
+}

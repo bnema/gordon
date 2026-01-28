@@ -6,8 +6,8 @@ package mocks
 
 import (
 	"context"
-	"github.com/bnema/gordon/internal/domain"
 
+	"github.com/bnema/gordon/internal/domain"
 	mock "github.com/stretchr/testify/mock"
 )
 
