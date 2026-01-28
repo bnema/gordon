@@ -340,7 +340,7 @@ func TestRequireScope(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodGet, "/admin/routes", nil)
 			// Add scopes to context
-			ctx := context.WithValue(req.Context(), ContextKeyScopes, tt.scopes)
+			ctx := context.WithValue(req.Context(), domain.ContextKeyScopes, tt.scopes)
 			req = req.WithContext(ctx)
 
 			rec := httptest.NewRecorder()
@@ -352,7 +352,7 @@ func TestRequireScope(t *testing.T) {
 }
 
 func TestHasAccess(t *testing.T) {
-	ctx := context.WithValue(context.Background(), ContextKeyScopes, []string{"admin:routes:read", "admin:secrets:*"})
+	ctx := context.WithValue(context.Background(), domain.ContextKeyScopes, []string{"admin:routes:read", "admin:secrets:*"})
 
 	assert.True(t, HasAccess(ctx, "routes", "read"))
 	assert.False(t, HasAccess(ctx, "routes", "write"))
