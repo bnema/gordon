@@ -183,6 +183,7 @@ func TestHandler_RoutesPut_RequiresWriteScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
 				configSvc.EXPECT().UpdateRoute(mock.Anything, mock.AnythingOfType("domain.Route")).Return(nil).Maybe()
+				registrySvc.EXPECT().GetManifest(mock.Anything, "myapp", "v2").Return(nil, nil).Maybe()
 			}
 
 			req := httptest.NewRequest("PUT", "/admin/routes/app.example.com", bytes.NewBufferString(routeJSON))
@@ -728,7 +729,7 @@ func TestHandler_RoutesPost_ImageNotFound(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			registrySvc.EXPECT().GetManifest(mock.Anything, tt.manifestName, tt.manifestRef).Return(nil, fmt.Errorf("manifest not found"))
+			registrySvc.EXPECT().GetManifest(mock.Anything, tt.manifestName, tt.manifestRef).Return(nil, domain.ErrManifestNotFound)
 
 			req := httptest.NewRequest("POST", "/admin/routes", bytes.NewBufferString(tt.body))
 			req = req.WithContext(ctxWithScopes("admin:routes:write"))
