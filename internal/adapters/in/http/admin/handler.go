@@ -15,6 +15,7 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 // maxAdminRequestSize is the maximum allowed size for admin API request bodies.
@@ -31,6 +32,7 @@ type Handler struct {
 	healthSvc    in.HealthService
 	secretSvc    in.SecretService
 	logSvc       in.LogService
+	registrySvc  in.RegistryService
 	eventBus     out.EventPublisher
 	log          zerowrap.Logger
 }
@@ -84,6 +86,7 @@ func NewHandler(
 	healthSvc in.HealthService,
 	secretSvc in.SecretService,
 	logSvc in.LogService,
+	registrySvc in.RegistryService,
 	eventBus out.EventPublisher,
 	log zerowrap.Logger,
 ) *Handler {
@@ -94,6 +97,7 @@ func NewHandler(
 		healthSvc:    healthSvc,
 		secretSvc:    secretSvc,
 		logSvc:       logSvc,
+		registrySvc:  registrySvc,
 		eventBus:     eventBus,
 		log:          log,
 	}
@@ -272,6 +276,16 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 		log.Warn().Err(err).Msg("invalid route JSON")
 		h.sendError(w, http.StatusBadRequest, "invalid JSON")
 		return
+	}
+
+	// Validate image exists in registry before adding route
+	if h.registrySvc != nil {
+		imageName, imageRef := validation.ParseImageReference(route.Image)
+		if _, err := h.registrySvc.GetManifest(ctx, imageName, imageRef); err != nil {
+			log.Error().Err(err).Str("image", route.Image).Msg("image not found in registry")
+			h.sendError(w, http.StatusBadRequest, fmt.Sprintf("image '%s' not found in Gordon's registry. Please push it first using: gordon push %s", route.Image, route.Image))
+			return
+		}
 	}
 
 	if err := h.configSvc.AddRoute(ctx, route); err != nil {
