@@ -140,11 +140,12 @@ type routeHandler func(w http.ResponseWriter, r *http.Request, path string)
 func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	// Exact match routes
 	exactRoutes := map[string]routeHandler{
-		"/networks": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
-		"/status":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
-		"/health":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
-		"/reload":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
-		"/config":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
+		"/networks":    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
+		"/status":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
+		"/health":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
+		"/reload":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
+		"/config":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
+		"/auth/verify": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true
@@ -1077,4 +1078,28 @@ func (h *Handler) handleAttachmentsConfigDelete(w http.ResponseWriter, r *http.R
 
 	log.Info().Str("target", domainOrGroup).Str("image", image).Msg("attachment removed")
 	h.sendJSON(w, http.StatusOK, dto.AttachmentStatusResponse{Status: "removed"})
+}
+
+// handleAuthVerify handles /admin/auth/verify endpoint.
+// Validates authentication session and returns token status.
+func (h *Handler) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Call use case to get auth status
+	status, err := h.authSvc.GetAuthStatus(ctx)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "failed to get auth status")
+		return
+	}
+
+	// Convert domain.AuthStatus to DTO
+	response := dto.AuthVerifyResponse{
+		Valid:     status.Valid,
+		Subject:   status.Subject,
+		Scopes:    status.Scopes,
+		ExpiresAt: status.ExpiresAt,
+		IssuedAt:  status.IssuedAt,
+	}
+
+	h.sendJSON(w, http.StatusOK, response)
 }
