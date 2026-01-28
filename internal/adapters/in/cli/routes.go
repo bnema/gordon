@@ -257,12 +257,26 @@ func newRoutesAddCmd() *cobra.Command {
 Examples:
   gordon routes add app.mydomain.com myapp:latest
   gordon --remote https://gordon.mydomain.com routes add api.mydomain.com api:v2`,
-		Args: cobra.ExactArgs(2),
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			routeDomain := args[0]
 
-			if image == "" {
+			// Resolve image from positional argument or flag
+			hasPositionalImage := len(args) > 1
+			hasFlagImage := image != ""
+
+			// Check for conflicts: both positional and flag provided
+			if hasPositionalImage && hasFlagImage {
+				return fmt.Errorf("error: cannot use both positional image argument and --image flag")
+			}
+
+			// Check that image is provided via either method
+			if !hasPositionalImage && !hasFlagImage {
+				return fmt.Errorf("error: image is required (use positional argument or --image flag)")
+			}
+
+			if hasPositionalImage {
 				image = args[1]
 			}
 

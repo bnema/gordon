@@ -279,7 +279,7 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate image exists in registry before adding route
-	if h.registrySvc != nil {
+	if h.registrySvc != nil && route.Image != "" {
 		imageName, imageRef := validation.ParseImageReference(route.Image)
 		if _, err := h.registrySvc.GetManifest(ctx, imageName, imageRef); err != nil {
 			if errors.Is(err, domain.ErrManifestNotFound) {
