@@ -250,21 +250,34 @@ func newRoutesAddCmd() *cobra.Command {
 	var image string
 
 	cmd := &cobra.Command{
-		Use:   "add <domain>",
+		Use:   "add <domain> <image>",
 		Short: "Add a new route",
 		Long: `Add a new route mapping a domain to a container image.
 
 Examples:
-  gordon routes add app.mydomain.com --image myapp:latest
-  gordon --remote https://gordon.mydomain.com routes add api.mydomain.com --image api:v2`,
-		Args: cobra.ExactArgs(1),
+  gordon routes add app.mydomain.com myapp:latest
+  gordon --remote https://gordon.mydomain.com routes add api.mydomain.com api:v2`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			routeDomain := args[0]
 
-			if image == "" {
-				fmt.Println(styles.RenderError("--image flag is required"))
-				return nil
+			// Resolve image from positional argument or flag
+			hasPositionalImage := len(args) > 1
+			hasFlagImage := image != ""
+
+			// Check for conflicts: both positional and flag provided
+			if hasPositionalImage && hasFlagImage {
+				return fmt.Errorf("error: cannot use both positional image argument and --image flag")
+			}
+
+			// Check that image is provided via either method
+			if !hasPositionalImage && !hasFlagImage {
+				return fmt.Errorf("error: image is required (use positional argument or --image flag)")
+			}
+
+			if hasPositionalImage {
+				image = args[1]
 			}
 
 			route := domain.Route{
@@ -292,8 +305,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVarP(&image, "image", "i", "", "Container image (required)")
-	_ = cmd.MarkFlagRequired("image")
+	cmd.Flags().StringVarP(&image, "image", "i", "", "Container image")
 
 	return cmd
 }
