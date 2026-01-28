@@ -683,12 +683,12 @@ func runAuthStatus() error {
 	// Determine active remote
 	remoteName := config.Active
 	if remoteName == "" {
-		return fmt.Errorf("No active remote configured. Use 'gordon remote use <name>' or --remote flag")
+		return fmt.Errorf("no active remote configured. Use 'gordon remote use <name>' or --remote flag")
 	}
 
 	remoteConfig, ok := config.Remotes[remoteName]
 	if !ok {
-		return fmt.Errorf("Active remote '%s' not found", remoteName)
+		return fmt.Errorf("active remote '%s' not found", remoteName)
 	}
 
 	// Create client
