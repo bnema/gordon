@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/internal/adapters/out/secrets"
@@ -35,6 +36,7 @@ func newAuthCmd() *cobra.Command {
 	cmd.AddCommand(newAuthPasswordCmd())
 	cmd.AddCommand(newAuthInternalCmd())
 	cmd.AddCommand(newAuthLoginCmd())
+	cmd.AddCommand(newAuthStatusCmd())
 
 	return cmd
 }
@@ -650,4 +652,146 @@ func createAuthServiceForCLI(cfg *cliConfig, log zerowrap.Logger) (*auth.Service
 	}
 
 	return auth.NewService(authConfig, store, log), nil
+}
+
+// newAuthStatusCmd creates the auth status command.
+func newAuthStatusCmd() *cobra.Command {
+	var remoteNameFlag string
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Check authentication session status",
+		Long: `Verify if stored authentication session is still valid.
+
+Shows token validity, expiry, and connection status for the active remote.
+
+Examples:
+  gordon auth status              Check status of active remote
+  gordon auth status --remote prod  Check specific remote`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthStatus(remoteNameFlag)
+		},
+	}
+	cmd.Flags().StringVarP(&remoteNameFlag, "remote", "r", "", "Check specific remote")
+	return cmd
+}
+
+// runAuthStatus checks authentication status for the active remote.
+func runAuthStatus(remoteNameArg string) error {
+	// Load remotes config
+	config, err := remote.LoadRemotes("")
+	if err != nil {
+		return fmt.Errorf("failed to load remotes: %w", err)
+	}
+
+	// Determine remote name
+	remoteName := remoteNameArg
+	if remoteName == "" {
+		remoteName = config.Active
+	}
+	if remoteName == "" {
+		return fmt.Errorf("no active remote configured. Use 'gordon remote use <name>' or --remote flag")
+	}
+
+	remoteConfig, ok := config.Remotes[remoteName]
+	if !ok {
+		if remoteNameArg != "" {
+			return fmt.Errorf("remote '%s' not found", remoteName)
+		}
+		return fmt.Errorf("active remote '%s' not found", remoteName)
+	}
+
+	// Create client
+	client := remote.NewClient(remoteConfig.URL, remote.WithToken(remoteConfig.Token))
+
+	// Verify auth
+	ctx := context.Background()
+	fmt.Printf("Checking authentication status for '%s'...\n", remoteName)
+
+	status, err := client.VerifyAuth(ctx)
+	if err != nil {
+		return handleAuthVerifyError(err, remoteName, remoteConfig.URL)
+	}
+
+	// Display status
+	displayAuthStatus(remoteName, remoteConfig.URL, status)
+	return nil
+}
+
+// handleAuthVerifyError handles errors from auth verification.
+func handleAuthVerifyError(err error, remoteName, url string) error {
+	errStrLower := strings.ToLower(err.Error())
+
+	// Connection errors
+	if strings.Contains(errStrLower, "connection refused") ||
+		strings.Contains(errStrLower, "no such host") ||
+		strings.Contains(errStrLower, "timeout") {
+		fmt.Println(styles.Theme.Bold.Render("Remote:  " + url))
+		fmt.Println()
+		fmt.Println(styles.Theme.Error.Render(styles.IconError + " Connection Failed"))
+		fmt.Printf("Error:  %s\n\n", err.Error())
+		fmt.Println(styles.Theme.Muted.Render("Check that Gordon server is running and accessible."))
+		return nil
+	}
+
+	// Auth errors
+	if strings.Contains(errStrLower, "401") ||
+		strings.Contains(errStrLower, "unauthorized") ||
+		strings.Contains(errStrLower, "invalid token") {
+		fmt.Println(styles.Theme.Bold.Render("Remote:  " + url))
+		fmt.Println()
+		fmt.Println(styles.Theme.Error.Render(styles.IconError + " Authentication Failed"))
+		fmt.Println()
+		fmt.Println(styles.Theme.Muted.Render("Reason: Token is invalid or expired"))
+		fmt.Println()
+		fmt.Println(styles.Theme.Bold.Render("Action: Re-authenticate with:"))
+		fmt.Printf("  gordon auth login --remote %s\n", remoteName)
+		return nil
+	}
+
+	return fmt.Errorf("failed to verify auth: %w", err)
+}
+
+// displayAuthStatus displays authentication status information.
+func displayAuthStatus(remoteName, url string, status *dto.AuthVerifyResponse) {
+	fmt.Println(styles.Theme.Bold.Render("Remote:  " + remoteName + " | URL: " + url))
+	fmt.Println()
+
+	if status.Valid {
+		// Valid authentication
+		fmt.Println(styles.Theme.Success.Render(styles.IconSuccess + " Authenticated"))
+		fmt.Println()
+
+		if status.Subject != "" {
+			fmt.Printf("%s %s\n", styles.Theme.Bold.Render("Subject:"), status.Subject)
+		}
+
+		if status.IssuedAt > 0 {
+			issuedAt := time.Unix(status.IssuedAt, 0)
+			fmt.Printf("%s %s\n", styles.Theme.Bold.Render("Issued:"), issuedAt.Format("2006-01-02 15:04:05"))
+		}
+
+		if status.ExpiresAt > 0 {
+			expiresAt := time.Unix(status.ExpiresAt, 0)
+			if expiresAt.Before(time.Now()) {
+				fmt.Printf("%s %s (%s ago)\n", styles.Theme.Bold.Render("Expired:"),
+					expiresAt.Format("2006-01-02 15:04:05"),
+					styles.Theme.Muted.Render(time.Since(expiresAt).Round(time.Second).String()))
+			} else {
+				remaining := time.Until(expiresAt)
+				fmt.Printf("%s %s (%s)\n", styles.Theme.Bold.Render("Expires:"),
+					expiresAt.Format("2006-01-02 15:04:05"),
+					styles.Theme.Muted.Render(remaining.Round(time.Second).String()))
+			}
+		}
+
+		if len(status.Scopes) > 0 {
+			fmt.Printf("%s %s\n", styles.Theme.Bold.Render("Scopes:"), strings.Join(status.Scopes, ", "))
+		}
+	} else {
+		// Invalid or no authentication
+		fmt.Println(styles.Theme.Error.Render(styles.IconError + " Not Authenticated"))
+		fmt.Println()
+		fmt.Println(styles.Theme.Muted.Render("Action: Re-authenticate with:"))
+		fmt.Printf("  gordon auth login --remote %s\n", remoteName)
+	}
 }

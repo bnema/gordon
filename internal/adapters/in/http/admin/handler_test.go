@@ -23,7 +23,7 @@ func testLogger() zerowrap.Logger {
 
 func ctxWithScopes(scopes ...string) context.Context {
 	ctx := context.Background()
-	return context.WithValue(ctx, ContextKeyScopes, scopes)
+	return context.WithValue(ctx, domain.ContextKeyScopes, scopes)
 }
 
 // Routes endpoint tests

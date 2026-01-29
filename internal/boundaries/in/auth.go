@@ -42,4 +42,8 @@ type AuthService interface {
 
 	// GeneratePasswordHash generates a bcrypt hash for a password.
 	GeneratePasswordHash(password string) (string, error)
+
+	// GetAuthStatus returns authentication status from context.
+	// Extracts and validates token claims that were set by auth middleware.
+	GetAuthStatus(ctx context.Context) (*domain.AuthStatus, error)
 }
