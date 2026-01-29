@@ -694,6 +694,9 @@ func runAuthStatus(remoteNameArg string) error {
 
 	remoteConfig, ok := config.Remotes[remoteName]
 	if !ok {
+		if remoteNameArg != "" {
+			return fmt.Errorf("remote '%s' not found", remoteName)
+		}
 		return fmt.Errorf("active remote '%s' not found", remoteName)
 	}
 
