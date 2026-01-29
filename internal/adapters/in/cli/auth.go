@@ -671,7 +671,7 @@ Examples:
 			return runAuthStatus(remoteNameFlag)
 		},
 	}
-	cmd.Flags().StringVar(&remoteNameFlag, "remote", "", "Check specific remote")
+	cmd.Flags().StringVarP(&remoteNameFlag, "remote", "r", "", "Check specific remote")
 	return cmd
 }
 
@@ -716,24 +716,24 @@ func runAuthStatus(remoteNameArg string) error {
 
 // handleAuthVerifyError handles errors from auth verification.
 func handleAuthVerifyError(err error, remoteName, url string) error {
-	errStr := err.Error()
+	errStrLower := strings.ToLower(err.Error())
 
 	// Connection errors
-	if strings.Contains(errStr, "connection refused") ||
-		strings.Contains(errStr, "no such host") ||
-		strings.Contains(errStr, "timeout") {
+	if strings.Contains(errStrLower, "connection refused") ||
+		strings.Contains(errStrLower, "no such host") ||
+		strings.Contains(errStrLower, "timeout") {
 		fmt.Println(styles.Theme.Bold.Render("Remote:  " + url))
 		fmt.Println()
 		fmt.Println(styles.Theme.Error.Render(styles.IconError + " Connection Failed"))
-		fmt.Printf("Error:  %s\n\n", errStr)
+		fmt.Printf("Error:  %s\n\n", err.Error())
 		fmt.Println(styles.Theme.Muted.Render("Check that Gordon server is running and accessible."))
 		return nil
 	}
 
 	// Auth errors
-	if strings.Contains(errStr, "401") ||
-		strings.Contains(errStr, "unauthorized") ||
-		strings.Contains(errStr, "invalid token") {
+	if strings.Contains(errStrLower, "401") ||
+		strings.Contains(errStrLower, "unauthorized") ||
+		strings.Contains(errStrLower, "invalid token") {
 		fmt.Println(styles.Theme.Bold.Render("Remote:  " + url))
 		fmt.Println()
 		fmt.Println(styles.Theme.Error.Render(styles.IconError + " Authentication Failed"))
@@ -750,7 +750,7 @@ func handleAuthVerifyError(err error, remoteName, url string) error {
 
 // displayAuthStatus displays authentication status information.
 func displayAuthStatus(remoteName, url string, status *dto.AuthVerifyResponse) {
-	fmt.Println(styles.Theme.Bold.Render("Remote:  " + url))
+	fmt.Println(styles.Theme.Bold.Render("Remote:  " + remoteName + " | URL: " + url))
 	fmt.Println()
 
 	if status.Valid {
@@ -769,10 +769,16 @@ func displayAuthStatus(remoteName, url string, status *dto.AuthVerifyResponse) {
 
 		if status.ExpiresAt > 0 {
 			expiresAt := time.Unix(status.ExpiresAt, 0)
-			remaining := time.Until(expiresAt)
-			fmt.Printf("%s %s (%s)\n", styles.Theme.Bold.Render("Expires:"),
-				expiresAt.Format("2006-01-02 15:04:05"),
-				styles.Theme.Muted.Render(remaining.Round(time.Second).String()))
+			if expiresAt.Before(time.Now()) {
+				fmt.Printf("%s %s (%s ago)\n", styles.Theme.Bold.Render("Expired:"),
+					expiresAt.Format("2006-01-02 15:04:05"),
+					styles.Theme.Muted.Render(time.Since(expiresAt).Round(time.Second).String()))
+			} else {
+				remaining := time.Until(expiresAt)
+				fmt.Printf("%s %s (%s)\n", styles.Theme.Bold.Render("Expires:"),
+					expiresAt.Format("2006-01-02 15:04:05"),
+					styles.Theme.Muted.Render(remaining.Round(time.Second).String()))
+			}
 		}
 
 		if len(status.Scopes) > 0 {
