@@ -208,6 +208,8 @@ The path format is `file:key.path` where:
 - `file` is the SOPS-encrypted file path
 - `key.path` is dot-notation to the value
 
+Route secrets remain in `.env` files with `${sops:...}` references. The SOPS backend is used for auth secrets (like `token_secret`) and provider lookups.
+
 ### Using Secrets in Environment Files
 
 Reference SOPS secrets in your app's environment files:

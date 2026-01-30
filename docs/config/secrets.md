@@ -54,6 +54,10 @@ token_secret = "gordon/auth/token_secret"
 - Standard Unix tooling
 - Works with team GPG keys
 
+**Route secrets storage:**
+- `gordon secrets set` stores per-domain secrets in pass under `gordon/env/<domain>/<KEY>`
+- Existing `.env` files are auto-migrated on startup and renamed to `.env.migrated`
+
 ### SOPS
 
 Uses Mozilla SOPS for encrypted file-based secrets:
@@ -84,6 +88,10 @@ DB_PASSWORD=${sops:secrets.yaml:database.password}
 - Multiple encryption backends (AWS KMS, GCP KMS, Azure Key Vault, PGP)
 - YAML/JSON file encryption
 - Git-friendly (encrypted files in repo)
+
+**Route secrets storage:**
+- Domain secrets stay in `.env` files
+- Use `${sops:...}` syntax to resolve encrypted values
 
 ### Unsafe (Development Only)
 
