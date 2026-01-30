@@ -483,6 +483,7 @@ func createLogWriter(cfg Config, log zerowrap.Logger) (*logwriter.LogWriter, err
 const (
 	internalRegistryUsername = "gordon-internal"
 	serviceTokenSubject      = "gordon-service"
+	serviceTokenDefaultTTL   = 30 * 24 * time.Hour
 )
 
 func generateInternalRegistryAuth() (string, string, error) {
@@ -789,6 +790,17 @@ func parseTokenExpiry(expiry string) (time.Duration, error) {
 	return parsed, nil
 }
 
+func resolveServiceTokenExpiry(cfg Config) (time.Duration, error) {
+	expiry, err := parseTokenExpiry(cfg.Auth.TokenExpiry)
+	if err != nil {
+		return 0, err
+	}
+	if expiry <= 0 {
+		return serviceTokenDefaultTTL, nil
+	}
+	return expiry, nil
+}
+
 // loadSecret loads a secret from the configured backend.
 func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDir string, log zerowrap.Logger) (string, error) {
 	switch backend {
@@ -831,7 +843,11 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 	}
 
 	if cfg.Auth.Enabled && svc.authSvc != nil {
-		serviceToken, err := svc.authSvc.GenerateToken(ctx, serviceTokenSubject, []string{"pull"}, 0)
+		expiry, err := resolveServiceTokenExpiry(cfg)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to resolve service token expiry")
+		}
+		serviceToken, err := svc.authSvc.GenerateToken(ctx, serviceTokenSubject, []string{"pull"}, expiry)
 		if err != nil {
 			return nil, log.WrapErr(err, "failed to generate registry service token")
 		}

@@ -326,22 +326,24 @@ func runAuthLoginWithToken(remoteName, token string) error {
 		return err
 	}
 
+	client := remote.NewClient(remoteConfig.URL, remote.WithToken(token))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	verified := true
+	if _, err := client.GetStatus(ctx); err != nil {
+		fmt.Println(styles.RenderWarning(fmt.Sprintf("Token verification failed: %v", err)))
+		verified = false
+	}
+
 	if err := remote.UpdateRemoteToken(resolvedName, token); err != nil {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
 	fmt.Println()
 	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Token stored for remote '%s'", resolvedName)))
-
-	client := remote.NewClient(remoteConfig.URL, remote.WithToken(token))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := client.GetStatus(ctx); err != nil {
-		fmt.Println(styles.RenderWarning(fmt.Sprintf("Token verification failed: %v", err)))
-		return nil
+	if verified {
+		fmt.Println(styles.RenderSuccess("Token verified with remote status endpoint"))
 	}
-
-	fmt.Println(styles.RenderSuccess("Token verified with remote status endpoint"))
 	return nil
 }
 

@@ -61,6 +61,12 @@ func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log
 	if err != nil {
 		return fmt.Errorf("failed to parse env file %s: %w", filePath, err)
 	}
+	if len(secrets) == 0 {
+		log.Info().
+			Str("file", filePath).
+			Msg("no secrets found in env file; skipping migration")
+		return nil
+	}
 
 	existingKeys, err := passStore.ListKeys(domainName)
 	if err != nil {

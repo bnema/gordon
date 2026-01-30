@@ -10,6 +10,7 @@ import (
 // envDomainRegex validates domain names used for env secrets.
 // Allows: alphanumeric, dots, hyphens, colons (for ports), and forward slashes (for paths).
 var envDomainRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$`)
+var envKeyRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // SanitizeDomainForEnvFile validates and sanitizes a domain name for env file storage.
 // Returns a safe domain string suitable for filenames.
@@ -67,4 +68,18 @@ func ParseEnvData(data []byte) (map[string]string, error) {
 	}
 
 	return secrets, nil
+}
+
+// ValidateEnvKey validates an env key for storage.
+func ValidateEnvKey(key string) error {
+	if key == "" {
+		return ErrPathTraversal
+	}
+	if strings.Contains(key, "..") || strings.ContainsAny(key, "/\\") {
+		return ErrPathTraversal
+	}
+	if !envKeyRegex.MatchString(key) {
+		return ErrPathTraversal
+	}
+	return nil
 }
