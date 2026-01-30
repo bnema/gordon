@@ -266,19 +266,8 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	// Generate internal registry credentials for loopback-only pulls
-	if cfg.Auth.Enabled {
-		svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to generate internal registry credentials")
-		}
-
-		// Persist credentials to file for CLI access (gordon auth internal)
-		if err := persistInternalCredentials(svc.internalRegUser, svc.internalRegPass); err != nil {
-			log.Warn().Err(err).Msg("failed to persist internal credentials for CLI access")
-		}
-
-		log.Debug().Msg("internal registry auth generated for loopback pulls")
+	if err := setupInternalRegistryAuth(cfg, svc, log); err != nil {
+		return nil, err
 	}
 
 	// Create use case services
@@ -287,28 +276,13 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, log.WrapErr(err, "failed to load configuration")
 	}
 
-	// Determine env directory for admin API
-	svc.envDir = resolveEnvDir(cfg)
-
-	backend := resolveSecretsBackend(cfg.Auth.SecretsBackend)
-	var domainSecretStore out.DomainSecretStore
+	var backend domain.SecretsBackend
 	var passStore *domainsecrets.PassStore
+	var domainSecretStore out.DomainSecretStore
 
-	switch backend {
-	case domain.SecretsBackendPass:
-		passStore, err = domainsecrets.NewPassStore(log)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to create pass domain secret store")
-		}
-		if err := migrateEnvFilesToPass(svc.envDir, passStore, log); err != nil {
-			return nil, log.WrapErr(err, "failed to migrate env files to pass")
-		}
-		domainSecretStore = passStore
-	default:
-		domainSecretStore, err = domainsecrets.NewFileStore(svc.envDir, log)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to create domain secret store")
-		}
+	svc.envDir, backend, passStore, domainSecretStore, err = createDomainSecretStore(cfg, log)
+	if err != nil {
+		return nil, err
 	}
 
 	if svc.envLoader, err = createEnvLoader(backend, svc.envDir, passStore, log); err != nil {
@@ -346,6 +320,49 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log)
 
 	return svc, nil
+}
+
+func setupInternalRegistryAuth(cfg Config, svc *services, log zerowrap.Logger) error {
+	if !cfg.Auth.Enabled {
+		return nil
+	}
+
+	var err error
+	svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
+	if err != nil {
+		return log.WrapErr(err, "failed to generate internal registry credentials")
+	}
+
+	// Persist credentials to file for CLI access (gordon auth internal)
+	if err := persistInternalCredentials(svc.internalRegUser, svc.internalRegPass); err != nil {
+		log.Warn().Err(err).Msg("failed to persist internal credentials for CLI access")
+	}
+
+	log.Debug().Msg("internal registry auth generated for loopback pulls")
+	return nil
+}
+
+func createDomainSecretStore(cfg Config, log zerowrap.Logger) (string, domain.SecretsBackend, *domainsecrets.PassStore, out.DomainSecretStore, error) {
+	envDir := resolveEnvDir(cfg)
+	backend := resolveSecretsBackend(cfg.Auth.SecretsBackend)
+
+	switch backend {
+	case domain.SecretsBackendPass:
+		passStore, err := domainsecrets.NewPassStore(log)
+		if err != nil {
+			return "", backend, nil, nil, log.WrapErr(err, "failed to create pass domain secret store")
+		}
+		if err := migrateEnvFilesToPass(envDir, passStore, log); err != nil {
+			return "", backend, nil, nil, log.WrapErr(err, "failed to migrate env files to pass")
+		}
+		return envDir, backend, passStore, passStore, nil
+	default:
+		store, err := domainsecrets.NewFileStore(envDir, log)
+		if err != nil {
+			return "", backend, nil, nil, log.WrapErr(err, "failed to create domain secret store")
+		}
+		return envDir, backend, nil, store, nil
+	}
 }
 
 // resolveLogFilePath returns the configured log file path or a default.

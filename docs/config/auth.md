@@ -2,34 +2,11 @@
 
 Configure authentication for the Gordon registry and Admin API.
 
-## Quick Start
+Authentication is enabled by default. Gordon will not start without a valid `token_secret` (or `GORDON_AUTH_TOKEN_SECRET`).
 
-Authentication is **enabled by default** for security. Gordon will not start without authentication configured.
+## Pick a Mode
 
-**Option 1: Password Authentication (simplest)**
-```bash
-# 1. Generate password hash
-gordon auth password hash
-# Enter your password, copy the bcrypt hash
-
-# 2. Save hash to secrets file
-mkdir -p ~/.gordon/secrets
-echo '$2a$10$...' > ~/.gordon/secrets/password_hash
-
-# 3. Add to config.toml
-cat >> ~/.gordon/config.toml << 'EOF'
-[auth]
-password_hash = "password_hash"
-EOF
-```
-
-**Option 2: Disable Authentication (development only)**
-```toml
-[auth]
-enabled = false
-```
-
-## Configuration
+### Token-only (recommended for CI/CD)
 
 ```toml
 [auth]
@@ -37,11 +14,20 @@ enabled = true
 secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"
+```
 
-# Optional: enable password authentication
+### Password + Token (interactive + CI/CD)
+
+```toml
+[auth]
+enabled = true
+secrets_backend = "pass"
 username = "deploy"
 password_hash = "gordon/auth/password_hash"
+token_secret = "gordon/auth/token_secret"
 ```
+
+Token auth always works. Adding `username` + `password_hash` enables interactive login.
 
 ## Options
 
@@ -54,35 +40,9 @@ password_hash = "gordon/auth/password_hash"
 | `username` | string | - | Username for password auth (optional) |
 | `password_hash` | string | - | Path to bcrypt hash in secrets backend (optional) |
 
-## Authentication Modes
+## Secrets Backends
 
-Gordon infers the authentication mode from your configuration:
-
-| Config | Mode | Description |
-|--------|------|-------------|
-| Only `token_secret` | Token-only | JWT tokens for all access |
-| `token_secret` + `username` + `password_hash` | Password + Token | Password for interactive login, tokens for CI/CD |
-
-Tokens always work regardless of mode. The difference is whether password authentication is available.
-
-## Environment Variables
-
-Gordon supports environment variables for sensitive configuration:
-
-| Variable | Description |
-|----------|-------------|
-| `GORDON_AUTH_TOKEN_SECRET` | JWT signing secret (takes priority over config file) |
-
-Using environment variables is recommended for production as it avoids storing secrets on disk:
-
-```bash
-export GORDON_AUTH_TOKEN_SECRET="your-32-character-secret-here"
-gordon serve
-```
-
-## Secrets Backend
-
-The `secrets_backend` option determines how Gordon retrieves sensitive values like `token_secret` and `password_hash`:
+`token_secret` and `password_hash` are read through the configured backend:
 
 | Backend | Description |
 |---------|-------------|
@@ -90,23 +50,21 @@ The `secrets_backend` option determines how Gordon retrieves sensitive values li
 | `sops` | Mozilla SOPS encrypted files |
 | `unsafe` | Plain text files (development only) |
 
-See [Secret Providers](./secrets.md) for detailed configuration of each backend.
+See [Secret Providers](./secrets.md) for setup details.
 
-## Authentication Types
+## Environment Variable
 
-### Token-Only Mode
+`GORDON_AUTH_TOKEN_SECRET` overrides `token_secret` in the config.
 
-JWT-based authentication, ideal for CI/CD pipelines when you don't need interactive login:
-
-```toml
-[auth]
-enabled = true
-secrets_backend = "pass"
-token_secret = "gordon/auth/token_secret"
-token_expiry = "30d"
+```bash
+export GORDON_AUTH_TOKEN_SECRET="your-32-character-secret-here"
+gordon serve
 ```
 
-**Setup:**
+## Setup
+
+### Token-only setup
+
 ```bash
 # Create token secret (random 32+ characters)
 pass insert gordon/auth/token_secret
@@ -115,83 +73,43 @@ pass insert gordon/auth/token_secret
 gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
 ```
 
-**Usage:**
 ```bash
 # Docker login with token
 docker login -u ci-bot -p <token> registry.mydomain.com
 ```
 
-**Token Management:**
-```bash
-# List all tokens
-gordon auth token list
+### Password + token setup
 
-# Revoke a specific token
-gordon auth token revoke <token-id>
-
-# Revoke all tokens
-gordon auth token revoke --all
-```
-
-### Password + Token Mode
-
-Password authentication for interactive login, plus tokens for CI/CD:
-
-```toml
-[auth]
-enabled = true
-secrets_backend = "pass"
-username = "deploy"
-password_hash = "gordon/auth/password_hash"
-token_secret = "gordon/auth/token_secret"
-```
-
-When `username` and `password_hash` are configured, both password and token authentication work.
-
-**Setup:**
 ```bash
 # Generate bcrypt hash
 gordon auth password hash
-# Enter password when prompted
 
-# Store hash in secrets backend
+# Store hash and token secret
 pass insert gordon/auth/password_hash
-# Paste the bcrypt hash
-
-# Create token secret (for CI/CD token generation)
 pass insert gordon/auth/token_secret
-# Enter a random 32+ character string
 ```
 
-**Usage:**
 ```bash
 # Docker registry access
 docker login -u deploy -p <password> registry.mydomain.com
 
-# Remote CLI authentication
+# Remote CLI login (stores a token for you)
 gordon auth login --remote prod
-# Enter username and password when prompted
 ```
 
-**Remote CLI Authentication:**
+## Remote CLI Tokens
 
-With password authentication enabled, you can use `gordon auth login` to obtain a token for remote CLI operations:
+If you already have a token (token-only servers), store it directly:
 
 ```bash
-gordon auth login --remote prod
-# Username: deploy
-# Password: ********
-# ✓ Authentication successful!
-# Token stored for remote 'prod'
+gordon auth login --token <token>
+# or
+gordon remotes set-token prod <token>
 ```
-
-The returned token is stored automatically and used for subsequent CLI commands.
 
 ## Token Scopes
 
-Tokens can have different permission levels:
-
-### Registry Scopes
+Registry scopes:
 
 | Scope | Permission |
 |-------|------------|
@@ -199,9 +117,7 @@ Tokens can have different permission levels:
 | `pull` | Pull images from registry |
 | `push,pull` | Both push and pull (default) |
 
-### Admin Scopes
-
-For remote CLI access via the Admin API:
+Admin scopes (for remote CLI):
 
 | Scope | Permission |
 |-------|------------|
@@ -214,108 +130,45 @@ For remote CLI access via the Admin API:
 | `admin:secrets:read` | List secret keys |
 | `admin:secrets:write` | Set/delete secrets |
 
-**Examples:**
+Examples:
+
 ```bash
-# Pull-only token (for read-only access)
 gordon auth token generate --subject reader --scopes pull --expiry 30d
-
-# Push-only token (for CI builds)
 gordon auth token generate --subject builder --scopes push --expiry 0
-
-# Full admin access (for remote CLI)
 gordon auth token generate --subject admin --scopes "push,pull,admin:*:*" --expiry 0
 ```
 
 ## Token Expiry
 
-Control how long tokens remain valid. Supports human-friendly units:
-
-| Unit | Description |
-|------|-------------|
-| `d` | days (24 hours) |
-| `w` | weeks (7 days) |
-| `M` | months (30 days) |
-| `y` | years (365 days) |
-
-Compound durations work too: `1y6M`, `2w3d`
+Durations support `d`, `w`, `M`, `y` and combinations like `1y6M` or `2w3d`.
 
 ```bash
-# Never expires (for CI/CD)
 gordon auth token generate --subject ci --expiry 0
-
-# Expires in 1 year
 gordon auth token generate --subject deploy --expiry 1y
-
-# Expires in 30 days
 gordon auth token generate --subject temp --expiry 30d
 ```
 
-## Instance-Specific Tokens
+## Instance-specific Tokens
 
-Tokens are signed with the `token_secret`, which is unique to each Gordon instance:
-
+- Tokens are signed with `token_secret`
 - Tokens from one Gordon instance won't work on another
-- Changing the `token_secret` invalidates all existing tokens
-- Each environment (dev, staging, prod) should have different secrets
+- Changing `token_secret` invalidates all existing tokens
 
-## Development Setup
-
-For local development without authentication:
+## Disable Auth (development only)
 
 ```toml
 [auth]
 enabled = false
 ```
 
-## Examples
-
-### CI/CD Setup (Token-Only)
-
-```toml
-[auth]
-enabled = true
-secrets_backend = "pass"
-token_secret = "gordon/auth/token_secret"
-```
-
-```bash
-# Generate CI token
-gordon auth token generate --subject github-actions --scopes push,pull --expiry 0
-```
-
-In GitHub Actions:
-```yaml
-- name: Login to Gordon Registry
-  run: docker login -u github-actions -p ${{ secrets.GORDON_TOKEN }} ${{ secrets.GORDON_REGISTRY }}
-```
-
-### Production with Password + Token
-
-```toml
-[auth]
-enabled = true
-secrets_backend = "pass"
-username = "deploy"
-password_hash = "gordon/auth/password_hash"
-token_secret = "gordon/auth/token_secret"
-```
-
-### Enterprise with SOPS
-
-```toml
-[auth]
-enabled = true
-secrets_backend = "sops"
-token_secret = "gordon/auth/token_secret"
-```
-
 ## Internal Registry Auth
 
-Gordon generates internal credentials automatically when auth is enabled. These are used for loopback pulls when deploying containers and are regenerated on each restart.
+Gordon generates internal credentials when auth is enabled. These are used for loopback pulls during deploys and are regenerated on each restart.
 
 Gordon also generates a separate service token for its own registry-domain pulls. This token is managed internally and is not exposed via configuration or CLI.
 
 To view internal credentials (for troubleshooting):
+
 ```bash
 gordon auth internal
 ```
