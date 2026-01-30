@@ -54,7 +54,7 @@ See [Secret Providers](./secrets.md) for setup details.
 
 ## Environment Variable
 
-`GORDON_AUTH_TOKEN_SECRET` overrides `token_secret` in the config.
+`GORDON_AUTH_TOKEN_SECRET` overrides `token_secret` in the config. If you don’t set the env var, `token_secret` is loaded from the configured secrets backend (including `pass`).
 
 ```bash
 export GORDON_AUTH_TOKEN_SECRET="your-32-character-secret-here"
