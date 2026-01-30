@@ -34,6 +34,21 @@ Gordon loads environment variables from files named after the domain:
 | `api.company.io` | `api_company_io.env` |
 | `staging.app.dev` | `staging_app_dev.env` |
 
+## Backend Behavior
+
+The `auth.secrets_backend` setting changes where route secrets live:
+
+### Pass Backend
+
+- Env files are not used for route secrets.
+- Use `gordon secrets set` to store per-domain secrets in pass.
+- Existing `.env` files are migrated on startup and renamed to `.env.migrated`.
+
+### SOPS or Unsafe Backend
+
+- Env files remain the source of truth.
+- Use `${sops:...}` syntax for encrypted values when `secrets_backend = "sops"`.
+
 ## File Format
 
 Standard `.env` file format:

@@ -119,7 +119,7 @@ type services struct {
 	eventBus        *eventbus.InMemory
 	blobStorage     *filesystem.BlobStorage
 	manifestStorage *filesystem.ManifestStorage
-	envLoader       *envloader.FileLoader
+	envLoader       out.EnvLoader
 	logWriter       *logwriter.LogWriter
 	tokenStore      out.TokenStore
 	configSvc       *config.Service
@@ -256,11 +256,6 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	// Create env loader
-	if svc.envLoader, err = createEnvLoader(cfg, log); err != nil {
-		return nil, err
-	}
-
 	// Create log writer
 	if svc.logWriter, err = createLogWriter(cfg, log); err != nil {
 		return nil, err
@@ -292,6 +287,36 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, log.WrapErr(err, "failed to load configuration")
 	}
 
+	// Determine env directory for admin API
+	svc.envDir = resolveEnvDir(cfg)
+
+	backend := resolveSecretsBackend(cfg.Auth.SecretsBackend)
+	var domainSecretStore out.DomainSecretStore
+	var passStore *domainsecrets.PassStore
+
+	switch backend {
+	case domain.SecretsBackendPass:
+		passStore, err = domainsecrets.NewPassStore(log)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to create pass domain secret store")
+		}
+		if err := migrateEnvFilesToPass(svc.envDir, passStore, log); err != nil {
+			return nil, log.WrapErr(err, "failed to migrate env files to pass")
+		}
+		domainSecretStore = passStore
+	default:
+		domainSecretStore, err = domainsecrets.NewFileStore(svc.envDir, log)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to create domain secret store")
+		}
+	}
+
+	if svc.envLoader, err = createEnvLoader(backend, svc.envDir, passStore, log); err != nil {
+		return nil, err
+	}
+
+	secretSvc := secretsSvc.NewService(domainSecretStore, log)
+
 	svc.containerSvc = createContainerService(v, cfg, svc)
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
 	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxy.Config{
@@ -307,23 +332,6 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		}
 		svc.authHandler = authhandler.NewHandler(svc.authSvc, internalAuth, log)
 	}
-
-	// Determine env directory for admin API
-	dataDir := cfg.Server.DataDir
-	if dataDir == "" {
-		dataDir = DefaultDataDir()
-	}
-	svc.envDir = cfg.Env.Dir
-	if svc.envDir == "" {
-		svc.envDir = filepath.Join(dataDir, "env")
-	}
-
-	// Create domain secret store and service
-	domainSecretStore, err := domainsecrets.NewFileStore(svc.envDir, log)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to create domain secret store")
-	}
-	secretSvc := secretsSvc.NewService(domainSecretStore, log)
 
 	// Create health service for route health checking
 	prober := httpprober.New()
@@ -391,36 +399,35 @@ func createStorage(cfg Config, log zerowrap.Logger) (*filesystem.BlobStorage, *f
 }
 
 // createEnvLoader creates the environment loader with secret providers.
-func createEnvLoader(cfg Config, log zerowrap.Logger) (*envloader.FileLoader, error) {
-	dataDir := cfg.Server.DataDir
-	if dataDir == "" {
-		dataDir = DefaultDataDir()
-	}
+func createEnvLoader(backend domain.SecretsBackend, envDir string, passStore *domainsecrets.PassStore, log zerowrap.Logger) (out.EnvLoader, error) {
+	switch backend {
+	case domain.SecretsBackendPass:
+		loader, err := envloader.NewPassLoader(passStore, log)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to create pass env loader")
+		}
+		return loader, nil
+	default:
+		loader, err := envloader.NewFileLoader(envDir, log)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to create env loader")
+		}
 
-	envDir := cfg.Env.Dir
-	if envDir == "" {
-		envDir = filepath.Join(dataDir, "env")
-	}
+		// Register secret providers
+		passProvider := secrets.NewPassProvider(log)
+		if passProvider.IsAvailable() {
+			loader.RegisterSecretProvider(passProvider)
+			log.Debug().Msg("pass secret provider registered")
+		}
 
-	envLoader, err := envloader.NewFileLoader(envDir, log)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to create env loader")
-	}
+		sopsProvider := secrets.NewSopsProvider(log)
+		if sopsProvider.IsAvailable() {
+			loader.RegisterSecretProvider(sopsProvider)
+			log.Debug().Msg("sops secret provider registered")
+		}
 
-	// Register secret providers
-	passProvider := secrets.NewPassProvider(log)
-	if passProvider.IsAvailable() {
-		envLoader.RegisterSecretProvider(passProvider)
-		log.Debug().Msg("pass secret provider registered")
+		return loader, nil
 	}
-
-	sopsProvider := secrets.NewSopsProvider(log)
-	if sopsProvider.IsAvailable() {
-		envLoader.RegisterSecretProvider(sopsProvider)
-		log.Debug().Msg("sops secret provider registered")
-	}
-
-	return envLoader, nil
 }
 
 // createLogWriter creates the container log writer.
@@ -632,6 +639,15 @@ func resolveDataDir(dataDir string) string {
 		return DefaultDataDir()
 	}
 	return dataDir
+}
+
+func resolveEnvDir(cfg Config) string {
+	dataDir := resolveDataDir(cfg.Server.DataDir)
+	envDir := cfg.Env.Dir
+	if envDir == "" {
+		envDir = filepath.Join(dataDir, "env")
+	}
+	return envDir
 }
 
 func createTokenStore(backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (out.TokenStore, error) {

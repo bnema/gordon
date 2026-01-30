@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/bnema/zerowrap"
@@ -86,33 +85,17 @@ func (s *FileStore) GetAll(domainName string) (map[string]string, error) {
 		return nil, err
 	}
 
-	file, err := os.Open(envFile)
+	data, err := os.ReadFile(envFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return map[string]string{}, nil
 		}
-		return nil, fmt.Errorf("failed to open env file: %w", err)
-	}
-	defer file.Close()
-
-	secrets := make(map[string]string)
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// Parse KEY=value
-		if idx := strings.Index(line, "="); idx > 0 {
-			key := line[:idx]
-			value := line[idx+1:]
-			secrets[key] = value
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("failed to read env file: %w", err)
+	}
+
+	secrets, err := domain.ParseEnvData(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse env file: %w", err)
 	}
 
 	return secrets, nil
@@ -221,39 +204,21 @@ func (s *FileStore) writeSecretsAtomic(domainName string, secrets map[string]str
 	return nil
 }
 
-// domainRegex validates domain names to prevent path injection.
-// Allows: alphanumeric, dots, hyphens, colons (for ports), and forward slashes (for paths).
-var domainRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$`)
-
 // getEnvFilePath converts a domain to its env file path.
 // This must match the naming convention in envloader.FileLoader.getEnvFilePath.
 //
 // SECURITY: Validates domain and ensures the resulting path stays within envDir.
 func (s *FileStore) getEnvFilePath(domainName string) string {
-	// SECURITY: Reject domains that look like path traversal attempts
-	if strings.Contains(domainName, "..") {
+	safeDomain, err := domain.SanitizeDomainForEnvFile(domainName)
+	if err != nil {
 		s.log.Warn().
 			Str(zerowrap.FieldLayer, "adapter").
 			Str(zerowrap.FieldAdapter, "domainsecrets").
 			Str("domain", domainName).
-			Msg("rejected domain with path traversal sequence")
+			Err(err).
+			Msg("rejected invalid domain")
 		return ""
 	}
-
-	// SECURITY: Validate domain format
-	if !domainRegex.MatchString(domainName) {
-		s.log.Warn().
-			Str(zerowrap.FieldLayer, "adapter").
-			Str(zerowrap.FieldAdapter, "domainsecrets").
-			Str("domain", domainName).
-			Msg("rejected invalid domain format")
-		return ""
-	}
-
-	// Create domain-safe filename (replace dots and other chars with underscores)
-	safeDomain := strings.ReplaceAll(domainName, ".", "_")
-	safeDomain = strings.ReplaceAll(safeDomain, ":", "_")
-	safeDomain = strings.ReplaceAll(safeDomain, "/", "_")
 
 	fullPath := filepath.Join(s.envDir, safeDomain+".env")
 

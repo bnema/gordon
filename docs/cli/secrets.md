@@ -2,6 +2,10 @@
 
 Manage secrets on local or remote Gordon instances.
 
+Storage depends on the secrets backend:
+- `pass`: secrets are stored in pass under `gordon/env/<domain>/<KEY>`
+- `sops` or `unsafe`: secrets are stored in domain `.env` files
+
 ## gordon secrets
 
 ### Subcommands
