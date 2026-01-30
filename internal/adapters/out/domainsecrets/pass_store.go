@@ -86,9 +86,6 @@ func (s *PassStore) GetAll(domainName string) (map[string]string, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-	defer cancel()
-
 	secretsMap := make(map[string]string)
 	for _, key := range keys {
 		keyPath, err := s.keyPath(domainName, key)
@@ -96,7 +93,9 @@ func (s *PassStore) GetAll(domainName string) (map[string]string, error) {
 			return nil, err
 		}
 
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 		value, exists, err := s.passShow(ctx, keyPath)
+		cancel()
 		if err != nil {
 			return nil, err
 		}
@@ -121,22 +120,38 @@ func (s *PassStore) Set(domainName string, secretsMap map[string]string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-	defer cancel()
+	existingKeys, err := s.ListKeys(domainName)
+	if err != nil {
+		return err
+	}
 
+	existingSet := make(map[string]struct{}, len(existingKeys))
+	for _, key := range existingKeys {
+		existingSet[key] = struct{}{}
+	}
+
+	insertedNewPaths := make([]string, 0, len(secretsMap))
 	for key, value := range secretsMap {
+		if err := domain.ValidateEnvKey(key); err != nil {
+			return err
+		}
+
 		keyPath, err := s.keyPath(domainName, key)
 		if err != nil {
 			return err
 		}
-		if err := s.passInsert(ctx, keyPath, value); err != nil {
+
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		err = s.passInsert(ctx, keyPath, value)
+		cancel()
+		if err != nil {
+			s.cleanupInsertedPaths(insertedNewPaths)
 			return fmt.Errorf("failed to store secret %s: %w", key, err)
 		}
-	}
 
-	existingKeys, err := s.ListKeys(domainName)
-	if err != nil {
-		return err
+		if _, exists := existingSet[key]; !exists {
+			insertedNewPaths = append(insertedNewPaths, keyPath)
+		}
 	}
 
 	keySet := make(map[string]struct{}, len(existingKeys)+len(secretsMap))
@@ -158,9 +173,13 @@ func (s *PassStore) Set(domainName string, secretsMap map[string]string) error {
 		return err
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	if err := s.passInsert(ctx, manifestPath, strings.Join(keys, "\n")); err != nil {
+		cancel()
+		s.cleanupInsertedPaths(insertedNewPaths)
 		return fmt.Errorf("failed to update manifest: %w", err)
 	}
+	cancel()
 
 	return nil
 }
@@ -281,6 +300,9 @@ func (s *PassStore) keyPath(domainName, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := domain.ValidateEnvKey(key); err != nil {
+		return "", err
+	}
 	path := fmt.Sprintf("%s/%s", domainPath, key)
 	if err := secrets.ValidatePath(path); err != nil {
 		return "", err
@@ -363,7 +385,9 @@ func (s *PassStore) passShow(ctx context.Context, path string) (string, bool, er
 		}
 		return "", false, fmt.Errorf("pass show failed: %s: %w", strings.TrimSpace(string(output)), err)
 	}
-	return strings.TrimSpace(string(output)), true, nil
+
+	clean := ansiRegex.ReplaceAllString(string(output), "")
+	return strings.TrimSpace(clean), true, nil
 }
 
 func (s *PassStore) listTopLevelEntries(ctx context.Context, basePath string) ([]string, error) {
@@ -453,7 +477,20 @@ func parsePassListOutput(basePath, output string) []passListEntry {
 }
 
 func passEntryMissing(output string) bool {
-	lower := strings.ToLower(output)
+	clean := ansiRegex.ReplaceAllString(output, "")
+	lower := strings.ToLower(clean)
 	return strings.Contains(lower, "not in the password store") ||
 		strings.Contains(lower, "password store is empty")
+}
+
+func (s *PassStore) cleanupInsertedPaths(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+
+	for _, path := range paths {
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		_ = s.passRemove(ctx, path)
+		cancel()
+	}
 }
