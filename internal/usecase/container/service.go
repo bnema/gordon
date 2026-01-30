@@ -21,8 +21,8 @@ type Config struct {
 	RegistryAuthEnabled      bool
 	RegistryDomain           string
 	RegistryPort             int
-	RegistryUsername         string
-	RegistryPassword         string
+	ServiceTokenUsername     string
+	ServiceToken             string
 	InternalRegistryUsername string
 	InternalRegistryPassword string
 	PullPolicy               string
@@ -754,7 +754,10 @@ func (s *Service) pullImage(ctx context.Context, pullRef string, isInternal bool
 			return log.WrapErr(err, "failed to pull image")
 		}
 	case s.config.RegistryAuthEnabled:
-		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.RegistryUsername, s.config.RegistryPassword); err != nil {
+		if s.config.ServiceTokenUsername == "" || s.config.ServiceToken == "" {
+			return log.WrapErr(fmt.Errorf("registry service token not configured"), "failed to pull image for registry auth")
+		}
+		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.ServiceTokenUsername, s.config.ServiceToken); err != nil {
 			return log.WrapErr(err, "failed to pull image with auth")
 		}
 	default:
