@@ -37,6 +37,8 @@ func SanitizeDomainForEnvFile(domainName string) (string, error) {
 func ParseEnvData(data []byte) (map[string]string, error) {
 	secrets := make(map[string]string)
 	scanner := bufio.NewScanner(bytes.NewReader(data))
+	// Allow large env values (certs/keys) without hitting the default ~64KB limit.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {

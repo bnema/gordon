@@ -46,7 +46,14 @@ func readEnvDir(envDir string) ([]os.DirEntry, error) {
 }
 
 func isPlainEnvFile(name string) bool {
-	return strings.HasSuffix(name, ".env") && !strings.HasSuffix(name, ".env.migrated")
+	if !strings.HasSuffix(name, ".env") || strings.HasSuffix(name, ".env.migrated") {
+		return false
+	}
+	// Skip attachment env files: gordon-<sanitized-domain>-<service>.env
+	if strings.HasPrefix(name, "gordon-") {
+		return false
+	}
+	return true
 }
 
 func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log zerowrap.Logger) error {

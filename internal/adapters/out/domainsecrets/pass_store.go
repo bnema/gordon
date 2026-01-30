@@ -387,7 +387,8 @@ func (s *PassStore) passShow(ctx context.Context, path string) (string, bool, er
 	}
 
 	clean := ansiRegex.ReplaceAllString(string(output), "")
-	return strings.TrimSpace(clean), true, nil
+	clean = strings.TrimRight(clean, "\r\n")
+	return clean, true, nil
 }
 
 func (s *PassStore) listTopLevelEntries(ctx context.Context, basePath string) ([]string, error) {

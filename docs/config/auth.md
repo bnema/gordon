@@ -45,7 +45,7 @@ Token auth always works. Adding `username` + `password_hash` enables interactive
 `token_secret` and `password_hash` are read through the configured backend:
 
 | Backend | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `pass` | Unix password manager (GPG-encrypted) |
 | `sops` | Mozilla SOPS encrypted files |
 | `unsafe` | Plain text files (development only) |
@@ -112,7 +112,7 @@ gordon remotes set-token prod <token>
 Registry scopes:
 
 | Scope | Permission |
-|-------|------------|
+| ------- | ------------ |
 | `push` | Push images to registry |
 | `pull` | Pull images from registry |
 | `push,pull` | Both push and pull (default) |

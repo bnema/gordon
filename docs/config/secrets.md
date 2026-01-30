@@ -55,7 +55,7 @@ token_secret = "gordon/auth/token_secret"
 - Works with team GPG keys
 
 **Route secrets storage:**
-- `gordon secrets set` stores per-domain secrets in pass under `gordon/env/<domain>/<KEY>`
+- `gordon secrets set` stores per-domain secrets in pass under `gordon/env/<sanitized-domain>/<KEY>` (dots/colons/slashes → underscores)
 - Existing `.env` files are auto-migrated on startup and renamed to `.env.migrated`
 
 ### SOPS
