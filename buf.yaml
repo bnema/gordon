@@ -1,0 +1,15 @@
+version: v2
+
+modules:
+  - path: api/proto
+    name: buf.build/bnema/gordon
+
+lint:
+  use:
+    - DEFAULT
+  except:
+    - PACKAGE_VERSION_SUFFIX
+
+breaking:
+  use:
+    - FILE

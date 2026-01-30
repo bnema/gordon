@@ -1,0 +1,17 @@
+version: v2
+
+managed:
+  enabled: true
+  override:
+    - file_option: go_package
+      value: github.com/bnema/gordon/internal/grpc
+
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.4
+    out: internal/grpc
+    opt:
+  
+  - remote: buf.build/grpc/go:v1.5.1
+    out: internal/grpc
+    opt:
+      - require_unimplemented_servers=false
