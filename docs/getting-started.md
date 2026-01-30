@@ -29,7 +29,7 @@ Config is created at `~/.config/gordon/gordon.toml`.
 
 ## 3. Set Up Authentication
 
-Gordon requires a `token_secret` for JWT authentication. We recommend using `pass` to store secrets securely.
+Gordon requires a `token_secret` for JWT authentication. You can store it in `pass` or provide it via the `GORDON_AUTH_TOKEN_SECRET` environment variable. We recommend using `pass` to store secrets securely.
 
 > **Local development?** If you just want to try Gordon locally, you can disable auth temporarily:
 > ```toml
@@ -51,6 +51,11 @@ pass init <your-gpg-key-id>
 ```bash
 # Generate and store a random 32-character secret
 openssl rand -base64 32 | pass insert -m gordon/auth/token_secret
+```
+
+**Or set it via environment variable:**
+```bash
+export GORDON_AUTH_TOKEN_SECRET="your-32-character-secret-here"
 ```
 
 **Update your config** (`~/.config/gordon/gordon.toml`):
