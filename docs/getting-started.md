@@ -54,6 +54,7 @@ openssl rand -base64 32 | pass insert -m gordon/auth/token_secret
 ```
 
 **Or set it via environment variable:**
+
 ```bash
 export GORDON_AUTH_TOKEN_SECRET="your-32-character-secret-here"
 ```

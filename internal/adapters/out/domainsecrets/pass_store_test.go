@@ -1,9 +1,9 @@
 package domainsecrets
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,16 +13,22 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+func passCmd(args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "pass", args...).Run()
+}
+
 func requirePass(t *testing.T) {
-	if err := exec.Command("pass", "version").Run(); err != nil {
+	if err := passCmd("version"); err != nil {
 		t.Skip("pass not available")
 	}
-	if err := exec.Command("pass", "ls").Run(); err != nil {
+	if err := passCmd("ls"); err != nil {
 		t.Skip("pass store not initialized")
 	}
 }
 
-func cleanupPassDomain(t *testing.T, domainName string, keys []string) {
+func cleanupPassDomain(_ *testing.T, domainName string, keys []string) {
 	safeDomain, err := domain.SanitizeDomainForEnvFile(domainName)
 	if err != nil {
 		return
@@ -30,11 +36,11 @@ func cleanupPassDomain(t *testing.T, domainName string, keys []string) {
 
 	for _, key := range keys {
 		path := fmt.Sprintf("%s/%s/%s", passDomainSecretsPath, safeDomain, key)
-		_ = exec.Command("pass", "rm", "-f", path).Run()
+		_ = passCmd("rm", "-f", path)
 	}
 
 	manifestPath := fmt.Sprintf("%s/%s/.keys", passDomainSecretsPath, safeDomain)
-	_ = exec.Command("pass", "rm", "-f", manifestPath).Run()
+	_ = passCmd("rm", "-f", manifestPath)
 }
 
 func TestPassStore_SetGetDelete(t *testing.T) {
@@ -62,8 +68,8 @@ func TestPassStore_SetGetDelete(t *testing.T) {
 
 	values, err := store.GetAll(domainName)
 	require.NoError(t, err)
-	assert.Equal(t, "alpha", strings.TrimSpace(values["API_KEY"]))
-	assert.Equal(t, "bravo", strings.TrimSpace(values["DB_PASSWORD"]))
+	assert.Equal(t, "alpha", values["API_KEY"])
+	assert.Equal(t, "bravo", values["DB_PASSWORD"])
 
 	err = store.Delete(domainName, "DB_PASSWORD")
 	require.NoError(t, err)
