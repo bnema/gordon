@@ -313,6 +313,8 @@ token_secret = "gordon/auth/token_secret"
 
 Gordon generates internal credentials automatically when auth is enabled. These are used for loopback pulls when deploying containers and are regenerated on each restart.
 
+Gordon also generates a separate service token for its own registry-domain pulls. This token is managed internally and is not exposed via configuration or CLI.
+
 To view internal credentials (for troubleshooting):
 ```bash
 gordon auth internal

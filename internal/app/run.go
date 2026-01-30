@@ -317,7 +317,9 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 	secretSvc := secretsSvc.NewService(domainSecretStore, log)
 
-	svc.containerSvc = createContainerService(v, cfg, svc)
+	if svc.containerSvc, err = createContainerService(ctx, v, cfg, svc, log); err != nil {
+		return nil, err
+	}
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
 	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxy.Config{
 		RegistryDomain: cfg.Server.RegistryDomain,
@@ -461,7 +463,10 @@ func createLogWriter(cfg Config, log zerowrap.Logger) (*logwriter.LogWriter, err
 	return writer, nil
 }
 
-const internalRegistryUsername = "gordon-internal"
+const (
+	internalRegistryUsername = "gordon-internal"
+	serviceTokenSubject      = "gordon-service"
+)
 
 func generateInternalRegistryAuth() (string, string, error) {
 	password, err := randomTokenHex(32)
@@ -790,13 +795,11 @@ func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDi
 }
 
 // createContainerService creates the container service with configuration.
-func createContainerService(v *viper.Viper, cfg Config, svc *services) *container.Service {
+func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (*container.Service, error) {
 	containerConfig := container.Config{
 		RegistryAuthEnabled:      cfg.Auth.Enabled,
 		RegistryDomain:           cfg.Server.RegistryDomain,
 		RegistryPort:             cfg.Server.RegistryPort,
-		RegistryUsername:         cfg.Auth.Username,
-		RegistryPassword:         cfg.Auth.Password,
 		InternalRegistryUsername: svc.internalRegUser,
 		InternalRegistryPassword: svc.internalRegPass,
 		PullPolicy:               v.GetString("deploy.pull_policy"),
@@ -809,7 +812,17 @@ func createContainerService(v *viper.Viper, cfg Config, svc *services) *containe
 		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
 		Attachments:              svc.configSvc.GetAttachments(),
 	}
-	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig)
+
+	if cfg.Auth.Enabled && svc.authSvc != nil {
+		serviceToken, err := svc.authSvc.GenerateToken(ctx, serviceTokenSubject, []string{"pull"}, 0)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to generate registry service token")
+		}
+		containerConfig.ServiceTokenUsername = serviceTokenSubject
+		containerConfig.ServiceToken = serviceToken
+	}
+
+	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig), nil
 }
 
 // registerEventHandlers registers all event handlers.

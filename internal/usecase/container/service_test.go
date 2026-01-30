@@ -119,6 +119,41 @@ func TestService_Deploy_ImagePullFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to pull image")
 }
 
+func TestService_PullImage_UsesServiceTokenForExternalPull(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+
+	config := Config{
+		RegistryAuthEnabled:  true,
+		ServiceTokenUsername: "gordon-service",
+		ServiceToken:         "service-token",
+	}
+
+	svc := NewService(runtime, nil, nil, nil, config)
+	ctx := testContext()
+
+	runtime.EXPECT().PullImageWithAuth(mock.Anything, "registry.example.com/myapp:latest", "gordon-service", "service-token").Return(nil)
+
+	err := svc.pullImage(ctx, "registry.example.com/myapp:latest", false)
+
+	assert.NoError(t, err)
+}
+
+func TestService_PullImage_RequiresServiceTokenForExternalPull(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+
+	config := Config{
+		RegistryAuthEnabled: true,
+	}
+
+	svc := NewService(runtime, nil, nil, nil, config)
+	ctx := testContext()
+
+	err := svc.pullImage(ctx, "registry.example.com/myapp:latest", false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "registry service token not configured")
+}
+
 func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
