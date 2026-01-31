@@ -36,10 +36,10 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
 const (
@@ -57,8 +57,7 @@ type GordonTestSuite struct {
 	suite.Suite
 	ctx context.Context
 
-	// Docker resources
-	network      *testcontainers.DockerNetwork
+	// Docker client
 	dockerClient *client.Client
 
 	// Core container (only one we start manually)
@@ -73,6 +72,11 @@ type GordonTestSuite struct {
 	SecretsClient  gordonv1.SecretsServiceClient
 	RegistryClient gordonv1.RegistryInspectServiceClient
 	CoreClient     gordonv1.CoreServiceClient
+
+	// gRPC connections (stored for health checks and cleanup)
+	secretsConn  *grpc.ClientConn
+	registryConn *grpc.ClientConn
+	coreConn     *grpc.ClientConn
 
 	// Ports (mapped host ports for auto-deployed containers)
 	CoreGRPCPort     string
@@ -96,15 +100,8 @@ func (s *GordonTestSuite) SetupSuite() {
 	// Build Gordon test image first
 	s.Require().NoError(s.buildGordonImage(), "failed to build Gordon test image")
 
-	// Create shared network
-	nw, err := network.New(s.ctx,
-		network.WithDriver("bridge"),
-		network.WithAttachable(),
-	)
-	s.Require().NoError(err, "failed to create Docker network")
-	s.network = nw
-
-	// Start only gordon-core (lifecycle manager will deploy sub-containers)
+	// Start only gordon-core on the gordon-internal network
+	// (lifecycle manager will create the network and deploy sub-containers)
 	s.startCoreOnly()
 
 	// Wait for gordon-core's lifecycle manager to deploy sub-containers
@@ -122,6 +119,17 @@ func (s *GordonTestSuite) TearDownSuite() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Close gRPC connections
+	if s.secretsConn != nil {
+		_ = s.secretsConn.Close()
+	}
+	if s.registryConn != nil {
+		_ = s.registryConn.Close()
+	}
+	if s.coreConn != nil {
+		_ = s.coreConn.Close()
+	}
+
 	// Stop manually started core container
 	if s.CoreC != nil {
 		_ = s.CoreC.Terminate(ctx)
@@ -134,11 +142,6 @@ func (s *GordonTestSuite) TearDownSuite() {
 			_ = s.dockerClient.ContainerStop(ctx, c.ID, container.StopOptions{})
 			_ = s.dockerClient.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
 		}
-	}
-
-	// Remove network
-	if s.network != nil {
-		_ = s.network.Remove(s.ctx)
 	}
 
 	// Close Docker client
@@ -182,22 +185,30 @@ func (s *GordonTestSuite) startCoreOnly() {
 		testcontainers.BindMount(configPath, "/app/gordon.toml"),
 	}
 
+	// Create gordon-internal network first (core needs to be on it for proxy to reach it)
+	networkName := "gordon-internal"
+	_, err := testcontainers.GenericNetwork(s.ctx, testcontainers.GenericNetworkRequest{
+		NetworkRequest: testcontainers.NetworkRequest{
+			Name:     networkName,
+			Driver:   "bridge",
+			Internal: false,
+		},
+	})
+	s.Require().NoError(err, "failed to create gordon-internal network")
+
 	// Core takes longer to start as it needs to deploy sub-containers
 	// Use simple port wait with long timeout - HTTP starts after DeployAll completes
 	waitStrategy := wait.ForListeningPort("9090/tcp").WithStartupTimeout(coreStartupTimeout)
 
 	req := testcontainers.ContainerRequest{
 		Image:        testImageName,
-		Name:         "gordon-core-test",
+		Name:         "gordon-core",
 		ExposedPorts: []string{"5000/tcp", "9090/tcp"},
-		Networks:     []string{s.network.Name},
-		NetworkAliases: map[string][]string{
-			s.network.Name: {"gordon-core"},
-		},
-		Mounts:     mounts,
-		Env:        env,
-		Cmd:        []string{"--component=core"},
-		WaitingFor: waitStrategy,
+		Mounts:       mounts,
+		Env:          env,
+		Cmd:          []string{"--component=core"},
+		WaitingFor:   waitStrategy,
+		Networks:     []string{networkName},
 	}
 
 	container, err := testcontainers.GenericContainer(s.ctx, testcontainers.GenericContainerRequest{
@@ -240,9 +251,9 @@ func (s *GordonTestSuite) waitForSubContainers() {
 	}
 
 	for {
-		// List containers with gordon-component label
+		// List containers with gordon.component label
 		filters := filters.NewArgs()
-		filters.Add("label", "gordon-component")
+		filters.Add("label", "gordon.component")
 
 		containers, err := s.dockerClient.ContainerList(ctx, container.ListOptions{
 			All:     true,
@@ -254,11 +265,12 @@ func (s *GordonTestSuite) waitForSubContainers() {
 		}
 
 		found := make(map[string]*types.Container)
-		for _, c := range containers {
-			if compLabel, ok := c.Labels["gordon-component"]; ok {
+		for i := range containers {
+			c := &containers[i]
+			if compLabel, ok := c.Labels["gordon.component"]; ok {
 				// Skip core itself - we only want sub-containers
 				if compLabel != "core" {
-					found[compLabel] = &c
+					found[compLabel] = c
 					s.T().Logf("Found sub-container: %s (ID: %s, State: %s, Status: %s)",
 						compLabel, c.ID[:12], c.State, c.Status)
 				}
@@ -315,7 +327,7 @@ func (s *GordonTestSuite) getSubContainerPorts() {
 		inspect, err := s.dockerClient.ContainerInspect(s.ctx, c.ID)
 		s.Require().NoError(err, "failed to inspect container %d", i)
 
-		component := c.Labels["gordon-component"]
+		component := c.Labels["gordon.component"]
 		s.T().Logf("Container %s - Ports: %+v", component, inspect.NetworkSettings.Ports)
 
 		// Extract ports based on component type
@@ -355,78 +367,77 @@ func (s *GordonTestSuite) initializeGRPCClients() {
 
 	// Initialize secrets client
 	secretsAddr := net.JoinHostPort("localhost", s.SecretsGRPCPort)
-	secretsConn, err := grpc.NewClient(
+	var err error
+	s.secretsConn, err = grpc.NewClient(
 		secretsAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	s.Require().NoError(err, "failed to connect to secrets service")
-	s.SecretsClient = gordonv1.NewSecretsServiceClient(secretsConn)
+	s.SecretsClient = gordonv1.NewSecretsServiceClient(s.secretsConn)
 
 	// Initialize registry client
 	registryAddr := net.JoinHostPort("localhost", s.RegistryGRPCPort)
-	registryConn, err := grpc.NewClient(
+	s.registryConn, err = grpc.NewClient(
 		registryAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	s.Require().NoError(err, "failed to connect to registry service")
-	s.RegistryClient = gordonv1.NewRegistryInspectServiceClient(registryConn)
+	s.RegistryClient = gordonv1.NewRegistryInspectServiceClient(s.registryConn)
 
 	// Initialize core client
 	coreAddr := net.JoinHostPort("localhost", s.CoreGRPCPort)
-	coreConn, err := grpc.NewClient(
+	s.coreConn, err = grpc.NewClient(
 		coreAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	s.Require().NoError(err, "failed to connect to core service")
-	s.CoreClient = gordonv1.NewCoreServiceClient(coreConn)
+	s.CoreClient = gordonv1.NewCoreServiceClient(s.coreConn)
 
-	// Wait for services to be ready with health checks
-	s.waitForServices()
+	// Wait for services to be ready with gRPC health checks
+	s.waitForServicesWithHealth()
 
 	s.T().Log("gRPC clients initialized successfully")
 }
 
-// waitForServices waits for all gRPC services to be ready.
-func (s *GordonTestSuite) waitForServices() {
+// waitForServicesWithHealth waits for all gRPC services to be ready using proper gRPC health checks.
+func (s *GordonTestSuite) waitForServicesWithHealth() {
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 
-	// Check secrets service
-	err := s.waitForService(ctx, "secrets", func(ctx context.Context) error {
-		_, err := s.SecretsClient.ListTokens(ctx, &gordonv1.ListTokensRequest{})
-		return err
-	})
-	s.Require().NoError(err, "secrets service failed to become ready")
+	// Check secrets service health
+	s.T().Log("Waiting for secrets service health...")
+	secretsHealthClient := grpc_health_v1.NewHealthClient(s.secretsConn)
+	err := s.waitForGRPCHealth(ctx, "secrets", secretsHealthClient)
+	s.Require().NoError(err, "secrets service health check failed")
 
-	// Check registry service
-	err = s.waitForService(ctx, "registry", func(ctx context.Context) error {
-		// Registry inspect service - use ListRepositories to test connectivity
-		_, err := s.RegistryClient.ListRepositories(ctx, &gordonv1.ListRepositoriesRequest{})
-		// Error is expected if registry is empty, but connection should work
-		return err
-	})
-	s.Require().NoError(err, "registry service failed to become ready")
+	// Check registry service health
+	s.T().Log("Waiting for registry service health...")
+	registryHealthClient := grpc_health_v1.NewHealthClient(s.registryConn)
+	err = s.waitForGRPCHealth(ctx, "registry", registryHealthClient)
+	s.Require().NoError(err, "registry service health check failed")
 
-	// Check core service
-	err = s.waitForService(ctx, "core", func(ctx context.Context) error {
-		_, err := s.CoreClient.GetRoutes(ctx, &gordonv1.GetRoutesRequest{})
-		return err
-	})
-	s.Require().NoError(err, "core service failed to become ready")
+	// Check core service health
+	s.T().Log("Waiting for core service health...")
+	coreHealthClient := grpc_health_v1.NewHealthClient(s.coreConn)
+	err = s.waitForGRPCHealth(ctx, "core", coreHealthClient)
+	s.Require().NoError(err, "core service health check failed")
+
+	s.T().Log("All gRPC services are healthy")
 }
 
-// waitForService waits for a service to pass a health check.
-func (s *GordonTestSuite) waitForService(ctx context.Context, name string, check func(context.Context) error) error {
+// waitForGRPCHealth waits for a gRPC health check to pass.
+func (s *GordonTestSuite) waitForGRPCHealth(ctx context.Context, name string, client grpc_health_v1.HealthClient) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout waiting for %s service: %w", name, ctx.Err())
+			return fmt.Errorf("timeout waiting for %s service health: %w", name, ctx.Err())
 		case <-ticker.C:
-			if err := check(ctx); err == nil {
-				s.T().Logf("%s service is ready", name)
+			resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+			if err == nil && resp.Status == grpc_health_v1.HealthCheckResponse_SERVING {
+				s.T().Logf("%s service health check passed", name)
 				return nil
 			}
 		}

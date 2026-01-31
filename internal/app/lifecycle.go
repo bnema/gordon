@@ -75,6 +75,7 @@ func (lm *LifecycleManager) InitializeSpecs(cfg Config) {
 		Image:        lm.image,
 		Component:    "secrets",
 		Env:          mergeEnv(commonEnv, map[string]string{"GORDON_COMPONENT": "secrets"}),
+		Ports:        map[string]string{"9091": "9091"}, // gRPC
 		NetworkMode:  "gordon-internal",
 		ReadOnlyRoot: true,
 		Volumes:      map[string]string{
@@ -89,7 +90,7 @@ func (lm *LifecycleManager) InitializeSpecs(cfg Config) {
 		Image:        lm.image,
 		Component:    "registry",
 		Env:          mergeEnv(commonEnv, map[string]string{"GORDON_COMPONENT": "registry"}),
-		Ports:        map[string]string{"5000": "5000"}, // Registry HTTP
+		Ports:        map[string]string{"5000": "5000", "9092": "9092"}, // HTTP + gRPC
 		NetworkMode:  "gordon-internal",
 		ReadOnlyRoot: true,
 		Volumes: map[string]string{

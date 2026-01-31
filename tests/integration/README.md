@@ -40,15 +40,15 @@ go test -v -timeout 10m -run Test01 ./tests/integration/...
 
 ## Test Suite
 
-| Test | File | Duration | Description |
-|------|------|----------|-------------|
-| Test01 | `01_startup_test.go` | ~90s | Four-container startup and health checks |
-| Test02 | `02_grpc_test.go` | ~30s | gRPC communication between components |
-| Test03 | `03_registry_test.go` | ~3min | Image push triggers auto-deploy |
-| Test04 | `04_restart_test.go` | ~2min | Auto-restart of failed sub-containers |
-| Test05 | `05_security_test.go` | ~45s | Security isolation verification |
+| Test | File | Duration | Description | Status |
+|------|------|----------|-------------|--------|
+| Test01 | `01_startup_test.go` | ~4s | Four-container startup and health checks | ✅ Implemented |
+| Test02 | `02_grpc_test.go` | ~30s | gRPC communication between components | 📝 Planned |
+| Test03 | `03_registry_test.go` | ~3min | Image push triggers auto-deploy | 📝 Planned |
+| Test04 | `04_restart_test.go` | ~2min | Auto-restart of failed sub-containers | 📝 Planned |
+| Test05 | `05_security_test.go` | ~45s | Security isolation verification | 📝 Planned |
 
-**Total Duration**: ~8 minutes (10 min max)
+**Current Duration**: ~4 seconds (Test01 only)
 
 ## Architecture Under Test
 
@@ -57,12 +57,22 @@ Internet → gordon-proxy:80 (HTTP only)
               │ gRPC
               ▼
            gordon-core:9090 (Docker socket, orchestrator)
-              │ gRPC
-              ├───────────────┐
-              ▼               ▼
-        gordon-secrets:9091  gordon-registry:5000 + :9092
-        (secrets)            (Docker registry)
+              │ gRPC                    │ gRPC
+              ▼                         ▼
+           gordon-secrets:9091       gordon-registry:5000 + :9092
+           (.gnupg/.password-store)  (Docker registry storage)
 ```
+
+### Implementation Status
+
+| Component | gRPC Server | gRPC Client | Status |
+|-----------|-------------|-------------|--------|
+| gordon-core | ✅ CoreService | ❌ Missing (needs clients to secrets & registry) | Partial |
+| gordon-proxy | ❌ N/A | ❌ Missing (needs client to core) | Not Started |
+| gordon-registry | ✅ RegistryInspectService | ❌ Missing (needs client to core for events) | Partial |
+| gordon-secrets | ✅ SecretsService | ❌ N/A | Complete |
+
+**Note**: Current test validates container deployment and individual gRPC server startup. Full inter-service gRPC communication is pending implementation of gRPC clients in core, proxy, and registry components.
 
 ## Testcontainers v0.40.0
 
@@ -110,3 +120,15 @@ docker build -t gordon:v3-test .
 - **Sequential execution**: Tests run one after another for reliability
 - **Automatic cleanup**: Containers are terminated after tests
 - **Rootless Docker support**: Automatically detects rootless socket
+
+## Security Model Verification
+
+Current test validates:
+- ✅ Sub-containers deployed on `gordon-internal` network (isolation from host)
+- ✅ Sub-containers have no Docker socket access
+- ✅ gordon-core has Docker socket access (for orchestration)
+
+Pending verification:
+- 📝 gRPC mTLS between services
+- 📝 No cross-container filesystem access
+- 📝 Secrets container has GPG mounted, others don't

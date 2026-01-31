@@ -93,10 +93,33 @@ func RunProxy(ctx context.Context, configPath string) error {
 		}
 	}()
 
+	// Create mux with health endpoint and proxy handler
+	mux := http.NewServeMux()
+
+	// Health check endpoint
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		// Check if core connection is healthy
+		coreHealthy := coreClient.HealthCheck()
+
+		status := "healthy"
+		code := http.StatusOK
+		if !coreHealthy {
+			status = "degraded"
+			code = http.StatusServiceUnavailable
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		fmt.Fprintf(w, `{"status":"%s","component":"proxy","core_connected":%t}`, status, coreHealthy)
+	})
+
+	// Proxy handler for all other requests
+	mux.Handle("/", proxySvc)
+
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         ":" + proxyPort,
-		Handler:      proxySvc,
+		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
