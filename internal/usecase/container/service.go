@@ -1095,7 +1095,25 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	})
 
 	// Check if already running (idempotent)
+	// Try new name first, then fall back to legacy name for backwards compatibility
 	existingContainer := s.findContainerByName(ctx, containerName)
+	if existingContainer == nil {
+		// Try legacy naming scheme for backwards compatibility during upgrades
+		containerNameLegacy := fmt.Sprintf("gordon-%s-%s", sanitizeNameLegacy(ownerDomain), serviceName)
+		existingContainer = s.findContainerByName(ctx, containerNameLegacy)
+		if existingContainer != nil {
+			log.Info().Str("container_name", containerNameLegacy).Msg("found attachment with legacy naming, will be replaced")
+			// Remove the old container and recreate with new name
+			if err := s.runtime.StopContainer(ctx, existingContainer.ID); err != nil {
+				return log.WrapErr(err, "failed to stop legacy attachment container")
+			}
+			if err := s.runtime.RemoveContainer(ctx, existingContainer.ID, true); err != nil {
+				return log.WrapErr(err, "failed to remove legacy attachment container")
+			}
+			existingContainer = nil // Clear so we create new one below
+		}
+	}
+
 	if existingContainer != nil && existingContainer.Status == string(domain.ContainerStatusRunning) {
 		log.Debug().Str("container_name", containerName).Msg("attachment already running, skipping")
 		return nil
@@ -1105,7 +1123,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	if existingContainer != nil {
 		log.Info().Str("container_name", containerName).Msg("removing stopped attachment container")
 		if err := s.runtime.RemoveContainer(ctx, existingContainer.ID, true); err != nil {
-			log.WrapErr(err, "failed to remove existing attachment container")
+			return log.WrapErr(err, "failed to remove existing attachment container")
 		}
 	}
 
@@ -1306,13 +1324,14 @@ func extractServiceName(image string) string {
 	return name
 }
 
-// sanitizeName makes a domain safe for container naming.
-func sanitizeName(domain string) string {
-	// Replace dots and other special chars with dashes
-	result := strings.ReplaceAll(domain, ".", "-")
-	result = strings.ReplaceAll(result, ":", "-")
-	result = strings.ReplaceAll(result, "/", "-")
-	return result
+// sanitizeName is a convenience wrapper around domain.SanitizeDomainForContainer.
+func sanitizeName(d string) string {
+	return domain.SanitizeDomainForContainer(d)
+}
+
+// sanitizeNameLegacy is a convenience wrapper around domain.SanitizeDomainForContainerLegacy.
+func sanitizeNameLegacy(d string) string {
+	return domain.SanitizeDomainForContainerLegacy(d)
 }
 
 // findContainerByName finds a container by its name.
