@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/bnema/gordon/internal/app"
 
@@ -26,14 +25,11 @@ In v3, Gordon runs as multiple isolated containers. Use --component to specify w
   --component=registry - Docker registry with gRPC inspection
   --component=secrets  - Secrets and token management
 
-If no component is specified, runs in backward-compatible monolithic mode (deprecated).`,
+The --component flag is required.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 
 			switch component {
-			case "":
-				// Backward compatibility: run monolithic mode
-				return app.Run(ctx, configPath)
 			case "core":
 				return app.RunCore(ctx, configPath)
 			case "proxy":
@@ -51,6 +47,7 @@ If no component is specified, runs in backward-compatible monolithic mode (depre
 	// Add flags
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
 	cmd.Flags().StringVar(&component, "component", "", "Component to run (core|proxy|registry|secrets)")
+	_ = cmd.MarkFlagRequired("component")
 
 	return cmd
 }
@@ -63,11 +60,10 @@ func newStartCmd() *cobra.Command {
 		Use:        "start",
 		Short:      "Start the Gordon server (deprecated: use 'serve')",
 		Long:       `Start the Gordon server. This command is deprecated, please use 'gordon serve' instead.`,
-		Deprecated: "use 'gordon serve' instead",
+		Deprecated: "use 'gordon serve --component=<core|proxy|registry|secrets>' instead",
 		Hidden:     true, // Hide from help but still works
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(os.Stderr, "\nWarning: 'gordon start' is deprecated, use 'gordon serve' instead")
-			return app.Run(context.Background(), configPath)
+			return fmt.Errorf("'gordon start' is no longer supported. Use 'gordon serve --component=<core|proxy|registry|secrets>' instead")
 		},
 	}
 

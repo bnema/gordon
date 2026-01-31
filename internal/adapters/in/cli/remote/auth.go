@@ -1,73 +1,45 @@
 package remote
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+
+	gordon "github.com/bnema/gordon/internal/grpc"
 )
 
-// PasswordRequest represents the request body for POST /auth/password.
+// PasswordRequest represents the request body for authentication.
 type PasswordRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
-// PasswordResponse represents the response from POST /auth/password.
+// PasswordResponse represents the response from password authentication.
 type PasswordResponse struct {
 	Token     string `json:"token"`
 	ExpiresIn int    `json:"expires_in"`
 	IssuedAt  string `json:"issued_at"`
 }
 
-// Authenticate calls POST /auth/password and returns a token.
+// Authenticate issues a token using username and password.
 // This method does NOT require an existing token since it's used to obtain one.
 func (c *Client) Authenticate(ctx context.Context, username, password string) (*PasswordResponse, error) {
-	url := c.baseURL + "/auth/password"
+	if err := c.ensureConn(ctx); err != nil {
+		return nil, err
+	}
 
-	reqBody := PasswordRequest{
+	resp, err := c.admin.AuthenticatePassword(ctx, &gordon.AuthenticatePasswordRequest{
 		Username: username,
 		Password: password,
-	}
-
-	jsonBody, err := json.Marshal(reqBody)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		var errResp struct {
-			Error string `json:"error"`
-		}
-		if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
-			return nil, fmt.Errorf("%s: %s", resp.Status, errResp.Error)
-		}
-		return nil, fmt.Errorf("%s: %s", resp.Status, string(body))
-	}
-
-	var result PasswordResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
+	return &PasswordResponse{
+		Token:     resp.Token,
+		ExpiresIn: int(resp.ExpiresIn),
+		IssuedAt:  resp.IssuedAt,
+	}, nil
 }
 
 // UpdateRemoteToken updates the token for a named remote.
@@ -83,7 +55,7 @@ func UpdateRemoteToken(name, token string) error {
 	}
 
 	remote.Token = token
-	remote.TokenEnv = "" // Clear token_env when setting token directly
+	remote.TokenEnv = ""
 	config.Remotes[name] = remote
 
 	return SaveRemotes("", config)
