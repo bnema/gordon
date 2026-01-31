@@ -6,16 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
-
-func testLogger() zerowrap.Logger {
-	return zerowrap.Default()
-}
 
 func TestFileStore_PathTraversal(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "domainsecrets-test-*")

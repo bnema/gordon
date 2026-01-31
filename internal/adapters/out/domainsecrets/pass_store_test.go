@@ -35,11 +35,11 @@ func cleanupPassDomain(_ *testing.T, domainName string, keys []string) {
 	}
 
 	for _, key := range keys {
-		path := fmt.Sprintf("%s/%s/%s", passDomainSecretsPath, safeDomain, key)
+		path := fmt.Sprintf("%s/%s/%s", PassDomainSecretsPath, safeDomain, key)
 		_ = passCmd("rm", "-f", path)
 	}
 
-	manifestPath := fmt.Sprintf("%s/%s/.keys", passDomainSecretsPath, safeDomain)
+	manifestPath := fmt.Sprintf("%s/%s/.keys", PassDomainSecretsPath, safeDomain)
 	_ = passCmd("rm", "-f", manifestPath)
 }
 
@@ -77,4 +77,45 @@ func TestPassStore_SetGetDelete(t *testing.T) {
 	keysList, err = store.ListKeys(domainName)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"API_KEY"}, keysList)
+}
+
+func TestParsePassListOutput(t *testing.T) {
+	tests := []struct {
+		name     string
+		basePath string
+		output   string
+		want     []passListEntry
+	}{
+		{
+			name:     "simple tree",
+			basePath: "domain",
+			output:   "domain\n├── key1\n└── key2",
+			want:     []passListEntry{{name: "key1", depth: 1}, {name: "key2", depth: 1}},
+		},
+		{
+			name:     "nested tree",
+			basePath: "domain",
+			output:   "domain\n│   ├── subkey1\n│   └── subkey2\n└── key1",
+			want:     []passListEntry{{name: "subkey1", depth: 2}, {name: "subkey2", depth: 2}, {name: "key1", depth: 1}},
+		},
+		{
+			name:     "empty output",
+			basePath: "domain",
+			output:   "",
+			want:     []passListEntry{},
+		},
+		{
+			name:     "ASCII fallback chars",
+			basePath: "domain",
+			output:   "domain\n|   |-- subkey1\n`-- key1",
+			want:     []passListEntry{{name: "subkey1", depth: 2}, {name: "key1", depth: 1}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parsePassListOutput(tt.basePath, tt.output)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

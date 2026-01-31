@@ -28,6 +28,8 @@ func TestSanitizeDomainForEnvFile(t *testing.T) {
 		{name: "ends with dot", domain: "trailing.", wantErr: true},
 		{name: "space", domain: "has space", wantErr: true},
 		{name: "special chars", domain: "bad$domain", wantErr: true},
+		{name: "idempotent simple", domain: "example_com", want: "example_com"},
+		{name: "idempotent complex", domain: "my-app_example_com_8080", want: "my-app_example_com_8080"},
 	}
 
 	for _, tt := range tests {
@@ -100,6 +102,16 @@ func TestParseEnvData(t *testing.T) {
 			data: "BIG=" + strings.Repeat("x", 100000),
 			want: map[string]string{"BIG": strings.Repeat("x", 100000)},
 		},
+		{
+			name: "quoted value with inner spaces",
+			data: `KEY="  hello  "`,
+			want: map[string]string{"KEY": "  hello  "},
+		},
+		{
+			name: "unquoted value with outer spaces",
+			data: "KEY=  hello  ",
+			want: map[string]string{"KEY": "hello"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -117,30 +129,34 @@ func TestParseEnvData(t *testing.T) {
 
 func TestValidateEnvKey(t *testing.T) {
 	tests := []struct {
-		name    string
-		key     string
-		wantErr bool
+		name        string
+		key         string
+		wantErr     bool
+		wantErrType error
 	}{
 		{name: "simple", key: "FOO", wantErr: false},
 		{name: "with underscore", key: "FOO_BAR", wantErr: false},
 		{name: "starts with underscore", key: "_PRIVATE", wantErr: false},
 		{name: "lowercase", key: "foo", wantErr: false},
 		{name: "mixed", key: "myApp_v2", wantErr: false},
-		{name: "empty", key: "", wantErr: true},
-		{name: "starts with number", key: "1BAD", wantErr: true},
-		{name: "contains dot", key: "FOO.BAR", wantErr: true},
-		{name: "contains slash", key: "FOO/BAR", wantErr: true},
-		{name: "contains backslash", key: `FOO\BAR`, wantErr: true},
-		{name: "path traversal", key: "..", wantErr: true},
-		{name: "contains hyphen", key: "FOO-BAR", wantErr: true},
-		{name: "contains space", key: "FOO BAR", wantErr: true},
+		{name: "empty", key: "", wantErr: true, wantErrType: ErrInvalidEnvKey},
+		{name: "starts with number", key: "1BAD", wantErr: true, wantErrType: ErrInvalidEnvKey},
+		{name: "contains dot", key: "FOO.BAR", wantErr: true, wantErrType: ErrInvalidEnvKey},
+		{name: "contains slash", key: "FOO/BAR", wantErr: true, wantErrType: ErrPathTraversal},
+		{name: "contains backslash", key: `FOO\BAR`, wantErr: true, wantErrType: ErrPathTraversal},
+		{name: "path traversal", key: "..", wantErr: true, wantErrType: ErrPathTraversal},
+		{name: "contains hyphen", key: "FOO-BAR", wantErr: true, wantErrType: ErrInvalidEnvKey},
+		{name: "contains space", key: "FOO BAR", wantErr: true, wantErrType: ErrInvalidEnvKey},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := ValidateEnvKey(tt.key)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
+				if tt.wantErrType != nil {
+					assert.ErrorIs(t, err, tt.wantErrType)
+				}
 			} else {
 				assert.NoError(t, err)
 			}
