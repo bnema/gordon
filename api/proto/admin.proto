@@ -1,0 +1,265 @@
+syntax = "proto3";
+
+package gordon;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bnema/gordon/internal/grpc";
+
+// AdminService provides administrative operations.
+service AdminService {
+  // Routes
+  rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse);
+  rpc GetRoute(GetRouteRequest) returns (AdminRoute);
+  rpc AddRoute(AddRouteRequest) returns (AdminRoute);
+  rpc UpdateRoute(UpdateRouteRequest) returns (AdminRoute);
+  rpc RemoveRoute(RemoveRouteRequest) returns (RemoveRouteResponse);
+
+  // Secrets
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+  rpc SetSecrets(SetSecretsRequest) returns (SetSecretsResponse);
+  rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
+
+  // Logs - server streaming for real-time logs
+  rpc GetProcessLogs(GetProcessLogsRequest) returns (stream LogEntry);
+  rpc GetContainerLogs(GetContainerLogsRequest) returns (stream LogEntry);
+
+  // System
+  rpc GetStatus(GetStatusRequest) returns (StatusResponse);
+  rpc GetHealth(GetHealthRequest) returns (HealthResponse);
+  rpc GetConfig(GetConfigRequest) returns (ConfigResponse);
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
+  rpc Deploy(DeployRequest) returns (DeployResponse);
+
+  // Networks and attachments
+  rpc ListNetworks(ListNetworksRequest) returns (ListNetworksResponse);
+  rpc GetAttachments(GetAttachmentsRequest) returns (AttachmentsResponse);
+  rpc AddAttachment(AddAttachmentRequest) returns (Attachment);
+  rpc RemoveAttachment(RemoveAttachmentRequest) returns (RemoveAttachmentResponse);
+
+  // Auth verification
+  rpc VerifyAuth(VerifyAuthRequest) returns (VerifyAuthResponse);
+  rpc AuthenticatePassword(AuthenticatePasswordRequest) returns (AuthenticatePasswordResponse);
+}
+
+message LogEntry {
+  string line = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string source = 3; // "process" or container domain
+}
+
+// Route messages
+message AdminRoute {
+  string domain = 1;
+  string image = 2;
+  bool https = 3;
+  map<string, string> labels = 4;
+}
+
+message RouteInfo {
+  string domain = 1;
+  string image = 2;
+  string container_id = 3;
+  string container_status = 4;
+  string network = 5;
+  repeated Attachment attachments = 6;
+}
+
+message Attachment {
+  string name = 1;
+  string image = 2;
+  string container_id = 3;
+  string status = 4;
+  string network = 5;
+}
+
+// Request/response messages
+message ListRoutesRequest {
+  bool detailed = 1;
+}
+
+message ListRoutesResponse {
+  repeated AdminRoute routes = 1;
+  repeated RouteInfo route_infos = 2; // Populated if detailed = true
+}
+
+message GetRouteRequest {
+  string domain = 1;
+}
+
+message AddRouteRequest {
+  AdminRoute route = 1;
+}
+
+message UpdateRouteRequest {
+  string domain = 1;
+  AdminRoute route = 2;
+}
+
+message RemoveRouteRequest {
+  string domain = 1;
+}
+
+message RemoveRouteResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Secrets messages
+message ListSecretsRequest {
+  string domain = 1;
+}
+
+message ListSecretsResponse {
+  string domain = 1;
+  repeated string keys = 2;
+  repeated AttachmentSecrets attachments = 3;
+}
+
+message SetSecretsRequest {
+  string domain = 1;
+  map<string, string> secrets = 2;
+}
+
+message SetSecretsResponse {
+  bool success = 1;
+}
+
+message DeleteSecretRequest {
+  string domain = 1;
+  string key = 2;
+}
+
+message DeleteSecretResponse {
+  bool success = 1;
+}
+
+message AttachmentSecrets {
+  string service = 1;
+  repeated string keys = 2;
+}
+
+// Log messages
+message GetProcessLogsRequest {
+  int32 lines = 1;
+  bool follow = 2; // Stream if true
+}
+
+message GetContainerLogsRequest {
+  string domain = 1;
+  int32 lines = 2;
+  bool follow = 3; // Stream if true
+}
+
+// Status and health messages
+message GetStatusRequest {}
+
+message StatusResponse {
+  int32 route_count = 1;
+  int32 container_count = 2;
+  string registry_domain = 3;
+  bool auth_enabled = 4;
+  int32 registry_port = 5;
+  int32 server_port = 6;
+  bool auto_route = 7;
+  bool network_isolation = 8;
+  map<string, string> container_statuses = 9;
+}
+
+message GetHealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+  map<string, RouteHealth> routes = 2;
+}
+
+message RouteHealth {
+  bool healthy = 1;
+  int32 response_time_ms = 2;
+  string last_check = 3;
+  string error = 4;
+}
+
+// Config messages
+message GetConfigRequest {}
+
+message ConfigResponse {
+  bytes config_json = 1; // Full config as JSON bytes
+}
+
+message ReloadRequest {}
+
+message ReloadResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Deploy messages
+message DeployRequest {
+  string domain = 1;
+}
+
+message DeployResponse {
+  bool success = 1;
+  string container_id = 2;
+  string message = 3;
+}
+
+// Network messages
+message ListNetworksRequest {}
+
+message ListNetworksResponse {
+  repeated Network networks = 1;
+}
+
+message Network {
+  string name = 1;
+  string driver = 2;
+  string subnet = 3;
+  int32 container_count = 4;
+}
+
+// Attachment messages
+message GetAttachmentsRequest {
+  string target = 1; // Empty for all
+}
+
+message AttachmentsResponse {
+  repeated Attachment attachments = 1;
+}
+
+message AddAttachmentRequest {
+  string target = 1;
+  string image = 2;
+  map<string, string> env = 3;
+}
+
+message RemoveAttachmentRequest {
+  string target = 1;
+  string image = 2;
+}
+
+message RemoveAttachmentResponse {
+  bool success = 1;
+}
+
+// Auth messages
+message VerifyAuthRequest {}
+
+message VerifyAuthResponse {
+  bool valid = 1;
+  string subject = 2;
+  repeated string scopes = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message AuthenticatePasswordRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message AuthenticatePasswordResponse {
+  string token = 1;
+  int32 expires_in = 2;
+  string issued_at = 3;
+}

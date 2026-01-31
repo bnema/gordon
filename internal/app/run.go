@@ -7,36 +7,23 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/bnema/zerowrap"
-	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 
 	// Adapters - Output
 	"github.com/bnema/gordon/internal/adapters/out/docker"
-	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
 	"github.com/bnema/gordon/internal/adapters/out/envloader"
 	"github.com/bnema/gordon/internal/adapters/out/eventbus"
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
-	"github.com/bnema/gordon/internal/adapters/out/httpprober"
 	"github.com/bnema/gordon/internal/adapters/out/logwriter"
-	"github.com/bnema/gordon/internal/adapters/out/ratelimit"
 	"github.com/bnema/gordon/internal/adapters/out/secrets"
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
-
-	// Adapters - Input
-	"github.com/bnema/gordon/internal/adapters/in/http/admin"
-	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
-	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
-	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 
 	// Boundaries
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -46,13 +33,7 @@ import (
 
 	// Use cases
 	"github.com/bnema/gordon/internal/usecase/auth"
-	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
-	"github.com/bnema/gordon/internal/usecase/health"
-	"github.com/bnema/gordon/internal/usecase/logs"
-	"github.com/bnema/gordon/internal/usecase/proxy"
-	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
-	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 
 	// Pkg
 	"github.com/bnema/gordon/pkg/duration"
@@ -113,83 +94,6 @@ type Config struct {
 	} `mapstructure:"api"`
 }
 
-// services holds all the services used by the application.
-type services struct {
-	runtime         *docker.Runtime
-	eventBus        *eventbus.InMemory
-	blobStorage     *filesystem.BlobStorage
-	manifestStorage *filesystem.ManifestStorage
-	envLoader       *envloader.FileLoader
-	logWriter       *logwriter.LogWriter
-	tokenStore      out.TokenStore
-	configSvc       *config.Service
-	containerSvc    *container.Service
-	registrySvc     *registrySvc.Service
-	proxySvc        *proxy.Service
-	authSvc         *auth.Service
-	authHandler     *authhandler.Handler
-	adminHandler    *admin.Handler
-	internalRegUser string
-	internalRegPass string
-	envDir          string
-}
-
-// Run initializes and starts the Gordon application.
-func Run(ctx context.Context, configPath string) error {
-	// Load configuration
-	v, cfg, err := initConfig(configPath)
-	if err != nil {
-		return err
-	}
-
-	// Initialize logger
-	log, cleanup, err := initLogger(cfg)
-	if err != nil {
-		return err
-	}
-	if cleanup != nil {
-		defer cleanup()
-	}
-
-	ctx = zerowrap.WithCtx(ctx, log)
-	log.Info().Msg("Gordon starting")
-
-	// Create PID file
-	pidFile := createPidFile(log)
-	if pidFile != "" {
-		defer removePidFile(pidFile, log)
-	}
-
-	// Create all services
-	svc, err := createServices(ctx, v, cfg, log)
-	if err != nil {
-		return err
-	}
-
-	// Register event handlers
-	if err := registerEventHandlers(ctx, svc, cfg); err != nil {
-		return err
-	}
-
-	// Set up config hot reload
-	setupConfigHotReload(ctx, v, svc, log)
-
-	// Start event bus
-	if err := svc.eventBus.Start(); err != nil {
-		return log.WrapErr(err, "failed to start event bus")
-	}
-	defer svc.eventBus.Stop()
-
-	// Sync and auto-start containers
-	syncAndAutoStart(ctx, svc, log)
-
-	// Create HTTP handlers
-	registryHandler, proxyHandler := createHTTPHandlers(svc, cfg, log)
-
-	// Start servers and wait for shutdown
-	return runServers(ctx, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, log)
-}
-
 // initConfig loads configuration from file.
 func initConfig(configPath string) (*viper.Viper, Config, error) {
 	v := viper.New()
@@ -239,103 +143,6 @@ func initLogger(cfg Config) (zerowrap.Logger, func(), error) {
 	}
 
 	return zerowrap.New(logConfig), nil, nil
-}
-
-// createServices creates all the application services.
-func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (*services, error) {
-	svc := &services{}
-	var err error
-
-	// Create output adapters
-	if svc.runtime, svc.eventBus, err = createOutputAdapters(ctx, log); err != nil {
-		return nil, err
-	}
-
-	// Create storage
-	if svc.blobStorage, svc.manifestStorage, err = createStorage(cfg, log); err != nil {
-		return nil, err
-	}
-
-	// Create env loader
-	if svc.envLoader, err = createEnvLoader(cfg, log); err != nil {
-		return nil, err
-	}
-
-	// Create log writer
-	if svc.logWriter, err = createLogWriter(cfg, log); err != nil {
-		return nil, err
-	}
-
-	// Create auth service (if enabled)
-	if svc.tokenStore, svc.authSvc, err = createAuthService(ctx, cfg, log); err != nil {
-		return nil, err
-	}
-
-	// Generate internal registry credentials for loopback-only pulls
-	if cfg.Auth.Enabled {
-		svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to generate internal registry credentials")
-		}
-
-		// Persist credentials to file for CLI access (gordon auth internal)
-		if err := persistInternalCredentials(svc.internalRegUser, svc.internalRegPass); err != nil {
-			log.Warn().Err(err).Msg("failed to persist internal credentials for CLI access")
-		}
-
-		log.Debug().Msg("internal registry auth generated for loopback pulls")
-	}
-
-	// Create use case services
-	svc.configSvc = config.NewService(v, svc.eventBus)
-	if err := svc.configSvc.Load(ctx); err != nil {
-		return nil, log.WrapErr(err, "failed to load configuration")
-	}
-
-	svc.containerSvc = createContainerService(v, cfg, svc)
-	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
-	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxy.Config{
-		RegistryDomain: cfg.Server.RegistryDomain,
-		RegistryPort:   cfg.Server.RegistryPort,
-	})
-
-	// Create token handler for registry token endpoint
-	if svc.authSvc != nil {
-		internalAuth := authhandler.InternalAuth{
-			Username: svc.internalRegUser,
-			Password: svc.internalRegPass,
-		}
-		svc.authHandler = authhandler.NewHandler(svc.authSvc, internalAuth, log)
-	}
-
-	// Determine env directory for admin API
-	dataDir := cfg.Server.DataDir
-	if dataDir == "" {
-		dataDir = DefaultDataDir()
-	}
-	svc.envDir = cfg.Env.Dir
-	if svc.envDir == "" {
-		svc.envDir = filepath.Join(dataDir, "env")
-	}
-
-	// Create domain secret store and service
-	domainSecretStore, err := domainsecrets.NewFileStore(svc.envDir, log)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to create domain secret store")
-	}
-	secretSvc := secretsSvc.NewService(domainSecretStore, log)
-
-	// Create health service for route health checking
-	prober := httpprober.New()
-	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
-
-	// Create log service for accessing logs via admin API
-	logSvc := logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
-
-	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log)
-
-	return svc, nil
 }
 
 // resolveLogFilePath returns the configured log file path or a default.
@@ -540,11 +347,6 @@ func persistInternalCredentials(username, password string) error {
 		return fmt.Errorf("failed to write credentials file: %w", err)
 	}
 	return nil
-}
-
-// cleanupInternalCredentials removes the internal credentials file.
-func cleanupInternalCredentials() {
-	_ = os.Remove(getInternalCredentialsFile())
 }
 
 // GetInternalCredentials reads the internal registry credentials from file.
@@ -773,293 +575,6 @@ func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDi
 	}
 }
 
-// createContainerService creates the container service with configuration.
-func createContainerService(v *viper.Viper, cfg Config, svc *services) *container.Service {
-	containerConfig := container.Config{
-		RegistryAuthEnabled:      cfg.Auth.Enabled,
-		RegistryDomain:           cfg.Server.RegistryDomain,
-		RegistryPort:             cfg.Server.RegistryPort,
-		RegistryUsername:         cfg.Auth.Username,
-		RegistryPassword:         cfg.Auth.Password,
-		InternalRegistryUsername: svc.internalRegUser,
-		InternalRegistryPassword: svc.internalRegPass,
-		PullPolicy:               v.GetString("deploy.pull_policy"),
-		VolumeAutoCreate:         v.GetBool("volumes.auto_create"),
-		VolumePrefix:             v.GetString("volumes.prefix"),
-		VolumePreserve:           v.GetBool("volumes.preserve"),
-		NetworkIsolation:         v.GetBool("network_isolation.enabled"),
-		NetworkPrefix:            v.GetString("network_isolation.network_prefix"),
-		DNSSuffix:                v.GetString("network_isolation.dns_suffix"),
-		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
-		Attachments:              svc.configSvc.GetAttachments(),
-	}
-	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig)
-}
-
-// registerEventHandlers registers all event handlers.
-func registerEventHandlers(ctx context.Context, svc *services, cfg Config) error {
-	imagePushedHandler := container.NewImagePushedHandler(ctx, svc.containerSvc, svc.configSvc)
-	if err := svc.eventBus.Subscribe(imagePushedHandler); err != nil {
-		return fmt.Errorf("failed to subscribe image pushed handler: %w", err)
-	}
-
-	// Auto-route handler for creating routes from image labels
-	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, cfg.Server.RegistryDomain).
-		WithEnvExtractor(svc.runtime, svc.envDir)
-	if err := svc.eventBus.Subscribe(autoRouteHandler); err != nil {
-		return fmt.Errorf("failed to subscribe auto-route handler: %w", err)
-	}
-
-	configReloadHandler := container.NewConfigReloadHandler(ctx, svc.containerSvc, svc.configSvc)
-	if err := svc.eventBus.Subscribe(configReloadHandler); err != nil {
-		return fmt.Errorf("failed to subscribe config reload handler: %w", err)
-	}
-
-	manualReloadHandler := container.NewManualReloadHandler(ctx, svc.containerSvc, svc.configSvc)
-	if err := svc.eventBus.Subscribe(manualReloadHandler); err != nil {
-		return fmt.Errorf("failed to subscribe manual reload handler: %w", err)
-	}
-
-	manualDeployHandler := container.NewManualDeployHandler(ctx, svc.containerSvc, svc.configSvc)
-	if err := svc.eventBus.Subscribe(manualDeployHandler); err != nil {
-		return fmt.Errorf("failed to subscribe manual deploy handler: %w", err)
-	}
-
-	// Proxy cache invalidation on container deployment (for zero-downtime)
-	containerDeployedHandler := proxy.NewContainerDeployedHandler(ctx, svc.proxySvc)
-	if err := svc.eventBus.Subscribe(containerDeployedHandler); err != nil {
-		return fmt.Errorf("failed to subscribe container deployed handler: %w", err)
-	}
-
-	return nil
-}
-
-// setupConfigHotReload sets up Viper config hot reload.
-// NOTE: This does NOT reload routes into memory. Routes are managed via API
-// (AddRoute/UpdateRoute/RemoveRoute) and memory is the source of truth.
-// The file watcher only updates proxy config and refreshes targets.
-// Manual config file edits to routes require a server restart.
-func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, log zerowrap.Logger) {
-	v.OnConfigChange(func(e fsnotify.Event) {
-		log.Info().Str("file", e.Name).Msg("config file changed")
-
-		if err := v.ReadInConfig(); err != nil {
-			log.Error().Err(err).Msg("failed to reload config")
-			return
-		}
-
-		// Update proxy config from viper (reads directly from viper, not memory)
-		svc.proxySvc.UpdateConfig(proxy.Config{
-			RegistryDomain: v.GetString("server.registry_domain"),
-			RegistryPort:   v.GetInt("server.registry_port"),
-		})
-
-		// Clear proxy target cache to pick up external route changes
-		if err := svc.proxySvc.RefreshTargets(ctx); err != nil {
-			log.Warn().Err(err).Msg("failed to refresh proxy targets")
-		}
-
-		log.Debug().Msg("config hot reload complete (routes unchanged, memory is source of truth)")
-	})
-	v.WatchConfig()
-}
-
-// syncAndAutoStart syncs existing containers and auto-starts if configured.
-func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
-	if err := svc.containerSvc.SyncContainers(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to sync existing containers")
-	}
-
-	if svc.configSvc.IsAutoRouteEnabled() {
-		routes := svc.configSvc.GetRoutes(ctx)
-		if err := svc.containerSvc.AutoStart(ctx, routes); err != nil {
-			log.Warn().Err(err).Msg("failed to auto-start containers")
-		}
-	}
-}
-
-// createHTTPHandlers creates HTTP handlers with middleware.
-func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler) {
-	registryHandler := registry.NewHandler(svc.registrySvc, log)
-
-	registryMiddlewares := []func(http.Handler) http.Handler{
-		middleware.PanicRecovery(log),
-		middleware.RequestLogger(log),
-		middleware.SecurityHeaders,
-	}
-
-	// Create rate limiters using the factory
-	var rateLimitMiddleware func(http.Handler) http.Handler
-	if cfg.API.RateLimit.Enabled {
-		globalLimiter := ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
-		ipLimiter := ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
-		rateLimitMiddleware = registry.RateLimitMiddleware(
-			globalLimiter,
-			ipLimiter,
-			cfg.API.RateLimit.TrustedProxies,
-			log,
-		)
-	} else {
-		rateLimitMiddleware = registry.RateLimitMiddleware(nil, nil, nil, log)
-	}
-	registryMiddlewares = append(registryMiddlewares, rateLimitMiddleware)
-
-	if cfg.Auth.Enabled && svc.authSvc != nil {
-		internalAuth := middleware.InternalRegistryAuth{
-			Username: svc.internalRegUser,
-			Password: svc.internalRegPass,
-		}
-		registryMiddlewares = append(registryMiddlewares,
-			middleware.RegistryAuthV2(svc.authSvc, internalAuth, log))
-	}
-
-	registryWithMiddleware := middleware.Chain(registryMiddlewares...)(registryHandler)
-
-	// Create a mux that routes:
-	// - /auth/* to auth handler (no auth required, for password login and token exchange)
-	// - /v2/* to registry handler (with auth)
-	// - /admin/* to admin handler (with auth)
-	registryMux := http.NewServeMux()
-	if svc.authHandler != nil {
-		// Auth endpoints are NOT protected by auth - they're where clients authenticate
-		// but still need rate limiting to prevent brute force attacks
-		authWithMiddleware := middleware.Chain(
-			middleware.PanicRecovery(log),
-			middleware.RequestLogger(log),
-			middleware.SecurityHeaders,
-			rateLimitMiddleware,
-		)(svc.authHandler)
-		registryMux.Handle("/auth/", authWithMiddleware)
-	}
-	registryMux.Handle("/v2/", registryWithMiddleware)
-
-	// Add admin API handler with auth middleware
-	if svc.adminHandler != nil {
-		adminMiddlewares := []func(http.Handler) http.Handler{
-			middleware.PanicRecovery(log),
-			middleware.RequestLogger(log),
-			middleware.SecurityHeaders,
-		}
-		// Add admin auth middleware if auth is enabled
-		if svc.authSvc != nil {
-			// Create rate limiters for admin API - uses same config as registry
-			var globalLimiter, ipLimiter out.RateLimiter
-			var trustedNets []*net.IPNet
-			if cfg.API.RateLimit.Enabled {
-				globalLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
-				ipLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
-				trustedNets = middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
-			}
-			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, globalLimiter, ipLimiter, trustedNets, log))
-		}
-		adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
-		registryMux.Handle("/admin/", adminWithMiddleware)
-	}
-
-	proxyMiddlewares := []func(http.Handler) http.Handler{
-		middleware.PanicRecovery(log),
-		middleware.RequestLogger(log),
-		middleware.SecurityHeaders,
-		middleware.CORS,
-	}
-
-	proxyWithMiddleware := middleware.Chain(proxyMiddlewares...)(svc.proxySvc)
-
-	return registryMux, proxyWithMiddleware
-}
-
-// runServers starts the HTTP servers and waits for shutdown.
-// Signal handling notes:
-// - SIGINT/SIGTERM: Triggers graceful shutdown via signal.NotifyContext
-// - SIGUSR1: Triggers config reload without restart
-// - SIGUSR2: Triggers manual deploy for a specific route
-// The deferred signal.Stop calls ensure signal handlers are properly
-// cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, log zerowrap.Logger) error {
-	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	// Set up SIGUSR1 for reload.
-	// Note: signal.Stop must be called (via defer) to release the channel
-	// and prevent signal handler leaks when the function returns.
-	reloadChan := make(chan os.Signal, 1)
-	signal.Notify(reloadChan, syscall.SIGUSR1)
-	defer signal.Stop(reloadChan)
-
-	// Set up SIGUSR2 for manual deploy.
-	deployChan := make(chan os.Signal, 1)
-	signal.Notify(deployChan, syscall.SIGUSR2)
-	defer signal.Stop(deployChan)
-
-	errChan := make(chan error, 2)
-
-	go startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
-	go startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
-
-	log.Info().
-		Int("proxy_port", cfg.Server.Port).
-		Int("registry_port", cfg.Server.RegistryPort).
-		Msg("Gordon is running")
-
-	for {
-		select {
-		case err := <-errChan:
-			return err
-		case <-reloadChan:
-			log.Info().Msg("reload signal received (SIGUSR1)")
-			if err := eventBus.Publish(domain.EventManualReload, nil); err != nil {
-				log.Error().Err(err).Msg("failed to publish manual reload event")
-			}
-		case <-deployChan:
-			log.Info().Msg("deploy signal received (SIGUSR2)")
-			domainName, err := readDeployRequest()
-			if err != nil {
-				log.Error().Err(err).Msg("failed to read deploy request")
-				continue
-			}
-			payload := &domain.ManualDeployPayload{Domain: domainName}
-			if err := eventBus.Publish(domain.EventManualDeploy, payload); err != nil {
-				log.Error().Err(err).Str("domain", domainName).Msg("failed to publish manual deploy event")
-			}
-		case <-ctx.Done():
-			log.Info().Msg("shutdown signal received")
-			goto shutdown
-		}
-	}
-
-shutdown:
-	log.Info().Msg("shutting down Gordon...")
-
-	if err := containerSvc.Shutdown(ctx); err != nil {
-		log.Warn().Err(err).Msg("error during container shutdown")
-	}
-
-	// Clean up internal credentials file
-	cleanupInternalCredentials()
-
-	log.Info().Msg("Gordon stopped")
-	return nil
-}
-
-// startServer starts an HTTP server.
-func startServer(addr string, handler http.Handler, name string, errChan chan<- error, log zerowrap.Logger) {
-	log.Info().Str("address", addr).Msgf("%s server starting", name)
-
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       5 * time.Minute,   // Timeout for reading entire request
-		WriteTimeout:      5 * time.Minute,   // Timeout for writing response
-		IdleTimeout:       120 * time.Second, // Timeout for idle keep-alive connections
-		MaxHeaderBytes:    1 << 20,           // 1MB max header size
-	}
-
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		errChan <- fmt.Errorf("%s server error: %w", name, err)
-	}
-}
-
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.
 func SendReloadSignal() error {
 	pidFile := findPidFile()
@@ -1162,29 +677,6 @@ func SendDeploySignal(domain string) (string, error) {
 	}
 
 	return domain, nil
-}
-
-// readDeployRequest reads and removes the deploy request file atomically.
-// Returns empty string if file doesn't exist (may have been consumed by another handler).
-func readDeployRequest() (string, error) {
-	deployFile := getDeployRequestFile()
-
-	// Rename to a temp file first to make the read-and-delete atomic
-	tmpFile := deployFile + ".processing"
-	if err := os.Rename(deployFile, tmpFile); err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("deploy request file not found (may have been processed already)")
-		}
-		return "", fmt.Errorf("failed to acquire deploy request: %w", err)
-	}
-
-	data, err := os.ReadFile(tmpFile)
-	_ = os.Remove(tmpFile) // Always clean up
-	if err != nil {
-		return "", fmt.Errorf("failed to read deploy request: %w", err)
-	}
-
-	return string(data), nil
 }
 
 // createPidFile creates a PID file for the Gordon process.

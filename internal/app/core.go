@@ -16,6 +16,8 @@ import (
 	"github.com/spf13/viper"
 
 	// gRPC adapters
+	grpcadmin "github.com/bnema/gordon/internal/adapters/in/grpc/admin"
+	grpcauth "github.com/bnema/gordon/internal/adapters/in/grpc/auth"
 	grpccore "github.com/bnema/gordon/internal/adapters/in/grpc/core"
 	"github.com/bnema/gordon/internal/adapters/out/docker"
 	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
@@ -27,14 +29,13 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/ratelimit"
 
 	// HTTP handlers
-	"github.com/bnema/gordon/internal/adapters/in/http/admin"
 	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 
 	// Use cases
 	"github.com/bnema/gordon/internal/boundaries/out"
-	gordonv1 "github.com/bnema/gordon/internal/grpc"
+	gordon "github.com/bnema/gordon/internal/grpc"
 	"github.com/bnema/gordon/internal/usecase/auth"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
@@ -64,7 +65,6 @@ type coreServices struct {
 	proxySvc        *proxy.Service
 	authSvc         *auth.Service
 	authHandler     *authhandler.Handler
-	adminHandler    *admin.Handler
 	healthSvc       *health.Service
 	logSvc          *logs.Service
 	secretSvc       *secretsSvc.Service
@@ -78,7 +78,6 @@ type coreServices struct {
 // RunCore starts the gordon-core component.
 // This is the orchestrator component that:
 //   - Has Docker socket access
-//   - Runs admin API on :5000
 //   - Provides CoreService gRPC on :9090
 //   - Deploys and manages other sub-containers
 func RunCore(ctx context.Context, configPath string) error {
@@ -160,7 +159,10 @@ func RunCore(ctx context.Context, configPath string) error {
 		return fmt.Errorf("failed to listen on gRPC port %s: %w", grpcPort, err)
 	}
 
-	grpcServer := grpclib.NewServer()
+	grpcServer := grpclib.NewServer(
+		grpclib.UnaryInterceptor(grpcauth.UnaryInterceptor(svc.authSvc)),
+		grpclib.StreamInterceptor(grpcauth.StreamInterceptor(svc.authSvc)),
+	)
 	coreServer := grpccore.NewServer(
 		svc.containerSvc,
 		svc.configSvc,
@@ -168,7 +170,20 @@ func RunCore(ctx context.Context, configPath string) error {
 		svc.eventBus,
 		log,
 	)
-	gordonv1.RegisterCoreServiceServer(grpcServer, coreServer)
+	gordon.RegisterCoreServiceServer(grpcServer, coreServer)
+
+	adminServer := grpcadmin.NewServer(
+		svc.configSvc,
+		svc.authSvc,
+		svc.containerSvc,
+		svc.healthSvc,
+		svc.secretSvc,
+		svc.logSvc,
+		svc.registrySvc,
+		svc.eventBus,
+		log,
+	)
+	gordon.RegisterAdminServiceServer(grpcServer, adminServer)
 
 	// Register health check
 	healthServer := grpclibhealth.NewServer()
@@ -193,10 +208,10 @@ func RunCore(ctx context.Context, configPath string) error {
 	}()
 
 	// Create HTTP handlers for admin API and registry
-	adminHandler, registryHandler := createCoreHTTPHandlers(svc, cfg, log)
+	_, registryHandler := createCoreHTTPHandlers(svc, cfg, log)
 
 	// Start admin API and registry servers
-	if err := runCoreServers(ctx, cfg, adminHandler, registryHandler, svc.eventBus, log); err != nil {
+	if err := runCoreServers(ctx, cfg, nil, registryHandler, svc.eventBus, log); err != nil {
 		return err
 	}
 
@@ -326,38 +341,11 @@ func createCoreServices(ctx context.Context, v *viper.Viper, cfg Config, log zer
 	svc.logSvc = logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, svc.healthSvc, svc.secretSvc, svc.logSvc, svc.registrySvc, svc.eventBus, log)
-
 	return svc, nil
 }
 
 // createCoreHTTPHandlers creates the HTTP handlers for core component.
 func createCoreHTTPHandlers(svc *coreServices, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler) {
-	// Admin API handler with middleware
-	var adminHandler http.Handler
-	if svc.adminHandler != nil {
-		adminMiddlewares := []func(http.Handler) http.Handler{
-			middleware.PanicRecovery(log),
-			middleware.RequestLogger(log),
-			middleware.SecurityHeaders,
-		}
-
-		// Add admin auth middleware if auth is enabled
-		if svc.authSvc != nil {
-			// Create rate limiters for admin API
-			var globalLimiter, ipLimiter out.RateLimiter
-			var trustedNets []*net.IPNet
-			if cfg.API.RateLimit.Enabled {
-				globalLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
-				ipLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
-				trustedNets = middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
-			}
-			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, globalLimiter, ipLimiter, trustedNets, log))
-		}
-
-		adminHandler = middleware.Chain(adminMiddlewares...)(svc.adminHandler)
-	}
-
 	// Registry handler with middleware
 	registryHandler := registry.NewHandler(svc.registrySvc, log)
 	registryMiddlewares := []func(http.Handler) http.Handler{
@@ -394,19 +382,12 @@ func createCoreHTTPHandlers(svc *coreServices, cfg Config, log zerowrap.Logger) 
 
 	registryWithMiddleware := middleware.Chain(registryMiddlewares...)(registryHandler)
 
-	return adminHandler, registryWithMiddleware
+	return nil, registryWithMiddleware
 }
 
 // runCoreServers starts the HTTP servers for core component.
 func runCoreServers(ctx context.Context, cfg Config, adminHandler, registryHandler http.Handler, eventBus out.EventBus, log zerowrap.Logger) error {
 	mux := http.NewServeMux()
-
-	// Mount admin API at /v2/admin
-	if adminHandler != nil {
-		mux.Handle("/v2/admin/", http.StripPrefix("/v2/admin", adminHandler))
-		mux.Handle("/v2/admin", http.RedirectHandler("/v2/admin/", http.StatusMovedPermanently))
-		log.Info().Str("endpoint", "/v2/admin").Msg("admin API enabled")
-	}
 
 	// Mount registry at /v2/ (Docker registry API)
 	mux.Handle("/v2/", registryHandler)
