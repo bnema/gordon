@@ -1153,3 +1153,63 @@ func TestService_StripRegistryPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeName(t *testing.T) {
+	tests := []struct {
+		domain      string
+		expected    string
+		description string
+	}{
+		{
+			domain:      "git.example.com",
+			expected:    "git__example__com",
+			description: "Dots become double underscores",
+		},
+		{
+			domain:      "git-example.com",
+			expected:    "git-example__com",
+			description: "Hyphens preserved, dots become underscores",
+		},
+		{
+			domain:      "app:8080.example.com",
+			expected:    "app-_8080__example__com",
+			description: "Colons become hyphen-underscore",
+		},
+		{
+			domain:      "git.example.com:3000",
+			expected:    "git__example__com-_3000",
+			description: "Multiple separators handled distinctly",
+		},
+		{
+			domain:      "simple.com",
+			expected:    "simple__com",
+			description: "Simple domain",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.domain, func(t *testing.T) {
+			result := sanitizeName(tt.domain)
+			assert.Equal(t, tt.expected, result, "sanitization should match expected")
+		})
+	}
+
+	// Verify no collisions between potentially conflicting domains
+	t.Run("NoCollisions", func(t *testing.T) {
+		domains := []string{
+			"git.example.com",
+			"git-example.com",
+			"app:8080.example.com",
+			"app-8080-example.com",
+		}
+
+		results := make(map[string]string)
+		for _, d := range domains {
+			result := sanitizeName(d)
+			if original, exists := results[result]; exists {
+				t.Errorf("COLLISION: %q and %q both sanitize to %q", original, d, result)
+			}
+			results[result] = d
+		}
+	})
+}
