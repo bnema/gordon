@@ -46,9 +46,10 @@ var (
 	ErrConfigLoadFailed = errors.New("failed to load configuration")
 
 	// Environment errors
-	ErrEnvFileNotFound  = errors.New("environment file not found")
-	ErrSecretNotFound   = errors.New("secret not found")
-	ErrProviderNotFound = errors.New("secret provider not found")
+	ErrEnvFileNotFound      = errors.New("environment file not found")
+	ErrSecretNotFound       = errors.New("secret not found")
+	ErrProviderNotFound     = errors.New("secret provider not found")
+	ErrInvalidContainerName = errors.New("invalid container name")
 
 	// Authentication errors
 	ErrInvalidToken       = errors.New("invalid token")
