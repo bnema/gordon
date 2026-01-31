@@ -155,6 +155,68 @@ func (_c *MockDomainSecretStore_GetAll_Call) RunAndReturn(run func(domain string
 	return _c
 }
 
+// GetAllAttachment provides a mock function for the type MockDomainSecretStore
+func (_mock *MockDomainSecretStore) GetAllAttachment(containerName string) (map[string]string, error) {
+	ret := _mock.Called(containerName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllAttachment")
+	}
+
+	var r0 map[string]string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (map[string]string, error)); ok {
+		return returnFunc(containerName)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) map[string]string); ok {
+		r0 = returnFunc(containerName)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(containerName)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockDomainSecretStore_GetAllAttachment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllAttachment'
+type MockDomainSecretStore_GetAllAttachment_Call struct {
+	*mock.Call
+}
+
+// GetAllAttachment is a helper method to define mock.On call
+//   - containerName string
+func (_e *MockDomainSecretStore_Expecter) GetAllAttachment(containerName interface{}) *MockDomainSecretStore_GetAllAttachment_Call {
+	return &MockDomainSecretStore_GetAllAttachment_Call{Call: _e.mock.On("GetAllAttachment", containerName)}
+}
+
+func (_c *MockDomainSecretStore_GetAllAttachment_Call) Run(run func(containerName string)) *MockDomainSecretStore_GetAllAttachment_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockDomainSecretStore_GetAllAttachment_Call) Return(stringToString map[string]string, err error) *MockDomainSecretStore_GetAllAttachment_Call {
+	_c.Call.Return(stringToString, err)
+	return _c
+}
+
+func (_c *MockDomainSecretStore_GetAllAttachment_Call) RunAndReturn(run func(containerName string) (map[string]string, error)) *MockDomainSecretStore_GetAllAttachment_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListAttachmentKeys provides a mock function for the type MockDomainSecretStore
 func (_mock *MockDomainSecretStore) ListAttachmentKeys(domain string) ([]out.AttachmentSecrets, error) {
 	ret := _mock.Called(domain)
@@ -332,6 +394,63 @@ func (_c *MockDomainSecretStore_Set_Call) Return(err error) *MockDomainSecretSto
 }
 
 func (_c *MockDomainSecretStore_Set_Call) RunAndReturn(run func(domain string, secrets map[string]string) error) *MockDomainSecretStore_Set_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetAttachment provides a mock function for the type MockDomainSecretStore
+func (_mock *MockDomainSecretStore) SetAttachment(containerName string, secrets map[string]string) error {
+	ret := _mock.Called(containerName, secrets)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetAttachment")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, map[string]string) error); ok {
+		r0 = returnFunc(containerName, secrets)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockDomainSecretStore_SetAttachment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetAttachment'
+type MockDomainSecretStore_SetAttachment_Call struct {
+	*mock.Call
+}
+
+// SetAttachment is a helper method to define mock.On call
+//   - containerName string
+//   - secrets map[string]string
+func (_e *MockDomainSecretStore_Expecter) SetAttachment(containerName interface{}, secrets interface{}) *MockDomainSecretStore_SetAttachment_Call {
+	return &MockDomainSecretStore_SetAttachment_Call{Call: _e.mock.On("SetAttachment", containerName, secrets)}
+}
+
+func (_c *MockDomainSecretStore_SetAttachment_Call) Run(run func(containerName string, secrets map[string]string)) *MockDomainSecretStore_SetAttachment_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 map[string]string
+		if args[1] != nil {
+			arg1 = args[1].(map[string]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockDomainSecretStore_SetAttachment_Call) Return(err error) *MockDomainSecretStore_SetAttachment_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockDomainSecretStore_SetAttachment_Call) RunAndReturn(run func(containerName string, secrets map[string]string) error) *MockDomainSecretStore_SetAttachment_Call {
 	_c.Call.Return(run)
 	return _c
 }
