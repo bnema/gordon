@@ -217,6 +217,7 @@ func (lm *LifecycleManager) EnsureRunning(ctx context.Context, spec SubContainer
 		Env:         envVars,
 		Ports:       ports,
 		NetworkMode: spec.NetworkMode,
+		Cmd:         []string{"--component=" + spec.Component},
 		Labels: map[string]string{
 			"gordon.managed":   "true",
 			"gordon.component": spec.Component,
