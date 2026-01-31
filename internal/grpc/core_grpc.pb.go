@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: gordon/v1/core.proto
+// source: core.proto
 
 package grpc
 
@@ -287,5 +287,5 @@ var CoreService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "gordon/v1/core.proto",
+	Metadata: "core.proto",
 }

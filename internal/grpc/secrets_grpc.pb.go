@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: gordon/v1/secrets.proto
+// source: secrets.proto
 
 package grpc
 
@@ -353,5 +353,5 @@ var SecretsService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "gordon/v1/secrets.proto",
+	Metadata: "secrets.proto",
 }

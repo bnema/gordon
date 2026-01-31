@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: gordon/v1/registry.proto
+// source: registry.proto
 
 package grpc
 
@@ -203,5 +203,5 @@ var RegistryInspectService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "gordon/v1/registry.proto",
+	Metadata: "registry.proto",
 }

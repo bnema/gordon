@@ -4,6 +4,9 @@ modules:
   - path: api/proto
     name: buf.build/bnema/gordon
 
+deps:
+  - buf.build/googleapis/googleapis
+
 lint:
   use:
     - DEFAULT
