@@ -14,6 +14,7 @@ var envKeyRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // SanitizeDomainForEnvFile validates and sanitizes a domain name for env file storage.
 // Returns a safe domain string suitable for filenames.
+// This function is idempotent: calling it on already-sanitized input returns the same value.
 func SanitizeDomainForEnvFile(domainName string) (string, error) {
 	if domainName == "" {
 		return "", ErrPathTraversal
@@ -51,12 +52,15 @@ func ParseEnvData(data []byte) (map[string]string, error) {
 		}
 
 		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
+		rawValue := parts[1]
 
-		if len(value) >= 2 {
-			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
-				value = value[1 : len(value)-1]
+		trimmedValue := strings.TrimSpace(rawValue)
+		value := trimmedValue
+
+		if len(trimmedValue) >= 2 {
+			if (strings.HasPrefix(trimmedValue, "\"") && strings.HasSuffix(trimmedValue, "\"")) ||
+				(strings.HasPrefix(trimmedValue, "'") && strings.HasSuffix(trimmedValue, "'")) {
+				value = trimmedValue[1 : len(trimmedValue)-1]
 			}
 		}
 
@@ -75,13 +79,13 @@ func ParseEnvData(data []byte) (map[string]string, error) {
 // ValidateEnvKey validates an env key for storage.
 func ValidateEnvKey(key string) error {
 	if key == "" {
-		return ErrPathTraversal
+		return ErrInvalidEnvKey
 	}
 	if strings.Contains(key, "..") || strings.ContainsAny(key, "/\\") {
 		return ErrPathTraversal
 	}
 	if !envKeyRegex.MatchString(key) {
-		return ErrPathTraversal
+		return ErrInvalidEnvKey
 	}
 	return nil
 }

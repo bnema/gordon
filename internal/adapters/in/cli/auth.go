@@ -240,8 +240,11 @@ Examples:
 
 	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to authenticate with (defaults to active remote)")
 	cmd.Flags().StringVarP(&username, "username", "u", "", "Username for authentication")
-	cmd.Flags().StringVarP(&password, "password", "p", "", "Password for authentication")
+	cmd.Flags().StringVarP(&password, "password", "p", "", "Password (visible in process listings; prefer interactive prompt)")
 	cmd.Flags().StringVarP(&token, "token", "t", "", "Authentication token to store for the remote")
+
+	cmd.MarkFlagsMutuallyExclusive("token", "password")
+	cmd.MarkFlagsMutuallyExclusive("token", "username")
 
 	return cmd
 }

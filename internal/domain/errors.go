@@ -63,6 +63,7 @@ var (
 	ErrInsufficientScope = errors.New("insufficient scope for operation")
 	ErrInvalidScope      = errors.New("invalid scope format")
 	ErrSSRFBlocked       = errors.New("request to internal/blocked network not allowed")
+	ErrInvalidEnvKey     = errors.New("invalid environment variable key")
 
 	// Attachment errors
 	ErrAttachmentNotFound    = errors.New("attachment not found")

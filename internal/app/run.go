@@ -847,10 +847,16 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		if err != nil {
 			return nil, log.WrapErr(err, "failed to resolve service token expiry")
 		}
+		// Note: Service tokens are not auto-refreshed. If the token expires during
+		// container runtime, the container will need to be recreated to get a new token.
 		serviceToken, err := svc.authSvc.GenerateToken(ctx, serviceTokenSubject, []string{"pull"}, expiry)
 		if err != nil {
 			return nil, log.WrapErr(err, "failed to generate registry service token")
 		}
+		log.Info().
+			Str("subject", serviceTokenSubject).
+			Str("expiry", expiry.String()).
+			Msg("generated service token for container registry access")
 		containerConfig.ServiceTokenUsername = serviceTokenSubject
 		containerConfig.ServiceToken = serviceToken
 	}

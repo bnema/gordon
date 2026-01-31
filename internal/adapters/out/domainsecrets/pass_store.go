@@ -21,8 +21,8 @@ import (
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 const (
-	passDomainSecretsPath = "gordon/env"             //nolint:gosec // Not a credential, this is a pass store path.
-	passAttachmentPath    = "gordon/env/attachments" //nolint:gosec // Not a credential, this is a pass store path.
+	PassDomainSecretsPath = "gordon/env"             //nolint:gosec // Not a credential, this is a pass store path.
+	PassAttachmentPath    = "gordon/env/attachments" //nolint:gosec // Not a credential, this is a pass store path.
 )
 
 // PassStore implements the DomainSecretStore interface using the pass password manager.
@@ -190,14 +190,14 @@ func (s *PassStore) Delete(domainName, key string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-	defer cancel()
-
 	keyPath, err := s.keyPath(domainName, key)
 	if err != nil {
 		return err
 	}
-	if err := s.passRemove(ctx, keyPath); err != nil {
+
+	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
+	defer rmCancel()
+	if err := s.passRemove(rmCtx, keyPath); err != nil {
 		return err
 	}
 
@@ -220,7 +220,9 @@ func (s *PassStore) Delete(domainName, key string) error {
 		return err
 	}
 
-	if err := s.passInsert(ctx, manifestPath, strings.Join(updated, "\n")); err != nil {
+	insertCtx, insertCancel := context.WithTimeout(context.Background(), s.timeout)
+	defer insertCancel()
+	if err := s.passInsert(insertCtx, manifestPath, strings.Join(updated, "\n")); err != nil {
 		return fmt.Errorf("failed to update manifest: %w", err)
 	}
 
@@ -236,7 +238,7 @@ func (s *PassStore) ListAttachmentKeys(domainName string) ([]out.AttachmentSecre
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
 
-	containers, err := s.listTopLevelEntries(ctx, passAttachmentPath)
+	containers, err := s.listTopLevelEntries(ctx, PassAttachmentPath)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +252,7 @@ func (s *PassStore) ListAttachmentKeys(domainName string) ([]out.AttachmentSecre
 			continue
 		}
 
-		manifestPath := fmt.Sprintf("%s/%s/.keys", passAttachmentPath, containerName)
+		manifestPath := fmt.Sprintf("%s/%s/.keys", PassAttachmentPath, containerName)
 		if err := secrets.ValidatePath(manifestPath); err != nil {
 			return nil, err
 		}
@@ -288,7 +290,7 @@ func (s *PassStore) domainPath(domainName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := fmt.Sprintf("%s/%s", passDomainSecretsPath, safeDomain)
+	path := fmt.Sprintf("%s/%s", PassDomainSecretsPath, safeDomain)
 	if err := secrets.ValidatePath(path); err != nil {
 		return "", err
 	}
@@ -431,6 +433,7 @@ func parsePassListOutput(basePath, output string) []passListEntry {
 		}
 
 		depth := 0
+	prefixLoop:
 		for {
 			switch {
 			case strings.HasPrefix(line, "│   "):
@@ -443,10 +446,9 @@ func parsePassListOutput(basePath, output string) []passListEntry {
 				line = strings.TrimPrefix(line, "    ")
 				depth++
 			default:
-				goto prefixDone
+				break prefixLoop
 			}
 		}
-	prefixDone:
 
 		switch {
 		case strings.HasPrefix(line, "├── "):
