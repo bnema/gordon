@@ -30,9 +30,10 @@ import (
 
 	gordonv1 "github.com/bnema/gordon/internal/grpc"
 	"github.com/bnema/gordon/tests/integration/helpers"
-	"github.com/docker/docker/api/types"
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
@@ -64,9 +65,9 @@ type GordonTestSuite struct {
 	CoreC testcontainers.Container
 
 	// Sub-containers (auto-deployed by core's lifecycle manager)
-	SecretsC  *types.Container
-	RegistryC *types.Container
-	ProxyC    *types.Container
+	SecretsC  *container.Summary
+	RegistryC *container.Summary
+	ProxyC    *container.Summary
 
 	// gRPC clients (initialized after containers start)
 	SecretsClient  gordonv1.SecretsServiceClient
@@ -136,7 +137,7 @@ func (s *GordonTestSuite) TearDownSuite() {
 	}
 
 	// Stop auto-deployed containers
-	containers := []*types.Container{s.ProxyC, s.RegistryC, s.SecretsC}
+	containers := []*container.Summary{s.ProxyC, s.RegistryC, s.SecretsC}
 	for _, c := range containers {
 		if c != nil {
 			_ = s.dockerClient.ContainerStop(ctx, c.ID, container.StopOptions{})
@@ -180,21 +181,23 @@ func (s *GordonTestSuite) startCoreOnly() {
 		"GORDON_ENV":       "test",
 	}
 
-	mounts := []testcontainers.ContainerMount{
-		testcontainers.BindMount(helpers.GetDockerSocketPath(), "/var/run/docker.sock"),
-		testcontainers.BindMount(configPath, "/app/gordon.toml"),
+	binds := []string{
+		fmt.Sprintf("%s:/var/run/docker.sock", helpers.GetDockerSocketPath()),
+		fmt.Sprintf("%s:/app/gordon.toml", configPath),
 	}
 
 	// Create gordon-internal network first (core needs to be on it for proxy to reach it)
 	networkName := "gordon-internal"
-	_, err := testcontainers.GenericNetwork(s.ctx, testcontainers.GenericNetworkRequest{
-		NetworkRequest: testcontainers.NetworkRequest{
-			Name:     networkName,
-			Driver:   "bridge",
-			Internal: false,
-		},
-	})
-	s.Require().NoError(err, "failed to create gordon-internal network")
+	if _, err := s.dockerClient.NetworkInspect(s.ctx, networkName, network.InspectOptions{}); err != nil {
+		if !errdefs.IsNotFound(err) {
+			s.Require().NoError(err, "failed to inspect gordon-internal network")
+		}
+		_, err = s.dockerClient.NetworkCreate(s.ctx, networkName, network.CreateOptions{
+			Driver:     "bridge",
+			Attachable: true,
+		})
+		s.Require().NoError(err, "failed to create gordon-internal network")
+	}
 
 	// Core takes longer to start as it needs to deploy sub-containers
 	// Use simple port wait with long timeout - HTTP starts after DeployAll completes
@@ -204,11 +207,13 @@ func (s *GordonTestSuite) startCoreOnly() {
 		Image:        testImageName,
 		Name:         "gordon-core",
 		ExposedPorts: []string{"5000/tcp", "9090/tcp"},
-		Mounts:       mounts,
 		Env:          env,
 		Cmd:          []string{"--component=core"},
 		WaitingFor:   waitStrategy,
 		Networks:     []string{networkName},
+		HostConfigModifier: func(hostConfig *container.HostConfig) {
+			hostConfig.Binds = append(hostConfig.Binds, binds...)
+		},
 	}
 
 	container, err := testcontainers.GenericContainer(s.ctx, testcontainers.GenericContainerRequest{
@@ -244,7 +249,7 @@ func (s *GordonTestSuite) waitForSubContainers() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	requiredComponents := map[string]**types.Container{
+	requiredComponents := map[string]**container.Summary{
 		"secrets":  &s.SecretsC,
 		"registry": &s.RegistryC,
 		"proxy":    &s.ProxyC,
@@ -264,7 +269,7 @@ func (s *GordonTestSuite) waitForSubContainers() {
 			continue
 		}
 
-		found := make(map[string]*types.Container)
+		found := make(map[string]*container.Summary)
 		for i := range containers {
 			c := &containers[i]
 			if compLabel, ok := c.Labels["gordon.component"]; ok {
@@ -317,7 +322,7 @@ func (s *GordonTestSuite) getSubContainerPorts() {
 	s.T().Log("Getting mapped ports for sub-containers...")
 
 	// Refresh container info to get latest port mappings
-	containers := []*types.Container{s.SecretsC, s.RegistryC, s.ProxyC}
+	containers := []*container.Summary{s.SecretsC, s.RegistryC, s.ProxyC}
 	for i, c := range containers {
 		if c == nil {
 			continue

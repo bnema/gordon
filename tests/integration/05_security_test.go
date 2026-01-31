@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,7 +51,7 @@ func (s *GordonTestSuite) Test05_SecurityVerification() {
 func (s *GordonTestSuite) verifyDockerSocketAccess() {
 	containers := []struct {
 		name             string
-		container        *types.Container
+		container        *container.Summary
 		shouldHaveSocket bool
 	}{
 		{"gordon-core", nil, true}, // Core should have it
@@ -67,11 +67,8 @@ func (s *GordonTestSuite) verifyDockerSocketAccess() {
 	for _, tc := range containers {
 		s.T().Logf("Checking Docker socket access for %s...", tc.name)
 
-		var mounts []types.MountPoint
-		if tc.name == "gordon-core" {
-			// Core container from testcontainers
-			mounts = coreDetails.Mounts
-		} else {
+		mounts := coreDetails.Mounts
+		if tc.name != "gordon-core" {
 			// Other containers from Docker API
 			if tc.container == nil {
 				s.T().Logf("  ⚠ Skipping %s - container not found", tc.name)
@@ -106,7 +103,7 @@ func (s *GordonTestSuite) verifyDockerSocketAccess() {
 func (s *GordonTestSuite) verifySecretsMounts() {
 	containers := []struct {
 		name              string
-		container         *types.Container
+		container         *container.Summary
 		shouldHaveSecrets bool
 	}{
 		{"gordon-core", nil, false},
@@ -123,12 +120,10 @@ func (s *GordonTestSuite) verifySecretsMounts() {
 			continue
 		}
 
-		var mounts []types.MountPoint
-		if tc.name == "gordon-core" {
-			coreDetails, err := s.CoreC.Inspect(s.ctx)
-			require.NoError(s.T(), err, "failed to inspect core container")
-			mounts = coreDetails.Mounts
-		} else {
+		coreDetails, err := s.CoreC.Inspect(s.ctx)
+		require.NoError(s.T(), err, "failed to inspect core container")
+		mounts := coreDetails.Mounts
+		if tc.name != "gordon-core" {
 			inspect, err := s.dockerClient.ContainerInspect(s.ctx, tc.container.ID)
 			require.NoError(s.T(), err, "failed to inspect %s", tc.name)
 			mounts = inspect.Mounts
@@ -165,7 +160,7 @@ func (s *GordonTestSuite) verifyNetworkIsolation() {
 
 	containers := []struct {
 		name            string
-		container       *types.Container
+		container       *container.Summary
 		expectedNetwork string
 	}{
 		{"gordon-core", nil, "gordon-internal"},

@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,7 +37,7 @@ func (s *GordonTestSuite) Test04_AutoRestart() {
 }
 
 // testContainerRestart kills a container and verifies it gets restarted.
-func (s *GordonTestSuite) testContainerRestart(component string, containerPtr **types.Container) {
+func (s *GordonTestSuite) testContainerRestart(component string, containerPtr **container.Summary) {
 	s.T().Logf("Testing auto-restart for %s...", component)
 
 	// Refresh container reference before killing (it might have been replaced already)
@@ -69,7 +68,7 @@ func (s *GordonTestSuite) testContainerRestart(component string, containerPtr **
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	var newContainer *types.Container
+	var newContainer *container.Summary
 	attempts := 0
 	maxAttempts := 15 // 30 seconds max
 
@@ -119,7 +118,7 @@ found:
 }
 
 // refreshContainerRef updates the container reference by looking up current container by label
-func (s *GordonTestSuite) refreshContainerRef(component string, containerPtr **types.Container) {
+func (s *GordonTestSuite) refreshContainerRef(component string, containerPtr **container.Summary) {
 	containers, err := s.dockerClient.ContainerList(s.ctx, container.ListOptions{All: true})
 	if err != nil {
 		s.T().Logf("Warning: failed to list containers: %v", err)

@@ -129,71 +129,19 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 	log := zerowrap.FromCtx(ctx)
 
 	// Check cache first
-	s.mu.RLock()
-	if target, exists := s.targets[domainName]; exists {
-		s.mu.RUnlock()
-		log.Debug().
-			Str("host", target.Host).
-			Int("port", target.Port).
-			Str("container_id", target.ContainerID).
-			Msg("using cached proxy target")
+	if target, ok := s.getCachedTarget(domainName, log); ok {
 		return target, nil
 	}
-	s.mu.RUnlock()
 
 	// If resolver is available (remote mode), use it for all lookups
 	if s.resolver != nil {
-		target, err := s.resolver.GetTarget(ctx, domainName)
-		if err != nil {
-			return nil, err
-		}
-
-		// Cache the target
-		s.mu.Lock()
-		s.targets[domainName] = target
-		s.mu.Unlock()
-
-		return target, nil
+		return s.resolveWithResolver(ctx, domainName)
 	}
 
 	// Check if this is an external route
-	externalRoutes := s.configSvc.GetExternalRoutes()
-	if targetAddr, ok := externalRoutes[domainName]; ok {
-		host, portStr, err := net.SplitHostPort(targetAddr)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "invalid external route target", map[string]any{"target": targetAddr})
-		}
-		port, err := strconv.Atoi(portStr)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
-		}
-
-		// SECURITY: Validate target is not an internal/blocked network (SSRF protection)
-		if err := ValidateExternalRouteTarget(host); err != nil {
-			log.Warn().
-				Err(err).
-				Str("host", host).
-				Str("domain", domainName).
-				Msg("SSRF protection: blocked external route to internal network")
-			return nil, err
-		}
-
-		target := &domain.ProxyTarget{
-			Host:        host,
-			Port:        port,
-			ContainerID: "", // Not a container
-			Scheme:      "http",
-		}
-
-		// Cache external route target
-		s.mu.Lock()
-		s.targets[domainName] = target
-		s.mu.Unlock()
-
-		log.Debug().
-			Str("host", host).
-			Int("port", port).
-			Msg("using external route target")
+	if target, ok, err := s.resolveExternalRoute(ctx, domainName, log); err != nil {
+		return nil, err
+	} else if ok {
 		return target, nil
 	}
 
@@ -205,62 +153,144 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 	}
 	log.Debug().Str("container_id", container.ID).Str("image", container.Image).Msg("found container for domain")
 
-	// Build target based on runtime mode
-	var target *domain.ProxyTarget
+	target, err := s.resolveContainerTarget(ctx, domainName, container, log)
+	if err != nil {
+		return nil, err
+	}
 
+	s.cacheTarget(domainName, target)
+	return target, nil
+}
+
+func (s *Service) getCachedTarget(domainName string, log zerowrap.Logger) (*domain.ProxyTarget, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	target, exists := s.targets[domainName]
+	if !exists {
+		return nil, false
+	}
+
+	log.Debug().
+		Str("host", target.Host).
+		Int("port", target.Port).
+		Str("container_id", target.ContainerID).
+		Msg("using cached proxy target")
+	return target, true
+}
+
+func (s *Service) resolveWithResolver(ctx context.Context, domainName string) (*domain.ProxyTarget, error) {
+	target, err := s.resolver.GetTarget(ctx, domainName)
+	if err != nil {
+		return nil, err
+	}
+
+	s.cacheTarget(domainName, target)
+	return target, nil
+}
+
+func (s *Service) resolveExternalRoute(ctx context.Context, domainName string, log zerowrap.Logger) (*domain.ProxyTarget, bool, error) {
+	externalRoutes := s.configSvc.GetExternalRoutes()
+	targetAddr, ok := externalRoutes[domainName]
+	if !ok {
+		return nil, false, nil
+	}
+
+	host, portStr, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		return nil, true, log.WrapErrWithFields(err, "invalid external route target", map[string]any{"target": targetAddr})
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, true, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
+	}
+
+	// SECURITY: Validate target is not an internal/blocked network (SSRF protection)
+	if err := ValidateExternalRouteTarget(host); err != nil {
+		log.Warn().
+			Err(err).
+			Str("host", host).
+			Str("domain", domainName).
+			Msg("SSRF protection: blocked external route to internal network")
+		return nil, true, err
+	}
+
+	target := &domain.ProxyTarget{
+		Host:        host,
+		Port:        port,
+		ContainerID: "", // Not a container
+		Scheme:      "http",
+	}
+
+	s.cacheTarget(domainName, target)
+
+	log.Debug().
+		Str("host", host).
+		Int("port", port).
+		Msg("using external route target")
+	return target, true, nil
+}
+
+func (s *Service) resolveContainerTarget(ctx context.Context, domainName string, container *domain.Container, log zerowrap.Logger) (*domain.ProxyTarget, error) {
 	if s.isRunningInContainer() {
-		// Gordon is in a container - use container network
-		containerIP, containerPort, err := s.runtime.GetContainerNetworkInfo(ctx, container.ID)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "failed to get container network info", map[string]any{zerowrap.FieldEntityID: container.ID})
-		}
-		target = &domain.ProxyTarget{
-			Host:        containerIP,
-			Port:        containerPort,
-			ContainerID: container.ID,
-			Scheme:      "http",
-		}
-	} else {
-		// Gordon is on the host - use host port mapping
-		routes := s.configSvc.GetRoutes(ctx)
-		var route *domain.Route
-		for _, r := range routes {
-			if r.Domain == domainName {
-				route = &r
-				break
-			}
-		}
+		return s.resolveNetworkTarget(ctx, container, log)
+	}
 
-		if route == nil {
-			return nil, domain.ErrRouteNotFound
-		}
+	return s.resolveHostTarget(ctx, domainName, container, log)
+}
 
-		// Determine target port: check for label first, then fall back to first exposed port
-		// Use container.Image (the actual running image) instead of route.Image (config shorthand)
-		targetPort, err := s.getProxyPort(ctx, container.Image)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to determine proxy port")
-		}
+func (s *Service) resolveNetworkTarget(ctx context.Context, container *domain.Container, log zerowrap.Logger) (*domain.ProxyTarget, error) {
+	containerIP, containerPort, err := s.runtime.GetContainerNetworkInfo(ctx, container.ID)
+	if err != nil {
+		return nil, log.WrapErrWithFields(err, "failed to get container network info", map[string]any{zerowrap.FieldEntityID: container.ID})
+	}
 
-		hostPort, err := s.runtime.GetContainerPort(ctx, container.ID, targetPort)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "failed to get host port mapping", map[string]any{"internal_port": targetPort})
-		}
+	return &domain.ProxyTarget{
+		Host:        containerIP,
+		Port:        containerPort,
+		ContainerID: container.ID,
+		Scheme:      "http",
+	}, nil
+}
 
-		target = &domain.ProxyTarget{
-			Host:        "localhost",
-			Port:        hostPort,
-			ContainerID: container.ID,
-			Scheme:      "http",
+func (s *Service) resolveHostTarget(ctx context.Context, domainName string, container *domain.Container, log zerowrap.Logger) (*domain.ProxyTarget, error) {
+	routes := s.configSvc.GetRoutes(ctx)
+	var route *domain.Route
+	for _, r := range routes {
+		if r.Domain == domainName {
+			route = &r
+			break
 		}
 	}
 
-	// Cache the target
+	if route == nil {
+		return nil, domain.ErrRouteNotFound
+	}
+
+	// Determine target port: check for label first, then fall back to first exposed port
+	// Use container.Image (the actual running image) instead of route.Image (config shorthand)
+	targetPort, err := s.getProxyPort(ctx, container.Image)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to determine proxy port")
+	}
+
+	hostPort, err := s.runtime.GetContainerPort(ctx, container.ID, targetPort)
+	if err != nil {
+		return nil, log.WrapErrWithFields(err, "failed to get host port mapping", map[string]any{"internal_port": targetPort})
+	}
+
+	return &domain.ProxyTarget{
+		Host:        "localhost",
+		Port:        hostPort,
+		ContainerID: container.ID,
+		Scheme:      "http",
+	}, nil
+}
+
+func (s *Service) cacheTarget(domainName string, target *domain.ProxyTarget) {
 	s.mu.Lock()
 	s.targets[domainName] = target
 	s.mu.Unlock()
-
-	return target, nil
 }
 
 // RegisterTarget registers a new proxy target for a domain.

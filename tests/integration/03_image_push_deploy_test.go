@@ -85,7 +85,9 @@ func (s *GordonTestSuite) testCoreRouting() {
 	s.T().Logf("✓ Core routing: %d routes, %d external routes", len(routes.GetRoutes()), len(externalRoutes.GetRoutes()))
 
 	// Try to resolve a target (will fail if no routes, but tests connectivity)
-	_, err = s.CoreClient.GetTarget(ctx, &gordonv1.GetTargetRequest{Domain: "test.local"})
-	// Error is expected if domain not configured, but RPC should work
+	if _, err := s.CoreClient.GetTarget(ctx, &gordonv1.GetTargetRequest{Domain: "test.local"}); err != nil {
+		// Error is expected if domain not configured, but RPC should work
+		s.T().Logf("GetTarget returned error (expected when no routes): %v", err)
+	}
 	s.T().Logf("✓ GetTarget RPC works (result depends on route configuration)")
 }

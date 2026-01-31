@@ -25,7 +25,7 @@ func BuildGordonImage(t *testing.T, ctx context.Context) error {
 	}
 	defer cli.Close()
 
-	_, _, err = cli.ImageInspectWithRaw(ctx, TestImageName)
+	_, err = cli.ImageInspect(ctx, TestImageName)
 	if err == nil {
 		t.Logf("Using existing Gordon image: %s", TestImageName)
 		return nil

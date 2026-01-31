@@ -110,7 +110,9 @@ func RunProxy(ctx context.Context, configPath string) error {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
-		fmt.Fprintf(w, `{"status":"%s","component":"proxy","core_connected":%t}`, status, coreHealthy)
+		if _, err := fmt.Fprintf(w, `{"status":"%s","component":"proxy","core_connected":%t}`, status, coreHealthy); err != nil {
+			log.Warn().Err(err).Msg("failed to write health response")
+		}
 	})
 
 	// Proxy handler for all other requests

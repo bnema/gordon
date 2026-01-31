@@ -1,7 +1,7 @@
 package integration
 
 import (
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,10 +17,10 @@ func (s *GordonTestSuite) Test01_FourContainerStartup() {
 	assert.True(s.T(), state.Running, "gordon-core should be running")
 
 	// Verify auto-deployed sub-containers are running
-	// These are *types.Container (Docker API) not testcontainers.Container
+	// These are *container.Summary (Docker API) not testcontainers.Container
 	containers := []struct {
 		name      string
-		container *types.Container
+		container *container.Summary
 	}{
 		{"gordon-secrets", s.SecretsC},
 		{"gordon-registry", s.RegistryC},
