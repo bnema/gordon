@@ -229,7 +229,113 @@ func (s *PassStore) Delete(domainName, key string) error {
 	return nil
 }
 
+// SetAttachment sets or updates multiple secrets for an attachment container.
+func (s *PassStore) SetAttachment(containerName string, secretsMap map[string]string) error {
+	if _, err := s.attachmentPath(containerName); err != nil {
+		return err
+	}
+
+	existingKeys, err := s.listAttachmentKeys(containerName)
+	if err != nil {
+		return err
+	}
+
+	existingSet := make(map[string]struct{}, len(existingKeys))
+	for _, key := range existingKeys {
+		existingSet[key] = struct{}{}
+	}
+
+	insertedNewPaths := make([]string, 0, len(secretsMap))
+	for key, value := range secretsMap {
+		if err := domain.ValidateEnvKey(key); err != nil {
+			return err
+		}
+
+		keyPath, err := s.attachmentKeyPath(containerName, key)
+		if err != nil {
+			return err
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		err = s.passInsert(ctx, keyPath, value)
+		cancel()
+		if err != nil {
+			s.cleanupInsertedPaths(insertedNewPaths)
+			return fmt.Errorf("failed to store attachment secret %s: %w", key, err)
+		}
+
+		if _, exists := existingSet[key]; !exists {
+			insertedNewPaths = append(insertedNewPaths, keyPath)
+		}
+	}
+
+	keySet := make(map[string]struct{}, len(existingKeys)+len(secretsMap))
+	for _, key := range existingKeys {
+		keySet[key] = struct{}{}
+	}
+	for key := range secretsMap {
+		keySet[key] = struct{}{}
+	}
+
+	keys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	manifestPath, err := s.attachmentManifestPath(containerName)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	if err := s.passInsert(ctx, manifestPath, strings.Join(keys, "\n")); err != nil {
+		cancel()
+		s.cleanupInsertedPaths(insertedNewPaths)
+		return fmt.Errorf("failed to update attachment manifest: %w", err)
+	}
+	cancel()
+
+	return nil
+}
+
+// GetAllAttachment returns all secrets for an attachment container as a key-value map.
+func (s *PassStore) GetAllAttachment(containerName string) (map[string]string, error) {
+	keys, err := s.listAttachmentKeys(containerName)
+	if err != nil {
+		return nil, err
+	}
+
+	secretsMap := make(map[string]string)
+	for _, key := range keys {
+		keyPath, err := s.attachmentKeyPath(containerName, key)
+		if err != nil {
+			return nil, err
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		value, exists, err := s.passShow(ctx, keyPath)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			s.log.Warn().
+				Str(zerowrap.FieldLayer, "adapter").
+				Str(zerowrap.FieldAdapter, "domainsecrets").
+				Str("container", containerName).
+				Str("key", key).
+				Msg("attachment secret listed in manifest but missing in pass")
+			continue
+		}
+		secretsMap[key] = value
+	}
+
+	return secretsMap, nil
+}
+
 // ListAttachmentKeys finds attachment secrets for a domain from pass.
+// Supports both new (collision-resistant) and legacy container naming for backwards compatibility.
 func (s *PassStore) ListAttachmentKeys(domainName string) ([]out.AttachmentSecrets, error) {
 	if _, err := s.domainPath(domainName); err != nil {
 		return nil, err
@@ -243,14 +349,33 @@ func (s *PassStore) ListAttachmentKeys(domainName string) ([]out.AttachmentSecre
 		return nil, err
 	}
 
-	sanitizedDomain := sanitizeDomainForContainer(domainName)
-	prefix := "gordon-" + sanitizedDomain + "-"
+	// Try both new and legacy sanitization for backwards compatibility
+	sanitizedDomain := domain.SanitizeDomainForContainer(domainName)
+	sanitizedDomainLegacy := domain.SanitizeDomainForContainerLegacy(domainName)
+	prefixes := []string{
+		"gordon-" + sanitizedDomain + "-",       // New format (collision-resistant)
+		"gordon-" + sanitizedDomainLegacy + "-", // Old format (buggy but backwards compatible)
+	}
 
+	seen := make(map[string]bool)
 	var results []out.AttachmentSecrets
 	for _, containerName := range containers {
-		if !strings.HasPrefix(containerName, prefix) {
+		matches := false
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(containerName, prefix) {
+				matches = true
+				break
+			}
+		}
+		if !matches {
 			continue
 		}
+
+		// Deduplicate results
+		if seen[containerName] {
+			continue
+		}
+		seen[containerName] = true
 
 		manifestPath := fmt.Sprintf("%s/%s/.keys", PassAttachmentPath, containerName)
 		if err := secrets.ValidatePath(manifestPath); err != nil {
@@ -324,6 +449,73 @@ func (s *PassStore) manifestPath(domainName string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+func (s *PassStore) attachmentPath(containerName string) (string, error) {
+	if err := domain.ValidateContainerName(containerName); err != nil {
+		return "", err
+	}
+	path := fmt.Sprintf("%s/%s", PassAttachmentPath, containerName)
+	if err := secrets.ValidatePath(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (s *PassStore) attachmentKeyPath(containerName, key string) (string, error) {
+	attachmentPath, err := s.attachmentPath(containerName)
+	if err != nil {
+		return "", err
+	}
+	if err := domain.ValidateEnvKey(key); err != nil {
+		return "", err
+	}
+	path := fmt.Sprintf("%s/%s", attachmentPath, key)
+	if err := secrets.ValidatePath(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (s *PassStore) attachmentManifestPath(containerName string) (string, error) {
+	attachmentPath, err := s.attachmentPath(containerName)
+	if err != nil {
+		return "", err
+	}
+	path := fmt.Sprintf("%s/.keys", attachmentPath)
+	if err := secrets.ValidatePath(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (s *PassStore) listAttachmentKeys(containerName string) ([]string, error) {
+	manifestPath, err := s.attachmentManifestPath(containerName)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+
+	content, exists, err := s.passShow(ctx, manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return []string{}, nil
+	}
+
+	keys := []string{}
+	for _, line := range strings.Split(content, "\n") {
+		key := strings.TrimSpace(line)
+		if key == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+
+	return keys, nil
 }
 
 func (s *PassStore) sanitizeDomain(domainName string) (string, error) {
