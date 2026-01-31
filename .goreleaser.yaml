@@ -3,8 +3,12 @@ version: 2
 before:
   hooks:
 
+git:
+  prerelease_suffix: "-"
+
 release:
   draft: true
+  prerelease: auto
 
 builds:
   - id: "gordon"
