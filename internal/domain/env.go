@@ -11,6 +11,7 @@ import (
 // Allows: alphanumeric, dots, hyphens, colons (for ports), and forward slashes (for paths).
 var envDomainRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$`)
 var envKeyRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var containerNameRegex = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
 
 // SanitizeDomainForEnvFile validates and sanitizes a domain name for env file storage.
 // Returns a safe domain string suitable for filenames.
@@ -86,6 +87,22 @@ func ValidateEnvKey(key string) error {
 	}
 	if !envKeyRegex.MatchString(key) {
 		return ErrInvalidEnvKey
+	}
+	return nil
+}
+
+// ValidateContainerName validates a container name for attachment storage.
+// Container names can contain alphanumeric characters, hyphens, and underscores,
+// but must start with a letter.
+func ValidateContainerName(name string) error {
+	if name == "" {
+		return ErrInvalidContainerName
+	}
+	if strings.Contains(name, "..") || strings.ContainsAny(name, "/\\") {
+		return ErrPathTraversal
+	}
+	if !containerNameRegex.MatchString(name) {
+		return ErrInvalidContainerName
 	}
 	return nil
 }

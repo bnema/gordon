@@ -163,3 +163,44 @@ func TestValidateEnvKey(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateContainerName(t *testing.T) {
+	tests := []struct {
+		name        string
+		container   string
+		wantErr     bool
+		wantErrType error
+	}{
+		{name: "simple", container: "postgres", wantErr: false},
+		{name: "with hyphen", container: "gitea-postgres", wantErr: false},
+		{name: "with underscore", container: "gitea_postgres", wantErr: false},
+		{name: "complex real container", container: "gordon-git-example-com-gitea-postgres", wantErr: false},
+		{name: "starts with letter", container: "a-b", wantErr: false},
+		{name: "lowercase", container: "my-container", wantErr: false},
+		{name: "mixed case", container: "MyContainer-123", wantErr: false},
+		{name: "empty", container: "", wantErr: true, wantErrType: ErrInvalidContainerName},
+		{name: "starts with number", container: "1container", wantErr: true, wantErrType: ErrInvalidContainerName},
+		{name: "starts with hyphen", container: "-container", wantErr: true, wantErrType: ErrInvalidContainerName},
+		{name: "starts with underscore", container: "_container", wantErr: true, wantErrType: ErrInvalidContainerName},
+		{name: "contains slash", container: "container/name", wantErr: true, wantErrType: ErrPathTraversal},
+		{name: "contains backslash", container: `container\name`, wantErr: true, wantErrType: ErrPathTraversal},
+		{name: "path traversal", container: "..", wantErr: true, wantErrType: ErrPathTraversal},
+		{name: "contains dot", container: "container.name", wantErr: true, wantErrType: ErrInvalidContainerName},
+		{name: "contains space", container: "container name", wantErr: true, wantErrType: ErrInvalidContainerName},
+		{name: "contains special char", container: "container$name", wantErr: true, wantErrType: ErrInvalidContainerName},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateContainerName(tt.container)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrType != nil {
+					assert.ErrorIs(t, err, tt.wantErrType)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
