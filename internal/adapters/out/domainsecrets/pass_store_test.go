@@ -79,6 +79,53 @@ func TestPassStore_SetGetDelete(t *testing.T) {
 	assert.ElementsMatch(t, []string{"API_KEY"}, keysList)
 }
 
+func TestPassStore_SetGetAttachment(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	containerName := fmt.Sprintf("gitea-postgres-%d", time.Now().UnixNano())
+	keys := []string{"POSTGRES_USER", "POSTGRES_PASSWORD"}
+	defer CleanupPassAttachment(t, containerName, keys)
+
+	secretsMap := map[string]string{
+		"POSTGRES_USER":     "gitea",
+		"POSTGRES_PASSWORD": "secret123",
+	}
+
+	err = store.SetAttachment(containerName, secretsMap)
+	require.NoError(t, err)
+
+	values, err := store.GetAllAttachment(containerName)
+	require.NoError(t, err)
+	assert.Equal(t, "gitea", values["POSTGRES_USER"])
+	assert.Equal(t, "secret123", values["POSTGRES_PASSWORD"])
+}
+
+func TestPassStore_ListAttachmentKeys_AfterSet(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	containerName := fmt.Sprintf("redis-cache-%d", time.Now().UnixNano())
+	keys := []string{"REDIS_PASSWORD"}
+	defer CleanupPassAttachment(t, containerName, keys)
+
+	secretsMap := map[string]string{
+		"REDIS_PASSWORD": "redis123",
+	}
+
+	err = store.SetAttachment(containerName, secretsMap)
+	require.NoError(t, err)
+
+	values, err := store.GetAllAttachment(containerName)
+	require.NoError(t, err)
+	assert.Len(t, values, 1)
+	assert.Equal(t, "redis123", values["REDIS_PASSWORD"])
+}
+
 func TestParsePassListOutput(t *testing.T) {
 	tests := []struct {
 		name     string
