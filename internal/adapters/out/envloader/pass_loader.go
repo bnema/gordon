@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/bnema/zerowrap"
 
@@ -45,9 +46,19 @@ func (l *PassLoader) LoadEnv(ctx context.Context, domain string) ([]string, erro
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	secretsMap, err := l.store.GetAll(domain)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to load env from pass")
+	var secretsMap map[string]string
+	var err error
+
+	if isAttachmentContainer(domain) {
+		secretsMap, err = l.store.GetAllAttachment(domain)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to load attachment env from pass")
+		}
+	} else {
+		secretsMap, err = l.store.GetAll(domain)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to load env from pass")
+		}
 	}
 
 	keys := make([]string, 0, len(secretsMap))
@@ -64,6 +75,19 @@ func (l *PassLoader) LoadEnv(ctx context.Context, domain string) ([]string, erro
 	log.Info().Int(zerowrap.FieldCount, len(envVars)).Msg("loaded environment variables for route")
 
 	return envVars, nil
+}
+
+// isAttachmentContainer determines whether a given name refers to an attachment container
+// or a domain. It uses a simple heuristic: attachment container names always start with
+// the "gordon-" prefix (e.g., "gordon-git-example-com-gitea-postgres").
+//
+// LIMITATION: This heuristic assumes domains never start with "gordon-". A domain like
+// "gordon-app.example.com" would be incorrectly classified as an attachment container.
+// This is an acceptable trade-off for simplicity, but if such domains become common,
+// this should be replaced with a more robust detection mechanism (e.g., checking both
+// GetAll() and GetAllAttachment() and seeing which returns results).
+func isAttachmentContainer(domain string) bool {
+	return strings.HasPrefix(domain, "gordon-")
 }
 
 // CreateEnvFile is a no-op for pass-backed loader.
