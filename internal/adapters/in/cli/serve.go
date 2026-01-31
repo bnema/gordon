@@ -13,18 +13,44 @@ import (
 // newServeCmd creates the serve command.
 func newServeCmd() *cobra.Command {
 	var configPath string
+	var component string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the Gordon server",
-		Long:  `Start the Gordon server, including the registry and proxy components.`,
+		Long: `Start the Gordon server.
+
+In v3, Gordon runs as multiple isolated containers. Use --component to specify which component to run:
+  --component=core     - Orchestrator with Docker socket and admin API
+  --component=proxy    - HTTP reverse proxy (internet-facing)
+  --component=registry - Docker registry with gRPC inspection
+  --component=secrets  - Secrets and token management
+
+If no component is specified, runs in backward-compatible monolithic mode (deprecated).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return app.Run(context.Background(), configPath)
+			ctx := context.Background()
+
+			switch component {
+			case "":
+				// Backward compatibility: run monolithic mode
+				return app.Run(ctx, configPath)
+			case "core":
+				return app.RunCore(ctx, configPath)
+			case "proxy":
+				return app.RunProxy(ctx, configPath)
+			case "registry":
+				return app.RunRegistry(ctx, configPath)
+			case "secrets":
+				return app.RunSecrets(ctx, configPath)
+			default:
+				return fmt.Errorf("unknown component: %s (valid: core, proxy, registry, secrets)", component)
+			}
 		},
 	}
 
 	// Add flags
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	cmd.Flags().StringVar(&component, "component", "", "Component to run (core|proxy|registry|secrets)")
 
 	return cmd
 }

@@ -1,10 +1,10 @@
 # This Makefile is used for dev purposes
 # Variables
 REPO := ghcr.io/bnema/gordon
-TAG := v2-dev
-DEV_TAG := v2-dev-$(shell date +%Y%m%d-%H%M%S)
+TAG := v3-dev
+DEV_TAG := v3-dev-$(shell date +%Y%m%d-%H%M%S)
 DIST_DIR := ./dist
-ENGINE := podman
+ENGINE ?= podman
 
 # Version information
 VERSION := $(shell git describe --tags --always --dirty)
@@ -45,6 +45,11 @@ mocks: ## Generate mocks using mockery
 	@echo "Generating mocks..."
 	@mockery
 	@echo "Mocks generated successfully"
+
+proto: ## Generate Go code from protobuf definitions
+	@echo "Generating protobuf code..."
+	@buf generate
+	@echo "Protobuf code generated successfully"
 
 check: lint test ## Run lint and tests
 

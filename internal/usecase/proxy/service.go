@@ -46,12 +46,14 @@ type Service struct {
 	runtime      out.ContainerRuntime
 	containerSvc in.ContainerService
 	configSvc    in.ConfigService
+	resolver     out.TargetResolver // gRPC-based resolver for remote mode
 	config       Config
 	targets      map[string]*domain.ProxyTarget
 	mu           sync.RWMutex
 }
 
-// NewService creates a new proxy service.
+// NewService creates a new proxy service with local Docker dependencies.
+// This is used in monolithic mode where the proxy has direct Docker access.
 func NewService(
 	runtime out.ContainerRuntime,
 	containerSvc in.ContainerService,
@@ -64,6 +66,17 @@ func NewService(
 		configSvc:    configSvc,
 		config:       config,
 		targets:      make(map[string]*domain.ProxyTarget),
+	}
+}
+
+// NewRemoteService creates a new proxy service with remote (gRPC) dependencies.
+// This is used in container mode where the proxy communicates with gordon-core via gRPC.
+// The resolver provides target resolution, and the config provides registry settings.
+func NewRemoteService(resolver out.TargetResolver, watcher out.RouteChangeWatcher, config Config) *Service {
+	return &Service{
+		resolver: resolver,
+		config:   config,
+		targets:  make(map[string]*domain.ProxyTarget),
 	}
 }
 
@@ -127,6 +140,21 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 		return target, nil
 	}
 	s.mu.RUnlock()
+
+	// If resolver is available (remote mode), use it for all lookups
+	if s.resolver != nil {
+		target, err := s.resolver.GetTarget(ctx, domainName)
+		if err != nil {
+			return nil, err
+		}
+
+		// Cache the target
+		s.mu.Lock()
+		s.targets[domainName] = target
+		s.mu.Unlock()
+
+		return target, nil
+	}
 
 	// Check if this is an external route
 	externalRoutes := s.configSvc.GetExternalRoutes()
