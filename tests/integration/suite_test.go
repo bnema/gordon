@@ -448,3 +448,29 @@ func (s *GordonTestSuite) waitForGRPCHealth(ctx context.Context, name string, cl
 func TestGordonIntegration(t *testing.T) {
 	suite.Run(t, new(GordonTestSuite))
 }
+
+// refreshAllContainerRefs updates all sub-container references by looking up current containers by label.
+// This is needed because containers may be restarted/replaced during auto-restart tests.
+func (s *GordonTestSuite) refreshAllContainerRefs() {
+	containers, err := s.dockerClient.ContainerList(s.ctx, container.ListOptions{All: true})
+	if err != nil {
+		s.T().Logf("Warning: failed to refresh container refs: %v", err)
+		return
+	}
+
+	for i := range containers {
+		c := &containers[i]
+		if compLabel, ok := c.Labels["gordon.component"]; ok {
+			if c.State == "running" {
+				switch compLabel {
+				case "secrets":
+					s.SecretsC = c
+				case "registry":
+					s.RegistryC = c
+				case "proxy":
+					s.ProxyC = c
+				}
+			}
+		}
+	}
+}
