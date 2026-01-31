@@ -257,7 +257,9 @@ func (s *PassStore) ListAttachmentKeys(domainName string) ([]out.AttachmentSecre
 			return nil, err
 		}
 
-		content, exists, err := s.passShow(ctx, manifestPath)
+		showCtx, showCancel := context.WithTimeout(context.Background(), s.timeout)
+		content, exists, err := s.passShow(showCtx, manifestPath)
+		showCancel()
 		if err != nil {
 			return nil, err
 		}
