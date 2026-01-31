@@ -271,7 +271,6 @@ func runAuthLogin(remoteName, username, password string) error {
 		return fmt.Errorf("username cannot be empty")
 	}
 
-	password = strings.TrimSpace(password)
 	if password == "" {
 		// Prompt for password (hidden input)
 		fmt.Print("Password: ")
@@ -283,10 +282,14 @@ func runAuthLogin(remoteName, username, password string) error {
 			if readErr != nil {
 				return fmt.Errorf("failed to read password: %w", readErr)
 			}
-			passwordBytes = []byte(strings.TrimSpace(passwordInput))
+			// Only trim trailing newline from fallback input
+			passwordBytes = []byte(strings.TrimRight(passwordInput, "\r\n"))
 		}
 		fmt.Println()
-		password = strings.TrimSpace(string(passwordBytes))
+		password = string(passwordBytes)
+	} else {
+		// Only trim trailing newline from flag-provided password
+		password = strings.TrimRight(password, "\r\n")
 	}
 
 	if password == "" {
