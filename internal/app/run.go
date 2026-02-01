@@ -119,7 +119,7 @@ type services struct {
 	eventBus        *eventbus.InMemory
 	blobStorage     *filesystem.BlobStorage
 	manifestStorage *filesystem.ManifestStorage
-	envLoader       *envloader.FileLoader
+	envLoader       out.EnvLoader
 	logWriter       *logwriter.LogWriter
 	tokenStore      out.TokenStore
 	configSvc       *config.Service
@@ -256,11 +256,6 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	// Create env loader
-	if svc.envLoader, err = createEnvLoader(cfg, log); err != nil {
-		return nil, err
-	}
-
 	// Create log writer
 	if svc.logWriter, err = createLogWriter(cfg, log); err != nil {
 		return nil, err
@@ -271,19 +266,8 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	// Generate internal registry credentials for loopback-only pulls
-	if cfg.Auth.Enabled {
-		svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to generate internal registry credentials")
-		}
-
-		// Persist credentials to file for CLI access (gordon auth internal)
-		if err := persistInternalCredentials(svc.internalRegUser, svc.internalRegPass); err != nil {
-			log.Warn().Err(err).Msg("failed to persist internal credentials for CLI access")
-		}
-
-		log.Debug().Msg("internal registry auth generated for loopback pulls")
+	if err := setupInternalRegistryAuth(cfg, svc, log); err != nil {
+		return nil, err
 	}
 
 	// Create use case services
@@ -292,7 +276,24 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, log.WrapErr(err, "failed to load configuration")
 	}
 
-	svc.containerSvc = createContainerService(v, cfg, svc)
+	var backend domain.SecretsBackend
+	var passStore *domainsecrets.PassStore
+	var domainSecretStore out.DomainSecretStore
+
+	svc.envDir, backend, passStore, domainSecretStore, err = createDomainSecretStore(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+
+	if svc.envLoader, err = createEnvLoader(backend, svc.envDir, passStore, log); err != nil {
+		return nil, err
+	}
+
+	secretSvc := secretsSvc.NewService(domainSecretStore, log)
+
+	if svc.containerSvc, err = createContainerService(ctx, v, cfg, svc, log); err != nil {
+		return nil, err
+	}
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
 	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxy.Config{
 		RegistryDomain: cfg.Server.RegistryDomain,
@@ -308,23 +309,6 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		svc.authHandler = authhandler.NewHandler(svc.authSvc, internalAuth, log)
 	}
 
-	// Determine env directory for admin API
-	dataDir := cfg.Server.DataDir
-	if dataDir == "" {
-		dataDir = DefaultDataDir()
-	}
-	svc.envDir = cfg.Env.Dir
-	if svc.envDir == "" {
-		svc.envDir = filepath.Join(dataDir, "env")
-	}
-
-	// Create domain secret store and service
-	domainSecretStore, err := domainsecrets.NewFileStore(svc.envDir, log)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to create domain secret store")
-	}
-	secretSvc := secretsSvc.NewService(domainSecretStore, log)
-
 	// Create health service for route health checking
 	prober := httpprober.New()
 	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
@@ -336,6 +320,49 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log)
 
 	return svc, nil
+}
+
+func setupInternalRegistryAuth(cfg Config, svc *services, log zerowrap.Logger) error {
+	if !cfg.Auth.Enabled {
+		return nil
+	}
+
+	var err error
+	svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
+	if err != nil {
+		return log.WrapErr(err, "failed to generate internal registry credentials")
+	}
+
+	// Persist credentials to file for CLI access (gordon auth internal)
+	if err := persistInternalCredentials(svc.internalRegUser, svc.internalRegPass); err != nil {
+		log.Warn().Err(err).Msg("failed to persist internal credentials for CLI access")
+	}
+
+	log.Debug().Msg("internal registry auth generated for loopback pulls")
+	return nil
+}
+
+func createDomainSecretStore(cfg Config, log zerowrap.Logger) (string, domain.SecretsBackend, *domainsecrets.PassStore, out.DomainSecretStore, error) {
+	envDir := resolveEnvDir(cfg)
+	backend := resolveSecretsBackend(cfg.Auth.SecretsBackend)
+
+	switch backend {
+	case domain.SecretsBackendPass:
+		passStore, err := domainsecrets.NewPassStore(log)
+		if err != nil {
+			return "", backend, nil, nil, log.WrapErr(err, "failed to create pass domain secret store")
+		}
+		if err := migrateEnvFilesToPass(envDir, passStore, log); err != nil {
+			return "", backend, nil, nil, log.WrapErr(err, "failed to migrate env files to pass")
+		}
+		return envDir, backend, passStore, passStore, nil
+	default:
+		store, err := domainsecrets.NewFileStore(envDir, log)
+		if err != nil {
+			return "", backend, nil, nil, log.WrapErr(err, "failed to create domain secret store")
+		}
+		return envDir, backend, nil, store, nil
+	}
 }
 
 // resolveLogFilePath returns the configured log file path or a default.
@@ -391,36 +418,35 @@ func createStorage(cfg Config, log zerowrap.Logger) (*filesystem.BlobStorage, *f
 }
 
 // createEnvLoader creates the environment loader with secret providers.
-func createEnvLoader(cfg Config, log zerowrap.Logger) (*envloader.FileLoader, error) {
-	dataDir := cfg.Server.DataDir
-	if dataDir == "" {
-		dataDir = DefaultDataDir()
-	}
+func createEnvLoader(backend domain.SecretsBackend, envDir string, passStore *domainsecrets.PassStore, log zerowrap.Logger) (out.EnvLoader, error) {
+	switch backend {
+	case domain.SecretsBackendPass:
+		loader, err := envloader.NewPassLoader(passStore, log)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to create pass env loader")
+		}
+		return loader, nil
+	default:
+		loader, err := envloader.NewFileLoader(envDir, log)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to create env loader")
+		}
 
-	envDir := cfg.Env.Dir
-	if envDir == "" {
-		envDir = filepath.Join(dataDir, "env")
-	}
+		// Register secret providers
+		passProvider := secrets.NewPassProvider(log)
+		if passProvider.IsAvailable() {
+			loader.RegisterSecretProvider(passProvider)
+			log.Debug().Msg("pass secret provider registered")
+		}
 
-	envLoader, err := envloader.NewFileLoader(envDir, log)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to create env loader")
-	}
+		sopsProvider := secrets.NewSopsProvider(log)
+		if sopsProvider.IsAvailable() {
+			loader.RegisterSecretProvider(sopsProvider)
+			log.Debug().Msg("sops secret provider registered")
+		}
 
-	// Register secret providers
-	passProvider := secrets.NewPassProvider(log)
-	if passProvider.IsAvailable() {
-		envLoader.RegisterSecretProvider(passProvider)
-		log.Debug().Msg("pass secret provider registered")
+		return loader, nil
 	}
-
-	sopsProvider := secrets.NewSopsProvider(log)
-	if sopsProvider.IsAvailable() {
-		envLoader.RegisterSecretProvider(sopsProvider)
-		log.Debug().Msg("sops secret provider registered")
-	}
-
-	return envLoader, nil
 }
 
 // createLogWriter creates the container log writer.
@@ -454,7 +480,11 @@ func createLogWriter(cfg Config, log zerowrap.Logger) (*logwriter.LogWriter, err
 	return writer, nil
 }
 
-const internalRegistryUsername = "gordon-internal"
+const (
+	internalRegistryUsername = "gordon-internal"
+	serviceTokenSubject      = "gordon-service"
+	serviceTokenDefaultTTL   = 30 * 24 * time.Hour
+)
 
 func generateInternalRegistryAuth() (string, string, error) {
 	password, err := randomTokenHex(32)
@@ -634,6 +664,15 @@ func resolveDataDir(dataDir string) string {
 	return dataDir
 }
 
+func resolveEnvDir(cfg Config) string {
+	dataDir := resolveDataDir(cfg.Server.DataDir)
+	envDir := cfg.Env.Dir
+	if envDir == "" {
+		envDir = filepath.Join(dataDir, "env")
+	}
+	return envDir
+}
+
 func createTokenStore(backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (out.TokenStore, error) {
 	// Token store is always created since tokens work in both auth modes
 	store, err := tokenstore.NewStore(backend, dataDir, log)
@@ -751,6 +790,17 @@ func parseTokenExpiry(expiry string) (time.Duration, error) {
 	return parsed, nil
 }
 
+func resolveServiceTokenExpiry(cfg Config) (time.Duration, error) {
+	expiry, err := parseTokenExpiry(cfg.Auth.TokenExpiry)
+	if err != nil {
+		return 0, err
+	}
+	if expiry <= 0 {
+		return serviceTokenDefaultTTL, nil
+	}
+	return expiry, nil
+}
+
 // loadSecret loads a secret from the configured backend.
 func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDir string, log zerowrap.Logger) (string, error) {
 	switch backend {
@@ -774,13 +824,11 @@ func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDi
 }
 
 // createContainerService creates the container service with configuration.
-func createContainerService(v *viper.Viper, cfg Config, svc *services) *container.Service {
+func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (*container.Service, error) {
 	containerConfig := container.Config{
 		RegistryAuthEnabled:      cfg.Auth.Enabled,
 		RegistryDomain:           cfg.Server.RegistryDomain,
 		RegistryPort:             cfg.Server.RegistryPort,
-		RegistryUsername:         cfg.Auth.Username,
-		RegistryPassword:         cfg.Auth.Password,
 		InternalRegistryUsername: svc.internalRegUser,
 		InternalRegistryPassword: svc.internalRegPass,
 		PullPolicy:               v.GetString("deploy.pull_policy"),
@@ -793,7 +841,27 @@ func createContainerService(v *viper.Viper, cfg Config, svc *services) *containe
 		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
 		Attachments:              svc.configSvc.GetAttachments(),
 	}
-	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig)
+
+	if cfg.Auth.Enabled && svc.authSvc != nil {
+		expiry, err := resolveServiceTokenExpiry(cfg)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to resolve service token expiry")
+		}
+		// Note: Service tokens are not auto-refreshed. If the token expires during
+		// container runtime, the container will need to be recreated to get a new token.
+		serviceToken, err := svc.authSvc.GenerateToken(ctx, serviceTokenSubject, []string{"pull"}, expiry)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to generate registry service token")
+		}
+		log.Info().
+			Str("subject", serviceTokenSubject).
+			Str("expiry", expiry.String()).
+			Msg("generated service token for container registry access")
+		containerConfig.ServiceTokenUsername = serviceTokenSubject
+		containerConfig.ServiceToken = serviceToken
+	}
+
+	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig), nil
 }
 
 // registerEventHandlers registers all event handlers.

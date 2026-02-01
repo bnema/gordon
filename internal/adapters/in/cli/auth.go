@@ -207,12 +207,14 @@ func newAuthLoginCmd() *cobra.Command {
 	var (
 		remoteName string
 		username   string
+		token      string
+		password   string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate with a Gordon server",
-		Long: `Authenticate with a Gordon server using password authentication.
+		Long: `Authenticate with a Gordon server using password authentication or a pre-generated token.
 
 This command prompts for your username and password, authenticates with the
 remote server's /auth/password endpoint, and stores the returned token.
@@ -220,43 +222,38 @@ remote server's /auth/password endpoint, and stores the returned token.
 The token is stored in your remote configuration and used for subsequent
 CLI operations.
 
-Note: This command only works with servers configured for password authentication.
-For servers using token-based auth, use 'gordon remote set-token' instead.
+If --token is provided, the token is stored for the remote and verified
+against /admin/status on a best-effort basis.
 
 Examples:
-  gordon auth login                    Login using active remote
-  gordon auth login --remote prod      Login to specific remote
-  gordon auth login --username admin   Pre-fill username`,
+	gordon auth login                    Login using active remote
+	gordon auth login --remote prod      Login to specific remote
+	gordon auth login --username admin   Pre-fill username
+	gordon auth login --token <token>    Store a token for token-only servers`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthLogin(remoteName, username)
+			if token != "" {
+				return runAuthLoginWithToken(remoteName, token)
+			}
+			return runAuthLogin(remoteName, username, password)
 		},
 	}
 
 	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to authenticate with (defaults to active remote)")
 	cmd.Flags().StringVarP(&username, "username", "u", "", "Username for authentication")
+	cmd.Flags().StringVarP(&password, "password", "p", "", "Password (visible in process listings; prefer interactive prompt)")
+	cmd.Flags().StringVarP(&token, "token", "t", "", "Authentication token to store for the remote")
+
+	cmd.MarkFlagsMutuallyExclusive("token", "password")
+	cmd.MarkFlagsMutuallyExclusive("token", "username")
 
 	return cmd
 }
 
 // runAuthLogin authenticates with a remote Gordon server.
-func runAuthLogin(remoteName, username string) error {
-	// Load remotes config
-	config, err := remote.LoadRemotes("")
+func runAuthLogin(remoteName, username, password string) error {
+	resolvedName, remoteConfig, err := resolveRemoteEntry(remoteName)
 	if err != nil {
-		return fmt.Errorf("failed to load remotes: %w", err)
-	}
-
-	// Determine which remote to use
-	if remoteName == "" {
-		remoteName = config.Active
-	}
-	if remoteName == "" {
-		return fmt.Errorf("no remote specified and no active remote set. Use --remote or 'gordon remote use <name>'")
-	}
-
-	remoteConfig, ok := config.Remotes[remoteName]
-	if !ok {
-		return fmt.Errorf("remote '%s' not found", remoteName)
+		return err
 	}
 
 	// Prompt for username if not provided
@@ -274,21 +271,28 @@ func runAuthLogin(remoteName, username string) error {
 		return fmt.Errorf("username cannot be empty")
 	}
 
-	// Prompt for password (hidden input)
-	fmt.Print("Password: ")
-	passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-	if err != nil {
-		// Fallback for non-terminal input
-		reader := bufio.NewReader(os.Stdin)
-		password, readErr := reader.ReadString('\n')
-		if readErr != nil {
-			return fmt.Errorf("failed to read password: %w", readErr)
+	if password == "" {
+		// Prompt for password (hidden input)
+		fmt.Print("Password: ")
+		passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+		if err != nil {
+			// Fallback for non-terminal input
+			reader := bufio.NewReader(os.Stdin)
+			passwordInput, readErr := reader.ReadString('\n')
+			if readErr != nil {
+				return fmt.Errorf("failed to read password: %w", readErr)
+			}
+			// Only trim trailing newline from fallback input
+			passwordBytes = []byte(strings.TrimRight(passwordInput, "\r\n"))
 		}
-		passwordBytes = []byte(strings.TrimSpace(password))
+		fmt.Println()
+		password = string(passwordBytes)
+	} else {
+		// Only trim trailing newline from flag-provided password
+		password = strings.TrimRight(password, "\r\n")
 	}
-	fmt.Println() // newline after hidden password input
 
-	if len(passwordBytes) == 0 {
+	if password == "" {
 		return fmt.Errorf("password cannot be empty")
 	}
 
@@ -297,24 +301,77 @@ func runAuthLogin(remoteName, username string) error {
 
 	// Authenticate
 	ctx := context.Background()
-	fmt.Printf("Authenticating with %s...\n", remoteName)
+	fmt.Printf("Authenticating with %s...\n", resolvedName)
 
-	resp, err := client.Authenticate(ctx, username, string(passwordBytes))
+	resp, err := client.Authenticate(ctx, username, password)
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
 
 	// Update remote config with new token
-	if err := remote.UpdateRemoteToken(remoteName, resp.Token); err != nil {
+	if err := remote.UpdateRemoteToken(resolvedName, resp.Token); err != nil {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
 	fmt.Println()
 	fmt.Println(styles.RenderSuccess("Authentication successful!"))
-	fmt.Printf("Token stored for remote '%s'\n", remoteName)
+	fmt.Printf("Token stored for remote '%s'\n", resolvedName)
 	fmt.Printf("Expires in: %d seconds\n", resp.ExpiresIn)
 
 	return nil
+}
+
+func runAuthLoginWithToken(remoteName, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return fmt.Errorf("token cannot be empty")
+	}
+
+	resolvedName, remoteConfig, err := resolveRemoteEntry(remoteName)
+	if err != nil {
+		return err
+	}
+
+	client := remote.NewClient(remoteConfig.URL, remote.WithToken(token))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	verified := true
+	if _, err := client.GetStatus(ctx); err != nil {
+		fmt.Println(styles.RenderWarning(fmt.Sprintf("Token verification failed: %v", err)))
+		verified = false
+	}
+
+	if err := remote.UpdateRemoteToken(resolvedName, token); err != nil {
+		return fmt.Errorf("failed to save token: %w", err)
+	}
+
+	fmt.Println()
+	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Token stored for remote '%s'", resolvedName)))
+	if verified {
+		fmt.Println(styles.RenderSuccess("Token verified with remote status endpoint"))
+	}
+	return nil
+}
+
+func resolveRemoteEntry(remoteName string) (string, remote.RemoteEntry, error) {
+	config, err := remote.LoadRemotes("")
+	if err != nil {
+		return "", remote.RemoteEntry{}, fmt.Errorf("failed to load remotes: %w", err)
+	}
+
+	if remoteName == "" {
+		remoteName = config.Active
+	}
+	if remoteName == "" {
+		return "", remote.RemoteEntry{}, fmt.Errorf("no remote specified and no active remote set. Use --remote or 'gordon remote use <name>'")
+	}
+
+	remoteConfig, ok := config.Remotes[remoteName]
+	if !ok {
+		return "", remote.RemoteEntry{}, fmt.Errorf("remote '%s' not found", remoteName)
+	}
+
+	return remoteName, remoteConfig, nil
 }
 
 // runShowInternalAuth displays the internal registry credentials.
