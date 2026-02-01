@@ -385,21 +385,99 @@ The following security practices are well-implemented:
 
 ## Recommendations Summary (Priority Order)
 
-| # | Severity | Finding | Effort |
+| # | Severity | Finding | Status |
 |---|----------|---------|--------|
-| C1 | CRITICAL | Remove credentials from debug logs | Trivial |
-| C2 | CRITICAL | Bind container ports to 127.0.0.1 | Low |
-| H1 | HIGH | Validate X-Forwarded-Host for realm URL | Low |
-| H2 | HIGH | Trust X-Forwarded-Proto only from trusted proxies | Low |
-| H3 | HIGH | Remove wildcard CORS from proxy | Low |
-| H4 | HIGH | Use trusted-proxy-aware IP extraction in logging | Trivial |
-| H5 | HIGH | Restrict admin API when auth disabled | Medium |
-| M1 | MEDIUM | Validate container ports belong to Gordon | Medium |
-| M2 | MEDIUM | Add body size limit for proxied requests | Low |
-| M3 | MEDIUM | Reject absolute paths in SOPS provider | Trivial |
-| M4 | MEDIUM | Use singleflight for target resolution | Low |
-| M5 | MEDIUM | Make container detection configurable | Low |
-| M6 | MEDIUM | Escape SSE log lines | Trivial |
-| L1 | LOW | Add rate limiting to proxy | Medium |
-| L2 | LOW | Require Bearer prefix for admin API | Trivial |
-| L3 | LOW | Cache reverse proxy instances | Low |
+| C1 | CRITICAL | Remove credentials from debug logs | **FIXED** |
+| C2 | CRITICAL | Bind container ports to 127.0.0.1 | **FIXED** |
+| H1 | HIGH | Validate X-Forwarded-Host for realm URL | **FIXED** |
+| H2 | HIGH | Trust X-Forwarded-Proto only from trusted proxies | **FIXED** |
+| H3 | HIGH | Remove wildcard CORS from proxy | **FIXED** |
+| H4 | HIGH | Use trusted-proxy-aware IP extraction in logging | **FIXED** |
+| H5 | HIGH | Document auth-disabled admin API (intentional for local use) | **FIXED** (documented) |
+| M1 | MEDIUM | Validate container ports belong to Gordon | TODO |
+| M2 | MEDIUM | Add body size limit for proxied requests | **FIXED** |
+| M3 | MEDIUM | Reject absolute paths in SOPS provider | **FIXED** |
+| M4 | MEDIUM | Use singleflight for target resolution | TODO |
+| M5 | MEDIUM | Remove unreliable hostname-length container detection | **FIXED** |
+| M6 | MEDIUM | Escape SSE log lines | **FIXED** |
+| L1 | LOW | Add rate limiting to proxy | TODO |
+| L2 | LOW | Require Bearer prefix for admin API | **FIXED** |
+| L3 | LOW | Cache reverse proxy instances | TODO |
+| I1 | INFO | Security headers override backend policies | TODO |
+| I2 | INFO | Deprecated plain password support | TODO |
+
+---
+
+## Remaining Work (TODO)
+
+The following findings were not fixed because they require architectural changes,
+new dependencies, or new configuration options that need design decisions.
+
+### M1 — Validate Container Ports Belong to Gordon
+
+**Why not fixed**: Requires maintaining a whitelist of Gordon-managed container ports
+and cross-referencing during proxy target resolution. This is a non-trivial change
+to the container lifecycle management that needs careful design to avoid race conditions
+during zero-downtime deployments.
+
+**Suggested approach**: Add a `ManagedPorts() map[int]string` method to `ContainerService`
+that returns a map of host ports to container IDs. Check this map in `GetTarget()` when
+resolving host-mode targets.
+
+---
+
+### M4 — Use Singleflight for Target Resolution
+
+**Why not fixed**: Requires adding `golang.org/x/sync` as a new dependency.
+The current TOCTOU race in the target cache is low-risk (duplicate resolution work,
+not a security issue) but could cause brief inconsistencies during deployments.
+
+**Suggested approach**:
+```bash
+go get golang.org/x/sync
+```
+Then wrap the target resolution in `GetTarget()` with `singleflight.Group.Do(domainName, ...)`.
+
+---
+
+### L1 — Add Rate Limiting to Reverse Proxy
+
+**Why not fixed**: Requires a new configuration section (e.g., `[proxy.rate_limit]`)
+and design decisions about defaults, per-route limits, and whether to share the
+existing `ratelimit.MemoryStore` or create separate instances.
+
+**Suggested approach**: Add `proxy.rate_limit.per_ip_rps` and `proxy.rate_limit.burst`
+to the config, then add the rate limit middleware to the proxy chain in `createHTTPHandlers()`,
+similar to how it's done for the admin API.
+
+---
+
+### L3 — Cache Reverse Proxy Instances
+
+**Why not fixed**: Performance optimization, not a security fix. The current per-request
+`httputil.ReverseProxy` allocation shares the transport so connection pooling still works.
+Under extremely high load, the GC pressure from allocations could contribute to latency.
+
+**Suggested approach**: Add a `proxy *httputil.ReverseProxy` field to `domain.ProxyTarget`
+and create it once when the target is first resolved. Invalidate it when the target is
+invalidated.
+
+---
+
+### I1 — Security Headers Override Backend Policies
+
+**Why not fixed**: Design decision needed. The current behavior (always set security headers)
+is the safer default. Making it configurable per route adds complexity to the config format.
+
+**Suggested approach**: Either set headers in `ModifyResponse` only when the backend doesn't
+already set them, or add a per-route `security_headers = false` option.
+
+---
+
+### I2 — Deprecated Plain Password Support
+
+**Why not fixed**: This is a backwards-compatibility concern that should follow a deprecation
+timeline. The warning is already logged when plain passwords are used.
+
+**Suggested approach**: Add a deprecation notice in the next minor release notes, then
+remove the plain password fallback in the next major version.
