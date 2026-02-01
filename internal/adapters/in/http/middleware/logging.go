@@ -3,6 +3,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"time"
 
@@ -51,7 +52,13 @@ func (rw *ResponseWriter) BytesWritten() int {
 
 // RequestLogger is a middleware that logs HTTP requests using zerowrap.
 // It also attaches the logger to the request context for downstream handlers.
-func RequestLogger(log zerowrap.Logger) func(http.Handler) http.Handler {
+// The trustedNets parameter controls which proxy headers are trusted for IP extraction.
+// Pass nil to only use RemoteAddr (safest default when not behind a trusted proxy).
+func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.Handler) http.Handler {
+	var nets []*net.IPNet
+	if len(trustedNets) > 0 {
+		nets = trustedNets[0]
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -59,8 +66,9 @@ func RequestLogger(log zerowrap.Logger) func(http.Handler) http.Handler {
 			// Wrap the response writer to capture status and bytes
 			rw := NewResponseWriter(w)
 
-			// Get client IP (handle X-Forwarded-For and X-Real-IP headers)
-			clientIP := getClientIP(r)
+			// SECURITY: Use trusted-proxy-aware IP extraction to prevent
+			// IP spoofing via X-Forwarded-For from untrusted sources.
+			clientIP := GetClientIP(r, nets)
 
 			// Attach the logger to the request context for downstream handlers
 			ctx := zerowrap.WithCtx(r.Context(), log)
@@ -92,32 +100,6 @@ func RequestLogger(log zerowrap.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// getClientIP extracts the client IP from various headers.
-func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header (comma-separated list, first is original client)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first IP (original client)
-		for idx := 0; idx < len(xff); idx++ {
-			if xff[idx] == ',' {
-				return xff[:idx]
-			}
-		}
-		return xff
-	}
-
-	// Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-
-	// Check X-Forwarded header (less common)
-	if xf := r.Header.Get("X-Forwarded"); xf != "" {
-		return xf
-	}
-
-	// Fallback to RemoteAddr
-	return r.RemoteAddr
-}
 
 // PanicRecovery middleware recovers from panics and logs them.
 func PanicRecovery(log zerowrap.Logger) func(http.Handler) http.Handler {
@@ -145,7 +127,9 @@ func PanicRecovery(log zerowrap.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// CORS middleware adds CORS headers.
+// CORS middleware adds permissive CORS headers.
+// NOTE: This is intentionally NOT used on the proxy chain (backends control their own CORS).
+// Available for use on specific endpoints (e.g., registry API) where CORS is needed.
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
