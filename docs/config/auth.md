@@ -161,6 +161,8 @@ gordon auth token generate --subject temp --expiry 30d
 enabled = false
 ```
 
+> **Security Warning:** When authentication is disabled, the admin API is fully accessible without credentials. This includes endpoints to deploy containers, manage secrets, modify routes, and reload configuration. Only disable auth for local development where Gordon is not exposed to the internet.
+
 ## Internal Registry Auth
 
 Gordon generates internal credentials when auth is enabled. These are used for loopback pulls during deploys and are regenerated on each restart.
@@ -172,6 +174,8 @@ To view internal credentials (for troubleshooting):
 ```bash
 gordon auth internal
 ```
+
+> **Note:** Internal credentials are stored with restrictive permissions (0600) in secure runtime directories (XDG_RUNTIME_DIR or ~/.gordon/run) and cleaned up on shutdown.
 
 ## Related
 
