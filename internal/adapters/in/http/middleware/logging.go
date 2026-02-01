@@ -100,7 +100,6 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 	}
 }
 
-
 // PanicRecovery middleware recovers from panics and logs them.
 func PanicRecovery(log zerowrap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
