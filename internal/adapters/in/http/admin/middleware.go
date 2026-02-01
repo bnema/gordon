@@ -51,30 +51,36 @@ func AuthMiddleware(
 				}
 			}
 
-			// Check if auth is enabled
+			// Check if auth is enabled.
+			// DESIGN NOTE: When auth is disabled, the admin API is intentionally
+			// accessible without credentials. This is the expected behavior for
+			// local/development setups where Gordon is not exposed to the internet.
+			// Users who disable auth accept this tradeoff explicitly in their config.
+			// For production deployments, auth should always be enabled.
 			if !authSvc.IsEnabled() {
-				// Auth disabled, log warning and allow all requests
 				log.Warn().
 					Str("path", r.URL.Path).
 					Str("method", r.Method).
 					Str("remote_addr", r.RemoteAddr).
-					Msg("auth disabled - allowing unauthenticated admin API access")
+					Msg("auth disabled - allowing unauthenticated admin API access (intended for local use only)")
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// Extract token from Authorization header
+			// Extract token from Authorization header.
+			// SECURITY: Require the standard "Bearer" prefix per RFC 6750
+			// to prevent accidental token exposure in non-standard formats.
 			auth := r.Header.Get("Authorization")
 			if auth == "" {
 				sendUnauthorized(w, "missing authorization header")
 				return
 			}
 
-			// Support both "Bearer <token>" and direct token
-			token := auth
-			if strings.HasPrefix(auth, "Bearer ") {
-				token = strings.TrimPrefix(auth, "Bearer ")
+			if !strings.HasPrefix(auth, "Bearer ") {
+				sendUnauthorized(w, "authorization header must use Bearer scheme")
+				return
 			}
+			token := strings.TrimPrefix(auth, "Bearer ")
 
 			// Validate token
 			claims, err := authSvc.ValidateToken(ctx, token)
