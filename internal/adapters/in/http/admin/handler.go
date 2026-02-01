@@ -893,9 +893,12 @@ func (h *Handler) streamProcessLogs(w http.ResponseWriter, r *http.Request, line
 			if !ok {
 				return
 			}
-			// SECURITY: Escape newlines in log lines to prevent SSE event injection.
+			// SECURITY: Normalize line endings and escape newlines in log lines to prevent SSE event injection.
+			// First normalize CRLF (\r\n) and CR (\r) to LF (\n), then escape newlines.
 			// Per the SSE spec, multi-line data must use separate "data:" prefixes.
-			escaped := strings.ReplaceAll(line, "\n", "\ndata: ")
+			normalized := strings.ReplaceAll(line, "\r\n", "\n")
+			normalized = strings.ReplaceAll(normalized, "\r", "\n")
+			escaped := strings.ReplaceAll(normalized, "\n", "\ndata: ")
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", escaped)
 			flusher.Flush()
 		case <-ctx.Done():
@@ -936,8 +939,12 @@ func (h *Handler) streamContainerLogs(w http.ResponseWriter, r *http.Request, lo
 			if !ok {
 				return
 			}
-			// SECURITY: Escape newlines in log lines to prevent SSE event injection.
-			escaped := strings.ReplaceAll(line, "\n", "\ndata: ")
+			// SECURITY: Normalize line endings and escape newlines in log lines to prevent SSE event injection.
+			// First normalize CRLF (\r\n) and CR (\r) to LF (\n), then escape newlines.
+			// Per the SSE spec, multi-line data must use separate "data:" prefixes.
+			normalized := strings.ReplaceAll(line, "\r\n", "\n")
+			normalized = strings.ReplaceAll(normalized, "\r", "\n")
+			escaped := strings.ReplaceAll(normalized, "\n", "\ndata: ")
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", escaped)
 			flusher.Flush()
 		case <-ctx.Done():
