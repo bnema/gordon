@@ -62,8 +62,19 @@ if [ "$VERSION" = "latest" ] && [ -n "$GORDON_PRERELEASE" ]; then
     fi
     echo "Using pre-release version: ${VERSION}"
 elif [ "$VERSION" = "latest" ]; then
-    VERSION="latest"
     echo "Using latest stable release"
+    # Resolve "latest" to actual tag name since GitHub download URLs require exact tags
+    RELEASE_DATA=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null || echo "")
+    if [ -z "$RELEASE_DATA" ]; then
+        echo "Error: Failed to fetch latest release information from GitHub API"
+        exit 1
+    fi
+    VERSION=$(echo "$RELEASE_DATA" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+    if [ -z "$VERSION" ]; then
+        echo "Error: Could not determine latest stable version"
+        exit 1
+    fi
+    echo "Resolved version: ${VERSION}"
 else
     echo "Using version: ${VERSION}"
 fi
