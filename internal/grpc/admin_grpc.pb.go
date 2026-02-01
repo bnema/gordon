@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: admin.proto
+// source: gordon/admin.proto
 
 package grpc
 
@@ -50,27 +50,27 @@ const (
 type AdminServiceClient interface {
 	// Routes
 	ListRoutes(ctx context.Context, in *ListRoutesRequest, opts ...grpc.CallOption) (*ListRoutesResponse, error)
-	GetRoute(ctx context.Context, in *GetRouteRequest, opts ...grpc.CallOption) (*AdminRoute, error)
-	AddRoute(ctx context.Context, in *AddRouteRequest, opts ...grpc.CallOption) (*AdminRoute, error)
-	UpdateRoute(ctx context.Context, in *UpdateRouteRequest, opts ...grpc.CallOption) (*AdminRoute, error)
+	GetRoute(ctx context.Context, in *GetRouteRequest, opts ...grpc.CallOption) (*GetRouteResponse, error)
+	AddRoute(ctx context.Context, in *AddRouteRequest, opts ...grpc.CallOption) (*AddRouteResponse, error)
+	UpdateRoute(ctx context.Context, in *UpdateRouteRequest, opts ...grpc.CallOption) (*UpdateRouteResponse, error)
 	RemoveRoute(ctx context.Context, in *RemoveRouteRequest, opts ...grpc.CallOption) (*RemoveRouteResponse, error)
 	// Secrets
 	ListSecrets(ctx context.Context, in *ListSecretsRequest, opts ...grpc.CallOption) (*ListSecretsResponse, error)
 	SetSecrets(ctx context.Context, in *SetSecretsRequest, opts ...grpc.CallOption) (*SetSecretsResponse, error)
 	DeleteSecret(ctx context.Context, in *DeleteSecretRequest, opts ...grpc.CallOption) (*DeleteSecretResponse, error)
 	// Logs - server streaming for real-time logs
-	GetProcessLogs(ctx context.Context, in *GetProcessLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEntry], error)
-	GetContainerLogs(ctx context.Context, in *GetContainerLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEntry], error)
+	GetProcessLogs(ctx context.Context, in *GetProcessLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetProcessLogsResponse], error)
+	GetContainerLogs(ctx context.Context, in *GetContainerLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetContainerLogsResponse], error)
 	// System
-	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*StatusResponse, error)
-	GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
-	GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*ConfigResponse, error)
+	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
+	GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*GetHealthResponse, error)
+	GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigResponse, error)
 	Reload(ctx context.Context, in *ReloadRequest, opts ...grpc.CallOption) (*ReloadResponse, error)
 	Deploy(ctx context.Context, in *DeployRequest, opts ...grpc.CallOption) (*DeployResponse, error)
 	// Networks and attachments
 	ListNetworks(ctx context.Context, in *ListNetworksRequest, opts ...grpc.CallOption) (*ListNetworksResponse, error)
-	GetAttachments(ctx context.Context, in *GetAttachmentsRequest, opts ...grpc.CallOption) (*AttachmentsResponse, error)
-	AddAttachment(ctx context.Context, in *AddAttachmentRequest, opts ...grpc.CallOption) (*Attachment, error)
+	GetAttachments(ctx context.Context, in *GetAttachmentsRequest, opts ...grpc.CallOption) (*GetAttachmentsResponse, error)
+	AddAttachment(ctx context.Context, in *AddAttachmentRequest, opts ...grpc.CallOption) (*AddAttachmentResponse, error)
 	RemoveAttachment(ctx context.Context, in *RemoveAttachmentRequest, opts ...grpc.CallOption) (*RemoveAttachmentResponse, error)
 	// Auth verification
 	VerifyAuth(ctx context.Context, in *VerifyAuthRequest, opts ...grpc.CallOption) (*VerifyAuthResponse, error)
@@ -95,9 +95,9 @@ func (c *adminServiceClient) ListRoutes(ctx context.Context, in *ListRoutesReque
 	return out, nil
 }
 
-func (c *adminServiceClient) GetRoute(ctx context.Context, in *GetRouteRequest, opts ...grpc.CallOption) (*AdminRoute, error) {
+func (c *adminServiceClient) GetRoute(ctx context.Context, in *GetRouteRequest, opts ...grpc.CallOption) (*GetRouteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AdminRoute)
+	out := new(GetRouteResponse)
 	err := c.cc.Invoke(ctx, AdminService_GetRoute_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -105,9 +105,9 @@ func (c *adminServiceClient) GetRoute(ctx context.Context, in *GetRouteRequest, 
 	return out, nil
 }
 
-func (c *adminServiceClient) AddRoute(ctx context.Context, in *AddRouteRequest, opts ...grpc.CallOption) (*AdminRoute, error) {
+func (c *adminServiceClient) AddRoute(ctx context.Context, in *AddRouteRequest, opts ...grpc.CallOption) (*AddRouteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AdminRoute)
+	out := new(AddRouteResponse)
 	err := c.cc.Invoke(ctx, AdminService_AddRoute_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -115,9 +115,9 @@ func (c *adminServiceClient) AddRoute(ctx context.Context, in *AddRouteRequest, 
 	return out, nil
 }
 
-func (c *adminServiceClient) UpdateRoute(ctx context.Context, in *UpdateRouteRequest, opts ...grpc.CallOption) (*AdminRoute, error) {
+func (c *adminServiceClient) UpdateRoute(ctx context.Context, in *UpdateRouteRequest, opts ...grpc.CallOption) (*UpdateRouteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AdminRoute)
+	out := new(UpdateRouteResponse)
 	err := c.cc.Invoke(ctx, AdminService_UpdateRoute_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -165,13 +165,13 @@ func (c *adminServiceClient) DeleteSecret(ctx context.Context, in *DeleteSecretR
 	return out, nil
 }
 
-func (c *adminServiceClient) GetProcessLogs(ctx context.Context, in *GetProcessLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEntry], error) {
+func (c *adminServiceClient) GetProcessLogs(ctx context.Context, in *GetProcessLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetProcessLogsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &AdminService_ServiceDesc.Streams[0], AdminService_GetProcessLogs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[GetProcessLogsRequest, LogEntry]{ClientStream: stream}
+	x := &grpc.GenericClientStream[GetProcessLogsRequest, GetProcessLogsResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -182,15 +182,15 @@ func (c *adminServiceClient) GetProcessLogs(ctx context.Context, in *GetProcessL
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AdminService_GetProcessLogsClient = grpc.ServerStreamingClient[LogEntry]
+type AdminService_GetProcessLogsClient = grpc.ServerStreamingClient[GetProcessLogsResponse]
 
-func (c *adminServiceClient) GetContainerLogs(ctx context.Context, in *GetContainerLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEntry], error) {
+func (c *adminServiceClient) GetContainerLogs(ctx context.Context, in *GetContainerLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetContainerLogsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &AdminService_ServiceDesc.Streams[1], AdminService_GetContainerLogs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[GetContainerLogsRequest, LogEntry]{ClientStream: stream}
+	x := &grpc.GenericClientStream[GetContainerLogsRequest, GetContainerLogsResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -201,11 +201,11 @@ func (c *adminServiceClient) GetContainerLogs(ctx context.Context, in *GetContai
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AdminService_GetContainerLogsClient = grpc.ServerStreamingClient[LogEntry]
+type AdminService_GetContainerLogsClient = grpc.ServerStreamingClient[GetContainerLogsResponse]
 
-func (c *adminServiceClient) GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*StatusResponse, error) {
+func (c *adminServiceClient) GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(StatusResponse)
+	out := new(GetStatusResponse)
 	err := c.cc.Invoke(ctx, AdminService_GetStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -213,9 +213,9 @@ func (c *adminServiceClient) GetStatus(ctx context.Context, in *GetStatusRequest
 	return out, nil
 }
 
-func (c *adminServiceClient) GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *adminServiceClient) GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*GetHealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(HealthResponse)
+	out := new(GetHealthResponse)
 	err := c.cc.Invoke(ctx, AdminService_GetHealth_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -223,9 +223,9 @@ func (c *adminServiceClient) GetHealth(ctx context.Context, in *GetHealthRequest
 	return out, nil
 }
 
-func (c *adminServiceClient) GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*ConfigResponse, error) {
+func (c *adminServiceClient) GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ConfigResponse)
+	out := new(GetConfigResponse)
 	err := c.cc.Invoke(ctx, AdminService_GetConfig_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -263,9 +263,9 @@ func (c *adminServiceClient) ListNetworks(ctx context.Context, in *ListNetworksR
 	return out, nil
 }
 
-func (c *adminServiceClient) GetAttachments(ctx context.Context, in *GetAttachmentsRequest, opts ...grpc.CallOption) (*AttachmentsResponse, error) {
+func (c *adminServiceClient) GetAttachments(ctx context.Context, in *GetAttachmentsRequest, opts ...grpc.CallOption) (*GetAttachmentsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AttachmentsResponse)
+	out := new(GetAttachmentsResponse)
 	err := c.cc.Invoke(ctx, AdminService_GetAttachments_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -273,9 +273,9 @@ func (c *adminServiceClient) GetAttachments(ctx context.Context, in *GetAttachme
 	return out, nil
 }
 
-func (c *adminServiceClient) AddAttachment(ctx context.Context, in *AddAttachmentRequest, opts ...grpc.CallOption) (*Attachment, error) {
+func (c *adminServiceClient) AddAttachment(ctx context.Context, in *AddAttachmentRequest, opts ...grpc.CallOption) (*AddAttachmentResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Attachment)
+	out := new(AddAttachmentResponse)
 	err := c.cc.Invoke(ctx, AdminService_AddAttachment_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -321,27 +321,27 @@ func (c *adminServiceClient) AuthenticatePassword(ctx context.Context, in *Authe
 type AdminServiceServer interface {
 	// Routes
 	ListRoutes(context.Context, *ListRoutesRequest) (*ListRoutesResponse, error)
-	GetRoute(context.Context, *GetRouteRequest) (*AdminRoute, error)
-	AddRoute(context.Context, *AddRouteRequest) (*AdminRoute, error)
-	UpdateRoute(context.Context, *UpdateRouteRequest) (*AdminRoute, error)
+	GetRoute(context.Context, *GetRouteRequest) (*GetRouteResponse, error)
+	AddRoute(context.Context, *AddRouteRequest) (*AddRouteResponse, error)
+	UpdateRoute(context.Context, *UpdateRouteRequest) (*UpdateRouteResponse, error)
 	RemoveRoute(context.Context, *RemoveRouteRequest) (*RemoveRouteResponse, error)
 	// Secrets
 	ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error)
 	SetSecrets(context.Context, *SetSecretsRequest) (*SetSecretsResponse, error)
 	DeleteSecret(context.Context, *DeleteSecretRequest) (*DeleteSecretResponse, error)
 	// Logs - server streaming for real-time logs
-	GetProcessLogs(*GetProcessLogsRequest, grpc.ServerStreamingServer[LogEntry]) error
-	GetContainerLogs(*GetContainerLogsRequest, grpc.ServerStreamingServer[LogEntry]) error
+	GetProcessLogs(*GetProcessLogsRequest, grpc.ServerStreamingServer[GetProcessLogsResponse]) error
+	GetContainerLogs(*GetContainerLogsRequest, grpc.ServerStreamingServer[GetContainerLogsResponse]) error
 	// System
-	GetStatus(context.Context, *GetStatusRequest) (*StatusResponse, error)
-	GetHealth(context.Context, *GetHealthRequest) (*HealthResponse, error)
-	GetConfig(context.Context, *GetConfigRequest) (*ConfigResponse, error)
+	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
+	GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error)
+	GetConfig(context.Context, *GetConfigRequest) (*GetConfigResponse, error)
 	Reload(context.Context, *ReloadRequest) (*ReloadResponse, error)
 	Deploy(context.Context, *DeployRequest) (*DeployResponse, error)
 	// Networks and attachments
 	ListNetworks(context.Context, *ListNetworksRequest) (*ListNetworksResponse, error)
-	GetAttachments(context.Context, *GetAttachmentsRequest) (*AttachmentsResponse, error)
-	AddAttachment(context.Context, *AddAttachmentRequest) (*Attachment, error)
+	GetAttachments(context.Context, *GetAttachmentsRequest) (*GetAttachmentsResponse, error)
+	AddAttachment(context.Context, *AddAttachmentRequest) (*AddAttachmentResponse, error)
 	RemoveAttachment(context.Context, *RemoveAttachmentRequest) (*RemoveAttachmentResponse, error)
 	// Auth verification
 	VerifyAuth(context.Context, *VerifyAuthRequest) (*VerifyAuthResponse, error)
@@ -358,13 +358,13 @@ type UnimplementedAdminServiceServer struct{}
 func (UnimplementedAdminServiceServer) ListRoutes(context.Context, *ListRoutesRequest) (*ListRoutesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListRoutes not implemented")
 }
-func (UnimplementedAdminServiceServer) GetRoute(context.Context, *GetRouteRequest) (*AdminRoute, error) {
+func (UnimplementedAdminServiceServer) GetRoute(context.Context, *GetRouteRequest) (*GetRouteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRoute not implemented")
 }
-func (UnimplementedAdminServiceServer) AddRoute(context.Context, *AddRouteRequest) (*AdminRoute, error) {
+func (UnimplementedAdminServiceServer) AddRoute(context.Context, *AddRouteRequest) (*AddRouteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddRoute not implemented")
 }
-func (UnimplementedAdminServiceServer) UpdateRoute(context.Context, *UpdateRouteRequest) (*AdminRoute, error) {
+func (UnimplementedAdminServiceServer) UpdateRoute(context.Context, *UpdateRouteRequest) (*UpdateRouteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRoute not implemented")
 }
 func (UnimplementedAdminServiceServer) RemoveRoute(context.Context, *RemoveRouteRequest) (*RemoveRouteResponse, error) {
@@ -379,19 +379,19 @@ func (UnimplementedAdminServiceServer) SetSecrets(context.Context, *SetSecretsRe
 func (UnimplementedAdminServiceServer) DeleteSecret(context.Context, *DeleteSecretRequest) (*DeleteSecretResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteSecret not implemented")
 }
-func (UnimplementedAdminServiceServer) GetProcessLogs(*GetProcessLogsRequest, grpc.ServerStreamingServer[LogEntry]) error {
+func (UnimplementedAdminServiceServer) GetProcessLogs(*GetProcessLogsRequest, grpc.ServerStreamingServer[GetProcessLogsResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method GetProcessLogs not implemented")
 }
-func (UnimplementedAdminServiceServer) GetContainerLogs(*GetContainerLogsRequest, grpc.ServerStreamingServer[LogEntry]) error {
+func (UnimplementedAdminServiceServer) GetContainerLogs(*GetContainerLogsRequest, grpc.ServerStreamingServer[GetContainerLogsResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method GetContainerLogs not implemented")
 }
-func (UnimplementedAdminServiceServer) GetStatus(context.Context, *GetStatusRequest) (*StatusResponse, error) {
+func (UnimplementedAdminServiceServer) GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetStatus not implemented")
 }
-func (UnimplementedAdminServiceServer) GetHealth(context.Context, *GetHealthRequest) (*HealthResponse, error) {
+func (UnimplementedAdminServiceServer) GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetHealth not implemented")
 }
-func (UnimplementedAdminServiceServer) GetConfig(context.Context, *GetConfigRequest) (*ConfigResponse, error) {
+func (UnimplementedAdminServiceServer) GetConfig(context.Context, *GetConfigRequest) (*GetConfigResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetConfig not implemented")
 }
 func (UnimplementedAdminServiceServer) Reload(context.Context, *ReloadRequest) (*ReloadResponse, error) {
@@ -403,10 +403,10 @@ func (UnimplementedAdminServiceServer) Deploy(context.Context, *DeployRequest) (
 func (UnimplementedAdminServiceServer) ListNetworks(context.Context, *ListNetworksRequest) (*ListNetworksResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListNetworks not implemented")
 }
-func (UnimplementedAdminServiceServer) GetAttachments(context.Context, *GetAttachmentsRequest) (*AttachmentsResponse, error) {
+func (UnimplementedAdminServiceServer) GetAttachments(context.Context, *GetAttachmentsRequest) (*GetAttachmentsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetAttachments not implemented")
 }
-func (UnimplementedAdminServiceServer) AddAttachment(context.Context, *AddAttachmentRequest) (*Attachment, error) {
+func (UnimplementedAdminServiceServer) AddAttachment(context.Context, *AddAttachmentRequest) (*AddAttachmentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddAttachment not implemented")
 }
 func (UnimplementedAdminServiceServer) RemoveAttachment(context.Context, *RemoveAttachmentRequest) (*RemoveAttachmentResponse, error) {
@@ -587,22 +587,22 @@ func _AdminService_GetProcessLogs_Handler(srv interface{}, stream grpc.ServerStr
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(AdminServiceServer).GetProcessLogs(m, &grpc.GenericServerStream[GetProcessLogsRequest, LogEntry]{ServerStream: stream})
+	return srv.(AdminServiceServer).GetProcessLogs(m, &grpc.GenericServerStream[GetProcessLogsRequest, GetProcessLogsResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AdminService_GetProcessLogsServer = grpc.ServerStreamingServer[LogEntry]
+type AdminService_GetProcessLogsServer = grpc.ServerStreamingServer[GetProcessLogsResponse]
 
 func _AdminService_GetContainerLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(GetContainerLogsRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(AdminServiceServer).GetContainerLogs(m, &grpc.GenericServerStream[GetContainerLogsRequest, LogEntry]{ServerStream: stream})
+	return srv.(AdminServiceServer).GetContainerLogs(m, &grpc.GenericServerStream[GetContainerLogsRequest, GetContainerLogsResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AdminService_GetContainerLogsServer = grpc.ServerStreamingServer[LogEntry]
+type AdminService_GetContainerLogsServer = grpc.ServerStreamingServer[GetContainerLogsResponse]
 
 func _AdminService_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetStatusRequest)
@@ -898,5 +898,5 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "admin.proto",
+	Metadata: "gordon/admin.proto",
 }

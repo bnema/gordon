@@ -24,10 +24,13 @@ type PasswordResponse struct {
 // This method does NOT require an existing token since it's used to obtain one.
 func (c *Client) Authenticate(ctx context.Context, username, password string) (*PasswordResponse, error) {
 	if err := c.ensureConn(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("connection failed: %w", err)
 	}
 
-	resp, err := c.admin.AuthenticatePassword(ctx, &gordon.AuthenticatePasswordRequest{
+	authCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	resp, err := c.admin.AuthenticatePassword(authCtx, &gordon.AuthenticatePasswordRequest{
 		Username: username,
 		Password: password,
 	})

@@ -93,7 +93,12 @@ func authenticate(ctx context.Context, authSvc in.AuthService) (context.Context,
 		return nil, status.Error(codes.Unauthenticated, "missing authorization header")
 	}
 
-	token := strings.TrimPrefix(authHeader[0], "Bearer ")
+	headerValue := authHeader[0]
+	if !strings.HasPrefix(headerValue, "Bearer ") {
+		return nil, status.Error(codes.Unauthenticated, "invalid authorization header format: expected 'Bearer <token>'")
+	}
+
+	token := strings.TrimPrefix(headerValue, "Bearer ")
 	if token == "" {
 		return nil, status.Error(codes.Unauthenticated, "missing token")
 	}

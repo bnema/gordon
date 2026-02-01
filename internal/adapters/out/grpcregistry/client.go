@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/domain"
-	gordonv1 "github.com/bnema/gordon/internal/grpc"
+	gordon "github.com/bnema/gordon/internal/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
@@ -18,7 +18,7 @@ import (
 // It connects to the gordon-registry service for manifest inspection.
 type Client struct {
 	conn   *grpc.ClientConn
-	client gordonv1.RegistryInspectServiceClient
+	client gordon.RegistryInspectServiceClient
 }
 
 // NewClient creates a new gRPC client for the registry service.
@@ -46,7 +46,7 @@ func NewClient(addr string) (*Client, error) {
 
 	return &Client{
 		conn:   conn,
-		client: gordonv1.NewRegistryInspectServiceClient(conn),
+		client: gordon.NewRegistryInspectServiceClient(conn),
 	}, nil
 }
 
@@ -60,7 +60,7 @@ func (c *Client) Close() error {
 
 // GetManifest retrieves a manifest by name and reference (tag or digest).
 func (c *Client) GetManifest(ctx context.Context, name, reference string) (*domain.Manifest, error) {
-	resp, err := c.client.GetManifest(ctx, &gordonv1.GetManifestRequest{
+	resp, err := c.client.GetManifest(ctx, &gordon.GetManifestRequest{
 		Name:      name,
 		Reference: reference,
 	})
@@ -85,7 +85,7 @@ func (c *Client) GetManifest(ctx context.Context, name, reference string) (*doma
 
 // ListTags returns all tags for a repository.
 func (c *Client) ListTags(ctx context.Context, name string) ([]string, error) {
-	resp, err := c.client.ListTags(ctx, &gordonv1.ListTagsRequest{
+	resp, err := c.client.ListTags(ctx, &gordon.ListTagsRequest{
 		Name: name,
 	})
 	if err != nil {
@@ -97,7 +97,7 @@ func (c *Client) ListTags(ctx context.Context, name string) ([]string, error) {
 
 // ListRepositories returns all repository names in the registry.
 func (c *Client) ListRepositories(ctx context.Context) ([]string, error) {
-	resp, err := c.client.ListRepositories(ctx, &gordonv1.ListRepositoriesRequest{})
+	resp, err := c.client.ListRepositories(ctx, &gordon.ListRepositoriesRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list repositories: %w", err)
 	}

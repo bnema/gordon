@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -34,11 +35,12 @@ type SubContainerSpec struct {
 //   - gordon-registry (Docker registry)
 //   - gordon-secrets (secrets management)
 type LifecycleManager struct {
-	runtime out.ContainerRuntime
-	image   string // Self-image to use for sub-containers
-	specs   []SubContainerSpec
-	log     zerowrap.Logger
-	stopCh  chan struct{}
+	runtime  out.ContainerRuntime
+	image    string // Self-image to use for sub-containers
+	specs    []SubContainerSpec
+	log      zerowrap.Logger
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // NewLifecycleManager creates a new lifecycle manager.
@@ -172,58 +174,15 @@ func (lm *LifecycleManager) EnsureRunning(ctx context.Context, spec SubContainer
 	}
 
 	if existing != nil {
-		// Check if it's using the correct image
-		isRunning, _ := lm.runtime.IsContainerRunning(ctx, existing.ID)
-
-		if isRunning {
-			// Verify it's the right image
-			inspect, err := lm.runtime.InspectContainer(ctx, existing.ID)
-			if err == nil && strings.HasPrefix(inspect.Image, spec.Image) {
-				log.Debug().Msg("container already running with correct image")
-				return nil
-			}
-		}
-
-		// Stop and remove if wrong image or not running
-		log.Info().Msg("stopping existing container for restart")
-		if err := lm.runtime.StopContainer(ctx, existing.ID); err != nil {
-			log.Warn().Err(err).Msg("failed to stop container, forcing removal")
-		}
-		if err := lm.runtime.RemoveContainer(ctx, existing.ID, true); err != nil {
-			return fmt.Errorf("failed to remove existing container: %w", err)
+		if err := lm.handleExistingContainer(ctx, existing, spec); err != nil {
+			return err
 		}
 	}
 
 	// Create new container
 	log.Info().Msg("creating new container")
 
-	// Build environment variables
-	envVars := make([]string, 0, len(spec.Env))
-	for k, v := range spec.Env {
-		envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
-	}
-
-	// Convert ports to domain format
-	ports := make([]int, 0, len(spec.Ports))
-	for _, containerPort := range spec.Ports {
-		p, _ := strconv.Atoi(containerPort)
-		if p > 0 {
-			ports = append(ports, p)
-		}
-	}
-
-	config := &domain.ContainerConfig{
-		Name:        spec.Name,
-		Image:       spec.Image,
-		Env:         envVars,
-		Ports:       ports,
-		NetworkMode: spec.NetworkMode,
-		Cmd:         []string{"--component=" + spec.Component},
-		Labels: map[string]string{
-			"gordon.managed":   "true",
-			"gordon.component": spec.Component,
-		},
-	}
+	config := lm.buildContainerConfig(spec)
 
 	container, err := lm.runtime.CreateContainer(ctx, config)
 	if err != nil {
@@ -237,6 +196,79 @@ func (lm *LifecycleManager) EnsureRunning(ctx context.Context, spec SubContainer
 
 	log.Info().Str("container_id", container.ID).Msg("container started")
 	return nil
+}
+
+// handleExistingContainer checks if an existing container is running correctly.
+func (lm *LifecycleManager) handleExistingContainer(ctx context.Context, existing *domain.Container, spec SubContainerSpec) error {
+	log := lm.log.With().
+		Str("container", spec.Name).
+		Logger()
+
+	// Check if it's using the correct image
+	isRunning, _ := lm.runtime.IsContainerRunning(ctx, existing.ID)
+
+	if isRunning {
+		// Verify it's the right image
+		inspect, err := lm.runtime.InspectContainer(ctx, existing.ID)
+		if err == nil && strings.HasPrefix(inspect.Image, spec.Image) {
+			log.Debug().Msg("container already running with correct image")
+			return nil
+		}
+	}
+
+	// Stop and remove if wrong image or not running
+	log.Info().Msg("stopping existing container for restart")
+	if err := lm.runtime.StopContainer(ctx, existing.ID); err != nil {
+		log.Warn().Err(err).Msg("failed to stop container, forcing removal")
+	}
+	if err := lm.runtime.RemoveContainer(ctx, existing.ID, true); err != nil {
+		return fmt.Errorf("failed to remove existing container: %w", err)
+	}
+
+	return nil
+}
+
+// buildContainerConfig creates a ContainerConfig from a SubContainerSpec.
+func (lm *LifecycleManager) buildContainerConfig(spec SubContainerSpec) *domain.ContainerConfig {
+	// Build environment variables
+	envVars := make([]string, 0, len(spec.Env))
+	for k, v := range spec.Env {
+		envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Convert ports to domain format
+	portBindings := make(map[string]string, len(spec.Ports))
+	ports := make([]int, 0, len(spec.Ports))
+	for hostPort, containerPort := range spec.Ports {
+		portBindings[hostPort] = containerPort
+		p, _ := strconv.Atoi(containerPort)
+		if p > 0 {
+			ports = append(ports, p)
+		}
+	}
+
+	// Convert volumes (spec uses host:container format)
+	volumes := make(map[string]string, len(spec.Volumes))
+	for hostPath, containerPath := range spec.Volumes {
+		volumes[hostPath] = containerPath
+	}
+
+	return &domain.ContainerConfig{
+		Name:         spec.Name,
+		Image:        spec.Image,
+		Env:          envVars,
+		Ports:        ports,
+		PortBindings: portBindings,
+		Volumes:      volumes,
+		NetworkMode:  spec.NetworkMode,
+		Cmd:          []string{"--component=" + spec.Component},
+		Privileged:   spec.Privileged,
+		ReadOnlyRoot: spec.ReadOnlyRoot,
+		Labels: map[string]string{
+			"gordon.managed":   "true",
+			"gordon.component": spec.Component,
+		},
+	}
 }
 
 // MonitorLoop runs a continuous monitoring loop for all sub-containers.
@@ -266,8 +298,11 @@ func (lm *LifecycleManager) MonitorLoop(ctx context.Context) {
 }
 
 // Stop stops the monitoring loop.
+// This method is idempotent and can be called multiple times safely.
 func (lm *LifecycleManager) Stop() {
-	close(lm.stopCh)
+	lm.stopOnce.Do(func() {
+		close(lm.stopCh)
+	})
 }
 
 // checkAndRestart checks all sub-containers and restarts any that are down.
@@ -309,17 +344,26 @@ func (lm *LifecycleManager) checkHealth(ctx context.Context, name, component str
 
 // waitForHealth waits for a sub-container to become healthy.
 func (lm *LifecycleManager) waitForHealth(ctx context.Context, name, component string) error {
-	// Wait up to 30 seconds for container to be healthy
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		isHealthy, err := lm.checkHealth(ctx, name, component)
-		if err == nil && isHealthy {
-			return nil
-		}
-		time.Sleep(1 * time.Second)
-	}
+	// Create a timeout context
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-	return fmt.Errorf("timeout waiting for %s to become healthy", name)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeoutCtx.Done():
+			return fmt.Errorf("timeout waiting for %s to become healthy", name)
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			isHealthy, err := lm.checkHealth(ctx, name, component)
+			if err == nil && isHealthy {
+				return nil
+			}
+		}
+	}
 }
 
 // ensureNetwork ensures the specified Docker network exists.

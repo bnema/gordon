@@ -33,10 +33,9 @@ type Client struct {
 	token   string
 	timeout time.Duration
 
-	conn     *grpc.ClientConn
-	admin    gordon.AdminServiceClient
-	dialOnce sync.Once
-	dialErr  error
+	mu    sync.Mutex
+	conn  *grpc.ClientConn
+	admin gordon.AdminServiceClient
 }
 
 // ClientOption configures the Client.
@@ -186,16 +185,16 @@ func (c *Client) GetRoute(ctx context.Context, routeDomain string) (*domain.Rout
 		return nil, err
 	}
 
-	route, err := c.admin.GetRoute(c.ctxWithAuth(ctx), &gordon.GetRouteRequest{Domain: routeDomain})
+	resp, err := c.admin.GetRoute(c.ctxWithAuth(ctx), &gordon.GetRouteRequest{Domain: routeDomain})
 	if err != nil {
 		return nil, err
 	}
 
-	if route == nil {
+	if resp.Route == nil {
 		return nil, fmt.Errorf("route not found")
 	}
 
-	return &domain.Route{Domain: route.Domain, Image: route.Image, HTTPS: route.Https}, nil
+	return &domain.Route{Domain: resp.Route.Domain, Image: resp.Route.Image, HTTPS: resp.Route.Https}, nil
 }
 
 // AddRoute adds a new route.
@@ -490,7 +489,7 @@ func (c *Client) GetContainerLogs(ctx context.Context, logDomain string, lines i
 		return nil, err
 	}
 
-	return readLogStream(stream)
+	return readContainerLogStream(stream)
 }
 
 // StreamProcessLogs streams process log lines.
@@ -518,7 +517,7 @@ func (c *Client) StreamContainerLogs(ctx context.Context, logDomain string, line
 		return nil, err
 	}
 
-	return streamLogChannel(ctx, stream)
+	return streamContainerLogChannel(ctx, stream)
 }
 
 // Attachments config API
@@ -618,40 +617,34 @@ func (c *Client) ctxWithAuth(ctx context.Context) context.Context {
 }
 
 func (c *Client) ensureConn(ctx context.Context) error {
-	c.dialOnce.Do(func() {
-		dialCtx, cancel := context.WithTimeout(ctx, c.timeout)
-		defer cancel()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-		creds := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
-		conn, err := grpc.NewClient(c.addr, grpc.WithTransportCredentials(creds))
-		if err != nil {
-			c.dialErr = err
-			return
-		}
+	if c.conn != nil && c.admin != nil {
+		return nil
+	}
 
-		if c.timeout > 0 {
-			state := conn.GetState()
-			if state == connectivity.Idle {
-				if !conn.WaitForStateChange(dialCtx, state) {
-					c.dialErr = dialCtx.Err()
-					_ = conn.Close()
-					return
-				}
+	dialCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	creds := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	conn, err := grpc.NewClient(c.addr, grpc.WithTransportCredentials(creds))
+	if err != nil {
+		return fmt.Errorf("failed to connect to %s: %w", c.addr, err)
+	}
+
+	if c.timeout > 0 {
+		state := conn.GetState()
+		if state == connectivity.Idle {
+			if !conn.WaitForStateChange(dialCtx, state) {
+				_ = conn.Close()
+				return fmt.Errorf("connection timeout: %w", dialCtx.Err())
 			}
 		}
-
-		c.conn = conn
-		c.admin = gordon.NewAdminServiceClient(conn)
-	})
-
-	if c.dialErr != nil {
-		return fmt.Errorf("failed to connect to %s: %w", c.addr, c.dialErr)
 	}
 
-	if c.admin == nil {
-		return errors.New("gRPC client not initialized")
-	}
-
+	c.conn = conn
+	c.admin = gordon.NewAdminServiceClient(conn)
 	return nil
 }
 
@@ -729,46 +722,88 @@ func toRouteInfo(info *gordon.RouteInfo) RouteInfo {
 }
 
 func readLogStream(stream interface {
-	Recv() (*gordon.LogEntry, error)
+	Recv() (*gordon.GetProcessLogsResponse, error)
 }) ([]string, error) {
 	lines := make([]string, 0)
 	for {
-		entry, err := stream.Recv()
+		resp, err := stream.Recv()
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
 				return lines, nil
 			}
 			return nil, err
 		}
-		if entry != nil {
-			lines = append(lines, entry.Line)
+		if resp != nil && resp.Entry != nil {
+			lines = append(lines, resp.Entry.Line)
 		}
 	}
 }
 
 func streamLogChannel(ctx context.Context, stream interface {
-	Recv() (*gordon.LogEntry, error)
+	Recv() (*gordon.GetProcessLogsResponse, error)
 }) (<-chan string, error) {
 	out := make(chan string)
 
 	go func() {
 		defer close(out)
 		for {
-			entry, err := stream.Recv()
+			resp, err := stream.Recv()
 			if err != nil {
 				return
 			}
-			if entry == nil {
+			if resp == nil || resp.Entry == nil {
 				continue
 			}
 			select {
 			case <-ctx.Done():
 				return
-			case out <- entry.Line:
+			case out <- resp.Entry.Line:
 			}
 		}
 	}()
+	return out, nil
+}
 
+func readContainerLogStream(stream interface {
+	Recv() (*gordon.GetContainerLogsResponse, error)
+}) ([]string, error) {
+	lines := make([]string, 0)
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
+				return lines, nil
+			}
+			return nil, err
+		}
+		if resp != nil && resp.Entry != nil {
+			lines = append(lines, resp.Entry.Line)
+		}
+	}
+}
+
+func streamContainerLogChannel(ctx context.Context, stream interface {
+	Recv() (*gordon.GetContainerLogsResponse, error)
+}) (<-chan string, error) {
+	out := make(chan string)
+
+	go func() {
+		defer close(out)
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			if resp == nil || resp.Entry == nil {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case out <- resp.Entry.Line:
+			}
+		}
+	}()
 	return out, nil
 }
 

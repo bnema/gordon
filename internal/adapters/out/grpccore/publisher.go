@@ -9,7 +9,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
-	gordonv1 "github.com/bnema/gordon/internal/grpc"
+	gordon "github.com/bnema/gordon/internal/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -19,7 +19,7 @@ const defaultTimeout = 5 * time.Second
 
 // EventPublisher implements out.EventPublisher by sending events to core via gRPC.
 type EventPublisher struct {
-	client gordonv1.CoreServiceClient
+	client gordon.CoreServiceClient
 	conn   *grpc.ClientConn
 }
 
@@ -31,7 +31,7 @@ func NewEventPublisher(coreAddr string) (*EventPublisher, error) {
 	}
 
 	return &EventPublisher{
-		client: gordonv1.NewCoreServiceClient(conn),
+		client: gordon.NewCoreServiceClient(conn),
 		conn:   conn,
 	}, nil
 }
@@ -66,7 +66,7 @@ func (p *EventPublisher) publishImagePushed(payload any) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
-	_, err := p.client.NotifyImagePushed(ctx, &gordonv1.NotifyImagePushedRequest{
+	_, err := p.client.NotifyImagePushed(ctx, &gordon.NotifyImagePushedRequest{
 		Name:        imagePushed.Name,
 		Reference:   imagePushed.Reference,
 		Manifest:    imagePushed.Manifest,

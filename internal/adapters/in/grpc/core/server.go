@@ -15,14 +15,14 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
-	gordonv1 "github.com/bnema/gordon/internal/grpc"
+	gordon "github.com/bnema/gordon/internal/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 // Server implements the CoreService gRPC interface.
 type Server struct {
-	gordonv1.UnimplementedCoreServiceServer
+	gordon.UnimplementedCoreServiceServer
 	containerSvc in.ContainerService
 	configSvc    in.ConfigService
 	runtime      out.ContainerRuntime
@@ -31,7 +31,7 @@ type Server struct {
 
 	// Route change streaming
 	watchersMu sync.RWMutex
-	watchers   map[string]chan *gordonv1.RouteChangeEvent
+	watchers   map[string]chan *gordon.RouteChangeEvent
 	watcherID  int
 }
 
@@ -49,7 +49,7 @@ func NewServer(
 		runtime:      runtime,
 		eventBus:     eventBus,
 		log:          log,
-		watchers:     make(map[string]chan *gordonv1.RouteChangeEvent),
+		watchers:     make(map[string]chan *gordon.RouteChangeEvent),
 	}
 
 	// Subscribe to events to stream route changes
@@ -63,7 +63,7 @@ func NewServer(
 }
 
 // GetTarget resolves a domain to its proxy target.
-func (s *Server) GetTarget(ctx context.Context, req *gordonv1.GetTargetRequest) (*gordonv1.GetTargetResponse, error) {
+func (s *Server) GetTarget(ctx context.Context, req *gordon.GetTargetRequest) (*gordon.GetTargetResponse, error) {
 	log := s.log.With().
 		Str("domain", req.Domain).
 		Str("usecase", "GetTarget").
@@ -87,8 +87,8 @@ func (s *Server) GetTarget(ctx context.Context, req *gordonv1.GetTargetRequest) 
 		}
 		port := int32(port64)
 
-		return &gordonv1.GetTargetResponse{
-			Target: &gordonv1.Target{
+		return &gordon.GetTargetResponse{
+			Target: &gordon.Target{
 				Host:        host,
 				Port:        port,
 				ContainerId: "", // Not a container
@@ -102,7 +102,7 @@ func (s *Server) GetTarget(ctx context.Context, req *gordonv1.GetTargetRequest) 
 	container, exists := s.containerSvc.Get(ctx, req.Domain)
 	if !exists {
 		log.Debug().Msg("container not found for domain")
-		return &gordonv1.GetTargetResponse{Found: false}, nil
+		return &gordon.GetTargetResponse{Found: false}, nil
 	}
 
 	log.Debug().
@@ -111,7 +111,7 @@ func (s *Server) GetTarget(ctx context.Context, req *gordonv1.GetTargetRequest) 
 		Msg("found container for domain")
 
 	// Build target based on runtime mode (container vs host)
-	var target *gordonv1.Target
+	var target *gordon.Target
 
 	if s.isRunningInContainer() {
 		// Gordon is in a container - use container network
@@ -119,7 +119,7 @@ func (s *Server) GetTarget(ctx context.Context, req *gordonv1.GetTargetRequest) 
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to get container network info: %v", err)
 		}
-		target = &gordonv1.Target{
+		target = &gordon.Target{
 			Host:        containerIP,
 			Port:        int32(containerPort), // #nosec G115 - Container ports are always within valid range
 			ContainerId: container.ID,
@@ -137,7 +137,7 @@ func (s *Server) GetTarget(ctx context.Context, req *gordonv1.GetTargetRequest) 
 		}
 
 		if route == nil {
-			return &gordonv1.GetTargetResponse{Found: false}, nil
+			return &gordon.GetTargetResponse{Found: false}, nil
 		}
 
 		// Get the exposed port from container config
@@ -147,7 +147,7 @@ func (s *Server) GetTarget(ctx context.Context, req *gordonv1.GetTargetRequest) 
 			return nil, status.Errorf(codes.Internal, "failed to get host port mapping: %v", err)
 		}
 
-		target = &gordonv1.Target{
+		target = &gordon.Target{
 			Host:        "localhost",
 			Port:        int32(hostPort), // #nosec G115 - Host ports are always within valid range
 			ContainerId: container.ID,
@@ -155,19 +155,19 @@ func (s *Server) GetTarget(ctx context.Context, req *gordonv1.GetTargetRequest) 
 		}
 	}
 
-	return &gordonv1.GetTargetResponse{
+	return &gordon.GetTargetResponse{
 		Target: target,
 		Found:  true,
 	}, nil
 }
 
 // GetRoutes returns all configured routes.
-func (s *Server) GetRoutes(ctx context.Context, _ *gordonv1.GetRoutesRequest) (*gordonv1.GetRoutesResponse, error) {
+func (s *Server) GetRoutes(ctx context.Context, _ *gordon.GetRoutesRequest) (*gordon.GetRoutesResponse, error) {
 	routes := s.configSvc.GetRoutes(ctx)
-	protoRoutes := make([]*gordonv1.Route, len(routes))
+	protoRoutes := make([]*gordon.Route, len(routes))
 
 	for i, r := range routes {
-		protoRoutes[i] = &gordonv1.Route{
+		protoRoutes[i] = &gordon.Route{
 			Domain:   r.Domain,
 			Image:    r.Image,
 			Https:    r.HTTPS,
@@ -175,19 +175,19 @@ func (s *Server) GetRoutes(ctx context.Context, _ *gordonv1.GetRoutesRequest) (*
 		}
 	}
 
-	return &gordonv1.GetRoutesResponse{Routes: protoRoutes}, nil
+	return &gordon.GetRoutesResponse{Routes: protoRoutes}, nil
 }
 
 // GetExternalRoutes returns all external route mappings.
-func (s *Server) GetExternalRoutes(ctx context.Context, _ *gordonv1.GetExternalRoutesRequest) (*gordonv1.GetExternalRoutesResponse, error) {
+func (s *Server) GetExternalRoutes(ctx context.Context, _ *gordon.GetExternalRoutesRequest) (*gordon.GetExternalRoutesResponse, error) {
 	externalRoutes := s.configSvc.GetExternalRoutes()
-	return &gordonv1.GetExternalRoutesResponse{
+	return &gordon.GetExternalRoutesResponse{
 		Routes: externalRoutes,
 	}, nil
 }
 
 // NotifyImagePushed handles image push notifications from the registry.
-func (s *Server) NotifyImagePushed(ctx context.Context, req *gordonv1.NotifyImagePushedRequest) (*gordonv1.NotifyImagePushedResponse, error) {
+func (s *Server) NotifyImagePushed(ctx context.Context, req *gordon.NotifyImagePushedRequest) (*gordon.NotifyImagePushedResponse, error) {
 	log := s.log.With().
 		Str("usecase", "NotifyImagePushed").
 		Str("image", req.Name).
@@ -226,11 +226,11 @@ func (s *Server) NotifyImagePushed(ctx context.Context, req *gordonv1.NotifyImag
 		}
 	}
 
-	return &gordonv1.NotifyImagePushedResponse{Accepted: true}, nil
+	return &gordon.NotifyImagePushedResponse{Accepted: true}, nil
 }
 
 // WatchRouteChanges streams route change events to connected clients.
-func (s *Server) WatchRouteChanges(_ *gordonv1.WatchRouteChangesRequest, stream gordonv1.CoreService_WatchRouteChangesServer) error {
+func (s *Server) WatchRouteChanges(_ *gordon.WatchRouteChangesRequest, stream gordon.CoreService_WatchRouteChangesServer) error {
 	ctx := stream.Context()
 	log := s.log.With().
 		Str("usecase", "WatchRouteChanges").
@@ -243,16 +243,24 @@ func (s *Server) WatchRouteChanges(_ *gordonv1.WatchRouteChangesRequest, stream 
 	s.watchersMu.Lock()
 	s.watcherID++
 	watcherID := strconv.Itoa(s.watcherID)
-	eventCh := make(chan *gordonv1.RouteChangeEvent, 10)
+	eventCh := make(chan *gordon.RouteChangeEvent, 10)
 	s.watchers[watcherID] = eventCh
 	s.watchersMu.Unlock()
+
+	// Use sync.Once to ensure channel is closed only once
+	var closeOnce sync.Once
 
 	// Cleanup on exit
 	defer func() {
 		s.watchersMu.Lock()
 		delete(s.watchers, watcherID)
 		s.watchersMu.Unlock()
-		close(eventCh)
+
+		// Close the channel after removing from map to prevent sends to it
+		closeOnce.Do(func() {
+			close(eventCh)
+		})
+
 		log.Info().Msg("route change watcher disconnected")
 	}()
 
@@ -265,7 +273,7 @@ func (s *Server) WatchRouteChanges(_ *gordonv1.WatchRouteChangesRequest, stream 
 			if !ok {
 				return nil
 			}
-			if err := stream.Send(event); err != nil {
+			if err := stream.Send(&gordon.WatchRouteChangesResponse{Event: event}); err != nil {
 				log.Warn().Err(err).Msg("failed to send route change event")
 				return err
 			}
@@ -274,11 +282,11 @@ func (s *Server) WatchRouteChanges(_ *gordonv1.WatchRouteChangesRequest, stream 
 }
 
 // BroadcastRouteChange broadcasts a route change event to all connected watchers.
-func (s *Server) BroadcastRouteChange(changeType gordonv1.RouteChangeEvent_ChangeType, domain string) {
+func (s *Server) BroadcastRouteChange(changeType gordon.RouteChangeEvent_ChangeType, domain string) {
 	s.watchersMu.RLock()
 	defer s.watchersMu.RUnlock()
 
-	event := &gordonv1.RouteChangeEvent{
+	event := &gordon.RouteChangeEvent{
 		Type:   changeType,
 		Domain: domain,
 	}
@@ -329,11 +337,11 @@ func (h *routeChangeHandler) Handle(event domain.Event) error {
 	case domain.EventImagePushed:
 		// When an image is pushed, check if it's for a specific route
 		if event.Route != "" {
-			h.server.BroadcastRouteChange(gordonv1.RouteChangeEvent_INVALIDATE, event.Route)
+			h.server.BroadcastRouteChange(gordon.RouteChangeEvent_CHANGE_TYPE_INVALIDATE, event.Route)
 		}
 	case domain.EventConfigReload:
 		// Config reload invalidates all routes
-		h.server.BroadcastRouteChange(gordonv1.RouteChangeEvent_INVALIDATE_ALL, "")
+		h.server.BroadcastRouteChange(gordon.RouteChangeEvent_CHANGE_TYPE_INVALIDATE_ALL, "")
 	}
 	return nil
 }

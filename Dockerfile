@@ -35,6 +35,7 @@ FROM alpine:latest
 # - ca-certificates: TLS support
 # - curl, wget: Health checks and debugging
 # - tzdata: Timezone support
+# - grpc-health-probe: For gRPC health checks
 RUN apk add --no-cache \
     ca-certificates \
     docker-cli \
@@ -43,6 +44,7 @@ RUN apk add --no-cache \
     tzdata \
     pass \
     gnupg \
+    grpc-health-probe \
     && rm -rf /var/cache/apk/*
 
 # Create non-root user (not used by default - components run as root for Docker socket access)
@@ -77,13 +79,22 @@ ENV GORDON_COMPONENT="" \
 EXPOSE 80 5000 9090 9091 9092
 
 # Health check (component-aware)
-# Core/Registry use port 5000 by default
-# Proxy uses port 80
+# Core/Registry use HTTP on port 5000 by default
+# Proxy uses HTTP on port 80
 # Secrets uses gRPC health on 9091
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:${HEALTHCHECK_PORT}/v2/health || \
+    CMD \
+    if [ "$GORDON_COMPONENT" = "secrets" ]; then \
+        grpc-health-probe -addr=:9091 || exit 1; \
+    elif [ -n "$GORDON_COMPONENT" ]; then \
+        wget --quiet --tries=1 --spider http://localhost:${HEALTHCHECK_PORT}/v2/health || \
         wget --quiet --tries=1 --spider http://localhost:${HEALTHCHECK_PORT}/health || \
-        exit 1
+        exit 1; \
+    else \
+        wget --quiet --tries=1 --spider http://localhost:${HEALTHCHECK_PORT}/v2/health || \
+        wget --quiet --tries=1 --spider http://localhost:${HEALTHCHECK_PORT}/health || \
+        exit 1; \
+    fi
 
 # Use ENTRYPOINT so we can pass arguments (like --component) after the command
 # For v3 sub-containers, use: docker run gordon:v3-test --component=core

@@ -10,10 +10,10 @@ plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.4
     out: internal/grpc
     opt:
-      - paths=source_relative
-  
+      - paths=import
+
   - remote: buf.build/grpc/go:v1.5.1
     out: internal/grpc
     opt:
-      - paths=source_relative
+      - paths=import
       - require_unimplemented_servers=false

@@ -91,7 +91,7 @@ func (s *Server) ListRoutes(ctx context.Context, req *gordon.ListRoutesRequest) 
 }
 
 // GetRoute returns a specific route.
-func (s *Server) GetRoute(ctx context.Context, req *gordon.GetRouteRequest) (*gordon.AdminRoute, error) {
+func (s *Server) GetRoute(ctx context.Context, req *gordon.GetRouteRequest) (*gordon.GetRouteResponse, error) {
 	if err := auth.CheckAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionRead); err != nil {
 		return nil, err
 	}
@@ -104,15 +104,17 @@ func (s *Server) GetRoute(ctx context.Context, req *gordon.GetRouteRequest) (*go
 		return nil, status.Error(codes.Internal, "failed to get route")
 	}
 
-	return &gordon.AdminRoute{
-		Domain: route.Domain,
-		Image:  route.Image,
-		Https:  route.HTTPS,
+	return &gordon.GetRouteResponse{
+		Route: &gordon.AdminRoute{
+			Domain: route.Domain,
+			Image:  route.Image,
+			Https:  route.HTTPS,
+		},
 	}, nil
 }
 
 // AddRoute creates a new route.
-func (s *Server) AddRoute(ctx context.Context, req *gordon.AddRouteRequest) (*gordon.AdminRoute, error) {
+func (s *Server) AddRoute(ctx context.Context, req *gordon.AddRouteRequest) (*gordon.AddRouteResponse, error) {
 	if err := auth.CheckAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionWrite); err != nil {
 		return nil, err
 	}
@@ -142,11 +144,11 @@ func (s *Server) AddRoute(ctx context.Context, req *gordon.AddRouteRequest) (*go
 		}
 	}
 
-	return req.Route, nil
+	return &gordon.AddRouteResponse{Route: req.Route}, nil
 }
 
 // UpdateRoute modifies an existing route.
-func (s *Server) UpdateRoute(ctx context.Context, req *gordon.UpdateRouteRequest) (*gordon.AdminRoute, error) {
+func (s *Server) UpdateRoute(ctx context.Context, req *gordon.UpdateRouteRequest) (*gordon.UpdateRouteResponse, error) {
 	if err := auth.CheckAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionWrite); err != nil {
 		return nil, err
 	}
@@ -176,7 +178,9 @@ func (s *Server) UpdateRoute(ctx context.Context, req *gordon.UpdateRouteRequest
 		}
 	}
 
-	return &gordon.AdminRoute{Domain: route.Domain, Image: route.Image, Https: route.HTTPS}, nil
+	return &gordon.UpdateRouteResponse{
+		Route: &gordon.AdminRoute{Domain: route.Domain, Image: route.Image, Https: route.HTTPS},
+	}, nil
 }
 
 // RemoveRoute deletes a route.
@@ -264,7 +268,9 @@ func (s *Server) GetProcessLogs(req *gordon.GetProcessLogsRequest, stream gordon
 		if err != nil {
 			return status.Error(codes.Internal, "failed to follow process logs")
 		}
-		return streamLogLines(ctx, ch, "process", stream.Send)
+		return streamLogLines(ctx, ch, "process", func(entry *gordon.LogEntry) error {
+			return stream.Send(&gordon.GetProcessLogsResponse{Entry: entry})
+		})
 	}
 
 	entries, err := s.logSvc.GetProcessLogs(ctx, lines)
@@ -273,7 +279,9 @@ func (s *Server) GetProcessLogs(req *gordon.GetProcessLogsRequest, stream gordon
 	}
 
 	for _, line := range entries {
-		if err := stream.Send(&gordon.LogEntry{Line: line, Source: "process"}); err != nil {
+		if err := stream.Send(&gordon.GetProcessLogsResponse{
+			Entry: &gordon.LogEntry{Line: line, Source: "process", Timestamp: timestamppb.Now()},
+		}); err != nil {
 			return err
 		}
 	}
@@ -298,7 +306,9 @@ func (s *Server) GetContainerLogs(req *gordon.GetContainerLogsRequest, stream go
 		if err != nil {
 			return status.Error(codes.Internal, "failed to follow container logs")
 		}
-		return streamLogLines(ctx, ch, req.Domain, stream.Send)
+		return streamLogLines(ctx, ch, req.Domain, func(entry *gordon.LogEntry) error {
+			return stream.Send(&gordon.GetContainerLogsResponse{Entry: entry})
+		})
 	}
 
 	entries, err := s.logSvc.GetContainerLogs(ctx, req.Domain, lines)
@@ -307,7 +317,9 @@ func (s *Server) GetContainerLogs(req *gordon.GetContainerLogsRequest, stream go
 	}
 
 	for _, line := range entries {
-		if err := stream.Send(&gordon.LogEntry{Line: line, Source: req.Domain}); err != nil {
+		if err := stream.Send(&gordon.GetContainerLogsResponse{
+			Entry: &gordon.LogEntry{Line: line, Source: req.Domain, Timestamp: timestamppb.Now()},
+		}); err != nil {
 			return err
 		}
 	}
@@ -316,7 +328,7 @@ func (s *Server) GetContainerLogs(req *gordon.GetContainerLogsRequest, stream go
 }
 
 // GetStatus returns basic system status.
-func (s *Server) GetStatus(ctx context.Context, _ *gordon.GetStatusRequest) (*gordon.StatusResponse, error) {
+func (s *Server) GetStatus(ctx context.Context, _ *gordon.GetStatusRequest) (*gordon.GetStatusResponse, error) {
 	if err := auth.CheckAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead); err != nil {
 		return nil, err
 	}
@@ -339,7 +351,7 @@ func (s *Server) GetStatus(ctx context.Context, _ *gordon.GetStatusRequest) (*go
 		authEnabled = s.authSvc.IsEnabled()
 	}
 
-	return &gordon.StatusResponse{
+	return &gordon.GetStatusResponse{
 		RouteCount:        safeInt32(int64(len(routes))),
 		ContainerCount:    safeInt32(int64(len(containers))),
 		RegistryDomain:    s.configSvc.GetRegistryDomain(),
@@ -353,7 +365,7 @@ func (s *Server) GetStatus(ctx context.Context, _ *gordon.GetStatusRequest) (*go
 }
 
 // GetHealth returns route health statuses.
-func (s *Server) GetHealth(ctx context.Context, _ *gordon.GetHealthRequest) (*gordon.HealthResponse, error) {
+func (s *Server) GetHealth(ctx context.Context, _ *gordon.GetHealthRequest) (*gordon.GetHealthResponse, error) {
 	if err := auth.CheckAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead); err != nil {
 		return nil, err
 	}
@@ -376,11 +388,11 @@ func (s *Server) GetHealth(ctx context.Context, _ *gordon.GetHealthRequest) (*go
 		}
 	}
 
-	return &gordon.HealthResponse{Status: "ok", Routes: response}, nil
+	return &gordon.GetHealthResponse{Status: "ok", Routes: response}, nil
 }
 
 // GetConfig returns the full configuration as JSON bytes.
-func (s *Server) GetConfig(ctx context.Context, _ *gordon.GetConfigRequest) (*gordon.ConfigResponse, error) {
+func (s *Server) GetConfig(ctx context.Context, _ *gordon.GetConfigRequest) (*gordon.GetConfigResponse, error) {
 	if err := auth.CheckAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead); err != nil {
 		return nil, err
 	}
@@ -418,7 +430,7 @@ func (s *Server) GetConfig(ctx context.Context, _ *gordon.GetConfigRequest) (*go
 		return nil, status.Error(codes.Internal, "failed to marshal config")
 	}
 
-	return &gordon.ConfigResponse{ConfigJson: configJSON}, nil
+	return &gordon.GetConfigResponse{ConfigJson: configJSON}, nil
 }
 
 // Reload triggers configuration reload.
@@ -489,7 +501,7 @@ func (s *Server) ListNetworks(ctx context.Context, _ *gordon.ListNetworksRequest
 }
 
 // GetAttachments returns attachment configuration for a target or all.
-func (s *Server) GetAttachments(ctx context.Context, req *gordon.GetAttachmentsRequest) (*gordon.AttachmentsResponse, error) {
+func (s *Server) GetAttachments(ctx context.Context, req *gordon.GetAttachmentsRequest) (*gordon.GetAttachmentsResponse, error) {
 	if err := auth.CheckAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead); err != nil {
 		return nil, err
 	}
@@ -515,11 +527,11 @@ func (s *Server) GetAttachments(ctx context.Context, req *gordon.GetAttachmentsR
 		}
 	}
 
-	return &gordon.AttachmentsResponse{Attachments: attachments}, nil
+	return &gordon.GetAttachmentsResponse{Attachments: attachments}, nil
 }
 
 // AddAttachment adds an attachment to a target.
-func (s *Server) AddAttachment(ctx context.Context, req *gordon.AddAttachmentRequest) (*gordon.Attachment, error) {
+func (s *Server) AddAttachment(ctx context.Context, req *gordon.AddAttachmentRequest) (*gordon.AddAttachmentResponse, error) {
 	if err := auth.CheckAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite); err != nil {
 		return nil, err
 	}
@@ -539,7 +551,9 @@ func (s *Server) AddAttachment(ctx context.Context, req *gordon.AddAttachmentReq
 		}
 	}
 
-	return &gordon.Attachment{Name: req.Target, Image: req.Image}, nil
+	return &gordon.AddAttachmentResponse{
+		Attachment: &gordon.Attachment{Name: req.Target, Image: req.Image},
+	}, nil
 }
 
 // RemoveAttachment removes an attachment from a target.

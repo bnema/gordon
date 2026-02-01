@@ -16,7 +16,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/adapters/out/grpccore"
-	gordonv1 "github.com/bnema/gordon/internal/grpc"
+	gordon "github.com/bnema/gordon/internal/grpc"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
 	"github.com/bnema/zerowrap"
 	"google.golang.org/grpc"
@@ -88,7 +88,7 @@ func RunRegistry(ctx context.Context, configPath string) error {
 
 	grpcServer := grpc.NewServer()
 	grpcRegistryServer := grpcregistry.NewServer(registryService)
-	gordonv1.RegisterRegistryInspectServiceServer(grpcServer, grpcRegistryServer)
+	gordon.RegisterRegistryInspectServiceServer(grpcServer, grpcRegistryServer)
 
 	// Register health check
 	healthServer := health.NewServer()
@@ -156,8 +156,21 @@ func RunRegistry(ctx context.Context, configPath string) error {
 	}
 
 	// Graceful shutdown
+	log.Info().
+		Str(zerowrap.FieldLayer, "app").
+		Str(zerowrap.FieldComponent, "registry").
+		Msg("shutting down gRPC server")
 	grpcServer.GracefulStop()
-	if err := httpServer.Shutdown(context.Background()); err != nil {
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	log.Info().
+		Str(zerowrap.FieldLayer, "app").
+		Str(zerowrap.FieldComponent, "registry").
+		Msg("shutting down HTTP server")
+
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Error().
 			Str(zerowrap.FieldLayer, "app").
 			Str(zerowrap.FieldComponent, "registry").

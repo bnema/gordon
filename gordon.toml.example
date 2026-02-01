@@ -1,27 +1,93 @@
+# Gordon v3 Configuration Example
+# IMPORTANT: Change all passwords and secrets before using in production
+
 [server]
-port = 8080
-registry_port = 5000
-registry_domain = "registry.example.com"
-runtime = "docker"
+port = 9090                          # gRPC admin port (default: 9090)
+registry_port = 5000                 # Registry HTTP port
+gordon_domain = "gordon.example.com" # Gordon's own domain for registry
+data_dir = "/var/lib/gordon"         # Data directory for storage
 
-[registry_auth]
-enabled = true
+[logging]
+level = "info"                       # Log level: debug, info, warn, error
+format = "console"                   # Log format: console, json
+
+[logging.file]
+enabled = true                       # Enable file logging
+path = "/var/lib/gordon/logs/gordon.log"
+max_size = 100                       # Max MB per log file
+max_backups = 3                      # Number of rotated logs to keep
+max_age = 7                          # Days to retain logs
+
+[logging.container_logs]
+enabled = true                       # Enable container log collection
+dir = "/var/lib/gordon/logs/containers"
+max_size = 50
+max_backups = 2
+max_age = 3
+
+[auth]
+enabled = true                       # Enable authentication for admin API
+type = "password"                    # Auth type: "password" or "token"
+# WARNING: Use strong passwords in production
+# Generate secure password hash with: openssl rand -base64 32
 username = "admin"
-password = "password123"
+password = "CHANGE_THIS_STRONG_PASSWORD_NOW"
+secrets_backend = "unsafe"           # Backend for storing secrets: "pass", "sops", or "unsafe" (dev only!)
+token_secret = "CHANGE_THIS_TOKEN_SECRET_NOW"  # JWT signing secret (path or value)
+token_expiry = "720h"                # Token validity period (720h = 30 days)
 
+[api]
+[api.rate_limit]
+enabled = false                      # Enable rate limiting
+global_rps = 100                     # Global requests per second
+per_ip_rps = 10                      # Per-IP requests per second
+burst = 20                           # Burst size
+trusted_proxies = []                 # List of trusted proxy IPs
+
+# Routes: domain -> image mapping
+# Images will be deployed as containers
 [routes]
 "app.example.com" = "nginx:latest"
 "api.example.com" = "myapi:v1"
+"blog.example.com" = "wordpress:latest"
 
+# External routes: domain -> "host:port" mapping
+# For services not managed by Gordon
+[external_routes]
+"legacy.example.com" = "10.0.0.5:8080"
+"external.example.com" = "backend.internal:3000"
+
+# Network groups for isolation
+# Groups define which routes can communicate
+[network_groups]
+public = ["app.example.com", "blog.example.com"]
+internal = ["api.example.com"]
+
+# Attachments: group or domain -> list of images
+# Auto-deploy additional containers with routes
+[attachments]
+# Attach database to API route
+"api.example.com" = [
+    "postgres:15",
+    "redis:7"
+]
+# Attach monitoring to all routes in a group
+"internal" = [
+    "prometheus:latest",
+    "grafana:latest"
+]
+
+# Auto-route configuration
+[auto_route]
+enabled = false                      # Auto-create routes from registry pushes
+
+# Network isolation
+[network_isolation]
+enabled = false                      # Enable network isolation between routes
+network_prefix = "gordon"            # Prefix for isolated networks
+
+# Volume management
 [volumes]
-auto_create = true
-prefix = "gordon"
-preserve = true
-
-[env]
-dir = "/tmp/env"
-providers = ["pass", "sops"]
-
-[logging]
-enabled = true
-level = "info"
+auto_create = true                   # Auto-create volumes for containers
+prefix = "gordon"                    # Volume name prefix
+preserve = true                      # Keep volumes when removing containers

@@ -36,14 +36,14 @@ log_error() {
 # Build the test image
 build() {
     log_info "Building v3 test image..."
-    cd "${SCRIPT_DIR}"
+    cd "${SCRIPT_DIR}/.."
     
     # Build the binary
     go build -o dist/gordon ./main.go
     
     # Build the container image
     cp dist/gordon ./gordon
-    $ENGINE build -t $TEST_IMAGE .
+    $ENGINE build -t $TEST_IMAGE -f Dockerfile .
     rm ./gordon
     
     log_success "Test image built: $TEST_IMAGE"

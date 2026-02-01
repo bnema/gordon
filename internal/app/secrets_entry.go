@@ -16,7 +16,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
-	gordonv1 "github.com/bnema/gordon/internal/grpc"
+	gordon "github.com/bnema/gordon/internal/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -79,7 +79,7 @@ func RunSecrets(ctx context.Context, configPath string) error {
 
 	grpcServer := grpc.NewServer()
 	secretsServer := grpcsecrets.NewServer(tokenStore, providers)
-	gordonv1.RegisterSecretsServiceServer(grpcServer, secretsServer)
+	gordon.RegisterSecretsServiceServer(grpcServer, secretsServer)
 
 	// Register health check
 	healthServer := health.NewServer()

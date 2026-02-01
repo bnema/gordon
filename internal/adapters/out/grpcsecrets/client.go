@@ -9,7 +9,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
-	gordonv1 "github.com/bnema/gordon/internal/grpc"
+	gordon "github.com/bnema/gordon/internal/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -18,7 +18,7 @@ import (
 // It communicates with the gordon-secrets service via gRPC.
 type Client struct {
 	conn         *grpc.ClientConn
-	client       gordonv1.SecretsServiceClient
+	client       gordon.SecretsServiceClient
 	providerName string // For SecretProvider interface
 }
 
@@ -31,7 +31,7 @@ func NewClient(addr string) (*Client, error) {
 
 	return &Client{
 		conn:   conn,
-		client: gordonv1.NewSecretsServiceClient(conn),
+		client: gordon.NewSecretsServiceClient(conn),
 	}, nil
 }
 
@@ -53,7 +53,7 @@ func (c *Client) WithProvider(name string) *Client {
 
 // SaveToken stores a token via gRPC.
 func (c *Client) SaveToken(ctx context.Context, token *domain.Token, jwt string) error {
-	_, err := c.client.SaveToken(ctx, &gordonv1.SaveTokenRequest{
+	_, err := c.client.SaveToken(ctx, &gordon.SaveTokenRequest{
 		Token: domainToProtoToken(token),
 		Jwt:   jwt,
 	})
@@ -62,7 +62,7 @@ func (c *Client) SaveToken(ctx context.Context, token *domain.Token, jwt string)
 
 // GetToken retrieves a token by subject via gRPC.
 func (c *Client) GetToken(ctx context.Context, subject string) (string, *domain.Token, error) {
-	resp, err := c.client.GetToken(ctx, &gordonv1.GetTokenRequest{Subject: subject})
+	resp, err := c.client.GetToken(ctx, &gordon.GetTokenRequest{Subject: subject})
 	if err != nil {
 		return "", nil, err
 	}
@@ -74,7 +74,7 @@ func (c *Client) GetToken(ctx context.Context, subject string) (string, *domain.
 
 // ListTokens returns all stored tokens via gRPC.
 func (c *Client) ListTokens(ctx context.Context) ([]domain.Token, error) {
-	resp, err := c.client.ListTokens(ctx, &gordonv1.ListTokensRequest{})
+	resp, err := c.client.ListTokens(ctx, &gordon.ListTokensRequest{})
 	if err != nil {
 		return nil, err
 	}
@@ -88,13 +88,13 @@ func (c *Client) ListTokens(ctx context.Context) ([]domain.Token, error) {
 
 // Revoke adds token ID to revocation list via gRPC.
 func (c *Client) Revoke(ctx context.Context, tokenID string) error {
-	_, err := c.client.RevokeToken(ctx, &gordonv1.RevokeTokenRequest{TokenId: tokenID})
+	_, err := c.client.RevokeToken(ctx, &gordon.RevokeTokenRequest{TokenId: tokenID})
 	return err
 }
 
 // IsRevoked checks if token ID is in revocation list via gRPC.
 func (c *Client) IsRevoked(ctx context.Context, tokenID string) (bool, error) {
-	resp, err := c.client.IsRevoked(ctx, &gordonv1.IsRevokedRequest{TokenId: tokenID})
+	resp, err := c.client.IsRevoked(ctx, &gordon.IsRevokedRequest{TokenId: tokenID})
 	if err != nil {
 		return false, err
 	}
@@ -103,7 +103,7 @@ func (c *Client) IsRevoked(ctx context.Context, tokenID string) (bool, error) {
 
 // DeleteToken removes a token via gRPC.
 func (c *Client) DeleteToken(ctx context.Context, subject string) error {
-	_, err := c.client.DeleteToken(ctx, &gordonv1.DeleteTokenRequest{Subject: subject})
+	_, err := c.client.DeleteToken(ctx, &gordon.DeleteTokenRequest{Subject: subject})
 	return err
 }
 
@@ -116,7 +116,7 @@ func (c *Client) Name() string {
 
 // GetSecret retrieves a secret via gRPC.
 func (c *Client) GetSecret(ctx context.Context, key string) (string, error) {
-	resp, err := c.client.GetSecret(ctx, &gordonv1.GetSecretRequest{
+	resp, err := c.client.GetSecret(ctx, &gordon.GetSecretRequest{
 		Provider: c.providerName,
 		Path:     key,
 	})
@@ -135,7 +135,7 @@ func (c *Client) IsAvailable() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := c.client.ListTokens(ctx, &gordonv1.ListTokensRequest{})
+	_, err := c.client.ListTokens(ctx, &gordon.ListTokensRequest{})
 	return err == nil
 }
 
@@ -144,12 +144,12 @@ var _ out.TokenStore = (*Client)(nil)
 var _ out.SecretProvider = (*Client)(nil)
 
 // domainToProtoToken converts a domain.Token to protobuf Token.
-func domainToProtoToken(t *domain.Token) *gordonv1.Token {
+func domainToProtoToken(t *domain.Token) *gordon.Token {
 	if t == nil {
 		return nil
 	}
 
-	protoToken := &gordonv1.Token{
+	protoToken := &gordon.Token{
 		Id:       t.ID,
 		Subject:  t.Subject,
 		Scopes:   t.Scopes,
@@ -165,7 +165,7 @@ func domainToProtoToken(t *domain.Token) *gordonv1.Token {
 }
 
 // protoToDomainToken converts a protobuf Token to domain.Token.
-func protoToDomainToken(t *gordonv1.Token) *domain.Token {
+func protoToDomainToken(t *gordon.Token) *domain.Token {
 	if t == nil {
 		return nil
 	}

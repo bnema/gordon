@@ -156,17 +156,37 @@ make test-v3-logs-follow
 
 ### 5. Test Proxy Routing
 
-Add a route via admin API:
+Add a route via gRPC admin API:
 ```bash
-curl -X POST http://localhost:5000/admin/routes \
-  -H "Content-Type: application/json" \
+# First, authenticate to get a token
+TOKEN=$(grpcurl -plaintext -d '{"username": "admin", "password": "changeme"}' \
+  localhost:9090 gordon.v1.AdminService/AuthenticatePassword | jq -r '.token')
+
+# Add a route
+grpcurl -plaintext \
+  -H "authorization: Bearer $TOKEN" \
   -d '{
     "domain": "test.local",
-    "target": {
-      "container": "myapp",
-      "port": 8080
+    "route": {
+      "domain": "test.local",
+      "image": "nginx:latest",
+      "https": false
     }
-  }'
+  }' \
+  localhost:9090 gordon.v1.AdminService/AddRoute
+
+# List routes to verify
+grpcurl -plaintext \
+  -H "authorization: Bearer $TOKEN" \
+  localhost:9090 gordon.v1.AdminService/ListRoutes
+```
+
+Deploy the route:
+```bash
+grpcurl -plaintext \
+  -H "authorization: Bearer $TOKEN" \
+  -d '{"domain": "test.local"}' \
+  localhost:9090 gordon.v1.AdminService/Deploy
 ```
 
 Test proxy routing:

@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: core.proto
+// source: gordon/core.proto
 
 package grpc
 
@@ -42,7 +42,7 @@ type CoreServiceClient interface {
 	// NotifyImagePushed is called by the registry when an image is pushed
 	NotifyImagePushed(ctx context.Context, in *NotifyImagePushedRequest, opts ...grpc.CallOption) (*NotifyImagePushedResponse, error)
 	// WatchRouteChanges streams route change events for cache invalidation
-	WatchRouteChanges(ctx context.Context, in *WatchRouteChangesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RouteChangeEvent], error)
+	WatchRouteChanges(ctx context.Context, in *WatchRouteChangesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRouteChangesResponse], error)
 }
 
 type coreServiceClient struct {
@@ -93,13 +93,13 @@ func (c *coreServiceClient) NotifyImagePushed(ctx context.Context, in *NotifyIma
 	return out, nil
 }
 
-func (c *coreServiceClient) WatchRouteChanges(ctx context.Context, in *WatchRouteChangesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RouteChangeEvent], error) {
+func (c *coreServiceClient) WatchRouteChanges(ctx context.Context, in *WatchRouteChangesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRouteChangesResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &CoreService_ServiceDesc.Streams[0], CoreService_WatchRouteChanges_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[WatchRouteChangesRequest, RouteChangeEvent]{ClientStream: stream}
+	x := &grpc.GenericClientStream[WatchRouteChangesRequest, WatchRouteChangesResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func (c *coreServiceClient) WatchRouteChanges(ctx context.Context, in *WatchRout
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CoreService_WatchRouteChangesClient = grpc.ServerStreamingClient[RouteChangeEvent]
+type CoreService_WatchRouteChangesClient = grpc.ServerStreamingClient[WatchRouteChangesResponse]
 
 // CoreServiceServer is the server API for CoreService service.
 // All implementations should embed UnimplementedCoreServiceServer
@@ -128,7 +128,7 @@ type CoreServiceServer interface {
 	// NotifyImagePushed is called by the registry when an image is pushed
 	NotifyImagePushed(context.Context, *NotifyImagePushedRequest) (*NotifyImagePushedResponse, error)
 	// WatchRouteChanges streams route change events for cache invalidation
-	WatchRouteChanges(*WatchRouteChangesRequest, grpc.ServerStreamingServer[RouteChangeEvent]) error
+	WatchRouteChanges(*WatchRouteChangesRequest, grpc.ServerStreamingServer[WatchRouteChangesResponse]) error
 }
 
 // UnimplementedCoreServiceServer should be embedded to have
@@ -150,7 +150,7 @@ func (UnimplementedCoreServiceServer) GetExternalRoutes(context.Context, *GetExt
 func (UnimplementedCoreServiceServer) NotifyImagePushed(context.Context, *NotifyImagePushedRequest) (*NotifyImagePushedResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NotifyImagePushed not implemented")
 }
-func (UnimplementedCoreServiceServer) WatchRouteChanges(*WatchRouteChangesRequest, grpc.ServerStreamingServer[RouteChangeEvent]) error {
+func (UnimplementedCoreServiceServer) WatchRouteChanges(*WatchRouteChangesRequest, grpc.ServerStreamingServer[WatchRouteChangesResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method WatchRouteChanges not implemented")
 }
 func (UnimplementedCoreServiceServer) testEmbeddedByValue() {}
@@ -250,11 +250,11 @@ func _CoreService_WatchRouteChanges_Handler(srv interface{}, stream grpc.ServerS
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(CoreServiceServer).WatchRouteChanges(m, &grpc.GenericServerStream[WatchRouteChangesRequest, RouteChangeEvent]{ServerStream: stream})
+	return srv.(CoreServiceServer).WatchRouteChanges(m, &grpc.GenericServerStream[WatchRouteChangesRequest, WatchRouteChangesResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CoreService_WatchRouteChangesServer = grpc.ServerStreamingServer[RouteChangeEvent]
+type CoreService_WatchRouteChangesServer = grpc.ServerStreamingServer[WatchRouteChangesResponse]
 
 // CoreService_ServiceDesc is the grpc.ServiceDesc for CoreService service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -287,5 +287,5 @@ var CoreService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "core.proto",
+	Metadata: "gordon/core.proto",
 }

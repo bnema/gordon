@@ -12,7 +12,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
-	gordonv1 "github.com/bnema/gordon/internal/grpc"
+	gordon "github.com/bnema/gordon/internal/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
@@ -21,7 +21,7 @@ import (
 // Client implements the out.TargetResolver and out.RouteChangeWatcher interfaces
 // by making gRPC calls to the gordon-core service.
 type Client struct {
-	client       gordonv1.CoreServiceClient
+	client       gordon.CoreServiceClient
 	conn         *grpc.ClientConn
 	coreAddr     string
 	log          zerowrap.Logger
@@ -58,7 +58,7 @@ func NewClient(coreAddr string, log zerowrap.Logger) (*Client, error) {
 	}
 
 	return &Client{
-		client:   gordonv1.NewCoreServiceClient(conn),
+		client:   gordon.NewCoreServiceClient(conn),
 		conn:     conn,
 		coreAddr: coreAddr,
 		log:      log,
@@ -72,7 +72,7 @@ func (c *Client) GetTarget(ctx context.Context, domainName string) (*domain.Prox
 		Str("usecase", "GetTarget").
 		Logger()
 
-	resp, err := c.client.GetTarget(ctx, &gordonv1.GetTargetRequest{
+	resp, err := c.client.GetTarget(ctx, &gordon.GetTargetRequest{
 		Domain: domainName,
 	})
 	if err != nil {
@@ -102,7 +102,7 @@ func (c *Client) GetTarget(ctx context.Context, domainName string) (*domain.Prox
 
 // GetRoutes returns all configured routes via gRPC.
 func (c *Client) GetRoutes(ctx context.Context) ([]domain.Route, error) {
-	resp, err := c.client.GetRoutes(ctx, &gordonv1.GetRoutesRequest{})
+	resp, err := c.client.GetRoutes(ctx, &gordon.GetRoutesRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get routes from core: %w", err)
 	}
@@ -121,7 +121,7 @@ func (c *Client) GetRoutes(ctx context.Context) ([]domain.Route, error) {
 
 // GetExternalRoutes returns external route mappings via gRPC.
 func (c *Client) GetExternalRoutes(ctx context.Context) (map[string]string, error) {
-	resp, err := c.client.GetExternalRoutes(ctx, &gordonv1.GetExternalRoutesRequest{})
+	resp, err := c.client.GetExternalRoutes(ctx, &gordon.GetExternalRoutesRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external routes from core: %w", err)
 	}
@@ -146,7 +146,7 @@ func (c *Client) Watch(ctx context.Context, onInvalidate func(domainName string)
 		}
 	}
 
-	stream, err := c.client.WatchRouteChanges(ctx, &gordonv1.WatchRouteChangesRequest{})
+	stream, err := c.client.WatchRouteChanges(ctx, &gordon.WatchRouteChangesRequest{})
 	if err != nil {
 		return fmt.Errorf("failed to start route change watch: %w", err)
 	}
@@ -154,7 +154,7 @@ func (c *Client) Watch(ctx context.Context, onInvalidate func(domainName string)
 	log.Info().Msg("connected to core route change stream")
 
 	for {
-		event, err := stream.Recv()
+		resp, err := stream.Recv()
 		if err == io.EOF {
 			log.Info().Msg("route change stream closed by server")
 			return nil
@@ -164,13 +164,13 @@ func (c *Client) Watch(ctx context.Context, onInvalidate func(domainName string)
 			return fmt.Errorf("route change stream error: %w", err)
 		}
 
-		switch event.Type {
-		case gordonv1.RouteChangeEvent_INVALIDATE:
-			log.Debug().Str("domain", event.Domain).Msg("route invalidated")
+		switch resp.Event.Type {
+		case gordon.RouteChangeEvent_CHANGE_TYPE_INVALIDATE:
+			log.Debug().Str("domain", resp.Event.Domain).Msg("route invalidated")
 			if c.onInvalidate != nil {
-				c.onInvalidate(event.Domain)
+				c.onInvalidate(resp.Event.Domain)
 			}
-		case gordonv1.RouteChangeEvent_INVALIDATE_ALL:
+		case gordon.RouteChangeEvent_CHANGE_TYPE_INVALIDATE_ALL:
 			log.Debug().Msg("all routes invalidated")
 			if c.onInvalidate != nil {
 				c.onInvalidate("") // Empty domain means invalidate all

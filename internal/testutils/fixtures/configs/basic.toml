@@ -1,13 +1,16 @@
 [server]
-port = 8080
+port = 9090
 registry_port = 5000
-registry_domain = "registry.example.com"
-runtime = "docker"
+gordon_domain = "registry.example.com"
+data_dir = "/var/gordon"
 
-[registry_auth]
+[logging]
+level = "info"
+
+[auth]
 enabled = true
 username = "admin"
-password = "password123"
+password = "secret"
 
 [routes]
 "app.example.com" = "nginx:latest"
@@ -18,10 +21,8 @@ auto_create = true
 prefix = "gordon"
 preserve = true
 
-[env]
-dir = "/tmp/env"
-providers = ["pass", "sops"]
+[auto_route]
+enabled = false
 
-[logging]
-enabled = true
-level = "info"
+[network_isolation]
+enabled = false
