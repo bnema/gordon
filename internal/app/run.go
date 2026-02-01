@@ -54,17 +54,19 @@ import (
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 
 	// Pkg
+	"github.com/bnema/gordon/pkg/bytesize"
 	"github.com/bnema/gordon/pkg/duration"
 )
 
 // Config holds the application configuration.
 type Config struct {
 	Server struct {
-		Port           int    `mapstructure:"port"`
-		RegistryPort   int    `mapstructure:"registry_port"`
-		GordonDomain   string `mapstructure:"gordon_domain"`
-		RegistryDomain string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
-		DataDir        string `mapstructure:"data_dir"`
+		Port             int    `mapstructure:"port"`
+		RegistryPort     int    `mapstructure:"registry_port"`
+		GordonDomain     string `mapstructure:"gordon_domain"`
+		RegistryDomain   string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
+		DataDir          string `mapstructure:"data_dir"`
+		MaxProxyBodySize string `mapstructure:"max_proxy_body_size"` // e.g., "512MB", "1GB"
 	} `mapstructure:"server"`
 
 	Logging struct {
@@ -294,9 +296,21 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
+
+	// Parse max_proxy_body_size config (default: 512MB)
+	maxProxyBodySize := int64(512 << 20) // 512MB default
+	if cfg.Server.MaxProxyBodySize != "" {
+		parsedSize, err := bytesize.Parse(cfg.Server.MaxProxyBodySize)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid server.max_proxy_body_size configuration", map[string]any{"value": cfg.Server.MaxProxyBodySize})
+		}
+		maxProxyBodySize = parsedSize
+	}
+
 	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxy.Config{
 		RegistryDomain: cfg.Server.RegistryDomain,
 		RegistryPort:   cfg.Server.RegistryPort,
+		MaxBodySize:    maxProxyBodySize,
 	})
 
 	// Create token handler for registry token endpoint

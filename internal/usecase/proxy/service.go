@@ -39,6 +39,7 @@ var proxyTransport = &http.Transport{
 type Config struct {
 	RegistryDomain string
 	RegistryPort   int
+	MaxBodySize    int64 // Maximum request body size in bytes (0 = no limit)
 }
 
 // Service implements the ProxyService interface.
@@ -67,14 +68,12 @@ func NewService(
 	}
 }
 
-// maxProxyBodySize is the maximum request body size for proxied requests (512MB).
-// This prevents resource exhaustion from extremely large uploads through the proxy.
-const maxProxyBodySize = 512 << 20
-
 // ServeHTTP handles incoming HTTP requests and proxies them to the appropriate backend.
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// SECURITY: Limit request body size to prevent resource exhaustion.
-	r.Body = http.MaxBytesReader(w, r.Body, maxProxyBodySize)
+	if s.config.MaxBodySize > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, s.config.MaxBodySize)
+	}
 
 	// Enrich request context with fields for downstream logging
 	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
@@ -323,6 +322,12 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 
 	proxy := newReverseProxy(targetURL,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
+			// Check if this is a MaxBytesError (request body too large)
+			if err.Error() == "http: request body too large" {
+				log.Warn().Err(err).Str("target", targetURL.String()).Msg("proxy error: request body too large")
+				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			log.Error().Err(err).Str("target", targetURL.String()).Msg("proxy error: connection failed")
 			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		},
@@ -352,6 +357,12 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 
 	proxy := newReverseProxy(targetURL,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
+			// Check if this is a MaxBytesError (request body too large)
+			if err.Error() == "http: request body too large" {
+				log.Warn().Err(err).Int("registry_port", s.config.RegistryPort).Msg("registry proxy error: request body too large")
+				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			log.Error().Err(err).Int("registry_port", s.config.RegistryPort).Msg("registry proxy error")
 			http.Error(w, "Registry Unavailable", http.StatusServiceUnavailable)
 		},
