@@ -893,7 +893,10 @@ func (h *Handler) streamProcessLogs(w http.ResponseWriter, r *http.Request, line
 			if !ok {
 				return
 			}
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
+			// SECURITY: Escape newlines in log lines to prevent SSE event injection.
+			// Per the SSE spec, multi-line data must use separate "data:" prefixes.
+			escaped := strings.ReplaceAll(line, "\n", "\ndata: ")
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", escaped)
 			flusher.Flush()
 		case <-ctx.Done():
 			return
@@ -933,7 +936,9 @@ func (h *Handler) streamContainerLogs(w http.ResponseWriter, r *http.Request, lo
 			if !ok {
 				return
 			}
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
+			// SECURITY: Escape newlines in log lines to prevent SSE event injection.
+			escaped := strings.ReplaceAll(line, "\n", "\ndata: ")
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", escaped)
 			flusher.Flush()
 		case <-ctx.Done():
 			return
