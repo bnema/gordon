@@ -21,6 +21,7 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 | `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
 | `registry_domain` | string | - | Deprecated alias for `gordon_domain` |
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
+| `max_proxy_body_size` | string | `"512MB"` | Maximum request body size for proxied requests |
 
 ## Port Configuration
 
@@ -102,11 +103,44 @@ data_dir = "~/.gordon"  # Default for user installations
 
 ### Permissions
 
-Gordon creates directories with secure permissions:
-- Directories: `0700` (owner only)
-- Files: `0600` (owner only)
+ Gordon creates directories with secure permissions:
+ - Directories: `0700` (owner only)
+ - Files: `0600` (owner only)
 
-## Examples
+ ## Maximum Proxy Body Size
+
+ The `max_proxy_body_size` setting limits the size of request bodies that Gordon will forward to backend containers:
+
+ ```toml
+ [server]
+ max_proxy_body_size = "512MB"  # Default
+ ```
+
+ **Purpose:** Prevents resource exhaustion attacks from extremely large uploads through the proxy.
+
+ **Supported units:** B, KB, MB, GB, TB (case-insensitive, decimal/1024-based)
+
+ **Examples:**
+ ```toml
+ max_proxy_body_size = "100MB"   # Stricter limit
+ max_proxy_body_size = "1GB"     # Allow larger uploads
+ max_proxy_body_size = "0"       # No limit (not recommended)
+ ```
+
+ **Behavior:**
+ - When a request exceeds the limit, Gordon returns `413 Request Entity Too Large`
+ - The limit is applied before the request reaches the backend container
+ - Uploads in progress are terminated when the limit is exceeded
+
+ **Use cases:**
+ - File upload services: increase to `1GB` or higher
+ - CI/CD artifact uploads: adjust based on your largest artifacts
+ - Tight security: reduce to `100MB` or lower
+ - Default (512MB): suitable for most applications
+
+ > **Warning:** Setting this to `0` (no limit) allows unlimited upload sizes, which can lead to disk exhaustion and DoS vulnerabilities. Always set a reasonable limit for production deployments.
+
+ ## Examples
 
 ### Development Configuration
 

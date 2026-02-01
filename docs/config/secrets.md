@@ -89,6 +89,11 @@ DB_PASSWORD=${sops:secrets.yaml:database.password}
 - YAML/JSON file encryption
 - Git-friendly (encrypted files in repo)
 
+**Security:**
+- Absolute paths are rejected to prevent arbitrary file access
+- Path traversal (`..`) is blocked
+- Only relative paths from your config directory are allowed
+
 **Route secrets storage:**
 - Domain secrets stay in `.env` files
 - Use `${sops:...}` syntax to resolve encrypted values
@@ -193,6 +198,7 @@ JWT_SECRET=${sops:secrets.yaml:jwt.secret}
 2. **Never commit**: Don't commit unencrypted secrets to git
 3. **Rotate regularly**: Regenerate tokens and passwords periodically
 4. **Least privilege**: Use separate secrets per environment
+5. **Path validation**: SOPS provider rejects absolute paths and path traversal attempts for security
 
 ## Related
 

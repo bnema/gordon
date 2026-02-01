@@ -244,8 +244,10 @@ cscli decisions list | wc -l
 | 22 | TCP | Closed | SSH (use Tailscale instead) |
 | 80 | TCP | Open | HTTP (Gordon proxy) |
 | 443 | TCP | Open | HTTPS (Gordon proxy via Cloudflare) |
-| 5000 | TCP | Closed | Registry (proxied through 80/443) |
+| 5000 | TCP | Closed | Registry (proxied through 80/443, containers bind to 127.0.0.1) |
 | 41641 | UDP | Open | Tailscale WireGuard |
+
+> **Security Note:** All managed containers bind to `127.0.0.1` by default, preventing direct access to their ports. The only entry point to your applications is Gordon's reverse proxy on ports 80/443, where authentication and rate limiting are enforced.
 
 ---
 

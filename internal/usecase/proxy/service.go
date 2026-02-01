@@ -39,6 +39,7 @@ var proxyTransport = &http.Transport{
 type Config struct {
 	RegistryDomain string
 	RegistryPort   int
+	MaxBodySize    int64 // Maximum request body size in bytes (0 = no limit)
 }
 
 // Service implements the ProxyService interface.
@@ -69,6 +70,11 @@ func NewService(
 
 // ServeHTTP handles incoming HTTP requests and proxies them to the appropriate backend.
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// SECURITY: Limit request body size to prevent resource exhaustion.
+	if s.config.MaxBodySize > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, s.config.MaxBodySize)
+	}
+
 	// Enrich request context with fields for downstream logging
 	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
 		zerowrap.FieldLayer:    "adapter",
@@ -288,13 +294,12 @@ func newReverseProxy(targetURL *url.URL, errorHandler func(http.ResponseWriter, 
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(targetURL)
-			// Preserve original X-Forwarded-Proto from upstream proxy (e.g., Cloudflare)
-			// before SetXForwarded overwrites it based on local connection
-			origProto := pr.In.Header.Get("X-Forwarded-Proto")
+			// SECURITY: Let SetXForwarded() set X-Forwarded-Proto based on the actual
+			// connection state (r.TLS). We do NOT preserve the original X-Forwarded-Proto
+			// from the incoming request because we cannot verify it came from a trusted
+			// proxy. An attacker could spoof X-Forwarded-Proto: https on an HTTP connection
+			// to trick backends into thinking the connection is secure.
 			pr.SetXForwarded()
-			if origProto != "" {
-				pr.Out.Header.Set("X-Forwarded-Proto", origProto)
-			}
 			pr.Out.Host = targetURL.Host
 		},
 		Transport:      proxyTransport,
@@ -317,6 +322,12 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 
 	proxy := newReverseProxy(targetURL,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
+			// Check if this is a MaxBytesError (request body too large)
+			if err.Error() == "http: request body too large" {
+				log.Warn().Err(err).Str("target", targetURL.String()).Msg("proxy error: request body too large")
+				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			log.Error().Err(err).Str("target", targetURL.String()).Msg("proxy error: connection failed")
 			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		},
@@ -346,6 +357,12 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 
 	proxy := newReverseProxy(targetURL,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
+			// Check if this is a MaxBytesError (request body too large)
+			if err.Error() == "http: request body too large" {
+				log.Warn().Err(err).Int("registry_port", s.config.RegistryPort).Msg("registry proxy error: request body too large")
+				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			log.Error().Err(err).Int("registry_port", s.config.RegistryPort).Msg("registry proxy error")
 			http.Error(w, "Registry Unavailable", http.StatusServiceUnavailable)
 		},
@@ -387,12 +404,9 @@ func (s *Service) isRunningInContainer() bool {
 		}
 	}
 
-	// Check hostname pattern
-	if hostname, err := os.Hostname(); err == nil {
-		if len(hostname) == 12 || len(hostname) == 64 {
-			return true
-		}
-	}
+	// NOTE: Hostname length check (12 or 64 chars) was removed because it produced
+	// false positives on hosts with short hostnames (e.g., "web-server-1" = 12 chars),
+	// which would cause the proxy to use container network IPs instead of host port mappings.
 
 	// Check environment variables
 	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" ||
