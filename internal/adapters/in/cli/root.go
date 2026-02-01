@@ -5,6 +5,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -87,6 +90,18 @@ Commands are organized by where they run:
 	deployCmd := newDeployCmd()
 	deployCmd.GroupID = groupManage
 	rootCmd.AddCommand(deployCmd)
+
+	restartCmd := newRestartCmd()
+	restartCmd.GroupID = groupManage
+	rootCmd.AddCommand(restartCmd)
+
+	pushCmd := newPushCmd()
+	pushCmd.GroupID = groupManage
+	rootCmd.AddCommand(pushCmd)
+
+	rollbackCmd := newRollbackCmd()
+	rollbackCmd.GroupID = groupManage
+	rootCmd.AddCommand(rollbackCmd)
 
 	reloadCmd := newReloadCmd()
 	reloadCmd.GroupID = groupManage
@@ -232,7 +247,8 @@ func runLogs(logsConfigPath, logDomain string, follow bool, lines int) error {
 
 // runLogsRemote fetches logs from a remote Gordon instance.
 func runLogsRemote(client *remote.Client, logDomain string, follow bool, lines int) error {
-	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
 	if follow {
 		return streamLogsRemote(ctx, client, logDomain, lines)
