@@ -410,7 +410,7 @@ func (r *Runtime) PullImageWithAuth(ctx context.Context, imageRef, username, pas
 
 	log.Debug().
 		Str("server_address", serverAddress).
-		Bool("has_auth", len(authConfigBytes) > 0).
+		Bool("has_auth", username != "" || password != "").
 		Msg("auth config for pull")
 
 	// Pull with authentication
