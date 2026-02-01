@@ -3,6 +3,7 @@
 **Date**: 2026-02-01
 **Scope**: Full security review with focus on reverse proxy, Docker socket access, secrets management, authentication/authorization
 **Severity scale**: CRITICAL > HIGH > MEDIUM > LOW > INFO
+**Status**: Fixes applied for C1, C2, H1-H5, M2, M3, M5, M6, L2
 
 ---
 

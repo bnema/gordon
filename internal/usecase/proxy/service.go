@@ -67,8 +67,15 @@ func NewService(
 	}
 }
 
+// maxProxyBodySize is the maximum request body size for proxied requests (512MB).
+// This prevents resource exhaustion from extremely large uploads through the proxy.
+const maxProxyBodySize = 512 << 20
+
 // ServeHTTP handles incoming HTTP requests and proxies them to the appropriate backend.
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// SECURITY: Limit request body size to prevent resource exhaustion.
+	r.Body = http.MaxBytesReader(w, r.Body, maxProxyBodySize)
+
 	// Enrich request context with fields for downstream logging
 	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
 		zerowrap.FieldLayer:    "adapter",
@@ -288,13 +295,12 @@ func newReverseProxy(targetURL *url.URL, errorHandler func(http.ResponseWriter, 
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(targetURL)
-			// Preserve original X-Forwarded-Proto from upstream proxy (e.g., Cloudflare)
-			// before SetXForwarded overwrites it based on local connection
-			origProto := pr.In.Header.Get("X-Forwarded-Proto")
+			// SECURITY: Let SetXForwarded() set X-Forwarded-Proto based on the actual
+			// connection state (r.TLS). We do NOT preserve the original X-Forwarded-Proto
+			// from the incoming request because we cannot verify it came from a trusted
+			// proxy. An attacker could spoof X-Forwarded-Proto: https on an HTTP connection
+			// to trick backends into thinking the connection is secure.
 			pr.SetXForwarded()
-			if origProto != "" {
-				pr.Out.Header.Set("X-Forwarded-Proto", origProto)
-			}
 			pr.Out.Host = targetURL.Host
 		},
 		Transport:      proxyTransport,
@@ -387,12 +393,9 @@ func (s *Service) isRunningInContainer() bool {
 		}
 	}
 
-	// Check hostname pattern
-	if hostname, err := os.Hostname(); err == nil {
-		if len(hostname) == 12 || len(hostname) == 64 {
-			return true
-		}
-	}
+	// NOTE: Hostname length check (12 or 64 chars) was removed because it produced
+	// false positives on hosts with short hostnames (e.g., "web-server-1" = 12 chars),
+	// which would cause the proxy to use container network IPs instead of host port mappings.
 
 	// Check environment variables
 	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" ||
