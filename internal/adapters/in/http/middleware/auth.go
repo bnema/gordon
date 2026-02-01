@@ -87,6 +87,21 @@ func isAuthenticated(r *http.Request, expectedUsername, expectedPassword string,
 	return authenticated
 }
 
+// sanitizeHeaderValue removes characters that could enable header injection.
+// Only allows alphanumeric, dots, hyphens, colons, and square brackets
+// (sufficient for host:port and IPv6 addresses).
+func sanitizeHeaderValue(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '.' || r == '-' || r == ':' || r == '[' || r == ']' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // redactUsername partially redacts a username for logging.
 // Shows first and last character with asterisks in between.
 // SECURITY: Prevents full username exposure in logs.
@@ -417,19 +432,24 @@ func sendUnauthorized(w http.ResponseWriter, authType domain.AuthType, host stri
 
 	switch authType {
 	case domain.AuthTypeToken:
-		// For token auth, indicate the token server endpoint
-		// Use X-Forwarded-Host if behind proxy, otherwise use Host header
-		realmHost := r.Header.Get("X-Forwarded-Host")
-		if realmHost == "" {
-			realmHost = host
-		}
-		// Detect scheme: prioritize X-Forwarded-Proto (set by reverse proxies like Cloudflare)
+		// For token auth, indicate the token server endpoint.
+		// SECURITY: Only use X-Forwarded-Host/Proto from trusted sources.
+		// The Host header from the request is used as the default.
+		// X-Forwarded-Host is NOT trusted here because this middleware doesn't
+		// have access to trusted proxy configuration, and an attacker could
+		// inject a malicious realm URL to phish for credentials.
+		realmHost := host
+
+		// Detect scheme from TLS state only (not from headers that can be spoofed)
 		scheme := "http"
-		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-			scheme = proto
-		} else if r.TLS != nil {
+		if r.TLS != nil {
 			scheme = "https"
 		}
+
+		// SECURITY: Sanitize the host to prevent header injection.
+		// Remove any characters that could break the WWW-Authenticate header format.
+		realmHost = sanitizeHeaderValue(realmHost)
+
 		realm := scheme + "://" + realmHost + "/auth/token"
 		w.Header().Set("WWW-Authenticate", `Bearer realm="`+realm+`",service="gordon-registry"`)
 	default:

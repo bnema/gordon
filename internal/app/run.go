@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -55,17 +54,19 @@ import (
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 
 	// Pkg
+	"github.com/bnema/gordon/pkg/bytesize"
 	"github.com/bnema/gordon/pkg/duration"
 )
 
 // Config holds the application configuration.
 type Config struct {
 	Server struct {
-		Port           int    `mapstructure:"port"`
-		RegistryPort   int    `mapstructure:"registry_port"`
-		GordonDomain   string `mapstructure:"gordon_domain"`
-		RegistryDomain string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
-		DataDir        string `mapstructure:"data_dir"`
+		Port             int    `mapstructure:"port"`
+		RegistryPort     int    `mapstructure:"registry_port"`
+		GordonDomain     string `mapstructure:"gordon_domain"`
+		RegistryDomain   string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
+		DataDir          string `mapstructure:"data_dir"`
+		MaxProxyBodySize string `mapstructure:"max_proxy_body_size"` // e.g., "512MB", "1GB"
 	} `mapstructure:"server"`
 
 	Logging struct {
@@ -295,9 +296,21 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
+
+	// Parse max_proxy_body_size config (default: 512MB)
+	maxProxyBodySize := int64(512 << 20) // 512MB default
+	if cfg.Server.MaxProxyBodySize != "" {
+		parsedSize, err := bytesize.Parse(cfg.Server.MaxProxyBodySize)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid server.max_proxy_body_size configuration", map[string]any{"value": cfg.Server.MaxProxyBodySize})
+		}
+		maxProxyBodySize = parsedSize
+	}
+
 	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxy.Config{
 		RegistryDomain: cfg.Server.RegistryDomain,
 		RegistryPort:   cfg.Server.RegistryPort,
+		MaxBodySize:    maxProxyBodySize,
 	})
 
 	// Create token handler for registry token endpoint
@@ -948,11 +961,15 @@ func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
 
 // createHTTPHandlers creates HTTP handlers with middleware.
 func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler) {
+	// Parse trusted proxies once for all middleware chains.
+	// This ensures consistent IP extraction across logging, rate limiting, and auth.
+	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
+
 	registryHandler := registry.NewHandler(svc.registrySvc, log)
 
 	registryMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
-		middleware.RequestLogger(log),
+		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
 	}
 
@@ -993,7 +1010,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		// but still need rate limiting to prevent brute force attacks
 		authWithMiddleware := middleware.Chain(
 			middleware.PanicRecovery(log),
-			middleware.RequestLogger(log),
+			middleware.RequestLogger(log, trustedNets),
 			middleware.SecurityHeaders,
 			rateLimitMiddleware,
 		)(svc.authHandler)
@@ -1005,18 +1022,16 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	if svc.adminHandler != nil {
 		adminMiddlewares := []func(http.Handler) http.Handler{
 			middleware.PanicRecovery(log),
-			middleware.RequestLogger(log),
+			middleware.RequestLogger(log, trustedNets),
 			middleware.SecurityHeaders,
 		}
 		// Add admin auth middleware if auth is enabled
 		if svc.authSvc != nil {
 			// Create rate limiters for admin API - uses same config as registry
 			var globalLimiter, ipLimiter out.RateLimiter
-			var trustedNets []*net.IPNet
 			if cfg.API.RateLimit.Enabled {
 				globalLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
 				ipLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
-				trustedNets = middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 			}
 			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, globalLimiter, ipLimiter, trustedNets, log))
 		}
@@ -1024,11 +1039,14 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		registryMux.Handle("/admin/", adminWithMiddleware)
 	}
 
+	// SECURITY: No CORS middleware on the proxy chain. Backend applications
+	// should control their own CORS policies. A blanket Access-Control-Allow-Origin: *
+	// would override backend CORS settings and allow any website to make
+	// cross-origin authenticated requests to proxied applications.
 	proxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
-		middleware.RequestLogger(log),
+		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
-		middleware.CORS,
 	}
 
 	proxyWithMiddleware := middleware.Chain(proxyMiddlewares...)(svc.proxySvc)

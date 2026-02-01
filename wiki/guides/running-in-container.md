@@ -352,6 +352,17 @@ ls -la ~/.password-store
 
 ## Security Considerations
 
+### Container Port Binding
+
+When Gordon manages containers, it binds their ports to `127.0.0.1` (localhost only) by default. This prevents direct network access to containers, forcing all traffic through Gordon's reverse proxy where:
+
+- Authentication is enforced
+- Rate limiting is applied
+- Security headers are added
+- Request logging is performed
+
+When running Gordon itself in a container, it communicates with managed containers via Docker's internal network (no port publishing needed).
+
 ### Docker Socket Access
 
 Mounting the Docker/Podman socket grants Gordon full access to the container runtime. This is required for Gordon to manage containers but has security implications:
@@ -366,6 +377,7 @@ Mounting the Docker/Podman socket grants Gordon full access to the container run
 2. **Limit network exposure**: Only expose ports 80/443 publicly
 3. **Use TLS**: Put Gordon behind a reverse proxy with TLS (Cloudflare, Caddy, nginx)
 4. **Enable authentication**: Always enable authentication for the registry
+5. **Container isolation**: Container ports bound to localhost prevent direct access
 
 ## Troubleshooting
 

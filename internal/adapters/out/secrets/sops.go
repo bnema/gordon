@@ -88,10 +88,14 @@ func (s *SopsProvider) GetSecret(ctx context.Context, path string) (string, erro
 	filePath := parts[0]
 	keyPath := parts[1]
 
-	// Validate file path to prevent command injection
+	// Validate file path to prevent command injection and path traversal
 	cleanPath := filepath.Clean(filePath)
 	if strings.Contains(cleanPath, "..") {
 		return "", fmt.Errorf("invalid file path: path traversal not allowed")
+	}
+	// SECURITY: Reject absolute paths to prevent reading arbitrary files on the system.
+	if filepath.IsAbs(cleanPath) {
+		return "", fmt.Errorf("invalid file path: absolute paths not allowed")
 	}
 
 	// Validate key path to prevent command injection
