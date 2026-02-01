@@ -218,28 +218,29 @@ func initLogger(cfg Config) (zerowrap.Logger, func(), error) {
 		Format: cfg.Logging.Format,
 	}
 
-	if cfg.Logging.File.Enabled {
-		logPath := cfg.Logging.File.Path
-		if logPath == "" {
-			// Default to {data_dir}/logs/gordon.log
-			logPath = filepath.Join(cfg.Server.DataDir, "logs", "gordon.log")
+	// Always enable file logging so admin API can read process logs
+	// (Config flag is respected for backward-compatibility)
+	logPath := cfg.Logging.File.Path
+	if logPath == "" {
+		dataDir := cfg.Server.DataDir
+		if dataDir == "" {
+			dataDir = DefaultDataDir()
 		}
-
-		log, cleanup, err := zerowrap.NewWithFile(logConfig, zerowrap.FileConfig{
-			Enabled:    true,
-			Path:       logPath,
-			MaxSize:    cfg.Logging.File.MaxSize,
-			MaxBackups: cfg.Logging.File.MaxBackups,
-			MaxAge:     cfg.Logging.File.MaxAge,
-			Compress:   true,
-		})
-		if err != nil {
-			return zerowrap.Default(), nil, fmt.Errorf("failed to create logger with file: %w", err)
-		}
-		return log, cleanup, nil
+		logPath = filepath.Join(dataDir, "logs", "gordon.log")
 	}
 
-	return zerowrap.New(logConfig), nil, nil
+	log, cleanup, err := zerowrap.NewWithFile(logConfig, zerowrap.FileConfig{
+		Enabled:    cfg.Logging.File.Enabled,
+		Path:       logPath,
+		MaxSize:    cfg.Logging.File.MaxSize,
+		MaxBackups: cfg.Logging.File.MaxBackups,
+		MaxAge:     cfg.Logging.File.MaxAge,
+		Compress:   true,
+	})
+	if err != nil {
+		return zerowrap.Default(), nil, fmt.Errorf("failed to create logger with file: %w", err)
+	}
+	return log, cleanup, nil
 }
 
 // createServices creates all the application services.
@@ -383,10 +384,7 @@ func resolveLogFilePath(cfg Config) string {
 	if cfg.Logging.File.Path != "" {
 		return cfg.Logging.File.Path
 	}
-	if cfg.Logging.File.Enabled {
-		return filepath.Join(cfg.Server.DataDir, "logs", "gordon.log")
-	}
-	return ""
+	return filepath.Join(cfg.Server.DataDir, "logs", "gordon.log")
 }
 
 // createOutputAdapters creates the Docker runtime and event bus.
