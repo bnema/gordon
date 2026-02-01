@@ -65,26 +65,45 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	exposedPorts := make(nat.PortSet)
 	portBindings := make(nat.PortMap)
 
-	for _, port := range config.Ports {
-		containerPort := nat.Port(fmt.Sprintf("%d/tcp", port))
-		exposedPorts[containerPort] = struct{}{}
+	// Use explicit port bindings if provided, otherwise use default behavior
+	if len(config.PortBindings) > 0 {
+		// Use explicit host:container mappings from PortBindings
+		for hostPort, containerPort := range config.PortBindings {
+			containerPortNat := nat.Port(fmt.Sprintf("%s/tcp", containerPort))
+			exposedPorts[containerPortNat] = struct{}{}
 
-		// Bind to random available port on host
-		portBindings[containerPort] = []nat.PortBinding{
-			{
-				HostIP:   "0.0.0.0",
-				HostPort: "0", // Docker will assign a random available port
-			},
+			portBindings[containerPortNat] = []nat.PortBinding{
+				{
+					HostIP:   "0.0.0.0",
+					HostPort: hostPort,
+				},
+			}
+		}
+	} else {
+		// Fall back to auto-binding for Ports
+		for _, port := range config.Ports {
+			containerPort := nat.Port(fmt.Sprintf("%d/tcp", port))
+			exposedPorts[containerPort] = struct{}{}
+
+			portBindings[containerPort] = []nat.PortBinding{
+				{
+					HostIP:   "0.0.0.0",
+					HostPort: "0", // Docker will assign a random available port
+				},
+			}
 		}
 	}
 
 	// Convert volumes to Docker format
+	// Volumes can be:
+	// - hostPath:containerPath (bind mount)
+	// - volumeName:containerPath (named volume)
 	var binds []string
 	if config.Volumes != nil {
-		for containerPath, volumeName := range config.Volumes {
-			bind := fmt.Sprintf("%s:%s", volumeName, containerPath)
+		for volumeOrHostPath, containerPath := range config.Volumes {
+			bind := fmt.Sprintf("%s:%s", volumeOrHostPath, containerPath)
 			binds = append(binds, bind)
-			log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding volume mount")
+			log.Debug().Str("volume_or_host", volumeOrHostPath).Str("mount_path", containerPath).Msg("adding volume mount")
 		}
 	}
 
@@ -100,10 +119,12 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	}
 
 	hostConfig := &container.HostConfig{
-		PortBindings: portBindings,
-		AutoRemove:   config.AutoRemove,
-		Binds:        binds,
-		NetworkMode:  container.NetworkMode(config.NetworkMode),
+		PortBindings:   portBindings,
+		AutoRemove:     config.AutoRemove,
+		Binds:          binds,
+		NetworkMode:    container.NetworkMode(config.NetworkMode),
+		Privileged:     config.Privileged,
+		ReadonlyRootfs: config.ReadOnlyRoot,
 	}
 
 	// Create network configuration for container

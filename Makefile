@@ -1,10 +1,10 @@
 # This Makefile is used for dev purposes
 # Variables
 REPO := ghcr.io/bnema/gordon
-TAG := v2-dev
-DEV_TAG := v2-dev-$(shell date +%Y%m%d-%H%M%S)
+TAG := v3-dev
+DEV_TAG := v3-dev-$(shell date +%Y%m%d-%H%M%S)
 DIST_DIR := ./dist
-ENGINE := podman
+ENGINE ?= podman
 
 # Version information
 VERSION := $(shell git describe --tags --always --dirty)
@@ -22,7 +22,8 @@ ARCHS := amd64 arm64
 
 # Phony targets
 .PHONY: all build build-push clean dev-release \
-	test test-short test-race test-coverage \
+	test test-short test-race test-coverage test-integration test-integration-quick \
+	test-integration-build test-integration-clean \
 	lint fmt check mocks clean-test help
 
 # Default target
@@ -45,6 +46,11 @@ mocks: ## Generate mocks using mockery
 	@echo "Generating mocks..."
 	@mockery
 	@echo "Mocks generated successfully"
+
+proto: ## Generate Go code from protobuf definitions
+	@echo "Generating protobuf code..."
+	@buf generate
+	@echo "Protobuf code generated successfully"
 
 check: lint test ## Run lint and tests
 
@@ -76,6 +82,31 @@ test-usecase: ## Run usecase layer tests only
 
 test-adapter: ## Run adapter layer tests only
 	@go test -v ./internal/adapters/...
+
+test-integration-clean: ## Clean up leftover test containers from previous runs
+	@echo "Cleaning up test containers..."
+	@-docker stop gordon-core-test gordon-secrets gordon-registry gordon-proxy 2>/dev/null || true
+	@-docker rm -f gordon-core-test gordon-secrets gordon-registry gordon-proxy 2>/dev/null || true
+	@-docker network rm gordon-internal 2>/dev/null || true
+	@-docker network rm -f testcontainers 2>/dev/null || true
+	@-docker network prune -f 2>/dev/null || true
+	@-docker ps -a --filter "label=gordon.component" --format "{{.ID}}" | xargs -r docker rm -f 2>/dev/null || true
+	@echo "Cleanup complete"
+
+test-integration-build: build-local ## Build Gordon test image for integration tests
+	@echo "Building Gordon test image..."
+	@docker build -t gordon:v3-test .
+	@echo "Test image built: gordon:v3-test"
+
+test-integration: test-integration-clean test-integration-build ## Run integration tests (max 10min)
+	@echo "Running integration tests..."
+	@docker pull ghcr.io/bnema/go-hello-world-http:latest || true
+	@go test -v -timeout 10m ./tests/integration/... 2>&1 | tee test-integration.log
+	@echo "Integration tests complete. Log: test-integration.log"
+
+test-integration-quick: test-integration-clean test-integration-build ## Run quick integration tests (startup + gRPC only, ~3min)
+	@echo "Running quick integration tests..."
+	@go test -v -timeout 5m -run "Test01|Test02" ./tests/integration/...
 
 ##@ Build
 

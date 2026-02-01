@@ -1,0 +1,23 @@
+# Test configuration for Gordon integration tests
+# This is a minimal config for testing the 4-container architecture
+
+[server]
+port = 5000
+data_dir = "/tmp/gordon-test"
+
+[logging]
+level = "debug"
+format = "json"
+
+[logging.file]
+enabled = false
+
+[logging.container_logs]
+enabled = false
+
+[auth]
+enabled = false
+
+[api]
+[api.rate_limit]
+enabled = false
