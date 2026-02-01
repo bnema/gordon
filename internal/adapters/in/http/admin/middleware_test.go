@@ -261,7 +261,7 @@ func TestAuthMiddleware_Success(t *testing.T) {
 	assert.Equal(t, "admin", GetSubject(capturedCtx))
 }
 
-func TestAuthMiddleware_DirectToken(t *testing.T) {
+func TestAuthMiddleware_DirectToken_Rejected(t *testing.T) {
 	authSvc := inmocks.NewMockAuthService(t)
 	globalLimiter := outmocks.NewMockRateLimiter(t)
 	ipLimiter := outmocks.NewMockRateLimiter(t)
@@ -269,11 +269,6 @@ func TestAuthMiddleware_DirectToken(t *testing.T) {
 	globalLimiter.EXPECT().Allow(context.Background(), "global").Return(true)
 	ipLimiter.EXPECT().Allow(context.Background(), "ip:192.168.1.100").Return(true)
 	authSvc.EXPECT().IsEnabled().Return(true)
-	// Token without "Bearer " prefix
-	authSvc.EXPECT().ValidateToken(mock.Anything, "direct-token").Return(&domain.TokenClaims{
-		Subject: "admin",
-		Scopes:  []string{"admin:routes:read"},
-	}, nil)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -282,13 +277,15 @@ func TestAuthMiddleware_DirectToken(t *testing.T) {
 	mw := AuthMiddleware(authSvc, globalLimiter, ipLimiter, nil, adminTestLogger())
 	wrappedHandler := mw(handler)
 
+	// Token without "Bearer " prefix should be rejected (RFC 6750)
 	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
 	req.RemoteAddr = "192.168.1.100:12345"
-	req.Header.Set("Authorization", "direct-token") // No "Bearer " prefix
+	req.Header.Set("Authorization", "direct-token")
 	rec := httptest.NewRecorder()
 	wrappedHandler.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Bearer scheme")
 }
 
 func TestRequireScope(t *testing.T) {
