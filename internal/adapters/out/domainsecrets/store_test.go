@@ -6,16 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
-
-func testLogger() zerowrap.Logger {
-	return zerowrap.Default()
-}
 
 func TestFileStore_PathTraversal(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "domainsecrets-test-*")
@@ -118,6 +113,183 @@ func TestFileStore_PathContainment(t *testing.T) {
 			// Check it's not our test file escaped
 			assert.NotContains(t, entry, ".env", "unexpected .env file outside tmpDir: %s", entry)
 		}
+	}
+}
+
+func TestSanitizeDomainForContainer(t *testing.T) {
+	tests := []struct {
+		domain      string
+		expected    string
+		description string
+	}{
+		{
+			domain:      "git.example.com",
+			expected:    "git__example__com",
+			description: "Dots become double underscores",
+		},
+		{
+			domain:      "git-example.com",
+			expected:    "git-example__com",
+			description: "Hyphens preserved, dots become underscores",
+		},
+		{
+			domain:      "app:8080.example.com",
+			expected:    "app-_8080__example__com",
+			description: "Colons become hyphen-underscore",
+		},
+		{
+			domain:      "git.example.com:3000",
+			expected:    "git__example__com-_3000",
+			description: "Multiple separators handled distinctly",
+		},
+		{
+			domain:      "simple.com",
+			expected:    "simple__com",
+			description: "Simple domain",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.domain, func(t *testing.T) {
+			result := domain.SanitizeDomainForContainer(tt.domain)
+			assert.Equal(t, tt.expected, result, "sanitization should match expected")
+		})
+	}
+
+	// Verify no collisions between potentially conflicting domains
+	t.Run("NoCollisions", func(t *testing.T) {
+		domains := []string{
+			"git.example.com",
+			"git-example.com",
+			"app:8080.example.com",
+			"app-8080-example.com",
+		}
+
+		results := make(map[string]string)
+		for _, d := range domains {
+			result := domain.SanitizeDomainForContainer(d)
+			if original, exists := results[result]; exists {
+				t.Errorf("COLLISION: %q and %q both sanitize to %q", original, d, result)
+			}
+			results[result] = d
+		}
+	})
+}
+
+func TestFileStore_AttachmentOperations(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "domainsecrets-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	store, err := NewFileStore(tmpDir, testLogger())
+	require.NoError(t, err)
+
+	containerName := "gitea-postgres"
+
+	t.Run("SetAttachment creates new file", func(t *testing.T) {
+		err := store.SetAttachment(containerName, map[string]string{
+			"POSTGRES_DB":       "gitea",
+			"POSTGRES_PASSWORD": "secret123",
+		})
+		require.NoError(t, err)
+
+		// Verify file exists
+		expectedFile := filepath.Join(tmpDir, "gordon-"+containerName+".env")
+		_, err = os.Stat(expectedFile)
+		assert.NoError(t, err, "expected attachment env file to exist at %s", expectedFile)
+	})
+
+	t.Run("GetAllAttachment retrieves secrets", func(t *testing.T) {
+		secrets, err := store.GetAllAttachment(containerName)
+		require.NoError(t, err)
+		assert.Equal(t, "gitea", secrets["POSTGRES_DB"])
+		assert.Equal(t, "secret123", secrets["POSTGRES_PASSWORD"])
+	})
+
+	t.Run("SetAttachment merges with existing", func(t *testing.T) {
+		err := store.SetAttachment(containerName, map[string]string{
+			"NEW_VAR": "new_value",
+		})
+		require.NoError(t, err)
+
+		// Should have both old and new secrets
+		secrets, err := store.GetAllAttachment(containerName)
+		require.NoError(t, err)
+		assert.Equal(t, "gitea", secrets["POSTGRES_DB"])
+		assert.Equal(t, "secret123", secrets["POSTGRES_PASSWORD"])
+		assert.Equal(t, "new_value", secrets["NEW_VAR"])
+	})
+
+	t.Run("GetAllAttachment returns empty map for non-existent container", func(t *testing.T) {
+		secrets, err := store.GetAllAttachment("non-existent")
+		require.NoError(t, err)
+		assert.Empty(t, secrets)
+	})
+
+	t.Run("SetAttachment with hyphenated container name", func(t *testing.T) {
+		hyphenatedContainer := "gordon-git-example-com-gitea-postgres"
+		err := store.SetAttachment(hyphenatedContainer, map[string]string{
+			"KEY": "value",
+		})
+		require.NoError(t, err)
+
+		secrets, err := store.GetAllAttachment(hyphenatedContainer)
+		require.NoError(t, err)
+		assert.Equal(t, "value", secrets["KEY"])
+	})
+}
+
+func TestFileStore_AttachmentPathTraversal(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "domainsecrets-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	store, err := NewFileStore(tmpDir, testLogger())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		container  string
+		wantSetErr bool
+		wantGetErr bool
+	}{
+		// Valid container names
+		{"simple", "postgres", false, false},
+		{"with hyphen", "gitea-postgres", false, false},
+		{"with underscore", "gitea_postgres", false, false},
+		{"complex real container", "gordon-git-example-com-gitea-postgres", false, false},
+
+		// Invalid container names - should fail
+		{"empty", "", true, true},
+		{"starts with number", "1container", true, true},
+		{"starts with hyphen", "-container", true, true},
+		{"starts with underscore", "_container", true, true},
+		{"path traversal", "../etc", true, true},
+		{"contains slash", "container/name", true, true},
+		{"contains backslash", "container\\name", true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test SetAttachment
+			err := store.SetAttachment(tt.container, map[string]string{"KEY": "value"})
+			if tt.wantSetErr {
+				require.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			// Test GetAllAttachment
+			_, err = store.GetAllAttachment(tt.container)
+			if tt.wantGetErr {
+				require.Error(t, err)
+			} else {
+				if !tt.wantSetErr {
+					// Only check no error if we successfully set it
+					assert.NoError(t, err)
+				}
+			}
+		})
 	}
 }
 

@@ -23,6 +23,12 @@ type DomainSecretStore interface {
 	// Delete removes a specific secret key from a domain.
 	Delete(domain, key string) error
 
+	// SetAttachment sets or updates multiple secrets for an attachment container.
+	SetAttachment(containerName string, secrets map[string]string) error
+
+	// GetAllAttachment returns all secrets for an attachment container as a key-value map.
+	GetAllAttachment(containerName string) (map[string]string, error)
+
 	// ListAttachmentKeys finds and returns secret keys for attachment containers
 	// associated with the given domain. Returns a list of AttachmentSecrets, one
 	// for each attachment that has secrets configured.

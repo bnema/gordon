@@ -46,9 +46,10 @@ var (
 	ErrConfigLoadFailed = errors.New("failed to load configuration")
 
 	// Environment errors
-	ErrEnvFileNotFound  = errors.New("environment file not found")
-	ErrSecretNotFound   = errors.New("secret not found")
-	ErrProviderNotFound = errors.New("secret provider not found")
+	ErrEnvFileNotFound      = errors.New("environment file not found")
+	ErrSecretNotFound       = errors.New("secret not found")
+	ErrProviderNotFound     = errors.New("secret provider not found")
+	ErrInvalidContainerName = errors.New("invalid container name")
 
 	// Authentication errors
 	ErrInvalidToken       = errors.New("invalid token")
@@ -63,6 +64,7 @@ var (
 	ErrInsufficientScope = errors.New("insufficient scope for operation")
 	ErrInvalidScope      = errors.New("invalid scope format")
 	ErrSSRFBlocked       = errors.New("request to internal/blocked network not allowed")
+	ErrInvalidEnvKey     = errors.New("invalid environment variable key")
 
 	// Attachment errors
 	ErrAttachmentNotFound    = errors.New("attachment not found")

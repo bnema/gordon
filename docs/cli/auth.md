@@ -19,7 +19,7 @@ Manage Gordon server authentication tokens and passwords.
 
 ## gordon auth login
 
-Authenticate with a remote Gordon server using password authentication.
+Authenticate with a remote Gordon server using password authentication or a pre-generated token.
 
 ```bash
 gordon auth login [options]
@@ -31,14 +31,18 @@ gordon auth login [options]
 |--------|-------------|
 | `-r, --remote` | Remote to authenticate with (defaults to active remote) |
 | `-u, --username` | Username for authentication |
+| `-p, --password` | Password for authentication |
+| `-t, --token` | Authentication token to store for the remote |
 
 ### Description
 
 This command prompts for your username and password, authenticates with the remote server's `/auth/password` endpoint, and stores the returned token in your remotes configuration.
 
+If you provide `--token`, the token is stored directly and verified against `/admin/status` on a best-effort basis.
+
 The token is a long-lived JWT (7 days) that's used for subsequent CLI operations against the remote.
 
-> **Note:** This command only works with servers that have password authentication configured (`username` + `password_hash`). For token-only servers, use `gordon remotes set-token` instead.
+> **Note:** For token-only servers, you can pass `--token` here or use `gordon remotes set-token`.
 
 ### Examples
 
@@ -51,6 +55,9 @@ gordon auth login --remote prod
 
 # Pre-fill username
 gordon auth login --username admin
+
+# Store a pre-generated token
+gordon auth login --token <token>
 ```
 
 ### Output
@@ -212,7 +219,9 @@ Display the auto-generated internal registry credentials.
 gordon auth internal
 ```
 
-Gordon generates temporary credentials for internal communication with its local registry. These credentials are useful for manual recovery when debugging deployment issues.
+Gordon generates temporary credentials for loopback-only communication with its local registry. These credentials are useful for manual recovery when debugging deployment issues.
+
+When registry auth is enabled, Gordon also generates a separate service token for its own registry-domain pulls. That token is not exposed via the CLI.
 
 ### Output
 
@@ -231,6 +240,7 @@ Usage:
 - Credentials are regenerated each time Gordon starts
 - Only available while Gordon is running
 - Used for manual `docker pull` from the local registry during debugging
+- Separate from the service token used by Gordon core for registry-domain pulls
 
 ### Use Cases
 
