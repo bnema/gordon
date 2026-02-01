@@ -69,10 +69,13 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		containerPort := nat.Port(fmt.Sprintf("%d/tcp", port))
 		exposedPorts[containerPort] = struct{}{}
 
-		// Bind to random available port on host
+		// Bind to random available port on localhost only.
+		// SECURITY: Using 127.0.0.1 prevents direct access from the network,
+		// forcing all traffic through Gordon's reverse proxy where auth,
+		// rate limiting, and security headers are applied.
 		portBindings[containerPort] = []nat.PortBinding{
 			{
-				HostIP:   "0.0.0.0",
+				HostIP:   "127.0.0.1",
 				HostPort: "0", // Docker will assign a random available port
 			},
 		}
@@ -407,7 +410,7 @@ func (r *Runtime) PullImageWithAuth(ctx context.Context, imageRef, username, pas
 
 	log.Debug().
 		Str("server_address", serverAddress).
-		Str("auth_json", string(authConfigBytes)).
+		Bool("has_auth", len(authConfigBytes) > 0).
 		Msg("auth config for pull")
 
 	// Pull with authentication
