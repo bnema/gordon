@@ -2,6 +2,9 @@
 
 Manage secrets on local or remote Gordon instances.
 
+Remote targeting uses client config or an active remote by default.
+Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
+
 Storage depends on the secrets backend:
 - `pass`: secrets are stored in pass under `gordon/env/<domain>/<KEY>`
 - `sops` or `unsafe`: secrets are stored in domain `.env` files
@@ -45,7 +48,7 @@ gordon secrets list <domain>
 # Local
 gordon secrets list myapp.local
 
-# Remote
+# Remote (override)
 gordon secrets list myapp.local --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
@@ -92,7 +95,7 @@ gordon secrets set myapp.local DATABASE_URL "postgres://..."
 gordon secrets set myapp.local DATABASE_URL "postgres://user:pass@postgres:5432/db"
 gordon secrets set myapp.local API_KEY "your-api-key"
 
-# Remote
+# Remote (override)
 gordon secrets set myapp.local DATABASE_URL "postgres://..." --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
@@ -126,7 +129,7 @@ gordon secrets remove <domain> <key>
 # Local
 gordon secrets remove myapp.local DATABASE_URL
 
-# Remote
+# Remote (override)
 gordon secrets remove myapp.local DATABASE_URL --remote https://gordon.mydomain.com --token $TOKEN
 ```
 

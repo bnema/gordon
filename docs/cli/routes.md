@@ -2,6 +2,9 @@
 
 Manage routes on local or remote Gordon instances.
 
+Remote targeting uses client config or an active remote by default.
+Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
+
 ## gordon routes
 
 ### Subcommands
@@ -66,7 +69,7 @@ gordon routes add myapp.example.com myapp:latest
 gordon routes add myapp.example.com myapp:latest
 gordon routes add api.example.com myapi:v2.1.0
 
-# Remote
+# Remote (override)
 gordon routes add myapp.example.com myapp:latest --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
@@ -100,7 +103,7 @@ gordon routes remove myapp.example.com
 # Local
 gordon routes remove myapp.example.com
 
-# Remote
+# Remote (override)
 gordon routes remove myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
@@ -138,7 +141,7 @@ Triggers a fresh image pull and container redeployment for the specified route.
 # Local
 gordon routes deploy myapp.example.com
 
-# Remote
+# Remote (override)
 gordon routes deploy myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
