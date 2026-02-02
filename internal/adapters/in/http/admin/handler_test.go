@@ -844,6 +844,107 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestHandler_Restart_InvalidDomain(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	tests := []struct {
+		name   string
+		path   string
+		status int
+	}{
+		{"path traversal", "/admin/restart/../../etc/passwd", http.StatusBadRequest},
+		{"empty domain", "/admin/restart/", http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", tt.path, nil)
+			req = req.WithContext(ctxWithScopes("admin:config:write"))
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.status, rec.Code)
+		})
+	}
+}
+
+func TestHandler_Restart_ContainerNotFound(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	containerSvc.EXPECT().Restart(mock.Anything, "nonexistent.example.com", false).Return(domain.ErrContainerNotFound)
+
+	req := httptest.NewRequest("POST", "/admin/restart/nonexistent.example.com", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestHandler_Restart_GenericError(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	containerSvc.EXPECT().Restart(mock.Anything, "test.example.com", false).Return(fmt.Errorf("docker daemon error: secret details"))
+
+	req := httptest.NewRequest("POST", "/admin/restart/test.example.com", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	// Verify internal error details are NOT leaked
+	assert.NotContains(t, rec.Body.String(), "docker daemon error")
+	assert.NotContains(t, rec.Body.String(), "secret details")
+}
+
+func TestHandler_Tags_InvalidRepository(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	tests := []struct {
+		name   string
+		path   string
+		status int
+	}{
+		{"path traversal", "/admin/tags/../../etc/passwd", http.StatusBadRequest},
+		{"empty repo", "/admin/tags/", http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.path, nil)
+			req = req.WithContext(ctxWithScopes("admin:status:read"))
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.status, rec.Code)
+		})
+	}
+}
+
 func TestHandler_NotFound(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
