@@ -10,7 +10,7 @@ Display server configuration and container status for all routes.
 gordon status --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
-> **Note:** The status command requires remote mode. Use `--remote` flag or set `GORDON_REMOTE` environment variable.
+> **Note:** The status command requires remote mode. See [CLI Overview](./index.md) for targeting options.
 
 ### Output
 

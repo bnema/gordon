@@ -2,6 +2,9 @@
 
 Manage attachments on local or remote Gordon instances.
 
+Remote targeting uses client config or an active remote by default.
+Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
+
 ## Requirements
 
 Attachments require `network_isolation.enabled = true` in your configuration. Without network isolation, containers use Docker's default bridge network which does not provide DNS resolution - your app won't be able to reach attachments by hostname (e.g., `postgres:5432`).
@@ -42,7 +45,7 @@ gordon attachments list
 gordon attachments list app.example.com
 gordon attachments list backend
 
-# Remote mode
+# Remote (override)
 gordon attachments list --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
@@ -91,7 +94,7 @@ gordon attachments add app.example.com postgres:18
 # Add cache to a network group (shared by all domains in the group)
 gordon attachments add backend redis:7-alpine
 
-# Remote
+# Remote (override)
 gordon attachments add app.example.com postgres:18 --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
@@ -129,7 +132,7 @@ gordon attachments remove app.example.com postgres:18
 # Remove from network group
 gordon attachments remove backend redis:7-alpine
 
-# Remote
+# Remote (override)
 gordon attachments remove app.example.com postgres:18 --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
