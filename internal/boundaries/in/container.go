@@ -23,6 +23,10 @@ type ContainerService interface {
 	// Get retrieves a container by domain name.
 	Get(ctx context.Context, domain string) (*domain.Container, bool)
 
+	// Restart restarts a running container for the given domain.
+	// If withAttachments is true, also restarts attachment containers.
+	Restart(ctx context.Context, domain string, withAttachments bool) error
+
 	// List returns all managed containers.
 	List(ctx context.Context) map[string]*domain.Container
 
