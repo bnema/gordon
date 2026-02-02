@@ -19,6 +19,7 @@ import (
 func newPushCmd() *cobra.Command {
 	var (
 		noDeploy  bool
+		noConfirm bool
 		build     bool
 		platform  string
 		tag       string
@@ -40,11 +41,12 @@ Examples:
   gordon push myapp.example.com --build --build-arg CGO_ENABLED=0 --remote ...`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPush(cmd.Context(), args[0], tag, build, platform, buildArgs, noDeploy)
+			return runPush(cmd.Context(), args[0], tag, build, platform, buildArgs, noDeploy, noConfirm)
 		},
 	}
 
 	cmd.Flags().BoolVar(&noDeploy, "no-deploy", false, "Push only, don't trigger deploy")
+	cmd.Flags().BoolVar(&noConfirm, "no-confirm", false, "Skip deploy confirmation prompt")
 	cmd.Flags().BoolVar(&build, "build", false, "Build the image first using docker buildx")
 	cmd.Flags().StringVar(&platform, "platform", "linux/amd64", "Target platform (used with --build)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Override version tag (default: git describe)")
@@ -53,7 +55,7 @@ Examples:
 	return cmd
 }
 
-func runPush(ctx context.Context, pushDomain, tag string, build bool, platform string, buildArgs []string, noDeploy bool) error {
+func runPush(ctx context.Context, pushDomain, tag string, build bool, platform string, buildArgs []string, noDeploy bool, noConfirm bool) error {
 	client, isRemote := GetRemoteClient()
 	if !isRemote {
 		fmt.Println(styles.RenderError("push command requires --remote flag or GORDON_REMOTE env var"))
@@ -104,7 +106,7 @@ func runPush(ctx context.Context, pushDomain, tag string, build bool, platform s
 	fmt.Println(styles.RenderSuccess("Push complete"))
 
 	if !noDeploy {
-		return deployAfterPush(ctx, client, pushDomain)
+		return deployAfterPush(ctx, client, pushDomain, noConfirm)
 	}
 
 	return nil
@@ -178,13 +180,15 @@ func tagAndPush(ctx context.Context, registry, imageName, version, versionRef, l
 	return nil
 }
 
-func deployAfterPush(ctx context.Context, client *remote.Client, pushDomain string) error {
-	confirmed, err := components.RunConfirm("Deploy now?", components.WithDefaultYes())
-	if err != nil {
-		return err
-	}
-	if !confirmed {
-		return nil
+func deployAfterPush(ctx context.Context, client *remote.Client, pushDomain string, noConfirm bool) error {
+	if !noConfirm {
+		confirmed, err := components.RunConfirm("Deploy now?", components.WithDefaultYes())
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			return nil
+		}
 	}
 
 	result, err := client.Deploy(ctx, pushDomain)
