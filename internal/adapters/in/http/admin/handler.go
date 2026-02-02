@@ -15,6 +15,7 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/registry"
 	"github.com/bnema/gordon/pkg/validation"
 )
 
@@ -837,6 +838,10 @@ func (h *Handler) handleTags(w http.ResponseWriter, r *http.Request, path string
 
 	tags, err := h.registrySvc.ListTags(ctx, repository)
 	if err != nil {
+		if errors.Is(err, registry.ErrRepositoryNotFound) {
+			h.sendError(w, http.StatusNotFound, "repository not found")
+			return
+		}
 		h.sendError(w, http.StatusInternalServerError, "failed to list tags")
 		return
 	}

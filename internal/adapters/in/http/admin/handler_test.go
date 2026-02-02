@@ -915,6 +915,53 @@ func TestHandler_Restart_GenericError(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "secret details")
 }
 
+func TestHandler_Restart_Success(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	tests := []struct {
+		name            string
+		path            string
+		withAttachments bool
+	}{
+		{
+			name:            "without attachments",
+			path:            "/admin/restart/test.example.com",
+			withAttachments: false,
+		},
+		{
+			name:            "with attachments",
+			path:            "/admin/restart/test.example.com?attachments=true",
+			withAttachments: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			containerSvc.EXPECT().Restart(mock.Anything, "test.example.com", tt.withAttachments).Return(nil)
+
+			req := httptest.NewRequest("POST", tt.path, nil)
+			req = req.WithContext(ctxWithScopes("admin:config:write"))
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusOK, rec.Code)
+			var response struct {
+				Status string `json:"status"`
+				Domain string `json:"domain"`
+			}
+			assert.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+			assert.Equal(t, "restarted", response.Status)
+			assert.Equal(t, "test.example.com", response.Domain)
+		})
+	}
+}
+
 func TestHandler_Tags_InvalidRepository(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
@@ -943,6 +990,54 @@ func TestHandler_Tags_InvalidRepository(t *testing.T) {
 			assert.Equal(t, tt.status, rec.Code)
 		})
 	}
+}
+
+func TestHandler_Tags_Success(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, registrySvc, nil, testLogger())
+
+	registrySvc.EXPECT().ListTags(mock.Anything, "myapp").Return([]string{"latest", "v1.0"}, nil)
+
+	req := httptest.NewRequest("GET", "/admin/tags/myapp", nil)
+	req = req.WithContext(ctxWithScopes("admin:status:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var response struct {
+		Repository string   `json:"repository"`
+		Tags       []string `json:"tags"`
+	}
+	assert.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	assert.Equal(t, "myapp", response.Repository)
+	assert.Equal(t, []string{"latest", "v1.0"}, response.Tags)
+}
+
+func TestHandler_Tags_Error(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, registrySvc, nil, testLogger())
+
+	registrySvc.EXPECT().ListTags(mock.Anything, "myapp").Return(nil, fmt.Errorf("registry error"))
+
+	req := httptest.NewRequest("GET", "/admin/tags/myapp", nil)
+	req = req.WithContext(ctxWithScopes("admin:status:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "registry error")
 }
 
 func TestHandler_NotFound(t *testing.T) {
