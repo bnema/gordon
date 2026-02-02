@@ -57,6 +57,11 @@ func (rw *ResponseWriter) Flush() {
 	}
 }
 
+// Unwrap returns the underlying ResponseWriter.
+func (rw *ResponseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
 // RequestLogger is a middleware that logs HTTP requests using zerowrap.
 // It also attaches the logger to the request context for downstream handlers.
 // The trustedNets parameter controls which proxy headers are trusted for IP extraction.

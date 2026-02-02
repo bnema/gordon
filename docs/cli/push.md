@@ -60,9 +60,8 @@ gordon push myapp.example.com --build --platform linux/arm64 --build-arg CGO_ENA
 ### Notes
 
 - Remote mode required. See [CLI Overview](./index.md) for targeting options.
-- `--build` requires Docker with Buildx available. Docker Desktop includes Buildx;
-  on Linux, install the `docker-buildx-plugin` package.
-- `docker buildx` must be available when using `--build`.
+- `--build` requires Docker with Buildx. Docker Desktop includes it; on Linux,
+  install the `docker-buildx-plugin` package.
 
 ## Related
 
