@@ -173,6 +173,25 @@ func TestManifestStorage_ListTags_Empty(t *testing.T) {
 	assert.Empty(t, tags)
 }
 
+func TestManifestStorage_ListTags_SkipsDigestReference(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewManifestStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	manifestData := []byte(`{"schemaVersion": 2}`)
+	contentType := "application/vnd.docker.distribution.manifest.v2+json"
+
+	err = storage.PutManifest("myapp", "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", contentType, manifestData)
+	require.NoError(t, err)
+
+	tags, err := storage.ListTags("myapp")
+	require.NoError(t, err)
+
+	assert.Empty(t, tags)
+}
+
 func TestManifestStorage_ListTags_AfterDelete(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := testLogger()

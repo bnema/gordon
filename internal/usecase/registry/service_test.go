@@ -375,7 +375,12 @@ func TestService_ListTags_Success(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	manifestStorage.EXPECT().ListTags("myapp").Return([]string{"latest", "v1.0", "v2.0"}, nil)
+	manifestStorage.EXPECT().ListTags("myapp").Return([]string{
+		"latest",
+		"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		"v1.0",
+		"v2.0",
+	}, nil)
 
 	tags, err := svc.ListTags(ctx, "myapp")
 

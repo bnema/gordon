@@ -304,6 +304,10 @@ func (s *ManifestStorage) deleteManifestContentType(name, reference string) erro
 // Tags management helpers
 
 func (s *ManifestStorage) updateTagsList(name, reference string) error {
+	if validation.ValidateDigest(reference) == nil {
+		return nil
+	}
+
 	tags, err := s.ListTags(name)
 	if err != nil {
 		return err
