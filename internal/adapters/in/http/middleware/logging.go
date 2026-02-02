@@ -50,6 +50,13 @@ func (rw *ResponseWriter) BytesWritten() int {
 	return rw.bytes
 }
 
+// Flush implements http.Flusher by delegating to the underlying ResponseWriter.
+func (rw *ResponseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // RequestLogger is a middleware that logs HTTP requests using zerowrap.
 // It also attaches the logger to the request context for downstream handlers.
 // The trustedNets parameter controls which proxy headers are trusted for IP extraction.
