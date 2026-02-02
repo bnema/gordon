@@ -58,7 +58,6 @@ Examples:
 func runPush(ctx context.Context, pushDomain, tag string, build bool, platform string, buildArgs []string, noDeploy bool, noConfirm bool) error {
 	client, isRemote := GetRemoteClient()
 	if !isRemote {
-		fmt.Println(styles.RenderError("push command requires --remote flag or GORDON_REMOTE env var"))
 		return fmt.Errorf("push requires remote mode")
 	}
 

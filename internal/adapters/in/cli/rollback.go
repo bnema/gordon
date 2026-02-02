@@ -42,7 +42,6 @@ Examples:
 func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
 	client, isRemote := GetRemoteClient()
 	if !isRemote {
-		fmt.Println(styles.RenderError("rollback command requires --remote flag or GORDON_REMOTE env var"))
 		return fmt.Errorf("rollback requires remote mode")
 	}
 
@@ -172,6 +171,7 @@ func deploySelectedTag(ctx context.Context, client *remote.Client, route *domain
 		route.Image = oldImage
 		if revertErr := client.UpdateRoute(ctx, *route); revertErr != nil {
 			fmt.Fprintf(os.Stderr, "WARNING: deploy failed and could not revert route: %v\n", revertErr)
+			return fmt.Errorf("failed to deploy; revert failed: %v; deploy error: %w", revertErr, err)
 		}
 		return fmt.Errorf("failed to deploy (route reverted): %w", err)
 	}
