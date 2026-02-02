@@ -212,6 +212,49 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	return newContainer, nil
 }
 
+// Restart restarts a running container for the given domain.
+func (s *Service) Restart(ctx context.Context, domainName string, withAttachments bool) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "Restart",
+		"domain":              domainName,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	s.mu.RLock()
+	container, exists := s.containers[domainName]
+	attachments := s.attachments[domainName]
+	var attachmentIDs []string
+	if len(attachments) > 0 {
+		attachmentIDs = make([]string, len(attachments))
+		copy(attachmentIDs, attachments)
+	}
+	s.mu.RUnlock()
+
+	if !exists || container == nil {
+		return domain.ErrContainerNotFound
+	}
+
+	// Restart the main container
+	if err := s.runtime.RestartContainer(ctx, container.ID); err != nil {
+		return log.WrapErr(err, "failed to restart container")
+	}
+	log.Info().Str(zerowrap.FieldEntityID, container.ID).Msg("container restarted")
+
+	// Restart attachments if requested
+	if withAttachments && len(attachmentIDs) > 0 {
+		for _, attachID := range attachmentIDs {
+			if err := s.runtime.RestartContainer(ctx, attachID); err != nil {
+				log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to restart attachment")
+				continue // Don't fail the whole operation for one attachment
+			}
+			log.Info().Str("attachment_id", attachID).Msg("attachment restarted")
+		}
+	}
+
+	return nil
+}
+
 // Stop stops a running container.
 func (s *Service) Stop(ctx context.Context, containerID string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{

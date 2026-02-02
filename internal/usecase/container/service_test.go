@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -564,6 +565,87 @@ func TestService_Shutdown_PartialFailure(t *testing.T) {
 	assert.NoError(t, err)
 	// One container should still be tracked (the one that failed to stop)
 	assert.Len(t, svc.containers, 1)
+}
+
+func TestService_Restart_NotFound(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	ctx := testContext()
+
+	err := svc.Restart(ctx, "nonexistent.example.com", false)
+
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrContainerNotFound))
+}
+
+func TestService_Restart_Success(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	ctx := testContext()
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+
+	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(nil)
+
+	err := svc.Restart(ctx, "test.example.com", false)
+
+	assert.NoError(t, err)
+}
+
+func TestService_Restart_Error(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	ctx := testContext()
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+
+	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(errors.New("restart failed"))
+
+	err := svc.Restart(ctx, "test.example.com", false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to restart container")
+}
+
+func TestService_Restart_WithAttachments(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	ctx := testContext()
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+	svc.attachments["test.example.com"] = []string{"container-attach-1", "container-attach-2"}
+
+	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(nil)
+	runtime.EXPECT().RestartContainer(mock.Anything, "container-attach-1").Return(nil)
+	runtime.EXPECT().RestartContainer(mock.Anything, "container-attach-2").Return(fmt.Errorf("boom"))
+
+	err := svc.Restart(ctx, "test.example.com", true)
+
+	assert.NoError(t, err)
 }
 
 func TestNormalizeImageRef(t *testing.T) {
