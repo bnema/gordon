@@ -574,6 +574,69 @@ func (_c *MockContainerService_Remove_Call) RunAndReturn(run func(ctx context.Co
 	return _c
 }
 
+// Restart provides a mock function for the type MockContainerService
+func (_mock *MockContainerService) Restart(ctx context.Context, domain1 string, withAttachments bool) error {
+	ret := _mock.Called(ctx, domain1, withAttachments)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Restart")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, bool) error); ok {
+		r0 = returnFunc(ctx, domain1, withAttachments)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockContainerService_Restart_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Restart'
+type MockContainerService_Restart_Call struct {
+	*mock.Call
+}
+
+// Restart is a helper method to define mock.On call
+//   - ctx context.Context
+//   - domain1 string
+//   - withAttachments bool
+func (_e *MockContainerService_Expecter) Restart(ctx interface{}, domain1 interface{}, withAttachments interface{}) *MockContainerService_Restart_Call {
+	return &MockContainerService_Restart_Call{Call: _e.mock.On("Restart", ctx, domain1, withAttachments)}
+}
+
+func (_c *MockContainerService_Restart_Call) Run(run func(ctx context.Context, domain1 string, withAttachments bool)) *MockContainerService_Restart_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 bool
+		if args[2] != nil {
+			arg2 = args[2].(bool)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerService_Restart_Call) Return(err error) *MockContainerService_Restart_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockContainerService_Restart_Call) RunAndReturn(run func(ctx context.Context, domain1 string, withAttachments bool) error) *MockContainerService_Restart_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Shutdown provides a mock function for the type MockContainerService
 func (_mock *MockContainerService) Shutdown(ctx context.Context) error {
 	ret := _mock.Called(ctx)

@@ -160,6 +160,8 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		{"/routes", h.handleRoutes},
 		{"/secrets", h.handleSecrets},
 		{"/deploy", h.handleDeploy},
+		{"/restart", h.handleRestart},
+		{"/tags", h.handleTags},
 		{"/logs", h.handleLogs},
 	}
 	for _, route := range prefixRoutes {
@@ -757,6 +759,91 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 		Status:      "deployed",
 		ContainerID: container.ID,
 		Domain:      deployDomain,
+	})
+}
+
+// handleRestart handles /admin/restart/:domain endpoint.
+func (h *Handler) handleRestart(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodPost {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+
+	restartDomain := strings.TrimPrefix(path, "/restart/")
+	if restartDomain == "" || restartDomain == "/restart" {
+		h.sendError(w, http.StatusBadRequest, "domain required in path")
+		return
+	}
+	if strings.Contains(restartDomain, "..") || strings.ContainsAny(restartDomain, "\x00\n\r") {
+		h.sendError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
+
+	withAttachments := r.URL.Query().Get("attachments") == "true"
+
+	if err := h.containerSvc.Restart(ctx, restartDomain, withAttachments); err != nil {
+		log.Error().Err(err).Str("domain", restartDomain).Msg("failed to restart container")
+		if errors.Is(err, domain.ErrContainerNotFound) {
+			h.sendError(w, http.StatusNotFound, "container not found")
+			return
+		}
+		h.sendError(w, http.StatusInternalServerError, "failed to restart container")
+		return
+	}
+
+	log.Info().Str("domain", restartDomain).Bool("with_attachments", withAttachments).Msg("container restarted via admin API")
+	h.sendJSON(w, http.StatusOK, dto.RestartResponse{
+		Status: "restarted",
+		Domain: restartDomain,
+	})
+}
+
+// handleTags handles /admin/tags/:repository endpoint.
+func (h *Handler) handleTags(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := r.Context()
+
+	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+
+	repository := strings.TrimPrefix(path, "/tags/")
+	if repository == "" || repository == "/tags" {
+		h.sendError(w, http.StatusBadRequest, "repository name required in path")
+		return
+	}
+	if err := validation.ValidateRepositoryName(repository); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	if h.registrySvc == nil {
+		h.sendError(w, http.StatusServiceUnavailable, "registry service not available")
+		return
+	}
+
+	tags, err := h.registrySvc.ListTags(ctx, repository)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "failed to list tags")
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, dto.RepositoryTagsResponse{
+		Repository: repository,
+		Tags:       tags,
 	})
 }
 
