@@ -29,7 +29,6 @@ Examples:
 
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				fmt.Println(styles.RenderError("restart command requires --remote flag or GORDON_REMOTE env var"))
 				return fmt.Errorf("restart requires remote mode")
 			}
 

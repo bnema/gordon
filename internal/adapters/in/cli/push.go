@@ -132,9 +132,11 @@ func buildAndPush(ctx context.Context, version, platform string, buildArgs []str
 	args := []string{
 		"buildx", "build",
 		"--platform", platform,
-		"-t", versionRef,
 		"-t", latestRef,
 		"--build-arg", "VERSION=" + version,
+	}
+	if version != "latest" {
+		args = append(args, "-t", versionRef)
 	}
 	for _, ba := range buildArgs {
 		args = append(args, "--build-arg", ba)

@@ -455,6 +455,9 @@ func (c *Client) Restart(ctx context.Context, restartDomain string, withAttachme
 
 // ListTags returns available tags for a repository.
 func (c *Client) ListTags(ctx context.Context, repository string) ([]string, error) {
+	if repository == "" {
+		return nil, fmt.Errorf("repository cannot be empty")
+	}
 	resp, err := c.request(ctx, http.MethodGet, "/tags/"+url.PathEscape(repository), nil)
 	if err != nil {
 		return nil, err

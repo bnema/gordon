@@ -384,7 +384,11 @@ func resolveLogFilePath(cfg Config) string {
 	if cfg.Logging.File.Path != "" {
 		return cfg.Logging.File.Path
 	}
-	return filepath.Join(cfg.Server.DataDir, "logs", "gordon.log")
+	dataDir := cfg.Server.DataDir
+	if dataDir == "" {
+		dataDir = DefaultDataDir()
+	}
+	return filepath.Join(dataDir, "logs", "gordon.log")
 }
 
 // createOutputAdapters creates the Docker runtime and event bus.

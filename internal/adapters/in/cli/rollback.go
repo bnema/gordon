@@ -83,7 +83,13 @@ func fetchAndSortTags(ctx context.Context, client *remote.Client, imageName stri
 		return nil, fmt.Errorf("no tags found for %s", imageName)
 	}
 
-	// Separate semver tags from non-semver tags
+	return sortSemverTags(tags), nil
+}
+
+// sortSemverTags normalizes, classifies, and sorts tags.
+// Semver tags (with or without 'v' prefix) are sorted in descending order first,
+// followed by non-semver tags in descending lexicographic order.
+func sortSemverTags(tags []string) []string {
 	var semverTags, otherTags []string
 	for _, tag := range tags {
 		sv := tag
@@ -115,8 +121,7 @@ func fetchAndSortTags(ctx context.Context, client *remote.Client, imageName stri
 	})
 
 	// Combine: semver tags first, then other tags
-	tags = append(semverTags, otherTags...)
-	return tags, nil
+	return append(semverTags, otherTags...)
 }
 
 func selectTag(targetTag string, tags []string, currentTag, rollbackDomain string) (string, error) {
