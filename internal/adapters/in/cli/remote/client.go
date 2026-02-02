@@ -434,6 +434,9 @@ type RestartResult struct {
 
 // Restart triggers a container restart for the specified domain.
 func (c *Client) Restart(ctx context.Context, restartDomain string, withAttachments bool) (*RestartResult, error) {
+	if restartDomain == "" {
+		return nil, fmt.Errorf("domain cannot be empty")
+	}
 	path := "/restart/" + url.PathEscape(restartDomain)
 	if withAttachments {
 		path += "?attachments=true"
