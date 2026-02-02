@@ -223,7 +223,12 @@ func (s *Service) Restart(ctx context.Context, domainName string, withAttachment
 
 	s.mu.RLock()
 	container, exists := s.containers[domainName]
-	attachmentIDs := s.attachments[domainName]
+	attachments := s.attachments[domainName]
+	var attachmentIDs []string
+	if len(attachments) > 0 {
+		attachmentIDs = make([]string, len(attachments))
+		copy(attachmentIDs, attachments)
+	}
 	s.mu.RUnlock()
 
 	if !exists || container == nil {
