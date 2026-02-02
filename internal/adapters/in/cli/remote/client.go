@@ -424,6 +424,57 @@ func (c *Client) Deploy(ctx context.Context, deployDomain string) (*DeployResult
 	return &result, nil
 }
 
+// Restart API
+
+// RestartResult contains the result of a restart.
+type RestartResult struct {
+	Status string `json:"status"`
+	Domain string `json:"domain"`
+}
+
+// Restart triggers a container restart for the specified domain.
+func (c *Client) Restart(ctx context.Context, restartDomain string, withAttachments bool) (*RestartResult, error) {
+	if restartDomain == "" {
+		return nil, fmt.Errorf("domain cannot be empty")
+	}
+	path := "/restart/" + url.PathEscape(restartDomain)
+	if withAttachments {
+		path += "?attachments=true"
+	}
+	resp, err := c.request(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result RestartResult
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// Tags API
+
+// ListTags returns available tags for a repository.
+func (c *Client) ListTags(ctx context.Context, repository string) ([]string, error) {
+	if repository == "" {
+		return nil, fmt.Errorf("repository cannot be empty")
+	}
+	resp, err := c.request(ctx, http.MethodGet, "/tags/"+url.PathEscape(repository), nil)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Repository string   `json:"repository"`
+		Tags       []string `json:"tags"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return result.Tags, nil
+}
+
 // Logs API
 
 // GetProcessLogs returns Gordon process logs.
@@ -596,12 +647,12 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 			}
 
 			n, err := resp.Body.Read(buf)
-			if err != nil {
-				// EOF is expected when stream ends, other errors are ignored
-				return
+			if n > 0 {
+				lineBuffer.Write(buf[:n])
 			}
-
-			lineBuffer.Write(buf[:n])
+			if err != nil {
+				return // EOF or context cancellation — clean exit
+			}
 
 			// Process complete SSE events
 			for {
