@@ -43,6 +43,9 @@ max_age = 28
 | `file.max_backups` | int | `3` | Number of old files to keep |
 | `file.max_age` | int | `28` | Days to keep old files |
 
+The Admin API and `gordon logs` read from the process log file. Keep
+`logging.file.enabled` set to `true` if you need process log streaming.
+
 ### Container Logs
 
 | Option | Type | Default | Description |

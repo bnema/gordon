@@ -5,7 +5,7 @@ Gordon provides a command-line interface for server management, deployment, and 
 Commands are organized by where they run:
 
 - **Server Commands** - Must run on the machine hosting Gordon
-- **Management Commands** - Work locally or remotely via `--remote` flag
+- **Management Commands** - Work locally or remotely
 - **Client Commands** - CLI utilities that don't require a running Gordon server
 
 ## Server Commands (local only)
@@ -15,7 +15,7 @@ Commands are organized by where they run:
 | `gordon serve` | Start the Gordon server | [serve](./serve.md) |
 | `gordon auth` | Manage Gordon server authentication | [auth](./auth.md) |
 
-## Management Commands (local or --remote)
+## Management Commands (local or remote)
 
 | Command | Description | Documentation |
 |---------|-------------|---------------|
@@ -23,6 +23,9 @@ Commands are organized by where they run:
 | `gordon attachments` | Manage container attachments | [attachments](./attachments.md) |
 | `gordon secrets` | Manage secrets | [secrets](./secrets.md) |
 | `gordon deploy` | Manually deploy or redeploy a route | [serve](./serve.md#gordon-deploy) |
+| `gordon restart` | Restart a running container | [restart](./restart.md) |
+| `gordon push` | Tag, push, and optionally deploy an image | [push](./push.md) |
+| `gordon rollback` | Roll back to a previous image tag | [rollback](./rollback.md) |
 | `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
 | `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
 | `gordon status` | Show Gordon server status | [status](./status.md) |
@@ -47,6 +50,18 @@ gordon reload
 
 # Deploy a specific route
 gordon deploy myapp.example.com
+
+# Restart a running container
+gordon restart myapp.example.com
+
+# Push an image and deploy
+gordon push myapp.example.com --build
+
+# Push and deploy without confirmation
+gordon push myapp.example.com --no-confirm
+
+# Roll back to a previous tag
+gordon rollback myapp.example.com
 
 # View logs
 gordon logs                          # Gordon process logs
@@ -97,7 +112,9 @@ gordon remotes use prod
 
 ### Remote Targeting
 
-The CLI can target remote Gordon instances using the `--remote` flag or `GORDON_REMOTE` environment variable.
+The CLI can target remote Gordon instances using client config, an active remote, `--remote`,
+or `GORDON_REMOTE` environment variable. Use `--remote` and `--token` as global overrides
+when you want to bypass your saved configuration.
 
 **Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
 

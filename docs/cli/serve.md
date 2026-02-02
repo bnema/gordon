@@ -172,6 +172,9 @@ gordon deploy <domain> [options]
 | `--remote` | Remote Gordon URL |
 | `--token` | Authentication token for remote |
 
+Remote targeting uses client config or an active remote by default.
+Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
+
 ### Description
 
 **Local mode:** Sends `SIGUSR2` to the Gordon process with the specified domain.
@@ -190,7 +193,7 @@ Both modes trigger:
 gordon deploy myapp.example.com
 gordon deploy api.example.com
 
-# Remote deployment
+# Remote deployment (override)
 gordon deploy myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
@@ -229,6 +232,9 @@ gordon logs [domain] [options]
 | `--remote` | | | Remote Gordon URL |
 | `--token` | | | Authentication token for remote |
 
+Remote targeting uses client config or an active remote by default.
+Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
+
 ### Examples
 
 ```bash
@@ -243,7 +249,7 @@ gordon logs myapp.local           # Last 50 lines from container
 gordon logs myapp.local -f        # Follow container logs
 gordon logs myapp.local -n 100    # Last 100 lines from container
 
-# Remote mode
+# Remote mode (override)
 gordon logs --remote https://gordon.mydomain.com --token $TOKEN
 gordon logs myapp.local --remote https://gordon.mydomain.com --token $TOKEN
 ```
