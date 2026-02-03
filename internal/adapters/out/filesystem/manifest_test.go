@@ -457,3 +457,45 @@ func TestManifestStorage_CompleteWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, repos, "myorg/myapp")
 }
+
+func TestManifestStorage_UpdateTagsList_CleansLegacyDigestEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewManifestStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	manifestData := []byte(`{"schemaVersion": 2}`)
+	contentType := "application/vnd.docker.distribution.manifest.v2+json"
+
+	// Create initial tags
+	err = storage.PutManifest("myapp", "v1.0", contentType, manifestData)
+	require.NoError(t, err)
+	err = storage.PutManifest("myapp", "v2.0", contentType, manifestData)
+	require.NoError(t, err)
+
+	// Manually inject digest entries into tags.json to simulate legacy data
+	tagsPath := filepath.Join(tmpDir, "repositories", "myapp", "tags.json")
+
+	// Write the contaminated tags list directly
+	err = os.WriteFile(tagsPath, []byte(`["v1.0","v2.0","sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","sha256:a6b1c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]`), 0600)
+	require.NoError(t, err)
+
+	// Verify tags.json contains digest entries
+	tagsBefore, _ := storage.ListTags("myapp")
+	require.Len(t, tagsBefore, 4, "Should have 4 entries (2 tags + 2 digests)")
+
+	// Add a new tag - this should trigger cleanup of legacy digest entries
+	err = storage.PutManifest("myapp", "v3.0", contentType, manifestData)
+	require.NoError(t, err)
+
+	// Verify that digest entries were cleaned up
+	tagsAfter, err := storage.ListTags("myapp")
+	require.NoError(t, err)
+	assert.Len(t, tagsAfter, 3, "Should have 3 entries (only tags, digests removed)")
+	assert.Contains(t, tagsAfter, "v1.0")
+	assert.Contains(t, tagsAfter, "v2.0")
+	assert.Contains(t, tagsAfter, "v3.0")
+	assert.NotContains(t, tagsAfter, "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	assert.NotContains(t, tagsAfter, "sha256:a6b1c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+}
