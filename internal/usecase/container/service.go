@@ -636,10 +636,30 @@ func (s *Service) buildImageRef(image string) string {
 		return image
 	}
 
-	repoPart := strings.Split(image, ":")[0]
-	if strings.HasPrefix(repoPart, s.config.RegistryDomain+"/") {
+	// Check if image already has the registry domain prefix
+	prefix := s.config.RegistryDomain + "/"
+	if strings.HasPrefix(image, prefix) {
 		return image
 	}
+
+	// Check if image is from an external registry (has dot and slash in the repo part).
+	// Extract repo part by finding tag separator (last colon not in digest).
+	// For "docker.io/library/nginx:latest" -> "docker.io/library/nginx"
+	// For "myapp:latest" -> "myapp"
+	// For "localhost:5000/myapp:latest" -> "localhost:5000/myapp" (already handled above)
+	repoPart := image
+	if idx := strings.LastIndex(image, ":"); idx != -1 {
+		// Check if this colon is a tag separator (not part of a digest or port)
+		afterColon := image[idx+1:]
+		if !strings.HasPrefix(afterColon, "sha256:") && !strings.Contains(afterColon, "/") {
+			repoPart = image[:idx]
+		}
+	}
+	// Handle digest references: repo@sha256:...
+	if idx := strings.Index(repoPart, "@"); idx != -1 {
+		repoPart = repoPart[:idx]
+	}
+
 	if strings.Contains(repoPart, ".") && strings.Contains(repoPart, "/") {
 		return image
 	}
