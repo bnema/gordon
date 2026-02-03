@@ -339,6 +339,15 @@ func (s *ManifestStorage) removeFromTagsList(name, reference string) error {
 		return err
 	}
 
+	// Drop any legacy digest entries before persisting
+	filtered := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if !validation.IsDigest(tag) {
+			filtered = append(filtered, tag)
+		}
+	}
+	tags = filtered
+
 	// Remove tag if present
 	var newTags []string
 	for _, tag := range tags {
