@@ -791,7 +791,7 @@ func TestBuildImageRef(t *testing.T) {
 			image:               "localhost:5000/myapp:latest",
 			registryAuthEnabled: true,
 			registryDomain:      "localhost:5000",
-			wantRef:             "localhost:5000/myapp:latest", // BUG: currently returns localhost:5000/localhost:5000/myapp:latest
+			wantRef:             "localhost:5000/myapp:latest",
 		},
 	}
 
