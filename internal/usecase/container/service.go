@@ -655,7 +655,7 @@ func (s *Service) buildImageRef(image string) string {
 }
 
 // hasExplicitRegistry checks if an image reference already includes an explicit registry.
-// Returns true for patterns like "docker.io/image", "localhost:5000/image", "registry:8080/image".
+// Returns true for patterns like "docker.io/image", "localhost:5000/image", "localhost/image", "registry:8080/image".
 func hasExplicitRegistry(image string) bool {
 	// Find the first slash which separates registry from image name
 	slashIdx := strings.Index(image, "/")
@@ -665,6 +665,11 @@ func hasExplicitRegistry(image string) bool {
 
 	// Extract the part before the first slash (potential registry)
 	registryPart := image[:slashIdx]
+
+	// Check for localhost (with or without port)
+	if registryPart == "localhost" {
+		return true
+	}
 
 	// Check for host:port pattern (e.g., "localhost:5000", "registry:8080")
 	if colonIdx := strings.LastIndex(registryPart, ":"); colonIdx != -1 {
