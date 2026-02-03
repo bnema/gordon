@@ -828,6 +828,27 @@ func TestBuildImageRef(t *testing.T) {
 			registryDomain:      "localhost:5000",
 			wantRef:             "localhost/myapp:latest",
 		},
+		{
+			name:                "registry domain with trailing slash",
+			image:               "myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "registry.example.com/",
+			wantRef:             "registry.example.com/myapp:latest",
+		},
+		{
+			name:                "ipv6 registry without port",
+			image:               "[fd00::1]/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "[fd00::1]/myapp:latest",
+		},
+		{
+			name:                "ipv6 registry with port",
+			image:               "[fd00::1]:5000/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "[fd00::1]:5000/myapp:latest",
+		},
 	}
 
 	for _, tt := range tests {
