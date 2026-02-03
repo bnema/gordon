@@ -11,6 +11,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 // Service implements the RegistryService interface.
@@ -250,7 +251,15 @@ func (s *Service) ListTags(ctx context.Context, name string) ([]string, error) {
 		return nil, log.WrapErr(err, "failed to list tags")
 	}
 
-	return tags, nil
+	filtered := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if validation.IsDigest(tag) {
+			continue
+		}
+		filtered = append(filtered, tag)
+	}
+
+	return filtered, nil
 }
 
 // ListRepositories returns all repository names.
