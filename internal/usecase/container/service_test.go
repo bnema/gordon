@@ -793,6 +793,13 @@ func TestBuildImageRef(t *testing.T) {
 			registryDomain:      "localhost:5000",
 			wantRef:             "localhost:5000/myapp:latest",
 		},
+		{
+			name:                "explicit host:port different than RegistryDomain",
+			image:               "localhost:5001/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "localhost:5001/myapp:latest",
+		},
 	}
 
 	for _, tt := range tests {

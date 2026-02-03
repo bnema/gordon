@@ -642,28 +642,55 @@ func (s *Service) buildImageRef(image string) string {
 		return image
 	}
 
-	// Check if image is from an external registry (has dot and slash in the repo part).
-	// Extract repo part by finding tag separator (last colon not in digest).
-	// For "docker.io/library/nginx:latest" -> "docker.io/library/nginx"
-	// For "myapp:latest" -> "myapp"
-	// For "localhost:5000/myapp:latest" -> "localhost:5000/myapp" (already handled above)
-	repoPart := image
-	if idx := strings.LastIndex(image, ":"); idx != -1 {
-		// Check if this colon is a tag separator (not part of a port)
-		afterColon := image[idx+1:]
-		if !strings.Contains(afterColon, "/") {
-			repoPart = image[:idx]
-		}
-	}
-	// Handle digest references: repo@sha256:...
-	if idx := strings.Index(repoPart, "@"); idx != -1 {
-		repoPart = repoPart[:idx]
-	}
-
-	if strings.Contains(repoPart, ".") && strings.Contains(repoPart, "/") {
+	// Check if image already has an explicit registry (host:port/ or host.domain/).
+	// We need to detect patterns like:
+	// - "docker.io/library/nginx:latest" (has dot and slash)
+	// - "localhost:5001/myapp:latest" (has host:port/ pattern)
+	// - "myregistry:5000/app:v1" (has host:port/ pattern)
+	if hasExplicitRegistry(image) {
 		return image
 	}
+
 	return fmt.Sprintf("%s/%s", s.config.RegistryDomain, image)
+}
+
+// hasExplicitRegistry checks if an image reference already includes an explicit registry.
+// Returns true for patterns like "docker.io/image", "localhost:5000/image", "registry:8080/image".
+func hasExplicitRegistry(image string) bool {
+	// Find the first slash which separates registry from image name
+	slashIdx := strings.Index(image, "/")
+	if slashIdx == -1 {
+		return false // No slash means no registry prefix (e.g., "myapp:latest")
+	}
+
+	// Extract the part before the first slash (potential registry)
+	registryPart := image[:slashIdx]
+
+	// Check for host:port pattern (e.g., "localhost:5000", "registry:8080")
+	if colonIdx := strings.LastIndex(registryPart, ":"); colonIdx != -1 {
+		port := registryPart[colonIdx+1:]
+		// If everything after colon is digits, it's a port
+		if len(port) > 0 && isNumeric(port) {
+			return true
+		}
+	}
+
+	// Check for domain pattern (has a dot, e.g., "docker.io", "gcr.io")
+	if strings.Contains(registryPart, ".") {
+		return true
+	}
+
+	return false
+}
+
+// isNumeric checks if a string contains only digits.
+func isNumeric(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizePullPolicy(policy string) string {
