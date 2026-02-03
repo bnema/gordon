@@ -800,6 +800,27 @@ func TestBuildImageRef(t *testing.T) {
 			registryDomain:      "localhost:5000",
 			wantRef:             "localhost:5001/myapp:latest",
 		},
+		{
+			name:                "ghcr.io external registry",
+			image:               "ghcr.io/owner/repo:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "ghcr.io/owner/repo:latest",
+		},
+		{
+			name:                "gcr.io external registry",
+			image:               "gcr.io/project/image:v1",
+			registryAuthEnabled: true,
+			registryDomain:      "registry.example.com",
+			wantRef:             "gcr.io/project/image:v1",
+		},
+		{
+			name:                "quay.io external registry",
+			image:               "quay.io/org/app:tag",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "quay.io/org/app:tag",
+		},
 	}
 
 	for _, tt := range tests {
