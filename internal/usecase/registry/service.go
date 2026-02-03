@@ -253,7 +253,7 @@ func (s *Service) ListTags(ctx context.Context, name string) ([]string, error) {
 
 	filtered := make([]string, 0, len(tags))
 	for _, tag := range tags {
-		if validation.ValidateDigest(tag) == nil {
+		if validation.IsDigest(tag) {
 			continue
 		}
 		filtered = append(filtered, tag)

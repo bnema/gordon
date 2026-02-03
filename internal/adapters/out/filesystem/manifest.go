@@ -304,7 +304,7 @@ func (s *ManifestStorage) deleteManifestContentType(name, reference string) erro
 // Tags management helpers
 
 func (s *ManifestStorage) updateTagsList(name, reference string) error {
-	if validation.ValidateDigest(reference) == nil {
+	if validation.IsDigest(reference) {
 		return nil
 	}
 
@@ -312,6 +312,15 @@ func (s *ManifestStorage) updateTagsList(name, reference string) error {
 	if err != nil {
 		return err
 	}
+
+	// Drop any legacy digest entries before persisting
+	filtered := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if !validation.IsDigest(tag) {
+			filtered = append(filtered, tag)
+		}
+	}
+	tags = filtered
 
 	// Add tag if not already present
 	for _, tag := range tags {
