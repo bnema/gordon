@@ -43,7 +43,7 @@ func (t *Token) IsExpired() bool {
 	if t.ExpiresAt.IsZero() {
 		return false // Never expires
 	}
-	return time.Now().After(t.ExpiresAt)
+	return time.Now().UTC().After(t.ExpiresAt)
 }
 
 // SecretsBackend represents the type of secrets storage backend.

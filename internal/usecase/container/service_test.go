@@ -743,6 +743,128 @@ func TestMergeEnvironmentVariables(t *testing.T) {
 	assert.Contains(t, result, "BAZ=user")
 }
 
+func TestBuildImageRef(t *testing.T) {
+	tests := []struct {
+		name                string
+		image               string
+		registryAuthEnabled bool
+		registryDomain      string
+		wantRef             string
+	}{
+		{
+			name:                "adds registry domain prefix",
+			image:               "myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "registry.example.com",
+			wantRef:             "registry.example.com/myapp:latest",
+		},
+		{
+			name:                "keeps existing registry domain prefix",
+			image:               "registry.example.com/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "registry.example.com",
+			wantRef:             "registry.example.com/myapp:latest",
+		},
+		{
+			name:                "skips external registry images",
+			image:               "docker.io/library/nginx:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "registry.example.com",
+			wantRef:             "docker.io/library/nginx:latest",
+		},
+		{
+			name:                "returns original when auth disabled",
+			image:               "myapp:latest",
+			registryAuthEnabled: false,
+			registryDomain:      "registry.example.com",
+			wantRef:             "myapp:latest",
+		},
+		{
+			name:                "localhost domain adds prefix",
+			image:               "myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "localhost:5000/myapp:latest",
+		},
+		{
+			name:                "localhost domain keeps existing prefix",
+			image:               "localhost:5000/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "localhost:5000/myapp:latest",
+		},
+		{
+			name:                "explicit host:port different than RegistryDomain",
+			image:               "localhost:5001/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "localhost:5001/myapp:latest",
+		},
+		{
+			name:                "ghcr.io external registry",
+			image:               "ghcr.io/owner/repo:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "ghcr.io/owner/repo:latest",
+		},
+		{
+			name:                "gcr.io external registry",
+			image:               "gcr.io/project/image:v1",
+			registryAuthEnabled: true,
+			registryDomain:      "registry.example.com",
+			wantRef:             "gcr.io/project/image:v1",
+		},
+		{
+			name:                "quay.io external registry",
+			image:               "quay.io/org/app:tag",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "quay.io/org/app:tag",
+		},
+		{
+			name:                "localhost without port keeps existing prefix",
+			image:               "localhost/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "localhost/myapp:latest",
+		},
+		{
+			name:                "registry domain with trailing slash",
+			image:               "myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "registry.example.com/",
+			wantRef:             "registry.example.com/myapp:latest",
+		},
+		{
+			name:                "ipv6 registry without port",
+			image:               "[fd00::1]/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "[fd00::1]/myapp:latest",
+		},
+		{
+			name:                "ipv6 registry with port",
+			image:               "[fd00::1]:5000/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "[fd00::1]:5000/myapp:latest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &Service{
+				config: Config{
+					RegistryAuthEnabled: tt.registryAuthEnabled,
+					RegistryDomain:      tt.registryDomain,
+				},
+			}
+			gotRef := svc.buildImageRef(tt.image)
+			assert.Equal(t, tt.wantRef, gotRef, "unexpected image reference")
+		})
+	}
+}
+
 func TestRewriteToRegistryDomain(t *testing.T) {
 	tests := []struct {
 		name           string

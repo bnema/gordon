@@ -231,7 +231,7 @@ func ensureTokenNotExpired(tokenClaims *domain.TokenClaims, log zerowrap.Logger)
 		return nil
 	}
 
-	if time.Now().Unix() > tokenClaims.ExpiresAt {
+	if time.Now().UTC().Unix() > tokenClaims.ExpiresAt {
 		log.Debug().Str("token_id", tokenClaims.ID).Msg("token has expired")
 		return domain.ErrExpiredToken
 	}
@@ -256,7 +256,7 @@ func (s *Service) isEphemeralAccessToken(claims *domain.TokenClaims) bool {
 
 	// Security: ensure token was recently issued to prevent attackers with
 	// stolen secrets from creating arbitrary short-lived tokens
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 	tokenAge := now - claims.IssuedAt
 	if tokenAge > maxAccessTokenLifetimeSecs {
 		return false // Old tokens require store validation
@@ -275,7 +275,7 @@ func (s *Service) GenerateToken(ctx context.Context, subject string, scopes []st
 	log := zerowrap.FromCtx(ctx)
 
 	tokenID := uuid.New().String()
-	now := time.Now()
+	now := time.Now().UTC()
 
 	// Build token
 	token := &domain.Token{
@@ -345,7 +345,7 @@ func (s *Service) GenerateAccessToken(ctx context.Context, subject string, scope
 	}
 
 	tokenID := uuid.New().String()
-	now := time.Now()
+	now := time.Now().UTC()
 
 	claims := jwt.MapClaims{
 		"jti":    tokenID,
