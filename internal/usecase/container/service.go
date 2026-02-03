@@ -649,9 +649,9 @@ func (s *Service) buildImageRef(image string) string {
 	// For "localhost:5000/myapp:latest" -> "localhost:5000/myapp" (already handled above)
 	repoPart := image
 	if idx := strings.LastIndex(image, ":"); idx != -1 {
-		// Check if this colon is a tag separator (not part of a digest or port)
+		// Check if this colon is a tag separator (not part of a port)
 		afterColon := image[idx+1:]
-		if !strings.HasPrefix(afterColon, "sha256:") && !strings.Contains(afterColon, "/") {
+		if !strings.Contains(afterColon, "/") {
 			repoPart = image[:idx]
 		}
 	}
