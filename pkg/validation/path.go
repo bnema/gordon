@@ -102,6 +102,12 @@ func ValidateDigest(digest string) error {
 	return nil
 }
 
+// IsDigest checks if a string is a valid Docker content digest.
+// Returns true if the string is a valid digest format.
+func IsDigest(digest string) bool {
+	return ValidateDigest(digest) == nil
+}
+
 // ValidateUUID validates a blob upload UUID.
 // UUIDs are server-generated but still validated for safety.
 func ValidateUUID(uuid string) error {

@@ -303,11 +303,28 @@ func (s *ManifestStorage) deleteManifestContentType(name, reference string) erro
 
 // Tags management helpers
 
+// filterOutDigests removes digest entries from a tag list.
+func filterOutDigests(tags []string) []string {
+	filtered := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if !validation.IsDigest(tag) {
+			filtered = append(filtered, tag)
+		}
+	}
+	return filtered
+}
+
 func (s *ManifestStorage) updateTagsList(name, reference string) error {
+	if validation.IsDigest(reference) {
+		return nil
+	}
+
 	tags, err := s.ListTags(name)
 	if err != nil {
 		return err
 	}
+
+	tags = filterOutDigests(tags)
 
 	// Add tag if not already present
 	for _, tag := range tags {
@@ -325,6 +342,8 @@ func (s *ManifestStorage) removeFromTagsList(name, reference string) error {
 	if err != nil {
 		return err
 	}
+
+	tags = filterOutDigests(tags)
 
 	// Remove tag if present
 	var newTags []string
