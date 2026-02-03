@@ -147,7 +147,7 @@ func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request) {
 	response := PasswordResponse{
 		Token:     token,
 		ExpiresIn: int(expiry.Seconds()),
-		IssuedAt:  time.Now().Format(time.RFC3339),
+		IssuedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -244,7 +244,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 	response := dto.TokenResponse{
 		Token:     accessToken,
 		ExpiresIn: 300, // 5 minutes in seconds
-		IssuedAt:  time.Now().Format(time.RFC3339),
+		IssuedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -266,7 +266,7 @@ func (h *Handler) sendAnonymousToken(w http.ResponseWriter, log zerowrap.Logger)
 	response := dto.TokenResponse{
 		Token:     "", // Empty token indicates limited access
 		ExpiresIn: 60, // 1 minute
-		IssuedAt:  time.Now().Format(time.RFC3339),
+		IssuedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
