@@ -821,6 +821,13 @@ func TestBuildImageRef(t *testing.T) {
 			registryDomain:      "localhost:5000",
 			wantRef:             "quay.io/org/app:tag",
 		},
+		{
+			name:                "localhost without port keeps existing prefix",
+			image:               "localhost/myapp:latest",
+			registryAuthEnabled: true,
+			registryDomain:      "localhost:5000",
+			wantRef:             "localhost/myapp:latest",
+		},
 	}
 
 	for _, tt := range tests {
