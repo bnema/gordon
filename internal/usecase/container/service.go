@@ -78,7 +78,56 @@ func NewService(
 // domainDeployMu returns a per-domain mutex for serializing deploy operations.
 func (s *Service) domainDeployMu(domain string) *sync.Mutex {
 	v, _ := s.deployMu.LoadOrStore(domain, &sync.Mutex{})
+	// Type assertion is safe: LoadOrStore always stores *sync.Mutex values,
+	// and any concurrent LoadOrStore calls will also store *sync.Mutex.
 	return v.(*sync.Mutex)
+}
+
+// acquireDomainDeployLock acquires the per-domain deploy lock with context cancellation support.
+// Returns an unlock function that must be called to release the lock.
+func (s *Service) acquireDomainDeployLock(ctx context.Context, domain string) (func(), error) {
+	mu := s.domainDeployMu(domain)
+
+	// Check if context is already cancelled before acquiring lock
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	mu.Lock()
+
+	// Check if context was cancelled while waiting for lock
+	if err := ctx.Err(); err != nil {
+		mu.Unlock()
+		return nil, err
+	}
+
+	return func() { mu.Unlock() }, nil
+}
+
+// buildContainerConfig constructs the container configuration for deployment.
+func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef string, exposedPorts []int, envVars []string, volumes map[string]string, networkName string, hasExisting bool) *domain.ContainerConfig {
+	// Determine container name (use temp suffix for zero-downtime if existing)
+	containerName := fmt.Sprintf("gordon-%s", containerDomain)
+	if hasExisting {
+		containerName = fmt.Sprintf("gordon-%s-new", containerDomain)
+	}
+
+	return &domain.ContainerConfig{
+		Image:       actualImageRef,
+		Name:        containerName,
+		Ports:       exposedPorts,
+		Env:         envVars,
+		Volumes:     volumes,
+		NetworkMode: networkName,
+		Hostname:    containerDomain,
+		Labels: map[string]string{
+			"gordon.domain":  containerDomain,
+			"gordon.image":   image,
+			"gordon.managed": "true",
+			"gordon.route":   containerDomain,
+		},
+		AutoRemove: false,
+	}
 }
 
 // Deploy creates and starts a container for the given route.
@@ -86,9 +135,11 @@ func (s *Service) domainDeployMu(domain string) *sync.Mutex {
 func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Container, error) {
 	// Serialize deploys for the same domain to prevent race conditions
 	// (e.g. multiple image.pushed events + explicit deploy call from CLI).
-	mu := s.domainDeployMu(route.Domain)
-	mu.Lock()
-	defer mu.Unlock()
+	unlock, err := s.acquireDomainDeployLock(ctx, route.Domain)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	// Enrich context with use case fields for all downstream logs
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -151,29 +202,8 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		return nil, err
 	}
 
-	// Determine container name (use temp suffix for zero-downtime if existing)
-	containerName := fmt.Sprintf("gordon-%s", route.Domain)
-	if hasExisting {
-		containerName = fmt.Sprintf("gordon-%s-new", route.Domain)
-	}
-
-	// Create container (use actual image ref from pull, but track original in labels)
-	containerConfig := &domain.ContainerConfig{
-		Image:       actualImageRef,
-		Name:        containerName,
-		Ports:       exposedPorts,
-		Env:         envVars,
-		Volumes:     volumes,
-		NetworkMode: networkName,
-		Hostname:    route.Domain,
-		Labels: map[string]string{
-			"gordon.domain":  route.Domain,
-			"gordon.image":   route.Image,
-			"gordon.managed": "true",
-			"gordon.route":   route.Domain,
-		},
-		AutoRemove: false,
-	}
+	// Build container configuration
+	containerConfig := s.buildContainerConfig(route.Domain, route.Image, actualImageRef, exposedPorts, envVars, volumes, networkName, hasExisting)
 
 	newContainer, err := s.runtime.CreateContainer(ctx, containerConfig)
 	if err != nil {
@@ -342,6 +372,11 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 		}
 	}
 	s.mu.Unlock()
+
+	// Cleanup per-domain deploy mutex to prevent unbounded growth
+	if removedDomain != "" {
+		s.deployMu.Delete(removedDomain)
+	}
 
 	// Cleanup network
 	if removedDomain != "" && s.config.NetworkIsolation {
