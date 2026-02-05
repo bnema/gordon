@@ -71,10 +71,20 @@ func newDomainDeployLock() *domainDeployLock {
 
 // Lock acquires the lock or returns an error if the context is cancelled.
 func (l *domainDeployLock) Lock(ctx context.Context) error {
+	// Fast path: honor already-canceled contexts before blocking.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-l.ch:
+		// Re-check context after acquisition: if canceled while we were
+		// in the select, release the token so the lock isn't consumed.
+		if err := ctx.Err(); err != nil {
+			l.ch <- struct{}{}
+			return err
+		}
 		return nil
 	}
 }
