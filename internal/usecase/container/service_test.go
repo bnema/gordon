@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -1416,4 +1417,101 @@ func TestSanitizeName(t *testing.T) {
 			results[result] = d
 		}
 	})
+}
+
+func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
+	// Verify that concurrent Deploy calls for the same domain are serialized
+	// and both succeed without container name conflicts.
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	// Track call order to verify serialization
+	var callOrder []string
+	var callMu sync.Mutex
+
+	// Setup mocks that will be called by both deploys sequentially.
+	// First deploy: no existing container → creates gordon-test.example.com
+	// Second deploy: sees first container → creates gordon-test.example.com-new
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Times(2)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil).Times(2)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil).Times(2)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return(nil, nil).Times(2)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return(nil, nil).Times(2)
+
+	createCall := 0
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).
+		RunAndReturn(func(_ context.Context, cfg *domain.ContainerConfig) (*domain.Container, error) {
+			callMu.Lock()
+			createCall++
+			n := createCall
+			callOrder = append(callOrder, fmt.Sprintf("create-%d:%s", n, cfg.Name))
+			callMu.Unlock()
+			return &domain.Container{
+				ID:     fmt.Sprintf("container-%d", n),
+				Name:   cfg.Name,
+				Image:  cfg.Image,
+				Status: "created",
+			}, nil
+		})
+
+	runtime.EXPECT().StartContainer(mock.Anything, mock.AnythingOfType("string")).Return(nil).Times(2)
+	// IsContainerRunning is called 2x per deploy in waitForReady (initial check + after delay)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, mock.AnythingOfType("string")).Return(true, nil).Times(4)
+
+	runtime.EXPECT().InspectContainer(mock.Anything, mock.AnythingOfType("string")).
+		RunAndReturn(func(_ context.Context, id string) (*domain.Container, error) {
+			return &domain.Container{
+				ID:     id,
+				Name:   "gordon-test.example.com",
+				Image:  "myapp:latest",
+				Status: "running",
+				Ports:  []int{8080},
+			}, nil
+		})
+
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.Anything).Return(nil).Times(2)
+
+	// The second deploy will see the first container and do zero-downtime swap,
+	// which means it will also stop+remove+rename the old container.
+	runtime.EXPECT().StopContainer(mock.Anything, mock.AnythingOfType("string")).Return(nil).Maybe()
+	runtime.EXPECT().RemoveContainer(mock.Anything, mock.AnythingOfType("string"), true).Return(nil).Maybe()
+	runtime.EXPECT().RenameContainer(mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(nil).Maybe()
+
+	// Launch two concurrent deploys
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+
+	wg.Add(2)
+	for i := range 2 {
+		go func(idx int) {
+			defer wg.Done()
+			_, errs[idx] = svc.Deploy(ctx, route)
+		}(i)
+	}
+	wg.Wait()
+
+	// Both should succeed (second deploy waits for the first to finish)
+	assert.NoError(t, errs[0], "first deploy should succeed")
+	assert.NoError(t, errs[1], "second deploy should succeed")
+
+	// Verify creates were serialized (not interleaved)
+	callMu.Lock()
+	assert.Len(t, callOrder, 2, "should have exactly 2 create calls")
+	// First deploy uses canonical name, second uses -new suffix (zero-downtime)
+	assert.Contains(t, callOrder[0], "gordon-test.example.com", "first create should use canonical name")
+	assert.Contains(t, callOrder[1], "gordon-test.example.com-new", "second create should use -new suffix")
+	callMu.Unlock()
 }
