@@ -1473,9 +1473,16 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 
 	runtime.EXPECT().InspectContainer(mock.Anything, mock.AnythingOfType("string")).
 		RunAndReturn(func(_ context.Context, id string) (*domain.Container, error) {
+			// Return correct container name based on ID
+			// container-1 is the first deploy (canonical name)
+			// container-2 is the second deploy (with -new suffix)
+			name := "gordon-test.example.com"
+			if id == "container-2" {
+				name = "gordon-test.example.com-new"
+			}
 			return &domain.Container{
 				ID:     id,
-				Name:   "gordon-test.example.com",
+				Name:   name,
 				Image:  "myapp:latest",
 				Status: "running",
 				Ports:  []int{8080},
@@ -1486,9 +1493,9 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 
 	// The second deploy will see the first container and do zero-downtime swap,
 	// which means it will also stop+remove+rename the old container.
-	runtime.EXPECT().StopContainer(mock.Anything, mock.AnythingOfType("string")).Return(nil).Maybe()
-	runtime.EXPECT().RemoveContainer(mock.Anything, mock.AnythingOfType("string"), true).Return(nil).Maybe()
-	runtime.EXPECT().RenameContainer(mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(nil).Maybe()
+	runtime.EXPECT().StopContainer(mock.Anything, mock.AnythingOfType("string")).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, mock.AnythingOfType("string"), true).Return(nil).Once()
+	runtime.EXPECT().RenameContainer(mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(nil).Once()
 
 	// Launch two concurrent deploys
 	var wg sync.WaitGroup
@@ -1511,7 +1518,7 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 	callMu.Lock()
 	assert.Len(t, callOrder, 2, "should have exactly 2 create calls")
 	// First deploy uses canonical name, second uses -new suffix (zero-downtime)
-	assert.Contains(t, callOrder[0], "gordon-test.example.com", "first create should use canonical name")
+	assert.Equal(t, "create-1:gordon-test.example.com", callOrder[0], "first create should use canonical name")
 	assert.Contains(t, callOrder[1], "gordon-test.example.com-new", "second create should use -new suffix")
 	callMu.Unlock()
 }
