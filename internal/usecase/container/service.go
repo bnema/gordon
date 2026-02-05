@@ -53,6 +53,51 @@ type Service struct {
 	containers  map[string]*domain.Container
 	attachments map[string][]string // ownerDomain → []containerIDs
 	mu          sync.RWMutex
+	deployMu    sync.Map // per-domain deploy locks (domain → *domainDeployLock)
+}
+
+// domainDeployLock is a context-aware mutex using a buffered channel.
+// It allows Lock() to be interrupted by context cancellation.
+type domainDeployLock struct {
+	ch chan struct{}
+}
+
+// newDomainDeployLock creates a new lock that is initially unlocked.
+func newDomainDeployLock() *domainDeployLock {
+	l := &domainDeployLock{ch: make(chan struct{}, 1)}
+	l.ch <- struct{}{}
+	return l
+}
+
+// Lock acquires the lock or returns an error if the context is cancelled.
+func (l *domainDeployLock) Lock(ctx context.Context) error {
+	// Fast path: honor already-canceled contexts before blocking.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-l.ch:
+		// Re-check context after acquisition: if canceled while we were
+		// in the select, release the token so the lock isn't consumed.
+		if err := ctx.Err(); err != nil {
+			l.ch <- struct{}{}
+			return err
+		}
+		return nil
+	}
+}
+
+// Unlock releases the lock.
+func (l *domainDeployLock) Unlock() {
+	select {
+	case l.ch <- struct{}{}:
+	default:
+		// This should never happen if Lock/Unlock are used correctly.
+		// Panic to detect double-unlocks or other misuse early.
+		panic("domainDeployLock: double unlock detected")
+	}
 }
 
 // NewService creates a new container service.
@@ -74,9 +119,61 @@ func NewService(
 	}
 }
 
+// domainDeployMu returns a per-domain lock for serializing deploy operations.
+func (s *Service) domainDeployMu(domain string) *domainDeployLock {
+	v, _ := s.deployMu.LoadOrStore(domain, newDomainDeployLock())
+	// Type assertion is safe: LoadOrStore always stores *domainDeployLock values,
+	// and any concurrent LoadOrStore calls will also store *domainDeployLock.
+	return v.(*domainDeployLock)
+}
+
+// acquireDomainDeployLock acquires the per-domain deploy lock with context cancellation support.
+// Returns an unlock function that must be called to release the lock.
+func (s *Service) acquireDomainDeployLock(ctx context.Context, domain string) (func(), error) {
+	lock := s.domainDeployMu(domain)
+	if err := lock.Lock(ctx); err != nil {
+		return nil, err
+	}
+	return func() { lock.Unlock() }, nil
+}
+
+// buildContainerConfig constructs the container configuration for deployment.
+func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef string, exposedPorts []int, envVars []string, volumes map[string]string, networkName string, hasExisting bool) *domain.ContainerConfig {
+	// Determine container name (use temp suffix for zero-downtime if existing)
+	containerName := fmt.Sprintf("gordon-%s", containerDomain)
+	if hasExisting {
+		containerName = fmt.Sprintf("gordon-%s-new", containerDomain)
+	}
+
+	return &domain.ContainerConfig{
+		Image:       actualImageRef,
+		Name:        containerName,
+		Ports:       exposedPorts,
+		Env:         envVars,
+		Volumes:     volumes,
+		NetworkMode: networkName,
+		Hostname:    containerDomain,
+		Labels: map[string]string{
+			"gordon.domain":  containerDomain,
+			"gordon.image":   image,
+			"gordon.managed": "true",
+			"gordon.route":   containerDomain,
+		},
+		AutoRemove: false,
+	}
+}
+
 // Deploy creates and starts a container for the given route.
 // Implements zero-downtime deployment: new container starts before old one stops.
 func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Container, error) {
+	// Serialize deploys for the same domain to prevent race conditions
+	// (e.g. multiple image.pushed events + explicit deploy call from CLI).
+	unlock, err := s.acquireDomainDeployLock(ctx, route.Domain)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	// Enrich context with use case fields for all downstream logs
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -138,29 +235,8 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		return nil, err
 	}
 
-	// Determine container name (use temp suffix for zero-downtime if existing)
-	containerName := fmt.Sprintf("gordon-%s", route.Domain)
-	if hasExisting {
-		containerName = fmt.Sprintf("gordon-%s-new", route.Domain)
-	}
-
-	// Create container (use actual image ref from pull, but track original in labels)
-	containerConfig := &domain.ContainerConfig{
-		Image:       actualImageRef,
-		Name:        containerName,
-		Ports:       exposedPorts,
-		Env:         envVars,
-		Volumes:     volumes,
-		NetworkMode: networkName,
-		Hostname:    route.Domain,
-		Labels: map[string]string{
-			"gordon.domain":  route.Domain,
-			"gordon.image":   route.Image,
-			"gordon.managed": "true",
-			"gordon.route":   route.Domain,
-		},
-		AutoRemove: false,
-	}
+	// Build container configuration
+	containerConfig := s.buildContainerConfig(route.Domain, route.Image, actualImageRef, exposedPorts, envVars, volumes, networkName, hasExisting)
 
 	newContainer, err := s.runtime.CreateContainer(ctx, containerConfig)
 	if err != nil {
@@ -329,6 +405,12 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 		}
 	}
 	s.mu.Unlock()
+
+	// Note: We intentionally do NOT clean up deployMu entries to avoid a race condition:
+	// If Remove deletes the mutex entry while a concurrent Deploy is acquiring the lock,
+	// the Deploy would create a fresh mutex, breaking serialization and allowing concurrent
+	// deploys to the same domain. The memory footprint is acceptable (one small struct per
+	// domain ever deployed), and this is the safer choice for correctness.
 
 	// Cleanup network
 	if removedDomain != "" && s.config.NetworkIsolation {
