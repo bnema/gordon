@@ -53,7 +53,41 @@ type Service struct {
 	containers  map[string]*domain.Container
 	attachments map[string][]string // ownerDomain → []containerIDs
 	mu          sync.RWMutex
-	deployMu    sync.Map // per-domain deploy mutexes (domain → *sync.Mutex)
+	deployMu    sync.Map // per-domain deploy locks (domain → *domainDeployLock)
+}
+
+// domainDeployLock is a context-aware mutex using a buffered channel.
+// It allows Lock() to be interrupted by context cancellation.
+type domainDeployLock struct {
+	ch chan struct{}
+}
+
+// newDomainDeployLock creates a new lock that is initially unlocked.
+func newDomainDeployLock() *domainDeployLock {
+	l := &domainDeployLock{ch: make(chan struct{}, 1)}
+	l.ch <- struct{}{}
+	return l
+}
+
+// Lock acquires the lock or returns an error if the context is cancelled.
+func (l *domainDeployLock) Lock(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-l.ch:
+		return nil
+	}
+}
+
+// Unlock releases the lock.
+func (l *domainDeployLock) Unlock() {
+	select {
+	case l.ch <- struct{}{}:
+	default:
+		// This should never happen if Lock/Unlock are used correctly.
+		// Panic to detect double-unlocks or other misuse early.
+		panic("domainDeployLock: double unlock detected")
+	}
 }
 
 // NewService creates a new container service.
@@ -75,33 +109,22 @@ func NewService(
 	}
 }
 
-// domainDeployMu returns a per-domain mutex for serializing deploy operations.
-func (s *Service) domainDeployMu(domain string) *sync.Mutex {
-	v, _ := s.deployMu.LoadOrStore(domain, &sync.Mutex{})
-	// Type assertion is safe: LoadOrStore always stores *sync.Mutex values,
-	// and any concurrent LoadOrStore calls will also store *sync.Mutex.
-	return v.(*sync.Mutex)
+// domainDeployMu returns a per-domain lock for serializing deploy operations.
+func (s *Service) domainDeployMu(domain string) *domainDeployLock {
+	v, _ := s.deployMu.LoadOrStore(domain, newDomainDeployLock())
+	// Type assertion is safe: LoadOrStore always stores *domainDeployLock values,
+	// and any concurrent LoadOrStore calls will also store *domainDeployLock.
+	return v.(*domainDeployLock)
 }
 
 // acquireDomainDeployLock acquires the per-domain deploy lock with context cancellation support.
 // Returns an unlock function that must be called to release the lock.
 func (s *Service) acquireDomainDeployLock(ctx context.Context, domain string) (func(), error) {
-	mu := s.domainDeployMu(domain)
-
-	// Check if context is already cancelled before acquiring lock
-	if err := ctx.Err(); err != nil {
+	lock := s.domainDeployMu(domain)
+	if err := lock.Lock(ctx); err != nil {
 		return nil, err
 	}
-
-	mu.Lock()
-
-	// Check if context was cancelled while waiting for lock
-	if err := ctx.Err(); err != nil {
-		mu.Unlock()
-		return nil, err
-	}
-
-	return func() { mu.Unlock() }, nil
+	return func() { lock.Unlock() }, nil
 }
 
 // buildContainerConfig constructs the container configuration for deployment.
@@ -373,10 +396,11 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 	}
 	s.mu.Unlock()
 
-	// Cleanup per-domain deploy mutex to prevent unbounded growth
-	if removedDomain != "" {
-		s.deployMu.Delete(removedDomain)
-	}
+	// Note: We intentionally do NOT clean up deployMu entries to avoid a race condition:
+	// If Remove deletes the mutex entry while a concurrent Deploy is acquiring the lock,
+	// the Deploy would create a fresh mutex, breaking serialization and allowing concurrent
+	// deploys to the same domain. The memory footprint is acceptable (one small struct per
+	// domain ever deployed), and this is the safer choice for correctness.
 
 	// Cleanup network
 	if removedDomain != "" && s.config.NetworkIsolation {
