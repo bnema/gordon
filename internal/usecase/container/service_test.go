@@ -1522,3 +1522,28 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 	assert.Contains(t, callOrder[1], "gordon-test.example.com-new", "second create should use -new suffix")
 	callMu.Unlock()
 }
+
+func TestService_Deploy_ContextCancellation(t *testing.T) {
+	// Verify that deploy lock acquisition respects context cancellation.
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	// Test context cancelled before lock acquisition.
+	cancelledCtx, cancel := context.WithCancel(testContext())
+	cancel() // Cancel immediately
+
+	_, err := svc.Deploy(cancelledCtx, route)
+	assert.Error(t, err, "deploy should fail with cancelled context")
+	assert.ErrorIs(t, err, context.Canceled, "error should be context.Canceled")
+}
