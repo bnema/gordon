@@ -53,6 +53,7 @@ type Service struct {
 	containers  map[string]*domain.Container
 	attachments map[string][]string // ownerDomain → []containerIDs
 	mu          sync.RWMutex
+	deployMu    sync.Map // per-domain deploy mutexes (domain → *sync.Mutex)
 }
 
 // NewService creates a new container service.
@@ -74,9 +75,21 @@ func NewService(
 	}
 }
 
+// domainDeployMu returns a per-domain mutex for serializing deploy operations.
+func (s *Service) domainDeployMu(domain string) *sync.Mutex {
+	v, _ := s.deployMu.LoadOrStore(domain, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 // Deploy creates and starts a container for the given route.
 // Implements zero-downtime deployment: new container starts before old one stops.
 func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Container, error) {
+	// Serialize deploys for the same domain to prevent race conditions
+	// (e.g. multiple image.pushed events + explicit deploy call from CLI).
+	mu := s.domainDeployMu(route.Domain)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Enrich context with use case fields for all downstream logs
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
