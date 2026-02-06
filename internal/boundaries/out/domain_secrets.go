@@ -29,6 +29,9 @@ type DomainSecretStore interface {
 	// GetAllAttachment returns all secrets for an attachment container as a key-value map.
 	GetAllAttachment(containerName string) (map[string]string, error)
 
+	// DeleteAttachment removes a specific secret key from an attachment container.
+	DeleteAttachment(containerName, key string) error
+
 	// ListAttachmentKeys finds and returns secret keys for attachment containers
 	// associated with the given domain. Returns a list of AttachmentSecrets, one
 	// for each attachment that has secrets configured.

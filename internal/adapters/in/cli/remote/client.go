@@ -295,6 +295,26 @@ func (c *Client) DeleteSecret(ctx context.Context, secretDomain, key string) err
 	return parseResponse(resp, nil)
 }
 
+// SetAttachmentSecrets sets secrets for an attachment container.
+func (c *Client) SetAttachmentSecrets(ctx context.Context, domain, service string, secrets map[string]string) error {
+	path := "/secrets/" + url.PathEscape(domain) + "/attachments/" + url.PathEscape(service)
+	resp, err := c.request(ctx, http.MethodPost, path, secrets)
+	if err != nil {
+		return err
+	}
+	return parseResponse(resp, nil)
+}
+
+// DeleteAttachmentSecret removes a secret from an attachment container.
+func (c *Client) DeleteAttachmentSecret(ctx context.Context, domain, service, key string) error {
+	path := "/secrets/" + url.PathEscape(domain) + "/attachments/" + url.PathEscape(service) + "/" + url.PathEscape(key)
+	resp, err := c.request(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	return parseResponse(resp, nil)
+}
+
 // Status API
 
 // Status represents the Gordon server status.

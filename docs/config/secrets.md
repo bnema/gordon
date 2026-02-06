@@ -57,6 +57,8 @@ token_secret = "gordon/auth/token_secret"
 **Route secrets storage:**
 - `gordon secrets set` stores per-domain secrets in pass under `gordon/env/<sanitized-domain>/<KEY>` (dots/colons/slashes → underscores)
 - Existing `.env` files are auto-migrated on startup and renamed to `.env.migrated`
+- Attachment secrets are stored under `gordon/env/attachments/<container-name>/<KEY>` with a `.keys` manifest
+- Use `gordon secrets set <domain> --attachment <service> KEY=value` to manage them
 
 ### SOPS
 
@@ -98,6 +100,11 @@ DB_PASSWORD=${sops:secrets.yaml:database.password}
 - Domain secrets stay in `.env` files
 - Use `${sops:...}` syntax to resolve encrypted values
 
+**Attachment secrets storage:**
+- Attachment secrets are stored in `gordon-<container-name>.env` files alongside domain env files
+- Use `${sops:...}` syntax inside attachment env files to resolve encrypted values
+- Use `gordon secrets set <domain> --attachment <service> KEY=value` to manage them
+
 ### Unsafe (Development Only)
 
 Stores secrets as plain text files:
@@ -115,6 +122,11 @@ secrets_backend = "unsafe"
 │       ├── password_hash
 │       └── token_secret
 ```
+
+**Attachment secrets:**
+- Stored as `gordon-<container-name>.env` files in the env directory
+- Example: `gordon-app__mydomain__com-postgres.env`
+- Use `gordon secrets set <domain> --attachment <service> KEY=value` to manage them
 
 **Usage:**
 ```bash

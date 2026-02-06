@@ -80,8 +80,20 @@ FROM postgres:18
 VOLUME ["/var/lib/postgresql/data"]
 ENV POSTGRES_DB=myapp
 ENV POSTGRES_USER=app
-ENV POSTGRES_PASSWORD=secret
+# Password is injected via attachment secrets — do NOT hardcode here
 ```
+
+Configure credentials via attachment secrets instead of hardcoding them:
+
+```bash
+# Set database password securely
+gordon secrets set app.mydomain.com --attachment postgres POSTGRES_PASSWORD=secret
+
+# Verify
+gordon secrets list app.mydomain.com
+```
+
+This works with all secrets backends (pass, sops, unsafe). See [Secrets Configuration](./secrets.md) for backend details.
 
 Build and push to Gordon:
 ```bash
@@ -94,6 +106,32 @@ Use in attachments:
 [attachments]
 "app.mydomain.com" = ["my-postgres:latest"]
 ```
+
+## Attachment Secrets
+
+Inject environment variables into attachment containers using the `--attachment` flag on secrets commands:
+
+```bash
+# Set secrets for the postgres attachment
+gordon secrets set app.mydomain.com --attachment postgres POSTGRES_USER=admin POSTGRES_PASSWORD=secret
+
+# Set secrets for the redis attachment
+gordon secrets set app.mydomain.com --attachment redis REDIS_PASSWORD=cache-secret
+
+# View all secrets (domain + attachments) in a tree view
+gordon secrets list app.mydomain.com
+
+# Remove an attachment secret
+gordon secrets remove app.mydomain.com --attachment postgres POSTGRES_PASSWORD
+```
+
+The `--attachment` flag takes the service name (the image name before the colon in your attachments config). For example, if your config has `"app.mydomain.com" = ["postgres:18", "redis:7-alpine"]`, the service names are `postgres` and `redis`.
+
+Storage depends on your secrets backend:
+- **pass**: `gordon/env/attachments/<container-name>/<KEY>`
+- **sops/unsafe**: `gordon-<container-name>.env` files
+
+See [Secrets Configuration](./secrets.md) and [Secrets Commands](../cli/secrets.md) for details.
 
 ## Shared Attachments with Network Groups
 
