@@ -136,21 +136,21 @@ Commands are organized by where they run:
 // GetRemoteClient returns a remote client if targeting a remote instance,
 // or nil if running locally.
 func GetRemoteClient() (*remote.Client, bool) {
-	url, token, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag)
+	url, token, insecureTLS, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag, insecureTLSFlag)
 	if !isRemote {
 		return nil, false
 	}
 
-	client := remote.NewClient(url, remoteClientOptions(token)...)
+	client := remote.NewClient(url, remoteClientOptions(token, insecureTLS)...)
 	return client, true
 }
 
-func remoteClientOptions(token string) []remote.ClientOption {
+func remoteClientOptions(token string, insecureTLS bool) []remote.ClientOption {
 	opts := make([]remote.ClientOption, 0, 2)
 	if token != "" {
 		opts = append(opts, remote.WithToken(token))
 	}
-	if insecureTLSFlag {
+	if insecureTLS {
 		opts = append(opts, remote.WithInsecureTLS(true))
 	}
 	return opts
@@ -158,7 +158,7 @@ func remoteClientOptions(token string) []remote.ClientOption {
 
 // IsRemoteMode returns true if CLI is targeting a remote Gordon instance.
 func IsRemoteMode() bool {
-	_, _, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag)
+	_, _, _, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag, insecureTLSFlag)
 	return isRemote
 }
 

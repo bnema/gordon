@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -17,17 +18,19 @@ type ClientConfig struct {
 
 // ClientSettings represents the [client] section.
 type ClientSettings struct {
-	Mode     string `toml:"mode"`      // "local" (default) or "remote"
-	Remote   string `toml:"remote"`    // Remote Gordon URL
-	Token    string `toml:"token"`     // Auth token
-	TokenEnv string `toml:"token_env"` // Env var name for token
+	Mode        string `toml:"mode"`         // "local" (default) or "remote"
+	Remote      string `toml:"remote"`       // Remote Gordon URL
+	Token       string `toml:"token"`        // Auth token
+	TokenEnv    string `toml:"token_env"`    // Env var name for token
+	InsecureTLS bool   `toml:"insecure_tls"` // Skip TLS verification for remote admin API
 }
 
 // RemoteEntry represents a saved remote in [remotes.*].
 type RemoteEntry struct {
-	URL      string `toml:"url"`
-	Token    string `toml:"token,omitempty"`
-	TokenEnv string `toml:"token_env,omitempty"`
+	URL         string `toml:"url"`
+	Token       string `toml:"token,omitempty"`
+	TokenEnv    string `toml:"token_env,omitempty"`
+	InsecureTLS bool   `toml:"insecure_tls,omitempty"`
 }
 
 // DefaultClientConfigPath returns the default client config path.
@@ -134,43 +137,44 @@ func SaveRemotes(path string, config *ClientConfig) error {
 
 // ResolveRemote resolves the remote URL and token from configuration.
 // Precedence: flag > env > config > active remote
-func ResolveRemote(flagRemote, flagToken string) (url, token string, isRemote bool) {
+func ResolveRemote(flagRemote, flagToken string, flagInsecure bool) (url, token string, insecureTLS, isRemote bool) {
 	config, _ := LoadClientConfig("")
 	remotes, _ := LoadRemotes("")
 
-	url, isRemote = resolveRemoteURL(flagRemote, config, remotes)
+	url, remoteName, isRemote := resolveRemoteURL(flagRemote, config, remotes)
 	if isRemote {
 		token = resolveToken(flagToken, config, remotes)
+		insecureTLS = resolveInsecureTLS(flagInsecure, config, remotes, remoteName)
 	}
 
-	return url, token, isRemote
+	return url, token, insecureTLS, isRemote
 }
 
 // resolveRemoteURL resolves the remote URL from various sources.
-func resolveRemoteURL(flagRemote string, config *ClientConfig, remotes *ClientConfig) (string, bool) {
+func resolveRemoteURL(flagRemote string, config *ClientConfig, remotes *ClientConfig) (url, remoteName string, isRemote bool) {
 	// 1. Check flag
 	if flagRemote != "" {
-		return flagRemote, true
+		return flagRemote, "", true
 	}
 
 	// 2. Check environment variable
 	if envRemote := os.Getenv("GORDON_REMOTE"); envRemote != "" {
-		return envRemote, true
+		return envRemote, "", true
 	}
 
 	// 3. Check client config
 	if config != nil && config.Client.Mode == "remote" && config.Client.Remote != "" {
-		return config.Client.Remote, true
+		return config.Client.Remote, "", true
 	}
 
 	// 4. Check active remote
 	if remotes != nil && remotes.Active != "" {
 		if remote, ok := remotes.Remotes[remotes.Active]; ok {
-			return remote.URL, true
+			return remote.URL, remotes.Active, true
 		}
 	}
 
-	return "", false
+	return "", "", false
 }
 
 // resolveToken resolves the authentication token from various sources.
@@ -208,6 +212,38 @@ func resolveToken(flagToken string, config *ClientConfig, remotes *ClientConfig)
 	}
 
 	return ""
+}
+
+// ResolveInsecureTLSForRemote resolves insecure TLS behavior for a named remote.
+// Precedence: flag > env > client config > specific remote config.
+func ResolveInsecureTLSForRemote(flagInsecure bool, remoteName string) bool {
+	config, _ := LoadClientConfig("")
+	remotes, _ := LoadRemotes("")
+	return resolveInsecureTLS(flagInsecure, config, remotes, remoteName)
+}
+
+func resolveInsecureTLS(flagInsecure bool, config *ClientConfig, remotes *ClientConfig, remoteName string) bool {
+	if flagInsecure {
+		return true
+	}
+
+	if env := os.Getenv("GORDON_INSECURE"); env != "" {
+		if value, err := strconv.ParseBool(env); err == nil {
+			return value
+		}
+	}
+
+	if config != nil && config.Client.InsecureTLS {
+		return true
+	}
+
+	if remoteName != "" && remotes != nil {
+		if remote, ok := remotes.Remotes[remoteName]; ok && remote.InsecureTLS {
+			return true
+		}
+	}
+
+	return false
 }
 
 // AddRemote adds a new remote to the remotes configuration.
