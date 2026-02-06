@@ -184,17 +184,16 @@ func (s *Service) StartUpload(ctx context.Context, name string) (string, error) 
 }
 
 // AppendBlobChunk appends data to an in-progress blob upload.
-func (s *Service) AppendBlobChunk(ctx context.Context, name, uuid string, chunk []byte) (int64, error) {
+func (s *Service) AppendBlobChunk(ctx context.Context, name, uuid string, data io.Reader) (int64, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "AppendBlobChunk",
 		"name":                name,
 		"uuid":                uuid,
-		zerowrap.FieldSize:    len(chunk),
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	length, err := s.blobStorage.AppendBlobChunk(name, uuid, chunk)
+	length, err := s.blobStorage.AppendBlobChunk(name, uuid, data)
 	if err != nil {
 		return 0, log.WrapErr(err, "failed to append blob chunk")
 	}
