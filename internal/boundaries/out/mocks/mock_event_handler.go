@@ -5,6 +5,8 @@
 package mocks
 
 import (
+	"context"
+
 	"github.com/bnema/gordon/internal/domain"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -88,16 +90,16 @@ func (_c *MockEventHandler_CanHandle_Call) RunAndReturn(run func(eventType domai
 }
 
 // Handle provides a mock function for the type MockEventHandler
-func (_mock *MockEventHandler) Handle(event domain.Event) error {
-	ret := _mock.Called(event)
+func (_mock *MockEventHandler) Handle(ctx context.Context, event domain.Event) error {
+	ret := _mock.Called(ctx, event)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Handle")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(domain.Event) error); ok {
-		r0 = returnFunc(event)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.Event) error); ok {
+		r0 = returnFunc(ctx, event)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -110,19 +112,25 @@ type MockEventHandler_Handle_Call struct {
 }
 
 // Handle is a helper method to define mock.On call
+//   - ctx context.Context
 //   - event domain.Event
-func (_e *MockEventHandler_Expecter) Handle(event interface{}) *MockEventHandler_Handle_Call {
-	return &MockEventHandler_Handle_Call{Call: _e.mock.On("Handle", event)}
+func (_e *MockEventHandler_Expecter) Handle(ctx interface{}, event interface{}) *MockEventHandler_Handle_Call {
+	return &MockEventHandler_Handle_Call{Call: _e.mock.On("Handle", ctx, event)}
 }
 
-func (_c *MockEventHandler_Handle_Call) Run(run func(event domain.Event)) *MockEventHandler_Handle_Call {
+func (_c *MockEventHandler_Handle_Call) Run(run func(ctx context.Context, event domain.Event)) *MockEventHandler_Handle_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 domain.Event
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(domain.Event)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 domain.Event
+		if args[1] != nil {
+			arg1 = args[1].(domain.Event)
 		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
@@ -133,7 +141,7 @@ func (_c *MockEventHandler_Handle_Call) Return(err error) *MockEventHandler_Hand
 	return _c
 }
 
-func (_c *MockEventHandler_Handle_Call) RunAndReturn(run func(event domain.Event) error) *MockEventHandler_Handle_Call {
+func (_c *MockEventHandler_Handle_Call) RunAndReturn(run func(ctx context.Context, event domain.Event) error) *MockEventHandler_Handle_Call {
 	_c.Call.Return(run)
 	return _c
 }

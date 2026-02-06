@@ -189,13 +189,16 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 			h := handler // shadow loop variable for goroutine capture
 			start := time.Now()
 
+			ctx, cancel := context.WithTimeout(bus.ctx, 30*time.Second)
+
 			done := make(chan error, 1)
 			go func() {
-				done <- h.Handle(event)
+				done <- h.Handle(ctx, event)
 			}()
 
 			select {
 			case err := <-done:
+				cancel()
 				if err != nil {
 					bus.log.Error().
 						Str(zerowrap.FieldLayer, "adapter").
@@ -215,7 +218,8 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 						Dur(zerowrap.FieldDuration, time.Since(start)).
 						Msg("event handled successfully")
 				}
-			case <-time.After(30 * time.Second):
+			case <-ctx.Done():
+				cancel()
 				bus.log.Warn().
 					Str(zerowrap.FieldLayer, "adapter").
 					Str(zerowrap.FieldAdapter, "eventbus").
