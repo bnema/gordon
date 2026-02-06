@@ -63,20 +63,41 @@ func (s *PassStore) ListKeys(domainName string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !exists {
-		return []string{}, nil
-	}
-
 	keys := []string{}
-	for _, line := range strings.Split(content, "\n") {
-		key := strings.TrimSpace(line)
-		if key == "" {
-			continue
+	if exists {
+		for _, line := range strings.Split(content, "\n") {
+			key := strings.TrimSpace(line)
+			if key == "" {
+				continue
+			}
+			keys = append(keys, key)
 		}
-		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	// Recover keys that may exist in pass but are missing from the manifest.
+	discovered, err := s.listDomainKeys(domainName)
+	if err != nil {
+		return nil, err
 	}
 
-	return keys, nil
+	merged, changed := mergeUniqueKeys(keys, discovered)
+	if changed {
+		// Best-effort self-heal of stale manifest.
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), s.timeout)
+		writeErr := s.passInsert(writeCtx, manifestPath, strings.Join(merged, "\n"))
+		writeCancel()
+		if writeErr != nil {
+			s.log.Warn().
+				Str(zerowrap.FieldLayer, "adapter").
+				Str(zerowrap.FieldAdapter, "domainsecrets").
+				Str("domain", domainName).
+				Err(writeErr).
+				Msg("failed to self-heal pass manifest, continuing with recovered keys")
+		}
+	}
+
+	return merged, nil
 }
 
 // GetAll returns all secrets for a domain as a key-value map.
@@ -496,6 +517,35 @@ func (s *PassStore) manifestPath(domainName string) (string, error) {
 	return path, nil
 }
 
+func (s *PassStore) listDomainKeys(domainName string) ([]string, error) {
+	basePath, err := s.domainPath(domainName)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+
+	entries, err := s.listTopLevelEntries(ctx, basePath)
+	if err != nil {
+		return nil, err
+	}
+
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry == ".keys" {
+			continue
+		}
+		if err := domain.ValidateEnvKey(entry); err != nil {
+			continue
+		}
+		keys = append(keys, entry)
+	}
+
+	sort.Strings(keys)
+	return keys, nil
+}
+
 func (s *PassStore) attachmentPath(containerName string) (string, error) {
 	if err := domain.ValidateContainerName(containerName); err != nil {
 		return "", err
@@ -723,6 +773,34 @@ func passEntryMissing(output string) bool {
 	lower := strings.ToLower(clean)
 	return strings.Contains(lower, "not in the password store") ||
 		strings.Contains(lower, "password store is empty")
+}
+
+func mergeUniqueKeys(primary, secondary []string) ([]string, bool) {
+	mergedSet := make(map[string]struct{}, len(primary)+len(secondary))
+	for _, key := range primary {
+		mergedSet[key] = struct{}{}
+	}
+	for _, key := range secondary {
+		mergedSet[key] = struct{}{}
+	}
+
+	merged := make([]string, 0, len(mergedSet))
+	for key := range mergedSet {
+		merged = append(merged, key)
+	}
+	sort.Strings(merged)
+
+	if len(merged) != len(primary) {
+		return merged, true
+	}
+
+	for i := range primary {
+		if primary[i] != merged[i] {
+			return merged, true
+		}
+	}
+
+	return merged, false
 }
 
 func (s *PassStore) cleanupInsertedPaths(paths []string) {

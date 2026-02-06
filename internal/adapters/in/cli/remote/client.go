@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,11 @@ type Client struct {
 	token      string
 	httpClient *http.Client
 }
+
+var (
+	retryMaxAttempts = 4
+	retryBaseDelay   = 250 * time.Millisecond
+)
 
 // ClientOption configures the Client.
 type ClientOption func(*Client)
@@ -100,13 +106,7 @@ func parseResponse(resp *http.Response, target any) error {
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		var errResp struct {
-			Error string `json:"error"`
-		}
-		if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
-			return fmt.Errorf("%s: %s", resp.Status, errResp.Error)
-		}
-		return fmt.Errorf("%s: %s", resp.Status, string(body))
+		return parseErrorResponse(resp, body)
 	}
 
 	if target != nil {
@@ -116,6 +116,72 @@ func parseResponse(resp *http.Response, target any) error {
 	}
 
 	return nil
+}
+
+func parseErrorResponse(resp *http.Response, body []byte) error {
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
+		return fmt.Errorf("%s: %s", resp.Status, errResp.Error)
+	}
+	return fmt.Errorf("%s: %s", resp.Status, string(body))
+}
+
+func isRetryableRequestError(err error) bool {
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func isRetryableStatus(status int) bool {
+	return status >= 500 && status <= 599
+}
+
+func retryDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return retryBaseDelay
+	}
+	return retryBaseDelay * time.Duration(1<<(attempt-1))
+}
+
+// requestWithRetry performs an HTTP request and retries transient failures.
+// Retries occur on transport errors and any 5xx response.
+func (c *Client) requestWithRetry(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	var lastErr error
+
+	for attempt := 1; attempt <= retryMaxAttempts; attempt++ {
+		resp, err := c.request(ctx, method, path, body)
+		if err != nil {
+			lastErr = err
+			if attempt == retryMaxAttempts || !isRetryableRequestError(err) {
+				return nil, err
+			}
+		} else {
+			if !isRetryableStatus(resp.StatusCode) {
+				return resp, nil
+			}
+
+			respBody, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			lastErr = parseErrorResponse(resp, respBody)
+			if attempt == retryMaxAttempts {
+				return nil, lastErr
+			}
+		}
+
+		delay := retryDelay(attempt)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("request failed after retries")
 }
 
 // Routes API
@@ -371,7 +437,7 @@ func (c *Client) GetHealth(ctx context.Context) (map[string]*RouteHealth, error)
 
 // Reload triggers a configuration reload.
 func (c *Client) Reload(ctx context.Context) error {
-	resp, err := c.request(ctx, http.MethodPost, "/reload", nil)
+	resp, err := c.requestWithRetry(ctx, http.MethodPost, "/reload", nil)
 	if err != nil {
 		return err
 	}
@@ -431,7 +497,7 @@ type DeployResult struct {
 
 // Deploy triggers a deployment for the specified domain.
 func (c *Client) Deploy(ctx context.Context, deployDomain string) (*DeployResult, error) {
-	resp, err := c.request(ctx, http.MethodPost, "/deploy/"+url.PathEscape(deployDomain), nil)
+	resp, err := c.requestWithRetry(ctx, http.MethodPost, "/deploy/"+url.PathEscape(deployDomain), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +527,7 @@ func (c *Client) Restart(ctx context.Context, restartDomain string, withAttachme
 	if withAttachments {
 		path += "?attachments=true"
 	}
-	resp, err := c.request(ctx, http.MethodPost, path, nil)
+	resp, err := c.requestWithRetry(ctx, http.MethodPost, path, nil)
 	if err != nil {
 		return nil, err
 	}

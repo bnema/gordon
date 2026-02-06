@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,25 @@ func passCmd(args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return exec.CommandContext(ctx, "pass", args...).Run()
+}
+
+func passInsertValue(path, value string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path)
+	cmd.Stdin = strings.NewReader(value)
+	_, err := cmd.CombinedOutput()
+	return err
+}
+
+func passShow(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "pass", "show", path).CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func requirePass(t *testing.T) {
@@ -155,6 +175,45 @@ func TestPassStore_DeleteAttachment(t *testing.T) {
 	assert.Equal(t, "gitea", values["POSTGRES_USER"])
 	_, exists := values["POSTGRES_PASSWORD"]
 	assert.False(t, exists)
+}
+
+func TestPassStore_ListKeys_RecoversOrphanedEntries(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	domainName := fmt.Sprintf("orphan.%d.example.com", time.Now().UnixNano())
+	keys := []string{"EXISTING", "ORIGIN"}
+	defer cleanupPassDomain(t, domainName, keys)
+
+	err = store.Set(domainName, map[string]string{"EXISTING": "present"})
+	require.NoError(t, err)
+
+	safeDomain, err := domain.SanitizeDomainForEnvFile(domainName)
+	require.NoError(t, err)
+
+	orphanPath := fmt.Sprintf("%s/%s/ORIGIN", PassDomainSecretsPath, safeDomain)
+	err = passInsertValue(orphanPath, "https://example.com")
+	require.NoError(t, err)
+
+	manifestPath := fmt.Sprintf("%s/%s/.keys", PassDomainSecretsPath, safeDomain)
+	err = passInsertValue(manifestPath, "EXISTING\n")
+	require.NoError(t, err)
+
+	listed, err := store.ListKeys(domainName)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"EXISTING", "ORIGIN"}, listed)
+
+	values, err := store.GetAll(domainName)
+	require.NoError(t, err)
+	assert.Equal(t, "present", values["EXISTING"])
+	assert.Equal(t, "https://example.com", values["ORIGIN"])
+
+	manifest, err := passShow(manifestPath)
+	require.NoError(t, err)
+	assert.Contains(t, manifest, "EXISTING")
+	assert.Contains(t, manifest, "ORIGIN")
 }
 
 func TestParsePassListOutput(t *testing.T) {
