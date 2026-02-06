@@ -82,15 +82,15 @@ func TestClientDeployReturnsErrorAfterRetryExhaustion(t *testing.T) {
 		require.Equal(t, "/admin/deploy/test.example.com", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
 		atomic.AddInt32(&attempts, 1)
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":"failed to deploy container"}`))
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"upstream unavailable"}`))
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
 	_, err := client.Deploy(context.Background(), "test.example.com")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "500 Internal Server Error: failed to deploy container")
+	assert.Contains(t, err.Error(), "502 Bad Gateway: upstream unavailable")
 	assert.EqualValues(t, retryMaxAttempts, atomic.LoadInt32(&attempts))
 }
 
