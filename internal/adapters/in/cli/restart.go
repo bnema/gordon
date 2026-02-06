@@ -50,6 +50,7 @@ Examples:
 						fmt.Println(styles.RenderSuccess(fmt.Sprintf("Restart signal sent for %s (local deploy path)", domain)))
 						return nil
 					}
+					return fmt.Errorf("remote restart failed: %w; local fallback failed: %v", err, localErr)
 				}
 				return fmt.Errorf("failed to restart: %w", err)
 			}

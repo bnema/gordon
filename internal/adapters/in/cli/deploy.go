@@ -42,6 +42,7 @@ Examples:
 							fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
 							return nil
 						}
+						return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %v", err, localErr)
 					}
 					return fmt.Errorf("failed to deploy: %w", err)
 				}
