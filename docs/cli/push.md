@@ -21,6 +21,7 @@ gordon push <domain> [options]
 | Option | Description |
 |--------|-------------|
 | `--build` | Build the image first using `docker buildx` |
+| `-f, --file` | Path to Dockerfile (default: `./Dockerfile`, used with `--build`) |
 | `--platform` | Target platform for buildx (default: `linux/amd64`) |
 | `--build-arg` | Additional build args (repeatable, `KEY=VALUE`) |
 | `--tag` | Override version tag (default: `git describe --tags --abbrev=0`) |
@@ -37,8 +38,9 @@ Gordon registry, pushes it, and optionally deploys it.
 - The registry and repository are derived from the route image on the server.
 - The version tag defaults to the latest git tag. If no tag is found, `latest`
   is used.
-- When `--build` is set, the command uses `docker buildx build --push` and
-  injects `VERSION=<tag>` plus any `--build-arg` values.
+- When `--build` is set, the command builds with `docker buildx build --load`
+  and injects `VERSION=<tag>` plus any `--build-arg` values.
+- Use `-f/--file` to build from a Dockerfile outside the current directory root.
 - The version tag and `latest` are both pushed (unless the version is `latest`).
 
 ### Examples
@@ -55,6 +57,9 @@ gordon push myapp.example.com --no-confirm
 
 # Build for ARM and pass build args
 gordon push myapp.example.com --build --platform linux/arm64 --build-arg CGO_ENABLED=0
+
+# Build from a custom Dockerfile path
+gordon push myapp.example.com --build -f docker/app/Dockerfile
 ```
 
 ### Notes
