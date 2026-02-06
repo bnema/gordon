@@ -442,7 +442,9 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 	// For PATCH requests, respond with 202 Accepted
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uuid))
-	w.Header().Set("Range", fmt.Sprintf("0-%d", length-1))
+	if length > 0 {
+		w.Header().Set("Range", fmt.Sprintf("0-%d", length-1))
+	}
 	w.Header().Set("Docker-Upload-UUID", uuid)
 	w.WriteHeader(http.StatusAccepted)
 }
