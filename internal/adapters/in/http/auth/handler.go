@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -342,5 +343,7 @@ func (h *Handler) isInternalAuth(username, password string) bool {
 	if h.internalAuth.Username == "" || h.internalAuth.Password == "" {
 		return false
 	}
-	return username == h.internalAuth.Username && password == h.internalAuth.Password
+	usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(h.internalAuth.Username)) == 1
+	passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(h.internalAuth.Password)) == 1
+	return usernameMatch && passwordMatch
 }
