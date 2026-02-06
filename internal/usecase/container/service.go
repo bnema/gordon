@@ -1216,16 +1216,48 @@ func (s *Service) deployAttachments(ctx context.Context, domainName, networkName
 	}
 
 	log := zerowrap.FromCtx(ctx)
-	var failed int
+	var deployed []string // track successfully deployed attachment IDs for rollback
 	for _, svc := range attachments {
 		if err := s.deployAttachedService(ctx, domainName, svc, networkName); err != nil {
 			log.WrapErrWithFields(err, "failed to deploy attachment", map[string]any{zerowrap.FieldService: svc, "domain": domainName})
-			failed++
-		}
-	}
 
-	if failed > 0 {
-		return fmt.Errorf("failed to deploy %d of %d attachment(s)", failed, len(attachments))
+			// Rollback: clean up already-deployed attachments
+			for _, id := range deployed {
+				if stopErr := s.runtime.StopContainer(ctx, id); stopErr != nil {
+					log.Warn().Err(stopErr).Str("attachment_id", id).Msg("rollback: failed to stop attachment")
+				}
+				if rmErr := s.runtime.RemoveContainer(ctx, id, true); rmErr != nil {
+					log.Warn().Err(rmErr).Str("attachment_id", id).Msg("rollback: failed to remove attachment")
+				}
+			}
+			// Deregister rolled-back attachments
+			if len(deployed) > 0 {
+				s.mu.Lock()
+				remaining := s.attachments[domainName]
+				filtered := remaining[:0]
+				rollbackSet := make(map[string]bool, len(deployed))
+				for _, id := range deployed {
+					rollbackSet[id] = true
+				}
+				for _, id := range remaining {
+					if !rollbackSet[id] {
+						filtered = append(filtered, id)
+					}
+				}
+				s.attachments[domainName] = filtered
+				s.mu.Unlock()
+			}
+
+			return fmt.Errorf("failed to deploy attachment %q (rolled back %d already-deployed)", svc, len(deployed))
+		}
+		// Collect IDs of attachments tracked under this domain after successful deploy
+		s.mu.RLock()
+		ids := s.attachments[domainName]
+		if len(ids) > 0 {
+			latest := ids[len(ids)-1]
+			deployed = append(deployed, latest)
+		}
+		s.mu.RUnlock()
 	}
 	return nil
 }
