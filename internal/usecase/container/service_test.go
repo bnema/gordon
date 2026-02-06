@@ -1547,6 +1547,65 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 	assert.Equal(t, "new-container", result.ID)
 }
 
+func TestService_Deploy_TrackedTempContainerUsesAlternateTempName(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// Simulate an interrupted zero-downtime deploy that left "-new" as the tracked container name.
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "tracked-temp-container",
+		Name:   "gordon-test.example.com-new",
+		Status: "running",
+	}
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:v2",
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		{
+			ID:     "tracked-temp-container",
+			Name:   "gordon-test.example.com-new",
+			Status: "running",
+		},
+	}, nil)
+
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
+
+	created := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-next", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-test.example.com-next"
+	})).Return(created, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID:     "new-container",
+		Status: "running",
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	runtime.EXPECT().StopContainer(mock.Anything, "tracked-temp-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "tracked-temp-container", true).Return(nil)
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "new-container", result.ID)
+}
+
 func TestService_StripRegistryPrefix(t *testing.T) {
 	tests := []struct {
 		name           string

@@ -144,12 +144,28 @@ func (s *Service) acquireDomainDeployLock(ctx context.Context, domain string) (f
 }
 
 // buildContainerConfig constructs the container configuration for deployment.
-func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef string, exposedPorts []int, envVars []string, volumes map[string]string, networkName string, hasExisting bool) *domain.ContainerConfig {
-	// Determine container name (use temp suffix for zero-downtime if existing)
-	containerName := fmt.Sprintf("gordon-%s", containerDomain)
-	if hasExisting {
-		containerName = fmt.Sprintf("gordon-%s-new", containerDomain)
+func (s *Service) deploymentContainerName(containerDomain string, existing *domain.Container) string {
+	canonicalName := fmt.Sprintf("gordon-%s", containerDomain)
+	if existing == nil {
+		return canonicalName
 	}
+
+	// Alternate temporary names if the tracked container was left with a temp suffix.
+	// This prevents name collisions after interrupted zero-downtime deploys.
+	newName := canonicalName + "-new"
+	nextName := canonicalName + "-next"
+	switch existing.Name {
+	case newName:
+		return nextName
+	case nextName:
+		return newName
+	default:
+		return newName
+	}
+}
+
+func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef string, exposedPorts []int, envVars []string, volumes map[string]string, networkName string, existing *domain.Container) *domain.ContainerConfig {
+	containerName := s.deploymentContainerName(containerDomain, existing)
 
 	return &domain.ContainerConfig{
 		Image:       actualImageRef,
@@ -242,7 +258,7 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	}
 
 	// Build container configuration
-	containerConfig := s.buildContainerConfig(route.Domain, route.Image, actualImageRef, exposedPorts, envVars, volumes, networkName, hasExisting)
+	containerConfig := s.buildContainerConfig(route.Domain, route.Image, actualImageRef, exposedPorts, envVars, volumes, networkName, existing)
 
 	newContainer, err := s.runtime.CreateContainer(ctx, containerConfig)
 	if err != nil {
@@ -1221,6 +1237,7 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 	log := zerowrap.FromCtx(ctx)
 	expectedName := fmt.Sprintf("gordon-%s", domainName)
 	expectedNewName := expectedName + "-new"
+	expectedNextName := expectedName + "-next"
 
 	allContainers, err := s.runtime.ListContainers(ctx, true)
 	if err != nil {
@@ -1228,7 +1245,7 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 	}
 
 	for _, c := range allContainers {
-		if (c.Name == expectedName || c.Name == expectedNewName) && c.ID != skipContainerID {
+		if (c.Name == expectedName || c.Name == expectedNewName || c.Name == expectedNextName) && c.ID != skipContainerID {
 			log.Info().Str(zerowrap.FieldEntityID, c.ID).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
 
 			if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
