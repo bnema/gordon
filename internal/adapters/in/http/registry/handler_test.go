@@ -257,7 +257,7 @@ func TestHandler_StartBlobUpload_Success(t *testing.T) {
 
 	handler := NewHandler(registrySvc, testLogger())
 
-	registrySvc.EXPECT().StartUpload(mock.Anything, "myapp").Return("1234567890-myapp", nil)
+	registrySvc.EXPECT().StartUpload(mock.Anything, "myapp").Return("550e8400-e29b-41d4-a716-446655440000", nil)
 
 	req := httptest.NewRequest("POST", "/v2/myapp/blobs/uploads/", nil)
 	rec := httptest.NewRecorder()
@@ -265,7 +265,7 @@ func TestHandler_StartBlobUpload_Success(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	assert.Contains(t, rec.Header().Get("Location"), "/v2/myapp/blobs/uploads/1234567890-myapp")
+	assert.Contains(t, rec.Header().Get("Location"), "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000")
 	assert.Equal(t, "0-0", rec.Header().Get("Range"))
 }
 
@@ -291,15 +291,15 @@ func TestHandler_BlobUpload_PATCH(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger())
 
 	chunkData := []byte("chunk content")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "1234567890-myapp", chunkData).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
 
-	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/1234567890-myapp", bytes.NewReader(chunkData))
+	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	assert.Contains(t, rec.Header().Get("Location"), "/v2/myapp/blobs/uploads/1234567890-myapp")
+	assert.Contains(t, rec.Header().Get("Location"), "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000")
 }
 
 func TestHandler_BlobUpload_PUT_Finalize(t *testing.T) {
@@ -308,10 +308,10 @@ func TestHandler_BlobUpload_PUT_Finalize(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger())
 
 	chunkData := []byte("final chunk")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "1234567890-myapp", chunkData).Return(int64(len(chunkData)), nil)
-	registrySvc.EXPECT().FinishUpload(mock.Anything, "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().FinishUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
 
-	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/1234567890-myapp?digest=sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", bytes.NewReader(chunkData))
+	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000?digest=sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -330,7 +330,7 @@ func TestHandler_BlobUpload_PUT_DigestMismatch(t *testing.T) {
 	// Note: Invalid digest format is rejected by validation before reaching storage layer
 	// This test verifies that invalid digests are properly rejected
 
-	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/1234567890-myapp?digest=sha256:wrong", bytes.NewReader(chunkData))
+	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000?digest=sha256:wrong", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

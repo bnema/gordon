@@ -28,8 +28,8 @@ var referenceRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 var digestRegex = regexp.MustCompile(`^(sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`)
 
 // UUID validation for blob uploads:
-// - Format: timestamp-name (where name has / replaced with _)
-var uuidRegex = regexp.MustCompile(`^[0-9]+-[a-zA-Z0-9_-]+$`)
+// - Format: standard UUID v4 (e.g., 550e8400-e29b-41d4-a716-446655440000)
+var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // MaxRepositoryNameLength is the maximum allowed length for repository names.
 const MaxRepositoryNameLength = 256
