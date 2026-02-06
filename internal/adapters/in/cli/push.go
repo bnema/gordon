@@ -18,12 +18,13 @@ import (
 
 func newPushCmd() *cobra.Command {
 	var (
-		noDeploy  bool
-		noConfirm bool
-		build     bool
-		platform  string
-		tag       string
-		buildArgs []string
+		noDeploy   bool
+		noConfirm  bool
+		build      bool
+		platform   string
+		tag        string
+		dockerfile string
+		buildArgs  []string
 	)
 
 	cmd := &cobra.Command{
@@ -41,7 +42,7 @@ Examples:
   gordon push myapp.example.com --build --build-arg CGO_ENABLED=0 --remote ...`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPush(cmd.Context(), args[0], tag, build, platform, buildArgs, noDeploy, noConfirm)
+			return runPush(cmd.Context(), args[0], tag, build, platform, dockerfile, buildArgs, noDeploy, noConfirm)
 		},
 	}
 
@@ -49,16 +50,24 @@ Examples:
 	cmd.Flags().BoolVar(&noConfirm, "no-confirm", false, "Skip deploy confirmation prompt")
 	cmd.Flags().BoolVar(&build, "build", false, "Build the image first using docker buildx")
 	cmd.Flags().StringVar(&platform, "platform", "linux/amd64", "Target platform (used with --build)")
+	cmd.Flags().StringVarP(&dockerfile, "file", "f", "", "Path to Dockerfile (default: ./Dockerfile, used with --build)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Override version tag (default: git describe)")
 	cmd.Flags().StringArrayVar(&buildArgs, "build-arg", nil, "Additional build args (used with --build)")
 
 	return cmd
 }
 
-func runPush(ctx context.Context, pushDomain, tag string, build bool, platform string, buildArgs []string, noDeploy bool, noConfirm bool) error {
+func runPush(ctx context.Context, pushDomain, tag string, build bool, platform string, dockerfile string, buildArgs []string, noDeploy bool, noConfirm bool) error {
 	client, isRemote := GetRemoteClient()
 	if !isRemote {
 		return fmt.Errorf("push requires remote mode")
+	}
+
+	if dockerfile != "" && !build {
+		return fmt.Errorf("--file can only be used with --build")
+	}
+	if dockerfile == "" {
+		dockerfile = "Dockerfile"
 	}
 
 	route, err := client.GetRoute(ctx, pushDomain)
@@ -93,7 +102,7 @@ func runPush(ctx context.Context, pushDomain, tag string, build bool, platform s
 	}
 
 	if build {
-		if err := buildAndPush(ctx, version, platform, buildArgs, versionRef, latestRef); err != nil {
+		if err := buildAndPush(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef); err != nil {
 			return err
 		}
 	} else {
@@ -122,9 +131,9 @@ func determineVersion(ctx context.Context, tag string) string {
 	return version
 }
 
-func buildAndPush(ctx context.Context, version, platform string, buildArgs []string, versionRef, latestRef string) error {
-	if _, err := os.Stat("Dockerfile"); os.IsNotExist(err) {
-		return fmt.Errorf("no Dockerfile found in current directory")
+func buildAndPush(ctx context.Context, version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) error {
+	if _, err := os.Stat(dockerfile); os.IsNotExist(err) {
+		return fmt.Errorf("Dockerfile not found: %s", dockerfile)
 	}
 
 	// Build and load into local daemon (NOT --push).
@@ -132,7 +141,7 @@ func buildAndPush(ctx context.Context, version, platform string, buildArgs []str
 	// Cloudflare's 100MB per-request limit. Loading locally then
 	// using docker push gives us chunked uploads (~5MB per request).
 	fmt.Println("\nBuilding image...")
-	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(version, platform, buildArgs, versionRef, latestRef)...) // #nosec G204
+	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {
@@ -155,10 +164,11 @@ func buildAndPush(ctx context.Context, version, platform string, buildArgs []str
 // buildImageArgs constructs the docker buildx build arguments.
 // Uses --load instead of --push so the image is loaded into the local
 // daemon, allowing docker push to handle the upload with chunked requests.
-func buildImageArgs(version, platform string, buildArgs []string, versionRef, latestRef string) []string {
+func buildImageArgs(version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) []string {
 	args := []string{
 		"buildx", "build",
 		"--platform", platform,
+		"-f", dockerfile,
 		"-t", latestRef,
 		"--build-arg", "VERSION=" + version,
 	}
