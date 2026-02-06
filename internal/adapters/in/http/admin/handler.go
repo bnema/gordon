@@ -445,9 +445,6 @@ func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
 
 // handleSecrets handles /admin/secrets endpoints.
 func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
 	// Parse path: /secrets/{domain} or /secrets/{domain}/{key}
 	parts := strings.Split(strings.TrimPrefix(path, "/secrets/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
@@ -456,6 +453,35 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 	}
 
 	secretDomain := parts[0]
+
+	// Check for attachment sub-path: /secrets/{domain}/attachments/{service}[/{key}]
+	if len(parts) >= 2 && parts[1] == "attachments" {
+		switch r.Method {
+		case http.MethodPost:
+			// Expected path: /secrets/{domain}/attachments/{service}
+			if len(parts) != 3 {
+				h.sendError(w, http.StatusBadRequest, "invalid attachment path: expected /secrets/{domain}/attachments/{service}")
+				return
+			}
+			service := parts[2]
+			h.handleAttachmentSecrets(w, r, secretDomain, service, "")
+			return
+		case http.MethodDelete:
+			// Expected path: /secrets/{domain}/attachments/{service}/{key}
+			if len(parts) != 4 {
+				h.sendError(w, http.StatusBadRequest, "invalid attachment path: expected /secrets/{domain}/attachments/{service}/{key}")
+				return
+			}
+			service := parts[2]
+			attachmentKey := parts[3]
+			h.handleAttachmentSecrets(w, r, secretDomain, service, attachmentKey)
+			return
+		default:
+			h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+	}
+
 	secretKey := ""
 	if len(parts) > 1 {
 		secretKey = parts[1]
@@ -464,57 +490,66 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 	switch r.Method {
 	case http.MethodGet:
 		h.handleSecretsGet(w, r, secretDomain)
-
 	case http.MethodPost:
-		// Check write permission
-		if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
-			h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
-			return
-		}
-
-		// Limit request body size
-		r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-
-		// Set secret(s)
-		var data map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-			log.Warn().Err(err).Msg("invalid secrets JSON")
-			h.sendError(w, http.StatusBadRequest, "invalid JSON")
-			return
-		}
-
-		if err := h.secretSvc.Set(ctx, secretDomain, data); err != nil {
-			log.Error().Err(err).Str("domain", secretDomain).Msg("failed to set secrets")
-			h.sendError(w, http.StatusBadRequest, "invalid domain")
-			return
-		}
-
-		log.Info().Str("domain", secretDomain).Int("count", len(data)).Msg("secrets set")
-		h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "updated"})
-
+		h.handleSecretsPost(w, r, secretDomain)
 	case http.MethodDelete:
-		// Check write permission
-		if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
-			h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
-			return
-		}
-		if secretKey == "" {
-			h.sendError(w, http.StatusBadRequest, "key required in path")
-			return
-		}
-
-		if err := h.secretSvc.Delete(ctx, secretDomain, secretKey); err != nil {
-			log.Error().Err(err).Str("domain", secretDomain).Str("key", secretKey).Msg("failed to delete secret")
-			h.sendError(w, http.StatusBadRequest, "invalid domain")
-			return
-		}
-
-		log.Info().Str("domain", secretDomain).Str("key", secretKey).Msg("secret deleted")
-		h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "deleted"})
-
+		h.handleSecretsDelete(w, r, secretDomain, secretKey)
 	default:
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleSecretsPost handles POST /admin/secrets/{domain} - set secrets.
+func (h *Handler) handleSecretsPost(w http.ResponseWriter, r *http.Request, secretDomain string) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+
+	var data map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		log.Warn().Err(err).Msg("invalid secrets JSON")
+		h.sendError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if err := h.secretSvc.Set(ctx, secretDomain, data); err != nil {
+		log.Error().Err(err).Str("domain", secretDomain).Msg("failed to set secrets")
+		h.sendError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
+
+	log.Info().Str("domain", secretDomain).Int("count", len(data)).Msg("secrets set")
+	h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "updated"})
+}
+
+// handleSecretsDelete handles DELETE /admin/secrets/{domain}/{key} - delete a secret.
+func (h *Handler) handleSecretsDelete(w http.ResponseWriter, r *http.Request, secretDomain, secretKey string) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
+		return
+	}
+	if secretKey == "" {
+		h.sendError(w, http.StatusBadRequest, "key required in path")
+		return
+	}
+
+	if err := h.secretSvc.Delete(ctx, secretDomain, secretKey); err != nil {
+		log.Error().Err(err).Str("domain", secretDomain).Str("key", secretKey).Msg("failed to delete secret")
+		h.sendError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
+
+	log.Info().Str("domain", secretDomain).Str("key", secretKey).Msg("secret deleted")
+	h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "deleted"})
 }
 
 // handleSecretsGet handles GET /admin/secrets/{domain} - list secrets.
@@ -550,6 +585,61 @@ func (h *Handler) handleSecretsGet(w http.ResponseWriter, r *http.Request, secre
 		Keys:        keys,
 		Attachments: attachmentDTOs,
 	})
+}
+
+// handleAttachmentSecrets handles /admin/secrets/{domain}/attachments/{service}[/{key}] endpoints.
+func (h *Handler) handleAttachmentSecrets(w http.ResponseWriter, r *http.Request, secretDomain, service, key string) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	switch r.Method {
+	case http.MethodPost:
+		if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
+			h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+
+		var data map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+			log.Warn().Err(err).Msg("invalid attachment secrets JSON")
+			h.sendError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+
+		if err := h.secretSvc.SetAttachment(ctx, secretDomain, service, data); err != nil {
+			log.Error().Err(err).Str("domain", secretDomain).Str("service", service).Msg("failed to set attachment secrets")
+			h.sendError(w, http.StatusBadRequest, "invalid domain or service")
+			return
+		}
+
+		log.Info().Str("domain", secretDomain).Str("service", service).Int("count", len(data)).Msg("attachment secrets set")
+		h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "updated"})
+
+	case http.MethodDelete:
+		if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
+			h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
+			return
+		}
+
+		if key == "" {
+			h.sendError(w, http.StatusBadRequest, "key required in path")
+			return
+		}
+
+		if err := h.secretSvc.DeleteAttachment(ctx, secretDomain, service, key); err != nil {
+			log.Error().Err(err).Str("domain", secretDomain).Str("service", service).Str("key", key).Msg("failed to delete attachment secret")
+			h.sendError(w, http.StatusBadRequest, "invalid domain or service")
+			return
+		}
+
+		log.Info().Str("domain", secretDomain).Str("service", service).Str("key", key).Msg("attachment secret deleted")
+		h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "deleted"})
+
+	default:
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 // handleHealth handles /admin/health endpoint.

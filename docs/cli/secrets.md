@@ -23,7 +23,7 @@ Storage depends on the secrets backend:
 
 ## gordon secrets list
 
-List all secrets for a specific domain.
+List all secrets for a specific domain. When attachment secrets are present, they are displayed in a tree view below the domain secrets.
 
 ```bash
 gordon secrets list <domain>
@@ -55,11 +55,16 @@ gordon secrets list myapp.local --remote https://gordon.mydomain.com --token $TO
 ### Output
 
 ```
-Secret                    Value (masked)
---------------------------------------------------------------------------------
-DATABASE_URL              postgres://...
+Secrets for app.mydomain.com
+
+Key                       Value
+DATABASE_URL              ****
 API_KEY                   ****
-JWT_SECRET                ****
+├─ [postgres]
+│  ├─ POSTGRES_USER       ****
+│  └─ POSTGRES_PASSWORD   ****
+└─ [redis]
+   └─ REDIS_PASSWORD      ****
 ```
 
 ---
@@ -69,7 +74,7 @@ JWT_SECRET                ****
 Set a secret value for a domain.
 
 ```bash
-gordon secrets set <domain> <key> <value>
+gordon secrets set <domain> <KEY=value>...
 gordon secrets set myapp.local DATABASE_URL "postgres://..."
 ```
 
@@ -85,6 +90,7 @@ gordon secrets set myapp.local DATABASE_URL "postgres://..."
 
 | Option | Description |
 |--------|-------------|
+| `--attachment` / `-a` | Target an attachment service (e.g., postgres, redis) |
 | `--remote` | Remote Gordon URL |
 | `--token` | Authentication token for remote |
 
@@ -97,6 +103,13 @@ gordon secrets set myapp.local API_KEY "your-api-key"
 
 # Remote (override)
 gordon secrets set myapp.local DATABASE_URL "postgres://..." --remote https://gordon.mydomain.com --token $TOKEN
+
+# Set attachment secrets
+gordon secrets set app.mydomain.com --attachment postgres POSTGRES_PASSWORD=secret
+gordon secrets set app.mydomain.com -a redis REDIS_PASSWORD=mysecret
+
+# Multiple secrets at once
+gordon secrets set app.mydomain.com -a postgres POSTGRES_USER=admin POSTGRES_PASSWORD=secret
 ```
 
 ---
@@ -120,6 +133,7 @@ gordon secrets remove <domain> <key>
 
 | Option | Description |
 |--------|-------------|
+| `--attachment` / `-a` | Target an attachment service (e.g., postgres, redis) |
 | `--remote` | Remote Gordon URL |
 | `--token` | Authentication token for remote |
 
@@ -131,6 +145,9 @@ gordon secrets remove myapp.local DATABASE_URL
 
 # Remote (override)
 gordon secrets remove myapp.local DATABASE_URL --remote https://gordon.mydomain.com --token $TOKEN
+
+# Remove attachment secret
+gordon secrets remove app.mydomain.com --attachment postgres POSTGRES_PASSWORD
 ```
 
 ---
@@ -166,7 +183,7 @@ gordon secrets set myapp.example.com DATABASE_URL "$DATABASE_URL"
 gordon secrets set myapp.example.com API_KEY "$API_KEY"
 
 # Deploy
-gordon routes deploy myapp.example.com
+gordon deploy myapp.example.com
 ```
 
 ### Rotating Secrets
@@ -179,7 +196,23 @@ NEW_JWT_SECRET=$(openssl rand -base64 32)
 gordon secrets set myapp.local JWT_SECRET "$NEW_JWT_SECRET"
 
 # Redeploy to pick up new secret
-gordon routes deploy myapp.local
+gordon deploy myapp.local
+```
+
+### Attachment Secrets
+
+```bash
+# Configure database credentials
+gordon secrets set app.mydomain.com -a postgres POSTGRES_USER=admin POSTGRES_PASSWORD=secret
+
+# Configure cache credentials
+gordon secrets set app.mydomain.com -a redis REDIS_PASSWORD=cache-secret
+
+# Verify
+gordon secrets list app.mydomain.com
+
+# Redeploy to pick up new secrets
+gordon deploy app.mydomain.com
 ```
 
 ## Related

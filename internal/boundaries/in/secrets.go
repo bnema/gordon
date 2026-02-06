@@ -28,4 +28,12 @@ type SecretService interface {
 	// Delete removes a specific secret key from a domain.
 	// Returns an error if the domain is invalid.
 	Delete(ctx context.Context, domain, key string) error
+
+	// SetAttachment sets or updates multiple secrets for an attachment container.
+	// The container name is derived from the domain and service name.
+	SetAttachment(ctx context.Context, domain, service string, secrets map[string]string) error
+
+	// DeleteAttachment removes a specific secret key from an attachment container.
+	// The container name is derived from the domain and service name.
+	DeleteAttachment(ctx context.Context, domain, service, key string) error
 }

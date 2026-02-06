@@ -101,6 +101,75 @@ func (_c *MockSecretService_Delete_Call) RunAndReturn(run func(ctx context.Conte
 	return _c
 }
 
+// DeleteAttachment provides a mock function for the type MockSecretService
+func (_mock *MockSecretService) DeleteAttachment(ctx context.Context, domain string, service string, key string) error {
+	ret := _mock.Called(ctx, domain, service, key)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteAttachment")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) error); ok {
+		r0 = returnFunc(ctx, domain, service, key)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockSecretService_DeleteAttachment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteAttachment'
+type MockSecretService_DeleteAttachment_Call struct {
+	*mock.Call
+}
+
+// DeleteAttachment is a helper method to define mock.On call
+//   - ctx context.Context
+//   - domain string
+//   - service string
+//   - key string
+func (_e *MockSecretService_Expecter) DeleteAttachment(ctx interface{}, domain interface{}, service interface{}, key interface{}) *MockSecretService_DeleteAttachment_Call {
+	return &MockSecretService_DeleteAttachment_Call{Call: _e.mock.On("DeleteAttachment", ctx, domain, service, key)}
+}
+
+func (_c *MockSecretService_DeleteAttachment_Call) Run(run func(ctx context.Context, domain string, service string, key string)) *MockSecretService_DeleteAttachment_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockSecretService_DeleteAttachment_Call) Return(err error) *MockSecretService_DeleteAttachment_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockSecretService_DeleteAttachment_Call) RunAndReturn(run func(ctx context.Context, domain string, service string, key string) error) *MockSecretService_DeleteAttachment_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAll provides a mock function for the type MockSecretService
 func (_mock *MockSecretService) GetAll(ctx context.Context, domain string) (map[string]string, error) {
 	ret := _mock.Called(ctx, domain)
@@ -372,6 +441,75 @@ func (_c *MockSecretService_Set_Call) Return(err error) *MockSecretService_Set_C
 }
 
 func (_c *MockSecretService_Set_Call) RunAndReturn(run func(ctx context.Context, domain string, secrets map[string]string) error) *MockSecretService_Set_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetAttachment provides a mock function for the type MockSecretService
+func (_mock *MockSecretService) SetAttachment(ctx context.Context, domain string, service string, secrets map[string]string) error {
+	ret := _mock.Called(ctx, domain, service, secrets)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetAttachment")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, map[string]string) error); ok {
+		r0 = returnFunc(ctx, domain, service, secrets)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockSecretService_SetAttachment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetAttachment'
+type MockSecretService_SetAttachment_Call struct {
+	*mock.Call
+}
+
+// SetAttachment is a helper method to define mock.On call
+//   - ctx context.Context
+//   - domain string
+//   - service string
+//   - secrets map[string]string
+func (_e *MockSecretService_Expecter) SetAttachment(ctx interface{}, domain interface{}, service interface{}, secrets interface{}) *MockSecretService_SetAttachment_Call {
+	return &MockSecretService_SetAttachment_Call{Call: _e.mock.On("SetAttachment", ctx, domain, service, secrets)}
+}
+
+func (_c *MockSecretService_SetAttachment_Call) Run(run func(ctx context.Context, domain string, service string, secrets map[string]string)) *MockSecretService_SetAttachment_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 map[string]string
+		if args[3] != nil {
+			arg3 = args[3].(map[string]string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockSecretService_SetAttachment_Call) Return(err error) *MockSecretService_SetAttachment_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockSecretService_SetAttachment_Call) RunAndReturn(run func(ctx context.Context, domain string, service string, secrets map[string]string) error) *MockSecretService_SetAttachment_Call {
 	_c.Call.Return(run)
 	return _c
 }

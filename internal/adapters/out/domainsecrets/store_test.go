@@ -336,6 +336,46 @@ func TestFileStore_ValidDomainOperations(t *testing.T) {
 	assert.False(t, exists)
 }
 
+func TestFileStore_DeleteAttachment(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "domainsecrets-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	store, err := NewFileStore(tmpDir, testLogger())
+	require.NoError(t, err)
+
+	containerName := "gitea-postgres"
+
+	// Seed with two secrets
+	err = store.SetAttachment(containerName, map[string]string{
+		"POSTGRES_USER":     "gitea",
+		"POSTGRES_PASSWORD": "secret123",
+	})
+	require.NoError(t, err)
+
+	// Delete one key
+	err = store.DeleteAttachment(containerName, "POSTGRES_PASSWORD")
+	require.NoError(t, err)
+
+	// Verify remaining
+	secrets, err := store.GetAllAttachment(containerName)
+	require.NoError(t, err)
+	assert.Len(t, secrets, 1)
+	assert.Equal(t, "gitea", secrets["POSTGRES_USER"])
+	_, exists := secrets["POSTGRES_PASSWORD"]
+	assert.False(t, exists)
+
+	// Delete nonexistent key - should be no-op
+	err = store.DeleteAttachment(containerName, "NONEXISTENT_KEY")
+	assert.NoError(t, err)
+
+	// Verify secrets unchanged after no-op delete
+	secrets, err = store.GetAllAttachment(containerName)
+	require.NoError(t, err)
+	assert.Len(t, secrets, 1)
+	assert.Equal(t, "gitea", secrets["POSTGRES_USER"])
+}
+
 func TestGetEnvFilePath(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "domainsecrets-test-*")
 	require.NoError(t, err)
