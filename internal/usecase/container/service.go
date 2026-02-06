@@ -372,45 +372,21 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 	}
 
 	// Find domain and attachment IDs for cleanup
-	var containerDomain string
-	var attachmentIDs []string
-	s.mu.RLock()
-	for d, c := range s.containers {
-		if c.ID == containerID {
-			containerDomain = d
-			break
-		}
-	}
-	if containerDomain != "" {
-		attachmentIDs = append(attachmentIDs, s.attachments[containerDomain]...)
-	}
-	s.mu.RUnlock()
+	containerDomain, attachmentIDs, cfg := s.findContainerContext(containerID)
 
 	if err := s.runtime.RemoveContainer(ctx, containerID, force); err != nil {
 		return log.WrapErr(err, "failed to remove container")
 	}
 
 	// Cleanup volumes
-	if containerDomain != "" && !s.config.VolumePreserve {
+	if containerDomain != "" && !cfg.VolumePreserve {
 		if err := s.cleanupVolumesForDomain(ctx, containerDomain); err != nil {
 			log.WrapErrWithFields(err, "failed to cleanup volumes", map[string]any{"domain": containerDomain})
 		}
 	}
 
 	// Clean up attachment containers
-	for _, attachID := range attachmentIDs {
-		if s.logWriter != nil {
-			if err := s.logWriter.StopLogging(attachID); err != nil {
-				log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to stop attachment log collection")
-			}
-		}
-		if err := s.runtime.StopContainer(ctx, attachID); err != nil {
-			log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to stop attachment container")
-		}
-		if err := s.runtime.RemoveContainer(ctx, attachID, true); err != nil {
-			log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to remove attachment container")
-		}
-	}
+	s.removeAttachments(ctx, attachmentIDs)
 
 	// Remove from tracking
 	s.mu.Lock()
@@ -435,7 +411,7 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 	// domain ever deployed), and this is the safer choice for correctness.
 
 	// Cleanup network
-	if removedDomain != "" && s.config.NetworkIsolation {
+	if removedDomain != "" && cfg.NetworkIsolation {
 		networkName := s.getNetworkForApp(removedDomain)
 		if err := s.cleanupNetworkIfEmpty(ctx, networkName); err != nil {
 			log.WrapErrWithFields(err, "failed to cleanup network", map[string]any{"network": networkName})
@@ -443,6 +419,43 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 	}
 
 	return nil
+}
+
+// findContainerContext looks up the domain, attachment IDs, and config snapshot for a container.
+func (s *Service) findContainerContext(containerID string) (string, []string, Config) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg := s.config
+	var containerDomain string
+	for d, c := range s.containers {
+		if c.ID == containerID {
+			containerDomain = d
+			break
+		}
+	}
+	var attachmentIDs []string
+	if containerDomain != "" {
+		attachmentIDs = append(attachmentIDs, s.attachments[containerDomain]...)
+	}
+	return containerDomain, attachmentIDs, cfg
+}
+
+// removeAttachments stops and removes attachment containers best-effort.
+func (s *Service) removeAttachments(ctx context.Context, attachmentIDs []string) {
+	log := zerowrap.FromCtx(ctx)
+	for _, attachID := range attachmentIDs {
+		if s.logWriter != nil {
+			if err := s.logWriter.StopLogging(attachID); err != nil {
+				log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to stop attachment log collection")
+			}
+		}
+		if err := s.runtime.StopContainer(ctx, attachID); err != nil {
+			log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to stop attachment container")
+		}
+		if err := s.runtime.RemoveContainer(ctx, attachID, true); err != nil {
+			log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to remove attachment container")
+		}
+	}
 }
 
 // Get retrieves a container by domain.
@@ -514,10 +527,14 @@ func (s *Service) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo 
 // stripRegistryPrefix removes the configured registry domain prefix from an image reference.
 // For example, "reg.example.com/myapp:latest" becomes "myapp:latest" if registry domain is "reg.example.com".
 func (s *Service) stripRegistryPrefix(image string) string {
-	if s.config.RegistryDomain == "" {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	if cfg.RegistryDomain == "" {
 		return image
 	}
-	prefix := strings.TrimSuffix(s.config.RegistryDomain, "/") + "/"
+	prefix := strings.TrimSuffix(cfg.RegistryDomain, "/") + "/"
 	if strings.HasPrefix(image, prefix) {
 		return strings.TrimPrefix(image, prefix)
 	}
@@ -531,6 +548,10 @@ func (s *Service) ListAttachments(ctx context.Context, domainName string) []doma
 
 // ListNetworks returns Gordon-managed networks.
 func (s *Service) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error) {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	networks, err := s.runtime.ListNetworks(ctx)
 	if err != nil {
 		return nil, err
@@ -538,7 +559,7 @@ func (s *Service) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, erro
 
 	var filtered []*domain.NetworkInfo
 	for _, network := range networks {
-		if strings.HasPrefix(network.Name, s.config.NetworkPrefix+"-") {
+		if strings.HasPrefix(network.Name, cfg.NetworkPrefix+"-") {
 			filtered = append(filtered, network)
 		}
 	}
@@ -744,12 +765,16 @@ func (s *Service) startLogCollection(ctx context.Context, containerID, domainNam
 }
 
 func (s *Service) buildImageRef(image string) string {
-	if !s.config.RegistryAuthEnabled || s.config.RegistryDomain == "" {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	if !cfg.RegistryAuthEnabled || cfg.RegistryDomain == "" {
 		return image
 	}
 
 	// Normalize registry domain by trimming any trailing slash
-	reg := strings.TrimSuffix(s.config.RegistryDomain, "/")
+	reg := strings.TrimSuffix(cfg.RegistryDomain, "/")
 
 	// Check if image already has the registry domain prefix
 	prefix := reg + "/"
@@ -845,7 +870,10 @@ func (s *Service) pullRefForDeploy(ctx context.Context, imageRef string) (string
 	if !domain.IsInternalDeploy(ctx) {
 		return imageRef, false
 	}
-	return rewriteToLocalRegistry(imageRef, s.config.RegistryDomain, s.config.RegistryPort), true
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+	return rewriteToLocalRegistry(imageRef, cfg.RegistryDomain, cfg.RegistryPort), true
 }
 
 // ensureImage ensures the image is available locally, pulling if needed.
@@ -915,7 +943,11 @@ func (s *Service) ensureLocalImage(ctx context.Context, imageRef, pullRef string
 		return false, nil
 	}
 
-	pullPolicy := normalizePullPolicy(s.config.PullPolicy)
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	pullPolicy := normalizePullPolicy(cfg.PullPolicy)
 	switch pullPolicy {
 	case PullPolicyAlways:
 		log.Info().Str("pull_policy", pullPolicy).Msg("pull policy forces image pull")
@@ -960,25 +992,29 @@ func (s *Service) ensureLocalImage(ctx context.Context, imageRef, pullRef string
 }
 
 func (s *Service) pullImage(ctx context.Context, pullRef string, isInternal bool) error {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	log := zerowrap.FromCtx(ctx)
 
 	switch {
-	case isInternal && s.config.RegistryAuthEnabled:
-		if s.config.InternalRegistryUsername == "" || s.config.InternalRegistryPassword == "" {
+	case isInternal && cfg.RegistryAuthEnabled:
+		if cfg.InternalRegistryUsername == "" || cfg.InternalRegistryPassword == "" {
 			return log.WrapErr(fmt.Errorf("internal registry auth not configured"), "failed to pull image for internal deploy")
 		}
-		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.InternalRegistryUsername, s.config.InternalRegistryPassword); err != nil {
+		if err := s.runtime.PullImageWithAuth(ctx, pullRef, cfg.InternalRegistryUsername, cfg.InternalRegistryPassword); err != nil {
 			return log.WrapErr(err, "failed to pull image with internal auth")
 		}
 	case isInternal:
 		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
 			return log.WrapErr(err, "failed to pull image")
 		}
-	case s.config.RegistryAuthEnabled:
-		if s.config.ServiceTokenUsername == "" || s.config.ServiceToken == "" {
+	case cfg.RegistryAuthEnabled:
+		if cfg.ServiceTokenUsername == "" || cfg.ServiceToken == "" {
 			return log.WrapErr(fmt.Errorf("registry service token not configured"), "failed to pull image for registry auth")
 		}
-		if err := s.runtime.PullImageWithAuth(ctx, pullRef, s.config.ServiceTokenUsername, s.config.ServiceToken); err != nil {
+		if err := s.runtime.PullImageWithAuth(ctx, pullRef, cfg.ServiceTokenUsername, cfg.ServiceToken); err != nil {
 			return log.WrapErr(err, "failed to pull image with auth")
 		}
 	default:
@@ -1027,10 +1063,14 @@ func (s *Service) loadEnvironment(ctx context.Context, domainName, imageRef stri
 }
 
 func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string) (map[string]string, error) {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	log := zerowrap.FromCtx(ctx)
 	volumes := make(map[string]string)
 
-	if !s.config.VolumeAutoCreate {
+	if !cfg.VolumeAutoCreate {
 		return volumes, nil
 	}
 
@@ -1041,7 +1081,7 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 	}
 
 	for _, path := range volumePaths {
-		name := generateVolumeName(s.config.VolumePrefix, domainName, path)
+		name := generateVolumeName(cfg.VolumePrefix, domainName, path)
 
 		exists, err := s.runtime.VolumeExists(ctx, name)
 		if err != nil {
@@ -1064,11 +1104,15 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 }
 
 func (s *Service) getNetworkForApp(domainName string) string {
-	if !s.config.NetworkIsolation {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	if !cfg.NetworkIsolation {
 		return "bridge"
 	}
 
-	for groupName, domains := range s.config.NetworkGroups {
+	for groupName, domains := range cfg.NetworkGroups {
 		if slices.Contains(domains, domainName) {
 			return s.generateNetworkName(groupName)
 		}
@@ -1078,7 +1122,11 @@ func (s *Service) getNetworkForApp(domainName string) string {
 }
 
 func (s *Service) generateNetworkName(identifier string) string {
-	return fmt.Sprintf("%s-%s", s.config.NetworkPrefix, strings.ReplaceAll(identifier, ".", "-"))
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	return fmt.Sprintf("%s-%s", cfg.NetworkPrefix, strings.ReplaceAll(identifier, ".", "-"))
 }
 
 func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string) error {
@@ -1186,11 +1234,15 @@ func (s *Service) deployAttachments(ctx context.Context, domainName, networkName
 // 1. Direct domain attachments (attachments[domain])
 // 2. Network group attachments (attachments[group] where domain is in network_groups[group])
 func (s *Service) resolveAttachmentsForDomain(domainName string) []string {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	seen := make(map[string]bool)
 	var result []string
 
 	// First, add domain-specific attachments
-	if domainAttachments, ok := s.config.Attachments[domainName]; ok {
+	if domainAttachments, ok := cfg.Attachments[domainName]; ok {
 		for _, img := range domainAttachments {
 			if !seen[img] {
 				seen[img] = true
@@ -1200,9 +1252,9 @@ func (s *Service) resolveAttachmentsForDomain(domainName string) []string {
 	}
 
 	// Then, find which network group this domain belongs to and add group attachments
-	for groupName, domains := range s.config.NetworkGroups {
+	for groupName, domains := range cfg.NetworkGroups {
 		if slices.Contains(domains, domainName) {
-			if groupAttachments, ok := s.config.Attachments[groupName]; ok {
+			if groupAttachments, ok := cfg.Attachments[groupName]; ok {
 				for _, img := range groupAttachments {
 					if !seen[img] {
 						seen[img] = true
@@ -1599,8 +1651,12 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 		}
 	}
 
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	// Additional readiness delay (configurable, default 5 seconds)
-	delay := s.config.ReadinessDelay
+	delay := cfg.ReadinessDelay
 	if delay == 0 {
 		delay = 5 * time.Second
 	}

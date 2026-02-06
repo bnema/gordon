@@ -188,24 +188,41 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 		if handler.CanHandle(event.Type) {
 			start := time.Now()
 
-			if err := handler.Handle(event); err != nil {
-				bus.log.Error().
-					Str(zerowrap.FieldLayer, "adapter").
-					Str(zerowrap.FieldAdapter, "eventbus").
-					Err(err).
-					Str("event_id", event.ID).
-					Str(zerowrap.FieldEvent, string(event.Type)).
-					Str(zerowrap.FieldHandler, fmt.Sprintf("%T", handler)).
-					Msg("error handling event")
-			} else {
-				bus.log.Debug().
+			done := make(chan error, 1)
+			go func() {
+				done <- handler.Handle(event)
+			}()
+
+			select {
+			case err := <-done:
+				if err != nil {
+					bus.log.Error().
+						Str(zerowrap.FieldLayer, "adapter").
+						Str(zerowrap.FieldAdapter, "eventbus").
+						Err(err).
+						Str("event_id", event.ID).
+						Str(zerowrap.FieldEvent, string(event.Type)).
+						Str(zerowrap.FieldHandler, fmt.Sprintf("%T", handler)).
+						Msg("error handling event")
+				} else {
+					bus.log.Debug().
+						Str(zerowrap.FieldLayer, "adapter").
+						Str(zerowrap.FieldAdapter, "eventbus").
+						Str("event_id", event.ID).
+						Str(zerowrap.FieldEvent, string(event.Type)).
+						Str(zerowrap.FieldHandler, fmt.Sprintf("%T", handler)).
+						Dur(zerowrap.FieldDuration, time.Since(start)).
+						Msg("event handled successfully")
+				}
+			case <-time.After(30 * time.Second):
+				bus.log.Warn().
 					Str(zerowrap.FieldLayer, "adapter").
 					Str(zerowrap.FieldAdapter, "eventbus").
 					Str("event_id", event.ID).
 					Str(zerowrap.FieldEvent, string(event.Type)).
 					Str(zerowrap.FieldHandler, fmt.Sprintf("%T", handler)).
 					Dur(zerowrap.FieldDuration, time.Since(start)).
-					Msg("event handled successfully")
+					Msg("handler timeout after 30s")
 			}
 		}
 	}
