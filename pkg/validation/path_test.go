@@ -164,9 +164,13 @@ func TestValidateUUID(t *testing.T) {
 		errMsg  string
 	}{
 		// Valid cases - standard UUID v4
-		{"valid uuid", "550e8400-e29b-41d4-a716-446655440000", false, ""},
-		{"another valid uuid", "6ba7b810-9dad-11d1-80b4-00c04fd430c8", false, ""},
-		{"all zeros", "00000000-0000-0000-0000-000000000000", false, ""},
+		{"valid uuid v4", "550e8400-e29b-41d4-a716-446655440000", false, ""},
+		{"another valid uuid v4", "f47ac10b-58cc-4372-a567-0e02b2c3d479", false, ""},
+
+		// Invalid cases - not UUID v4
+		{"uuid v1 wrong version", "6ba7b810-9dad-11d1-80b4-00c04fd430c8", true, "invalid UUID format"},
+		{"all zeros not v4", "00000000-0000-0000-0000-000000000000", true, "invalid UUID format"},
+		{"wrong variant nibble", "550e8400-e29b-41d4-7716-446655440000", true, "invalid UUID format"},
 
 		// Invalid cases - path traversal
 		{"path traversal", "../etc/passwd", true, "path traversal"},
