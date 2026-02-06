@@ -2,7 +2,9 @@ package registry
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -291,7 +293,7 @@ func TestHandler_BlobUpload_PATCH(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("chunk content")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).Return(int64(len(chunkData)), nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
@@ -308,7 +310,7 @@ func TestHandler_BlobUpload_PUT_Finalize(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("final chunk")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).Return(int64(len(chunkData)), nil)
 	registrySvc.EXPECT().FinishUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
 
 	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000?digest=sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", bytes.NewReader(chunkData))
@@ -430,7 +432,7 @@ func TestHandler_BlobUpload_PATCH_ReturnsDockerUploadUUID(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("chunk content")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).Return(int64(len(chunkData)), nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
@@ -441,13 +443,22 @@ func TestHandler_BlobUpload_PATCH_ReturnsDockerUploadUUID(t *testing.T) {
 	assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Docker-Upload-UUID"))
 }
 
-func TestDefaultMaxBlobChunkSize_Is512MB(t *testing.T) {
-	assert.Equal(t, int64(512*1024*1024), int64(DefaultMaxBlobChunkSize))
+func TestDefaultMaxBlobChunkSize_Is95MB(t *testing.T) {
+	assert.Equal(t, int64(95*1024*1024), int64(DefaultMaxBlobChunkSize))
 }
 
 func TestHandler_BlobUpload_PATCH_RespectsConfiguredMaxBlobChunkSize(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 	handler := NewHandler(registrySvc, testLogger(), 5)
+
+	// The handler wraps r.Body in MaxBytesReader and passes it to AppendBlobChunk.
+	// The mock must read the body to trigger MaxBytesError, which the handler detects.
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, data io.Reader) {
+			// Drain the reader to trigger MaxBytesError
+			_, _ = io.ReadAll(data)
+		}).
+		Return(int64(0), &http.MaxBytesError{Limit: 5})
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader([]byte("chunk content")))
 	rec := httptest.NewRecorder()
@@ -462,7 +473,7 @@ func TestHandler_BlobUpload_PATCH_ReturnsRangeHeader(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("chunk content")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).Return(int64(len(chunkData)), nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()

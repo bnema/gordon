@@ -23,9 +23,9 @@ const (
 	// MaxManifestSize limits manifest uploads to 10MB.
 	MaxManifestSize = 10 * 1024 * 1024
 	// DefaultMaxBlobChunkSize is the default maximum size for a single blob upload chunk.
-	// Docker/Podman typically send a full layer as one request body, so this default
-	// must handle common base image layer sizes.
-	DefaultMaxBlobChunkSize = 512 * 1024 * 1024
+	// Kept at 95MB to stay within Cloudflare's 100MB per-request limit.
+	// Users who need larger chunks can configure it explicitly via max_blob_chunk_size.
+	DefaultMaxBlobChunkSize = 95 * 1024 * 1024
 )
 
 // Handler implements the HTTP handler for Docker Registry API v2.
@@ -407,11 +407,13 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Limit blob chunk size to prevent memory exhaustion
+	// Limit blob chunk size to prevent excessive uploads.
+	// MaxBytesReader wraps the body so the downstream io.Copy stops at the limit.
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxBlobChunkSize)
 
-	// Read the chunk from the request body
-	chunk, err := io.ReadAll(r.Body)
+	// Stream the body directly to storage — memory usage is bounded to a small
+	// copy buffer (~32KB) regardless of chunk size.
+	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, r.Body)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
@@ -419,14 +421,6 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob chunk exceeds maximum size")
 			return
 		}
-		log.Error().Err(err).Msg("failed to read blob chunk")
-		h.sendRegistryError(w, http.StatusBadRequest, "BLOB_UPLOAD_INVALID", "invalid blob chunk")
-		return
-	}
-
-	// Append the chunk to the upload
-	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, chunk)
-	if err != nil {
 		log.Error().Err(err).Msg("failed to append blob chunk")
 		h.sendRegistryError(w, http.StatusInternalServerError, "BLOB_UPLOAD_UNKNOWN", "failed to append blob chunk")
 		return

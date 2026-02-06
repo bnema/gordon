@@ -197,7 +197,7 @@ func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
 }
 
 // AppendBlobChunk appends data to an in-progress upload.
-func (s *BlobStorage) AppendBlobChunk(name, uuid string, chunk []byte) (int64, error) {
+func (s *BlobStorage) AppendBlobChunk(name, uuid string, data io.Reader) (int64, error) {
 	uploadPath, err := s.getUploadPath(uuid)
 	if err != nil {
 		return 0, fmt.Errorf("invalid upload path: %w", err)
@@ -212,7 +212,7 @@ func (s *BlobStorage) AppendBlobChunk(name, uuid string, chunk []byte) (int64, e
 	}
 	defer file.Close()
 
-	written, err := file.Write(chunk)
+	written, err := io.Copy(file, data)
 	if err != nil {
 		return 0, fmt.Errorf("failed to write chunk to upload file: %w", err)
 	}
@@ -227,7 +227,7 @@ func (s *BlobStorage) AppendBlobChunk(name, uuid string, chunk []byte) (int64, e
 		Str(zerowrap.FieldAdapter, "filesystem").
 		Str("uuid", uuid).
 		Str("name", name).
-		Int("chunk_size", written).
+		Int64("chunk_size", written).
 		Int64("total_size", fi.Size()).
 		Msg("appended chunk to blob upload")
 
