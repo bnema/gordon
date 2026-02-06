@@ -222,7 +222,7 @@ func TestBlobStorage_StartBlobUpload(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotEmpty(t, uuid)
-	assert.Contains(t, uuid, "myapp")
+	assert.Len(t, uuid, 36) // standard UUID format
 
 	// Verify upload file was created
 	uploadPath := filepath.Join(tmpDir, "uploads", uuid)
@@ -260,7 +260,7 @@ func TestBlobStorage_AppendBlobChunk_NotFound(t *testing.T) {
 	storage, err := NewBlobStorage(tmpDir, log)
 	require.NoError(t, err)
 
-	_, err = storage.AppendBlobChunk("myapp", "1234567890-invalid", []byte("data"))
+	_, err = storage.AppendBlobChunk("myapp", "00000000-0000-0000-0000-000000000000", []byte("data"))
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upload not found")
@@ -292,7 +292,7 @@ func TestBlobStorage_GetBlobUpload_NotFound(t *testing.T) {
 	storage, err := NewBlobStorage(tmpDir, log)
 	require.NoError(t, err)
 
-	writer, err := storage.GetBlobUpload("1234567890-invalid")
+	writer, err := storage.GetBlobUpload("00000000-0000-0000-0000-000000000000")
 
 	assert.Error(t, err)
 	assert.Nil(t, writer)
@@ -355,7 +355,7 @@ func TestBlobStorage_CancelBlobUpload_NotFound(t *testing.T) {
 	storage, err := NewBlobStorage(tmpDir, log)
 	require.NoError(t, err)
 
-	err = storage.CancelBlobUpload("1234567890-invalid")
+	err = storage.CancelBlobUpload("00000000-0000-0000-0000-000000000000")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upload not found")

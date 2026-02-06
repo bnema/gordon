@@ -163,23 +163,22 @@ func TestValidateUUID(t *testing.T) {
 		wantErr bool
 		errMsg  string
 	}{
-		// Valid cases
-		{"valid uuid", "1234567890-myapp", false, ""},
-		{"with underscore", "1234567890-my_app", false, ""},
-		{"with hyphen in name", "1234567890-my-app", false, ""},
-		{"nested repo uuid", "1234567890-myorg_myapp", false, ""},
+		// Valid cases - standard UUID v4
+		{"valid uuid", "550e8400-e29b-41d4-a716-446655440000", false, ""},
+		{"another valid uuid", "6ba7b810-9dad-11d1-80b4-00c04fd430c8", false, ""},
+		{"all zeros", "00000000-0000-0000-0000-000000000000", false, ""},
 
 		// Invalid cases - path traversal
-		{"path traversal", "1234567890-../etc/passwd", true, "path traversal"},
-		{"traversal in middle", "1234567890-app/../etc", true, "path traversal"},
+		{"path traversal", "../etc/passwd", true, "path traversal"},
+		{"traversal in middle", "app/../etc", true, "path traversal"},
 
 		// Invalid cases - format
 		{"empty", "", true, "cannot be empty"},
-		{"no timestamp", "myapp", true, "invalid UUID format"},
-		{"no hyphen", "1234567890myapp", true, "invalid UUID format"},
-		{"special chars", "1234567890-my@app", true, "invalid UUID format"},
-		{"spaces", "1234567890-my app", true, "invalid UUID format"},
-		{"slash not replaced", "1234567890-myorg/myapp", true, "invalid UUID format"},
+		{"random string", "myapp", true, "invalid UUID format"},
+		{"old timestamp format", "1234567890-myapp", true, "invalid UUID format"},
+		{"uppercase hex", "550E8400-E29B-41D4-A716-446655440000", true, "invalid UUID format"},
+		{"spaces", "550e8400 e29b 41d4 a716 446655440000", true, "invalid UUID format"},
+		{"missing section", "550e8400-e29b-41d4-a716", true, "invalid UUID format"},
 	}
 
 	for _, tt := range tests {
