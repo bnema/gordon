@@ -299,6 +299,51 @@ func (s *PassStore) SetAttachment(containerName string, secretsMap map[string]st
 	return nil
 }
 
+// DeleteAttachment removes a specific secret key from an attachment container.
+func (s *PassStore) DeleteAttachment(containerName, key string) error {
+	if _, err := s.attachmentPath(containerName); err != nil {
+		return err
+	}
+
+	keyPath, err := s.attachmentKeyPath(containerName, key)
+	if err != nil {
+		return err
+	}
+
+	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
+	defer rmCancel()
+	if err := s.passRemove(rmCtx, keyPath); err != nil {
+		return err
+	}
+
+	keys, err := s.listAttachmentKeys(containerName)
+	if err != nil {
+		return err
+	}
+
+	updated := make([]string, 0, len(keys))
+	for _, existingKey := range keys {
+		if existingKey == key {
+			continue
+		}
+		updated = append(updated, existingKey)
+	}
+	sort.Strings(updated)
+
+	manifestPath, err := s.attachmentManifestPath(containerName)
+	if err != nil {
+		return err
+	}
+
+	insertCtx, insertCancel := context.WithTimeout(context.Background(), s.timeout)
+	defer insertCancel()
+	if err := s.passInsert(insertCtx, manifestPath, strings.Join(updated, "\n")); err != nil {
+		return fmt.Errorf("failed to update attachment manifest: %w", err)
+	}
+
+	return nil
+}
+
 // GetAllAttachment returns all secrets for an attachment container as a key-value map.
 func (s *PassStore) GetAllAttachment(containerName string) (map[string]string, error) {
 	keys, err := s.listAttachmentKeys(containerName)

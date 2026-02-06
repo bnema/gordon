@@ -93,6 +93,63 @@ func (_c *MockDomainSecretStore_Delete_Call) RunAndReturn(run func(domain string
 	return _c
 }
 
+// DeleteAttachment provides a mock function for the type MockDomainSecretStore
+func (_mock *MockDomainSecretStore) DeleteAttachment(containerName string, key string) error {
+	ret := _mock.Called(containerName, key)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteAttachment")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) error); ok {
+		r0 = returnFunc(containerName, key)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockDomainSecretStore_DeleteAttachment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteAttachment'
+type MockDomainSecretStore_DeleteAttachment_Call struct {
+	*mock.Call
+}
+
+// DeleteAttachment is a helper method to define mock.On call
+//   - containerName string
+//   - key string
+func (_e *MockDomainSecretStore_Expecter) DeleteAttachment(containerName interface{}, key interface{}) *MockDomainSecretStore_DeleteAttachment_Call {
+	return &MockDomainSecretStore_DeleteAttachment_Call{Call: _e.mock.On("DeleteAttachment", containerName, key)}
+}
+
+func (_c *MockDomainSecretStore_DeleteAttachment_Call) Run(run func(containerName string, key string)) *MockDomainSecretStore_DeleteAttachment_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockDomainSecretStore_DeleteAttachment_Call) Return(err error) *MockDomainSecretStore_DeleteAttachment_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockDomainSecretStore_DeleteAttachment_Call) RunAndReturn(run func(containerName string, key string) error) *MockDomainSecretStore_DeleteAttachment_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAll provides a mock function for the type MockDomainSecretStore
 func (_mock *MockDomainSecretStore) GetAll(domain string) (map[string]string, error) {
 	ret := _mock.Called(domain)

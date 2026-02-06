@@ -459,3 +459,87 @@ func TestService_ValidationHappensBeforeStore(t *testing.T) {
 	// Verify no store methods were called (mockery would fail if unexpected calls happened)
 	mock.AssertExpectationsForObjects(t, store)
 }
+
+func TestService_SetAttachment(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	secrets := map[string]string{"POSTGRES_PASSWORD": "secret123"}
+	store.EXPECT().SetAttachment("app__example__com-postgres", secrets).Return(nil)
+
+	err := svc.SetAttachment(context.Background(), "app.example.com", "postgres", secrets)
+	assert.NoError(t, err)
+}
+
+func TestService_DeleteAttachment(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	store.EXPECT().DeleteAttachment("app__example__com-postgres", "OLD_KEY").Return(nil)
+
+	err := svc.DeleteAttachment(context.Background(), "app.example.com", "postgres", "OLD_KEY")
+	assert.NoError(t, err)
+}
+
+func TestService_SetAttachment_InvalidDomain(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	err := svc.SetAttachment(context.Background(), "", "postgres", map[string]string{"KEY": "val"})
+	assert.ErrorIs(t, err, ErrDomainEmpty)
+}
+
+func TestService_SetAttachment_EmptyService(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	err := svc.SetAttachment(context.Background(), "app.example.com", "", map[string]string{"KEY": "val"})
+	assert.ErrorIs(t, err, ErrServiceEmpty)
+}
+
+func TestService_DeleteAttachment_InvalidDomain(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	err := svc.DeleteAttachment(context.Background(), "", "postgres", "SOME_KEY")
+	assert.ErrorIs(t, err, ErrDomainEmpty)
+}
+
+func TestService_DeleteAttachment_EmptyService(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	err := svc.DeleteAttachment(context.Background(), "app.example.com", "", "SOME_KEY")
+	assert.ErrorIs(t, err, ErrServiceEmpty)
+}
+
+func TestService_SetAttachment_InvalidServiceName(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	err := svc.SetAttachment(context.Background(), "app.example.com", "../evil", map[string]string{"K": "V"})
+	assert.ErrorIs(t, err, ErrInvalidServiceName)
+}
+
+func TestService_DeleteAttachment_InvalidServiceName(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	err := svc.DeleteAttachment(context.Background(), "app.example.com", "foo/bar", "SOME_KEY")
+	assert.ErrorIs(t, err, ErrInvalidServiceName)
+}
+
+func TestService_AttachmentValidationHappensBeforeStore(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	// With invalid service name, store methods should never be called
+	err := svc.SetAttachment(context.Background(), "app.example.com", "../evil", map[string]string{"key": "value"})
+	assert.ErrorIs(t, err, ErrInvalidServiceName)
+
+	err = svc.DeleteAttachment(context.Background(), "app.example.com", "../evil", "key")
+	assert.ErrorIs(t, err, ErrInvalidServiceName)
+
+	// Verify no store methods were called
+	mock.AssertExpectationsForObjects(t, store)
+}
