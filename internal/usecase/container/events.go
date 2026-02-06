@@ -28,8 +28,8 @@ func NewImagePushedHandler(ctx context.Context, containerSvc in.ContainerService
 }
 
 // Handle handles an event.
-func (h *ImagePushedHandler) Handle(event domain.Event) error {
-	ctx := zerowrap.CtxWithFields(h.ctx, map[string]any{
+func (h *ImagePushedHandler) Handle(ctx context.Context, event domain.Event) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldHandler: "ImagePushedHandler",
 		zerowrap.FieldEvent:   string(event.Type),
@@ -122,8 +122,8 @@ func NewConfigReloadHandler(ctx context.Context, containerSvc in.ContainerServic
 }
 
 // Handle handles an event.
-func (h *ConfigReloadHandler) Handle(event domain.Event) error {
-	ctx := zerowrap.CtxWithFields(h.ctx, map[string]any{
+func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldHandler: "ConfigReloadHandler",
 		zerowrap.FieldEvent:   string(event.Type),
@@ -219,8 +219,8 @@ func NewManualReloadHandler(ctx context.Context, containerSvc in.ContainerServic
 // Handle handles an event.
 // It starts containers for configured routes that don't have a running container.
 // Running containers are NEVER restarted to ensure 100% uptime.
-func (h *ManualReloadHandler) Handle(event domain.Event) error {
-	ctx := zerowrap.CtxWithFields(h.ctx, map[string]any{
+func (h *ManualReloadHandler) Handle(ctx context.Context, event domain.Event) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldHandler: "ManualReloadHandler",
 		zerowrap.FieldEvent:   string(event.Type),
@@ -302,8 +302,8 @@ func NewManualDeployHandler(ctx context.Context, containerSvc in.ContainerServic
 }
 
 // Handle handles a manual deploy event for a specific route.
-func (h *ManualDeployHandler) Handle(event domain.Event) error {
-	ctx := zerowrap.CtxWithFields(h.ctx, map[string]any{
+func (h *ManualDeployHandler) Handle(ctx context.Context, event domain.Event) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldHandler: "ManualDeployHandler",
 		zerowrap.FieldEvent:   string(event.Type),

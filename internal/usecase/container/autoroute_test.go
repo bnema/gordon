@@ -368,7 +368,7 @@ func TestAutoRouteHandler_Handle_DisabledAutoRoute(t *testing.T) {
 		},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -389,7 +389,7 @@ func TestAutoRouteHandler_Handle_InvalidPayload(t *testing.T) {
 		Data: "invalid payload type",
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	// Handler skips invalid payload, doesn't error
 	assert.NoError(t, err)
@@ -415,7 +415,7 @@ func TestAutoRouteHandler_Handle_EmptyManifest(t *testing.T) {
 		},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -475,7 +475,7 @@ func TestAutoRouteHandler_Handle_CreatesNewRoute(t *testing.T) {
 		},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -537,7 +537,7 @@ func TestAutoRouteHandler_Handle_UpdatesExistingRoute(t *testing.T) {
 		},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -589,7 +589,7 @@ func TestAutoRouteHandler_Handle_NoUpdateIfSameImage(t *testing.T) {
 		},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -636,7 +636,7 @@ func TestAutoRouteHandler_Handle_NoDomainLabel(t *testing.T) {
 		},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -702,7 +702,7 @@ func TestAutoRouteHandler_Handle_MultipleDomains(t *testing.T) {
 		},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }

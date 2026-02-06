@@ -28,8 +28,8 @@ func NewContainerDeployedHandler(ctx context.Context, invalidator TargetInvalida
 }
 
 // Handle handles a container.deployed event by invalidating the proxy cache.
-func (h *ContainerDeployedHandler) Handle(event domain.Event) error {
-	ctx := zerowrap.CtxWithFields(h.ctx, map[string]any{
+func (h *ContainerDeployedHandler) Handle(ctx context.Context, event domain.Event) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldHandler: "ContainerDeployedHandler",
 		zerowrap.FieldEvent:   string(event.Type),
@@ -84,8 +84,8 @@ func NewConfigReloadProxyHandler(ctx context.Context, refresher TargetRefresher)
 }
 
 // Handle clears all cached proxy targets so they are re-resolved from current state.
-func (h *ConfigReloadProxyHandler) Handle(event domain.Event) error {
-	ctx := zerowrap.CtxWithFields(h.ctx, map[string]any{
+func (h *ConfigReloadProxyHandler) Handle(ctx context.Context, event domain.Event) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldHandler: "ConfigReloadProxyHandler",
 		zerowrap.FieldEvent:   string(event.Type),

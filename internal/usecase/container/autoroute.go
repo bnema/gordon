@@ -60,8 +60,8 @@ func (h *AutoRouteHandler) WithEnvExtractor(extractor EnvFileExtractor, envDir s
 }
 
 // Handle handles an image.pushed event and creates routes from labels.
-func (h *AutoRouteHandler) Handle(event domain.Event) error {
-	ctx := zerowrap.CtxWithFields(h.ctx, map[string]any{
+func (h *AutoRouteHandler) Handle(ctx context.Context, event domain.Event) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldHandler: "AutoRouteHandler",
 		zerowrap.FieldEvent:   string(event.Type),
