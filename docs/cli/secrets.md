@@ -183,7 +183,7 @@ gordon secrets set myapp.example.com DATABASE_URL "$DATABASE_URL"
 gordon secrets set myapp.example.com API_KEY "$API_KEY"
 
 # Deploy
-gordon routes deploy myapp.example.com
+gordon deploy myapp.example.com
 ```
 
 ### Rotating Secrets
@@ -196,7 +196,7 @@ NEW_JWT_SECRET=$(openssl rand -base64 32)
 gordon secrets set myapp.local JWT_SECRET "$NEW_JWT_SECRET"
 
 # Redeploy to pick up new secret
-gordon routes deploy myapp.local
+gordon deploy myapp.local
 ```
 
 ### Attachment Secrets

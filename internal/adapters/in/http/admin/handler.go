@@ -455,14 +455,31 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 	secretDomain := parts[0]
 
 	// Check for attachment sub-path: /secrets/{domain}/attachments/{service}[/{key}]
-	if len(parts) >= 3 && parts[1] == "attachments" {
-		service := parts[2]
-		attachmentKey := ""
-		if len(parts) > 3 {
-			attachmentKey = parts[3]
+	if len(parts) >= 2 && parts[1] == "attachments" {
+		switch r.Method {
+		case http.MethodPost:
+			// Expected path: /secrets/{domain}/attachments/{service}
+			if len(parts) != 3 {
+				h.sendError(w, http.StatusBadRequest, "invalid attachment path: expected /secrets/{domain}/attachments/{service}")
+				return
+			}
+			service := parts[2]
+			h.handleAttachmentSecrets(w, r, secretDomain, service, "")
+			return
+		case http.MethodDelete:
+			// Expected path: /secrets/{domain}/attachments/{service}/{key}
+			if len(parts) != 4 {
+				h.sendError(w, http.StatusBadRequest, "invalid attachment path: expected /secrets/{domain}/attachments/{service}/{key}")
+				return
+			}
+			service := parts[2]
+			attachmentKey := parts[3]
+			h.handleAttachmentSecrets(w, r, secretDomain, service, attachmentKey)
+			return
+		default:
+			h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
 		}
-		h.handleAttachmentSecrets(w, r, secretDomain, service, attachmentKey)
-		return
 	}
 
 	secretKey := ""
