@@ -44,7 +44,9 @@ gordon restart myapp.example.com --with-attachments
 
 ### Notes
 
-- Remote mode required. See [CLI Overview](./index.md) for targeting options.
+- Local mode works when run on the Gordon host. It uses the same deploy-signal path as `gordon deploy <domain>`.
+- `--with-attachments` is only supported in remote mode.
+- In remote mode, target your Gordon admin endpoint (for example `https://gordon.example.com`), not the registry host (for example `https://reg.example.com`).
 
 ## Related
 

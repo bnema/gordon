@@ -109,6 +109,7 @@ gordon remotes use prod
 | `-c, --config` | Path to configuration file |
 | `--remote` | Remote Gordon URL (e.g., `https://gordon.mydomain.com`) |
 | `--token` | Authentication token for remote |
+| `--insecure` | Skip TLS certificate verification for remote HTTPS endpoints |
 
 ### Remote Targeting
 
@@ -118,13 +119,23 @@ when you want to bypass your saved configuration.
 
 **Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
 
+Use `--insecure` when the remote endpoint uses a self-signed or otherwise untrusted TLS certificate.
+You can make this persistent with `insecure_tls = true` in `[client]` of `~/.config/gordon/gordon.toml`
+or in a specific entry in `~/.config/gordon/remotes.toml`.
+For Tailscale setups, you can also avoid `--insecure` by using the machine `*.ts.net` name with Tailscale-issued TLS certs in Gordon server config.
+Your public app domains can still use wildcard DNS and normal reverse-proxy routing.
+
 ```bash
 # Using flags (use the gordon_domain from remote Gordon config)
-gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
+gordon routes list --remote https://gordon.example.com --token $TOKEN
+
+# Against self-signed/private CA endpoint
+gordon --remote https://gordon.example.com --token $TOKEN --insecure status
 
 # Using environment variables
-export GORDON_REMOTE=https://gordon.mydomain.com
+export GORDON_REMOTE=https://gordon.example.com
 export GORDON_TOKEN=$TOKEN
+export GORDON_INSECURE=true
 gordon routes list
 ```
 

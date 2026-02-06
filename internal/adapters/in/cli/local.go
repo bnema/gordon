@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/bnema/zerowrap"
 	"github.com/spf13/viper"
@@ -12,6 +13,8 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/config"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 )
@@ -82,8 +85,8 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 		envDir = filepath.Join(dataDir, "env")
 	}
 
-	// Create domain secret store and service
-	domainSecretStore, err := domainsecrets.NewFileStore(envDir, log)
+	// Create domain secret store using configured backend (pass or file-based)
+	domainSecretStore, err := createLocalDomainSecretStore(v, envDir, log)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create domain secret store: %w", err)
 	}
@@ -94,4 +97,37 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 		secretSvc: secretSvc,
 		dataDir:   dataDir,
 	}, nil
+}
+
+func createLocalDomainSecretStore(v *viper.Viper, envDir string, log zerowrap.Logger) (out.DomainSecretStore, error) {
+	backend := resolveLocalSecretsBackend(v)
+	switch backend {
+	case domain.SecretsBackendPass:
+		return domainsecrets.NewPassStore(log)
+	case domain.SecretsBackendSops:
+		return nil, fmt.Errorf("sops backend not yet supported for domain secrets")
+	default:
+		return domainsecrets.NewFileStore(envDir, log)
+	}
+}
+
+func resolveLocalSecretsBackend(v *viper.Viper) domain.SecretsBackend {
+	backend := strings.TrimSpace(v.GetString("auth.secrets_backend"))
+	if backend == "" {
+		// Legacy key support for older configs.
+		backend = strings.TrimSpace(v.GetString("secrets.backend"))
+	}
+
+	switch backend {
+	case "pass":
+		return domain.SecretsBackendPass
+	case "sops":
+		return domain.SecretsBackendSops
+	case "unsafe", "":
+		return domain.SecretsBackendUnsafe
+	default:
+		log := zerowrap.Default()
+		log.Warn().Str("backend", backend).Msg("unrecognized secrets backend, falling back to unsafe")
+		return domain.SecretsBackendUnsafe
+	}
 }

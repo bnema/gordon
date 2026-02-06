@@ -13,6 +13,7 @@ port = 80                                    # HTTP proxy port
 registry_port = 5000                         # Container registry port
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
+max_blob_chunk_size = "512MB"                # Max size per registry blob upload chunk
 
 # =============================================================================
 # AUTHENTICATION (required - Gordon won't start without credentials configured)
@@ -125,6 +126,7 @@ preserve = true                              # Keep volumes when containers are 
 | `server.registry_port` | `5000` | Container registry port |
 | `server.gordon_domain` | `""` | **Required** - Gordon domain |
 | `server.data_dir` | `~/.gordon` | Data directory |
+| `server.max_blob_chunk_size` | `"512MB"` | Max size per registry blob upload chunk |
 | `auth.enabled` | `true` | Enable authentication |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |
@@ -144,6 +146,7 @@ preserve = true                              # Keep volumes when containers are 
 | `logging.container_logs.max_backups` | `3` | Keep 3 old files |
 | `logging.container_logs.max_age` | `28` | 28 days |
 | `deploy.pull_policy` | `"if-tag-changed"` | Pull on tag change |
+| `deploy.readiness_delay` | `"5s"` | Delay before container is considered ready |
 | `auto_route.enabled` | `false` | Auto-route disabled |
 | `network_isolation.enabled` | `false` | Isolation disabled |
 | `network_isolation.network_prefix` | `"gordon"` | Network prefix |

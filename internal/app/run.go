@@ -6,12 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -68,6 +70,7 @@ type Config struct {
 		RegistryDomain   string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
 		DataDir          string `mapstructure:"data_dir"`
 		MaxProxyBodySize string `mapstructure:"max_proxy_body_size"` // e.g., "512MB", "1GB"
+		MaxBlobChunkSize string `mapstructure:"max_blob_chunk_size"` // e.g., "512MB", "1GB"
 	} `mapstructure:"server"`
 
 	Logging struct {
@@ -117,23 +120,24 @@ type Config struct {
 
 // services holds all the services used by the application.
 type services struct {
-	runtime         *docker.Runtime
-	eventBus        *eventbus.InMemory
-	blobStorage     *filesystem.BlobStorage
-	manifestStorage *filesystem.ManifestStorage
-	envLoader       out.EnvLoader
-	logWriter       *logwriter.LogWriter
-	tokenStore      out.TokenStore
-	configSvc       *config.Service
-	containerSvc    *container.Service
-	registrySvc     *registrySvc.Service
-	proxySvc        *proxy.Service
-	authSvc         *auth.Service
-	authHandler     *authhandler.Handler
-	adminHandler    *admin.Handler
-	internalRegUser string
-	internalRegPass string
-	envDir          string
+	runtime          *docker.Runtime
+	eventBus         *eventbus.InMemory
+	blobStorage      *filesystem.BlobStorage
+	manifestStorage  *filesystem.ManifestStorage
+	envLoader        out.EnvLoader
+	logWriter        *logwriter.LogWriter
+	tokenStore       out.TokenStore
+	configSvc        *config.Service
+	containerSvc     *container.Service
+	registrySvc      *registrySvc.Service
+	proxySvc         *proxy.Service
+	authSvc          *auth.Service
+	authHandler      *authhandler.Handler
+	adminHandler     *admin.Handler
+	internalRegUser  string
+	internalRegPass  string
+	envDir           string
+	maxBlobChunkSize int64
 }
 
 // Run initializes and starts the Gordon application.
@@ -305,6 +309,18 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		}
 		maxProxyBodySize = parsedSize
 	}
+
+	// Parse max_blob_chunk_size config (default: 95MB)
+	maxBlobChunkSize := int64(registry.DefaultMaxBlobChunkSize)
+	if cfg.Server.MaxBlobChunkSize != "" {
+		parsedSize, err := bytesize.Parse(cfg.Server.MaxBlobChunkSize)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid server.max_blob_chunk_size configuration", map[string]any{"value": cfg.Server.MaxBlobChunkSize})
+		}
+		maxBlobChunkSize = parsedSize
+	}
+
+	svc.maxBlobChunkSize = maxBlobChunkSize
 
 	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxy.Config{
 		RegistryDomain: cfg.Server.RegistryDomain,
@@ -853,6 +869,7 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		DNSSuffix:                v.GetString("network_isolation.dns_suffix"),
 		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
 		Attachments:              svc.configSvc.GetAttachments(),
+		ReadinessDelay:           v.GetDuration("deploy.readiness_delay"),
 	}
 
 	if cfg.Auth.Enabled && svc.authSvc != nil {
@@ -971,7 +988,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
 	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 
-	registryHandler := registry.NewHandler(svc.registrySvc, log)
+	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize)
 
 	registryMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
@@ -1186,24 +1203,9 @@ func startServer(addr string, handler http.Handler, name string, errChan chan<- 
 
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.
 func SendReloadSignal() error {
-	pidFile := findPidFile()
-	if pidFile == "" {
-		return fmt.Errorf("gordon PID file not found, is Gordon running?")
-	}
-
-	pidBytes, err := os.ReadFile(pidFile)
+	process, _, err := findRunningProcess()
 	if err != nil {
-		return fmt.Errorf("failed to read PID file: %w", err)
-	}
-
-	var pid int
-	if _, err := fmt.Sscanf(string(pidBytes), "%d", &pid); err != nil {
-		return fmt.Errorf("failed to parse PID: %w", err)
-	}
-
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("failed to find process: %w", err)
+		return err
 	}
 
 	if err := process.Signal(syscall.SIGUSR1); err != nil {
@@ -1256,28 +1258,10 @@ func SendDeploySignal(domain string) (string, error) {
 	}
 
 	// Find PID and send SIGUSR2
-	pidFile := findPidFile()
-	if pidFile == "" {
-		_ = os.Remove(deployFile)
-		return "", fmt.Errorf("gordon PID file not found, is Gordon running?")
-	}
-
-	pidBytes, err := os.ReadFile(pidFile)
+	process, _, err := findRunningProcess()
 	if err != nil {
 		_ = os.Remove(deployFile)
-		return "", fmt.Errorf("failed to read PID file: %w", err)
-	}
-
-	var pid int
-	if _, err := fmt.Sscanf(string(pidBytes), "%d", &pid); err != nil {
-		_ = os.Remove(deployFile)
-		return "", fmt.Errorf("failed to parse PID: %w", err)
-	}
-
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		_ = os.Remove(deployFile)
-		return "", fmt.Errorf("failed to find process: %w", err)
+		return "", err
 	}
 
 	if err := process.Signal(syscall.SIGUSR2); err != nil {
@@ -1357,34 +1341,113 @@ func removePidFile(pidFile string, log zerowrap.Logger) {
 	}
 }
 
-// findPidFile finds the Gordon PID file.
-// Checks secure locations first, then falls back to legacy /tmp location.
-func findPidFile() string {
+func pidFileLocations() []string {
 	var locations []string
+	seen := make(map[string]struct{})
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		locations = append(locations, path)
+	}
 
 	// Check secure runtime directory first
 	if runtimeDir, err := getSecureRuntimeDir(); err == nil {
-		locations = append(locations, filepath.Join(runtimeDir, "gordon.pid"))
+		add(filepath.Join(runtimeDir, "gordon.pid"))
+	}
+
+	// Also check canonical /run/user/<uid> runtime path. This handles cases where
+	// Gordon started under systemd user services with runtime dir available, but
+	// CLI invocations (e.g. non-interactive SSH) don't have XDG_RUNTIME_DIR set.
+	runtimeByUID := filepath.Join("/run/user", strconv.Itoa(os.Getuid()), "gordon", "gordon.pid")
+	add(runtimeByUID)
+
+	// Check explicit XDG_RUNTIME_DIR if present in this process env.
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		add(filepath.Join(runtimeDir, "gordon.pid"))
 	}
 
 	// Check home directory
 	if homeDir, err := os.UserHomeDir(); err == nil {
-		locations = append(locations, filepath.Join(homeDir, ".gordon", "gordon.pid"))
+		add(filepath.Join(homeDir, ".gordon", "gordon.pid"))
 		// Legacy location for backward compatibility
-		locations = append(locations, filepath.Join(homeDir, ".gordon.pid"))
+		add(filepath.Join(homeDir, ".gordon.pid"))
 	}
 
 	// Legacy /tmp locations for backward compatibility
-	locations = append(locations, filepath.Join(os.TempDir(), "gordon.pid"))
-	locations = append(locations, "/tmp/gordon.pid")
+	add(filepath.Join(os.TempDir(), "gordon.pid"))
+	add("/tmp/gordon.pid")
+
+	return locations
+}
+
+// findRunningPidFile returns the first PID file whose PID belongs to a live process.
+// Stale/invalid PID files are ignored and removed when possible.
+func findRunningPidFile() (string, int, error) {
+	return findRunningPidFileInLocations(pidFileLocations())
+}
+
+func findRunningPidFileInLocations(locations []string) (string, int, error) {
+	foundAny := false
 
 	for _, location := range locations {
-		if _, err := os.Stat(location); err == nil {
-			return location
+		pidBytes, err := os.ReadFile(location)
+		if err != nil {
+			continue
 		}
+
+		foundAny = true
+
+		var pid int
+		if _, err := fmt.Sscanf(string(pidBytes), "%d", &pid); err != nil || pid <= 0 {
+			_ = os.Remove(location)
+			continue
+		}
+
+		if isProcessAlive(pid) {
+			return location, pid, nil
+		}
+
+		_ = os.Remove(location)
 	}
 
-	return ""
+	if foundAny {
+		return "", 0, fmt.Errorf("found stale gordon PID file(s), is Gordon running?")
+	}
+
+	return "", 0, fmt.Errorf("gordon PID file not found, is Gordon running?")
+}
+
+func findRunningProcess() (*os.Process, int, error) {
+	_, pid, err := findRunningPidFile()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to find process: %w", err)
+	}
+
+	return process, pid, nil
+}
+
+func isProcessAlive(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+
+	err = process.Signal(syscall.Signal(0))
+	if err == nil {
+		return true
+	}
+
+	return errors.Is(err, syscall.EPERM)
 }
 
 // loadConfig loads configuration from file and sets defaults.
@@ -1421,6 +1484,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
+	v.SetDefault("deploy.readiness_delay", "5s")
 
 	ConfigureViper(v, configPath)
 

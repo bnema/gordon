@@ -222,6 +222,7 @@ active = "prod"
 [remotes.prod]
 url = "https://gordon.mydomain.com"
 token_env = "PROD_TOKEN"
+insecure_tls = true
 
 [remotes.staging]
 url = "https://staging.mydomain.com"
@@ -241,6 +242,12 @@ When multiple sources specify remote or token, the CLI uses this priority:
 1. `--token` flag
 2. `GORDON_TOKEN` environment variable
 3. Token from active remote in `remotes.toml`
+
+**Insecure TLS:**
+1. `--insecure` flag
+2. `GORDON_INSECURE` environment variable (`true`/`false`)
+3. `[client] insecure_tls` in `gordon.toml`
+4. `insecure_tls` from the selected remote in `remotes.toml`
 
 This allows overriding specific values while keeping defaults:
 
@@ -296,6 +303,42 @@ gordon routes list --remote https://gordon.staging.example.com --token $STAGING_
 gordon remotes use prod && gordon routes list
 gordon remotes use staging && gordon routes list
 ```
+
+### Private Admin + Wildcard App Domains
+
+Recommended default: use your normal Gordon admin domain with a valid public certificate.
+
+```toml
+# ~/.config/gordon/remotes.toml
+active = "prod"
+
+[remotes.prod]
+url = "https://gordon.example.com"
+token_env = "GORDON_TOKEN"
+```
+
+If your admin/API path is private over Tailscale, you have two options:
+
+1. Use `insecure_tls = true` for that remote.
+2. Prefer a Tailscale-issued cert on the machine's `*.ts.net` name and keep verification enabled.
+
+Tailscale certificates are issued for tailnet MagicDNS names (for example `host-name.tailnet.ts.net`), not your custom domain. Enable HTTPS certificates in the Tailscale admin DNS settings, then generate files on the host:
+
+```bash
+sudo tailscale cert --cert-file /etc/gordon/tls/cert.pem --key-file /etc/gordon/tls/key.pem host-name.tailnet.ts.net
+```
+
+Configure Gordon to use them:
+
+```toml
+[server]
+tls_enabled = true
+tls_port = 443
+tls_cert_file = "/etc/gordon/tls/cert.pem"
+tls_key_file = "/etc/gordon/tls/key.pem"
+```
+
+`insecure_tls` only affects CLI -> Gordon admin HTTPS verification. It does not change runtime routing: Gordon reverse proxy and container routes can still serve wildcard app domains like `*.example.com`.
 
 ## Related
 

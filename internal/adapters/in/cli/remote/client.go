@@ -4,11 +4,14 @@ package remote
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -18,10 +21,16 @@ import (
 
 // Client is an HTTP client for the Gordon admin API.
 type Client struct {
-	baseURL    string
-	token      string
-	httpClient *http.Client
+	baseURL     string
+	token       string
+	httpClient  *http.Client
+	insecureTLS bool
 }
+
+var (
+	retryMaxAttempts = 4
+	retryBaseDelay   = 250 * time.Millisecond
+)
 
 // ClientOption configures the Client.
 type ClientOption func(*Client)
@@ -41,6 +50,8 @@ func NewClient(baseURL string, opts ...ClientOption) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+
+	c.applyTLSConfig()
 
 	return c
 }
@@ -64,6 +75,37 @@ func WithTimeout(timeout time.Duration) ClientOption {
 	return func(c *Client) {
 		c.httpClient.Timeout = timeout
 	}
+}
+
+// WithInsecureTLS disables TLS certificate verification for remote admin API requests.
+func WithInsecureTLS(insecure bool) ClientOption {
+	return func(c *Client) {
+		c.insecureTLS = insecure
+	}
+}
+
+func (c *Client) applyTLSConfig() {
+	if !c.insecureTLS {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "WARNING: TLS certificate verification disabled for %s\n", c.baseURL)
+
+	var transport *http.Transport
+	if existing, ok := c.httpClient.Transport.(*http.Transport); ok {
+		transport = existing.Clone()
+	} else {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	}
+
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	} else {
+		transport.TLSClientConfig.MinVersion = tls.VersionTLS12
+	}
+	//nolint:gosec // Explicit CLI opt-in via --insecure for self-signed/private cert deployments.
+	transport.TLSClientConfig.InsecureSkipVerify = true
+	c.httpClient.Transport = transport
 }
 
 // request performs an HTTP request to the admin API.
@@ -100,13 +142,7 @@ func parseResponse(resp *http.Response, target any) error {
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		var errResp struct {
-			Error string `json:"error"`
-		}
-		if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
-			return fmt.Errorf("%s: %s", resp.Status, errResp.Error)
-		}
-		return fmt.Errorf("%s: %s", resp.Status, string(body))
+		return parseErrorResponse(resp, body)
 	}
 
 	if target != nil {
@@ -116,6 +152,74 @@ func parseResponse(resp *http.Response, target any) error {
 	}
 
 	return nil
+}
+
+func parseErrorResponse(resp *http.Response, body []byte) error {
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
+		return fmt.Errorf("%s: %s", resp.Status, errResp.Error)
+	}
+	return fmt.Errorf("%s: %s", resp.Status, string(body))
+}
+
+func isRetryableRequestError(err error) bool {
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func isRetryableStatus(status int) bool {
+	// Only retry gateway errors; retrying 500 on non-idempotent POSTs
+	// (deploy, restart, reload) can cause duplicate state changes.
+	return status == 502 || status == 503 || status == 504
+}
+
+func retryDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return retryBaseDelay
+	}
+	return retryBaseDelay * time.Duration(1<<(attempt-1))
+}
+
+// requestWithRetry performs an HTTP request and retries transient failures.
+// Retries occur on transport errors and gateway errors (502, 503, 504).
+func (c *Client) requestWithRetry(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	var lastErr error
+
+	for attempt := 1; attempt <= retryMaxAttempts; attempt++ {
+		resp, err := c.request(ctx, method, path, body)
+		if err != nil {
+			lastErr = err
+			if attempt == retryMaxAttempts || !isRetryableRequestError(err) {
+				return nil, err
+			}
+		} else {
+			if !isRetryableStatus(resp.StatusCode) {
+				return resp, nil
+			}
+
+			respBody, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			lastErr = parseErrorResponse(resp, respBody)
+			if attempt == retryMaxAttempts {
+				return nil, lastErr
+			}
+		}
+
+		delay := retryDelay(attempt)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("request failed after retries")
 }
 
 // Routes API
@@ -371,7 +475,7 @@ func (c *Client) GetHealth(ctx context.Context) (map[string]*RouteHealth, error)
 
 // Reload triggers a configuration reload.
 func (c *Client) Reload(ctx context.Context) error {
-	resp, err := c.request(ctx, http.MethodPost, "/reload", nil)
+	resp, err := c.requestWithRetry(ctx, http.MethodPost, "/reload", nil)
 	if err != nil {
 		return err
 	}
@@ -431,7 +535,7 @@ type DeployResult struct {
 
 // Deploy triggers a deployment for the specified domain.
 func (c *Client) Deploy(ctx context.Context, deployDomain string) (*DeployResult, error) {
-	resp, err := c.request(ctx, http.MethodPost, "/deploy/"+url.PathEscape(deployDomain), nil)
+	resp, err := c.requestWithRetry(ctx, http.MethodPost, "/deploy/"+url.PathEscape(deployDomain), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +565,7 @@ func (c *Client) Restart(ctx context.Context, restartDomain string, withAttachme
 	if withAttachments {
 		path += "?attachments=true"
 	}
-	resp, err := c.request(ctx, http.MethodPost, path, nil)
+	resp, err := c.requestWithRetry(ctx, http.MethodPost, path, nil)
 	if err != nil {
 		return nil, err
 	}
