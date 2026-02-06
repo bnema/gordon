@@ -19,7 +19,7 @@ var (
 	ErrDomainPathTraversal = errors.New("domain contains path traversal sequence")
 	ErrDomainInvalidChars  = errors.New("domain contains invalid characters")
 	ErrServiceEmpty        = errors.New("service name cannot be empty")
-	ErrInvalidServiceName  = errors.New("invalid service name: must start with a letter and contain only lowercase letters, numbers, and hyphens")
+	ErrInvalidServiceName  = errors.New("invalid service name: must start with a letter, contain only lowercase letters, numbers, and hyphens, be at most 63 characters, and not end with a hyphen")
 )
 
 // Service implements the SecretService interface.
@@ -263,14 +263,14 @@ func validateServiceName(service string) error {
 // Ensures the total name does not exceed Docker's 255-character limit.
 func resolveContainerName(domainName, service string) string {
 	sanitized := domain.SanitizeDomainForContainer(domainName)
-	name := sanitized + "-" + service
+	name := "gordon-" + sanitized + "-" + service
 
 	// Docker container names are limited to 255 characters
 	if len(name) > 255 {
-		// Truncate the domain part to fit, keeping room for "-" and service name
-		maxDomainLen := 255 - 1 - len(service)
+		// Truncate the domain part to fit, keeping room for "gordon-", "-", and service name
+		maxDomainLen := 255 - 7 - 1 - len(service) // 7 for "gordon-", 1 for "-"
 		if maxDomainLen > 0 {
-			name = sanitized[:maxDomainLen] + "-" + service
+			name = "gordon-" + sanitized[:maxDomainLen] + "-" + service
 		}
 	}
 	return name

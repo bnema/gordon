@@ -1143,7 +1143,7 @@ func TestHandler_AttachmentSecretsDelete_RequiresKey(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Contains(t, rec.Body.String(), "key required")
+	assert.Contains(t, rec.Body.String(), "invalid attachment path")
 }
 
 func TestHandler_AttachmentSecretsPost_InvalidJSON(t *testing.T) {

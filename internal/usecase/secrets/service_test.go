@@ -465,7 +465,7 @@ func TestService_SetAttachment(t *testing.T) {
 	svc := NewService(store, testLogger())
 
 	secrets := map[string]string{"POSTGRES_PASSWORD": "secret123"}
-	store.EXPECT().SetAttachment("app__example__com-postgres", secrets).Return(nil)
+	store.EXPECT().SetAttachment("gordon-app__example__com-postgres", secrets).Return(nil)
 
 	err := svc.SetAttachment(context.Background(), "app.example.com", "postgres", secrets)
 	assert.NoError(t, err)
@@ -475,7 +475,7 @@ func TestService_DeleteAttachment(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
 	svc := NewService(store, testLogger())
 
-	store.EXPECT().DeleteAttachment("app__example__com-postgres", "OLD_KEY").Return(nil)
+	store.EXPECT().DeleteAttachment("gordon-app__example__com-postgres", "OLD_KEY").Return(nil)
 
 	err := svc.DeleteAttachment(context.Background(), "app.example.com", "postgres", "OLD_KEY")
 	assert.NoError(t, err)
