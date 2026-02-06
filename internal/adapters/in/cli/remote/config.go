@@ -231,6 +231,7 @@ func resolveInsecureTLS(flagInsecure bool, config *ClientConfig, remotes *Client
 		if value, err := strconv.ParseBool(env); err == nil {
 			return value
 		}
+		fmt.Fprintf(os.Stderr, "WARNING: invalid GORDON_INSECURE value %q, ignoring\n", env)
 	}
 
 	if config != nil && config.Client.InsecureTLS {
