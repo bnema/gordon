@@ -70,9 +70,14 @@ func NewService(
 
 // ServeHTTP handles incoming HTTP requests and proxies them to the appropriate backend.
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Copy config under RLock to avoid data race with UpdateConfig
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	// SECURITY: Limit request body size to prevent resource exhaustion.
-	if s.config.MaxBodySize > 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, s.config.MaxBodySize)
+	if cfg.MaxBodySize > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxBodySize)
 	}
 
 	// Enrich request context with fields for downstream logging
@@ -88,7 +93,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log := zerowrap.FromCtx(ctx)
 
 	// Check if this is the registry domain
-	if s.config.RegistryDomain != "" && r.Host == s.config.RegistryDomain {
+	if cfg.RegistryDomain != "" && r.Host == cfg.RegistryDomain {
 		log.Info().Msg("routing request to registry")
 		s.proxyToRegistry(w, r)
 		return
@@ -281,7 +286,9 @@ func (s *Service) RefreshTargets(ctx context.Context) error {
 
 // UpdateConfig updates the service configuration.
 func (s *Service) UpdateConfig(config Config) {
+	s.mu.Lock()
 	s.config = config
+	s.mu.Unlock()
 }
 
 // Helper methods
@@ -346,9 +353,14 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 }
 
 func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
+	// Copy config under RLock to avoid data race with UpdateConfig
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	log := zerowrap.FromCtx(r.Context())
 
-	targetURL, err := url.Parse(fmt.Sprintf("http://localhost:%d", s.config.RegistryPort))
+	targetURL, err := url.Parse(fmt.Sprintf("http://localhost:%d", cfg.RegistryPort))
 	if err != nil {
 		log.WrapErr(err, "failed to parse registry target URL")
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -359,11 +371,11 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 		func(w http.ResponseWriter, _ *http.Request, err error) {
 			// Check if this is a MaxBytesError (request body too large)
 			if err.Error() == "http: request body too large" {
-				log.Warn().Err(err).Int("registry_port", s.config.RegistryPort).Msg("registry proxy error: request body too large")
+				log.Warn().Err(err).Int("registry_port", cfg.RegistryPort).Msg("registry proxy error: request body too large")
 				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
 				return
 			}
-			log.Error().Err(err).Int("registry_port", s.config.RegistryPort).Msg("registry proxy error")
+			log.Error().Err(err).Int("registry_port", cfg.RegistryPort).Msg("registry proxy error")
 			http.Error(w, "Registry Unavailable", http.StatusServiceUnavailable)
 		},
 		func(resp *http.Response) error {

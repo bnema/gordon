@@ -361,7 +361,7 @@ func TestContainerDeployedHandler_Handle_InvalidatesCache(t *testing.T) {
 		},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 
@@ -393,7 +393,7 @@ func TestContainerDeployedHandler_Handle_NoDomain(t *testing.T) {
 	}
 
 	// Should not error, just skip
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 	assert.NoError(t, err)
 }
 

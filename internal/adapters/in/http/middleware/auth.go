@@ -303,8 +303,7 @@ func isLocalhostRequest(r *http.Request) bool {
 	// RemoteAddr includes port, e.g., "127.0.0.1:12345" or "[::1]:12345"
 	if strings.HasPrefix(host, "127.") ||
 		strings.HasPrefix(host, "[::1]") ||
-		strings.HasPrefix(host, "::1") ||
-		strings.HasPrefix(host, "localhost") {
+		strings.HasPrefix(host, "::1") {
 		return true
 	}
 	return false

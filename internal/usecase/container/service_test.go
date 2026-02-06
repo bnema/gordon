@@ -1137,6 +1137,48 @@ func TestService_AutoStart_HandlesDeployErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "auto-start completed with 1 errors")
 }
 
+func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		RegistryDomain: "reg.example.com",
+		RegistryPort:   5000,
+		ReadinessDelay: time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+
+	// Mark context as internal deploy — this is what syncAndAutoStart should do
+	ctx := domain.WithInternalDeploy(testContext())
+
+	routes := []domain.Route{
+		{Domain: "app1.example.com", Image: "reg.example.com/myapp:latest"},
+	}
+
+	// Key assertion: PullImage should be called with localhost:5000 rewrite,
+	// NOT the original reg.example.com/myapp:latest
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "localhost:5000/myapp:latest").Return(nil)
+	runtime.EXPECT().TagImage(mock.Anything, "localhost:5000/myapp:latest", "reg.example.com/myapp:latest").Return(nil)
+	runtime.EXPECT().UntagImage(mock.Anything, "localhost:5000/myapp:latest").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "reg.example.com/myapp:latest").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "app1.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "reg.example.com/myapp:latest").Return([]string{}, nil)
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{
+		ID: "container-1", Name: "gordon-app1.example.com", Status: "created",
+	}, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "container-1").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-1").Return(true, nil).Times(2)
+	runtime.EXPECT().InspectContainer(mock.Anything, "container-1").Return(&domain.Container{
+		Status: "running",
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	err := svc.AutoStart(ctx, routes)
+	assert.NoError(t, err)
+}
+
 // TestService_Deploy_OrphanCleanupSkipsTrackedContainer verifies that the orphan cleanup
 // does not remove the currently tracked container during zero-downtime deployment.
 // This is critical for preventing downtime - the old container must stay running

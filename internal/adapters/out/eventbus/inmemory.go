@@ -74,7 +74,15 @@ func (bus *InMemory) Publish(eventType domain.EventType, payload any) error {
 		return nil
 	case <-bus.ctx.Done():
 		return fmt.Errorf("event bus is stopped")
-	default:
+	case <-time.After(5 * time.Second):
+		bus.log.Error().
+			Str(zerowrap.FieldLayer, "adapter").
+			Str(zerowrap.FieldAdapter, "eventbus").
+			Str("event_id", event.ID).
+			Str(zerowrap.FieldEvent, string(event.Type)).
+			Str("image_name", event.ImageName).
+			Str("tag", event.Tag).
+			Msg("event channel is full, dropping event after 5s timeout")
 		return fmt.Errorf("event channel is full, dropping event %s", event.ID)
 	}
 }
@@ -178,10 +186,20 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 
 	for _, handler := range handlers {
 		if handler.CanHandle(event.Type) {
-			go func(h out.EventHandler) {
-				start := time.Now()
+			h := handler // shadow loop variable for goroutine capture
+			start := time.Now()
 
-				if err := h.Handle(event); err != nil {
+			ctx, cancel := context.WithTimeout(bus.ctx, 30*time.Second)
+
+			done := make(chan error, 1)
+			go func() {
+				done <- h.Handle(ctx, event)
+			}()
+
+			select {
+			case err := <-done:
+				cancel()
+				if err != nil {
 					bus.log.Error().
 						Str(zerowrap.FieldLayer, "adapter").
 						Str(zerowrap.FieldAdapter, "eventbus").
@@ -200,7 +218,17 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 						Dur(zerowrap.FieldDuration, time.Since(start)).
 						Msg("event handled successfully")
 				}
-			}(handler)
+			case <-ctx.Done():
+				cancel()
+				bus.log.Warn().
+					Str(zerowrap.FieldLayer, "adapter").
+					Str(zerowrap.FieldAdapter, "eventbus").
+					Str("event_id", event.ID).
+					Str(zerowrap.FieldEvent, string(event.Type)).
+					Str(zerowrap.FieldHandler, fmt.Sprintf("%T", h)).
+					Dur(zerowrap.FieldDuration, time.Since(start)).
+					Msg("handler timeout after 30s")
+			}
 		}
 	}
 }

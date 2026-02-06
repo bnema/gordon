@@ -1,12 +1,14 @@
 package out
 
 import (
+	"context"
+
 	"github.com/bnema/gordon/internal/domain"
 )
 
 // EventHandler defines the contract for handling events.
 type EventHandler interface {
-	Handle(event domain.Event) error
+	Handle(ctx context.Context, event domain.Event) error
 	CanHandle(eventType domain.EventType) bool
 }
 

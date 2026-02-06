@@ -63,7 +63,7 @@ func TestImagePushedHandler_Handle_DeploysMatchingRoutes(t *testing.T) {
 		Tag:       "latest",
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -89,7 +89,7 @@ func TestImagePushedHandler_Handle_NoMatchingRoutes(t *testing.T) {
 		Tag:       "latest",
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -107,7 +107,7 @@ func TestImagePushedHandler_Handle_EmptyImageName(t *testing.T) {
 		Tag:       "latest",
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.ErrorIs(t, err, domain.ErrInvalidImageFormat)
 }
@@ -137,7 +137,7 @@ func TestImagePushedHandler_Handle_DefaultTag(t *testing.T) {
 		Tag:       "", // Empty tag should default to "latest"
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -164,7 +164,7 @@ func TestImagePushedHandler_Handle_DeployError(t *testing.T) {
 	}
 
 	// Handler logs error but doesn't fail
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -192,7 +192,7 @@ func TestImagePushedHandler_Handle_StripsRegistryDomain(t *testing.T) {
 		Tag:       "latest",
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -237,7 +237,7 @@ func TestConfigReloadHandler_Handle_DeploysNewRoutes(t *testing.T) {
 		Type: domain.EventConfigReload,
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -273,7 +273,7 @@ func TestConfigReloadHandler_Handle_StopsRemovedRoutes(t *testing.T) {
 		Type: domain.EventConfigReload,
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -313,7 +313,7 @@ func TestConfigReloadHandler_Handle_RedeploysChangedImage(t *testing.T) {
 		Type: domain.EventConfigReload,
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -349,7 +349,7 @@ func TestConfigReloadHandler_Handle_NoChanges(t *testing.T) {
 		Type: domain.EventConfigReload,
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -397,7 +397,7 @@ func TestManualReloadHandler_Handle_StartsOnlyMissingContainers(t *testing.T) {
 		Type: domain.EventManualReload,
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -428,7 +428,7 @@ func TestManualReloadHandler_Handle_StartsMissingContainer(t *testing.T) {
 		Type: domain.EventManualReload,
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -467,7 +467,7 @@ func TestManualReloadHandler_Handle_DeployErrors(t *testing.T) {
 		Type: domain.EventManualReload,
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	// Should return error indicating some failures
 	assert.Error(t, err)
@@ -497,7 +497,7 @@ func TestManualReloadHandler_Handle_DoesNotRestartRunningContainers(t *testing.T
 		Type: domain.EventManualReload,
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -539,7 +539,7 @@ func TestManualDeployHandler_Handle_DeploysSpecificRoute(t *testing.T) {
 		Data: &domain.ManualDeployPayload{Domain: "app1.example.com"},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.NoError(t, err)
 }
@@ -561,7 +561,7 @@ func TestManualDeployHandler_Handle_RouteNotFound(t *testing.T) {
 		Data: &domain.ManualDeployPayload{Domain: "unknown.example.com"},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "route not found")
@@ -580,7 +580,7 @@ func TestManualDeployHandler_Handle_InvalidPayload(t *testing.T) {
 		Data: nil,
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid manual deploy payload")
@@ -599,7 +599,7 @@ func TestManualDeployHandler_Handle_EmptyDomain(t *testing.T) {
 		Data: &domain.ManualDeployPayload{Domain: ""},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid manual deploy payload")
@@ -623,7 +623,7 @@ func TestManualDeployHandler_Handle_DeployError(t *testing.T) {
 		Data: &domain.ManualDeployPayload{Domain: "app.example.com"},
 	}
 
-	err := handler.Handle(event)
+	err := handler.Handle(context.Background(), event)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to deploy")
