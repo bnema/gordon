@@ -68,6 +68,7 @@ type Config struct {
 		RegistryDomain   string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
 		DataDir          string `mapstructure:"data_dir"`
 		MaxProxyBodySize string `mapstructure:"max_proxy_body_size"` // e.g., "512MB", "1GB"
+		MaxBlobChunkSize string `mapstructure:"max_blob_chunk_size"` // e.g., "512MB", "1GB"
 	} `mapstructure:"server"`
 
 	Logging struct {
@@ -117,23 +118,24 @@ type Config struct {
 
 // services holds all the services used by the application.
 type services struct {
-	runtime         *docker.Runtime
-	eventBus        *eventbus.InMemory
-	blobStorage     *filesystem.BlobStorage
-	manifestStorage *filesystem.ManifestStorage
-	envLoader       out.EnvLoader
-	logWriter       *logwriter.LogWriter
-	tokenStore      out.TokenStore
-	configSvc       *config.Service
-	containerSvc    *container.Service
-	registrySvc     *registrySvc.Service
-	proxySvc        *proxy.Service
-	authSvc         *auth.Service
-	authHandler     *authhandler.Handler
-	adminHandler    *admin.Handler
-	internalRegUser string
-	internalRegPass string
-	envDir          string
+	runtime          *docker.Runtime
+	eventBus         *eventbus.InMemory
+	blobStorage      *filesystem.BlobStorage
+	manifestStorage  *filesystem.ManifestStorage
+	envLoader        out.EnvLoader
+	logWriter        *logwriter.LogWriter
+	tokenStore       out.TokenStore
+	configSvc        *config.Service
+	containerSvc     *container.Service
+	registrySvc      *registrySvc.Service
+	proxySvc         *proxy.Service
+	authSvc          *auth.Service
+	authHandler      *authhandler.Handler
+	adminHandler     *admin.Handler
+	internalRegUser  string
+	internalRegPass  string
+	envDir           string
+	maxBlobChunkSize int64
 }
 
 // Run initializes and starts the Gordon application.
@@ -305,6 +307,18 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		}
 		maxProxyBodySize = parsedSize
 	}
+
+	// Parse max_blob_chunk_size config (default: 512MB)
+	maxBlobChunkSize := int64(registry.DefaultMaxBlobChunkSize)
+	if cfg.Server.MaxBlobChunkSize != "" {
+		parsedSize, err := bytesize.Parse(cfg.Server.MaxBlobChunkSize)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid server.max_blob_chunk_size configuration", map[string]any{"value": cfg.Server.MaxBlobChunkSize})
+		}
+		maxBlobChunkSize = parsedSize
+	}
+
+	svc.maxBlobChunkSize = maxBlobChunkSize
 
 	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxy.Config{
 		RegistryDomain: cfg.Server.RegistryDomain,
@@ -971,7 +985,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
 	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 
-	registryHandler := registry.NewHandler(svc.registrySvc, log)
+	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize)
 
 	registryMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
