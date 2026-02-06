@@ -176,6 +176,26 @@ func (s *FileStore) SetAttachment(containerName string, secrets map[string]strin
 	return s.writeAttachmentSecretsAtomic(containerName, existing)
 }
 
+// DeleteAttachment removes a specific secret key from an attachment container.
+func (s *FileStore) DeleteAttachment(containerName, key string) error {
+	// Validate container name first
+	if _, err := s.validateAttachmentEnvFilePath(containerName); err != nil {
+		return err
+	}
+
+	// Read existing secrets
+	existing, err := s.GetAllAttachment(containerName)
+	if err != nil {
+		return err
+	}
+
+	// Remove the key (no-op if not present)
+	delete(existing, key)
+
+	// Write back atomically
+	return s.writeAttachmentSecretsAtomic(containerName, existing)
+}
+
 // GetAllAttachment returns all secrets for an attachment container as a key-value map.
 func (s *FileStore) GetAllAttachment(containerName string) (map[string]string, error) {
 	envFile, err := s.validateAttachmentEnvFilePath(containerName)

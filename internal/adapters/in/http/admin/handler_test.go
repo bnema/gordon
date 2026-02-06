@@ -389,6 +389,59 @@ func TestHandler_SecretsDelete_RequiresWriteScope(t *testing.T) {
 	}
 }
 
+// Attachment secrets endpoint tests
+
+func TestHandler_AttachmentSecretsPost(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	secretSvc.EXPECT().SetAttachment(mock.Anything, "app.example.com", "redis", mock.AnythingOfType("map[string]string")).Return(nil)
+
+	body := `{"REDIS_URL": "redis://localhost:6379"}`
+	req := httptest.NewRequest("POST", "/admin/secrets/app.example.com/attachments/redis", bytes.NewBufferString(body))
+	req = req.WithContext(ctxWithScopes("admin:secrets:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response struct {
+		Status string `json:"status"`
+	}
+	assert.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	assert.Equal(t, "updated", response.Status)
+}
+
+func TestHandler_AttachmentSecretsDelete(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	secretSvc.EXPECT().DeleteAttachment(mock.Anything, "app.example.com", "redis", "REDIS_URL").Return(nil)
+
+	req := httptest.NewRequest("DELETE", "/admin/secrets/app.example.com/attachments/redis/REDIS_URL", nil)
+	req = req.WithContext(ctxWithScopes("admin:secrets:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response struct {
+		Status string `json:"status"`
+	}
+	assert.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	assert.Equal(t, "deleted", response.Status)
+}
+
 // Status endpoint tests
 
 func TestHandler_Status_RequiresReadScope(t *testing.T) {
@@ -1038,6 +1091,78 @@ func TestHandler_Tags_Error(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "registry error")
+}
+
+func TestHandler_AttachmentSecretsPost_RequiresWriteScope(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	body := `{"REDIS_URL": "redis://localhost:6379"}`
+	req := httptest.NewRequest("POST", "/admin/secrets/app.example.com/attachments/redis", bytes.NewBufferString(body))
+	req = req.WithContext(ctxWithScopes("admin:secrets:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestHandler_AttachmentSecretsDelete_RequiresWriteScope(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	req := httptest.NewRequest("DELETE", "/admin/secrets/app.example.com/attachments/redis/REDIS_URL", nil)
+	req = req.WithContext(ctxWithScopes("admin:secrets:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestHandler_AttachmentSecretsDelete_RequiresKey(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	req := httptest.NewRequest("DELETE", "/admin/secrets/app.example.com/attachments/redis", nil)
+	req = req.WithContext(ctxWithScopes("admin:secrets:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "key required")
+}
+
+func TestHandler_AttachmentSecretsPost_InvalidJSON(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger())
+
+	body := `{not valid json`
+	req := httptest.NewRequest("POST", "/admin/secrets/app.example.com/attachments/redis", bytes.NewBufferString(body))
+	req = req.WithContext(ctxWithScopes("admin:secrets:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid JSON")
 }
 
 func TestHandler_NotFound(t *testing.T) {

@@ -126,6 +126,37 @@ func TestPassStore_ListAttachmentKeys_AfterSet(t *testing.T) {
 	assert.Equal(t, "redis123", values["REDIS_PASSWORD"])
 }
 
+func TestPassStore_DeleteAttachment(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	containerName := fmt.Sprintf("gitea-postgres-%d", time.Now().UnixNano())
+	keys := []string{"POSTGRES_USER", "POSTGRES_PASSWORD"}
+	defer CleanupPassAttachment(t, containerName, keys)
+
+	// Set 2 secrets
+	secretsMap := map[string]string{
+		"POSTGRES_USER":     "gitea",
+		"POSTGRES_PASSWORD": "secret123",
+	}
+	err = store.SetAttachment(containerName, secretsMap)
+	require.NoError(t, err)
+
+	// Delete 1
+	err = store.DeleteAttachment(containerName, "POSTGRES_PASSWORD")
+	require.NoError(t, err)
+
+	// Verify remaining via GetAllAttachment
+	values, err := store.GetAllAttachment(containerName)
+	require.NoError(t, err)
+	assert.Len(t, values, 1)
+	assert.Equal(t, "gitea", values["POSTGRES_USER"])
+	_, exists := values["POSTGRES_PASSWORD"]
+	assert.False(t, exists)
+}
+
 func TestParsePassListOutput(t *testing.T) {
 	tests := []struct {
 		name     string

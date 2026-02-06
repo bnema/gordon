@@ -17,9 +17,10 @@ func newSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
 		Short: "Manage secrets",
-		Long: `Manage secrets (environment variables) for routes.
+		Long: `Manage secrets (environment variables) for routes and attachments.
 
 Secrets are stored per-domain and injected into containers as environment variables.
+Use --attachment to target attachment containers (databases, caches, etc.).
 
 When targeting a remote Gordon instance (via --remote flag or GORDON_REMOTE env var),
 these commands operate on the remote server.`,
@@ -213,17 +214,23 @@ func getKeyPrefix(isLastAttachment, isLastKey bool) string {
 
 // newSecretsSetCmd creates the secrets set command.
 func newSecretsSetCmd() *cobra.Command {
-	return &cobra.Command{
+	var attachment string
+
+	cmd := &cobra.Command{
 		Use:   "set <domain> <KEY=value>...",
-		Short: "Set secrets for a domain",
-		Long: `Set one or more secrets for a domain.
+		Short: "Set secrets for a domain or attachment",
+		Long: `Set one or more secrets for a domain or an attachment container.
 
 Secrets are specified as KEY=value pairs. Multiple secrets can be set at once.
+
+Use --attachment to target an attachment service (e.g., postgres, redis) instead
+of the main domain container.
 
 Examples:
   gordon secrets set app.mydomain.com DATABASE_URL=postgres://localhost/db
   gordon secrets set app.mydomain.com API_KEY=secret123 DEBUG=false
-  gordon --remote https://gordon.mydomain.com secrets set api.mydomain.com TOKEN=abc`,
+  gordon secrets set app.mydomain.com --attachment postgres POSTGRES_PASSWORD=secret
+  gordon secrets set app.mydomain.com --attachment redis REDIS_PASSWORD=secret`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
@@ -243,54 +250,87 @@ Examples:
 
 			client, isRemote := GetRemoteClient()
 			if isRemote {
-				if err := client.SetSecrets(ctx, secretDomain, secrets); err != nil {
-					return fmt.Errorf("failed to set secrets: %w", err)
+				if attachment != "" {
+					if err := client.SetAttachmentSecrets(ctx, secretDomain, attachment, secrets); err != nil {
+						return fmt.Errorf("failed to set secrets: %w", err)
+					}
+				} else {
+					if err := client.SetSecrets(ctx, secretDomain, secrets); err != nil {
+						return fmt.Errorf("failed to set secrets: %w", err)
+					}
 				}
 			} else {
 				local, err := GetLocalServices(configPath)
 				if err != nil {
 					return fmt.Errorf("failed to initialize local services: %w", err)
 				}
-				if err := local.GetSecretService().Set(ctx, secretDomain, secrets); err != nil {
-					return fmt.Errorf("failed to set secrets: %w", err)
+				if attachment != "" {
+					if err := local.GetSecretService().SetAttachment(ctx, secretDomain, attachment, secrets); err != nil {
+						return fmt.Errorf("failed to set secrets: %w", err)
+					}
+				} else {
+					if err := local.GetSecretService().Set(ctx, secretDomain, secrets); err != nil {
+						return fmt.Errorf("failed to set secrets: %w", err)
+					}
 				}
+			}
+
+			target := secretDomain
+			if attachment != "" {
+				target = fmt.Sprintf("%s [%s]", secretDomain, attachment)
 			}
 
 			if len(secrets) == 1 {
 				for key := range secrets {
-					fmt.Println(styles.RenderSuccess(fmt.Sprintf("Secret set: %s", key)))
+					fmt.Println(styles.RenderSuccess(fmt.Sprintf("Secret set: %s on %s", key, target)))
 				}
 			} else {
-				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Set %d secrets for %s", len(secrets), secretDomain)))
+				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Set %d secrets for %s", len(secrets), target)))
 			}
 
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&attachment, "attachment", "a", "", "Target an attachment service (e.g., postgres, redis)")
+
+	return cmd
 }
 
 // newSecretsRemoveCmd creates the secrets remove command.
 func newSecretsRemoveCmd() *cobra.Command {
-	var force bool
+	var (
+		force      bool
+		attachment string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "remove <domain> <key>",
 		Short: "Remove a secret",
-		Long: `Remove a secret from a domain.
+		Long: `Remove a secret from a domain or an attachment container.
+
+Use --attachment to target an attachment service (e.g., postgres, redis) instead
+of the main domain container.
 
 Examples:
   gordon secrets remove app.mydomain.com OLD_API_KEY
-  gordon secrets remove app.mydomain.com OLD_API_KEY --force`,
+  gordon secrets remove app.mydomain.com OLD_API_KEY --force
+  gordon secrets remove app.mydomain.com --attachment postgres POSTGRES_PASSWORD`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			secretDomain := args[0]
 			key := args[1]
 
+			target := secretDomain
+			if attachment != "" {
+				target = fmt.Sprintf("%s [%s]", secretDomain, attachment)
+			}
+
 			// Confirm unless --force
 			if !force {
 				confirmed, err := components.RunConfirm(
-					fmt.Sprintf("Remove secret '%s' from %s?", key, secretDomain),
+					fmt.Sprintf("Remove secret '%s' from %s?", key, target),
 				)
 				if err != nil {
 					return err
@@ -303,25 +343,38 @@ Examples:
 
 			client, isRemote := GetRemoteClient()
 			if isRemote {
-				if err := client.DeleteSecret(ctx, secretDomain, key); err != nil {
-					return fmt.Errorf("failed to remove secret: %w", err)
+				if attachment != "" {
+					if err := client.DeleteAttachmentSecret(ctx, secretDomain, attachment, key); err != nil {
+						return fmt.Errorf("failed to remove secret: %w", err)
+					}
+				} else {
+					if err := client.DeleteSecret(ctx, secretDomain, key); err != nil {
+						return fmt.Errorf("failed to remove secret: %w", err)
+					}
 				}
 			} else {
 				local, err := GetLocalServices(configPath)
 				if err != nil {
 					return fmt.Errorf("failed to initialize local services: %w", err)
 				}
-				if err := local.GetSecretService().Delete(ctx, secretDomain, key); err != nil {
-					return fmt.Errorf("failed to remove secret: %w", err)
+				if attachment != "" {
+					if err := local.GetSecretService().DeleteAttachment(ctx, secretDomain, attachment, key); err != nil {
+						return fmt.Errorf("failed to remove secret: %w", err)
+					}
+				} else {
+					if err := local.GetSecretService().Delete(ctx, secretDomain, key); err != nil {
+						return fmt.Errorf("failed to remove secret: %w", err)
+					}
 				}
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Secret removed: %s", key)))
+			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Secret removed from %s: %s", target, key)))
 			return nil
 		},
 	}
 
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation")
+	cmd.Flags().StringVarP(&attachment, "attachment", "a", "", "Target an attachment service (e.g., postgres, redis)")
 
 	return cmd
 }
