@@ -409,3 +409,57 @@ func TestHandler_RegisterRoutes(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
+
+func TestHandler_StartBlobUpload_ReturnsDockerUploadUUID(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+	handler := NewHandler(registrySvc, testLogger())
+
+	registrySvc.EXPECT().StartUpload(mock.Anything, "myapp").Return("550e8400-e29b-41d4-a716-446655440000", nil)
+
+	req := httptest.NewRequest("POST", "/v2/myapp/blobs/uploads/", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Docker-Upload-UUID"))
+}
+
+func TestHandler_BlobUpload_PATCH_ReturnsDockerUploadUUID(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+	handler := NewHandler(registrySvc, testLogger())
+
+	chunkData := []byte("chunk content")
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
+
+	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Docker-Upload-UUID"))
+}
+
+func TestMaxBlobChunkSize_Under100MB(t *testing.T) {
+	// Verify the constant leaves headroom below Cloudflare's 100MB limit
+	assert.Less(t, int64(MaxBlobChunkSize), int64(100*1024*1024))
+	assert.Greater(t, int64(MaxBlobChunkSize), int64(90*1024*1024))
+}
+
+func TestHandler_BlobUpload_PATCH_ReturnsRangeHeader(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+	handler := NewHandler(registrySvc, testLogger())
+
+	chunkData := []byte("chunk content")
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
+
+	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	// OCI spec: Range header should reflect total received bytes
+	assert.Equal(t, "0-12", rec.Header().Get("Range"))
+}
