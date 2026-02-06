@@ -41,6 +41,11 @@ const (
 	PullPolicyAlways       = "always"
 	PullPolicyIfNotPresent = "if-not-present"
 	PullPolicyIfTagChanged = "if-tag-changed"
+
+	// readinessRecoveryWindow is an additional grace window used when a container
+	// is briefly not running at the end of readiness delay. This avoids false
+	// negatives during short startup flaps.
+	readinessRecoveryWindow = 30 * time.Second
 )
 
 // Service implements the ContainerService interface.
@@ -1705,11 +1710,35 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 	if err != nil {
 		return err
 	}
-	if !running {
-		return fmt.Errorf("container stopped during readiness delay")
+	if running {
+		return nil
 	}
 
-	return nil
+	// Be tolerant to short startup flaps: retry within a bounded recovery window
+	// before treating readiness as failed.
+	log.Warn().
+		Dur("recovery_window", readinessRecoveryWindow).
+		Msg("container not running after readiness delay, waiting for recovery")
+
+	deadline := time.Now().Add(readinessRecoveryWindow)
+	for time.Now().Before(deadline) {
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		running, err = s.runtime.IsContainerRunning(ctx, containerID)
+		if err != nil {
+			return err
+		}
+		if running {
+			log.Info().Msg("container recovered during readiness recovery window")
+			return nil
+		}
+	}
+
+	return fmt.Errorf("container stopped during readiness delay")
 }
 
 // publishContainerDeployed publishes a container.deployed event.
