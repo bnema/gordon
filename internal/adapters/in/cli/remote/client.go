@@ -182,7 +182,7 @@ func retryDelay(attempt int) time.Duration {
 }
 
 // requestWithRetry performs an HTTP request and retries transient failures.
-// Retries occur on transport errors and any 5xx response.
+// Retries occur on transport errors and gateway errors (502, 503, 504).
 func (c *Client) requestWithRetry(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var lastErr error
 

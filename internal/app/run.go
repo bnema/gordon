@@ -310,7 +310,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		maxProxyBodySize = parsedSize
 	}
 
-	// Parse max_blob_chunk_size config (default: 512MB)
+	// Parse max_blob_chunk_size config (default: 95MB)
 	maxBlobChunkSize := int64(registry.DefaultMaxBlobChunkSize)
 	if cfg.Server.MaxBlobChunkSize != "" {
 		parsedSize, err := bytesize.Parse(cfg.Server.MaxBlobChunkSize)
