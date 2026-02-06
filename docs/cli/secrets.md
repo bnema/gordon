@@ -212,7 +212,7 @@ gordon secrets set app.mydomain.com -a redis REDIS_PASSWORD=cache-secret
 gordon secrets list app.mydomain.com
 
 # Redeploy to pick up new secrets
-gordon push app.mydomain.com
+gordon deploy app.mydomain.com
 ```
 
 ## Related

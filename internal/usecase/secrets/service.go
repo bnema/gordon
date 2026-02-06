@@ -260,8 +260,20 @@ func validateServiceName(service string) error {
 }
 
 // resolveContainerName builds the container name from a domain and service.
+// Ensures the total name does not exceed Docker's 255-character limit.
 func resolveContainerName(domainName, service string) string {
-	return domain.SanitizeDomainForContainer(domainName) + "-" + service
+	sanitized := domain.SanitizeDomainForContainer(domainName)
+	name := sanitized + "-" + service
+
+	// Docker container names are limited to 255 characters
+	if len(name) > 255 {
+		// Truncate the domain part to fit, keeping room for "-" and service name
+		maxDomainLen := 255 - 1 - len(service)
+		if maxDomainLen > 0 {
+			name = sanitized[:maxDomainLen] + "-" + service
+		}
+	}
+	return name
 }
 
 // ValidateDomain validates that a domain is safe to use for secret storage.

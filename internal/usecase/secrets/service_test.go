@@ -529,6 +529,42 @@ func TestService_DeleteAttachment_InvalidServiceName(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidServiceName)
 }
 
+func TestService_SetAttachment_ServiceNameTooLong(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	// Service name exceeds DNS label limit of 63 characters
+	longService := strings.Repeat("a", 64)
+	err := svc.SetAttachment(context.Background(), "app.example.com", longService, map[string]string{"K": "V"})
+	assert.ErrorIs(t, err, ErrInvalidServiceName)
+}
+
+func TestService_SetAttachment_ServiceNameTrailingHyphen(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	err := svc.SetAttachment(context.Background(), "app.example.com", "postgres-", map[string]string{"K": "V"})
+	assert.ErrorIs(t, err, ErrInvalidServiceName)
+}
+
+func TestService_DeleteAttachment_ServiceNameTooLong(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	// Service name exceeds DNS label limit of 63 characters
+	longService := strings.Repeat("a", 64)
+	err := svc.DeleteAttachment(context.Background(), "app.example.com", longService, "SOME_KEY")
+	assert.ErrorIs(t, err, ErrInvalidServiceName)
+}
+
+func TestService_DeleteAttachment_ServiceNameTrailingHyphen(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger())
+
+	err := svc.DeleteAttachment(context.Background(), "app.example.com", "redis-", "SOME_KEY")
+	assert.ErrorIs(t, err, ErrInvalidServiceName)
+}
+
 func TestService_AttachmentValidationHappensBeforeStore(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
 	svc := NewService(store, testLogger())

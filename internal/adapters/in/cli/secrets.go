@@ -242,8 +242,7 @@ Examples:
 			for _, pair := range pairs {
 				parts := strings.SplitN(pair, "=", 2)
 				if len(parts) != 2 {
-					fmt.Println(styles.RenderError(fmt.Sprintf("Invalid format: %s (expected KEY=value)", pair)))
-					return nil
+					return fmt.Errorf("invalid format: %s (expected KEY=value)", pair)
 				}
 				secrets[parts[0]] = parts[1]
 			}
