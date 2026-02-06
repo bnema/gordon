@@ -120,6 +120,8 @@ when you want to bypass your saved configuration.
 **Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
 
 Use `--insecure` when the remote endpoint uses a self-signed or otherwise untrusted TLS certificate.
+You can make this persistent with `insecure_tls = true` in `[client]` of `~/.config/gordon/gordon.toml`
+or in a specific entry in `~/.config/gordon/remotes.toml`.
 
 ```bash
 # Using flags (use the gordon_domain from remote Gordon config)
@@ -131,6 +133,7 @@ gordon --remote https://gordon.mydomain.com --token $TOKEN --insecure status
 # Using environment variables
 export GORDON_REMOTE=https://gordon.mydomain.com
 export GORDON_TOKEN=$TOKEN
+export GORDON_INSECURE=true
 gordon routes list
 ```
 

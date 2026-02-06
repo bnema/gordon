@@ -222,6 +222,7 @@ active = "prod"
 [remotes.prod]
 url = "https://gordon.mydomain.com"
 token_env = "PROD_TOKEN"
+insecure_tls = true
 
 [remotes.staging]
 url = "https://staging.mydomain.com"
@@ -241,6 +242,12 @@ When multiple sources specify remote or token, the CLI uses this priority:
 1. `--token` flag
 2. `GORDON_TOKEN` environment variable
 3. Token from active remote in `remotes.toml`
+
+**Insecure TLS:**
+1. `--insecure` flag
+2. `GORDON_INSECURE` environment variable (`true`/`false`)
+3. `[client] insecure_tls` in `gordon.toml`
+4. `insecure_tls` from the selected remote in `remotes.toml`
 
 This allows overriding specific values while keeping defaults:
 
