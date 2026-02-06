@@ -281,7 +281,9 @@ func (s *Service) RefreshTargets(ctx context.Context) error {
 
 // UpdateConfig updates the service configuration.
 func (s *Service) UpdateConfig(config Config) {
+	s.mu.Lock()
 	s.config = config
+	s.mu.Unlock()
 }
 
 // Helper methods

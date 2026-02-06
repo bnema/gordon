@@ -912,6 +912,12 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) error
 		return fmt.Errorf("failed to subscribe container deployed handler: %w", err)
 	}
 
+	// Proxy cache invalidation on config reload (clears stale targets for removed routes)
+	configReloadProxyHandler := proxy.NewConfigReloadProxyHandler(ctx, svc.proxySvc)
+	if err := svc.eventBus.Subscribe(configReloadProxyHandler); err != nil {
+		return fmt.Errorf("failed to subscribe config reload proxy handler: %w", err)
+	}
+
 	return nil
 }
 
