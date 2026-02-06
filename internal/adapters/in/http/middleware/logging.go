@@ -2,6 +2,8 @@
 package middleware
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -75,6 +77,13 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
+			// Generate or reuse X-Request-ID for request tracing
+			requestID := r.Header.Get("X-Request-ID")
+			if requestID == "" {
+				requestID = generateRequestID()
+			}
+			w.Header().Set("X-Request-ID", requestID)
+
 			// Wrap the response writer to capture status and bytes
 			rw := NewResponseWriter(w)
 
@@ -96,6 +105,7 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 			log.Info().
 				Str(zerowrap.FieldLayer, "adapter").
 				Str(zerowrap.FieldAdapter, "http").
+				Str("request_id", requestID).
 				Str(zerowrap.FieldMethod, r.Method).
 				Str(zerowrap.FieldPath, r.URL.Path).
 				Str("query", r.URL.RawQuery).
@@ -110,6 +120,13 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 				Msg("HTTP request")
 		})
 	}
+}
+
+// generateRequestID creates a random 16-byte hex-encoded request ID.
+func generateRequestID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // PanicRecovery middleware recovers from panics and logs them.
