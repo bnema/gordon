@@ -955,7 +955,7 @@ func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
 
 	if svc.configSvc.IsAutoRouteEnabled() {
 		routes := svc.configSvc.GetRoutes(ctx)
-		if err := svc.containerSvc.AutoStart(ctx, routes); err != nil {
+		if err := svc.containerSvc.AutoStart(domain.WithInternalDeploy(ctx), routes); err != nil {
 			log.Warn().Err(err).Msg("failed to auto-start containers")
 		}
 	}
