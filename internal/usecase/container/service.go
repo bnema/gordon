@@ -3,6 +3,7 @@ package container
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -1103,8 +1104,7 @@ func (s *Service) pullImageWithRetry(ctx context.Context, pullFn func(context.Co
 			return ctx.Err()
 		}
 	}
-
-	return fmt.Errorf("internal image pull failed after %d attempts", internalPullMaxAttempts)
+	return nil
 }
 
 func (s *Service) tagImageIfNeeded(ctx context.Context, sourceRef, targetRef string) error {
@@ -1731,6 +1731,9 @@ func isContainerNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, domain.ErrContainerNotFound) {
+		return true
+	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "no such container") ||
 		strings.Contains(msg, "no container with name or id") ||
@@ -1815,7 +1818,7 @@ func (s *Service) pollContainerRunning(ctx context.Context, containerID string) 
 			return ctx.Err()
 		}
 	}
-	return nil
+	return fmt.Errorf("container did not start within 30 seconds")
 }
 
 // waitForRecovery waits for a container to recover within the recovery window.
