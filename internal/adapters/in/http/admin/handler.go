@@ -837,8 +837,8 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 		return
 	}
 
-	// Deploy the container
-	container, err := h.containerSvc.Deploy(ctx, *route)
+	// Deploy is an internal server-side action: pull from local registry path.
+	container, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route)
 	if err != nil {
 		log.Error().Err(err).Str("domain", deployDomain).Msg("failed to deploy container")
 		h.sendError(w, http.StatusInternalServerError, "failed to deploy container")
