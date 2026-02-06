@@ -101,10 +101,14 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 
 func createLocalDomainSecretStore(v *viper.Viper, envDir string, log zerowrap.Logger) (out.DomainSecretStore, error) {
 	backend := resolveLocalSecretsBackend(v)
-	if backend == domain.SecretsBackendPass {
+	switch backend {
+	case domain.SecretsBackendPass:
 		return domainsecrets.NewPassStore(log)
+	case domain.SecretsBackendSops:
+		return nil, fmt.Errorf("sops backend not yet supported for domain secrets")
+	default:
+		return domainsecrets.NewFileStore(envDir, log)
 	}
-	return domainsecrets.NewFileStore(envDir, log)
 }
 
 func resolveLocalSecretsBackend(v *viper.Viper) domain.SecretsBackend {
@@ -122,6 +126,8 @@ func resolveLocalSecretsBackend(v *viper.Viper) domain.SecretsBackend {
 	case "unsafe", "":
 		return domain.SecretsBackendUnsafe
 	default:
+		log := zerowrap.Default()
+		log.Warn().Str("backend", backend).Msg("unrecognized secrets backend, falling back to unsafe")
 		return domain.SecretsBackendUnsafe
 	}
 }
