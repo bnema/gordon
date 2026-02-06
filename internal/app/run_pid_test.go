@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,12 +16,13 @@ func TestFindRunningPidFileInLocations_PrefersLiveProcessOverStale(t *testing.T)
 	liveFile := filepath.Join(tmpDir, "live.pid")
 
 	require.NoError(t, os.WriteFile(staleFile, []byte("999999"), 0600))
-	require.NoError(t, os.WriteFile(liveFile, []byte("1"), 0600))
+	myPid := os.Getpid()
+	require.NoError(t, os.WriteFile(liveFile, []byte(strconv.Itoa(myPid)), 0600))
 
 	path, pid, err := findRunningPidFileInLocations([]string{staleFile, liveFile})
 	require.NoError(t, err)
 	assert.Equal(t, liveFile, path)
-	assert.Equal(t, 1, pid)
+	assert.Equal(t, myPid, pid)
 
 	_, statErr := os.Stat(staleFile)
 	assert.True(t, os.IsNotExist(statErr))

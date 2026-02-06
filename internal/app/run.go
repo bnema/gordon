@@ -1341,16 +1341,6 @@ func removePidFile(pidFile string, log zerowrap.Logger) {
 	}
 }
 
-// findPidFile finds the Gordon PID file.
-// Checks secure locations first, then falls back to legacy /tmp location.
-func findPidFile() string {
-	location, _, err := findRunningPidFile()
-	if err != nil {
-		return ""
-	}
-	return location
-}
-
 func pidFileLocations() []string {
 	var locations []string
 	seen := make(map[string]struct{})

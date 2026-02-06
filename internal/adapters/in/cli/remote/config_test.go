@@ -56,6 +56,15 @@ func TestResolveInsecureTLSForRemote_FromRemoteEntry(t *testing.T) {
 	}
 }
 
+func TestResolveInsecureTLSForRemote_DefaultSecure(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// With no flag, no env, and no config, TLS should be secure by default
+	if ResolveInsecureTLSForRemote(false, "") {
+		t.Fatalf("expected insecure TLS false by default")
+	}
+}
+
 func TestResolveInsecureTLSForRemote_EnvAndFlagPrecedence(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GORDON_INSECURE", "true")

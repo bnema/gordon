@@ -38,6 +38,31 @@ func TestResolveLocalSecretsBackend(t *testing.T) {
 	})
 }
 
+func TestCreateLocalDomainSecretStore_UsesPassStoreForPass(t *testing.T) {
+	// pass(1) must be available on the system for this test
+	if _, err := domainsecrets.NewPassStore(zerowrap.New(zerowrap.Config{Level: "error", Format: "console"})); err != nil {
+		t.Skipf("pass store not available: %v", err)
+	}
+
+	v := viper.New()
+	v.Set("auth.secrets_backend", "pass")
+
+	log := zerowrap.New(zerowrap.Config{Level: "error", Format: "console"})
+	store, err := createLocalDomainSecretStore(v, t.TempDir(), log)
+	require.NoError(t, err)
+	require.IsType(t, &domainsecrets.PassStore{}, store)
+}
+
+func TestCreateLocalDomainSecretStore_RejectsSopsBackend(t *testing.T) {
+	v := viper.New()
+	v.Set("auth.secrets_backend", "sops")
+
+	log := zerowrap.New(zerowrap.Config{Level: "error", Format: "console"})
+	_, err := createLocalDomainSecretStore(v, t.TempDir(), log)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sops backend not yet supported")
+}
+
 func TestCreateLocalDomainSecretStore_UsesFileStoreForUnsafe(t *testing.T) {
 	v := viper.New()
 	v.Set("auth.secrets_backend", "unsafe")
