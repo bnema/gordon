@@ -93,3 +93,18 @@ func TestClientDeployReturnsErrorAfterRetryExhaustion(t *testing.T) {
 	assert.Contains(t, err.Error(), "500 Internal Server Error: failed to deploy container")
 	assert.EqualValues(t, retryMaxAttempts, atomic.LoadInt32(&attempts))
 }
+
+func TestClientWithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/status", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"routes":0,"registry_domain":"","registry_port":0,"server_port":0,"auto_route":false,"network_isolation":false,"container_status":{}}`))
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL).GetStatus(context.Background())
+	require.Error(t, err)
+
+	_, err = NewClient(srv.URL, WithInsecureTLS(true)).GetStatus(context.Background())
+	require.NoError(t, err)
+}

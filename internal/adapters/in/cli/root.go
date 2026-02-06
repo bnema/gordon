@@ -22,8 +22,9 @@ var (
 	BuildDate = "unknown"
 
 	// Global flags for remote targeting
-	remoteFlag string
-	tokenFlag  string
+	remoteFlag      string
+	tokenFlag       string
+	insecureTLSFlag bool
 )
 
 // Command group IDs
@@ -60,6 +61,7 @@ Commands are organized by where they run:
 	// Add persistent flags for remote targeting
 	rootCmd.PersistentFlags().StringVar(&remoteFlag, "remote", "", "Remote Gordon URL (e.g., https://gordon.mydomain.com)")
 	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "Authentication token for remote")
+	rootCmd.PersistentFlags().BoolVar(&insecureTLSFlag, "insecure", false, "Skip TLS certificate verification for remote HTTPS endpoints")
 
 	// Server-only commands (must run on the Gordon host)
 	serveCmd := newServeCmd()
@@ -139,8 +141,19 @@ func GetRemoteClient() (*remote.Client, bool) {
 		return nil, false
 	}
 
-	client := remote.NewClient(url, remote.WithToken(token))
+	client := remote.NewClient(url, remoteClientOptions(token)...)
 	return client, true
+}
+
+func remoteClientOptions(token string) []remote.ClientOption {
+	opts := make([]remote.ClientOption, 0, 2)
+	if token != "" {
+		opts = append(opts, remote.WithToken(token))
+	}
+	if insecureTLSFlag {
+		opts = append(opts, remote.WithInsecureTLS(true))
+	}
+	return opts
 }
 
 // IsRemoteMode returns true if CLI is targeting a remote Gordon instance.

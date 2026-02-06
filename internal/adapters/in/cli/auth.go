@@ -297,7 +297,7 @@ func runAuthLogin(remoteName, username, password string) error {
 	}
 
 	// Create remote client
-	client := remote.NewClient(remoteConfig.URL)
+	client := remote.NewClient(remoteConfig.URL, remoteClientOptions("")...)
 
 	// Authenticate
 	ctx := context.Background()
@@ -332,7 +332,7 @@ func runAuthLoginWithToken(remoteName, token string) error {
 		return err
 	}
 
-	client := remote.NewClient(remoteConfig.URL, remote.WithToken(token))
+	client := remote.NewClient(remoteConfig.URL, remoteClientOptions(token)...)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	verified := true
@@ -758,7 +758,7 @@ func runAuthStatus(remoteNameArg string) error {
 	}
 
 	// Create client
-	client := remote.NewClient(remoteConfig.URL, remote.WithToken(remoteConfig.Token))
+	client := remote.NewClient(remoteConfig.URL, remoteClientOptions(remoteConfig.Token)...)
 
 	// Verify auth
 	ctx := context.Background()
