@@ -204,11 +204,13 @@ func runReload() error {
 func runReloadRemote(ctx context.Context, client *remote.Client) error {
 	if err := client.Reload(ctx); err != nil {
 		if shouldFallbackToLocal(err) {
-			if localErr := runReload(); localErr == nil {
+			localErr := runReload()
+			if localErr == nil {
 				fmt.Printf("Remote reload failed (%v), used local signal fallback\n", err)
 				fmt.Println("Configuration reloaded successfully")
 				return nil
 			}
+			return fmt.Errorf("remote reload failed: %w; local fallback failed: %v", err, localErr)
 		}
 		return fmt.Errorf("failed to reload: %w", err)
 	}
