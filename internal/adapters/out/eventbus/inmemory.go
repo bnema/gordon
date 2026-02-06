@@ -74,7 +74,15 @@ func (bus *InMemory) Publish(eventType domain.EventType, payload any) error {
 		return nil
 	case <-bus.ctx.Done():
 		return fmt.Errorf("event bus is stopped")
-	default:
+	case <-time.After(5 * time.Second):
+		bus.log.Error().
+			Str(zerowrap.FieldLayer, "adapter").
+			Str(zerowrap.FieldAdapter, "eventbus").
+			Str("event_id", event.ID).
+			Str(zerowrap.FieldEvent, string(event.Type)).
+			Str("image_name", event.ImageName).
+			Str("tag", event.Tag).
+			Msg("event channel is full, dropping event after 5s timeout")
 		return fmt.Errorf("event channel is full, dropping event %s", event.ID)
 	}
 }
@@ -178,29 +186,27 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 
 	for _, handler := range handlers {
 		if handler.CanHandle(event.Type) {
-			go func(h out.EventHandler) {
-				start := time.Now()
+			start := time.Now()
 
-				if err := h.Handle(event); err != nil {
-					bus.log.Error().
-						Str(zerowrap.FieldLayer, "adapter").
-						Str(zerowrap.FieldAdapter, "eventbus").
-						Err(err).
-						Str("event_id", event.ID).
-						Str(zerowrap.FieldEvent, string(event.Type)).
-						Str(zerowrap.FieldHandler, fmt.Sprintf("%T", h)).
-						Msg("error handling event")
-				} else {
-					bus.log.Debug().
-						Str(zerowrap.FieldLayer, "adapter").
-						Str(zerowrap.FieldAdapter, "eventbus").
-						Str("event_id", event.ID).
-						Str(zerowrap.FieldEvent, string(event.Type)).
-						Str(zerowrap.FieldHandler, fmt.Sprintf("%T", h)).
-						Dur(zerowrap.FieldDuration, time.Since(start)).
-						Msg("event handled successfully")
-				}
-			}(handler)
+			if err := handler.Handle(event); err != nil {
+				bus.log.Error().
+					Str(zerowrap.FieldLayer, "adapter").
+					Str(zerowrap.FieldAdapter, "eventbus").
+					Err(err).
+					Str("event_id", event.ID).
+					Str(zerowrap.FieldEvent, string(event.Type)).
+					Str(zerowrap.FieldHandler, fmt.Sprintf("%T", handler)).
+					Msg("error handling event")
+			} else {
+				bus.log.Debug().
+					Str(zerowrap.FieldLayer, "adapter").
+					Str(zerowrap.FieldAdapter, "eventbus").
+					Str("event_id", event.ID).
+					Str(zerowrap.FieldEvent, string(event.Type)).
+					Str(zerowrap.FieldHandler, fmt.Sprintf("%T", handler)).
+					Dur(zerowrap.FieldDuration, time.Since(start)).
+					Msg("event handled successfully")
+			}
 		}
 	}
 }

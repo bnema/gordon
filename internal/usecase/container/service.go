@@ -213,7 +213,7 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 
 	// Deploy attachments BEFORE main container (dependencies first)
 	if err := s.deployAttachments(ctx, route.Domain, networkName); err != nil {
-		log.WrapErr(err, "failed to deploy some attachments")
+		return nil, log.WrapErr(err, "failed to deploy attachments")
 	}
 
 	// Get exposed ports (use actual image ref from pull)
@@ -371,14 +371,18 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 		}
 	}
 
-	// Find domain for cleanup
+	// Find domain and attachment IDs for cleanup
 	var containerDomain string
+	var attachmentIDs []string
 	s.mu.RLock()
 	for d, c := range s.containers {
 		if c.ID == containerID {
 			containerDomain = d
 			break
 		}
+	}
+	if containerDomain != "" {
+		attachmentIDs = append(attachmentIDs, s.attachments[containerDomain]...)
 	}
 	s.mu.RUnlock()
 
@@ -393,6 +397,21 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 		}
 	}
 
+	// Clean up attachment containers
+	for _, attachID := range attachmentIDs {
+		if s.logWriter != nil {
+			if err := s.logWriter.StopLogging(attachID); err != nil {
+				log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to stop attachment log collection")
+			}
+		}
+		if err := s.runtime.StopContainer(ctx, attachID); err != nil {
+			log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to stop attachment container")
+		}
+		if err := s.runtime.RemoveContainer(ctx, attachID, true); err != nil {
+			log.Warn().Err(err).Str("attachment_id", attachID).Msg("failed to remove attachment container")
+		}
+	}
+
 	// Remove from tracking
 	s.mu.Lock()
 	var removedDomain string
@@ -403,6 +422,9 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 			log.Info().Str("domain", d).Msg("container removed")
 			break
 		}
+	}
+	if removedDomain != "" {
+		delete(s.attachments, removedDomain)
 	}
 	s.mu.Unlock()
 
@@ -532,14 +554,19 @@ func (s *Service) HealthCheck(ctx context.Context) map[string]bool {
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	// Copy container IDs under lock, then release before making Docker API calls
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	health := make(map[string]bool, len(s.containers))
+	snapshot := make(map[string]string, len(s.containers))
 	for d, c := range s.containers {
-		running, err := s.runtime.IsContainerRunning(ctx, c.ID)
+		snapshot[d] = c.ID
+	}
+	s.mu.RUnlock()
+
+	health := make(map[string]bool, len(snapshot))
+	for d, id := range snapshot {
+		running, err := s.runtime.IsContainerRunning(ctx, id)
 		if err != nil {
-			log.WrapErrWithFields(err, "health check failed", map[string]any{"domain": d, zerowrap.FieldEntityID: c.ID})
+			log.WrapErrWithFields(err, "health check failed", map[string]any{"domain": d, zerowrap.FieldEntityID: id})
 			health[d] = false
 		} else {
 			health[d] = running
@@ -556,9 +583,7 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	// List containers without holding lock to avoid blocking during Docker API call
 	allContainers, err := s.runtime.ListContainers(ctx, false)
 	if err != nil {
 		return log.WrapErr(err, "failed to list containers")
@@ -573,7 +598,10 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 		}
 	}
 
+	s.mu.Lock()
 	s.containers = managed
+	s.mu.Unlock()
+
 	log.Info().Int(zerowrap.FieldCount, len(managed)).Msg("container state synchronized")
 	return nil
 }
@@ -649,7 +677,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 // UpdateConfig updates the service configuration.
 func (s *Service) UpdateConfig(config Config) {
+	s.mu.Lock()
 	s.config = config
+	s.mu.Unlock()
 }
 
 // Helper methods
@@ -1138,12 +1168,17 @@ func (s *Service) deployAttachments(ctx context.Context, domainName, networkName
 	}
 
 	log := zerowrap.FromCtx(ctx)
+	var failed int
 	for _, svc := range attachments {
 		if err := s.deployAttachedService(ctx, domainName, svc, networkName); err != nil {
 			log.WrapErrWithFields(err, "failed to deploy attachment", map[string]any{zerowrap.FieldService: svc, "domain": domainName})
+			failed++
 		}
 	}
 
+	if failed > 0 {
+		return fmt.Errorf("failed to deploy %d of %d attachment(s)", failed, len(attachments))
+	}
 	return nil
 }
 
@@ -1557,7 +1592,11 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 		if i == 29 {
 			return fmt.Errorf("container did not start within 30 seconds")
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	// Additional readiness delay (configurable, default 5 seconds)
@@ -1567,7 +1606,11 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 	}
 
 	log.Debug().Dur("delay", delay).Msg("waiting for container readiness")
-	time.Sleep(delay)
+	select {
+	case <-time.After(delay):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	// Verify still running after delay
 	running, err := s.runtime.IsContainerRunning(ctx, containerID)
