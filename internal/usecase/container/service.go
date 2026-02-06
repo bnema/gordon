@@ -46,6 +46,7 @@ const (
 	// is briefly not running at the end of readiness delay. This avoids false
 	// negatives during short startup flaps.
 	readinessRecoveryWindow = 30 * time.Second
+	internalPullMaxAttempts = 3
 )
 
 // Service implements the ContainerService interface.
@@ -318,7 +319,33 @@ func (s *Service) Restart(ctx context.Context, domainName string, withAttachment
 
 	// Restart the main container
 	if err := s.runtime.RestartContainer(ctx, container.ID); err != nil {
-		return log.WrapErr(err, "failed to restart container")
+		if !isContainerNotFoundError(err) {
+			return log.WrapErr(err, "failed to restart container")
+		}
+
+		// In-memory container ID can become stale after external runtime changes.
+		// Re-sync and retry once with the latest tracked container.
+		log.Warn().
+			Err(err).
+			Str(zerowrap.FieldEntityID, container.ID).
+			Msg("tracked container missing during restart, attempting state reconciliation")
+
+		if syncErr := s.SyncContainers(ctx); syncErr != nil {
+			log.Warn().Err(syncErr).Msg("failed to sync container state during restart recovery")
+		}
+
+		s.mu.RLock()
+		refreshed, refreshedExists := s.containers[domainName]
+		attachmentIDs = append([]string{}, s.attachments[domainName]...)
+		s.mu.RUnlock()
+
+		if !refreshedExists || refreshed == nil {
+			return domain.ErrContainerNotFound
+		}
+		if err := s.runtime.RestartContainer(ctx, refreshed.ID); err != nil {
+			return log.WrapErr(err, "failed to restart container after state reconciliation")
+		}
+		container = refreshed
 	}
 	log.Info().Str(zerowrap.FieldEntityID, container.ID).Msg("container restarted")
 
@@ -1008,11 +1035,15 @@ func (s *Service) pullImage(ctx context.Context, pullRef string, isInternal bool
 		if cfg.InternalRegistryUsername == "" || cfg.InternalRegistryPassword == "" {
 			return log.WrapErr(fmt.Errorf("internal registry auth not configured"), "failed to pull image for internal deploy")
 		}
-		if err := s.runtime.PullImageWithAuth(ctx, pullRef, cfg.InternalRegistryUsername, cfg.InternalRegistryPassword); err != nil {
+		if err := s.pullImageWithRetry(ctx, func(ctx context.Context) error {
+			return s.runtime.PullImageWithAuth(ctx, pullRef, cfg.InternalRegistryUsername, cfg.InternalRegistryPassword)
+		}, isInternal); err != nil {
 			return log.WrapErr(err, "failed to pull image with internal auth")
 		}
 	case isInternal:
-		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
+		if err := s.pullImageWithRetry(ctx, func(ctx context.Context) error {
+			return s.runtime.PullImage(ctx, pullRef)
+		}, isInternal); err != nil {
 			return log.WrapErr(err, "failed to pull image")
 		}
 	case cfg.RegistryAuthEnabled:
@@ -1029,6 +1060,35 @@ func (s *Service) pullImage(ctx context.Context, pullRef string, isInternal bool
 	}
 
 	return nil
+}
+
+func (s *Service) pullImageWithRetry(ctx context.Context, pullFn func(context.Context) error, isInternal bool) error {
+	log := zerowrap.FromCtx(ctx)
+
+	for attempt := 1; attempt <= internalPullMaxAttempts; attempt++ {
+		err := pullFn(ctx)
+		if err == nil {
+			return nil
+		}
+		if !isInternal || !isConnectionRefusedError(err) || attempt == internalPullMaxAttempts {
+			return err
+		}
+
+		backoff := time.Duration(attempt) * time.Second
+		log.Warn().
+			Err(err).
+			Int("attempt", attempt).
+			Dur("backoff", backoff).
+			Msg("internal image pull failed with connection refused, retrying")
+
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return fmt.Errorf("internal image pull failed after %d attempts", internalPullMaxAttempts)
 }
 
 func (s *Service) tagImageIfNeeded(ctx context.Context, sourceRef, targetRef string) error {
@@ -1647,6 +1707,23 @@ func sanitizeName(d string) string {
 // sanitizeNameLegacy is a convenience wrapper around domain.SanitizeDomainForContainerLegacy.
 func sanitizeNameLegacy(d string) string {
 	return domain.SanitizeDomainForContainerLegacy(d)
+}
+
+func isContainerNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such container") ||
+		strings.Contains(msg, "no container with name or id") ||
+		strings.Contains(msg, "container not found")
+}
+
+func isConnectionRefusedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "connection refused")
 }
 
 // findContainerByName finds a container by its name.

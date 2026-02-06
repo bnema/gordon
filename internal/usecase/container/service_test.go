@@ -215,6 +215,30 @@ func TestService_PullImage_RequiresServiceTokenForExternalPull(t *testing.T) {
 	assert.Contains(t, err.Error(), "registry service token not configured")
 }
 
+func TestService_PullImage_InternalRetriesOnConnectionRefused(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+
+	config := Config{
+		RegistryAuthEnabled:      true,
+		InternalRegistryUsername: "internal",
+		InternalRegistryPassword: "secret",
+	}
+
+	svc := NewService(runtime, nil, nil, nil, config)
+	ctx := testContext()
+
+	runtime.EXPECT().PullImageWithAuth(mock.Anything, "localhost:5000/myapp:latest", "internal", "secret").
+		Return(errors.New("connection refused")).
+		Once()
+	runtime.EXPECT().PullImageWithAuth(mock.Anything, "localhost:5000/myapp:latest", "internal", "secret").
+		Return(nil).
+		Once()
+
+	err := svc.pullImage(ctx, "localhost:5000/myapp:latest", true)
+
+	assert.NoError(t, err)
+}
+
 func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
@@ -682,6 +706,65 @@ func TestService_Restart_Error(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to restart container")
+}
+
+func TestService_Restart_ReconcilesStaleContainerID(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	ctx := testContext()
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "stale-container-id",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+
+	runtime.EXPECT().RestartContainer(mock.Anything, "stale-container-id").
+		Return(errors.New("no container with name or ID \"stale-container-id\" found")).
+		Once()
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID:   "fresh-container-id",
+			Name: "gordon-test.example.com",
+			Labels: map[string]string{
+				"gordon.domain":  "test.example.com",
+				"gordon.managed": "true",
+			},
+		},
+	}, nil).Once()
+	runtime.EXPECT().RestartContainer(mock.Anything, "fresh-container-id").Return(nil).Once()
+
+	err := svc.Restart(ctx, "test.example.com", false)
+
+	assert.NoError(t, err)
+}
+
+func TestService_Restart_ReconcilesStaleContainerID_NotFoundAfterSync(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	ctx := testContext()
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "stale-container-id",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+
+	runtime.EXPECT().RestartContainer(mock.Anything, "stale-container-id").
+		Return(errors.New("no such container")).
+		Once()
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Once()
+
+	err := svc.Restart(ctx, "test.example.com", false)
+
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrContainerNotFound))
 }
 
 func TestService_Restart_WithAttachments(t *testing.T) {
