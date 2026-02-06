@@ -4,6 +4,7 @@ package remote
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,9 +20,10 @@ import (
 
 // Client is an HTTP client for the Gordon admin API.
 type Client struct {
-	baseURL    string
-	token      string
-	httpClient *http.Client
+	baseURL     string
+	token       string
+	httpClient  *http.Client
+	insecureTLS bool
 }
 
 var (
@@ -48,6 +50,8 @@ func NewClient(baseURL string, opts ...ClientOption) *Client {
 		opt(c)
 	}
 
+	c.applyTLSConfig()
+
 	return c
 }
 
@@ -70,6 +74,33 @@ func WithTimeout(timeout time.Duration) ClientOption {
 	return func(c *Client) {
 		c.httpClient.Timeout = timeout
 	}
+}
+
+// WithInsecureTLS disables TLS certificate verification for remote admin API requests.
+func WithInsecureTLS(insecure bool) ClientOption {
+	return func(c *Client) {
+		c.insecureTLS = insecure
+	}
+}
+
+func (c *Client) applyTLSConfig() {
+	if !c.insecureTLS {
+		return
+	}
+
+	var transport *http.Transport
+	if existing, ok := c.httpClient.Transport.(*http.Transport); ok {
+		transport = existing.Clone()
+	} else {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	}
+
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	}
+	//nolint:gosec // Explicit CLI opt-in via --insecure for self-signed/private cert deployments.
+	transport.TLSClientConfig.InsecureSkipVerify = true
+	c.httpClient.Transport = transport
 }
 
 // request performs an HTTP request to the admin API.
