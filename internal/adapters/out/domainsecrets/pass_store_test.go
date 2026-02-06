@@ -177,6 +177,78 @@ func TestPassStore_DeleteAttachment(t *testing.T) {
 	assert.False(t, exists)
 }
 
+func TestPassStore_Delete_Idempotent(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	domainName := fmt.Sprintf("idempotent.%d.example.com", time.Now().UnixNano())
+	keys := []string{"API_KEY"}
+	defer cleanupPassDomain(t, domainName, keys)
+
+	err = store.Set(domainName, map[string]string{"API_KEY": "alpha"})
+	require.NoError(t, err)
+
+	err = store.Delete(domainName, "API_KEY")
+	require.NoError(t, err)
+
+	// Second delete of an already-removed key must be a no-op.
+	err = store.Delete(domainName, "API_KEY")
+	require.NoError(t, err)
+
+	values, err := store.GetAll(domainName)
+	require.NoError(t, err)
+	assert.NotContains(t, values, "API_KEY")
+}
+
+func TestPassStore_DeleteAttachment_Idempotent(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	containerName := fmt.Sprintf("idempotent-attachment-%d", time.Now().UnixNano())
+	keys := []string{"POSTGRES_PASSWORD"}
+	defer CleanupPassAttachment(t, containerName, keys)
+
+	err = store.SetAttachment(containerName, map[string]string{"POSTGRES_PASSWORD": "secret123"})
+	require.NoError(t, err)
+
+	err = store.DeleteAttachment(containerName, "POSTGRES_PASSWORD")
+	require.NoError(t, err)
+
+	// Second delete of an already-removed key must be a no-op.
+	err = store.DeleteAttachment(containerName, "POSTGRES_PASSWORD")
+	require.NoError(t, err)
+
+	values, err := store.GetAllAttachment(containerName)
+	require.NoError(t, err)
+	assert.NotContains(t, values, "POSTGRES_PASSWORD")
+}
+
+func TestPassStore_SetAttachment_OverwriteValue(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	containerName := fmt.Sprintf("attachment-overwrite-%d", time.Now().UnixNano())
+	keys := []string{"REDIS_PASSWORD"}
+	defer CleanupPassAttachment(t, containerName, keys)
+
+	err = store.SetAttachment(containerName, map[string]string{"REDIS_PASSWORD": "first"})
+	require.NoError(t, err)
+
+	// Re-setting same key with a different value should deterministically overwrite.
+	err = store.SetAttachment(containerName, map[string]string{"REDIS_PASSWORD": "second"})
+	require.NoError(t, err)
+
+	values, err := store.GetAllAttachment(containerName)
+	require.NoError(t, err)
+	assert.Equal(t, "second", values["REDIS_PASSWORD"])
+}
+
 func TestPassStore_ListKeys_RecoversOrphanedEntries(t *testing.T) {
 	requirePass(t)
 
