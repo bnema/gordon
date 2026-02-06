@@ -64,13 +64,15 @@ import (
 // Config holds the application configuration.
 type Config struct {
 	Server struct {
-		Port             int    `mapstructure:"port"`
-		RegistryPort     int    `mapstructure:"registry_port"`
-		GordonDomain     string `mapstructure:"gordon_domain"`
-		RegistryDomain   string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
-		DataDir          string `mapstructure:"data_dir"`
-		MaxProxyBodySize string `mapstructure:"max_proxy_body_size"` // e.g., "512MB", "1GB"
-		MaxBlobChunkSize string `mapstructure:"max_blob_chunk_size"` // e.g., "512MB", "1GB"
+		Port                 int    `mapstructure:"port"`
+		RegistryPort         int    `mapstructure:"registry_port"`
+		GordonDomain         string `mapstructure:"gordon_domain"`
+		RegistryDomain       string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
+		DataDir              string `mapstructure:"data_dir"`
+		MaxProxyBodySize     string `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
+		MaxBlobChunkSize     string `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
+		MaxProxyResponseSize string `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
+		MaxConcurrentConns   int    `mapstructure:"max_concurrent_connections"`
 	} `mapstructure:"server"`
 
 	Logging struct {
@@ -300,33 +302,12 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	}
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
 
-	// Parse max_proxy_body_size config (default: 512MB)
-	maxProxyBodySize := int64(512 << 20) // 512MB default
-	if cfg.Server.MaxProxyBodySize != "" {
-		parsedSize, err := bytesize.Parse(cfg.Server.MaxProxyBodySize)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "invalid server.max_proxy_body_size configuration", map[string]any{"value": cfg.Server.MaxProxyBodySize})
-		}
-		maxProxyBodySize = parsedSize
+	proxyCfg, err := buildProxyConfig(cfg, log)
+	if err != nil {
+		return nil, err
 	}
-
-	// Parse max_blob_chunk_size config (default: 95MB)
-	maxBlobChunkSize := int64(registry.DefaultMaxBlobChunkSize)
-	if cfg.Server.MaxBlobChunkSize != "" {
-		parsedSize, err := bytesize.Parse(cfg.Server.MaxBlobChunkSize)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "invalid server.max_blob_chunk_size configuration", map[string]any{"value": cfg.Server.MaxBlobChunkSize})
-		}
-		maxBlobChunkSize = parsedSize
-	}
-
-	svc.maxBlobChunkSize = maxBlobChunkSize
-
-	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxy.Config{
-		RegistryDomain: cfg.Server.RegistryDomain,
-		RegistryPort:   cfg.Server.RegistryPort,
-		MaxBodySize:    maxProxyBodySize,
-	})
+	svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
+	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxyCfg.proxyConfig)
 
 	// Create token handler for registry token endpoint
 	if svc.authSvc != nil {
@@ -852,6 +833,58 @@ func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDi
 	}
 }
 
+// proxyConfigResult holds parsed proxy and blob chunk size config.
+type proxyConfigResult struct {
+	proxyConfig      proxy.Config
+	maxBlobChunkSize int64
+}
+
+// buildProxyConfig parses size-related config fields and builds the proxy config.
+func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, error) {
+	maxProxyBodySize := int64(512 << 20) // 512MB default
+	if cfg.Server.MaxProxyBodySize != "" {
+		parsedSize, err := bytesize.Parse(cfg.Server.MaxProxyBodySize)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid server.max_proxy_body_size configuration", map[string]any{"value": cfg.Server.MaxProxyBodySize})
+		}
+		maxProxyBodySize = parsedSize
+	}
+
+	maxBlobChunkSize := int64(registry.DefaultMaxBlobChunkSize)
+	if cfg.Server.MaxBlobChunkSize != "" {
+		parsedSize, err := bytesize.Parse(cfg.Server.MaxBlobChunkSize)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid server.max_blob_chunk_size configuration", map[string]any{"value": cfg.Server.MaxBlobChunkSize})
+		}
+		maxBlobChunkSize = parsedSize
+	}
+
+	maxProxyResponseSize := int64(1 << 30) // 1GB default
+	if cfg.Server.MaxProxyResponseSize != "" {
+		parsedSize, err := bytesize.Parse(cfg.Server.MaxProxyResponseSize)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid server.max_proxy_response_size configuration", map[string]any{"value": cfg.Server.MaxProxyResponseSize})
+		}
+		maxProxyResponseSize = parsedSize
+	}
+
+	maxConcurrentConns := cfg.Server.MaxConcurrentConns
+	if maxConcurrentConns == 0 {
+		maxConcurrentConns = 10000 // default
+	}
+
+	return &proxyConfigResult{
+		proxyConfig: proxy.Config{
+			RegistryDomain:     cfg.Server.RegistryDomain,
+			RegistryPort:       cfg.Server.RegistryPort,
+			MaxBodySize:        maxProxyBodySize,
+			MaxResponseSize:    maxProxyResponseSize,
+			MaxConcurrentConns: maxConcurrentConns,
+		},
+		maxBlobChunkSize: maxBlobChunkSize,
+	}, nil
+}
+
 // createContainerService creates the container service with configuration.
 func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (*container.Service, error) {
 	containerConfig := container.Config{
@@ -1102,8 +1135,8 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 
 	errChan := make(chan error, 2)
 
-	registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
-	proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
+	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
+	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
 
 	// Wait for both servers to bind their ports before auto-starting containers.
 	// This prevents the race where auto-start pulls from the registry before it's listening.
@@ -1153,38 +1186,53 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 	}
 
 shutdown:
-	log.Info().Msg("shutting down Gordon...")
-
-	if err := containerSvc.Shutdown(ctx); err != nil {
-		log.Warn().Err(err).Msg("error during container shutdown")
-	}
-
-	// Clean up internal credentials file
-	cleanupInternalCredentials()
-
-	log.Info().Msg("Gordon stopped")
+	gracefulShutdown(registrySrv, proxySrv, containerSvc, log)
 	return nil
 }
 
-// startServer starts an HTTP server, returning a channel that closes once the
-// listening socket is bound. This lets callers wait for the port to be ready
-// before taking actions that depend on it (e.g. auto-start pulling from the
-// local registry).
-func startServer(addr string, handler http.Handler, name string, errChan chan<- error, log zerowrap.Logger) <-chan struct{} {
+// gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
+// the container service and cleans up runtime files.
+func gracefulShutdown(registrySrv, proxySrv *http.Server, containerSvc *container.Service, log zerowrap.Logger) {
+	log.Info().Msg("shutting down Gordon...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	if err := registrySrv.Shutdown(shutdownCtx); err != nil {
+		log.Warn().Err(err).Msg("registry server shutdown error")
+	}
+	if err := proxySrv.Shutdown(shutdownCtx); err != nil {
+		log.Warn().Err(err).Msg("proxy server shutdown error")
+	}
+
+	if err := containerSvc.Shutdown(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("error during container shutdown")
+	}
+
+	cleanupInternalCredentials()
+	log.Info().Msg("Gordon stopped")
+}
+
+// startServer starts an HTTP server, returning the server instance and a channel
+// that closes once the listening socket is bound. This lets callers wait for the
+// port to be ready before taking actions that depend on it (e.g. auto-start
+// pulling from the local registry). The returned *http.Server can be used for
+// graceful shutdown.
+func startServer(addr string, handler http.Handler, name string, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
 	ready := make(chan struct{})
+
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 
 	go func() {
 		log.Info().Str("address", addr).Msgf("%s server starting", name)
-
-		server := &http.Server{
-			Addr:              addr,
-			Handler:           handler,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       5 * time.Minute,
-			WriteTimeout:      5 * time.Minute,
-			IdleTimeout:       120 * time.Second,
-			MaxHeaderBytes:    1 << 20,
-		}
 
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -1198,7 +1246,7 @@ func startServer(addr string, handler http.Handler, name string, errChan chan<- 
 		}
 	}()
 
-	return ready
+	return server, ready
 }
 
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.
