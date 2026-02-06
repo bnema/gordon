@@ -1087,7 +1087,7 @@ func (s *Service) pullImageWithRetry(ctx context.Context, pullFn func(context.Co
 			return nil
 		}
 		if !isInternal || !isConnectionRefusedError(err) || attempt == internalPullMaxAttempts {
-			return err
+			return fmt.Errorf("internal image pull failed after %d attempts: %w", attempt, err)
 		}
 
 		backoff := time.Duration(attempt) * time.Second
@@ -1764,30 +1764,14 @@ func (s *Service) findContainerByName(ctx context.Context, name string) *domain.
 func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 	log := zerowrap.FromCtx(ctx)
 
-	// Poll for container to be running (max 30 seconds)
-	for i := 0; i < 30; i++ {
-		running, err := s.runtime.IsContainerRunning(ctx, containerID)
-		if err != nil {
-			return err
-		}
-		if running {
-			break
-		}
-		if i == 29 {
-			return fmt.Errorf("container did not start within 30 seconds")
-		}
-		select {
-		case <-time.After(time.Second):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	if err := s.pollContainerRunning(ctx, containerID); err != nil {
+		return err
 	}
 
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
 
-	// Additional readiness delay (configurable, default 5 seconds)
 	delay := cfg.ReadinessDelay
 	if delay == 0 {
 		delay = 5 * time.Second
@@ -1809,8 +1793,34 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 		return nil
 	}
 
-	// Be tolerant to short startup flaps: retry within a bounded recovery window
-	// before treating readiness as failed.
+	return s.waitForRecovery(ctx, containerID)
+}
+
+// pollContainerRunning polls until the container is running (max 30 seconds).
+func (s *Service) pollContainerRunning(ctx context.Context, containerID string) error {
+	for i := 0; i < 30; i++ {
+		running, err := s.runtime.IsContainerRunning(ctx, containerID)
+		if err != nil {
+			return err
+		}
+		if running {
+			return nil
+		}
+		if i == 29 {
+			return fmt.Errorf("container did not start within 30 seconds")
+		}
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// waitForRecovery waits for a container to recover within the recovery window.
+func (s *Service) waitForRecovery(ctx context.Context, containerID string) error {
+	log := zerowrap.FromCtx(ctx)
 	log.Warn().
 		Dur("recovery_window", readinessRecoveryWindow).
 		Msg("container not running after readiness delay, waiting for recovery")
@@ -1823,7 +1833,7 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 			return ctx.Err()
 		}
 
-		running, err = s.runtime.IsContainerRunning(ctx, containerID)
+		running, err := s.runtime.IsContainerRunning(ctx, containerID)
 		if err != nil {
 			return err
 		}
@@ -1833,7 +1843,7 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 		}
 	}
 
-	return fmt.Errorf("container stopped during readiness delay")
+	return fmt.Errorf("container not running after readiness delay and recovery window")
 }
 
 // publishContainerDeployed publishes a container.deployed event.
