@@ -190,6 +190,13 @@ func runReload() error {
 // runReloadRemote triggers a reload on a remote Gordon instance.
 func runReloadRemote(ctx context.Context, client *remote.Client) error {
 	if err := client.Reload(ctx); err != nil {
+		if shouldFallbackToLocal(err) {
+			if localErr := runReload(); localErr == nil {
+				fmt.Printf("Remote reload failed (%v), used local signal fallback\n", err)
+				fmt.Println("Configuration reloaded successfully")
+				return nil
+			}
+		}
 		return fmt.Errorf("failed to reload: %w", err)
 	}
 	fmt.Println("Configuration reloaded successfully")
