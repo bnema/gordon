@@ -60,3 +60,12 @@ func TestParseImageRef(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildAndPush_BuildArgs(t *testing.T) {
+	// Verify buildImageArgs produces --load instead of --push
+	args := buildImageArgs("v1.0.0", "linux/amd64", []string{"CGO_ENABLED=0"}, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")
+
+	assert.Contains(t, args, "--load")
+	assert.NotContains(t, args, "--push")
+	assert.Contains(t, args, "--platform")
+}
