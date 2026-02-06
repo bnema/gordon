@@ -3,7 +3,9 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -37,9 +39,11 @@ var proxyTransport = &http.Transport{
 
 // Config holds configuration needed by the proxy service.
 type Config struct {
-	RegistryDomain string
-	RegistryPort   int
-	MaxBodySize    int64 // Maximum request body size in bytes (0 = no limit)
+	RegistryDomain     string
+	RegistryPort       int
+	MaxBodySize        int64 // Maximum request body size in bytes (0 = no limit)
+	MaxResponseSize    int64 // Maximum response body size in bytes (0 = no limit)
+	MaxConcurrentConns int   // Maximum concurrent proxy connections (0 = no limit)
 }
 
 // Service implements the ProxyService interface.
@@ -50,6 +54,7 @@ type Service struct {
 	config       Config
 	targets      map[string]*domain.ProxyTarget
 	mu           sync.RWMutex
+	connSem      chan struct{} // Semaphore for concurrent connection limiting
 }
 
 // NewService creates a new proxy service.
@@ -59,17 +64,32 @@ func NewService(
 	configSvc in.ConfigService,
 	config Config,
 ) *Service {
-	return &Service{
+	svc := &Service{
 		runtime:      runtime,
 		containerSvc: containerSvc,
 		configSvc:    configSvc,
 		config:       config,
 		targets:      make(map[string]*domain.ProxyTarget),
 	}
+	if config.MaxConcurrentConns > 0 {
+		svc.connSem = make(chan struct{}, config.MaxConcurrentConns)
+	}
+	return svc
 }
 
 // ServeHTTP handles incoming HTTP requests and proxies them to the appropriate backend.
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// SECURITY: Limit concurrent connections to prevent resource exhaustion.
+	if s.connSem != nil {
+		select {
+		case s.connSem <- struct{}{}:
+			defer func() { <-s.connSem }()
+		default:
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
+
 	// Copy config under RLock to avoid data race with UpdateConfig
 	s.mu.RLock()
 	cfg := s.config
@@ -104,6 +124,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target, err := s.GetTarget(ctx, r.Host)
 	if err != nil {
 		log.Warn().Err(err).Msg("no route found for domain")
+		w.Header().Set("Cache-Control", "no-store")
 		http.NotFound(w, r)
 		return
 	}
@@ -151,8 +172,12 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 			return nil, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
 		}
 
-		// SECURITY: Validate target is not an internal/blocked network (SSRF protection)
-		if err := ValidateExternalRouteTarget(host); err != nil {
+		// SECURITY: Resolve DNS and validate that the target is not an internal/blocked
+		// network. We use the resolved IP as the proxy target to prevent DNS rebinding
+		// (TOCTOU) attacks where a hostname resolves to a public IP during validation
+		// but to a private IP when the proxy connects.
+		resolvedIP, err := ResolveAndValidateHost(host)
+		if err != nil {
 			log.Warn().
 				Err(err).
 				Str("host", host).
@@ -162,7 +187,7 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 		}
 
 		target := &domain.ProxyTarget{
-			Host:        host,
+			Host:        resolvedIP,
 			Port:        port,
 			ContainerID: "", // Not a container
 			Scheme:      "http",
@@ -291,6 +316,57 @@ func (s *Service) UpdateConfig(config Config) {
 	s.mu.Unlock()
 }
 
+// modifyResponse returns a function that modifies backend responses.
+// It adds proxy headers and enforces the response size limit if configured.
+func (s *Service) modifyResponse(cfg Config) func(*http.Response) error {
+	return func(resp *http.Response) error {
+		resp.Header.Set("X-Proxied-By", "Gordon")
+
+		// SECURITY: Enforce response size limit to prevent memory exhaustion
+		// from malicious or buggy backends streaming unbounded data.
+		if cfg.MaxResponseSize > 0 {
+			if resp.ContentLength > cfg.MaxResponseSize {
+				resp.Body.Close()
+				resp.StatusCode = http.StatusBadGateway
+				resp.Body = io.NopCloser(strings.NewReader("Response Too Large"))
+				resp.ContentLength = int64(len("Response Too Large"))
+				resp.Header.Set("Content-Type", "text/plain")
+				resp.Header.Set("Cache-Control", "no-store")
+				return nil
+			}
+			// For chunked/streaming responses where Content-Length is unknown,
+			// wrap with LimitReader to enforce the cap.
+			if resp.ContentLength < 0 {
+				resp.Body = &limitedReadCloser{
+					ReadCloser: resp.Body,
+					remaining:  cfg.MaxResponseSize,
+				}
+			}
+		}
+
+		return nil
+	}
+}
+
+// limitedReadCloser wraps an io.ReadCloser with a byte limit.
+// When the limit is exceeded, subsequent reads return an error.
+type limitedReadCloser struct {
+	io.ReadCloser
+	remaining int64
+}
+
+func (l *limitedReadCloser) Read(p []byte) (int, error) {
+	if l.remaining <= 0 {
+		return 0, fmt.Errorf("response body exceeded maximum size limit")
+	}
+	if int64(len(p)) > l.remaining {
+		p = p[:l.remaining]
+	}
+	n, err := l.ReadCloser.Read(p)
+	l.remaining -= int64(n)
+	return n, err
+}
+
 // Helper methods
 
 // newReverseProxy creates a reverse proxy using Rewrite instead of Director to prevent
@@ -316,6 +392,10 @@ func newReverseProxy(targetURL *url.URL, errorHandler func(http.ResponseWriter, 
 }
 
 func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *domain.ProxyTarget) {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	log := zerowrap.FromCtx(r.Context())
 
 	targetURL, err := url.Parse(fmt.Sprintf("%s://%s:%d", target.Scheme, target.Host, target.Port))
@@ -329,19 +409,18 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 
 	proxy := newReverseProxy(targetURL,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
-			// Check if this is a MaxBytesError (request body too large)
-			if err.Error() == "http: request body too large" {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
 				log.Warn().Err(err).Str("target", targetURL.String()).Msg("proxy error: request body too large")
+				w.Header().Set("Cache-Control", "no-store")
 				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
 				return
 			}
 			log.Error().Err(err).Str("target", targetURL.String()).Msg("proxy error: connection failed")
+			w.Header().Set("Cache-Control", "no-store")
 			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		},
-		func(resp *http.Response) error {
-			resp.Header.Set("X-Proxied-By", "Gordon")
-			return nil
-		},
+		s.modifyResponse(cfg),
 	)
 
 	log.Debug().
@@ -352,6 +431,11 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 	proxy.ServeHTTP(w, r)
 }
 
+// proxyToRegistry forwards requests to the local registry HTTP server.
+// SECURITY: This uses http://localhost:{port} which is safe because the registry
+// runs on the same host and traffic never leaves the loopback interface. If Gordon
+// ever supports running the registry on a separate host, this must use TLS with
+// certificate verification.
 func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 	// Copy config under RLock to avoid data race with UpdateConfig
 	s.mu.RLock()
@@ -369,13 +453,15 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 
 	proxy := newReverseProxy(targetURL,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
-			// Check if this is a MaxBytesError (request body too large)
-			if err.Error() == "http: request body too large" {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
 				log.Warn().Err(err).Int("registry_port", cfg.RegistryPort).Msg("registry proxy error: request body too large")
+				w.Header().Set("Cache-Control", "no-store")
 				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
 				return
 			}
 			log.Error().Err(err).Int("registry_port", cfg.RegistryPort).Msg("registry proxy error")
+			w.Header().Set("Cache-Control", "no-store")
 			http.Error(w, "Registry Unavailable", http.StatusServiceUnavailable)
 		},
 		func(resp *http.Response) error {

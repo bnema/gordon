@@ -397,6 +397,55 @@ func TestContainerDeployedHandler_Handle_NoDomain(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestService_ConcurrentConnectionLimit(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	// Allow only 1 concurrent connection
+	svc := NewService(runtime, containerSvc, configSvc, Config{
+		MaxConcurrentConns: 1,
+	})
+
+	assert.NotNil(t, svc.connSem, "semaphore should be initialized when MaxConcurrentConns > 0")
+	assert.Equal(t, 1, cap(svc.connSem))
+}
+
+func TestService_ConcurrentConnectionLimit_Disabled(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{
+		MaxConcurrentConns: 0,
+	})
+
+	assert.Nil(t, svc.connSem, "semaphore should be nil when MaxConcurrentConns is 0")
+}
+
+func TestService_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{
+		MaxConcurrentConns: 1,
+	})
+
+	// Fill the semaphore
+	svc.connSem <- struct{}{}
+
+	// Next request should get 503
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+
+	assert.Equal(t, 503, w.Code)
+
+	// Drain semaphore
+	<-svc.connSem
+}
+
 func TestServeHTTP_MaxBodySize(t *testing.T) {
 	tests := []struct {
 		name        string

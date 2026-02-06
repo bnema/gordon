@@ -115,3 +115,40 @@ func ValidateExternalRouteTarget(host string) error {
 	}
 	return nil
 }
+
+// ResolveAndValidateHost resolves DNS for a hostname and validates that all
+// resolved IPs are safe (not in blocked CIDR ranges). Returns the first safe
+// resolved IP address. For raw IP addresses, validates and returns them directly.
+//
+// SECURITY: This function pins DNS resolution to prevent TOCTOU/DNS-rebinding
+// attacks where a hostname resolves to a public IP during validation but to a
+// private IP when the proxy actually connects.
+func ResolveAndValidateHost(host string) (string, error) {
+	initBlockedCIDRs()
+
+	// If already an IP address, validate and return directly
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedIP(ip) {
+			return "", domain.ErrSSRFBlocked
+		}
+		return host, nil
+	}
+
+	// Resolve DNS
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return "", fmt.Errorf("%w: DNS resolution failed for %s: %v", domain.ErrSSRFBlocked, host, err)
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("%w: no IP addresses found for %s", domain.ErrSSRFBlocked, host)
+	}
+
+	// Find the first non-blocked IP
+	for _, ip := range ips {
+		if !isBlockedIP(ip) {
+			return ip.String(), nil
+		}
+	}
+
+	return "", domain.ErrSSRFBlocked
+}
