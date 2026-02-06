@@ -869,6 +869,7 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		DNSSuffix:                v.GetString("network_isolation.dns_suffix"),
 		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
 		Attachments:              svc.configSvc.GetAttachments(),
+		ReadinessDelay:           v.GetDuration("deploy.readiness_delay"),
 	}
 
 	if cfg.Auth.Enabled && svc.authSvc != nil {
@@ -1493,6 +1494,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
+	v.SetDefault("deploy.readiness_delay", "5s")
 
 	ConfigureViper(v, configPath)
 

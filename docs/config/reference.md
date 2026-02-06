@@ -146,6 +146,7 @@ preserve = true                              # Keep volumes when containers are 
 | `logging.container_logs.max_backups` | `3` | Keep 3 old files |
 | `logging.container_logs.max_age` | `28` | 28 days |
 | `deploy.pull_policy` | `"if-tag-changed"` | Pull on tag change |
+| `deploy.readiness_delay` | `"5s"` | Delay before container is considered ready |
 | `auto_route.enabled` | `false` | Auto-route disabled |
 | `network_isolation.enabled` | `false` | Isolation disabled |
 | `network_isolation.network_prefix` | `"gordon"` | Network prefix |
