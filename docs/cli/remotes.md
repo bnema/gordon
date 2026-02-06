@@ -304,31 +304,41 @@ gordon remotes use prod && gordon routes list
 gordon remotes use staging && gordon routes list
 ```
 
-### Tailscale Admin + Wildcard App Domains
+### Private Admin + Wildcard App Domains
 
-Use this pattern when Gordon admin/API is reachable only on a Tailscale path (self-signed or private cert),
-while app traffic still uses your public wildcard DNS and reverse-proxy routing.
+Recommended default: use your normal Gordon admin domain with a valid public certificate.
 
 ```toml
 # ~/.config/gordon/remotes.toml
-active = "prod-ts"
+active = "prod"
 
-[remotes.prod-ts]
-url = "https://gordon-backend.tailnet.ts.net"
+[remotes.prod]
+url = "https://gordon.example.com"
 token_env = "GORDON_TOKEN"
-insecure_tls = true
 ```
+
+If your admin/API path is private over Tailscale, you have two options:
+
+1. Use `insecure_tls = true` for that remote.
+2. Prefer a Tailscale-issued cert on the machine's `*.ts.net` name and keep verification enabled.
+
+Tailscale certificates are issued for tailnet MagicDNS names (for example `host-name.tailnet.ts.net`), not your custom domain. Enable HTTPS certificates in the Tailscale admin DNS settings, then generate files on the host:
 
 ```bash
-# CLI calls Gordon admin API over Tailscale with insecure TLS allowed
-gordon status
-gordon routes list
-gordon deploy app.bnema.dev
+sudo tailscale cert --cert-file /etc/gordon/tls/cert.pem --key-file /etc/gordon/tls/key.pem host-name.tailnet.ts.net
 ```
 
-`insecure_tls` only affects CLI -> Gordon admin HTTPS verification. It does not change
-your runtime routing: the Gordon reverse proxy and container routes can still serve
-`*.bnema.dev` behind your normal wildcard DNS setup.
+Configure Gordon to use them:
+
+```toml
+[server]
+tls_enabled = true
+tls_port = 443
+tls_cert_file = "/etc/gordon/tls/cert.pem"
+tls_key_file = "/etc/gordon/tls/key.pem"
+```
+
+`insecure_tls` only affects CLI -> Gordon admin HTTPS verification. It does not change runtime routing: Gordon reverse proxy and container routes can still serve wildcard app domains like `*.example.com`.
 
 ## Related
 
