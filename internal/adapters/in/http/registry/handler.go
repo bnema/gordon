@@ -22,26 +22,33 @@ import (
 const (
 	// MaxManifestSize limits manifest uploads to 10MB.
 	MaxManifestSize = 10 * 1024 * 1024
-	// MaxBlobChunkSize limits individual blob chunks to 95MB.
-	// Kept below 100MB to leave headroom for HTTP overhead when behind
-	// proxies like Cloudflare that enforce a 100MB per-request limit.
-	MaxBlobChunkSize = 95 * 1024 * 1024
+	// DefaultMaxBlobChunkSize is the default maximum size for a single blob upload chunk.
+	// Docker/Podman typically send a full layer as one request body, so this default
+	// must handle common base image layer sizes.
+	DefaultMaxBlobChunkSize = 512 * 1024 * 1024
 )
 
 // Handler implements the HTTP handler for Docker Registry API v2.
 type Handler struct {
-	registrySvc in.RegistryService
-	log         zerowrap.Logger
+	registrySvc      in.RegistryService
+	log              zerowrap.Logger
+	maxBlobChunkSize int64
 }
 
 // NewHandler creates a new registry HTTP handler.
 func NewHandler(
 	registrySvc in.RegistryService,
 	log zerowrap.Logger,
+	maxBlobChunkSize int64,
 ) *Handler {
+	if maxBlobChunkSize <= 0 {
+		maxBlobChunkSize = DefaultMaxBlobChunkSize
+	}
+
 	return &Handler{
-		registrySvc: registrySvc,
-		log:         log,
+		registrySvc:      registrySvc,
+		log:              log,
+		maxBlobChunkSize: maxBlobChunkSize,
 	}
 }
 
@@ -401,14 +408,14 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Limit blob chunk size to prevent memory exhaustion
-	r.Body = http.MaxBytesReader(w, r.Body, MaxBlobChunkSize)
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBlobChunkSize)
 
 	// Read the chunk from the request body
 	chunk, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			log.Warn().Int64("max_size", MaxBlobChunkSize).Msg("blob chunk too large")
+			log.Warn().Int64("max_size", h.maxBlobChunkSize).Msg("blob chunk too large")
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob chunk exceeds maximum size")
 			return
 		}

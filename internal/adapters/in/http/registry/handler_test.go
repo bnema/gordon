@@ -23,7 +23,7 @@ func testLogger() zerowrap.Logger {
 func TestHandler_Base(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	req := httptest.NewRequest("GET", "/v2/", nil)
 	rec := httptest.NewRecorder()
@@ -37,7 +37,7 @@ func TestHandler_Base(t *testing.T) {
 func TestHandler_NotFound(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	req := httptest.NewRequest("GET", "/v2/unknown/path", nil)
 	rec := httptest.NewRecorder()
@@ -50,7 +50,7 @@ func TestHandler_NotFound(t *testing.T) {
 func TestHandler_GetManifest_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 	registrySvc.EXPECT().GetManifest(mock.Anything, "myapp", "latest").Return(&domain.Manifest{
@@ -73,7 +73,7 @@ func TestHandler_GetManifest_Success(t *testing.T) {
 func TestHandler_GetManifest_HEAD(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 	registrySvc.EXPECT().GetManifest(mock.Anything, "myapp", "latest").Return(&domain.Manifest{
@@ -97,7 +97,7 @@ func TestHandler_GetManifest_HEAD(t *testing.T) {
 func TestHandler_GetManifest_NotFound(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	registrySvc.EXPECT().GetManifest(mock.Anything, "myapp", "notexists").Return(nil, assert.AnError)
 
@@ -113,7 +113,7 @@ func TestHandler_GetManifest_NotFound(t *testing.T) {
 func TestHandler_GetManifest_NestedName(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 	registrySvc.EXPECT().GetManifest(mock.Anything, "org/project/app", "v1.0").Return(&domain.Manifest{
@@ -134,7 +134,7 @@ func TestHandler_GetManifest_NestedName(t *testing.T) {
 func TestHandler_PutManifest_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 	registrySvc.EXPECT().PutManifest(mock.Anything, mock.MatchedBy(func(m *domain.Manifest) bool {
@@ -155,7 +155,7 @@ func TestHandler_PutManifest_Success(t *testing.T) {
 func TestHandler_PutManifest_MissingContentType(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 
@@ -171,7 +171,7 @@ func TestHandler_PutManifest_MissingContentType(t *testing.T) {
 func TestHandler_PutManifest_StorageError(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	manifestData := []byte(`{"schemaVersion": 2}`)
 	registrySvc.EXPECT().PutManifest(mock.Anything, mock.Anything).Return("", assert.AnError)
@@ -188,7 +188,7 @@ func TestHandler_PutManifest_StorageError(t *testing.T) {
 func TestHandler_ManifestRoutes_MethodNotAllowed(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	req := httptest.NewRequest("DELETE", "/v2/myapp/manifests/latest", nil)
 	rec := httptest.NewRecorder()
@@ -201,7 +201,7 @@ func TestHandler_ManifestRoutes_MethodNotAllowed(t *testing.T) {
 func TestHandler_GetBlob_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	// Create a temp file for http.ServeFile
 	tmpFile, err := os.CreateTemp("", "blob-*")
@@ -226,7 +226,7 @@ func TestHandler_GetBlob_Success(t *testing.T) {
 func TestHandler_GetBlob_NotFound(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	registrySvc.EXPECT().GetBlobPath(mock.Anything, "sha256:0000000000000000000000000000000000000000000000000000000000000000").Return("", assert.AnError)
 
@@ -241,7 +241,7 @@ func TestHandler_GetBlob_NotFound(t *testing.T) {
 func TestHandler_BlobRoutes_MethodNotAllowed(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	req := httptest.NewRequest("POST", "/v2/myapp/blobs/sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", nil)
 	rec := httptest.NewRecorder()
@@ -255,7 +255,7 @@ func TestHandler_BlobRoutes_MethodNotAllowed(t *testing.T) {
 func TestHandler_StartBlobUpload_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	registrySvc.EXPECT().StartUpload(mock.Anything, "myapp").Return("550e8400-e29b-41d4-a716-446655440000", nil)
 
@@ -272,7 +272,7 @@ func TestHandler_StartBlobUpload_Success(t *testing.T) {
 func TestHandler_StartBlobUpload_Error(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	registrySvc.EXPECT().StartUpload(mock.Anything, "myapp").Return("", assert.AnError)
 
@@ -288,7 +288,7 @@ func TestHandler_StartBlobUpload_Error(t *testing.T) {
 func TestHandler_BlobUpload_PATCH(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("chunk content")
 	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
@@ -305,7 +305,7 @@ func TestHandler_BlobUpload_PATCH(t *testing.T) {
 func TestHandler_BlobUpload_PUT_Finalize(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("final chunk")
 	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
@@ -324,7 +324,7 @@ func TestHandler_BlobUpload_PUT_Finalize(t *testing.T) {
 func TestHandler_BlobUpload_PUT_DigestMismatch(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("final chunk")
 	// Note: Invalid digest format is rejected by validation before reaching storage layer
@@ -342,7 +342,7 @@ func TestHandler_BlobUpload_PUT_DigestMismatch(t *testing.T) {
 func TestHandler_ListTags_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	registrySvc.EXPECT().ListTags(mock.Anything, "myapp").Return([]string{"latest", "v1.0", "v2.0"}, nil)
 
@@ -366,7 +366,7 @@ func TestHandler_ListTags_Success(t *testing.T) {
 func TestHandler_ListTags_NotFound(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	registrySvc.EXPECT().ListTags(mock.Anything, "notexists").Return(nil, assert.AnError)
 
@@ -382,7 +382,7 @@ func TestHandler_ListTags_NotFound(t *testing.T) {
 func TestHandler_ListTags_MethodNotAllowed(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	req := httptest.NewRequest("POST", "/v2/myapp/tags/list", nil)
 	rec := httptest.NewRecorder()
@@ -396,7 +396,7 @@ func TestHandler_ListTags_MethodNotAllowed(t *testing.T) {
 func TestHandler_RegisterRoutes(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
@@ -412,7 +412,7 @@ func TestHandler_RegisterRoutes(t *testing.T) {
 
 func TestHandler_StartBlobUpload_ReturnsDockerUploadUUID(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	registrySvc.EXPECT().StartUpload(mock.Anything, "myapp").Return("550e8400-e29b-41d4-a716-446655440000", nil)
 
@@ -427,7 +427,7 @@ func TestHandler_StartBlobUpload_ReturnsDockerUploadUUID(t *testing.T) {
 
 func TestHandler_BlobUpload_PATCH_ReturnsDockerUploadUUID(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("chunk content")
 	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
@@ -441,15 +441,25 @@ func TestHandler_BlobUpload_PATCH_ReturnsDockerUploadUUID(t *testing.T) {
 	assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Header().Get("Docker-Upload-UUID"))
 }
 
-func TestMaxBlobChunkSize_Under100MB(t *testing.T) {
-	// Verify the constant leaves headroom below Cloudflare's 100MB limit
-	assert.Less(t, int64(MaxBlobChunkSize), int64(100*1024*1024))
-	assert.Greater(t, int64(MaxBlobChunkSize), int64(90*1024*1024))
+func TestDefaultMaxBlobChunkSize_Is512MB(t *testing.T) {
+	assert.Equal(t, int64(512*1024*1024), int64(DefaultMaxBlobChunkSize))
+}
+
+func TestHandler_BlobUpload_PATCH_RespectsConfiguredMaxBlobChunkSize(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+	handler := NewHandler(registrySvc, testLogger(), 5)
+
+	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader([]byte("chunk content")))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 }
 
 func TestHandler_BlobUpload_PATCH_ReturnsRangeHeader(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
-	handler := NewHandler(registrySvc, testLogger())
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("chunk content")
 	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
