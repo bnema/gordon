@@ -96,6 +96,65 @@ func TestService_Deploy_Success(t *testing.T) {
 	assert.Equal(t, "container-123", tracked.ID)
 }
 
+func TestService_Deploy_ReadinessRecoveryWindow_AllowsTransientFlap(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		NetworkIsolation: false,
+		VolumeAutoCreate: false,
+		ReadinessDelay:   time.Millisecond,
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:latest").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	createdContainer := &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Image:  "myapp:latest",
+		Status: "created",
+	}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(createdContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "container-123").Return(nil)
+
+	// Readiness check sequence:
+	// 1) Initial "started" check => running
+	// 2) Post-delay verification => transient not-running
+	// 3) Recovery-window poll => running again
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-123").Return(true, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-123").Return(false, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-123").Return(true, nil).Once()
+
+	runtime.EXPECT().InspectContainer(mock.Anything, "container-123").Return(&domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Image:  "myapp:latest",
+		Status: "running",
+		Ports:  []int{8080},
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "container-123", result.ID)
+}
+
 func TestService_Deploy_ImagePullFailure(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
