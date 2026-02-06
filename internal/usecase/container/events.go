@@ -159,7 +159,7 @@ func (h *ConfigReloadHandler) Handle(event domain.Event) error {
 					Str("new_image", route.Image).
 					Msg("image changed for route, redeploying")
 
-				if _, err := h.containerSvc.Deploy(ctx, route); err != nil {
+				if _, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), route); err != nil {
 					log.WrapErrWithFields(err, "failed to redeploy container", map[string]any{"domain": route.Domain})
 				}
 			}
@@ -171,7 +171,7 @@ func (h *ConfigReloadHandler) Handle(event domain.Event) error {
 				Str("image", route.Image).
 				Msg("route missing container, deploying")
 
-			if _, err := h.containerSvc.Deploy(ctx, route); err != nil {
+			if _, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), route); err != nil {
 				log.WrapErrWithFields(err, "failed to deploy container for route", map[string]any{"domain": route.Domain})
 			}
 		}
@@ -253,7 +253,7 @@ func (h *ManualReloadHandler) Handle(event domain.Event) error {
 			Str("image", route.Image).
 			Msg("starting container for route")
 
-		if _, err := h.containerSvc.Deploy(ctx, route); err != nil {
+		if _, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), route); err != nil {
 			log.WrapErrWithFields(err, "failed to start container", map[string]any{"domain": route.Domain})
 			errorCount++
 			continue
