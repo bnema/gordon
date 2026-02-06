@@ -57,17 +57,31 @@ Examples:
 	return cmd
 }
 
+func resolveDockerfile(dockerfile string, build bool) (string, error) {
+	if dockerfile != "" && !build {
+		return "", fmt.Errorf("--file can only be used with --build")
+	}
+	if dockerfile == "" {
+		return "Dockerfile", nil
+	}
+	return dockerfile, nil
+}
+
+func resolveImageRefs(registry, imageName, version string) (versionRef, latestRef string) {
+	versionRef = fmt.Sprintf("%s/%s:%s", registry, imageName, version)
+	latestRef = fmt.Sprintf("%s/%s:latest", registry, imageName)
+	return versionRef, latestRef
+}
+
 func runPush(ctx context.Context, pushDomain, tag string, build bool, platform string, dockerfile string, buildArgs []string, noDeploy bool, noConfirm bool) error {
 	client, isRemote := GetRemoteClient()
 	if !isRemote {
 		return fmt.Errorf("push requires remote mode")
 	}
 
-	if dockerfile != "" && !build {
-		return fmt.Errorf("--file can only be used with --build")
-	}
-	if dockerfile == "" {
-		dockerfile = "Dockerfile"
+	dockerfile, err := resolveDockerfile(dockerfile, build)
+	if err != nil {
+		return err
 	}
 
 	route, err := client.GetRoute(ctx, pushDomain)
@@ -93,8 +107,7 @@ func runPush(ctx context.Context, pushDomain, tag string, build bool, platform s
 		}
 	}
 
-	versionRef := fmt.Sprintf("%s/%s:%s", registry, imageName, version)
-	latestRef := fmt.Sprintf("%s/%s:latest", registry, imageName)
+	versionRef, latestRef := resolveImageRefs(registry, imageName, version)
 
 	fmt.Printf("Image: %s\n", styles.Theme.Bold.Render(versionRef))
 	if version != "latest" {
@@ -133,7 +146,7 @@ func determineVersion(ctx context.Context, tag string) string {
 
 func buildAndPush(ctx context.Context, version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) error {
 	if _, err := os.Stat(dockerfile); os.IsNotExist(err) {
-		return fmt.Errorf("Dockerfile not found: %s", dockerfile)
+		return fmt.Errorf("dockerfile not found: %s", dockerfile)
 	}
 
 	// Build and load into local daemon (NOT --push).
