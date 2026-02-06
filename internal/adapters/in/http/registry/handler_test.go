@@ -447,7 +447,7 @@ func TestMaxBlobChunkSize_Under100MB(t *testing.T) {
 	assert.Greater(t, int64(MaxBlobChunkSize), int64(90*1024*1024))
 }
 
-func TestHandler_BlobUpload_PATCH_ReturnsContentRange(t *testing.T) {
+func TestHandler_BlobUpload_PATCH_ReturnsRangeHeader(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 	handler := NewHandler(registrySvc, testLogger())
 
@@ -455,8 +455,6 @@ func TestHandler_BlobUpload_PATCH_ReturnsContentRange(t *testing.T) {
 	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", chunkData).Return(int64(len(chunkData)), nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
-	req.Header.Set("Content-Range", "0-12")
-	req.Header.Set("Content-Length", "13")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
