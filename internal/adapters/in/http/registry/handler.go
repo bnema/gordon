@@ -22,8 +22,10 @@ import (
 const (
 	// MaxManifestSize limits manifest uploads to 10MB.
 	MaxManifestSize = 10 * 1024 * 1024
-	// MaxBlobChunkSize limits individual blob chunks to 100MB.
-	MaxBlobChunkSize = 100 * 1024 * 1024
+	// MaxBlobChunkSize limits individual blob chunks to 95MB.
+	// Kept below 100MB to leave headroom for HTTP overhead when behind
+	// proxies like Cloudflare that enforce a 100MB per-request limit.
+	MaxBlobChunkSize = 95 * 1024 * 1024
 )
 
 // Handler implements the HTTP handler for Docker Registry API v2.
@@ -372,6 +374,7 @@ func (h *Handler) handleStartBlobUpload(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uuid))
 	w.Header().Set("Range", "0-0")
+	w.Header().Set("Docker-Upload-UUID", uuid)
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -439,7 +442,10 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 	// For PATCH requests, respond with 202 Accepted
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uuid))
-	w.Header().Set("Range", fmt.Sprintf("0-%d", length-1))
+	if length > 0 {
+		w.Header().Set("Range", fmt.Sprintf("0-%d", length-1))
+	}
+	w.Header().Set("Docker-Upload-UUID", uuid)
 	w.WriteHeader(http.StatusAccepted)
 }
 

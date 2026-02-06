@@ -127,7 +127,35 @@ func buildAndPush(ctx context.Context, version, platform string, buildArgs []str
 		return fmt.Errorf("no Dockerfile found in current directory")
 	}
 
-	fmt.Println("\nBuilding and pushing...")
+	// Build and load into local daemon (NOT --push).
+	// BuildKit's --push uses monolithic blob uploads that exceed
+	// Cloudflare's 100MB per-request limit. Loading locally then
+	// using docker push gives us chunked uploads (~5MB per request).
+	fmt.Println("\nBuilding image...")
+	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(version, platform, buildArgs, versionRef, latestRef)...) // #nosec G204
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		return fmt.Errorf("docker buildx build failed: %w", err)
+	}
+
+	fmt.Println("Pushing...")
+	if err := dockerPush(ctx, latestRef); err != nil {
+		return fmt.Errorf("failed to push %s: %w", latestRef, err)
+	}
+	if version != "latest" {
+		if err := dockerPush(ctx, versionRef); err != nil {
+			return fmt.Errorf("failed to push %s: %w", versionRef, err)
+		}
+	}
+
+	return nil
+}
+
+// buildImageArgs constructs the docker buildx build arguments.
+// Uses --load instead of --push so the image is loaded into the local
+// daemon, allowing docker push to handle the upload with chunked requests.
+func buildImageArgs(version, platform string, buildArgs []string, versionRef, latestRef string) []string {
 	args := []string{
 		"buildx", "build",
 		"--platform", platform,
@@ -140,15 +168,8 @@ func buildAndPush(ctx context.Context, version, platform string, buildArgs []str
 	for _, ba := range buildArgs {
 		args = append(args, "--build-arg", ba)
 	}
-	args = append(args, "--push", ".")
-
-	dockerCmd := exec.CommandContext(ctx, "docker", args...) // #nosec G204
-	dockerCmd.Stdout = os.Stdout
-	dockerCmd.Stderr = os.Stderr
-	if err := dockerCmd.Run(); err != nil {
-		return fmt.Errorf("docker buildx failed: %w", err)
-	}
-	return nil
+	args = append(args, "--load", ".")
+	return args
 }
 
 func tagAndPush(ctx context.Context, registry, imageName, version, versionRef, latestRef string) error {
