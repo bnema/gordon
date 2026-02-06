@@ -1220,6 +1220,7 @@ func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string)
 func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName string, skipContainerID string) error {
 	log := zerowrap.FromCtx(ctx)
 	expectedName := fmt.Sprintf("gordon-%s", domainName)
+	expectedNewName := expectedName + "-new"
 
 	allContainers, err := s.runtime.ListContainers(ctx, true)
 	if err != nil {
@@ -1227,7 +1228,7 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 	}
 
 	for _, c := range allContainers {
-		if c.Name == expectedName && c.ID != skipContainerID {
+		if (c.Name == expectedName || c.Name == expectedNewName) && c.ID != skipContainerID {
 			log.Info().Str(zerowrap.FieldEntityID, c.ID).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
 
 			if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
