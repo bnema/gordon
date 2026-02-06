@@ -11,9 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/bnema/zerowrap"
+	"github.com/google/uuid"
 
 	"github.com/bnema/gordon/pkg/validation"
 )
@@ -167,10 +167,9 @@ func (s *BlobStorage) BlobExists(digest string) bool {
 
 // StartBlobUpload starts a new blob upload and returns the upload UUID.
 func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
-	// Generate UUID-like upload ID using timestamp
-	uuid := fmt.Sprintf("%d-%s", time.Now().UnixNano(), strings.ReplaceAll(name, "/", "_"))
+	uploadID := uuid.New().String()
 
-	uploadPath, err := s.getUploadPath(uuid)
+	uploadPath, err := s.getUploadPath(uploadID)
 	if err != nil {
 		return "", fmt.Errorf("invalid upload path: %w", err)
 	}
@@ -190,11 +189,11 @@ func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
 		Str(zerowrap.FieldAdapter, "filesystem").
-		Str("uuid", uuid).
+		Str("uuid", uploadID).
 		Str("name", name).
 		Msg("blob upload started")
 
-	return uuid, nil
+	return uploadID, nil
 }
 
 // AppendBlobChunk appends data to an in-progress upload.

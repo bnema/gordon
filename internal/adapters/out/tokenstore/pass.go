@@ -19,6 +19,11 @@ import (
 // ansiRegex matches ANSI escape sequences for stripping from pass output.
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
+// subjectRegex validates token subjects to prevent path injection.
+// Allows alphanumeric characters, forward slashes, underscores, dots, hyphens, and @.
+// This prevents path traversal (../) and command injection attacks.
+var subjectRegex = regexp.MustCompile(`^[a-zA-Z0-9/_.@-]+$`)
+
 const (
 	// passTokenPath is the base path for tokens in pass.
 	passTokenPath = "gordon/registry/tokens" //nolint:gosec // Not a credential, this is a pass store path
@@ -30,6 +35,24 @@ const (
 type cachedToken struct {
 	jwt   string
 	token *domain.Token
+}
+
+// validateSubject validates a token subject to prevent path injection and command injection.
+// Returns an error if the subject is invalid.
+func validateSubject(subject string) error {
+	if subject == "" {
+		return fmt.Errorf("subject cannot be empty")
+	}
+
+	if !subjectRegex.MatchString(subject) {
+		return fmt.Errorf("invalid subject: must contain only alphanumeric characters, /, _, ., @, -")
+	}
+
+	if strings.Contains(subject, "..") {
+		return fmt.Errorf("invalid subject: cannot contain '..' to prevent path traversal")
+	}
+
+	return nil
 }
 
 // PassStore implements TokenStore using the pass password manager.
@@ -66,6 +89,10 @@ type tokenMetadata struct {
 
 // SaveToken stores a token JWT and metadata in pass.
 func (s *PassStore) SaveToken(ctx context.Context, token *domain.Token, jwt string) error {
+	if err := validateSubject(token.Subject); err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -111,6 +138,10 @@ func (s *PassStore) SaveToken(ctx context.Context, token *domain.Token, jwt stri
 
 // GetToken retrieves token JWT by subject from pass.
 func (s *PassStore) GetToken(ctx context.Context, subject string) (string, *domain.Token, error) {
+	if err := validateSubject(subject); err != nil {
+		return "", nil, err
+	}
+
 	// Check cache first
 	s.cacheMu.RLock()
 	if cached, ok := s.tokenCache[subject]; ok {
@@ -212,6 +243,9 @@ func (s *PassStore) ListTokens(ctx context.Context) ([]domain.Token, error) {
 
 // Revoke adds token ID to revocation list in pass.
 func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -240,13 +274,11 @@ func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
 	}
 
 	// Update cache
-	s.cacheMu.Lock()
 	s.revokedList = revokedList
 	s.revokedSet = make(map[string]struct{}, len(revokedList))
 	for _, id := range revokedList {
 		s.revokedSet[id] = struct{}{}
 	}
-	s.cacheMu.Unlock()
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
@@ -291,6 +323,10 @@ func (s *PassStore) IsRevoked(ctx context.Context, tokenID string) (bool, error)
 
 // DeleteToken removes token from pass.
 func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
+	if err := validateSubject(subject); err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 

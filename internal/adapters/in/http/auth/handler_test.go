@@ -413,3 +413,86 @@ func TestIsLocalhostRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestHandler_isInternalAuth(t *testing.T) {
+	tests := []struct {
+		name         string
+		username     string
+		password     string
+		internalAuth InternalAuth
+		wantResult   bool
+	}{
+		{
+			name:     "correct credentials",
+			username: "gordon-internal",
+			password: "internal-secret",
+			internalAuth: InternalAuth{
+				Username: "gordon-internal",
+				Password: "internal-secret",
+			},
+			wantResult: true,
+		},
+		{
+			name:     "incorrect username",
+			username: "wrong-username",
+			password: "internal-secret",
+			internalAuth: InternalAuth{
+				Username: "gordon-internal",
+				Password: "internal-secret",
+			},
+			wantResult: false,
+		},
+		{
+			name:     "incorrect password",
+			username: "gordon-internal",
+			password: "wrong-password",
+			internalAuth: InternalAuth{
+				Username: "gordon-internal",
+				Password: "internal-secret",
+			},
+			wantResult: false,
+		},
+		{
+			name:     "empty internal auth credentials",
+			username: "gordon-internal",
+			password: "internal-secret",
+			internalAuth: InternalAuth{
+				Username: "",
+				Password: "",
+			},
+			wantResult: false,
+		},
+		{
+			name:     "partially empty internal auth - empty password",
+			username: "gordon-internal",
+			password: "internal-secret",
+			internalAuth: InternalAuth{
+				Username: "gordon-internal",
+				Password: "",
+			},
+			wantResult: false,
+		},
+		{
+			name:     "partially empty internal auth - empty username",
+			username: "gordon-internal",
+			password: "internal-secret",
+			internalAuth: InternalAuth{
+				Username: "",
+				Password: "internal-secret",
+			},
+			wantResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &Handler{
+				internalAuth: tt.internalAuth,
+			}
+
+			result := h.isInternalAuth(tt.username, tt.password)
+
+			assert.Equal(t, tt.wantResult, result)
+		})
+	}
+}

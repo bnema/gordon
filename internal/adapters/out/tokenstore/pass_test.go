@@ -258,3 +258,97 @@ func TestPassStore_RevokeUpdatesCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, revoked)
 }
+
+func TestPassStore_SaveToken_RejectsInvalidSubject(t *testing.T) {
+	store := newTestPassStore()
+
+	tests := []struct {
+		name    string
+		subject string
+	}{
+		{"path traversal with ../", "../../../etc/passwd"},
+		{"path traversal with ..\\", "..\\..\\windows\\system32"},
+		{"shell metacharacter semicolon", "user;rm -rf /"},
+		{"shell metacharacter pipe", "user|cat /etc/passwd"},
+		{"shell metacharacter ampersand", "user&&malicious"},
+		{"shell metacharacter backtick", "user`evil`"},
+		{"shell metacharacter dollar sign", "user$(evil)"},
+		{"newline character", "user\nmalicious"},
+		{"null byte", "user\x00malicious"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := &domain.Token{
+				ID:        "test-id",
+				Subject:   tt.subject,
+				Scopes:    []string{"push"},
+				IssuedAt:  time.Now(),
+				ExpiresAt: time.Now().Add(24 * time.Hour),
+			}
+
+			err := store.SaveToken(context.Background(), token, "jwt-token")
+			assert.Error(t, err, "should reject invalid subject: %s", tt.subject)
+			assert.Contains(t, err.Error(), "invalid subject", "error message should mention invalid subject")
+		})
+	}
+}
+
+func TestPassStore_SaveToken_AcceptsValidSubject(t *testing.T) {
+	tests := []struct {
+		name    string
+		subject string
+	}{
+		{"simple username", "myuser"},
+		{"username with dots", "user.name"},
+		{"username with hyphens", "user-name"},
+		{"username with underscores", "user_name"},
+		{"email-like", "user@example.com"},
+		{"path-like but safe", "registry/user"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Verify the validation logic accepts valid subjects
+			err := validateSubject(tt.subject)
+			assert.NoError(t, err, "should accept valid subject: %s", tt.subject)
+		})
+	}
+}
+
+func TestPassStore_GetToken_RejectsInvalidSubject(t *testing.T) {
+	store := newTestPassStore()
+
+	invalidSubjects := []string{
+		"../../../etc/passwd",
+		"user;rm -rf /",
+		"user|cat",
+		"user\nnewline",
+	}
+
+	for _, subject := range invalidSubjects {
+		t.Run(subject, func(t *testing.T) {
+			_, _, err := store.GetToken(context.Background(), subject)
+			assert.Error(t, err, "should reject invalid subject")
+			assert.Contains(t, err.Error(), "invalid subject")
+		})
+	}
+}
+
+func TestPassStore_DeleteToken_RejectsInvalidSubject(t *testing.T) {
+	store := newTestPassStore()
+
+	invalidSubjects := []string{
+		"../../../etc/passwd",
+		"user;rm -rf /",
+		"user|cat",
+	}
+
+	for _, subject := range invalidSubjects {
+		t.Run(subject, func(t *testing.T) {
+			err := store.DeleteToken(context.Background(), subject)
+			assert.Error(t, err, "should reject invalid subject")
+			assert.Contains(t, err.Error(), "invalid subject")
+		})
+	}
+}

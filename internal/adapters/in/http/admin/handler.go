@@ -943,7 +943,7 @@ func (h *Handler) handleContainerLogs(w http.ResponseWriter, r *http.Request, lo
 	logLines, err := h.logSvc.GetContainerLogs(ctx, logDomain, lines)
 	if err != nil {
 		log.Warn().Err(err).Str("domain", logDomain).Msg("failed to get container logs")
-		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get logs: %v", err))
+		h.sendError(w, http.StatusInternalServerError, "failed to get container logs")
 		return
 	}
 
