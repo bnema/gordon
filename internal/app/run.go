@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -181,14 +182,11 @@ func Run(ctx context.Context, configPath string) error {
 	}
 	defer svc.eventBus.Stop()
 
-	// Sync and auto-start containers
-	syncAndAutoStart(ctx, svc, log)
-
 	// Create HTTP handlers
 	registryHandler, proxyHandler := createHTTPHandlers(svc, cfg, log)
 
-	// Start servers and wait for shutdown
-	return runServers(ctx, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, log)
+	// Start servers, wait for listeners to bind, then sync/auto-start containers.
+	return runServers(ctx, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, svc, log)
 }
 
 // initConfig loads configuration from file.
@@ -1063,7 +1061,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 // - SIGUSR2: Triggers manual deploy for a specific route
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, log zerowrap.Logger) error {
+func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, svc *services, log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -1081,13 +1079,29 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 
 	errChan := make(chan error, 2)
 
-	go startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
-	go startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
+	registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
+	proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
+
+	// Wait for both servers to bind their ports before auto-starting containers.
+	// This prevents the race where auto-start pulls from the registry before it's listening.
+	select {
+	case <-registryReady:
+	case err := <-errChan:
+		return err
+	}
+	select {
+	case <-proxyReady:
+	case err := <-errChan:
+		return err
+	}
 
 	log.Info().
 		Int("proxy_port", cfg.Server.Port).
 		Int("registry_port", cfg.Server.RegistryPort).
 		Msg("Gordon is running")
+
+	// Auto-start after servers are listening (registry port is now bound).
+	syncAndAutoStart(ctx, svc, log)
 
 	for {
 		select {
@@ -1129,23 +1143,39 @@ shutdown:
 	return nil
 }
 
-// startServer starts an HTTP server.
-func startServer(addr string, handler http.Handler, name string, errChan chan<- error, log zerowrap.Logger) {
-	log.Info().Str("address", addr).Msgf("%s server starting", name)
+// startServer starts an HTTP server, returning a channel that closes once the
+// listening socket is bound. This lets callers wait for the port to be ready
+// before taking actions that depend on it (e.g. auto-start pulling from the
+// local registry).
+func startServer(addr string, handler http.Handler, name string, errChan chan<- error, log zerowrap.Logger) <-chan struct{} {
+	ready := make(chan struct{})
 
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       5 * time.Minute,   // Timeout for reading entire request
-		WriteTimeout:      5 * time.Minute,   // Timeout for writing response
-		IdleTimeout:       120 * time.Second, // Timeout for idle keep-alive connections
-		MaxHeaderBytes:    1 << 20,           // 1MB max header size
-	}
+	go func() {
+		log.Info().Str("address", addr).Msgf("%s server starting", name)
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		errChan <- fmt.Errorf("%s server error: %w", name, err)
-	}
+		server := &http.Server{
+			Addr:              addr,
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       5 * time.Minute,
+			WriteTimeout:      5 * time.Minute,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+		}
+
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			errChan <- fmt.Errorf("%s server error: %w", name, err)
+			return
+		}
+		close(ready) // signal: port is bound and accepting connections
+
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+			errChan <- fmt.Errorf("%s server error: %w", name, err)
+		}
+	}()
+
+	return ready
 }
 
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.
