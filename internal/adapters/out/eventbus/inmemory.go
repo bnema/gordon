@@ -186,11 +186,12 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 
 	for _, handler := range handlers {
 		if handler.CanHandle(event.Type) {
+			h := handler // shadow loop variable for goroutine capture
 			start := time.Now()
 
 			done := make(chan error, 1)
 			go func() {
-				done <- handler.Handle(event)
+				done <- h.Handle(event)
 			}()
 
 			select {
@@ -202,7 +203,7 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 						Err(err).
 						Str("event_id", event.ID).
 						Str(zerowrap.FieldEvent, string(event.Type)).
-						Str(zerowrap.FieldHandler, fmt.Sprintf("%T", handler)).
+						Str(zerowrap.FieldHandler, fmt.Sprintf("%T", h)).
 						Msg("error handling event")
 				} else {
 					bus.log.Debug().
@@ -210,7 +211,7 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 						Str(zerowrap.FieldAdapter, "eventbus").
 						Str("event_id", event.ID).
 						Str(zerowrap.FieldEvent, string(event.Type)).
-						Str(zerowrap.FieldHandler, fmt.Sprintf("%T", handler)).
+						Str(zerowrap.FieldHandler, fmt.Sprintf("%T", h)).
 						Dur(zerowrap.FieldDuration, time.Since(start)).
 						Msg("event handled successfully")
 				}
@@ -220,7 +221,7 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 					Str(zerowrap.FieldAdapter, "eventbus").
 					Str("event_id", event.ID).
 					Str(zerowrap.FieldEvent, string(event.Type)).
-					Str(zerowrap.FieldHandler, fmt.Sprintf("%T", handler)).
+					Str(zerowrap.FieldHandler, fmt.Sprintf("%T", h)).
 					Dur(zerowrap.FieldDuration, time.Since(start)).
 					Msg("handler timeout after 30s")
 			}
