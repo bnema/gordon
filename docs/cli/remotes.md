@@ -304,6 +304,32 @@ gordon remotes use prod && gordon routes list
 gordon remotes use staging && gordon routes list
 ```
 
+### Tailscale Admin + Wildcard App Domains
+
+Use this pattern when Gordon admin/API is reachable only on a Tailscale path (self-signed or private cert),
+while app traffic still uses your public wildcard DNS and reverse-proxy routing.
+
+```toml
+# ~/.config/gordon/remotes.toml
+active = "prod-ts"
+
+[remotes.prod-ts]
+url = "https://gordon-backend.tailnet.ts.net"
+token_env = "GORDON_TOKEN"
+insecure_tls = true
+```
+
+```bash
+# CLI calls Gordon admin API over Tailscale with insecure TLS allowed
+gordon status
+gordon routes list
+gordon deploy app.bnema.dev
+```
+
+`insecure_tls` only affects CLI -> Gordon admin HTTPS verification. It does not change
+your runtime routing: the Gordon reverse proxy and container routes can still serve
+`*.bnema.dev` behind your normal wildcard DNS setup.
+
 ## Related
 
 - [CLI Overview](./index.md)

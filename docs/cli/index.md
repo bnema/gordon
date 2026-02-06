@@ -122,6 +122,8 @@ when you want to bypass your saved configuration.
 Use `--insecure` when the remote endpoint uses a self-signed or otherwise untrusted TLS certificate.
 You can make this persistent with `insecure_tls = true` in `[client]` of `~/.config/gordon/gordon.toml`
 or in a specific entry in `~/.config/gordon/remotes.toml`.
+This is useful when admin/API access goes through a private network (for example Tailscale),
+while your public app domains still use wildcard DNS and normal reverse-proxy routing.
 
 ```bash
 # Using flags (use the gordon_domain from remote Gordon config)
