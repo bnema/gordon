@@ -242,13 +242,13 @@ func TestBlobStorage_AppendBlobChunk(t *testing.T) {
 
 	// Append first chunk
 	chunk1 := []byte("first chunk")
-	size1, err := storage.AppendBlobChunk("myapp", uuid, chunk1)
+	size1, err := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(chunk1))
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(chunk1)), size1)
 
 	// Append second chunk
 	chunk2 := []byte(" second chunk")
-	size2, err := storage.AppendBlobChunk("myapp", uuid, chunk2)
+	size2, err := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(chunk2))
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(chunk1)+len(chunk2)), size2)
 }
@@ -260,7 +260,7 @@ func TestBlobStorage_AppendBlobChunk_NotFound(t *testing.T) {
 	storage, err := NewBlobStorage(tmpDir, log)
 	require.NoError(t, err)
 
-	_, err = storage.AppendBlobChunk("myapp", "00000000-0000-4000-a000-000000000000", []byte("data"))
+	_, err = storage.AppendBlobChunk("myapp", "00000000-0000-4000-a000-000000000000", bytes.NewReader([]byte("data")))
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upload not found")
@@ -312,7 +312,7 @@ func TestBlobStorage_FinishBlobUpload(t *testing.T) {
 
 	// Append data - content that hashes to testDigest1
 	blobData := []byte("complete blob content")
-	_, err = storage.AppendBlobChunk("myapp", uuid, blobData)
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData))
 	require.NoError(t, err)
 
 	// Finish upload - use testDigest1 (validation will pass, but hash won't match)
@@ -439,7 +439,7 @@ func TestBlobStorage_CompleteUploadFlow(t *testing.T) {
 
 	var totalSize int64
 	for _, chunk := range chunks {
-		size, err := storage.AppendBlobChunk(repoName, uuid, chunk)
+		size, err := storage.AppendBlobChunk(repoName, uuid, bytes.NewReader(chunk))
 		require.NoError(t, err)
 		totalSize = size
 	}

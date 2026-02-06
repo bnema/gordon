@@ -145,6 +145,7 @@ enabled = false                          # Auto-create routes from image names
 | `api.rate_limit.burst` | `100` |
 | `api.rate_limit.trusted_proxies` | `[]` |
 | `deploy.pull_policy` | `"if-tag-changed"` |
+| `deploy.readiness_delay` | `"5s"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |
 | `logging.file.enabled` | `false` |
@@ -173,6 +174,7 @@ The following settings require a restart to take effect:
 - `server.data_dir`
 - `auth` settings
 - `deploy.pull_policy`
+- `deploy.readiness_delay`
 
 ## Environment Variable Override
 

@@ -38,8 +38,8 @@ func (_m *MockBlobStorage) EXPECT() *MockBlobStorage_Expecter {
 }
 
 // AppendBlobChunk provides a mock function for the type MockBlobStorage
-func (_mock *MockBlobStorage) AppendBlobChunk(name string, uuid string, chunk []byte) (int64, error) {
-	ret := _mock.Called(name, uuid, chunk)
+func (_mock *MockBlobStorage) AppendBlobChunk(name string, uuid string, data io.Reader) (int64, error) {
+	ret := _mock.Called(name, uuid, data)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AppendBlobChunk")
@@ -47,16 +47,16 @@ func (_mock *MockBlobStorage) AppendBlobChunk(name string, uuid string, chunk []
 
 	var r0 int64
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, []byte) (int64, error)); ok {
-		return returnFunc(name, uuid, chunk)
+	if returnFunc, ok := ret.Get(0).(func(string, string, io.Reader) (int64, error)); ok {
+		return returnFunc(name, uuid, data)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, []byte) int64); ok {
-		r0 = returnFunc(name, uuid, chunk)
+	if returnFunc, ok := ret.Get(0).(func(string, string, io.Reader) int64); ok {
+		r0 = returnFunc(name, uuid, data)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, string, []byte) error); ok {
-		r1 = returnFunc(name, uuid, chunk)
+	if returnFunc, ok := ret.Get(1).(func(string, string, io.Reader) error); ok {
+		r1 = returnFunc(name, uuid, data)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -71,12 +71,12 @@ type MockBlobStorage_AppendBlobChunk_Call struct {
 // AppendBlobChunk is a helper method to define mock.On call
 //   - name string
 //   - uuid string
-//   - chunk []byte
-func (_e *MockBlobStorage_Expecter) AppendBlobChunk(name interface{}, uuid interface{}, chunk interface{}) *MockBlobStorage_AppendBlobChunk_Call {
-	return &MockBlobStorage_AppendBlobChunk_Call{Call: _e.mock.On("AppendBlobChunk", name, uuid, chunk)}
+//   - data io.Reader
+func (_e *MockBlobStorage_Expecter) AppendBlobChunk(name interface{}, uuid interface{}, data interface{}) *MockBlobStorage_AppendBlobChunk_Call {
+	return &MockBlobStorage_AppendBlobChunk_Call{Call: _e.mock.On("AppendBlobChunk", name, uuid, data)}
 }
 
-func (_c *MockBlobStorage_AppendBlobChunk_Call) Run(run func(name string, uuid string, chunk []byte)) *MockBlobStorage_AppendBlobChunk_Call {
+func (_c *MockBlobStorage_AppendBlobChunk_Call) Run(run func(name string, uuid string, data io.Reader)) *MockBlobStorage_AppendBlobChunk_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -86,9 +86,9 @@ func (_c *MockBlobStorage_AppendBlobChunk_Call) Run(run func(name string, uuid s
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 []byte
+		var arg2 io.Reader
 		if args[2] != nil {
-			arg2 = args[2].([]byte)
+			arg2 = args[2].(io.Reader)
 		}
 		run(
 			arg0,
@@ -104,7 +104,7 @@ func (_c *MockBlobStorage_AppendBlobChunk_Call) Return(n int64, err error) *Mock
 	return _c
 }
 
-func (_c *MockBlobStorage_AppendBlobChunk_Call) RunAndReturn(run func(name string, uuid string, chunk []byte) (int64, error)) *MockBlobStorage_AppendBlobChunk_Call {
+func (_c *MockBlobStorage_AppendBlobChunk_Call) RunAndReturn(run func(name string, uuid string, data io.Reader) (int64, error)) *MockBlobStorage_AppendBlobChunk_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,25 @@ func passCmd(args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return exec.CommandContext(ctx, "pass", args...).Run()
+}
+
+func passInsertValue(path, value string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path)
+	cmd.Stdin = strings.NewReader(value)
+	_, err := cmd.CombinedOutput()
+	return err
+}
+
+func passShow(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "pass", "show", path).CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func requirePass(t *testing.T) {
@@ -155,6 +175,117 @@ func TestPassStore_DeleteAttachment(t *testing.T) {
 	assert.Equal(t, "gitea", values["POSTGRES_USER"])
 	_, exists := values["POSTGRES_PASSWORD"]
 	assert.False(t, exists)
+}
+
+func TestPassStore_Delete_Idempotent(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	domainName := fmt.Sprintf("idempotent.%d.example.com", time.Now().UnixNano())
+	keys := []string{"API_KEY"}
+	defer cleanupPassDomain(t, domainName, keys)
+
+	err = store.Set(domainName, map[string]string{"API_KEY": "alpha"})
+	require.NoError(t, err)
+
+	err = store.Delete(domainName, "API_KEY")
+	require.NoError(t, err)
+
+	// Second delete of an already-removed key must be a no-op.
+	err = store.Delete(domainName, "API_KEY")
+	require.NoError(t, err)
+
+	values, err := store.GetAll(domainName)
+	require.NoError(t, err)
+	assert.NotContains(t, values, "API_KEY")
+}
+
+func TestPassStore_DeleteAttachment_Idempotent(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	containerName := fmt.Sprintf("idempotent-attachment-%d", time.Now().UnixNano())
+	keys := []string{"POSTGRES_PASSWORD"}
+	defer CleanupPassAttachment(t, containerName, keys)
+
+	err = store.SetAttachment(containerName, map[string]string{"POSTGRES_PASSWORD": "secret123"})
+	require.NoError(t, err)
+
+	err = store.DeleteAttachment(containerName, "POSTGRES_PASSWORD")
+	require.NoError(t, err)
+
+	// Second delete of an already-removed key must be a no-op.
+	err = store.DeleteAttachment(containerName, "POSTGRES_PASSWORD")
+	require.NoError(t, err)
+
+	values, err := store.GetAllAttachment(containerName)
+	require.NoError(t, err)
+	assert.NotContains(t, values, "POSTGRES_PASSWORD")
+}
+
+func TestPassStore_SetAttachment_OverwriteValue(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	containerName := fmt.Sprintf("attachment-overwrite-%d", time.Now().UnixNano())
+	keys := []string{"REDIS_PASSWORD"}
+	defer CleanupPassAttachment(t, containerName, keys)
+
+	err = store.SetAttachment(containerName, map[string]string{"REDIS_PASSWORD": "first"})
+	require.NoError(t, err)
+
+	// Re-setting same key with a different value should deterministically overwrite.
+	err = store.SetAttachment(containerName, map[string]string{"REDIS_PASSWORD": "second"})
+	require.NoError(t, err)
+
+	values, err := store.GetAllAttachment(containerName)
+	require.NoError(t, err)
+	assert.Equal(t, "second", values["REDIS_PASSWORD"])
+}
+
+func TestPassStore_ListKeys_RecoversOrphanedEntries(t *testing.T) {
+	requirePass(t)
+
+	store, err := NewPassStore(testLogger())
+	require.NoError(t, err)
+
+	domainName := fmt.Sprintf("orphan.%d.example.com", time.Now().UnixNano())
+	keys := []string{"EXISTING", "ORIGIN"}
+	defer cleanupPassDomain(t, domainName, keys)
+
+	err = store.Set(domainName, map[string]string{"EXISTING": "present"})
+	require.NoError(t, err)
+
+	safeDomain, err := domain.SanitizeDomainForEnvFile(domainName)
+	require.NoError(t, err)
+
+	orphanPath := fmt.Sprintf("%s/%s/ORIGIN", PassDomainSecretsPath, safeDomain)
+	err = passInsertValue(orphanPath, "https://example.com")
+	require.NoError(t, err)
+
+	manifestPath := fmt.Sprintf("%s/%s/.keys", PassDomainSecretsPath, safeDomain)
+	err = passInsertValue(manifestPath, "EXISTING\n")
+	require.NoError(t, err)
+
+	listed, err := store.ListKeys(domainName)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"EXISTING", "ORIGIN"}, listed)
+
+	values, err := store.GetAll(domainName)
+	require.NoError(t, err)
+	assert.Equal(t, "present", values["EXISTING"])
+	assert.Equal(t, "https://example.com", values["ORIGIN"])
+
+	manifest, err := passShow(manifestPath)
+	require.NoError(t, err)
+	assert.Contains(t, manifest, "EXISTING")
+	assert.Contains(t, manifest, "ORIGIN")
 }
 
 func TestParsePassListOutput(t *testing.T) {

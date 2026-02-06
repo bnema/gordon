@@ -22,8 +22,9 @@ var (
 	BuildDate = "unknown"
 
 	// Global flags for remote targeting
-	remoteFlag string
-	tokenFlag  string
+	remoteFlag      string
+	tokenFlag       string
+	insecureTLSFlag bool
 )
 
 // Command group IDs
@@ -60,6 +61,7 @@ Commands are organized by where they run:
 	// Add persistent flags for remote targeting
 	rootCmd.PersistentFlags().StringVar(&remoteFlag, "remote", "", "Remote Gordon URL (e.g., https://gordon.mydomain.com)")
 	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "Authentication token for remote")
+	rootCmd.PersistentFlags().BoolVar(&insecureTLSFlag, "insecure", false, "Skip TLS certificate verification for remote HTTPS endpoints")
 
 	// Server-only commands (must run on the Gordon host)
 	serveCmd := newServeCmd()
@@ -134,18 +136,29 @@ Commands are organized by where they run:
 // GetRemoteClient returns a remote client if targeting a remote instance,
 // or nil if running locally.
 func GetRemoteClient() (*remote.Client, bool) {
-	url, token, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag)
+	url, token, insecureTLS, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag, insecureTLSFlag)
 	if !isRemote {
 		return nil, false
 	}
 
-	client := remote.NewClient(url, remote.WithToken(token))
+	client := remote.NewClient(url, remoteClientOptions(token, insecureTLS)...)
 	return client, true
+}
+
+func remoteClientOptions(token string, insecureTLS bool) []remote.ClientOption {
+	opts := make([]remote.ClientOption, 0, 2)
+	if token != "" {
+		opts = append(opts, remote.WithToken(token))
+	}
+	if insecureTLS {
+		opts = append(opts, remote.WithInsecureTLS(true))
+	}
+	return opts
 }
 
 // IsRemoteMode returns true if CLI is targeting a remote Gordon instance.
 func IsRemoteMode() bool {
-	_, _, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag)
+	_, _, _, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag, insecureTLSFlag)
 	return isRemote
 }
 
@@ -190,6 +203,15 @@ func runReload() error {
 // runReloadRemote triggers a reload on a remote Gordon instance.
 func runReloadRemote(ctx context.Context, client *remote.Client) error {
 	if err := client.Reload(ctx); err != nil {
+		if shouldFallbackToLocal(err) {
+			localErr := runReload()
+			if localErr == nil {
+				fmt.Printf("Remote reload failed (%v), used local signal fallback\n", err)
+				fmt.Println("Configuration reloaded successfully")
+				return nil
+			}
+			return fmt.Errorf("remote reload failed: %w; local fallback failed: %v", err, localErr)
+		}
 		return fmt.Errorf("failed to reload: %w", err)
 	}
 	fmt.Println("Configuration reloaded successfully")

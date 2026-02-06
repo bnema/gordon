@@ -22,6 +22,7 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 | `registry_domain` | string | - | Deprecated alias for `gordon_domain` |
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
 | `max_proxy_body_size` | string | `"512MB"` | Maximum request body size for proxied requests |
+| `max_blob_chunk_size` | string | `"95MB"` | Maximum request body size for a single registry blob upload chunk |
 
 ## Port Configuration
 
@@ -140,7 +141,32 @@ data_dir = "~/.gordon"  # Default for user installations
 
  > **Warning:** Setting this to `0` (no limit) allows unlimited upload sizes, which can lead to disk exhaustion and DoS vulnerabilities. Always set a reasonable limit for production deployments.
 
- ## Examples
+## Maximum Registry Blob Chunk Size
+
+The `max_blob_chunk_size` setting limits the size of a single blob upload request to the registry (`PATCH`/`PUT` under `/v2/*/blobs/uploads/*`):
+
+```toml
+[server]
+max_blob_chunk_size = "95MB"  # Default
+```
+
+**Purpose:** Prevents excessive memory usage during blob uploads while allowing large real-world image layers.
+
+**Supported units:** B, KB, MB, GB, TB (case-insensitive, decimal/1024-based)
+
+**Examples:**
+
+```toml
+max_blob_chunk_size = "256MB"  # Stricter limit
+max_blob_chunk_size = "1GB"    # Allow larger layers
+```
+
+**Behavior:**
+- When a blob chunk exceeds the limit, Gordon returns `413 Request Entity Too Large`
+- Docker/Podman may send a full layer in one request, so set this high enough for your base images
+- Default (`95MB`) is compatible with Cloudflare and most CDN proxies; increase if pushing very large layers directly
+
+## Examples
 
 ### Development Configuration
 

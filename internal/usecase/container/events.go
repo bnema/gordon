@@ -332,8 +332,8 @@ func (h *ManualDeployHandler) Handle(ctx context.Context, event domain.Event) er
 		return fmt.Errorf("route not found for domain: %s", payload.Domain)
 	}
 
-	// Deploy the container (this will replace any existing container)
-	if _, err := h.containerSvc.Deploy(ctx, *targetRoute); err != nil {
+	// Manual deploy is an internal trigger, so use internal deploy context.
+	if _, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *targetRoute); err != nil {
 		return log.WrapErr(err, "failed to deploy container")
 	}
 

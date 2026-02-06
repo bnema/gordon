@@ -22,7 +22,7 @@ type RegistryService interface {
 
 	// Upload operations
 	StartUpload(ctx context.Context, name string) (string, error)
-	AppendBlobChunk(ctx context.Context, name, uuid string, chunk []byte) (int64, error)
+	AppendBlobChunk(ctx context.Context, name, uuid string, data io.Reader) (int64, error)
 	FinishUpload(ctx context.Context, uuid, digest string) error
 	CancelUpload(ctx context.Context, uuid string) error
 
