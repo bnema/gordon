@@ -43,6 +43,14 @@ Examples:
 
 			result, err := client.Restart(ctx, restartDomain, withAttachments)
 			if err != nil {
+				if !withAttachments && shouldFallbackToLocal(err) {
+					domain, localErr := app.SendDeploySignal(restartDomain)
+					if localErr == nil {
+						fmt.Println(styles.RenderWarning(fmt.Sprintf("Remote restart failed (%v), used local deploy-signal fallback", err)))
+						fmt.Println(styles.RenderSuccess(fmt.Sprintf("Restart signal sent for %s (local deploy path)", domain)))
+						return nil
+					}
+				}
 				return fmt.Errorf("failed to restart: %w", err)
 			}
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Restarted %s", result.Domain)))

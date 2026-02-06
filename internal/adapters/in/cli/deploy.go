@@ -35,6 +35,14 @@ Examples:
 				// Remote deployment via admin API
 				result, err := client.Deploy(ctx, deployDomain)
 				if err != nil {
+					if shouldFallbackToLocal(err) {
+						domain, localErr := app.SendDeploySignal(deployDomain)
+						if localErr == nil {
+							fmt.Println(styles.RenderWarning(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err)))
+							fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
+							return nil
+						}
+					}
 					return fmt.Errorf("failed to deploy: %w", err)
 				}
 				containerID := result.ContainerID
