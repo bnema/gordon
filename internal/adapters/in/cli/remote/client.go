@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -88,6 +89,8 @@ func (c *Client) applyTLSConfig() {
 		return
 	}
 
+	fmt.Fprintf(os.Stderr, "WARNING: TLS certificate verification disabled for %s\n", c.baseURL)
+
 	var transport *http.Transport
 	if existing, ok := c.httpClient.Transport.(*http.Transport); ok {
 		transport = existing.Clone()
@@ -96,7 +99,9 @@ func (c *Client) applyTLSConfig() {
 	}
 
 	if transport.TLSClientConfig == nil {
-		transport.TLSClientConfig = &tls.Config{}
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	} else {
+		transport.TLSClientConfig.MinVersion = tls.VersionTLS12
 	}
 	//nolint:gosec // Explicit CLI opt-in via --insecure for self-signed/private cert deployments.
 	transport.TLSClientConfig.InsecureSkipVerify = true
@@ -164,7 +169,9 @@ func isRetryableRequestError(err error) bool {
 }
 
 func isRetryableStatus(status int) bool {
-	return status >= 500 && status <= 599
+	// Only retry gateway errors; retrying 500 on non-idempotent POSTs
+	// (deploy, restart, reload) can cause duplicate state changes.
+	return status == 502 || status == 503 || status == 504
 }
 
 func retryDelay(attempt int) time.Duration {
