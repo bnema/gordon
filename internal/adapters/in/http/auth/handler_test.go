@@ -463,12 +463,22 @@ func TestHandler_isInternalAuth(t *testing.T) {
 			wantResult: false,
 		},
 		{
-			name:     "partially empty internal auth",
+			name:     "partially empty internal auth - empty password",
 			username: "gordon-internal",
 			password: "internal-secret",
 			internalAuth: InternalAuth{
 				Username: "gordon-internal",
 				Password: "",
+			},
+			wantResult: false,
+		},
+		{
+			name:     "partially empty internal auth - empty username",
+			username: "gordon-internal",
+			password: "internal-secret",
+			internalAuth: InternalAuth{
+				Username: "",
+				Password: "internal-secret",
 			},
 			wantResult: false,
 		},
