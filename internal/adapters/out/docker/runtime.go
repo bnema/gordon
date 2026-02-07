@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -33,6 +35,35 @@ import (
 // Runtime implements the ContainerRuntime interface using Docker API.
 type Runtime struct {
 	client *client.Client
+}
+
+type pipeReadCloser struct {
+	pr       *io.PipeReader
+	pw       *io.PipeWriter
+	original io.Closer
+	once     sync.Once
+}
+
+func (p *pipeReadCloser) Read(b []byte) (int, error) {
+	return p.pr.Read(b)
+}
+
+func (p *pipeReadCloser) Close() error {
+	var closeErr error
+	p.once.Do(func() {
+		if err := p.pw.CloseWithError(errors.New("reader closed")); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+			closeErr = err
+		}
+		if err := p.pr.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		if p.original != nil {
+			if err := p.original.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
+	})
+	return closeErr
 }
 
 // NewRuntime creates a new Docker runtime instance.
@@ -1238,7 +1269,7 @@ func extractFileFromTar(reader io.ReadCloser, targetPath string) (io.ReadCloser,
 					}
 					_ = pw.Close()
 				}()
-				return pr, nil
+				return &pipeReadCloser{pr: pr, pw: pw, original: reader}, nil
 			}
 		}
 	}
