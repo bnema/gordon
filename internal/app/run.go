@@ -78,7 +78,7 @@ type Config struct {
 		TLSPort              int    `mapstructure:"tls_port"`
 		TLSCertFile          string `mapstructure:"tls_cert_file"`
 		TLSKeyFile           string `mapstructure:"tls_key_file"`
-    DataDir              string `mapstructure:"data_dir"`
+		DataDir              string `mapstructure:"data_dir"`
 		MaxProxyBodySize     string `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
 		MaxBlobChunkSize     string `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
 		MaxProxyResponseSize string `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
@@ -298,7 +298,7 @@ func generateSelfSignedTLSCert(certPath, keyPath, domainName string) error {
 		return err
 	}
 
-	certOut, err := os.OpenFile(certPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	certOut, err := os.OpenFile(certPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
@@ -1277,8 +1277,8 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 
 	errChan := make(chan error, 3)
 
-	registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
-	proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
+	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
+	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
 	var tlsReady <-chan struct{}
 	if cfg.Server.TLSEnabled {
 		if cfg.Server.TLSCertFile == "" || cfg.Server.TLSKeyFile == "" {
@@ -1326,10 +1326,19 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 	// Auto-start after servers are listening (registry port is now bound).
 	syncAndAutoStart(ctx, svc, log)
 
+	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
+	gracefulShutdown(registrySrv, proxySrv, containerSvc, log)
+	return nil
+}
+
+// waitForShutdown blocks on the event loop, handling server errors and
+// Unix signals (reload, deploy, shutdown) until the context is cancelled.
+func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, deployChan <-chan os.Signal, eventBus out.EventBus, log zerowrap.Logger) {
 	for {
 		select {
 		case err := <-errChan:
-			return err
+			log.Error().Err(err).Msg("server error")
+			return
 		case <-reloadChan:
 			log.Info().Msg("reload signal received (SIGUSR1)")
 			if err := eventBus.Publish(domain.EventManualReload, nil); err != nil {
@@ -1348,13 +1357,9 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 			}
 		case <-ctx.Done():
 			log.Info().Msg("shutdown signal received")
-			goto shutdown
+			return
 		}
 	}
-
-shutdown:
-	gracefulShutdown(registrySrv, proxySrv, containerSvc, log)
-	return nil
 }
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
