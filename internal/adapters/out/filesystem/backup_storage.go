@@ -42,6 +42,7 @@ func (s *BackupStorage) Store(_ context.Context, domainName, dbName string, sche
 	if schedulePart == "" {
 		schedulePart = "manual"
 	}
+	schedulePart = sanitizeBackupPathComponent(schedulePart)
 
 	backupDir := filepath.Join(s.rootDir, domainPart, dbPart, schedulePart)
 	if err := os.MkdirAll(backupDir, 0750); err != nil {

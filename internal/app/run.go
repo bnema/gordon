@@ -1099,15 +1099,15 @@ func createBackupService(cfg Config, svc *services, log zerowrap.Logger) (*files
 		return nil, nil, log.WrapErr(err, "failed to create backup storage")
 	}
 
+	retention, err := validateBackupRetention(cfg)
+	if err != nil {
+		return nil, nil, log.WrapErr(err, "invalid backup retention policy")
+	}
+
 	backupCfg := domain.BackupConfig{
 		Enabled:    cfg.Backups.Enabled,
 		StorageDir: storageDir,
-		Retention: domain.RetentionPolicy{
-			Hourly:  cfg.Backups.Retention.Hourly,
-			Daily:   cfg.Backups.Retention.Daily,
-			Weekly:  cfg.Backups.Retention.Weekly,
-			Monthly: cfg.Backups.Retention.Monthly,
-		},
+		Retention:  retention,
 	}
 
 	backupSvc := backup.NewService(svc.runtime, backupStorage, svc.containerSvc, backupCfg, log)
@@ -1117,6 +1117,28 @@ func createBackupService(cfg Config, svc *services, log zerowrap.Logger) (*files
 		Msg("backup service initialized")
 
 	return backupStorage, backupSvc, nil
+}
+
+func validateBackupRetention(cfg Config) (domain.RetentionPolicy, error) {
+	if cfg.Backups.Retention.Hourly < 0 {
+		return domain.RetentionPolicy{}, fmt.Errorf("backups.retention.hourly cannot be negative")
+	}
+	if cfg.Backups.Retention.Daily < 0 {
+		return domain.RetentionPolicy{}, fmt.Errorf("backups.retention.daily cannot be negative")
+	}
+	if cfg.Backups.Retention.Weekly < 0 {
+		return domain.RetentionPolicy{}, fmt.Errorf("backups.retention.weekly cannot be negative")
+	}
+	if cfg.Backups.Retention.Monthly < 0 {
+		return domain.RetentionPolicy{}, fmt.Errorf("backups.retention.monthly cannot be negative")
+	}
+
+	return domain.RetentionPolicy{
+		Hourly:  cfg.Backups.Retention.Hourly,
+		Daily:   cfg.Backups.Retention.Daily,
+		Weekly:  cfg.Backups.Retention.Weekly,
+		Monthly: cfg.Backups.Retention.Monthly,
+	}, nil
 }
 
 // registerEventHandlers registers all event handlers.

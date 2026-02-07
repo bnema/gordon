@@ -14,8 +14,20 @@ func detectDatabaseFromAttachment(domainName string, a domain.Attachment) (domai
 	switch {
 	case strings.Contains(image, "postgres"), strings.Contains(name, "postgres"):
 		port := 5432
-		if len(a.Ports) > 0 && a.Ports[0] > 0 {
-			port = a.Ports[0]
+		hasPostgresPort := false
+		firstPositive := 0
+		for _, p := range a.Ports {
+			if p == 5432 {
+				port = 5432
+				hasPostgresPort = true
+				break
+			}
+			if p > 0 && firstPositive == 0 {
+				firstPositive = p
+			}
+		}
+		if !hasPostgresPort && firstPositive > 0 {
+			port = firstPositive
 		}
 		return domain.DBInfo{
 			Type:        domain.DBTypePostgreSQL,

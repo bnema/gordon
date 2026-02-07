@@ -153,12 +153,9 @@ func (s *Scheduler) RunNow(ctx context.Context, id string) error {
 
 func (s *Scheduler) runDue(ctx context.Context) {
 	now := s.nowFn()
-	entries := s.snapshotEntries()
+	entries := s.dueEntries(now)
 	sem := make(chan struct{}, s.maxJobs)
 	for _, e := range entries {
-		if now.Before(e.nextRun) {
-			continue
-		}
 		sem <- struct{}{}
 
 		e := e
@@ -178,7 +175,15 @@ func (s *Scheduler) executeEntry(ctx context.Context, e *entry) error {
 	defer e.running.Store(false)
 
 	now := s.nowFn()
-	jobErr := e.job(ctx)
+	var jobErr error
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				jobErr = fmt.Errorf("job panic: %v", rec)
+			}
+		}()
+		jobErr = e.job(ctx)
+	}()
 
 	nextRun, nextErr := calculateNextRun(now, e.schedule)
 	if nextErr != nil {
@@ -202,12 +207,15 @@ func (s *Scheduler) getEntry(id string) *entry {
 	return s.entries[id]
 }
 
-func (s *Scheduler) snapshotEntries() []*entry {
+func (s *Scheduler) dueEntries(now time.Time) []*entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	entries := make([]*entry, 0, len(s.entries))
 	for _, e := range s.entries {
+		if now.Before(e.nextRun) {
+			continue
+		}
 		entries = append(entries, e)
 	}
 	return entries

@@ -1113,18 +1113,19 @@ func (r *Runtime) DisconnectContainerFromNetwork(ctx context.Context, containerN
 
 // ExecInContainer executes a command in a running container.
 func (r *Runtime) ExecInContainer(ctx context.Context, containerID string, cmd []string) (*out.ExecResult, error) {
+	if len(cmd) == 0 {
+		return nil, fmt.Errorf("command cannot be empty")
+	}
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
 		zerowrap.FieldAction:   "ExecInContainer",
 		zerowrap.FieldEntityID: containerID,
-		"command":              strings.Join(cmd, " "),
+		"command":              cmd[0],
+		"arg_count":            len(cmd) - 1,
 	})
 	log := zerowrap.FromCtx(ctx)
-
-	if len(cmd) == 0 {
-		return nil, fmt.Errorf("command cannot be empty")
-	}
 
 	execResp, err := r.client.ContainerExecCreate(ctx, containerID, container.ExecOptions{
 		Cmd:          cmd,
