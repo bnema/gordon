@@ -83,6 +83,8 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 			requestID := r.Header.Get("X-Request-ID")
 			if requestID == "" {
 				requestID = generateRequestID()
+				// Set on the incoming request so downstream handlers can read it
+				r.Header.Set("X-Request-ID", requestID)
 			}
 			w.Header().Set("X-Request-ID", requestID)
 
