@@ -121,6 +121,19 @@ preserve = true                              # Keep volumes when containers are 
 # =============================================================================
 [attachments]
 # "domain-or-group" = ["image1:tag", "image2:tag"]
+
+# =============================================================================
+# BACKUPS
+# =============================================================================
+[backups]
+enabled = false                              # Enable backup service
+storage_dir = ""                            # Backup root (default: {data_dir}/backups)
+
+[backups.retention]
+hourly = 0                                   # Keep N hourly backups per DB
+daily = 0                                    # Keep N daily backups per DB
+weekly = 0                                   # Keep N weekly backups per DB
+monthly = 0                                  # Keep N monthly backups per DB
 ```
 
 ## Default Values Summary
@@ -164,6 +177,12 @@ preserve = true                              # Keep volumes when containers are 
 | `volumes.auto_create` | `true` | Auto-create volumes |
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
+| `backups.enabled` | `false` | Backup service disabled |
+| `backups.storage_dir` | `""` | Uses `{server.data_dir}/backups` when empty |
+| `backups.retention.hourly` | `0` | Keep 0 hourly backups by default |
+| `backups.retention.daily` | `0` | Keep 0 daily backups by default |
+| `backups.retention.weekly` | `0` | Keep 0 weekly backups by default |
+| `backups.retention.monthly` | `0` | Keep 0 monthly backups by default |
 
 ## Environment Variables
 

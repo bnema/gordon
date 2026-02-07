@@ -54,6 +54,7 @@ import (
 
 	// Use cases
 	"github.com/bnema/gordon/internal/usecase/auth"
+	"github.com/bnema/gordon/internal/usecase/backup"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
 	"github.com/bnema/gordon/internal/usecase/health"
@@ -129,6 +130,17 @@ type Config struct {
 			TrustedProxies []string `mapstructure:"trusted_proxies"`
 		} `mapstructure:"rate_limit"`
 	} `mapstructure:"api"`
+
+	Backups struct {
+		Enabled    bool   `mapstructure:"enabled"`
+		StorageDir string `mapstructure:"storage_dir"`
+		Retention  struct {
+			Hourly  int `mapstructure:"hourly"`
+			Daily   int `mapstructure:"daily"`
+			Weekly  int `mapstructure:"weekly"`
+			Monthly int `mapstructure:"monthly"`
+		} `mapstructure:"retention"`
+	} `mapstructure:"backups"`
 }
 
 // services holds all the services used by the application.
@@ -137,11 +149,13 @@ type services struct {
 	eventBus         *eventbus.InMemory
 	blobStorage      *filesystem.BlobStorage
 	manifestStorage  *filesystem.ManifestStorage
+	backupStorage    *filesystem.BackupStorage
 	envLoader        out.EnvLoader
 	logWriter        *logwriter.LogWriter
 	tokenStore       out.TokenStore
 	configSvc        *config.Service
 	containerSvc     *container.Service
+	backupSvc        *backup.Service
 	registrySvc      *registrySvc.Service
 	proxySvc         *proxy.Service
 	authSvc          *auth.Service
@@ -432,6 +446,11 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	if svc.containerSvc, err = createContainerService(ctx, v, cfg, svc, log); err != nil {
 		return nil, err
 	}
+
+	if svc.backupStorage, svc.backupSvc, err = createBackupService(cfg, svc, log); err != nil {
+		return nil, err
+	}
+
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
 
 	proxyCfg, err := buildProxyConfig(cfg, log)
@@ -462,7 +481,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	logSvc := logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log)
+	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log, svc.backupSvc)
 
 	return svc, nil
 }
@@ -1062,6 +1081,42 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 	}
 
 	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig), nil
+}
+
+func createBackupService(cfg Config, svc *services, log zerowrap.Logger) (*filesystem.BackupStorage, *backup.Service, error) {
+	if !cfg.Backups.Enabled {
+		return nil, nil, nil
+	}
+
+	storageDir := cfg.Backups.StorageDir
+	if storageDir == "" {
+		dataDir := resolveDataDir(cfg.Server.DataDir)
+		storageDir = filepath.Join(dataDir, "backups")
+	}
+
+	backupStorage, err := filesystem.NewBackupStorage(storageDir, log)
+	if err != nil {
+		return nil, nil, log.WrapErr(err, "failed to create backup storage")
+	}
+
+	backupCfg := domain.BackupConfig{
+		Enabled:    cfg.Backups.Enabled,
+		StorageDir: storageDir,
+		Retention: domain.RetentionPolicy{
+			Hourly:  cfg.Backups.Retention.Hourly,
+			Daily:   cfg.Backups.Retention.Daily,
+			Weekly:  cfg.Backups.Retention.Weekly,
+			Monthly: cfg.Backups.Retention.Monthly,
+		},
+	}
+
+	backupSvc := backup.NewService(svc.runtime, backupStorage, svc.containerSvc, backupCfg, log)
+
+	log.Info().
+		Str("storage_dir", storageDir).
+		Msg("backup service initialized")
+
+	return backupStorage, backupSvc, nil
 }
 
 // registerEventHandlers registers all event handlers.
