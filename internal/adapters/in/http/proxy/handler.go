@@ -71,6 +71,8 @@ func (h *Handler) Start(ctx context.Context, handler http.Handler) error {
 			Str(zerowrap.FieldLayer, "adapter").
 			Str(zerowrap.FieldAdapter, "http").
 			Msg("proxy server shutting down")
-		return server.Shutdown(context.Background())
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		return server.Shutdown(shutdownCtx)
 	}
 }

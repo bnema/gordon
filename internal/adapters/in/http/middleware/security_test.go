@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,6 +28,43 @@ func TestSecurityHeaders(t *testing.T) {
 	assert.Equal(t, "1; mode=block", rec.Header().Get("X-XSS-Protection"))
 	assert.Equal(t, "strict-origin-when-cross-origin", rec.Header().Get("Referrer-Policy"))
 	assert.Equal(t, "geolocation=(), microphone=(), camera=()", rec.Header().Get("Permissions-Policy"))
+
+	// CSP should NOT be set globally (would break proxied sites)
+	assert.Empty(t, rec.Header().Get("Content-Security-Policy"))
+
+	// HSTS should NOT be set on plain HTTP
+	assert.Empty(t, rec.Header().Get("Strict-Transport-Security"))
+}
+
+func TestSecurityHeaders_HSTS_WithTLS(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrapped := SecurityHeaders(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.TLS = &tls.ConnectionState{} // Simulate TLS connection
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	assert.Equal(t, "max-age=31536000; includeSubDomains", rec.Header().Get("Strict-Transport-Security"))
+}
+
+func TestSecurityHeaders_HSTS_WithForwardedProto_NotTrusted(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrapped := SecurityHeaders(handler)
+
+	// X-Forwarded-Proto is client-spoofable and should NOT trigger HSTS
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	assert.Empty(t, rec.Header().Get("Strict-Transport-Security"), "HSTS should not be set based on spoofable X-Forwarded-Proto")
 }
 
 func TestSecurityHeaders_PreservesExistingHeaders(t *testing.T) {

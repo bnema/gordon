@@ -2,9 +2,13 @@
 package middleware
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -75,6 +79,13 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
+			// Generate or reuse X-Request-ID for request tracing
+			requestID := r.Header.Get("X-Request-ID")
+			if requestID == "" {
+				requestID = generateRequestID()
+			}
+			w.Header().Set("X-Request-ID", requestID)
+
 			// Wrap the response writer to capture status and bytes
 			rw := NewResponseWriter(w)
 
@@ -96,6 +107,7 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 			log.Info().
 				Str(zerowrap.FieldLayer, "adapter").
 				Str(zerowrap.FieldAdapter, "http").
+				Str("request_id", requestID).
 				Str(zerowrap.FieldMethod, r.Method).
 				Str(zerowrap.FieldPath, r.URL.Path).
 				Str("query", r.URL.RawQuery).
@@ -110,6 +122,19 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 				Msg("HTTP request")
 		})
 	}
+}
+
+// fallbackCounter ensures uniqueness when crypto/rand is unavailable.
+var fallbackCounter atomic.Uint64
+
+// generateRequestID creates a random 16-byte hex-encoded request ID.
+func generateRequestID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp + monotonic counter if RNG is unavailable
+		return fmt.Sprintf("%x-%x", time.Now().UnixNano(), fallbackCounter.Add(1))
+	}
+	return hex.EncodeToString(b)
 }
 
 // PanicRecovery middleware recovers from panics and logs them.

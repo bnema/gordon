@@ -9,10 +9,11 @@ type Route struct {
 
 // ProxyTarget represents the destination for proxying requests.
 type ProxyTarget struct {
-	Host        string
-	Port        int
-	ContainerID string
-	Scheme      string // "http" or "https"
+	Host         string
+	Port         int
+	ContainerID  string
+	Scheme       string // "http" or "https"
+	OriginalHost string // Original hostname before DNS resolution (for Host header)
 }
 
 // RouteMatch represents the result of matching a request to a route.

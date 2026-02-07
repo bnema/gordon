@@ -397,6 +397,53 @@ func TestContainerDeployedHandler_Handle_NoDomain(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestService_ConcurrentConnectionLimit(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	// Allow only 1 concurrent connection
+	svc := NewService(runtime, containerSvc, configSvc, Config{
+		MaxConcurrentConns: 1,
+	})
+
+	assert.Equal(t, 1, svc.config.MaxConcurrentConns)
+	assert.Equal(t, int64(0), svc.activeConns.Load(), "active connections should start at 0")
+}
+
+func TestService_ConcurrentConnectionLimit_Disabled(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{
+		MaxConcurrentConns: 0,
+	})
+
+	assert.Equal(t, 0, svc.config.MaxConcurrentConns, "0 means no limit")
+}
+
+func TestService_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{
+		MaxConcurrentConns: 1,
+	})
+
+	// Simulate an in-flight connection by incrementing the atomic counter
+	svc.activeConns.Add(1)
+	defer svc.activeConns.Add(-1)
+
+	// Next request should get 503
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	w := httptest.NewRecorder()
+	svc.ServeHTTP(w, req)
+
+	assert.Equal(t, 503, w.Code)
+}
+
 func TestServeHTTP_MaxBodySize(t *testing.T) {
 	tests := []struct {
 		name        string

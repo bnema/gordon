@@ -92,10 +92,17 @@ func (c *Client) applyTLSConfig() {
 	fmt.Fprintf(os.Stderr, "WARNING: TLS certificate verification disabled for %s\n", c.baseURL)
 
 	var transport *http.Transport
-	if existing, ok := c.httpClient.Transport.(*http.Transport); ok {
-		transport = existing.Clone()
-	} else {
+	switch t := c.httpClient.Transport.(type) {
+	case *http.Transport:
+		transport = t.Clone()
+	case nil:
 		transport = http.DefaultTransport.(*http.Transport).Clone()
+	default:
+		// Cannot apply InsecureSkipVerify to a non-*http.Transport.
+		// Log a warning and leave the transport intact rather than
+		// silently replacing it (which would drop caller-provided behavior).
+		fmt.Fprintf(os.Stderr, "WARNING: --insecure requires *http.Transport, got %T; TLS override not applied\n", t)
+		return
 	}
 
 	if transport.TLSClientConfig == nil {
@@ -741,8 +748,11 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	// Use a client without timeout for streaming
-	streamClient := &http.Client{}
+	// Use the same transport as the main client (honoring TLS config and
+	// custom transports) but without a timeout so streaming doesn't get cut off.
+	streamClient := &http.Client{
+		Transport: c.httpClient.Transport,
+	}
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
