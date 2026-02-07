@@ -75,6 +75,38 @@ func TestSchedulerAddListAndRunNow(t *testing.T) {
 	entries = s.List()
 	require.Len(t, entries, 1)
 	assert.Equal(t, now, entries[0].LastRun)
+	assert.Equal(t, time.Date(2026, 2, 8, 2, 0, 0, 0, time.UTC), entries[0].NextRun)
+}
+
+func TestSchedulerWithMaxJobsOption(t *testing.T) {
+	s := NewScheduler(zerowrap.Default(), WithMaxJobs(9))
+	assert.Equal(t, 9, s.maxJobs)
+}
+
+func TestSchedulerRemoveRejectsRunningJob(t *testing.T) {
+	s := NewScheduler(zerowrap.Default())
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	err := s.Add("backup-hourly", "hourly backup", domain.CronSchedule{Preset: domain.ScheduleHourly}, func(context.Context) error {
+		close(started)
+		<-release
+		return nil
+	})
+	require.NoError(t, err)
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- s.RunNow(context.Background(), "backup-hourly")
+	}()
+
+	<-started
+	err = s.Remove("backup-hourly")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrJobRunning)
+
+	close(release)
+	require.NoError(t, <-runErrCh)
 }
 
 func TestSchedulerRunNowRejectsConcurrentRun(t *testing.T) {

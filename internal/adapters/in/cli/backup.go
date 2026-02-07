@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -44,7 +43,7 @@ func newBackupListCmd() *cobra.Command {
 				domainName = args[0]
 			}
 
-			jobs, err := client.ListBackups(context.Background(), domainName)
+			jobs, err := client.ListBackups(cmd.Context(), domainName)
 			if err != nil {
 				return fmt.Errorf("failed to list backups: %w", err)
 			}
@@ -85,7 +84,7 @@ func newBackupRunCmd() *cobra.Command {
 				return fmt.Errorf("backup commands require a configured remote target")
 			}
 
-			result, err := client.RunBackup(context.Background(), args[0], dbName)
+			result, err := client.RunBackup(cmd.Context(), args[0], dbName)
 			if err != nil {
 				return fmt.Errorf("failed to run backup: %w", err)
 			}
@@ -123,7 +122,7 @@ func newBackupDetectCmd() *cobra.Command {
 				return fmt.Errorf("backup commands require a configured remote target")
 			}
 
-			dbs, err := client.DetectDatabases(context.Background(), args[0])
+			dbs, err := client.DetectDatabases(cmd.Context(), args[0])
 			if err != nil {
 				return fmt.Errorf("failed to detect databases: %w", err)
 			}
@@ -161,7 +160,7 @@ func newBackupStatusCmd() *cobra.Command {
 				return fmt.Errorf("backup commands require a configured remote target")
 			}
 
-			jobs, err := client.BackupStatus(context.Background())
+			jobs, err := client.BackupStatus(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("failed to get backup status: %w", err)
 			}

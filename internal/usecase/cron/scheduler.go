@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,20 @@ type Scheduler struct {
 	started atomic.Bool
 }
 
+// Option configures a Scheduler.
+type Option func(*Scheduler)
+
+var ErrJobRunning = errors.New("schedule is currently running")
+
+// WithMaxJobs sets the maximum number of jobs run concurrently.
+func WithMaxJobs(n int) Option {
+	return func(s *Scheduler) {
+		if n > 0 {
+			s.maxJobs = n
+		}
+	}
+}
+
 type entry struct {
 	id       string
 	name     string
@@ -33,8 +48,8 @@ type entry struct {
 }
 
 // NewScheduler creates a scheduler instance.
-func NewScheduler(log zerowrap.Logger) *Scheduler {
-	return &Scheduler{
+func NewScheduler(log zerowrap.Logger, opts ...Option) *Scheduler {
+	s := &Scheduler{
 		entries: make(map[string]*entry),
 		stopCh:  make(chan struct{}),
 		log:     log,
@@ -43,6 +58,14 @@ func NewScheduler(log zerowrap.Logger) *Scheduler {
 			return time.Now().UTC()
 		},
 	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+
+	return s
 }
 
 // Add registers a new scheduled job.
@@ -78,10 +101,18 @@ func (s *Scheduler) Add(id, name string, sched domain.CronSchedule, job func(ctx
 }
 
 // Remove unregisters a scheduled job.
-func (s *Scheduler) Remove(id string) {
+func (s *Scheduler) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	e := s.entries[id]
+	if e == nil {
+		return nil
+	}
+	if e.running.Load() {
+		return fmt.Errorf("%w: %s", ErrJobRunning, id)
+	}
 	delete(s.entries, id)
+	return nil
 }
 
 // Start begins the scheduler loop.
@@ -155,17 +186,21 @@ func (s *Scheduler) runDue(ctx context.Context) {
 	now := s.nowFn()
 	entries := s.dueEntries(now)
 	sem := make(chan struct{}, s.maxJobs)
+	var wg sync.WaitGroup
 	for _, e := range entries {
+		wg.Add(1)
 		sem <- struct{}{}
 
 		e := e
 		go func() {
+			defer wg.Done()
 			defer func() { <-sem }()
 			if err := s.executeEntry(ctx, e); err != nil {
 				s.log.Warn().Err(err).Str("schedule_id", e.id).Msg("scheduled job failed")
 			}
 		}()
 	}
+	wg.Wait()
 }
 
 func (s *Scheduler) executeEntry(ctx context.Context, e *entry) error {

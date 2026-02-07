@@ -45,8 +45,14 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 	pullCtx, cancelPull := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancelPull()
 	require.NoError(t, runtime.PullImage(pullCtx, image))
-	require.NoError(t, runtime.CreateNetwork(ctx, networkName, map[string]string{"driver": "bridge"}))
-	t.Cleanup(func() { _ = runtime.RemoveNetwork(context.Background(), networkName) })
+	netCtx, cancelNet := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelNet()
+	require.NoError(t, runtime.CreateNetwork(netCtx, networkName, map[string]string{"driver": "bridge"}))
+	t.Cleanup(func() {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancelCleanup()
+		_ = runtime.RemoveNetwork(cleanupCtx, networkName)
+	})
 
 	containerCfg := &domain.ContainerConfig{
 		Image:       image,
@@ -66,13 +72,22 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 		},
 	}
 
-	container, err := runtime.CreateContainer(ctx, containerCfg)
+	contCtx, cancelCont := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelCont()
+	container, err := runtime.CreateContainer(contCtx, containerCfg)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = runtime.StopContainer(context.Background(), container.ID)
-		_ = runtime.RemoveContainer(context.Background(), container.ID, true)
+		stopCtx, cancelStop := context.WithTimeout(context.Background(), 20*time.Second)
+		_ = runtime.StopContainer(stopCtx, container.ID)
+		cancelStop()
+
+		removeCtx, cancelRemove := context.WithTimeout(context.Background(), 20*time.Second)
+		_ = runtime.RemoveContainer(removeCtx, container.ID, true)
+		cancelRemove()
 	})
-	require.NoError(t, runtime.StartContainer(ctx, container.ID))
+	startCtx, cancelStart := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelStart()
+	require.NoError(t, runtime.StartContainer(startCtx, container.ID))
 
 	require.NoError(t, waitForPostgresReady(ctx, runtime, container.ID, 60*time.Second))
 	require.NoError(t, seedPostgresData(ctx, runtime, container.ID))

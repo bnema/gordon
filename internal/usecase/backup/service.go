@@ -211,7 +211,10 @@ func selectDatabase(dbs []domain.DBInfo, requested string) (domain.DBInfo, error
 	}
 
 	if requested == "" {
-		return dbs[0], nil
+		if len(dbs) == 1 {
+			return dbs[0], nil
+		}
+		return domain.DBInfo{}, fmt.Errorf("multiple database attachments detected; please specify one")
 	}
 
 	for _, db := range dbs {

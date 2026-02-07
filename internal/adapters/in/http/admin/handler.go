@@ -770,6 +770,8 @@ func (h *Handler) handleBackups(w http.ResponseWriter, r *http.Request, path str
 		return
 	}
 
+	path = strings.TrimSuffix(path, "/")
+
 	if path == "/backups" || path == "/backups/status" {
 		h.handleBackupsStatus(w, r)
 		return

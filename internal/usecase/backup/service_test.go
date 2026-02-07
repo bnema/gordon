@@ -48,7 +48,7 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 			return false
 		}
 		return bytes.Contains([]byte(cmd[2]), []byte("pg_dump -Fc")) && bytes.Contains([]byte(cmd[2]), []byte(" > "))
-	})).Return(&outiface.ExecResult{ExitCode: 0}, nil)
+	})).Return(&outiface.ExecResult{ExitCode: 0, Stdout: []byte("backup-data")}, nil)
 
 	runtime.EXPECT().CopyFromContainer(mock.Anything, "db123", mock.MatchedBy(func(path string) bool {
 		return path != ""
@@ -65,8 +65,8 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 		domain.BackupSchedule(""),
 		mock.Anything,
 		mock.MatchedBy(func(r io.Reader) bool {
-			data, err := io.ReadAll(r)
-			return err == nil && string(data) == "backup-data"
+			data, _ := io.ReadAll(r)
+			return string(data) == "backup-data"
 		}),
 	).Return("/tmp/backup.bak", nil)
 
@@ -78,4 +78,20 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 	assert.Equal(t, domain.BackupStatusCompleted, result.Job.Status)
 	assert.Equal(t, "/tmp/backup.bak", result.Job.FilePath)
 	assert.Equal(t, int64(len("backup-data")), result.Job.SizeBytes)
+}
+
+func TestSelectDatabaseRequiresExplicitNameWhenMultipleDetected(t *testing.T) {
+	db, err := selectDatabase([]domain.DBInfo{
+		{Name: "postgres"},
+		{Name: "analytics"},
+	}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple database attachments detected")
+	assert.Equal(t, domain.DBInfo{}, db)
+}
+
+func TestSelectDatabaseAutoSelectsOnlyDatabaseWhenUnspecified(t *testing.T) {
+	db, err := selectDatabase([]domain.DBInfo{{Name: "postgres"}}, "")
+	require.NoError(t, err)
+	assert.Equal(t, "postgres", db.Name)
 }
