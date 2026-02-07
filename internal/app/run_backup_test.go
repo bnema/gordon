@@ -56,16 +56,33 @@ func TestValidateBackupRetentionRejectsNegativeValues(t *testing.T) {
 }
 
 func TestValidateBackupRetentionAcceptsZeroAndPositiveValues(t *testing.T) {
-	var cfg Config
-	cfg.Backups.Retention.Hourly = 1
-	cfg.Backups.Retention.Daily = 7
-	cfg.Backups.Retention.Weekly = 4
-	cfg.Backups.Retention.Monthly = 12
+	t.Run("positive values", func(t *testing.T) {
+		var cfg Config
+		cfg.Backups.Retention.Hourly = 1
+		cfg.Backups.Retention.Daily = 7
+		cfg.Backups.Retention.Weekly = 4
+		cfg.Backups.Retention.Monthly = 12
 
-	retention, err := validateBackupRetention(cfg)
-	require.NoError(t, err)
-	assert.Equal(t, 1, retention.Hourly)
-	assert.Equal(t, 7, retention.Daily)
-	assert.Equal(t, 4, retention.Weekly)
-	assert.Equal(t, 12, retention.Monthly)
+		retention, err := validateBackupRetention(cfg)
+		require.NoError(t, err)
+		assert.Equal(t, 1, retention.Hourly)
+		assert.Equal(t, 7, retention.Daily)
+		assert.Equal(t, 4, retention.Weekly)
+		assert.Equal(t, 12, retention.Monthly)
+	})
+
+	t.Run("zero values", func(t *testing.T) {
+		var cfg Config
+		cfg.Backups.Retention.Hourly = 0
+		cfg.Backups.Retention.Daily = 0
+		cfg.Backups.Retention.Weekly = 0
+		cfg.Backups.Retention.Monthly = 0
+
+		retention, err := validateBackupRetention(cfg)
+		require.NoError(t, err)
+		assert.Equal(t, 0, retention.Hourly)
+		assert.Equal(t, 0, retention.Daily)
+		assert.Equal(t, 0, retention.Weekly)
+		assert.Equal(t, 0, retention.Monthly)
+	})
 }
