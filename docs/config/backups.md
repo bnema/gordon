@@ -46,13 +46,13 @@ monthly = 12
 Backups are stored under:
 
 ```text
-<storage_dir>/backups/<domain>/<db>/<schedule>/<timestamp>.bak
+<storage_dir>/<domain>/<db>/<schedule>/<timestamp>.bak
 ```
 
 Example:
 
 ```text
-~/.gordon/backups/backups/app.example.com/postgres/daily/20260207T110000Z.bak
+~/.gordon/backups/app.example.com/postgres/daily/20260207T110000Z.bak
 ```
 
 ## Notes
@@ -60,6 +60,7 @@ Example:
 - Backups require PostgreSQL attachment containers to be running.
 - The backup command executes inside the database container using Gordon runtime APIs.
 - Retention applies per database and per schedule.
+- `backups.retention.hourly`, `daily`, `weekly`, and `monthly` set to `0` means no backups are retained for that tier (new backups are immediately eligible for cleanup). For practical defaults, set at least `daily = 7`.
 
 ## Related
 

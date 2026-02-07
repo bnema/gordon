@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bnema/zerowrap"
 
@@ -82,6 +83,17 @@ func toRouteResponse(r domain.Route) dto.Route {
 }
 
 func toBackupJobResponse(job domain.BackupJob) dto.BackupJob {
+	var startedAt *time.Time
+	if !job.StartedAt.IsZero() {
+		t := job.StartedAt
+		startedAt = &t
+	}
+	var completedAt *time.Time
+	if !job.CompletedAt.IsZero() {
+		t := job.CompletedAt
+		completedAt = &t
+	}
+
 	return dto.BackupJob{
 		ID:          job.ID,
 		Domain:      job.Domain,
@@ -89,8 +101,8 @@ func toBackupJobResponse(job domain.BackupJob) dto.BackupJob {
 		Schedule:    string(job.Schedule),
 		Type:        string(job.Type),
 		Status:      string(job.Status),
-		StartedAt:   job.StartedAt,
-		CompletedAt: job.CompletedAt,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
 		SizeBytes:   job.SizeBytes,
 		FilePath:    job.FilePath,
 		Error:       job.Error,
@@ -120,18 +132,13 @@ func NewHandler(
 	registrySvc in.RegistryService,
 	eventBus out.EventPublisher,
 	log zerowrap.Logger,
-	backupSvc ...in.BackupService,
+	backupSvc in.BackupService,
 ) *Handler {
-	var backup in.BackupService
-	if len(backupSvc) > 0 {
-		backup = backupSvc[0]
-	}
-
 	return &Handler{
 		configSvc:    configSvc,
 		authSvc:      authSvc,
 		containerSvc: containerSvc,
-		backupSvc:    backup,
+		backupSvc:    backupSvc,
 		healthSvc:    healthSvc,
 		secretSvc:    secretSvc,
 		logSvc:       logSvc,
@@ -853,9 +860,13 @@ func (h *Handler) handleBackupsDomainRun(w http.ResponseWriter, r *http.Request,
 
 	result, err := h.backupSvc.RunBackup(ctx, backupDomain, req.DB)
 	if err != nil {
-		h.sendError(w, http.StatusInternalServerError, err.Error())
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Str("domain", backupDomain).Msg("backup run failed")
+		h.sendError(w, http.StatusInternalServerError, "failed to run backup")
 		return
 	}
+	log := zerowrap.FromCtx(ctx)
+	log.Info().Str("domain", backupDomain).Str("db", req.DB).Str("job_id", result.Job.ID).Msg("backup completed via admin API")
 
 	h.sendJSON(w, http.StatusOK, dto.BackupRunResponse{
 		Status: "completed",

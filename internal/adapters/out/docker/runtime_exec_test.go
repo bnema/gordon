@@ -23,10 +23,21 @@ func TestParseExecOutput_SplitsStdoutAndStderr(t *testing.T) {
 func TestRuntime_ExecInContainer_RejectsEmptyCommand(t *testing.T) {
 	r := &Runtime{}
 
-	result, err := r.ExecInContainer(context.Background(), "abc123", nil)
+	tests := []struct {
+		name string
+		cmd  []string
+	}{
+		{name: "nil", cmd: nil},
+		{name: "empty slice", cmd: []string{}},
+	}
 
-	require.Error(t, err)
-	assert.Nil(t, result)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := r.ExecInContainer(context.Background(), "abc123", tt.cmd)
+			require.Error(t, err)
+			assert.Nil(t, result)
+		})
+	}
 }
 
 func frameDockerStream(streamID byte, payload []byte) []byte {

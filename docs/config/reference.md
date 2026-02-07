@@ -134,6 +134,9 @@ hourly = 0                                   # Keep N hourly backups per DB
 daily = 0                                    # Keep N daily backups per DB
 weekly = 0                                   # Keep N weekly backups per DB
 monthly = 0                                  # Keep N monthly backups per DB
+
+# Note: retention values set to 0 keep no backups for that tier.
+# For practical defaults, consider setting daily = 7.
 ```
 
 ## Default Values Summary
@@ -179,10 +182,12 @@ monthly = 0                                  # Keep N monthly backups per DB
 | `volumes.preserve` | `true` | Keep volumes |
 | `backups.enabled` | `false` | Backup service disabled |
 | `backups.storage_dir` | `""` | Uses `{server.data_dir}/backups` when empty |
-| `backups.retention.hourly` | `0` | Keep 0 hourly backups by default |
-| `backups.retention.daily` | `0` | Keep 0 daily backups by default |
-| `backups.retention.weekly` | `0` | Keep 0 weekly backups by default |
-| `backups.retention.monthly` | `0` | Keep 0 monthly backups by default |
+| `backups.retention.hourly` | `0` | Keep no hourly backups by default |
+| `backups.retention.daily` | `0` | Keep no daily backups by default (recommend `7`) |
+| `backups.retention.weekly` | `0` | Keep no weekly backups by default |
+| `backups.retention.monthly` | `0` | Keep no monthly backups by default |
+
+Note: for all `backups.retention.*` keys, `0` means keep no backups for that retention tier.
 
 ## Environment Variables
 

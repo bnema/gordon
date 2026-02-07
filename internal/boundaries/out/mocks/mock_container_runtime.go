@@ -104,23 +104,23 @@ func (_c *MockContainerRuntime_ConnectContainerToNetwork_Call) RunAndReturn(run 
 }
 
 // CopyFromContainer provides a mock function for the type MockContainerRuntime
-func (_mock *MockContainerRuntime) CopyFromContainer(ctx context.Context, containerID string, srcPath string) ([]byte, error) {
+func (_mock *MockContainerRuntime) CopyFromContainer(ctx context.Context, containerID string, srcPath string) (io.ReadCloser, error) {
 	ret := _mock.Called(ctx, containerID, srcPath)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CopyFromContainer")
 	}
 
-	var r0 []byte
+	var r0 io.ReadCloser
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) ([]byte, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (io.ReadCloser, error)); ok {
 		return returnFunc(ctx, containerID, srcPath)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) []byte); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) io.ReadCloser); ok {
 		r0 = returnFunc(ctx, containerID, srcPath)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]byte)
+			r0 = ret.Get(0).(io.ReadCloser)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
@@ -167,12 +167,12 @@ func (_c *MockContainerRuntime_CopyFromContainer_Call) Run(run func(ctx context.
 	return _c
 }
 
-func (_c *MockContainerRuntime_CopyFromContainer_Call) Return(bytes []byte, err error) *MockContainerRuntime_CopyFromContainer_Call {
-	_c.Call.Return(bytes, err)
+func (_c *MockContainerRuntime_CopyFromContainer_Call) Return(readCloser io.ReadCloser, err error) *MockContainerRuntime_CopyFromContainer_Call {
+	_c.Call.Return(readCloser, err)
 	return _c
 }
 
-func (_c *MockContainerRuntime_CopyFromContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, srcPath string) ([]byte, error)) *MockContainerRuntime_CopyFromContainer_Call {
+func (_c *MockContainerRuntime_CopyFromContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, srcPath string) (io.ReadCloser, error)) *MockContainerRuntime_CopyFromContainer_Call {
 	_c.Call.Return(run)
 	return _c
 }

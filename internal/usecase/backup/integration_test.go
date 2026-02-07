@@ -42,7 +42,9 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 	networkName := fmt.Sprintf("gordon-backup-it-%s-%d", version, time.Now().UnixNano())
 	containerName := fmt.Sprintf("gordon-backup-it-%s-%d", version, time.Now().UnixNano())
 
-	require.NoError(t, runtime.PullImage(ctx, image))
+	pullCtx, cancelPull := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancelPull()
+	require.NoError(t, runtime.PullImage(pullCtx, image))
 	require.NoError(t, runtime.CreateNetwork(ctx, networkName, map[string]string{"driver": "bridge"}))
 	t.Cleanup(func() { _ = runtime.RemoveNetwork(context.Background(), networkName) })
 
@@ -90,6 +92,7 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 					ContainerID: container.ID,
 					Status:      container.Status,
 					Network:     networkName,
+					Ports:       []int{5432},
 				},
 			},
 		},
@@ -132,6 +135,12 @@ func requireDockerRuntime(t *testing.T) *docker.Runtime {
 func waitForPostgresReady(ctx context.Context, runtime *docker.Runtime, containerID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		res, err := runtime.ExecInContainer(ctx, containerID, []string{"pg_isready", "-U", "postgres", "-d", "appdb"})
 		if err == nil && res.ExitCode == 0 {
 			return nil
@@ -142,7 +151,7 @@ func waitForPostgresReady(ctx context.Context, runtime *docker.Runtime, containe
 }
 
 func seedPostgresData(ctx context.Context, runtime *docker.Runtime, containerID string) error {
-	cmd := `psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE TABLE IF NOT EXISTS backup_items (id serial primary key, name text); INSERT INTO backup_items(name) VALUES ('one'), ('two');"`
+	cmd := `psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1 || createdb -U "$POSTGRES_USER" "$POSTGRES_DB"; psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE TABLE IF NOT EXISTS backup_items (id serial primary key, name text); INSERT INTO backup_items(name) VALUES ('one'), ('two');"`
 	res, err := runtime.ExecInContainer(ctx, containerID, []string{"sh", "-c", cmd})
 	if err != nil {
 		return err

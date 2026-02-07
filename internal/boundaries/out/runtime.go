@@ -62,7 +62,7 @@ type ContainerRuntime interface {
 
 	// In-container operations
 	ExecInContainer(ctx context.Context, containerID string, cmd []string) (*ExecResult, error)
-	CopyFromContainer(ctx context.Context, containerID, srcPath string) ([]byte, error)
+	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error)
 
 	// Network management
 	CreateNetwork(ctx context.Context, name string, options map[string]string) error

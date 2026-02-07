@@ -1825,6 +1825,12 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
+	v.SetDefault("backups.enabled", false)
+	v.SetDefault("backups.storage_dir", "")
+	v.SetDefault("backups.retention.hourly", 0)
+	v.SetDefault("backups.retention.daily", 0)
+	v.SetDefault("backups.retention.weekly", 0)
+	v.SetDefault("backups.retention.monthly", 0)
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("deploy.readiness_delay", "5s")

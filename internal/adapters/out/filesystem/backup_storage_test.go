@@ -3,6 +3,7 @@ package filesystem
 import (
 	"bytes"
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -24,8 +25,7 @@ func TestBackupStorage_StoreAndGet(t *testing.T) {
 	require.NoError(t, err)
 	defer rc.Close()
 
-	data := make([]byte, len(payload))
-	_, err = rc.Read(data)
+	data, err := io.ReadAll(rc)
 	require.NoError(t, err)
 	assert.Equal(t, payload, data)
 }
@@ -83,4 +83,13 @@ func TestBackupStorage_ApplyRetention(t *testing.T) {
 	jobs, err := storage.List(context.Background(), "app.example.com", &schedule)
 	require.NoError(t, err)
 	assert.Len(t, jobs, 2)
+}
+
+func TestBackupStorage_StoreSanitizesDotOnlyPathComponents(t *testing.T) {
+	storage, err := NewBackupStorage(t.TempDir(), testLogger())
+	require.NoError(t, err)
+
+	path, err := storage.Store(context.Background(), "..", "...", domain.ScheduleDaily, time.Now().UTC(), bytes.NewReader([]byte("data")))
+	require.NoError(t, err)
+	assert.NotContains(t, path, "..")
 }

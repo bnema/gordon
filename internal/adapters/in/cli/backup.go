@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -14,8 +15,7 @@ func newBackupCmd() *cobra.Command {
 		Short: "Manage database backups",
 		Long: `Manage database backups through Gordon's admin API.
 
-These commands currently require remote mode with --remote/--token
-or configured remotes.`,
+These commands currently require remote mode with a configured target.`,
 	}
 
 	cmd.AddCommand(newBackupListCmd())
@@ -34,7 +34,7 @@ func newBackupListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				return fmt.Errorf("backup commands currently require --remote and --token")
+				return fmt.Errorf("backup commands require a configured remote target")
 			}
 
 			domainName := ""
@@ -51,9 +51,10 @@ func newBackupListCmd() *cobra.Command {
 				fmt.Println("No backups found")
 				return nil
 			}
+			fmt.Println("DOMAIN\tDB\tSTATUS\tSTARTED_AT\tFILE_PATH")
 
 			for _, job := range jobs {
-				fmt.Printf("%s\t%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, job.StartedAt.Format("2006-01-02T15:04:05Z"), job.FilePath)
+				fmt.Printf("%s\t%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt), job.FilePath)
 			}
 
 			return nil
@@ -71,7 +72,7 @@ func newBackupRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				return fmt.Errorf("backup commands currently require --remote and --token")
+				return fmt.Errorf("backup commands require a configured remote target")
 			}
 
 			result, err := client.RunBackup(context.Background(), args[0], dbName)
@@ -79,7 +80,8 @@ func newBackupRunCmd() *cobra.Command {
 				return fmt.Errorf("failed to run backup: %w", err)
 			}
 
-			fmt.Printf("Backup completed: domain=%s db=%s path=%s size=%d\n", result.Backup.Domain, result.Backup.DBName, result.Backup.FilePath, result.Backup.SizeBytes)
+			fmt.Println("DOMAIN\tDB\tSTATUS\tSTARTED_AT\tFILE_PATH\tSIZE_BYTES")
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%d\n", result.Backup.Domain, result.Backup.DBName, result.Backup.Status, formatBackupTime(result.Backup.StartedAt), result.Backup.FilePath, result.Backup.SizeBytes)
 			return nil
 		},
 	}
@@ -96,7 +98,7 @@ func newBackupDetectCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				return fmt.Errorf("backup commands currently require --remote and --token")
+				return fmt.Errorf("backup commands require a configured remote target")
 			}
 
 			dbs, err := client.DetectDatabases(context.Background(), args[0])
@@ -108,6 +110,7 @@ func newBackupDetectCmd() *cobra.Command {
 				fmt.Println("No supported databases detected")
 				return nil
 			}
+			fmt.Println("NAME\tTYPE\tHOST\tPORT\tIMAGE")
 
 			for _, db := range dbs {
 				fmt.Printf("%s\t%s\t%s\t%d\t%s\n", db.Name, db.Type, db.Host, db.Port, db.ImageName)
@@ -125,7 +128,7 @@ func newBackupStatusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
-				return fmt.Errorf("backup commands currently require --remote and --token")
+				return fmt.Errorf("backup commands require a configured remote target")
 			}
 
 			jobs, err := client.BackupStatus(context.Background())
@@ -137,12 +140,20 @@ func newBackupStatusCmd() *cobra.Command {
 				fmt.Println("No backup status available")
 				return nil
 			}
+			fmt.Println("DOMAIN\tDB\tSTATUS\tSTARTED_AT")
 
 			for _, job := range jobs {
-				fmt.Printf("%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, job.StartedAt.Format("2006-01-02T15:04:05Z"))
+				fmt.Printf("%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt))
 			}
 
 			return nil
 		},
 	}
+}
+
+func formatBackupTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
