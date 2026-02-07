@@ -74,6 +74,8 @@ dir = ""                                     # Env files directory (default: {da
 # =============================================================================
 [deploy]
 pull_policy = "if-tag-changed"               # "always", "if-tag-changed", "never"
+readiness_delay = "5s"                       # Wait after running before considered ready
+drain_delay = "2s"                           # Wait after cache invalidation before old stop
 
 # =============================================================================
 # AUTO-ROUTE
@@ -173,6 +175,7 @@ monthly = 0                                  # Keep N monthly backups per DB
 | `logging.container_logs.max_age` | `28` | 28 days |
 | `deploy.pull_policy` | `"if-tag-changed"` | Pull on tag change |
 | `deploy.readiness_delay` | `"5s"` | Delay before container is considered ready |
+| `deploy.drain_delay` | `"2s"` | Delay before stopping previous container after cache invalidation |
 | `auto_route.enabled` | `false` | Auto-route disabled |
 | `network_isolation.enabled` | `false` | Isolation disabled |
 | `network_isolation.network_prefix` | `"gordon"` | Network prefix |
