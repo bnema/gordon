@@ -570,6 +570,78 @@ func (_c *MockContainerRuntime_GetContainerExposedPorts_Call) RunAndReturn(run f
 	return _c
 }
 
+// GetContainerHealthStatus provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) GetContainerHealthStatus(ctx context.Context, containerID string) (string, bool, error) {
+	ret := _mock.Called(ctx, containerID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetContainerHealthStatus")
+	}
+
+	var r0 string
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (string, bool, error)); ok {
+		return returnFunc(ctx, containerID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) string); ok {
+		r0 = returnFunc(ctx, containerID)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) bool); ok {
+		r1 = returnFunc(ctx, containerID)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, containerID)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockContainerRuntime_GetContainerHealthStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetContainerHealthStatus'
+type MockContainerRuntime_GetContainerHealthStatus_Call struct {
+	*mock.Call
+}
+
+// GetContainerHealthStatus is a helper method to define mock.On call
+//   - ctx context.Context
+//   - containerID string
+func (_e *MockContainerRuntime_Expecter) GetContainerHealthStatus(ctx interface{}, containerID interface{}) *MockContainerRuntime_GetContainerHealthStatus_Call {
+	return &MockContainerRuntime_GetContainerHealthStatus_Call{Call: _e.mock.On("GetContainerHealthStatus", ctx, containerID)}
+}
+
+func (_c *MockContainerRuntime_GetContainerHealthStatus_Call) Run(run func(ctx context.Context, containerID string)) *MockContainerRuntime_GetContainerHealthStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetContainerHealthStatus_Call) Return(status string, hasHealthcheck bool, err error) *MockContainerRuntime_GetContainerHealthStatus_Call {
+	_c.Call.Return(status, hasHealthcheck, err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetContainerHealthStatus_Call) RunAndReturn(run func(ctx context.Context, containerID string) (string, bool, error)) *MockContainerRuntime_GetContainerHealthStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetContainerLogs provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) GetContainerLogs(ctx context.Context, containerID string, follow bool) (io.ReadCloser, error) {
 	ret := _mock.Called(ctx, containerID, follow)
