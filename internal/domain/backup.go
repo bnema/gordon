@@ -47,7 +47,21 @@ type DBInfo struct {
 	Port        int
 	ContainerID string
 	ImageName   string
+	// Credentials contains sensitive values (passwords/tokens).
+	// Never log or expose this map in API responses.
 	Credentials map[string]string
+}
+
+// ClearCredentials clears sensitive credential values from DBInfo.
+func (d *DBInfo) ClearCredentials() {
+	if d == nil || d.Credentials == nil {
+		return
+	}
+	for k := range d.Credentials {
+		d.Credentials[k] = ""
+		delete(d.Credentials, k)
+	}
+	d.Credentials = nil
 }
 
 // BackupJob represents a scheduled or manual backup operation.

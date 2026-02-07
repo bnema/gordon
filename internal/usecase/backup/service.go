@@ -3,8 +3,13 @@ package backup
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -13,6 +18,8 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+const backupExecTimeout = 30 * time.Minute
 
 // Service orchestrates backup operations.
 type Service struct {
@@ -75,8 +82,14 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 		return nil, fmt.Errorf("unsupported database type: %s", db.Type)
 	}
 
-	execResult, err := s.runtime.ExecInContainer(ctx, db.ContainerID, []string{"sh", "-c", postgresDumpCommand()})
+	execCtx, cancelExec := context.WithTimeout(ctx, backupExecTimeout)
+	defer cancelExec()
+
+	execResult, err := s.runtime.ExecInContainer(execCtx, db.ContainerID, []string{"sh", "-c", postgresDumpCommand()})
 	if err != nil {
+		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("pg_dump timed out after %s", backupExecTimeout)
+		}
 		return nil, err
 	}
 	if execResult.ExitCode != 0 {
@@ -89,7 +102,7 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 	}
 
 	job := domain.BackupJob{
-		ID:          started.Format(time.RFC3339Nano),
+		ID:          newBackupJobID(started),
 		Domain:      domainName,
 		DBName:      db.Name,
 		Type:        domain.BackupTypeLogical,
@@ -119,15 +132,64 @@ func (s *Service) RestorePITR(context.Context, string, time.Time) error {
 // Status returns aggregate backup status for all managed domains.
 func (s *Service) Status(ctx context.Context) ([]domain.BackupJob, error) {
 	routes := s.containerSvc.List(ctx)
-	jobs := make([]domain.BackupJob, 0)
+	domainNames := make([]string, 0, len(routes))
 	for domainName := range routes {
-		domainJobs, err := s.ListBackups(ctx, domainName)
-		if err != nil {
-			return nil, err
+		domainNames = append(domainNames, domainName)
+	}
+	sort.Strings(domainNames)
+
+	const maxWorkers = 4
+	sem := make(chan struct{}, maxWorkers)
+	results := make([][]domain.BackupJob, len(domainNames))
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+
+	for i, domainName := range domainNames {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
 		}
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, name string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			domainJobs, err := s.ListBackups(ctx, name)
+			if err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+			results[idx] = domainJobs
+		}(i, domainName)
+	}
+
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
+
+	jobs := make([]domain.BackupJob, 0)
+	for _, domainJobs := range results {
 		jobs = append(jobs, domainJobs...)
 	}
+
 	return jobs, nil
+}
+
+func newBackupJobID(started time.Time) string {
+	random := make([]byte, 4)
+	if _, err := rand.Read(random); err != nil {
+		return fmt.Sprintf("%s-%d", started.Format(time.RFC3339Nano), time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s-%s", started.Format(time.RFC3339Nano), hex.EncodeToString(random))
 }
 
 func selectDatabase(dbs []domain.DBInfo, requested string) (domain.DBInfo, error) {
