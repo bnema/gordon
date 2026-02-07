@@ -160,6 +160,44 @@ func TestValidateExternalRouteTarget(t *testing.T) {
 	}
 }
 
+func TestResolveAndValidateHost_IPAddresses(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    string
+		wantIP  string
+		wantErr bool
+	}{
+		{"public IP returned as-is", "203.0.113.1", "203.0.113.1", false},
+		{"blocked loopback IP", "127.0.0.1", "", true},
+		{"blocked private IP", "10.0.0.1", "", true},
+		{"blocked metadata IP", "169.254.169.254", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip, err := ResolveAndValidateHost(tt.host)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.True(t, errors.Is(err, domain.ErrSSRFBlocked))
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.wantIP, ip)
+			}
+		})
+	}
+}
+
+func TestResolveAndValidateHost_Hostname(t *testing.T) {
+	// localhost should resolve to a blocked IP
+	_, err := ResolveAndValidateHost("localhost")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrSSRFBlocked))
+
+	// Non-existent domain should error
+	_, err = ResolveAndValidateHost("this-domain-definitely-does-not-exist-12345.invalid")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrSSRFBlocked))
+}
+
 func TestIsBlockedIP(t *testing.T) {
 	tests := []struct {
 		ip      string

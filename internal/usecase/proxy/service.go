@@ -3,7 +3,9 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -12,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -37,9 +40,11 @@ var proxyTransport = &http.Transport{
 
 // Config holds configuration needed by the proxy service.
 type Config struct {
-	RegistryDomain string
-	RegistryPort   int
-	MaxBodySize    int64 // Maximum request body size in bytes (0 = no limit)
+	RegistryDomain     string
+	RegistryPort       int
+	MaxBodySize        int64 // Maximum request body size in bytes (0 = no limit)
+	MaxResponseSize    int64 // Maximum response body size in bytes (0 = no limit)
+	MaxConcurrentConns int   // Maximum concurrent proxy connections (0 = no limit)
 }
 
 // Service implements the ProxyService interface.
@@ -50,6 +55,7 @@ type Service struct {
 	config       Config
 	targets      map[string]*domain.ProxyTarget
 	mu           sync.RWMutex
+	activeConns  atomic.Int64 // Atomic counter for concurrent connection limiting
 }
 
 // NewService creates a new proxy service.
@@ -74,6 +80,19 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
+
+	// SECURITY: Limit concurrent connections to prevent resource exhaustion.
+	// Uses an atomic counter so config reloads don't create a race between
+	// an old and new semaphore — the counter is shared across reloads.
+	if cfg.MaxConcurrentConns > 0 {
+		current := s.activeConns.Add(1)
+		if current > int64(cfg.MaxConcurrentConns) {
+			s.activeConns.Add(-1)
+			proxyError(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		defer s.activeConns.Add(-1)
+	}
 
 	// SECURITY: Limit request body size to prevent resource exhaustion.
 	if cfg.MaxBodySize > 0 {
@@ -104,7 +123,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target, err := s.GetTarget(ctx, r.Host)
 	if err != nil {
 		log.Warn().Err(err).Msg("no route found for domain")
-		http.NotFound(w, r)
+		proxyError(w, "404 page not found", http.StatusNotFound)
 		return
 	}
 
@@ -151,8 +170,12 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 			return nil, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
 		}
 
-		// SECURITY: Validate target is not an internal/blocked network (SSRF protection)
-		if err := ValidateExternalRouteTarget(host); err != nil {
+		// SECURITY: Resolve DNS and validate that the target is not an internal/blocked
+		// network. We use the resolved IP as the proxy target to prevent DNS rebinding
+		// (TOCTOU) attacks where a hostname resolves to a public IP during validation
+		// but to a private IP when the proxy connects.
+		resolvedIP, err := ResolveAndValidateHost(host)
+		if err != nil {
 			log.Warn().
 				Err(err).
 				Str("host", host).
@@ -161,11 +184,19 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 			return nil, err
 		}
 
+		// Preserve the original hostname for the Host header so virtual-hosted
+		// upstreams work correctly. The resolved IP is used for dialing only.
+		var originalHost string
+		if resolvedIP != host {
+			originalHost = host
+		}
+
 		target := &domain.ProxyTarget{
-			Host:        host,
-			Port:        port,
-			ContainerID: "", // Not a container
-			Scheme:      "http",
+			Host:         resolvedIP,
+			Port:         port,
+			ContainerID:  "", // Not a container
+			Scheme:       "http",
+			OriginalHost: originalHost,
 		}
 
 		// Cache external route target
@@ -285,10 +316,80 @@ func (s *Service) RefreshTargets(ctx context.Context) error {
 }
 
 // UpdateConfig updates the service configuration.
+// Connection limiting uses an atomic counter checked against config, so
+// changing MaxConcurrentConns takes effect immediately without any race.
 func (s *Service) UpdateConfig(config Config) {
 	s.mu.Lock()
 	s.config = config
 	s.mu.Unlock()
+}
+
+// modifyResponse returns a function that modifies backend responses.
+// It adds proxy headers and enforces the response size limit if configured.
+func (s *Service) modifyResponse(cfg Config) func(*http.Response) error {
+	return func(resp *http.Response) error {
+		resp.Header.Set("X-Proxied-By", "Gordon")
+
+		// SECURITY: Enforce response size limit to prevent memory exhaustion
+		// from malicious or buggy backends streaming unbounded data.
+		if cfg.MaxResponseSize > 0 {
+			if resp.ContentLength > cfg.MaxResponseSize {
+				resp.Body.Close()
+				const msg = "Response Too Large"
+				resp.StatusCode = http.StatusBadGateway
+				resp.Body = io.NopCloser(strings.NewReader(msg))
+				resp.ContentLength = int64(len(msg))
+				resp.Header.Set("Content-Type", "text/plain")
+				resp.Header.Set("Cache-Control", "no-store")
+				resp.Header.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+				// Ensure framing/encoding headers match the substituted body
+				resp.Header.Del("Transfer-Encoding")
+				resp.Header.Del("Content-Encoding")
+				resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
+				return nil
+			}
+			// For chunked/streaming responses where Content-Length is unknown,
+			// wrap with LimitReader to enforce the cap.
+			if resp.ContentLength < 0 {
+				resp.Body = &limitedReadCloser{
+					ReadCloser: resp.Body,
+					remaining:  cfg.MaxResponseSize,
+				}
+			}
+		}
+
+		return nil
+	}
+}
+
+// limitedReadCloser wraps an io.ReadCloser with a byte limit.
+// When the limit is exceeded, subsequent reads return an error.
+type limitedReadCloser struct {
+	io.ReadCloser
+	remaining int64
+}
+
+func (l *limitedReadCloser) Read(p []byte) (int, error) {
+	if l.remaining <= 0 {
+		// Close the underlying body to release upstream connection/resources
+		l.Close()
+		return 0, fmt.Errorf("response body exceeded maximum size limit")
+	}
+	if int64(len(p)) > l.remaining {
+		p = p[:l.remaining]
+	}
+	n, err := l.ReadCloser.Read(p)
+	l.remaining -= int64(n)
+	return n, err
+}
+
+// proxyError writes an error response with security headers appropriate for
+// proxy-generated error pages. CSP is set here (not in global middleware)
+// because Gordon proxies arbitrary web apps and a blanket CSP would break them.
+func proxyError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	w.Header().Set("Cache-Control", "no-store")
+	http.Error(w, msg, code)
 }
 
 // Helper methods
@@ -297,7 +398,11 @@ func (s *Service) UpdateConfig(config Config) {
 // hop-by-hop header attacks. A malicious client could send "Connection: Authorization"
 // to strip the Authorization header when using the default Director. Rewrite processes
 // headers after hop-by-hop removal, ensuring headers like Authorization are preserved.
-func newReverseProxy(targetURL *url.URL, errorHandler func(http.ResponseWriter, *http.Request, error), modifyResponse func(*http.Response) error) *httputil.ReverseProxy {
+//
+// originalHost, when non-empty, overrides the Host header sent to the backend.
+// This is used for DNS-pinned targets where the proxy dials an IP but needs to
+// send the original hostname for virtual-hosted upstreams.
+func newReverseProxy(targetURL *url.URL, originalHost string, errorHandler func(http.ResponseWriter, *http.Request, error), modifyResponse func(*http.Response) error) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(targetURL)
@@ -307,7 +412,13 @@ func newReverseProxy(targetURL *url.URL, errorHandler func(http.ResponseWriter, 
 			// proxy. An attacker could spoof X-Forwarded-Proto: https on an HTTP connection
 			// to trick backends into thinking the connection is secure.
 			pr.SetXForwarded()
-			pr.Out.Host = targetURL.Host
+			if originalHost != "" {
+				// DNS pinning: dial the resolved IP but send the original hostname
+				// so virtual-hosted upstreams route the request correctly.
+				pr.Out.Host = net.JoinHostPort(originalHost, targetURL.Port())
+			} else {
+				pr.Out.Host = targetURL.Host
+			}
 		},
 		Transport:      proxyTransport,
 		ErrorHandler:   errorHandler,
@@ -316,32 +427,38 @@ func newReverseProxy(targetURL *url.URL, errorHandler func(http.ResponseWriter, 
 }
 
 func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *domain.ProxyTarget) {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	log := zerowrap.FromCtx(r.Context())
 
-	targetURL, err := url.Parse(fmt.Sprintf("%s://%s:%d", target.Scheme, target.Host, target.Port))
+	// Use net.JoinHostPort for IPv6-safe URL construction (brackets are added automatically)
+	targetURL, err := url.Parse(fmt.Sprintf("%s://%s", target.Scheme, net.JoinHostPort(target.Host, strconv.Itoa(target.Port))))
 	if err != nil {
 		log.WrapErr(err, "failed to parse target URL")
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		proxyError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
 	log.Debug().Str("target_url", targetURL.String()).Msg("proxying to target")
 
-	proxy := newReverseProxy(targetURL,
+	// If DNS pinning resolved hostname to IP, preserve the original hostname
+	// for the Host header so virtual-hosted upstreams work correctly.
+	originalHost := target.OriginalHost
+
+	proxy := newReverseProxy(targetURL, originalHost,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
-			// Check if this is a MaxBytesError (request body too large)
-			if err.Error() == "http: request body too large" {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
 				log.Warn().Err(err).Str("target", targetURL.String()).Msg("proxy error: request body too large")
-				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+				proxyError(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
 				return
 			}
 			log.Error().Err(err).Str("target", targetURL.String()).Msg("proxy error: connection failed")
-			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			proxyError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		},
-		func(resp *http.Response) error {
-			resp.Header.Set("X-Proxied-By", "Gordon")
-			return nil
-		},
+		s.modifyResponse(cfg),
 	)
 
 	log.Debug().
@@ -352,6 +469,11 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 	proxy.ServeHTTP(w, r)
 }
 
+// proxyToRegistry forwards requests to the local registry HTTP server.
+// SECURITY: This uses http://localhost:{port} which is safe because the registry
+// runs on the same host and traffic never leaves the loopback interface. If Gordon
+// ever supports running the registry on a separate host, this must use TLS with
+// certificate verification.
 func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 	// Copy config under RLock to avoid data race with UpdateConfig
 	s.mu.RLock()
@@ -363,20 +485,20 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 	targetURL, err := url.Parse(fmt.Sprintf("http://localhost:%d", cfg.RegistryPort))
 	if err != nil {
 		log.WrapErr(err, "failed to parse registry target URL")
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		proxyError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	proxy := newReverseProxy(targetURL,
+	proxy := newReverseProxy(targetURL, "",
 		func(w http.ResponseWriter, _ *http.Request, err error) {
-			// Check if this is a MaxBytesError (request body too large)
-			if err.Error() == "http: request body too large" {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
 				log.Warn().Err(err).Int("registry_port", cfg.RegistryPort).Msg("registry proxy error: request body too large")
-				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+				proxyError(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
 				return
 			}
 			log.Error().Err(err).Int("registry_port", cfg.RegistryPort).Msg("registry proxy error")
-			http.Error(w, "Registry Unavailable", http.StatusServiceUnavailable)
+			proxyError(w, "Registry Unavailable", http.StatusServiceUnavailable)
 		},
 		func(resp *http.Response) error {
 			resp.Header.Set("X-Proxied-By", "Gordon")
@@ -390,6 +512,8 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 			resp.Header.Del("X-XSS-Protection")
 			resp.Header.Del("Referrer-Policy")
 			resp.Header.Del("Permissions-Policy")
+			resp.Header.Del("Content-Security-Policy")
+			resp.Header.Del("Strict-Transport-Security")
 
 			return nil
 		},
