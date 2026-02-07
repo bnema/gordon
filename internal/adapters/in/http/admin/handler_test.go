@@ -1189,7 +1189,7 @@ func TestHandler_BackupsStatus(t *testing.T) {
 	secretSvc := inmocks.NewMockSecretService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
-	backupSvc.EXPECT().Status(mock.Anything).Return([]domain.BackupJob{{Domain: "app.example.com", DBName: "postgres", Status: domain.BackupStatusCompleted}}, nil)
+	backupSvc.EXPECT().Status(mock.Anything).Return([]domain.BackupJob{{Domain: "app.example.com", DBName: "postgres", Status: domain.BackupStatusCompleted, FilePath: "/var/lib/gordon/backups/private.bak"}}, nil)
 
 	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), backupSvc)
 
@@ -1201,6 +1201,7 @@ func TestHandler_BackupsStatus(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "app.example.com")
+	assert.NotContains(t, rec.Body.String(), "file_path")
 }
 
 func TestHandler_BackupsListDomain(t *testing.T) {

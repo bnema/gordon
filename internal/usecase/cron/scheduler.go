@@ -227,7 +227,12 @@ func (s *Scheduler) executeEntry(ctx context.Context, e *entry) error {
 		jobErr = e.job(ctx)
 	}()
 
-	nextRun, nextErr := calculateNextRun(now, e.schedule)
+	completedAt := s.nowFn()
+	if completedAt.Before(now) {
+		completedAt = now
+	}
+
+	nextRun, nextErr := calculateNextRun(completedAt, e.schedule)
 	if nextErr != nil {
 		if jobErr != nil {
 			return fmt.Errorf("job failed: %w; also failed to calculate next run: %v", jobErr, nextErr)
