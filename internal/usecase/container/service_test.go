@@ -29,6 +29,7 @@ func TestService_Deploy_Success(t *testing.T) {
 		NetworkIsolation: false,
 		VolumeAutoCreate: false,
 		ReadinessDelay:   time.Millisecond, // Minimal delay for tests
+		DrainDelay:       time.Millisecond,
 	}
 
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
@@ -105,6 +106,7 @@ func TestService_Deploy_ReadinessRecoveryWindow_AllowsTransientFlap(t *testing.T
 		NetworkIsolation: false,
 		VolumeAutoCreate: false,
 		ReadinessDelay:   time.Millisecond,
+		DrainDelay:       time.Millisecond,
 	}
 
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
@@ -243,11 +245,14 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
 		ReadinessDelay: time.Millisecond, // Minimal delay for tests
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
 	// Pre-populate with existing container
@@ -294,7 +299,10 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	// Publish event
 	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
 
-	// Now cleanup old container (after new one is ready)
+	// Synchronous cache invalidation before old container cleanup
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Return()
+
+	// Now cleanup old container (after new one is ready + cache invalidated + drain delay)
 	runtime.EXPECT().StopContainer(mock.Anything, "old-container").Return(nil)
 	runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil)
 
@@ -321,6 +329,7 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 		NetworkIsolation: true,
 		NetworkPrefix:    "gordon",
 		ReadinessDelay:   time.Millisecond, // Minimal delay for tests
+		DrainDelay:       time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -372,6 +381,7 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 		VolumeAutoCreate: true,
 		VolumePrefix:     "gordon",
 		ReadinessDelay:   time.Millisecond, // Minimal delay for tests
+		DrainDelay:       time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -1107,6 +1117,7 @@ func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 		InternalRegistryUsername: "internal",
 		InternalRegistryPassword: "secret",
 		ReadinessDelay:           time.Millisecond,
+		DrainDelay:               time.Millisecond,
 	}
 
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
@@ -1175,6 +1186,7 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 
 	config := Config{
 		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -1218,6 +1230,7 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 
 	config := Config{
 		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -1288,6 +1301,7 @@ func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
 		RegistryDomain: "reg.example.com",
 		RegistryPort:   5000,
 		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 
@@ -1329,11 +1343,14 @@ func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
 		ReadinessDelay: time.Millisecond, // Minimal delay for tests
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
 	// Pre-populate with existing tracked container
@@ -1388,6 +1405,9 @@ func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 	// Publish event
 	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
 
+	// Synchronous cache invalidation
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Return()
+
 	// NOW (after new container is ready) the old container should be stopped and removed
 	// This is the correct zero-downtime sequence - not during orphan cleanup
 	runtime.EXPECT().StopContainer(mock.Anything, "tracked-container-123").Return(nil)
@@ -1416,6 +1436,7 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 
 	config := Config{
 		ReadinessDelay: time.Millisecond, // Minimal delay for tests
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -1485,11 +1506,14 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
 		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
 	// Tracked canonical container exists, but stale -new container should be removed.
@@ -1537,6 +1561,9 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 	}, nil)
 	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
 
+	// Synchronous cache invalidation
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Return()
+
 	runtime.EXPECT().StopContainer(mock.Anything, "tracked-container-123").Return(nil)
 	runtime.EXPECT().RemoveContainer(mock.Anything, "tracked-container-123", true).Return(nil)
 	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
@@ -1551,11 +1578,14 @@ func TestService_Deploy_TrackedTempContainerUsesAlternateTempName(t *testing.T) 
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
 		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
 	// Simulate an interrupted zero-downtime deploy that left "-new" as the tracked container name.
@@ -1595,6 +1625,9 @@ func TestService_Deploy_TrackedTempContainerUsesAlternateTempName(t *testing.T) 
 		Status: "running",
 	}, nil)
 	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// Synchronous cache invalidation
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Return()
 
 	runtime.EXPECT().StopContainer(mock.Anything, "tracked-temp-container").Return(nil)
 	runtime.EXPECT().RemoveContainer(mock.Anything, "tracked-temp-container", true).Return(nil)
@@ -1734,11 +1767,14 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
 		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -1800,7 +1836,9 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 
 	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.Anything).Return(nil).Times(2)
 
-	// The second deploy will see the first container and do zero-downtime swap,
+	// Both deploys call InvalidateTarget (to ensure proxy picks up the new container).
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Return().Times(2)
+
 	// which means it will also stop+remove+rename the old container.
 	runtime.EXPECT().StopContainer(mock.Anything, mock.AnythingOfType("string")).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, mock.AnythingOfType("string"), true).Return(nil).Once()
@@ -1840,6 +1878,7 @@ func TestService_Deploy_ContextCancellation(t *testing.T) {
 
 	config := Config{
 		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 
@@ -1855,4 +1894,136 @@ func TestService_Deploy_ContextCancellation(t *testing.T) {
 	_, err := svc.Deploy(cancelledCtx, route)
 	assert.Error(t, err, "deploy should fail with cancelled context")
 	assert.ErrorIs(t, err, context.Canceled, "error should be context.Canceled")
+}
+
+// TestService_Deploy_CacheInvalidationBeforeOldContainerStop verifies the fix for
+// the proxy cache race condition: InvalidateTarget must be called synchronously
+// BEFORE the old container is stopped, preventing 503 errors during deployment.
+func TestService_Deploy_CacheInvalidationBeforeOldContainerStop(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
+	ctx := testContext()
+
+	// Pre-populate with existing container
+	existingContainer := &domain.Container{
+		ID:     "old-container",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:v2",
+	}
+
+	// Track ordering of cache invalidation and container stop
+	var callOrder []string
+	var orderMu sync.Mutex
+
+	// Standard deploy mocks
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:v2"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
+
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID: "new-container", Status: "running",
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// Track: cache invalidation should happen first
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").
+		Run(func(_ context.Context, _ string) {
+			orderMu.Lock()
+			callOrder = append(callOrder, "invalidate_cache")
+			orderMu.Unlock()
+		}).Return()
+
+	// Track: stop should happen after invalidation
+	runtime.EXPECT().StopContainer(mock.Anything, "old-container").
+		RunAndReturn(func(_ context.Context, _ string) error {
+			orderMu.Lock()
+			callOrder = append(callOrder, "stop_old_container")
+			orderMu.Unlock()
+			return nil
+		})
+	runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil)
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
+
+	// Verify ordering: cache invalidation MUST happen before old container stop
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	assert.Equal(t, []string{"invalidate_cache", "stop_old_container"}, callOrder,
+		"InvalidateTarget must be called before StopContainer to prevent 503 errors")
+}
+
+// TestService_Deploy_NilCacheInvalidator verifies that deploy works gracefully
+// when no cache invalidator is set (e.g., in tests or minimal configurations).
+func TestService_Deploy_NilCacheInvalidator(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
+	}
+	// Intentionally NOT setting cache invalidator
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// Pre-populate with existing container
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "old-container",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:v2",
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:v2"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
+
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID: "new-container", Status: "running",
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+	runtime.EXPECT().StopContainer(mock.Anything, "old-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil)
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
 }

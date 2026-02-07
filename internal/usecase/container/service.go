@@ -36,6 +36,7 @@ type Config struct {
 	NetworkGroups            map[string][]string
 	Attachments              map[string][]string
 	ReadinessDelay           time.Duration // Delay after container starts before considering it ready
+	DrainDelay               time.Duration // Grace period after cache invalidation before stopping old container
 }
 
 const (
@@ -52,15 +53,16 @@ const (
 
 // Service implements the ContainerService interface.
 type Service struct {
-	runtime     out.ContainerRuntime
-	envLoader   out.EnvLoader
-	eventBus    out.EventPublisher
-	logWriter   out.ContainerLogWriter
-	config      Config
-	containers  map[string]*domain.Container
-	attachments map[string][]string // ownerDomain → []containerIDs
-	mu          sync.RWMutex
-	deployMu    sync.Map // per-domain deploy locks (domain → *domainDeployLock)
+	runtime          out.ContainerRuntime
+	envLoader        out.EnvLoader
+	eventBus         out.EventPublisher
+	logWriter        out.ContainerLogWriter
+	cacheInvalidator out.ProxyCacheInvalidator
+	config           Config
+	containers       map[string]*domain.Container
+	attachments      map[string][]string // ownerDomain → []containerIDs
+	mu               sync.RWMutex
+	deployMu         sync.Map // per-domain deploy locks (domain → *domainDeployLock)
 }
 
 // domainDeployLock is a context-aware mutex using a buffered channel.
@@ -124,6 +126,16 @@ func NewService(
 		containers:  make(map[string]*domain.Container),
 		attachments: make(map[string][]string),
 	}
+}
+
+// SetProxyCacheInvalidator sets the proxy cache invalidator for synchronous
+// cache invalidation during zero-downtime deployments. This must be called
+// after construction because the proxy service is created after the container
+// service during application initialization.
+func (s *Service) SetProxyCacheInvalidator(inv out.ProxyCacheInvalidator) {
+	s.mu.Lock()
+	s.cacheInvalidator = inv
+	s.mu.Unlock()
 }
 
 // domainDeployMu returns a per-domain lock for serializing deploy operations.
@@ -289,10 +301,32 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	s.containers[route.Domain] = newContainer
 	s.mu.Unlock()
 
-	// Publish container deployed event (proxy will invalidate cache)
+	// Publish container deployed event (other subscribers)
 	s.publishContainerDeployed(ctx, route.Domain, newContainer.ID)
 
-	// NOW stop and remove old container (traffic already going to new one)
+	// Synchronous cache invalidation: ensure the proxy stops routing to the
+	// old container immediately, before we stop it. This fixes the race where
+	// the async event bus invalidation arrives after the old container is killed.
+	s.mu.RLock()
+	inv := s.cacheInvalidator
+	s.mu.RUnlock()
+	if inv != nil {
+		inv.InvalidateTarget(ctx, route.Domain)
+	}
+
+	// Grace period: let in-flight requests to the old container finish draining.
+	if hasExisting {
+		drainDelay := s.config.DrainDelay
+		if drainDelay == 0 {
+			drainDelay = 2 * time.Second
+		}
+		select {
+		case <-time.After(drainDelay):
+		case <-ctx.Done():
+		}
+	}
+
+	// NOW safe to stop and remove old container
 	if hasExisting {
 		s.cleanupOldContainer(ctx, existing, newContainer.ID, route.Domain)
 	}
