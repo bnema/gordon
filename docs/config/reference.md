@@ -11,6 +11,10 @@ Complete configuration reference with all options and their default values.
 [server]
 port = 80                                    # HTTP proxy port
 registry_port = 5000                         # Container registry port
+tls_enabled = false                          # Enable native HTTPS listener
+tls_port = 443                               # HTTPS proxy port when enabled
+tls_cert_file = ""                           # PEM cert path (auto-generated if empty and TLS enabled)
+tls_key_file = ""                            # PEM key path (auto-generated if empty and TLS enabled)
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
 max_blob_chunk_size = "512MB"                # Max size per registry blob upload chunk
@@ -124,6 +128,10 @@ preserve = true                              # Keep volumes when containers are 
 |---------|---------|-------------|
 | `server.port` | `80` | HTTP proxy port |
 | `server.registry_port` | `5000` | Container registry port |
+| `server.tls_enabled` | `false` | Enable native HTTPS listener |
+| `server.tls_port` | `443` | HTTPS listener port |
+| `server.tls_cert_file` | `""` | TLS cert path (auto-generated when empty) |
+| `server.tls_key_file` | `""` | TLS key path (auto-generated when empty) |
 | `server.gordon_domain` | `""` | **Required** - Gordon domain |
 | `server.data_dir` | `~/.gordon` | Data directory |
 | `server.max_blob_chunk_size` | `"512MB"` | Max size per registry blob upload chunk |
