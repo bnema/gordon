@@ -199,3 +199,29 @@ func TestSchedulerRunNowComputesNextRunFromJobFinishTime(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, time.Date(2026, 2, 7, 14, 0, 0, 0, time.UTC), entries[0].NextRun)
 }
+
+func TestSchedulerStartNoOpWhenContextAlreadyCanceled(t *testing.T) {
+	s := NewScheduler(zerowrap.Default())
+	now := time.Date(2026, 2, 7, 12, 0, 0, 0, time.UTC)
+	s.nowFn = func() time.Time { return now }
+
+	runs := 0
+	err := s.Add("canceled-job", "canceled job", domain.CronSchedule{Preset: domain.ScheduleDaily}, func(context.Context) error {
+		runs++
+		return nil
+	})
+	require.NoError(t, err)
+
+	s.mu.Lock()
+	s.entries["canceled-job"].nextRun = now.Add(-time.Minute)
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	s.Start(ctx)
+	time.Sleep(50 * time.Millisecond)
+
+	assert.Equal(t, 0, runs)
+	assert.False(t, s.started.Load())
+}

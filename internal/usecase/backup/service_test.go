@@ -84,6 +84,31 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 	assert.Equal(t, int64(len("backup-data")), result.Job.SizeBytes)
 }
 
+func TestService_RunBackup_CleansUpDumpWhenPgDumpFails(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	storage := outmocks.NewMockBackupStorage(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+
+	containerSvc.EXPECT().ListAttachments(mock.Anything, "app.example.com").Return([]domain.Attachment{
+		{Name: "postgres", Image: "postgres:17", ContainerID: "db123", Status: "running"},
+	})
+
+	runtime.EXPECT().ExecInContainer(mock.Anything, "db123", mock.MatchedBy(func(cmd []string) bool {
+		return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c" && bytes.Contains([]byte(cmd[2]), []byte("pg_dump -Fc"))
+	})).Return(&outiface.ExecResult{ExitCode: 2, Stderr: []byte("dump failed")}, nil)
+
+	runtime.EXPECT().ExecInContainer(mock.Anything, "db123", mock.MatchedBy(func(cmd []string) bool {
+		return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c" && bytes.Contains([]byte(cmd[2]), []byte("rm -f"))
+	})).Return(&outiface.ExecResult{ExitCode: 0}, nil)
+
+	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{}, zerowrap.Default())
+
+	result, err := svc.RunBackup(context.Background(), "app.example.com", "postgres")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "pg_dump failed")
+}
+
 func TestSelectDatabaseRequiresExplicitNameWhenMultipleDetected(t *testing.T) {
 	db, err := selectDatabase([]domain.DBInfo{
 		{Name: "postgres"},
