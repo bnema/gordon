@@ -18,6 +18,7 @@ tls_key_file = ""                            # PEM key path (auto-generated if e
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
 max_blob_chunk_size = "512MB"                # Max size per registry blob upload chunk
+registry_allowed_ips = []                    # IPs or CIDR ranges allowed to access the registry (empty = allow all)
 
 # =============================================================================
 # AUTHENTICATION (required - Gordon won't start without credentials configured)
@@ -135,6 +136,7 @@ preserve = true                              # Keep volumes when containers are 
 | `server.gordon_domain` | `""` | **Required** - Gordon domain |
 | `server.data_dir` | `~/.gordon` | Data directory |
 | `server.max_blob_chunk_size` | `"512MB"` | Max size per registry blob upload chunk |
+| `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `auth.enabled` | `true` | Enable authentication |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |
