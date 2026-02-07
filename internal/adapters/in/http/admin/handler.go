@@ -104,7 +104,6 @@ func toBackupJobResponse(job domain.BackupJob) dto.BackupJob {
 		StartedAt:   startedAt,
 		CompletedAt: completedAt,
 		SizeBytes:   job.SizeBytes,
-		FilePath:    job.FilePath,
 		Error:       job.Error,
 	}
 }

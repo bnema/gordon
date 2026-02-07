@@ -180,3 +180,22 @@ func TestSchedulerStartNoOpWhenStopped(t *testing.T) {
 	assert.Equal(t, 0, runs)
 	assert.False(t, s.started.Load())
 }
+
+func TestSchedulerRunNowComputesNextRunFromJobFinishTime(t *testing.T) {
+	s := NewScheduler(zerowrap.Default())
+	current := time.Date(2026, 2, 7, 12, 59, 0, 0, time.UTC)
+	s.nowFn = func() time.Time { return current }
+
+	err := s.Add("backup-hourly", "hourly backup", domain.CronSchedule{Preset: domain.ScheduleHourly}, func(context.Context) error {
+		current = time.Date(2026, 2, 7, 13, 1, 0, 0, time.UTC)
+		return nil
+	})
+	require.NoError(t, err)
+
+	err = s.RunNow(context.Background(), "backup-hourly")
+	require.NoError(t, err)
+
+	entries := s.List()
+	require.Len(t, entries, 1)
+	assert.Equal(t, time.Date(2026, 2, 7, 14, 0, 0, 0, time.UTC), entries[0].NextRun)
+}

@@ -53,12 +53,12 @@ func newBackupListCmd() *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tFILE_PATH"); err != nil {
+			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tBACKUP_ID"); err != nil {
 				return err
 			}
 
 			for _, job := range jobs {
-				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt), job.FilePath); err != nil {
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt), job.ID); err != nil {
 					return err
 				}
 			}
@@ -94,10 +94,10 @@ func newBackupRunCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tFILE_PATH\tSIZE_BYTES"); err != nil {
+			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tBACKUP_ID\tSIZE_BYTES"); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\n", result.Backup.Domain, result.Backup.DBName, result.Backup.Status, formatBackupTime(result.Backup.StartedAt), result.Backup.FilePath, result.Backup.SizeBytes); err != nil {
+			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\n", result.Backup.Domain, result.Backup.DBName, result.Backup.Status, formatBackupTime(result.Backup.StartedAt), result.Backup.ID, result.Backup.SizeBytes); err != nil {
 				return err
 			}
 			if err := w.Flush(); err != nil {
