@@ -3,11 +3,17 @@ package app
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -68,7 +74,11 @@ type Config struct {
 		RegistryPort         int    `mapstructure:"registry_port"`
 		GordonDomain         string `mapstructure:"gordon_domain"`
 		RegistryDomain       string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
-		DataDir              string `mapstructure:"data_dir"`
+		TLSEnabled           bool   `mapstructure:"tls_enabled"`
+		TLSPort              int    `mapstructure:"tls_port"`
+		TLSCertFile          string `mapstructure:"tls_cert_file"`
+		TLSKeyFile           string `mapstructure:"tls_key_file"`
+    DataDir              string `mapstructure:"data_dir"`
 		MaxProxyBodySize     string `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
 		MaxBlobChunkSize     string `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
 		MaxProxyResponseSize string `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
@@ -162,6 +172,10 @@ func Run(ctx context.Context, configPath string) error {
 	ctx = zerowrap.WithCtx(ctx, log)
 	log.Info().Msg("Gordon starting")
 
+	if err := ensureTLSConfig(&cfg, log); err != nil {
+		return err
+	}
+
 	// Create PID file
 	pidFile := createPidFile(log)
 	if pidFile != "" {
@@ -193,6 +207,123 @@ func Run(ctx context.Context, configPath string) error {
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
 	return runServers(ctx, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, svc, log)
+}
+
+func ensureTLSConfig(cfg *Config, log zerowrap.Logger) error {
+	if !cfg.Server.TLSEnabled {
+		return nil
+	}
+
+	if cfg.Server.TLSCertFile != "" && cfg.Server.TLSKeyFile != "" {
+		return nil
+	}
+
+	dataDir := resolveDataDir(cfg.Server.DataDir)
+	tlsDir := filepath.Join(dataDir, "tls")
+	certPath := filepath.Join(tlsDir, "cert.pem")
+	keyPath := filepath.Join(tlsDir, "key.pem")
+
+	domainName := cfg.Server.GordonDomain
+	if domainName == "" {
+		domainName = cfg.Server.RegistryDomain
+	}
+	if domainName == "" {
+		domainName = "localhost"
+	}
+
+	if err := generateSelfSignedTLSCert(certPath, keyPath, domainName); err != nil {
+		return fmt.Errorf("failed to generate self-signed TLS certificate: %w", err)
+	}
+
+	cfg.Server.TLSCertFile = certPath
+	cfg.Server.TLSKeyFile = keyPath
+
+	log.Warn().
+		Str("cert_file", certPath).
+		Str("key_file", keyPath).
+		Str("domain", domainName).
+		Msg("server.tls_enabled=true with empty tls_cert_file/tls_key_file; using auto-generated self-signed certificate")
+
+	return nil
+}
+
+func generateSelfSignedTLSCert(certPath, keyPath, domainName string) error {
+	// Reuse existing pair if already generated.
+	if _, err := os.Stat(certPath); err == nil {
+		if _, keyErr := os.Stat(keyPath); keyErr == nil {
+			return nil
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(certPath), 0700); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0700); err != nil {
+		return err
+	}
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialLimit)
+	if err != nil {
+		return err
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   domainName,
+			Organization: []string{"Gordon Auto-Generated TLS"},
+		},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.AddDate(1, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	if ip := net.ParseIP(domainName); ip != nil {
+		template.IPAddresses = []net.IP{ip}
+	} else {
+		template.DNSNames = []string{domainName}
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return err
+	}
+
+	certOut, err := os.OpenFile(certPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer certOut.Close()
+
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
+		return err
+	}
+
+	keyBytes, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return err
+	}
+
+	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer keyOut.Close()
+
+	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes}); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // initConfig loads configuration from file.
@@ -1144,10 +1275,25 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 	signal.Notify(deployChan, syscall.SIGUSR2)
 	defer signal.Stop(deployChan)
 
-	errChan := make(chan error, 2)
+	errChan := make(chan error, 3)
 
-	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
-	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
+	registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
+	proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
+	var tlsReady <-chan struct{}
+	if cfg.Server.TLSEnabled {
+		if cfg.Server.TLSCertFile == "" || cfg.Server.TLSKeyFile == "" {
+			return fmt.Errorf("server.tls_enabled=true requires both server.tls_cert_file and server.tls_key_file")
+		}
+		tlsReady = startTLSServer(
+			fmt.Sprintf(":%d", cfg.Server.TLSPort),
+			proxyHandler,
+			"proxy-tls",
+			cfg.Server.TLSCertFile,
+			cfg.Server.TLSKeyFile,
+			errChan,
+			log,
+		)
+	}
 
 	// Wait for both servers to bind their ports before auto-starting containers.
 	// This prevents the race where auto-start pulls from the registry before it's listening.
@@ -1161,11 +1307,21 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 	case err := <-errChan:
 		return err
 	}
+	if cfg.Server.TLSEnabled {
+		select {
+		case <-tlsReady:
+		case err := <-errChan:
+			return err
+		}
+	}
 
-	log.Info().
+	logEvent := log.Info().
 		Int("proxy_port", cfg.Server.Port).
-		Int("registry_port", cfg.Server.RegistryPort).
-		Msg("Gordon is running")
+		Int("registry_port", cfg.Server.RegistryPort)
+	if cfg.Server.TLSEnabled {
+		logEvent = logEvent.Int("tls_port", cfg.Server.TLSPort)
+	}
+	logEvent.Msg("Gordon is running")
 
 	// Auto-start after servers are listening (registry port is now bound).
 	syncAndAutoStart(ctx, svc, log)
@@ -1258,6 +1414,42 @@ func startServer(addr string, handler http.Handler, name string, errChan chan<- 
 	}()
 
 	return server, ready
+}
+
+// startTLSServer starts an HTTPS server with the provided certificate and key.
+func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile string, errChan chan<- error, log zerowrap.Logger) <-chan struct{} {
+	ready := make(chan struct{})
+
+	go func() {
+		log.Info().
+			Str("address", addr).
+			Str("cert_file", certFile).
+			Str("key_file", keyFile).
+			Msgf("%s server starting", name)
+
+		server := &http.Server{
+			Addr:              addr,
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       5 * time.Minute,
+			WriteTimeout:      5 * time.Minute,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+		}
+
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			errChan <- fmt.Errorf("%s server error: %w", name, err)
+			return
+		}
+		close(ready)
+
+		if err := server.ServeTLS(ln, certFile, keyFile); err != nil && err != http.ErrServerClosed {
+			errChan <- fmt.Errorf("%s server error: %w", name, err)
+		}
+	}()
+
+	return ready
 }
 
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.
@@ -1513,6 +1705,10 @@ func isProcessAlive(pid int) bool {
 func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.port", 80)
 	v.SetDefault("server.registry_port", 5000)
+	v.SetDefault("server.tls_enabled", false)
+	v.SetDefault("server.tls_port", 443)
+	v.SetDefault("server.tls_cert_file", "")
+	v.SetDefault("server.tls_key_file", "")
 	v.SetDefault("server.data_dir", DefaultDataDir())
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "console")

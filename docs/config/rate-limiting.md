@@ -28,7 +28,7 @@ burst = 100
 trusted_proxies = []
 ```
 
-> **Important:** Gordon does not handle TLS termination, so production deployments require a front proxy (Cloudflare, nginx, etc.) for HTTPS. You **must** configure `trusted_proxies` to ensure rate limiting sees real client IPs instead of your proxy's IP.
+> **Important:** If you run Gordon behind a front proxy (Cloudflare, nginx, etc.), configure `trusted_proxies` so rate limiting sees real client IPs instead of your proxy's IP.
 
 ## Configuration
 
@@ -150,7 +150,7 @@ A burst of `100` with `per_ip_rps = 50` means a client can send 100 requests ins
 
 **Critical for correct IP detection in production.**
 
-Gordon is a reverse proxy that routes requests to your containers, but it **does not handle TLS termination**. For HTTPS support, you must place Gordon behind a TLS-terminating proxy like Cloudflare, nginx, or a load balancer.
+Gordon is a reverse proxy that routes requests to your containers. In production you can either terminate TLS directly in Gordon (`server.tls_enabled = true`) or place it behind a TLS-terminating proxy like Cloudflare, nginx, or a load balancer.
 
 ```
 Internet → [Cloudflare/nginx] → Gordon → Containers
