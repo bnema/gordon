@@ -460,6 +460,11 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
 	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxyCfg.proxyConfig)
 
+	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
+	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
+	svc.containerSvc.SetProxyCacheInvalidator(svc.proxySvc)
+	svc.containerSvc.SetProxyDrainWaiter(svc.proxySvc)
+
 	// Create token handler for registry token endpoint
 	if svc.authSvc != nil {
 		internalAuth := authhandler.InternalAuth{
@@ -1055,6 +1060,15 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
 		Attachments:              svc.configSvc.GetAttachments(),
 		ReadinessDelay:           v.GetDuration("deploy.readiness_delay"),
+		ReadinessMode:            v.GetString("deploy.readiness_mode"),
+		HealthTimeout:            v.GetDuration("deploy.health_timeout"),
+		DrainDelay:               v.GetDuration("deploy.drain_delay"),
+		DrainMode:                v.GetString("deploy.drain_mode"),
+		DrainTimeout:             v.GetDuration("deploy.drain_timeout"),
+	}
+	if v.IsSet("deploy.drain_delay") {
+		containerConfig.DrainDelayConfigured = true
+		containerConfig.DrainDelay = v.GetDuration("deploy.drain_delay")
 	}
 
 	if cfg.Auth.Enabled && svc.authSvc != nil {
@@ -1164,12 +1178,6 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) error
 	manualDeployHandler := container.NewManualDeployHandler(ctx, svc.containerSvc, svc.configSvc)
 	if err := svc.eventBus.Subscribe(manualDeployHandler); err != nil {
 		return fmt.Errorf("failed to subscribe manual deploy handler: %w", err)
-	}
-
-	// Proxy cache invalidation on container deployment (for zero-downtime)
-	containerDeployedHandler := proxy.NewContainerDeployedHandler(ctx, svc.proxySvc)
-	if err := svc.eventBus.Subscribe(containerDeployedHandler); err != nil {
-		return fmt.Errorf("failed to subscribe container deployed handler: %w", err)
 	}
 
 	// Proxy cache invalidation on config reload (clears stale targets for removed routes)
@@ -1856,6 +1864,10 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("deploy.readiness_delay", "5s")
+	v.SetDefault("deploy.readiness_mode", "auto")
+	v.SetDefault("deploy.health_timeout", "90s")
+	v.SetDefault("deploy.drain_mode", "auto")
+	v.SetDefault("deploy.drain_timeout", "30s")
 
 	ConfigureViper(v, configPath)
 
