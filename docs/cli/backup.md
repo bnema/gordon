@@ -16,6 +16,8 @@ Subcommands:
 - `status` - Show backup status across domains
 
 > **Note:** Backup commands currently require remote mode (`--remote` + `--token`, or configured remotes).
+>
+> `gordon backup run <domain>` auto-selects the database only when exactly one supported DB attachment is detected. If multiple DB attachments are present, pass `--db <name>`.
 
 In normal usage, configure remotes once (`gordon remotes ...`) and run backup commands without per-command remote flags.
 
@@ -28,7 +30,7 @@ gordon backup list
 # List backups for one domain
 gordon backup list app.example.com
 
-# Trigger backup (auto-detect database)
+# Trigger backup (auto-detect when exactly one DB attachment exists)
 gordon backup run app.example.com
 
 # Trigger backup for specific attachment name
