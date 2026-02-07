@@ -48,6 +48,74 @@ Common issues and solutions when using Gordon.
    sudo firewall-cmd --list-ports
    ```
 
+### "server gave HTTP response to HTTPS client"
+
+**Cause:** Docker/Podman defaults to HTTPS but your registry is serving plain HTTP (common with `localhost:5000` or when TLS is terminated by a reverse proxy).
+
+**Solution — Docker:**
+
+Add the registry to `/etc/docker/daemon.json`:
+
+```json
+{
+  "insecure-registries": ["gordon.mydomain.com:5000"]
+}
+```
+
+Then restart Docker:
+
+```bash
+sudo systemctl restart docker
+```
+
+**Solution — Podman:**
+
+Create or edit `~/.config/containers/registries.conf.d/gordon.conf`:
+
+```toml
+[[registry]]
+location = "gordon.mydomain.com:5000"
+insecure = true
+```
+
+No restart needed — Podman reads this on each pull/push.
+
+> **Note:** For `localhost:5000`, Docker already allows insecure access by default. This is only needed for remote or domain-based registry access over HTTP.
+
+### TLS certificate errors with the Gordon CLI
+
+**Cause:** The Gordon server uses a self-signed certificate or TLS is terminated elsewhere.
+
+**Solutions (in priority order):**
+
+1. Per-command flag:
+
+   ```bash
+   gordon push myapp:latest --insecure
+   ```
+
+2. Environment variable:
+
+   ```bash
+   export GORDON_INSECURE=true
+   ```
+
+3. Per-remote in `~/.config/gordon/remotes.toml`:
+
+   ```toml
+   [remotes.my-server]
+   url = "https://gordon.mydomain.com"
+   token = "..."
+   insecure_tls = true
+   ```
+
+4. Global default in `~/.config/gordon/gordon.toml`:
+
+   ```toml
+   [client]
+   insecure_tls = true
+   ```
+
 ### "unknown: image not found"
 
 **Cause:** Image was pushed but no route configured.
@@ -259,6 +327,22 @@ gordon reload
 **Solution:** Manual reload:
 ```bash
 gordon reload
+```
+
+### Stale `targets.toml` in config directory
+
+**Cause:** Gordon renamed `targets.toml` to `remotes.toml` in v2.9. The old file is ignored but may cause confusion.
+
+**Solution:** Delete the old file and use `remotes.toml`:
+
+```bash
+rm ~/.config/gordon/targets.toml
+```
+
+If you had remotes configured in `targets.toml`, recreate them:
+
+```bash
+gordon remotes add my-server https://gordon.mydomain.com --token YOUR_TOKEN
 ```
 
 ### "failed to read config file"
