@@ -1464,6 +1464,7 @@ func (s *Service) getAllAttachments(ctx context.Context) map[string][]domain.Att
 			ContainerID: container.ID,
 			Status:      container.Status,
 			Network:     network,
+			Ports:       append([]int(nil), container.Ports...),
 		}
 		result[ownerDomain] = append(result[ownerDomain], attachment)
 	}
@@ -1501,6 +1502,7 @@ func (s *Service) filterAttachments(ctx context.Context, containers []*domain.Co
 			ContainerID: container.ID,
 			Status:      container.Status,
 			Network:     network,
+			Ports:       append([]int(nil), container.Ports...),
 		}
 		attachments = append(attachments, attachment)
 	}

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	cerrdefs "github.com/containerd/errdefs"
@@ -1134,11 +1135,21 @@ func (r *Runtime) ExecInContainer(ctx context.Context, containerID string, cmd [
 		return nil, log.WrapErr(err, "failed to create exec")
 	}
 
-	attachResp, err := r.client.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{})
+	attachCtx := ctx
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		attachCtx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+	}
+
+	attachResp, err := r.client.ContainerExecAttach(attachCtx, execResp.ID, container.ExecAttachOptions{})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to attach to exec")
 	}
 	defer attachResp.Close()
+	if deadline, ok := attachCtx.Deadline(); ok && attachResp.Conn != nil {
+		_ = attachResp.Conn.SetReadDeadline(deadline)
+	}
 
 	stdout, stderr, err := parseExecOutput(attachResp.Reader)
 	if err != nil {
@@ -1168,9 +1179,8 @@ func parseExecOutput(reader io.Reader) ([]byte, []byte, error) {
 	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
-// CopyFromContainer copies a file from a container to the host.
-// Returns the file contents as a byte slice.
-func (r *Runtime) CopyFromContainer(ctx context.Context, containerID, srcPath string) ([]byte, error) {
+// CopyFromContainer copies a file from a container and returns a content stream.
+func (r *Runtime) CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
@@ -1180,24 +1190,23 @@ func (r *Runtime) CopyFromContainer(ctx context.Context, containerID, srcPath st
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	reader, _, err := r.client.CopyFromContainer(ctx, containerID, srcPath)
+	tarReader, _, err := r.client.CopyFromContainer(ctx, containerID, srcPath)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to copy from container")
 	}
-	defer reader.Close()
 
-	// The response is a tar archive - we need to extract the file
-	data, err := extractFileFromTar(reader, srcPath)
+	// The response is a tar archive - we need to extract the requested file stream.
+	reader, err := extractFileFromTar(tarReader, srcPath)
 	if err != nil {
+		_ = tarReader.Close()
 		return nil, log.WrapErr(err, "failed to extract file from tar")
 	}
 
-	log.Debug().Int("size", len(data)).Msg("file copied from container")
-	return data, nil
+	return reader, nil
 }
 
 // extractFileFromTar extracts a single file from a tar archive.
-func extractFileFromTar(reader io.Reader, targetPath string) ([]byte, error) {
+func extractFileFromTar(reader io.ReadCloser, targetPath string) (io.ReadCloser, error) {
 	tr := tar.NewReader(reader)
 
 	// The path in the tar may be relative or absolute
@@ -1217,15 +1226,23 @@ func extractFileFromTar(reader io.Reader, targetPath string) ([]byte, error) {
 		if header.Typeflag == tar.TypeReg {
 			headerName := filepath.Base(header.Name)
 			if headerName == targetName {
-				data, err := io.ReadAll(tr)
-				if err != nil {
-					return nil, err
-				}
-				return data, nil
+				size := header.Size
+				pr, pw := io.Pipe()
+				go func() {
+					defer reader.Close()
+					_, copyErr := io.CopyN(pw, tr, size)
+					if copyErr != nil {
+						_ = pw.CloseWithError(copyErr)
+						return
+					}
+					_ = pw.Close()
+				}()
+				return pr, nil
 			}
 		}
 	}
 
+	_ = reader.Close()
 	return nil, fmt.Errorf("file not found in container: %s", targetPath)
 }
 
@@ -1265,9 +1282,15 @@ func (r *Runtime) ExtractEnvFileFromImage(ctx context.Context, imageRef, envFile
 	}()
 
 	// Copy the env file from the container
-	data, err := r.CopyFromContainer(ctx, tempContainerID, envFilePath)
+	reader, err := r.CopyFromContainer(ctx, tempContainerID, envFilePath)
 	if err != nil {
 		return nil, err
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to read extracted env file")
 	}
 
 	log.Info().Int("size", len(data)).Msg("env file extracted from image")
