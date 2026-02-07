@@ -596,6 +596,27 @@ func (r *Runtime) IsContainerRunning(ctx context.Context, containerID string) (b
 	return ctr.Status == string(domain.ContainerStatusRunning), nil
 }
 
+// GetContainerHealthStatus returns Docker healthcheck status when available.
+func (r *Runtime) GetContainerHealthStatus(ctx context.Context, containerID string) (string, bool, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "docker",
+		zerowrap.FieldAction:   "GetContainerHealthStatus",
+		zerowrap.FieldEntityID: containerID,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	resp, err := r.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "", false, log.WrapErr(err, "failed to inspect container")
+	}
+	if resp.State == nil || resp.State.Health == nil {
+		return "", false, nil
+	}
+
+	return resp.State.Health.Status, true, nil
+}
+
 // GetContainerPort gets the host port for a container's internal port.
 func (r *Runtime) GetContainerPort(ctx context.Context, containerID string, internalPort int) (int, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{

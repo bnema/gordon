@@ -56,6 +56,8 @@ type Service struct {
 	targets      map[string]*domain.ProxyTarget
 	mu           sync.RWMutex
 	activeConns  atomic.Int64 // Atomic counter for concurrent connection limiting
+	inFlight     map[string]int
+	inFlightMu   sync.Mutex
 }
 
 // NewService creates a new proxy service.
@@ -71,6 +73,7 @@ func NewService(
 		configSvc:    configSvc,
 		config:       config,
 		targets:      make(map[string]*domain.ProxyTarget),
+		inFlight:     make(map[string]int),
 	}
 }
 
@@ -304,6 +307,37 @@ func (s *Service) InvalidateTarget(_ context.Context, domainName string) {
 	delete(s.targets, domainName)
 }
 
+// WaitForNoInFlight waits until no requests are currently proxied to the
+// given container, or until timeout/context cancellation.
+func (s *Service) WaitForNoInFlight(ctx context.Context, containerID string, timeout time.Duration) bool {
+	if containerID == "" {
+		return true
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		s.inFlightMu.Lock()
+		count := s.inFlight[containerID]
+		s.inFlightMu.Unlock()
+		if count <= 0 {
+			return true
+		}
+
+		if time.Now().After(deadline) {
+			return false
+		}
+
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
 // RefreshTargets refreshes all proxy targets from container state.
 func (s *Service) RefreshTargets(ctx context.Context) error {
 	s.mu.Lock()
@@ -459,6 +493,8 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 	// If DNS pinning resolved hostname to IP, preserve the original hostname
 	// for the Host header so virtual-hosted upstreams work correctly.
 	originalHost := target.OriginalHost
+	releaseInFlight := s.trackInFlight(target.ContainerID)
+	defer releaseInFlight()
 
 	proxy := newReverseProxy(targetURL, originalHost,
 		func(w http.ResponseWriter, _ *http.Request, err error) {
@@ -480,6 +516,26 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 		Msg("proxying request")
 
 	proxy.ServeHTTP(w, r)
+}
+
+func (s *Service) trackInFlight(containerID string) func() {
+	if containerID == "" {
+		return func() {}
+	}
+
+	s.inFlightMu.Lock()
+	s.inFlight[containerID]++
+	s.inFlightMu.Unlock()
+
+	return func() {
+		s.inFlightMu.Lock()
+		if s.inFlight[containerID] > 1 {
+			s.inFlight[containerID]--
+		} else {
+			delete(s.inFlight, containerID)
+		}
+		s.inFlightMu.Unlock()
+	}
 }
 
 // proxyToRegistry forwards requests to the local registry HTTP server.
