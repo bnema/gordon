@@ -463,6 +463,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
 	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
 	svc.containerSvc.SetProxyCacheInvalidator(svc.proxySvc)
+	svc.containerSvc.SetProxyDrainWaiter(svc.proxySvc)
 
 	// Create token handler for registry token endpoint
 	if svc.authSvc != nil {
@@ -1059,7 +1060,11 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
 		Attachments:              svc.configSvc.GetAttachments(),
 		ReadinessDelay:           v.GetDuration("deploy.readiness_delay"),
+		ReadinessMode:            v.GetString("deploy.readiness_mode"),
+		HealthTimeout:            v.GetDuration("deploy.health_timeout"),
 		DrainDelay:               v.GetDuration("deploy.drain_delay"),
+		DrainMode:                v.GetString("deploy.drain_mode"),
+		DrainTimeout:             v.GetDuration("deploy.drain_timeout"),
 	}
 
 	if cfg.Auth.Enabled && svc.authSvc != nil {
@@ -1855,7 +1860,11 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("deploy.readiness_delay", "5s")
+	v.SetDefault("deploy.readiness_mode", "auto")
+	v.SetDefault("deploy.health_timeout", "90s")
 	v.SetDefault("deploy.drain_delay", "2s")
+	v.SetDefault("deploy.drain_mode", "auto")
+	v.SetDefault("deploy.drain_timeout", "30s")
 
 	ConfigureViper(v, configPath)
 

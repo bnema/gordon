@@ -74,7 +74,11 @@ dir = ""                                     # Env files directory (default: {da
 # =============================================================================
 [deploy]
 pull_policy = "if-tag-changed"               # "always", "if-tag-changed", "never"
+readiness_mode = "auto"                      # "auto", "docker-health", "delay"
+health_timeout = "90s"                       # Max wait for health-based readiness
 readiness_delay = "5s"                       # Wait after running before considered ready
+drain_mode = "auto"                          # "auto", "inflight", "delay"
+drain_timeout = "30s"                        # Max wait for in-flight request drain
 drain_delay = "2s"                           # Wait after cache invalidation before old stop
 
 # =============================================================================
@@ -174,7 +178,11 @@ monthly = 0                                  # Keep N monthly backups per DB
 | `logging.container_logs.max_backups` | `3` | Keep 3 old files |
 | `logging.container_logs.max_age` | `28` | 28 days |
 | `deploy.pull_policy` | `"if-tag-changed"` | Pull on tag change |
+| `deploy.readiness_mode` | `"auto"` | Readiness strategy (`auto`, `docker-health`, `delay`) |
+| `deploy.health_timeout` | `"90s"` | Max wait for health-based readiness before deploy fails |
 | `deploy.readiness_delay` | `"5s"` | Delay before container is considered ready |
+| `deploy.drain_mode` | `"auto"` | Drain strategy (`auto`, `inflight`, `delay`) |
+| `deploy.drain_timeout` | `"30s"` | Max wait for in-flight request drain before old stop |
 | `deploy.drain_delay` | `"2s"` | Delay before stopping previous container after cache invalidation |
 | `auto_route.enabled` | `false` | Auto-route disabled |
 | `network_isolation.enabled` | `false` | Isolation disabled |

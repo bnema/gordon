@@ -56,7 +56,11 @@ trusted_proxies = []                     # IPs/CIDRs trusted for X-Forwarded-For
 # Deploy behavior
 [deploy]
 pull_policy = "if-tag-changed"           # always, if-not-present, if-tag-changed
+readiness_mode = "auto"                  # auto, docker-health, delay
+health_timeout = "90s"                   # Max wait for health-based readiness
 readiness_delay = "5s"                   # Wait after running before ready
+drain_mode = "auto"                      # auto, inflight, delay
+drain_timeout = "30s"                    # Max wait for in-flight drain
 drain_delay = "2s"                       # Wait after proxy invalidation before old stop
 
 # Logging
@@ -159,7 +163,11 @@ monthly = 12
 | `api.rate_limit.burst` | `100` |
 | `api.rate_limit.trusted_proxies` | `[]` |
 | `deploy.pull_policy` | `"if-tag-changed"` |
+| `deploy.readiness_mode` | `"auto"` |
+| `deploy.health_timeout` | `"90s"` |
 | `deploy.readiness_delay` | `"5s"` |
+| `deploy.drain_mode` | `"auto"` |
+| `deploy.drain_timeout` | `"30s"` |
 | `deploy.drain_delay` | `"2s"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |
@@ -190,7 +198,11 @@ The following settings require a restart to take effect:
 - `server.data_dir`
 - `auth` settings
 - `deploy.pull_policy`
+- `deploy.readiness_mode`
+- `deploy.health_timeout`
 - `deploy.readiness_delay`
+- `deploy.drain_mode`
+- `deploy.drain_timeout`
 - `deploy.drain_delay`
 
 ## Environment Variable Override

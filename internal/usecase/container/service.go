@@ -36,7 +36,11 @@ type Config struct {
 	NetworkGroups            map[string][]string
 	Attachments              map[string][]string
 	ReadinessDelay           time.Duration // Delay after container starts before considering it ready
+	ReadinessMode            string        // Readiness strategy: auto, docker-health, delay
+	HealthTimeout            time.Duration // Max wait for health-based readiness
 	DrainDelay               time.Duration // Grace period after cache invalidation before stopping old container
+	DrainMode                string        // Drain strategy: auto, inflight, delay
+	DrainTimeout             time.Duration // Max wait for in-flight requests to drain
 }
 
 const (
@@ -58,6 +62,7 @@ type Service struct {
 	eventBus         out.EventPublisher
 	logWriter        out.ContainerLogWriter
 	cacheInvalidator out.ProxyCacheInvalidator
+	drainWaiter      out.ProxyDrainWaiter
 	config           Config
 	containers       map[string]*domain.Container
 	attachments      map[string][]string // ownerDomain → []containerIDs
@@ -135,6 +140,14 @@ func NewService(
 func (s *Service) SetProxyCacheInvalidator(inv out.ProxyCacheInvalidator) {
 	s.mu.Lock()
 	s.cacheInvalidator = inv
+	s.mu.Unlock()
+}
+
+// SetProxyDrainWaiter sets the proxy in-flight drain waiter used during
+// zero-downtime replacement before stopping the old container.
+func (s *Service) SetProxyDrainWaiter(waiter out.ProxyDrainWaiter) {
+	s.mu.Lock()
+	s.drainWaiter = waiter
 	s.mu.Unlock()
 }
 
@@ -371,16 +384,7 @@ func (s *Service) finalizePreviousContainer(ctx context.Context, domainName stri
 	log := zerowrap.FromCtx(ctx)
 
 	if invalidated {
-		s.mu.RLock()
-		drainDelay := s.config.DrainDelay
-		s.mu.RUnlock()
-		if drainDelay == 0 {
-			drainDelay = 2 * time.Second
-		}
-		select {
-		case <-time.After(drainDelay):
-		case <-ctx.Done():
-		}
+		s.waitForDrain(ctx, existing.ID)
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -389,6 +393,37 @@ func (s *Service) finalizePreviousContainer(ctx context.Context, domainName stri
 	}
 
 	s.cleanupOldContainer(ctx, existing, newContainerID, domainName)
+}
+
+func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
+	s.mu.RLock()
+	cfg := s.config
+	waiter := s.drainWaiter
+	s.mu.RUnlock()
+
+	drainMode := cfg.DrainMode
+	if drainMode == "" {
+		drainMode = "delay"
+	}
+
+	shouldUseInFlight := (drainMode == "inflight" || drainMode == "auto") && waiter != nil
+	if shouldUseInFlight {
+		timeout := cfg.DrainTimeout
+		if timeout == 0 {
+			timeout = 30 * time.Second
+		}
+		waiter.WaitForNoInFlight(ctx, oldContainerID, timeout)
+		return
+	}
+
+	drainDelay := cfg.DrainDelay
+	if drainDelay == 0 {
+		drainDelay = 2 * time.Second
+	}
+	select {
+	case <-time.After(drainDelay):
+	case <-ctx.Done():
+	}
 }
 
 // Restart restarts a running container for the given domain.
@@ -1844,14 +1879,47 @@ func (s *Service) findContainerByName(ctx context.Context, name string) *domain.
 	return nil
 }
 
-// waitForReady waits for a container to be ready.
-// Uses simple "running + delay" approach for universal compatibility.
 func (s *Service) waitForReady(ctx context.Context, containerID string) error {
-	log := zerowrap.FromCtx(ctx)
-
 	if err := s.pollContainerRunning(ctx, containerID); err != nil {
 		return err
 	}
+
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	readinessMode := cfg.ReadinessMode
+	if readinessMode == "" {
+		readinessMode = "delay"
+	}
+
+	switch readinessMode {
+	case "delay":
+		return s.waitForReadyByDelay(ctx, containerID)
+	case "docker-health":
+		_, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(ctx, containerID)
+		if err != nil {
+			return err
+		}
+		if !hasHealthcheck {
+			return errors.New("no healthcheck detected")
+		}
+		return s.waitForHealthy(ctx, containerID, cfg.HealthTimeout)
+	default: // auto
+		_, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(ctx, containerID)
+		if err != nil {
+			return err
+		}
+		if hasHealthcheck {
+			return s.waitForHealthy(ctx, containerID, cfg.HealthTimeout)
+		}
+		return s.waitForReadyByDelay(ctx, containerID)
+	}
+}
+
+// waitForReadyByDelay waits using the legacy running+delay strategy.
+func (s *Service) waitForReadyByDelay(ctx context.Context, containerID string) error {
+	log := zerowrap.FromCtx(ctx)
 
 	s.mu.RLock()
 	cfg := s.config
@@ -1879,6 +1947,37 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 	}
 
 	return s.waitForRecovery(ctx, containerID)
+}
+
+func (s *Service) waitForHealthy(ctx context.Context, containerID string, timeout time.Duration) error {
+	if timeout == 0 {
+		timeout = 90 * time.Second
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	lastStatus := "starting"
+	for {
+		status, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(waitCtx, containerID)
+		if err != nil {
+			return err
+		}
+		if !hasHealthcheck {
+			return errors.New("no healthcheck detected")
+		}
+		if status == "healthy" {
+			return nil
+		}
+		if status != "" {
+			lastStatus = status
+		}
+
+		select {
+		case <-time.After(time.Second):
+		case <-waitCtx.Done():
+			return fmt.Errorf("container healthcheck timeout after %s (last status: %s)", timeout, lastStatus)
+		}
+	}
 }
 
 // pollContainerRunning polls until the container is running (max 30 seconds).
