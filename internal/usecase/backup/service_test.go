@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outiface "github.com/bnema/gordon/internal/boundaries/out"
@@ -47,7 +49,9 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 		if len(cmd) != 3 || cmd[0] != "sh" || cmd[1] != "-c" {
 			return false
 		}
-		return bytes.Contains([]byte(cmd[2]), []byte("pg_dump -Fc")) && bytes.Contains([]byte(cmd[2]), []byte(" > "))
+		return bytes.Contains([]byte(cmd[2]), []byte("pg_dump -Fc")) &&
+			bytes.Contains([]byte(cmd[2]), []byte("PGDATABASE='postgres'")) &&
+			bytes.Contains([]byte(cmd[2]), []byte(" > "))
 	})).Return(&outiface.ExecResult{ExitCode: 0, Stdout: []byte("backup-data")}, nil)
 
 	runtime.EXPECT().CopyFromContainer(mock.Anything, "db123", mock.MatchedBy(func(path string) bool {
@@ -94,4 +98,57 @@ func TestSelectDatabaseAutoSelectsOnlyDatabaseWhenUnspecified(t *testing.T) {
 	db, err := selectDatabase([]domain.DBInfo{{Name: "postgres"}}, "")
 	require.NoError(t, err)
 	assert.Equal(t, "postgres", db.Name)
+}
+
+func TestPostgresDumpCommandQuotesDatabaseName(t *testing.T) {
+	cmd := postgresDumpCommand("customer data")
+	assert.Contains(t, cmd, "PGDATABASE='customer data'")
+}
+
+func TestServiceStatusReturnsWhenContextCancelledDuringSemaphoreAcquire(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	storage := outmocks.NewMockBackupStorage(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+
+	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
+		"a.example.com": {},
+		"b.example.com": {},
+		"c.example.com": {},
+		"d.example.com": {},
+		"e.example.com": {},
+	})
+
+	unblock := make(chan struct{})
+	defer close(unblock)
+
+	var started int32
+	startedFour := make(chan struct{})
+	storage.EXPECT().List(mock.Anything, mock.Anything, (*domain.BackupSchedule)(nil)).RunAndReturn(
+		func(context.Context, string, *domain.BackupSchedule) ([]domain.BackupJob, error) {
+			if atomic.AddInt32(&started, 1) == 4 {
+				close(startedFour)
+			}
+			<-unblock
+			return nil, nil
+		},
+	).Times(4)
+
+	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{}, zerowrap.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := svc.Status(ctx)
+		errCh <- err
+	}()
+
+	<-startedFour
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Status did not return after context cancellation while waiting for semaphore")
+	}
 }
