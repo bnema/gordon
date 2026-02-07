@@ -1059,6 +1059,7 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
 		Attachments:              svc.configSvc.GetAttachments(),
 		ReadinessDelay:           v.GetDuration("deploy.readiness_delay"),
+		DrainDelay:               v.GetDuration("deploy.drain_delay"),
 	}
 
 	if cfg.Auth.Enabled && svc.authSvc != nil {
@@ -1168,12 +1169,6 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) error
 	manualDeployHandler := container.NewManualDeployHandler(ctx, svc.containerSvc, svc.configSvc)
 	if err := svc.eventBus.Subscribe(manualDeployHandler); err != nil {
 		return fmt.Errorf("failed to subscribe manual deploy handler: %w", err)
-	}
-
-	// Proxy cache invalidation on container deployment (for zero-downtime)
-	containerDeployedHandler := proxy.NewContainerDeployedHandler(ctx, svc.proxySvc)
-	if err := svc.eventBus.Subscribe(containerDeployedHandler); err != nil {
-		return fmt.Errorf("failed to subscribe container deployed handler: %w", err)
 	}
 
 	// Proxy cache invalidation on config reload (clears stale targets for removed routes)
@@ -1860,6 +1855,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("deploy.readiness_delay", "5s")
+	v.SetDefault("deploy.drain_delay", "2s")
 
 	ConfigureViper(v, configPath)
 

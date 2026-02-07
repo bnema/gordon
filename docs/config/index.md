@@ -56,6 +56,8 @@ trusted_proxies = []                     # IPs/CIDRs trusted for X-Forwarded-For
 # Deploy behavior
 [deploy]
 pull_policy = "if-tag-changed"           # always, if-not-present, if-tag-changed
+readiness_delay = "5s"                   # Wait after running before ready
+drain_delay = "2s"                       # Wait after proxy invalidation before old stop
 
 # Logging
 [logging]
@@ -158,6 +160,7 @@ monthly = 12
 | `api.rate_limit.trusted_proxies` | `[]` |
 | `deploy.pull_policy` | `"if-tag-changed"` |
 | `deploy.readiness_delay` | `"5s"` |
+| `deploy.drain_delay` | `"2s"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |
 | `logging.file.enabled` | `false` |
@@ -188,6 +191,7 @@ The following settings require a restart to take effect:
 - `auth` settings
 - `deploy.pull_policy`
 - `deploy.readiness_delay`
+- `deploy.drain_delay`
 
 ## Environment Variable Override
 

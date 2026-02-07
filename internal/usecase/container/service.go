@@ -229,8 +229,8 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		return nil, err
 	}
 
-	s.activateDeployedContainer(ctx, route.Domain, newContainer)
-	s.finalizePreviousContainer(ctx, route.Domain, existing, hasExisting, newContainer.ID)
+	invalidated := s.activateDeployedContainer(ctx, route.Domain, newContainer)
+	s.finalizePreviousContainer(ctx, route.Domain, existing, hasExisting, invalidated, newContainer.ID)
 
 	// Start container log collection (non-blocking, errors don't fail deployment)
 	s.startLogCollection(ctx, newContainer.ID, route.Domain)
@@ -346,7 +346,7 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 	return inspected, nil
 }
 
-func (s *Service) activateDeployedContainer(ctx context.Context, domainName string, container *domain.Container) {
+func (s *Service) activateDeployedContainer(ctx context.Context, domainName string, container *domain.Container) bool {
 	s.mu.Lock()
 	s.containers[domainName] = container
 	s.mu.Unlock()
@@ -358,22 +358,29 @@ func (s *Service) activateDeployedContainer(ctx context.Context, domainName stri
 	s.mu.RUnlock()
 	if inv != nil {
 		inv.InvalidateTarget(ctx, domainName)
+		return true
 	}
+
+	return false
 }
 
-func (s *Service) finalizePreviousContainer(ctx context.Context, domainName string, existing *domain.Container, hasExisting bool, newContainerID string) {
+func (s *Service) finalizePreviousContainer(ctx context.Context, domainName string, existing *domain.Container, hasExisting, invalidated bool, newContainerID string) {
 	if !hasExisting {
 		return
 	}
 	log := zerowrap.FromCtx(ctx)
 
-	drainDelay := s.config.DrainDelay
-	if drainDelay == 0 {
-		drainDelay = 2 * time.Second
-	}
-	select {
-	case <-time.After(drainDelay):
-	case <-ctx.Done():
+	if invalidated {
+		s.mu.RLock()
+		drainDelay := s.config.DrainDelay
+		s.mu.RUnlock()
+		if drainDelay == 0 {
+			drainDelay = 2 * time.Second
+		}
+		select {
+		case <-time.After(drainDelay):
+		case <-ctx.Done():
+		}
 	}
 
 	if err := ctx.Err(); err != nil {
