@@ -85,6 +85,7 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 	execCtx, cancelExec := context.WithTimeout(ctx, backupExecTimeout)
 	defer cancelExec()
 	dumpPath := fmt.Sprintf("/tmp/gordon-backup-%d.bak", started.UnixNano())
+	defer s.cleanupDumpFile(db.ContainerID, dumpPath)
 
 	execResult, err := s.runtime.ExecInContainer(execCtx, db.ContainerID, []string{"sh", "-c", pgDumpToPathCommand(dumpPath, db.Name)})
 	if err != nil {
@@ -96,8 +97,6 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 	if execResult.ExitCode != 0 {
 		return nil, fmt.Errorf("pg_dump failed with exit code %d: %s", execResult.ExitCode, string(execResult.Stderr))
 	}
-
-	defer s.cleanupDumpFile(db.ContainerID, dumpPath)
 
 	dumpStream, err := s.runtime.CopyFromContainer(execCtx, db.ContainerID, dumpPath)
 	if err != nil {

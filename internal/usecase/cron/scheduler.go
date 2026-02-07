@@ -128,6 +128,13 @@ func (s *Scheduler) Start(ctx context.Context) {
 	default:
 	}
 
+	select {
+	case <-ctx.Done():
+		s.started.Store(false)
+		return
+	default:
+	}
+
 	ticker := time.NewTicker(time.Minute)
 	go func() {
 		defer ticker.Stop()
