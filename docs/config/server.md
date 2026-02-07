@@ -84,6 +84,8 @@ Docker/Podman clients push to this port:
 docker push registry.mydomain.com:5000/myapp:latest
 ```
 
+If the registry is served over plain HTTP (no TLS), clients must be configured to allow insecure access. See [Troubleshooting: insecure registry](../reference/troubleshooting.md#server-gave-http-response-to-https-client) for Docker and Podman instructions.
+
 ## Gordon Domain
 
 The `gordon_domain` is required and must match your DNS configuration:
