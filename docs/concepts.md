@@ -211,6 +211,21 @@ Gordon uses an internal event system for coordination:
 | `manual.deploy` | `gordon deploy <domain>` command | Deploy specific route |
 | `container.deployed` | Container started | Update proxy cache |
 
+## Backups and Recovery
+
+Gordon can run logical PostgreSQL backups for attachment containers.
+
+Current design:
+
+1. Detect PostgreSQL attachments attached to a route
+2. Execute `pg_dump -Fc` through Gordon runtime operations
+3. Store backup artifacts on local filesystem storage
+4. Expose backup actions through admin API and CLI
+
+This is intentionally scoped for operational safety and predictable behavior.
+Future extensions can add physical backups, PITR, and remote object storage adapters.
+For configuration details and usage examples, see the [Backups Configuration guide](./config/backups.md), [Backup CLI reference](./cli/backup.md), and [Configuration Reference](./config/reference.md).
+
 ## Container Labels
 
 Gordon uses labels to track managed containers:

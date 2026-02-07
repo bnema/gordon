@@ -117,6 +117,10 @@ Commands are organized by where they run:
 	statusCmd.GroupID = groupManage
 	rootCmd.AddCommand(statusCmd)
 
+	backupCmd := newBackupCmd()
+	backupCmd.GroupID = groupManage
+	rootCmd.AddCommand(backupCmd)
+
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
 	remotesCmd.GroupID = groupClient
