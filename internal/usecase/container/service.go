@@ -39,6 +39,7 @@ type Config struct {
 	ReadinessMode            string        // Readiness strategy: auto, docker-health, delay
 	HealthTimeout            time.Duration // Max wait for health-based readiness
 	DrainDelay               time.Duration // Grace period after cache invalidation before stopping old container
+	DrainDelayConfigured     bool          // True when deploy.drain_delay was explicitly configured
 	DrainMode                string        // Drain strategy: auto, inflight, delay
 	DrainTimeout             time.Duration // Max wait for in-flight requests to drain
 }
@@ -425,9 +426,12 @@ func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
 		return
 	}
 
-	drainDelay := cfg.DrainDelay
-	if drainDelay == 0 {
-		drainDelay = 2 * time.Second
+	drainDelay := 2 * time.Second
+	if cfg.DrainDelayConfigured {
+		drainDelay = cfg.DrainDelay
+	}
+	if drainDelay <= 0 {
+		return
 	}
 	select {
 	case <-time.After(drainDelay):

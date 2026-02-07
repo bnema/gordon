@@ -1066,6 +1066,10 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		DrainMode:                v.GetString("deploy.drain_mode"),
 		DrainTimeout:             v.GetDuration("deploy.drain_timeout"),
 	}
+	if v.IsSet("deploy.drain_delay") {
+		containerConfig.DrainDelayConfigured = true
+		containerConfig.DrainDelay = v.GetDuration("deploy.drain_delay")
+	}
 
 	if cfg.Auth.Enabled && svc.authSvc != nil {
 		expiry, err := resolveServiceTokenExpiry(cfg)
@@ -1862,7 +1866,6 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("deploy.readiness_delay", "5s")
 	v.SetDefault("deploy.readiness_mode", "auto")
 	v.SetDefault("deploy.health_timeout", "90s")
-	v.SetDefault("deploy.drain_delay", "2s")
 	v.SetDefault("deploy.drain_mode", "auto")
 	v.SetDefault("deploy.drain_timeout", "30s")
 
