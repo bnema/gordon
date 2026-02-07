@@ -463,6 +463,81 @@ type RouteHealth struct {
 	Error           string `json:"error"`
 }
 
+// Backups API
+
+// ListBackups returns backups globally or for a domain.
+func (c *Client) ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error) {
+	path := "/backups"
+	if backupDomain != "" {
+		path += "/" + url.PathEscape(backupDomain)
+	}
+
+	resp, err := c.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.BackupsResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Backups, nil
+}
+
+// BackupStatus returns aggregate backup status.
+func (c *Client) BackupStatus(ctx context.Context) ([]dto.BackupJob, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/backups/status", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.BackupsResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Backups, nil
+}
+
+// RunBackup triggers a backup for a domain.
+func (c *Client) RunBackup(ctx context.Context, backupDomain, dbName string) (*dto.BackupRunResponse, error) {
+	if backupDomain == "" {
+		return nil, fmt.Errorf("domain cannot be empty")
+	}
+
+	resp, err := c.request(ctx, http.MethodPost, "/backups/"+url.PathEscape(backupDomain), dto.BackupRunRequest{DB: dbName})
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.BackupRunResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// DetectDatabases detects supported databases for a domain.
+func (c *Client) DetectDatabases(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error) {
+	if backupDomain == "" {
+		return nil, fmt.Errorf("domain cannot be empty")
+	}
+
+	resp, err := c.request(ctx, http.MethodGet, "/backups/"+url.PathEscape(backupDomain)+"/detect", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.BackupDetectResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Databases, nil
+}
+
 // GetHealth returns health status for all routes with HTTP probing.
 func (c *Client) GetHealth(ctx context.Context) (map[string]*RouteHealth, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/health", nil)

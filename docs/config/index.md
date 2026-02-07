@@ -109,6 +109,17 @@ enabled = false                          # Auto-create routes from image names
 [attachments]
 "app.mydomain.com" = ["postgres:latest", "redis:latest"]
 "backend" = ["rabbitmq:latest"]
+
+# Backups
+[backups]
+enabled = true
+storage_dir = "~/.gordon/backups"
+
+[backups.retention]
+hourly = 24
+daily = 7
+weekly = 4
+monthly = 12
 ```
 
 ## Configuration Sections
@@ -128,6 +139,7 @@ enabled = false                          # Auto-create routes from image names
 | `[external_routes]` | Non-containerized service proxying | [External Routes](./external-routes.md) |
 | `[network_groups]` | Shared service networks | [Network Groups](./network-groups.md) |
 | `[attachments]` | Service dependencies | [Attachments](./attachments.md) |
+| `[backups]` | Database backups | [Backups](./backups.md) |
 
 ## Default Values
 
@@ -158,6 +170,7 @@ enabled = false                          # Auto-create routes from image names
 | `volumes.preserve` | `true` |
 | `network_isolation.enabled` | `false` |
 | `auto_route.enabled` | `false` |
+| `backups.enabled` | `false` |
 
 ## Hot Reload
 
@@ -193,3 +206,4 @@ Pattern: `GORDON_SECTION_KEY` (uppercase, underscores instead of dots)
 - [Routes Configuration](./routes.md)
 - [External Routes](./external-routes.md)
 - [Authentication](./auth.md)
+- [Backups](./backups.md)

@@ -23,6 +23,18 @@ Additional labels for attachment containers:
 | `gordon.attachment` | `"true"` | Container is an attachment service |
 | `gordon.attached-to` | Domain/group | Route or network group this serves |
 
+### Backup Labels
+
+Labels used by the backup subsystem:
+
+| Label | Value | Description |
+|-------|-------|-------------|
+| `gordon.backup` | `"true"` / `"false"` | Enables or disables backup behavior for a container |
+| `gordon.backup.type` | e.g. `"postgresql"` | Explicit database type override |
+| `gordon.backup.version` | e.g. `"17"` | Explicit database version override |
+| `gordon.backup.schedule` | e.g. `"hourly,daily"` | Schedule override hint |
+| `gordon.backup.sidecar` | `"true"` | Identifies backup sidecar containers |
+
 ## Image Labels
 
 Labels you can set in your Dockerfile:
@@ -96,6 +108,9 @@ docker ps -f "label=gordon.attachment=true"
 
 # Attachments for specific route
 docker ps -f "label=gordon.attached-to=app.mydomain.com"
+
+# Backup sidecars
+docker ps -f "label=gordon.backup.sidecar=true"
 ```
 
 ## Examples
