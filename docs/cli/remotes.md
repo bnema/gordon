@@ -59,6 +59,7 @@ gordon remotes add <name> <url> [options]
 |--------|-------------|
 | `--token` | Store token directly in config |
 | `--token-env` | Store environment variable name (token resolved at runtime) |
+| `--insecure` | Skip TLS certificate verification for this remote |
 
 ### Examples
 
@@ -71,6 +72,9 @@ gordon remotes add prod https://gordon.mydomain.com --token eyJ...
 
 # With environment variable reference (recommended)
 gordon remotes add prod https://gordon.mydomain.com --token-env PROD_TOKEN
+
+# With self-signed certificate
+gordon remotes add dev https://dev.internal --insecure
 ```
 
 ### Token Security

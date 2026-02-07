@@ -248,15 +248,16 @@ func resolveInsecureTLS(flagInsecure bool, config *ClientConfig, remotes *Client
 }
 
 // AddRemote adds a new remote to the remotes configuration.
-func AddRemote(name, url, token string) error {
+func AddRemote(name, url, token string, insecureTLS bool) error {
 	config, err := LoadRemotes("")
 	if err != nil {
 		return err
 	}
 
 	config.Remotes[name] = RemoteEntry{
-		URL:   url,
-		Token: token,
+		URL:         url,
+		Token:       token,
+		InsecureTLS: insecureTLS,
 	}
 
 	return SaveRemotes("", config)
