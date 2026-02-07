@@ -48,7 +48,7 @@ gordon backup status
 ### list
 
 ```text
-<domain>\t<db>\t<status>\t<started_at>\t<file_path>
+<domain>\t<db>\t<status>\t<started_at>\t<backup_id>
 ```
 
 ### detect
@@ -61,6 +61,12 @@ gordon backup status
 
 ```text
 <domain>\t<db>\t<status>\t<started_at>
+```
+
+### run
+
+```text
+<domain>\t<db>\t<status>\t<started_at>\t<backup_id>\t<size_bytes>
 ```
 
 ## Required Permissions
