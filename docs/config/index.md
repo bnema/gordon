@@ -61,7 +61,7 @@ health_timeout = "90s"                   # Max wait for health-based readiness
 readiness_delay = "5s"                   # Wait after running before ready
 drain_mode = "auto"                      # auto, inflight, delay
 drain_timeout = "30s"                    # Max wait for in-flight drain
-drain_delay = "2s"                       # Wait after proxy invalidation before old stop
+drain_delay = "2s"                       # Wait after proxy invalidation before stopping the old container
 
 # Logging
 [logging]

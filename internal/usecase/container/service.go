@@ -353,6 +353,7 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 
 	inspected, err := s.runtime.InspectContainer(ctx, newContainer.ID)
 	if err != nil {
+		s.cleanupFailedContainer(ctx, newContainer.ID)
 		return nil, log.WrapErr(err, "failed to inspect started container")
 	}
 
@@ -396,6 +397,8 @@ func (s *Service) finalizePreviousContainer(ctx context.Context, domainName stri
 }
 
 func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
+	log := zerowrap.FromCtx(ctx)
+
 	s.mu.RLock()
 	cfg := s.config
 	waiter := s.drainWaiter
@@ -412,7 +415,13 @@ func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
 		if timeout == 0 {
 			timeout = 30 * time.Second
 		}
-		waiter.WaitForNoInFlight(ctx, oldContainerID, timeout)
+		drained := waiter.WaitForNoInFlight(ctx, oldContainerID, timeout)
+		if !drained {
+			log.Warn().
+				Str("old_container_id", oldContainerID).
+				Dur("drain_timeout", timeout).
+				Msg("drain wait timed out; old container may still have in-flight traffic")
+		}
 		return
 	}
 
