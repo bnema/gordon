@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -122,10 +124,16 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 	}
 }
 
+// fallbackCounter ensures uniqueness when crypto/rand is unavailable.
+var fallbackCounter atomic.Uint64
+
 // generateRequestID creates a random 16-byte hex-encoded request ID.
 func generateRequestID() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp + monotonic counter if RNG is unavailable
+		return fmt.Sprintf("%x-%x", time.Now().UnixNano(), fallbackCounter.Add(1))
+	}
 	return hex.EncodeToString(b)
 }
 

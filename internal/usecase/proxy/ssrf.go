@@ -116,9 +116,10 @@ func ValidateExternalRouteTarget(host string) error {
 	return nil
 }
 
-// ResolveAndValidateHost resolves DNS for a hostname and validates that all
-// resolved IPs are safe (not in blocked CIDR ranges). Returns the first safe
-// resolved IP address. For raw IP addresses, validates and returns them directly.
+// ResolveAndValidateHost resolves DNS for a hostname and returns the first
+// resolved IP that is not in a blocked CIDR range. If all resolved IPs are
+// blocked, returns ErrSSRFBlocked. For raw IP addresses, validates and returns
+// them directly.
 //
 // SECURITY: This function pins DNS resolution to prevent TOCTOU/DNS-rebinding
 // attacks where a hostname resolves to a public IP during validation but to a
