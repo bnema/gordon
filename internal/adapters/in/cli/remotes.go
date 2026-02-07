@@ -71,7 +71,12 @@ func newRemotesListCmd() *cobra.Command {
 					tokenStatus = fmt.Sprintf("$%s", r.TokenEnv)
 				}
 
-				rows = append(rows, []string{name, r.URL, tokenStatus, status})
+				tlsStatus := ""
+				if r.InsecureTLS {
+					tlsStatus = styles.Theme.Warning.Render("insecure")
+				}
+
+				rows = append(rows, []string{name, r.URL, tokenStatus, tlsStatus, status})
 			}
 
 			// Render table
@@ -80,6 +85,7 @@ func newRemotesListCmd() *cobra.Command {
 					{Title: "Name", Width: 15},
 					{Title: "URL", Width: 35},
 					{Title: "Token", Width: 15},
+					{Title: "TLS", Width: 10},
 					{Title: "Status", Width: 10},
 				}),
 				components.WithRows(rows),
@@ -96,6 +102,7 @@ func newRemotesListCmd() *cobra.Command {
 func newRemotesAddCmd() *cobra.Command {
 	var token string
 	var tokenEnv string
+	var insecureTLS bool
 
 	cmd := &cobra.Command{
 		Use:   "add <name> <url>",
@@ -105,7 +112,8 @@ func newRemotesAddCmd() *cobra.Command {
 Examples:
   gordon remotes add prod https://gordon.mydomain.com
   gordon remotes add prod https://gordon.mydomain.com --token eyJ...
-  gordon remotes add staging https://staging.mydomain.com --token-env STAGING_TOKEN`,
+  gordon remotes add staging https://staging.mydomain.com --token-env STAGING_TOKEN
+  gordon remotes add dev https://dev.internal --insecure`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -115,11 +123,11 @@ Examples:
 			finalToken := token
 			if tokenEnv != "" {
 				// Store token_env reference instead of actual token
-				if err := addRemoteWithEnv(name, url, tokenEnv); err != nil {
+				if err := addRemoteWithEnv(name, url, tokenEnv, insecureTLS); err != nil {
 					return fmt.Errorf("failed to add remote: %w", err)
 				}
 			} else {
-				if err := remote.AddRemote(name, url, finalToken); err != nil {
+				if err := remote.AddRemote(name, url, finalToken, insecureTLS); err != nil {
 					return fmt.Errorf("failed to add remote: %w", err)
 				}
 			}
@@ -136,20 +144,22 @@ Examples:
 
 	cmd.Flags().StringVar(&token, "token", "", "Authentication token")
 	cmd.Flags().StringVar(&tokenEnv, "token-env", "", "Environment variable containing token")
+	cmd.Flags().BoolVar(&insecureTLS, "insecure", false, "Skip TLS certificate verification")
 
 	return cmd
 }
 
 // addRemoteWithEnv adds a remote with a token environment variable reference.
-func addRemoteWithEnv(name, url, tokenEnv string) error {
+func addRemoteWithEnv(name, url, tokenEnv string, insecureTLS bool) error {
 	config, err := remote.LoadRemotes("")
 	if err != nil {
 		return err
 	}
 
 	config.Remotes[name] = remote.RemoteEntry{
-		URL:      url,
-		TokenEnv: tokenEnv,
+		URL:         url,
+		TokenEnv:    tokenEnv,
+		InsecureTLS: insecureTLS,
 	}
 
 	return remote.SaveRemotes("", config)
