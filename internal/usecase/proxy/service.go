@@ -363,16 +363,21 @@ func (s *Service) modifyResponse(cfg Config) func(*http.Response) error {
 }
 
 // limitedReadCloser wraps an io.ReadCloser with a byte limit.
-// When the limit is exceeded, subsequent reads return an error.
+// When the limit is exceeded, subsequent reads return an error and the
+// underlying body is closed exactly once to release upstream resources.
 type limitedReadCloser struct {
 	io.ReadCloser
 	remaining int64
+	closed    bool
 }
 
 func (l *limitedReadCloser) Read(p []byte) (int, error) {
 	if l.remaining <= 0 {
 		// Close the underlying body to release upstream connection/resources
-		l.Close()
+		if !l.closed {
+			l.closed = true
+			l.ReadCloser.Close()
+		}
 		return 0, fmt.Errorf("response body exceeded maximum size limit")
 	}
 	if int64(len(p)) > l.remaining {
@@ -381,6 +386,14 @@ func (l *limitedReadCloser) Read(p []byte) (int, error) {
 	n, err := l.ReadCloser.Read(p)
 	l.remaining -= int64(n)
 	return n, err
+}
+
+func (l *limitedReadCloser) Close() error {
+	if l.closed {
+		return nil
+	}
+	l.closed = true
+	return l.ReadCloser.Close()
 }
 
 // proxyError writes an error response with security headers appropriate for
