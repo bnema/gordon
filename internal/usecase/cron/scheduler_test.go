@@ -156,3 +156,27 @@ func TestSchedulerRunNowRecoversFromPanics(t *testing.T) {
 	assert.False(t, entries[0].LastRun.IsZero())
 	assert.False(t, entries[0].NextRun.IsZero())
 }
+
+func TestSchedulerStartNoOpWhenStopped(t *testing.T) {
+	s := NewScheduler(zerowrap.Default())
+	now := time.Date(2026, 2, 7, 12, 0, 0, 0, time.UTC)
+	s.nowFn = func() time.Time { return now }
+
+	runs := 0
+	err := s.Add("stopped-job", "stopped job", domain.CronSchedule{Preset: domain.ScheduleDaily}, func(context.Context) error {
+		runs++
+		return nil
+	})
+	require.NoError(t, err)
+
+	s.mu.Lock()
+	s.entries["stopped-job"].nextRun = now.Add(-time.Minute)
+	s.mu.Unlock()
+
+	s.Stop()
+	s.Start(context.Background())
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 0, runs)
+	assert.False(t, s.started.Load())
+}

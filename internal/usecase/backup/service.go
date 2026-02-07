@@ -86,7 +86,7 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 	defer cancelExec()
 	dumpPath := fmt.Sprintf("/tmp/gordon-backup-%d.bak", started.UnixNano())
 
-	execResult, err := s.runtime.ExecInContainer(execCtx, db.ContainerID, []string{"sh", "-c", pgDumpToPathCommand(dumpPath)})
+	execResult, err := s.runtime.ExecInContainer(execCtx, db.ContainerID, []string{"sh", "-c", pgDumpToPathCommand(dumpPath, db.Name)})
 	if err != nil {
 		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
 			return nil, fmt.Errorf("pg_dump timed out after %s", backupExecTimeout)
@@ -164,8 +164,13 @@ func (s *Service) Status(ctx context.Context) ([]domain.BackupJob, error) {
 		default:
 		}
 
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(idx int, name string) {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -226,12 +231,16 @@ func selectDatabase(dbs []domain.DBInfo, requested string) (domain.DBInfo, error
 	return domain.DBInfo{}, fmt.Errorf("database %q not found for domain", requested)
 }
 
-func postgresDumpCommand() string {
-	return "pg_dump -Fc --dbname=\"${POSTGRES_DB:-postgres}\" --username=\"${POSTGRES_USER:-postgres}\""
+func postgresDumpCommand(dbName string) string {
+	return fmt.Sprintf("PGDATABASE=%s pg_dump -Fc --dbname=\"$PGDATABASE\" --username=\"${POSTGRES_USER:-postgres}\"", shellQuote(dbName))
 }
 
-func pgDumpToPathCommand(path string) string {
-	return fmt.Sprintf("%s > %q", postgresDumpCommand(), path)
+func pgDumpToPathCommand(path, dbName string) string {
+	return fmt.Sprintf("%s > %q", postgresDumpCommand(dbName), path)
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (s *Service) cleanupDumpFile(containerID, dumpPath string) {
