@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -98,6 +99,80 @@ func (_c *MockContainerRuntime_ConnectContainerToNetwork_Call) Return(err error)
 }
 
 func (_c *MockContainerRuntime_ConnectContainerToNetwork_Call) RunAndReturn(run func(ctx context.Context, containerName string, networkName string) error) *MockContainerRuntime_ConnectContainerToNetwork_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CopyFromContainer provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) CopyFromContainer(ctx context.Context, containerID string, srcPath string) ([]byte, error) {
+	ret := _mock.Called(ctx, containerID, srcPath)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CopyFromContainer")
+	}
+
+	var r0 []byte
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) ([]byte, error)); ok {
+		return returnFunc(ctx, containerID, srcPath)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) []byte); ok {
+		r0 = returnFunc(ctx, containerID, srcPath)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]byte)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, containerID, srcPath)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerRuntime_CopyFromContainer_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CopyFromContainer'
+type MockContainerRuntime_CopyFromContainer_Call struct {
+	*mock.Call
+}
+
+// CopyFromContainer is a helper method to define mock.On call
+//   - ctx context.Context
+//   - containerID string
+//   - srcPath string
+func (_e *MockContainerRuntime_Expecter) CopyFromContainer(ctx interface{}, containerID interface{}, srcPath interface{}) *MockContainerRuntime_CopyFromContainer_Call {
+	return &MockContainerRuntime_CopyFromContainer_Call{Call: _e.mock.On("CopyFromContainer", ctx, containerID, srcPath)}
+}
+
+func (_c *MockContainerRuntime_CopyFromContainer_Call) Run(run func(ctx context.Context, containerID string, srcPath string)) *MockContainerRuntime_CopyFromContainer_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_CopyFromContainer_Call) Return(bytes []byte, err error) *MockContainerRuntime_CopyFromContainer_Call {
+	_c.Call.Return(bytes, err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_CopyFromContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, srcPath string) ([]byte, error)) *MockContainerRuntime_CopyFromContainer_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -349,6 +424,80 @@ func (_c *MockContainerRuntime_DisconnectContainerFromNetwork_Call) Return(err e
 }
 
 func (_c *MockContainerRuntime_DisconnectContainerFromNetwork_Call) RunAndReturn(run func(ctx context.Context, containerName string, networkName string) error) *MockContainerRuntime_DisconnectContainerFromNetwork_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ExecInContainer provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) ExecInContainer(ctx context.Context, containerID string, cmd []string) (*out.ExecResult, error) {
+	ret := _mock.Called(ctx, containerID, cmd)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ExecInContainer")
+	}
+
+	var r0 *out.ExecResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string) (*out.ExecResult, error)); ok {
+		return returnFunc(ctx, containerID, cmd)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string) *out.ExecResult); ok {
+		r0 = returnFunc(ctx, containerID, cmd)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*out.ExecResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, []string) error); ok {
+		r1 = returnFunc(ctx, containerID, cmd)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerRuntime_ExecInContainer_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ExecInContainer'
+type MockContainerRuntime_ExecInContainer_Call struct {
+	*mock.Call
+}
+
+// ExecInContainer is a helper method to define mock.On call
+//   - ctx context.Context
+//   - containerID string
+//   - cmd []string
+func (_e *MockContainerRuntime_Expecter) ExecInContainer(ctx interface{}, containerID interface{}, cmd interface{}) *MockContainerRuntime_ExecInContainer_Call {
+	return &MockContainerRuntime_ExecInContainer_Call{Call: _e.mock.On("ExecInContainer", ctx, containerID, cmd)}
+}
+
+func (_c *MockContainerRuntime_ExecInContainer_Call) Run(run func(ctx context.Context, containerID string, cmd []string)) *MockContainerRuntime_ExecInContainer_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 []string
+		if args[2] != nil {
+			arg2 = args[2].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_ExecInContainer_Call) Return(execResult *out.ExecResult, err error) *MockContainerRuntime_ExecInContainer_Call {
+	_c.Call.Return(execResult, err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_ExecInContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, cmd []string) (*out.ExecResult, error)) *MockContainerRuntime_ExecInContainer_Call {
 	_c.Call.Return(run)
 	return _c
 }

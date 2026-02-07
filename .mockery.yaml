@@ -22,9 +22,11 @@ packages:
       TokenStore:
       DomainSecretStore:
       RateLimiter:
+      BackupStorage:
   github.com/bnema/gordon/internal/boundaries/in:
     interfaces:
       ContainerService:
+      BackupService:
       RegistryService:
       ProxyService:
       ConfigService:
