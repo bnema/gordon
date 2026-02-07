@@ -217,119 +217,20 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Get existing container (if any) without holding lock
-	s.mu.RLock()
-	existing, hasExisting := s.containers[route.Domain]
-	s.mu.RUnlock()
+	existing, hasExisting := s.getTrackedContainer(route.Domain)
 
-	// Clean up orphaned containers (containers with same name but not tracked)
-	// Skip the currently tracked container to preserve zero-downtime deployment
-	existingID := ""
-	if hasExisting {
-		existingID = existing.ID
-	}
-	if err := s.cleanupOrphanedContainers(ctx, route.Domain, existingID); err != nil {
-		log.WrapErr(err, "failed to cleanup orphaned containers")
-	}
-
-	// Build image reference and ensure it's available.
-	// ensureImage returns the canonical reference; internal pulls may use the local registry.
-	imageRef := s.buildImageRef(route.Image)
-	actualImageRef, err := s.ensureImage(ctx, imageRef)
+	resources, err := s.prepareDeployResources(ctx, route, existing)
 	if err != nil {
 		return nil, err
 	}
 
-	// Setup network FIRST (attachments need it)
-	networkName := s.getNetworkForApp(route.Domain)
-	if err := s.createNetworkIfNeeded(ctx, networkName); err != nil {
-		return nil, log.WrapErr(err, "failed to create network")
-	}
-
-	// Deploy attachments BEFORE main container (dependencies first)
-	if err := s.deployAttachments(ctx, route.Domain, networkName); err != nil {
-		return nil, log.WrapErr(err, "failed to deploy attachments")
-	}
-
-	// Get exposed ports (use actual image ref from pull)
-	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, actualImageRef)
-	if err != nil {
-		log.WrapErr(err, "failed to get exposed ports, using defaults")
-		exposedPorts = []int{80, 8080, 3000}
-	}
-
-	// Load environment
-	envVars, err := s.loadEnvironment(ctx, route.Domain, actualImageRef)
+	newContainer, err := s.createStartedContainer(ctx, route, existing, resources)
 	if err != nil {
 		return nil, err
 	}
 
-	// Setup volumes (use actual image ref from pull)
-	volumes, err := s.setupVolumes(ctx, route.Domain, actualImageRef)
-	if err != nil {
-		return nil, err
-	}
-
-	// Build container configuration
-	containerConfig := s.buildContainerConfig(route.Domain, route.Image, actualImageRef, exposedPorts, envVars, volumes, networkName, existing)
-
-	newContainer, err := s.runtime.CreateContainer(ctx, containerConfig)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to create container")
-	}
-
-	// Start new container
-	if err := s.runtime.StartContainer(ctx, newContainer.ID); err != nil {
-		s.runtime.RemoveContainer(ctx, newContainer.ID, true)
-		return nil, log.WrapErr(err, "failed to start container")
-	}
-
-	// Wait for new container to be ready
-	if err := s.waitForReady(ctx, newContainer.ID); err != nil {
-		s.cleanupFailedContainer(ctx, newContainer.ID)
-		return nil, log.WrapErr(err, "container failed readiness check")
-	}
-
-	// Re-inspect for updated info (ports, etc.)
-	newContainer, err = s.runtime.InspectContainer(ctx, newContainer.ID)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to inspect started container")
-	}
-
-	// ATOMIC SWITCH: Update tracking first (proxy will now route to new container)
-	s.mu.Lock()
-	s.containers[route.Domain] = newContainer
-	s.mu.Unlock()
-
-	// Publish container deployed event (other subscribers)
-	s.publishContainerDeployed(ctx, route.Domain, newContainer.ID)
-
-	// Synchronous cache invalidation: ensure the proxy stops routing to the
-	// old container immediately, before we stop it. This fixes the race where
-	// the async event bus invalidation arrives after the old container is killed.
-	s.mu.RLock()
-	inv := s.cacheInvalidator
-	s.mu.RUnlock()
-	if inv != nil {
-		inv.InvalidateTarget(ctx, route.Domain)
-	}
-
-	// Grace period: let in-flight requests to the old container finish draining.
-	if hasExisting {
-		drainDelay := s.config.DrainDelay
-		if drainDelay == 0 {
-			drainDelay = 2 * time.Second
-		}
-		select {
-		case <-time.After(drainDelay):
-		case <-ctx.Done():
-		}
-	}
-
-	// NOW safe to stop and remove old container
-	if hasExisting {
-		s.cleanupOldContainer(ctx, existing, newContainer.ID, route.Domain)
-	}
+	s.activateDeployedContainer(ctx, route.Domain, newContainer)
+	s.finalizePreviousContainer(ctx, route.Domain, existing, hasExisting, newContainer.ID)
 
 	// Start container log collection (non-blocking, errors don't fail deployment)
 	s.startLogCollection(ctx, newContainer.ID, route.Domain)
@@ -338,11 +239,143 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		Str("image", route.Image).
 		Str(zerowrap.FieldEntityID, newContainer.ID).
 		Ints("ports", newContainer.Ports).
-		Str("network", networkName).
+		Str("network", resources.networkName).
 		Bool("zero_downtime", hasExisting).
 		Msg("container deployed successfully")
 
 	return newContainer, nil
+}
+
+type deployResources struct {
+	networkName    string
+	actualImageRef string
+	exposedPorts   []int
+	envVars        []string
+	volumes        map[string]string
+}
+
+func (s *Service) getTrackedContainer(domainName string) (*domain.Container, bool) {
+	s.mu.RLock()
+	container, ok := s.containers[domainName]
+	s.mu.RUnlock()
+	return container, ok
+}
+
+func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route, existing *domain.Container) (*deployResources, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	existingID := ""
+	if existing != nil {
+		existingID = existing.ID
+	}
+	if err := s.cleanupOrphanedContainers(ctx, route.Domain, existingID); err != nil {
+		log.WrapErr(err, "failed to cleanup orphaned containers")
+	}
+
+	imageRef := s.buildImageRef(route.Image)
+	actualImageRef, err := s.ensureImage(ctx, imageRef)
+	if err != nil {
+		return nil, err
+	}
+
+	networkName := s.getNetworkForApp(route.Domain)
+	if err := s.createNetworkIfNeeded(ctx, networkName); err != nil {
+		return nil, log.WrapErr(err, "failed to create network")
+	}
+	if err := s.deployAttachments(ctx, route.Domain, networkName); err != nil {
+		return nil, log.WrapErr(err, "failed to deploy attachments")
+	}
+
+	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, actualImageRef)
+	if err != nil {
+		log.WrapErr(err, "failed to get exposed ports, using defaults")
+		exposedPorts = []int{80, 8080, 3000}
+	}
+
+	envVars, err := s.loadEnvironment(ctx, route.Domain, actualImageRef)
+	if err != nil {
+		return nil, err
+	}
+
+	volumes, err := s.setupVolumes(ctx, route.Domain, actualImageRef)
+	if err != nil {
+		return nil, err
+	}
+
+	return &deployResources{
+		networkName:    networkName,
+		actualImageRef: actualImageRef,
+		exposedPorts:   exposedPorts,
+		envVars:        envVars,
+		volumes:        volumes,
+	}, nil
+}
+
+func (s *Service) createStartedContainer(ctx context.Context, route domain.Route, existing *domain.Container, resources *deployResources) (*domain.Container, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	containerConfig := s.buildContainerConfig(
+		route.Domain,
+		route.Image,
+		resources.actualImageRef,
+		resources.exposedPorts,
+		resources.envVars,
+		resources.volumes,
+		resources.networkName,
+		existing,
+	)
+
+	newContainer, err := s.runtime.CreateContainer(ctx, containerConfig)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to create container")
+	}
+	if err := s.runtime.StartContainer(ctx, newContainer.ID); err != nil {
+		s.runtime.RemoveContainer(ctx, newContainer.ID, true)
+		return nil, log.WrapErr(err, "failed to start container")
+	}
+	if err := s.waitForReady(ctx, newContainer.ID); err != nil {
+		s.cleanupFailedContainer(ctx, newContainer.ID)
+		return nil, log.WrapErr(err, "container failed readiness check")
+	}
+
+	inspected, err := s.runtime.InspectContainer(ctx, newContainer.ID)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to inspect started container")
+	}
+
+	return inspected, nil
+}
+
+func (s *Service) activateDeployedContainer(ctx context.Context, domainName string, container *domain.Container) {
+	s.mu.Lock()
+	s.containers[domainName] = container
+	s.mu.Unlock()
+
+	s.publishContainerDeployed(ctx, domainName, container.ID)
+
+	s.mu.RLock()
+	inv := s.cacheInvalidator
+	s.mu.RUnlock()
+	if inv != nil {
+		inv.InvalidateTarget(ctx, domainName)
+	}
+}
+
+func (s *Service) finalizePreviousContainer(ctx context.Context, domainName string, existing *domain.Container, hasExisting bool, newContainerID string) {
+	if !hasExisting {
+		return
+	}
+
+	drainDelay := s.config.DrainDelay
+	if drainDelay == 0 {
+		drainDelay = 2 * time.Second
+	}
+	select {
+	case <-time.After(drainDelay):
+	case <-ctx.Done():
+	}
+
+	s.cleanupOldContainer(ctx, existing, newContainerID, domainName)
 }
 
 // Restart restarts a running container for the given domain.
