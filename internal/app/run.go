@@ -460,6 +460,10 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
 	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxyCfg.proxyConfig)
 
+	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
+	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
+	svc.containerSvc.SetProxyCacheInvalidator(svc.proxySvc)
+
 	// Create token handler for registry token endpoint
 	if svc.authSvc != nil {
 		internalAuth := authhandler.InternalAuth{
