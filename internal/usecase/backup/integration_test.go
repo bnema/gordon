@@ -141,7 +141,9 @@ func waitForPostgresReady(ctx context.Context, runtime *docker.Runtime, containe
 		default:
 		}
 
-		res, err := runtime.ExecInContainer(ctx, containerID, []string{"pg_isready", "-U", "postgres", "-d", "appdb"})
+		execCtx, cancelExec := context.WithTimeout(ctx, 10*time.Second)
+		res, err := runtime.ExecInContainer(execCtx, containerID, []string{"pg_isready", "-U", "postgres", "-d", "appdb"})
+		cancelExec()
 		if err == nil && res.ExitCode == 0 {
 			return nil
 		}
@@ -152,7 +154,10 @@ func waitForPostgresReady(ctx context.Context, runtime *docker.Runtime, containe
 
 func seedPostgresData(ctx context.Context, runtime *docker.Runtime, containerID string) error {
 	cmd := `psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1 || createdb -U "$POSTGRES_USER" "$POSTGRES_DB"; psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE TABLE IF NOT EXISTS backup_items (id serial primary key, name text); INSERT INTO backup_items(name) VALUES ('one'), ('two');"`
-	res, err := runtime.ExecInContainer(ctx, containerID, []string{"sh", "-c", cmd})
+	execCtx, cancelExec := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelExec()
+
+	res, err := runtime.ExecInContainer(execCtx, containerID, []string{"sh", "-c", cmd})
 	if err != nil {
 		return err
 	}

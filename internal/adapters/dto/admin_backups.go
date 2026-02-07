@@ -29,8 +29,8 @@ type BackupRunRequest struct {
 
 // BackupRunResponse is returned after triggering a backup.
 type BackupRunResponse struct {
-	Status string    `json:"status"`
-	Backup BackupJob `json:"backup"`
+	Status string     `json:"status"`
+	Backup *BackupJob `json:"backup,omitempty"`
 }
 
 // DatabaseInfo represents a detected database attachment.

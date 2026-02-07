@@ -1,12 +1,12 @@
 package backup
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -84,8 +84,9 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 
 	execCtx, cancelExec := context.WithTimeout(ctx, backupExecTimeout)
 	defer cancelExec()
+	dumpPath := fmt.Sprintf("/tmp/gordon-backup-%d.bak", started.UnixNano())
 
-	execResult, err := s.runtime.ExecInContainer(execCtx, db.ContainerID, []string{"sh", "-c", postgresDumpCommand()})
+	execResult, err := s.runtime.ExecInContainer(execCtx, db.ContainerID, []string{"sh", "-c", pgDumpToPathCommand(dumpPath)})
 	if err != nil {
 		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
 			return nil, fmt.Errorf("pg_dump timed out after %s", backupExecTimeout)
@@ -96,7 +97,19 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 		return nil, fmt.Errorf("pg_dump failed with exit code %d: %s", execResult.ExitCode, string(execResult.Stderr))
 	}
 
-	path, err := s.storage.Store(ctx, domainName, db.Name, domain.BackupSchedule(""), started, bytes.NewReader(execResult.Stdout))
+	defer s.cleanupDumpFile(db.ContainerID, dumpPath)
+
+	dumpStream, err := s.runtime.CopyFromContainer(execCtx, db.ContainerID, dumpPath)
+	if err != nil {
+		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("backup copy timed out after %s", backupExecTimeout)
+		}
+		return nil, err
+	}
+	defer dumpStream.Close()
+
+	counter := &byteCounter{}
+	path, err := s.storage.Store(ctx, domainName, db.Name, domain.BackupSchedule(""), started, io.TeeReader(dumpStream, counter))
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +122,7 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 		Status:      domain.BackupStatusCompleted,
 		StartedAt:   started,
 		CompletedAt: time.Now().UTC(),
-		SizeBytes:   int64(len(execResult.Stdout)),
+		SizeBytes:   counter.n,
 		FilePath:    path,
 	}
 
@@ -212,4 +225,24 @@ func selectDatabase(dbs []domain.DBInfo, requested string) (domain.DBInfo, error
 
 func postgresDumpCommand() string {
 	return "pg_dump -Fc --dbname=\"${POSTGRES_DB:-postgres}\" --username=\"${POSTGRES_USER:-postgres}\""
+}
+
+func pgDumpToPathCommand(path string) string {
+	return fmt.Sprintf("%s > %q", postgresDumpCommand(), path)
+}
+
+func (s *Service) cleanupDumpFile(containerID, dumpPath string) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, _ = s.runtime.ExecInContainer(cleanupCtx, containerID, []string{"sh", "-c", fmt.Sprintf("rm -f %q", dumpPath)})
+}
+
+type byteCounter struct {
+	n int64
+}
+
+func (c *byteCounter) Write(p []byte) (int, error) {
+	c.n += int64(len(p))
+	return len(p), nil
 }

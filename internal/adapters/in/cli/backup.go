@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -51,10 +53,18 @@ func newBackupListCmd() *cobra.Command {
 				fmt.Println("No backups found")
 				return nil
 			}
-			fmt.Println("DOMAIN\tDB\tSTATUS\tSTARTED_AT\tFILE_PATH")
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tFILE_PATH"); err != nil {
+				return err
+			}
 
 			for _, job := range jobs {
-				fmt.Printf("%s\t%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt), job.FilePath)
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt), job.FilePath); err != nil {
+					return err
+				}
+			}
+			if err := w.Flush(); err != nil {
+				return err
 			}
 
 			return nil
@@ -80,8 +90,20 @@ func newBackupRunCmd() *cobra.Command {
 				return fmt.Errorf("failed to run backup: %w", err)
 			}
 
-			fmt.Println("DOMAIN\tDB\tSTATUS\tSTARTED_AT\tFILE_PATH\tSIZE_BYTES")
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%d\n", result.Backup.Domain, result.Backup.DBName, result.Backup.Status, formatBackupTime(result.Backup.StartedAt), result.Backup.FilePath, result.Backup.SizeBytes)
+			if result.Backup == nil {
+				return fmt.Errorf("backup run completed without backup payload")
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tFILE_PATH\tSIZE_BYTES"); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\n", result.Backup.Domain, result.Backup.DBName, result.Backup.Status, formatBackupTime(result.Backup.StartedAt), result.Backup.FilePath, result.Backup.SizeBytes); err != nil {
+				return err
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -110,10 +132,18 @@ func newBackupDetectCmd() *cobra.Command {
 				fmt.Println("No supported databases detected")
 				return nil
 			}
-			fmt.Println("NAME\tTYPE\tHOST\tPORT\tIMAGE")
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			if _, err := fmt.Fprintln(w, "NAME\tTYPE\tHOST\tPORT\tIMAGE"); err != nil {
+				return err
+			}
 
 			for _, db := range dbs {
-				fmt.Printf("%s\t%s\t%s\t%d\t%s\n", db.Name, db.Type, db.Host, db.Port, db.ImageName)
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", db.Name, db.Type, db.Host, db.Port, db.ImageName); err != nil {
+					return err
+				}
+			}
+			if err := w.Flush(); err != nil {
+				return err
 			}
 
 			return nil
@@ -140,10 +170,18 @@ func newBackupStatusCmd() *cobra.Command {
 				fmt.Println("No backup status available")
 				return nil
 			}
-			fmt.Println("DOMAIN\tDB\tSTATUS\tSTARTED_AT")
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT"); err != nil {
+				return err
+			}
 
 			for _, job := range jobs {
-				fmt.Printf("%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt))
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt)); err != nil {
+					return err
+				}
+			}
+			if err := w.Flush(); err != nil {
+				return err
 			}
 
 			return nil

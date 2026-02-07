@@ -1246,6 +1246,29 @@ func TestHandler_BackupsRunDomain(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "completed")
 }
 
+func TestHandler_BackupsRunDomain_ChunkedBodyIsDecoded(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	backupSvc := inmocks.NewMockBackupService(t)
+
+	backupSvc.EXPECT().RunBackup(mock.Anything, "app.example.com", "postgres").Return(&domain.BackupResult{Job: domain.BackupJob{Domain: "app.example.com", DBName: "postgres", Status: domain.BackupStatusCompleted}}, nil)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), backupSvc)
+
+	body := bytes.NewBufferString(`{"db":"postgres"}`)
+	req := httptest.NewRequest("POST", "/admin/backups/app.example.com", body)
+	req.ContentLength = -1
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "completed")
+}
+
 func TestHandler_BackupsDetectDomain(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)

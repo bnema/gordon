@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -92,4 +93,19 @@ func TestBackupStorage_StoreSanitizesDotOnlyPathComponents(t *testing.T) {
 	path, err := storage.Store(context.Background(), "..", "...", domain.ScheduleDaily, time.Now().UTC(), bytes.NewReader([]byte("data")))
 	require.NoError(t, err)
 	assert.NotContains(t, path, "..")
+}
+
+func TestBackupStorage_StoreSanitizesSchedulePathComponent(t *testing.T) {
+	rootDir := t.TempDir()
+	storage, err := NewBackupStorage(rootDir, testLogger())
+	require.NoError(t, err)
+
+	path, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.BackupSchedule("../../escape"), time.Now().UTC(), bytes.NewReader([]byte("data")))
+	require.NoError(t, err)
+
+	rel, err := filepath.Rel(rootDir, path)
+	require.NoError(t, err)
+	assert.NotEqual(t, "..", rel)
+	assert.NotContains(t, rel, "../")
+	assert.NotContains(t, rel, "..\\")
 }

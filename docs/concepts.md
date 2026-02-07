@@ -224,6 +224,7 @@ Current design:
 
 This is intentionally scoped for operational safety and predictable behavior.
 Future extensions can add physical backups, PITR, and remote object storage adapters.
+For configuration details and usage examples, see the [Backups Configuration guide](./config/backups.md), [Backup CLI reference](./cli/backup.md), and [Configuration Reference](./config/reference.md).
 
 ## Container Labels
 

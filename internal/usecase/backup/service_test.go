@@ -1,7 +1,9 @@
 package backup
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"testing"
 
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
@@ -42,8 +44,19 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 	})
 
 	runtime.EXPECT().ExecInContainer(mock.Anything, "db123", mock.MatchedBy(func(cmd []string) bool {
-		return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c"
-	})).Return(&outiface.ExecResult{ExitCode: 0, Stdout: []byte("backup-data")}, nil)
+		if len(cmd) != 3 || cmd[0] != "sh" || cmd[1] != "-c" {
+			return false
+		}
+		return bytes.Contains([]byte(cmd[2]), []byte("pg_dump -Fc")) && bytes.Contains([]byte(cmd[2]), []byte(" > "))
+	})).Return(&outiface.ExecResult{ExitCode: 0}, nil)
+
+	runtime.EXPECT().CopyFromContainer(mock.Anything, "db123", mock.MatchedBy(func(path string) bool {
+		return path != ""
+	})).Return(io.NopCloser(bytes.NewReader([]byte("backup-data"))), nil)
+
+	runtime.EXPECT().ExecInContainer(mock.Anything, "db123", mock.MatchedBy(func(cmd []string) bool {
+		return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c" && bytes.Contains([]byte(cmd[2]), []byte("rm -f"))
+	})).Return(&outiface.ExecResult{ExitCode: 0}, nil)
 
 	storage.EXPECT().Store(
 		mock.Anything,
@@ -51,7 +64,10 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 		"postgres",
 		domain.BackupSchedule(""),
 		mock.Anything,
-		mock.Anything,
+		mock.MatchedBy(func(r io.Reader) bool {
+			data, err := io.ReadAll(r)
+			return err == nil && string(data) == "backup-data"
+		}),
 	).Return("/tmp/backup.bak", nil)
 
 	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{}, zerowrap.Default())
@@ -61,4 +77,5 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, domain.BackupStatusCompleted, result.Job.Status)
 	assert.Equal(t, "/tmp/backup.bak", result.Job.FilePath)
+	assert.Equal(t, int64(len("backup-data")), result.Job.SizeBytes)
 }

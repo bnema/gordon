@@ -851,11 +851,9 @@ func (h *Handler) handleBackupsDomainRun(w http.ResponseWriter, r *http.Request,
 
 	var req dto.BackupRunRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-			h.sendError(w, http.StatusBadRequest, "invalid JSON")
-			return
-		}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		h.sendError(w, http.StatusBadRequest, "invalid JSON")
+		return
 	}
 
 	result, err := h.backupSvc.RunBackup(ctx, backupDomain, req.DB)
@@ -868,9 +866,10 @@ func (h *Handler) handleBackupsDomainRun(w http.ResponseWriter, r *http.Request,
 	log := zerowrap.FromCtx(ctx)
 	log.Info().Str("domain", backupDomain).Str("db", req.DB).Str("job_id", result.Job.ID).Msg("backup completed via admin API")
 
+	job := toBackupJobResponse(result.Job)
 	h.sendJSON(w, http.StatusOK, dto.BackupRunResponse{
 		Status: "completed",
-		Backup: toBackupJobResponse(result.Job),
+		Backup: &job,
 	})
 }
 
