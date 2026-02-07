@@ -1,0 +1,323 @@
+package cron
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/zerowrap"
+)
+
+// Scheduler runs recurring jobs based on backup schedules.
+type Scheduler struct {
+	entries map[string]*entry
+	mu      sync.RWMutex
+	stopCh  chan struct{}
+	log     zerowrap.Logger
+	nowFn   func() time.Time
+	maxJobs int
+	started atomic.Bool
+}
+
+// Option configures a Scheduler.
+type Option func(*Scheduler)
+
+var ErrJobRunning = errors.New("schedule is currently running")
+
+// WithMaxJobs sets the maximum number of jobs run concurrently.
+func WithMaxJobs(n int) Option {
+	return func(s *Scheduler) {
+		if n > 0 {
+			s.maxJobs = n
+		}
+	}
+}
+
+type entry struct {
+	id       string
+	name     string
+	schedule domain.CronSchedule
+	job      func(ctx context.Context) error
+	lastRun  time.Time
+	nextRun  time.Time
+	running  atomic.Bool
+}
+
+// NewScheduler creates a scheduler instance.
+func NewScheduler(log zerowrap.Logger, opts ...Option) *Scheduler {
+	s := &Scheduler{
+		entries: make(map[string]*entry),
+		stopCh:  make(chan struct{}),
+		log:     log,
+		maxJobs: 4,
+		nowFn: func() time.Time {
+			return time.Now().UTC()
+		},
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+
+	return s
+}
+
+// Add registers a new scheduled job.
+func (s *Scheduler) Add(id, name string, sched domain.CronSchedule, job func(ctx context.Context) error) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	if job == nil {
+		return fmt.Errorf("job is required")
+	}
+
+	nextRun, err := calculateNextRun(s.nowFn(), sched)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.entries[id]; exists {
+		return fmt.Errorf("schedule %q already exists", id)
+	}
+
+	s.entries[id] = &entry{
+		id:       id,
+		name:     name,
+		schedule: sched,
+		job:      job,
+		nextRun:  nextRun,
+	}
+
+	return nil
+}
+
+// Remove unregisters a scheduled job.
+func (s *Scheduler) Remove(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.entries[id]
+	if e == nil {
+		return nil
+	}
+	if e.running.Load() {
+		return fmt.Errorf("%w: %s", ErrJobRunning, id)
+	}
+	delete(s.entries, id)
+	return nil
+}
+
+// Start begins the scheduler loop.
+func (s *Scheduler) Start(ctx context.Context) {
+	if !s.started.CompareAndSwap(false, true) {
+		return
+	}
+
+	select {
+	case <-s.stopCh:
+		s.started.Store(false)
+		return
+	default:
+	}
+
+	select {
+	case <-ctx.Done():
+		s.started.Store(false)
+		return
+	default:
+	}
+
+	ticker := time.NewTicker(time.Minute)
+	go func() {
+		defer ticker.Stop()
+		s.runDue(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.stopCh:
+				return
+			case <-ticker.C:
+				s.runDue(ctx)
+			}
+		}
+	}()
+}
+
+// Stop stops Scheduler processing.
+//
+// Stop is idempotent and safe to call multiple times. Because Stop closes
+// Scheduler.stopCh, the scheduler instance is not restartable after Stop;
+// create a new Scheduler to start processing again.
+func (s *Scheduler) Stop() {
+	select {
+	case <-s.stopCh:
+		return
+	default:
+		close(s.stopCh)
+	}
+}
+
+// List returns current scheduler entries.
+func (s *Scheduler) List() []domain.CronEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entries := make([]domain.CronEntry, 0, len(s.entries))
+	for _, e := range s.entries {
+		entries = append(entries, domain.CronEntry{
+			ID:       e.id,
+			Name:     e.name,
+			Schedule: e.schedule,
+			LastRun:  e.lastRun,
+			NextRun:  e.nextRun,
+			Running:  e.running.Load(),
+		})
+	}
+
+	return entries
+}
+
+// RunNow triggers a registered job immediately with the provided context.
+func (s *Scheduler) RunNow(ctx context.Context, id string) error {
+	e := s.getEntry(id)
+	if e == nil {
+		return fmt.Errorf("schedule %q not found", id)
+	}
+
+	return s.executeEntry(ctx, e)
+}
+
+func (s *Scheduler) runDue(ctx context.Context) {
+	now := s.nowFn()
+	entries := s.dueEntries(now)
+	sem := make(chan struct{}, s.maxJobs)
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		wg.Add(1)
+		sem <- struct{}{}
+
+		e := e
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := s.executeEntry(ctx, e); err != nil {
+				s.log.Warn().Err(err).Str("schedule_id", e.id).Msg("scheduled job failed")
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func (s *Scheduler) executeEntry(ctx context.Context, e *entry) error {
+	if !e.running.CompareAndSwap(false, true) {
+		return fmt.Errorf("schedule %q is already running", e.id)
+	}
+	defer e.running.Store(false)
+
+	now := s.nowFn()
+	var jobErr error
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				jobErr = fmt.Errorf("job panic: %v", rec)
+			}
+		}()
+		jobErr = e.job(ctx)
+	}()
+
+	completedAt := s.nowFn()
+	if completedAt.Before(now) {
+		completedAt = now
+	}
+
+	nextRun, nextErr := calculateNextRun(completedAt, e.schedule)
+	if nextErr != nil {
+		if jobErr != nil {
+			return fmt.Errorf("job failed: %w; also failed to calculate next run: %v", jobErr, nextErr)
+		}
+		return nextErr
+	}
+
+	s.mu.Lock()
+	e.lastRun = now
+	e.nextRun = nextRun
+	s.mu.Unlock()
+
+	return jobErr
+}
+
+func (s *Scheduler) getEntry(id string) *entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.entries[id]
+}
+
+func (s *Scheduler) dueEntries(now time.Time) []*entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entries := make([]*entry, 0, len(s.entries))
+	for _, e := range s.entries {
+		if now.Before(e.nextRun) {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+// calculateNextRun computes the next execution time using UTC-only preset rules.
+//
+// Current MVP behavior is intentionally fixed to UTC because domain.CronSchedule
+// has no timezone field yet:
+//   - daily:   02:00 UTC
+//   - weekly:  Sunday 03:00 UTC
+//   - monthly: first day of month 04:00 UTC
+//
+// This means users in non-UTC timezones should account for UTC offsets.
+//
+// TODO: add timezone support on domain.CronSchedule once timezone-aware
+// scheduling is introduced. Default timezone should be the host system timezone
+// when no explicit timezone is configured.
+func calculateNextRun(now time.Time, schedule domain.CronSchedule) (time.Time, error) {
+	now = now.UTC()
+
+	switch schedule.Preset {
+	case domain.ScheduleHourly:
+		next := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, time.UTC)
+		if !next.After(now) {
+			next = next.Add(time.Hour)
+		}
+		return next, nil
+	case domain.ScheduleDaily:
+		next := time.Date(now.Year(), now.Month(), now.Day(), 2, 0, 0, 0, time.UTC)
+		if !next.After(now) {
+			next = next.AddDate(0, 0, 1)
+		}
+		return next, nil
+	case domain.ScheduleWeekly:
+		daysUntilSunday := (7 - int(now.Weekday())) % 7
+		next := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, time.UTC).AddDate(0, 0, daysUntilSunday)
+		if !next.After(now) {
+			next = next.AddDate(0, 0, 7)
+		}
+		return next, nil
+	case domain.ScheduleMonthly:
+		next := time.Date(now.Year(), now.Month(), 1, 4, 0, 0, 0, time.UTC)
+		if !next.After(now) {
+			next = next.AddDate(0, 1, 0)
+		}
+		return next, nil
+	default:
+		return time.Time{}, fmt.Errorf("unsupported schedule preset: %q", schedule.Preset)
+	}
+}
