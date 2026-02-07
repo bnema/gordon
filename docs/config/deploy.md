@@ -69,6 +69,8 @@ the previous container during zero-downtime replacement.
 - Uses Go duration format (examples: `"2s"`, `"10s"`, `"1m"`).
 - Applied only when a previous container exists and cache invalidation was
   triggered for the deployed domain.
+- If explicitly set to `"0s"` (or a negative duration), delay is disabled and
+  Gordon switches immediately after invalidation.
 
 Default: `"2s"`
 
