@@ -2,12 +2,14 @@ package filesystem
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -15,10 +17,7 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-const (
-	backupDirName         = "backups"
-	backupTimestampLayout = "20060102T150405Z"
-)
+const backupTimestampLayout = "20060102T150405Z"
 
 // BackupStorage implements backup artifact persistence on local filesystem.
 type BackupStorage struct {
@@ -28,8 +27,7 @@ type BackupStorage struct {
 
 // NewBackupStorage creates a new filesystem backup storage.
 func NewBackupStorage(rootDir string, log zerowrap.Logger) (*BackupStorage, error) {
-	backupRoot := filepath.Join(rootDir, backupDirName)
-	if err := os.MkdirAll(backupRoot, 0750); err != nil {
+	if err := os.MkdirAll(rootDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
@@ -45,7 +43,7 @@ func (s *BackupStorage) Store(_ context.Context, domainName, dbName string, sche
 		schedulePart = "manual"
 	}
 
-	backupDir := filepath.Join(s.rootDir, backupDirName, domainPart, dbPart, schedulePart)
+	backupDir := filepath.Join(s.rootDir, domainPart, dbPart, schedulePart)
 	if err := os.MkdirAll(backupDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create backup path: %w", err)
 	}
@@ -54,7 +52,7 @@ func (s *BackupStorage) Store(_ context.Context, domainName, dbName string, sche
 	finalPath := filepath.Join(backupDir, fileName)
 	tmpPath := finalPath + ".tmp"
 
-	f, err := os.Create(tmpPath)
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp backup file: %w", err)
 	}
@@ -80,7 +78,7 @@ func (s *BackupStorage) Store(_ context.Context, domainName, dbName string, sche
 
 // Get retrieves a backup file by path.
 func (s *BackupStorage) Get(_ context.Context, path string) (io.ReadCloser, error) {
-	if !pathWithinRoot(filepath.Join(s.rootDir, backupDirName), path) {
+	if !pathWithinRoot(s.rootDir, path) {
 		return nil, fmt.Errorf("backup path escapes storage root")
 	}
 
@@ -93,7 +91,7 @@ func (s *BackupStorage) Get(_ context.Context, path string) (io.ReadCloser, erro
 
 // List returns backups for a domain, optionally filtered by schedule.
 func (s *BackupStorage) List(_ context.Context, domainName string, schedule *domain.BackupSchedule) ([]domain.BackupJob, error) {
-	domainRoot := filepath.Join(s.rootDir, backupDirName, sanitizeBackupPathComponent(domainName))
+	domainRoot := filepath.Join(s.rootDir, sanitizeBackupPathComponent(domainName))
 	if _, err := os.Stat(domainRoot); err != nil {
 		if os.IsNotExist(err) {
 			return []domain.BackupJob{}, nil
@@ -163,7 +161,7 @@ func (s *BackupStorage) List(_ context.Context, domainName string, schedule *dom
 
 // Delete removes a backup file.
 func (s *BackupStorage) Delete(_ context.Context, path string) error {
-	if !pathWithinRoot(filepath.Join(s.rootDir, backupDirName), path) {
+	if !pathWithinRoot(s.rootDir, path) {
 		return fmt.Errorf("backup path escapes storage root")
 	}
 	return os.Remove(path)
@@ -200,11 +198,44 @@ func (s *BackupStorage) ApplyRetention(ctx context.Context, domainName string, p
 				}
 				return deleted, err
 			}
+			if err := s.removeEmptyBackupDirs(group[idx].FilePath, domainName); err != nil {
+				return deleted, err
+			}
 			deleted++
 		}
 	}
 
 	return deleted, nil
+}
+
+func (s *BackupStorage) removeEmptyBackupDirs(filePath, domainName string) error {
+	backupRoot := s.rootDir
+	domainRoot := filepath.Join(backupRoot, sanitizeBackupPathComponent(domainName))
+
+	dir := filepath.Dir(filePath)
+	for {
+		if !pathWithinRoot(backupRoot, dir) {
+			return nil
+		}
+		if dir == domainRoot || dir == backupRoot {
+			break
+		}
+
+		err := os.Remove(dir)
+		if err == nil {
+			dir = filepath.Dir(dir)
+			continue
+		}
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+			return nil
+		}
+		return err
+	}
+
+	return nil
 }
 
 func retentionKeepCount(policy domain.RetentionPolicy, schedule domain.BackupSchedule) int {
@@ -227,13 +258,29 @@ func sanitizeBackupPathComponent(input string) string {
 	if clean == "" {
 		return "unknown"
 	}
+	if strings.Trim(clean, ".") == "" {
+		return "unknown"
+	}
+	clean = strings.Trim(clean, ".")
+	if clean == "" {
+		return "unknown"
+	}
 	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_")
 	return replacer.Replace(clean)
 }
 
 func pathWithinRoot(root, path string) bool {
-	rootClean := filepath.Clean(root)
-	pathClean := filepath.Clean(path)
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+
+	rootClean := filepath.Clean(rootAbs)
+	pathClean := filepath.Clean(pathAbs)
 	rel, err := filepath.Rel(rootClean, pathClean)
 	if err != nil {
 		return false

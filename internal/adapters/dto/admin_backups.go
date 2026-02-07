@@ -4,17 +4,17 @@ import "time"
 
 // BackupJob represents backup metadata in admin API responses.
 type BackupJob struct {
-	ID          string    `json:"id"`
-	Domain      string    `json:"domain"`
-	DBName      string    `json:"db_name"`
-	Schedule    string    `json:"schedule,omitempty"`
-	Type        string    `json:"type"`
-	Status      string    `json:"status"`
-	StartedAt   time.Time `json:"started_at"`
-	CompletedAt time.Time `json:"completed_at,omitempty"`
-	SizeBytes   int64     `json:"size_bytes"`
-	FilePath    string    `json:"file_path"`
-	Error       string    `json:"error,omitempty"`
+	ID          string     `json:"id"`
+	Domain      string     `json:"domain"`
+	DBName      string     `json:"db_name"`
+	Schedule    string     `json:"schedule,omitempty"`
+	Type        string     `json:"type"`
+	Status      string     `json:"status"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	SizeBytes   int64      `json:"size_bytes"`
+	FilePath    string     `json:"file_path"`
+	Error       string     `json:"error,omitempty"`
 }
 
 // BackupsResponse is returned by backup listing endpoints.
