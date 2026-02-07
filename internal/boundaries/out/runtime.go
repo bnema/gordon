@@ -60,6 +60,10 @@ type ContainerRuntime interface {
 	// Label inspection
 	GetImageLabels(ctx context.Context, imageRef string) (map[string]string, error)
 
+	// In-container operations
+	ExecInContainer(ctx context.Context, containerID string, cmd []string) (*ExecResult, error)
+	CopyFromContainer(ctx context.Context, containerID, srcPath string) ([]byte, error)
+
 	// Network management
 	CreateNetwork(ctx context.Context, name string, options map[string]string) error
 	RemoveNetwork(ctx context.Context, name string) error
@@ -67,4 +71,11 @@ type ContainerRuntime interface {
 	NetworkExists(ctx context.Context, name string) (bool, error)
 	ConnectContainerToNetwork(ctx context.Context, containerName, networkName string) error
 	DisconnectContainerFromNetwork(ctx context.Context, containerName, networkName string) error
+}
+
+// ExecResult holds the result of executing a command in a container.
+type ExecResult struct {
+	ExitCode int
+	Stdout   []byte
+	Stderr   []byte
 }

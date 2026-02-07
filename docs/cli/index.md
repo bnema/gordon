@@ -29,6 +29,7 @@ Commands are organized by where they run:
 | `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
 | `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
 | `gordon status` | Show Gordon server status | [status](./status.md) |
+| `gordon backup` | Manage database backups | [backup](./backup.md) |
 
 ## Client Commands
 
@@ -72,6 +73,12 @@ gordon logs myapp.local -f           # Follow container logs
 
 # Check version
 gordon version
+
+# Backups
+gordon backup list
+gordon backup run app.example.com
+gordon backup detect app.example.com
+gordon backup status
 
 # Authentication
 gordon auth token generate --subject ci-bot --expiry 0

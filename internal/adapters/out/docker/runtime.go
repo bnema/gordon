@@ -3,6 +3,7 @@ package docker
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -21,8 +22,10 @@ import (
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -1105,6 +1108,64 @@ func (r *Runtime) DisconnectContainerFromNetwork(ctx context.Context, containerN
 
 	log.Info().Msg("container disconnected from network")
 	return nil
+}
+
+// ExecInContainer executes a command in a running container.
+func (r *Runtime) ExecInContainer(ctx context.Context, containerID string, cmd []string) (*out.ExecResult, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "docker",
+		zerowrap.FieldAction:   "ExecInContainer",
+		zerowrap.FieldEntityID: containerID,
+		"command":              strings.Join(cmd, " "),
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	if len(cmd) == 0 {
+		return nil, fmt.Errorf("command cannot be empty")
+	}
+
+	execResp, err := r.client.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+		Cmd:          cmd,
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to create exec")
+	}
+
+	attachResp, err := r.client.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to attach to exec")
+	}
+	defer attachResp.Close()
+
+	stdout, stderr, err := parseExecOutput(attachResp.Reader)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to read exec output")
+	}
+
+	inspectResp, err := r.client.ContainerExecInspect(ctx, execResp.ID)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to inspect exec result")
+	}
+
+	return &out.ExecResult{
+		ExitCode: inspectResp.ExitCode,
+		Stdout:   stdout,
+		Stderr:   stderr,
+	}, nil
+}
+
+func parseExecOutput(reader io.Reader) ([]byte, []byte, error) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, reader); err != nil {
+		return nil, nil, err
+	}
+
+	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
 // CopyFromContainer copies a file from a container to the host.
