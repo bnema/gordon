@@ -106,3 +106,21 @@ func TestSchedulerRunNowRejectsConcurrentRun(t *testing.T) {
 	err1 := <-firstErrCh
 	require.NoError(t, err1)
 }
+
+func TestSchedulerRunNowRecoversFromPanics(t *testing.T) {
+	s := NewScheduler(zerowrap.Default())
+	err := s.Add("panic-job", "panic job", domain.CronSchedule{Preset: domain.ScheduleHourly}, func(context.Context) error {
+		panic("boom")
+	})
+	require.NoError(t, err)
+
+	err = s.RunNow(context.Background(), "panic-job")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panic")
+
+	entries := s.List()
+	require.Len(t, entries, 1)
+	assert.False(t, entries[0].Running)
+	assert.False(t, entries[0].LastRun.IsZero())
+	assert.False(t, entries[0].NextRun.IsZero())
+}

@@ -49,7 +49,7 @@ type DBInfo struct {
 	ImageName   string
 	// Credentials contains sensitive values (passwords/tokens).
 	// Never log or expose this map in API responses.
-	Credentials map[string]string
+	Credentials map[string]string `json:"-"`
 }
 
 // ClearCredentials clears sensitive credential values from DBInfo.
