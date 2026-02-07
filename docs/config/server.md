@@ -8,6 +8,10 @@ Core server settings for Gordon.
 [server]
 port = 8080                              # HTTP proxy port
 registry_port = 5000                     # Container registry port
+tls_enabled = false                      # Enable native TLS listener
+tls_port = 443                           # HTTPS listener port
+tls_cert_file = ""                       # PEM certificate file (required when TLS enabled)
+tls_key_file = ""                        # PEM key file (required when TLS enabled)
 gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 # data_dir = "~/.gordon"                 # Data storage directory (default)
 ```
@@ -18,6 +22,10 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 |--------|------|---------|-------------|
 | `port` | int | `80` | HTTP proxy port for routing traffic to containers |
 | `registry_port` | int | `5000` | Docker registry port for image push/pull |
+| `tls_enabled` | bool | `false` | Enable native HTTPS listener for proxy traffic |
+| `tls_port` | int | `443` | HTTPS listener port when `tls_enabled` is true |
+| `tls_cert_file` | string | `""` | Path to PEM certificate file |
+| `tls_key_file` | string | `""` | Path to PEM private key file |
 | `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
 | `registry_domain` | string | - | Deprecated alias for `gordon_domain` |
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
@@ -41,6 +49,24 @@ For rootless containers, you'll typically use a high port and configure firewall
 # Forward port 80 to 8080
 sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8080
 ```
+
+### Native TLS Listener
+
+Enable native HTTPS directly in Gordon:
+
+```toml
+[server]
+tls_enabled = true
+tls_port = 443
+tls_cert_file = "/etc/gordon/certs/fullchain.pem"
+tls_key_file = "/etc/gordon/certs/privkey.pem"
+```
+
+With TLS enabled:
+- Gordon terminates HTTPS on `tls_port`
+- Host-based routing still works (apps, `/v2/*`, `/auth/*`, `/admin/*`)
+- `port` remains available for plain HTTP unless you restrict it externally
+- If `tls_cert_file`/`tls_key_file` are empty, Gordon auto-generates a self-signed pair in `{data_dir}/tls/`
 
 ### Registry Port
 
