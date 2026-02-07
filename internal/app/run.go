@@ -70,19 +70,20 @@ import (
 // Config holds the application configuration.
 type Config struct {
 	Server struct {
-		Port                 int    `mapstructure:"port"`
-		RegistryPort         int    `mapstructure:"registry_port"`
-		GordonDomain         string `mapstructure:"gordon_domain"`
-		RegistryDomain       string `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
-		TLSEnabled           bool   `mapstructure:"tls_enabled"`
-		TLSPort              int    `mapstructure:"tls_port"`
-		TLSCertFile          string `mapstructure:"tls_cert_file"`
-		TLSKeyFile           string `mapstructure:"tls_key_file"`
-		DataDir              string `mapstructure:"data_dir"`
-		MaxProxyBodySize     string `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
-		MaxBlobChunkSize     string `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
-		MaxProxyResponseSize string `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
-		MaxConcurrentConns   int    `mapstructure:"max_concurrent_connections"`
+		Port                 int      `mapstructure:"port"`
+		RegistryPort         int      `mapstructure:"registry_port"`
+		GordonDomain         string   `mapstructure:"gordon_domain"`
+		RegistryDomain       string   `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
+		TLSEnabled           bool     `mapstructure:"tls_enabled"`
+		TLSPort              int      `mapstructure:"tls_port"`
+		TLSCertFile          string   `mapstructure:"tls_cert_file"`
+		TLSKeyFile           string   `mapstructure:"tls_key_file"`
+		DataDir              string   `mapstructure:"data_dir"`
+		MaxProxyBodySize     string   `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
+		MaxBlobChunkSize     string   `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
+		MaxProxyResponseSize string   `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
+		MaxConcurrentConns   int      `mapstructure:"max_concurrent_connections"`
+		RegistryAllowedIPs   []string `mapstructure:"registry_allowed_ips"`
 	} `mapstructure:"server"`
 
 	Logging struct {
@@ -1171,6 +1172,27 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		middleware.SecurityHeaders,
 	}
 
+	// CIDR allowlist for registry access (e.g., restrict to Tailscale IPs).
+	// Inserted before rate limiting so denied IPs never consume limiter tokens.
+	var cidrAllowlistMiddleware func(http.Handler) http.Handler
+	if len(cfg.Server.RegistryAllowedIPs) > 0 {
+		allowedNets := middleware.ParseTrustedProxies(cfg.Server.RegistryAllowedIPs)
+		if len(allowedNets) != len(cfg.Server.RegistryAllowedIPs) {
+			for _, entry := range cfg.Server.RegistryAllowedIPs {
+				if nets := middleware.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
+					log.Warn().Str("entry", entry).Msg("ignoring invalid registry_allowed_ips entry")
+				}
+			}
+		}
+		if len(allowedNets) == 0 {
+			log.Error().
+				Strs("registry_allowed_ips", cfg.Server.RegistryAllowedIPs).
+				Msg("registry_allowed_ips is set but no valid entries were parsed; registry will allow all traffic")
+		}
+		cidrAllowlistMiddleware = middleware.RegistryCIDRAllowlist(allowedNets, trustedNets, log)
+		registryMiddlewares = append(registryMiddlewares, cidrAllowlistMiddleware)
+	}
+
 	// Create rate limiters using the factory
 	var rateLimitMiddleware func(http.Handler) http.Handler
 	if cfg.API.RateLimit.Enabled {
@@ -1206,12 +1228,16 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	if svc.authHandler != nil {
 		// Auth endpoints are NOT protected by auth - they're where clients authenticate
 		// but still need rate limiting to prevent brute force attacks
-		authWithMiddleware := middleware.Chain(
+		authMiddlewares := []func(http.Handler) http.Handler{
 			middleware.PanicRecovery(log),
 			middleware.RequestLogger(log, trustedNets),
 			middleware.SecurityHeaders,
-			rateLimitMiddleware,
-		)(svc.authHandler)
+		}
+		if cidrAllowlistMiddleware != nil {
+			authMiddlewares = append(authMiddlewares, cidrAllowlistMiddleware)
+		}
+		authMiddlewares = append(authMiddlewares, rateLimitMiddleware)
+		authWithMiddleware := middleware.Chain(authMiddlewares...)(svc.authHandler)
 		registryMux.Handle("/auth/", authWithMiddleware)
 	}
 	registryMux.Handle("/v2/", registryWithMiddleware)
@@ -1745,6 +1771,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
+	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("deploy.readiness_delay", "5s")
 
 	ConfigureViper(v, configPath)
