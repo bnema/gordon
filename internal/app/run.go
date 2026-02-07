@@ -869,9 +869,10 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 	}
 
 	maxConcurrentConns := cfg.Server.MaxConcurrentConns
-	if maxConcurrentConns == 0 {
-		maxConcurrentConns = 10000 // default
+	if maxConcurrentConns < 0 {
+		maxConcurrentConns = 10000 // default when explicitly set to -1
 	}
+	// 0 means no limit (as documented in proxy.Config)
 
 	return &proxyConfigResult{
 		proxyConfig: proxy.Config{
@@ -985,11 +986,21 @@ func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, lo
 			return
 		}
 
-		// Update proxy config from viper (reads directly from viper, not memory)
-		svc.proxySvc.UpdateConfig(proxy.Config{
-			RegistryDomain: v.GetString("server.registry_domain"),
-			RegistryPort:   v.GetInt("server.registry_port"),
-		})
+		// Re-unmarshal config and rebuild proxy config to pick up all changes
+		var reloadCfg Config
+		if err := v.Unmarshal(&reloadCfg); err != nil {
+			log.Error().Err(err).Msg("failed to unmarshal config on reload")
+			return
+		}
+		if reloadCfg.Server.GordonDomain != "" {
+			reloadCfg.Server.RegistryDomain = reloadCfg.Server.GordonDomain
+		}
+		reloadedProxy, err := buildProxyConfig(reloadCfg, log)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to parse proxy config on reload")
+			return
+		}
+		svc.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
 
 		// Clear proxy target cache to pick up external route changes
 		if err := svc.proxySvc.RefreshTargets(ctx); err != nil {
@@ -1205,7 +1216,7 @@ func gracefulShutdown(registrySrv, proxySrv *http.Server, containerSvc *containe
 		log.Warn().Err(err).Msg("proxy server shutdown error")
 	}
 
-	if err := containerSvc.Shutdown(context.Background()); err != nil {
+	if err := containerSvc.Shutdown(shutdownCtx); err != nil {
 		log.Warn().Err(err).Msg("error during container shutdown")
 	}
 
@@ -1532,6 +1543,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
+	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("deploy.readiness_delay", "5s")
 
 	ConfigureViper(v, configPath)

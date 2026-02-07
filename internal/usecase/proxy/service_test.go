@@ -407,8 +407,8 @@ func TestService_ConcurrentConnectionLimit(t *testing.T) {
 		MaxConcurrentConns: 1,
 	})
 
-	assert.NotNil(t, svc.connSem, "semaphore should be initialized when MaxConcurrentConns > 0")
-	assert.Equal(t, 1, cap(svc.connSem))
+	assert.Equal(t, 1, svc.config.MaxConcurrentConns)
+	assert.Equal(t, int64(0), svc.activeConns.Load(), "active connections should start at 0")
 }
 
 func TestService_ConcurrentConnectionLimit_Disabled(t *testing.T) {
@@ -420,7 +420,7 @@ func TestService_ConcurrentConnectionLimit_Disabled(t *testing.T) {
 		MaxConcurrentConns: 0,
 	})
 
-	assert.Nil(t, svc.connSem, "semaphore should be nil when MaxConcurrentConns is 0")
+	assert.Equal(t, 0, svc.config.MaxConcurrentConns, "0 means no limit")
 }
 
 func TestService_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
@@ -432,8 +432,9 @@ func TestService_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
 		MaxConcurrentConns: 1,
 	})
 
-	// Fill the semaphore
-	svc.connSem <- struct{}{}
+	// Simulate an in-flight connection by incrementing the atomic counter
+	svc.activeConns.Add(1)
+	defer svc.activeConns.Add(-1)
 
 	// Next request should get 503
 	req := httptest.NewRequest("GET", "http://example.com/test", nil)
@@ -441,9 +442,6 @@ func TestService_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
 	svc.ServeHTTP(w, req)
 
 	assert.Equal(t, 503, w.Code)
-
-	// Drain semaphore
-	<-svc.connSem
 }
 
 func TestServeHTTP_MaxBodySize(t *testing.T) {

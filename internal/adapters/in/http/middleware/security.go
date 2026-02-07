@@ -24,14 +24,17 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 
 		// HSTS: Enforce HTTPS-only for browsers. Only set when the request
-		// arrived over TLS to avoid issues with plain HTTP development setups.
-		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		// arrived over a real TLS connection. We do NOT trust X-Forwarded-Proto
+		// here because it is client-spoofable unless the request came from a
+		// trusted proxy, and we have no trusted-proxy list at this layer.
+		if r.TLS != nil {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 
-		// CSP for proxy-generated error pages. Backends set their own CSP
-		// which will override this for proxied content.
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		// NOTE: CSP is intentionally NOT set here. Gordon proxies arbitrary web
+		// apps, so a blanket "default-src 'none'" would break all proxied sites.
+		// Instead, CSP is set directly on proxy-generated error responses in the
+		// proxy error handlers (service.go).
 
 		next.ServeHTTP(w, r)
 	})
