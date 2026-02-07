@@ -31,6 +31,7 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
 | `max_proxy_body_size` | string | `"512MB"` | Maximum request body size for proxied requests |
 | `max_blob_chunk_size` | string | `"95MB"` | Maximum request body size for a single registry blob upload chunk |
+| `registry_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 
 ## Port Configuration
 
@@ -191,6 +192,37 @@ max_blob_chunk_size = "1GB"    # Allow larger layers
 - When a blob chunk exceeds the limit, Gordon returns `413 Request Entity Too Large`
 - Docker/Podman may send a full layer in one request, so set this high enough for your base images
 - Default (`95MB`) is compatible with Cloudflare and most CDN proxies; increase if pushing very large layers directly
+
+## Registry IP Allowlist
+
+The `registry_allowed_ips` setting restricts registry access to specific IPs or IP ranges. Accepts both CIDR notation (`100.64.0.0/10`) and individual IPs (`203.0.113.50`). When set, only requests from listed addresses (plus localhost) can reach registry and auth endpoints. An empty list allows all traffic (default).
+
+```toml
+[server]
+registry_allowed_ips = [
+  "100.64.0.0/10",   # Tailscale CGNAT range
+  "203.0.113.50",    # single IP (treated as /32)
+]
+```
+
+**Behavior:**
+- Single IPs are automatically converted to `/32` (IPv4) or `/128` (IPv6)
+- Denied requests receive `403 Forbidden`
+- Localhost (`127.0.0.0/8`, `::1`) is always allowed so Gordon can pull from its own registry
+- Respects `trusted_proxies` for accurate client IP extraction behind reverse proxies
+- Applied before rate limiting and authentication
+- Changes require a Gordon server restart; not picked up by config hot-reload
+
+**Use cases:**
+- Restrict registry to Tailscale network: `["100.64.0.0/10"]`
+- Restrict to private subnets: `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]`
+- Allow a specific CI server: `["100.64.0.0/10", "203.0.113.50"]`
+
+Via environment variable:
+
+```bash
+GORDON_SERVER_REGISTRY_ALLOWED_IPS=100.64.0.0/10
+```
 
 ## Examples
 
