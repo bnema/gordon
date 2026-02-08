@@ -142,6 +142,55 @@ Verify public SSH is blocked:
 ssh -o ConnectTimeout=5 root@<public-ip>  # Should timeout
 ```
 
+## Step 6.5: Restrict Registry and Auth to Tailnet CIDR
+
+If you want `/auth/*` and registry (`/v2/*`) reachable only from your tailnet, set Gordon's registry allowlist to the Tailscale CGNAT range.
+
+Edit `~/.config/gordon/gordon.toml`:
+
+```toml
+[server]
+registry_allowed_ips = ["100.64.0.0/10"]
+```
+
+Apply the change:
+
+```bash
+systemctl --user restart gordon
+```
+
+Behavior:
+
+- Requests from tailnet IPs (`100.64.0.0/10`) are allowed.
+- Requests outside that CIDR get `403 Forbidden` on registry/auth endpoints.
+- App routes still use normal host-based routing through your proxy ports.
+
+For private operations (auth, push/pull, admin API), keep using the HTTPS registry domain, but resolve that domain to the VPS tailnet IP (for example, via Cloudflare DNS to the tailnet address). With self-signed certs, configure the CLI remote with insecure TLS enabled.
+
+```bash
+# Example: save remote once
+gordon remotes add tailnet-reg https://gordon.example.com --token-env GORDON_TOKEN --insecure
+gordon remotes use tailnet-reg
+
+# Then use commands normally (auth + admin API)
+gordon auth login
+gordon routes list
+gordon backup status
+```
+
+`~/.config/gordon/remotes.toml` should contain an entry like:
+
+```toml
+active = "tailnet-reg"
+
+[remotes.tailnet-reg]
+url = "https://gordon.example.com"
+token_env = "GORDON_TOKEN"
+insecure_tls = true
+```
+
+This keeps transport on HTTPS while allowing self-signed certificates in tailnet-only deployments.
+
 ---
 
 ## Step 7: Install CrowdSec
