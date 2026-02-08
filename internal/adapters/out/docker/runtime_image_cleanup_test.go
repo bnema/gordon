@@ -37,14 +37,14 @@ func TestRuntime_PruneImages_DanglingOnlyFilter(t *testing.T) {
 	assert.EqualValues(t, 1234, report.SpaceReclaimed)
 }
 
-func TestRuntime_PruneImages_FullUnusedFilter(t *testing.T) {
+func TestRuntime_PruneImages_FullUnusedHasNoDanglingFilter(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/v1.41/images/prune", r.URL.Path)
 
 		parsedFilters, err := filters.FromJSON(r.URL.Query().Get("filters"))
 		require.NoError(t, err)
-		assert.Equal(t, []string{"false"}, parsedFilters.Get("dangling"))
+		assert.Empty(t, parsedFilters.Get("dangling"))
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ImagesDeleted":[{"Deleted":"sha256:def"}],"SpaceReclaimed":5678}`))
@@ -91,7 +91,7 @@ func TestRuntime_PruneImages_ReturnsErrorOnInvalidPayload(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRuntime_PruneImages_ReturnsErrorOnSpaceReclaimedOverflow(t *testing.T) {
+func TestRuntime_PruneImages_CapsSpaceReclaimedOverflow(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/v1.41/images/prune", r.URL.Path)
@@ -102,11 +102,10 @@ func TestRuntime_PruneImages_ReturnsErrorOnSpaceReclaimedOverflow(t *testing.T) 
 	defer server.Close()
 
 	runtime := newRuntimeForHTTPServer(t, server)
-	_, err := runtime.PruneImages(context.Background(), true)
+	report, err := runtime.PruneImages(context.Background(), true)
 
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "space reclaimed")
-	assert.ErrorContains(t, err, "int64")
+	require.NoError(t, err)
+	assert.EqualValues(t, math.MaxInt64, report.SpaceReclaimed)
 }
 
 func TestRuntime_ListImagesDetailed_MapsImageSummary(t *testing.T) {

@@ -111,6 +111,8 @@ func (s *Service) PruneRuntime(ctx context.Context) (domain.ImagePruneReport, er
 }
 
 // PruneRegistry applies tag retention and blob garbage collection.
+// It keeps the most recent keepLast tags from tagInfos and always keeps
+// the "latest" tag when present, so up to keepLast+1 tags can be retained.
 func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.ImagePruneReport, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
