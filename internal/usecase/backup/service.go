@@ -86,6 +86,7 @@ func (s *Service) RunForSchedule(ctx context.Context, schedule domain.BackupSche
 	for _, domainName := range domainNames {
 		dbs, err := s.DetectDatabases(ctx, domainName)
 		if err != nil {
+			s.log.Error().Err(err).Str("domain", domainName).Msg("scheduled backup database detection failed")
 			if firstErr == nil {
 				firstErr = fmt.Errorf("detect databases for %s: %w", domainName, err)
 			}
@@ -93,13 +94,19 @@ func (s *Service) RunForSchedule(ctx context.Context, schedule domain.BackupSche
 		}
 
 		for _, db := range dbs {
-			if _, err := s.runBackup(ctx, domainName, db.Name, schedule); err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("run backup for %s/%s: %w", domainName, db.Name, err)
+			if _, err := s.runBackupForDB(ctx, domainName, db, schedule); err != nil {
+				s.log.Error().Err(err).Str("domain", domainName).Str("db", db.Name).Msg("scheduled backup failed")
+				if firstErr == nil {
+					firstErr = fmt.Errorf("run backup for %s/%s: %w", domainName, db.Name, err)
+				}
 			}
 		}
 
-		if _, err := s.storage.ApplyRetention(ctx, domainName, s.config.Retention); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("apply retention for %s: %w", domainName, err)
+		if _, err := s.storage.ApplyRetention(ctx, domainName, s.config.Retention); err != nil {
+			s.log.Error().Err(err).Str("domain", domainName).Msg("scheduled backup retention failed")
+			if firstErr == nil {
+				firstErr = fmt.Errorf("apply retention for %s: %w", domainName, err)
+			}
 		}
 	}
 
@@ -107,8 +114,6 @@ func (s *Service) RunForSchedule(ctx context.Context, schedule domain.BackupSche
 }
 
 func (s *Service) runBackup(ctx context.Context, domainName, dbName string, schedule domain.BackupSchedule) (*domain.BackupResult, error) {
-	started := time.Now().UTC()
-
 	dbs, err := s.DetectDatabases(ctx, domainName)
 	if err != nil {
 		return nil, err
@@ -118,6 +123,12 @@ func (s *Service) runBackup(ctx context.Context, domainName, dbName string, sche
 	if err != nil {
 		return nil, err
 	}
+
+	return s.runBackupForDB(ctx, domainName, db, schedule)
+}
+
+func (s *Service) runBackupForDB(ctx context.Context, domainName string, db domain.DBInfo, schedule domain.BackupSchedule) (*domain.BackupResult, error) {
+	started := time.Now().UTC()
 
 	if db.Type != domain.DBTypePostgreSQL {
 		return nil, fmt.Errorf("unsupported database type: %s", db.Type)

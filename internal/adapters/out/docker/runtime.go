@@ -624,10 +624,8 @@ func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepk
 		spaceReclaimed = uint64(math.MaxInt64)
 	}
 
-	spaceReclaimedInt, err := strconv.ParseInt(strconv.FormatUint(spaceReclaimed, 10), 10, 64)
-	if err != nil {
-		return runtimepkg.PruneReport{}, log.WrapErr(err, "failed to map space reclaimed to int64")
-	}
+	//nolint:gosec // spaceReclaimed is capped to MaxInt64 above
+	spaceReclaimedInt := int64(spaceReclaimed)
 
 	return runtimepkg.PruneReport{
 		DeletedIDs:     deletedIDs,
