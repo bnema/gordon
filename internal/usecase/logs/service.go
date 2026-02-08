@@ -86,85 +86,134 @@ func (s *Service) FollowProcessLogs(ctx context.Context, initialLines int) (<-ch
 		zerowrap.FieldUseCase: "FollowProcessLogs",
 		"initial_lines":       initialLines,
 	})
-	log := zerowrap.FromCtx(ctx)
-
-	if s.useFileProcessLogs() {
-		if s.logFilePath == "" {
-			return nil, fmt.Errorf("log file path not configured")
-		}
-
-		file, err := os.Open(s.logFilePath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				log.Warn().Str("log_path", s.logFilePath).
-					Msg("process log file missing, falling back to journalctl follow")
-				return s.followProcessLogsFromJournal(ctx, initialLines)
-			}
-			return nil, log.WrapErr(err, "failed to open log file")
-		}
-
-		ch := make(chan string, 100)
-
-		go func() {
-			defer close(ch)
-			defer file.Close()
-
-			// First, get initial lines
-			if initialLines > 0 {
-				lines, err := tailLines(file, initialLines)
-				if err != nil {
-					log.Warn().Err(err).Msg("failed to read initial lines")
-				} else {
-					for _, line := range lines {
-						select {
-						case ch <- line:
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
-			}
-
-			// Seek to end for following
-			if _, err := file.Seek(0, io.SeekEnd); err != nil {
-				log.Warn().Err(err).Msg("failed to seek to end")
-				return
-			}
-
-			// Follow new lines
-			reader := bufio.NewReader(file)
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					line, err := reader.ReadString('\n')
-					if err != nil {
-						if err == io.EOF {
-							time.Sleep(100 * time.Millisecond)
-							continue
-						}
-						log.Warn().Err(err).Msg("error reading log file")
-						return
-					}
-					line = strings.TrimRight(line, "\n\r")
-					select {
-					case ch <- line:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}()
-
-		return ch, nil
+	if !s.useFileProcessLogs() {
+		return s.followProcessLogsFromJournal(ctx, initialLines)
 	}
 
-	return s.followProcessLogsFromJournal(ctx, initialLines)
+	return s.followProcessLogsFromFileOrJournal(ctx, initialLines)
 }
 
 func (s *Service) useFileProcessLogs() bool {
 	return s.fileLoggingEnabled
+}
+
+func (s *Service) followProcessLogsFromFileOrJournal(
+	ctx context.Context,
+	initialLines int,
+) (<-chan string, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	file, err := s.openProcessLogFile()
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Warn().Str("log_path", s.logFilePath).
+				Msg("process log file missing, falling back to journalctl follow")
+			return s.followProcessLogsFromJournal(ctx, initialLines)
+		}
+		return nil, log.WrapErr(err, "failed to open log file")
+	}
+
+	return s.followProcessLogsFromFile(ctx, file, initialLines), nil
+}
+
+func (s *Service) openProcessLogFile() (*os.File, error) {
+	if s.logFilePath == "" {
+		return nil, fmt.Errorf("log file path not configured")
+	}
+
+	return os.Open(s.logFilePath)
+}
+
+func (s *Service) followProcessLogsFromFile(
+	ctx context.Context,
+	file *os.File,
+	initialLines int,
+) <-chan string {
+	log := zerowrap.FromCtx(ctx)
+	ch := make(chan string, 100)
+
+	go func() {
+		defer close(ch)
+		defer file.Close()
+
+		if !s.emitInitialFileLogs(ctx, file, initialLines, ch) {
+			return
+		}
+		if err := s.seekToEndForFileFollow(file); err != nil {
+			log.Warn().Err(err).Msg("failed to seek to end")
+			return
+		}
+
+		s.streamFileFollowLogs(ctx, file, ch)
+	}()
+
+	return ch
+}
+
+func (s *Service) emitInitialFileLogs(
+	ctx context.Context,
+	file *os.File,
+	initialLines int,
+	ch chan<- string,
+) bool {
+	if initialLines <= 0 {
+		return true
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	lines, err := tailLines(file, initialLines)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read initial lines")
+		return true
+	}
+
+	for _, line := range lines {
+		if !sendLogLineWithChannel(ctx, ch, line) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (s *Service) seekToEndForFileFollow(file *os.File) error {
+	_, err := file.Seek(0, io.SeekEnd)
+	return err
+}
+
+func (s *Service) streamFileFollowLogs(ctx context.Context, file *os.File, ch chan<- string) {
+	log := zerowrap.FromCtx(ctx)
+	reader := bufio.NewReader(file)
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			log.Warn().Err(err).Msg("error reading log file")
+			return
+		}
+
+		line = strings.TrimRight(line, "\n\r")
+		if !sendLogLineWithChannel(ctx, ch, line) {
+			return
+		}
+	}
+}
+
+func sendLogLineWithChannel(ctx context.Context, ch chan<- string, line string) bool {
+	select {
+	case ch <- line:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (s *Service) getProcessLogsFromJournal(ctx context.Context, lines int) ([]string, error) {
