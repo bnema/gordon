@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/bnema/zerowrap"
 
@@ -74,8 +75,10 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 		return "", log.WrapErr(err, "failed to store manifest")
 	}
 
-	// Publish image pushed event
-	if s.eventBus != nil {
+	// Publish image pushed event only for tag references (not digests).
+	// A docker push sends manifests by both digest and tag; firing only on
+	// tag prevents duplicate deploy triggers for the same push.
+	if s.eventBus != nil && !strings.HasPrefix(manifest.Reference, "sha256:") {
 		if err := s.eventBus.Publish(domain.EventImagePushed, domain.ImagePushedPayload{
 			Name:        manifest.Name,
 			Reference:   manifest.Reference,
