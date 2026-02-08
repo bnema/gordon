@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sort"
 	"testing"
 	"time"
 
@@ -612,7 +611,6 @@ func (f *fakeBlobStorage) DeleteBlob(digest string) error {
 		f.blobs = append(f.blobs[:i], f.blobs[i+1:]...)
 		break
 	}
-	sort.Strings(f.deletedBlobs)
 	return nil
 }
 

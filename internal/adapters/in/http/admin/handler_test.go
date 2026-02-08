@@ -1385,7 +1385,7 @@ func TestHandler_ImagesPrune_AcceptsOptionalKeepLast(t *testing.T) {
 		body             string
 		expectedKeepLast int
 	}{
-		{name: "missing keep_last uses zero", body: `{}`, expectedKeepLast: 0},
+		{name: "missing keep_last uses default", body: `{}`, expectedKeepLast: domain.DefaultImagePruneKeepLast},
 		{name: "provided keep_last", body: `{"keep_last": 3}`, expectedKeepLast: 3},
 	}
 

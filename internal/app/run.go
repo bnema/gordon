@@ -232,7 +232,7 @@ func Run(ctx context.Context, configPath string) error {
 	registryHandler, proxyHandler := createHTTPHandlers(svc, cfg, log)
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
-	return runServers(ctx, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, svc, log)
+	return runServers(ctx, v, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, svc, log)
 }
 
 func ensureTLSConfig(cfg *Config, log zerowrap.Logger) error {
@@ -1382,7 +1382,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 // - SIGUSR2: Triggers manual deploy for a specific route
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, svc *services, log zerowrap.Logger) error {
+func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, svc *services, log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -1446,7 +1446,9 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 	}
 	logEvent.Msg("Gordon is running")
 
-	imageScheduler, err := startImagePruneScheduler(ctx, cfg, svc, log)
+	imageScheduler, err := startImagePruneScheduler(ctx, cfg, svc, log, func() int {
+		return v.GetInt("images.prune.keep_last")
+	})
 	if err != nil {
 		return err
 	}
@@ -1462,11 +1464,14 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 	return nil
 }
 
-func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (*cronSvc.Scheduler, error) {
+func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger, keepLastGetter func() int) (*cronSvc.Scheduler, error) {
 	if !cfg.Images.Prune.Enabled || svc == nil || svc.imageSvc == nil {
 		return nil, nil
 	}
-	if cfg.Images.Prune.KeepLast < 0 {
+	if keepLastGetter == nil {
+		keepLastGetter = func() int { return cfg.Images.Prune.KeepLast }
+	}
+	if keepLastGetter() < 0 {
 		return nil, fmt.Errorf("images.prune.keep_last must be >= 0")
 	}
 
@@ -1481,12 +1486,22 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 		"Image prune",
 		domain.CronSchedule{Preset: preset},
 		func(jobCtx context.Context) error {
-			report, err := svc.imageSvc.Prune(jobCtx, cfg.Images.Prune.KeepLast)
+			keepLast := keepLastGetter()
+			if keepLast < 0 {
+				log.Warn().
+					Int("configured_keep_last", keepLast).
+					Int("fallback_keep_last", domain.DefaultImagePruneKeepLast).
+					Msg("invalid images.prune.keep_last; using default")
+				keepLast = domain.DefaultImagePruneKeepLast
+			}
+
+			report, err := svc.imageSvc.Prune(jobCtx, keepLast)
 			if err != nil {
 				return err
 			}
 
 			log.Info().
+				Int("keep_last", keepLast).
 				Int("runtime_deleted", report.Runtime.DeletedCount).
 				Int64("runtime_reclaimed_bytes", report.Runtime.SpaceReclaimed).
 				Int("registry_tags_removed", report.Registry.TagsRemoved).
@@ -1502,7 +1517,7 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 	scheduler.Start(ctx)
 	log.Info().
 		Str("schedule", string(preset)).
-		Int("keep_last", cfg.Images.Prune.KeepLast).
+		Int("keep_last", keepLastGetter()).
 		Msg("image prune scheduler enabled")
 
 	return scheduler, nil
@@ -1943,7 +1958,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("backups.retention.monthly", 0)
 	v.SetDefault("images.prune.enabled", false)
 	v.SetDefault("images.prune.schedule", string(domain.ScheduleDaily))
-	v.SetDefault("images.prune.keep_last", 3)
+	v.SetDefault("images.prune.keep_last", domain.DefaultImagePruneKeepLast)
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("deploy.readiness_delay", "5s")

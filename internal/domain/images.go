@@ -2,6 +2,8 @@ package domain
 
 import "time"
 
+const DefaultImagePruneKeepLast = 3
+
 // ImagePruneConfig defines scheduled image cleanup behavior.
 type ImagePruneConfig struct {
 	Enabled  bool
