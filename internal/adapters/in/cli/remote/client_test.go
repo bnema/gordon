@@ -2,6 +2,7 @@ package remote
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/adapters/dto"
 )
 
 func withFastRetry(t *testing.T) {
@@ -107,4 +110,44 @@ func TestClientWithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
 
 	_, err = NewClient(srv.URL, WithInsecureTLS(true)).GetStatus(context.Background())
 	require.NoError(t, err)
+}
+
+func TestClientListImages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/images", r.URL.Path)
+		require.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"images":[{"repository":"registry.example.com/app","tag":"latest","size":1234,"created":"2026-02-08T12:00:00Z","id":"sha256:abc","dangling":false}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	images, err := client.ListImages(context.Background())
+	require.NoError(t, err)
+	require.Len(t, images, 1)
+	assert.Equal(t, "registry.example.com/app", images[0].Repository)
+	assert.Equal(t, "latest", images[0].Tag)
+}
+
+func TestClientPruneImages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/images/prune", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+
+		var req dto.ImagePruneRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NotNil(t, req.KeepLast)
+		assert.Equal(t, 4, *req.KeepLast)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"runtime":{"deleted_count":2,"space_reclaimed":2048},"registry":{"tags_removed":3,"blobs_removed":1,"space_reclaimed":4096}}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	resp, err := client.PruneImages(context.Background(), 4)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, 2, resp.Runtime.DeletedCount)
+	assert.Equal(t, 3, resp.Registry.TagsRemoved)
 }
