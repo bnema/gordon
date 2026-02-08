@@ -918,8 +918,8 @@ func (s *Service) StartMonitor(ctx context.Context) {
 	}
 	s.monitor = newMonitor(s)
 	m := s.monitor
-	s.mu.Unlock()
 	m.Start(ctx)
+	s.mu.Unlock()
 }
 
 // StopMonitor stops the background container monitor.
