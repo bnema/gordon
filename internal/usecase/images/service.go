@@ -134,57 +134,23 @@ func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.Image
 	report := domain.ImagePruneReport{}
 
 	for _, repository := range repositories {
-		tags, err := s.manifestStorage.ListTags(repository)
+		tagInfos, err := s.loadRepositoryTagInfos(repository)
 		if err != nil {
-			return domain.ImagePruneReport{}, log.WrapErr(err, "failed to list repository tags")
+			return domain.ImagePruneReport{}, log.WrapErr(err, "failed to load repository tags")
 		}
-
-		if len(tags) == 0 {
+		if len(tagInfos) == 0 {
 			continue
 		}
 
-		tagInfos := make([]registryTag, 0, len(tags))
-		for _, tag := range tags {
-			modTime, err := s.manifestStorage.GetManifestModTime(repository, tag)
-			if err != nil {
-				return domain.ImagePruneReport{}, log.WrapErr(err, "failed to read manifest modification time")
-			}
-			tagInfos = append(tagInfos, registryTag{name: tag, modTime: modTime})
+		keptTags := buildKeptTagSet(tagInfos, keepLast)
+		removed, err := s.deleteUnkeptManifests(repository, tagInfos, keptTags)
+		if err != nil {
+			return domain.ImagePruneReport{}, log.WrapErr(err, "failed to delete manifest")
 		}
+		report.Registry.TagsRemoved += removed
 
-		sort.Slice(tagInfos, func(i, j int) bool {
-			if tagInfos[i].modTime.Equal(tagInfos[j].modTime) {
-				return tagInfos[i].name > tagInfos[j].name
-			}
-			return tagInfos[i].modTime.After(tagInfos[j].modTime)
-		})
-
-		keptTags := make(map[string]struct{})
-		if containsTag(tagInfos, "latest") {
-			keptTags["latest"] = struct{}{}
-		}
-		for i := 0; i < len(tagInfos) && i < keepLast; i++ {
-			keptTags[tagInfos[i].name] = struct{}{}
-		}
-
-		for _, tag := range tagInfos {
-			if _, kept := keptTags[tag.name]; kept {
-				continue
-			}
-			if err := s.manifestStorage.DeleteManifest(repository, tag.name); err != nil {
-				return domain.ImagePruneReport{}, log.WrapErr(err, "failed to delete manifest")
-			}
-			report.Registry.TagsRemoved++
-		}
-
-		for _, tag := range tagInfos {
-			if _, kept := keptTags[tag.name]; !kept {
-				continue
-			}
-
-			if err := s.collectReferencedDigests(log, repository, tag.name, referencedDigests, make(map[string]struct{})); err != nil {
-				return domain.ImagePruneReport{}, err
-			}
+		if err := s.collectKeptTagDigests(log, repository, tagInfos, keptTags, referencedDigests); err != nil {
+			return domain.ImagePruneReport{}, err
 		}
 	}
 
@@ -204,6 +170,78 @@ func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.Image
 	}
 
 	return report, nil
+}
+
+func (s *Service) loadRepositoryTagInfos(repository string) ([]registryTag, error) {
+	tags, err := s.manifestStorage.ListTags(repository)
+	if err != nil {
+		return nil, err
+	}
+
+	tagInfos := make([]registryTag, 0, len(tags))
+	for _, tag := range tags {
+		modTime, err := s.manifestStorage.GetManifestModTime(repository, tag)
+		if err != nil {
+			return nil, err
+		}
+		tagInfos = append(tagInfos, registryTag{name: tag, modTime: modTime})
+	}
+
+	sort.Slice(tagInfos, func(i, j int) bool {
+		if tagInfos[i].modTime.Equal(tagInfos[j].modTime) {
+			return tagInfos[i].name > tagInfos[j].name
+		}
+		return tagInfos[i].modTime.After(tagInfos[j].modTime)
+	})
+
+	return tagInfos, nil
+}
+
+func buildKeptTagSet(tagInfos []registryTag, keepLast int) map[string]struct{} {
+	keptTags := make(map[string]struct{})
+	if containsTag(tagInfos, "latest") {
+		keptTags["latest"] = struct{}{}
+	}
+
+	for i := 0; i < len(tagInfos) && i < keepLast; i++ {
+		keptTags[tagInfos[i].name] = struct{}{}
+	}
+
+	return keptTags
+}
+
+func (s *Service) deleteUnkeptManifests(repository string, tagInfos []registryTag, keptTags map[string]struct{}) (int, error) {
+	removed := 0
+	for _, tag := range tagInfos {
+		if _, kept := keptTags[tag.name]; kept {
+			continue
+		}
+		if err := s.manifestStorage.DeleteManifest(repository, tag.name); err != nil {
+			return 0, err
+		}
+		removed++
+	}
+
+	return removed, nil
+}
+
+func (s *Service) collectKeptTagDigests(
+	log zerowrap.Logger,
+	repository string,
+	tagInfos []registryTag,
+	keptTags map[string]struct{},
+	referencedDigests map[string]struct{},
+) error {
+	for _, tag := range tagInfos {
+		if _, kept := keptTags[tag.name]; !kept {
+			continue
+		}
+		if err := s.collectReferencedDigests(log, repository, tag.name, referencedDigests, make(map[string]struct{})); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Prune runs runtime prune and registry prune and aggregates reports.
