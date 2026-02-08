@@ -492,7 +492,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
 
 	// Create log service for accessing logs via admin API
-	logSvc := logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
+	logSvc := logs.NewService(resolveLogFilePath(cfg), cfg.Logging.File.Enabled, svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API
 	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log, svc.backupSvc, svc.imageSvc)
