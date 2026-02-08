@@ -66,6 +66,47 @@ func (s *Service) DetectDatabases(ctx context.Context, domainName string) ([]dom
 
 // RunBackup triggers a logical PostgreSQL backup for a detected DB.
 func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*domain.BackupResult, error) {
+	return s.runBackup(ctx, domainName, dbName, domain.BackupSchedule(""))
+}
+
+// RunForSchedule executes backups for all detected databases and applies retention.
+func (s *Service) RunForSchedule(ctx context.Context, schedule domain.BackupSchedule) error {
+	if !isValidBackupSchedule(schedule) {
+		return fmt.Errorf("invalid backup schedule: %q", schedule)
+	}
+
+	routes := s.containerSvc.List(ctx)
+	domainNames := make([]string, 0, len(routes))
+	for domainName := range routes {
+		domainNames = append(domainNames, domainName)
+	}
+	sort.Strings(domainNames)
+
+	var firstErr error
+	for _, domainName := range domainNames {
+		dbs, err := s.DetectDatabases(ctx, domainName)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("detect databases for %s: %w", domainName, err)
+			}
+			continue
+		}
+
+		for _, db := range dbs {
+			if _, err := s.runBackup(ctx, domainName, db.Name, schedule); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("run backup for %s/%s: %w", domainName, db.Name, err)
+			}
+		}
+
+		if _, err := s.storage.ApplyRetention(ctx, domainName, s.config.Retention); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("apply retention for %s: %w", domainName, err)
+		}
+	}
+
+	return firstErr
+}
+
+func (s *Service) runBackup(ctx context.Context, domainName, dbName string, schedule domain.BackupSchedule) (*domain.BackupResult, error) {
 	started := time.Now().UTC()
 
 	dbs, err := s.DetectDatabases(ctx, domainName)
@@ -108,7 +149,7 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 	defer dumpStream.Close()
 
 	counter := &byteCounter{}
-	path, err := s.storage.Store(ctx, domainName, db.Name, domain.BackupSchedule(""), started, io.TeeReader(dumpStream, counter))
+	path, err := s.storage.Store(ctx, domainName, db.Name, schedule, started, io.TeeReader(dumpStream, counter))
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +170,15 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 		Job:      job,
 		Duration: time.Since(started),
 	}, nil
+}
+
+func isValidBackupSchedule(schedule domain.BackupSchedule) bool {
+	switch schedule {
+	case domain.ScheduleHourly, domain.ScheduleDaily, domain.ScheduleWeekly, domain.ScheduleMonthly:
+		return true
+	default:
+		return false
+	}
 }
 
 // Restore restores a backup by ID.

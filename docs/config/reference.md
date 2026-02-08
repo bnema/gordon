@@ -133,6 +133,7 @@ preserve = true                              # Keep volumes when containers are 
 # =============================================================================
 [backups]
 enabled = false                              # Enable backup service
+schedule = "daily"                          # "hourly", "daily", "weekly", "monthly"
 storage_dir = ""                            # Backup root (default: {data_dir}/backups)
 
 [backups.retention]
@@ -200,6 +201,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
 | `backups.enabled` | `false` | Backup service disabled |
+| `backups.schedule` | `"daily"` | Backup scheduler preset |
 | `backups.storage_dir` | `""` | Uses `{server.data_dir}/backups` when empty |
 | `backups.retention.hourly` | `0` | Keep no hourly backups by default |
 | `backups.retention.daily` | `0` | Keep no daily backups by default (recommend `7`) |

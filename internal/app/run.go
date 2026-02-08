@@ -135,6 +135,7 @@ type Config struct {
 
 	Backups struct {
 		Enabled    bool   `mapstructure:"enabled"`
+		Schedule   string `mapstructure:"schedule"`
 		StorageDir string `mapstructure:"storage_dir"`
 		Retention  struct {
 			Hourly  int `mapstructure:"hourly"`
@@ -1446,6 +1447,14 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	}
 	logEvent.Msg("Gordon is running")
 
+	backupScheduler, err := startBackupScheduler(ctx, cfg, svc, log)
+	if err != nil {
+		return err
+	}
+	if backupScheduler != nil {
+		defer backupScheduler.Stop()
+	}
+
 	imageScheduler, err := startImagePruneScheduler(ctx, cfg, svc, log, func() int {
 		return v.GetInt("images.prune.keep_last")
 	})
@@ -1462,6 +1471,57 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
 	gracefulShutdown(registrySrv, proxySrv, containerSvc, log)
 	return nil
+}
+
+func startBackupScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (*cronSvc.Scheduler, error) {
+	if !cfg.Backups.Enabled || svc == nil || svc.backupSvc == nil {
+		return nil, nil
+	}
+
+	preset, err := resolveBackupSchedule(cfg.Backups.Schedule)
+	if err != nil {
+		return nil, err
+	}
+
+	scheduler := cronSvc.NewScheduler(log)
+	err = scheduler.Add(
+		"backup-scheduler",
+		"Backups",
+		domain.CronSchedule{Preset: preset},
+		func(jobCtx context.Context) error {
+			if err := svc.backupSvc.RunForSchedule(jobCtx, preset); err != nil {
+				return err
+			}
+			log.Info().
+				Str("schedule", string(preset)).
+				Msg("scheduled backup run complete")
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to register backup schedule")
+	}
+
+	scheduler.Start(ctx)
+	log.Info().
+		Str("schedule", string(preset)).
+		Msg("backup scheduler enabled")
+
+	return scheduler, nil
+}
+
+func resolveBackupSchedule(raw string) (domain.BackupSchedule, error) {
+	schedule := domain.BackupSchedule(strings.ToLower(strings.TrimSpace(raw)))
+	if schedule == "" {
+		schedule = domain.ScheduleDaily
+	}
+
+	switch schedule {
+	case domain.ScheduleHourly, domain.ScheduleDaily, domain.ScheduleWeekly, domain.ScheduleMonthly:
+		return schedule, nil
+	default:
+		return "", fmt.Errorf("backups.schedule must be one of: hourly, daily, weekly, monthly")
+	}
 }
 
 func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger, keepLastGetter func() int) (*cronSvc.Scheduler, error) {
@@ -1951,6 +2011,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
 	v.SetDefault("backups.enabled", false)
+	v.SetDefault("backups.schedule", string(domain.ScheduleDaily))
 	v.SetDefault("backups.storage_dir", "")
 	v.SetDefault("backups.retention.hourly", 0)
 	v.SetDefault("backups.retention.daily", 0)

@@ -119,6 +119,7 @@ enabled = false                          # Auto-create routes from image names
 # Backups
 [backups]
 enabled = true
+schedule = "daily"
 storage_dir = "~/.gordon/backups"
 
 [backups.retention]
@@ -189,6 +190,7 @@ keep_last = 3
 | `network_isolation.enabled` | `false` |
 | `auto_route.enabled` | `false` |
 | `backups.enabled` | `false` |
+| `backups.schedule` | `"daily"` |
 | `images.prune.enabled` | `false` |
 | `images.prune.schedule` | `"daily"` |
 | `images.prune.keep_last` | `3` |
