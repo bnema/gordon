@@ -33,6 +33,7 @@ type Handler struct {
 	authSvc      in.AuthService
 	containerSvc in.ContainerService
 	backupSvc    in.BackupService
+	imageSvc     in.ImageService
 	healthSvc    in.HealthService
 	secretSvc    in.SecretService
 	logSvc       in.LogService
@@ -132,12 +133,19 @@ func NewHandler(
 	eventBus out.EventPublisher,
 	log zerowrap.Logger,
 	backupSvc in.BackupService,
+	imageSvcs ...in.ImageService,
 ) *Handler {
+	var imageSvc in.ImageService
+	if len(imageSvcs) > 0 {
+		imageSvc = imageSvcs[0]
+	}
+
 	return &Handler{
 		configSvc:    configSvc,
 		authSvc:      authSvc,
 		containerSvc: containerSvc,
 		backupSvc:    backupSvc,
+		imageSvc:     imageSvc,
 		healthSvc:    healthSvc,
 		secretSvc:    secretSvc,
 		logSvc:       logSvc,
@@ -207,6 +215,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		{"/deploy", h.handleDeploy},
 		{"/restart", h.handleRestart},
 		{"/tags", h.handleTags},
+		{"/images", h.handleImages},
 		{"/logs", h.handleLogs},
 	}
 	for _, route := range prefixRoutes {
