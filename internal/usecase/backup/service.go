@@ -291,16 +291,12 @@ func selectDatabase(dbs []domain.DBInfo, requested string) (domain.DBInfo, error
 	return domain.DBInfo{}, fmt.Errorf("database %q not found for domain", requested)
 }
 
-func postgresDumpCommand(dbName string) string {
-	return fmt.Sprintf("PGDATABASE=%s pg_dump -Fc --dbname=\"$PGDATABASE\" --username=\"${POSTGRES_USER:-postgres}\"", shellQuote(dbName))
+func postgresDumpCommand(_ string) string {
+	return "pg_dump -Fc --dbname=\"${POSTGRES_DB:-postgres}\" --username=\"${POSTGRES_USER:-postgres}\""
 }
 
 func pgDumpToPathCommand(path, dbName string) string {
 	return fmt.Sprintf("%s > %q", postgresDumpCommand(dbName), path)
-}
-
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (s *Service) cleanupDumpFile(containerID, dumpPath string) {

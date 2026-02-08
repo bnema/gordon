@@ -350,12 +350,13 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	name := strings.TrimPrefix(resp.Name, "/")
 
 	return &domain.Container{
-		ID:     resp.ID,
-		Image:  resp.Config.Image,
-		Name:   name,
-		Status: resp.State.Status,
-		Ports:  ports,
-		Labels: resp.Config.Labels,
+		ID:       resp.ID,
+		Image:    resp.Config.Image,
+		Name:     name,
+		Status:   resp.State.Status,
+		ExitCode: resp.State.ExitCode,
+		Ports:    ports,
+		Labels:   resp.Config.Labels,
 	}, nil
 }
 

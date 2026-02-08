@@ -56,28 +56,6 @@ const (
 	internalPullMaxAttempts = 3
 )
 
-// healthTimeoutError is returned when a container's health check times out.
-// It carries the last observed health status to distinguish retryable (starting)
-// from fatal (unhealthy) timeouts.
-type healthTimeoutError struct {
-	lastStatus string
-	timeout    time.Duration
-}
-
-func (e *healthTimeoutError) Error() string {
-	return fmt.Sprintf("container healthcheck timeout after %s (last status: %s)", e.timeout, e.lastStatus)
-}
-
-// isHealthTimeoutStarting returns true if err is a health timeout where the
-// container was still in "starting" state (i.e., not unhealthy, just slow).
-func isHealthTimeoutStarting(err error) bool {
-	var hte *healthTimeoutError
-	if errors.As(err, &hte) {
-		return hte.lastStatus == "starting"
-	}
-	return false
-}
-
 // Service implements the ContainerService interface.
 type Service struct {
 	runtime          out.ContainerRuntime
@@ -91,6 +69,7 @@ type Service struct {
 	attachments      map[string][]string // ownerDomain → []containerIDs
 	mu               sync.RWMutex
 	deployMu         sync.Map // per-domain deploy locks (domain → *domainDeployLock)
+	monitor          *Monitor
 }
 
 // domainDeployLock is a context-aware mutex using a buffered channel.
@@ -369,13 +348,11 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 		s.runtime.RemoveContainer(ctx, newContainer.ID, true)
 		return nil, log.WrapErr(err, "failed to start container")
 	}
-	if err := s.waitForReady(ctx, newContainer.ID); err != nil {
-		// If health timed out but the container is still starting (not unhealthy),
-		// keep it running for potential retry by the caller.
-		if !isHealthTimeoutStarting(err) {
+	if !domain.IsSkipReadiness(ctx) {
+		if err := s.waitForReady(ctx, newContainer.ID); err != nil {
 			s.cleanupFailedContainer(ctx, newContainer.ID)
+			return nil, log.WrapErr(err, "container failed readiness check")
 		}
-		return nil, log.WrapErr(err, "container failed readiness check")
 	}
 
 	inspected, err := s.runtime.InspectContainer(ctx, newContainer.ID)
@@ -831,6 +808,8 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 }
 
 // AutoStart starts containers for the provided routes that aren't running.
+// It skips readiness checks to avoid blocking boot; the background monitor
+// handles crash recovery.
 func (s *Service) AutoStart(ctx context.Context, routes []domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -840,47 +819,55 @@ func (s *Service) AutoStart(ctx context.Context, routes []domain.Route) error {
 
 	log.Info().Int("route_count", len(routes)).Msg("auto-starting containers for configured routes")
 
-	var started, skipped, errCount int
-	var retryable []domain.Route
-
+	// Filter out routes that already have a running container.
+	var pending []domain.Route
+	skipped := 0
 	for _, route := range routes {
 		if _, exists := s.Get(ctx, route.Domain); exists {
 			log.Debug().Str("domain", route.Domain).Msg("container already running, skipping")
 			skipped++
-			continue
+		} else {
+			pending = append(pending, route)
 		}
-
-		log.Info().
-			Str("domain", route.Domain).
-			Str("image", route.Image).
-			Msg("auto-starting container for route")
-
-		if _, err := s.Deploy(ctx, route); err != nil {
-			if isHealthTimeoutStarting(err) {
-				log.Warn().Str("domain", route.Domain).Msg("health check still starting, will retry")
-				retryable = append(retryable, route)
-			} else {
-				log.Warn().Err(err).Str("domain", route.Domain).Msg("failed to auto-start container")
-				errCount++
-			}
-			continue
-		}
-
-		started++
 	}
 
-	// Retry routes whose containers are still starting with extended timeout.
-	if len(retryable) > 0 {
-		log.Info().Int("retry_count", len(retryable)).Msg("retrying slow-starting containers with extended timeout")
-		retryCtx := domain.WithHealthTimeoutMultiplier(ctx, 2.0)
+	if len(pending) == 0 {
+		log.Info().Int("skipped", skipped).Msg("auto-start completed, all containers already running")
+		return nil
+	}
 
-		for _, route := range retryable {
-			// Container is still running from first attempt, try readiness again.
-			if _, err := s.retryReadiness(retryCtx, route); err != nil {
-				log.Warn().Err(err).Str("domain", route.Domain).Msg("failed to auto-start container after retry")
-				errCount++
-				continue
+	// Deploy all pending routes concurrently with readiness checks skipped.
+	deployCtx := domain.WithSkipReadiness(ctx)
+
+	type result struct {
+		route domain.Route
+		err   error
+	}
+	results := make(chan result, len(pending))
+	sem := make(chan struct{}, 4) // limit concurrency
+
+	for _, route := range pending {
+		sem <- struct{}{}
+		go func(r domain.Route) {
+			defer func() { <-sem }()
+
+			log.Info().Str("domain", r.Domain).Str("image", r.Image).Msg("auto-starting container for route")
+
+			if _, err := s.Deploy(deployCtx, r); err != nil {
+				results <- result{route: r, err: err}
+				return
 			}
+			results <- result{route: r}
+		}(route)
+	}
+
+	var started, errCount int
+	for range len(pending) {
+		res := <-results
+		if res.err != nil {
+			log.Warn().Err(res.err).Str("domain", res.route.Domain).Msg("failed to auto-start container")
+			errCount++
+		} else {
 			started++
 		}
 	}
@@ -897,54 +884,6 @@ func (s *Service) AutoStart(ctx context.Context, routes []domain.Route) error {
 	return nil
 }
 
-// retryReadiness re-checks readiness for a container that was left running
-// after a health timeout during auto-start. If readiness succeeds, the
-// container is activated. If it fails, the container is cleaned up.
-func (s *Service) retryReadiness(ctx context.Context, route domain.Route) (*domain.Container, error) {
-	log := zerowrap.FromCtx(ctx)
-
-	unlock, err := s.acquireDomainDeployLock(ctx, route.Domain)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-
-	// Find the container that was left running from the first attempt.
-	containers, err := s.runtime.ListContainers(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-
-	var containerID string
-	for _, c := range containers {
-		if c.Labels != nil && c.Labels[domain.LabelRoute] == route.Domain && c.Status == string(domain.ContainerStatusRunning) {
-			containerID = c.ID
-			break
-		}
-	}
-	if containerID == "" {
-		// Container is no longer running, do a full deploy.
-		return s.Deploy(ctx, route)
-	}
-
-	log.Info().Str("domain", route.Domain).Str("container_id", containerID).Msg("retrying readiness check")
-
-	if err := s.waitForReady(ctx, containerID); err != nil {
-		s.cleanupFailedContainer(ctx, containerID)
-		return nil, log.WrapErr(err, "container failed readiness check on retry")
-	}
-
-	inspected, err := s.runtime.InspectContainer(ctx, containerID)
-	if err != nil {
-		s.cleanupFailedContainer(ctx, containerID)
-		return nil, log.WrapErr(err, "failed to inspect container after retry")
-	}
-
-	s.activateDeployedContainer(ctx, route.Domain, inspected)
-
-	return inspected, nil
-}
-
 // Shutdown gracefully shuts down all managed containers.
 func (s *Service) Shutdown(ctx context.Context) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -954,9 +893,8 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	log := zerowrap.FromCtx(ctx)
 	log.Info().Msg("shutting down container manager...")
 
-	if err := s.stopAllManagedContainers(ctx); err != nil {
-		log.WrapErr(err, "failed to stop all containers during shutdown")
-	}
+	// Containers are left running across Gordon restarts.
+	// SyncContainers + AutoStart will pick them back up on next boot.
 
 	// Close log writer to stop all log collection
 	if s.logWriter != nil {
@@ -967,6 +905,33 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	log.Info().Msg("container manager shutdown complete")
 	return nil
+}
+
+// StartMonitor begins background monitoring of tracked containers.
+// The monitor restarts crashed containers and detects crash loops.
+// Safe to call multiple times; subsequent calls are no-ops.
+func (s *Service) StartMonitor(ctx context.Context) {
+	s.mu.Lock()
+	if s.monitor != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.monitor = newMonitor(s)
+	m := s.monitor
+	s.mu.Unlock()
+	m.Start(ctx)
+}
+
+// StopMonitor stops the background container monitor.
+// Safe to call multiple times; subsequent calls are no-ops.
+func (s *Service) StopMonitor() {
+	s.mu.Lock()
+	m := s.monitor
+	s.monitor = nil
+	s.mu.Unlock()
+	if m != nil {
+		m.Stop()
+	}
 }
 
 // UpdateConfig updates the service configuration.
@@ -1816,46 +1781,6 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	return nil
 }
 
-func (s *Service) stopAllManagedContainers(ctx context.Context) error {
-	log := zerowrap.FromCtx(ctx)
-
-	s.mu.RLock()
-	containers := make(map[string]*domain.Container, len(s.containers))
-	maps.Copy(containers, s.containers)
-	s.mu.RUnlock()
-
-	if len(containers) == 0 {
-		log.Info().Msg("no managed containers to stop")
-		return nil
-	}
-
-	log.Info().Int(zerowrap.FieldCount, len(containers)).Msg("stopping all managed containers...")
-
-	errorCount := 0
-	for d, c := range containers {
-		log.Info().Str("domain", d).Str(zerowrap.FieldEntityID, c.ID).Msg("stopping managed container")
-
-		if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
-			log.WrapErrWithFields(err, "failed to stop container", map[string]any{"domain": d, zerowrap.FieldEntityID: c.ID})
-			errorCount++
-			continue
-		}
-
-		s.mu.Lock()
-		delete(s.containers, d)
-		s.mu.Unlock()
-
-		log.Info().Str("domain", d).Str(zerowrap.FieldEntityID, c.ID).Msg("container stopped successfully")
-	}
-
-	if errorCount > 0 {
-		return fmt.Errorf("failed to stop %d containers", errorCount)
-	}
-
-	log.Info().Msg("all managed containers stopped successfully")
-	return nil
-}
-
 // Utility functions
 
 func normalizeImageRef(image string) string {
@@ -2062,14 +1987,10 @@ func (s *Service) waitForHealthy(ctx context.Context, containerID string, timeou
 	if timeout == 0 {
 		timeout = 90 * time.Second
 	}
-	// Apply multiplier from context (used for auto-start retries).
-	if m := domain.HealthTimeoutMultiplier(ctx); m > 1.0 {
-		timeout = time.Duration(float64(timeout) * m)
-	}
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	lastStatus := "starting"
+	var lastStatus string
 	for {
 		status, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(waitCtx, containerID)
 		if err != nil {
@@ -2088,7 +2009,7 @@ func (s *Service) waitForHealthy(ctx context.Context, containerID string, timeou
 		select {
 		case <-time.After(time.Second):
 		case <-waitCtx.Done():
-			return &healthTimeoutError{lastStatus: lastStatus, timeout: timeout}
+			return fmt.Errorf("container healthcheck timeout after %s (last status: %s)", timeout, lastStatus)
 		}
 	}
 }
