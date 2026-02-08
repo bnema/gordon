@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"github.com/bnema/zerowrap"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/registry"
@@ -30,12 +32,15 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	runtimepkg "github.com/bnema/gordon/pkg/runtime"
 )
 
 // Runtime implements the ContainerRuntime interface using Docker API.
 type Runtime struct {
 	client *client.Client
 }
+
+var errSpaceReclaimedOverflow = errors.New("space reclaimed exceeds int64 range")
 
 type pipeReadCloser struct {
 	pr       *io.PipeReader
@@ -553,6 +558,72 @@ func (r *Runtime) ListImages(ctx context.Context) ([]string, error) {
 	}
 
 	return result, nil
+}
+
+// ListImagesDetailed lists images with metadata.
+func (r *Runtime) ListImagesDetailed(ctx context.Context) ([]runtimepkg.ImageDetail, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "ListImagesDetailed",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	images, err := r.client.ImageList(ctx, image.ListOptions{All: true})
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to list detailed images")
+	}
+
+	result := make([]runtimepkg.ImageDetail, 0, len(images))
+	for _, img := range images {
+		result = append(result, runtimepkg.ImageDetail{
+			ID:       img.ID,
+			RepoTags: img.RepoTags,
+			Size:     img.Size,
+			Created:  time.Unix(img.Created, 0),
+		})
+	}
+
+	return result, nil
+}
+
+// PruneImages prunes unused images and reports reclaimed space.
+func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepkg.PruneReport, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "PruneImages",
+		"dangling_only":       danglingOnly,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	pruneFilters := filters.NewArgs()
+	pruneFilters.Add("dangling", strconv.FormatBool(danglingOnly))
+
+	pruneResult, err := r.client.ImagesPrune(ctx, pruneFilters)
+	if err != nil {
+		return runtimepkg.PruneReport{}, log.WrapErr(err, "failed to prune images")
+	}
+
+	deletedIDs := make([]string, 0, len(pruneResult.ImagesDeleted))
+	for _, deleted := range pruneResult.ImagesDeleted {
+		if deleted.Deleted != "" {
+			deletedIDs = append(deletedIDs, deleted.Deleted)
+		}
+		if deleted.Untagged != "" {
+			deletedIDs = append(deletedIDs, deleted.Untagged)
+		}
+	}
+
+	if pruneResult.SpaceReclaimed > math.MaxInt64 {
+		err := fmt.Errorf("space reclaimed %d exceeds max int64: %w", pruneResult.SpaceReclaimed, errSpaceReclaimedOverflow)
+		return runtimepkg.PruneReport{}, log.WrapErr(err, "failed to map prune result")
+	}
+
+	return runtimepkg.PruneReport{
+		DeletedIDs:     deletedIDs,
+		SpaceReclaimed: int64(pruneResult.SpaceReclaimed),
+	}, nil
 }
 
 // Ping checks if Docker is responsive.
