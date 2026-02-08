@@ -40,8 +40,6 @@ type Runtime struct {
 	client *client.Client
 }
 
-var errSpaceReclaimedOverflow = errors.New("space reclaimed exceeds int64 range")
-
 type pipeReadCloser struct {
 	pr       *io.PipeReader
 	pw       *io.PipeWriter
@@ -598,7 +596,9 @@ func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepk
 	log := zerowrap.FromCtx(ctx)
 
 	pruneFilters := filters.NewArgs()
-	pruneFilters.Add("dangling", strconv.FormatBool(danglingOnly))
+	if danglingOnly {
+		pruneFilters.Add("dangling", strconv.FormatBool(true))
+	}
 
 	pruneResult, err := r.client.ImagesPrune(ctx, pruneFilters)
 	if err != nil {
@@ -615,14 +615,18 @@ func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepk
 		}
 	}
 
-	if pruneResult.SpaceReclaimed > math.MaxInt64 {
-		err := fmt.Errorf("space reclaimed %d exceeds max int64: %w", pruneResult.SpaceReclaimed, errSpaceReclaimedOverflow)
-		return runtimepkg.PruneReport{}, log.WrapErr(err, "failed to map prune result")
+	spaceReclaimed := pruneResult.SpaceReclaimed
+	if spaceReclaimed > math.MaxInt64 {
+		log.Warn().
+			Uint64("space_reclaimed_bytes", spaceReclaimed).
+			Int64("space_reclaimed_capped_bytes", math.MaxInt64).
+			Msg("space reclaimed exceeds int64 max; capping value")
+		spaceReclaimed = uint64(math.MaxInt64)
 	}
 
 	return runtimepkg.PruneReport{
 		DeletedIDs:     deletedIDs,
-		SpaceReclaimed: int64(pruneResult.SpaceReclaimed),
+		SpaceReclaimed: int64(spaceReclaimed),
 	}, nil
 }
 

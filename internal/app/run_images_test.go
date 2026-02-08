@@ -17,7 +17,7 @@ func TestLoadConfigSetsImagePruneDefaults(t *testing.T) {
 
 	assert.False(t, v.GetBool("images.prune.enabled"))
 	assert.Equal(t, string(domain.ScheduleDaily), v.GetString("images.prune.schedule"))
-	assert.Equal(t, 3, v.GetInt("images.prune.keep_last"))
+	assert.Equal(t, domain.DefaultImagePruneKeepLast, v.GetInt("images.prune.keep_last"))
 }
 
 func TestResolveImagePruneSchedule(t *testing.T) {

@@ -97,7 +97,7 @@ func (h *Handler) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keepLast := 0
+	keepLast := domain.DefaultImagePruneKeepLast
 	if req.KeepLast != nil {
 		if *req.KeepLast < 0 {
 			h.sendError(w, http.StatusBadRequest, "keep_last must be >= 0")
