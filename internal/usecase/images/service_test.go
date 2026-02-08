@@ -622,8 +622,10 @@ func TestSplitRepoTag(t *testing.T) {
 		wantTag  string
 	}{
 		{name: "repository and tag", input: "alpine:latest", wantRepo: "alpine", wantTag: "latest"},
+		{name: "sha-like tag stays a tag", input: "image:sha256vdfhnijkvfedhbni", wantRepo: "image", wantTag: "sha256vdfhnijkvfedhbni"},
 		{name: "registry port and tag", input: "localhost:5000/repo:v1", wantRepo: "localhost:5000/repo", wantTag: "v1"},
 		{name: "registry port without tag", input: "localhost:5000/repo", wantRepo: "localhost:5000/repo", wantTag: ""},
+		{name: "digest reference not split as tag", input: "image@sha256:abcdef012345", wantRepo: "image@sha256:abcdef012345", wantTag: ""},
 		{name: "missing tag", input: "alpine", wantRepo: "alpine", wantTag: ""},
 		{name: "trailing colon", input: "alpine:", wantRepo: "alpine:", wantTag: ""},
 	}

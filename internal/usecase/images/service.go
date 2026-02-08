@@ -351,6 +351,9 @@ func splitRepoTag(repoTag string) (string, string) {
 	if repoTag == "" {
 		return "", ""
 	}
+	if strings.Contains(repoTag, "@") {
+		return repoTag, ""
+	}
 
 	idx := strings.LastIndex(repoTag, ":")
 	slashIdx := strings.LastIndex(repoTag, "/")
