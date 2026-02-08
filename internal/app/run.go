@@ -1536,17 +1536,7 @@ func startBackupScheduler(ctx context.Context, cfg Config, svc *services, log ze
 }
 
 func resolveBackupSchedule(raw string) (domain.BackupSchedule, error) {
-	schedule := domain.BackupSchedule(strings.ToLower(strings.TrimSpace(raw)))
-	if schedule == "" {
-		schedule = domain.ScheduleDaily
-	}
-
-	switch schedule {
-	case domain.ScheduleHourly, domain.ScheduleDaily, domain.ScheduleWeekly, domain.ScheduleMonthly:
-		return schedule, nil
-	default:
-		return "", fmt.Errorf("backups.schedule must be one of: hourly, daily, weekly, monthly")
-	}
+	return resolveSchedulePreset(raw, "backups.schedule", domain.ScheduleDaily)
 }
 
 func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger, keepLastGetter func() int) (*cronSvc.Scheduler, error) {
@@ -1609,16 +1599,20 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 }
 
 func resolveImagePruneSchedule(raw string) (domain.BackupSchedule, error) {
+	return resolveSchedulePreset(raw, "images.prune.schedule", domain.ScheduleDaily)
+}
+
+func resolveSchedulePreset(raw, name string, defaultVal domain.BackupSchedule) (domain.BackupSchedule, error) {
 	schedule := domain.BackupSchedule(strings.ToLower(strings.TrimSpace(raw)))
 	if schedule == "" {
-		schedule = domain.ScheduleDaily
+		schedule = defaultVal
 	}
 
 	switch schedule {
 	case domain.ScheduleHourly, domain.ScheduleDaily, domain.ScheduleWeekly, domain.ScheduleMonthly:
 		return schedule, nil
 	default:
-		return "", fmt.Errorf("images.prune.schedule must be one of: hourly, daily, weekly, monthly")
+		return "", fmt.Errorf("%s must be one of: hourly, daily, weekly, monthly", name)
 	}
 }
 
