@@ -37,6 +37,8 @@ Flags:
 | `--keep` | `0` | Number of latest tags to keep per repository (`0` disables registry cleanup) |
 | `--runtime-only` | `false` | Prune dangling runtime images only; forces registry cleanup off |
 
+`--keep` defaults to `0` for ad-hoc CLI safety (registry cleanup off by default), while scheduled pruning uses `images.prune.keep_last` from config (default `3`). Use config for recurring behavior; when a CLI `--keep` value is provided, that request value is used.
+
 Behavior notes:
 
 - `--runtime-only` forces `keep_last = 0`.
