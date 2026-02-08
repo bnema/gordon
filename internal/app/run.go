@@ -57,7 +57,9 @@ import (
 	"github.com/bnema/gordon/internal/usecase/backup"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
+	cronSvc "github.com/bnema/gordon/internal/usecase/cron"
 	"github.com/bnema/gordon/internal/usecase/health"
+	"github.com/bnema/gordon/internal/usecase/images"
 	"github.com/bnema/gordon/internal/usecase/logs"
 	"github.com/bnema/gordon/internal/usecase/proxy"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
@@ -141,6 +143,14 @@ type Config struct {
 			Monthly int `mapstructure:"monthly"`
 		} `mapstructure:"retention"`
 	} `mapstructure:"backups"`
+
+	Images struct {
+		Prune struct {
+			Enabled  bool   `mapstructure:"enabled"`
+			Schedule string `mapstructure:"schedule"`
+			KeepLast int    `mapstructure:"keep_last"`
+		} `mapstructure:"prune"`
+	} `mapstructure:"images"`
 }
 
 // services holds all the services used by the application.
@@ -157,6 +167,7 @@ type services struct {
 	containerSvc     *container.Service
 	backupSvc        *backup.Service
 	registrySvc      *registrySvc.Service
+	imageSvc         *images.Service
 	proxySvc         *proxy.Service
 	authSvc          *auth.Service
 	authHandler      *authhandler.Handler
@@ -452,6 +463,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	}
 
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
+	svc.imageSvc = images.NewService(svc.runtime, svc.manifestStorage, svc.blobStorage, log)
 
 	proxyCfg, err := buildProxyConfig(cfg, log)
 	if err != nil {
@@ -482,7 +494,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	logSvc := logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log, svc.backupSvc)
+	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log, svc.backupSvc, svc.imageSvc)
 
 	return svc, nil
 }
@@ -1434,12 +1446,80 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 	}
 	logEvent.Msg("Gordon is running")
 
+	imageScheduler, err := startImagePruneScheduler(ctx, cfg, svc, log)
+	if err != nil {
+		return err
+	}
+	if imageScheduler != nil {
+		defer imageScheduler.Stop()
+	}
+
 	// Auto-start after servers are listening (registry port is now bound).
 	syncAndAutoStart(ctx, svc, log)
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
 	gracefulShutdown(registrySrv, proxySrv, containerSvc, log)
 	return nil
+}
+
+func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (*cronSvc.Scheduler, error) {
+	if !cfg.Images.Prune.Enabled || svc == nil || svc.imageSvc == nil {
+		return nil, nil
+	}
+	if cfg.Images.Prune.KeepLast < 0 {
+		return nil, fmt.Errorf("images.prune.keep_last must be >= 0")
+	}
+
+	preset, err := resolveImagePruneSchedule(cfg.Images.Prune.Schedule)
+	if err != nil {
+		return nil, err
+	}
+
+	scheduler := cronSvc.NewScheduler(log)
+	err = scheduler.Add(
+		"image-prune",
+		"Image prune",
+		domain.CronSchedule{Preset: preset},
+		func(jobCtx context.Context) error {
+			report, err := svc.imageSvc.Prune(jobCtx, cfg.Images.Prune.KeepLast)
+			if err != nil {
+				return err
+			}
+
+			log.Info().
+				Int("runtime_deleted", report.Runtime.DeletedCount).
+				Int64("runtime_reclaimed_bytes", report.Runtime.SpaceReclaimed).
+				Int("registry_tags_removed", report.Registry.TagsRemoved).
+				Int("registry_blobs_removed", report.Registry.BlobsRemoved).
+				Msg("scheduled image prune complete")
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to register image prune schedule")
+	}
+
+	scheduler.Start(ctx)
+	log.Info().
+		Str("schedule", string(preset)).
+		Int("keep_last", cfg.Images.Prune.KeepLast).
+		Msg("image prune scheduler enabled")
+
+	return scheduler, nil
+}
+
+func resolveImagePruneSchedule(raw string) (domain.BackupSchedule, error) {
+	schedule := domain.BackupSchedule(strings.ToLower(strings.TrimSpace(raw)))
+	if schedule == "" {
+		schedule = domain.ScheduleDaily
+	}
+
+	switch schedule {
+	case domain.ScheduleHourly, domain.ScheduleDaily, domain.ScheduleWeekly, domain.ScheduleMonthly:
+		return schedule, nil
+	default:
+		return "", fmt.Errorf("images.prune.schedule must be one of: hourly, daily, weekly, monthly")
+	}
 }
 
 // waitForShutdown blocks on the event loop, handling server errors and
@@ -1861,6 +1941,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("backups.retention.daily", 0)
 	v.SetDefault("backups.retention.weekly", 0)
 	v.SetDefault("backups.retention.monthly", 0)
+	v.SetDefault("images.prune.enabled", false)
+	v.SetDefault("images.prune.schedule", string(domain.ScheduleDaily))
+	v.SetDefault("images.prune.keep_last", 3)
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("deploy.readiness_delay", "5s")

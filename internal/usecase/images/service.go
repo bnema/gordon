@@ -17,15 +17,20 @@ import (
 
 // Service implements image list and prune operations.
 type Service struct {
-	runtime         runtime.Runtime
+	runtime         imageRuntime
 	manifestStorage out.ManifestStorage
 	blobStorage     out.BlobStorage
 	log             zerowrap.Logger
 }
 
+type imageRuntime interface {
+	ListImagesDetailed(ctx context.Context) ([]runtime.ImageDetail, error)
+	PruneImages(ctx context.Context, danglingOnly bool) (runtime.PruneReport, error)
+}
+
 // NewService creates a new images service.
 func NewService(
-	rt runtime.Runtime,
+	rt imageRuntime,
 	manifestStorage out.ManifestStorage,
 	blobStorage out.BlobStorage,
 	log zerowrap.Logger,
