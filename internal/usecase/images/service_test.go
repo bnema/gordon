@@ -2,7 +2,9 @@ package images
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -180,6 +182,272 @@ func TestService_PruneRuntime_ReturnsErrorWhenRuntimeFails(t *testing.T) {
 	assert.True(t, rt.pruneDanglingOnly)
 }
 
+func TestService_PruneRegistry_KeepsLastNTags(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v3", "v2", "v1"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v3")] = time.Date(2026, 2, 8, 11, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v2")] = time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v1")] = time.Date(2026, 2, 8, 9, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-latest", "sha256:layer-latest")
+	manifestStorage.manifests[manifestRefKey("gordon/api", "v3")] = mustManifestJSON(t, "sha256:cfg-v3", "sha256:layer-v3")
+
+	blobStorage := &fakeBlobStorage{}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 2)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, report.Registry.TagsRemoved)
+	assert.ElementsMatch(t, []manifestRef{
+		{name: "gordon/api", reference: "v2"},
+		{name: "gordon/api", reference: "v1"},
+	}, manifestStorage.deletedManifests)
+}
+
+func TestService_PruneRegistry_AlwaysKeepsLatestTag(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v3", "v2"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 8, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v3")] = time.Date(2026, 2, 8, 11, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v2")] = time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-latest", "sha256:layer-shared")
+	manifestStorage.manifests[manifestRefKey("gordon/api", "v3")] = mustManifestJSON(t, "sha256:cfg-v3", "sha256:layer-shared")
+
+	blobStorage := &fakeBlobStorage{}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Registry.TagsRemoved)
+	assert.Equal(t, []manifestRef{{name: "gordon/api", reference: "v2"}}, manifestStorage.deletedManifests)
+}
+
+func TestService_PruneRegistry_SkipsWhenFewerThanKeepLast(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v1"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v1")] = time.Date(2026, 2, 8, 11, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-latest", "sha256:layer-latest")
+	manifestStorage.manifests[manifestRefKey("gordon/api", "v1")] = mustManifestJSON(t, "sha256:cfg-v1", "sha256:layer-v1")
+
+	blobStorage := &fakeBlobStorage{}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 5)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.Registry.TagsRemoved)
+	assert.Empty(t, manifestStorage.deletedManifests)
+}
+
+func TestService_PruneRegistry_KeepLastZeroSkipsRegistryCleanup(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:orphan"}}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.RegistryPruneResult{}, report.Registry)
+	assert.Equal(t, 0, manifestStorage.listRepositoriesCalls)
+	assert.Empty(t, manifestStorage.deletedManifests)
+	assert.Empty(t, blobStorage.deletedBlobs)
+}
+
+func TestService_PruneRegistry_GarbageCollectsUnreferencedBlobs(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-live", "sha256:layer-live")
+
+	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:cfg-live", "sha256:layer-live", "sha256:orphan"}}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Registry.BlobsRemoved)
+	assert.Equal(t, []string{"sha256:orphan"}, blobStorage.deletedBlobs)
+}
+
+func TestService_PruneRegistry_PreservesSharedBlobs(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v1"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v1")] = time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-latest", "sha256:layer-shared")
+	manifestStorage.manifests[manifestRefKey("gordon/api", "v1")] = mustManifestJSON(t, "sha256:cfg-v1", "sha256:layer-shared")
+
+	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:cfg-latest", "sha256:layer-shared", "sha256:cfg-v1"}}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Registry.BlobsRemoved)
+	assert.Equal(t, []string{"sha256:cfg-v1"}, blobStorage.deletedBlobs)
+}
+
+func TestService_PruneRegistry_PreservesManifestListChildDigests(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestIndexJSON(t, "sha256:child-amd64", "sha256:child-arm64")
+	manifestStorage.manifests[manifestRefKey("gordon/api", "sha256:child-amd64")] = mustManifestJSON(t, "sha256:cfg-amd64", "sha256:layer-amd64")
+	manifestStorage.manifests[manifestRefKey("gordon/api", "sha256:child-arm64")] = mustManifestJSON(t, "sha256:cfg-arm64", "sha256:layer-arm64")
+
+	blobStorage := &fakeBlobStorage{blobs: []string{
+		"sha256:child-amd64",
+		"sha256:child-arm64",
+		"sha256:cfg-amd64",
+		"sha256:layer-amd64",
+		"sha256:cfg-arm64",
+		"sha256:layer-arm64",
+		"sha256:orphan",
+	}}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Registry.BlobsRemoved)
+	assert.Equal(t, []string{"sha256:orphan"}, blobStorage.deletedBlobs)
+}
+
+func TestService_PruneRegistry_TieBreaksByTagName(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"v1", "v2"}
+	tie := time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v1")] = tie
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v2")] = tie
+	manifestStorage.manifests[manifestRefKey("gordon/api", "v2")] = mustManifestJSON(t, "sha256:cfg-v2", "sha256:layer-v2")
+
+	blobStorage := &fakeBlobStorage{}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Registry.TagsRemoved)
+	assert.Equal(t, []manifestRef{{name: "gordon/api", reference: "v1"}}, manifestStorage.deletedManifests)
+}
+
+func TestService_PruneRegistry_ReturnsErrorWhenChildManifestMissing(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestIndexJSON(t, "sha256:child-missing")
+
+	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:child-missing", "sha256:orphan"}}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	_, err := svc.PruneRegistry(context.Background(), 1)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read manifest")
+}
+
+func TestService_PruneRegistry_MultipleRepositories(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api", "gordon/web"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v2", "v1"}
+	manifestStorage.tagsByRepo["gordon/web"] = []string{"latest", "v3", "v2"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v2")] = time.Date(2026, 2, 8, 11, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v1")] = time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/web", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/web", "v3")] = time.Date(2026, 2, 8, 11, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/web", "v2")] = time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-api-latest", "sha256:layer-api-latest")
+	manifestStorage.manifests[manifestRefKey("gordon/api", "v2")] = mustManifestJSON(t, "sha256:cfg-api-v2", "sha256:layer-api-v2")
+	manifestStorage.manifests[manifestRefKey("gordon/web", "latest")] = mustManifestJSON(t, "sha256:cfg-web-latest", "sha256:layer-web-latest")
+	manifestStorage.manifests[manifestRefKey("gordon/web", "v3")] = mustManifestJSON(t, "sha256:cfg-web-v3", "sha256:layer-web-v3")
+
+	blobStorage := &fakeBlobStorage{}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 2)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, report.Registry.TagsRemoved)
+	assert.ElementsMatch(t, []manifestRef{
+		{name: "gordon/api", reference: "v1"},
+		{name: "gordon/web", reference: "v2"},
+	}, manifestStorage.deletedManifests)
+}
+
+func TestService_PruneRegistry_EmptyRepository(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{}
+	blobStorage := &fakeBlobStorage{}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 2)
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.RegistryPruneResult{}, report.Registry)
+	assert.Empty(t, manifestStorage.deletedManifests)
+	assert.Empty(t, blobStorage.deletedBlobs)
+}
+
+func TestService_Prune_RunsBothRuntimeAndRegistry(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v1"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v1")] = time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-live", "sha256:layer-live")
+	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:cfg-live", "sha256:layer-live", "sha256:orphan"}}
+	rt := &fakeRuntime{pruneReport: pkgruntime.PruneReport{DeletedIDs: []string{"sha256:img1"}, SpaceReclaimed: 1024}}
+
+	svc := NewService(rt, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.Prune(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Runtime.DeletedCount)
+	assert.Equal(t, int64(1024), report.Runtime.SpaceReclaimed)
+	assert.Equal(t, 1, report.Registry.TagsRemoved)
+	assert.Equal(t, 1, report.Registry.BlobsRemoved)
+	assert.Equal(t, []manifestRef{{name: "gordon/api", reference: "v1"}}, manifestStorage.deletedManifests)
+	assert.Equal(t, []string{"sha256:orphan"}, blobStorage.deletedBlobs)
+}
+
+func TestService_Prune_RuntimeFailureDoesNotBlockRegistry(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v1"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v1")] = time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-live", "sha256:layer-live")
+	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:cfg-live", "sha256:layer-live", "sha256:orphan"}}
+	rt := &fakeRuntime{pruneErr: errors.New("runtime prune failed")}
+
+	svc := NewService(rt, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.Prune(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.Runtime.DeletedCount)
+	assert.Equal(t, int64(0), report.Runtime.SpaceReclaimed)
+	assert.Equal(t, 1, report.Registry.TagsRemoved)
+	assert.Equal(t, 1, report.Registry.BlobsRemoved)
+	assert.Equal(t, []manifestRef{{name: "gordon/api", reference: "v1"}}, manifestStorage.deletedManifests)
+	assert.Equal(t, []string{"sha256:orphan"}, blobStorage.deletedBlobs)
+}
+
 type fakeRuntime struct {
 	pkgruntime.Runtime
 
@@ -200,6 +468,30 @@ type noopBlobStorage struct {
 	out.BlobStorage
 }
 
+type manifestRef struct {
+	name      string
+	reference string
+}
+
+type fakeManifestStorage struct {
+	out.ManifestStorage
+
+	repositories []string
+	tagsByRepo   map[string][]string
+	modTimes     map[string]time.Time
+	manifests    map[string][]byte
+
+	listRepositoriesCalls int
+	deletedManifests      []manifestRef
+}
+
+type fakeBlobStorage struct {
+	out.BlobStorage
+
+	blobs        []string
+	deletedBlobs []string
+}
+
 func (f *fakeRuntime) ListImagesDetailed(context.Context) ([]pkgruntime.ImageDetail, error) {
 	return f.listDetails, f.listErr
 }
@@ -208,6 +500,120 @@ func (f *fakeRuntime) PruneImages(_ context.Context, danglingOnly bool) (pkgrunt
 	f.pruneCalled = true
 	f.pruneDanglingOnly = danglingOnly
 	return f.pruneReport, f.pruneErr
+}
+
+func newFakeManifestStorage() *fakeManifestStorage {
+	return &fakeManifestStorage{
+		tagsByRepo: make(map[string][]string),
+		modTimes:   make(map[string]time.Time),
+		manifests:  make(map[string][]byte),
+	}
+}
+
+func manifestRefKey(name, reference string) string {
+	return name + "@" + reference
+}
+
+func mustManifestJSON(t *testing.T, configDigest string, layerDigests ...string) []byte {
+	t.Helper()
+
+	type descriptor struct {
+		Digest string `json:"digest"`
+	}
+
+	payload := struct {
+		Config descriptor   `json:"config"`
+		Layers []descriptor `json:"layers"`
+	}{
+		Config: descriptor{Digest: configDigest},
+		Layers: make([]descriptor, 0, len(layerDigests)),
+	}
+
+	for _, digest := range layerDigests {
+		payload.Layers = append(payload.Layers, descriptor{Digest: digest})
+	}
+
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return data
+}
+
+func mustManifestIndexJSON(t *testing.T, digests ...string) []byte {
+	t.Helper()
+
+	type descriptor struct {
+		Digest string `json:"digest"`
+	}
+
+	payload := struct {
+		Manifests []descriptor `json:"manifests"`
+	}{
+		Manifests: make([]descriptor, 0, len(digests)),
+	}
+
+	for _, digest := range digests {
+		payload.Manifests = append(payload.Manifests, descriptor{Digest: digest})
+	}
+
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return data
+}
+
+func (f *fakeManifestStorage) ListRepositories() ([]string, error) {
+	f.listRepositoriesCalls++
+	return append([]string(nil), f.repositories...), nil
+}
+
+func (f *fakeManifestStorage) ListTags(name string) ([]string, error) {
+	return append([]string(nil), f.tagsByRepo[name]...), nil
+}
+
+func (f *fakeManifestStorage) GetManifestModTime(name, reference string) (time.Time, error) {
+	modTime, ok := f.modTimes[manifestRefKey(name, reference)]
+	if !ok {
+		return time.Time{}, errors.New("manifest modtime not found")
+	}
+	return modTime, nil
+}
+
+func (f *fakeManifestStorage) DeleteManifest(name, reference string) error {
+	f.deletedManifests = append(f.deletedManifests, manifestRef{name: name, reference: reference})
+	tags := f.tagsByRepo[name]
+	filtered := tags[:0]
+	for _, tag := range tags {
+		if tag != reference {
+			filtered = append(filtered, tag)
+		}
+	}
+	f.tagsByRepo[name] = filtered
+	delete(f.manifests, manifestRefKey(name, reference))
+	return nil
+}
+
+func (f *fakeManifestStorage) GetManifest(name, reference string) ([]byte, string, error) {
+	manifest, ok := f.manifests[manifestRefKey(name, reference)]
+	if !ok {
+		return nil, "", errors.New("manifest not found")
+	}
+	return manifest, "application/vnd.oci.image.manifest.v1+json", nil
+}
+
+func (f *fakeBlobStorage) ListBlobs() ([]string, error) {
+	return append([]string(nil), f.blobs...), nil
+}
+
+func (f *fakeBlobStorage) DeleteBlob(digest string) error {
+	f.deletedBlobs = append(f.deletedBlobs, digest)
+	for i, existing := range f.blobs {
+		if existing != digest {
+			continue
+		}
+		f.blobs = append(f.blobs[:i], f.blobs[i+1:]...)
+		break
+	}
+	sort.Strings(f.deletedBlobs)
+	return nil
 }
 
 var _ pkgruntime.Runtime = (*fakeRuntime)(nil)
