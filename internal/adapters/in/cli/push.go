@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -236,7 +237,7 @@ func deployAfterPush(ctx context.Context, client *remote.Client, pushDomain stri
 		}
 	}
 
-	result, err := client.Deploy(ctx, pushDomain)
+	result, err := deployWithSpinner(ctx, client, pushDomain)
 	if err != nil {
 		return fmt.Errorf("failed to deploy: %w", err)
 	}
@@ -246,6 +247,102 @@ func deployAfterPush(ctx context.Context, client *remote.Client, pushDomain stri
 	}
 	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", pushDomain, containerID)))
 	return nil
+}
+
+func deployWithSpinner(ctx context.Context, client *remote.Client, pushDomain string) (*remote.DeployResult, error) {
+	if !isInteractiveTerminal() {
+		fmt.Printf("Deploying %s...\n", pushDomain)
+		return client.Deploy(ctx, pushDomain)
+	}
+
+	done := make(chan deployOutcome, 1)
+	go func() {
+		result, err := client.Deploy(ctx, pushDomain)
+		done <- deployOutcome{result: result, err: err}
+	}()
+
+	model := newDeploySpinnerModel(pushDomain, done)
+	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	fmt.Print("\r\033[K")
+	if err != nil {
+		return nil, err
+	}
+
+	deployModel, ok := final.(deploySpinnerModel)
+	if !ok {
+		return nil, fmt.Errorf("spinner exited with unexpected model type %T", final)
+	}
+	if !deployModel.finished {
+		return nil, fmt.Errorf("deploy spinner exited before deploy result was received")
+	}
+
+	return deployModel.outcome.result, deployModel.outcome.err
+}
+
+type deployOutcome struct {
+	result *remote.DeployResult
+	err    error
+}
+
+type deployDoneMsg deployOutcome
+
+type deploySpinnerModel struct {
+	spinner  components.SpinnerModel
+	done     <-chan deployOutcome
+	outcome  deployOutcome
+	finished bool
+}
+
+func newDeploySpinnerModel(pushDomain string, done <-chan deployOutcome) deploySpinnerModel {
+	return deploySpinnerModel{
+		spinner: components.NewSpinner(
+			components.WithMessage(fmt.Sprintf("Deploying %s...", pushDomain)),
+			components.WithSpinnerType(components.SpinnerMiniDot),
+		),
+		done: done,
+	}
+}
+
+func (m deploySpinnerModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Init(), waitForDeployDone(m.done))
+}
+
+func (m deploySpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case deployDoneMsg:
+		m.outcome = deployOutcome(msg)
+		m.finished = true
+		return m, tea.Quit
+	default:
+		updated, cmd := m.spinner.Update(msg)
+		spinnerModel, ok := updated.(components.SpinnerModel)
+		if ok {
+			m.spinner = spinnerModel
+		}
+		return m, cmd
+	}
+}
+
+func (m deploySpinnerModel) View() string {
+	return m.spinner.View()
+}
+
+func waitForDeployDone(done <-chan deployOutcome) tea.Cmd {
+	return func() tea.Msg {
+		return deployDoneMsg(<-done)
+	}
+}
+
+func isInteractiveTerminal() bool {
+	term := os.Getenv("TERM")
+	if term == "" || term == "dumb" {
+		return false
+	}
+	info, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
 // parseImageRef splits "registry/name:tag" into components.

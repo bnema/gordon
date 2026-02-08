@@ -69,6 +69,30 @@ With TLS enabled:
 - `port` remains available for plain HTTP unless you restrict it externally
 - If `tls_cert_file`/`tls_key_file` are empty, Gordon auto-generates a self-signed pair in `{data_dir}/tls/`
 
+For rootless user services, do not bind directly to `443`. Use an unprivileged TLS port (for example `8443`) and forward `443` to it at the firewall or edge proxy.
+
+```toml
+[server]
+tls_enabled = true
+tls_port = 8443
+```
+
+With firewalld and Tailscale:
+
+```bash
+# Verify tailscale0 is in trusted zone
+sudo firewall-cmd --get-zone-of-interface=tailscale0
+
+# If needed, place tailscale0 in trusted
+sudo firewall-cmd --permanent --zone=trusted --add-interface=tailscale0
+sudo firewall-cmd --reload
+
+# Forward 443 -> 8443 permanently (IPv4 + IPv6)
+sudo firewall-cmd --permanent --zone=trusted --add-rich-rule='rule family=ipv4 forward-port port=443 protocol=tcp to-port=8443'
+sudo firewall-cmd --permanent --zone=trusted --add-rich-rule='rule family=ipv6 forward-port port=443 protocol=tcp to-port=8443'
+sudo firewall-cmd --reload
+```
+
 ### Registry Port
 
 The `registry_port` setting controls where Gordon accepts image pushes:

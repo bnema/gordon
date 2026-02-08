@@ -69,6 +69,7 @@ type Service struct {
 	attachments      map[string][]string // ownerDomain → []containerIDs
 	mu               sync.RWMutex
 	deployMu         sync.Map // per-domain deploy locks (domain → *domainDeployLock)
+	monitor          *Monitor
 }
 
 // domainDeployLock is a context-aware mutex using a buffered channel.
@@ -347,9 +348,11 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 		s.runtime.RemoveContainer(ctx, newContainer.ID, true)
 		return nil, log.WrapErr(err, "failed to start container")
 	}
-	if err := s.waitForReady(ctx, newContainer.ID); err != nil {
-		s.cleanupFailedContainer(ctx, newContainer.ID)
-		return nil, log.WrapErr(err, "container failed readiness check")
+	if !domain.IsSkipReadiness(ctx) {
+		if err := s.waitForReady(ctx, newContainer.ID); err != nil {
+			s.cleanupFailedContainer(ctx, newContainer.ID)
+			return nil, log.WrapErr(err, "container failed readiness check")
+		}
 	}
 
 	inspected, err := s.runtime.InspectContainer(ctx, newContainer.ID)
@@ -805,6 +808,8 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 }
 
 // AutoStart starts containers for the provided routes that aren't running.
+// It skips readiness checks to avoid blocking boot; the background monitor
+// handles crash recovery.
 func (s *Service) AutoStart(ctx context.Context, routes []domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -814,37 +819,67 @@ func (s *Service) AutoStart(ctx context.Context, routes []domain.Route) error {
 
 	log.Info().Int("route_count", len(routes)).Msg("auto-starting containers for configured routes")
 
-	var started, skipped, errors int
+	// Filter out routes that already have a running container.
+	var pending []domain.Route
+	skipped := 0
 	for _, route := range routes {
-		// Check if container already exists and is running
 		if _, exists := s.Get(ctx, route.Domain); exists {
 			log.Debug().Str("domain", route.Domain).Msg("container already running, skipping")
 			skipped++
-			continue
+		} else {
+			pending = append(pending, route)
 		}
+	}
 
-		log.Info().
-			Str("domain", route.Domain).
-			Str("image", route.Image).
-			Msg("auto-starting container for route")
+	if len(pending) == 0 {
+		log.Info().Int("skipped", skipped).Msg("auto-start completed, all containers already running")
+		return nil
+	}
 
-		if _, err := s.Deploy(ctx, route); err != nil {
-			log.Warn().Err(err).Str("domain", route.Domain).Msg("failed to auto-start container")
-			errors++
-			continue
+	// Deploy all pending routes concurrently with readiness checks skipped.
+	deployCtx := domain.WithSkipReadiness(ctx)
+
+	type result struct {
+		route domain.Route
+		err   error
+	}
+	results := make(chan result, len(pending))
+	sem := make(chan struct{}, 4) // limit concurrency
+
+	for _, route := range pending {
+		sem <- struct{}{}
+		go func(r domain.Route) {
+			defer func() { <-sem }()
+
+			log.Info().Str("domain", r.Domain).Str("image", r.Image).Msg("auto-starting container for route")
+
+			if _, err := s.Deploy(deployCtx, r); err != nil {
+				results <- result{route: r, err: err}
+				return
+			}
+			results <- result{route: r}
+		}(route)
+	}
+
+	var started, errCount int
+	for i := 0; i < len(pending); i++ {
+		res := <-results
+		if res.err != nil {
+			log.Warn().Err(res.err).Str("domain", res.route.Domain).Msg("failed to auto-start container")
+			errCount++
+		} else {
+			started++
 		}
-
-		started++
 	}
 
 	log.Info().
 		Int("started", started).
 		Int("skipped", skipped).
-		Int("errors", errors).
+		Int("errors", errCount).
 		Msg("auto-start completed")
 
-	if errors > 0 {
-		return fmt.Errorf("auto-start completed with %d errors", errors)
+	if errCount > 0 {
+		return fmt.Errorf("auto-start completed with %d errors", errCount)
 	}
 	return nil
 }
@@ -858,9 +893,8 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	log := zerowrap.FromCtx(ctx)
 	log.Info().Msg("shutting down container manager...")
 
-	if err := s.stopAllManagedContainers(ctx); err != nil {
-		log.WrapErr(err, "failed to stop all containers during shutdown")
-	}
+	// Containers are left running across Gordon restarts.
+	// SyncContainers + AutoStart will pick them back up on next boot.
 
 	// Close log writer to stop all log collection
 	if s.logWriter != nil {
@@ -871,6 +905,33 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	log.Info().Msg("container manager shutdown complete")
 	return nil
+}
+
+// StartMonitor begins background monitoring of tracked containers.
+// The monitor restarts crashed containers and detects crash loops.
+// Safe to call multiple times; subsequent calls are no-ops.
+func (s *Service) StartMonitor(ctx context.Context) {
+	s.mu.Lock()
+	if s.monitor != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.monitor = newMonitor(s)
+	m := s.monitor
+	s.mu.Unlock()
+	m.Start(ctx)
+}
+
+// StopMonitor stops the background container monitor.
+// Safe to call multiple times; subsequent calls are no-ops.
+func (s *Service) StopMonitor() {
+	s.mu.Lock()
+	m := s.monitor
+	s.monitor = nil
+	s.mu.Unlock()
+	if m != nil {
+		m.Stop()
+	}
 }
 
 // UpdateConfig updates the service configuration.
@@ -1720,46 +1781,6 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	return nil
 }
 
-func (s *Service) stopAllManagedContainers(ctx context.Context) error {
-	log := zerowrap.FromCtx(ctx)
-
-	s.mu.RLock()
-	containers := make(map[string]*domain.Container, len(s.containers))
-	maps.Copy(containers, s.containers)
-	s.mu.RUnlock()
-
-	if len(containers) == 0 {
-		log.Info().Msg("no managed containers to stop")
-		return nil
-	}
-
-	log.Info().Int(zerowrap.FieldCount, len(containers)).Msg("stopping all managed containers...")
-
-	errorCount := 0
-	for d, c := range containers {
-		log.Info().Str("domain", d).Str(zerowrap.FieldEntityID, c.ID).Msg("stopping managed container")
-
-		if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
-			log.WrapErrWithFields(err, "failed to stop container", map[string]any{"domain": d, zerowrap.FieldEntityID: c.ID})
-			errorCount++
-			continue
-		}
-
-		s.mu.Lock()
-		delete(s.containers, d)
-		s.mu.Unlock()
-
-		log.Info().Str("domain", d).Str(zerowrap.FieldEntityID, c.ID).Msg("container stopped successfully")
-	}
-
-	if errorCount > 0 {
-		return fmt.Errorf("failed to stop %d containers", errorCount)
-	}
-
-	log.Info().Msg("all managed containers stopped successfully")
-	return nil
-}
-
 // Utility functions
 
 func normalizeImageRef(image string) string {
@@ -1969,7 +1990,7 @@ func (s *Service) waitForHealthy(ctx context.Context, containerID string, timeou
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	lastStatus := "starting"
+	var lastStatus string
 	for {
 		status, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(waitCtx, containerID)
 		if err != nil {
@@ -1978,12 +1999,15 @@ func (s *Service) waitForHealthy(ctx context.Context, containerID string, timeou
 		if !hasHealthcheck {
 			return errors.New("no healthcheck detected")
 		}
+		// Treat empty health status as transitional startup. Some runtimes can
+		// temporarily report an empty status before first probe results.
+		if status == "" {
+			status = "starting"
+		}
 		if status == "healthy" {
 			return nil
 		}
-		if status != "" {
-			lastStatus = status
-		}
+		lastStatus = status
 
 		select {
 		case <-time.After(time.Second):

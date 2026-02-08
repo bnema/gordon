@@ -18,7 +18,7 @@ Manage Gordon instances remotely using the CLI with the `--remote` flag or saved
 
 ## Understanding the Remote URL
 
-The `--remote` URL must be the `gordon_domain` configured on the remote Gordon instance. This domain serves both the container registry and the Admin API.
+Default: use the Gordon domain configured on the remote instance.
 
 ```toml
 # On the remote Gordon server
@@ -27,6 +27,31 @@ gordon_domain = "gordon.example.com"  # Use this as --remote URL
 ```
 
 The CLI connects to `https://gordon.example.com/admin/*` endpoints.
+
+Private tailnet setup (recommended for hardened VPS): keep using the HTTPS domain, point that DNS record to the VPS tailnet IP, and set insecure TLS for self-signed certs.
+
+```bash
+# Save remote once
+gordon remotes add tailnet-reg https://gordon.example.com --token-env GORDON_TOKEN --insecure
+gordon remotes use tailnet-reg
+
+# Use it for auth/admin commands
+gordon auth login
+gordon routes list
+```
+
+Equivalent `remotes.toml` entry:
+
+```toml
+active = "tailnet-reg"
+
+[remotes.tailnet-reg]
+url = "https://gordon.example.com"
+token_env = "GORDON_TOKEN"
+insecure_tls = true
+```
+
+Use this mode when registry/auth/admin access is intentionally restricted to tailnet CIDRs.
 
 ## Quick Start
 
@@ -65,6 +90,7 @@ These flags are available on all commands:
 |------|-------------|
 | `--remote <URL>` | Remote Gordon URL |
 | `--token <TOKEN>` | Authentication token |
+| `--insecure` | Skip TLS verification (self-signed/private certs) |
 
 ```bash
 # List routes on remote

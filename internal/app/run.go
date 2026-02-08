@@ -492,7 +492,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
 
 	// Create log service for accessing logs via admin API
-	logSvc := logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
+	logSvc := logs.NewService(resolveLogFilePath(cfg), cfg.Logging.File.Enabled, svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API
 	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log, svc.backupSvc, svc.imageSvc)
@@ -1254,6 +1254,9 @@ func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
 			log.Warn().Err(err).Msg("failed to auto-start containers")
 		}
 	}
+
+	// Start background monitor to restart crashed containers.
+	svc.containerSvc.StartMonitor(ctx)
 }
 
 // createHTTPHandlers creates HTTP handlers with middleware.
@@ -1661,6 +1664,8 @@ func gracefulShutdown(registrySrv, proxySrv *http.Server, containerSvc *containe
 	if err := proxySrv.Shutdown(shutdownCtx); err != nil {
 		log.Warn().Err(err).Msg("proxy server shutdown error")
 	}
+
+	containerSvc.StopMonitor()
 
 	if err := containerSvc.Shutdown(shutdownCtx); err != nil {
 		log.Warn().Err(err).Msg("error during container shutdown")

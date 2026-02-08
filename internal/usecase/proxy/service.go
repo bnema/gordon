@@ -24,8 +24,8 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// proxyTransport is a shared HTTP transport with proper timeouts.
-// This prevents resource exhaustion from slow backends or network issues.
+// proxyTransport is a shared HTTP transport for proxying to application containers.
+// ResponseHeaderTimeout is kept short to detect unresponsive backends quickly.
 var proxyTransport = &http.Transport{
 	DialContext: (&net.Dialer{
 		Timeout:   10 * time.Second,
@@ -34,6 +34,21 @@ var proxyTransport = &http.Transport{
 	TLSHandshakeTimeout:   10 * time.Second,
 	ResponseHeaderTimeout: 30 * time.Second,
 	MaxIdleConns:          100,
+	MaxIdleConnsPerHost:   10,
+	IdleConnTimeout:       90 * time.Second,
+}
+
+// registryTransport is used for the registry reverse proxy (localhost loopback).
+// It needs a longer ResponseHeaderTimeout because admin endpoints like /admin/deploy
+// perform blocking operations (image pull, container start, readiness checks) that
+// can take well over 30 seconds.
+var registryTransport = &http.Transport{
+	DialContext: (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ResponseHeaderTimeout: 3 * time.Minute,
+	MaxIdleConns:          20,
 	MaxIdleConnsPerHost:   10,
 	IdleConnTimeout:       90 * time.Second,
 }
@@ -558,8 +573,14 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxy := newReverseProxy(targetURL, "",
-		func(w http.ResponseWriter, _ *http.Request, err error) {
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(targetURL)
+			pr.SetXForwarded()
+			pr.Out.Host = targetURL.Host
+		},
+		Transport: registryTransport,
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err, &maxBytesErr) {
 				log.Warn().Err(err).Int("registry_port", cfg.RegistryPort).Msg("registry proxy error: request body too large")
@@ -569,13 +590,11 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 			log.Error().Err(err).Int("registry_port", cfg.RegistryPort).Msg("registry proxy error")
 			proxyError(w, "Registry Unavailable", http.StatusServiceUnavailable)
 		},
-		func(resp *http.Response) error {
+		ModifyResponse: func(resp *http.Response) error {
 			resp.Header.Set("X-Proxied-By", "Gordon")
 			resp.Header.Set("X-Registry-Backend", "gordon-registry")
 
 			// Remove security headers from registry response to prevent duplicates.
-			// The proxy middleware already adds these headers, so the registry's
-			// copies would create duplicates in the final response.
 			resp.Header.Del("X-Content-Type-Options")
 			resp.Header.Del("X-Frame-Options")
 			resp.Header.Del("X-XSS-Protection")
@@ -586,7 +605,7 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 
 			return nil
 		},
-	)
+	}
 
 	log.Debug().Str("target", targetURL.String()).Msg("proxying request to registry")
 

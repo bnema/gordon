@@ -27,11 +27,24 @@ type BackupStorage struct {
 
 // NewBackupStorage creates a new filesystem backup storage.
 func NewBackupStorage(rootDir string, log zerowrap.Logger) (*BackupStorage, error) {
+	rootDir = expandTilde(rootDir)
+
 	if err := os.MkdirAll(rootDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
 	return &BackupStorage{rootDir: rootDir, log: log}, nil
+}
+
+// expandTilde replaces a leading "~/" with the user's home directory.
+func expandTilde(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, path[2:])
+	}
+	return path
 }
 
 // Store saves backup data and returns the absolute storage path.
