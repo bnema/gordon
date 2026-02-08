@@ -1419,22 +1419,16 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 		)
 	}
 
-	// Wait for both servers to bind their ports before auto-starting containers.
+	// Wait for all enabled servers to bind their ports before auto-starting containers.
 	// This prevents the race where auto-start pulls from the registry before it's listening.
-	select {
-	case <-registryReady:
-	case err := <-errChan:
+	if err := waitForServerReady(registryReady, errChan); err != nil {
 		return err
 	}
-	select {
-	case <-proxyReady:
-	case err := <-errChan:
+	if err := waitForServerReady(proxyReady, errChan); err != nil {
 		return err
 	}
 	if cfg.Server.TLSEnabled {
-		select {
-		case <-tlsReady:
-		case err := <-errChan:
+		if err := waitForServerReady(tlsReady, errChan); err != nil {
 			return err
 		}
 	}
@@ -1447,22 +1441,12 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	}
 	logEvent.Msg("Gordon is running")
 
-	backupScheduler, err := startBackupScheduler(ctx, cfg, svc, log)
+	schedulerCleanup, err := startOptionalSchedulers(ctx, cfg, svc, log, v)
 	if err != nil {
 		return err
 	}
-	if backupScheduler != nil {
-		defer backupScheduler.Stop()
-	}
-
-	imageScheduler, err := startImagePruneScheduler(ctx, cfg, svc, log, func() int {
-		return v.GetInt("images.prune.keep_last")
-	})
-	if err != nil {
-		return err
-	}
-	if imageScheduler != nil {
-		defer imageScheduler.Stop()
+	if schedulerCleanup != nil {
+		defer schedulerCleanup()
 	}
 
 	// Auto-start after servers are listening (registry port is now bound).
@@ -1471,6 +1455,47 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
 	gracefulShutdown(registrySrv, proxySrv, containerSvc, log)
 	return nil
+}
+
+func waitForServerReady(ready <-chan struct{}, errChan <-chan error) error {
+	select {
+	case <-ready:
+		return nil
+	case err := <-errChan:
+		return err
+	}
+}
+
+func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger, v *viper.Viper) (func(), error) {
+	schedulers := make([]*cronSvc.Scheduler, 0, 2)
+
+	backupScheduler, err := startBackupScheduler(ctx, cfg, svc, log)
+	if err != nil {
+		return nil, err
+	}
+	if backupScheduler != nil {
+		schedulers = append(schedulers, backupScheduler)
+	}
+
+	imageScheduler, err := startImagePruneScheduler(ctx, cfg, svc, log, func() int {
+		return v.GetInt("images.prune.keep_last")
+	})
+	if err != nil {
+		return nil, err
+	}
+	if imageScheduler != nil {
+		schedulers = append(schedulers, imageScheduler)
+	}
+
+	if len(schedulers) == 0 {
+		return nil, nil
+	}
+
+	return func() {
+		for i := len(schedulers) - 1; i >= 0; i-- {
+			schedulers[i].Stop()
+		}
+	}, nil
 }
 
 func startBackupScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (*cronSvc.Scheduler, error) {
