@@ -30,6 +30,7 @@ Commands are organized by where they run:
 | `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
 | `gordon status` | Show Gordon server status | [status](./status.md) |
 | `gordon backup` | Manage database backups | [backup](./backup.md) |
+| `gordon images` | List and prune images | [images](./images.md) |
 
 ## Client Commands
 
@@ -79,6 +80,11 @@ gordon backup list
 gordon backup run app.example.com
 gordon backup detect app.example.com
 gordon backup status
+
+# Images
+gordon images list
+gordon images prune --runtime-only
+gordon images prune --keep 3
 
 # Authentication
 gordon auth token generate --subject ci-bot --expiry 0
