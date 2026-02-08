@@ -862,7 +862,7 @@ func (s *Service) AutoStart(ctx context.Context, routes []domain.Route) error {
 	}
 
 	var started, errCount int
-	for range len(pending) {
+	for i := 0; i < len(pending); i++ {
 		res := <-results
 		if res.err != nil {
 			log.Warn().Err(res.err).Str("domain", res.route.Domain).Msg("failed to auto-start container")

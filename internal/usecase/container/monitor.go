@@ -120,7 +120,7 @@ func (m *Monitor) checkContainer(ctx context.Context, log zerowrap.Logger, domai
 			return
 		}
 		// Crashed (non-zero exit): restart if not in backoff.
-		m.handleCrash(ctx, log, domainName, tracked.ID, now)
+		m.handleCrash(ctx, log, domainName, tracked.ID, inspected.ExitCode, now)
 	}
 }
 
@@ -157,7 +157,7 @@ func (m *Monitor) handleRunning(ctx context.Context, log zerowrap.Logger, domain
 	m.mu.Unlock()
 }
 
-func (m *Monitor) handleCrash(ctx context.Context, log zerowrap.Logger, domainName, containerID string, now time.Time) {
+func (m *Monitor) handleCrash(ctx context.Context, log zerowrap.Logger, domainName, containerID string, exitCode int, now time.Time) {
 	m.mu.Lock()
 	rec := m.history[domainName]
 	if rec == nil {
@@ -213,7 +213,7 @@ func (m *Monitor) handleCrash(ctx context.Context, log zerowrap.Logger, domainNa
 	}
 
 	log.Warn().Str("domain", domainName).Str("container_id", containerID).
-		Int("exit_code", -1). // exact code already logged by inspect
+		Int("exit_code", exitCode).
 		Msg("monitor: restarting crashed container")
 
 	if err := m.service.runtime.StartContainer(ctx, containerID); err != nil {
