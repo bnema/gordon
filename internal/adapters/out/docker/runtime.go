@@ -350,12 +350,13 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	name := strings.TrimPrefix(resp.Name, "/")
 
 	return &domain.Container{
-		ID:     resp.ID,
-		Image:  resp.Config.Image,
-		Name:   name,
-		Status: resp.State.Status,
-		Ports:  ports,
-		Labels: resp.Config.Labels,
+		ID:       resp.ID,
+		Image:    resp.Config.Image,
+		Name:     name,
+		Status:   resp.State.Status,
+		ExitCode: resp.State.ExitCode,
+		Ports:    ports,
+		Labels:   resp.Config.Labels,
 	}, nil
 }
 
@@ -688,11 +689,27 @@ func (r *Runtime) GetContainerHealthStatus(ctx context.Context, containerID stri
 	if err != nil {
 		return "", false, log.WrapErr(err, "failed to inspect container")
 	}
-	if resp.State == nil || resp.State.Health == nil {
+
+	// Detect configured healthchecks from container config rather than relying on
+	// State.Health presence. Some runtimes can expose an empty State.Health struct
+	// even when no healthcheck is configured.
+	hasHealthcheck := hasConfiguredHealthcheck(resp.Config)
+	if !hasHealthcheck {
 		return "", false, nil
+	}
+	if resp.State == nil || resp.State.Health == nil {
+		return "", true, nil
 	}
 
 	return resp.State.Health.Status, true, nil
+}
+
+func hasConfiguredHealthcheck(cfg *container.Config) bool {
+	if cfg == nil || cfg.Healthcheck == nil || len(cfg.Healthcheck.Test) == 0 {
+		return false
+	}
+	// Docker uses ["NONE"] to explicitly disable healthchecks inherited from base images.
+	return !strings.EqualFold(strings.TrimSpace(cfg.Healthcheck.Test[0]), "NONE")
 }
 
 // GetContainerPort gets the host port for a container's internal port.

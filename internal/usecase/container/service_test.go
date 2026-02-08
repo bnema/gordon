@@ -630,35 +630,13 @@ func TestService_Shutdown(t *testing.T) {
 	svc.containers["app1.example.com"] = &domain.Container{ID: "container-1"}
 	svc.containers["app2.example.com"] = &domain.Container{ID: "container-2"}
 
-	runtime.EXPECT().StopContainer(mock.Anything, "container-1").Return(nil)
-	runtime.EXPECT().StopContainer(mock.Anything, "container-2").Return(nil)
-
+	// Shutdown no longer stops containers — they are left running for
+	// SyncContainers + AutoStart to pick back up on next boot.
 	err := svc.Shutdown(ctx)
 
 	assert.NoError(t, err)
-	assert.Empty(t, svc.containers)
-}
-
-func TestService_Shutdown_PartialFailure(t *testing.T) {
-	runtime := mocks.NewMockContainerRuntime(t)
-	envLoader := mocks.NewMockEnvLoader(t)
-	eventBus := mocks.NewMockEventPublisher(t)
-
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
-	ctx := testContext()
-
-	svc.containers["app1.example.com"] = &domain.Container{ID: "container-1"}
-	svc.containers["app2.example.com"] = &domain.Container{ID: "container-2"}
-
-	runtime.EXPECT().StopContainer(mock.Anything, "container-1").Return(nil)
-	runtime.EXPECT().StopContainer(mock.Anything, "container-2").Return(errors.New("stop failed"))
-
-	err := svc.Shutdown(ctx)
-
-	// Shutdown logs errors but always returns nil for graceful degradation
-	assert.NoError(t, err)
-	// One container should still be tracked (the one that failed to stop)
-	assert.Len(t, svc.containers, 1)
+	// Containers remain tracked (not stopped).
+	assert.Len(t, svc.containers, 2)
 }
 
 func TestService_Restart_NotFound(t *testing.T) {
@@ -1196,14 +1174,14 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 		{Domain: "app2.example.com", Image: "myapp2:latest"},
 	}
 
-	// Setup mocks for first route deployment
+	// Setup mocks for route deployments
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Times(2)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp1:latest", "myapp2:latest"}, nil).Times(2)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, mock.AnythingOfType("string")).Return([]int{8080}, nil).Times(2)
 	envLoader.EXPECT().LoadEnv(mock.Anything, mock.AnythingOfType("string")).Return([]string{}, nil).Times(2)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, mock.AnythingOfType("string")).Return([]string{}, nil).Times(2)
 
-	// Create and start containers
+	// Create and start containers — readiness is skipped so no IsContainerRunning calls.
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{
 		ID: "container-1", Name: "gordon-app1.example.com", Status: "created",
 	}, nil).Once()
@@ -1211,7 +1189,6 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 		ID: "container-2", Name: "gordon-app2.example.com", Status: "created",
 	}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, mock.AnythingOfType("string")).Return(nil).Times(2)
-	runtime.EXPECT().IsContainerRunning(mock.Anything, mock.AnythingOfType("string")).Return(true, nil).Times(4)
 	runtime.EXPECT().InspectContainer(mock.Anything, mock.AnythingOfType("string")).Return(&domain.Container{
 		Status: "running",
 	}, nil).Times(2)
@@ -1245,7 +1222,7 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 		{Domain: "app2.example.com", Image: "myapp2:latest"}, // New route
 	}
 
-	// Only deploy for app2 (app1 is skipped)
+	// Only deploy for app2 (app1 is skipped). Readiness is skipped — no IsContainerRunning.
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp2:latest"}, nil).Once()
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp2:latest").Return([]int{8080}, nil).Once()
@@ -1255,7 +1232,6 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 		ID: "container-2", Status: "created",
 	}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "container-2").Return(nil).Once()
-	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-2").Return(true, nil).Times(2)
 	runtime.EXPECT().InspectContainer(mock.Anything, "container-2").Return(&domain.Container{
 		Status: "running",
 	}, nil).Once()
@@ -1313,7 +1289,8 @@ func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
 	}
 
 	// Key assertion: PullImage should be called with localhost:5000 rewrite,
-	// NOT the original reg.example.com/myapp:latest
+	// NOT the original reg.example.com/myapp:latest.
+	// Readiness is skipped — no IsContainerRunning calls.
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "localhost:5000/myapp:latest").Return(nil)
 	runtime.EXPECT().TagImage(mock.Anything, "localhost:5000/myapp:latest", "reg.example.com/myapp:latest").Return(nil)
@@ -1325,7 +1302,6 @@ func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
 		ID: "container-1", Name: "gordon-app1.example.com", Status: "created",
 	}, nil)
 	runtime.EXPECT().StartContainer(mock.Anything, "container-1").Return(nil)
-	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-1").Return(true, nil).Times(2)
 	runtime.EXPECT().InspectContainer(mock.Anything, "container-1").Return(&domain.Container{
 		Status: "running",
 	}, nil)
