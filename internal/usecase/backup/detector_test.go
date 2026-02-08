@@ -76,3 +76,96 @@ func TestDetectDatabaseFromAttachment_NonPostgres(t *testing.T) {
 	})
 	assert.False(t, ok)
 }
+
+func TestDetectDatabaseFromAttachment_PgsqlImage(t *testing.T) {
+	db, ok := detectDatabaseFromAttachment("app.example.com", domain.Attachment{
+		Name:        "pgsql",
+		Image:       "pgsql:16",
+		ContainerID: "pgsql-1",
+		Ports:       []int{5432},
+	})
+
+	require.True(t, ok)
+	assert.Equal(t, domain.DBTypePostgreSQL, db.Type)
+	assert.Equal(t, "16", db.Version)
+	assert.Equal(t, 5432, db.Port)
+}
+
+func TestDetectDatabaseFromAttachment_PgsqlInCompositeName(t *testing.T) {
+	db, ok := detectDatabaseFromAttachment("mon-fauteuil.fr", domain.Attachment{
+		Name:        "mon-fauteuil-prod-pgsql",
+		Image:       "mon-fauteuil-prod-pgsql:v18",
+		ContainerID: "pgsql-2",
+		Ports:       []int{5432},
+	})
+
+	require.True(t, ok)
+	assert.Equal(t, domain.DBTypePostgreSQL, db.Type)
+	assert.Equal(t, "", db.Version) // v18 tag starts with non-digit, no version extracted
+}
+
+func TestDetectDatabaseFromAttachment_PostgresqlFullName(t *testing.T) {
+	db, ok := detectDatabaseFromAttachment("app.example.com", domain.Attachment{
+		Name:        "postgresql",
+		Image:       "postgresql:15",
+		ContainerID: "pg-full-1",
+		Ports:       []int{5432},
+	})
+
+	require.True(t, ok)
+	assert.Equal(t, domain.DBTypePostgreSQL, db.Type)
+	assert.Equal(t, "15", db.Version)
+}
+
+func TestDetectDatabaseFromAttachment_PostgisImage(t *testing.T) {
+	db, ok := detectDatabaseFromAttachment("app.example.com", domain.Attachment{
+		Name:        "postgis",
+		Image:       "postgis/postgis:16-3.4",
+		ContainerID: "postgis-1",
+		Ports:       []int{5432},
+	})
+
+	require.True(t, ok)
+	assert.Equal(t, domain.DBTypePostgreSQL, db.Type)
+	assert.Equal(t, "16", db.Version)
+}
+
+func TestDetectDatabaseFromAttachment_Port5432Fallback(t *testing.T) {
+	db, ok := detectDatabaseFromAttachment("app.example.com", domain.Attachment{
+		Name:        "custom-db",
+		Image:       "custom-db:latest",
+		ContainerID: "fallback-1",
+		Ports:       []int{5432},
+	})
+
+	require.True(t, ok, "port 5432 should trigger PostgreSQL fallback detection")
+	assert.Equal(t, domain.DBTypePostgreSQL, db.Type)
+	assert.Equal(t, 5432, db.Port)
+}
+
+func TestDetectDatabaseFromAttachment_UnknownImageNoPostgresPort(t *testing.T) {
+	_, ok := detectDatabaseFromAttachment("app.example.com", domain.Attachment{
+		Name:        "custom-db",
+		Image:       "custom-db:latest",
+		ContainerID: "unknown-1",
+		Ports:       []int{3306},
+	})
+	assert.False(t, ok, "non-postgres port with unknown image should not match")
+}
+
+func TestLooksLikePostgres(t *testing.T) {
+	// Positive cases
+	assert.True(t, looksLikePostgres("postgres"))
+	assert.True(t, looksLikePostgres("postgres:16"))
+	assert.True(t, looksLikePostgres("my-postgres-db"))
+	assert.True(t, looksLikePostgres("postgresql"))
+	assert.True(t, looksLikePostgres("pgsql"))
+	assert.True(t, looksLikePostgres("mon-fauteuil-prod-pgsql"))
+	assert.True(t, looksLikePostgres("postgis/postgis"))
+
+	// Negative cases
+	assert.False(t, looksLikePostgres("mysql"))
+	assert.False(t, looksLikePostgres("redis"))
+	assert.False(t, looksLikePostgres("custom-db"))
+	assert.False(t, looksLikePostgres(""))
+}
