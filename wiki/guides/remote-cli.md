@@ -30,6 +30,15 @@ The CLI connects to `https://gordon.example.com/admin/*` endpoints.
 
 Private tailnet setup (recommended for hardened VPS): keep using the HTTPS domain, point that DNS record to the VPS tailnet IP, and set insecure TLS for self-signed certs.
 
+> [!CAUTION]
+> `--insecure` and `insecure_tls = true` disable TLS certificate verification.
+> This removes server identity validation and increases man-in-the-middle risk.
+> Use this only for private tailnet/VPN deployments with strict network access controls (restricted CIDRs, firewall allowlists, and no public ingress to admin endpoints).
+> Safer alternatives:
+> - Use a publicly trusted certificate (for example, Let's Encrypt).
+> - Use an internal CA and trust that CA on operator machines.
+> - Use Tailscale certificate generation (`tailscale cert`) and serve Gordon with that cert.
+
 ```bash
 # Save remote once
 gordon remotes add tailnet-reg https://gordon.example.com --token-env GORDON_TOKEN --insecure
