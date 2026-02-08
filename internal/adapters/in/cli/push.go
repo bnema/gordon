@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -236,7 +238,7 @@ func deployAfterPush(ctx context.Context, client *remote.Client, pushDomain stri
 		}
 	}
 
-	result, err := client.Deploy(ctx, pushDomain)
+	result, err := deployWithSpinner(ctx, client, pushDomain)
 	if err != nil {
 		return fmt.Errorf("failed to deploy: %w", err)
 	}
@@ -246,6 +248,58 @@ func deployAfterPush(ctx context.Context, client *remote.Client, pushDomain stri
 	}
 	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", pushDomain, containerID)))
 	return nil
+}
+
+func deployWithSpinner(ctx context.Context, client *remote.Client, pushDomain string) (*remote.DeployResult, error) {
+	if !isInteractiveTerminal() {
+		fmt.Printf("Deploying %s...\n", pushDomain)
+		return client.Deploy(ctx, pushDomain)
+	}
+
+	type deployOutcome struct {
+		result *remote.DeployResult
+		err    error
+	}
+
+	done := make(chan deployOutcome, 1)
+	go func() {
+		result, err := client.Deploy(ctx, pushDomain)
+		done <- deployOutcome{result: result, err: err}
+	}()
+
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	frameStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary)
+	message := styles.Theme.Muted.Render(fmt.Sprintf("Deploying %s...", pushDomain))
+
+	ticker := time.NewTicker(90 * time.Millisecond)
+	defer ticker.Stop()
+
+	frame := 0
+	for {
+		select {
+		case out := <-done:
+			fmt.Print("\r\033[K")
+			return out.result, out.err
+		case <-ticker.C:
+			fmt.Printf("\r%s %s", frameStyle.Render(frames[frame%len(frames)]), message)
+			frame++
+		case <-ctx.Done():
+			fmt.Print("\r\033[K")
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func isInteractiveTerminal() bool {
+	term := os.Getenv("TERM")
+	if term == "" || term == "dumb" {
+		return false
+	}
+	info, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
 // parseImageRef splits "registry/name:tag" into components.

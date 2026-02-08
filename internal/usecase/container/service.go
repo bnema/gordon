@@ -1999,12 +1999,15 @@ func (s *Service) waitForHealthy(ctx context.Context, containerID string, timeou
 		if !hasHealthcheck {
 			return errors.New("no healthcheck detected")
 		}
+		// Treat empty health status as transitional startup. Some runtimes can
+		// temporarily report an empty status before first probe results.
+		if status == "" {
+			status = "starting"
+		}
 		if status == "healthy" {
 			return nil
 		}
-		if status != "" {
-			lastStatus = status
-		}
+		lastStatus = status
 
 		select {
 		case <-time.After(time.Second):
