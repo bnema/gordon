@@ -18,15 +18,15 @@ Manage Gordon instances remotely using the CLI with the `--remote` flag or saved
 
 ## Understanding the Remote URL
 
-Default: use the Gordon registry domain configured on the remote instance.
+Default: use the Gordon domain configured on the remote instance.
 
 ```toml
 # On the remote Gordon server
 [server]
-registry_domain = "reg.example.com"  # Use this as --remote URL
+gordon_domain = "gordon.example.com"  # Use this as --remote URL
 ```
 
-The CLI connects to `https://reg.example.com/admin/*` endpoints.
+The CLI connects to `https://gordon.example.com/admin/*` endpoints.
 
 Private tailnet setup (recommended for hardened VPS): keep using the HTTPS domain, point that DNS record to the VPS tailnet IP, and set insecure TLS for self-signed certs.
 

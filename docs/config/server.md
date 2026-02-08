@@ -77,11 +77,17 @@ tls_enabled = true
 tls_port = 8443
 ```
 
-With firewalld and Tailscale (`tailscale0` in `trusted` zone):
+With firewalld and Tailscale:
 
 ```bash
-sudo firewall-cmd --zone=trusted --add-rich-rule='rule family=ipv4 forward-port port=443 protocol=tcp to-port=8443'
-sudo firewall-cmd --zone=trusted --add-rich-rule='rule family=ipv6 forward-port port=443 protocol=tcp to-port=8443'
+# Verify tailscale0 is in trusted zone
+sudo firewall-cmd --get-zone-of-interface=tailscale0
+
+# If needed, place tailscale0 in trusted
+sudo firewall-cmd --permanent --zone=trusted --add-interface=tailscale0
+sudo firewall-cmd --reload
+
+# Forward 443 -> 8443 permanently (IPv4 + IPv6)
 sudo firewall-cmd --permanent --zone=trusted --add-rich-rule='rule family=ipv4 forward-port port=443 protocol=tcp to-port=8443'
 sudo firewall-cmd --permanent --zone=trusted --add-rich-rule='rule family=ipv6 forward-port port=443 protocol=tcp to-port=8443'
 sudo firewall-cmd --reload

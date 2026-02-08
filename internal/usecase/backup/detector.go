@@ -44,20 +44,16 @@ func hasPort(ports []int, p int) bool {
 // buildPostgresInfo constructs a DBInfo for a PostgreSQL attachment.
 func buildPostgresInfo(domainName string, a domain.Attachment) domain.DBInfo {
 	port := 5432
-	hasPostgresPort := false
-	firstPositive := 0
 	for _, p := range a.Ports {
 		if p == 5432 {
-			hasPostgresPort = true
+			port = 5432
 			break
 		}
-		if p > 0 && firstPositive == 0 {
-			firstPositive = p
+		if p > 0 && port == 5432 {
+			port = p
 		}
 	}
-	if !hasPostgresPort && firstPositive > 0 {
-		port = firstPositive
-	}
+
 	return domain.DBInfo{
 		Type:        domain.DBTypePostgreSQL,
 		Version:     postgresVersionFromImage(a.Image),

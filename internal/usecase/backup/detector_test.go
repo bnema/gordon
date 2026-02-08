@@ -154,18 +154,27 @@ func TestDetectDatabaseFromAttachment_UnknownImageNoPostgresPort(t *testing.T) {
 }
 
 func TestLooksLikePostgres(t *testing.T) {
-	// Positive cases
-	assert.True(t, looksLikePostgres("postgres"))
-	assert.True(t, looksLikePostgres("postgres:16"))
-	assert.True(t, looksLikePostgres("my-postgres-db"))
-	assert.True(t, looksLikePostgres("postgresql"))
-	assert.True(t, looksLikePostgres("pgsql"))
-	assert.True(t, looksLikePostgres("mon-fauteuil-prod-pgsql"))
-	assert.True(t, looksLikePostgres("postgis/postgis"))
+	tests := []struct {
+		name  string
+		image string
+		want  bool
+	}{
+		{name: "postgres base image", image: "postgres", want: true},
+		{name: "postgres with version tag", image: "postgres:16", want: true},
+		{name: "name contains postgres", image: "my-postgres-db", want: true},
+		{name: "postgresql alias", image: "postgresql", want: true},
+		{name: "pgsql alias", image: "pgsql", want: true},
+		{name: "project specific pgsql alias", image: "mon-fauteuil-prod-pgsql", want: true},
+		{name: "postgis alias", image: "postgis/postgis", want: true},
+		{name: "mysql negative", image: "mysql", want: false},
+		{name: "redis negative", image: "redis", want: false},
+		{name: "custom negative", image: "custom-db", want: false},
+		{name: "empty negative", image: "", want: false},
+	}
 
-	// Negative cases
-	assert.False(t, looksLikePostgres("mysql"))
-	assert.False(t, looksLikePostgres("redis"))
-	assert.False(t, looksLikePostgres("custom-db"))
-	assert.False(t, looksLikePostgres(""))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, looksLikePostgres(tc.image))
+		})
+	}
 }
