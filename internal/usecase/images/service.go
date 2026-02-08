@@ -353,7 +353,8 @@ func splitRepoTag(repoTag string) (string, string) {
 	}
 
 	idx := strings.LastIndex(repoTag, ":")
-	if idx <= 0 || idx >= len(repoTag)-1 {
+	slashIdx := strings.LastIndex(repoTag, "/")
+	if idx <= slashIdx || idx >= len(repoTag)-1 {
 		return repoTag, ""
 	}
 

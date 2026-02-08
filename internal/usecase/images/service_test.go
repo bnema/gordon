@@ -614,4 +614,27 @@ func (f *fakeBlobStorage) DeleteBlob(digest string) error {
 	return nil
 }
 
+func TestSplitRepoTag(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantRepo string
+		wantTag  string
+	}{
+		{name: "repository and tag", input: "alpine:latest", wantRepo: "alpine", wantTag: "latest"},
+		{name: "registry port and tag", input: "localhost:5000/repo:v1", wantRepo: "localhost:5000/repo", wantTag: "v1"},
+		{name: "registry port without tag", input: "localhost:5000/repo", wantRepo: "localhost:5000/repo", wantTag: ""},
+		{name: "missing tag", input: "alpine", wantRepo: "alpine", wantTag: ""},
+		{name: "trailing colon", input: "alpine:", wantRepo: "alpine:", wantTag: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, tag := splitRepoTag(tt.input)
+			assert.Equal(t, tt.wantRepo, repo)
+			assert.Equal(t, tt.wantTag, tag)
+		})
+	}
+}
+
 var _ pkgruntime.Runtime = (*fakeRuntime)(nil)
