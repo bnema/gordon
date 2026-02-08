@@ -165,6 +165,52 @@ func (s *BlobStorage) BlobExists(digest string) bool {
 	return err == nil
 }
 
+// ListBlobs returns all blob digests.
+func (s *BlobStorage) ListBlobs() ([]string, error) {
+	blobsDir := filepath.Join(s.rootDir, "blobs")
+
+	if _, err := os.Stat(blobsDir); err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("failed to access blobs directory: %w", err)
+	}
+
+	digests := make([]string, 0)
+	err := filepath.Walk(blobsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(blobsDir, path)
+		if err != nil {
+			return err
+		}
+
+		parts := strings.Split(relPath, string(filepath.Separator))
+		if len(parts) < 2 {
+			return nil
+		}
+
+		digest := parts[0] + ":" + parts[len(parts)-1]
+		if err := validation.ValidateDigest(digest); err != nil {
+			return nil
+		}
+
+		digests = append(digests, digest)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list blobs: %w", err)
+	}
+
+	return digests, nil
+}
+
 // StartBlobUpload starts a new blob upload and returns the upload UUID.
 func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
 	uploadID := uuid.New().String()
