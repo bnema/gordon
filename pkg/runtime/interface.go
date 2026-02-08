@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // Container represents a running container
@@ -40,6 +41,26 @@ type ContainerConfig struct {
 	Aliases     []string          // Additional network aliases
 }
 
+// PruneReport represents the result of an image prune operation.
+type PruneReport struct {
+	// DeletedIDs contains runtime-provided image identifiers removed by prune.
+	DeletedIDs []string
+	// SpaceReclaimed is the number of bytes reclaimed by prune.
+	SpaceReclaimed int64
+}
+
+// ImageDetail represents detailed metadata for an image.
+type ImageDetail struct {
+	// ID is the runtime image identifier (for example, image ID/digest).
+	ID string
+	// RepoTags contains repository:tag references known for the image.
+	RepoTags []string
+	// Size is the image size in bytes.
+	Size int64
+	// Created is the image creation timestamp as reported by the runtime.
+	Created time.Time
+}
+
 // Runtime interface defines the contract for container runtime implementations
 type Runtime interface {
 	// Container lifecycle
@@ -59,6 +80,11 @@ type Runtime interface {
 	PullImageWithAuth(ctx context.Context, image, username, password string) error
 	RemoveImage(ctx context.Context, image string, force bool) error
 	ListImages(ctx context.Context) ([]string, error)
+	// ListImagesDetailed returns metadata for all images visible to the runtime.
+	ListImagesDetailed(ctx context.Context) ([]ImageDetail, error)
+	// PruneImages removes images eligible for prune; when danglingOnly is true,
+	// only dangling images are pruned.
+	PruneImages(ctx context.Context, danglingOnly bool) (PruneReport, error)
 
 	// Runtime information
 	Ping(ctx context.Context) error
