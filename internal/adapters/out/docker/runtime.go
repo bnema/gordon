@@ -597,7 +597,7 @@ func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepk
 
 	pruneFilters := filters.NewArgs()
 	if danglingOnly {
-		pruneFilters.Add("dangling", strconv.FormatBool(true))
+		pruneFilters.Add("dangling", "true")
 	}
 
 	pruneResult, err := r.client.ImagesPrune(ctx, pruneFilters)
