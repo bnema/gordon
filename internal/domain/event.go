@@ -83,20 +83,18 @@ func WithInternalDeploy(ctx context.Context) context.Context {
 }
 
 const (
-	// ContextKeyHealthTimeoutMultiplier overrides the health timeout with a multiplier.
-	ContextKeyHealthTimeoutMultiplier contextKey = "health_timeout_multiplier"
+	// ContextKeySkipReadiness indicates that readiness checks should be skipped
+	// (e.g., during AutoStart where the background monitor handles crash recovery).
+	ContextKeySkipReadiness contextKey = "skip_readiness"
 )
 
-// WithHealthTimeoutMultiplier returns a context that scales the health timeout.
-func WithHealthTimeoutMultiplier(ctx context.Context, multiplier float64) context.Context {
-	return context.WithValue(ctx, ContextKeyHealthTimeoutMultiplier, multiplier)
+// WithSkipReadiness returns a context that skips readiness checks on deploy.
+func WithSkipReadiness(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ContextKeySkipReadiness, true)
 }
 
-// HealthTimeoutMultiplier returns the timeout multiplier from ctx, or 1.0 if unset.
-func HealthTimeoutMultiplier(ctx context.Context) float64 {
-	v, ok := ctx.Value(ContextKeyHealthTimeoutMultiplier).(float64)
-	if !ok || v <= 0 {
-		return 1.0
-	}
-	return v
+// IsSkipReadiness checks if the context indicates readiness should be skipped.
+func IsSkipReadiness(ctx context.Context) bool {
+	v, ok := ctx.Value(ContextKeySkipReadiness).(bool)
+	return ok && v
 }

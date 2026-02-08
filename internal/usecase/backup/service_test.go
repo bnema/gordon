@@ -50,7 +50,7 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 			return false
 		}
 		return bytes.Contains([]byte(cmd[2]), []byte("pg_dump -Fc")) &&
-			bytes.Contains([]byte(cmd[2]), []byte("PGDATABASE='postgres'")) &&
+			bytes.Contains([]byte(cmd[2]), []byte("${POSTGRES_DB:-postgres}")) &&
 			bytes.Contains([]byte(cmd[2]), []byte(" > "))
 	})).Return(&outiface.ExecResult{ExitCode: 0, Stdout: []byte("backup-data")}, nil)
 
@@ -125,9 +125,10 @@ func TestSelectDatabaseAutoSelectsOnlyDatabaseWhenUnspecified(t *testing.T) {
 	assert.Equal(t, "postgres", db.Name)
 }
 
-func TestPostgresDumpCommandQuotesDatabaseName(t *testing.T) {
-	cmd := postgresDumpCommand("customer data")
-	assert.Contains(t, cmd, "PGDATABASE='customer data'")
+func TestPostgresDumpCommandUsesEnvVar(t *testing.T) {
+	cmd := postgresDumpCommand("ignored")
+	assert.Contains(t, cmd, "${POSTGRES_DB:-postgres}")
+	assert.Contains(t, cmd, "${POSTGRES_USER:-postgres}")
 }
 
 func TestServiceStatusReturnsWhenContextCancelledDuringSemaphoreAcquire(t *testing.T) {
