@@ -503,6 +503,61 @@ func (_c *MockBlobStorage_GetBlobUpload_Call) RunAndReturn(run func(uuid string)
 	return _c
 }
 
+// ListBlobs provides a mock function for the type MockBlobStorage
+func (_mock *MockBlobStorage) ListBlobs() ([]string, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListBlobs")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]string, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []string); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockBlobStorage_ListBlobs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListBlobs'
+type MockBlobStorage_ListBlobs_Call struct {
+	*mock.Call
+}
+
+// ListBlobs is a helper method to define mock.On call
+func (_e *MockBlobStorage_Expecter) ListBlobs() *MockBlobStorage_ListBlobs_Call {
+	return &MockBlobStorage_ListBlobs_Call{Call: _e.mock.On("ListBlobs")}
+}
+
+func (_c *MockBlobStorage_ListBlobs_Call) Run(run func()) *MockBlobStorage_ListBlobs_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockBlobStorage_ListBlobs_Call) Return(strings []string, err error) *MockBlobStorage_ListBlobs_Call {
+	_c.Call.Return(strings, err)
+	return _c
+}
+
+func (_c *MockBlobStorage_ListBlobs_Call) RunAndReturn(run func() ([]string, error)) *MockBlobStorage_ListBlobs_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PutBlob provides a mock function for the type MockBlobStorage
 func (_mock *MockBlobStorage) PutBlob(digest string, data io.Reader, size int64) error {
 	ret := _mock.Called(digest, data, size)
