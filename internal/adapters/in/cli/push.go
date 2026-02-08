@@ -7,9 +7,8 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -256,37 +255,81 @@ func deployWithSpinner(ctx context.Context, client *remote.Client, pushDomain st
 		return client.Deploy(ctx, pushDomain)
 	}
 
-	type deployOutcome struct {
-		result *remote.DeployResult
-		err    error
-	}
-
 	done := make(chan deployOutcome, 1)
 	go func() {
 		result, err := client.Deploy(ctx, pushDomain)
 		done <- deployOutcome{result: result, err: err}
 	}()
 
-	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	frameStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary)
-	message := styles.Theme.Muted.Render(fmt.Sprintf("Deploying %s...", pushDomain))
+	model := newDeploySpinnerModel(pushDomain, done)
+	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	fmt.Print("\r\033[K")
+	if err != nil {
+		return nil, err
+	}
 
-	ticker := time.NewTicker(90 * time.Millisecond)
-	defer ticker.Stop()
+	deployModel, ok := final.(deploySpinnerModel)
+	if !ok {
+		return nil, fmt.Errorf("spinner exited with unexpected model type %T", final)
+	}
+	if !deployModel.finished {
+		return nil, fmt.Errorf("deploy spinner exited before deploy result was received")
+	}
 
-	frame := 0
-	for {
-		select {
-		case out := <-done:
-			fmt.Print("\r\033[K")
-			return out.result, out.err
-		case <-ticker.C:
-			fmt.Printf("\r%s %s", frameStyle.Render(frames[frame%len(frames)]), message)
-			frame++
-		case <-ctx.Done():
-			fmt.Print("\r\033[K")
-			return nil, ctx.Err()
+	return deployModel.outcome.result, deployModel.outcome.err
+}
+
+type deployOutcome struct {
+	result *remote.DeployResult
+	err    error
+}
+
+type deployDoneMsg deployOutcome
+
+type deploySpinnerModel struct {
+	spinner  components.SpinnerModel
+	done     <-chan deployOutcome
+	outcome  deployOutcome
+	finished bool
+}
+
+func newDeploySpinnerModel(pushDomain string, done <-chan deployOutcome) deploySpinnerModel {
+	return deploySpinnerModel{
+		spinner: components.NewSpinner(
+			components.WithMessage(fmt.Sprintf("Deploying %s...", pushDomain)),
+			components.WithSpinnerType(components.SpinnerMiniDot),
+		),
+		done: done,
+	}
+}
+
+func (m deploySpinnerModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Init(), waitForDeployDone(m.done))
+}
+
+func (m deploySpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case deployDoneMsg:
+		m.outcome = deployOutcome(msg)
+		m.finished = true
+		return m, tea.Quit
+	default:
+		updated, cmd := m.spinner.Update(msg)
+		spinnerModel, ok := updated.(components.SpinnerModel)
+		if ok {
+			m.spinner = spinnerModel
 		}
+		return m, cmd
+	}
+}
+
+func (m deploySpinnerModel) View() string {
+	return m.spinner.View()
+}
+
+func waitForDeployDone(done <-chan deployOutcome) tea.Cmd {
+	return func() tea.Msg {
+		return deployDoneMsg(<-done)
 	}
 }
 
