@@ -313,11 +313,64 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "new-container", result.ID)
+}
 
-	// Old container should be replaced
-	tracked, exists := svc.Get(ctx, "test.example.com")
-	assert.True(t, exists)
-	assert.Equal(t, "new-container", tracked.ID)
+func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// Existing container has ImageID, but GetImageID will fail
+	existingContainer := &domain.Container{
+		ID:      "existing-container",
+		Name:    "gordon-test.example.com",
+		Image:   "myapp:latest",
+		ImageID: "sha256:abc123",
+		Status:  "running",
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	// prepareDeployResources
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	// GetImageID fails => deploy proceeds normally (graceful degradation)
+	runtime.EXPECT().GetImageID(mock.Anything, "myapp:latest").Return("", errors.New("image inspect failed"))
+
+	// Full deploy proceeds despite the error
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID: "new-container", Status: "running",
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// Old container is finalized
+	runtime.EXPECT().StopContainer(mock.Anything, "existing-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "existing-container", true).Return(nil)
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
 }
 
 func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
@@ -1996,6 +2049,177 @@ func TestService_Deploy_NilCacheInvalidator(t *testing.T) {
 	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
 	runtime.EXPECT().StopContainer(mock.Anything, "old-container").Return(nil)
 	runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil)
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
+}
+
+func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// Pre-populate with existing container that has an ImageID (set by InspectContainer).
+	// This simulates the first deploy (from image.pushed event) having already completed.
+	existingContainer := &domain.Container{
+		ID:      "existing-container",
+		Name:    "gordon-test.example.com",
+		Image:   "myapp:latest",
+		ImageID: "sha256:abc123",
+		Status:  "running",
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	// prepareDeployResources will run: orphan cleanup, image pull, etc.
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	// skipRedundantDeploy: resolve image ID and compare with existing container
+	runtime.EXPECT().GetImageID(mock.Anything, "myapp:latest").Return("sha256:abc123", nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "existing-container").Return(true, nil)
+
+	// No CreateContainer, StartContainer, or readiness calls should happen
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "existing-container", result.ID)
+
+	// Container should still be tracked
+	tracked, exists := svc.Get(ctx, "test.example.com")
+	assert.True(t, exists)
+	assert.Equal(t, "existing-container", tracked.ID)
+}
+
+func TestService_Deploy_DoesNotSkipWhenImageIDDiffers(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
+	ctx := testContext()
+
+	// Existing container with a DIFFERENT image ID than what's being deployed
+	existingContainer := &domain.Container{
+		ID:      "old-container",
+		Name:    "gordon-test.example.com",
+		Image:   "myapp:latest",
+		ImageID: "sha256:old-image",
+		Status:  "running",
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	// prepareDeployResources
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	// skipRedundantDeploy: image IDs differ, so deploy proceeds
+	runtime.EXPECT().GetImageID(mock.Anything, "myapp:latest").Return("sha256:new-image", nil)
+
+	// Full deploy proceeds
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID: "new-container", Status: "running",
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Return()
+	runtime.EXPECT().StopContainer(mock.Anything, "old-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil)
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
+}
+
+func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// Existing container has same image ID but is NOT running (crashed)
+	existingContainer := &domain.Container{
+		ID:      "existing-container",
+		Name:    "gordon-test.example.com",
+		Image:   "myapp:latest",
+		ImageID: "sha256:abc123",
+		Status:  "exited",
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	// prepareDeployResources
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	// skipRedundantDeploy: same image ID but container not running => proceed with deploy
+	runtime.EXPECT().GetImageID(mock.Anything, "myapp:latest").Return("sha256:abc123", nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "existing-container").Return(false, nil)
+
+	// Full deploy proceeds (replaces crashed container)
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID: "new-container", Status: "running",
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// Old (exited) container is still finalized
+	runtime.EXPECT().StopContainer(mock.Anything, "existing-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "existing-container", true).Return(nil)
 	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
 
 	result, err := svc.Deploy(ctx, route)
