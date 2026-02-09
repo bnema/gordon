@@ -86,3 +86,29 @@ func TestCreateHTTPHandlers_AuthEnabled_ExposesAdminOnProxy(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
 	}
 }
+
+func TestBuildRegistryCIDRAllowlistMiddleware_InvalidEntries_DenyAll(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{}
+	cfg.Server.RegistryAllowedIPs = []string{"not-a-cidr"}
+
+	mw := buildRegistryCIDRAllowlistMiddleware(cfg, nil, zerowrap.Default())
+	if mw == nil {
+		t.Fatal("expected non-nil allowlist middleware")
+	}
+
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/test/manifests/latest", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, rec.Code)
+	}
+}

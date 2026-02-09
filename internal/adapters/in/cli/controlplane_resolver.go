@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/app"
 )
 
@@ -16,7 +18,10 @@ func (h *controlPlaneHandle) close() {
 	if h == nil || h.closeFn == nil {
 		return
 	}
-	_ = h.closeFn()
+	if err := h.closeFn(); err != nil {
+		log := zerowrap.Default()
+		log.Warn().Err(err).Msg("failed to close control-plane resources")
+	}
 }
 
 func resolveControlPlane(configPath string) (*controlPlaneHandle, error) {
