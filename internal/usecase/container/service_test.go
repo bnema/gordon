@@ -313,6 +313,11 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "new-container", result.ID)
+
+	// Ensure the service's tracked container entry now points to the new container.
+	tracked, ok := svc.Get(ctx, "test.example.com")
+	assert.True(t, ok)
+	assert.Equal(t, "new-container", tracked.ID)
 }
 
 func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
