@@ -41,6 +41,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 
 	// Adapters - Input
+	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/http/admin"
 	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
@@ -487,11 +488,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	return svc, nil
 }
 
-func setupInternalRegistryAuth(cfg Config, svc *services, log zerowrap.Logger) error {
-	if !cfg.Auth.Enabled {
-		return nil
-	}
-
+func setupInternalRegistryAuth(_ Config, svc *services, log zerowrap.Logger) error {
 	var err error
 	svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
 	if err != nil {
@@ -761,7 +758,7 @@ func GetInternalCredentials() (*InternalCredentials, error) {
 // createAuthService creates the authentication service and token store.
 func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (out.TokenStore, *auth.Service, error) {
 	if !cfg.Auth.Enabled {
-		return nil, nil, nil
+		return nil, nil, fmt.Errorf("auth.enabled=false is no longer supported; authentication is always required")
 	}
 
 	authType := resolveAuthType(cfg)
@@ -850,7 +847,7 @@ func createTokenStore(backend domain.SecretsBackend, dataDir string, log zerowra
 
 func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (auth.Config, error) {
 	authConfig := auth.Config{
-		Enabled:  cfg.Auth.Enabled,
+		Enabled:  true,
 		AuthType: authType,
 		Username: cfg.Auth.Username,
 	}
@@ -1045,7 +1042,7 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 // createContainerService creates the container service with configuration.
 func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (*container.Service, error) {
 	containerConfig := container.Config{
-		RegistryAuthEnabled:      cfg.Auth.Enabled,
+		RegistryAuthEnabled:      true,
 		RegistryDomain:           cfg.Server.RegistryDomain,
 		RegistryPort:             cfg.Server.RegistryPort,
 		InternalRegistryUsername: svc.internalRegUser,
@@ -1071,7 +1068,7 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		containerConfig.DrainDelay = v.GetDuration("deploy.drain_delay")
 	}
 
-	if cfg.Auth.Enabled && svc.authSvc != nil {
+	if svc.authSvc != nil {
 		expiry, err := resolveServiceTokenExpiry(cfg)
 		if err != nil {
 			return nil, log.WrapErr(err, "failed to resolve service token expiry")
@@ -1088,6 +1085,8 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 			Msg("generated service token for container registry access")
 		containerConfig.ServiceTokenUsername = serviceTokenSubject
 		containerConfig.ServiceToken = serviceToken
+	} else {
+		return nil, fmt.Errorf("authentication service unavailable: cannot generate registry service token")
 	}
 
 	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig), nil
@@ -1242,6 +1241,28 @@ func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
 		}
 	}
 }
+func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			log.Warn().
+				Str("path", r.URL.Path).
+				Str("remote_addr", r.RemoteAddr).
+				Msg("blocked non-loopback access on internal admin route")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 // createHTTPHandlers creates HTTP handlers with middleware.
 func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler) {
@@ -1294,13 +1315,22 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	}
 	registryMiddlewares = append(registryMiddlewares, rateLimitMiddleware)
 
-	if cfg.Auth.Enabled && svc.authSvc != nil {
+	if svc.authSvc != nil {
 		internalAuth := middleware.InternalRegistryAuth{
 			Username: svc.internalRegUser,
 			Password: svc.internalRegPass,
 		}
 		registryMiddlewares = append(registryMiddlewares,
 			middleware.RegistryAuthV2(svc.authSvc, internalAuth, log))
+	} else {
+		log.Error().Msg("authentication service unavailable; registry requests will be denied")
+		registryMiddlewares = append(registryMiddlewares, func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication service unavailable"})
+			})
+		})
 	}
 
 	registryWithMiddleware := middleware.Chain(registryMiddlewares...)(registryHandler)
@@ -1334,7 +1364,6 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 			middleware.RequestLogger(log, trustedNets),
 			middleware.SecurityHeaders,
 		}
-		// Add admin auth middleware if auth is enabled
 		if svc.authSvc != nil {
 			// Create rate limiters for admin API - uses same config as registry
 			var globalLimiter, ipLimiter out.RateLimiter
@@ -1343,9 +1372,17 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 				ipLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
 			}
 			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, globalLimiter, ipLimiter, trustedNets, log))
+		} else {
+			adminMiddlewares = append(adminMiddlewares, func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication service unavailable"})
+				})
+			})
 		}
 		adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
-		registryMux.Handle("/admin/", adminWithMiddleware)
+		registryMux.Handle("/admin/", loopbackOnly(adminWithMiddleware, log))
 	}
 
 	// SECURITY: No CORS middleware on the proxy chain. Backend applications

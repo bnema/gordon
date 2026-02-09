@@ -50,6 +50,13 @@ type PasswordResponse struct {
 	IssuedAt  string `json:"issued_at"`
 }
 
+const passwordSessionTTL = 24 * time.Hour
+
+func setNoStoreHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+}
+
 // ServeHTTP routes requests to the appropriate handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/auth"), "/")
@@ -67,9 +74,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePassword handles POST /auth/password requests.
-// Validates username/password and returns a long-lived JWT (7 days).
+// Validates username/password and returns a daily session JWT.
 // Only works when auth type is "password" - returns error for "token" auth type.
 func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request) {
+	setNoStoreHeaders(w)
+
 	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
 		zerowrap.FieldLayer:   "adapter",
 		zerowrap.FieldAdapter: "http",
@@ -89,8 +98,8 @@ func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request) {
 	// Check if auth is enabled
 	if h.authSvc == nil || !h.authSvc.IsEnabled() {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication is disabled"})
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication is required"})
 		return
 	}
 
@@ -132,8 +141,9 @@ func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate 7-day token with full access (push, pull, admin)
-	expiry := 7 * 24 * time.Hour
+	// Generate daily session token with full access (push, pull, admin).
+	// This enforces regular re-authentication similar to short-session UX.
+	expiry := passwordSessionTTL
 	scopes := []string{"push", "pull", "admin:*:*"}
 
 	token, err := h.authSvc.GenerateToken(ctx, req.Username, scopes, expiry)
@@ -168,6 +178,8 @@ func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request) {
 // This is the Docker Registry v2 token server endpoint.
 // Issues short-lived access tokens for registry access.
 func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
+	setNoStoreHeaders(w)
+
 	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
 		zerowrap.FieldLayer:   "adapter",
 		zerowrap.FieldAdapter: "http",
@@ -186,21 +198,27 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 
 	// Check if auth is enabled
 	if h.authSvc == nil || !h.authSvc.IsEnabled() {
-		// If auth is disabled, return an anonymous token
-		h.sendAnonymousToken(w, log)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication is required"})
 		return
 	}
 
 	// Get credentials from Basic Auth
 	username, password, ok := r.BasicAuth()
 	if !ok {
-		// No credentials provided - return anonymous token with limited scope
-		h.sendAnonymousToken(w, log)
+		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon Registry"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "unauthorized"})
 		return
 	}
 
 	// Check for internal registry auth (localhost requests with internal creds)
-	var authenticated bool
+	var (
+		authenticated bool
+		parentClaims  *domain.TokenClaims
+	)
 	if isLocalhostRequest(r) && h.isInternalAuth(username, password) {
 		authenticated = true
 		log.Debug().Str("username", username).Msg("internal registry auth accepted")
@@ -214,6 +232,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 			claims, err := h.authSvc.ValidateToken(ctx, password)
 			if err == nil && claims.Subject == username {
 				authenticated = true
+				parentClaims = claims
 			}
 		}
 	}
@@ -231,6 +250,15 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 
 	// Parse requested scopes from query parameter
 	requestedScopes := h.parseRequestedScopes(r, log)
+	if parentClaims != nil {
+		requestedScopes = h.intersectRequestedScopes(requestedScopes, parentClaims.Scopes, log)
+		if len(requestedScopes) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "forbidden: insufficient scope"})
+			return
+		}
+	}
 
 	// Generate a short-lived access token (5 minutes) - not stored
 	accessToken, err := h.authSvc.GenerateAccessToken(ctx, username, requestedScopes, 5*time.Minute)
@@ -259,6 +287,69 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		Str("username", username).
 		Int("expires_in", response.ExpiresIn).
 		Msg("access token issued")
+}
+
+func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []string, log zerowrap.Logger) []string {
+	var effective []string
+
+	for _, reqScopeStr := range requestedScopes {
+		reqScope, err := domain.ParseScope(reqScopeStr)
+		if err != nil || reqScope.Type != domain.ScopeTypeRepository {
+			continue
+		}
+
+		allowedActions := make([]string, 0, len(reqScope.Actions))
+		for _, action := range reqScope.Actions {
+			if hasGrantedRegistryAccess(grantedScopes, reqScope.Name, action) {
+				allowedActions = append(allowedActions, action)
+			}
+		}
+
+		if len(allowedActions) == 0 {
+			continue
+		}
+
+		effective = append(effective, (&domain.Scope{
+			Type:    reqScope.Type,
+			Name:    reqScope.Name,
+			Actions: allowedActions,
+		}).String())
+	}
+
+	log.Debug().
+		Strs("requested_scopes", requestedScopes).
+		Strs("granted_scopes", grantedScopes).
+		Strs("effective_scopes", effective).
+		Msg("calculated effective scopes from parent token")
+
+	return effective
+}
+
+func hasGrantedRegistryAccess(grantedScopes []string, repoName, action string) bool {
+	for _, grantedScopeStr := range grantedScopes {
+		scopeStr := strings.TrimSpace(grantedScopeStr)
+		switch scopeStr {
+		case domain.ScopeActionAll:
+			return true
+		case domain.ScopeActionPull, domain.ScopeActionPush:
+			if scopeStr == action {
+				return true
+			}
+		}
+
+		scope, err := domain.ParseScope(scopeStr)
+		if err != nil {
+			continue
+		}
+		if scope.Type != domain.ScopeTypeRepository {
+			continue
+		}
+		if scope.CanAccess(repoName, action) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // sendAnonymousToken sends a token for anonymous/unauthenticated access.

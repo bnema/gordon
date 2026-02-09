@@ -10,7 +10,6 @@ Authentication is enabled by default. Gordon will not start without a valid `tok
 
 ```toml
 [auth]
-enabled = true
 secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"
@@ -20,7 +19,6 @@ token_expiry = "30d"
 
 ```toml
 [auth]
-enabled = true
 secrets_backend = "pass"
 username = "deploy"
 password_hash = "gordon/auth/password_hash"
@@ -33,7 +31,7 @@ Token auth always works. Adding `username` + `password_hash` enables interactive
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable authentication |
+| `enabled` | bool | `true` | Deprecated. Authentication is always required; setting `false` is rejected |
 | `secrets_backend` | string | `"unsafe"` | Secrets backend: `"pass"`, `"sops"`, or `"unsafe"` |
 | `token_secret` | string | - | **Required.** Path to JWT signing secret in secrets backend |
 | `token_expiry` | string | `"30d"` | Token validity duration (0 = never expires) |
@@ -154,14 +152,9 @@ gordon auth token generate --subject temp --expiry 30d
 - Tokens from one Gordon instance won't work on another
 - Changing `token_secret` invalidates all existing tokens
 
-## Disable Auth (development only)
+## Authentication Required
 
-```toml
-[auth]
-enabled = false
-```
-
-> **Security Warning:** When authentication is disabled, the admin API is fully accessible without credentials. This includes endpoints to deploy containers, manage secrets, modify routes, and reload configuration. Only disable auth for local development where Gordon is not exposed to the internet.
+Authentication is always required. `auth.enabled=false` is no longer supported.
 
 ## Internal Registry Auth
 
