@@ -61,6 +61,9 @@ type ContainerRuntime interface {
 	// Label inspection
 	GetImageLabels(ctx context.Context, imageRef string) (map[string]string, error)
 
+	// Image identity
+	GetImageID(ctx context.Context, imageRef string) (string, error)
+
 	// In-container operations
 	ExecInContainer(ctx context.Context, containerID string, cmd []string) (*ExecResult, error)
 	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error)

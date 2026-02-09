@@ -6,6 +6,7 @@ package domain
 type Container struct {
 	ID       string
 	Image    string
+	ImageID  string // Docker image ID (sha256 digest) used to detect redundant deploys
 	Name     string
 	Status   string
 	ExitCode int
