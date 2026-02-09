@@ -15,6 +15,7 @@ import (
 //
 // It intentionally does not start HTTP servers or register signal handlers.
 type Kernel struct {
+	authEnabled  bool
 	configSvc    in.ConfigService
 	secretSvc    in.SecretService
 	containerSvc in.ContainerService
@@ -47,6 +48,7 @@ func NewKernel(configPath string) (*Kernel, error) {
 	// as remote mode without going through HTTP admin endpoints.
 	if svc, fullErr := createServices(ctx, v, cfg, log); fullErr == nil {
 		return &Kernel{
+			authEnabled:  cfg.Auth.Enabled,
 			configSvc:    svc.configSvc,
 			secretSvc:    svc.secretSvc,
 			containerSvc: svc.containerSvc,
@@ -75,9 +77,10 @@ func NewKernel(configPath string) (*Kernel, error) {
 	secretSvc := secretsusecase.NewService(domainSecretStore, log)
 
 	return &Kernel{
-		configSvc: configSvc,
-		secretSvc: secretSvc,
-		cleanup:   cleanup,
+		authEnabled: cfg.Auth.Enabled,
+		configSvc:   configSvc,
+		secretSvc:   secretSvc,
+		cleanup:     cleanup,
 	}, nil
 }
 
@@ -102,3 +105,5 @@ func (k *Kernel) Registry() in.RegistryService { return k.registrySvc }
 func (k *Kernel) Health() in.HealthService { return k.healthSvc }
 
 func (k *Kernel) Logs() in.LogService { return k.logSvc }
+
+func (k *Kernel) AuthEnabled() bool { return k != nil && k.authEnabled }

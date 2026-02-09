@@ -67,16 +67,18 @@ func TestCreateHTTPHandlers_LocalMode_RestrictsRegistryToLoopback(t *testing.T) 
 	}
 }
 
-func TestCreateHTTPHandlers_AuthEnabled_ExposesAdminOnProxy(t *testing.T) {
+func TestCreateHTTPHandlers_AuthEnabled_ExposesAdminOnProxyForRegistryHost(t *testing.T) {
 	t.Parallel()
 
 	cfg := Config{}
 	cfg.Auth.Enabled = true
+	cfg.Server.RegistryDomain = "gordon.local"
 
 	svc := &services{adminHandler: &adminhttp.Handler{}}
 	_, proxyHandler := createHTTPHandlers(svc, cfg, zerowrap.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.Host = "gordon.local"
 	req.RemoteAddr = "192.0.2.30:12345"
 
 	rec := httptest.NewRecorder()
@@ -84,6 +86,28 @@ func TestCreateHTTPHandlers_AuthEnabled_ExposesAdminOnProxy(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
+	}
+}
+
+func TestCreateHTTPHandlers_AuthEnabled_BlocksAdminOnNonRegistryHost(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{}
+	cfg.Auth.Enabled = true
+	cfg.Server.RegistryDomain = "gordon.local"
+
+	svc := &services{adminHandler: &adminhttp.Handler{}}
+	_, proxyHandler := createHTTPHandlers(svc, cfg, zerowrap.Default())
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.Host = "app.example.com"
+	req.RemoteAddr = "192.0.2.30:12345"
+
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
 	}
 }
 
