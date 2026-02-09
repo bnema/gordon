@@ -994,6 +994,72 @@ func (_c *MockContainerRuntime_GetImageExposedPorts_Call) RunAndReturn(run func(
 	return _c
 }
 
+// GetImageID provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) GetImageID(ctx context.Context, imageRef string) (string, error) {
+	ret := _mock.Called(ctx, imageRef)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetImageID")
+	}
+
+	var r0 string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (string, error)); ok {
+		return returnFunc(ctx, imageRef)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) string); ok {
+		r0 = returnFunc(ctx, imageRef)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, imageRef)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerRuntime_GetImageID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetImageID'
+type MockContainerRuntime_GetImageID_Call struct {
+	*mock.Call
+}
+
+// GetImageID is a helper method to define mock.On call
+//   - ctx context.Context
+//   - imageRef string
+func (_e *MockContainerRuntime_Expecter) GetImageID(ctx interface{}, imageRef interface{}) *MockContainerRuntime_GetImageID_Call {
+	return &MockContainerRuntime_GetImageID_Call{Call: _e.mock.On("GetImageID", ctx, imageRef)}
+}
+
+func (_c *MockContainerRuntime_GetImageID_Call) Run(run func(ctx context.Context, imageRef string)) *MockContainerRuntime_GetImageID_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetImageID_Call) Return(s string, err error) *MockContainerRuntime_GetImageID_Call {
+	_c.Call.Return(s, err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetImageID_Call) RunAndReturn(run func(ctx context.Context, imageRef string) (string, error)) *MockContainerRuntime_GetImageID_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetImageLabels provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) GetImageLabels(ctx context.Context, imageRef string) (map[string]string, error) {
 	ret := _mock.Called(ctx, imageRef)
