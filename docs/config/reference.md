@@ -159,7 +159,7 @@ monthly = 0                                  # Keep N monthly backups per DB
 | `server.data_dir` | `~/.gordon` | Data directory |
 | `server.max_blob_chunk_size` | `"512MB"` | Max size per registry blob upload chunk |
 | `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
-| `auth.enabled` | `true` | Enable authentication |
+| `auth.enabled` | `true` | Enable authentication; when `false`, run local-only mode (loopback-only `/v2/*`, `/admin/*` disabled) |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |
 | `api.rate_limit.enabled` | `true` | Enable rate limiting |

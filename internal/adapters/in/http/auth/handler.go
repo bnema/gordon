@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -214,29 +215,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for internal registry auth (localhost requests with internal creds)
-	var (
-		authenticated bool
-		parentClaims  *domain.TokenClaims
-	)
-	if isLocalhostRequest(r) && h.isInternalAuth(username, password) {
-		authenticated = true
-		log.Debug().Str("username", username).Msg("internal registry auth accepted")
-	} else {
-		// Validate credentials based on auth type
-		switch h.authSvc.GetAuthType() {
-		case domain.AuthTypePassword:
-			authenticated = h.authSvc.ValidatePassword(ctx, username, password)
-		case domain.AuthTypeToken:
-			// For token auth, the password might be an existing JWT
-			claims, err := h.authSvc.ValidateToken(ctx, password)
-			if err == nil && claims.Subject == username {
-				authenticated = true
-				parentClaims = claims
-			}
-		}
-	}
-
+	authenticated, parentClaims := h.authenticateTokenCredentials(ctx, r, username, password, log)
 	if !authenticated {
 		log.Debug().
 			Str("username", username).
@@ -287,6 +266,25 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		Str("username", username).
 		Int("expires_in", response.ExpiresIn).
 		Msg("access token issued")
+}
+
+func (h *Handler) authenticateTokenCredentials(ctx context.Context, r *http.Request, username, password string, log zerowrap.Logger) (bool, *domain.TokenClaims) {
+	if isLocalhostRequest(r) && h.isInternalAuth(username, password) {
+		log.Debug().Str("username", username).Msg("internal registry auth accepted")
+		return true, nil
+	}
+
+	switch h.authSvc.GetAuthType() {
+	case domain.AuthTypePassword:
+		return h.authSvc.ValidatePassword(ctx, username, password), nil
+	case domain.AuthTypeToken:
+		claims, err := h.authSvc.ValidateToken(ctx, password)
+		if err == nil && claims.Subject == username {
+			return true, claims
+		}
+	}
+
+	return false, nil
 }
 
 func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []string, log zerowrap.Logger) []string {
@@ -350,25 +348,6 @@ func hasGrantedRegistryAccess(grantedScopes []string, repoName, action string) b
 	}
 
 	return false
-}
-
-// sendAnonymousToken sends a token for anonymous/unauthenticated access.
-func (h *Handler) sendAnonymousToken(w http.ResponseWriter, log zerowrap.Logger) {
-	// For anonymous access, we issue a very short-lived token with limited scope
-	response := dto.TokenResponse{
-		Token:     "", // Empty token indicates limited access
-		ExpiresIn: 60, // 1 minute
-		IssuedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error().Err(err).Msg("failed to encode anonymous token response")
-	}
-
-	log.Debug().Msg("anonymous token issued")
 }
 
 // isLocalhostRequest checks if the request originates from localhost.

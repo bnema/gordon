@@ -152,9 +152,15 @@ gordon auth token generate --subject temp --expiry 30d
 - Tokens from one Gordon instance won't work on another
 - Changing `token_secret` invalidates all existing tokens
 
-## Authentication Required
+## Local-only Mode
 
-Authentication is always required. `auth.enabled=false` is no longer supported.
+Authentication is enabled by default. If you set `auth.enabled=false`, Gordon switches to local-only mode:
+
+- `/admin/*` endpoints are not registered.
+- `/v2/*` registry endpoints are restricted to loopback (`127.0.0.1` / `::1`).
+- Remote registry and remote admin access are disabled.
+
+Use this only when Gordon is intended for local machine usage.
 
 ## Internal Registry Auth
 
