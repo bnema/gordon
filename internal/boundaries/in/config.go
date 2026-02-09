@@ -21,6 +21,10 @@ type ConfigService interface {
 	// GetRoute returns a single route by domain.
 	GetRoute(ctx context.Context, domain string) (*domain.Route, error)
 
+	// FindRoutesByImage returns all routes that match the given image name.
+	// Image names are normalized by stripping the registry domain prefix before comparison.
+	FindRoutesByImage(ctx context.Context, imageName string) []domain.Route
+
 	// AddRoute adds a new route to the configuration.
 	AddRoute(ctx context.Context, route domain.Route) error
 

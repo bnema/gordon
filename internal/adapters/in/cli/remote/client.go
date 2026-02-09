@@ -322,6 +322,24 @@ func (c *Client) GetRoute(ctx context.Context, routeDomain string) (*domain.Rout
 	return &route, nil
 }
 
+// FindRoutesByImage returns all routes associated with the given image name.
+func (c *Client) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/routes/by-image/"+url.PathEscape(imageName), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Image  string         `json:"image"`
+		Routes []domain.Route `json:"routes"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Routes, nil
+}
+
 // AddRoute adds a new route.
 func (c *Client) AddRoute(ctx context.Context, route domain.Route) error {
 	resp, err := c.request(ctx, http.MethodPost, "/routes", route)

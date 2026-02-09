@@ -158,6 +158,65 @@ func (_c *MockConfigService_AddRoute_Call) RunAndReturn(run func(ctx context.Con
 	return _c
 }
 
+// FindRoutesByImage provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) FindRoutesByImage(ctx context.Context, imageName string) []domain.Route {
+	ret := _mock.Called(ctx, imageName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for FindRoutesByImage")
+	}
+
+	var r0 []domain.Route
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []domain.Route); ok {
+		r0 = returnFunc(ctx, imageName)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]domain.Route)
+		}
+	}
+	return r0
+}
+
+// MockConfigService_FindRoutesByImage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FindRoutesByImage'
+type MockConfigService_FindRoutesByImage_Call struct {
+	*mock.Call
+}
+
+// FindRoutesByImage is a helper method to define mock.On call
+//   - ctx context.Context
+//   - imageName string
+func (_e *MockConfigService_Expecter) FindRoutesByImage(ctx interface{}, imageName interface{}) *MockConfigService_FindRoutesByImage_Call {
+	return &MockConfigService_FindRoutesByImage_Call{Call: _e.mock.On("FindRoutesByImage", ctx, imageName)}
+}
+
+func (_c *MockConfigService_FindRoutesByImage_Call) Run(run func(ctx context.Context, imageName string)) *MockConfigService_FindRoutesByImage_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockConfigService_FindRoutesByImage_Call) Return(routes []domain.Route) *MockConfigService_FindRoutesByImage_Call {
+	_c.Call.Return(routes)
+	return _c
+}
+
+func (_c *MockConfigService_FindRoutesByImage_Call) RunAndReturn(run func(ctx context.Context, imageName string) []domain.Route) *MockConfigService_FindRoutesByImage_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAllAttachments provides a mock function for the type MockConfigService
 func (_mock *MockConfigService) GetAllAttachments(ctx context.Context) map[string][]string {
 	ret := _mock.Called(ctx)
