@@ -34,6 +34,10 @@ func resolveControlPlane(configPath string) (*controlPlaneHandle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize local control plane: %w", err)
 	}
+	if kernel.AuthEnabled() {
+		kernel.Close()
+		return nil, fmt.Errorf("local control plane is disabled when auth.enabled=true; use --remote with token")
+	}
 
 	return &controlPlaneHandle{
 		plane:   NewLocalControlPlane(kernel),
