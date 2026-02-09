@@ -305,12 +305,13 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 		}
 
 		result = append(result, &domain.Container{
-			ID:     c.ID,
-			Image:  c.Image,
-			Name:   name,
-			Status: c.State, // Use State (e.g., "running") not Status (e.g., "Up 2 days")
-			Ports:  ports,
-			Labels: c.Labels,
+			ID:      c.ID,
+			Image:   c.Image,
+			ImageID: c.ImageID,
+			Name:    name,
+			Status:  c.State, // Use State (e.g., "running") not Status (e.g., "Up 2 days")
+			Ports:   ports,
+			Labels:  c.Labels,
 		})
 	}
 
@@ -352,6 +353,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	return &domain.Container{
 		ID:       resp.ID,
 		Image:    resp.Config.Image,
+		ImageID:  resp.Image,
 		Name:     name,
 		Status:   resp.State.Status,
 		ExitCode: resp.State.ExitCode,
@@ -1101,6 +1103,24 @@ func (r *Runtime) GetImageLabels(ctx context.Context, imageRef string) (map[stri
 
 	log.Debug().Int("label_count", len(labels)).Msg("retrieved image labels")
 	return labels, nil
+}
+
+// GetImageID returns the unique image ID (sha256 digest) for the given image reference.
+func (r *Runtime) GetImageID(ctx context.Context, imageRef string) (string, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "GetImageID",
+		"image":               imageRef,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	imageInspect, err := r.client.ImageInspect(ctx, imageRef)
+	if err != nil {
+		return "", log.WrapErr(err, "failed to inspect image")
+	}
+
+	return imageInspect.ID, nil
 }
 
 // CreateNetwork creates a new Docker network.
