@@ -17,6 +17,8 @@ Commands are organized by where they run:
 
 ## Management Commands (local or remote)
 
+Management commands run locally through in-process services by default. Add `--remote` to target another Gordon instance.
+
 | Command | Description | Documentation |
 |---------|-------------|---------------|
 | `gordon routes` | Manage routes | [routes](./routes.md) |
@@ -29,7 +31,7 @@ Commands are organized by where they run:
 | `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
 | `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
 | `gordon status` | Show Gordon server status | [status](./status.md) |
-| `gordon backup` | Manage database backups | [backup](./backup.md) |
+| `gordon backups` | Manage database backups | [backup](./backup.md) |
 
 ## Client Commands
 
@@ -75,10 +77,10 @@ gordon logs myapp.local -f           # Follow container logs
 gordon version
 
 # Backups
-gordon backup list
-gordon backup run app.example.com
-gordon backup detect app.example.com
-gordon backup status
+gordon backups list
+gordon backups run app.example.com
+gordon backups detect app.example.com
+gordon backups status
 
 # Authentication
 gordon auth token generate --subject ci-bot --expiry 0

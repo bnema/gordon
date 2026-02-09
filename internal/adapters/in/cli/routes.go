@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -375,13 +374,13 @@ func newStatusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				fmt.Println(styles.RenderError("status command requires --remote flag or GORDON_REMOTE env var"))
-				os.Exit(1)
+			handle, err := resolveControlPlane(configPath)
+			if err != nil {
+				return err
 			}
+			defer handle.close()
 
-			status, err := client.GetStatus(ctx)
+			status, err := handle.plane.GetStatus(ctx)
 			if err != nil {
 				return fmt.Errorf("failed to get status: %w", err)
 			}

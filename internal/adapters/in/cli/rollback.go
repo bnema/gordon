@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/mod/semver"
 
-	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/internal/domain"
@@ -40,12 +39,13 @@ Examples:
 }
 
 func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
-	client, isRemote := GetRemoteClient()
-	if !isRemote {
-		return fmt.Errorf("rollback requires remote mode")
+	handle, err := resolveControlPlane(configPath)
+	if err != nil {
+		return err
 	}
+	defer handle.close()
 
-	route, err := client.GetRoute(ctx, rollbackDomain)
+	route, err := handle.plane.GetRoute(ctx, rollbackDomain)
 	if err != nil {
 		return fmt.Errorf("failed to get route: %w", err)
 	}
@@ -55,7 +55,7 @@ func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
 		return fmt.Errorf("cannot parse image name from route: %s", route.Image)
 	}
 
-	tags, err := fetchAndSortTags(ctx, client, imageName)
+	tags, err := fetchAndSortTags(ctx, handle.plane, imageName)
 	if err != nil {
 		return err
 	}
@@ -70,11 +70,11 @@ func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
 		return nil
 	}
 
-	return deploySelectedTag(ctx, client, route, rollbackDomain, imageName, selectedTag)
+	return deploySelectedTag(ctx, handle.plane, route, rollbackDomain, imageName, selectedTag)
 }
 
-func fetchAndSortTags(ctx context.Context, client *remote.Client, imageName string) ([]string, error) {
-	tags, err := client.ListTags(ctx, imageName)
+func fetchAndSortTags(ctx context.Context, cp ControlPlane, imageName string) ([]string, error) {
+	tags, err := cp.ListTags(ctx, imageName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tags: %w", err)
 	}
@@ -154,22 +154,22 @@ func validateTagExists(targetTag string, tags []string) bool {
 	return false
 }
 
-func deploySelectedTag(ctx context.Context, client *remote.Client, route *domain.Route, rollbackDomain, imageName, selectedTag string) error {
+func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route, rollbackDomain, imageName, selectedTag string) error {
 	registry, _, _ := parseImageRef(route.Image)
 	oldImage := route.Image
 	route.Image = fmt.Sprintf("%s/%s:%s", registry, imageName, selectedTag)
 
 	fmt.Printf("Rolling back to %s...\n", styles.Theme.Bold.Render(selectedTag))
 
-	if err := client.UpdateRoute(ctx, *route); err != nil {
+	if err := cp.UpdateRoute(ctx, *route); err != nil {
 		return fmt.Errorf("failed to update route: %w", err)
 	}
 
-	result, err := client.Deploy(ctx, rollbackDomain)
+	result, err := cp.Deploy(ctx, rollbackDomain)
 	if err != nil {
 		// Attempt to revert route to previous image
 		route.Image = oldImage
-		if revertErr := client.UpdateRoute(ctx, *route); revertErr != nil {
+		if revertErr := cp.UpdateRoute(ctx, *route); revertErr != nil {
 			fmt.Fprintf(os.Stderr, "WARNING: deploy failed and could not revert route: %v\n", revertErr)
 			return fmt.Errorf("failed to deploy; revert failed: %v; deploy error: %w", revertErr, err)
 		}

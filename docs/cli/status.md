@@ -7,10 +7,14 @@ Show Gordon server status and container health.
 Display server configuration and container status for all routes.
 
 ```bash
+gordon status
 gordon status --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
-> **Note:** The status command requires remote mode. See [CLI Overview](./index.md) for targeting options.
+`gordon status` works in local mode and remote mode.
+
+- Local mode reads status from in-process services.
+- Remote mode reads status from the target admin API.
 
 ### Output
 
@@ -70,9 +74,12 @@ The status command uses global flags for remote access:
 
 ## Examples
 
-### Check Remote Server Status
+### Check Local or Remote Status
 
 ```bash
+# Local
+gordon status
+
 # Using flags
 gordon status --remote https://gordon.mydomain.com --token $TOKEN
 
@@ -89,9 +96,9 @@ gordon status
 gordon status --remote https://gordon.mydomain.com --token $TOKEN | grep -E "(running|stopped|exited)"
 ```
 
-## Required Permissions
+## Required Permissions (Remote Only)
 
-The status endpoint requires `admin:status:read` scope in the authentication token.
+Remote status calls require `admin:status:read` scope in the authentication token.
 
 ```bash
 # Generate token with required scope

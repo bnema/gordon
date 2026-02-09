@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/pkg/validation"
@@ -74,17 +73,18 @@ func resolveImageRefs(registry, imageName, version string) (versionRef, latestRe
 }
 
 func runPush(ctx context.Context, pushDomain, tag string, build bool, platform string, dockerfile string, buildArgs []string, noDeploy bool, noConfirm bool) error {
-	client, isRemote := GetRemoteClient()
-	if !isRemote {
-		return fmt.Errorf("push requires remote mode")
+	handle, err := resolveControlPlane(configPath)
+	if err != nil {
+		return err
 	}
+	defer handle.close()
 
-	dockerfile, err := resolveDockerfile(dockerfile, build)
+	dockerfile, err = resolveDockerfile(dockerfile, build)
 	if err != nil {
 		return err
 	}
 
-	route, err := client.GetRoute(ctx, pushDomain)
+	route, err := handle.plane.GetRoute(ctx, pushDomain)
 	if err != nil {
 		return fmt.Errorf("failed to get route: %w", err)
 	}
@@ -127,7 +127,7 @@ func runPush(ctx context.Context, pushDomain, tag string, build bool, platform s
 	fmt.Println(styles.RenderSuccess("Push complete"))
 
 	if !noDeploy {
-		return deployAfterPush(ctx, client, pushDomain, noConfirm)
+		return deployAfterPush(ctx, handle.plane, pushDomain, noConfirm)
 	}
 
 	return nil
@@ -225,7 +225,7 @@ func tagAndPush(ctx context.Context, registry, imageName, version, versionRef, l
 	return nil
 }
 
-func deployAfterPush(ctx context.Context, client *remote.Client, pushDomain string, noConfirm bool) error {
+func deployAfterPush(ctx context.Context, cp ControlPlane, pushDomain string, noConfirm bool) error {
 	if !noConfirm {
 		confirmed, err := components.RunConfirm("Deploy now?", components.WithDefaultYes())
 		if err != nil {
@@ -236,7 +236,7 @@ func deployAfterPush(ctx context.Context, client *remote.Client, pushDomain stri
 		}
 	}
 
-	result, err := client.Deploy(ctx, pushDomain)
+	result, err := cp.Deploy(ctx, pushDomain)
 	if err != nil {
 		return fmt.Errorf("failed to deploy: %w", err)
 	}
