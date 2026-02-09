@@ -12,6 +12,12 @@ func TestResolveControlPlane_LocalDeniedWhenAuthEnabled(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "xdg"))
 	t.Setenv("GORDON_REMOTE", "")
 	t.Setenv("GORDON_TOKEN", "")
+	originalRemoteFlag, originalTokenFlag, originalInsecureTLSFlag := remoteFlag, tokenFlag, insecureTLSFlag
+	t.Cleanup(func() {
+		remoteFlag = originalRemoteFlag
+		tokenFlag = originalTokenFlag
+		insecureTLSFlag = originalInsecureTLSFlag
+	})
 
 	remoteFlag = ""
 	tokenFlag = ""
@@ -46,6 +52,12 @@ func TestResolveControlPlane_LocalAllowedWhenAuthDisabled(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "xdg"))
 	t.Setenv("GORDON_REMOTE", "")
 	t.Setenv("GORDON_TOKEN", "")
+	originalRemoteFlag, originalTokenFlag, originalInsecureTLSFlag := remoteFlag, tokenFlag, insecureTLSFlag
+	t.Cleanup(func() {
+		remoteFlag = originalRemoteFlag
+		tokenFlag = originalTokenFlag
+		insecureTLSFlag = originalInsecureTLSFlag
+	})
 
 	remoteFlag = ""
 	tokenFlag = ""
