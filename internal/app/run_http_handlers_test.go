@@ -66,3 +66,23 @@ func TestCreateHTTPHandlers_LocalMode_RestrictsRegistryToLoopback(t *testing.T) 
 		t.Fatalf("expected status %d, got %d", http.StatusForbidden, rec.Code)
 	}
 }
+
+func TestCreateHTTPHandlers_AuthEnabled_ExposesAdminOnProxy(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{}
+	cfg.Auth.Enabled = true
+
+	svc := &services{adminHandler: &adminhttp.Handler{}}
+	_, proxyHandler := createHTTPHandlers(svc, cfg, zerowrap.Default())
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.RemoteAddr = "192.0.2.30:12345"
+
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
+	}
+}
