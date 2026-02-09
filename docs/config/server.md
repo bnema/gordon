@@ -127,6 +127,10 @@ This domain is used for:
 
 When requests arrive on the proxy port with this domain as the Host header, Gordon routes them to the backend services (registry and admin API).
 
+Security note:
+- Direct access to `/admin/*` on `registry_port` is blocked for non-loopback clients.
+- Admin API traffic should go through the main proxy listener (`server.port`/`server.tls_port`).
+
 > **Note:** `registry_domain` is supported as a deprecated alias for backwards compatibility.
 
 ## Data Directory

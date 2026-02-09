@@ -12,11 +12,13 @@ import (
 // newBackupCmd creates the backup command group.
 func newBackupCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "backup",
-		Short: "Manage database backups",
-		Long: `Manage database backups through Gordon's admin API.
+		Use:     "backups",
+		Aliases: []string{"backup"},
+		Short:   "Manage database backups",
+		Long: `Manage database backups.
 
-These commands currently require remote mode with a configured target.`,
+Runs locally via in-process services by default, or against a remote Gordon
+instance when --remote targeting is configured.`,
 	}
 
 	cmd.AddCommand(newBackupListCmd())
@@ -33,17 +35,18 @@ func newBackupListCmd() *cobra.Command {
 		Short: "List backups",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				return fmt.Errorf("backup commands require a configured remote target")
+			handle, err := resolveControlPlane(configPath)
+			if err != nil {
+				return err
 			}
+			defer handle.close()
 
 			domainName := ""
 			if len(args) == 1 {
 				domainName = args[0]
 			}
 
-			jobs, err := client.ListBackups(cmd.Context(), domainName)
+			jobs, err := handle.plane.ListBackups(cmd.Context(), domainName)
 			if err != nil {
 				return fmt.Errorf("failed to list backups: %w", err)
 			}
@@ -79,12 +82,13 @@ func newBackupRunCmd() *cobra.Command {
 		Short: "Run backup now",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				return fmt.Errorf("backup commands require a configured remote target")
+			handle, err := resolveControlPlane(configPath)
+			if err != nil {
+				return err
 			}
+			defer handle.close()
 
-			result, err := client.RunBackup(cmd.Context(), args[0], dbName)
+			result, err := handle.plane.RunBackup(cmd.Context(), args[0], dbName)
 			if err != nil {
 				return fmt.Errorf("failed to run backup: %w", err)
 			}
@@ -117,12 +121,13 @@ func newBackupDetectCmd() *cobra.Command {
 		Short: "Detect databases for domain",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				return fmt.Errorf("backup commands require a configured remote target")
+			handle, err := resolveControlPlane(configPath)
+			if err != nil {
+				return err
 			}
+			defer handle.close()
 
-			dbs, err := client.DetectDatabases(cmd.Context(), args[0])
+			dbs, err := handle.plane.DetectDatabases(cmd.Context(), args[0])
 			if err != nil {
 				return fmt.Errorf("failed to detect databases: %w", err)
 			}
@@ -155,12 +160,13 @@ func newBackupStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show backup status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				return fmt.Errorf("backup commands require a configured remote target")
+			handle, err := resolveControlPlane(configPath)
+			if err != nil {
+				return err
 			}
+			defer handle.close()
 
-			jobs, err := client.BackupStatus(cmd.Context())
+			jobs, err := handle.plane.BackupStatus(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("failed to get backup status: %w", err)
 			}

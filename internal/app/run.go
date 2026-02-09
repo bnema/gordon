@@ -41,6 +41,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 
 	// Adapters - Input
+	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/http/admin"
 	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
@@ -165,9 +166,12 @@ type services struct {
 	logWriter        *logwriter.LogWriter
 	tokenStore       out.TokenStore
 	configSvc        *config.Service
+	secretSvc        *secretsSvc.Service
 	containerSvc     *container.Service
 	backupSvc        *backup.Service
 	registrySvc      *registrySvc.Service
+	healthSvc        *health.Service
+	logSvc           *logs.Service
 	imageSvc         *images.Service
 	proxySvc         *proxy.Service
 	authSvc          *auth.Service
@@ -430,7 +434,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	if err := setupInternalRegistryAuth(cfg, svc, log); err != nil {
+	if err := setupInternalRegistryAuth(svc, log); err != nil {
 		return nil, err
 	}
 
@@ -453,7 +457,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	secretSvc := secretsSvc.NewService(domainSecretStore, log)
+	svc.secretSvc = secretsSvc.NewService(domainSecretStore, log)
 
 	if svc.containerSvc, err = createContainerService(ctx, v, cfg, svc, log); err != nil {
 		return nil, err
@@ -489,22 +493,30 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 	// Create health service for route health checking
 	prober := httpprober.New()
-	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
+	svc.healthSvc = health.NewService(svc.configSvc, svc.containerSvc, prober, log)
 
 	// Create log service for accessing logs via admin API
-	logSvc := logs.NewService(resolveLogFilePath(cfg), cfg.Logging.File.Enabled, svc.containerSvc, svc.runtime, log)
+	svc.logSvc = logs.NewService(resolveLogFilePath(cfg), cfg.Logging.File.Enabled, svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log, svc.backupSvc, svc.imageSvc)
+	svc.adminHandler = admin.NewHandler(
+		svc.configSvc,
+		svc.authSvc,
+		svc.containerSvc,
+		svc.healthSvc,
+		svc.secretSvc,
+		svc.logSvc,
+		svc.registrySvc,
+		svc.eventBus,
+		log,
+		svc.backupSvc,
+		svc.imageSvc,
+	)
 
 	return svc, nil
 }
 
-func setupInternalRegistryAuth(cfg Config, svc *services, log zerowrap.Logger) error {
-	if !cfg.Auth.Enabled {
-		return nil
-	}
-
+func setupInternalRegistryAuth(svc *services, log zerowrap.Logger) error {
 	var err error
 	svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
 	if err != nil {
@@ -774,6 +786,7 @@ func GetInternalCredentials() (*InternalCredentials, error) {
 // createAuthService creates the authentication service and token store.
 func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (out.TokenStore, *auth.Service, error) {
 	if !cfg.Auth.Enabled {
+		log.Warn().Msg("auth.enabled=false detected: running in local-only mode (registry loopback-only, admin API disabled)")
 		return nil, nil, nil
 	}
 
@@ -1084,7 +1097,10 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		containerConfig.DrainDelay = v.GetDuration("deploy.drain_delay")
 	}
 
-	if cfg.Auth.Enabled && svc.authSvc != nil {
+	if containerConfig.RegistryAuthEnabled {
+		if svc.authSvc == nil {
+			return nil, fmt.Errorf("authentication service unavailable: cannot generate registry service token")
+		}
 		expiry, err := resolveServiceTokenExpiry(cfg)
 		if err != nil {
 			return nil, log.WrapErr(err, "failed to resolve service token expiry")
@@ -1101,6 +1117,8 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 			Msg("generated service token for container registry access")
 		containerConfig.ServiceTokenUsername = serviceTokenSubject
 		containerConfig.ServiceToken = serviceToken
+	} else {
+		log.Warn().Msg("registry auth disabled; container image pulls will use unauthenticated mode")
 	}
 
 	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig), nil
@@ -1258,6 +1276,28 @@ func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
 	// Start background monitor to restart crashed containers.
 	svc.containerSvc.StartMonitor(ctx)
 }
+func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			log.Warn().
+				Str("path", r.URL.Path).
+				Str("remote_addr", r.RemoteAddr).
+				Msg("blocked non-loopback access on internal admin route")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 // createHTTPHandlers creates HTTP handlers with middleware.
 func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler) {
@@ -1266,103 +1306,17 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 
 	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize)
+	registryWithMiddleware, cidrAllowlistMiddleware, rateLimitMiddleware := buildRegistryHandlerWithMiddleware(
+		svc,
+		cfg,
+		trustedNets,
+		registryHandler,
+		log,
+	)
 
-	registryMiddlewares := []func(http.Handler) http.Handler{
-		middleware.PanicRecovery(log),
-		middleware.RequestLogger(log, trustedNets),
-		middleware.SecurityHeaders,
-	}
-
-	// CIDR allowlist for registry access (e.g., restrict to Tailscale IPs).
-	// Inserted before rate limiting so denied IPs never consume limiter tokens.
-	var cidrAllowlistMiddleware func(http.Handler) http.Handler
-	if len(cfg.Server.RegistryAllowedIPs) > 0 {
-		allowedNets := middleware.ParseTrustedProxies(cfg.Server.RegistryAllowedIPs)
-		if len(allowedNets) != len(cfg.Server.RegistryAllowedIPs) {
-			for _, entry := range cfg.Server.RegistryAllowedIPs {
-				if nets := middleware.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
-					log.Warn().Str("entry", entry).Msg("ignoring invalid registry_allowed_ips entry")
-				}
-			}
-		}
-		if len(allowedNets) == 0 {
-			log.Error().
-				Strs("registry_allowed_ips", cfg.Server.RegistryAllowedIPs).
-				Msg("registry_allowed_ips is set but no valid entries were parsed; registry will allow all traffic")
-		}
-		cidrAllowlistMiddleware = middleware.RegistryCIDRAllowlist(allowedNets, trustedNets, log)
-		registryMiddlewares = append(registryMiddlewares, cidrAllowlistMiddleware)
-	}
-
-	// Create rate limiters using the factory
-	var rateLimitMiddleware func(http.Handler) http.Handler
-	if cfg.API.RateLimit.Enabled {
-		globalLimiter := ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
-		ipLimiter := ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
-		rateLimitMiddleware = registry.RateLimitMiddleware(
-			globalLimiter,
-			ipLimiter,
-			cfg.API.RateLimit.TrustedProxies,
-			log,
-		)
-	} else {
-		rateLimitMiddleware = registry.RateLimitMiddleware(nil, nil, nil, log)
-	}
-	registryMiddlewares = append(registryMiddlewares, rateLimitMiddleware)
-
-	if cfg.Auth.Enabled && svc.authSvc != nil {
-		internalAuth := middleware.InternalRegistryAuth{
-			Username: svc.internalRegUser,
-			Password: svc.internalRegPass,
-		}
-		registryMiddlewares = append(registryMiddlewares,
-			middleware.RegistryAuthV2(svc.authSvc, internalAuth, log))
-	}
-
-	registryWithMiddleware := middleware.Chain(registryMiddlewares...)(registryHandler)
-
-	// Create a mux that routes:
-	// - /auth/* to auth handler (no auth required, for password login and token exchange)
-	// - /v2/* to registry handler (with auth)
-	// - /admin/* to admin handler (with auth)
 	registryMux := http.NewServeMux()
-	if svc.authHandler != nil {
-		// Auth endpoints are NOT protected by auth - they're where clients authenticate
-		// but still need rate limiting to prevent brute force attacks
-		authMiddlewares := []func(http.Handler) http.Handler{
-			middleware.PanicRecovery(log),
-			middleware.RequestLogger(log, trustedNets),
-			middleware.SecurityHeaders,
-		}
-		if cidrAllowlistMiddleware != nil {
-			authMiddlewares = append(authMiddlewares, cidrAllowlistMiddleware)
-		}
-		authMiddlewares = append(authMiddlewares, rateLimitMiddleware)
-		authWithMiddleware := middleware.Chain(authMiddlewares...)(svc.authHandler)
-		registryMux.Handle("/auth/", authWithMiddleware)
-	}
-	registryMux.Handle("/v2/", registryWithMiddleware)
-
-	// Add admin API handler with auth middleware
-	if svc.adminHandler != nil {
-		adminMiddlewares := []func(http.Handler) http.Handler{
-			middleware.PanicRecovery(log),
-			middleware.RequestLogger(log, trustedNets),
-			middleware.SecurityHeaders,
-		}
-		// Add admin auth middleware if auth is enabled
-		if svc.authSvc != nil {
-			// Create rate limiters for admin API - uses same config as registry
-			var globalLimiter, ipLimiter out.RateLimiter
-			if cfg.API.RateLimit.Enabled {
-				globalLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
-				ipLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
-			}
-			adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, globalLimiter, ipLimiter, trustedNets, log))
-		}
-		adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
-		registryMux.Handle("/admin/", adminWithMiddleware)
-	}
+	registerAuthRoutes(registryMux, svc, trustedNets, cidrAllowlistMiddleware, rateLimitMiddleware, log)
+	registryMux.Handle("/v2/", wrapRegistryForLocalMode(registryWithMiddleware, cfg, log))
 
 	// SECURITY: No CORS middleware on the proxy chain. Backend applications
 	// should control their own CORS policies. A blanket Access-Control-Allow-Origin: *
@@ -1375,8 +1329,229 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	}
 
 	proxyWithMiddleware := middleware.Chain(proxyMiddlewares...)(svc.proxySvc)
+	proxyMux := http.NewServeMux()
+	proxyMux.Handle("/", proxyWithMiddleware)
 
-	return registryMux, proxyWithMiddleware
+	registerAdminRoutes(registryMux, proxyMux, svc, cfg, trustedNets, log)
+
+	return registryMux, proxyMux
+}
+
+func buildRegistryHandlerWithMiddleware(
+	svc *services,
+	cfg Config,
+	trustedNets []*net.IPNet,
+	registryHandler http.Handler,
+	log zerowrap.Logger,
+) (http.Handler, func(http.Handler) http.Handler, func(http.Handler) http.Handler) {
+	registryMiddlewares := []func(http.Handler) http.Handler{
+		middleware.PanicRecovery(log),
+		middleware.RequestLogger(log, trustedNets),
+		middleware.SecurityHeaders,
+	}
+
+	cidrAllowlistMiddleware := buildRegistryCIDRAllowlistMiddleware(cfg, trustedNets, log)
+	if cidrAllowlistMiddleware != nil {
+		registryMiddlewares = append(registryMiddlewares, cidrAllowlistMiddleware)
+	}
+
+	rateLimitMiddleware := buildRegistryRateLimitMiddleware(cfg, log)
+	registryMiddlewares = append(registryMiddlewares, rateLimitMiddleware)
+
+	appendRegistryAuthMiddleware(&registryMiddlewares, svc, cfg, log)
+
+	return middleware.Chain(registryMiddlewares...)(registryHandler), cidrAllowlistMiddleware, rateLimitMiddleware
+}
+
+func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	if len(cfg.Server.RegistryAllowedIPs) == 0 {
+		return nil
+	}
+
+	allowedNets := middleware.ParseTrustedProxies(cfg.Server.RegistryAllowedIPs)
+	if len(allowedNets) != len(cfg.Server.RegistryAllowedIPs) {
+		for _, entry := range cfg.Server.RegistryAllowedIPs {
+			if nets := middleware.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
+				log.Warn().Str("entry", entry).Msg("ignoring invalid registry_allowed_ips entry")
+			}
+		}
+	}
+
+	if len(allowedNets) == 0 {
+		log.Error().
+			Strs("registry_allowed_ips", cfg.Server.RegistryAllowedIPs).
+			Msg("registry_allowed_ips is set but no valid entries were parsed; registry will deny all traffic (fail-closed)")
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				log.Warn().
+					Str(zerowrap.FieldPath, r.URL.Path).
+					Str(zerowrap.FieldClientIP, middleware.GetClientIP(r, trustedNets)).
+					Msg("registry access denied due to invalid registry_allowed_ips configuration")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
+			})
+		}
+	}
+
+	return middleware.RegistryCIDRAllowlist(allowedNets, trustedNets, log)
+}
+
+func buildRegistryRateLimitMiddleware(cfg Config, log zerowrap.Logger) func(http.Handler) http.Handler {
+	if cfg.API.RateLimit.Enabled {
+		globalLimiter := ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
+		ipLimiter := ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
+		return registry.RateLimitMiddleware(
+			globalLimiter,
+			ipLimiter,
+			cfg.API.RateLimit.TrustedProxies,
+			log,
+		)
+	}
+
+	return registry.RateLimitMiddleware(nil, nil, nil, log)
+}
+
+func appendRegistryAuthMiddleware(registryMiddlewares *[]func(http.Handler) http.Handler, svc *services, cfg Config, log zerowrap.Logger) {
+	if svc.authSvc != nil {
+		internalAuth := middleware.InternalRegistryAuth{
+			Username: svc.internalRegUser,
+			Password: svc.internalRegPass,
+		}
+		*registryMiddlewares = append(*registryMiddlewares, middleware.RegistryAuthV2(svc.authSvc, internalAuth, log))
+		return
+	}
+
+	if cfg.Auth.Enabled {
+		log.Error().Msg("authentication service unavailable; registry requests will be denied")
+		*registryMiddlewares = append(*registryMiddlewares, func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication service unavailable"})
+			})
+		})
+	}
+}
+
+func registerAuthRoutes(
+	registryMux *http.ServeMux,
+	svc *services,
+	trustedNets []*net.IPNet,
+	cidrAllowlistMiddleware func(http.Handler) http.Handler,
+	rateLimitMiddleware func(http.Handler) http.Handler,
+	log zerowrap.Logger,
+) {
+	if svc.authHandler == nil {
+		return
+	}
+
+	// Auth endpoints are NOT protected by auth - they're where clients authenticate
+	// but still need rate limiting to prevent brute force attacks.
+	authMiddlewares := []func(http.Handler) http.Handler{
+		middleware.PanicRecovery(log),
+		middleware.RequestLogger(log, trustedNets),
+		middleware.SecurityHeaders,
+	}
+	if cidrAllowlistMiddleware != nil {
+		authMiddlewares = append(authMiddlewares, cidrAllowlistMiddleware)
+	}
+	authMiddlewares = append(authMiddlewares, rateLimitMiddleware)
+	authWithMiddleware := middleware.Chain(authMiddlewares...)(svc.authHandler)
+	registryMux.Handle("/auth/", authWithMiddleware)
+}
+
+func wrapRegistryForLocalMode(registryWithMiddleware http.Handler, cfg Config, log zerowrap.Logger) http.Handler {
+	if !cfg.Auth.Enabled {
+		return loopbackOnly(registryWithMiddleware, log)
+	}
+	return registryWithMiddleware
+}
+
+func registerAdminRoutes(registryMux, proxyMux *http.ServeMux, svc *services, cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) {
+	if svc.adminHandler == nil {
+		return
+	}
+
+	if !cfg.Auth.Enabled {
+		log.Warn().Msg("auth disabled: admin API endpoints are not registered")
+		return
+	}
+
+	adminMiddlewares := []func(http.Handler) http.Handler{
+		middleware.PanicRecovery(log),
+		middleware.RequestLogger(log, trustedNets),
+		middleware.SecurityHeaders,
+	}
+
+	if svc.authSvc != nil {
+		// Create rate limiters for admin API - uses same config as registry.
+		var globalLimiter, ipLimiter out.RateLimiter
+		if cfg.API.RateLimit.Enabled {
+			globalLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.Burst, log)
+			ipLimiter = ratelimit.NewMemoryStore(cfg.API.RateLimit.PerIPRPS, cfg.API.RateLimit.Burst, log)
+		}
+		adminMiddlewares = append(adminMiddlewares, admin.AuthMiddleware(svc.authSvc, globalLimiter, ipLimiter, trustedNets, log))
+	} else {
+		adminMiddlewares = append(adminMiddlewares, func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication service unavailable"})
+			})
+		})
+	}
+
+	adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
+	registryMux.Handle("/admin/", loopbackOnly(adminWithMiddleware, log))
+	proxyMux.Handle("/admin/", adminHostOnly(adminWithMiddleware, cfg.Server.RegistryDomain, log))
+}
+
+func adminHostOnly(next http.Handler, allowedHost string, log zerowrap.Logger) http.Handler {
+	canonicalAllowedHost := canonicalHost(allowedHost)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := canonicalHost(r.Host)
+		if host == "" {
+			host = canonicalHost(r.URL.Host)
+		}
+
+		if !isLoopbackHost(host) && (canonicalAllowedHost == "" || !strings.EqualFold(host, canonicalAllowedHost)) {
+			log.Warn().
+				Str("path", r.URL.Path).
+				Str("host", r.Host).
+				Str("allowed_host", canonicalAllowedHost).
+				Msg("blocked admin request on unauthorized host")
+			http.NotFound(w, r)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func canonicalHost(rawHost string) string {
+	host := strings.TrimSpace(rawHost)
+	if host == "" {
+		return ""
+	}
+
+	if splitHost, _, err := net.SplitHostPort(host); err == nil {
+		host = splitHost
+	}
+
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	return strings.ToLower(host)
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // runServers starts the HTTP servers and waits for shutdown.

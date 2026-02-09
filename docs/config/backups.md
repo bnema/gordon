@@ -6,7 +6,7 @@ Configure automatic PostgreSQL logical backups for attachment containers.
 
 When backups are enabled, Gordon detects PostgreSQL attachments for each route and can:
 
-- Run on-demand backups via `gordon backup run`
+- Run on-demand backups via `gordon backups run`
 - Store backup artifacts on the Gordon host filesystem
 - Apply retention policies per schedule tier
 

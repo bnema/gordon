@@ -58,7 +58,14 @@ func TestGetClientIP(t *testing.T) {
 		{
 			name:        "XFF honored from trusted proxy (multiple IPs)",
 			remoteAddr:  "127.0.0.1:12345",
-			xff:         "203.0.113.50, 10.0.0.1, 172.16.0.1",
+			xff:         "203.0.113.50, 10.0.0.1",
+			trustedNets: trustedNets,
+			wantIP:      "203.0.113.50",
+		},
+		{
+			name:        "XFF spoof chain returns first untrusted from right",
+			remoteAddr:  "127.0.0.1:12345",
+			xff:         "198.51.100.123, 203.0.113.50, 10.0.0.9",
 			trustedNets: trustedNets,
 			wantIP:      "203.0.113.50",
 		},
