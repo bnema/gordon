@@ -434,7 +434,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	if err := setupInternalRegistryAuth(cfg, svc, log); err != nil {
+	if err := setupInternalRegistryAuth(svc, log); err != nil {
 		return nil, err
 	}
 
@@ -516,7 +516,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	return svc, nil
 }
 
-func setupInternalRegistryAuth(_ Config, svc *services, log zerowrap.Logger) error {
+func setupInternalRegistryAuth(svc *services, log zerowrap.Logger) error {
 	var err error
 	svc.internalRegUser, svc.internalRegPass, err = generateInternalRegistryAuth()
 	if err != nil {
@@ -1381,6 +1381,17 @@ func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, 
 		log.Error().
 			Strs("registry_allowed_ips", cfg.Server.RegistryAllowedIPs).
 			Msg("registry_allowed_ips is set but no valid entries were parsed; registry will allow all traffic")
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				log.Warn().
+					Str(zerowrap.FieldPath, r.URL.Path).
+					Str(zerowrap.FieldClientIP, middleware.GetClientIP(r, trustedNets)).
+					Msg("registry access denied due to invalid registry_allowed_ips configuration")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
+			})
+		}
 	}
 
 	return middleware.RegistryCIDRAllowlist(allowedNets, trustedNets, log)
