@@ -42,6 +42,12 @@ type AttachmentsResponse struct {
 	Attachments []Attachment `json:"attachments"`
 }
 
+// RoutesByImageResponse represents routes found for a given image.
+type RoutesByImageResponse struct {
+	Image  string  `json:"image"`
+	Routes []Route `json:"routes"`
+}
+
 // RouteDeleteResponse represents a route removal response.
 type RouteDeleteResponse struct {
 	Status string `json:"status"`

@@ -16,6 +16,7 @@ type ControlPlane interface {
 	ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error)
 	GetHealth(ctx context.Context) (map[string]*remote.RouteHealth, error)
 	GetRoute(ctx context.Context, routeDomain string) (*domain.Route, error)
+	FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error)
 	AddRoute(ctx context.Context, route domain.Route) error
 	UpdateRoute(ctx context.Context, route domain.Route) error
 	RemoveRoute(ctx context.Context, routeDomain string) error

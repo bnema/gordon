@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/pkg/validation"
 )
 
@@ -26,24 +29,35 @@ func newPushCmd() *cobra.Command {
 		tag        string
 		dockerfile string
 		buildArgs  []string
+		domainFlag string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "push <domain>",
+		Use:   "push [image]",
 		Short: "Tag, push, and optionally deploy an image",
 		Long: `Tags a local image for the Gordon registry and pushes it.
 Uses git tags for versioning. Optionally triggers deployment after push.
 
+The image argument is optional. Resolution order:
+  1. If --domain is provided, uses the legacy domain-based lookup
+  2. If an image name is provided as argument, resolves domain(s) from the backend
+  3. If no argument, auto-detects from Dockerfile labels or current directory name
+
 With --build, builds the image first using docker buildx.
 
 Examples:
-  gordon push myapp.example.com --remote ...
-  gordon push myapp.example.com --build --remote ...
-  gordon push myapp.example.com --tag v1.2.0 --no-deploy --remote ...
-  gordon push myapp.example.com --build --build-arg CGO_ENABLED=0 --remote ...`,
-		Args: cobra.ExactArgs(1),
+  gordon push --build --remote ...
+  gordon push myapp --build --remote ...
+  gordon push --domain myapp.example.com --build --remote ...
+  gordon push myapp --tag v1.2.0 --no-deploy --remote ...
+  gordon push --build --build-arg CGO_ENABLED=0 --remote ...`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPush(cmd.Context(), args[0], tag, build, platform, dockerfile, buildArgs, noDeploy, noConfirm)
+			var imageArg string
+			if len(args) > 0 {
+				imageArg = args[0]
+			}
+			return runPush(cmd.Context(), imageArg, domainFlag, tag, build, platform, dockerfile, buildArgs, noDeploy, noConfirm)
 		},
 	}
 
@@ -54,6 +68,7 @@ Examples:
 	cmd.Flags().StringVarP(&dockerfile, "file", "f", "", "Path to Dockerfile (default: ./Dockerfile, used with --build)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Override version tag (default: git describe)")
 	cmd.Flags().StringArrayVar(&buildArgs, "build-arg", nil, "Additional build args (used with --build)")
+	cmd.Flags().StringVar(&domainFlag, "domain", "", "Explicit domain override (legacy mode)")
 
 	return cmd
 }
@@ -74,7 +89,35 @@ func resolveImageRefs(registry, imageName, version string) (versionRef, latestRe
 	return versionRef, latestRef
 }
 
-func runPush(ctx context.Context, pushDomain, tag string, build bool, platform string, dockerfile string, buildArgs []string, noDeploy bool, noConfirm bool) error {
+// resolveRoute determines the registry, image name, and domain from the input mode.
+func resolveRoute(ctx context.Context, cp ControlPlane, imageArg, domainFlag, dockerfile string) (registry, imageName, pushDomain string, err error) {
+	if domainFlag != "" {
+		return resolveFromDomain(ctx, cp, domainFlag)
+	}
+
+	if imageArg == "" {
+		imageArg, err = detectImageName(dockerfile)
+		if err != nil {
+			return "", "", "", err
+		}
+		fmt.Printf("Detected image: %s\n", styles.Theme.Bold.Render(imageArg))
+	}
+
+	return resolveFromImage(ctx, cp, imageArg, dockerfile)
+}
+
+// resolveVersion determines and validates the version tag.
+func resolveVersion(ctx context.Context, tag string) (string, error) {
+	version := determineVersion(ctx, tag)
+	if version != "latest" {
+		if err := validation.ValidateReference(version); err != nil {
+			return "", fmt.Errorf("invalid version tag %q: %w", version, err)
+		}
+	}
+	return version, nil
+}
+
+func runPush(ctx context.Context, imageArg, domainFlag, tag string, build bool, platform string, dockerfile string, buildArgs []string, noDeploy bool, noConfirm bool) error {
 	handle, err := resolveControlPlane(configPath)
 	if err != nil {
 		return err
@@ -86,21 +129,14 @@ func runPush(ctx context.Context, pushDomain, tag string, build bool, platform s
 		return err
 	}
 
-	route, err := handle.plane.GetRoute(ctx, pushDomain)
+	registry, imageName, pushDomain, err := resolveRoute(ctx, handle.plane, imageArg, domainFlag, dockerfile)
 	if err != nil {
-		return fmt.Errorf("failed to get route: %w", err)
+		return err
 	}
 
-	registry, imageName, _ := parseImageRef(route.Image)
-	if registry == "" || imageName == "" {
-		return fmt.Errorf("cannot parse registry/image from route image: %s", route.Image)
-	}
-
-	version := determineVersion(ctx, tag)
-	if version != "latest" {
-		if err := validation.ValidateReference(version); err != nil {
-			return fmt.Errorf("invalid version tag %q: %w", version, err)
-		}
+	version, err := resolveVersion(ctx, tag)
+	if err != nil {
+		return err
 	}
 
 	for _, ba := range buildArgs {
@@ -111,10 +147,11 @@ func runPush(ctx context.Context, pushDomain, tag string, build bool, platform s
 
 	versionRef, latestRef := resolveImageRefs(registry, imageName, version)
 
-	fmt.Printf("Image: %s\n", styles.Theme.Bold.Render(versionRef))
+	fmt.Printf("Image:  %s\n", styles.Theme.Bold.Render(versionRef))
 	if version != "latest" {
-		fmt.Printf("Also:  %s\n", styles.Theme.Bold.Render(latestRef))
+		fmt.Printf("Also:   %s\n", styles.Theme.Bold.Render(latestRef))
 	}
+	fmt.Printf("Domain: %s\n", styles.Theme.Bold.Render(pushDomain))
 
 	if build {
 		if err := buildAndPush(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef); err != nil {
@@ -133,6 +170,235 @@ func runPush(ctx context.Context, pushDomain, tag string, build bool, platform s
 	}
 
 	return nil
+}
+
+// resolveFromDomain resolves image info from a domain name (legacy mode).
+func resolveFromDomain(ctx context.Context, cp ControlPlane, pushDomain string) (registry, imageName, resolvedDomain string, err error) {
+	route, err := cp.GetRoute(ctx, pushDomain)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to get route for domain %q: %w", pushDomain, err)
+	}
+
+	registry, imageName, _ = parseImageRef(route.Image)
+	if registry == "" || imageName == "" {
+		return "", "", "", fmt.Errorf("cannot parse registry/image from route image: %s", route.Image)
+	}
+
+	return registry, imageName, pushDomain, nil
+}
+
+// resolveFromImage resolves domain(s) from an image name using the backend.
+func resolveFromImage(ctx context.Context, cp ControlPlane, imageArg, dockerfile string) (registry, imageName, resolvedDomain string, err error) {
+	// First, query the backend to find routes for this image
+	routes, err := cp.FindRoutesByImage(ctx, imageArg)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to find routes for image %q: %w", imageArg, err)
+	}
+
+	if len(routes) == 0 {
+		return "", "", "", fmt.Errorf(
+			"no route configured for image %q\n\nUse 'gordon routes add' to create a route first",
+			imageArg,
+		)
+	}
+
+	// Pick the target domain
+	var targetRoute domain.Route
+	if len(routes) == 1 {
+		targetRoute = routes[0]
+	} else {
+		// Multiple domains: check Dockerfile labels first, then prompt
+		targetRoute, err = selectDomain(routes, dockerfile)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+
+	registry, imageName, _ = parseImageRef(targetRoute.Image)
+	if registry == "" || imageName == "" {
+		return "", "", "", fmt.Errorf("cannot parse registry/image from route image: %s", targetRoute.Image)
+	}
+
+	return registry, imageName, targetRoute.Domain, nil
+}
+
+// selectDomain picks the target domain from multiple routes.
+// Checks Dockerfile labels first, then falls back to interactive selection.
+func selectDomain(routes []domain.Route, dockerfile string) (domain.Route, error) {
+	// Try to resolve from Dockerfile labels
+	labels := parseDockerfileLabels(dockerfile)
+	labelDomain := labels[domain.LabelDomain]
+	labelDomains := labels[domain.LabelDomains]
+
+	// Collect domains from labels
+	var labelDomainList []string
+	if labelDomain != "" {
+		labelDomainList = append(labelDomainList, labelDomain)
+	}
+	if labelDomains != "" {
+		for _, d := range strings.Split(labelDomains, ",") {
+			d = strings.TrimSpace(d)
+			if d != "" {
+				labelDomainList = append(labelDomainList, d)
+			}
+		}
+	}
+
+	// Try to find a matching route from labels
+	if len(labelDomainList) > 0 {
+		routeMap := make(map[string]domain.Route, len(routes))
+		for _, r := range routes {
+			routeMap[r.Domain] = r
+		}
+		for _, ld := range labelDomainList {
+			if r, ok := routeMap[ld]; ok {
+				return r, nil
+			}
+		}
+	}
+
+	// Fall back to interactive selection
+	items := make([]string, 0, len(routes))
+	for _, r := range routes {
+		items = append(items, fmt.Sprintf("%s  %s", r.Domain, styles.Theme.Muted.Render(r.Image)))
+	}
+
+	selected, err := components.RunSelector(
+		"Multiple domains found for this image. Select target:",
+		items,
+		"",
+	)
+	if err != nil {
+		return domain.Route{}, fmt.Errorf("selection error: %w", err)
+	}
+	if selected == "" {
+		return domain.Route{}, fmt.Errorf("no domain selected")
+	}
+
+	// Extract domain from the selected display string
+	for i, item := range items {
+		if item == selected {
+			return routes[i], nil
+		}
+	}
+
+	return domain.Route{}, fmt.Errorf("selected domain not found")
+}
+
+// detectImageName auto-detects the image name from context.
+// Resolution order:
+// 1. Dockerfile label gordon.domain (if Dockerfile exists)
+// 2. Current directory name
+func detectImageName(dockerfile string) (string, error) {
+	// Try Dockerfile labels
+	labels := parseDockerfileLabels(dockerfile)
+	if d := labels[domain.LabelDomain]; d != "" {
+		// Strip the registry prefix if it looks like a full image ref
+		_, name, _ := parseImageRef(d)
+		if name != "" {
+			return name, nil
+		}
+		return d, nil
+	}
+
+	// Fall back to current directory name
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot detect image name: %w", err)
+	}
+
+	dirName := filepath.Base(cwd)
+	if dirName == "." || dirName == "/" {
+		return "", fmt.Errorf("cannot detect image name from current directory; provide an image name or use --domain")
+	}
+
+	return dirName, nil
+}
+
+// parseDockerfileLabels extracts LABEL instructions from a Dockerfile.
+// Returns a map of label key -> value. Only parses gordon.* labels.
+func parseDockerfileLabels(dockerfile string) map[string]string {
+	labels := make(map[string]string)
+
+	f, err := os.Open(dockerfile)
+	if err != nil {
+		return labels
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip comments and empty lines
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Match LABEL instructions
+		if !strings.HasPrefix(strings.ToUpper(line), "LABEL ") {
+			continue
+		}
+
+		// Parse "LABEL key=value" or "LABEL key=\"value\""
+		labelContent := strings.TrimSpace(line[6:])
+		for _, pair := range splitLabelPairs(labelContent) {
+			key, value, ok := parseLabelPair(pair)
+			if ok && strings.HasPrefix(key, "gordon.") {
+				labels[key] = value
+			}
+		}
+	}
+
+	return labels
+}
+
+// splitLabelPairs splits LABEL content into key=value pairs,
+// handling quoted values that may contain spaces.
+func splitLabelPairs(content string) []string {
+	var pairs []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := byte(0)
+
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+		if inQuote {
+			current.WriteByte(ch)
+			if ch == quoteChar {
+				inQuote = false
+			}
+		} else if ch == '"' || ch == '\'' {
+			inQuote = true
+			quoteChar = ch
+			current.WriteByte(ch)
+		} else if ch == ' ' || ch == '\t' {
+			if current.Len() > 0 {
+				pairs = append(pairs, current.String())
+				current.Reset()
+			}
+		} else {
+			current.WriteByte(ch)
+		}
+	}
+	if current.Len() > 0 {
+		pairs = append(pairs, current.String())
+	}
+
+	return pairs
+}
+
+// parseLabelPair parses a single "key=value" or "key=\"value\"" pair.
+func parseLabelPair(pair string) (key, value string, ok bool) {
+	idx := strings.Index(pair, "=")
+	if idx == -1 {
+		return "", "", false
+	}
+	key = pair[:idx]
+	value = pair[idx+1:]
+	// Strip surrounding quotes
+	value = strings.Trim(value, "\"'")
+	return key, value, true
 }
 
 func determineVersion(ctx context.Context, tag string) string {

@@ -226,6 +226,72 @@ func (s *Service) GetRoute(_ context.Context, domainName string) (*domain.Route,
 	return route, nil
 }
 
+// FindRoutesByImage returns all routes whose image matches the given image name.
+// Image names are normalized by stripping the registry domain prefix before comparison.
+// When the input has no tag, only the name portion is compared (i.e. "myapp" matches "myapp:latest").
+func (s *Service) FindRoutesByImage(_ context.Context, imageName string) []domain.Route {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	registryDomain := s.config.RegistryDomain
+	normalizedImage := NormalizeRegistryImage(imageName, registryDomain)
+	inputName, inputHasTag := splitImageNameTag(normalizedImage)
+
+	var routes []domain.Route
+	for domainName, image := range s.config.Routes {
+		normalizedRouteImage := NormalizeRegistryImage(image, registryDomain)
+
+		match := false
+		if inputHasTag {
+			// Exact match when the caller provided a tag (e.g. event handler).
+			match = strings.EqualFold(normalizedRouteImage, normalizedImage)
+		} else {
+			// Name-only match when no tag was provided (e.g. CLI push).
+			routeName, _ := splitImageNameTag(normalizedRouteImage)
+			match = strings.EqualFold(routeName, inputName)
+		}
+
+		if match {
+			route := domain.Route{
+				Image: image,
+				HTTPS: true,
+			}
+			if strings.HasPrefix(domainName, "http://") {
+				route.Domain = strings.TrimPrefix(domainName, "http://")
+				route.HTTPS = false
+			} else {
+				route.Domain = domainName
+			}
+			routes = append(routes, route)
+		}
+	}
+
+	return routes
+}
+
+// splitImageNameTag splits "name:tag" into ("name", true) or ("name", false) when no tag is present.
+func splitImageNameTag(image string) (name string, hasTag bool) {
+	if idx := strings.LastIndex(image, ":"); idx != -1 {
+		return image[:idx], true
+	}
+	return image, false
+}
+
+// NormalizeRegistryImage strips the registry domain prefix from an image name for comparison.
+func NormalizeRegistryImage(imageName, registryDomain string) string {
+	registryDomain = strings.TrimSuffix(registryDomain, "/")
+	if registryDomain == "" {
+		return imageName
+	}
+
+	prefix := registryDomain + "/"
+	if strings.HasPrefix(imageName, prefix) {
+		return strings.TrimPrefix(imageName, prefix)
+	}
+
+	return imageName
+}
+
 // AddRoute adds a new route to the configuration and persists it.
 func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
