@@ -78,7 +78,11 @@ func TestAuthMiddleware_TrustedProxy(t *testing.T) {
 
 	globalLimiter.EXPECT().Allow(context.Background(), "global").Return(true)
 	ipLimiter.EXPECT().Allow(context.Background(), "ip:203.0.113.50").Return(true)
-	authSvc.EXPECT().IsEnabled().Return(false)
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "valid-admin-token").Return(&domain.TokenClaims{
+		Subject: "admin",
+		Scopes:  []string{"admin:*:*"},
+	}, nil)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -90,6 +94,7 @@ func TestAuthMiddleware_TrustedProxy(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+	req.Header.Set("Authorization", "Bearer valid-admin-token")
 	rec := httptest.NewRecorder()
 	wrappedHandler.ServeHTTP(rec, req)
 
@@ -99,8 +104,12 @@ func TestAuthMiddleware_TrustedProxy(t *testing.T) {
 func TestAuthMiddleware_NoRateLimiting(t *testing.T) {
 	authSvc := inmocks.NewMockAuthService(t)
 
-	// Auth disabled, no rate limiters
-	authSvc.EXPECT().IsEnabled().Return(false)
+	// No rate limiters, auth still required
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "valid-admin-token").Return(&domain.TokenClaims{
+		Subject: "admin",
+		Scopes:  []string{"admin:*:*"},
+	}, nil)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -110,6 +119,7 @@ func TestAuthMiddleware_NoRateLimiting(t *testing.T) {
 	wrappedHandler := mw(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.Header.Set("Authorization", "Bearer valid-admin-token")
 	rec := httptest.NewRecorder()
 	wrappedHandler.ServeHTTP(rec, req)
 
@@ -139,8 +149,8 @@ func TestAuthMiddleware_AuthDisabled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wrappedHandler.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.True(t, handlerCalled)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.False(t, handlerCalled)
 }
 
 func TestAuthMiddleware_MissingAuthHeader(t *testing.T) {

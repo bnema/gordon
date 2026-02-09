@@ -10,7 +10,6 @@ Authentication is enabled by default. Gordon will not start without a valid `tok
 
 ```toml
 [auth]
-enabled = true
 secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"
@@ -20,7 +19,6 @@ token_expiry = "30d"
 
 ```toml
 [auth]
-enabled = true
 secrets_backend = "pass"
 username = "deploy"
 password_hash = "gordon/auth/password_hash"
@@ -33,7 +31,7 @@ Token auth always works. Adding `username` + `password_hash` enables interactive
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable authentication |
+| `enabled` | bool | `true` | Authentication toggle. `false` enables local-only mode (see below) |
 | `secrets_backend` | string | `"unsafe"` | Secrets backend: `"pass"`, `"sops"`, or `"unsafe"` |
 | `token_secret` | string | - | **Required.** Path to JWT signing secret in secrets backend |
 | `token_expiry` | string | `"30d"` | Token validity duration (0 = never expires) |
@@ -154,14 +152,15 @@ gordon auth token generate --subject temp --expiry 30d
 - Tokens from one Gordon instance won't work on another
 - Changing `token_secret` invalidates all existing tokens
 
-## Disable Auth (development only)
+## Local-only Mode
 
-```toml
-[auth]
-enabled = false
-```
+Authentication is enabled by default. If you set `auth.enabled=false`, Gordon switches to local-only mode:
 
-> **Security Warning:** When authentication is disabled, the admin API is fully accessible without credentials. This includes endpoints to deploy containers, manage secrets, modify routes, and reload configuration. Only disable auth for local development where Gordon is not exposed to the internet.
+- `/admin/*` endpoints are not registered.
+- `/v2/*` registry endpoints are restricted to loopback (`127.0.0.1` / `::1`).
+- Remote registry and remote admin access are disabled.
+
+Use this only when Gordon is intended for local machine usage.
 
 ## Internal Registry Auth
 

@@ -6,6 +6,24 @@ import (
 	"strings"
 )
 
+func normalizeIP(raw string) string {
+	ip := strings.TrimSpace(raw)
+	if ip == "" {
+		return ""
+	}
+
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil {
+		return ""
+	}
+
+	return parsed.String()
+}
+
 // ParseTrustedProxies converts a list of IP addresses and CIDR ranges to net.IPNet.
 // It accepts both single IPs (e.g., "10.0.0.1") and CIDR notation (e.g., "10.0.0.0/8").
 // Single IPs are converted to /32 (IPv4) or /128 (IPv6) CIDR blocks.
@@ -60,21 +78,41 @@ func GetClientIP(r *http.Request, trustedNets []*net.IPNet) string {
 	if err != nil {
 		remoteIP = r.RemoteAddr
 	}
+	if normalized := normalizeIP(remoteIP); normalized != "" {
+		remoteIP = normalized
+	}
 
 	// Only honor proxy headers if the request comes from a trusted proxy
 	if IsTrustedProxy(remoteIP, trustedNets) {
-		// Check X-Forwarded-For for proxied requests
+		// Check X-Forwarded-For for proxied requests.
+		// SECURITY: Parse from right to left and return the first untrusted IP.
+		// This prevents spoofing when a trusted proxy appends to an attacker-
+		// supplied XFF chain.
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Take first IP in chain (original client)
-			if first, _, found := strings.Cut(xff, ","); found {
-				return strings.TrimSpace(first)
+			parts := strings.Split(xff, ",")
+			validChain := make([]string, 0, len(parts))
+			for _, part := range parts {
+				if ip := normalizeIP(part); ip != "" {
+					validChain = append(validChain, ip)
+				}
 			}
-			return strings.TrimSpace(xff)
+
+			for i := len(validChain) - 1; i >= 0; i-- {
+				if !IsTrustedProxy(validChain[i], trustedNets) {
+					return validChain[i]
+				}
+			}
+
+			if len(validChain) > 0 {
+				return validChain[0]
+			}
 		}
 
 		// Check X-Real-IP
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return xri
+			if ip := normalizeIP(xri); ip != "" {
+				return ip
+			}
 		}
 	}
 

@@ -195,6 +195,8 @@ keep_last = 3
 | `images.prune.schedule` | `"daily"` |
 | `images.prune.keep_last` | `3` |
 
+When `auth.enabled=false`, Gordon runs in local-only mode: `/admin/*` is disabled and `/v2/*` is loopback-only.
+
 ## Hot Reload
 
 Gordon watches the configuration file and reloads automatically when changes are detected. You can also trigger a manual reload:

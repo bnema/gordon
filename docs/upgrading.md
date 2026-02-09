@@ -121,7 +121,7 @@ password_hash = "gordon/auth/password_hash"
 
 ### Breaking: Auth Enabled by Default
 
-Gordon now requires explicit auth configuration. Set `auth.enabled = false` to disable.
+Gordon keeps auth enabled by default. If you set `auth.enabled = false`, Gordon runs in local-only mode (`/admin/*` disabled, `/v2/*` loopback-only).
 
 ### Breaking: Secret Paths Changed
 

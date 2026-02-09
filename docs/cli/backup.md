@@ -2,10 +2,10 @@
 
 Manage backups for database attachments.
 
-## gordon backup
+## gordon backups
 
 ```bash
-gordon backup <subcommand>
+gordon backups <subcommand>
 ```
 
 Subcommands:
@@ -15,9 +15,12 @@ Subcommands:
 - `detect <domain>` - Detect supported databases for a domain
 - `status` - Show backup status across domains
 
-> **Note:** Backup commands currently require remote mode (`--remote` + `--token`, or configured remotes).
+> Backup commands work both locally and remotely.
 >
-> `gordon backup run <domain>` auto-selects the database only when exactly one supported DB attachment is detected. If multiple DB attachments are present, pass `--db <name>`.
+> - Local mode (no `--remote`) executes backups through in-process services.
+> - Remote mode uses the admin API on the target instance.
+>
+> `gordon backups run <domain>` auto-selects the database only when exactly one supported DB attachment is detected. If multiple DB attachments are present, pass `--db <name>`.
 
 In normal usage, configure remotes once (`gordon remotes ...`) and run backup commands without per-command remote flags.
 
@@ -25,22 +28,22 @@ In normal usage, configure remotes once (`gordon remotes ...`) and run backup co
 
 ```bash
 # List all backups
-gordon backup list
+gordon backups list
 
 # List backups for one domain
-gordon backup list app.example.com
+gordon backups list app.example.com
 
 # Trigger backup (auto-detect when exactly one DB attachment exists)
-gordon backup run app.example.com
+gordon backups run app.example.com
 
 # Trigger backup for specific attachment name
-gordon backup run app.example.com --db postgres
+gordon backups run app.example.com --db postgres
 
 # Detect DB attachments
-gordon backup detect app.example.com
+gordon backups detect app.example.com
 
 # Status summary
-gordon backup status
+gordon backups status
 ```
 
 ## Output Columns

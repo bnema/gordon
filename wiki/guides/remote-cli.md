@@ -2,6 +2,8 @@
 
 Manage Gordon instances remotely using the CLI with the `--remote` flag or saved remotes.
 
+By default (without `--remote`), management commands execute locally through in-process services.
+
 ## What You'll Learn
 
 - Using global `--remote` and `--token` flags
