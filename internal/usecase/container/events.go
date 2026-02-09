@@ -3,7 +3,6 @@ package container
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/bnema/zerowrap"
 
@@ -50,7 +49,7 @@ func (h *ImagePushedHandler) Handle(ctx context.Context, event domain.Event) err
 
 	log.Info().Str("image", fullImageName).Msg("processing image push event")
 
-	routes := h.findRoutesForImage(fullImageName)
+	routes := h.configSvc.FindRoutesByImage(ctx, fullImageName)
 	if len(routes) == 0 {
 		log.Debug().Str("image", fullImageName).Msg("no routes configured for pushed image")
 		return nil
@@ -72,37 +71,6 @@ func (h *ImagePushedHandler) Handle(ctx context.Context, event domain.Event) err
 // CanHandle returns whether this handler can handle the given event type.
 func (h *ImagePushedHandler) CanHandle(eventType domain.EventType) bool {
 	return eventType == domain.EventImagePushed
-}
-
-func (h *ImagePushedHandler) findRoutesForImage(imageName string) []domain.Route {
-	var routes []domain.Route
-
-	registryDomain := h.configSvc.GetRegistryDomain()
-	normalizedImage := normalizeRegistryImage(imageName, registryDomain)
-
-	configuredRoutes := h.configSvc.GetRoutes(h.ctx)
-	for _, route := range configuredRoutes {
-		normalizedRouteImage := normalizeRegistryImage(route.Image, registryDomain)
-		if strings.EqualFold(normalizedRouteImage, normalizedImage) {
-			routes = append(routes, route)
-		}
-	}
-
-	return routes
-}
-
-func normalizeRegistryImage(imageName, registryDomain string) string {
-	registryDomain = strings.TrimSuffix(registryDomain, "/")
-	if registryDomain == "" {
-		return imageName
-	}
-
-	prefix := registryDomain + "/"
-	if strings.HasPrefix(imageName, prefix) {
-		return strings.TrimPrefix(imageName, prefix)
-	}
-
-	return imageName
 }
 
 // ConfigReloadHandler handles config.reload events.

@@ -36,13 +36,10 @@ func TestImagePushedHandler_Handle_DeploysMatchingRoutes(t *testing.T) {
 
 	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
 
-	configSvc.EXPECT().GetRegistryDomain().Return("")
-
-	// Configure routes that match the pushed image
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+	// FindRoutesByImage returns matching routes directly
+	configSvc.EXPECT().FindRoutesByImage(mock.Anything, "myapp:latest").Return([]domain.Route{
 		{Domain: "app1.example.com", Image: "myapp:latest"},
 		{Domain: "app2.example.com", Image: "myapp:latest"},
-		{Domain: "other.example.com", Image: "otherapp:latest"},
 	})
 
 	// Expect Deploy to be called for both matching routes
@@ -74,11 +71,8 @@ func TestImagePushedHandler_Handle_NoMatchingRoutes(t *testing.T) {
 
 	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
 
-	configSvc.EXPECT().GetRegistryDomain().Return("")
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "other.example.com", Image: "otherapp:latest"},
-	})
+	// FindRoutesByImage returns no matching routes
+	configSvc.EXPECT().FindRoutesByImage(mock.Anything, "myapp:latest").Return([]domain.Route{})
 
 	// No Deploy calls expected
 
@@ -118,10 +112,8 @@ func TestImagePushedHandler_Handle_DefaultTag(t *testing.T) {
 
 	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
 
-	configSvc.EXPECT().GetRegistryDomain().Return("")
-
 	// Image name "myapp" with empty tag should become "myapp:latest"
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+	configSvc.EXPECT().FindRoutesByImage(mock.Anything, "myapp:latest").Return([]domain.Route{
 		{Domain: "app.example.com", Image: "myapp:latest"},
 	})
 
@@ -148,9 +140,7 @@ func TestImagePushedHandler_Handle_DeployError(t *testing.T) {
 
 	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
 
-	configSvc.EXPECT().GetRegistryDomain().Return("")
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+	configSvc.EXPECT().FindRoutesByImage(mock.Anything, "myapp:latest").Return([]domain.Route{
 		{Domain: "app.example.com", Image: "myapp:latest"},
 	})
 
@@ -175,8 +165,8 @@ func TestImagePushedHandler_Handle_StripsRegistryDomain(t *testing.T) {
 
 	handler := NewImagePushedHandler(testCtx(), containerSvc, configSvc)
 
-	configSvc.EXPECT().GetRegistryDomain().Return("registry.example.com")
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+	// FindRoutesByImage handles registry domain stripping internally
+	configSvc.EXPECT().FindRoutesByImage(mock.Anything, "docker.io/library/nginx:latest").Return([]domain.Route{
 		{Domain: "app.example.com", Image: "registry.example.com/docker.io/library/nginx:latest"},
 	})
 
