@@ -119,6 +119,7 @@ enabled = false                          # Auto-create routes from image names
 # Backups
 [backups]
 enabled = true
+schedule = "daily"                        # "hourly", "daily", "weekly", "monthly"
 storage_dir = "~/.gordon/backups"
 
 [backups.retention]
@@ -126,6 +127,12 @@ hourly = 24
 daily = 7
 weekly = 4
 monthly = 12
+
+# Images
+[images.prune]
+enabled = false
+schedule = "daily"
+keep_last = 3
 ```
 
 ## Configuration Sections
@@ -146,6 +153,7 @@ monthly = 12
 | `[network_groups]` | Shared service networks | [Network Groups](./network-groups.md) |
 | `[attachments]` | Service dependencies | [Attachments](./attachments.md) |
 | `[backups]` | Database backups | [Backups](./backups.md) |
+| `[images.prune]` | Scheduled image cleanup | [Images](./images.md) |
 
 ## Default Values
 
@@ -182,6 +190,10 @@ monthly = 12
 | `network_isolation.enabled` | `false` |
 | `auto_route.enabled` | `false` |
 | `backups.enabled` | `false` |
+| `backups.schedule` | `"daily"` (`"hourly"`, `"daily"`, `"weekly"`, `"monthly"`) |
+| `images.prune.enabled` | `false` |
+| `images.prune.schedule` | `"daily"` |
+| `images.prune.keep_last` | `3` |
 
 When `auth.enabled=false`, Gordon runs in local-only mode: `/admin/*` is disabled and `/v2/*` is loopback-only.
 
@@ -225,3 +237,4 @@ Pattern: `GORDON_SECTION_KEY` (uppercase, underscores instead of dots)
 - [External Routes](./external-routes.md)
 - [Authentication](./auth.md)
 - [Backups](./backups.md)
+- [Images](./images.md)

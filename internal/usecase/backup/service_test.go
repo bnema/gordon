@@ -50,7 +50,7 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 			return false
 		}
 		return bytes.Contains([]byte(cmd[2]), []byte("pg_dump -Fc")) &&
-			bytes.Contains([]byte(cmd[2]), []byte("PGDATABASE='postgres'")) &&
+			bytes.Contains([]byte(cmd[2]), []byte("${POSTGRES_DB:-postgres}")) &&
 			bytes.Contains([]byte(cmd[2]), []byte(" > "))
 	})).Return(&outiface.ExecResult{ExitCode: 0, Stdout: []byte("backup-data")}, nil)
 
@@ -125,9 +125,10 @@ func TestSelectDatabaseAutoSelectsOnlyDatabaseWhenUnspecified(t *testing.T) {
 	assert.Equal(t, "postgres", db.Name)
 }
 
-func TestPostgresDumpCommandQuotesDatabaseName(t *testing.T) {
-	cmd := postgresDumpCommand("customer data")
-	assert.Contains(t, cmd, "PGDATABASE='customer data'")
+func TestPostgresDumpCommandUsesEnvVar(t *testing.T) {
+	cmd := postgresDumpCommand("ignored")
+	assert.Contains(t, cmd, "${POSTGRES_DB:-postgres}")
+	assert.Contains(t, cmd, "${POSTGRES_USER:-postgres}")
 }
 
 func TestServiceStatusReturnsWhenContextCancelledDuringSemaphoreAcquire(t *testing.T) {
@@ -176,4 +177,60 @@ func TestServiceStatusReturnsWhenContextCancelledDuringSemaphoreAcquire(t *testi
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("Status did not return after context cancellation while waiting for semaphore")
 	}
+}
+
+func TestService_RunForSchedule_StoresTierAndAppliesRetention(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	storage := outmocks.NewMockBackupStorage(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+
+	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
+		"app.example.com": {},
+	})
+	containerSvc.EXPECT().ListAttachments(mock.Anything, "app.example.com").Return([]domain.Attachment{
+		{Name: "postgres", Image: "postgres:17", ContainerID: "db123", Status: "running"},
+	})
+
+	runtime.EXPECT().ExecInContainer(mock.Anything, "db123", mock.MatchedBy(func(cmd []string) bool {
+		if len(cmd) != 3 || cmd[0] != "sh" || cmd[1] != "-c" {
+			return false
+		}
+		return bytes.Contains([]byte(cmd[2]), []byte("pg_dump -Fc"))
+	})).Return(&outiface.ExecResult{ExitCode: 0, Stdout: []byte("backup-data")}, nil)
+
+	runtime.EXPECT().CopyFromContainer(mock.Anything, "db123", mock.MatchedBy(func(path string) bool {
+		return path != ""
+	})).Return(io.NopCloser(bytes.NewReader([]byte("backup-data"))), nil)
+
+	runtime.EXPECT().ExecInContainer(mock.Anything, "db123", mock.MatchedBy(func(cmd []string) bool {
+		return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c" && bytes.Contains([]byte(cmd[2]), []byte("rm -f"))
+	})).Return(&outiface.ExecResult{ExitCode: 0}, nil)
+
+	storage.EXPECT().Store(
+		mock.Anything,
+		"app.example.com",
+		"postgres",
+		domain.ScheduleDaily,
+		mock.Anything,
+		mock.Anything,
+	).Return("/tmp/daily-backup.bak", nil)
+
+	storage.EXPECT().ApplyRetention(mock.Anything, "app.example.com", domain.RetentionPolicy{Daily: 7}).Return(0, nil)
+
+	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{Retention: domain.RetentionPolicy{Daily: 7}}, zerowrap.Default())
+
+	err := svc.RunForSchedule(context.Background(), domain.ScheduleDaily)
+	require.NoError(t, err)
+}
+
+func TestService_RunForSchedule_RejectsInvalidSchedule(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	storage := outmocks.NewMockBackupStorage(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+
+	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{}, zerowrap.Default())
+
+	err := svc.RunForSchedule(context.Background(), domain.BackupSchedule("every-minute"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid backup schedule")
 }

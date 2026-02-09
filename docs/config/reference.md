@@ -133,6 +133,7 @@ preserve = true                              # Keep volumes when containers are 
 # =============================================================================
 [backups]
 enabled = false                              # Enable backup service
+schedule = "daily"                          # "hourly", "daily", "weekly", "monthly"
 storage_dir = ""                            # Backup root (default: {data_dir}/backups)
 
 [backups.retention]
@@ -140,6 +141,14 @@ hourly = 0                                   # Keep N hourly backups per DB
 daily = 0                                    # Keep N daily backups per DB
 weekly = 0                                   # Keep N weekly backups per DB
 monthly = 0                                  # Keep N monthly backups per DB
+
+# =============================================================================
+# IMAGES
+# =============================================================================
+[images.prune]
+enabled = false                              # Enable scheduled image cleanup
+schedule = "daily"                          # "hourly", "daily", "weekly", "monthly"
+keep_last = 3                                # Keep N newest tags per repository
 
 # Note: retention values set to 0 keep no backups for that tier.
 # For practical defaults, consider setting daily = 7.
@@ -192,11 +201,15 @@ monthly = 0                                  # Keep N monthly backups per DB
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
 | `backups.enabled` | `false` | Backup service disabled |
+| `backups.schedule` | `"daily"` | Backup scheduler preset |
 | `backups.storage_dir` | `""` | Uses `{server.data_dir}/backups` when empty |
 | `backups.retention.hourly` | `0` | Keep no hourly backups by default |
 | `backups.retention.daily` | `0` | Keep no daily backups by default (recommend `7`) |
 | `backups.retention.weekly` | `0` | Keep no weekly backups by default |
 | `backups.retention.monthly` | `0` | Keep no monthly backups by default |
+| `images.prune.enabled` | `false` | Scheduled image cleanup disabled |
+| `images.prune.schedule` | `"daily"` | Cleanup schedule preset |
+| `images.prune.keep_last` | `3` | Number of recent tags kept per repository |
 
 Note: for all `backups.retention.*` keys, `0` means keep no backups for that retention tier.
 
@@ -269,3 +282,4 @@ gordon serve
 - [Authentication](./auth.md)
 - [Network Isolation](./network-isolation.md)
 - [Volumes](./volumes.md)
+- [Images](./images.md)

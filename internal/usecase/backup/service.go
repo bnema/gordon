@@ -66,8 +66,54 @@ func (s *Service) DetectDatabases(ctx context.Context, domainName string) ([]dom
 
 // RunBackup triggers a logical PostgreSQL backup for a detected DB.
 func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*domain.BackupResult, error) {
-	started := time.Now().UTC()
+	return s.runBackup(ctx, domainName, dbName, domain.BackupSchedule(""))
+}
 
+// RunForSchedule executes backups for all detected databases and applies retention.
+func (s *Service) RunForSchedule(ctx context.Context, schedule domain.BackupSchedule) error {
+	if !isValidBackupSchedule(schedule) {
+		return fmt.Errorf("invalid backup schedule: %q", schedule)
+	}
+
+	routes := s.containerSvc.List(ctx)
+	domainNames := make([]string, 0, len(routes))
+	for domainName := range routes {
+		domainNames = append(domainNames, domainName)
+	}
+	sort.Strings(domainNames)
+
+	var firstErr error
+	for _, domainName := range domainNames {
+		dbs, err := s.DetectDatabases(ctx, domainName)
+		if err != nil {
+			s.log.Error().Err(err).Str("domain", domainName).Msg("scheduled backup database detection failed")
+			if firstErr == nil {
+				firstErr = fmt.Errorf("detect databases for %s: %w", domainName, err)
+			}
+			continue
+		}
+
+		for _, db := range dbs {
+			if _, err := s.runBackupForDB(ctx, domainName, db, schedule); err != nil {
+				s.log.Error().Err(err).Str("domain", domainName).Str("db", db.Name).Msg("scheduled backup failed")
+				if firstErr == nil {
+					firstErr = fmt.Errorf("run backup for %s/%s: %w", domainName, db.Name, err)
+				}
+			}
+		}
+
+		if _, err := s.storage.ApplyRetention(ctx, domainName, s.config.Retention); err != nil {
+			s.log.Error().Err(err).Str("domain", domainName).Msg("scheduled backup retention failed")
+			if firstErr == nil {
+				firstErr = fmt.Errorf("apply retention for %s: %w", domainName, err)
+			}
+		}
+	}
+
+	return firstErr
+}
+
+func (s *Service) runBackup(ctx context.Context, domainName, dbName string, schedule domain.BackupSchedule) (*domain.BackupResult, error) {
 	dbs, err := s.DetectDatabases(ctx, domainName)
 	if err != nil {
 		return nil, err
@@ -77,6 +123,12 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 	if err != nil {
 		return nil, err
 	}
+
+	return s.runBackupForDB(ctx, domainName, db, schedule)
+}
+
+func (s *Service) runBackupForDB(ctx context.Context, domainName string, db domain.DBInfo, schedule domain.BackupSchedule) (*domain.BackupResult, error) {
+	started := time.Now().UTC()
 
 	if db.Type != domain.DBTypePostgreSQL {
 		return nil, fmt.Errorf("unsupported database type: %s", db.Type)
@@ -108,7 +160,7 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 	defer dumpStream.Close()
 
 	counter := &byteCounter{}
-	path, err := s.storage.Store(ctx, domainName, db.Name, domain.BackupSchedule(""), started, io.TeeReader(dumpStream, counter))
+	path, err := s.storage.Store(ctx, domainName, db.Name, schedule, started, io.TeeReader(dumpStream, counter))
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +181,15 @@ func (s *Service) RunBackup(ctx context.Context, domainName, dbName string) (*do
 		Job:      job,
 		Duration: time.Since(started),
 	}, nil
+}
+
+func isValidBackupSchedule(schedule domain.BackupSchedule) bool {
+	switch schedule {
+	case domain.ScheduleHourly, domain.ScheduleDaily, domain.ScheduleWeekly, domain.ScheduleMonthly:
+		return true
+	default:
+		return false
+	}
 }
 
 // Restore restores a backup by ID.
@@ -230,16 +291,12 @@ func selectDatabase(dbs []domain.DBInfo, requested string) (domain.DBInfo, error
 	return domain.DBInfo{}, fmt.Errorf("database %q not found for domain", requested)
 }
 
-func postgresDumpCommand(dbName string) string {
-	return fmt.Sprintf("PGDATABASE=%s pg_dump -Fc --dbname=\"$PGDATABASE\" --username=\"${POSTGRES_USER:-postgres}\"", shellQuote(dbName))
+func postgresDumpCommand(_ string) string {
+	return "pg_dump -Fc --dbname=\"${POSTGRES_DB:-postgres}\" --username=\"${POSTGRES_USER:-postgres}\""
 }
 
 func pgDumpToPathCommand(path, dbName string) string {
 	return fmt.Sprintf("%s > %q", postgresDumpCommand(dbName), path)
-}
-
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (s *Service) cleanupDumpFile(containerID, dumpPath string) {

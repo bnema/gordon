@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bnema/zerowrap"
 
@@ -220,6 +221,24 @@ func (s *ManifestStorage) ListRepositories() ([]string, error) {
 	}
 
 	return repositories, nil
+}
+
+// GetManifestModTime returns the manifest modification time.
+func (s *ManifestStorage) GetManifestModTime(name, reference string) (time.Time, error) {
+	manifestPath, err := s.getManifestPath(name, reference)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid path: %w", err)
+	}
+
+	info, err := os.Stat(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return time.Time{}, fmt.Errorf("manifest not found: %s/%s", name, reference)
+		}
+		return time.Time{}, fmt.Errorf("failed to stat manifest: %w", err)
+	}
+
+	return info.ModTime(), nil
 }
 
 // Helper methods for path generation with security validation

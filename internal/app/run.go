@@ -58,7 +58,9 @@ import (
 	"github.com/bnema/gordon/internal/usecase/backup"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
+	cronSvc "github.com/bnema/gordon/internal/usecase/cron"
 	"github.com/bnema/gordon/internal/usecase/health"
+	"github.com/bnema/gordon/internal/usecase/images"
 	"github.com/bnema/gordon/internal/usecase/logs"
 	"github.com/bnema/gordon/internal/usecase/proxy"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
@@ -134,6 +136,7 @@ type Config struct {
 
 	Backups struct {
 		Enabled    bool   `mapstructure:"enabled"`
+		Schedule   string `mapstructure:"schedule"`
 		StorageDir string `mapstructure:"storage_dir"`
 		Retention  struct {
 			Hourly  int `mapstructure:"hourly"`
@@ -142,6 +145,14 @@ type Config struct {
 			Monthly int `mapstructure:"monthly"`
 		} `mapstructure:"retention"`
 	} `mapstructure:"backups"`
+
+	Images struct {
+		Prune struct {
+			Enabled  bool   `mapstructure:"enabled"`
+			Schedule string `mapstructure:"schedule"`
+			KeepLast int    `mapstructure:"keep_last"`
+		} `mapstructure:"prune"`
+	} `mapstructure:"images"`
 }
 
 // services holds all the services used by the application.
@@ -161,6 +172,7 @@ type services struct {
 	registrySvc      *registrySvc.Service
 	healthSvc        *health.Service
 	logSvc           *logs.Service
+	imageSvc         *images.Service
 	proxySvc         *proxy.Service
 	authSvc          *auth.Service
 	authHandler      *authhandler.Handler
@@ -225,7 +237,7 @@ func Run(ctx context.Context, configPath string) error {
 	registryHandler, proxyHandler := createHTTPHandlers(svc, cfg, log)
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
-	return runServers(ctx, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, svc, log)
+	return runServers(ctx, v, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, svc, log)
 }
 
 func ensureTLSConfig(cfg *Config, log zerowrap.Logger) error {
@@ -456,6 +468,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	}
 
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
+	svc.imageSvc = images.NewService(svc.runtime, svc.manifestStorage, svc.blobStorage, log)
 
 	proxyCfg, err := buildProxyConfig(cfg, log)
 	if err != nil {
@@ -483,10 +496,22 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	svc.healthSvc = health.NewService(svc.configSvc, svc.containerSvc, prober, log)
 
 	// Create log service for accessing logs via admin API
-	svc.logSvc = logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
+	svc.logSvc = logs.NewService(resolveLogFilePath(cfg), cfg.Logging.File.Enabled, svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, svc.healthSvc, svc.secretSvc, svc.logSvc, svc.registrySvc, svc.eventBus, log, svc.backupSvc)
+	svc.adminHandler = admin.NewHandler(
+		svc.configSvc,
+		svc.authSvc,
+		svc.containerSvc,
+		svc.healthSvc,
+		svc.secretSvc,
+		svc.logSvc,
+		svc.registrySvc,
+		svc.eventBus,
+		log,
+		svc.backupSvc,
+		svc.imageSvc,
+	)
 
 	return svc, nil
 }
@@ -1247,6 +1272,9 @@ func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
 			log.Warn().Err(err).Msg("failed to auto-start containers")
 		}
 	}
+
+	// Start background monitor to restart crashed containers.
+	svc.containerSvc.StartMonitor(ctx)
 }
 func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1475,7 +1503,7 @@ func registerAdminRoutes(registryMux, proxyMux *http.ServeMux, svc *services, cf
 // - SIGUSR2: Triggers manual deploy for a specific route
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, svc *services, log zerowrap.Logger) error {
+func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, svc *services, log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -1511,22 +1539,16 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 		)
 	}
 
-	// Wait for both servers to bind their ports before auto-starting containers.
+	// Wait for all enabled servers to bind their ports before auto-starting containers.
 	// This prevents the race where auto-start pulls from the registry before it's listening.
-	select {
-	case <-registryReady:
-	case err := <-errChan:
+	if err := waitForServerReady(registryReady, errChan); err != nil {
 		return err
 	}
-	select {
-	case <-proxyReady:
-	case err := <-errChan:
+	if err := waitForServerReady(proxyReady, errChan); err != nil {
 		return err
 	}
 	if cfg.Server.TLSEnabled {
-		select {
-		case <-tlsReady:
-		case err := <-errChan:
+		if err := waitForServerReady(tlsReady, errChan); err != nil {
 			return err
 		}
 	}
@@ -1539,12 +1561,179 @@ func runServers(ctx context.Context, cfg Config, registryHandler, proxyHandler h
 	}
 	logEvent.Msg("Gordon is running")
 
+	schedulerCleanup, err := startOptionalSchedulers(ctx, cfg, svc, log, v)
+	if err != nil {
+		return err
+	}
+	if schedulerCleanup != nil {
+		defer schedulerCleanup()
+	}
+
 	// Auto-start after servers are listening (registry port is now bound).
 	syncAndAutoStart(ctx, svc, log)
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
 	gracefulShutdown(registrySrv, proxySrv, containerSvc, log)
 	return nil
+}
+
+func waitForServerReady(ready <-chan struct{}, errChan <-chan error) error {
+	select {
+	case <-ready:
+		return nil
+	case err := <-errChan:
+		return err
+	}
+}
+
+func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger, v *viper.Viper) (func(), error) {
+	schedulers := make([]*cronSvc.Scheduler, 0, 2)
+
+	backupScheduler, err := startBackupScheduler(ctx, cfg, svc, log)
+	if err != nil {
+		return nil, err
+	}
+	if backupScheduler != nil {
+		schedulers = append(schedulers, backupScheduler)
+	}
+
+	imageScheduler, err := startImagePruneScheduler(ctx, cfg, svc, log, func() int {
+		return v.GetInt("images.prune.keep_last")
+	})
+	if err != nil {
+		return nil, err
+	}
+	if imageScheduler != nil {
+		schedulers = append(schedulers, imageScheduler)
+	}
+
+	if len(schedulers) == 0 {
+		return nil, nil
+	}
+
+	return func() {
+		for i := len(schedulers) - 1; i >= 0; i-- {
+			schedulers[i].Stop()
+		}
+	}, nil
+}
+
+func startBackupScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (*cronSvc.Scheduler, error) {
+	if !cfg.Backups.Enabled || svc == nil || svc.backupSvc == nil {
+		return nil, nil
+	}
+
+	preset, err := resolveBackupSchedule(cfg.Backups.Schedule)
+	if err != nil {
+		return nil, err
+	}
+
+	scheduler := cronSvc.NewScheduler(log)
+	err = scheduler.Add(
+		"backup-scheduler",
+		"Backups",
+		domain.CronSchedule{Preset: preset},
+		func(jobCtx context.Context) error {
+			if err := svc.backupSvc.RunForSchedule(jobCtx, preset); err != nil {
+				return err
+			}
+			log.Info().
+				Str("schedule", string(preset)).
+				Msg("scheduled backup run complete")
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to register backup schedule")
+	}
+
+	scheduler.Start(ctx)
+	log.Info().
+		Str("schedule", string(preset)).
+		Msg("backup scheduler enabled")
+
+	return scheduler, nil
+}
+
+func resolveBackupSchedule(raw string) (domain.BackupSchedule, error) {
+	return resolveSchedulePreset(raw, "backups.schedule", domain.ScheduleDaily)
+}
+
+func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger, keepLastGetter func() int) (*cronSvc.Scheduler, error) {
+	if !cfg.Images.Prune.Enabled || svc == nil || svc.imageSvc == nil {
+		return nil, nil
+	}
+	if keepLastGetter == nil {
+		keepLastGetter = func() int { return cfg.Images.Prune.KeepLast }
+	}
+	if keepLastGetter() < 0 {
+		return nil, fmt.Errorf("images.prune.keep_last must be >= 0")
+	}
+
+	preset, err := resolveImagePruneSchedule(cfg.Images.Prune.Schedule)
+	if err != nil {
+		return nil, err
+	}
+
+	scheduler := cronSvc.NewScheduler(log)
+	err = scheduler.Add(
+		"image-prune",
+		"Image prune",
+		domain.CronSchedule{Preset: preset},
+		func(jobCtx context.Context) error {
+			keepLast := keepLastGetter()
+			if keepLast < 0 {
+				log.Warn().
+					Int("configured_keep_last", keepLast).
+					Int("fallback_keep_last", domain.DefaultImagePruneKeepLast).
+					Msg("invalid images.prune.keep_last; using default")
+				keepLast = domain.DefaultImagePruneKeepLast
+			}
+
+			report, err := svc.imageSvc.Prune(jobCtx, keepLast)
+			if err != nil {
+				return err
+			}
+
+			log.Info().
+				Int("keep_last", keepLast).
+				Int("runtime_deleted", report.Runtime.DeletedCount).
+				Int64("runtime_reclaimed_bytes", report.Runtime.SpaceReclaimed).
+				Int("registry_tags_removed", report.Registry.TagsRemoved).
+				Int("registry_blobs_removed", report.Registry.BlobsRemoved).
+				Msg("scheduled image prune complete")
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to register image prune schedule")
+	}
+
+	scheduler.Start(ctx)
+	log.Info().
+		Str("schedule", string(preset)).
+		Int("keep_last", keepLastGetter()).
+		Msg("image prune scheduler enabled")
+
+	return scheduler, nil
+}
+
+func resolveImagePruneSchedule(raw string) (domain.BackupSchedule, error) {
+	return resolveSchedulePreset(raw, "images.prune.schedule", domain.ScheduleDaily)
+}
+
+func resolveSchedulePreset(raw, name string, defaultVal domain.BackupSchedule) (domain.BackupSchedule, error) {
+	schedule := domain.BackupSchedule(strings.ToLower(strings.TrimSpace(raw)))
+	if schedule == "" {
+		schedule = defaultVal
+	}
+
+	switch schedule {
+	case domain.ScheduleHourly, domain.ScheduleDaily, domain.ScheduleWeekly, domain.ScheduleMonthly:
+		return schedule, nil
+	default:
+		return "", fmt.Errorf("%s must be one of: hourly, daily, weekly, monthly", name)
+	}
 }
 
 // waitForShutdown blocks on the event loop, handling server errors and
@@ -1592,6 +1781,8 @@ func gracefulShutdown(registrySrv, proxySrv *http.Server, containerSvc *containe
 	if err := proxySrv.Shutdown(shutdownCtx); err != nil {
 		log.Warn().Err(err).Msg("proxy server shutdown error")
 	}
+
+	containerSvc.StopMonitor()
 
 	if err := containerSvc.Shutdown(shutdownCtx); err != nil {
 		log.Warn().Err(err).Msg("error during container shutdown")
@@ -1961,11 +2152,15 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
 	v.SetDefault("backups.enabled", false)
+	v.SetDefault("backups.schedule", string(domain.ScheduleDaily))
 	v.SetDefault("backups.storage_dir", "")
 	v.SetDefault("backups.retention.hourly", 0)
 	v.SetDefault("backups.retention.daily", 0)
 	v.SetDefault("backups.retention.weekly", 0)
 	v.SetDefault("backups.retention.monthly", 0)
+	v.SetDefault("images.prune.enabled", false)
+	v.SetDefault("images.prune.schedule", string(domain.ScheduleDaily))
+	v.SetDefault("images.prune.keep_last", domain.DefaultImagePruneKeepLast)
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("deploy.readiness_delay", "5s")

@@ -3,8 +3,11 @@ package app
 import (
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestValidateBackupRetentionRejectsNegativeValues(t *testing.T) {
@@ -84,5 +87,42 @@ func TestValidateBackupRetentionAcceptsZeroAndPositiveValues(t *testing.T) {
 		assert.Equal(t, 0, retention.Daily)
 		assert.Equal(t, 0, retention.Weekly)
 		assert.Equal(t, 0, retention.Monthly)
+	})
+}
+
+func TestLoadConfigSetsBackupScheduleDefault(t *testing.T) {
+	v := viper.New()
+
+	require.NoError(t, loadConfig(v, ""))
+
+	assert.Equal(t, string(domain.ScheduleDaily), v.GetString("backups.schedule"))
+}
+
+func TestResolveBackupSchedule(t *testing.T) {
+	t.Run("valid values", func(t *testing.T) {
+		tests := []struct {
+			input string
+			want  domain.BackupSchedule
+		}{
+			{input: "hourly", want: domain.ScheduleHourly},
+			{input: "daily", want: domain.ScheduleDaily},
+			{input: "weekly", want: domain.ScheduleWeekly},
+			{input: "monthly", want: domain.ScheduleMonthly},
+			{input: " DAILY ", want: domain.ScheduleDaily},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.input, func(t *testing.T) {
+				got, err := resolveBackupSchedule(tt.input)
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			})
+		}
+	})
+
+	t.Run("invalid value", func(t *testing.T) {
+		_, err := resolveBackupSchedule("every-minute")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "backups.schedule")
 	})
 }

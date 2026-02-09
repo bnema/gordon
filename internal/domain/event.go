@@ -81,3 +81,20 @@ func IsInternalDeploy(ctx context.Context) bool {
 func WithInternalDeploy(ctx context.Context) context.Context {
 	return context.WithValue(ctx, ContextKeyInternalDeploy, true)
 }
+
+const (
+	// ContextKeySkipReadiness indicates that readiness checks should be skipped
+	// (e.g., during AutoStart where the background monitor handles crash recovery).
+	ContextKeySkipReadiness contextKey = "skip_readiness"
+)
+
+// WithSkipReadiness returns a context that skips readiness checks on deploy.
+func WithSkipReadiness(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ContextKeySkipReadiness, true)
+}
+
+// IsSkipReadiness checks if the context indicates readiness should be skipped.
+func IsSkipReadiness(ctx context.Context) bool {
+	v, ok := ctx.Value(ContextKeySkipReadiness).(bool)
+	return ok && v
+}

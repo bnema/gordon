@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -16,6 +18,25 @@ import (
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+type stubImageService struct {
+	listImagesFunc func(context.Context) ([]domain.ImageInfo, error)
+	pruneFunc      func(context.Context, int) (domain.ImagePruneReport, error)
+}
+
+func (s *stubImageService) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
+	if s.listImagesFunc == nil {
+		return nil, nil
+	}
+	return s.listImagesFunc(ctx)
+}
+
+func (s *stubImageService) Prune(ctx context.Context, keepLast int) (domain.ImagePruneReport, error) {
+	if s.pruneFunc == nil {
+		return domain.ImagePruneReport{}, nil
+	}
+	return s.pruneFunc(ctx, keepLast)
+}
 
 func testLogger() zerowrap.Logger {
 	return zerowrap.Default()
@@ -1289,4 +1310,232 @@ func TestHandler_BackupsDetectDomain(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "postgres")
+}
+
+func TestHandler_ImagesGet_ReturnsMappedList(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	createdAt := time.Date(2026, time.February, 8, 14, 30, 0, 0, time.UTC)
+	imageSvc := &stubImageService{
+		listImagesFunc: func(context.Context) ([]domain.ImageInfo, error) {
+			return []domain.ImageInfo{
+				{
+					Repository: "myapp",
+					Tag:        "latest",
+					Size:       1024,
+					Created:    createdAt,
+					ID:         "sha256:abc123",
+					Dangling:   false,
+				},
+				{
+					Repository: "",
+					Tag:        "",
+					Size:       512,
+					Created:    createdAt,
+					ID:         "sha256:def456",
+					Dangling:   true,
+				},
+			}, nil
+		},
+	}
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, imageSvc)
+
+	req := httptest.NewRequest("GET", "/admin/images", nil)
+	req = req.WithContext(ctxWithScopes("admin:status:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response struct {
+		Images []struct {
+			Repository string    `json:"repository"`
+			Tag        string    `json:"tag"`
+			Size       int64     `json:"size"`
+			Created    time.Time `json:"created"`
+			ID         string    `json:"id"`
+			Dangling   bool      `json:"dangling"`
+		} `json:"images"`
+	}
+
+	assert.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	assert.Len(t, response.Images, 2)
+	assert.Equal(t, "myapp", response.Images[0].Repository)
+	assert.Equal(t, "latest", response.Images[0].Tag)
+	assert.Equal(t, int64(1024), response.Images[0].Size)
+	assert.Equal(t, createdAt, response.Images[0].Created)
+	assert.Equal(t, "sha256:abc123", response.Images[0].ID)
+	assert.False(t, response.Images[0].Dangling)
+	assert.True(t, response.Images[1].Dangling)
+}
+
+func TestHandler_ImagesPrune_AcceptsOptionalKeepLast(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	tests := []struct {
+		name             string
+		body             string
+		expectedKeepLast int
+	}{
+		{name: "missing keep_last uses default", body: `{}`, expectedKeepLast: domain.DefaultImagePruneKeepLast},
+		{name: "provided keep_last", body: `{"keep_last": 3}`, expectedKeepLast: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			imageSvc := &stubImageService{
+				pruneFunc: func(_ context.Context, keepLast int) (domain.ImagePruneReport, error) {
+					called = true
+					assert.Equal(t, tt.expectedKeepLast, keepLast)
+					return domain.ImagePruneReport{
+						Runtime:  domain.RuntimePruneResult{DeletedCount: 2, SpaceReclaimed: 4096},
+						Registry: domain.RegistryPruneResult{TagsRemoved: 1, BlobsRemoved: 3, SpaceReclaimed: 2048},
+					}, nil
+				},
+			}
+
+			handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, imageSvc)
+
+			req := httptest.NewRequest("POST", "/admin/images/prune", bytes.NewBufferString(tt.body))
+			req = req.WithContext(ctxWithScopes("admin:config:write"))
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.True(t, called)
+			assert.Contains(t, rec.Body.String(), "deleted_count")
+			assert.Contains(t, rec.Body.String(), "tags_removed")
+		})
+	}
+}
+
+func TestHandler_Images_ErrorMappingForServiceFailures(t *testing.T) {
+	t.Run("list failure maps to internal server error", func(t *testing.T) {
+		configSvc := inmocks.NewMockConfigService(t)
+		authSvc := inmocks.NewMockAuthService(t)
+		containerSvc := inmocks.NewMockContainerService(t)
+		secretSvc := inmocks.NewMockSecretService(t)
+
+		imageSvc := &stubImageService{
+			listImagesFunc: func(context.Context) ([]domain.ImageInfo, error) {
+				return nil, errors.New("runtime list failed: confidential details")
+			},
+		}
+
+		handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, imageSvc)
+
+		req := httptest.NewRequest("GET", "/admin/images", nil)
+		req = req.WithContext(ctxWithScopes("admin:status:read"))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), "failed to list images")
+		assert.NotContains(t, rec.Body.String(), "confidential details")
+	})
+
+	t.Run("prune failure maps to internal server error", func(t *testing.T) {
+		configSvc := inmocks.NewMockConfigService(t)
+		authSvc := inmocks.NewMockAuthService(t)
+		containerSvc := inmocks.NewMockContainerService(t)
+		secretSvc := inmocks.NewMockSecretService(t)
+
+		imageSvc := &stubImageService{
+			pruneFunc: func(context.Context, int) (domain.ImagePruneReport, error) {
+				return domain.ImagePruneReport{}, errors.New("prune failed: confidential details")
+			},
+		}
+
+		handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, imageSvc)
+
+		req := httptest.NewRequest("POST", "/admin/images/prune", bytes.NewBufferString(`{"keep_last": 2}`))
+		req = req.WithContext(ctxWithScopes("admin:config:write"))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), "failed to prune images")
+		assert.NotContains(t, rec.Body.String(), "confidential details")
+	})
+}
+
+func TestHandler_ImagesPrune_ValidationAndAvailability(t *testing.T) {
+	t.Run("rejects negative keep_last", func(t *testing.T) {
+		configSvc := inmocks.NewMockConfigService(t)
+		authSvc := inmocks.NewMockAuthService(t)
+		containerSvc := inmocks.NewMockContainerService(t)
+		secretSvc := inmocks.NewMockSecretService(t)
+
+		handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, &stubImageService{})
+
+		req := httptest.NewRequest("POST", "/admin/images/prune", bytes.NewBufferString(`{"keep_last": -1}`))
+		req = req.WithContext(ctxWithScopes("admin:config:write"))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "keep_last must be")
+	})
+
+	t.Run("returns service unavailable when image service missing", func(t *testing.T) {
+		configSvc := inmocks.NewMockConfigService(t)
+		authSvc := inmocks.NewMockAuthService(t)
+		containerSvc := inmocks.NewMockContainerService(t)
+		secretSvc := inmocks.NewMockSecretService(t)
+
+		handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+		req := httptest.NewRequest("GET", "/admin/images", nil)
+		req = req.WithContext(ctxWithScopes("admin:status:read"))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		assert.Contains(t, rec.Body.String(), "image service not available")
+	})
+}
+
+func TestHandler_Images_Authorization(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, &stubImageService{})
+
+	t.Run("images list requires status:read", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/admin/images", nil)
+		req = req.WithContext(ctxWithScopes("admin:config:write"))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Contains(t, rec.Body.String(), "insufficient permissions for status:read")
+	})
+
+	t.Run("images prune requires config:write", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/admin/images/prune", bytes.NewBufferString(`{"keep_last": 1}`))
+		req = req.WithContext(ctxWithScopes("admin:status:read"))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Contains(t, rec.Body.String(), "insufficient permissions for config:write")
+	})
 }
