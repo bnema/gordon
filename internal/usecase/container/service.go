@@ -239,6 +239,16 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		return nil, err
 	}
 
+	// Skip redundant deploy: if the existing container is already running
+	// the exact same image (by Docker image ID), return it immediately.
+	// This prevents the double-deploy caused by the event-based deploy
+	// (triggered by image.pushed) racing with the explicit CLI deploy call.
+	if hasExisting && existing.ImageID != "" {
+		if skip, container := s.skipRedundantDeploy(ctx, existing, resources.actualImageRef); skip {
+			return container, nil
+		}
+	}
+
 	newContainer, err := s.createStartedContainer(ctx, route, existing, resources)
 	if err != nil {
 		return nil, err
@@ -259,6 +269,38 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		Msg("container deployed successfully")
 
 	return newContainer, nil
+}
+
+// skipRedundantDeploy checks whether the existing container is already running
+// the same image (by Docker image ID) as the one we are about to deploy.
+// When a push triggers both an event-based deploy and an explicit CLI deploy,
+// the second one arrives after the first has already completed; this avoids
+// a full redundant create-start-readiness cycle.
+func (s *Service) skipRedundantDeploy(ctx context.Context, existing *domain.Container, actualImageRef string) (bool, *domain.Container) {
+	log := zerowrap.FromCtx(ctx)
+
+	newImageID, err := s.runtime.GetImageID(ctx, actualImageRef)
+	if err != nil {
+		log.Debug().Err(err).Msg("cannot resolve image ID for redundancy check, proceeding with deploy")
+		return false, nil
+	}
+
+	if existing.ImageID != newImageID {
+		return false, nil
+	}
+
+	// Verify the container is actually still running before skipping.
+	running, err := s.runtime.IsContainerRunning(ctx, existing.ID)
+	if err != nil || !running {
+		return false, nil
+	}
+
+	log.Info().
+		Str("container_id", existing.ID).
+		Str("image_id", newImageID).
+		Msg("skipping redundant deploy: container already running this image")
+
+	return true, existing
 }
 
 type deployResources struct {
