@@ -21,6 +21,7 @@ Current scope:
 ```toml
 [backups]
 enabled = true
+schedule = "daily"
 storage_dir = "~/.gordon/backups"
 
 [backups.retention]
@@ -35,6 +36,7 @@ monthly = 12
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `backups.enabled` | bool | `false` | Enables backup service wiring |
+| `backups.schedule` | string | `"daily"` | Scheduler preset: `hourly`, `daily`, `weekly`, `monthly` |
 | `backups.storage_dir` | string | `""` | Root backup directory. If empty, defaults to `{server.data_dir}/backups` |
 | `backups.retention.hourly` | int | `0` | Number of hourly backups to keep per DB |
 | `backups.retention.daily` | int | `0` | Number of daily backups to keep per DB |
@@ -58,6 +60,7 @@ Example:
 ## Notes
 
 - Backups require PostgreSQL attachment containers to be running.
+- Scheduled backups run only when `backups.enabled = true`.
 - The backup command executes inside the database container using Gordon runtime APIs.
 - Retention applies per database and per schedule.
 - `backups.retention.hourly`, `daily`, `weekly`, and `monthly` set to `0` means no backups are retained for that tier (new backups are immediately eligible for cleanup). For practical defaults, set at least `daily = 7`.

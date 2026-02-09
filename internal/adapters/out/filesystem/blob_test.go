@@ -211,6 +211,39 @@ func TestBlobStorage_BlobExists(t *testing.T) {
 	assert.True(t, storage.BlobExists(testDigest2))
 }
 
+func TestBlobStorage_ListBlobs(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewBlobStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	blobData := []byte("test blob content")
+
+	err = storage.PutBlob(testDigest1, bytes.NewReader(blobData), int64(len(blobData)))
+	require.NoError(t, err)
+
+	err = storage.PutBlob(testDigest2, bytes.NewReader(blobData), int64(len(blobData)))
+	require.NoError(t, err)
+
+	digests, err := storage.ListBlobs()
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t, []string{testDigest1, testDigest2}, digests)
+}
+
+func TestBlobStorage_ListBlobs_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewBlobStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	digests, err := storage.ListBlobs()
+	require.NoError(t, err)
+	assert.Empty(t, digests)
+}
+
 func TestBlobStorage_StartBlobUpload(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := testLogger()

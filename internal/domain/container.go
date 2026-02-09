@@ -4,12 +4,13 @@ package domain
 
 // Container represents a running container in the system.
 type Container struct {
-	ID     string
-	Image  string
-	Name   string
-	Status string
-	Ports  []int
-	Labels map[string]string
+	ID       string
+	Image    string
+	Name     string
+	Status   string
+	ExitCode int
+	Ports    []int
+	Labels   map[string]string
 }
 
 // NetworkInfo represents network configuration and state.

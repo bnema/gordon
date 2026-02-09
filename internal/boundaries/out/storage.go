@@ -2,6 +2,7 @@ package out
 
 import (
 	"io"
+	"time"
 )
 
 // BlobStorage defines the contract for blob storage operations.
@@ -20,6 +21,9 @@ type BlobStorage interface {
 
 	// BlobExists checks if a blob exists.
 	BlobExists(digest string) bool
+
+	// ListBlobs returns all blob digests.
+	ListBlobs() ([]string, error)
 
 	// StartBlobUpload starts a new blob upload and returns the upload UUID.
 	StartBlobUpload(name string) (string, error)
@@ -54,4 +58,7 @@ type ManifestStorage interface {
 
 	// ListRepositories returns all repository names.
 	ListRepositories() ([]string, error)
+
+	// GetManifestModTime returns the manifest modification time.
+	GetManifestModTime(name, reference string) (time.Time, error)
 }

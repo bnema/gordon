@@ -32,6 +32,7 @@ Management commands run locally through in-process services by default. Add `--r
 | `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
 | `gordon status` | Show Gordon server status | [status](./status.md) |
 | `gordon backups` | Manage database backups | [backup](./backup.md) |
+| `gordon images` | List and prune images | [images](./images.md) |
 
 ## Client Commands
 
@@ -81,6 +82,11 @@ gordon backups list
 gordon backups run app.example.com
 gordon backups detect app.example.com
 gordon backups status
+
+# Images
+gordon images list
+gordon images prune --runtime-only
+gordon images prune --keep 3
 
 # Authentication
 gordon auth token generate --subject ci-bot --expiry 0

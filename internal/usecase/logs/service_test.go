@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestService_GetProcessLogs(t *testing.T) {
 		containerSvc := mocks.NewMockContainerService(t)
 		runtime := outMocks.NewMockContainerRuntime(t)
 
-		svc := NewService(logPath, containerSvc, runtime, log)
+		svc := NewService(logPath, true, containerSvc, runtime, log)
 
 		lines, err := svc.GetProcessLogs(context.Background(), 3)
 		require.NoError(t, err)
@@ -44,7 +45,7 @@ func TestService_GetProcessLogs(t *testing.T) {
 		containerSvc := mocks.NewMockContainerService(t)
 		runtime := outMocks.NewMockContainerRuntime(t)
 
-		svc := NewService("/nonexistent/file.log", containerSvc, runtime, log)
+		svc := NewService("/nonexistent/file.log", true, containerSvc, runtime, log)
 
 		lines, err := svc.GetProcessLogs(context.Background(), 10)
 		require.NoError(t, err)
@@ -55,7 +56,7 @@ func TestService_GetProcessLogs(t *testing.T) {
 		containerSvc := mocks.NewMockContainerService(t)
 		runtime := outMocks.NewMockContainerRuntime(t)
 
-		svc := NewService("", containerSvc, runtime, log)
+		svc := NewService("", true, containerSvc, runtime, log)
 
 		_, err := svc.GetProcessLogs(context.Background(), 10)
 		assert.Error(t, err)
@@ -72,11 +73,30 @@ func TestService_GetProcessLogs(t *testing.T) {
 		containerSvc := mocks.NewMockContainerService(t)
 		runtime := outMocks.NewMockContainerRuntime(t)
 
-		svc := NewService(logPath, containerSvc, runtime, log)
+		svc := NewService(logPath, true, containerSvc, runtime, log)
 
 		lines, err := svc.GetProcessLogs(context.Background(), 10)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"line1", "line2"}, lines)
+	})
+
+	t.Run("falls back to journalctl when file logging disabled", func(t *testing.T) {
+		origExec := execCommandContext
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "bash", "-lc", "printf 'journal-line-1\\njournal-line-2\\n'") // #nosec G204
+		}
+		defer func() {
+			execCommandContext = origExec
+		}()
+
+		containerSvc := mocks.NewMockContainerService(t)
+		runtime := outMocks.NewMockContainerRuntime(t)
+
+		svc := NewService("/tmp/unused.log", false, containerSvc, runtime, log)
+
+		lines, err := svc.GetProcessLogs(context.Background(), 10)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"journal-line-1", "journal-line-2"}, lines)
 	})
 }
 
@@ -93,7 +113,7 @@ func TestService_FollowProcessLogs(t *testing.T) {
 		containerSvc := mocks.NewMockContainerService(t)
 		runtime := outMocks.NewMockContainerRuntime(t)
 
-		svc := NewService(logPath, containerSvc, runtime, log)
+		svc := NewService(logPath, true, containerSvc, runtime, log)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -135,7 +155,7 @@ func TestService_GetContainerLogs(t *testing.T) {
 
 		containerSvc.EXPECT().Get(mock.Anything, "unknown.local").Return(nil, false)
 
-		svc := NewService("/tmp/test.log", containerSvc, runtime, log)
+		svc := NewService("/tmp/test.log", true, containerSvc, runtime, log)
 
 		_, err := svc.GetContainerLogs(context.Background(), "unknown.local", 10)
 		assert.Error(t, err)
@@ -156,7 +176,7 @@ func TestService_GetContainerLogs(t *testing.T) {
 		// Create a mock reader that returns empty content
 		runtime.EXPECT().GetContainerLogs(mock.Anything, "abc123", false).Return(&mockReader{}, nil)
 
-		svc := NewService("/tmp/test.log", containerSvc, runtime, log)
+		svc := NewService("/tmp/test.log", true, containerSvc, runtime, log)
 
 		lines, err := svc.GetContainerLogs(context.Background(), "app.local", 10)
 		require.NoError(t, err)
@@ -173,7 +193,7 @@ func TestService_FollowContainerLogs(t *testing.T) {
 
 		containerSvc.EXPECT().Get(mock.Anything, "unknown.local").Return(nil, false)
 
-		svc := NewService("/tmp/test.log", containerSvc, runtime, log)
+		svc := NewService("/tmp/test.log", true, containerSvc, runtime, log)
 
 		_, err := svc.FollowContainerLogs(context.Background(), "unknown.local", 10)
 		assert.Error(t, err)

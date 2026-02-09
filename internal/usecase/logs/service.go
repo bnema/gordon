@@ -3,11 +3,14 @@ package logs
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,24 +22,29 @@ import (
 
 // Service implements the LogService interface.
 type Service struct {
-	logFilePath  string
-	containerSvc in.ContainerService
-	runtime      out.ContainerRuntime
-	log          zerowrap.Logger
+	logFilePath        string
+	fileLoggingEnabled bool
+	containerSvc       in.ContainerService
+	runtime            out.ContainerRuntime
+	log                zerowrap.Logger
 }
+
+var execCommandContext = exec.CommandContext
 
 // NewService creates a new log service.
 func NewService(
 	logFilePath string,
+	fileLoggingEnabled bool,
 	containerSvc in.ContainerService,
 	runtime out.ContainerRuntime,
 	log zerowrap.Logger,
 ) *Service {
 	return &Service{
-		logFilePath:  logFilePath,
-		containerSvc: containerSvc,
-		runtime:      runtime,
-		log:          log,
+		logFilePath:        logFilePath,
+		fileLoggingEnabled: fileLoggingEnabled,
+		containerSvc:       containerSvc,
+		runtime:            runtime,
+		log:                log,
 	}
 }
 
@@ -49,20 +57,26 @@ func (s *Service) GetProcessLogs(ctx context.Context, lines int) ([]string, erro
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	if s.logFilePath == "" {
-		return nil, fmt.Errorf("log file path not configured")
-	}
-
-	file, err := os.Open(s.logFilePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []string{}, nil
+	if s.useFileProcessLogs() {
+		if s.logFilePath == "" {
+			return nil, fmt.Errorf("log file path not configured")
 		}
-		return nil, log.WrapErr(err, "failed to open log file")
-	}
-	defer file.Close()
 
-	return tailLines(file, lines)
+		file, err := os.Open(s.logFilePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Warn().Str("log_path", s.logFilePath).
+					Msg("process log file missing, falling back to journalctl")
+				return s.getProcessLogsFromJournal(ctx, lines)
+			}
+			return nil, log.WrapErr(err, "failed to open log file")
+		}
+		defer file.Close()
+
+		return tailLines(file, lines)
+	}
+
+	return s.getProcessLogsFromJournal(ctx, lines)
 }
 
 // FollowProcessLogs returns a channel that streams Gordon process log lines.
@@ -72,72 +86,244 @@ func (s *Service) FollowProcessLogs(ctx context.Context, initialLines int) (<-ch
 		zerowrap.FieldUseCase: "FollowProcessLogs",
 		"initial_lines":       initialLines,
 	})
+	if !s.useFileProcessLogs() {
+		return s.followProcessLogsFromJournal(ctx, initialLines)
+	}
+
+	return s.followProcessLogsFromFileOrJournal(ctx, initialLines)
+}
+
+func (s *Service) useFileProcessLogs() bool {
+	return s.fileLoggingEnabled
+}
+
+func (s *Service) followProcessLogsFromFileOrJournal(
+	ctx context.Context,
+	initialLines int,
+) (<-chan string, error) {
 	log := zerowrap.FromCtx(ctx)
 
+	file, err := s.openProcessLogFile()
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Warn().Str("log_path", s.logFilePath).
+				Msg("process log file missing, falling back to journalctl follow")
+			return s.followProcessLogsFromJournal(ctx, initialLines)
+		}
+		return nil, log.WrapErr(err, "failed to open log file")
+	}
+
+	return s.followProcessLogsFromFile(ctx, file, initialLines), nil
+}
+
+func (s *Service) openProcessLogFile() (*os.File, error) {
 	if s.logFilePath == "" {
 		return nil, fmt.Errorf("log file path not configured")
 	}
 
-	file, err := os.Open(s.logFilePath)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to open log file")
-	}
+	return os.Open(s.logFilePath)
+}
 
+func (s *Service) followProcessLogsFromFile(
+	ctx context.Context,
+	file *os.File,
+	initialLines int,
+) <-chan string {
+	log := zerowrap.FromCtx(ctx)
 	ch := make(chan string, 100)
 
 	go func() {
 		defer close(ch)
 		defer file.Close()
 
-		// First, get initial lines
-		if initialLines > 0 {
-			lines, err := tailLines(file, initialLines)
-			if err != nil {
-				log.Warn().Err(err).Msg("failed to read initial lines")
-			} else {
-				for _, line := range lines {
-					select {
-					case ch <- line:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
+		if !s.emitInitialFileLogs(ctx, file, initialLines, ch) {
+			return
 		}
-
-		// Seek to end for following
-		if _, err := file.Seek(0, io.SeekEnd); err != nil {
+		if err := s.seekToEndForFileFollow(file); err != nil {
 			log.Warn().Err(err).Msg("failed to seek to end")
 			return
 		}
 
-		// Follow new lines
-		reader := bufio.NewReader(file)
-		for {
+		s.streamFileFollowLogs(ctx, file, ch)
+	}()
+
+	return ch
+}
+
+func (s *Service) emitInitialFileLogs(
+	ctx context.Context,
+	file *os.File,
+	initialLines int,
+	ch chan<- string,
+) bool {
+	if initialLines <= 0 {
+		return true
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	lines, err := tailLines(file, initialLines)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read initial lines")
+		return true
+	}
+
+	for _, line := range lines {
+		if !sendLogLineWithChannel(ctx, ch, line) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (s *Service) seekToEndForFileFollow(file *os.File) error {
+	_, err := file.Seek(0, io.SeekEnd)
+	return err
+}
+
+func (s *Service) streamFileFollowLogs(ctx context.Context, file *os.File, ch chan<- string) {
+	log := zerowrap.FromCtx(ctx)
+	reader := bufio.NewReader(file)
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			log.Warn().Err(err).Msg("error reading log file")
+			return
+		}
+
+		line = strings.TrimRight(line, "\n\r")
+		if !sendLogLineWithChannel(ctx, ch, line) {
+			return
+		}
+	}
+}
+
+func sendLogLineWithChannel(ctx context.Context, ch chan<- string, line string) bool {
+	select {
+	case ch <- line:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *Service) getProcessLogsFromJournal(ctx context.Context, lines int) ([]string, error) {
+	userScope, err := resolveJournalctlScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []string{"-u", "gordon", "-n", strconv.Itoa(lines), "--no-pager", "-o", "cat"}
+	if userScope {
+		args = append([]string{"--user"}, args...)
+	}
+
+	out, err := execCommandContext(ctx, "journalctl", args...).Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read journalctl logs: %w", err)
+	}
+
+	return outputLines(out), nil
+}
+
+func (s *Service) followProcessLogsFromJournal(ctx context.Context, initialLines int) (<-chan string, error) {
+	userScope, err := resolveJournalctlScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []string{
+		"-u", "gordon",
+		"-n", strconv.Itoa(initialLines),
+		"--no-pager",
+		"-o", "cat",
+		"-f",
+	}
+	if userScope {
+		args = append([]string{"--user"}, args...)
+	}
+
+	cmd := execCommandContext(ctx, "journalctl", args...) // #nosec G204 -- internal args only
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open journalctl stdout: %w", err)
+	}
+	cmd.Stderr = io.Discard
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start journalctl follow: %w", err)
+	}
+
+	ch := make(chan string, 100)
+
+	go func() {
+		defer close(ch)
+		defer stdout.Close()
+		defer cmd.Wait() //nolint:errcheck // best-effort cleanup
+
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+		for scanner.Scan() {
 			select {
+			case ch <- scanner.Text():
 			case <-ctx.Done():
 				return
-			default:
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					if err == io.EOF {
-						time.Sleep(100 * time.Millisecond)
-						continue
-					}
-					log.Warn().Err(err).Msg("error reading log file")
-					return
-				}
-				line = strings.TrimRight(line, "\n\r")
-				select {
-				case ch <- line:
-				case <-ctx.Done():
-					return
-				}
 			}
 		}
 	}()
 
 	return ch, nil
+}
+
+func resolveJournalctlScope(ctx context.Context) (bool, error) {
+	userLogs, userErr := hasJournalctlLogs(ctx, true)
+	if userErr == nil && userLogs {
+		return true, nil
+	}
+
+	systemLogs, systemErr := hasJournalctlLogs(ctx, false)
+	if systemErr == nil && systemLogs {
+		return false, nil
+	}
+
+	if userErr != nil && systemErr != nil {
+		return false, fmt.Errorf("journalctl unavailable for user and system services")
+	}
+
+	// Default to user scope when logs are currently empty; this matches rootless setups.
+	return true, nil
+}
+
+func hasJournalctlLogs(ctx context.Context, userService bool) (bool, error) {
+	args := []string{"-u", "gordon", "-n", "1", "--no-pager", "-q", "-o", "cat"}
+	if userService {
+		args = append([]string{"--user"}, args...)
+	}
+
+	out, err := execCommandContext(ctx, "journalctl", args...).Output()
+	if err != nil {
+		return false, err
+	}
+
+	return len(bytes.TrimSpace(out)) > 0, nil
+}
+
+func outputLines(out []byte) []string {
+	trimmed := strings.TrimRight(string(out), "\n\r")
+	if trimmed == "" {
+		return []string{}
+	}
+	return strings.Split(trimmed, "\n")
 }
 
 // validateDomain checks that domain is safe for use in logs and error messages.

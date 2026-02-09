@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,6 +65,42 @@ func TestManifestStorage_GetManifest_NotFound(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, data)
 	assert.Empty(t, ct)
+	assert.Contains(t, err.Error(), "manifest not found")
+}
+
+func TestManifestStorage_GetManifestModTime(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewManifestStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	manifestData := []byte(`{"schemaVersion": 2}`)
+	contentType := "application/vnd.docker.distribution.manifest.v2+json"
+
+	err = storage.PutManifest("myapp", "latest", contentType, manifestData)
+	require.NoError(t, err)
+
+	modTime, err := storage.GetManifestModTime("myapp", "latest")
+	require.NoError(t, err)
+
+	manifestPath := filepath.Join(tmpDir, "repositories", "myapp", "manifests", "latest")
+	info, err := os.Stat(manifestPath)
+	require.NoError(t, err)
+
+	assert.WithinDuration(t, info.ModTime(), modTime, time.Second)
+}
+
+func TestManifestStorage_GetManifestModTime_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewManifestStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	_, err = storage.GetManifestModTime("notexists", "latest")
+
+	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "manifest not found")
 }
 

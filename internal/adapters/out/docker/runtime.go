@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"github.com/bnema/zerowrap"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/registry"
@@ -30,6 +32,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	runtimepkg "github.com/bnema/gordon/pkg/runtime"
 )
 
 // Runtime implements the ContainerRuntime interface using Docker API.
@@ -347,12 +350,13 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	name := strings.TrimPrefix(resp.Name, "/")
 
 	return &domain.Container{
-		ID:     resp.ID,
-		Image:  resp.Config.Image,
-		Name:   name,
-		Status: resp.State.Status,
-		Ports:  ports,
-		Labels: resp.Config.Labels,
+		ID:       resp.ID,
+		Image:    resp.Config.Image,
+		Name:     name,
+		Status:   resp.State.Status,
+		ExitCode: resp.State.ExitCode,
+		Ports:    ports,
+		Labels:   resp.Config.Labels,
 	}, nil
 }
 
@@ -555,6 +559,81 @@ func (r *Runtime) ListImages(ctx context.Context) ([]string, error) {
 	return result, nil
 }
 
+// ListImagesDetailed lists images with metadata.
+func (r *Runtime) ListImagesDetailed(ctx context.Context) ([]runtimepkg.ImageDetail, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "ListImagesDetailed",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	images, err := r.client.ImageList(ctx, image.ListOptions{All: true})
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to list detailed images")
+	}
+
+	result := make([]runtimepkg.ImageDetail, 0, len(images))
+	for _, img := range images {
+		result = append(result, runtimepkg.ImageDetail{
+			ID:       img.ID,
+			RepoTags: img.RepoTags,
+			Size:     img.Size,
+			Created:  time.Unix(img.Created, 0),
+		})
+	}
+
+	return result, nil
+}
+
+// PruneImages prunes unused images and reports reclaimed space.
+func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepkg.PruneReport, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "PruneImages",
+		"dangling_only":       danglingOnly,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	pruneFilters := filters.NewArgs()
+	if danglingOnly {
+		pruneFilters.Add("dangling", "true")
+	}
+
+	pruneResult, err := r.client.ImagesPrune(ctx, pruneFilters)
+	if err != nil {
+		return runtimepkg.PruneReport{}, log.WrapErr(err, "failed to prune images")
+	}
+
+	deletedIDs := make([]string, 0, len(pruneResult.ImagesDeleted))
+	for _, deleted := range pruneResult.ImagesDeleted {
+		if deleted.Deleted != "" {
+			deletedIDs = append(deletedIDs, deleted.Deleted)
+		}
+		if deleted.Untagged != "" {
+			deletedIDs = append(deletedIDs, deleted.Untagged)
+		}
+	}
+
+	spaceReclaimed := pruneResult.SpaceReclaimed
+	if spaceReclaimed > math.MaxInt64 {
+		log.Warn().
+			Uint64("space_reclaimed_bytes", spaceReclaimed).
+			Int64("space_reclaimed_capped_bytes", math.MaxInt64).
+			Msg("space reclaimed exceeds int64 max; capping value")
+		spaceReclaimed = uint64(math.MaxInt64)
+	}
+
+	//nolint:gosec // spaceReclaimed is capped to MaxInt64 above
+	spaceReclaimedInt := int64(spaceReclaimed)
+
+	return runtimepkg.PruneReport{
+		DeletedIDs:     deletedIDs,
+		SpaceReclaimed: spaceReclaimedInt,
+	}, nil
+}
+
 // Ping checks if Docker is responsive.
 func (r *Runtime) Ping(ctx context.Context) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -610,11 +689,27 @@ func (r *Runtime) GetContainerHealthStatus(ctx context.Context, containerID stri
 	if err != nil {
 		return "", false, log.WrapErr(err, "failed to inspect container")
 	}
-	if resp.State == nil || resp.State.Health == nil {
+
+	// Detect configured healthchecks from container config rather than relying on
+	// State.Health presence. Some runtimes can expose an empty State.Health struct
+	// even when no healthcheck is configured.
+	hasHealthcheck := hasConfiguredHealthcheck(resp.Config)
+	if !hasHealthcheck {
 		return "", false, nil
+	}
+	if resp.State == nil || resp.State.Health == nil {
+		return "", true, nil
 	}
 
 	return resp.State.Health.Status, true, nil
+}
+
+func hasConfiguredHealthcheck(cfg *container.Config) bool {
+	if cfg == nil || cfg.Healthcheck == nil || len(cfg.Healthcheck.Test) == 0 {
+		return false
+	}
+	// Docker uses ["NONE"] to explicitly disable healthchecks inherited from base images.
+	return !strings.EqualFold(strings.TrimSpace(cfg.Healthcheck.Test[0]), "NONE")
 }
 
 // GetContainerPort gets the host port for a container's internal port.

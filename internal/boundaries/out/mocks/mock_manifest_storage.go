@@ -5,6 +5,8 @@
 package mocks
 
 import (
+	"time"
+
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -162,6 +164,72 @@ func (_c *MockManifestStorage_GetManifest_Call) Return(bytes []byte, s string, e
 }
 
 func (_c *MockManifestStorage_GetManifest_Call) RunAndReturn(run func(name string, reference string) ([]byte, string, error)) *MockManifestStorage_GetManifest_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetManifestModTime provides a mock function for the type MockManifestStorage
+func (_mock *MockManifestStorage) GetManifestModTime(name string, reference string) (time.Time, error) {
+	ret := _mock.Called(name, reference)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetManifestModTime")
+	}
+
+	var r0 time.Time
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) (time.Time, error)); ok {
+		return returnFunc(name, reference)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string) time.Time); ok {
+		r0 = returnFunc(name, reference)
+	} else {
+		r0 = ret.Get(0).(time.Time)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
+		r1 = returnFunc(name, reference)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManifestStorage_GetManifestModTime_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetManifestModTime'
+type MockManifestStorage_GetManifestModTime_Call struct {
+	*mock.Call
+}
+
+// GetManifestModTime is a helper method to define mock.On call
+//   - name string
+//   - reference string
+func (_e *MockManifestStorage_Expecter) GetManifestModTime(name interface{}, reference interface{}) *MockManifestStorage_GetManifestModTime_Call {
+	return &MockManifestStorage_GetManifestModTime_Call{Call: _e.mock.On("GetManifestModTime", name, reference)}
+}
+
+func (_c *MockManifestStorage_GetManifestModTime_Call) Run(run func(name string, reference string)) *MockManifestStorage_GetManifestModTime_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManifestStorage_GetManifestModTime_Call) Return(time1 time.Time, err error) *MockManifestStorage_GetManifestModTime_Call {
+	_c.Call.Return(time1, err)
+	return _c
+}
+
+func (_c *MockManifestStorage_GetManifestModTime_Call) RunAndReturn(run func(name string, reference string) (time.Time, error)) *MockManifestStorage_GetManifestModTime_Call {
 	_c.Call.Return(run)
 	return _c
 }

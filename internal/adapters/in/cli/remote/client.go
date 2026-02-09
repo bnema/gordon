@@ -465,6 +465,42 @@ type RouteHealth struct {
 
 // Backups API
 
+// Images API
+
+// ListImages returns runtime images from the admin API.
+func (c *Client) ListImages(ctx context.Context) ([]dto.Image, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/images", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.ImagesResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Images, nil
+}
+
+// PruneImages prunes runtime and registry images.
+func (c *Client) PruneImages(ctx context.Context, keepLast int) (*dto.ImagePruneResponse, error) {
+	if keepLast < 0 {
+		return nil, fmt.Errorf("keepLast must be >= 0")
+	}
+
+	resp, err := c.request(ctx, http.MethodPost, "/images/prune", dto.ImagePruneRequest{KeepLast: &keepLast})
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.ImagePruneResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 // ListBackups returns backups globally or for a domain.
 func (c *Client) ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error) {
 	path := "/backups"
