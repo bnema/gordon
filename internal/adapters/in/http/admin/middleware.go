@@ -51,19 +51,15 @@ func AuthMiddleware(
 				}
 			}
 
-			// Check if auth is enabled.
-			// DESIGN NOTE: When auth is disabled, the admin API is intentionally
-			// accessible without credentials. This is the expected behavior for
-			// local/development setups where Gordon is not exposed to the internet.
-			// Users who disable auth accept this tradeoff explicitly in their config.
-			// For production deployments, auth should always be enabled.
+			// Authentication is always required for admin APIs.
+			// Fail closed if auth is disabled or misconfigured.
 			if !authSvc.IsEnabled() {
-				log.Warn().
+				log.Error().
 					Str("path", r.URL.Path).
 					Str("method", r.Method).
 					Str("remote_addr", r.RemoteAddr).
-					Msg("auth disabled - allowing unauthenticated admin API access (intended for local use only)")
-				next.ServeHTTP(w, r)
+					Msg("authentication disabled/misconfigured - denying admin API request")
+				sendUnauthorized(w, "authentication is required")
 				return
 			}
 
