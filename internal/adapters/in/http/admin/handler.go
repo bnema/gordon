@@ -476,10 +476,6 @@ func (h *Handler) handleRoutesByImage(w http.ResponseWriter, r *http.Request, pa
 	}
 
 	routes := h.configSvc.FindRoutesByImage(ctx, imageName)
-	if len(routes) == 0 {
-		h.sendError(w, http.StatusNotFound, fmt.Sprintf("no routes found for image '%s'", imageName))
-		return
-	}
 
 	response := make([]routeResponse, 0, len(routes))
 	for _, route := range routes {

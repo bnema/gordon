@@ -864,6 +864,233 @@ func TestService_GetExternalRoutes_Empty(t *testing.T) {
 	assert.Empty(t, routes)
 }
 
+func TestSplitImageNameTag(t *testing.T) {
+	tests := []struct {
+		name       string
+		image      string
+		wantName   string
+		wantHasTag bool
+	}{
+		{"with tag", "myapp:latest", "myapp", true},
+		{"with version tag", "myapp:v1.2.0", "myapp", true},
+		{"no tag", "myapp", "myapp", false},
+		{"empty string", "", "", false},
+		{"tag only colon", "myapp:", "myapp", true},
+		{"registry prefixed with tag", "reg.example.com/myapp:latest", "reg.example.com/myapp", true},
+		{"registry prefixed no tag", "reg.example.com/myapp", "reg.example.com/myapp", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, hasTag := splitImageNameTag(tt.image)
+			assert.Equal(t, tt.wantName, name)
+			assert.Equal(t, tt.wantHasTag, hasTag)
+		})
+	}
+}
+
+func TestNormalizeRegistryImage(t *testing.T) {
+	tests := []struct {
+		name           string
+		imageName      string
+		registryDomain string
+		expected       string
+	}{
+		{"strips registry prefix", "reg.example.com/myapp:latest", "reg.example.com", "myapp:latest"},
+		{"no prefix to strip", "myapp:latest", "reg.example.com", "myapp:latest"},
+		{"empty registry domain", "myapp:latest", "", "myapp:latest"},
+		{"registry with trailing slash", "reg.example.com/myapp:latest", "reg.example.com/", "myapp:latest"},
+		{"partial match is not stripped", "reg.example.com.evil/myapp:latest", "reg.example.com", "reg.example.com.evil/myapp:latest"},
+		{"bare name no registry", "myapp", "reg.example.com", "myapp"},
+		{"exact registry without image", "reg.example.com/", "reg.example.com", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := NormalizeRegistryImage(tt.imageName, tt.registryDomain)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestService_FindRoutesByImage(t *testing.T) {
+	t.Run("exact match with tag", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]interface{}{
+			"app.example.com": "myapp:latest",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "myapp:latest")
+		assert.Len(t, routes, 1)
+		assert.Equal(t, "app.example.com", routes[0].Domain)
+		assert.Equal(t, "myapp:latest", routes[0].Image)
+	})
+
+	t.Run("bare name matches route with tag", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]interface{}{
+			"app.example.com": "myapp:latest",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "myapp")
+		assert.Len(t, routes, 1)
+		assert.Equal(t, "app.example.com", routes[0].Domain)
+	})
+
+	t.Run("bare name matches route with version tag", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]interface{}{
+			"app.example.com": "myapp:v2.0.0",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "myapp")
+		assert.Len(t, routes, 1)
+		assert.Equal(t, "app.example.com", routes[0].Domain)
+	})
+
+	t.Run("tag mismatch does not match", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]interface{}{
+			"app.example.com": "myapp:v1",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "myapp:v2")
+		assert.Empty(t, routes)
+	})
+
+	t.Run("no match", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]interface{}{
+			"app.example.com": "myapp:latest",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "otherapp")
+		assert.Empty(t, routes)
+	})
+
+	t.Run("strips registry prefix before matching", func(t *testing.T) {
+		v := viper.New()
+		v.Set("server.registry_domain", "reg.example.com")
+		v.Set("routes", map[string]interface{}{
+			"app.example.com": "reg.example.com/myapp:latest",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "myapp")
+		assert.Len(t, routes, 1)
+		assert.Equal(t, "app.example.com", routes[0].Domain)
+	})
+
+	t.Run("strips registry prefix from input too", func(t *testing.T) {
+		v := viper.New()
+		v.Set("server.registry_domain", "reg.example.com")
+		v.Set("routes", map[string]interface{}{
+			"app.example.com": "reg.example.com/myapp:latest",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "reg.example.com/myapp:latest")
+		assert.Len(t, routes, 1)
+		assert.Equal(t, "app.example.com", routes[0].Domain)
+	})
+
+	t.Run("multiple routes for same image", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]interface{}{
+			"app1.example.com":  "myapp:latest",
+			"app2.example.com":  "myapp:latest",
+			"other.example.com": "otherapp:latest",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "myapp")
+		assert.Len(t, routes, 2)
+
+		domains := []string{routes[0].Domain, routes[1].Domain}
+		assert.ElementsMatch(t, []string{"app1.example.com", "app2.example.com"}, domains)
+	})
+
+	t.Run("case insensitive match", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]interface{}{
+			"app.example.com": "MyApp:latest",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "myapp")
+		assert.Len(t, routes, 1)
+	})
+
+	t.Run("http prefix route sets HTTPS false", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]interface{}{
+			"http://insecure.example.com": "myapp:latest",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "myapp")
+		assert.Len(t, routes, 1)
+		assert.Equal(t, "insecure.example.com", routes[0].Domain)
+		assert.False(t, routes[0].HTTPS)
+	})
+
+	t.Run("empty routes", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "myapp")
+		assert.Empty(t, routes)
+	})
+}
+
 func TestExtractDomainFromImageName(t *testing.T) {
 	tests := []struct {
 		name          string
