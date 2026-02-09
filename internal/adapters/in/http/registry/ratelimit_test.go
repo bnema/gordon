@@ -266,11 +266,11 @@ func TestGetClientIP(t *testing.T) {
 			wantIP:      "203.0.113.50",
 		},
 		{
-			name:        "XFF honored from trusted proxy (multiple IPs)",
+			name:        "XFF returns first untrusted IP from right",
 			remoteAddr:  "127.0.0.1:12345",
 			xff:         "203.0.113.50, 10.0.0.1, 172.16.0.1",
 			trustedNets: trustedNets,
-			wantIP:      "203.0.113.50",
+			wantIP:      "172.16.0.1",
 		},
 		{
 			name:        "XFF honored from trusted CIDR",

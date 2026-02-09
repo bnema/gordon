@@ -183,6 +183,8 @@ monthly = 12
 | `auto_route.enabled` | `false` |
 | `backups.enabled` | `false` |
 
+When `auth.enabled=false`, Gordon runs in local-only mode: `/admin/*` is disabled and `/v2/*` is loopback-only.
+
 ## Hot Reload
 
 Gordon watches the configuration file and reloads automatically when changes are detected. You can also trigger a manual reload:
