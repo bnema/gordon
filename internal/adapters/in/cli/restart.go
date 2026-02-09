@@ -28,22 +28,15 @@ Examples:
 			ctx := cmd.Context()
 			restartDomain := args[0]
 
-			client, isRemote := GetRemoteClient()
-			if !isRemote {
-				if withAttachments {
-					return fmt.Errorf("local restart does not support --with-attachments; use --remote")
-				}
-				domain, err := app.SendDeploySignal(restartDomain)
-				if err != nil {
-					return fmt.Errorf("failed to trigger local restart via deploy signal: %w", err)
-				}
-				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Restart signal sent for %s (local deploy path)", domain)))
-				return nil
-			}
-
-			result, err := client.Restart(ctx, restartDomain, withAttachments)
+			handle, err := resolveControlPlane(configPath)
 			if err != nil {
-				if !withAttachments && shouldFallbackToLocal(err) {
+				return err
+			}
+			defer handle.close()
+
+			result, err := handle.plane.Restart(ctx, restartDomain, withAttachments)
+			if err != nil {
+				if handle.isRemote && !withAttachments && shouldFallbackToLocal(err) {
 					domain, localErr := app.SendDeploySignal(restartDomain)
 					if localErr == nil {
 						fmt.Println(styles.RenderWarning(fmt.Sprintf("Remote restart failed (%v), used local deploy-signal fallback", err)))
