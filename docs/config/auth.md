@@ -31,7 +31,7 @@ Token auth always works. Adding `username` + `password_hash` enables interactive
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | bool | `true` | Deprecated. Authentication is always required; setting `false` is rejected |
+| `enabled` | bool | `true` | Authentication toggle. `false` enables local-only mode (see below) |
 | `secrets_backend` | string | `"unsafe"` | Secrets backend: `"pass"`, `"sops"`, or `"unsafe"` |
 | `token_secret` | string | - | **Required.** Path to JWT signing secret in secrets backend |
 | `token_expiry` | string | `"30d"` | Token validity duration (0 = never expires) |

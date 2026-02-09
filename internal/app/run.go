@@ -155,9 +155,12 @@ type services struct {
 	logWriter        *logwriter.LogWriter
 	tokenStore       out.TokenStore
 	configSvc        *config.Service
+	secretSvc        *secretsSvc.Service
 	containerSvc     *container.Service
 	backupSvc        *backup.Service
 	registrySvc      *registrySvc.Service
+	healthSvc        *health.Service
+	logSvc           *logs.Service
 	proxySvc         *proxy.Service
 	authSvc          *auth.Service
 	authHandler      *authhandler.Handler
@@ -442,7 +445,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	secretSvc := secretsSvc.NewService(domainSecretStore, log)
+	svc.secretSvc = secretsSvc.NewService(domainSecretStore, log)
 
 	if svc.containerSvc, err = createContainerService(ctx, v, cfg, svc, log); err != nil {
 		return nil, err
@@ -477,13 +480,13 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 	// Create health service for route health checking
 	prober := httpprober.New()
-	healthSvc := health.NewService(svc.configSvc, svc.containerSvc, prober, log)
+	svc.healthSvc = health.NewService(svc.configSvc, svc.containerSvc, prober, log)
 
 	// Create log service for accessing logs via admin API
-	logSvc := logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
+	svc.logSvc = logs.NewService(resolveLogFilePath(cfg), svc.containerSvc, svc.runtime, log)
 
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, healthSvc, secretSvc, logSvc, svc.registrySvc, svc.eventBus, log, svc.backupSvc)
+	svc.adminHandler = admin.NewHandler(svc.configSvc, svc.authSvc, svc.containerSvc, svc.healthSvc, svc.secretSvc, svc.logSvc, svc.registrySvc, svc.eventBus, log, svc.backupSvc)
 
 	return svc, nil
 }
@@ -1286,7 +1289,6 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	registryMux := http.NewServeMux()
 	registerAuthRoutes(registryMux, svc, trustedNets, cidrAllowlistMiddleware, rateLimitMiddleware, log)
 	registryMux.Handle("/v2/", wrapRegistryForLocalMode(registryWithMiddleware, cfg, log))
-	registerAdminRoutes(registryMux, svc, cfg, trustedNets, log)
 
 	// SECURITY: No CORS middleware on the proxy chain. Backend applications
 	// should control their own CORS policies. A blanket Access-Control-Allow-Origin: *
@@ -1299,8 +1301,12 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	}
 
 	proxyWithMiddleware := middleware.Chain(proxyMiddlewares...)(svc.proxySvc)
+	proxyMux := http.NewServeMux()
+	proxyMux.Handle("/", proxyWithMiddleware)
 
-	return registryMux, proxyWithMiddleware
+	registerAdminRoutes(registryMux, proxyMux, svc, cfg, trustedNets, log)
+
+	return registryMux, proxyMux
 }
 
 func buildRegistryHandlerWithMiddleware(
@@ -1423,7 +1429,7 @@ func wrapRegistryForLocalMode(registryWithMiddleware http.Handler, cfg Config, l
 	return registryWithMiddleware
 }
 
-func registerAdminRoutes(registryMux *http.ServeMux, svc *services, cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) {
+func registerAdminRoutes(registryMux, proxyMux *http.ServeMux, svc *services, cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) {
 	if svc.adminHandler == nil {
 		return
 	}
@@ -1459,6 +1465,7 @@ func registerAdminRoutes(registryMux *http.ServeMux, svc *services, cfg Config, 
 
 	adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
 	registryMux.Handle("/admin/", loopbackOnly(adminWithMiddleware, log))
+	proxyMux.Handle("/admin/", adminWithMiddleware)
 }
 
 // runServers starts the HTTP servers and waits for shutdown.
