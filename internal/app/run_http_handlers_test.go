@@ -76,6 +76,9 @@ func TestCreateHTTPHandlers_AuthEnabled_ExposesAdminOnProxyForRegistryHost(t *te
 
 	svc := &services{adminHandler: &adminhttp.Handler{}}
 	_, proxyHandler := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	// services uses an adminHandler stub with authSvc left nil. In createHTTPHandlers,
+	// registerAdminRoutes installs fail-closed middleware for that case, so admin
+	// requests on the allowed host return 503 ServiceUnavailable.
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
 	req.Host = "gordon.local"

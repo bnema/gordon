@@ -876,7 +876,7 @@ func createTokenStore(backend domain.SecretsBackend, dataDir string, log zerowra
 
 func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (auth.Config, error) {
 	authConfig := auth.Config{
-		Enabled:  true,
+		Enabled:  cfg.Auth.Enabled,
 		AuthType: authType,
 		Username: cfg.Auth.Username,
 	}
@@ -1380,7 +1380,7 @@ func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, 
 	if len(allowedNets) == 0 {
 		log.Error().
 			Strs("registry_allowed_ips", cfg.Server.RegistryAllowedIPs).
-			Msg("registry_allowed_ips is set but no valid entries were parsed; registry will allow all traffic")
+			Msg("registry_allowed_ips is set but no valid entries were parsed; registry will deny all traffic (fail-closed)")
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				log.Warn().
