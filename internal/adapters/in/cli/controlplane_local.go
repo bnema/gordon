@@ -84,6 +84,13 @@ func (l *localControlPlane) GetRoute(ctx context.Context, routeDomain string) (*
 	return l.configSvc.GetRoute(ctx, routeDomain)
 }
 
+func (l *localControlPlane) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
+	if l.configSvc == nil {
+		return nil, fmt.Errorf("local config service unavailable")
+	}
+	return l.configSvc.FindRoutesByImage(ctx, imageName), nil
+}
+
 func (l *localControlPlane) AddRoute(ctx context.Context, route domain.Route) error {
 	if l.configSvc == nil {
 		return fmt.Errorf("local config service unavailable")

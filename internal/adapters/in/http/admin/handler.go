@@ -210,6 +210,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	}{
 		{"/backups", h.handleBackups},
 		{"/attachments", h.handleAttachmentsConfig},
+		{"/routes/by-image", h.handleRoutesByImage},
 		{"/routes", h.handleRoutes},
 		{"/secrets", h.handleSecrets},
 		{"/deploy", h.handleDeploy},
@@ -451,6 +452,44 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 
 	log.Info().Str("domain", routeDomain).Msg("route removed")
 	h.sendJSON(w, http.StatusOK, dto.RouteDeleteResponse{Status: "removed"})
+}
+
+// handleRoutesByImage handles GET /admin/routes/by-image/{image} endpoint.
+// Returns all routes associated with the given image name.
+func (h *Handler) handleRoutesByImage(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := r.Context()
+
+	if !HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for routes:read")
+		return
+	}
+
+	imageName := strings.TrimPrefix(path, "/routes/by-image/")
+	if imageName == "" || imageName == "/routes/by-image" {
+		h.sendError(w, http.StatusBadRequest, "image name required in path")
+		return
+	}
+
+	routes := h.configSvc.FindRoutesByImage(ctx, imageName)
+	if len(routes) == 0 {
+		h.sendError(w, http.StatusNotFound, fmt.Sprintf("no routes found for image '%s'", imageName))
+		return
+	}
+
+	response := make([]routeResponse, 0, len(routes))
+	for _, route := range routes {
+		response = append(response, toRouteResponse(route))
+	}
+
+	h.sendJSON(w, http.StatusOK, dto.RoutesByImageResponse{
+		Image:  imageName,
+		Routes: response,
+	})
 }
 
 func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {

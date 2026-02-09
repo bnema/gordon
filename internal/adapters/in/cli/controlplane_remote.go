@@ -28,6 +28,10 @@ func (r *remoteControlPlane) GetRoute(ctx context.Context, routeDomain string) (
 	return r.client.GetRoute(ctx, routeDomain)
 }
 
+func (r *remoteControlPlane) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
+	return r.client.FindRoutesByImage(ctx, imageName)
+}
+
 func (r *remoteControlPlane) AddRoute(ctx context.Context, route domain.Route) error {
 	return r.client.AddRoute(ctx, route)
 }
