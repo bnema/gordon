@@ -82,6 +82,16 @@ max_size = 100
 max_backups = 3
 max_age = 28
 
+# Telemetry (OpenTelemetry)
+[telemetry]
+enabled = true                           # Enable OTLP export (default: false)
+endpoint = "http://localhost:5080/api/default"  # OTLP HTTP endpoint
+auth_token = ""                          # Base64 user:password for Basic auth
+traces = true                            # Export traces
+metrics = true                           # Export metrics
+logs = true                              # Bridge zerolog to OTLP logs
+trace_sample_rate = 1.0                  # 0.0 = none, 1.0 = all
+
 # Environment variables
 [env]
 dir = "~/.gordon/env"                    # Default location
@@ -144,6 +154,7 @@ keep_last = 3
 | `[api.rate_limit]` | Rate limiting configuration | [Rate Limiting](./rate-limiting.md) |
 | `[deploy]` | Deployment behavior | [Deploy](./deploy.md) |
 | `[logging]` | Logging configuration | [Logging](./logging.md) |
+| `[telemetry]` | OpenTelemetry observability export | [Telemetry](./telemetry.md) |
 | `[env]` | Environment variable settings | [Environment](./env.md) |
 | `[volumes]` | Volume management | [Volumes](./volumes.md) |
 | `[network_isolation]` | Network isolation settings | [Network Isolation](./network-isolation.md) |
@@ -194,6 +205,13 @@ keep_last = 3
 | `images.prune.enabled` | `false` |
 | `images.prune.schedule` | `"daily"` |
 | `images.prune.keep_last` | `3` |
+| `telemetry.enabled` | `false` |
+| `telemetry.endpoint` | `""` |
+| `telemetry.auth_token` | `""` |
+| `telemetry.traces` | `true` |
+| `telemetry.metrics` | `true` |
+| `telemetry.logs` | `true` |
+| `telemetry.trace_sample_rate` | `1.0` |
 
 When `auth.enabled=false`, Gordon runs in local-only mode: `/admin/*` is disabled and `/v2/*` is loopback-only.
 
@@ -236,5 +254,6 @@ Pattern: `GORDON_SECTION_KEY` (uppercase, underscores instead of dots)
 - [Routes Configuration](./routes.md)
 - [External Routes](./external-routes.md)
 - [Authentication](./auth.md)
+- [Telemetry](./telemetry.md)
 - [Backups](./backups.md)
 - [Images](./images.md)
