@@ -217,8 +217,13 @@ func Run(ctx context.Context, configPath string) error {
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to initialize telemetry, continuing without it")
 	} else {
-		defer telShutdown(ctx)
-		if cfg.Telemetry.Enabled {
+		// Use a fresh context for shutdown so a canceled app ctx doesn't prevent flushing.
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			telShutdown(shutdownCtx)
+		}()
+		if cfg.Telemetry.Enabled && cfg.Telemetry.Endpoint != "" {
 			// Bridge zerowrap logs to OTel if log export is enabled
 			if cfg.Telemetry.Logs && telProvider.LogProvider != nil {
 				otelHook := zerowrapotel.NewHookWithProvider(telProvider.LogProvider, "gordon")
@@ -1510,7 +1515,10 @@ func registerAuthRoutes(
 		authMiddlewares = append(authMiddlewares, cidrAllowlistMiddleware)
 	}
 	authMiddlewares = append(authMiddlewares, rateLimitMiddleware)
-	authWithMiddleware := middleware.Chain(authMiddlewares...)(svc.authHandler)
+	authWithMiddleware := otelhttp.NewHandler(
+		middleware.Chain(authMiddlewares...)(svc.authHandler),
+		"gordon.auth",
+	)
 	registryMux.Handle("/auth/", authWithMiddleware)
 }
 
@@ -1555,7 +1563,10 @@ func registerAdminRoutes(registryMux, proxyMux *http.ServeMux, svc *services, cf
 		})
 	}
 
-	adminWithMiddleware := middleware.Chain(adminMiddlewares...)(svc.adminHandler)
+	adminWithMiddleware := otelhttp.NewHandler(
+		middleware.Chain(adminMiddlewares...)(svc.adminHandler),
+		"gordon.admin",
+	)
 	registryMux.Handle("/admin/", loopbackOnly(adminWithMiddleware, log))
 	proxyMux.Handle("/admin/", adminHostOnly(adminWithMiddleware, cfg.Server.RegistryDomain, log))
 }

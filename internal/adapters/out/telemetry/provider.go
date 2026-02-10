@@ -27,7 +27,7 @@ type Config struct {
 	Traces          bool    `mapstructure:"traces"`            // Enable trace export
 	Metrics         bool    `mapstructure:"metrics"`           // Enable metric export
 	Logs            bool    `mapstructure:"logs"`              // Bridge zerowrap logs to OTLP
-	TraceSampleRate float64 `mapstructure:"trace_sample_rate"` // 0.0-1.0, default 1.0
+	TraceSampleRate float64 `mapstructure:"trace_sample_rate"` // 0=disabled, (0,1)=ratio-based, >=1=always sample
 }
 
 // Provider holds the initialized OTel providers.
@@ -141,11 +141,18 @@ func (p *Provider) setupTracing(ctx context.Context, ep *endpointConfig, cfg Con
 	}
 
 	// 0 = never sample (disabled), (0,1) = ratio-based, >= 1 = always sample.
+	// Clamp to [0, 1] so out-of-range values don't produce surprising behavior.
+	rate := cfg.TraceSampleRate
+	if rate < 0 {
+		rate = 0
+	} else if rate > 1 {
+		rate = 1
+	}
 	sampler := trace.AlwaysSample()
-	if cfg.TraceSampleRate == 0 {
+	if rate == 0 {
 		sampler = trace.NeverSample()
-	} else if cfg.TraceSampleRate < 1.0 {
-		sampler = trace.TraceIDRatioBased(cfg.TraceSampleRate)
+	} else if rate < 1.0 {
+		sampler = trace.TraceIDRatioBased(rate)
 	}
 
 	tp := trace.NewTracerProvider(
