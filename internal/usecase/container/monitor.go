@@ -224,17 +224,18 @@ func (m *Monitor) handleCrash(ctx context.Context, log zerowrap.Logger, domainNa
 		Int("exit_code", exitCode).
 		Msg("monitor: restarting crashed container")
 
-	// Record restart metric
+	if err := m.service.runtime.StartContainer(ctx, containerID); err != nil {
+		log.Warn().Err(err).Str("domain", domainName).Msg("monitor: failed to restart container")
+		return
+	}
+
+	// Record restart metric only on successful restart
 	if m.service.metrics != nil {
 		attrs := metric.WithAttributes(
 			attribute.String("domain", domainName),
 			attribute.String("source", "monitor"),
 		)
 		m.service.metrics.ContainerRestarts.Add(ctx, 1, attrs)
-	}
-
-	if err := m.service.runtime.StartContainer(ctx, containerID); err != nil {
-		log.Warn().Err(err).Str("domain", domainName).Msg("monitor: failed to restart container")
 	}
 }
 

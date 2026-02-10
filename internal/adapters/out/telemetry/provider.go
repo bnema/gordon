@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
@@ -115,7 +116,7 @@ func parseEndpoint(cfg Config) (*endpointConfig, error) {
 
 	return &endpointConfig{
 		host:     parsedURL.Host,
-		basePath: parsedURL.Path,
+		basePath: strings.TrimSuffix(parsedURL.Path, "/"),
 		insecure: parsedURL.Scheme == "http",
 		headers:  headers,
 	}, nil
@@ -139,6 +140,7 @@ func (p *Provider) setupTracing(ctx context.Context, ep *endpointConfig, cfg Con
 		return fmt.Errorf("create trace exporter: %w", err)
 	}
 
+	// 0 = never sample (disabled), (0,1) = ratio-based, >= 1 = always sample.
 	sampler := trace.AlwaysSample()
 	if cfg.TraceSampleRate == 0 {
 		sampler = trace.NeverSample()

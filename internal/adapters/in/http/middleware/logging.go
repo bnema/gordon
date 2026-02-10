@@ -116,8 +116,8 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 			// Calculate duration
 			duration := time.Since(start)
 
-			// Log the request
-			log.Info().
+			// Log the request (use reqLog to include trace_id/span_id)
+			reqLog.Info().
 				Str(zerowrap.FieldLayer, "adapter").
 				Str(zerowrap.FieldAdapter, "http").
 				Str("request_id", requestID).

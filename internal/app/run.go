@@ -495,15 +495,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
 	svc.imageSvc = images.NewService(svc.runtime, svc.manifestStorage, svc.blobStorage, log)
 
-	// Initialize and inject telemetry metrics into services
-	gordonMetrics, err := telemetry.NewMetrics()
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to create telemetry metrics, continuing without metrics")
-	} else {
-		svc.containerSvc.SetMetrics(gordonMetrics)
-		svc.registrySvc.SetMetrics(gordonMetrics)
-		svc.eventBus.SetMetrics(gordonMetrics)
-	}
+	injectTelemetryMetrics(cfg, svc, log)
 
 	proxyCfg, err := buildProxyConfig(cfg, log)
 	if err != nil {
@@ -549,6 +541,22 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	)
 
 	return svc, nil
+}
+
+// injectTelemetryMetrics creates and injects OTel metrics into services when
+// telemetry is enabled. Skipped otherwise to avoid unnecessary allocations.
+func injectTelemetryMetrics(cfg Config, svc *services, log zerowrap.Logger) {
+	if !cfg.Telemetry.Enabled || !cfg.Telemetry.Metrics {
+		return
+	}
+	gordonMetrics, err := telemetry.NewMetrics()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to create telemetry metrics, continuing without metrics")
+		return
+	}
+	svc.containerSvc.SetMetrics(gordonMetrics)
+	svc.registrySvc.SetMetrics(gordonMetrics)
+	svc.eventBus.SetMetrics(gordonMetrics)
 }
 
 func setupInternalRegistryAuth(svc *services, log zerowrap.Logger) error {

@@ -40,7 +40,8 @@ func NewMetrics() (*Metrics, error) {
 	}
 	if m.DeployDuration, err = meter.Float64Histogram("gordon.deploy.duration_seconds",
 		metric.WithDescription("Deploy duration in seconds"),
-		metric.WithUnit("s")); err != nil {
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(1, 5, 10, 30, 60, 120, 300)); err != nil {
 		return nil, err
 	}
 	if m.DeployErrors, err = meter.Int64Counter("gordon.deploy.errors",
