@@ -64,6 +64,18 @@ max_backups = 3                              # Number of old files to keep
 max_age = 28                                 # Days to keep old files
 
 # =============================================================================
+# TELEMETRY (OpenTelemetry)
+# =============================================================================
+[telemetry]
+enabled = false                              # Enable OTLP telemetry export
+endpoint = ""                                # OTLP HTTP endpoint URL
+auth_token = ""                              # Base64-encoded user:password for Basic auth
+traces = true                                # Export distributed traces
+metrics = true                               # Export metrics
+logs = true                                  # Bridge zerolog output to OTLP logs
+trace_sample_rate = 1.0                      # Fraction of traces to sample (0.0–1.0)
+
+# =============================================================================
 # ENVIRONMENT
 # =============================================================================
 [env]
@@ -186,6 +198,13 @@ keep_last = 3                                # Keep N newest tags per repository
 | `logging.container_logs.max_size` | `100` | 100 MB |
 | `logging.container_logs.max_backups` | `3` | Keep 3 old files |
 | `logging.container_logs.max_age` | `28` | 28 days |
+| `telemetry.enabled` | `false` | Enable OTLP telemetry export |
+| `telemetry.endpoint` | `""` | OTLP HTTP endpoint URL |
+| `telemetry.auth_token` | `""` | Base64 `user:password` for Basic auth |
+| `telemetry.traces` | `true` | Export distributed traces |
+| `telemetry.metrics` | `true` | Export metrics |
+| `telemetry.logs` | `true` | Bridge zerolog to OTLP logs |
+| `telemetry.trace_sample_rate` | `1.0` | Fraction of traces to sample (0.0–1.0) |
 | `deploy.pull_policy` | `"if-tag-changed"` | Pull on tag change |
 | `deploy.readiness_mode` | `"auto"` | Readiness strategy (`auto`, `docker-health`, `delay`) |
 | `deploy.health_timeout` | `"90s"` | Max wait for health-based readiness before deploy fails |
@@ -280,6 +299,7 @@ gordon serve
 
 - [Configuration Overview](./index.md)
 - [Authentication](./auth.md)
+- [Telemetry](./telemetry.md)
 - [Network Isolation](./network-isolation.md)
 - [Volumes](./volumes.md)
 - [Images](./images.md)

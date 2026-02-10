@@ -12,7 +12,13 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
+	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -44,6 +50,8 @@ type Config struct {
 	DrainTimeout             time.Duration // Max wait for in-flight requests to drain
 }
 
+var tracer = otel.Tracer("gordon.container")
+
 const (
 	PullPolicyAlways       = "always"
 	PullPolicyIfNotPresent = "if-not-present"
@@ -65,6 +73,7 @@ type Service struct {
 	cacheInvalidator out.ProxyCacheInvalidator
 	drainWaiter      out.ProxyDrainWaiter
 	config           Config
+	metrics          *telemetry.Metrics
 	containers       map[string]*domain.Container
 	attachments      map[string][]string // ownerDomain → []containerIDs
 	mu               sync.RWMutex
@@ -133,6 +142,11 @@ func NewService(
 		containers:  make(map[string]*domain.Container),
 		attachments: make(map[string][]string),
 	}
+}
+
+// SetMetrics sets the telemetry metrics for the container service.
+func (s *Service) SetMetrics(m *telemetry.Metrics) {
+	s.metrics = m
 }
 
 // SetProxyCacheInvalidator sets the proxy cache invalidator for synchronous
@@ -216,6 +230,15 @@ func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef st
 // Deploy creates and starts a container for the given route.
 // Implements zero-downtime deployment: new container starts before old one stops.
 func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Container, error) {
+	ctx, span := tracer.Start(ctx, "container.deploy",
+		trace.WithAttributes(
+			attribute.String("domain", route.Domain),
+			attribute.String("image", route.Image),
+		))
+	defer span.End()
+
+	deployStart := time.Now()
+
 	// Serialize deploys for the same domain to prevent race conditions
 	// (e.g. multiple image.pushed events + explicit deploy call from CLI).
 	unlock, err := s.acquireDomainDeployLock(ctx, route.Domain)
@@ -231,6 +254,26 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		"domain":              route.Domain,
 	})
 	log := zerowrap.FromCtx(ctx)
+
+	// Record deploy metrics and trace status
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		if s.metrics == nil {
+			return
+		}
+		attrs := metric.WithAttributes(
+			attribute.String("domain", route.Domain),
+			attribute.String("image", route.Image),
+		)
+		s.metrics.DeployTotal.Add(ctx, 1, attrs)
+		s.metrics.DeployDuration.Record(ctx, time.Since(deployStart).Seconds(), attrs)
+		if err != nil {
+			s.metrics.DeployErrors.Add(ctx, 1, attrs)
+		}
+	}()
 
 	existing, hasExisting := s.getTrackedContainer(route.Domain)
 
@@ -369,6 +412,9 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 }
 
 func (s *Service) createStartedContainer(ctx context.Context, route domain.Route, existing *domain.Container, resources *deployResources) (*domain.Container, error) {
+	ctx, span := tracer.Start(ctx, "container.create_and_start")
+	defer span.End()
+
 	log := zerowrap.FromCtx(ctx)
 
 	containerConfig := s.buildContainerConfig(
@@ -408,8 +454,16 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 
 func (s *Service) activateDeployedContainer(ctx context.Context, domainName string, container *domain.Container) bool {
 	s.mu.Lock()
+	_, wasTracked := s.containers[domainName]
 	s.containers[domainName] = container
 	s.mu.Unlock()
+
+	// Track managed container count (only increment for new domains, not replacements)
+	if !wasTracked && s.metrics != nil {
+		s.metrics.ManagedContainers.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("domain", domainName),
+		))
+	}
 
 	s.publishContainerDeployed(ctx, domainName, container.ID)
 
@@ -539,6 +593,14 @@ func (s *Service) Restart(ctx context.Context, domainName string, withAttachment
 	}
 	log.Info().Str(zerowrap.FieldEntityID, container.ID).Msg("container restarted")
 
+	// Record restart metric
+	if s.metrics != nil {
+		s.metrics.ContainerRestarts.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("domain", domainName),
+			attribute.String("source", "api"),
+		))
+	}
+
 	// Restart attachments if requested
 	if withAttachments && len(attachmentIDs) > 0 {
 		for _, attachID := range attachmentIDs {
@@ -625,6 +687,13 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 		delete(s.attachments, removedDomain)
 	}
 	s.mu.Unlock()
+
+	// Decrement managed container count
+	if removedDomain != "" && s.metrics != nil {
+		s.metrics.ManagedContainers.Add(ctx, -1, metric.WithAttributes(
+			attribute.String("domain", removedDomain),
+		))
+	}
 
 	// Note: We intentionally do NOT clean up deployMu entries to avoid a race condition:
 	// If Remove deletes the mutex entry while a concurrent Deploy is acquiring the lock,
@@ -1161,6 +1230,10 @@ func (s *Service) pullRefForDeploy(ctx context.Context, imageRef string) (string
 //   - For digest references (@sha256:...), returns the pullRef since Docker can't tag digests
 //   - For tagged images, returns the original imageRef after tagging the pulled image
 func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, error) {
+	ctx, span := tracer.Start(ctx, "container.ensure_image",
+		trace.WithAttributes(attribute.String("image", imageRef)))
+	defer span.End()
+
 	ctx = zerowrap.CtxWithField(ctx, "image", imageRef)
 	log := zerowrap.FromCtx(ctx)
 

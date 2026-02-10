@@ -9,17 +9,30 @@ import (
 	"strings"
 
 	"github.com/bnema/zerowrap"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
+	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/pkg/validation"
 )
+
+var registryTracer = otel.Tracer("gordon.registry")
 
 // Service implements the RegistryService interface.
 type Service struct {
 	blobStorage     out.BlobStorage
 	manifestStorage out.ManifestStorage
 	eventBus        out.EventPublisher
+	metrics         *telemetry.Metrics
+}
+
+// SetMetrics sets the telemetry metrics for the registry service.
+func (s *Service) SetMetrics(m *telemetry.Metrics) {
+	s.metrics = m
 }
 
 // NewService creates a new registry service.
@@ -60,6 +73,14 @@ func (s *Service) GetManifest(ctx context.Context, name, reference string) (*dom
 
 // PutManifest stores a manifest and returns the calculated digest.
 func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (string, error) {
+	ctx, span := registryTracer.Start(ctx, "registry.put_manifest",
+		trace.WithAttributes(
+			attribute.String("name", manifest.Name),
+			attribute.String("reference", manifest.Reference),
+			attribute.Int("manifest_size", len(manifest.Data)),
+		))
+	defer span.End()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "PutManifest",
@@ -73,6 +94,16 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 
 	if err := s.manifestStorage.PutManifest(manifest.Name, manifest.Reference, manifest.ContentType, manifest.Data); err != nil {
 		return "", log.WrapErr(err, "failed to store manifest")
+	}
+
+	// Record push metrics
+	if s.metrics != nil {
+		attrs := metric.WithAttributes(
+			attribute.String("name", manifest.Name),
+			attribute.String("reference", manifest.Reference),
+		)
+		s.metrics.ImagePushTotal.Add(ctx, 1, attrs)
+		s.metrics.ImagePushSize.Add(ctx, int64(len(manifest.Data)), attrs)
 	}
 
 	// Publish image pushed event only for tag references (not digests).
