@@ -58,6 +58,9 @@ import (
 	// Domain
 	"github.com/bnema/gordon/internal/domain"
 
+	// Packages
+	"github.com/bnema/gordon/pkg/version"
+
 	// Use cases
 	"github.com/bnema/gordon/internal/usecase/auth"
 	"github.com/bnema/gordon/internal/usecase/backup"
@@ -210,7 +213,7 @@ func Run(ctx context.Context, configPath string) error {
 	ctx = zerowrap.WithCtx(ctx, log)
 
 	// Initialize OpenTelemetry
-	telProvider, telShutdown, err := telemetry.NewProvider(ctx, cfg.Telemetry, "gordon", "dev")
+	telProvider, telShutdown, err := telemetry.NewProvider(ctx, cfg.Telemetry, "gordon", version.Version())
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to initialize telemetry, continuing without it")
 	} else {
