@@ -18,11 +18,16 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+var proxyTracer = otel.Tracer("gordon.proxy")
 
 // proxyTransport is a shared HTTP transport for proxying to application containers.
 // ResponseHeaderTimeout is kept short to detect unresponsive backends quickly.
@@ -156,6 +161,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // GetTarget returns the proxy target for a given domain.
 func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.ProxyTarget, error) {
+	ctx, span := proxyTracer.Start(ctx, "proxy.get_target",
+		trace.WithAttributes(attribute.String("domain", domainName)))
+	defer span.End()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "GetTarget",

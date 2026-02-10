@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -199,6 +201,12 @@ func (m *Monitor) handleCrash(ctx context.Context, log zerowrap.Logger, domainNa
 			Int("consecutive", rec.consecutive).
 			Dur("backoff", backoff).
 			Msg("monitor: crash loop detected, backing off")
+
+		// Record crash loop metric
+		if m.service.metrics != nil {
+			attrs := metric.WithAttributes(attribute.String("domain", domainName))
+			m.service.metrics.ContainerCrashLoops.Add(ctx, 1, attrs)
+		}
 		return
 	}
 	m.mu.Unlock()
@@ -215,6 +223,15 @@ func (m *Monitor) handleCrash(ctx context.Context, log zerowrap.Logger, domainNa
 	log.Warn().Str("domain", domainName).Str("container_id", containerID).
 		Int("exit_code", exitCode).
 		Msg("monitor: restarting crashed container")
+
+	// Record restart metric
+	if m.service.metrics != nil {
+		attrs := metric.WithAttributes(
+			attribute.String("domain", domainName),
+			attribute.String("source", "monitor"),
+		)
+		m.service.metrics.ContainerRestarts.Add(ctx, 1, attrs)
+	}
 
 	if err := m.service.runtime.StartContainer(ctx, containerID); err != nil {
 		log.Warn().Err(err).Str("domain", domainName).Msg("monitor: failed to restart container")

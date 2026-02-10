@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	zerowrapotel "github.com/bnema/zerowrap/otel"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 
@@ -38,7 +39,11 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/logwriter"
 	"github.com/bnema/gordon/internal/adapters/out/ratelimit"
 	"github.com/bnema/gordon/internal/adapters/out/secrets"
+	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
+
+	// OTel
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	// Adapters - Input
 	"github.com/bnema/gordon/internal/adapters/dto"
@@ -153,6 +158,8 @@ type Config struct {
 			KeepLast int    `mapstructure:"keep_last"`
 		} `mapstructure:"prune"`
 	} `mapstructure:"images"`
+
+	Telemetry telemetry.Config `mapstructure:"telemetry"`
 }
 
 // services holds all the services used by the application.
@@ -201,6 +208,24 @@ func Run(ctx context.Context, configPath string) error {
 	}
 
 	ctx = zerowrap.WithCtx(ctx, log)
+
+	// Initialize OpenTelemetry
+	telProvider, telShutdown, err := telemetry.NewProvider(ctx, cfg.Telemetry, "gordon", "dev")
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to initialize telemetry, continuing without it")
+	} else {
+		defer telShutdown(ctx)
+		if cfg.Telemetry.Enabled {
+			// Bridge zerowrap logs to OTel if log export is enabled
+			if cfg.Telemetry.Logs && telProvider.LogProvider != nil {
+				otelHook := zerowrapotel.NewHookWithProvider(telProvider.LogProvider, "gordon")
+				log = zerowrap.WithHook(log, otelHook)
+				ctx = zerowrap.WithCtx(ctx, log)
+			}
+			log.Info().Str("endpoint", cfg.Telemetry.Endpoint).Msg("telemetry initialized")
+		}
+	}
+
 	log.Info().Msg("Gordon starting")
 
 	if err := ensureTLSConfig(&cfg, log); err != nil {
@@ -469,6 +494,16 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
 	svc.imageSvc = images.NewService(svc.runtime, svc.manifestStorage, svc.blobStorage, log)
+
+	// Initialize and inject telemetry metrics into services
+	gordonMetrics, err := telemetry.NewMetrics()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to create telemetry metrics, continuing without metrics")
+	} else {
+		svc.containerSvc.SetMetrics(gordonMetrics)
+		svc.registrySvc.SetMetrics(gordonMetrics)
+		svc.eventBus.SetMetrics(gordonMetrics)
+	}
 
 	proxyCfg, err := buildProxyConfig(cfg, log)
 	if err != nil {
@@ -1328,7 +1363,10 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		middleware.SecurityHeaders,
 	}
 
-	proxyWithMiddleware := middleware.Chain(proxyMiddlewares...)(svc.proxySvc)
+	proxyWithMiddleware := otelhttp.NewHandler(
+		middleware.Chain(proxyMiddlewares...)(svc.proxySvc),
+		"gordon.proxy",
+	)
 	proxyMux := http.NewServeMux()
 	proxyMux.Handle("/", proxyWithMiddleware)
 
@@ -1360,7 +1398,11 @@ func buildRegistryHandlerWithMiddleware(
 
 	appendRegistryAuthMiddleware(&registryMiddlewares, svc, cfg, log)
 
-	return middleware.Chain(registryMiddlewares...)(registryHandler), cidrAllowlistMiddleware, rateLimitMiddleware
+	registryWithOtel := otelhttp.NewHandler(
+		middleware.Chain(registryMiddlewares...)(registryHandler),
+		"gordon.registry",
+	)
+	return registryWithOtel, cidrAllowlistMiddleware, rateLimitMiddleware
 }
 
 func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
@@ -2219,6 +2261,14 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("images.prune.enabled", false)
 	v.SetDefault("images.prune.schedule", string(domain.ScheduleDaily))
 	v.SetDefault("images.prune.keep_last", domain.DefaultImagePruneKeepLast)
+	v.SetDefault("telemetry.enabled", false)
+	v.SetDefault("telemetry.endpoint", "")
+	v.SetDefault("telemetry.auth_token", "")
+	v.SetDefault("telemetry.traces", true)
+	v.SetDefault("telemetry.metrics", true)
+	v.SetDefault("telemetry.logs", true)
+	v.SetDefault("telemetry.trace_sample_rate", 1.0)
+
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("deploy.readiness_delay", "5s")

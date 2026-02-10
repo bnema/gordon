@@ -9,7 +9,10 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
+	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -24,6 +27,14 @@ type InMemory struct {
 	cancel     context.CancelFunc
 	bufferSize int
 	log        zerowrap.Logger
+	metrics    *telemetry.Metrics
+}
+
+// SetMetrics sets the telemetry metrics for the event bus.
+func (bus *InMemory) SetMetrics(m *telemetry.Metrics) {
+	bus.mu.Lock()
+	bus.metrics = m
+	bus.mu.Unlock()
 }
 
 // NewInMemory creates a new in-memory event bus.
@@ -83,6 +94,13 @@ func (bus *InMemory) Publish(eventType domain.EventType, payload any) error {
 			Str("image_name", event.ImageName).
 			Str("tag", event.Tag).
 			Msg("event channel is full, dropping event after 5s timeout")
+
+		// Record dropped event metric
+		if bus.metrics != nil {
+			bus.metrics.EventsDropped.Add(context.Background(), 1, metric.WithAttributes(
+				attribute.String("event_type", string(event.Type)),
+			))
+		}
 		return fmt.Errorf("event channel is full, dropping event %s", event.ID)
 	}
 }
@@ -217,6 +235,13 @@ func (bus *InMemory) handleEvent(event domain.Event) {
 						Str(zerowrap.FieldHandler, fmt.Sprintf("%T", h)).
 						Dur(zerowrap.FieldDuration, time.Since(start)).
 						Msg("event handled successfully")
+
+					// Record processed event metric
+					if bus.metrics != nil {
+						bus.metrics.EventsProcessed.Add(context.Background(), 1, metric.WithAttributes(
+							attribute.String("event_type", string(event.Type)),
+						))
+					}
 				}
 			case <-ctx.Done():
 				cancel()

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 )
@@ -95,8 +96,18 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 			// IP spoofing via X-Forwarded-For from untrusted sources.
 			clientIP := GetClientIP(r, nets)
 
-			// Attach the logger to the request context for downstream handlers
-			ctx := zerowrap.WithCtx(r.Context(), log)
+			// Attach the logger to the request context for downstream handlers.
+			// If an OTel span is active (from otelhttp middleware), inject
+			// trace_id and span_id into the logger for log↔trace correlation.
+			reqLog := log
+			spanCtx := trace.SpanFromContext(r.Context()).SpanContext()
+			if spanCtx.HasTraceID() {
+				reqLog = reqLog.WithFields(map[string]any{
+					"trace_id": spanCtx.TraceID().String(),
+					"span_id":  spanCtx.SpanID().String(),
+				})
+			}
+			ctx := zerowrap.WithCtx(r.Context(), reqLog)
 			r = r.WithContext(ctx)
 
 			// Call the next handler
