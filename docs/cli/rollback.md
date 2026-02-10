@@ -8,6 +8,7 @@ Roll back a route to a previous image tag.
 
 ```bash
 gordon rollback <domain> [options]
+gordon rollback list <domain>
 ```
 
 ### Arguments
@@ -26,9 +27,11 @@ gordon rollback <domain> [options]
 
 ### Description
 
-`gordon rollback` lists available tags in the Gordon registry for the route's
-repository, then deploys the selected version. Semver tags are sorted in
-descending order first, followed by non-semver tags.
+`gordon rollback` deploys a selected tag for the route's repository.
+Semver tags are sorted in descending order first, followed by non-semver tags.
+
+`gordon rollback list <domain>` only lists available tags and marks the current
+tag without deploying.
 
 If the selected tag matches the current running tag, no action is taken.
 
@@ -40,6 +43,9 @@ gordon rollback myapp.example.com
 
 # Roll back to a specific tag
 gordon rollback myapp.example.com --tag v1.2.0
+
+# List available tags for a domain
+gordon rollback list myapp.example.com
 ```
 
 ### Notes

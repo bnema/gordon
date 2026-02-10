@@ -13,6 +13,7 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/pkg/runtime"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 // Service implements image list and prune operations.
@@ -43,7 +44,7 @@ func NewService(
 	}
 }
 
-// ListImages returns images known by the runtime.
+// ListImages returns images known by the runtime and registry tags.
 func (s *Service) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -57,6 +58,8 @@ func (s *Service) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 	}
 
 	images := make([]domain.ImageInfo, 0, len(details))
+	seenRepoTags := make(map[string]struct{}, len(details))
+	repoDisplayByNormalized := make(map[string]string)
 	for _, detail := range details {
 		if isDanglingImage(detail.RepoTags) {
 			images = append(images, domain.ImageInfo{
@@ -75,6 +78,11 @@ func (s *Service) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 				continue
 			}
 			repository, tag := splitRepoTag(repoTag)
+			normalizedRepository := normalizeRepository(repository)
+			seenRepoTags[repoTagKey(normalizedRepository, tag)] = struct{}{}
+			if normalizedRepository != "" && normalizedRepository != repository {
+				repoDisplayByNormalized[normalizedRepository] = repository
+			}
 			images = append(images, domain.ImageInfo{
 				Repository: repository,
 				Tag:        tag,
@@ -85,6 +93,57 @@ func (s *Service) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 			})
 		}
 	}
+
+	repositories, err := s.manifestStorage.ListRepositories()
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to list repositories")
+	}
+
+	sort.Strings(repositories)
+	for _, repository := range repositories {
+		tags, err := s.manifestStorage.ListTags(repository)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to list repository tags")
+		}
+
+		displayRepository := repository
+		normalizedRepository := normalizeRepository(repository)
+		if mappedRepository, ok := repoDisplayByNormalized[normalizedRepository]; ok {
+			displayRepository = mappedRepository
+		}
+
+		for _, tag := range tags {
+			if isRegistryTagPlaceholder(tag) {
+				continue
+			}
+
+			key := repoTagKey(normalizedRepository, tag)
+			if _, exists := seenRepoTags[key]; exists {
+				continue
+			}
+
+			createdAt, err := s.manifestStorage.GetManifestModTime(repository, tag)
+			if err != nil {
+				log.Warn().
+					Err(err).
+					Str("repository", repository).
+					Str("tag", tag).
+					Msg("failed to read manifest modification time")
+			}
+
+			images = append(images, domain.ImageInfo{
+				Repository: displayRepository,
+				Tag:        tag,
+				Created:    createdAt,
+				Dangling:   false,
+			})
+			seenRepoTags[key] = struct{}{}
+		}
+	}
+
+	sort.SliceStable(images, func(i, j int) bool {
+		return lessImageInfo(images[i], images[j])
+	})
 
 	return images, nil
 }
@@ -111,8 +170,8 @@ func (s *Service) PruneRuntime(ctx context.Context) (domain.ImagePruneReport, er
 }
 
 // PruneRegistry applies tag retention and blob garbage collection.
-// It keeps the most recent keepLast tags from tagInfos and always keeps
-// the "latest" tag when present, so up to keepLast+1 tags can be retained.
+// It keeps the "latest" tag when present and keeps keepLast most-recent
+// non-latest tags from tagInfos.
 func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.ImagePruneReport, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -203,8 +262,16 @@ func buildKeptTagSet(tagInfos []registryTag, keepLast int) map[string]struct{} {
 		keptTags["latest"] = struct{}{}
 	}
 
-	for i := 0; i < len(tagInfos) && i < keepLast; i++ {
-		keptTags[tagInfos[i].name] = struct{}{}
+	kept := 0
+	for _, tagInfo := range tagInfos {
+		if tagInfo.name == "latest" {
+			continue
+		}
+		if kept >= keepLast {
+			break
+		}
+		keptTags[tagInfo.name] = struct{}{}
+		kept++
 	}
 
 	return keptTags
@@ -400,4 +467,54 @@ func splitRepoTag(repoTag string) (string, string) {
 	}
 
 	return repoTag[:idx], repoTag[idx+1:]
+}
+
+func normalizeRepository(repository string) string {
+	repository = strings.TrimSpace(repository)
+	if repository == "" {
+		return ""
+	}
+
+	idx := strings.Index(repository, "/")
+	if idx <= 0 {
+		return repository
+	}
+
+	firstComponent := repository[:idx]
+	if strings.Contains(firstComponent, ".") || strings.Contains(firstComponent, ":") || firstComponent == "localhost" {
+		return repository[idx+1:]
+	}
+
+	return repository
+}
+
+func repoTagKey(repository, tag string) string {
+	return repository + "\x00" + tag
+}
+
+func isRegistryTagPlaceholder(tag string) bool {
+	return tag == "" || tag == "<none>" || tag == "<none>:<none>" || validation.IsDigest(tag)
+}
+
+func lessImageInfo(left, right domain.ImageInfo) bool {
+	if left.Dangling != right.Dangling {
+		return !left.Dangling
+	}
+	if left.Repository != right.Repository {
+		return left.Repository < right.Repository
+	}
+	if left.Tag == "latest" && right.Tag != "latest" {
+		return true
+	}
+	if right.Tag == "latest" && left.Tag != "latest" {
+		return false
+	}
+	if !left.Created.Equal(right.Created) {
+		return left.Created.After(right.Created)
+	}
+	if left.Tag != right.Tag {
+		return left.Tag > right.Tag
+	}
+
+	return left.ID < right.ID
 }

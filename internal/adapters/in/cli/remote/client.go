@@ -485,7 +485,7 @@ type RouteHealth struct {
 
 // Images API
 
-// ListImages returns runtime images from the admin API.
+// ListImages returns runtime images and registry tags from the admin API.
 func (c *Client) ListImages(ctx context.Context) ([]dto.Image, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/images", nil)
 	if err != nil {
