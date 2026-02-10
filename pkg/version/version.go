@@ -1,5 +1,5 @@
 // Package version holds build-time version info for Gordon.
-// Set via main using Set(), read from anywhere via Get().
+// Set via main using Set(), read from anywhere via Version(), Commit(), or BuildDate().
 package version
 
 // Build information, populated by Set() at startup.
