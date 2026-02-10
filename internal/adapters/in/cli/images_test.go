@@ -87,7 +87,7 @@ func TestRunImagesPrune_DryRunCallsListOnly(t *testing.T) {
 	text := out.String()
 	assert.Contains(t, text, "Dry run")
 	assert.Contains(t, text, "would prune 2 dangling runtime images")
-	assert.Contains(t, text, "would keep last 3 tags")
+	assert.Contains(t, text, "would keep latest + 3 previous tags")
 	assert.Equal(t, 1, client.listImagesCalls)
 	assert.Equal(t, 0, client.pruneCalls)
 }

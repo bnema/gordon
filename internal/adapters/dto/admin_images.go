@@ -2,7 +2,7 @@ package dto
 
 import "time"
 
-// Image represents a runtime image in admin API responses.
+// Image represents an image/tag in admin API responses.
 type Image struct {
 	Repository string    `json:"repository"`
 	Tag        string    `json:"tag"`

@@ -8,7 +8,8 @@ const DefaultImagePruneKeepLast = 3
 type ImagePruneConfig struct {
 	Enabled  bool
 	Schedule BackupSchedule
-	// KeepLast is the number of most-recent tags to retain per repository.
+	// KeepLast is the number of most-recent non-latest tags to retain per repository.
+	// The latest tag is retained separately when present.
 	KeepLast int
 }
 
@@ -33,7 +34,7 @@ type ImagePruneReport struct {
 	Registry RegistryPruneResult
 }
 
-// ImageInfo describes a runtime image.
+// ImageInfo describes an image/tag visible from runtime and registry data.
 type ImageInfo struct {
 	Repository string
 	Tag        string
