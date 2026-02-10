@@ -18,11 +18,17 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+var proxyTracer = otel.Tracer("gordon.proxy")
 
 // proxyTransport is a shared HTTP transport for proxying to application containers.
 // ResponseHeaderTimeout is kept short to detect unresponsive backends quickly.
@@ -155,7 +161,17 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetTarget returns the proxy target for a given domain.
-func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.ProxyTarget, error) {
+func (s *Service) GetTarget(ctx context.Context, domainName string) (target *domain.ProxyTarget, retErr error) {
+	ctx, span := proxyTracer.Start(ctx, "proxy.get_target",
+		trace.WithAttributes(attribute.String("domain", domainName)))
+	defer func() {
+		if retErr != nil {
+			span.RecordError(retErr)
+			span.SetStatus(codes.Error, retErr.Error())
+		}
+		span.End()
+	}()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "GetTarget",
@@ -179,54 +195,7 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 	// Check if this is an external route
 	externalRoutes := s.configSvc.GetExternalRoutes()
 	if targetAddr, ok := externalRoutes[domainName]; ok {
-		host, portStr, err := net.SplitHostPort(targetAddr)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "invalid external route target", map[string]any{"target": targetAddr})
-		}
-		port, err := strconv.Atoi(portStr)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
-		}
-
-		// SECURITY: Resolve DNS and validate that the target is not an internal/blocked
-		// network. We use the resolved IP as the proxy target to prevent DNS rebinding
-		// (TOCTOU) attacks where a hostname resolves to a public IP during validation
-		// but to a private IP when the proxy connects.
-		resolvedIP, err := ResolveAndValidateHost(host)
-		if err != nil {
-			log.Warn().
-				Err(err).
-				Str("host", host).
-				Str("domain", domainName).
-				Msg("SSRF protection: blocked external route to internal network")
-			return nil, err
-		}
-
-		// Preserve the original hostname for the Host header so virtual-hosted
-		// upstreams work correctly. The resolved IP is used for dialing only.
-		var originalHost string
-		if resolvedIP != host {
-			originalHost = host
-		}
-
-		target := &domain.ProxyTarget{
-			Host:         resolvedIP,
-			Port:         port,
-			ContainerID:  "", // Not a container
-			Scheme:       "http",
-			OriginalHost: originalHost,
-		}
-
-		// Cache external route target
-		s.mu.Lock()
-		s.targets[domainName] = target
-		s.mu.Unlock()
-
-		log.Debug().
-			Str("host", host).
-			Int("port", port).
-			Msg("using external route target")
-		return target, nil
+		return s.resolveExternalRoute(ctx, domainName, targetAddr, log)
 	}
 
 	// Get container for this domain
@@ -238,7 +207,6 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 	log.Debug().Str("container_id", container.ID).Str("image", container.Image).Msg("found container for domain")
 
 	// Build target based on runtime mode
-	var target *domain.ProxyTarget
 
 	if s.isRunningInContainer() {
 		// Gordon is in a container - use container network
@@ -293,6 +261,59 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (*domain.Pro
 	s.mu.Unlock()
 
 	return target, nil
+}
+
+// resolveExternalRoute resolves an external route target address into a ProxyTarget,
+// performing DNS validation and SSRF protection.
+func (s *Service) resolveExternalRoute(_ context.Context, domainName, targetAddr string, log zerowrap.Logger) (*domain.ProxyTarget, error) {
+	host, portStr, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		return nil, log.WrapErrWithFields(err, "invalid external route target", map[string]any{"target": targetAddr})
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
+	}
+
+	// SECURITY: Resolve DNS and validate that the target is not an internal/blocked
+	// network. We use the resolved IP as the proxy target to prevent DNS rebinding
+	// (TOCTOU) attacks where a hostname resolves to a public IP during validation
+	// but to a private IP when the proxy connects.
+	resolvedIP, err := ResolveAndValidateHost(host)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("host", host).
+			Str("domain", domainName).
+			Msg("SSRF protection: blocked external route to internal network")
+		return nil, err
+	}
+
+	// Preserve the original hostname for the Host header so virtual-hosted
+	// upstreams work correctly. The resolved IP is used for dialing only.
+	var originalHost string
+	if resolvedIP != host {
+		originalHost = host
+	}
+
+	t := &domain.ProxyTarget{
+		Host:         resolvedIP,
+		Port:         port,
+		ContainerID:  "", // Not a container
+		Scheme:       "http",
+		OriginalHost: originalHost,
+	}
+
+	// Cache external route target
+	s.mu.Lock()
+	s.targets[domainName] = t
+	s.mu.Unlock()
+
+	log.Debug().
+		Str("host", host).
+		Int("port", port).
+		Msg("using external route target")
+	return t, nil
 }
 
 // RegisterTarget registers a new proxy target for a domain.
