@@ -31,6 +31,7 @@ type InMemory struct {
 }
 
 // SetMetrics sets the telemetry metrics for the event bus.
+// Must be called before Start() to avoid data races on bus.metrics reads.
 func (bus *InMemory) SetMetrics(m *telemetry.Metrics) {
 	bus.mu.Lock()
 	bus.metrics = m

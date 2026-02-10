@@ -49,7 +49,7 @@ The `endpoint` field accepts a full URL. Gordon parses it to extract:
 
 For OpenObserve, the endpoint typically includes the organization path:
 
-```
+```text
 http://localhost:5080/api/default
 ```
 

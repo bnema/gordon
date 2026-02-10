@@ -6,7 +6,7 @@ Technical reference documentation for Gordon.
 
 - [Docker Labels](./docker-labels.md) - Container and image labels used by Gordon
 - [Environment Variables](./env-variables.md) - Environment variable syntax and interpolation
-- [Telemetry & Metrics](/docs/config/telemetry.md) - OpenTelemetry configuration, custom metrics, and trace spans
+- [Telemetry & Metrics](../config/telemetry.md) - OpenTelemetry configuration, custom metrics, and trace spans
 - [Troubleshooting](./troubleshooting.md) - Common issues and solutions
 
 ## Related
