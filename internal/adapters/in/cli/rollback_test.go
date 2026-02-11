@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,4 +51,16 @@ func TestSortSemverTags(t *testing.T) {
 func TestValidateTagExists(t *testing.T) {
 	assert.True(t, validateTagExists("v1.0.0", []string{"v1.0.0", "v2.0.0"}))
 	assert.False(t, validateTagExists("v3.0.0", []string{"v1.0.0", "v2.0.0"}))
+}
+
+func TestPrintRollbackTags_WritesToProvidedWriter(t *testing.T) {
+	var buf bytes.Buffer
+
+	printRollbackTags(&buf, "myapp.example.com", "v1.2.0", []string{"v1.2.0", "v1.1.0"})
+
+	output := buf.String()
+	assert.Contains(t, output, "Available tags for")
+	assert.Contains(t, output, "myapp.example.com")
+	assert.Contains(t, output, "- v1.2.0 (current)")
+	assert.Contains(t, output, "- v1.1.0")
 }

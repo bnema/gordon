@@ -57,9 +57,24 @@ func (s *Service) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 		return nil, log.WrapErr(err, "failed to list images")
 	}
 
+	images, seenRepoTags, repoDisplayByNormalized := buildRuntimeImageIndex(details)
+	images, err = s.appendRegistryImages(log, images, seenRepoTags, repoDisplayByNormalized)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(images, func(i, j int) bool {
+		return lessImageInfo(images[i], images[j])
+	})
+
+	return images, nil
+}
+
+func buildRuntimeImageIndex(details []runtime.ImageDetail) ([]domain.ImageInfo, map[string]struct{}, map[string]string) {
 	images := make([]domain.ImageInfo, 0, len(details))
 	seenRepoTags := make(map[string]struct{}, len(details))
 	repoDisplayByNormalized := make(map[string]string)
+
 	for _, detail := range details {
 		if isDanglingImage(detail.RepoTags) {
 			images = append(images, domain.ImageInfo{
@@ -94,6 +109,15 @@ func (s *Service) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 		}
 	}
 
+	return images, seenRepoTags, repoDisplayByNormalized
+}
+
+func (s *Service) appendRegistryImages(
+	log zerowrap.Logger,
+	images []domain.ImageInfo,
+	seenRepoTags map[string]struct{},
+	repoDisplayByNormalized map[string]string,
+) ([]domain.ImageInfo, error) {
 	repositories, err := s.manifestStorage.ListRepositories()
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to list repositories")
@@ -140,10 +164,6 @@ func (s *Service) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 			seenRepoTags[key] = struct{}{}
 		}
 	}
-
-	sort.SliceStable(images, func(i, j int) bool {
-		return lessImageInfo(images[i], images[j])
-	})
 
 	return images, nil
 }
