@@ -11,13 +11,171 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
 func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
+}
+
+func setupMetricsTest(t *testing.T) (*telemetry.Metrics, *sdkmetric.ManualReader) {
+	t.Helper()
+
+	prev := otel.GetMeterProvider()
+	t.Cleanup(func() {
+		otel.SetMeterProvider(prev)
+	})
+
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	otel.SetMeterProvider(mp)
+	t.Cleanup(func() {
+		_ = mp.Shutdown(context.Background())
+	})
+
+	m, err := telemetry.NewMetrics()
+	require.NoError(t, err)
+	return m, reader
+}
+
+func managedMetricState(t *testing.T, reader *sdkmetric.ManualReader) (int64, int, []metricdata.DataPoint[int64]) {
+	t.Helper()
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "gordon.container.managed" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			require.True(t, ok)
+			var total int64
+			for _, dp := range sum.DataPoints {
+				total += dp.Value
+			}
+			return total, len(sum.DataPoints), sum.DataPoints
+		}
+	}
+
+	return 0, 0, nil
+}
+
+func TestService_ManagedContainersMetric_GlobalSeriesOnDeployReplaceAndRemove(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	ctx := testContext()
+	metrics, reader := setupMetricsTest(t)
+	svc.SetMetrics(metrics)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil).Twice()
+
+	// First deploy increments metric.
+	svc.activateDeployedContainer(ctx, "test.example.com", &domain.Container{ID: "container-1"})
+	value, seriesCount, points := managedMetricState(t, reader)
+	assert.Equal(t, int64(1), value)
+	assert.Equal(t, 1, seriesCount)
+	assert.Equal(t, 0, points[0].Attributes.Len())
+
+	// Replacing an existing domain should not increment.
+	svc.activateDeployedContainer(ctx, "test.example.com", &domain.Container{ID: "container-2"})
+	value, seriesCount, points = managedMetricState(t, reader)
+	assert.Equal(t, int64(1), value)
+	assert.Equal(t, 1, seriesCount)
+	assert.Equal(t, 0, points[0].Attributes.Len())
+
+	runtime.EXPECT().RemoveContainer(mock.Anything, "container-2", true).Return(nil)
+	require.NoError(t, svc.Remove(ctx, "container-2", true))
+
+	value, seriesCount, points = managedMetricState(t, reader)
+	assert.Equal(t, int64(0), value)
+	assert.Equal(t, 1, seriesCount)
+	assert.Equal(t, 0, points[0].Attributes.Len())
+}
+
+func TestService_SyncContainers_ManagedContainersMetricTracksDelta(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	ctx := testContext()
+	metrics, reader := setupMetricsTest(t)
+	svc.SetMetrics(metrics)
+
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID: "container-1",
+			Labels: map[string]string{
+				"gordon.domain":  "app1.example.com",
+				"gordon.managed": "true",
+			},
+		},
+		{
+			ID: "container-2",
+			Labels: map[string]string{
+				"gordon.domain":  "app2.example.com",
+				"gordon.managed": "true",
+			},
+		},
+	}, nil).Once()
+	require.NoError(t, svc.SyncContainers(ctx))
+
+	value, seriesCount, points := managedMetricState(t, reader)
+	assert.Equal(t, int64(2), value)
+	assert.Equal(t, 1, seriesCount)
+	assert.Equal(t, 0, points[0].Attributes.Len())
+
+	// No runtime change: metric should remain stable.
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID: "container-1",
+			Labels: map[string]string{
+				"gordon.domain":  "app1.example.com",
+				"gordon.managed": "true",
+			},
+		},
+		{
+			ID: "container-2",
+			Labels: map[string]string{
+				"gordon.domain":  "app2.example.com",
+				"gordon.managed": "true",
+			},
+		},
+	}, nil).Once()
+	require.NoError(t, svc.SyncContainers(ctx))
+
+	value, seriesCount, points = managedMetricState(t, reader)
+	assert.Equal(t, int64(2), value)
+	assert.Equal(t, 1, seriesCount)
+	assert.Equal(t, 0, points[0].Attributes.Len())
+
+	// One container removed in runtime: metric should decrement by one.
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID: "container-1",
+			Labels: map[string]string{
+				"gordon.domain":  "app1.example.com",
+				"gordon.managed": "true",
+			},
+		},
+	}, nil).Once()
+	require.NoError(t, svc.SyncContainers(ctx))
+
+	value, seriesCount, points = managedMetricState(t, reader)
+	assert.Equal(t, int64(1), value)
+	assert.Equal(t, 1, seriesCount)
+	assert.Equal(t, 0, points[0].Attributes.Len())
 }
 
 func TestService_Deploy_Success(t *testing.T) {
