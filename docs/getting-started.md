@@ -6,7 +6,7 @@ Deploy your first app with Gordon in under 5 minutes.
 
 - A Linux VPS with Docker or Podman installed
 - A domain pointing to your VPS (DNS A record)
-- Cloudflare account (free tier) for HTTPS termination
+- HTTPS setup: Cloudflare proxy **or** native TLS in Gordon (`server.tls_enabled = true`)
 - [pass](https://www.passwordstore.org/) (password manager) with GPG key initialized
 
 ## 1. Install Gordon
@@ -36,7 +36,7 @@ Gordon requires a `token_secret` for JWT authentication. You can store it in `pa
 > [auth]
 > enabled = false
 > ```
-> Skip to [Step 4](#4-configure-your-registry-domain). For production, continue below.
+> Skip to [Step 4](#4-configure-your-gordon-domain). For production, continue below.
 
 **Initialize pass (if not already done):**
 ```bash
@@ -67,30 +67,36 @@ secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 ```
 
-## 4. Configure Your Registry Domain
+## 4. Configure Your Gordon Domain
 
 Edit `~/.config/gordon/gordon.toml`:
 
 ```toml
 [server]
-port = 8080                              # Proxy port (use with Cloudflare)
+port = 8080                              # Proxy port (use with Cloudflare/rootless)
 registry_port = 5000                     # Registry port
-gordon_domain = "gordon.mydomain.com"    # Your Gordon domain
+gordon_domain = "gordon.mydomain.com"    # Registry + Admin API domain
 
 [routes]
 "app.mydomain.com" = "myapp:latest"      # Domain → Image mapping
 ```
 
-## 5. Set Up DNS
+## 5. Set Up DNS (Including Wildcard)
 
-In Cloudflare (or your DNS provider):
+`gordon_domain` is the single domain used by both the registry and admin API.
 
-| Type | Name | Content |
-|------|------|---------|
-| A | `app` | `YOUR_SERVER_IP` |
-| A | `registry` | `YOUR_SERVER_IP` |
+In Cloudflare (or your DNS provider), create:
 
-Enable Cloudflare proxy (orange cloud) for HTTPS.
+| Type | Name | Content | Proxy |
+|------|------|---------|-------|
+| A | `gordon` | `YOUR_SERVER_IP` | Yes |
+| A/CNAME | `*` | `YOUR_SERVER_IP` or `gordon.mydomain.com` | Yes |
+
+Why wildcard (`*`)?
+- It automatically covers app routes like `app.mydomain.com`, `api.mydomain.com`, `demo.mydomain.com`, etc.
+- You can add new domains in `[routes]` without creating DNS records one by one.
+
+If your DNS provider supports wildcard CNAME flattening (Cloudflare does), `* -> gordon.mydomain.com` is usually the cleanest option.
 
 ## 6. Start Gordon as a Service
 
@@ -132,16 +138,16 @@ On your local machine:
 
 ```bash
 # Log in to your Gordon registry (skip if auth is disabled)
-docker login -u deploy -p <your-token> registry.mydomain.com
+docker login -u deploy -p <your-token> gordon.mydomain.com
 
 # Build your app
 docker build -t myapp .
 
 # Tag for your registry
-docker tag myapp registry.mydomain.com/myapp:latest
+docker tag myapp gordon.mydomain.com/myapp:latest
 
 # Push to Gordon
-docker push registry.mydomain.com/myapp:latest
+docker push gordon.mydomain.com/myapp:latest
 ```
 
 Your app is now live at `https://app.mydomain.com`!
@@ -153,8 +159,8 @@ Push a new image to deploy with zero downtime:
 ```bash
 # Make changes, rebuild
 docker build -t myapp .
-docker tag myapp registry.mydomain.com/myapp:latest
-docker push registry.mydomain.com/myapp:latest
+docker tag myapp gordon.mydomain.com/myapp:latest
+docker push gordon.mydomain.com/myapp:latest
 ```
 
 Gordon automatically:
