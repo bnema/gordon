@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -46,7 +47,7 @@ func newRollbackListCmd() *cobra.Command {
 		Short: "List available rollback tags",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRollbackList(cmd.Context(), args[0])
+			return runRollbackList(cmd.Context(), cmd.OutOrStdout(), args[0])
 		},
 	}
 }
@@ -86,7 +87,7 @@ func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
 	return deploySelectedTag(ctx, handle.plane, route, rollbackDomain, imageName, selectedTag)
 }
 
-func runRollbackList(ctx context.Context, rollbackDomain string) error {
+func runRollbackList(ctx context.Context, w io.Writer, rollbackDomain string) error {
 	handle, err := resolveControlPlane(configPath)
 	if err != nil {
 		return err
@@ -108,18 +109,18 @@ func runRollbackList(ctx context.Context, rollbackDomain string) error {
 		return err
 	}
 
-	printRollbackTags(rollbackDomain, currentTag, tags)
+	printRollbackTags(w, rollbackDomain, currentTag, tags)
 	return nil
 }
 
-func printRollbackTags(rollbackDomain, currentTag string, tags []string) {
-	fmt.Printf("Available tags for %s:\n", styles.Theme.Bold.Render(rollbackDomain))
+func printRollbackTags(w io.Writer, rollbackDomain, currentTag string, tags []string) {
+	fmt.Fprintf(w, "Available tags for %s:\n", styles.Theme.Bold.Render(rollbackDomain))
 	for _, tag := range tags {
 		suffix := ""
 		if tag == currentTag {
 			suffix = " (current)"
 		}
-		fmt.Printf("- %s%s\n", tag, suffix)
+		fmt.Fprintf(w, "- %s%s\n", tag, suffix)
 	}
 }
 
