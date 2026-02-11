@@ -100,7 +100,7 @@ Attributes: `domain`, `image`
 | `gordon.container.crash_loops` | Counter | - | Crash loop detections |
 | `gordon.container.managed` | UpDownCounter | - | Currently tracked containers |
 
-Attributes: `domain`, `source` (restarts only: `monitor` or `api`)
+Attributes: `source` (restarts only: `monitor` or `api`); `gordon.container.managed` is a global gauge with no attributes
 
 ### Registry
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -41,7 +42,7 @@ These commands currently require remote mode with a configured target.`,
 func newImagesListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List runtime images",
+		Short: "List runtime images and registry tags",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
@@ -70,7 +71,7 @@ func newImagesPruneCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Show what would be pruned without applying changes")
-	cmd.Flags().IntVar(&opts.KeepLast, "keep", 0, "Number of latest tags to keep per repository (0 disables registry cleanup)")
+	cmd.Flags().IntVar(&opts.KeepLast, "keep", 0, "Number of previous version tags to keep per repository (latest is always kept when present; 0 disables registry cleanup)")
 	cmd.Flags().BoolVar(&opts.RuntimeOnly, "runtime-only", false, "Prune dangling runtime images only (skip registry cleanup)")
 
 	return cmd
@@ -103,7 +104,7 @@ func runImagesList(ctx context.Context, client imagesClient, out io.Writer) erro
 			danglingCount++
 		}
 
-		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", img.Repository, img.Tag, formatImageSize(img.Size), formatImageCreatedAt(img.Created), img.ID, dangling); err != nil {
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", img.Repository, img.Tag, formatImageSize(img.Size), formatImageCreatedAt(img.Created), formatImageID(img.ID), dangling); err != nil {
 			return err
 		}
 	}
@@ -154,7 +155,7 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 			return err
 		}
 
-		_, err = fmt.Fprintf(out, "Registry: would keep last %d tags per repository\n", keepLast)
+		_, err = fmt.Fprintf(out, "Registry: would keep latest + %d previous tags per repository\n", keepLast)
 		return err
 	}
 
@@ -187,6 +188,10 @@ func formatImageCreatedAt(t time.Time) string {
 }
 
 func formatImageSize(size int64) string {
+	if size <= 0 {
+		return "-"
+	}
+
 	const unit = 1024
 	if size < unit {
 		return fmt.Sprintf("%d B", size)
@@ -197,4 +202,12 @@ func formatImageSize(size int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(size)/float64(div), "KMGTPE"[exp])
+}
+
+func formatImageID(id string) string {
+	if strings.TrimSpace(id) == "" {
+		return "-"
+	}
+
+	return id
 }

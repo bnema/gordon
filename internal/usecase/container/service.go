@@ -76,6 +76,7 @@ type Service struct {
 	metrics          *telemetry.Metrics
 	containers       map[string]*domain.Container
 	attachments      map[string][]string // ownerDomain → []containerIDs
+	managedCount     int64               // tracks UpDownCounter value for delta computation
 	mu               sync.RWMutex
 	deployMu         sync.Map // per-domain deploy locks (domain → *domainDeployLock)
 	monitor          *Monitor
@@ -456,13 +457,14 @@ func (s *Service) activateDeployedContainer(ctx context.Context, domainName stri
 	s.mu.Lock()
 	_, wasTracked := s.containers[domainName]
 	s.containers[domainName] = container
+	if !wasTracked {
+		s.managedCount++
+	}
 	s.mu.Unlock()
 
 	// Track managed container count (only increment for new domains, not replacements)
 	if !wasTracked && s.metrics != nil {
-		s.metrics.ManagedContainers.Add(ctx, 1, metric.WithAttributes(
-			attribute.String("domain", domainName),
-		))
+		s.metrics.ManagedContainers.Add(ctx, 1)
 	}
 
 	s.publishContainerDeployed(ctx, domainName, container.ID)
@@ -679,6 +681,7 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 		if c.ID == containerID {
 			delete(s.containers, d)
 			removedDomain = d
+			s.managedCount--
 			log.Info().Str("domain", d).Msg("container removed")
 			break
 		}
@@ -690,9 +693,7 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 
 	// Decrement managed container count
 	if removedDomain != "" && s.metrics != nil {
-		s.metrics.ManagedContainers.Add(ctx, -1, metric.WithAttributes(
-			attribute.String("domain", removedDomain),
-		))
+		s.metrics.ManagedContainers.Add(ctx, -1)
 	}
 
 	// Note: We intentionally do NOT clean up deployMu entries to avoid a race condition:
@@ -912,7 +913,15 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 
 	s.mu.Lock()
 	s.containers = managed
+	newCount := int64(len(managed))
+	delta := newCount - s.managedCount
+	s.managedCount = newCount
 	s.mu.Unlock()
+
+	// Report initial/delta managed container count to OTel UpDownCounter.
+	if delta != 0 && s.metrics != nil {
+		s.metrics.ManagedContainers.Add(ctx, delta)
+	}
 
 	log.Info().Int(zerowrap.FieldCount, len(managed)).Msg("container state synchronized")
 	return nil
