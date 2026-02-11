@@ -109,19 +109,23 @@ func runRollbackList(ctx context.Context, w io.Writer, rollbackDomain string) er
 		return err
 	}
 
-	printRollbackTags(w, rollbackDomain, currentTag, tags)
-	return nil
+	return printRollbackTags(w, rollbackDomain, currentTag, tags)
 }
 
-func printRollbackTags(w io.Writer, rollbackDomain, currentTag string, tags []string) {
-	fmt.Fprintf(w, "Available tags for %s:\n", styles.Theme.Bold.Render(rollbackDomain))
+func printRollbackTags(w io.Writer, rollbackDomain, currentTag string, tags []string) error {
+	if _, err := fmt.Fprintf(w, "Available tags for %s:\n", styles.Theme.Bold.Render(rollbackDomain)); err != nil {
+		return err
+	}
 	for _, tag := range tags {
 		suffix := ""
 		if tag == currentTag {
 			suffix = " (current)"
 		}
-		fmt.Fprintf(w, "- %s%s\n", tag, suffix)
+		if _, err := fmt.Fprintf(w, "- %s%s\n", tag, suffix); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func fetchAndSortTags(ctx context.Context, cp ControlPlane, imageName string) ([]string, error) {
