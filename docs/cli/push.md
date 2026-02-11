@@ -24,7 +24,7 @@ gordon push <domain> [options]
 | `-f, --file` | Path to Dockerfile (default: `./Dockerfile`, used with `--build`) |
 | `--platform` | Target platform for buildx (default: `linux/amd64`) |
 | `--build-arg` | Additional build args (repeatable, `KEY=VALUE`) |
-| `--tag` | Override version tag (default: `git describe --tags --abbrev=0`) |
+| `--tag` | Override version tag (default: tag ref from CI, then `git describe --tags --dirty`) |
 | `--no-confirm` | Skip deploy confirmation prompt |
 | `--no-deploy` | Push only; skip deployment prompt |
 | `--remote` | Remote Gordon URL |
@@ -36,10 +36,11 @@ gordon push <domain> [options]
 Gordon registry, pushes it, and optionally deploys it.
 
 - The registry and repository are derived from the route image on the server.
-- The version tag defaults to the latest git tag. If no tag is found, `latest`
-  is used.
+- The version tag defaults to a CI tag ref (like `refs/tags/v1.2.3`) when available,
+  then falls back to `git describe --tags --dirty` (for example
+  `v1.2.3-4-gabc1234` or `v1.2.3-dirty`). If no tag is found, `latest` is used.
 - When `--build` is set, the command builds with `docker buildx build --load`
-  and injects `VERSION=<tag>` plus any `--build-arg` values.
+  and injects `VERSION` into the build environment plus any `--build-arg` values.
 - Use `-f/--file` to build from a Dockerfile outside the current directory root.
 - The version tag and `latest` are both pushed (unless the version is `latest`).
 

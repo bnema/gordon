@@ -124,31 +124,38 @@ sudo loginctl enable-linger $USER
 
 ## 7. Generate a Deploy Token
 
-Create a token for pushing images to your registry (skip if auth is disabled):
+Create a token for remote CLI deploys (skip if auth is disabled):
 
 ```bash
 gordon auth token generate --subject deploy --scopes push,pull --expiry 0
 ```
 
-Save this token securely - you'll need it for Docker login.
+`--expiry 0` creates a non-expiring token. Prefer a finite expiry and a rotation policy unless you explicitly need a long-lived deploy token.
+
+Save this token securely - you'll use it with `gordon --remote` (or a saved remote), and it should be limited to remote deploy use.
 
 ## 8. Deploy Your First App
 
 On your local machine:
 
 ```bash
-# Log in to your Gordon registry (skip if auth is disabled)
-docker login -u deploy -p <your-token> gordon.mydomain.com
+# Save and select your Gordon remote (one-time)
+gordon remotes add prod https://gordon.mydomain.com --token <your-token>
+gordon remotes use prod
 
-# Build your app
-docker build -t myapp .
-
-# Tag for your registry
-docker tag myapp gordon.mydomain.com/myapp:latest
-
-# Push to Gordon
-docker push gordon.mydomain.com/myapp:latest
+# Build, push, and deploy through Gordon
+gordon push myapp --build --no-confirm
 ```
+
+What this command does:
+
+- `gordon push myapp` resolves the route for `myapp`, chooses a version tag,
+  pushes image tags to Gordon's registry, and triggers deploy.
+- `--build` runs `docker buildx build` first, injecting `VERSION` from the tag
+  into the build and then pushing both version and `latest` tags. This requires
+  Docker with Buildx; a Podman-only setup is not supported for `--build`.
+- `--no-confirm` skips the interactive "Deploy now?" prompt so the deploy runs
+  immediately.
 
 Your app is now live at `https://app.mydomain.com`!
 
@@ -157,10 +164,8 @@ Your app is now live at `https://app.mydomain.com`!
 Push a new image to deploy with zero downtime:
 
 ```bash
-# Make changes, rebuild
-docker build -t myapp .
-docker tag myapp gordon.mydomain.com/myapp:latest
-docker push gordon.mydomain.com/myapp:latest
+# Make changes, then build + push + deploy
+gordon push myapp --build --no-confirm
 ```
 
 Gordon automatically:
