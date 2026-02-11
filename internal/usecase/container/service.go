@@ -464,9 +464,7 @@ func (s *Service) activateDeployedContainer(ctx context.Context, domainName stri
 
 	// Track managed container count (only increment for new domains, not replacements)
 	if !wasTracked && s.metrics != nil {
-		s.metrics.ManagedContainers.Add(ctx, 1, metric.WithAttributes(
-			attribute.String("domain", domainName),
-		))
+		s.metrics.ManagedContainers.Add(ctx, 1)
 	}
 
 	s.publishContainerDeployed(ctx, domainName, container.ID)
@@ -695,9 +693,7 @@ func (s *Service) Remove(ctx context.Context, containerID string, force bool) er
 
 	// Decrement managed container count
 	if removedDomain != "" && s.metrics != nil {
-		s.metrics.ManagedContainers.Add(ctx, -1, metric.WithAttributes(
-			attribute.String("domain", removedDomain),
-		))
+		s.metrics.ManagedContainers.Add(ctx, -1)
 	}
 
 	// Note: We intentionally do NOT clean up deployMu entries to avoid a race condition:
