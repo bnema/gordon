@@ -2,10 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+type failingWriter struct{}
+
+func (failingWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("write failed")
+}
 
 func TestSortSemverTags(t *testing.T) {
 	tests := []struct {
@@ -56,11 +63,18 @@ func TestValidateTagExists(t *testing.T) {
 func TestPrintRollbackTags_WritesToProvidedWriter(t *testing.T) {
 	var buf bytes.Buffer
 
-	printRollbackTags(&buf, "myapp.example.com", "v1.2.0", []string{"v1.2.0", "v1.1.0"})
+	err := printRollbackTags(&buf, "myapp.example.com", "v1.2.0", []string{"v1.2.0", "v1.1.0"})
+	assert.NoError(t, err)
 
 	output := buf.String()
 	assert.Contains(t, output, "Available tags for")
 	assert.Contains(t, output, "myapp.example.com")
 	assert.Contains(t, output, "- v1.2.0 (current)")
 	assert.Contains(t, output, "- v1.1.0")
+}
+
+func TestPrintRollbackTags_ReturnsWriteError(t *testing.T) {
+	err := printRollbackTags(failingWriter{}, "myapp.example.com", "v1.2.0", []string{"v1.2.0"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "write failed")
 }
