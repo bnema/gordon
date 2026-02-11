@@ -124,7 +124,9 @@ Create a token for remote CLI deploys (skip if auth is disabled):
 gordon auth token generate --subject deploy --scopes push,pull --expiry 0
 ```
 
-Save this token securely - you'll use it with `gordon --remote` (or a saved remote).
+`--expiry 0` creates a non-expiring token. Prefer a finite expiry and a rotation policy unless you explicitly need a long-lived deploy token.
+
+Save this token securely - you'll use it with `gordon --remote` (or a saved remote), and it should be limited to remote deploy use.
 
 ## 8. Deploy Your First App
 
@@ -144,7 +146,8 @@ What this command does:
 - `gordon push myapp` resolves the route for `myapp`, chooses a version tag,
   pushes image tags to Gordon's registry, and triggers deploy.
 - `--build` runs `docker buildx build` first, injecting `VERSION` from the tag
-  into the build and then pushing both version and `latest` tags.
+  into the build and then pushing both version and `latest` tags. This requires
+  Docker with Buildx; a Podman-only setup is not supported for `--build`.
 - `--no-confirm` skips the interactive "Deploy now?" prompt so the deploy runs
   immediately.
 
