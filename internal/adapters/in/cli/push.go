@@ -66,7 +66,7 @@ Examples:
 	cmd.Flags().BoolVar(&build, "build", false, "Build the image first using docker buildx")
 	cmd.Flags().StringVar(&platform, "platform", "linux/amd64", "Target platform (used with --build)")
 	cmd.Flags().StringVarP(&dockerfile, "file", "f", "", "Path to Dockerfile (default: ./Dockerfile, used with --build)")
-	cmd.Flags().StringVar(&tag, "tag", "", "Override version tag (default: git describe)")
+	cmd.Flags().StringVar(&tag, "tag", "", "Override version tag (default: CI tag ref or git describe)")
 	cmd.Flags().StringArrayVar(&buildArgs, "build-arg", nil, "Additional build args (used with --build)")
 	cmd.Flags().StringVar(&domainFlag, "domain", "", "Explicit domain override (legacy mode)")
 
@@ -404,12 +404,53 @@ func parseLabelPair(pair string) (key, value string, ok bool) {
 func determineVersion(ctx context.Context, tag string) string {
 	version := tag
 	if version == "" {
+		version = versionFromTagRefs(os.Getenv)
+	}
+	if version == "" {
 		version = getGitVersion(ctx)
 	}
 	if version == "" {
 		version = "latest"
 	}
 	return version
+}
+
+func versionFromTagRefs(getenv func(string) string) string {
+	if ref := strings.TrimSpace(getenv("GITHUB_REF")); ref != "" {
+		if tag := parseTagRef(ref); tag != "" {
+			return tag
+		}
+	}
+
+	if strings.TrimSpace(getenv("GITHUB_REF_TYPE")) == "tag" {
+		if tag := strings.TrimSpace(getenv("GITHUB_REF_NAME")); tag != "" {
+			return tag
+		}
+	}
+
+	if tag := strings.TrimSpace(getenv("CI_COMMIT_TAG")); tag != "" {
+		return tag
+	}
+
+	if ref := strings.TrimSpace(getenv("BUILD_SOURCEBRANCH")); ref != "" {
+		if tag := parseTagRef(ref); tag != "" {
+			return tag
+		}
+	}
+
+	return ""
+}
+
+func parseTagRef(ref string) string {
+	ref = strings.TrimSpace(strings.TrimSuffix(ref, "^{}"))
+	if !strings.HasPrefix(ref, "refs/tags/") {
+		return ""
+	}
+	tag := strings.TrimPrefix(ref, "refs/tags/")
+	if tag == "" {
+		return ""
+	}
+	return tag
 }
 
 func buildAndPush(ctx context.Context, version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) error {
@@ -423,6 +464,7 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 	// using docker push gives us chunked uploads (~5MB per request).
 	fmt.Println("\nBuilding image...")
 	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
+	buildCmd.Env = append(os.Environ(), "VERSION="+version)
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {
@@ -451,7 +493,7 @@ func buildImageArgs(version, platform, dockerfile string, buildArgs []string, ve
 		"--platform", platform,
 		"-f", dockerfile,
 		"-t", latestRef,
-		"--build-arg", "VERSION=" + version,
+		"--build-arg", "VERSION",
 	}
 	if version != "latest" {
 		args = append(args, "-t", versionRef)
@@ -639,9 +681,9 @@ func parseImageRef(image string) (registry, name, tag string) {
 	return
 }
 
-// getGitVersion returns the latest git tag, or empty string if unavailable.
+// getGitVersion returns git describe output, or empty string if unavailable.
 func getGitVersion(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--abbrev=0").Output()
+	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--dirty").Output()
 	if err != nil {
 		return ""
 	}

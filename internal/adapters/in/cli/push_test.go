@@ -72,6 +72,73 @@ func TestBuildAndPush_BuildArgs(t *testing.T) {
 	assert.Contains(t, args, "--platform")
 	assert.Contains(t, args, "-f")
 	assert.Contains(t, args, "Dockerfile")
+	assert.Contains(t, args, "VERSION")
+	assert.NotContains(t, args, "VERSION=v1.0.0")
+}
+
+func TestParseTagRef(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  string
+		want string
+	}{
+		{name: "github tag ref", ref: "refs/tags/v1.2.3", want: "v1.2.3"},
+		{name: "peeled tag ref", ref: "refs/tags/v1.2.3^{}", want: "v1.2.3"},
+		{name: "branch ref", ref: "refs/heads/main", want: ""},
+		{name: "empty", ref: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, parseTagRef(tt.ref))
+		})
+	}
+}
+
+func TestVersionFromTagRefs(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "github ref tag",
+			env:  map[string]string{"GITHUB_REF": "refs/tags/v2.0.0"},
+			want: "v2.0.0",
+		},
+		{
+			name: "github ref type and name",
+			env: map[string]string{
+				"GITHUB_REF_TYPE": "tag",
+				"GITHUB_REF_NAME": "v2.1.0",
+			},
+			want: "v2.1.0",
+		},
+		{
+			name: "gitlab commit tag",
+			env:  map[string]string{"CI_COMMIT_TAG": "v3.0.0"},
+			want: "v3.0.0",
+		},
+		{
+			name: "azure source branch tag ref",
+			env:  map[string]string{"BUILD_SOURCEBRANCH": "refs/tags/v4.0.0"},
+			want: "v4.0.0",
+		},
+		{
+			name: "no tag refs",
+			env:  map[string]string{"GITHUB_REF": "refs/heads/main"},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := versionFromTagRefs(func(key string) string {
+				return tt.env[key]
+			})
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestBuildImageArgs_CustomDockerfile(t *testing.T) {
