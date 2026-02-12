@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"strings"
 	"testing"
@@ -67,14 +70,24 @@ func TestUIAdoptionMatrixCoverage(t *testing.T) {
 				t.Fatalf("ui adoption matrix for %s is empty", expect.family)
 			}
 
-			content, err := os.ReadFile(expect.file)
+			fset := token.NewFileSet()
+			fileNode, err := parser.ParseFile(fset, expect.file, nil, parser.AllErrors)
 			if err != nil {
-				t.Fatalf("failed to read %s: %v", expect.file, err)
+				t.Fatalf("failed to parse %s: %v", expect.file, err)
 			}
 
-			source := string(content)
+			found := make(map[string]bool, len(expect.functions))
+			ast.Inspect(fileNode, func(n ast.Node) bool {
+				fn, ok := n.(*ast.FuncDecl)
+				if !ok {
+					return true
+				}
+				found[fn.Name.Name] = true
+				return true
+			})
+
 			for _, fn := range expect.functions {
-				if !strings.Contains(source, "func "+fn+"(") {
+				if !found[fn] {
 					t.Fatalf("ui adoption matrix references missing function %s in %s", fn, expect.file)
 				}
 			}

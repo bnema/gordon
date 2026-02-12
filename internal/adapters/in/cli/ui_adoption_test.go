@@ -84,7 +84,7 @@ func TestUIAdoption(t *testing.T) {
 								hasHelperCall = true
 							}
 						case *ast.SelectorExpr:
-							if isForbiddenRawPrintCall(fun) {
+							if isForbiddenRawPrintCall(call, fun) {
 								hasForbiddenRawPrint = true
 							}
 							pkgIdent, ok := fun.X.(*ast.Ident)
@@ -112,7 +112,7 @@ func TestUIAdoption(t *testing.T) {
 	}
 }
 
-func isForbiddenRawPrintCall(sel *ast.SelectorExpr) bool {
+func isForbiddenRawPrintCall(call *ast.CallExpr, sel *ast.SelectorExpr) bool {
 	pkgIdent, ok := sel.X.(*ast.Ident)
 	if !ok {
 		return false
@@ -120,8 +120,25 @@ func isForbiddenRawPrintCall(sel *ast.SelectorExpr) bool {
 
 	if pkgIdent.Name == "fmt" {
 		switch sel.Sel.Name {
-		case "Print", "Printf", "Println":
-			return true
+		case "Print", "Printf", "Println", "Fprint", "Fprintf", "Fprintln":
+			if sel.Sel.Name == "Print" || sel.Sel.Name == "Printf" || sel.Sel.Name == "Println" {
+				return true
+			}
+
+			if len(call.Args) == 0 {
+				return true
+			}
+
+			switch dst := call.Args[0].(type) {
+			case *ast.SelectorExpr:
+				if dstPkg, ok := dst.X.(*ast.Ident); ok && dstPkg.Name == "os" && (dst.Sel.Name == "Stdout" || dst.Sel.Name == "Stderr") {
+					return true
+				}
+			case *ast.Ident:
+				if dst.Name == "out" {
+					return true
+				}
+			}
 		}
 	}
 
