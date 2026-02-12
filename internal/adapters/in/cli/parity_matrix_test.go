@@ -6,6 +6,35 @@ import (
 	"testing"
 )
 
+type uiAdoptionExpectation struct {
+	family    string
+	file      string
+	functions []string
+}
+
+var uiAdoptionExpectations = []uiAdoptionExpectation{
+	{
+		family:    "server",
+		file:      "serve.go",
+		functions: []string{"newStartCmd"},
+	},
+	{
+		family:    "root/server",
+		file:      "root.go",
+		functions: []string{"newVersionCmd", "runReloadRemote", "runLogsRemote", "streamLogsRemote", "showContainerLogsLocal"},
+	},
+	{
+		family:    "backups",
+		file:      "backup.go",
+		functions: []string{"newBackupListCmd", "newBackupRunCmd", "newBackupDetectCmd", "newBackupStatusCmd"},
+	},
+	{
+		family:    "images",
+		file:      "images.go",
+		functions: []string{"runImagesList", "runImagesPrune"},
+	},
+}
+
 func TestLocalParityMatrix(t *testing.T) {
 	checks := []struct {
 		file       string
@@ -27,5 +56,28 @@ func TestLocalParityMatrix(t *testing.T) {
 		if strings.Contains(string(content), check.legacyText) {
 			t.Fatalf("local parity gap: %s still blocks local mode (%q found in %s)", check.command, check.legacyText, check.file)
 		}
+	}
+}
+
+func TestUIAdoptionMatrixCoverage(t *testing.T) {
+	for _, expect := range uiAdoptionExpectations {
+		expect := expect
+		t.Run(expect.family, func(t *testing.T) {
+			if len(expect.functions) == 0 {
+				t.Fatalf("ui adoption matrix for %s is empty", expect.family)
+			}
+
+			content, err := os.ReadFile(expect.file)
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", expect.file, err)
+			}
+
+			source := string(content)
+			for _, fn := range expect.functions {
+				if !strings.Contains(source, "func "+fn+"(") {
+					t.Fatalf("ui adoption matrix references missing function %s in %s", fn, expect.file)
+				}
+			}
+		})
 	}
 }

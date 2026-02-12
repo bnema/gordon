@@ -52,8 +52,13 @@ func newBackupListCmd() *cobra.Command {
 			}
 
 			if len(jobs) == 0 {
-				fmt.Println("No backups found")
+				if err := cliWriteLine(os.Stdout, cliRenderMuted("No backups found")); err != nil {
+					return err
+				}
 				return nil
+			}
+			if err := cliWriteLine(os.Stdout, cliRenderTitle("Backups")); err != nil {
+				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tBACKUP_ID"); err != nil {
@@ -96,6 +101,9 @@ func newBackupRunCmd() *cobra.Command {
 			if result.Backup == nil {
 				return fmt.Errorf("backup run completed without backup payload")
 			}
+			if err := cliWriteLine(os.Stdout, cliRenderTitle("Backup Result")); err != nil {
+				return err
+			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tBACKUP_ID\tSIZE_BYTES"); err != nil {
@@ -133,8 +141,13 @@ func newBackupDetectCmd() *cobra.Command {
 			}
 
 			if len(dbs) == 0 {
-				fmt.Println("No supported databases detected")
+				if err := cliWriteLine(os.Stdout, cliRenderMuted("No supported databases detected")); err != nil {
+					return err
+				}
 				return nil
+			}
+			if err := cliWriteLine(os.Stdout, cliRenderTitle("Detected Databases")); err != nil {
+				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			if _, err := fmt.Fprintln(w, "NAME\tTYPE\tHOST\tPORT\tIMAGE"); err != nil {
@@ -172,8 +185,13 @@ func newBackupStatusCmd() *cobra.Command {
 			}
 
 			if len(jobs) == 0 {
-				fmt.Println("No backup status available")
+				if err := cliWriteLine(os.Stdout, cliRenderMuted("No backup status available")); err != nil {
+					return err
+				}
 				return nil
+			}
+			if err := cliWriteLine(os.Stdout, cliRenderTitle("Backup Status")); err != nil {
+				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT"); err != nil {
