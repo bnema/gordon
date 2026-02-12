@@ -26,7 +26,7 @@ func cliRenderMuted(msg string) string {
 }
 
 func cliRenderEmptyState(msg string) string {
-	return styles.Theme.Muted.Render(msg)
+	return cliRenderMuted(msg)
 }
 
 func cliRenderListItem(msg string) string {
