@@ -84,10 +84,14 @@ func runImagesList(ctx context.Context, client imagesClient, out io.Writer) erro
 	}
 
 	if len(images) == 0 {
-		if _, err := fmt.Fprintln(out, "No images found"); err != nil {
+		if err := cliWriteLine(out, cliRenderMuted("No images found")); err != nil {
 			return err
 		}
-		_, err := fmt.Fprintln(out, "Total images: 0 (dangling: 0)")
+		err := cliWriteLine(out, cliRenderInfo("Total images: 0 (dangling: 0)"))
+		return err
+	}
+
+	if err := cliWriteLine(out, cliRenderTitle("Images")); err != nil {
 		return err
 	}
 
@@ -113,7 +117,7 @@ func runImagesList(ctx context.Context, client imagesClient, out io.Writer) erro
 		return err
 	}
 
-	_, err = fmt.Fprintf(out, "\nTotal images: %d (dangling: %d)\n", len(images), danglingCount)
+	err = cliWritef(out, "\nTotal images: %d (dangling: %d)\n", len(images), danglingCount)
 	return err
 }
 
@@ -140,22 +144,22 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 			}
 		}
 
-		if _, err := fmt.Fprintln(out, "Dry run: no changes applied"); err != nil {
+		if err := cliWriteLine(out, cliRenderWarning("Dry run: no changes applied")); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(out, "Runtime: would prune %d dangling runtime images\n", danglingCount); err != nil {
+		if err := cliWritef(out, "Runtime: would prune %d dangling runtime images\n", danglingCount); err != nil {
 			return err
 		}
 		if opts.RuntimeOnly {
-			_, err = fmt.Fprintln(out, "Registry cleanup skipped (--runtime-only)")
+			err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--runtime-only)"))
 			return err
 		}
 		if keepLast == 0 {
-			_, err = fmt.Fprintln(out, "Registry cleanup skipped (--keep=0)")
+			err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--keep=0)"))
 			return err
 		}
 
-		_, err = fmt.Fprintf(out, "Registry: would keep latest + %d previous tags per repository\n", keepLast)
+		err = cliWritef(out, "Registry: would keep latest + %d previous tags per repository\n", keepLast)
 		return err
 	}
 
@@ -167,16 +171,16 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 		return fmt.Errorf("failed to prune images: empty response")
 	}
 
-	if _, err := fmt.Fprintf(out, "Runtime: deleted=%d space_reclaimed=%d\n", resp.Runtime.DeletedCount, resp.Runtime.SpaceReclaimed); err != nil {
+	if err := cliWritef(out, "Runtime: deleted=%d space_reclaimed=%d\n", resp.Runtime.DeletedCount, resp.Runtime.SpaceReclaimed); err != nil {
 		return err
 	}
 
 	if opts.RuntimeOnly {
-		_, err = fmt.Fprintln(out, "Registry cleanup skipped (--runtime-only)")
+		err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--runtime-only)"))
 		return err
 	}
 
-	_, err = fmt.Fprintf(out, "Registry: tags_removed=%d blobs_removed=%d space_reclaimed=%d\n", resp.Registry.TagsRemoved, resp.Registry.BlobsRemoved, resp.Registry.SpaceReclaimed)
+	err = cliWritef(out, "Registry: tags_removed=%d blobs_removed=%d space_reclaimed=%d\n", resp.Registry.TagsRemoved, resp.Registry.BlobsRemoved, resp.Registry.SpaceReclaimed)
 	return err
 }
 
