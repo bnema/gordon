@@ -529,6 +529,19 @@ func TestService_Prune_DanglingOnlySkipsRegistry(t *testing.T) {
 	assert.Equal(t, 0, manifestStorage.listRepositoriesCalls, "should not list repositories when registry disabled")
 }
 
+func TestService_Prune_DanglingOnlyRuntimeFailureReturnsError(t *testing.T) {
+	rt := &fakeRuntime{pruneErr: errors.New("docker daemon unavailable")}
+	svc := NewService(rt, newFakeManifestStorage(), &fakeBlobStorage{}, zerowrap.Default())
+
+	_, err := svc.Prune(context.Background(), domain.ImagePruneOptions{
+		KeepLast: 3, PruneDangling: true, PruneRegistry: false,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "runtime prune failed")
+	assert.Contains(t, err.Error(), "docker daemon unavailable")
+}
+
 func TestService_Prune_RegistryOnlySkipsRuntime(t *testing.T) {
 	manifestStorage := newFakeManifestStorage()
 	manifestStorage.repositories = []string{"gordon/api"}

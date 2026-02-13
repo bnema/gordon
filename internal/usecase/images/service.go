@@ -4,6 +4,7 @@ package images
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -347,11 +348,11 @@ func (s *Service) Prune(ctx context.Context, opts domain.ImagePruneOptions) (dom
 	if opts.PruneDangling {
 		runtimeReport, err := s.PruneRuntime(ctx)
 		if err != nil {
-			msg := "runtime prune failed"
-			if opts.PruneRegistry {
-				msg += "; continuing with registry prune"
+			if !opts.PruneRegistry {
+				// Dangling-only: surface the error to the caller.
+				return report, fmt.Errorf("runtime prune failed: %w", err)
 			}
-			log.Warn().Err(err).Msg(msg)
+			log.Warn().Err(err).Msg("runtime prune failed; continuing with registry prune")
 		} else {
 			report.Runtime = runtimeReport.Runtime
 		}
