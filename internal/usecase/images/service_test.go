@@ -395,7 +395,7 @@ func TestService_PruneRegistry_TieBreaksByTagName(t *testing.T) {
 	assert.Equal(t, []manifestRef{{name: "gordon/api", reference: "v1"}}, manifestStorage.deletedManifests)
 }
 
-func TestService_PruneRegistry_ReturnsErrorWhenChildManifestMissing(t *testing.T) {
+func TestService_PruneRegistry_LogsWarningAndContinuesWhenChildManifestMissing(t *testing.T) {
 	manifestStorage := newFakeManifestStorage()
 	manifestStorage.repositories = []string{"gordon/api"}
 	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest"}
@@ -403,12 +403,15 @@ func TestService_PruneRegistry_ReturnsErrorWhenChildManifestMissing(t *testing.T
 	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestIndexJSON(t, "sha256:child-missing")
 
 	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:child-missing", "sha256:orphan"}}
-	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+	logger := zerowrap.Default()
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, logger)
 
-	_, err := svc.PruneRegistry(context.Background(), 1)
+	report, err := svc.PruneRegistry(context.Background(), 1)
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to read manifest")
+	// Should not error - missing child manifests are logged as warnings and skipped
+	require.NoError(t, err)
+	assert.Equal(t, 0, report.Registry.TagsRemoved, "no tags should be removed (latest is kept)")
+	assert.Equal(t, 1, report.Registry.BlobsRemoved, "orphan blob should be garbage collected")
 }
 
 func TestService_PruneRegistry_MultipleRepositories(t *testing.T) {

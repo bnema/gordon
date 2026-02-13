@@ -403,7 +403,12 @@ func (s *Service) collectReferencedDigests(
 
 	manifestData, _, err := s.manifestStorage.GetManifest(repository, reference)
 	if err != nil {
-		return log.WrapErr(err, "failed to read manifest")
+		log.Warn().
+			Str("repository", repository).
+			Str("reference", reference).
+			Err(err).
+			Msg("manifest not found during prune; skipping (orphaned reference)")
+		return nil
 	}
 
 	refs, err := parseManifestReferences(manifestData)
