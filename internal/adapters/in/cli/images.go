@@ -12,19 +12,34 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 type imagesClient interface {
 	ListImages(ctx context.Context) ([]dto.Image, error)
-	PruneImages(ctx context.Context, keepLast int) (*dto.ImagePruneResponse, error)
+	PruneImages(ctx context.Context, req dto.ImagePruneRequest) (*dto.ImagePruneResponse, error)
 }
 
 type imagesPruneOptions struct {
-	DryRun      bool
-	KeepLast    int
-	RuntimeOnly bool
+	DryRun       bool
+	KeepReleases int
+	Dangling     bool // scope flag: prune dangling runtime images
+	Registry     bool // scope flag: prune registry tags
+	NoConfirm    bool
 }
 
+// pruneConfirmFunc is the confirmation callback used before destructive prune.
+// It is a package-level variable so tests can replace it without spawning a
+// real Bubble Tea program.
+var pruneConfirmFunc = defaultPruneConfirm
+
+func defaultPruneConfirm(prompt string) (bool, error) {
+	return components.RunConfirm(prompt, components.WithDefaultYes())
+}
+
+// Column widths are fixed to keep table output predictable across terminals.
+// Values are chosen for typical repository names and SHA-prefixed IDs;
+// the table component truncates with ellipsis when content overflows.
 const (
 	imagesListRepositoryColumnWidth = 44
 	imagesListTagColumnWidth        = 14
@@ -79,6 +94,10 @@ func newImagesPruneCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prune",
 		Short: "Prune unused images",
+		Long: `Remove dangling runtime images and/or old registry tags.
+
+By default both runtime and registry cleanup run, keeping latest + 3 previous
+release tags per repository. Use --dangling or --registry to restrict scope.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			client, isRemote := GetRemoteClient()
 			if !isRemote {
@@ -90,10 +109,22 @@ func newImagesPruneCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Show what would be pruned without applying changes")
-	cmd.Flags().IntVar(&opts.KeepLast, "keep", 0, "Number of previous version tags to keep per repository (latest is always kept when present; 0 disables registry cleanup)")
-	cmd.Flags().BoolVar(&opts.RuntimeOnly, "runtime-only", false, "Prune dangling runtime images only (skip registry cleanup)")
+	cmd.Flags().IntVar(&opts.KeepReleases, "keep-releases", domain.DefaultImagePruneKeepLast,
+		"Number of previous non-latest tags to keep per repository (latest is always kept)")
+	cmd.Flags().BoolVar(&opts.Dangling, "dangling", false, "Prune dangling runtime images only")
+	cmd.Flags().BoolVar(&opts.Registry, "registry", false, "Prune old registry tags only")
+	cmd.Flags().BoolVar(&opts.NoConfirm, "no-confirm", false, "Skip confirmation prompt")
 
 	return cmd
+}
+
+// resolvePruneScopes determines which prune subsystems are active.
+// No scope flags → both true. Any scope flag present → only selected scopes.
+func resolvePruneScopes(opts imagesPruneOptions) (pruneDangling, pruneRegistry bool) {
+	if !opts.Dangling && !opts.Registry {
+		return true, true
+	}
+	return opts.Dangling, opts.Registry
 }
 
 func runImagesList(ctx context.Context, client imagesClient, out io.Writer) error {
@@ -149,48 +180,30 @@ func runImagesList(ctx context.Context, client imagesClient, out io.Writer) erro
 }
 
 func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOptions, out io.Writer) error {
-	if opts.KeepLast < 0 {
-		return fmt.Errorf("--keep must be >= 0")
+	if opts.KeepReleases < 0 {
+		return fmt.Errorf("--keep-releases must be >= 0")
 	}
 
-	keepLast := opts.KeepLast
-	if opts.RuntimeOnly {
-		keepLast = 0
-	}
+	pruneDangling, pruneRegistry := resolvePruneScopes(opts)
 
 	if opts.DryRun {
-		images, err := client.ListImages(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to list images: %w", err)
-		}
-
-		danglingCount := 0
-		for _, img := range images {
-			if img.Dangling {
-				danglingCount++
-			}
-		}
-
-		if err := cliWriteLine(out, cliRenderWarning("Dry run: no changes applied")); err != nil {
-			return err
-		}
-		if err := cliWritef(out, "Runtime: would prune %d dangling runtime images\n", danglingCount); err != nil {
-			return err
-		}
-		if opts.RuntimeOnly {
-			err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--runtime-only)"))
-			return err
-		}
-		if keepLast == 0 {
-			err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--keep=0)"))
-			return err
-		}
-
-		err = cliWritef(out, "Registry: would keep latest + %d previous tags per repository\n", keepLast)
-		return err
+		return runImagesPruneDryRun(ctx, client, opts, pruneDangling, pruneRegistry, out)
 	}
 
-	resp, err := client.PruneImages(ctx, keepLast)
+	// Confirmation prompt for destructive operations.
+	if !opts.NoConfirm {
+		confirmed, err := pruneConfirmFunc("Prune images? This cannot be undone.")
+		if err != nil {
+			return fmt.Errorf("confirmation failed: %w", err)
+		}
+		if !confirmed {
+			return cliWriteLine(out, cliRenderMuted("Prune cancelled"))
+		}
+	}
+
+	req := buildPruneRequest(opts.KeepReleases, pruneDangling, pruneRegistry)
+
+	resp, err := client.PruneImages(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to prune images: %w", err)
 	}
@@ -198,17 +211,67 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 		return fmt.Errorf("failed to prune images: empty response")
 	}
 
-	if err := cliWritef(out, "Runtime: deleted=%d space_reclaimed=%d\n", resp.Runtime.DeletedCount, resp.Runtime.SpaceReclaimed); err != nil {
+	if pruneDangling {
+		if err := cliWritef(out, "Runtime: deleted=%d space_reclaimed=%d\n", resp.Runtime.DeletedCount, resp.Runtime.SpaceReclaimed); err != nil {
+			return err
+		}
+	} else {
+		if err := cliWriteLine(out, cliRenderMuted("Runtime cleanup skipped (--registry)")); err != nil {
+			return err
+		}
+	}
+
+	if pruneRegistry {
+		err = cliWritef(out, "Registry: tags_removed=%d blobs_removed=%d space_reclaimed=%d\n", resp.Registry.TagsRemoved, resp.Registry.BlobsRemoved, resp.Registry.SpaceReclaimed)
 		return err
 	}
 
-	if opts.RuntimeOnly {
-		err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--runtime-only)"))
-		return err
-	}
-
-	err = cliWritef(out, "Registry: tags_removed=%d blobs_removed=%d space_reclaimed=%d\n", resp.Registry.TagsRemoved, resp.Registry.BlobsRemoved, resp.Registry.SpaceReclaimed)
+	err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--dangling)"))
 	return err
+}
+
+func runImagesPruneDryRun(ctx context.Context, client imagesClient, opts imagesPruneOptions, pruneDangling, pruneRegistry bool, out io.Writer) error {
+	images, err := client.ListImages(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list images: %w", err)
+	}
+
+	danglingCount := 0
+	for _, img := range images {
+		if img.Dangling {
+			danglingCount++
+		}
+	}
+
+	if err := cliWriteLine(out, cliRenderWarning("Dry run: no changes applied")); err != nil {
+		return err
+	}
+
+	if pruneDangling {
+		if err := cliWritef(out, "Runtime: would prune %d dangling runtime images\n", danglingCount); err != nil {
+			return err
+		}
+	} else {
+		if err := cliWriteLine(out, cliRenderMuted("Runtime cleanup skipped (--registry)")); err != nil {
+			return err
+		}
+	}
+
+	if pruneRegistry {
+		err = cliWritef(out, "Registry: would keep latest + %d previous tags per repository\n", opts.KeepReleases)
+		return err
+	}
+
+	err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--dangling)"))
+	return err
+}
+
+func buildPruneRequest(keepReleases int, pruneDangling, pruneRegistry bool) dto.ImagePruneRequest {
+	return dto.ImagePruneRequest{
+		KeepLast:      &keepReleases,
+		PruneDangling: &pruneDangling,
+		PruneRegistry: &pruneRegistry,
+	}
 }
 
 func formatImageCreatedAt(t time.Time) string {

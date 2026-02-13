@@ -331,30 +331,36 @@ func (s *Service) collectKeptTagDigests(
 	return nil
 }
 
-// Prune runs runtime prune and registry prune and aggregates reports.
-func (s *Service) Prune(ctx context.Context, keepLast int) (domain.ImagePruneReport, error) {
+// Prune runs runtime and/or registry prune based on options and aggregates reports.
+func (s *Service) Prune(ctx context.Context, opts domain.ImagePruneOptions) (domain.ImagePruneReport, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "Prune",
-		"keepLast":            keepLast,
+		"keepLast":            opts.KeepLast,
+		"pruneDangling":       opts.PruneDangling,
+		"pruneRegistry":       opts.PruneRegistry,
 	})
 	log := zerowrap.FromCtx(ctx)
 
 	var report domain.ImagePruneReport
 
-	runtimeReport, err := s.PruneRuntime(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("runtime prune failed; continuing with registry prune")
-	} else {
-		report.Runtime = runtimeReport.Runtime
+	if opts.PruneDangling {
+		runtimeReport, err := s.PruneRuntime(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("runtime prune failed; continuing with registry prune")
+		} else {
+			report.Runtime = runtimeReport.Runtime
+		}
 	}
 
-	registryReport, err := s.PruneRegistry(ctx, keepLast)
-	if err != nil {
-		return report, err
+	if opts.PruneRegistry {
+		registryReport, err := s.PruneRegistry(ctx, opts.KeepLast)
+		if err != nil {
+			return report, err
+		}
+		report.Registry = registryReport.Registry
 	}
 
-	report.Registry = registryReport.Registry
 	return report, nil
 }
 

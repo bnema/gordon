@@ -138,14 +138,25 @@ func TestClientPruneImages(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		require.NotNil(t, req.KeepLast)
 		assert.Equal(t, 4, *req.KeepLast)
+		require.NotNil(t, req.PruneDangling)
+		assert.True(t, *req.PruneDangling)
+		require.NotNil(t, req.PruneRegistry)
+		assert.True(t, *req.PruneRegistry)
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"runtime":{"deleted_count":2,"space_reclaimed":2048},"registry":{"tags_removed":3,"blobs_removed":1,"space_reclaimed":4096}}`))
 	}))
 	defer srv.Close()
 
+	keepLast := 4
+	pruneDangling := true
+	pruneRegistry := true
 	client := NewClient(srv.URL)
-	resp, err := client.PruneImages(context.Background(), 4)
+	resp, err := client.PruneImages(context.Background(), dto.ImagePruneRequest{
+		KeepLast:      &keepLast,
+		PruneDangling: &pruneDangling,
+		PruneRegistry: &pruneRegistry,
+	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Equal(t, 2, resp.Runtime.DeletedCount)

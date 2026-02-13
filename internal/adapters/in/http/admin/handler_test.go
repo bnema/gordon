@@ -21,7 +21,7 @@ import (
 
 type stubImageService struct {
 	listImagesFunc func(context.Context) ([]domain.ImageInfo, error)
-	pruneFunc      func(context.Context, int) (domain.ImagePruneReport, error)
+	pruneFunc      func(context.Context, domain.ImagePruneOptions) (domain.ImagePruneReport, error)
 }
 
 func (s *stubImageService) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
@@ -31,11 +31,11 @@ func (s *stubImageService) ListImages(ctx context.Context) ([]domain.ImageInfo, 
 	return s.listImagesFunc(ctx)
 }
 
-func (s *stubImageService) Prune(ctx context.Context, keepLast int) (domain.ImagePruneReport, error) {
+func (s *stubImageService) Prune(ctx context.Context, opts domain.ImagePruneOptions) (domain.ImagePruneReport, error) {
 	if s.pruneFunc == nil {
 		return domain.ImagePruneReport{}, nil
 	}
-	return s.pruneFunc(ctx, keepLast)
+	return s.pruneFunc(ctx, opts)
 }
 
 func testLogger() zerowrap.Logger {
@@ -1393,9 +1393,9 @@ func TestHandler_ImagesPrune_AcceptsOptionalKeepLast(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			called := false
 			imageSvc := &stubImageService{
-				pruneFunc: func(_ context.Context, keepLast int) (domain.ImagePruneReport, error) {
+				pruneFunc: func(_ context.Context, opts domain.ImagePruneOptions) (domain.ImagePruneReport, error) {
 					called = true
-					assert.Equal(t, tt.expectedKeepLast, keepLast)
+					assert.Equal(t, tt.expectedKeepLast, opts.KeepLast)
 					return domain.ImagePruneReport{
 						Runtime:  domain.RuntimePruneResult{DeletedCount: 2, SpaceReclaimed: 4096},
 						Registry: domain.RegistryPruneResult{TagsRemoved: 1, BlobsRemoved: 3, SpaceReclaimed: 2048},
@@ -1452,7 +1452,7 @@ func TestHandler_Images_ErrorMappingForServiceFailures(t *testing.T) {
 		secretSvc := inmocks.NewMockSecretService(t)
 
 		imageSvc := &stubImageService{
-			pruneFunc: func(context.Context, int) (domain.ImagePruneReport, error) {
+			pruneFunc: func(context.Context, domain.ImagePruneOptions) (domain.ImagePruneReport, error) {
 				return domain.ImagePruneReport{}, errors.New("prune failed: confidential details")
 			},
 		}
@@ -1507,6 +1507,83 @@ func TestHandler_ImagesPrune_ValidationAndAvailability(t *testing.T) {
 		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 		assert.Contains(t, rec.Body.String(), "image service not available")
 	})
+}
+
+func TestHandler_ImagesPrune_ScopeDefaults(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	tests := []struct {
+		name                  string
+		body                  string
+		expectedPruneDangling bool
+		expectedPruneRegistry bool
+		expectedKeepLast      int
+		wantStatus            int
+	}{
+		{
+			name:                  "missing scope fields defaults to both true",
+			body:                  `{}`,
+			expectedPruneDangling: true,
+			expectedPruneRegistry: true,
+			expectedKeepLast:      domain.DefaultImagePruneKeepLast,
+			wantStatus:            http.StatusOK,
+		},
+		{
+			name:                  "explicit dangling only",
+			body:                  `{"prune_dangling": true, "prune_registry": false}`,
+			expectedPruneDangling: true,
+			expectedPruneRegistry: false,
+			expectedKeepLast:      domain.DefaultImagePruneKeepLast,
+			wantStatus:            http.StatusOK,
+		},
+		{
+			name:                  "explicit registry only",
+			body:                  `{"prune_dangling": false, "prune_registry": true, "keep_last": 5}`,
+			expectedPruneDangling: false,
+			expectedPruneRegistry: true,
+			expectedKeepLast:      5,
+			wantStatus:            http.StatusOK,
+		},
+		{
+			name:       "both scopes false returns 400",
+			body:       `{"prune_dangling": false, "prune_registry": false}`,
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			imageSvc := &stubImageService{
+				pruneFunc: func(_ context.Context, opts domain.ImagePruneOptions) (domain.ImagePruneReport, error) {
+					called = true
+					assert.Equal(t, tt.expectedPruneDangling, opts.PruneDangling)
+					assert.Equal(t, tt.expectedPruneRegistry, opts.PruneRegistry)
+					assert.Equal(t, tt.expectedKeepLast, opts.KeepLast)
+					return domain.ImagePruneReport{}, nil
+				},
+			}
+
+			handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, imageSvc)
+
+			req := httptest.NewRequest("POST", "/admin/images/prune", bytes.NewBufferString(tt.body))
+			req = req.WithContext(ctxWithScopes("admin:config:write"))
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantStatus == http.StatusOK {
+				assert.True(t, called, "prune should have been called")
+			}
+			if tt.wantStatus == http.StatusBadRequest {
+				assert.Contains(t, rec.Body.String(), "at least one prune scope")
+			}
+		})
+	}
 }
 
 func TestHandler_Images_Authorization(t *testing.T) {

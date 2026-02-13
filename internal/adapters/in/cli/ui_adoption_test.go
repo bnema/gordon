@@ -27,6 +27,9 @@ var uiAdoptionHelperCalls = map[string]struct{}{
 	"cliRenderInfo":       {},
 }
 
+// uiAdoptionSeamMu guards mutations of the package-level cliWriteLine and
+// cliWritef variables. Any test that overrides these seams must hold this
+// mutex for the duration of the override and restore the originals on cleanup.
 var uiAdoptionSeamMu sync.Mutex
 
 func TestPresentationHelpers(t *testing.T) {
@@ -120,11 +123,9 @@ func isForbiddenRawPrintCall(call *ast.CallExpr, sel *ast.SelectorExpr) bool {
 
 	if pkgIdent.Name == "fmt" {
 		switch sel.Sel.Name {
-		case "Print", "Printf", "Println", "Fprint", "Fprintf", "Fprintln":
-			if sel.Sel.Name == "Print" || sel.Sel.Name == "Printf" || sel.Sel.Name == "Println" {
-				return true
-			}
-
+		case "Print", "Printf", "Println":
+			return true
+		case "Fprint", "Fprintf", "Fprintln":
 			if len(call.Args) == 0 {
 				return true
 			}
@@ -162,7 +163,7 @@ func (s imagesClientStub) ListImages(context.Context) ([]dto.Image, error) {
 	return s.listResp, nil
 }
 
-func (s imagesClientStub) PruneImages(context.Context, int) (*dto.ImagePruneResponse, error) {
+func (s imagesClientStub) PruneImages(context.Context, dto.ImagePruneRequest) (*dto.ImagePruneResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}

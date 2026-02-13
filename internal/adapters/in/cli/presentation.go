@@ -30,7 +30,8 @@ func cliRenderEmptyState(msg string) string {
 }
 
 func cliRenderListItem(msg string) string {
-	return styles.RenderListItem(msg, false)
+	const selected = false // CLI list items are never in a selected/highlighted state
+	return styles.RenderListItem(msg, selected)
 }
 
 func cliRenderMeta(label, value string) string {

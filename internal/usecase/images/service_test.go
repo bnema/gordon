@@ -469,7 +469,9 @@ func TestService_Prune_RunsBothRuntimeAndRegistry(t *testing.T) {
 
 	svc := NewService(rt, manifestStorage, blobStorage, zerowrap.Default())
 
-	report, err := svc.Prune(context.Background(), 1)
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{
+		KeepLast: 1, PruneDangling: true, PruneRegistry: true,
+	})
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Runtime.DeletedCount)
@@ -494,7 +496,9 @@ func TestService_Prune_RuntimeFailureDoesNotBlockRegistry(t *testing.T) {
 
 	svc := NewService(rt, manifestStorage, blobStorage, zerowrap.Default())
 
-	report, err := svc.Prune(context.Background(), 1)
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{
+		KeepLast: 1, PruneDangling: true, PruneRegistry: true,
+	})
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, report.Runtime.DeletedCount)
@@ -503,6 +507,51 @@ func TestService_Prune_RuntimeFailureDoesNotBlockRegistry(t *testing.T) {
 	assert.Equal(t, 1, report.Registry.BlobsRemoved)
 	assert.Equal(t, []manifestRef{{name: "gordon/api", reference: "v1"}}, manifestStorage.deletedManifests)
 	assert.Equal(t, []string{"sha256:orphan"}, blobStorage.deletedBlobs)
+}
+
+func TestService_Prune_DanglingOnlySkipsRegistry(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v1"}
+	blobStorage := &fakeBlobStorage{}
+	rt := &fakeRuntime{pruneReport: pkgruntime.PruneReport{DeletedIDs: []string{"sha256:img1"}, SpaceReclaimed: 512}}
+
+	svc := NewService(rt, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{
+		KeepLast: 3, PruneDangling: true, PruneRegistry: false,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, rt.pruneCalled, "runtime prune should have been called")
+	assert.Equal(t, 1, report.Runtime.DeletedCount)
+	assert.Equal(t, 0, report.Registry.TagsRemoved, "registry should not be pruned")
+	assert.Equal(t, 0, manifestStorage.listRepositoriesCalls, "should not list repositories when registry disabled")
+}
+
+func TestService_Prune_RegistryOnlySkipsRuntime(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v2", "v1"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v2")] = time.Date(2026, 2, 8, 11, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v1")] = time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-live", "sha256:layer-live")
+	manifestStorage.manifests[manifestRefKey("gordon/api", "v2")] = mustManifestJSON(t, "sha256:cfg-v2", "sha256:layer-v2")
+	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:cfg-live", "sha256:layer-live", "sha256:orphan"}}
+	rt := &fakeRuntime{}
+
+	svc := NewService(rt, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{
+		KeepLast: 1, PruneDangling: false, PruneRegistry: true,
+	})
+
+	require.NoError(t, err)
+	assert.False(t, rt.pruneCalled, "runtime prune should not have been called")
+	assert.Equal(t, 0, report.Runtime.DeletedCount)
+	assert.Equal(t, 1, report.Registry.TagsRemoved)
+	assert.Equal(t, 1, report.Registry.BlobsRemoved)
 }
 
 type fakeRuntime struct {
