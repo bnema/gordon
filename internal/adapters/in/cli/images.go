@@ -178,13 +178,14 @@ func pruneWithSpinner(ctx context.Context, client imagesClient, req dto.ImagePru
 			model.SetMessage(cliRenderSuccess("Pruning complete"))
 			updatedModel, _ := model.Update(spinner.TickMsg{})
 			if m, ok := updatedModel.(components.SpinnerModel); ok {
-				fmt.Print(m.View())
+				fmt.Print("\r" + m.View() + "\n")
 			}
 			return result.resp, nil
 		case <-time.After(100 * time.Millisecond):
 			updatedModel, _ := model.Update(spinner.TickMsg{})
 			if m, ok := updatedModel.(components.SpinnerModel); ok {
-				fmt.Print(m.View())
+				model = m
+				fmt.Print("\r" + m.View())
 			}
 		}
 	}
