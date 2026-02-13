@@ -11,7 +11,7 @@ gordon images <subcommand>
 Subcommands:
 
 - `list` - List runtime images and registry tags.
-- `prune` - Prune dangling runtime images and optionally registry data.
+- `prune` - Prune dangling runtime images and old registry tags.
 
 > **Note:** Images commands require remote mode (`--remote` + `--token`, or configured remotes).
 
@@ -27,25 +27,33 @@ Rows that exist only in the registry (not currently present in the runtime cache
 ## gordon images prune
 
 ```bash
-gordon images prune [--dry-run] [--keep <n>] [--runtime-only]
+gordon images prune [--dry-run] [--keep-releases <n>] [--dangling] [--registry] [--no-confirm]
 ```
+
+By default, prune removes dangling runtime images **and** applies registry tag retention (keeping `latest` + 3 previous non-`latest` tags per repository). A confirmation prompt is shown before destructive operations.
 
 Flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--dry-run` | `false` | Show prune behavior without applying changes |
-| `--keep` | `0` | Number of previous tags to keep per repository (`latest` is always preserved when present; `0` disables registry cleanup) |
-| `--runtime-only` | `false` | Prune dangling runtime images only; forces registry cleanup off |
+| `--keep-releases` | `3` | Number of previous non-`latest` tags to keep per repository (`latest` is always preserved) |
+| `--dangling` | `false` | Restrict scope to dangling runtime images only |
+| `--registry` | `false` | Restrict scope to registry tag retention only |
+| `--no-confirm` | `false` | Skip the confirmation prompt |
 
-`--keep` defaults to `0` for ad-hoc CLI safety (registry cleanup off by default), while scheduled pruning uses `images.prune.keep_last` from config (default `3`). Use config for recurring behavior; when a CLI `--keep` value is provided, that request value is used.
+### Scope resolution
 
-Behavior notes:
+- **No scope flags** (default): both runtime and registry cleanup run.
+- **`--dangling`**: only runtime dangling images are pruned; registry is skipped.
+- **`--registry`**: only registry tag retention runs; runtime is skipped.
+- **`--dangling --registry`**: both scopes run (same as default, but explicit).
 
-- `--runtime-only` forces `keep_last = 0`.
-- `--keep` must be `>= 0`.
-- `--dry-run` reports what would be pruned.
-- When `--keep` is greater than `0`, registry cleanup keeps `latest` (if present) plus the requested number of most-recent non-`latest` tags.
+### Retention semantics
+
+- `latest` is always preserved when present.
+- `--keep-releases` counts non-`latest` tags, ordered by most recent first.
+- `--keep-releases=0` with registry scope enabled still runs registry cleanup but keeps no non-`latest` tags.
 
 ## Examples
 
@@ -53,14 +61,20 @@ Behavior notes:
 # List images
 gordon images list
 
-# Prune dangling runtime images only
-gordon images prune --runtime-only
+# Prune everything with defaults (dangling + registry, keep latest + 3)
+gordon images prune
 
-# Prune runtime images and keep latest + 3 previous tags per repository
-gordon images prune --keep 3
+# Prune dangling runtime images only
+gordon images prune --dangling
+
+# Prune registry tags only, keeping latest + 5 previous
+gordon images prune --registry --keep-releases 5
 
 # Preview cleanup without applying
-gordon images prune --dry-run --keep 5
+gordon images prune --dry-run
+
+# Skip confirmation prompt
+gordon images prune --no-confirm
 ```
 
 ## Required Permissions

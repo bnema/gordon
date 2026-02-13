@@ -1,10 +1,14 @@
 package components
 
 import (
+	"strings"
+
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 )
 
 // TableColumn defines a table column.
@@ -137,7 +141,19 @@ func (t *TableModel) Render() string {
 	// Extract headers
 	headers := make([]string, len(t.columns))
 	for i, col := range t.columns {
-		headers[i] = col.Title
+		headers[i] = truncateCell(col.Title, col.Width)
+	}
+
+	rows := make([][]string, len(t.rows))
+	for rowIdx, row := range t.rows {
+		rows[rowIdx] = make([]string, len(row))
+		for colIdx, cell := range row {
+			width := 0
+			if colIdx < len(t.columns) {
+				width = t.columns[colIdx].Width
+			}
+			rows[rowIdx][colIdx] = truncateCell(cell, width)
+		}
 	}
 
 	// Create table
@@ -145,15 +161,27 @@ func (t *TableModel) Render() string {
 		Border(t.border).
 		BorderStyle(t.borderStyle).
 		Headers(headers...).
-		Rows(t.rows...).
+		Rows(rows...).
 		StyleFunc(func(row, col int) lipgloss.Style {
+			width := 0
+			if col >= 0 && col < len(t.columns) {
+				width = t.columns[col].Width
+			}
+
+			applyWidth := func(s lipgloss.Style) lipgloss.Style {
+				if width > 0 {
+					return s.Width(width).MaxWidth(width)
+				}
+				return s
+			}
+
 			if row == table.HeaderRow {
-				return t.headerStyle
+				return applyWidth(t.headerStyle)
 			}
 			if row%2 == 0 {
-				return t.evenStyle
+				return applyWidth(t.evenStyle)
 			}
-			return t.oddStyle
+			return applyWidth(t.oddStyle)
 		})
 
 	// Apply width if set
@@ -162,6 +190,40 @@ func (t *TableModel) Render() string {
 	}
 
 	return tbl.String()
+}
+
+func truncateCell(value string, maxWidth int) string {
+	if strings.Contains(value, "\x1b[") {
+		return value
+	}
+
+	if maxWidth <= 0 || runewidth.StringWidth(value) <= maxWidth {
+		return value
+	}
+
+	if maxWidth <= 3 {
+		return strings.Repeat(".", maxWidth)
+	}
+
+	targetWidth := maxWidth - 3
+	b := strings.Builder{}
+	currentWidth := 0
+	g := uniseg.NewGraphemes(value)
+	for g.Next() {
+		grapheme := g.Str()
+		graphemeWidth := runewidth.StringWidth(grapheme)
+		if currentWidth+graphemeWidth > targetWidth {
+			break
+		}
+		b.WriteString(grapheme)
+		currentWidth += graphemeWidth
+	}
+
+	if b.Len() == 0 {
+		return strings.Repeat(".", maxWidth)
+	}
+
+	return b.String() + "..."
 }
 
 // View returns the table view (alias for Render).

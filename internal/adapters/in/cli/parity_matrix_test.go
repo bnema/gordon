@@ -1,10 +1,42 @@
 package cli
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"strings"
 	"testing"
 )
+
+type uiAdoptionExpectation struct {
+	family    string
+	file      string
+	functions []string
+}
+
+var uiAdoptionExpectations = []uiAdoptionExpectation{
+	{
+		family:    "server",
+		file:      "serve.go",
+		functions: []string{"newStartCmd"},
+	},
+	{
+		family:    "root/server",
+		file:      "root.go",
+		functions: []string{"newVersionCmd", "runReloadRemote", "runLogsRemote", "streamLogsRemote", "showContainerLogsLocal"},
+	},
+	{
+		family:    "backups",
+		file:      "backup.go",
+		functions: []string{"newBackupListCmd", "newBackupRunCmd", "newBackupDetectCmd", "newBackupStatusCmd"},
+	},
+	{
+		family:    "images",
+		file:      "images.go",
+		functions: []string{"runImagesList", "runImagesPrune"},
+	},
+}
 
 func TestLocalParityMatrix(t *testing.T) {
 	checks := []struct {
@@ -27,5 +59,38 @@ func TestLocalParityMatrix(t *testing.T) {
 		if strings.Contains(string(content), check.legacyText) {
 			t.Fatalf("local parity gap: %s still blocks local mode (%q found in %s)", check.command, check.legacyText, check.file)
 		}
+	}
+}
+
+func TestUIAdoptionMatrixCoverage(t *testing.T) {
+	for _, expect := range uiAdoptionExpectations {
+		expect := expect
+		t.Run(expect.family, func(t *testing.T) {
+			if len(expect.functions) == 0 {
+				t.Fatalf("ui adoption matrix for %s is empty", expect.family)
+			}
+
+			fset := token.NewFileSet()
+			fileNode, err := parser.ParseFile(fset, expect.file, nil, parser.AllErrors)
+			if err != nil {
+				t.Fatalf("failed to parse %s: %v", expect.file, err)
+			}
+
+			found := make(map[string]bool, len(expect.functions))
+			ast.Inspect(fileNode, func(n ast.Node) bool {
+				fn, ok := n.(*ast.FuncDecl)
+				if !ok {
+					return true
+				}
+				found[fn.Name.Name] = true
+				return true
+			})
+
+			for _, fn := range expect.functions {
+				if !found[fn] {
+					t.Fatalf("ui adoption matrix references missing function %s in %s", fn, expect.file)
+				}
+			}
+		})
 	}
 }

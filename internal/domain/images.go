@@ -4,6 +4,25 @@ import "time"
 
 const DefaultImagePruneKeepLast = 3
 
+// ImagePruneOptions controls which prune subsystems are activated.
+type ImagePruneOptions struct {
+	// KeepLast is the number of most-recent non-latest tags to retain per repository.
+	KeepLast int
+	// PruneDangling enables runtime dangling image cleanup.
+	PruneDangling bool
+	// PruneRegistry enables registry tag retention and blob garbage collection.
+	PruneRegistry bool
+}
+
+// DefaultImagePruneOptions returns options that prune both scopes with the default retention.
+func DefaultImagePruneOptions() ImagePruneOptions {
+	return ImagePruneOptions{
+		KeepLast:      DefaultImagePruneKeepLast,
+		PruneDangling: true,
+		PruneRegistry: true,
+	}
+}
+
 // ImagePruneConfig defines scheduled image cleanup behavior.
 type ImagePruneConfig struct {
 	Enabled  bool
