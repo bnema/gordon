@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
@@ -173,15 +174,18 @@ func pruneWithSpinner(ctx context.Context, client imagesClient, req dto.ImagePru
 			if result.resp == nil {
 				return nil, fmt.Errorf("prune operation completed but no response received")
 			}
-			// Success - wait for final frame to render
+			// Success - set final message and render
 			model.SetMessage(cliRenderSuccess("Pruning complete"))
-			time.Sleep(100 * time.Millisecond)
-			cmd := model.Init()
-			fmt.Print(cmd)
+			updatedModel, _ := model.Update(spinner.TickMsg{})
+			if m, ok := updatedModel.(components.SpinnerModel); ok {
+				fmt.Print(m.View())
+			}
 			return result.resp, nil
 		case <-time.After(100 * time.Millisecond):
-			cmd := model.Init()
-			fmt.Print(cmd)
+			updatedModel, _ := model.Update(spinner.TickMsg{})
+			if m, ok := updatedModel.(components.SpinnerModel); ok {
+				fmt.Print(m.View())
+			}
 		}
 	}
 }
@@ -378,10 +382,6 @@ type previewRegistryTag struct {
 }
 
 func estimateRegistryTagsToPrune(images []dto.Image, keepReleases int) int {
-	if keepReleases <= 0 {
-		return 0
-	}
-
 	tagsByRepo := collectTagsByRepository(images)
 	removed := 0
 

@@ -480,6 +480,9 @@ func TestService_Prune_IdempotentMultiplePrunesDoNotAccumulate(t *testing.T) {
 	assert.Equal(t, 1, report1.Registry.TagsRemoved, "first prune should remove v1")
 	assert.Equal(t, 1, report1.Registry.BlobsRemoved, "first prune should remove orphan")
 
+	// Reset runtime prune report to test idempotency properly (runtime would have nothing to prune second time)
+	rt.pruneReport = pkgruntime.PruneReport{}
+
 	// Second prune - should be idempotent (nothing else to remove)
 	report2, err := svc.Prune(context.Background(), domain.ImagePruneOptions{
 		KeepLast: 1, PruneDangling: true, PruneRegistry: true,
@@ -487,6 +490,8 @@ func TestService_Prune_IdempotentMultiplePrunesDoNotAccumulate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, report2.Registry.TagsRemoved, "second prune should remove nothing (idempotent)")
 	assert.Equal(t, 0, report2.Registry.BlobsRemoved, "second prune should remove nothing (idempotent)")
+	assert.Equal(t, 0, report2.Runtime.DeletedCount, "second prune should remove no runtime images")
+	assert.Equal(t, int64(0), report2.Runtime.SpaceReclaimed, "second prune should reclaim no runtime space")
 }
 
 func TestService_Prune_RunsBothRuntimeAndRegistry(t *testing.T) {
