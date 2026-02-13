@@ -382,7 +382,21 @@ func estimateRegistryTagsToPrune(images []dto.Image, keepReleases int) int {
 		return 0
 	}
 
+	tagsByRepo := collectTagsByRepository(images)
+	removed := 0
+
+	for _, repoTags := range tagsByRepo {
+		removed += countTagsToRemove(repoTags, keepReleases)
+	}
+
+	return removed
+}
+
+// collectTagsByRepository groups images by repository and returns
+// map of repo -> tag name -> creation time
+func collectTagsByRepository(images []dto.Image) map[string]map[string]time.Time {
 	tagsByRepo := make(map[string]map[string]time.Time)
+
 	for _, img := range images {
 		repo := strings.TrimSpace(img.Repository)
 		tag := strings.TrimSpace(img.Tag)
@@ -390,55 +404,73 @@ func estimateRegistryTagsToPrune(images []dto.Image, keepReleases int) int {
 			continue
 		}
 
-		repoTags, ok := tagsByRepo[repo]
-		if !ok {
-			repoTags = make(map[string]time.Time)
-			tagsByRepo[repo] = repoTags
+		if _, ok := tagsByRepo[repo]; !ok {
+			tagsByRepo[repo] = make(map[string]time.Time)
 		}
 
+		repoTags := tagsByRepo[repo]
 		if current, exists := repoTags[tag]; !exists || img.Created.After(current) {
 			repoTags[tag] = img.Created
 		}
 	}
 
-	removed := 0
-	for _, repoTags := range tagsByRepo {
-		tagInfos := make([]previewRegistryTag, 0, len(repoTags))
-		for name, created := range repoTags {
-			tagInfos = append(tagInfos, previewRegistryTag{name: name, created: created})
-		}
+	return tagsByRepo
+}
 
-		sort.Slice(tagInfos, func(i, j int) bool {
-			if tagInfos[i].created.Equal(tagInfos[j].created) {
-				return tagInfos[i].name > tagInfos[j].name
-			}
-			return tagInfos[i].created.After(tagInfos[j].created)
-		})
+// countTagsToRemove counts how many tags in a repository would be removed
+// based on keepReleases retention policy
+func countTagsToRemove(repoTags map[string]time.Time, keepReleases int) int {
+	tagInfos := toSortedTagInfos(repoTags)
 
-		kept := make(map[string]struct{})
-		for _, info := range tagInfos {
-			if info.name == "latest" {
-				kept["latest"] = struct{}{}
-				break
-			}
-		}
+	kept := selectKeptTags(tagInfos, keepReleases)
 
-		keptNonLatest := 0
-		for _, info := range tagInfos {
-			if info.name == "latest" {
-				continue
-			}
-			if keptNonLatest >= keepReleases {
-				break
-			}
-			kept[info.name] = struct{}{}
-			keptNonLatest++
-		}
+	return len(tagInfos) - len(kept)
+}
 
-		removed += len(tagInfos) - len(kept)
+// toSortedTagInfos converts repo tags map to sorted slice
+func toSortedTagInfos(repoTags map[string]time.Time) []previewRegistryTag {
+	tagInfos := make([]previewRegistryTag, 0, len(repoTags))
+	for name, created := range repoTags {
+		tagInfos = append(tagInfos, previewRegistryTag{name: name, created: created})
 	}
 
-	return removed
+	sort.Slice(tagInfos, func(i, j int) bool {
+		if tagInfos[i].created.Equal(tagInfos[j].created) {
+			return tagInfos[i].name > tagInfos[j].name
+		}
+		return tagInfos[i].created.After(tagInfos[j].created)
+	})
+
+	return tagInfos
+}
+
+// selectKeptTags returns which tags would be kept based on
+// retention policy (latest + keepReleases non-latest)
+func selectKeptTags(tagInfos []previewRegistryTag, keepReleases int) map[string]struct{} {
+	kept := make(map[string]struct{})
+
+	// Always keep latest if present
+	for _, info := range tagInfos {
+		if info.name == "latest" {
+			kept["latest"] = struct{}{}
+			break
+		}
+	}
+
+	// Keep most recent non-latest tags
+	keptCount := 0
+	for _, info := range tagInfos {
+		if info.name == "latest" {
+			continue
+		}
+		if keptCount >= keepReleases {
+			break
+		}
+		kept[info.name] = struct{}{}
+		keptCount++
+	}
+
+	return kept
 }
 
 func buildPruneRequest(keepReleases int, pruneDangling, pruneRegistry bool) dto.ImagePruneRequest {
