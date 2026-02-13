@@ -503,7 +503,7 @@ func (c *Client) ListImages(ctx context.Context) ([]dto.Image, error) {
 // PruneImages prunes runtime and registry images.
 func (c *Client) PruneImages(ctx context.Context, req dto.ImagePruneRequest) (*dto.ImagePruneResponse, error) {
 	if req.KeepLast != nil && *req.KeepLast < 0 {
-		return nil, fmt.Errorf("keepLast must be >= 0")
+		return nil, fmt.Errorf("keep_last must be >= 0")
 	}
 
 	resp, err := c.request(ctx, http.MethodPost, "/images/prune", req)

@@ -111,8 +111,8 @@ release tags per repository. Use --dangling or --registry to restrict scope.`,
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Show what would be pruned without applying changes")
 	cmd.Flags().IntVar(&opts.KeepReleases, "keep-releases", domain.DefaultImagePruneKeepLast,
 		"Number of previous non-latest tags to keep per repository (latest is always kept)")
-	cmd.Flags().BoolVar(&opts.Dangling, "dangling", false, "Prune dangling runtime images only")
-	cmd.Flags().BoolVar(&opts.Registry, "registry", false, "Prune old registry tags only")
+	cmd.Flags().BoolVar(&opts.Dangling, "dangling", false, "Include dangling runtime images (default: both scopes)")
+	cmd.Flags().BoolVar(&opts.Registry, "registry", false, "Include old registry tags (default: both scopes)")
 	cmd.Flags().BoolVar(&opts.NoConfirm, "no-confirm", false, "Skip confirmation prompt")
 
 	return cmd
@@ -231,23 +231,23 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 }
 
 func runImagesPruneDryRun(ctx context.Context, client imagesClient, opts imagesPruneOptions, pruneDangling, pruneRegistry bool, out io.Writer) error {
-	images, err := client.ListImages(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list images: %w", err)
-	}
-
-	danglingCount := 0
-	for _, img := range images {
-		if img.Dangling {
-			danglingCount++
-		}
-	}
-
 	if err := cliWriteLine(out, cliRenderWarning("Dry run: no changes applied")); err != nil {
 		return err
 	}
 
 	if pruneDangling {
+		images, err := client.ListImages(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list images: %w", err)
+		}
+
+		danglingCount := 0
+		for _, img := range images {
+			if img.Dangling {
+				danglingCount++
+			}
+		}
+
 		if err := cliWritef(out, "Runtime: would prune %d dangling runtime images\n", danglingCount); err != nil {
 			return err
 		}
@@ -258,12 +258,10 @@ func runImagesPruneDryRun(ctx context.Context, client imagesClient, opts imagesP
 	}
 
 	if pruneRegistry {
-		err = cliWritef(out, "Registry: would keep latest + %d previous tags per repository\n", opts.KeepReleases)
-		return err
+		return cliWritef(out, "Registry: would keep latest + %d previous tags per repository\n", opts.KeepReleases)
 	}
 
-	err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--dangling)"))
-	return err
+	return cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--dangling)"))
 }
 
 func buildPruneRequest(keepReleases int, pruneDangling, pruneRegistry bool) dto.ImagePruneRequest {

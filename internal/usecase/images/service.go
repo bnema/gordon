@@ -347,7 +347,11 @@ func (s *Service) Prune(ctx context.Context, opts domain.ImagePruneOptions) (dom
 	if opts.PruneDangling {
 		runtimeReport, err := s.PruneRuntime(ctx)
 		if err != nil {
-			log.Warn().Err(err).Msg("runtime prune failed; continuing with registry prune")
+			msg := "runtime prune failed"
+			if opts.PruneRegistry {
+				msg += "; continuing with registry prune"
+			}
+			log.Warn().Err(err).Msg(msg)
 		} else {
 			report.Runtime = runtimeReport.Runtime
 		}
