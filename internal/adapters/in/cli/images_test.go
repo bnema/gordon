@@ -401,6 +401,37 @@ func TestRunImagesPrune_NonDryRunCallsConfirm(t *testing.T) {
 	assert.Equal(t, 1, client.pruneCalls)
 }
 
+func TestRunImagesPrune_ConfirmPromptIncludesScopePreviewCounts(t *testing.T) {
+	created := time.Date(2026, 2, 13, 7, 0, 0, 0, time.UTC)
+	var prompt string
+	origConfirm := pruneConfirmFunc
+	pruneConfirmFunc = func(value string) (bool, error) {
+		prompt = value
+		return false, nil
+	}
+	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
+
+	client := &fakeImagesClient{
+		listImagesResp: []dto.Image{
+			{Repository: "registry.example.com/app", Tag: "latest", Created: created},
+			{Repository: "registry.example.com/app", Tag: "v3", Created: created.Add(-1 * time.Hour)},
+			{Repository: "registry.example.com/app", Tag: "v2", Created: created.Add(-2 * time.Hour)},
+			{Repository: "registry.example.com/app", Tag: "v1", Created: created.Add(-3 * time.Hour)},
+			{Repository: "<none>", Tag: "<none>", Dangling: true},
+		},
+	}
+
+	var out bytes.Buffer
+	opts := imagesPruneOptions{KeepReleases: 2}
+	err := runImagesPrune(context.Background(), client, opts, &out)
+	require.NoError(t, err)
+
+	assert.Contains(t, prompt, "Runtime: would prune 1 dangling runtime images")
+	assert.Contains(t, prompt, "Registry: would prune 1 tags")
+	assert.Equal(t, 1, client.listImagesCalls)
+	assert.Equal(t, 0, client.pruneCalls)
+}
+
 func TestRunImagesPrune_ConfirmRejectCancelsOperation(t *testing.T) {
 	origConfirm := pruneConfirmFunc
 	pruneConfirmFunc = func(_ string) (bool, error) {

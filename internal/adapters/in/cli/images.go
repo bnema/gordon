@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +27,11 @@ type imagesPruneOptions struct {
 	Dangling     bool // scope flag: prune dangling runtime images
 	Registry     bool // scope flag: prune registry tags
 	NoConfirm    bool
+}
+
+type prunePreview struct {
+	danglingRuntimeCount int
+	registryTagsToPrune  int
 }
 
 // pruneConfirmFunc is the confirmation callback used before destructive prune.
@@ -192,7 +198,12 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 
 	// Confirmation prompt for destructive operations.
 	if !opts.NoConfirm {
-		confirmed, err := pruneConfirmFunc("Prune images? This cannot be undone.")
+		preview, err := loadPrunePreview(ctx, client, opts.KeepReleases, pruneDangling, pruneRegistry)
+		if err != nil {
+			return fmt.Errorf("failed to load prune preview: %w", err)
+		}
+
+		confirmed, err := pruneConfirmFunc(renderPruneConfirmPrompt(preview, opts.KeepReleases, pruneDangling, pruneRegistry))
 		if err != nil {
 			return fmt.Errorf("confirmation failed: %w", err)
 		}
@@ -262,6 +273,119 @@ func runImagesPruneDryRun(ctx context.Context, client imagesClient, opts imagesP
 	}
 
 	return cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--dangling)"))
+}
+
+func loadPrunePreview(ctx context.Context, client imagesClient, keepReleases int, pruneDangling, pruneRegistry bool) (prunePreview, error) {
+	images, err := client.ListImages(ctx)
+	if err != nil {
+		return prunePreview{}, fmt.Errorf("failed to list images: %w", err)
+	}
+
+	preview := prunePreview{}
+	if pruneDangling {
+		for _, img := range images {
+			if img.Dangling {
+				preview.danglingRuntimeCount++
+			}
+		}
+	}
+
+	if pruneRegistry {
+		preview.registryTagsToPrune = estimateRegistryTagsToPrune(images, keepReleases)
+	}
+
+	return preview, nil
+}
+
+func renderPruneConfirmPrompt(preview prunePreview, keepReleases int, pruneDangling, pruneRegistry bool) string {
+	lines := []string{"Prune images? This cannot be undone.", ""}
+
+	if pruneDangling {
+		lines = append(lines, fmt.Sprintf("Runtime: would prune %d dangling runtime images", preview.danglingRuntimeCount))
+	} else {
+		lines = append(lines, "Runtime: cleanup skipped (--registry)")
+	}
+
+	if pruneRegistry {
+		lines = append(lines, fmt.Sprintf(
+			"Registry: would prune %d tags (keep latest + %d previous tags per repository)",
+			preview.registryTagsToPrune,
+			keepReleases,
+		))
+	} else {
+		lines = append(lines, "Registry: cleanup skipped (--dangling)")
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+type previewRegistryTag struct {
+	name    string
+	created time.Time
+}
+
+func estimateRegistryTagsToPrune(images []dto.Image, keepReleases int) int {
+	if keepReleases <= 0 {
+		return 0
+	}
+
+	tagsByRepo := make(map[string]map[string]time.Time)
+	for _, img := range images {
+		repo := strings.TrimSpace(img.Repository)
+		tag := strings.TrimSpace(img.Tag)
+		if repo == "" || tag == "" || repo == "<none>" || tag == "<none>" {
+			continue
+		}
+
+		repoTags, ok := tagsByRepo[repo]
+		if !ok {
+			repoTags = make(map[string]time.Time)
+			tagsByRepo[repo] = repoTags
+		}
+
+		if current, exists := repoTags[tag]; !exists || img.Created.After(current) {
+			repoTags[tag] = img.Created
+		}
+	}
+
+	removed := 0
+	for _, repoTags := range tagsByRepo {
+		tagInfos := make([]previewRegistryTag, 0, len(repoTags))
+		for name, created := range repoTags {
+			tagInfos = append(tagInfos, previewRegistryTag{name: name, created: created})
+		}
+
+		sort.Slice(tagInfos, func(i, j int) bool {
+			if tagInfos[i].created.Equal(tagInfos[j].created) {
+				return tagInfos[i].name > tagInfos[j].name
+			}
+			return tagInfos[i].created.After(tagInfos[j].created)
+		})
+
+		kept := make(map[string]struct{})
+		for _, info := range tagInfos {
+			if info.name == "latest" {
+				kept["latest"] = struct{}{}
+				break
+			}
+		}
+
+		keptNonLatest := 0
+		for _, info := range tagInfos {
+			if info.name == "latest" {
+				continue
+			}
+			if keptNonLatest >= keepReleases {
+				break
+			}
+			kept[info.name] = struct{}{}
+			keptNonLatest++
+		}
+
+		removed += len(tagInfos) - len(kept)
+	}
+
+	return removed
 }
 
 func buildPruneRequest(keepReleases int, pruneDangling, pruneRegistry bool) dto.ImagePruneRequest {
