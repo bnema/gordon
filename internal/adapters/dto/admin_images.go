@@ -19,7 +19,9 @@ type ImagesResponse struct {
 
 // ImagePruneRequest triggers image pruning.
 type ImagePruneRequest struct {
-	KeepLast *int `json:"keep_last,omitempty"`
+	KeepLast      *int  `json:"keep_last,omitempty"`
+	PruneDangling *bool `json:"prune_dangling,omitempty"`
+	PruneRegistry *bool `json:"prune_registry,omitempty"`
 }
 
 // RuntimePruneResult represents runtime prune results.

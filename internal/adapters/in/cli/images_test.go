@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 type fakeImagesClient struct {
@@ -23,7 +24,7 @@ type fakeImagesClient struct {
 
 	listImagesCalls int
 	pruneCalls      int
-	lastPruneKeep   int
+	lastPruneOpts   dto.ImagePruneRequest
 }
 
 func (f *fakeImagesClient) ListImages(_ context.Context) ([]dto.Image, error) {
@@ -34,14 +35,18 @@ func (f *fakeImagesClient) ListImages(_ context.Context) ([]dto.Image, error) {
 	return f.listImagesResp, nil
 }
 
-func (f *fakeImagesClient) PruneImages(_ context.Context, keepLast int) (*dto.ImagePruneResponse, error) {
+func (f *fakeImagesClient) PruneImages(_ context.Context, req dto.ImagePruneRequest) (*dto.ImagePruneResponse, error) {
 	f.pruneCalls++
-	f.lastPruneKeep = keepLast
+	f.lastPruneOpts = req
 	if f.pruneErr != nil {
 		return nil, f.pruneErr
 	}
 	return f.pruneResp, nil
 }
+
+// ---------------------------------------------------------------------------
+// images list tests (unchanged)
+// ---------------------------------------------------------------------------
 
 func TestRunImagesList_PrintsRowsAndSummary(t *testing.T) {
 	createdAt := time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
@@ -181,13 +186,123 @@ func TestRunImagesList_EmptyOutput(t *testing.T) {
 	assert.Equal(t, 1, client.listImagesCalls)
 }
 
-func TestRunImagesPrune_DryRunCallsListOnly(t *testing.T) {
+// ---------------------------------------------------------------------------
+// images prune: default scope behavior
+// ---------------------------------------------------------------------------
+
+func TestRunImagesPrune_DefaultScopeIsBothDanglingAndRegistry(t *testing.T) {
+	// No scope flags → both scopes enabled, keep-releases defaults to domain default.
+	client := &fakeImagesClient{
+		pruneResp: &dto.ImagePruneResponse{
+			Runtime:  dto.RuntimePruneResult{DeletedCount: 1, SpaceReclaimed: 512},
+			Registry: dto.RegistryPruneResult{TagsRemoved: 2, BlobsRemoved: 1, SpaceReclaimed: 1024},
+		},
+	}
+
+	var out bytes.Buffer
+	opts := imagesPruneOptions{KeepReleases: domain.DefaultImagePruneKeepLast, NoConfirm: true}
+	err := runImagesPrune(context.Background(), client, opts, &out)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, client.pruneCalls)
+	require.NotNil(t, client.lastPruneOpts.KeepLast)
+	assert.Equal(t, domain.DefaultImagePruneKeepLast, *client.lastPruneOpts.KeepLast)
+	require.NotNil(t, client.lastPruneOpts.PruneDangling)
+	assert.True(t, *client.lastPruneOpts.PruneDangling)
+	require.NotNil(t, client.lastPruneOpts.PruneRegistry)
+	assert.True(t, *client.lastPruneOpts.PruneRegistry)
+
+	text := out.String()
+	assert.Contains(t, text, "Runtime: deleted=1")
+	assert.Contains(t, text, "Registry: tags_removed=2")
+}
+
+func TestRunImagesPrune_DanglingOnlyScopeSkipsRegistry(t *testing.T) {
+	client := &fakeImagesClient{
+		pruneResp: &dto.ImagePruneResponse{
+			Runtime: dto.RuntimePruneResult{DeletedCount: 3, SpaceReclaimed: 2048},
+		},
+	}
+
+	var out bytes.Buffer
+	opts := imagesPruneOptions{Dangling: true, NoConfirm: true}
+	err := runImagesPrune(context.Background(), client, opts, &out)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, client.pruneCalls)
+	require.NotNil(t, client.lastPruneOpts.PruneDangling)
+	assert.True(t, *client.lastPruneOpts.PruneDangling)
+	require.NotNil(t, client.lastPruneOpts.PruneRegistry)
+	assert.False(t, *client.lastPruneOpts.PruneRegistry)
+
+	text := out.String()
+	assert.Contains(t, text, "Runtime: deleted=3")
+	assert.Contains(t, text, "Registry cleanup skipped")
+}
+
+func TestRunImagesPrune_RegistryOnlyScopeSkipsRuntime(t *testing.T) {
+	client := &fakeImagesClient{
+		pruneResp: &dto.ImagePruneResponse{
+			Registry: dto.RegistryPruneResult{TagsRemoved: 4, BlobsRemoved: 2, SpaceReclaimed: 4096},
+		},
+	}
+
+	var out bytes.Buffer
+	opts := imagesPruneOptions{Registry: true, KeepReleases: 5, NoConfirm: true}
+	err := runImagesPrune(context.Background(), client, opts, &out)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, client.pruneCalls)
+	require.NotNil(t, client.lastPruneOpts.PruneDangling)
+	assert.False(t, *client.lastPruneOpts.PruneDangling)
+	require.NotNil(t, client.lastPruneOpts.PruneRegistry)
+	assert.True(t, *client.lastPruneOpts.PruneRegistry)
+	require.NotNil(t, client.lastPruneOpts.KeepLast)
+	assert.Equal(t, 5, *client.lastPruneOpts.KeepLast)
+
+	text := out.String()
+	assert.Contains(t, text, "Runtime cleanup skipped")
+	assert.Contains(t, text, "Registry: tags_removed=4")
+}
+
+func TestRunImagesPrune_BothScopeFlagsExplicit(t *testing.T) {
+	client := &fakeImagesClient{
+		pruneResp: &dto.ImagePruneResponse{
+			Runtime:  dto.RuntimePruneResult{DeletedCount: 1, SpaceReclaimed: 100},
+			Registry: dto.RegistryPruneResult{TagsRemoved: 1, BlobsRemoved: 0, SpaceReclaimed: 200},
+		},
+	}
+
+	var out bytes.Buffer
+	opts := imagesPruneOptions{Dangling: true, Registry: true, KeepReleases: 2, NoConfirm: true}
+	err := runImagesPrune(context.Background(), client, opts, &out)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, client.pruneCalls)
+	require.NotNil(t, client.lastPruneOpts.PruneDangling)
+	assert.True(t, *client.lastPruneOpts.PruneDangling)
+	require.NotNil(t, client.lastPruneOpts.PruneRegistry)
+	assert.True(t, *client.lastPruneOpts.PruneRegistry)
+	require.NotNil(t, client.lastPruneOpts.KeepLast)
+	assert.Equal(t, 2, *client.lastPruneOpts.KeepLast)
+
+	text := out.String()
+	assert.Contains(t, text, "Runtime: deleted=1")
+	assert.Contains(t, text, "Registry: tags_removed=1")
+}
+
+// ---------------------------------------------------------------------------
+// images prune: dry-run with scope flags
+// ---------------------------------------------------------------------------
+
+func TestRunImagesPrune_DryRunBothScopes(t *testing.T) {
 	client := &fakeImagesClient{
 		listImagesResp: []dto.Image{{Dangling: true}, {Dangling: false}, {Dangling: true}},
 	}
 
 	var out bytes.Buffer
-	err := runImagesPrune(context.Background(), client, imagesPruneOptions{DryRun: true, KeepLast: 3}, &out)
+	opts := imagesPruneOptions{DryRun: true, KeepReleases: 3}
+	err := runImagesPrune(context.Background(), client, opts, &out)
 	require.NoError(t, err)
 
 	text := out.String()
@@ -198,70 +313,187 @@ func TestRunImagesPrune_DryRunCallsListOnly(t *testing.T) {
 	assert.Equal(t, 0, client.pruneCalls)
 }
 
-func TestRunImagesPrune_DryRunKeepZeroSkipsRegistry(t *testing.T) {
-	client := &fakeImagesClient{listImagesResp: []dto.Image{{Dangling: true}}}
+func TestRunImagesPrune_DryRunDanglingOnlyScope(t *testing.T) {
+	client := &fakeImagesClient{
+		listImagesResp: []dto.Image{{Dangling: true}},
+	}
 
 	var out bytes.Buffer
-	err := runImagesPrune(context.Background(), client, imagesPruneOptions{DryRun: true, KeepLast: 0}, &out)
+	opts := imagesPruneOptions{DryRun: true, Dangling: true}
+	err := runImagesPrune(context.Background(), client, opts, &out)
 	require.NoError(t, err)
 
 	text := out.String()
-	assert.Contains(t, text, "Registry cleanup skipped (--keep=0)")
-	assert.Equal(t, 1, client.listImagesCalls)
+	assert.Contains(t, text, "would prune 1 dangling runtime images")
+	assert.Contains(t, text, "Registry cleanup skipped")
 	assert.Equal(t, 0, client.pruneCalls)
 }
 
-func TestRunImagesPrune_RuntimeOnlyForcesKeepZero(t *testing.T) {
-	client := &fakeImagesClient{pruneResp: &dto.ImagePruneResponse{}}
+func TestRunImagesPrune_DryRunRegistryOnlyScope(t *testing.T) {
+	client := &fakeImagesClient{
+		listImagesResp: []dto.Image{{Dangling: true}, {Dangling: false}},
+	}
 
 	var out bytes.Buffer
-	err := runImagesPrune(context.Background(), client, imagesPruneOptions{KeepLast: 9, RuntimeOnly: true}, &out)
+	opts := imagesPruneOptions{DryRun: true, Registry: true, KeepReleases: 5}
+	err := runImagesPrune(context.Background(), client, opts, &out)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, client.pruneCalls)
-	assert.Equal(t, 0, client.lastPruneKeep)
-	assert.Contains(t, out.String(), "Registry cleanup skipped")
+	text := out.String()
+	assert.Contains(t, text, "Runtime cleanup skipped")
+	assert.Contains(t, text, "would keep latest + 5 previous tags")
+	assert.Equal(t, 0, client.pruneCalls)
 }
 
-func TestRunImagesPrune_UsesKeepFlagWhenNotRuntimeOnly(t *testing.T) {
+// ---------------------------------------------------------------------------
+// images prune: keep-releases semantics
+// ---------------------------------------------------------------------------
+
+func TestRunImagesPrune_KeepReleasesControlsRetention(t *testing.T) {
 	client := &fakeImagesClient{
 		pruneResp: &dto.ImagePruneResponse{
-			Runtime:  dto.RuntimePruneResult{DeletedCount: 2, SpaceReclaimed: 4096},
-			Registry: dto.RegistryPruneResult{TagsRemoved: 3, BlobsRemoved: 1, SpaceReclaimed: 8192},
+			Runtime:  dto.RuntimePruneResult{DeletedCount: 0},
+			Registry: dto.RegistryPruneResult{TagsRemoved: 7, BlobsRemoved: 3, SpaceReclaimed: 9000},
 		},
 	}
 
 	var out bytes.Buffer
-	err := runImagesPrune(context.Background(), client, imagesPruneOptions{KeepLast: 5}, &out)
+	opts := imagesPruneOptions{KeepReleases: 10, NoConfirm: true}
+	err := runImagesPrune(context.Background(), client, opts, &out)
 	require.NoError(t, err)
 
-	text := out.String()
-	assert.Equal(t, 1, client.pruneCalls)
-	assert.Equal(t, 5, client.lastPruneKeep)
-	assert.Contains(t, text, "Runtime: deleted=2")
-	assert.Contains(t, text, "Registry: tags_removed=3")
+	require.NotNil(t, client.lastPruneOpts.KeepLast)
+	assert.Equal(t, 10, *client.lastPruneOpts.KeepLast)
 }
 
+func TestRunImagesPrune_RejectsNegativeKeepReleases(t *testing.T) {
+	err := runImagesPrune(context.Background(), &fakeImagesClient{}, imagesPruneOptions{KeepReleases: -1}, &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--keep-releases must be >= 0")
+}
+
+// ---------------------------------------------------------------------------
+// images prune: confirmation behavior
+// ---------------------------------------------------------------------------
+
+func TestRunImagesPrune_NonDryRunCallsConfirm(t *testing.T) {
+	confirmCalled := false
+	origConfirm := pruneConfirmFunc
+	pruneConfirmFunc = func(_ string) (bool, error) {
+		confirmCalled = true
+		return true, nil
+	}
+	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
+
+	client := &fakeImagesClient{
+		pruneResp: &dto.ImagePruneResponse{
+			Runtime:  dto.RuntimePruneResult{DeletedCount: 1},
+			Registry: dto.RegistryPruneResult{TagsRemoved: 1},
+		},
+	}
+
+	var out bytes.Buffer
+	opts := imagesPruneOptions{KeepReleases: domain.DefaultImagePruneKeepLast}
+	err := runImagesPrune(context.Background(), client, opts, &out)
+	require.NoError(t, err)
+
+	assert.True(t, confirmCalled, "confirmation should have been called")
+	assert.Equal(t, 1, client.pruneCalls)
+}
+
+func TestRunImagesPrune_ConfirmRejectCancelsOperation(t *testing.T) {
+	origConfirm := pruneConfirmFunc
+	pruneConfirmFunc = func(_ string) (bool, error) {
+		return false, nil
+	}
+	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
+
+	client := &fakeImagesClient{pruneResp: &dto.ImagePruneResponse{}}
+
+	var out bytes.Buffer
+	opts := imagesPruneOptions{KeepReleases: domain.DefaultImagePruneKeepLast}
+	err := runImagesPrune(context.Background(), client, opts, &out)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, client.pruneCalls, "prune should not be called after rejection")
+	assert.Contains(t, out.String(), "cancelled")
+}
+
+func TestRunImagesPrune_NoConfirmSkipsPrompt(t *testing.T) {
+	confirmCalled := false
+	origConfirm := pruneConfirmFunc
+	pruneConfirmFunc = func(_ string) (bool, error) {
+		confirmCalled = true
+		return true, nil
+	}
+	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
+
+	client := &fakeImagesClient{
+		pruneResp: &dto.ImagePruneResponse{
+			Runtime: dto.RuntimePruneResult{DeletedCount: 1},
+		},
+	}
+
+	var out bytes.Buffer
+	opts := imagesPruneOptions{KeepReleases: domain.DefaultImagePruneKeepLast, NoConfirm: true}
+	err := runImagesPrune(context.Background(), client, opts, &out)
+	require.NoError(t, err)
+
+	assert.False(t, confirmCalled, "confirmation should not be called with --no-confirm")
+	assert.Equal(t, 1, client.pruneCalls)
+}
+
+func TestRunImagesPrune_DryRunNeverPrompts(t *testing.T) {
+	confirmCalled := false
+	origConfirm := pruneConfirmFunc
+	pruneConfirmFunc = func(_ string) (bool, error) {
+		confirmCalled = true
+		return true, nil
+	}
+	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
+
+	client := &fakeImagesClient{
+		listImagesResp: []dto.Image{{Dangling: true}},
+	}
+
+	var out bytes.Buffer
+	opts := imagesPruneOptions{DryRun: true, KeepReleases: 3}
+	err := runImagesPrune(context.Background(), client, opts, &out)
+	require.NoError(t, err)
+
+	assert.False(t, confirmCalled, "confirmation should not be called during dry-run")
+}
+
+// ---------------------------------------------------------------------------
+// images prune: error handling
+// ---------------------------------------------------------------------------
+
 func TestRunImagesPrune_ReturnsRemoteErrors(t *testing.T) {
+	origConfirm := pruneConfirmFunc
+	pruneConfirmFunc = func(_ string) (bool, error) { return true, nil }
+	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
+
 	client := &fakeImagesClient{pruneErr: errors.New("request failed")}
 
-	err := runImagesPrune(context.Background(), client, imagesPruneOptions{KeepLast: 2}, &bytes.Buffer{})
+	err := runImagesPrune(context.Background(), client, imagesPruneOptions{KeepReleases: 2}, &bytes.Buffer{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to prune images")
 }
 
-func TestRunImagesPrune_RejectsNegativeKeep(t *testing.T) {
-	err := runImagesPrune(context.Background(), &fakeImagesClient{}, imagesPruneOptions{KeepLast: -1}, &bytes.Buffer{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--keep must be >= 0")
-}
-
 func TestRunImagesPrune_RejectsEmptyResponse(t *testing.T) {
+	origConfirm := pruneConfirmFunc
+	pruneConfirmFunc = func(_ string) (bool, error) { return true, nil }
+	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
+
 	client := &fakeImagesClient{pruneResp: nil}
-	err := runImagesPrune(context.Background(), client, imagesPruneOptions{KeepLast: 1}, &bytes.Buffer{})
+	err := runImagesPrune(context.Background(), client, imagesPruneOptions{KeepReleases: 1}, &bytes.Buffer{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty response")
 }
+
+// ---------------------------------------------------------------------------
+// test helpers
+// ---------------------------------------------------------------------------
 
 func stripANSI(value string) string {
 	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*m`)

@@ -11,6 +11,8 @@ When enabled, Gordon runs a scheduled image prune job that:
 - Preserves the `latest` tag.
 - Removes unreferenced blobs after tag cleanup.
 
+The CLI `gordon images prune` uses the same defaults as the scheduled job (keep `latest` + 3 previous tags, both scopes enabled: dangling runtime images and registry tag retention).
+
 ## Configuration
 
 ```toml
