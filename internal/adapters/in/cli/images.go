@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 )
 
 type imagesClient interface {
@@ -22,6 +23,24 @@ type imagesPruneOptions struct {
 	DryRun      bool
 	KeepLast    int
 	RuntimeOnly bool
+}
+
+const (
+	imagesListRepositoryColumnWidth = 44
+	imagesListTagColumnWidth        = 14
+	imagesListSizeColumnWidth       = 10
+	imagesListCreatedColumnWidth    = 22
+	imagesListImageIDColumnWidth    = 22
+	imagesListDanglingColumnWidth   = 10
+)
+
+var imagesListTableColumns = []components.TableColumn{
+	{Title: "REPOSITORY", Width: imagesListRepositoryColumnWidth},
+	{Title: "TAG", Width: imagesListTagColumnWidth},
+	{Title: "SIZE", Width: imagesListSizeColumnWidth},
+	{Title: "CREATED", Width: imagesListCreatedColumnWidth},
+	{Title: "IMAGE_ID", Width: imagesListImageIDColumnWidth},
+	{Title: "DANGLING", Width: imagesListDanglingColumnWidth},
 }
 
 func newImagesCmd() *cobra.Command {
@@ -95,12 +114,8 @@ func runImagesList(ctx context.Context, client imagesClient, out io.Writer) erro
 		return err
 	}
 
-	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, "REPOSITORY\tTAG\tSIZE\tCREATED\tIMAGE_ID\tDANGLING"); err != nil {
-		return err
-	}
-
 	danglingCount := 0
+	rows := make([][]string, 0, len(images))
 	for _, img := range images {
 		dangling := "no"
 		if img.Dangling {
@@ -108,12 +123,24 @@ func runImagesList(ctx context.Context, client imagesClient, out io.Writer) erro
 			danglingCount++
 		}
 
-		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", img.Repository, img.Tag, formatImageSize(img.Size), formatImageCreatedAt(img.Created), formatImageID(img.ID), dangling); err != nil {
-			return err
-		}
+		rows = append(rows, []string{
+			img.Repository,
+			img.Tag,
+			formatImageSize(img.Size),
+			formatImageCreatedAt(img.Created),
+			formatImageID(img.ID),
+			dangling,
+		})
 	}
 
-	if err := w.Flush(); err != nil {
+	table := components.NewTable(
+		components.WithColumns(imagesListTableColumns),
+		components.WithRows(rows),
+		components.WithHeaderStyle(lipgloss.NewStyle().Bold(true)),
+		components.WithCellStyle(lipgloss.NewStyle()),
+	)
+
+	if err := cliWriteLine(out, table.View()); err != nil {
 		return err
 	}
 
