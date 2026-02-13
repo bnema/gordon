@@ -458,6 +458,42 @@ func TestService_PruneRegistry_EmptyRepository(t *testing.T) {
 	assert.Empty(t, blobStorage.deletedBlobs)
 }
 
+func TestService_Prune_IdempotentMultiplePrunesDoNotAccumulate(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest", "v2", "v1"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v2")] = time.Date(2026, 2, 8, 11, 0, 0, 0, time.UTC)
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "v1")] = time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-live", "sha256:layer-live")
+	manifestStorage.manifests[manifestRefKey("gordon/api", "v2")] = mustManifestJSON(t, "sha256:cfg-v2", "sha256:layer-v2")
+	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:cfg-live", "sha256:layer-live", "sha256:orphan"}}
+	rt := &fakeRuntime{pruneReport: pkgruntime.PruneReport{DeletedIDs: []string{"sha256:img1"}, SpaceReclaimed: 1024}}
+
+	svc := NewService(rt, manifestStorage, blobStorage, zerowrap.Default())
+
+	// First prune - should remove v1 and orphan
+	report1, err := svc.Prune(context.Background(), domain.ImagePruneOptions{
+		KeepLast: 1, PruneDangling: true, PruneRegistry: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, report1.Registry.TagsRemoved, "first prune should remove v1")
+	assert.Equal(t, 1, report1.Registry.BlobsRemoved, "first prune should remove orphan")
+
+	// Reset runtime prune report to test idempotency properly (runtime would have nothing to prune second time)
+	rt.pruneReport = pkgruntime.PruneReport{}
+
+	// Second prune - should be idempotent (nothing else to remove)
+	report2, err := svc.Prune(context.Background(), domain.ImagePruneOptions{
+		KeepLast: 1, PruneDangling: true, PruneRegistry: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, report2.Registry.TagsRemoved, "second prune should remove nothing (idempotent)")
+	assert.Equal(t, 0, report2.Registry.BlobsRemoved, "second prune should remove nothing (idempotent)")
+	assert.Equal(t, 0, report2.Runtime.DeletedCount, "second prune should remove no runtime images")
+	assert.Equal(t, int64(0), report2.Runtime.SpaceReclaimed, "second prune should reclaim no runtime space")
+}
+
 func TestService_Prune_RunsBothRuntimeAndRegistry(t *testing.T) {
 	manifestStorage := newFakeManifestStorage()
 	manifestStorage.repositories = []string{"gordon/api"}
