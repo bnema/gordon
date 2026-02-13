@@ -133,6 +133,59 @@ func resolvePruneScopes(opts imagesPruneOptions) (pruneDangling, pruneRegistry b
 	return opts.Dangling, opts.Registry
 }
 
+func pruneWithSpinner(ctx context.Context, client imagesClient, req dto.ImagePruneRequest, pruneDangling, pruneRegistry bool) (*dto.ImagePruneResponse, error) {
+	if !isInteractiveTerminal() {
+		return client.PruneImages(ctx, req)
+	}
+
+	type pruneResult struct {
+		resp *dto.ImagePruneResponse
+		err  error
+	}
+
+	done := make(chan pruneResult, 1)
+	go func() {
+		resp, err := client.PruneImages(ctx, req)
+		done <- pruneResult{resp: resp, err: err}
+	}()
+
+	// Build spinner message based on scopes
+	msg := "Pruning images"
+	if pruneDangling && pruneRegistry {
+		msg = "Pruning runtime and registry images"
+	} else if pruneDangling {
+		msg = "Pruning runtime images"
+	} else if pruneRegistry {
+		msg = "Pruning registry images"
+	}
+
+	model := components.NewSpinner(
+		components.WithMessage(msg),
+		components.WithSpinnerType(components.SpinnerMiniDot),
+	)
+
+	for {
+		select {
+		case result := <-done:
+			if result.err != nil {
+				return nil, result.err
+			}
+			if result.resp == nil {
+				return nil, fmt.Errorf("prune operation completed but no response received")
+			}
+			// Success - wait for final frame to render
+			model.SetMessage(cliRenderSuccess("Pruning complete"))
+			time.Sleep(100 * time.Millisecond)
+			cmd := model.Init()
+			fmt.Print(cmd)
+			return result.resp, nil
+		case <-time.After(100 * time.Millisecond):
+			cmd := model.Init()
+			fmt.Print(cmd)
+		}
+	}
+}
+
 func runImagesList(ctx context.Context, client imagesClient, out io.Writer) error {
 	images, err := client.ListImages(ctx)
 	if err != nil {
@@ -214,7 +267,7 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 
 	req := buildPruneRequest(opts.KeepReleases, pruneDangling, pruneRegistry)
 
-	resp, err := client.PruneImages(ctx, req)
+	resp, err := pruneWithSpinner(ctx, client, req, pruneDangling, pruneRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to prune images: %w", err)
 	}
