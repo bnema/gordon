@@ -195,10 +195,18 @@ func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print version information",
-		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Printf("Gordon %s\n", Version)
-			cmd.Printf("Commit: %s\n", Commit)
-			cmd.Printf("Build Date: %s\n", BuildDate)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+			if err := cliWriteLine(out, cliRenderTitle("Gordon "+Version)); err != nil {
+				return err
+			}
+			if err := cliWriteLine(out, cliRenderMeta("Commit:", Commit)); err != nil {
+				return err
+			}
+			if err := cliWriteLine(out, cliRenderMeta("Build Date:", BuildDate)); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 }
@@ -214,15 +222,21 @@ func runReloadRemote(ctx context.Context, client *remote.Client) error {
 		if shouldFallbackToLocal(err) {
 			localErr := runReload()
 			if localErr == nil {
-				fmt.Printf("Remote reload failed (%v), used local signal fallback\n", err)
-				fmt.Println("Configuration reloaded successfully")
+				if writeErr := cliWriteLine(os.Stdout, cliRenderWarning(fmt.Sprintf("Remote reload failed (%v), used local signal fallback", err))); writeErr != nil {
+					return writeErr
+				}
+				if writeErr := cliWriteLine(os.Stdout, cliRenderSuccess("Configuration reloaded successfully")); writeErr != nil {
+					return writeErr
+				}
 				return nil
 			}
 			return fmt.Errorf("remote reload failed: %w; local fallback failed: %v", err, localErr)
 		}
 		return fmt.Errorf("failed to reload: %w", err)
 	}
-	fmt.Println("Configuration reloaded successfully")
+	if err := cliWriteLine(os.Stdout, cliRenderSuccess("Configuration reloaded successfully")); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -291,7 +305,9 @@ func runLogsRemote(client *remote.Client, logDomain string, follow bool, lines i
 			return fmt.Errorf("failed to get process logs: %w", err)
 		}
 		for _, line := range logLines {
-			fmt.Println(line)
+			if err := cliWriteLine(os.Stdout, line); err != nil {
+				return err
+			}
 		}
 	} else {
 		// Container logs
@@ -300,7 +316,9 @@ func runLogsRemote(client *remote.Client, logDomain string, follow bool, lines i
 			return fmt.Errorf("failed to get container logs: %w", err)
 		}
 		for _, line := range logLines {
-			fmt.Println(line)
+			if err := cliWriteLine(os.Stdout, line); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -321,7 +339,9 @@ func streamLogsRemote(ctx context.Context, client *remote.Client, logDomain stri
 	}
 
 	for line := range ch {
-		fmt.Println(line)
+		if err := cliWriteLine(os.Stdout, line); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -342,13 +362,26 @@ func showContainerLogsLocal(logsConfigPath, logDomain string, follow bool, lines
 	// For local container logs, we need Docker access which requires
 	// the runtime to be initialized. For now, suggest using remote mode
 	// or direct docker logs command.
-	fmt.Printf("Container logs for %s\n", logDomain)
-	fmt.Println("To view container logs locally, use:")
-	fmt.Printf("  docker logs --tail %d %s\n", lines, logDomain)
-	if follow {
-		fmt.Printf("  docker logs -f --tail %d %s\n", lines, logDomain)
+	if err := cliWriteLine(os.Stdout, cliRenderTitle(fmt.Sprintf("Container logs for %s", logDomain))); err != nil {
+		return err
 	}
-	fmt.Println("\nOr use remote mode to access logs via the admin API.")
+	if err := cliWriteLine(os.Stdout, cliRenderInfo("To view container logs locally, use:")); err != nil {
+		return err
+	}
+	if err := cliWritef(os.Stdout, "  docker logs --tail %d %s\n", lines, logDomain); err != nil {
+		return err
+	}
+	if follow {
+		if err := cliWritef(os.Stdout, "  docker logs -f --tail %d %s\n", lines, logDomain); err != nil {
+			return err
+		}
+	}
+	if err := cliWriteLine(os.Stdout, ""); err != nil {
+		return err
+	}
+	if err := cliWriteLine(os.Stdout, cliRenderMuted("Or use remote mode to access logs via the admin API.")); err != nil {
+		return err
+	}
 	return nil
 }
 

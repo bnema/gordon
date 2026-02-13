@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/bnema/gordon/internal/app"
@@ -40,7 +39,9 @@ func newStartCmd() *cobra.Command {
 		Deprecated: "use 'gordon serve' instead",
 		Hidden:     true, // Hide from help but still works
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(os.Stderr, "\nWarning: 'gordon start' is deprecated, use 'gordon serve' instead")
+			if err := cliWriteLine(os.Stderr, cliRenderWarning("Warning: 'gordon start' is deprecated, use 'gordon serve' instead")); err != nil {
+				return err
+			}
 			return app.Run(context.Background(), configPath)
 		},
 	}

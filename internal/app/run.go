@@ -1812,7 +1812,11 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 				keepLast = domain.DefaultImagePruneKeepLast
 			}
 
-			report, err := svc.imageSvc.Prune(jobCtx, keepLast)
+			report, err := svc.imageSvc.Prune(jobCtx, domain.ImagePruneOptions{
+				KeepLast:      keepLast,
+				PruneDangling: true,
+				PruneRegistry: true,
+			})
 			if err != nil {
 				return err
 			}

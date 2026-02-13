@@ -97,18 +97,28 @@ func (h *Handler) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keepLast := domain.DefaultImagePruneKeepLast
+	opts := domain.DefaultImagePruneOptions()
 	if req.KeepLast != nil {
 		if *req.KeepLast < 0 {
 			h.sendError(w, http.StatusBadRequest, "keep_last must be >= 0")
 			return
 		}
-		keepLast = *req.KeepLast
+		opts.KeepLast = *req.KeepLast
+	}
+	if req.PruneDangling != nil {
+		opts.PruneDangling = *req.PruneDangling
+	}
+	if req.PruneRegistry != nil {
+		opts.PruneRegistry = *req.PruneRegistry
+	}
+	if !opts.PruneDangling && !opts.PruneRegistry {
+		h.sendError(w, http.StatusBadRequest, "at least one prune scope must be enabled")
+		return
 	}
 
-	report, err := h.imageSvc.Prune(ctx, keepLast)
+	report, err := h.imageSvc.Prune(ctx, opts)
 	if err != nil {
-		log.Error().Err(err).Int("keep_last", keepLast).Msg("image prune failed")
+		log.Error().Err(err).Int("keep_last", opts.KeepLast).Msg("image prune failed")
 		h.sendError(w, http.StatusInternalServerError, "failed to prune images")
 		return
 	}
