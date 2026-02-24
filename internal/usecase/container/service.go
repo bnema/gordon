@@ -903,16 +903,26 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	}
 
 	managed := make(map[string]*domain.Container)
+	attachments := make(map[string][]string)
 	for _, c := range allContainers {
-		if c.Labels != nil {
-			if d, ok := c.Labels[domain.LabelDomain]; ok && c.Labels[domain.LabelManaged] == "true" {
-				managed[d] = c
+		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
+			continue
+		}
+		if c.Labels[domain.LabelAttachment] == "true" {
+			owner := c.Labels[domain.LabelAttachedTo]
+			if owner != "" {
+				attachments[owner] = append(attachments[owner], c.ID)
 			}
+			continue
+		}
+		if d, ok := c.Labels[domain.LabelDomain]; ok {
+			managed[d] = c
 		}
 	}
 
 	s.mu.Lock()
 	s.containers = managed
+	s.attachments = attachments
 	newCount := int64(len(managed))
 	delta := newCount - s.managedCount
 	s.managedCount = newCount
