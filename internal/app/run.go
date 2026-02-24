@@ -819,19 +819,59 @@ func cleanupInternalCredentials() {
 	_ = os.Remove(getInternalCredentialsFile())
 }
 
+// getInternalCredentialsCandidates returns candidate file paths in priority order:
+// 1. XDG_RUNTIME_DIR/gordon/ (set by systemd for the daemon)
+// 2. /run/user/<uid>/gordon/ (well-known systemd default, for CLI in shells without XDG_RUNTIME_DIR)
+// 3. ~/.gordon/run/ (fallback for non-systemd environments)
+func getInternalCredentialsCandidates() []string {
+	var candidates []string
+
+	// 1. XDG_RUNTIME_DIR (set in daemon's environment)
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		candidates = append(candidates, filepath.Join(runtimeDir, "gordon", "internal-creds.json"))
+	}
+
+	// 2. /run/user/<uid>/gordon/ (systemd default, may not be in CLI's env)
+	uid := os.Getuid()
+	sysRuntime := filepath.Join("/run/user", fmt.Sprintf("%d", uid), "gordon", "internal-creds.json")
+	// Avoid duplicate if XDG_RUNTIME_DIR already points here
+	if len(candidates) == 0 || candidates[0] != sysRuntime {
+		candidates = append(candidates, sysRuntime)
+	}
+
+	// 3. ~/.gordon/run/ fallback
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(homeDir, ".gordon", "run", "internal-creds.json"))
+	}
+
+	return candidates
+}
+
+// GetInternalCredentialsFromCandidates reads credentials from the first candidate file that exists.
+// Exported for testing.
+func GetInternalCredentialsFromCandidates(candidates []string) (*InternalCredentials, error) {
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to read credentials file %s: %w", path, err)
+		}
+		var creds InternalCredentials
+		if err := json.Unmarshal(data, &creds); err != nil {
+			return nil, fmt.Errorf("failed to parse credentials at %s: %w", path, err)
+		}
+		return &creds, nil
+	}
+	return nil, fmt.Errorf("no credentials file found (is Gordon running?): checked %v", candidates)
+}
+
 // GetInternalCredentials reads the internal registry credentials from file.
-// This is used by the CLI to display credentials for manual recovery.
+// Probes all candidate runtime directories so CLI works regardless of whether
+// XDG_RUNTIME_DIR is set in the current shell environment.
 func GetInternalCredentials() (*InternalCredentials, error) {
-	credFile := getInternalCredentialsFile()
-	data, err := os.ReadFile(credFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read credentials file (is Gordon running?): %w", err)
-	}
-	var creds InternalCredentials
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return nil, fmt.Errorf("failed to parse credentials: %w", err)
-	}
-	return &creds, nil
+	return GetInternalCredentialsFromCandidates(getInternalCredentialsCandidates())
 }
 
 // createAuthService creates the authentication service and token store.
