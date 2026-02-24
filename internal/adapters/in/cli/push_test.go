@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,8 +73,42 @@ func TestBuildAndPush_BuildArgs(t *testing.T) {
 	assert.Contains(t, args, "--platform")
 	assert.Contains(t, args, "-f")
 	assert.Contains(t, args, "Dockerfile")
-	assert.Contains(t, args, "VERSION")
-	assert.NotContains(t, args, "VERSION=v1.0.0")
+	assert.Contains(t, args, "VERSION=v1.0.0")
+}
+
+func TestBuildImageArgsInjectsGitBuildArgs(t *testing.T) {
+	args := buildImageArgs("v1.2.3", "linux/amd64", "Dockerfile", nil, "registry/img:v1.2.3", "registry/img:latest")
+
+	// Must contain explicit KEY=VALUE for all standard git build args
+	argStr := strings.Join(args, " ")
+	for _, key := range []string{"VERSION=v1.2.3", "GIT_TAG=v1.2.3", "GIT_SHA=", "BUILD_TIME="} {
+		if !strings.Contains(argStr, key) {
+			t.Errorf("expected args to contain %q, got: %s", key, argStr)
+		}
+	}
+
+	// Must NOT contain bare "--build-arg VERSION" (without =value)
+	for i, a := range args {
+		if a == "--build-arg" && i+1 < len(args) && args[i+1] == "VERSION" {
+			t.Error("found bare '--build-arg VERSION' (without =value); should be '--build-arg VERSION=v1.2.3'")
+		}
+	}
+}
+
+func TestBuildImageArgsUserArgsOverrideDefaults(t *testing.T) {
+	userArgs := []string{"GIT_TAG=custom-override"}
+	args := buildImageArgs("v1.2.3", "linux/amd64", "Dockerfile", userArgs, "r/i:v1.2.3", "r/i:latest")
+
+	// Count how many times GIT_TAG appears — user override should come last (Docker uses last value)
+	count := 0
+	for i, a := range args {
+		if a == "--build-arg" && i+1 < len(args) && strings.HasPrefix(args[i+1], "GIT_TAG=") {
+			count++
+		}
+	}
+	if count < 2 {
+		t.Errorf("expected GIT_TAG to appear twice (default + override), got %d", count)
+	}
 }
 
 func TestParseTagRef(t *testing.T) {
