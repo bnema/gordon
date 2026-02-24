@@ -418,9 +418,14 @@ func (s *Service) Save(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Update viper with current config
+	// Sync ALL mutable config sections back to Viper before writing.
+	// Using explicit Set() ensures the values are stored as proper flat maps,
+	// preventing viper from splitting dotted keys (e.g. "reg.example.com") into
+	// nested TOML subtrees which corrupts the data on re-read.
 	s.viper.Set("routes", s.config.Routes)
+	s.viper.Set("external_routes", s.config.ExternalRoutes)
 	s.viper.Set("attachments", s.config.Attachments)
+	s.viper.Set("network_groups", s.config.NetworkGroups)
 
 	// Record save time to debounce file watcher events
 	atomic.StoreInt64(&s.lastSaveTime, time.Now().UnixNano())
