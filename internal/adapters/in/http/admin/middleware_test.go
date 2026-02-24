@@ -83,6 +83,8 @@ func TestAuthMiddleware_TrustedProxy(t *testing.T) {
 		Subject: "admin",
 		Scopes:  []string{"admin:*:*"},
 	}, nil)
+	// ExtendToken is called after successful validation; non-fatal if it fails
+	authSvc.EXPECT().ExtendToken(mock.Anything, "valid-admin-token").Return("valid-admin-token", nil)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -110,6 +112,8 @@ func TestAuthMiddleware_NoRateLimiting(t *testing.T) {
 		Subject: "admin",
 		Scopes:  []string{"admin:*:*"},
 	}, nil)
+	// ExtendToken is called after successful validation; non-fatal if it fails
+	authSvc.EXPECT().ExtendToken(mock.Anything, "valid-admin-token").Return("valid-admin-token", nil)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -247,6 +251,8 @@ func TestAuthMiddleware_Success(t *testing.T) {
 		Subject: "admin",
 		Scopes:  []string{"admin:*:*"},
 	}, nil)
+	// ExtendToken is called after successful validation; non-fatal if it fails
+	authSvc.EXPECT().ExtendToken(mock.Anything, "valid-admin-token").Return("valid-admin-token", nil)
 
 	var capturedCtx context.Context
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

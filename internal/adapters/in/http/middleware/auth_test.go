@@ -170,6 +170,10 @@ func (s stubAuthService) GetAuthStatus(context.Context) (*domain.AuthStatus, err
 	return nil, errors.New("not implemented")
 }
 
+func (s stubAuthService) ExtendToken(context.Context, string) (string, error) {
+	return "", errors.New("not implemented")
+}
+
 // Tests for checkScopeAccess function
 
 func TestCheckScopeAccess_ActionMapping(t *testing.T) {

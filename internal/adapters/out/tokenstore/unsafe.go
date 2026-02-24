@@ -73,12 +73,13 @@ func (s *UnsafeStore) SaveToken(_ context.Context, token *domain.Token, jwt stri
 	data := unsafeTokenData{
 		JWT: jwt,
 		Metadata: tokenMetadata{
-			ID:        token.ID,
-			Subject:   token.Subject, // Store original subject in metadata
-			Scopes:    token.Scopes,
-			IssuedAt:  token.IssuedAt,
-			ExpiresAt: token.ExpiresAt,
-			Revoked:   token.Revoked,
+			ID:             token.ID,
+			Subject:        token.Subject, // Store original subject in metadata
+			Scopes:         token.Scopes,
+			IssuedAt:       token.IssuedAt,
+			ExpiresAt:      token.ExpiresAt,
+			Revoked:        token.Revoked,
+			LastExtendedAt: token.LastExtendedAt,
 		},
 	}
 
@@ -124,12 +125,13 @@ func (s *UnsafeStore) GetToken(_ context.Context, subject string) (string, *doma
 	}
 
 	token := &domain.Token{
-		ID:        data.Metadata.ID,
-		Subject:   data.Metadata.Subject,
-		Scopes:    data.Metadata.Scopes,
-		IssuedAt:  data.Metadata.IssuedAt,
-		ExpiresAt: data.Metadata.ExpiresAt,
-		Revoked:   data.Metadata.Revoked,
+		ID:             data.Metadata.ID,
+		Subject:        data.Metadata.Subject,
+		Scopes:         data.Metadata.Scopes,
+		IssuedAt:       data.Metadata.IssuedAt,
+		ExpiresAt:      data.Metadata.ExpiresAt,
+		Revoked:        data.Metadata.Revoked,
+		LastExtendedAt: data.Metadata.LastExtendedAt,
 	}
 
 	return data.JWT, token, nil
@@ -168,12 +170,13 @@ func (s *UnsafeStore) ListTokens(_ context.Context) ([]domain.Token, error) {
 		}
 
 		token := domain.Token{
-			ID:        data.Metadata.ID,
-			Subject:   data.Metadata.Subject,
-			Scopes:    data.Metadata.Scopes,
-			IssuedAt:  data.Metadata.IssuedAt,
-			ExpiresAt: data.Metadata.ExpiresAt,
-			Revoked:   data.Metadata.Revoked,
+			ID:             data.Metadata.ID,
+			Subject:        data.Metadata.Subject,
+			Scopes:         data.Metadata.Scopes,
+			IssuedAt:       data.Metadata.IssuedAt,
+			ExpiresAt:      data.Metadata.ExpiresAt,
+			Revoked:        data.Metadata.Revoked,
+			LastExtendedAt: data.Metadata.LastExtendedAt,
 		}
 
 		tokens = append(tokens, token)
@@ -238,6 +241,12 @@ func (s *UnsafeStore) IsRevoked(_ context.Context, tokenID string) (bool, error)
 	}
 
 	return false, nil
+}
+
+// UpdateTokenExpiry updates the JWT and expiry metadata for an existing token.
+// LastExtendedAt is also updated to track debounce timing.
+func (s *UnsafeStore) UpdateTokenExpiry(ctx context.Context, token *domain.Token, newJWT string) error {
+	return s.SaveToken(ctx, token, newJWT)
 }
 
 // DeleteToken removes token file.

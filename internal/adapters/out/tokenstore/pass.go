@@ -79,12 +79,13 @@ func NewPassStore(log zerowrap.Logger) *PassStore {
 
 // tokenMetadata holds the non-sensitive token information.
 type tokenMetadata struct {
-	ID        string    `json:"id"`
-	Subject   string    `json:"subject"`
-	Scopes    []string  `json:"scopes"`
-	IssuedAt  time.Time `json:"issued_at"`
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
-	Revoked   bool      `json:"revoked"`
+	ID             string    `json:"id"`
+	Subject        string    `json:"subject"`
+	Scopes         []string  `json:"scopes"`
+	IssuedAt       time.Time `json:"issued_at"`
+	ExpiresAt      time.Time `json:"expires_at,omitempty"`
+	Revoked        bool      `json:"revoked"`
+	LastExtendedAt time.Time `json:"last_extended_at,omitempty"`
 }
 
 // SaveToken stores a token JWT and metadata in pass.
@@ -104,12 +105,13 @@ func (s *PassStore) SaveToken(ctx context.Context, token *domain.Token, jwt stri
 
 	// Store metadata
 	meta := tokenMetadata{
-		ID:        token.ID,
-		Subject:   token.Subject,
-		Scopes:    token.Scopes,
-		IssuedAt:  token.IssuedAt,
-		ExpiresAt: token.ExpiresAt,
-		Revoked:   token.Revoked,
+		ID:             token.ID,
+		Subject:        token.Subject,
+		Scopes:         token.Scopes,
+		IssuedAt:       token.IssuedAt,
+		ExpiresAt:      token.ExpiresAt,
+		Revoked:        token.Revoked,
+		LastExtendedAt: token.LastExtendedAt,
 	}
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
@@ -173,12 +175,13 @@ func (s *PassStore) GetToken(ctx context.Context, subject string) (string, *doma
 	}
 
 	token := &domain.Token{
-		ID:        meta.ID,
-		Subject:   meta.Subject,
-		Scopes:    meta.Scopes,
-		IssuedAt:  meta.IssuedAt,
-		ExpiresAt: meta.ExpiresAt,
-		Revoked:   meta.Revoked,
+		ID:             meta.ID,
+		Subject:        meta.Subject,
+		Scopes:         meta.Scopes,
+		IssuedAt:       meta.IssuedAt,
+		ExpiresAt:      meta.ExpiresAt,
+		Revoked:        meta.Revoked,
+		LastExtendedAt: meta.LastExtendedAt,
 	}
 
 	// Cache the token
@@ -319,6 +322,12 @@ func (s *PassStore) IsRevoked(ctx context.Context, tokenID string) (bool, error)
 	s.cacheMu.Unlock()
 
 	return revoked, nil
+}
+
+// UpdateTokenExpiry updates the JWT and expiry metadata for an existing token.
+// LastExtendedAt is also updated to track debounce timing.
+func (s *PassStore) UpdateTokenExpiry(ctx context.Context, token *domain.Token, newJWT string) error {
+	return s.SaveToken(ctx, token, newJWT)
 }
 
 // DeleteToken removes token from pass.

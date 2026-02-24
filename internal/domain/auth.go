@@ -20,12 +20,13 @@ const (
 
 // Token represents a generated authentication token stored in the secrets backend.
 type Token struct {
-	ID        string
-	Subject   string
-	Scopes    []string
-	IssuedAt  time.Time
-	ExpiresAt time.Time // Zero value means never expires
-	Revoked   bool
+	ID             string
+	Subject        string
+	Scopes         []string
+	IssuedAt       time.Time
+	ExpiresAt      time.Time // Zero value means never expires
+	Revoked        bool
+	LastExtendedAt time.Time // Zero value means never extended
 }
 
 // TokenClaims represents the JWT claims for a token.
