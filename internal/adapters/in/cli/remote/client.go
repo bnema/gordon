@@ -21,10 +21,11 @@ import (
 
 // Client is an HTTP client for the Gordon admin API.
 type Client struct {
-	baseURL     string
-	token       string
-	httpClient  *http.Client
-	insecureTLS bool
+	baseURL          string
+	token            string
+	httpClient       *http.Client
+	insecureTLS      bool
+	onTokenRefreshed func(newToken string) // optional callback to persist a refreshed token
 }
 
 var (
@@ -84,6 +85,15 @@ func WithInsecureTLS(insecure bool) ClientOption {
 	}
 }
 
+// WithTokenRefreshCallback sets a callback that is invoked when the server
+// returns a refreshed token in the X-Gordon-Token response header.
+// The CLI uses this to persist the new token to the remotes config atomically.
+func WithTokenRefreshCallback(fn func(newToken string)) ClientOption {
+	return func(c *Client) {
+		c.onTokenRefreshed = fn
+	}
+}
+
 func (c *Client) applyTLSConfig() {
 	if !c.insecureTLS {
 		return
@@ -140,7 +150,21 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	return c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// If the server returned a refreshed token, update the client's token and notify any callback.
+	// This implements the sliding expiry: the server re-signs the token and sends it back.
+	if newToken := resp.Header.Get("X-Gordon-Token"); newToken != "" && newToken != c.token {
+		c.token = newToken
+		if c.onTokenRefreshed != nil {
+			c.onTokenRefreshed(newToken)
+		}
+	}
+
+	return resp, nil
 }
 
 // parseResponse parses a JSON response into the given target.

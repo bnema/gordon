@@ -26,4 +26,8 @@ type TokenStore interface {
 
 	// DeleteToken removes token from store.
 	DeleteToken(ctx context.Context, subject string) error
+
+	// UpdateTokenExpiry updates the JWT and expiry/LastExtendedAt metadata for an existing token.
+	// Used by token sliding expiry to re-sign tokens without changing the JTI.
+	UpdateTokenExpiry(ctx context.Context, token *domain.Token, newJWT string) error
 }

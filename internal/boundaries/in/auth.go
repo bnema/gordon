@@ -46,4 +46,9 @@ type AuthService interface {
 	// GetAuthStatus returns authentication status from context.
 	// Extracts and validates token claims that were set by auth middleware.
 	GetAuthStatus(ctx context.Context) (*domain.AuthStatus, error)
+
+	// ExtendToken re-issues the token with expiry slid forward by 24h.
+	// Returns the same token string if it was already extended within the debounce window (1h).
+	// Skips extension for ephemeral access tokens (≤5min) and service tokens.
+	ExtendToken(ctx context.Context, tokenString string) (string, error)
 }

@@ -144,12 +144,23 @@ Commands are organized by where they run:
 // GetRemoteClient returns a remote client if targeting a remote instance,
 // or nil if running locally.
 func GetRemoteClient() (*remote.Client, bool) {
-	url, token, insecureTLS, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag, insecureTLSFlag)
+	url, token, insecureTLS, remoteName, isRemote := remote.ResolveRemoteFull(remoteFlag, tokenFlag, insecureTLSFlag)
 	if !isRemote {
 		return nil, false
 	}
 
-	client := remote.NewClient(url, remoteClientOptions(token, insecureTLS)...)
+	opts := remoteClientOptions(token, insecureTLS)
+
+	// When using a named remote (from remotes.toml), register a callback to persist
+	// refreshed tokens returned by the server in the X-Gordon-Token header.
+	if remoteName != "" {
+		name := remoteName // capture for closure
+		opts = append(opts, remote.WithTokenRefreshCallback(func(newToken string) {
+			_ = remote.UpdateRemoteToken(name, newToken) // best-effort; errors are non-fatal
+		}))
+	}
+
+	client := remote.NewClient(url, opts...)
 	return client, true
 }
 
