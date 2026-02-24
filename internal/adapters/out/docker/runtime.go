@@ -1017,7 +1017,7 @@ func (r *Runtime) CreateVolume(ctx context.Context, volumeName string) error {
 		Name: volumeName,
 		Labels: map[string]string{
 			domain.LabelManaged: "true",
-			domain.LabelCreated: "auto",
+			domain.LabelCreated: time.Now().UTC().Format(time.RFC3339),
 		},
 	})
 	if err != nil {
