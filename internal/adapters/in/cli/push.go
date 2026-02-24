@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -464,7 +465,7 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 	// using docker push gives us chunked uploads (~5MB per request).
 	fmt.Println("\nBuilding image...")
 	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
-	buildCmd.Env = append(os.Environ(), "VERSION="+version)
+	buildCmd.Env = os.Environ()                                                                                                        // VERSION is now passed as --build-arg VERSION=<value>
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {
@@ -484,6 +485,29 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 	return nil
 }
 
+// standardBuildArgs returns the standard set of git-related build args as
+// explicit KEY=VALUE pairs. User-supplied args are appended after and take
+// precedence (Docker uses the last occurrence of a duplicate key).
+func standardBuildArgs(version string) []string {
+	gitSHA := resolveGitSHA()
+	buildTime := time.Now().UTC().Format(time.RFC3339)
+	return []string{
+		"VERSION=" + version,
+		"GIT_TAG=" + version,
+		"GIT_SHA=" + gitSHA,
+		"BUILD_TIME=" + buildTime,
+	}
+}
+
+// resolveGitSHA returns the short git SHA of HEAD, or "unknown" if unavailable.
+func resolveGitSHA() string {
+	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output() // #nosec G204
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // buildImageArgs constructs the docker buildx build arguments.
 // Uses --load instead of --push so the image is loaded into the local
 // daemon, allowing docker push to handle the upload with chunked requests.
@@ -493,14 +517,20 @@ func buildImageArgs(version, platform, dockerfile string, buildArgs []string, ve
 		"--platform", platform,
 		"-f", dockerfile,
 		"-t", latestRef,
-		"--build-arg", "VERSION",
 	}
 	if version != "latest" {
 		args = append(args, "-t", versionRef)
 	}
+
+	// Inject standard git build args as explicit KEY=VALUE pairs.
+	// User-supplied --build-arg flags are appended AFTER so they override defaults.
+	for _, ba := range standardBuildArgs(version) {
+		args = append(args, "--build-arg", ba)
+	}
 	for _, ba := range buildArgs {
 		args = append(args, "--build-arg", ba)
 	}
+
 	args = append(args, "--load", ".")
 	return args
 }
