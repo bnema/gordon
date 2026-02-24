@@ -111,7 +111,7 @@ func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) er
 
 	activeRoutes := make(map[string]*domain.Container)
 	for _, container := range currentContainers {
-		if route, exists := container.Labels["gordon.route"]; exists {
+		if route, exists := container.Labels[domain.LabelRoute]; exists {
 			activeRoutes[route] = container
 		}
 	}
@@ -119,7 +119,7 @@ func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) er
 	routes := h.configSvc.GetRoutes(ctx)
 	for _, route := range routes {
 		if container, exists := activeRoutes[route.Domain]; exists {
-			currentImage := container.Labels["gordon.image"]
+			currentImage := container.Labels[domain.LabelImage]
 			if currentImage != route.Image {
 				log.Info().
 					Str("domain", route.Domain).

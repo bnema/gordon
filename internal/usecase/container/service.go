@@ -219,10 +219,10 @@ func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef st
 		NetworkMode: networkName,
 		Hostname:    containerDomain,
 		Labels: map[string]string{
-			"gordon.domain":  containerDomain,
-			"gordon.image":   image,
-			"gordon.managed": "true",
-			"gordon.route":   containerDomain,
+			domain.LabelDomain:  containerDomain,
+			domain.LabelImage:   image,
+			domain.LabelManaged: "true",
+			domain.LabelRoute:   containerDomain,
 		},
 		AutoRemove: false,
 	}
@@ -905,7 +905,7 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	managed := make(map[string]*domain.Container)
 	for _, c := range allContainers {
 		if c.Labels != nil {
-			if d, ok := c.Labels["gordon.domain"]; ok && c.Labels["gordon.managed"] == "true" {
+			if d, ok := c.Labels[domain.LabelDomain]; ok && c.Labels[domain.LabelManaged] == "true" {
 				managed[d] = c
 			}
 		}
@@ -1875,10 +1875,10 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 		Volumes:     volumes,
 		NetworkMode: networkName, // Same network as main app
 		Labels: map[string]string{
-			"gordon.managed":     "true",
-			"gordon.attachment":  "true",
-			"gordon.attached-to": ownerDomain,
-			"gordon.image":       serviceImage,
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: ownerDomain,
+			domain.LabelImage:      serviceImage,
 		},
 	}
 
