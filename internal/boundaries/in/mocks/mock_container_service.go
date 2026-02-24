@@ -795,3 +795,40 @@ func (_c *MockContainerService_SyncContainers_Call) RunAndReturn(run func(ctx co
 	_c.Call.Return(run)
 	return _c
 }
+
+// UpdateAttachments provides a mock function for the type MockContainerService
+func (_mock *MockContainerService) UpdateAttachments(attachments map[string][]string) {
+	_mock.Called(attachments)
+}
+
+// MockContainerService_UpdateAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateAttachments'
+type MockContainerService_UpdateAttachments_Call struct {
+	*mock.Call
+}
+
+// UpdateAttachments is a helper method to define mock.On call
+//   - attachments map[string][]string
+func (_e *MockContainerService_Expecter) UpdateAttachments(attachments interface{}) *MockContainerService_UpdateAttachments_Call {
+	return &MockContainerService_UpdateAttachments_Call{Call: _e.mock.On("UpdateAttachments", attachments)}
+}
+
+func (_c *MockContainerService_UpdateAttachments_Call) Run(run func(attachments map[string][]string)) *MockContainerService_UpdateAttachments_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 map[string][]string
+		if args[0] != nil {
+			arg0 = args[0].(map[string][]string)
+		}
+		run(arg0)
+	})
+	return _c
+}
+
+func (_c *MockContainerService_UpdateAttachments_Call) Return() *MockContainerService_UpdateAttachments_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockContainerService_UpdateAttachments_Call) RunAndReturn(run func(attachments map[string][]string)) *MockContainerService_UpdateAttachments_Call {
+	_c.Run(run)
+	return _c
+}
