@@ -1135,7 +1135,7 @@ frontend = ["app1.example.com", "app2.example.com"]
 		err = v2.ReadInConfig()
 		require.NoError(t, err)
 
-		// Verify network_groups is still in the file after save
+		// Verify network_groups is still intact and correct after save
 		savedGroups := loadStringArrayMap(v2.Get("network_groups"))
 		assert.Len(t, savedGroups, 1, "network_groups should still be present in saved config")
 		assert.ElementsMatch(t, []string{"app1.example.com", "app2.example.com"}, savedGroups["frontend"])
@@ -1146,6 +1146,59 @@ frontend = ["app1.example.com", "app2.example.com"]
 
 		// Verify server fields are preserved
 		assert.Equal(t, 9999, v2.GetInt("server.port"))
+	})
+
+	// Regression test: external_routes keys contain dots (e.g. "reg.example.com").
+	// Without explicitly calling viper.Set("external_routes", ...) before WriteConfig,
+	// viper splits dotted keys into nested subtrees, corrupting the data on re-read.
+	t.Run("external_routes with dotted domain keys are not corrupted on Save", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 8080
+
+[routes]
+"app.example.com" = "myapp:latest"
+
+[external_routes]
+"reg.example.com" = "localhost:5000"
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		// Verify external_routes loaded correctly in memory
+		extRoutes := svc.GetExternalRoutes()
+		require.Equal(t, "localhost:5000", extRoutes["reg.example.com"])
+
+		// Trigger Save
+		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
+		require.NoError(t, err)
+
+		// Re-read the file with a fresh viper instance
+		v2 := viper.New()
+		v2.SetConfigFile(configFile)
+		err = v2.ReadInConfig()
+		require.NoError(t, err)
+
+		// external_routes must survive Save with correct flat map structure.
+		// Without the fix, viper splits "reg.example.com" into nested TOML subtrees
+		// and GetString("external_routes.reg\\.example\\.com") returns empty string.
+		savedExtRoutes := loadStringMap(v2.Get("external_routes"))
+		assert.Equal(t, "localhost:5000", savedExtRoutes["reg.example.com"],
+			"external_routes must not be corrupted by viper's dot-path splitting on WriteConfig")
 	})
 
 	t.Run("network_groups added in memory are written to disk on Save", func(t *testing.T) {
