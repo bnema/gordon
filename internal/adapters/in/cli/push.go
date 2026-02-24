@@ -712,9 +712,12 @@ func parseImageRef(image string) (registry, name, tag string) {
 }
 
 // getGitVersion returns git describe output, or empty string if unavailable.
+// When it falls back it prints a warning to stderr so the user knows the
+// image will be tagged "latest" rather than a real version.
 func getGitVersion(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--dirty").Output()
+	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--dirty").Output() // #nosec G204
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "Warning: no git tags found — image version will be 'latest'. Tag your repo to get versioned images.")
 		return ""
 	}
 	return strings.TrimSpace(string(out))

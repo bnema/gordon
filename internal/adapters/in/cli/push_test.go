@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -334,6 +337,51 @@ func TestSplitLabelPairs(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestGetGitVersionNoTagsReturnsFallbackAndWarns(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a temp dir with a git repo that has no tags
+	tmpDir := t.TempDir()
+	if err := exec.Command("git", "-C", tmpDir, "init").Run(); err != nil { // #nosec G204
+		t.Skipf("git init failed: %v", err)
+	}
+	// Need at least one commit so git describe has something to describe
+	if err := exec.Command("git", "-C", tmpDir, "-c", "user.email=test@test.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init").Run(); err != nil { // #nosec G204
+		t.Skipf("git commit failed: %v", err)
+	}
+
+	// Change to the tmpDir for this test so getGitVersion uses the tag-less repo
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmpDir); err != nil { // #nosec G204
+		t.Fatal(err)
+	}
+	defer os.Chdir(origDir) // #nosec G204
+
+	// Redirect stderr to capture the warning
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	v := getGitVersion(ctx)
+
+	w.Close()
+	os.Stderr = origStderr
+	stderrOutput, _ := io.ReadAll(r)
+
+	// Should return "" (fallback to "latest" handled by determineVersion)
+	assert.Equal(t, "", v, "expected empty string fallback when no git tags exist")
+
+	// Should have printed a warning to stderr
+	assert.Contains(t, string(stderrOutput), "latest",
+		"expected a warning about 'latest' fallback on stderr")
 }
 
 func TestParseLabelPair(t *testing.T) {
