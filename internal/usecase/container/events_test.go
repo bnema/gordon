@@ -209,6 +209,10 @@ func TestConfigReloadHandler_Handle_DeploysNewRoutes(t *testing.T) {
 	// SyncContainers is called first
 	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
 
+	// Attachment config is propagated after sync
+	configSvc.EXPECT().GetAllAttachments(mock.Anything).Return(map[string][]string{})
+	containerSvc.EXPECT().UpdateAttachments(map[string][]string{}).Return()
+
 	// No existing containers
 	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{})
 
@@ -240,6 +244,10 @@ func TestConfigReloadHandler_Handle_StopsRemovedRoutes(t *testing.T) {
 
 	// SyncContainers is called first
 	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
+
+	// Attachment config is propagated after sync
+	configSvc.EXPECT().GetAllAttachments(mock.Anything).Return(map[string][]string{})
+	containerSvc.EXPECT().UpdateAttachments(map[string][]string{}).Return()
 
 	// Existing container for a route that's no longer configured
 	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
@@ -276,6 +284,10 @@ func TestConfigReloadHandler_Handle_RedeploysChangedImage(t *testing.T) {
 
 	// SyncContainers is called first
 	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
+
+	// Attachment config is propagated after sync
+	configSvc.EXPECT().GetAllAttachments(mock.Anything).Return(map[string][]string{})
+	containerSvc.EXPECT().UpdateAttachments(map[string][]string{}).Return()
 
 	// Existing container with old image
 	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
@@ -316,6 +328,10 @@ func TestConfigReloadHandler_Handle_NoChanges(t *testing.T) {
 
 	// SyncContainers is called first
 	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
+
+	// Attachment config is propagated after sync
+	configSvc.EXPECT().GetAllAttachments(mock.Anything).Return(map[string][]string{})
+	containerSvc.EXPECT().UpdateAttachments(map[string][]string{}).Return()
 
 	// Existing container matches config
 	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
@@ -493,6 +509,40 @@ func TestManualReloadHandler_Handle_DoesNotRestartRunningContainers(t *testing.T
 }
 
 // ManualDeployHandler tests
+
+func TestConfigReloadHandlerUpdatesContainerConfig(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	handler := NewConfigReloadHandler(testCtx(), containerSvc, configSvc)
+
+	// SyncContainers is called first
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
+
+	// No existing containers
+	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{})
+
+	// New attachments from config
+	newAttachments := map[string][]string{
+		"app.example.com": {"postgres:15", "redis:7"},
+	}
+	configSvc.EXPECT().GetAllAttachments(mock.Anything).Return(newAttachments)
+
+	// Expect UpdateAttachments to be called with new attachment config
+	containerSvc.EXPECT().UpdateAttachments(newAttachments).Return()
+
+	// No routes configured
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
+
+	event := domain.Event{
+		ID:   "event-123",
+		Type: domain.EventConfigReload,
+	}
+
+	err := handler.Handle(context.Background(), event)
+
+	assert.NoError(t, err)
+}
 
 func TestManualDeployHandler_CanHandle(t *testing.T) {
 	containerSvc := inmocks.NewMockContainerService(t)

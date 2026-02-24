@@ -107,6 +107,11 @@ func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) er
 		log.Warn().Err(err).Msg("failed to sync containers before reload, proceeding with current state")
 	}
 
+	// Propagate updated attachment configuration so new attachments take effect
+	// without requiring a Gordon restart (fixes issue #87 part 2).
+	attachments := h.configSvc.GetAllAttachments(ctx)
+	h.containerSvc.UpdateAttachments(attachments)
+
 	currentContainers := h.containerSvc.List(ctx)
 
 	activeRoutes := make(map[string]*domain.Container)

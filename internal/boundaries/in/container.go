@@ -45,6 +45,10 @@ type ContainerService interface {
 	// SyncContainers synchronizes containers with configured routes.
 	SyncContainers(ctx context.Context) error
 
+	// UpdateAttachments updates the attachment configuration in the container service.
+	// This is called after a config reload to propagate attachment changes without restart.
+	UpdateAttachments(attachments map[string][]string)
+
 	// AutoStart starts containers for the provided routes that aren't running.
 	AutoStart(ctx context.Context, routes []domain.Route) error
 

@@ -1071,6 +1071,14 @@ func (s *Service) UpdateConfig(config Config) {
 	s.mu.Unlock()
 }
 
+// UpdateAttachments updates only the attachment configuration in the service.
+// This is called after a config reload to propagate attachment changes without restart.
+func (s *Service) UpdateAttachments(attachments map[string][]string) {
+	s.mu.Lock()
+	s.config.Attachments = attachments
+	s.mu.Unlock()
+}
+
 // Helper methods
 
 // cleanupFailedContainer stops and removes a container that failed to start properly.
