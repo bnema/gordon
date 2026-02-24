@@ -10,6 +10,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/http/httputil"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -125,7 +126,7 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Allow localhost requests only with internal instance credentials.
-			if isLocalhostRequest(r) && isInternalRegistryAuth(r, internalAuth) {
+			if httputil.IsLocalhostRequest(r) && isInternalRegistryAuth(r, internalAuth) {
 				log.Debug().
 					Str(zerowrap.FieldLayer, "adapter").
 					Str(zerowrap.FieldAdapter, "http").
@@ -294,19 +295,6 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 		Str(zerowrap.FieldPath, r.URL.Path).
 		Msg("token-as-password authentication successful")
 	return true, claims
-}
-
-// isLocalhostRequest checks if the request originates from localhost.
-// This is used to allow Gordon to pull from its own registry with internal auth.
-func isLocalhostRequest(r *http.Request) bool {
-	host := r.RemoteAddr
-	// RemoteAddr includes port, e.g., "127.0.0.1:12345" or "[::1]:12345"
-	if strings.HasPrefix(host, "127.") ||
-		strings.HasPrefix(host, "[::1]") ||
-		strings.HasPrefix(host, "::1") {
-		return true
-	}
-	return false
 }
 
 func isInternalRegistryAuth(r *http.Request, internalAuth InternalRegistryAuth) bool {
