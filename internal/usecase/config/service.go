@@ -534,13 +534,6 @@ func (s *Service) GetConfig() Config {
 	return s.config
 }
 
-// GetRegistryAuthConfig returns registry authentication configuration.
-func (s *Service) GetRegistryAuthConfig() (enabled bool, username, password string) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config.RegistryAuthEnabled, s.config.RegistryAuthUsername, s.config.RegistryAuthPassword
-}
-
 // GetVolumeConfig returns volume configuration.
 func (s *Service) GetVolumeConfig() (autoCreate bool, prefix string, preserve bool) {
 	s.mu.RLock()
