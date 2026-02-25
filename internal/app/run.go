@@ -1690,12 +1690,13 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
 	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
+	var tlsSrv *http.Server
 	var tlsReady <-chan struct{}
 	if cfg.Server.TLSEnabled {
 		if cfg.Server.TLSCertFile == "" || cfg.Server.TLSKeyFile == "" {
 			return fmt.Errorf("server.tls_enabled=true requires both server.tls_cert_file and server.tls_key_file")
 		}
-		tlsReady = startTLSServer(
+		tlsSrv, tlsReady = startTLSServer(
 			fmt.Sprintf(":%d", cfg.Server.TLSPort),
 			proxyHandler,
 			"proxy-tls",
@@ -1740,7 +1741,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	syncAndAutoStart(ctx, svc, log)
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
-	gracefulShutdown(registrySrv, proxySrv, containerSvc, log)
+	gracefulShutdown(registrySrv, proxySrv, tlsSrv, containerSvc, log)
 	return nil
 }
 
@@ -1940,17 +1941,19 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrv, proxySrv *http.Server, containerSvc *container.Service, log zerowrap.Logger) {
+func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	if err := registrySrv.Shutdown(shutdownCtx); err != nil {
-		log.Warn().Err(err).Msg("registry server shutdown error")
-	}
-	if err := proxySrv.Shutdown(shutdownCtx); err != nil {
-		log.Warn().Err(err).Msg("proxy server shutdown error")
+	for _, srv := range []*http.Server{registrySrv, proxySrv, tlsSrv} {
+		if srv == nil {
+			continue
+		}
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Str("addr", srv.Addr).Msg("server shutdown error")
+		}
 	}
 
 	containerSvc.StopMonitor()
@@ -2000,8 +2003,19 @@ func startServer(addr string, handler http.Handler, name string, errChan chan<- 
 }
 
 // startTLSServer starts an HTTPS server with the provided certificate and key.
-func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile string, errChan chan<- error, log zerowrap.Logger) <-chan struct{} {
+// It returns the server instance (for graceful shutdown) and a channel that closes once the port is bound.
+func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile string, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
 	ready := make(chan struct{})
+
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 
 	go func() {
 		log.Info().
@@ -2009,16 +2023,6 @@ func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile s
 			Str("cert_file", certFile).
 			Str("key_file", keyFile).
 			Msgf("%s server starting", name)
-
-		server := &http.Server{
-			Addr:              addr,
-			Handler:           handler,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       5 * time.Minute,
-			WriteTimeout:      5 * time.Minute,
-			IdleTimeout:       120 * time.Second,
-			MaxHeaderBytes:    1 << 20,
-		}
 
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -2032,7 +2036,7 @@ func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile s
 		}
 	}()
 
-	return ready
+	return server, ready
 }
 
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.
