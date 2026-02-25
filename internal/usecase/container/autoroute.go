@@ -493,7 +493,7 @@ func writeEnvFile(path string, env map[string]string) error {
 		if strings.ContainsAny(v, " \t\n\"'$\\") {
 			v = fmt.Sprintf("\"%s\"", strings.ReplaceAll(v, "\"", "\\\""))
 		}
-		buf.WriteString(fmt.Sprintf("%s=%s\n", k, v))
+		fmt.Fprintf(&buf, "%s=%s\n", k, v)
 	}
 
 	return os.WriteFile(path, buf.Bytes(), 0600)

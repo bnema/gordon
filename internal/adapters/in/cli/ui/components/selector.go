@@ -82,7 +82,7 @@ func (m SelectorModel) View() string {
 		if i == m.cursor {
 			b.WriteString(styles.Theme.Highlight.Render(cursor + line))
 		} else {
-			b.WriteString(fmt.Sprintf("%s%s", cursor, line))
+			fmt.Fprintf(&b, "%s%s", cursor, line)
 		}
 		b.WriteString("\n")
 	}

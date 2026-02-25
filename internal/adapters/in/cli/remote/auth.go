@@ -12,7 +12,7 @@ import (
 // PasswordRequest represents the request body for POST /auth/password.
 type PasswordRequest struct {
 	Username string `json:"username"`
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec // intentional: CLI credential DTO for auth endpoint
 }
 
 // PasswordResponse represents the response from POST /auth/password.
