@@ -312,7 +312,7 @@ func parsePassLsOutput(output string) []string {
 		isDir := i+1 < len(entries) && entries[i+1].depth > entry.depth
 
 		// Always push so deeper entries can use this as ancestor context.
-		stack = append(stack, frame{depth: entry.depth, name: entry.name})
+		stack = append(stack, frame(entry))
 
 		if !isDir {
 			subjects = append(subjects, subject)
