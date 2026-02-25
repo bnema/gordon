@@ -150,7 +150,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: CLI outbound request to user-configured remote, not server-side SSRF
 	if err != nil {
 		return nil, err
 	}

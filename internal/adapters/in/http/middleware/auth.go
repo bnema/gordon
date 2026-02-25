@@ -48,7 +48,7 @@ func redactUsername(username string) string {
 // These are generated per Gordon instance and are never exposed in config.
 type InternalRegistryAuth struct {
 	Username string
-	Password string
+	Password string //nolint:gosec // auth middleware credential struct for loopback-only registry access
 }
 
 // RegistryAuthV2 middleware provides enhanced Docker Registry authentication

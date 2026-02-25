@@ -45,7 +45,7 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: CLI outbound request to user-configured remote endpoint, not server-side SSRF
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
