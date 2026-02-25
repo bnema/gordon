@@ -12,6 +12,74 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+// TestParsePassLsOutput verifies that pass ls tree output is parsed correctly,
+// including subjects that contain "/" (multi-level paths).
+func TestParsePassLsOutput(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{
+			name: "flat entries only",
+			input: `gordon/registry/tokens
+├── admin
+└── bob
+`,
+			want: []string{"admin", "bob"},
+		},
+		{
+			name: "nested entries with slash in subject",
+			input: `gordon/registry/tokens
+├── admin
+└── team
+    ├── alice
+    └── bob
+`,
+			want: []string{"admin", "team/alice", "team/bob"},
+		},
+		{
+			name: "deeply nested entries",
+			input: `gordon/registry/tokens
+└── org
+    └── team
+        └── alice
+`,
+			want: []string{"org/team/alice"},
+		},
+		{
+			name: "mixed flat and nested",
+			input: `gordon/registry/tokens
+├── admin
+├── team
+│   ├── alice
+│   └── bob
+└── standalone
+`,
+			want: []string{"admin", "team/alice", "team/bob", "standalone"},
+		},
+		{
+			name:  "empty output (no entries)",
+			input: "gordon/registry/tokens\n",
+			want:  []string{},
+		},
+		{
+			name: "ascii tree decoration variant",
+			input: `gordon/registry/tokens
+|-- admin
+` + "`-- team\n    `-- alice\n",
+			want: []string{"admin", "team/alice"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parsePassLsOutput(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // These tests verify the in-memory caching behavior of PassStore.
 // They directly manipulate the cache to test cache hit/miss logic
 // without requiring the actual pass binary.
