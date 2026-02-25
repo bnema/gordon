@@ -369,6 +369,10 @@ func TestGetGitVersionNoTagsReturnsFallbackAndWarns(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	defer func() {
+		w.Close()
+		os.Stderr = origStderr
+	}()
 
 	v := getGitVersion(ctx)
 

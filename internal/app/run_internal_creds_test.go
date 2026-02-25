@@ -32,9 +32,6 @@ func TestGetInternalCredentialsFindsRuntimeFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Unset XDG_RUNTIME_DIR so CLI path is taken, but probe gordonRuntime first
-	t.Setenv("XDG_RUNTIME_DIR", "")
-
 	creds, err := GetInternalCredentialsFromCandidates([]string{
 		filepath.Join(gordonRuntime, "internal-creds.json"),
 		filepath.Join(gordonHome, "internal-creds.json"),

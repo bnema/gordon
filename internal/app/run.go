@@ -823,6 +823,7 @@ func cleanupInternalCredentials() {
 // 1. XDG_RUNTIME_DIR/gordon/ (set by systemd for the daemon)
 // 2. /run/user/<uid>/gordon/ (well-known systemd default, for CLI in shells without XDG_RUNTIME_DIR)
 // 3. ~/.gordon/run/ (fallback for non-systemd environments)
+// 4. os.TempDir() (last resort, matches getInternalCredentialsFile fallback path)
 func getInternalCredentialsCandidates() []string {
 	var candidates []string
 
@@ -843,6 +844,10 @@ func getInternalCredentialsCandidates() []string {
 	if homeDir, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates, filepath.Join(homeDir, ".gordon", "run", "internal-creds.json"))
 	}
+
+	// 4. os.TempDir() last resort — matches the fallback path in getInternalCredentialsFile,
+	// ensuring GetInternalCredentials can find credentials even when getSecureRuntimeDir fails.
+	candidates = append(candidates, filepath.Join(os.TempDir(), "gordon-internal-creds.json"))
 
 	return candidates
 }

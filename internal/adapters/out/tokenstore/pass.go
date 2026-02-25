@@ -85,7 +85,7 @@ type tokenMetadata struct {
 	IssuedAt       time.Time `json:"issued_at"`
 	ExpiresAt      time.Time `json:"expires_at,omitempty"`
 	Revoked        bool      `json:"revoked"`
-	LastExtendedAt time.Time `json:"last_extended_at,omitempty"`
+	LastExtendedAt time.Time `json:"last_extended_at"`
 }
 
 // SaveToken stores a token JWT and metadata in pass.

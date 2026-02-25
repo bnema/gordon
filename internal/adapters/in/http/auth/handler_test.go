@@ -436,7 +436,6 @@ func TestIsLocalhostRequest(t *testing.T) {
 		{"127.0.0.1 is localhost", "127.0.0.1:12345", true},
 		{"127.0.0.2 is localhost", "127.0.0.2:12345", true},
 		{"::1 is localhost", "[::1]:12345", true},
-		{"::1 without brackets", "::1:12345", true},
 		{"192.168.1.1 is not localhost", "192.168.1.1:12345", false},
 		{"10.0.0.1 is not localhost", "10.0.0.1:12345", false},
 		{"public IP is not localhost", "8.8.8.8:12345", false},

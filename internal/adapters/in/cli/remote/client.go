@@ -160,7 +160,11 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 	if newToken := resp.Header.Get("X-Gordon-Token"); newToken != "" && newToken != c.token {
 		c.token = newToken
 		if c.onTokenRefreshed != nil {
-			c.onTokenRefreshed(newToken)
+			// Token persistence is non-fatal: a panic in the callback must not crash the request.
+			func() {
+				defer func() { recover() }() //nolint:errcheck
+				c.onTokenRefreshed(newToken)
+			}()
 		}
 	}
 

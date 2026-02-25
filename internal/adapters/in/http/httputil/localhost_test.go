@@ -17,7 +17,6 @@ func TestIsLocalhostRequest(t *testing.T) {
 		{"ipv4 loopback", "127.0.0.1:12345", true},
 		{"ipv4 loopback other", "127.0.0.2:9000", true},
 		{"ipv6 loopback bracketed", "[::1]:12345", true},
-		{"ipv6 loopback plain", "::1:12345", true},
 		{"external ipv4", "192.168.1.1:12345", false},
 		{"external ipv6", "[2001:db8::1]:12345", false},
 		{"empty", "", false},

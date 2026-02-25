@@ -110,7 +110,9 @@ func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) er
 	// Propagate updated attachment configuration so new attachments take effect
 	// without requiring a Gordon restart (fixes issue #87 part 2).
 	attachments := h.configSvc.GetAllAttachments(ctx)
+	log.Debug().Int("attachment_groups", len(attachments)).Msg("propagating updated attachment configuration")
 	h.containerSvc.UpdateAttachments(attachments)
+	log.Debug().Int("attachment_groups", len(attachments)).Msg("attachment configuration propagated")
 
 	currentContainers := h.containerSvc.List(ctx)
 
