@@ -150,7 +150,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: CLI outbound request to user-configured remote, not server-side SSRF
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -914,7 +914,7 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 	streamClient := &http.Client{
 		Transport: c.httpClient.Transport,
 	}
-	resp, err := streamClient.Do(req) //nolint:gosec // G704: CLI outbound request to user-configured remote, not server-side SSRF
+	resp, err := streamClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}

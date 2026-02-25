@@ -61,7 +61,7 @@ func NewUnsafeStore(dataDir string, log zerowrap.Logger) (*UnsafeStore, error) {
 
 // unsafeTokenData holds both JWT and metadata in a single file.
 type unsafeTokenData struct {
-	JWT      string        `json:"jwt"` //nolint:gosec // token store persistence format: jwt field name is intentional
+	JWT      string        `json:"jwt"`
 	Metadata tokenMetadata `json:"metadata"`
 }
 
