@@ -799,6 +799,7 @@ func (_c *MockContainerService_SyncContainers_Call) RunAndReturn(run func(ctx co
 // UpdateAttachments provides a mock function for the type MockContainerService
 func (_mock *MockContainerService) UpdateAttachments(attachments map[string][]string) {
 	_mock.Called(attachments)
+	return
 }
 
 // MockContainerService_UpdateAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateAttachments'
@@ -818,7 +819,9 @@ func (_c *MockContainerService_UpdateAttachments_Call) Run(run func(attachments 
 		if args[0] != nil {
 			arg0 = args[0].(map[string][]string)
 		}
-		run(arg0)
+		run(
+			arg0,
+		)
 	})
 	return _c
 }
@@ -829,6 +832,6 @@ func (_c *MockContainerService_UpdateAttachments_Call) Return() *MockContainerSe
 }
 
 func (_c *MockContainerService_UpdateAttachments_Call) RunAndReturn(run func(attachments map[string][]string)) *MockContainerService_UpdateAttachments_Call {
-	_c.Call.Return(run)
+	_c.Run(run)
 	return _c
 }
