@@ -219,10 +219,10 @@ func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef st
 		NetworkMode: networkName,
 		Hostname:    containerDomain,
 		Labels: map[string]string{
-			"gordon.domain":  containerDomain,
-			"gordon.image":   image,
-			"gordon.managed": "true",
-			"gordon.route":   containerDomain,
+			domain.LabelDomain:  containerDomain,
+			domain.LabelImage:   image,
+			domain.LabelManaged: "true",
+			domain.LabelRoute:   containerDomain,
 		},
 		AutoRemove: false,
 	}
@@ -903,16 +903,26 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	}
 
 	managed := make(map[string]*domain.Container)
+	attachments := make(map[string][]string)
 	for _, c := range allContainers {
-		if c.Labels != nil {
-			if d, ok := c.Labels["gordon.domain"]; ok && c.Labels["gordon.managed"] == "true" {
-				managed[d] = c
+		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
+			continue
+		}
+		if c.Labels[domain.LabelAttachment] == "true" {
+			owner := c.Labels[domain.LabelAttachedTo]
+			if owner != "" {
+				attachments[owner] = append(attachments[owner], c.ID)
 			}
+			continue
+		}
+		if d, ok := c.Labels[domain.LabelDomain]; ok {
+			managed[d] = c
 		}
 	}
 
 	s.mu.Lock()
 	s.containers = managed
+	s.attachments = attachments
 	newCount := int64(len(managed))
 	delta := newCount - s.managedCount
 	s.managedCount = newCount
@@ -1058,6 +1068,24 @@ func (s *Service) StopMonitor() {
 func (s *Service) UpdateConfig(config Config) {
 	s.mu.Lock()
 	s.config = config
+	s.mu.Unlock()
+}
+
+// UpdateAttachments updates only the attachment configuration in the service.
+// This is called after a config reload to propagate attachment changes without restart.
+// The incoming map is deep-copied so external callers cannot mutate service state.
+func (s *Service) UpdateAttachments(attachments map[string][]string) {
+	var copied map[string][]string
+	if attachments != nil {
+		copied = make(map[string][]string, len(attachments))
+		for k, v := range attachments {
+			sl := make([]string, len(v))
+			copy(sl, v)
+			copied[k] = sl
+		}
+	}
+	s.mu.Lock()
+	s.config.Attachments = copied
 	s.mu.Unlock()
 }
 
@@ -1875,10 +1903,10 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 		Volumes:     volumes,
 		NetworkMode: networkName, // Same network as main app
 		Labels: map[string]string{
-			"gordon.managed":     "true",
-			"gordon.attachment":  "true",
-			"gordon.attached-to": ownerDomain,
-			"gordon.image":       serviceImage,
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: ownerDomain,
+			domain.LabelImage:      serviceImage,
 		},
 	}
 

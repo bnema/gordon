@@ -1016,8 +1016,8 @@ func (r *Runtime) CreateVolume(ctx context.Context, volumeName string) error {
 	_, err := r.client.VolumeCreate(ctx, volume.CreateOptions{
 		Name: volumeName,
 		Labels: map[string]string{
-			"gordon.managed": "true",
-			"gordon.created": "auto",
+			domain.LabelManaged: "true",
+			domain.LabelCreated: time.Now().UTC().Format(time.RFC3339),
 		},
 	})
 	if err != nil {
@@ -1142,7 +1142,7 @@ func (r *Runtime) CreateNetwork(ctx context.Context, name string, options map[st
 	createOptions := network.CreateOptions{
 		Driver: driver,
 		Labels: map[string]string{
-			"gordon.managed": "true",
+			domain.LabelManaged: "true",
 		},
 	}
 

@@ -33,7 +33,10 @@ type PassStore struct {
 
 // NewPassStore creates a new pass-based domain secret store.
 func NewPassStore(log zerowrap.Logger) (*PassStore, error) {
-	if err := exec.Command("pass", "version").Run(); err != nil {
+	// Use a timeout so a stalled GPG agent or keyring does not hang startup.
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer probeCancel()
+	if err := exec.CommandContext(probeCtx, "pass", "version").Run(); err != nil { //nolint:gosec // binary is a constant ("pass"), no user input
 		return nil, fmt.Errorf("pass is not available: %w", err)
 	}
 
@@ -646,7 +649,7 @@ func (s *PassStore) ManifestExists(domainName string) (bool, error) {
 }
 
 func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
-	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path)
+	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
 	cmd.Stdin = strings.NewReader(value)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -656,7 +659,7 @@ func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 }
 
 func (s *PassStore) passRemove(ctx context.Context, path string) error {
-	cmd := exec.CommandContext(ctx, "pass", "rm", "-f", path)
+	cmd := exec.CommandContext(ctx, "pass", "rm", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if passEntryMissing(string(output)) {
@@ -668,7 +671,7 @@ func (s *PassStore) passRemove(ctx context.Context, path string) error {
 }
 
 func (s *PassStore) passShow(ctx context.Context, path string) (string, bool, error) {
-	cmd := exec.CommandContext(ctx, "pass", "show", path)
+	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if passEntryMissing(string(output)) {
@@ -687,7 +690,7 @@ func (s *PassStore) listTopLevelEntries(ctx context.Context, basePath string) ([
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, "pass", "ls", basePath)
+	cmd := exec.CommandContext(ctx, "pass", "ls", basePath) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if passEntryMissing(string(output)) {
@@ -809,8 +812,12 @@ func (s *PassStore) cleanupInsertedPaths(paths []string) {
 	}
 
 	for _, path := range paths {
-		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-		_ = s.passRemove(ctx, path)
-		cancel()
+		// Wrap in a closure so defer cancel() runs at the end of each iteration,
+		// not at the end of cleanupInsertedPaths (which would delay all cancels).
+		func(p string) {
+			ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+			defer cancel()
+			_ = s.passRemove(ctx, p)
+		}(path)
 	}
 }

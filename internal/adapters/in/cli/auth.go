@@ -24,6 +24,16 @@ import (
 	"github.com/bnema/gordon/pkg/duration"
 )
 
+// stdinFD returns os.Stdin's file descriptor as an int, guarded against
+// uintptr overflow on platforms where uintptr > int.
+func stdinFD() (int, error) {
+	fd := os.Stdin.Fd()
+	if fd > uintptr(^uint(0)>>1) {
+		return 0, fmt.Errorf("stdin fd value %d overflows int", fd)
+	}
+	return int(fd), nil
+}
+
 // newAuthCmd creates the auth command group.
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -274,7 +284,11 @@ func runAuthLogin(remoteName, username, password string) error {
 	if password == "" {
 		// Prompt for password (hidden input)
 		fmt.Print("Password: ")
-		passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fd, err := stdinFD()
+		if err != nil {
+			return fmt.Errorf("failed to get stdin fd: %w", err)
+		}
+		passwordBytes, err := term.ReadPassword(fd)
 		if err != nil {
 			// Fallback for non-terminal input
 			reader := bufio.NewReader(os.Stdin)
@@ -595,7 +609,11 @@ func runPasswordHash() error {
 	fmt.Print("Enter password: ")
 
 	// Read password without echo (use os.Stdin.Fd() for better compatibility)
-	passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fd, err := stdinFD()
+	if err != nil {
+		return fmt.Errorf("failed to get stdin fd: %w", err)
+	}
+	passwordBytes, err := term.ReadPassword(fd)
 	if err != nil {
 		// Fallback for non-terminal input
 		reader := bufio.NewReader(os.Stdin)

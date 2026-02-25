@@ -819,19 +819,73 @@ func cleanupInternalCredentials() {
 	_ = os.Remove(getInternalCredentialsFile())
 }
 
+// getInternalCredentialsCandidates returns candidate file paths in priority order:
+// 1. XDG_RUNTIME_DIR/gordon/ (set by systemd for the daemon)
+// 2. /run/user/<uid>/gordon/ (well-known systemd default, for CLI in shells without XDG_RUNTIME_DIR)
+// 3. ~/.gordon/run/ (fallback for non-systemd environments)
+// 4. os.TempDir() (last resort, matches getInternalCredentialsFile fallback path)
+func getInternalCredentialsCandidates() []string {
+	var candidates []string
+
+	// 1. XDG_RUNTIME_DIR (set in daemon's environment)
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		candidates = append(candidates, filepath.Join(runtimeDir, "gordon", "internal-creds.json"))
+	}
+
+	// 2. /run/user/<uid>/gordon/ (systemd default, may not be in CLI's env)
+	uid := os.Getuid()
+	sysRuntime := filepath.Join("/run/user", fmt.Sprintf("%d", uid), "gordon", "internal-creds.json")
+	// Avoid duplicate if XDG_RUNTIME_DIR already points here
+	if len(candidates) == 0 || candidates[0] != sysRuntime {
+		candidates = append(candidates, sysRuntime)
+	}
+
+	// 3. ~/.gordon/run/ fallback
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(homeDir, ".gordon", "run", "internal-creds.json"))
+	}
+
+	// 4. os.TempDir() last resort — matches the fallback path in getInternalCredentialsFile,
+	// ensuring GetInternalCredentials can find credentials even when getSecureRuntimeDir fails.
+	candidates = append(candidates, filepath.Join(os.TempDir(), "gordon-internal-creds.json"))
+
+	return candidates
+}
+
+// GetInternalCredentialsFromCandidates reads credentials from the first candidate file that exists.
+// Exported for testing.
+func GetInternalCredentialsFromCandidates(candidates []string) (*InternalCredentials, error) {
+	var lastErr error
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			// Non-permission errors (e.g. EACCES) may be transient or path-specific;
+			// record and try the next candidate rather than failing immediately.
+			lastErr = fmt.Errorf("failed to read credentials file %s: %w", path, err)
+			continue
+		}
+		var creds InternalCredentials
+		if err := json.Unmarshal(data, &creds); err != nil {
+			// Corrupt file — record and fall through to lower-priority candidates.
+			lastErr = fmt.Errorf("failed to parse credentials at %s: %w", path, err)
+			continue
+		}
+		return &creds, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("no credentials file found (is Gordon running?): checked %v", candidates)
+}
+
 // GetInternalCredentials reads the internal registry credentials from file.
-// This is used by the CLI to display credentials for manual recovery.
+// Probes all candidate runtime directories so CLI works regardless of whether
+// XDG_RUNTIME_DIR is set in the current shell environment.
 func GetInternalCredentials() (*InternalCredentials, error) {
-	credFile := getInternalCredentialsFile()
-	data, err := os.ReadFile(credFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read credentials file (is Gordon running?): %w", err)
-	}
-	var creds InternalCredentials
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return nil, fmt.Errorf("failed to parse credentials: %w", err)
-	}
-	return &creds, nil
+	return GetInternalCredentialsFromCandidates(getInternalCredentialsCandidates())
 }
 
 // createAuthService creates the authentication service and token store.
@@ -1645,12 +1699,13 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
 	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
+	var tlsSrv *http.Server
 	var tlsReady <-chan struct{}
 	if cfg.Server.TLSEnabled {
 		if cfg.Server.TLSCertFile == "" || cfg.Server.TLSKeyFile == "" {
 			return fmt.Errorf("server.tls_enabled=true requires both server.tls_cert_file and server.tls_key_file")
 		}
-		tlsReady = startTLSServer(
+		tlsSrv, tlsReady = startTLSServer(
 			fmt.Sprintf(":%d", cfg.Server.TLSPort),
 			proxyHandler,
 			"proxy-tls",
@@ -1695,7 +1750,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	syncAndAutoStart(ctx, svc, log)
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
-	gracefulShutdown(registrySrv, proxySrv, containerSvc, log)
+	gracefulShutdown(registrySrv, proxySrv, tlsSrv, containerSvc, log)
 	return nil
 }
 
@@ -1895,17 +1950,19 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrv, proxySrv *http.Server, containerSvc *container.Service, log zerowrap.Logger) {
+func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	if err := registrySrv.Shutdown(shutdownCtx); err != nil {
-		log.Warn().Err(err).Msg("registry server shutdown error")
-	}
-	if err := proxySrv.Shutdown(shutdownCtx); err != nil {
-		log.Warn().Err(err).Msg("proxy server shutdown error")
+	for _, srv := range []*http.Server{registrySrv, proxySrv, tlsSrv} {
+		if srv == nil {
+			continue
+		}
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Str("addr", srv.Addr).Msg("server shutdown error")
+		}
 	}
 
 	containerSvc.StopMonitor()
@@ -1955,8 +2012,19 @@ func startServer(addr string, handler http.Handler, name string, errChan chan<- 
 }
 
 // startTLSServer starts an HTTPS server with the provided certificate and key.
-func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile string, errChan chan<- error, log zerowrap.Logger) <-chan struct{} {
+// It returns the server instance (for graceful shutdown) and a channel that closes once the port is bound.
+func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile string, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
 	ready := make(chan struct{})
+
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 
 	go func() {
 		log.Info().
@@ -1964,16 +2032,6 @@ func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile s
 			Str("cert_file", certFile).
 			Str("key_file", keyFile).
 			Msgf("%s server starting", name)
-
-		server := &http.Server{
-			Addr:              addr,
-			Handler:           handler,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       5 * time.Minute,
-			WriteTimeout:      5 * time.Minute,
-			IdleTimeout:       120 * time.Second,
-			MaxHeaderBytes:    1 << 20,
-		}
 
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -1987,7 +2045,7 @@ func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile s
 		}
 	}()
 
-	return ready
+	return server, ready
 }
 
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.

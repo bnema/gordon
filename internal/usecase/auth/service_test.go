@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -815,4 +816,237 @@ func TestService_GenerateAccessToken_HasNbfClaim(t *testing.T) {
 	require.True(t, ok, "iat claim should exist")
 
 	assert.Equal(t, iat, nbf, "nbf should equal iat for access tokens")
+}
+
+func TestExtendTokenSlidesExpiry(t *testing.T) {
+	tokenStore := mocks.NewMockTokenStore(t)
+
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+
+	ctx := testContext()
+
+	// Generate a token with a short remaining life (1h) so ExtendToken produces a different exp
+	var capturedToken *domain.Token
+	tokenStore.EXPECT().
+		SaveToken(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, t *domain.Token, _ string) {
+			capturedToken = t
+		}).
+		Return(nil)
+
+	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, time.Hour)
+	require.NoError(t, err)
+
+	// ExtendToken flow:
+	// 1. ValidateToken → GetToken (ensureTokenExists) + IsRevoked
+	tokenStore.EXPECT().
+		GetToken(mock.Anything, "testuser").
+		Return(tokenStr, capturedToken, nil).Once()
+	tokenStore.EXPECT().
+		IsRevoked(mock.Anything, capturedToken.ID).
+		Return(false, nil).Once()
+
+	// 2. GetToken again for debounce check
+	tokenStore.EXPECT().
+		GetToken(mock.Anything, "testuser").
+		Return(tokenStr, capturedToken, nil).Once()
+
+	// 3. UpdateTokenExpiry
+	var updatedToken *domain.Token
+	tokenStore.EXPECT().
+		UpdateTokenExpiry(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, t *domain.Token, _ string) {
+			updatedToken = t
+		}).
+		Return(nil)
+
+	// Extend it
+	newTokenStr, err := svc.ExtendToken(ctx, tokenStr)
+	require.NoError(t, err, "ExtendToken should not fail")
+
+	// Since the original token expires in 1h and the new one expires in 24h, they must differ
+	assert.NotEqual(t, tokenStr, newTokenStr, "expected a new token string after extension")
+	assert.NotNil(t, updatedToken)
+	assert.False(t, updatedToken.LastExtendedAt.IsZero(), "LastExtendedAt should be set")
+
+	// New token must be valid — set up mock expectations for ValidateToken
+	tokenStore.EXPECT().
+		GetToken(mock.Anything, "testuser").
+		Return(newTokenStr, updatedToken, nil)
+	tokenStore.EXPECT().
+		IsRevoked(mock.Anything, capturedToken.ID).
+		Return(false, nil)
+
+	claims, err := svc.ValidateToken(ctx, newTokenStr)
+	require.NoError(t, err, "new token must be valid")
+
+	// New token should have ~24h expiry from now
+	expectedExpiry := time.Now().Add(24 * time.Hour)
+	actualExpiry := time.Unix(claims.ExpiresAt, 0)
+	assert.WithinDuration(t, expectedExpiry, actualExpiry, 5*time.Minute, "expiry should be ~24h from now")
+}
+
+func TestExtendTokenDebounce(t *testing.T) {
+	tokenStore := mocks.NewMockTokenStore(t)
+
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+
+	ctx := testContext()
+
+	// Generate a short-lived token (1h) so the first extension produces a different JWT
+	var capturedToken *domain.Token
+	tokenStore.EXPECT().
+		SaveToken(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, t *domain.Token, _ string) {
+			capturedToken = t
+		}).
+		Return(nil)
+
+	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, time.Hour)
+	require.NoError(t, err)
+
+	// First extend: flow is ValidateToken(GetToken+IsRevoked) + GetToken(debounce) + UpdateTokenExpiry
+	tokenStore.EXPECT().
+		GetToken(mock.Anything, "testuser").
+		Return(tokenStr, capturedToken, nil).Once()
+	tokenStore.EXPECT().
+		IsRevoked(mock.Anything, capturedToken.ID).
+		Return(false, nil).Once()
+	tokenStore.EXPECT().
+		GetToken(mock.Anything, "testuser").
+		Return(tokenStr, capturedToken, nil).Once()
+
+	var extendedToken *domain.Token
+	var extendedJWT string
+	tokenStore.EXPECT().
+		UpdateTokenExpiry(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, t *domain.Token, jwt string) {
+			extendedToken = t
+			extendedJWT = jwt
+		}).
+		Return(nil).Once()
+
+	newToken1, err := svc.ExtendToken(ctx, tokenStr)
+	require.NoError(t, err)
+	assert.NotEqual(t, tokenStr, newToken1, "first extend should produce a new token")
+	assert.NotNil(t, extendedToken)
+
+	// Second extend immediately — debounce should kick in (LastExtendedAt just set to now)
+	// Flow: ValidateToken(GetToken+IsRevoked) + GetToken(debounce) → debounced, no UpdateTokenExpiry
+	tokenStore.EXPECT().
+		GetToken(mock.Anything, "testuser").
+		Return(extendedJWT, extendedToken, nil).Once()
+	tokenStore.EXPECT().
+		IsRevoked(mock.Anything, capturedToken.ID).
+		Return(false, nil).Once()
+	tokenStore.EXPECT().
+		GetToken(mock.Anything, "testuser").
+		Return(extendedJWT, extendedToken, nil).Once()
+
+	// No UpdateTokenExpiry should be called — debounced
+	newToken2, err := svc.ExtendToken(ctx, newToken1)
+	require.NoError(t, err)
+
+	assert.Equal(t, newToken1, newToken2, "expected debounce to return same token within 1h window")
+}
+
+func TestExtendTokenSkipsEphemeral(t *testing.T) {
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, nil, zerowrap.Default())
+
+	ctx := testContext()
+
+	// Generate an ephemeral access token (≤5min)
+	tokenStr, err := svc.GenerateAccessToken(ctx, "testuser", []string{"pull"}, 5*time.Minute)
+	require.NoError(t, err)
+
+	// ExtendToken should skip ephemeral tokens and return the same string
+	result, err := svc.ExtendToken(ctx, tokenStr)
+	require.NoError(t, err)
+	assert.Equal(t, tokenStr, result, "ephemeral tokens should not be extended")
+}
+
+func newTestAuthService(t *testing.T) (*Service, *mocks.MockTokenStore) {
+	t.Helper()
+	tokenStore := mocks.NewMockTokenStore(t)
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+	return svc, tokenStore
+}
+
+func TestIsEphemeralAccessTokenRejectsFutureIat(t *testing.T) {
+	// A token with iat in the future should NOT be treated as ephemeral
+	// (otherwise it bypasses revocation checks)
+	svc, _ := newTestAuthService(t)
+
+	// Craft a token with iat = now+10min, exp = now+15min (age appears as -10min → negative → < 5min).
+	// nbf is set to current time (not future) so the JWT library's nbf check does not reject it —
+	// we need to isolate the iat bypass specifically.
+	now := time.Now().UTC()
+	claims := jwt.MapClaims{
+		"jti":    "test-jti",
+		"sub":    "testuser",
+		"iss":    TokenIssuer,
+		"iat":    now.Add(10 * time.Minute).Unix(), // future iat — the attack vector
+		"nbf":    now.Add(-1 * time.Second).Unix(), // current nbf so nbf check passes
+		"exp":    now.Add(15 * time.Minute).Unix(), // exp - iat = 5min → looks ephemeral
+		"scopes": []string{"admin:*:*"},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenStr, err := token.SignedString(svc.config.TokenSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Parsing should either reject the token outright (future iat) or not classify it as ephemeral
+	rawClaims, err := svc.parseTokenClaims(tokenStr)
+	if err != nil {
+		// Acceptable: future iat rejected at parse time
+		t.Logf("token with future iat rejected at parse: %v", err)
+		return
+	}
+	tokenClaims := buildTokenClaims(rawClaims)
+	if svc.isEphemeralAccessToken(tokenClaims) {
+		t.Error("token with future iat must NOT be classified as ephemeral — it bypasses revocation")
+	}
+}
+
+func TestExtendTokenSkipsServiceToken(t *testing.T) {
+	tokenStore := mocks.NewMockTokenStore(t)
+
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+
+	ctx := testContext()
+
+	// Generate a service token — service tokens skip extension before store checks
+	tokenStore.EXPECT().
+		SaveToken(mock.Anything, mock.Anything, mock.Anything).
+		Return(nil)
+
+	const svcSubject = "gordon-service"
+	tokenStr, err := svc.GenerateToken(ctx, svcSubject, []string{"pull"}, 24*time.Hour)
+	require.NoError(t, err)
+
+	// ExtendToken should skip service tokens WITHOUT touching the store
+	result, err := svc.ExtendToken(ctx, tokenStr)
+	require.NoError(t, err)
+	assert.Equal(t, tokenStr, result, "service tokens should not be extended")
 }

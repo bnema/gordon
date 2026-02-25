@@ -2332,6 +2332,49 @@ func TestService_Deploy_DoesNotSkipWhenImageIDDiffers(t *testing.T) {
 	assert.Equal(t, "new-container", result.ID)
 }
 
+func TestSyncContainersRebuildsAttachmentMap(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	ctx := testContext()
+
+	// ListContainers returns one main container and one attachment container
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID: "main-container-1",
+			Labels: map[string]string{
+				domain.LabelDomain:  "app.example.com",
+				domain.LabelManaged: "true",
+			},
+		},
+		{
+			ID: "attachment-container-1",
+			Labels: map[string]string{
+				domain.LabelManaged:    "true",
+				domain.LabelAttachment: "true",
+				domain.LabelAttachedTo: "app.example.com",
+			},
+		},
+	}, nil).Once()
+
+	require.NoError(t, svc.SyncContainers(ctx))
+
+	// Main container should be in s.containers
+	tracked, exists := svc.Get(ctx, "app.example.com")
+	require.True(t, exists, "main container should be tracked after SyncContainers")
+	assert.Equal(t, "main-container-1", tracked.ID)
+
+	// Attachment container should be in s.attachments under the owner domain
+	svc.mu.RLock()
+	attachIDs := svc.attachments["app.example.com"]
+	svc.mu.RUnlock()
+
+	require.Len(t, attachIDs, 1, "attachment map should contain one entry for app.example.com after SyncContainers")
+	assert.Equal(t, "attachment-container-1", attachIDs[0])
+}
+
 func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)

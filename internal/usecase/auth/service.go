@@ -27,6 +27,13 @@ const (
 	MaxAccessTokenLifetime = 5 * time.Minute
 	// maxAccessTokenLifetimeSecs is MaxAccessTokenLifetime in seconds for JWT comparisons.
 	maxAccessTokenLifetimeSecs = int64(MaxAccessTokenLifetime / time.Second)
+	// tokenExtensionTTL is the amount of time added to a token's expiry when extended.
+	tokenExtensionTTL = 24 * time.Hour
+	// tokenExtensionDebounce is the minimum time between token extensions.
+	tokenExtensionDebounce = time.Hour
+	// serviceTokenSubject is the subject used for internal service tokens.
+	// Service tokens are not extended to avoid churn on the token store.
+	serviceTokenSubject = "gordon-service"
 )
 
 // Config holds the authentication configuration.
@@ -161,7 +168,10 @@ func (s *Service) parseTokenClaims(tokenString string) (jwt.MapClaims, error) {
 			return nil, domain.ErrInvalidToken
 		}
 		return s.config.TokenSecret, nil
-	}, jwt.WithIssuer(TokenIssuer)) // SECURITY: Enforce issuer validation
+	},
+		jwt.WithIssuer(TokenIssuer), // SECURITY: Enforce issuer validation
+		jwt.WithIssuedAt(),          // SECURITY: Reject tokens with iat in the future
+	)
 	if err != nil {
 		return nil, domain.ErrInvalidToken
 	}
@@ -258,6 +268,10 @@ func (s *Service) isEphemeralAccessToken(claims *domain.TokenClaims) bool {
 	// stolen secrets from creating arbitrary short-lived tokens
 	now := time.Now().UTC().Unix()
 	tokenAge := now - claims.IssuedAt
+	if tokenAge < 0 {
+		// iat is in the future — do not classify as ephemeral (defense-in-depth: prevents bypass)
+		return false
+	}
 	if tokenAge > maxAccessTokenLifetimeSecs {
 		return false // Old tokens require store validation
 	}
@@ -431,6 +445,119 @@ func (s *Service) ListTokens(ctx context.Context) ([]domain.Token, error) {
 	}
 
 	return tokens, nil
+}
+
+// ExtendToken re-issues the token with expiry slid forward by 24h.
+// Returns the same token string if it was already extended within the debounce window (1h).
+// Skips extension for ephemeral access tokens (≤5min) and service tokens.
+func (s *Service) ExtendToken(ctx context.Context, tokenString string) (string, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "ExtendToken",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	// Parse claims without store validation first (to check skip conditions cheaply)
+	rawClaims, err := s.parseTokenClaims(tokenString)
+	if err != nil {
+		return "", domain.ErrInvalidToken
+	}
+
+	tokenClaims := buildTokenClaims(rawClaims)
+
+	// Skip ephemeral access tokens (≤5min lifetime)
+	if s.isEphemeralAccessToken(tokenClaims) {
+		log.Debug().Msg("skipping extension for ephemeral access token")
+		return tokenString, nil
+	}
+
+	// Skip service tokens
+	if tokenClaims.Subject == serviceTokenSubject {
+		log.Debug().Msg("skipping extension for service token")
+		return tokenString, nil
+	}
+
+	// Skip tokens with no expiry (permanent tokens must not be silently converted to 24h tokens)
+	if tokenClaims.ExpiresAt <= 0 {
+		log.Debug().Str("subject", tokenClaims.Subject).Msg("skipping extension for non-expiring token")
+		return tokenString, nil
+	}
+
+	// Full validation including store checks (not expired, not revoked, exists in store)
+	if _, err := s.ValidateToken(ctx, tokenString); err != nil {
+		return "", fmt.Errorf("token validation failed: %w", err)
+	}
+
+	// Fetch stored token to check debounce and get metadata
+	_, storedToken, err := s.tokenStore.GetToken(ctx, tokenClaims.Subject)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch stored token: %w", err)
+	}
+
+	// TOCTOU guard: confirm the store's current JTI matches the JWT we validated.
+	// A mismatch means the token was rotated between ValidateToken and GetToken;
+	// in that case return the original (still-valid) token without re-signing.
+	if storedToken.ID != tokenClaims.ID {
+		log.Debug().
+			Str("subject", tokenClaims.Subject).
+			Str("jwt_jti", tokenClaims.ID).
+			Str("store_id", storedToken.ID).
+			Msg("token ID mismatch after rotation, skipping extension")
+		return tokenString, nil
+	}
+
+	// Debounce: skip if already extended within the last hour
+	if !storedToken.LastExtendedAt.IsZero() && time.Since(storedToken.LastExtendedAt) < tokenExtensionDebounce {
+		log.Debug().
+			Str("subject", tokenClaims.Subject).
+			Time("last_extended_at", storedToken.LastExtendedAt).
+			Msg("token extension debounced")
+		return tokenString, nil
+	}
+
+	// Re-sign with same JTI but new expiry
+	now := time.Now().UTC()
+	newExpiresAt := now.Add(tokenExtensionTTL)
+
+	newClaims := jwt.MapClaims{
+		"jti":    tokenClaims.ID, // Reuse existing JTI to avoid invalidating concurrent requests
+		"sub":    tokenClaims.Subject,
+		"iss":    TokenIssuer,
+		"iat":    now.Unix(), // Update to current time (token is being re-issued)
+		"nbf":    now.Unix(), // SECURITY: not-before matches issuance time
+		"scopes": tokenClaims.Scopes,
+		"exp":    newExpiresAt.Unix(),
+	}
+
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, newClaims)
+	newTokenString, err := jwtToken.SignedString(s.config.TokenSecret)
+	if err != nil {
+		return "", log.WrapErr(err, "failed to re-sign token")
+	}
+
+	// Update stored token with new JWT, expiry, and LastExtendedAt
+	updatedToken := &domain.Token{
+		ID:             storedToken.ID,
+		Subject:        storedToken.Subject,
+		Scopes:         storedToken.Scopes,
+		IssuedAt:       storedToken.IssuedAt,
+		ExpiresAt:      newExpiresAt,
+		Revoked:        storedToken.Revoked,
+		LastExtendedAt: now,
+	}
+
+	if err := s.tokenStore.UpdateTokenExpiry(ctx, updatedToken, newTokenString); err != nil {
+		// Non-fatal: log and return original token rather than failing the request
+		log.Warn().Err(err).Str("subject", tokenClaims.Subject).Msg("failed to persist extended token, returning original")
+		return tokenString, nil
+	}
+
+	log.Debug().
+		Str("subject", tokenClaims.Subject).
+		Time("new_expires_at", newExpiresAt).
+		Msg("token expiry extended")
+
+	return newTokenString, nil
 }
 
 // GeneratePasswordHash generates a bcrypt hash for a password.

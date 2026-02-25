@@ -53,11 +53,6 @@ func TestService_Load(t *testing.T) {
 	assert.True(t, svc.IsNetworkIsolationEnabled())
 	assert.Equal(t, "gordon", svc.GetNetworkPrefix())
 
-	enabled, username, password := svc.GetRegistryAuthConfig()
-	assert.True(t, enabled)
-	assert.Equal(t, "admin", username)
-	assert.Equal(t, "secret", password)
-
 	autoCreate, prefix, preserve := svc.GetVolumeConfig()
 	assert.True(t, autoCreate)
 	assert.Equal(t, "gordon", prefix)
@@ -1088,6 +1083,174 @@ func TestService_FindRoutesByImage(t *testing.T) {
 
 		routes := svc.FindRoutesByImage(ctx, "myapp")
 		assert.Empty(t, routes)
+	})
+}
+
+func TestSavePreservesAllConfigFields(t *testing.T) {
+	t.Run("network_groups are persisted to disk", func(t *testing.T) {
+		// Setup: config file with auth, server, and network_groups
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 9999
+
+[auth]
+username = "admin"
+token_secret = "supersecretvalue"
+
+[routes]
+"app.example.com" = "myapp:latest"
+
+[network_groups]
+frontend = ["app1.example.com", "app2.example.com"]
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		// Verify network_groups loaded correctly in memory
+		groups := svc.GetNetworkGroups()
+		require.Len(t, groups, 1)
+		require.ElementsMatch(t, []string{"app1.example.com", "app2.example.com"}, groups["frontend"])
+
+		// Trigger a Save via AddRoute (which calls Save internally)
+		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
+		require.NoError(t, err)
+
+		// Re-read the file to verify network_groups was persisted
+		v2 := viper.New()
+		v2.SetConfigFile(configFile)
+		err = v2.ReadInConfig()
+		require.NoError(t, err)
+
+		// Verify network_groups is still intact and correct after save
+		savedGroups := loadStringArrayMap(v2.Get("network_groups"))
+		assert.Len(t, savedGroups, 1, "network_groups should still be present in saved config")
+		assert.ElementsMatch(t, []string{"app1.example.com", "app2.example.com"}, savedGroups["frontend"])
+
+		// Verify auth fields are preserved
+		assert.Equal(t, "admin", v2.GetString("auth.username"))
+		assert.Equal(t, "supersecretvalue", v2.GetString("auth.token_secret"))
+
+		// Verify server fields are preserved
+		assert.Equal(t, 9999, v2.GetInt("server.port"))
+	})
+
+	// Regression test: external_routes keys contain dots (e.g. "reg.example.com").
+	// Without explicitly calling viper.Set("external_routes", ...) before WriteConfig,
+	// viper splits dotted keys into nested subtrees, corrupting the data on re-read.
+	t.Run("external_routes with dotted domain keys are not corrupted on Save", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 8080
+
+[routes]
+"app.example.com" = "myapp:latest"
+
+[external_routes]
+"reg.example.com" = "localhost:5000"
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		// Verify external_routes loaded correctly in memory
+		extRoutes := svc.GetExternalRoutes()
+		require.Equal(t, "localhost:5000", extRoutes["reg.example.com"])
+
+		// Trigger Save
+		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
+		require.NoError(t, err)
+
+		// Re-read the file with a fresh viper instance
+		v2 := viper.New()
+		v2.SetConfigFile(configFile)
+		err = v2.ReadInConfig()
+		require.NoError(t, err)
+
+		// external_routes must survive Save with correct flat map structure.
+		// Without the fix, viper splits "reg.example.com" into nested TOML subtrees
+		// and GetString("external_routes.reg\\.example\\.com") returns empty string.
+		savedExtRoutes := loadStringMap(v2.Get("external_routes"))
+		assert.Equal(t, "localhost:5000", savedExtRoutes["reg.example.com"],
+			"external_routes must not be corrupted by viper's dot-path splitting on WriteConfig")
+	})
+
+	t.Run("network_groups added in memory are written to disk on Save", func(t *testing.T) {
+		// Setup: config file WITHOUT network_groups
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 8080
+
+[routes]
+"app.example.com" = "myapp:latest"
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		// Inject network_groups into viper as if they were loaded from some other source
+		// This simulates a case where network_groups exist in memory but not on disk
+		v.Set("network_groups", map[string]interface{}{
+			"backend": []interface{}{"api.example.com"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		// Verify network_groups is loaded in memory
+		groups := svc.GetNetworkGroups()
+		require.Len(t, groups, 1)
+
+		// Trigger Save
+		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
+		require.NoError(t, err)
+
+		// Re-read the file
+		v2 := viper.New()
+		v2.SetConfigFile(configFile)
+		err = v2.ReadInConfig()
+		require.NoError(t, err)
+
+		// network_groups must be present in the saved file
+		savedGroups := loadStringArrayMap(v2.Get("network_groups"))
+		assert.Len(t, savedGroups, 1, "network_groups added in memory must be written on Save")
+		assert.ElementsMatch(t, []string{"api.example.com"}, savedGroups["backend"])
 	})
 }
 

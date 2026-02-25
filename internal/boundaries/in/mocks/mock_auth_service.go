@@ -39,6 +39,72 @@ func (_m *MockAuthService) EXPECT() *MockAuthService_Expecter {
 	return &MockAuthService_Expecter{mock: &_m.Mock}
 }
 
+// ExtendToken provides a mock function for the type MockAuthService
+func (_mock *MockAuthService) ExtendToken(ctx context.Context, tokenString string) (string, error) {
+	ret := _mock.Called(ctx, tokenString)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ExtendToken")
+	}
+
+	var r0 string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (string, error)); ok {
+		return returnFunc(ctx, tokenString)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) string); ok {
+		r0 = returnFunc(ctx, tokenString)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, tokenString)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAuthService_ExtendToken_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ExtendToken'
+type MockAuthService_ExtendToken_Call struct {
+	*mock.Call
+}
+
+// ExtendToken is a helper method to define mock.On call
+//   - ctx context.Context
+//   - tokenString string
+func (_e *MockAuthService_Expecter) ExtendToken(ctx interface{}, tokenString interface{}) *MockAuthService_ExtendToken_Call {
+	return &MockAuthService_ExtendToken_Call{Call: _e.mock.On("ExtendToken", ctx, tokenString)}
+}
+
+func (_c *MockAuthService_ExtendToken_Call) Run(run func(ctx context.Context, tokenString string)) *MockAuthService_ExtendToken_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAuthService_ExtendToken_Call) Return(s string, err error) *MockAuthService_ExtendToken_Call {
+	_c.Call.Return(s, err)
+	return _c
+}
+
+func (_c *MockAuthService_ExtendToken_Call) RunAndReturn(run func(ctx context.Context, tokenString string) (string, error)) *MockAuthService_ExtendToken_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GenerateAccessToken provides a mock function for the type MockAuthService
 func (_mock *MockAuthService) GenerateAccessToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error) {
 	ret := _mock.Called(ctx, subject, scopes, expiry)

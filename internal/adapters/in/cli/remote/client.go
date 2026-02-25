@@ -21,10 +21,11 @@ import (
 
 // Client is an HTTP client for the Gordon admin API.
 type Client struct {
-	baseURL     string
-	token       string
-	httpClient  *http.Client
-	insecureTLS bool
+	baseURL          string
+	token            string
+	httpClient       *http.Client
+	insecureTLS      bool
+	onTokenRefreshed func(newToken string) // optional callback to persist a refreshed token
 }
 
 var (
@@ -84,6 +85,37 @@ func WithInsecureTLS(insecure bool) ClientOption {
 	}
 }
 
+// WithTokenRefreshCallback sets a callback that is invoked when the server
+// returns a refreshed token in the X-Gordon-Token response header.
+// The CLI uses this to persist the new token to the remotes config atomically.
+func WithTokenRefreshCallback(fn func(newToken string)) ClientOption {
+	return func(c *Client) {
+		c.onTokenRefreshed = fn
+	}
+}
+
+// observeTokenRotation checks the X-Gordon-Token header on a response and, if
+// the server issued a refreshed token, updates the client's in-memory token and
+// invokes the optional persistence callback. Panics in the callback are caught
+// so they never propagate to the caller.
+func (c *Client) observeTokenRotation(resp *http.Response) {
+	newToken := resp.Header.Get("X-Gordon-Token")
+	if newToken == "" || newToken == c.token {
+		return
+	}
+	c.token = newToken
+	if c.onTokenRefreshed != nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "warning: token refresh callback panicked: %v\n", r)
+				}
+			}()
+			c.onTokenRefreshed(newToken)
+		}()
+	}
+}
+
 func (c *Client) applyTLSConfig() {
 	if !c.insecureTLS {
 		return
@@ -140,7 +172,15 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	return c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Observe token rotation: the server re-signs and returns the token via X-Gordon-Token.
+	c.observeTokenRotation(resp)
+
+	return resp, nil
 }
 
 // parseResponse parses a JSON response into the given target.
@@ -886,6 +926,9 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
+
+	// Observe token rotation on streaming responses, same as request().
+	c.observeTokenRotation(resp)
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/bnema/zerowrap"
 
@@ -32,6 +33,7 @@ const (
 // UnsafeStore implements TokenStore using plain text files.
 // WARNING: This store does not encrypt secrets. Only use when pass/sops are unavailable.
 type UnsafeStore struct {
+	mu      sync.RWMutex
 	dataDir string
 	log     zerowrap.Logger
 }
@@ -73,12 +75,13 @@ func (s *UnsafeStore) SaveToken(_ context.Context, token *domain.Token, jwt stri
 	data := unsafeTokenData{
 		JWT: jwt,
 		Metadata: tokenMetadata{
-			ID:        token.ID,
-			Subject:   token.Subject, // Store original subject in metadata
-			Scopes:    token.Scopes,
-			IssuedAt:  token.IssuedAt,
-			ExpiresAt: token.ExpiresAt,
-			Revoked:   token.Revoked,
+			ID:             token.ID,
+			Subject:        token.Subject, // Store original subject in metadata
+			Scopes:         token.Scopes,
+			IssuedAt:       token.IssuedAt,
+			ExpiresAt:      token.ExpiresAt,
+			Revoked:        token.Revoked,
+			LastExtendedAt: token.LastExtendedAt,
 		},
 	}
 
@@ -124,12 +127,13 @@ func (s *UnsafeStore) GetToken(_ context.Context, subject string) (string, *doma
 	}
 
 	token := &domain.Token{
-		ID:        data.Metadata.ID,
-		Subject:   data.Metadata.Subject,
-		Scopes:    data.Metadata.Scopes,
-		IssuedAt:  data.Metadata.IssuedAt,
-		ExpiresAt: data.Metadata.ExpiresAt,
-		Revoked:   data.Metadata.Revoked,
+		ID:             data.Metadata.ID,
+		Subject:        data.Metadata.Subject,
+		Scopes:         data.Metadata.Scopes,
+		IssuedAt:       data.Metadata.IssuedAt,
+		ExpiresAt:      data.Metadata.ExpiresAt,
+		Revoked:        data.Metadata.Revoked,
+		LastExtendedAt: data.Metadata.LastExtendedAt,
 	}
 
 	return data.JWT, token, nil
@@ -168,12 +172,13 @@ func (s *UnsafeStore) ListTokens(_ context.Context) ([]domain.Token, error) {
 		}
 
 		token := domain.Token{
-			ID:        data.Metadata.ID,
-			Subject:   data.Metadata.Subject,
-			Scopes:    data.Metadata.Scopes,
-			IssuedAt:  data.Metadata.IssuedAt,
-			ExpiresAt: data.Metadata.ExpiresAt,
-			Revoked:   data.Metadata.Revoked,
+			ID:             data.Metadata.ID,
+			Subject:        data.Metadata.Subject,
+			Scopes:         data.Metadata.Scopes,
+			IssuedAt:       data.Metadata.IssuedAt,
+			ExpiresAt:      data.Metadata.ExpiresAt,
+			Revoked:        data.Metadata.Revoked,
+			LastExtendedAt: data.Metadata.LastExtendedAt,
 		}
 
 		tokens = append(tokens, token)
@@ -184,6 +189,9 @@ func (s *UnsafeStore) ListTokens(_ context.Context) ([]domain.Token, error) {
 
 // Revoke adds token ID to revocation list file.
 func (s *UnsafeStore) Revoke(_ context.Context, tokenID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	revokedFile := filepath.Join(s.dataDir, unsafeRevokedFile)
 
 	// Ensure parent directory exists
@@ -226,6 +234,9 @@ func (s *UnsafeStore) Revoke(_ context.Context, tokenID string) error {
 
 // IsRevoked checks if token ID is in revocation list.
 func (s *UnsafeStore) IsRevoked(_ context.Context, tokenID string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	revokedList, err := s.getRevokedList()
 	if err != nil {
 		return false, err
@@ -238,6 +249,12 @@ func (s *UnsafeStore) IsRevoked(_ context.Context, tokenID string) (bool, error)
 	}
 
 	return false, nil
+}
+
+// UpdateTokenExpiry updates the JWT and expiry metadata for an existing token.
+// LastExtendedAt is also updated to track debounce timing.
+func (s *UnsafeStore) UpdateTokenExpiry(ctx context.Context, token *domain.Token, newJWT string) error {
+	return s.SaveToken(ctx, token, newJWT)
 }
 
 // DeleteToken removes token file.

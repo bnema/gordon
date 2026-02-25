@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"context"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -65,15 +69,56 @@ func TestParseImageRef(t *testing.T) {
 
 func TestBuildAndPush_BuildArgs(t *testing.T) {
 	// Verify buildImageArgs produces --load instead of --push
-	args := buildImageArgs("v1.0.0", "linux/amd64", "Dockerfile", []string{"CGO_ENABLED=0"}, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")
+	args := buildImageArgs(context.Background(), "v1.0.0", "linux/amd64", "Dockerfile", []string{"CGO_ENABLED=0"}, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")
 
 	assert.Contains(t, args, "--load")
 	assert.NotContains(t, args, "--push")
 	assert.Contains(t, args, "--platform")
 	assert.Contains(t, args, "-f")
 	assert.Contains(t, args, "Dockerfile")
-	assert.Contains(t, args, "VERSION")
-	assert.NotContains(t, args, "VERSION=v1.0.0")
+	assert.Contains(t, args, "VERSION=v1.0.0")
+}
+
+func TestBuildImageArgsInjectsGitBuildArgs(t *testing.T) {
+	args := buildImageArgs(context.Background(), "v1.2.3", "linux/amd64", "Dockerfile", nil, "registry/img:v1.2.3", "registry/img:latest")
+
+	// Must contain explicit KEY=VALUE for all standard git build args
+	argStr := strings.Join(args, " ")
+	for _, key := range []string{"VERSION=v1.2.3", "GIT_TAG=v1.2.3", "GIT_SHA=", "BUILD_TIME="} {
+		if !strings.Contains(argStr, key) {
+			t.Errorf("expected args to contain %q, got: %s", key, argStr)
+		}
+	}
+
+	// Must NOT contain bare "--build-arg VERSION" (without =value)
+	for i, a := range args {
+		if a == "--build-arg" && i+1 < len(args) && args[i+1] == "VERSION" {
+			t.Error("found bare '--build-arg VERSION' (without =value); should be '--build-arg VERSION=v1.2.3'")
+		}
+	}
+}
+
+func TestBuildImageArgsUserArgsOverrideDefaults(t *testing.T) {
+	userArgs := []string{"GIT_TAG=custom-override"}
+	args := buildImageArgs(context.Background(), "v1.2.3", "linux/amd64", "Dockerfile", userArgs, "r/i:v1.2.3", "r/i:latest")
+
+	// Count how many times GIT_TAG appears and track the last occurrence index.
+	// Docker uses the last occurrence of a duplicate --build-arg key, so the user
+	// override must come after the default injected value.
+	count := 0
+	lastIdx := -1
+	for i, a := range args {
+		if a == "--build-arg" && i+1 < len(args) && strings.HasPrefix(args[i+1], "GIT_TAG=") {
+			count++
+			lastIdx = i + 1
+		}
+	}
+	if count < 2 {
+		t.Errorf("expected GIT_TAG to appear twice (default + override), got %d", count)
+	}
+	if lastIdx < 0 || args[lastIdx] != "GIT_TAG="+userArgs[0][len("GIT_TAG="):] {
+		t.Errorf("expected last GIT_TAG= arg to be the user override %q, got %q", "GIT_TAG=custom-override", args[lastIdx])
+	}
 }
 
 func TestParseTagRef(t *testing.T) {
@@ -142,7 +187,7 @@ func TestVersionFromTagRefs(t *testing.T) {
 }
 
 func TestBuildImageArgs_CustomDockerfile(t *testing.T) {
-	args := buildImageArgs("v1.0.0", "linux/amd64", "docker/app/Dockerfile", nil, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")
+	args := buildImageArgs(context.Background(), "v1.0.0", "linux/amd64", "docker/app/Dockerfile", nil, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")
 
 	assert.Contains(t, args, "-f")
 	assert.Contains(t, args, "docker/app/Dockerfile")
@@ -299,6 +344,55 @@ func TestSplitLabelPairs(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestGetGitVersionNoTagsReturnsFallbackAndWarns(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a temp dir with a git repo that has no tags
+	tmpDir := t.TempDir()
+	if err := exec.Command("git", "-C", tmpDir, "init").Run(); err != nil { // #nosec G204
+		t.Skipf("git init failed: %v", err)
+	}
+	// Need at least one commit so git describe has something to describe
+	if err := exec.Command("git", "-C", tmpDir, "-c", "user.email=test@test.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init").Run(); err != nil { // #nosec G204
+		t.Skipf("git commit failed: %v", err)
+	}
+
+	// Change to the tmpDir for this test so getGitVersion uses the tag-less repo
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmpDir); err != nil { // #nosec G204
+		t.Fatal(err)
+	}
+	defer os.Chdir(origDir) // #nosec G204
+
+	// Redirect stderr to capture the warning
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() {
+		w.Close()
+		os.Stderr = origStderr
+	}()
+
+	v := getGitVersion(ctx)
+
+	w.Close()
+	os.Stderr = origStderr
+	stderrOutput, _ := io.ReadAll(r)
+
+	// Should return "" (fallback to "latest" handled by determineVersion)
+	assert.Equal(t, "", v, "expected empty string fallback when no git tags exist")
+
+	// Should have printed a warning to stderr
+	assert.Contains(t, string(stderrOutput), "latest",
+		"expected a warning about 'latest' fallback on stderr")
 }
 
 func TestParseLabelPair(t *testing.T) {
