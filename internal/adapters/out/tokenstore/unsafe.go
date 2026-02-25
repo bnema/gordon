@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/bnema/zerowrap"
 
@@ -32,6 +33,7 @@ const (
 // UnsafeStore implements TokenStore using plain text files.
 // WARNING: This store does not encrypt secrets. Only use when pass/sops are unavailable.
 type UnsafeStore struct {
+	mu      sync.RWMutex
 	dataDir string
 	log     zerowrap.Logger
 }
@@ -187,6 +189,9 @@ func (s *UnsafeStore) ListTokens(_ context.Context) ([]domain.Token, error) {
 
 // Revoke adds token ID to revocation list file.
 func (s *UnsafeStore) Revoke(_ context.Context, tokenID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	revokedFile := filepath.Join(s.dataDir, unsafeRevokedFile)
 
 	// Ensure parent directory exists
@@ -229,6 +234,9 @@ func (s *UnsafeStore) Revoke(_ context.Context, tokenID string) error {
 
 // IsRevoked checks if token ID is in revocation list.
 func (s *UnsafeStore) IsRevoked(_ context.Context, tokenID string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	revokedList, err := s.getRevokedList()
 	if err != nil {
 		return false, err
