@@ -53,6 +53,10 @@ func validateSubject(subject string) error {
 		return fmt.Errorf("invalid subject: cannot contain '..' to prevent path traversal")
 	}
 
+	if strings.HasSuffix(subject, ".meta") {
+		return fmt.Errorf("invalid subject: cannot end with '.meta' (reserved for token metadata files)")
+	}
+
 	return nil
 }
 
@@ -442,7 +446,20 @@ func (s *PassStore) IsRevoked(ctx context.Context, tokenID string) (bool, error)
 
 // UpdateTokenExpiry updates the JWT and expiry metadata for an existing token.
 // LastExtendedAt is also updated to track debounce timing.
+// UpdateTokenExpiry enforces update-only semantics: it returns an error if
+// token is nil or if no existing record is found for token.Subject.
 func (s *PassStore) UpdateTokenExpiry(ctx context.Context, token *domain.Token, newJWT string) error {
+	if token == nil {
+		return fmt.Errorf("UpdateTokenExpiry: token must not be nil")
+	}
+	// Confirm the token exists before overwriting to avoid silent creation.
+	_, existing, err := s.GetToken(ctx, token.Subject)
+	if err != nil {
+		return fmt.Errorf("UpdateTokenExpiry: token not found for subject %q: %w", token.Subject, err)
+	}
+	if existing == nil {
+		return fmt.Errorf("UpdateTokenExpiry: no existing token for subject %q", token.Subject)
+	}
 	return s.SaveToken(ctx, token, newJWT)
 }
 

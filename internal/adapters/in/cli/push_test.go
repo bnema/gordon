@@ -69,7 +69,7 @@ func TestParseImageRef(t *testing.T) {
 
 func TestBuildAndPush_BuildArgs(t *testing.T) {
 	// Verify buildImageArgs produces --load instead of --push
-	args := buildImageArgs("v1.0.0", "linux/amd64", "Dockerfile", []string{"CGO_ENABLED=0"}, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")
+	args := buildImageArgs(context.Background(), "v1.0.0", "linux/amd64", "Dockerfile", []string{"CGO_ENABLED=0"}, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")
 
 	assert.Contains(t, args, "--load")
 	assert.NotContains(t, args, "--push")
@@ -80,7 +80,7 @@ func TestBuildAndPush_BuildArgs(t *testing.T) {
 }
 
 func TestBuildImageArgsInjectsGitBuildArgs(t *testing.T) {
-	args := buildImageArgs("v1.2.3", "linux/amd64", "Dockerfile", nil, "registry/img:v1.2.3", "registry/img:latest")
+	args := buildImageArgs(context.Background(), "v1.2.3", "linux/amd64", "Dockerfile", nil, "registry/img:v1.2.3", "registry/img:latest")
 
 	// Must contain explicit KEY=VALUE for all standard git build args
 	argStr := strings.Join(args, " ")
@@ -100,17 +100,24 @@ func TestBuildImageArgsInjectsGitBuildArgs(t *testing.T) {
 
 func TestBuildImageArgsUserArgsOverrideDefaults(t *testing.T) {
 	userArgs := []string{"GIT_TAG=custom-override"}
-	args := buildImageArgs("v1.2.3", "linux/amd64", "Dockerfile", userArgs, "r/i:v1.2.3", "r/i:latest")
+	args := buildImageArgs(context.Background(), "v1.2.3", "linux/amd64", "Dockerfile", userArgs, "r/i:v1.2.3", "r/i:latest")
 
-	// Count how many times GIT_TAG appears — user override should come last (Docker uses last value)
+	// Count how many times GIT_TAG appears and track the last occurrence index.
+	// Docker uses the last occurrence of a duplicate --build-arg key, so the user
+	// override must come after the default injected value.
 	count := 0
+	lastIdx := -1
 	for i, a := range args {
 		if a == "--build-arg" && i+1 < len(args) && strings.HasPrefix(args[i+1], "GIT_TAG=") {
 			count++
+			lastIdx = i + 1
 		}
 	}
 	if count < 2 {
 		t.Errorf("expected GIT_TAG to appear twice (default + override), got %d", count)
+	}
+	if lastIdx < 0 || args[lastIdx] != "GIT_TAG="+userArgs[0][len("GIT_TAG="):] {
+		t.Errorf("expected last GIT_TAG= arg to be the user override %q, got %q", "GIT_TAG=custom-override", args[lastIdx])
 	}
 }
 
@@ -180,7 +187,7 @@ func TestVersionFromTagRefs(t *testing.T) {
 }
 
 func TestBuildImageArgs_CustomDockerfile(t *testing.T) {
-	args := buildImageArgs("v1.0.0", "linux/amd64", "docker/app/Dockerfile", nil, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")
+	args := buildImageArgs(context.Background(), "v1.0.0", "linux/amd64", "docker/app/Dockerfile", nil, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")
 
 	assert.Contains(t, args, "-f")
 	assert.Contains(t, args, "docker/app/Dockerfile")
