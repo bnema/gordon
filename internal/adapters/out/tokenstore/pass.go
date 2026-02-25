@@ -488,7 +488,7 @@ func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
 
 // passInsert inserts a value into pass.
 func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
-	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path)
+	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments are sanitized token subjects
 	cmd.Stdin = strings.NewReader(value)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -499,7 +499,7 @@ func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 
 // passShow retrieves a value from pass.
 func (s *PassStore) passShow(ctx context.Context, path string) (string, error) {
-	cmd := exec.CommandContext(ctx, "pass", "show", path)
+	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); path arguments are sanitized token subjects
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("pass show failed: %w", err)

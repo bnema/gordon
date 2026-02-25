@@ -646,7 +646,7 @@ func (s *PassStore) ManifestExists(domainName string) (bool, error) {
 }
 
 func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
-	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path)
+	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
 	cmd.Stdin = strings.NewReader(value)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -656,7 +656,7 @@ func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 }
 
 func (s *PassStore) passRemove(ctx context.Context, path string) error {
-	cmd := exec.CommandContext(ctx, "pass", "rm", "-f", path)
+	cmd := exec.CommandContext(ctx, "pass", "rm", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if passEntryMissing(string(output)) {
@@ -668,7 +668,7 @@ func (s *PassStore) passRemove(ctx context.Context, path string) error {
 }
 
 func (s *PassStore) passShow(ctx context.Context, path string) (string, bool, error) {
-	cmd := exec.CommandContext(ctx, "pass", "show", path)
+	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if passEntryMissing(string(output)) {
@@ -687,7 +687,7 @@ func (s *PassStore) listTopLevelEntries(ctx context.Context, basePath string) ([
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, "pass", "ls", basePath)
+	cmd := exec.CommandContext(ctx, "pass", "ls", basePath) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if passEntryMissing(string(output)) {

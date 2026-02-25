@@ -724,14 +724,14 @@ func getGitVersion(ctx context.Context) string {
 }
 
 func dockerTag(ctx context.Context, src, dst string) error {
-	cmd := exec.CommandContext(ctx, "docker", "tag", src, dst)
+	cmd := exec.CommandContext(ctx, "docker", "tag", src, dst) //nolint:gosec // binary is constant; image refs validated by OCI ref parser
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func dockerPush(ctx context.Context, ref string) error {
-	cmd := exec.CommandContext(ctx, "docker", "push", ref)
+	cmd := exec.CommandContext(ctx, "docker", "push", ref) //nolint:gosec // binary is constant; image ref validated by OCI ref parser
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

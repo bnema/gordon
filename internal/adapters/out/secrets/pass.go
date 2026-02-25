@@ -80,7 +80,7 @@ func (p *PassProvider) GetSecret(ctx context.Context, path string) (string, erro
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "pass", "show", path)
+	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); arguments are validated secret paths
 	output, err := cmd.Output()
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
