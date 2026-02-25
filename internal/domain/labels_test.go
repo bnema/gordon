@@ -22,8 +22,10 @@ func TestLabelConstantsValues(t *testing.T) {
 		{domain.LabelCreated, "gordon.created"},
 	}
 	for _, tt := range tests {
-		if tt.constant != tt.expected {
-			t.Errorf("constant value changed: got %q, want %q", tt.constant, tt.expected)
-		}
+		t.Run(tt.expected, func(t *testing.T) {
+			if tt.constant != tt.expected {
+				t.Errorf("constant value changed: got %q, want %q", tt.constant, tt.expected)
+			}
+		})
 	}
 }

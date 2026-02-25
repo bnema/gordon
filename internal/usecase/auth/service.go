@@ -470,6 +470,12 @@ func (s *Service) ExtendToken(ctx context.Context, tokenString string) (string, 
 		return tokenString, nil
 	}
 
+	// Skip tokens with no expiry (permanent tokens must not be silently converted to 24h tokens)
+	if tokenClaims.ExpiresAt <= 0 {
+		log.Debug().Str("subject", tokenClaims.Subject).Msg("skipping extension for non-expiring token")
+		return tokenString, nil
+	}
+
 	// Full validation including store checks (not expired, not revoked, exists in store)
 	if _, err := s.ValidateToken(ctx, tokenString); err != nil {
 		return "", fmt.Errorf("token validation failed: %w", err)

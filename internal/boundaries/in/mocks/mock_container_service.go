@@ -829,6 +829,6 @@ func (_c *MockContainerService_UpdateAttachments_Call) Return() *MockContainerSe
 }
 
 func (_c *MockContainerService_UpdateAttachments_Call) RunAndReturn(run func(attachments map[string][]string)) *MockContainerService_UpdateAttachments_Call {
-	_c.Run(run)
+	_c.Call.Return(run)
 	return _c
 }
