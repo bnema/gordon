@@ -464,8 +464,8 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 	// Cloudflare's 100MB per-request limit. Loading locally then
 	// using docker push gives us chunked uploads (~5MB per request).
 	fmt.Println("\nBuilding image...")
-	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
-	buildCmd.Env = os.Environ()                                                                                                        // VERSION is now passed as --build-arg VERSION=<value>
+	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
+	buildCmd.Env = os.Environ()                                                                                                             // VERSION is now passed as --build-arg VERSION=<value>
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {
@@ -488,8 +488,8 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 // standardBuildArgs returns the standard set of git-related build args as
 // explicit KEY=VALUE pairs. User-supplied args are appended after and take
 // precedence (Docker uses the last occurrence of a duplicate key).
-func standardBuildArgs(version string) []string {
-	gitSHA := resolveGitSHA()
+func standardBuildArgs(ctx context.Context, version string) []string {
+	gitSHA := resolveGitSHA(ctx)
 	buildTime := time.Now().UTC().Format(time.RFC3339)
 	return []string{
 		"VERSION=" + version,
@@ -500,8 +500,8 @@ func standardBuildArgs(version string) []string {
 }
 
 // resolveGitSHA returns the short git SHA of HEAD, or "unknown" if unavailable.
-func resolveGitSHA() string {
-	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output() // #nosec G204
+func resolveGitSHA(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD").Output() // #nosec G204
 	if err != nil {
 		return "unknown"
 	}
@@ -511,7 +511,7 @@ func resolveGitSHA() string {
 // buildImageArgs constructs the docker buildx build arguments.
 // Uses --load instead of --push so the image is loaded into the local
 // daemon, allowing docker push to handle the upload with chunked requests.
-func buildImageArgs(version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) []string {
+func buildImageArgs(ctx context.Context, version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) []string {
 	args := []string{
 		"buildx", "build",
 		"--platform", platform,
@@ -524,7 +524,7 @@ func buildImageArgs(version, platform, dockerfile string, buildArgs []string, ve
 
 	// Inject standard git build args as explicit KEY=VALUE pairs.
 	// User-supplied --build-arg flags are appended AFTER so they override defaults.
-	for _, ba := range standardBuildArgs(version) {
+	for _, ba := range standardBuildArgs(ctx, version) {
 		args = append(args, "--build-arg", ba)
 	}
 	for _, ba := range buildArgs {
@@ -717,7 +717,7 @@ func parseImageRef(image string) (registry, name, tag string) {
 func getGitVersion(ctx context.Context) string {
 	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--dirty").Output() // #nosec G204
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Warning: no git tags found — image version will be 'latest'. Tag your repo to get versioned images.")
+		fmt.Fprintf(os.Stderr, "Warning: unable to determine git tag (%v) — image version will be 'latest'. Tag your repo to get versioned images.\n", err)
 		return ""
 	}
 	return strings.TrimSpace(string(out))

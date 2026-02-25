@@ -1073,9 +1073,19 @@ func (s *Service) UpdateConfig(config Config) {
 
 // UpdateAttachments updates only the attachment configuration in the service.
 // This is called after a config reload to propagate attachment changes without restart.
+// The incoming map is deep-copied so external callers cannot mutate service state.
 func (s *Service) UpdateAttachments(attachments map[string][]string) {
+	var copied map[string][]string
+	if attachments != nil {
+		copied = make(map[string][]string, len(attachments))
+		for k, v := range attachments {
+			sl := make([]string, len(v))
+			copy(sl, v)
+			copied[k] = sl
+		}
+	}
 	s.mu.Lock()
-	s.config.Attachments = attachments
+	s.config.Attachments = copied
 	s.mu.Unlock()
 }
 

@@ -152,6 +152,8 @@ func ResolveRemoteFull(flagRemote, flagToken string, flagInsecure bool) (url, to
 	var name string
 	url, name, isRemote = resolveRemoteURL(flagRemote, config, remotes)
 	if isRemote {
+		// resolveToken looks up remotes.Active internally; name == remotes.Active here
+		// because resolveRemoteURL only sets name when it finds the active remote entry.
 		token = resolveToken(flagToken, config, remotes)
 		insecureTLS = resolveInsecureTLS(flagInsecure, config, remotes, name)
 		remoteName = name

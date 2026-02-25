@@ -94,6 +94,28 @@ func WithTokenRefreshCallback(fn func(newToken string)) ClientOption {
 	}
 }
 
+// observeTokenRotation checks the X-Gordon-Token header on a response and, if
+// the server issued a refreshed token, updates the client's in-memory token and
+// invokes the optional persistence callback. Panics in the callback are caught
+// so they never propagate to the caller.
+func (c *Client) observeTokenRotation(resp *http.Response) {
+	newToken := resp.Header.Get("X-Gordon-Token")
+	if newToken == "" || newToken == c.token {
+		return
+	}
+	c.token = newToken
+	if c.onTokenRefreshed != nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "warning: token refresh callback panicked: %v\n", r)
+				}
+			}()
+			c.onTokenRefreshed(newToken)
+		}()
+	}
+}
+
 func (c *Client) applyTLSConfig() {
 	if !c.insecureTLS {
 		return
@@ -155,22 +177,8 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 		return nil, err
 	}
 
-	// If the server returned a refreshed token, update the client's token and notify any callback.
-	// This implements the sliding expiry: the server re-signs the token and sends it back.
-	if newToken := resp.Header.Get("X-Gordon-Token"); newToken != "" && newToken != c.token {
-		c.token = newToken
-		if c.onTokenRefreshed != nil {
-			// Token persistence is non-fatal: a panic in the callback must not crash the request.
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						fmt.Fprintf(os.Stderr, "warning: token refresh callback panicked: %v\n", r)
-					}
-				}()
-				c.onTokenRefreshed(newToken)
-			}()
-		}
-	}
+	// Observe token rotation: the server re-signs and returns the token via X-Gordon-Token.
+	c.observeTokenRotation(resp)
 
 	return resp, nil
 }
@@ -918,6 +926,9 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
+
+	// Observe token rotation on streaming responses, same as request().
+	c.observeTokenRotation(resp)
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)

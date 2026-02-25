@@ -46,16 +46,23 @@ func TestUnsafeStoreRevokeConcurrentNoLoss(t *testing.T) {
 		}
 	}
 
-	// Revoke all concurrently
+	// Revoke all concurrently; collect errors via a buffered channel.
 	var wg sync.WaitGroup
+	errs := make(chan error, len(tokenIDs))
 	for _, id := range tokenIDs {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			_ = store.Revoke(ctx, id)
+			if err := store.Revoke(ctx, id); err != nil {
+				errs <- fmt.Errorf("Revoke(%q): %w", id, err)
+			}
 		}(id)
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
 
 	// Verify all n token IDs are in the revoked list
 	for _, id := range tokenIDs {

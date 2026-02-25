@@ -855,19 +855,28 @@ func getInternalCredentialsCandidates() []string {
 // GetInternalCredentialsFromCandidates reads credentials from the first candidate file that exists.
 // Exported for testing.
 func GetInternalCredentialsFromCandidates(candidates []string) (*InternalCredentials, error) {
+	var lastErr error
 	for _, path := range candidates {
 		data, err := os.ReadFile(path)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to read credentials file %s: %w", path, err)
+			// Non-permission errors (e.g. EACCES) may be transient or path-specific;
+			// record and try the next candidate rather than failing immediately.
+			lastErr = fmt.Errorf("failed to read credentials file %s: %w", path, err)
+			continue
 		}
 		var creds InternalCredentials
 		if err := json.Unmarshal(data, &creds); err != nil {
-			return nil, fmt.Errorf("failed to parse credentials at %s: %w", path, err)
+			// Corrupt file — record and fall through to lower-priority candidates.
+			lastErr = fmt.Errorf("failed to parse credentials at %s: %w", path, err)
+			continue
 		}
 		return &creds, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
 	}
 	return nil, fmt.Errorf("no credentials file found (is Gordon running?): checked %v", candidates)
 }

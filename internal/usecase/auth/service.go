@@ -494,6 +494,18 @@ func (s *Service) ExtendToken(ctx context.Context, tokenString string) (string, 
 		return "", fmt.Errorf("failed to fetch stored token: %w", err)
 	}
 
+	// TOCTOU guard: confirm the store's current JTI matches the JWT we validated.
+	// A mismatch means the token was rotated between ValidateToken and GetToken;
+	// in that case return the original (still-valid) token without re-signing.
+	if storedToken.ID != tokenClaims.ID {
+		log.Debug().
+			Str("subject", tokenClaims.Subject).
+			Str("jwt_jti", tokenClaims.ID).
+			Str("store_id", storedToken.ID).
+			Msg("token ID mismatch after rotation, skipping extension")
+		return tokenString, nil
+	}
+
 	// Debounce: skip if already extended within the last hour
 	if !storedToken.LastExtendedAt.IsZero() && time.Since(storedToken.LastExtendedAt) < tokenExtensionDebounce {
 		log.Debug().

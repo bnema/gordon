@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -362,6 +363,60 @@ func TestRequireScope(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, rec.Code)
 		})
 	}
+}
+
+func TestAuthMiddleware_ExtendTokenFailureIsNonFatal(t *testing.T) {
+	authSvc := inmocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "valid-admin-token").Return(&domain.TokenClaims{
+		Subject: "admin",
+		Scopes:  []string{"admin:*:*"},
+	}, nil)
+	// ExtendToken fails — response must still be 200 (non-fatal)
+	authSvc.EXPECT().ExtendToken(mock.Anything, "valid-admin-token").Return("", errors.New("store unavailable"))
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := AuthMiddleware(authSvc, nil, nil, nil, adminTestLogger())
+	wrappedHandler := mw(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.Header.Set("Authorization", "Bearer valid-admin-token")
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, rec.Header().Get("X-Gordon-Token"))
+}
+
+func TestAuthMiddleware_ExtendTokenRotationHeader(t *testing.T) {
+	authSvc := inmocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "old-token").Return(&domain.TokenClaims{
+		Subject: "admin",
+		Scopes:  []string{"admin:*:*"},
+	}, nil)
+	// ExtendToken returns a rotated token — must appear in response header
+	authSvc.EXPECT().ExtendToken(mock.Anything, "old-token").Return("rotated-token", nil)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := AuthMiddleware(authSvc, nil, nil, nil, adminTestLogger())
+	wrappedHandler := mw(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.Header.Set("Authorization", "Bearer old-token")
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "rotated-token", rec.Header().Get("X-Gordon-Token"))
 }
 
 func TestHasAccess(t *testing.T) {
