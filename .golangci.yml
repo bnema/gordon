@@ -58,6 +58,26 @@ linters:
       - text: "G104:"
         linters:
           - gosec
+      # gosec G117: exported struct fields matching secret-name patterns are intentional DTOs
+      # (OCI registry tokens, CLI credential request bodies, telemetry config, JWT response frames).
+      # These fields must be exported and carry credentials by design — they are not accidental leaks.
+      - text: "G117:"
+        linters:
+          - gosec
+      # gosec G703/G704/G705: taint-analysis false positives for a CLI tool and reverse proxy.
+      # G704 (SSRF): target URLs come from operator-configured routing tables or explicit CLI flags,
+      # not from untrusted user input. G703 (path traversal): XDG_RUNTIME_DIR is a trusted env var
+      # set by the login session, not user-supplied. G705 (XSS): registry manifest data is binary
+      # OCI content served with an explicit Content-Type, not rendered as HTML.
+      - text: "G703:"
+        linters:
+          - gosec
+      - text: "G704:"
+        linters:
+          - gosec
+      - text: "G705:"
+        linters:
+          - gosec
 
 formatters:
   enable:
