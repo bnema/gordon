@@ -20,7 +20,7 @@ import (
 // InternalAuth holds credentials for internal loopback registry access.
 type InternalAuth struct {
 	Username string
-	Password string //nolint:gosec // auth handler internal credential struct for loopback registry access
+	Password string
 }
 
 // Handler handles authentication requests at /auth/*.
@@ -42,7 +42,7 @@ func NewHandler(authSvc in.AuthService, internalAuth InternalAuth, log zerowrap.
 // PasswordRequest represents the request body for POST /auth/password.
 type PasswordRequest struct {
 	Username string `json:"username"`
-	Password string `json:"password"` //nolint:gosec // auth handler request DTO: password field is intentional for the auth endpoint
+	Password string `json:"password"`
 }
 
 // PasswordResponse represents the response from POST /auth/password.

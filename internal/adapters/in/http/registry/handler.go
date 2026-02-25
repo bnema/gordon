@@ -279,11 +279,10 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", manifestData.ContentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(manifestData.Data)))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 
 	if r.Method == "GET" {
-		_, _ = w.Write(manifestData.Data) //nolint:gosec // G705: OCI manifest bytes with explicit media type header, not HTML content
+		_, _ = w.Write(manifestData.Data)
 	}
 }
 
