@@ -236,7 +236,8 @@ func parsePassLsEntries(output string) []treeEntry {
 			// The branch character (├ or └, 3 bytes each) immediately precedes them.
 			branchByteIdx := idx - 3
 			if branchByteIdx < 0 {
-				branchByteIdx = 0
+				// Marker is too close to the start — malformed line, skip.
+				continue
 			}
 			// Count runes in the indentation prefix before the branch char.
 			branchRune = utf8.RuneCountInString(line[:branchByteIdx])
@@ -246,7 +247,8 @@ func parsePassLsEntries(output string) []treeEntry {
 			// ASCII variant: branch char (| or `, 1 byte) is immediately before the dashes.
 			branchByteIdx := idx - 1
 			if branchByteIdx < 0 {
-				branchByteIdx = 0
+				// Marker is too close to the start — malformed line, skip.
+				continue
 			}
 			branchRune = utf8.RuneCountInString(line[:branchByteIdx])
 			// Name starts after: branchChar(1B) + -(1B) + -(1B) + SP(1B) = 4B from branch.
@@ -351,8 +353,12 @@ func (s *PassStore) ListTokens(ctx context.Context) ([]domain.Token, error) {
 			continue
 		}
 
-		// Try to get the token metadata
-		_, token, err := s.GetToken(ctx, subject)
+		// Try to get the token metadata.
+		// Use a fresh per-call context so each GetToken gets the full timeout,
+		// not the shared (potentially exhausted) deadline from the outer ctx.
+		callCtx, callCancel := context.WithTimeout(context.Background(), s.timeout)
+		_, token, err := s.GetToken(callCtx, subject)
+		callCancel()
 		if err != nil {
 			s.log.Warn().Err(err).Str("subject", subject).Msg("failed to get token")
 			continue
