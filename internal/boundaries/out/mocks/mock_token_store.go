@@ -354,65 +354,6 @@ func (_c *MockTokenStore_Revoke_Call) RunAndReturn(run func(ctx context.Context,
 	return _c
 }
 
-// UpdateTokenExpiry provides a mock function for the type MockTokenStore
-func (_mock *MockTokenStore) UpdateTokenExpiry(ctx context.Context, token *domain.Token, newJWT string) error {
-	ret := _mock.Called(ctx, token, newJWT)
-
-	if len(ret) == 0 {
-		panic("no return value specified for UpdateTokenExpiry")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, *domain.Token, string) error); ok {
-		r0 = returnFunc(ctx, token, newJWT)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockTokenStore_UpdateTokenExpiry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateTokenExpiry'
-type MockTokenStore_UpdateTokenExpiry_Call struct {
-	*mock.Call
-}
-
-// UpdateTokenExpiry is a helper method to define mock.On call
-//   - ctx context.Context
-//   - token *domain.Token
-//   - newJWT string
-func (_e *MockTokenStore_Expecter) UpdateTokenExpiry(ctx interface{}, token interface{}, newJWT interface{}) *MockTokenStore_UpdateTokenExpiry_Call {
-	return &MockTokenStore_UpdateTokenExpiry_Call{Call: _e.mock.On("UpdateTokenExpiry", ctx, token, newJWT)}
-}
-
-func (_c *MockTokenStore_UpdateTokenExpiry_Call) Run(run func(ctx context.Context, token *domain.Token, newJWT string)) *MockTokenStore_UpdateTokenExpiry_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 *domain.Token
-		if args[1] != nil {
-			arg1 = args[1].(*domain.Token)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		run(arg0, arg1, arg2)
-	})
-	return _c
-}
-
-func (_c *MockTokenStore_UpdateTokenExpiry_Call) Return(err error) *MockTokenStore_UpdateTokenExpiry_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockTokenStore_UpdateTokenExpiry_Call) RunAndReturn(run func(ctx context.Context, token *domain.Token, newJWT string) error) *MockTokenStore_UpdateTokenExpiry_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // SaveToken provides a mock function for the type MockTokenStore
 func (_mock *MockTokenStore) SaveToken(ctx context.Context, token *domain.Token, jwt string) error {
 	ret := _mock.Called(ctx, token, jwt)
@@ -472,6 +413,69 @@ func (_c *MockTokenStore_SaveToken_Call) Return(err error) *MockTokenStore_SaveT
 }
 
 func (_c *MockTokenStore_SaveToken_Call) RunAndReturn(run func(ctx context.Context, token *domain.Token, jwt string) error) *MockTokenStore_SaveToken_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateTokenExpiry provides a mock function for the type MockTokenStore
+func (_mock *MockTokenStore) UpdateTokenExpiry(ctx context.Context, token *domain.Token, newJWT string) error {
+	ret := _mock.Called(ctx, token, newJWT)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateTokenExpiry")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *domain.Token, string) error); ok {
+		r0 = returnFunc(ctx, token, newJWT)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockTokenStore_UpdateTokenExpiry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateTokenExpiry'
+type MockTokenStore_UpdateTokenExpiry_Call struct {
+	*mock.Call
+}
+
+// UpdateTokenExpiry is a helper method to define mock.On call
+//   - ctx context.Context
+//   - token *domain.Token
+//   - newJWT string
+func (_e *MockTokenStore_Expecter) UpdateTokenExpiry(ctx interface{}, token interface{}, newJWT interface{}) *MockTokenStore_UpdateTokenExpiry_Call {
+	return &MockTokenStore_UpdateTokenExpiry_Call{Call: _e.mock.On("UpdateTokenExpiry", ctx, token, newJWT)}
+}
+
+func (_c *MockTokenStore_UpdateTokenExpiry_Call) Run(run func(ctx context.Context, token *domain.Token, newJWT string)) *MockTokenStore_UpdateTokenExpiry_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 *domain.Token
+		if args[1] != nil {
+			arg1 = args[1].(*domain.Token)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockTokenStore_UpdateTokenExpiry_Call) Return(err error) *MockTokenStore_UpdateTokenExpiry_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockTokenStore_UpdateTokenExpiry_Call) RunAndReturn(run func(ctx context.Context, token *domain.Token, newJWT string) error) *MockTokenStore_UpdateTokenExpiry_Call {
 	_c.Call.Return(run)
 	return _c
 }
