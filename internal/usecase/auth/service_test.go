@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -974,6 +975,54 @@ func TestExtendTokenSkipsEphemeral(t *testing.T) {
 	result, err := svc.ExtendToken(ctx, tokenStr)
 	require.NoError(t, err)
 	assert.Equal(t, tokenStr, result, "ephemeral tokens should not be extended")
+}
+
+func newTestAuthService(t *testing.T) (*Service, *mocks.MockTokenStore) {
+	t.Helper()
+	tokenStore := mocks.NewMockTokenStore(t)
+	svc := NewService(Config{
+		Enabled:     true,
+		AuthType:    domain.AuthTypeToken,
+		TokenSecret: []byte("test-secret-key-for-jwt-signing"),
+	}, tokenStore, zerowrap.Default())
+	return svc, tokenStore
+}
+
+func TestIsEphemeralAccessTokenRejectsFutureIat(t *testing.T) {
+	// A token with iat in the future should NOT be treated as ephemeral
+	// (otherwise it bypasses revocation checks)
+	svc, _ := newTestAuthService(t)
+
+	// Craft a token with iat = now+10min, exp = now+15min (age appears as -10min → negative → < 5min).
+	// nbf is set to current time (not future) so the JWT library's nbf check does not reject it —
+	// we need to isolate the iat bypass specifically.
+	now := time.Now().UTC()
+	claims := jwt.MapClaims{
+		"jti":    "test-jti",
+		"sub":    "testuser",
+		"iss":    TokenIssuer,
+		"iat":    now.Add(10 * time.Minute).Unix(), // future iat — the attack vector
+		"nbf":    now.Add(-1 * time.Second).Unix(), // current nbf so nbf check passes
+		"exp":    now.Add(15 * time.Minute).Unix(), // exp - iat = 5min → looks ephemeral
+		"scopes": []string{"admin:*:*"},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenStr, err := token.SignedString(svc.config.TokenSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Parsing should either reject the token outright (future iat) or not classify it as ephemeral
+	rawClaims, err := svc.parseTokenClaims(tokenStr)
+	if err != nil {
+		// Acceptable: future iat rejected at parse time
+		t.Logf("token with future iat rejected at parse: %v", err)
+		return
+	}
+	tokenClaims := buildTokenClaims(rawClaims)
+	if svc.isEphemeralAccessToken(tokenClaims) {
+		t.Error("token with future iat must NOT be classified as ephemeral — it bypasses revocation")
+	}
 }
 
 func TestExtendTokenSkipsServiceToken(t *testing.T) {

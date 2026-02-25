@@ -168,7 +168,10 @@ func (s *Service) parseTokenClaims(tokenString string) (jwt.MapClaims, error) {
 			return nil, domain.ErrInvalidToken
 		}
 		return s.config.TokenSecret, nil
-	}, jwt.WithIssuer(TokenIssuer)) // SECURITY: Enforce issuer validation
+	},
+		jwt.WithIssuer(TokenIssuer), // SECURITY: Enforce issuer validation
+		jwt.WithIssuedAt(),          // SECURITY: Reject tokens with iat in the future
+	)
 	if err != nil {
 		return nil, domain.ErrInvalidToken
 	}
@@ -265,6 +268,10 @@ func (s *Service) isEphemeralAccessToken(claims *domain.TokenClaims) bool {
 	// stolen secrets from creating arbitrary short-lived tokens
 	now := time.Now().UTC().Unix()
 	tokenAge := now - claims.IssuedAt
+	if tokenAge < 0 {
+		// iat is in the future — do not classify as ephemeral (defense-in-depth: prevents bypass)
+		return false
+	}
 	if tokenAge > maxAccessTokenLifetimeSecs {
 		return false // Old tokens require store validation
 	}
