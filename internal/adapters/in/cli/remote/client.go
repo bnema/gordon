@@ -162,7 +162,11 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 		if c.onTokenRefreshed != nil {
 			// Token persistence is non-fatal: a panic in the callback must not crash the request.
 			func() {
-				defer func() { recover() }() //nolint:errcheck
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Fprintf(os.Stderr, "warning: token refresh callback panicked: %v\n", r)
+					}
+				}()
 				c.onTokenRefreshed(newToken)
 			}()
 		}
