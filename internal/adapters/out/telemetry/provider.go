@@ -23,7 +23,7 @@ import (
 type Config struct {
 	Enabled         bool    `mapstructure:"enabled"`
 	Endpoint        string  `mapstructure:"endpoint"`          // OTLP HTTP endpoint, e.g. "http://localhost:4318"
-	AuthToken       string  `mapstructure:"auth_token"`        // Basic auth token (base64 encoded user:pass)
+	AuthToken       string  `mapstructure:"auth_token"`        //nolint:gosec // telemetry provider API token field, required by external OTLP API schema
 	Traces          bool    `mapstructure:"traces"`            // Enable trace export
 	Metrics         bool    `mapstructure:"metrics"`           // Enable metric export
 	Logs            bool    `mapstructure:"logs"`              // Bridge zerowrap logs to OTLP

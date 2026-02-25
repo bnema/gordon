@@ -126,7 +126,7 @@ type Config struct {
 		Type           string `mapstructure:"type"`            // "password" or "token"
 		SecretsBackend string `mapstructure:"secrets_backend"` // "pass", "sops", or "unsafe"
 		Username       string `mapstructure:"username"`
-		Password       string `mapstructure:"password"`      // deprecated: use password_hash
+		Password       string `mapstructure:"password"`      //nolint:gosec // config struct field mapped from TOML config file (deprecated, use password_hash)
 		PasswordHash   string `mapstructure:"password_hash"` // path in secrets backend
 		TokenSecret    string `mapstructure:"token_secret"`  // path in secrets backend
 		TokenExpiry    string `mapstructure:"token_expiry"`  // e.g., "720h", "30d"
@@ -747,7 +747,7 @@ func randomTokenHex(size int) (string, error) {
 // InternalCredentials holds the internal registry credentials for CLI access.
 type InternalCredentials struct {
 	Username string `json:"username"`
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec // internal credential wire format: json key is intentional for CLI interop
 }
 
 // getSecureRuntimeDir returns a secure directory for runtime files.
@@ -755,9 +755,12 @@ type InternalCredentials struct {
 func getSecureRuntimeDir() (string, error) {
 	// Try XDG_RUNTIME_DIR first (typically /run/user/<uid> on Linux)
 	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
-		gordonDir := filepath.Join(runtimeDir, "gordon")
-		if err := os.MkdirAll(gordonDir, 0700); err == nil {
-			return gordonDir, nil
+		runtimeDir = filepath.Clean(runtimeDir)
+		if filepath.IsAbs(runtimeDir) {
+			gordonDir := filepath.Join(runtimeDir, "gordon")
+			if err := os.MkdirAll(gordonDir, 0700); err == nil { //nolint:gosec // G703: path cleaned and verified absolute before use
+				return gordonDir, nil
+			}
 		}
 	}
 
