@@ -79,7 +79,7 @@ func (p *Prober) Probe(ctx context.Context, url string) (int, int64, error) {
 	// Set a reasonable user agent
 	req.Header.Set("User-Agent", "Gordon-HealthCheck/1.0")
 
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(req) //nolint:gosec // G704: probe URL sourced from route configuration, not from user HTTP request
 	if err != nil {
 		elapsed := time.Since(start).Milliseconds()
 		return 0, elapsed, fmt.Errorf("request failed: %w", err)

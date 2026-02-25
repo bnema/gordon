@@ -551,7 +551,7 @@ func (s *Service) proxyToTarget(w http.ResponseWriter, r *http.Request, target *
 		Str(zerowrap.FieldEntityID, target.ContainerID).
 		Msg("proxying request")
 
-	proxy.ServeHTTP(w, r)
+	proxy.ServeHTTP(w, r) //nolint:gosec // G704: proxy target resolved from validated route config, not from incoming request
 }
 
 func (s *Service) trackInFlight(containerID string) func() {
@@ -630,7 +630,7 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 
 	log.Debug().Str("target", targetURL.String()).Msg("proxying request to registry")
 
-	proxy.ServeHTTP(w, r)
+	proxy.ServeHTTP(w, r) //nolint:gosec // G704: proxy target resolved from validated route config, not from incoming request
 }
 
 func (s *Service) isRunningInContainer() bool {

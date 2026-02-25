@@ -914,7 +914,7 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 	streamClient := &http.Client{
 		Transport: c.httpClient.Transport,
 	}
-	resp, err := streamClient.Do(req)
+	resp, err := streamClient.Do(req) //nolint:gosec // G704: CLI outbound request to user-configured remote, not server-side SSRF
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
