@@ -107,11 +107,18 @@ func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) er
 		log.Warn().Err(err).Msg("failed to sync containers before reload, proceeding with current state")
 	}
 
+	// Propagate updated attachment configuration so new attachments take effect
+	// without requiring a Gordon restart (fixes issue #87 part 2).
+	attachments := h.configSvc.GetAllAttachments(ctx)
+	log.Debug().Int("attachment_groups", len(attachments)).Msg("propagating updated attachment configuration")
+	h.containerSvc.UpdateAttachments(attachments)
+	log.Debug().Int("attachment_groups", len(attachments)).Msg("attachment configuration propagated")
+
 	currentContainers := h.containerSvc.List(ctx)
 
 	activeRoutes := make(map[string]*domain.Container)
 	for _, container := range currentContainers {
-		if route, exists := container.Labels["gordon.route"]; exists {
+		if route, exists := container.Labels[domain.LabelRoute]; exists {
 			activeRoutes[route] = container
 		}
 	}
@@ -119,7 +126,7 @@ func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) er
 	routes := h.configSvc.GetRoutes(ctx)
 	for _, route := range routes {
 		if container, exists := activeRoutes[route.Domain]; exists {
-			currentImage := container.Labels["gordon.image"]
+			currentImage := container.Labels[domain.LabelImage]
 			if currentImage != route.Image {
 				log.Info().
 					Str("domain", route.Domain).

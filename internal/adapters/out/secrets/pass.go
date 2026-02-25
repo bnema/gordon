@@ -80,7 +80,7 @@ func (p *PassProvider) GetSecret(ctx context.Context, path string) (string, erro
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "pass", "show", path)
+	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); arguments are validated secret paths
 	output, err := cmd.Output()
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
@@ -105,8 +105,10 @@ func (p *PassProvider) GetSecret(ctx context.Context, path string) (string, erro
 }
 
 // IsAvailable checks if pass is available in the system.
+// Uses a short timeout so a stalled GPG agent does not hang the caller.
 func (p *PassProvider) IsAvailable() bool {
-	cmd := exec.Command("pass", "version")
-	err := cmd.Run()
-	return err == nil
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "pass", "version") //nolint:gosec // binary is a constant ("pass"), no user input
+	return cmd.Run() == nil
 }

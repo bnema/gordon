@@ -138,16 +138,28 @@ func SaveRemotes(path string, config *ClientConfig) error {
 // ResolveRemote resolves the remote URL and token from configuration.
 // Precedence: flag > env > config > active remote
 func ResolveRemote(flagRemote, flagToken string, flagInsecure bool) (url, token string, insecureTLS, isRemote bool) {
+	url, token, insecureTLS, _, isRemote = ResolveRemoteFull(flagRemote, flagToken, flagInsecure)
+	return url, token, insecureTLS, isRemote
+}
+
+// ResolveRemoteFull resolves the remote URL, token, and named remote from configuration.
+// It also returns the remote name for use in token persistence callbacks.
+// Precedence: flag > env > config > active remote
+func ResolveRemoteFull(flagRemote, flagToken string, flagInsecure bool) (url, token string, insecureTLS bool, remoteName string, isRemote bool) {
 	config, _ := LoadClientConfig("")
 	remotes, _ := LoadRemotes("")
 
-	url, remoteName, isRemote := resolveRemoteURL(flagRemote, config, remotes)
+	var name string
+	url, name, isRemote = resolveRemoteURL(flagRemote, config, remotes)
 	if isRemote {
+		// resolveToken looks up remotes.Active internally; name == remotes.Active here
+		// because resolveRemoteURL only sets name when it finds the active remote entry.
 		token = resolveToken(flagToken, config, remotes)
-		insecureTLS = resolveInsecureTLS(flagInsecure, config, remotes, remoteName)
+		insecureTLS = resolveInsecureTLS(flagInsecure, config, remotes, name)
+		remoteName = name
 	}
 
-	return url, token, insecureTLS, isRemote
+	return url, token, insecureTLS, remoteName, isRemote
 }
 
 // resolveRemoteURL resolves the remote URL from various sources.

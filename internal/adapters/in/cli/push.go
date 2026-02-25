@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -463,8 +464,8 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 	// Cloudflare's 100MB per-request limit. Loading locally then
 	// using docker push gives us chunked uploads (~5MB per request).
 	fmt.Println("\nBuilding image...")
-	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
-	buildCmd.Env = append(os.Environ(), "VERSION="+version)
+	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
+	buildCmd.Env = os.Environ()                                                                                                             // VERSION is now passed as --build-arg VERSION=<value>
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {
@@ -484,23 +485,52 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 	return nil
 }
 
+// standardBuildArgs returns the standard set of git-related build args as
+// explicit KEY=VALUE pairs. User-supplied args are appended after and take
+// precedence (Docker uses the last occurrence of a duplicate key).
+func standardBuildArgs(ctx context.Context, version string) []string {
+	gitSHA := resolveGitSHA(ctx)
+	buildTime := time.Now().UTC().Format(time.RFC3339)
+	return []string{
+		"VERSION=" + version,
+		"GIT_TAG=" + version,
+		"GIT_SHA=" + gitSHA,
+		"BUILD_TIME=" + buildTime,
+	}
+}
+
+// resolveGitSHA returns the short git SHA of HEAD, or "unknown" if unavailable.
+func resolveGitSHA(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD").Output() // #nosec G204
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // buildImageArgs constructs the docker buildx build arguments.
 // Uses --load instead of --push so the image is loaded into the local
 // daemon, allowing docker push to handle the upload with chunked requests.
-func buildImageArgs(version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) []string {
+func buildImageArgs(ctx context.Context, version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) []string {
 	args := []string{
 		"buildx", "build",
 		"--platform", platform,
 		"-f", dockerfile,
 		"-t", latestRef,
-		"--build-arg", "VERSION",
 	}
 	if version != "latest" {
 		args = append(args, "-t", versionRef)
 	}
+
+	// Inject standard git build args as explicit KEY=VALUE pairs.
+	// User-supplied --build-arg flags are appended AFTER so they override defaults.
+	for _, ba := range standardBuildArgs(ctx, version) {
+		args = append(args, "--build-arg", ba)
+	}
 	for _, ba := range buildArgs {
 		args = append(args, "--build-arg", ba)
 	}
+
 	args = append(args, "--load", ".")
 	return args
 }
@@ -682,23 +712,26 @@ func parseImageRef(image string) (registry, name, tag string) {
 }
 
 // getGitVersion returns git describe output, or empty string if unavailable.
+// When it falls back it prints a warning to stderr so the user knows the
+// image will be tagged "latest" rather than a real version.
 func getGitVersion(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--dirty").Output()
+	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--dirty").Output() // #nosec G204
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: unable to determine git tag (%v) — image version will be 'latest'. Tag your repo to get versioned images.\n", err)
 		return ""
 	}
 	return strings.TrimSpace(string(out))
 }
 
 func dockerTag(ctx context.Context, src, dst string) error {
-	cmd := exec.CommandContext(ctx, "docker", "tag", src, dst)
+	cmd := exec.CommandContext(ctx, "docker", "tag", src, dst) //nolint:gosec // binary is constant; image refs validated by OCI ref parser
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func dockerPush(ctx context.Context, ref string) error {
-	cmd := exec.CommandContext(ctx, "docker", "push", ref)
+	cmd := exec.CommandContext(ctx, "docker", "push", ref) //nolint:gosec // binary is constant; image ref validated by OCI ref parser
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

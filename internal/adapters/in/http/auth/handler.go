@@ -12,6 +12,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/http/httputil"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -269,7 +270,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) authenticateTokenCredentials(ctx context.Context, r *http.Request, username, password string, log zerowrap.Logger) (bool, *domain.TokenClaims) {
-	if isLocalhostRequest(r) && h.isInternalAuth(username, password) {
+	if httputil.IsLocalhostRequest(r) && h.isInternalAuth(username, password) {
 		log.Debug().Str("username", username).Msg("internal registry auth accepted")
 		return true, nil
 	}
@@ -348,16 +349,6 @@ func hasGrantedRegistryAccess(grantedScopes []string, repoName, action string) b
 	}
 
 	return false
-}
-
-// isLocalhostRequest checks if the request originates from localhost.
-// SECURITY: Uses RemoteAddr (server-set) instead of Host header (client-spoofable).
-func isLocalhostRequest(r *http.Request) bool {
-	host := r.RemoteAddr
-	// RemoteAddr includes port, e.g., "127.0.0.1:12345" or "[::1]:12345"
-	return strings.HasPrefix(host, "127.") ||
-		strings.HasPrefix(host, "[::1]") ||
-		strings.HasPrefix(host, "::1")
 }
 
 // parseRequestedScopes extracts and validates scope parameters from the request.
