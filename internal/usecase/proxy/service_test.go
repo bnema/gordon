@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -508,5 +509,68 @@ func TestServeHTTP_MaxBodySize(t *testing.T) {
 			// by checking that MaxBodySize is properly stored in the service config
 			assert.Equal(t, tt.maxBodySize, svc.config.MaxBodySize)
 		})
+	}
+}
+
+func TestRegistryInFlightTracking(t *testing.T) {
+	svc := &Service{
+		inFlight: make(map[string]int),
+	}
+
+	if got := svc.registryInFlight.Load(); got != 0 {
+		t.Fatalf("expected 0 in-flight, got %d", got)
+	}
+
+	svc.registryInFlight.Add(1)
+	if got := svc.registryInFlight.Load(); got != 1 {
+		t.Fatalf("expected 1 in-flight after Add, got %d", got)
+	}
+
+	svc.registryInFlight.Add(-1)
+	if got := svc.registryInFlight.Load(); got != 0 {
+		t.Fatalf("expected 0 in-flight after release, got %d", got)
+	}
+}
+
+func TestDrainRegistryInFlight(t *testing.T) {
+	svc := &Service{
+		inFlight: make(map[string]int),
+	}
+
+	svc.registryInFlight.Add(2)
+
+	done := make(chan struct{})
+	go func() {
+		drained := svc.DrainRegistryInFlight(50 * time.Millisecond)
+		if !drained {
+			// Signal failure via done channel by leaving it open — test will time out
+			return
+		}
+		close(done)
+	}()
+
+	time.Sleep(5 * time.Millisecond)
+	svc.registryInFlight.Add(-1)
+	svc.registryInFlight.Add(-1)
+
+	select {
+	case <-done:
+		// good — drained cleanly
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("DrainRegistryInFlight did not return true after requests completed")
+	}
+}
+
+func TestDrainRegistryInFlightTimeout(t *testing.T) {
+	svc := &Service{
+		inFlight: make(map[string]int),
+	}
+
+	// Add a request and never release it
+	svc.registryInFlight.Add(1)
+
+	drained := svc.DrainRegistryInFlight(30 * time.Millisecond)
+	if drained {
+		t.Fatal("expected DrainRegistryInFlight to return false on timeout, got true")
 	}
 }
