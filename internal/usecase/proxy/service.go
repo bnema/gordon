@@ -575,6 +575,11 @@ func (s *Service) trackInFlight(containerID string) func() {
 	}
 }
 
+// RegistryInFlight returns the current count of active registry proxy requests.
+func (s *Service) RegistryInFlight() int64 {
+	return s.registryInFlight.Load()
+}
+
 // DrainRegistryInFlight blocks until all in-flight registry proxy requests
 // complete or the timeout elapses. Returns true if drained cleanly, false if
 // timed out with requests still in flight. Call this before shutting down the
