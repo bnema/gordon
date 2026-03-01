@@ -539,14 +539,9 @@ func TestDrainRegistryInFlight(t *testing.T) {
 
 	svc.registryInFlight.Add(2)
 
-	done := make(chan struct{})
+	result := make(chan bool, 1)
 	go func() {
-		drained := svc.DrainRegistryInFlight(50 * time.Millisecond)
-		if !drained {
-			// Signal failure via done channel by leaving it open — test will time out
-			return
-		}
-		close(done)
+		result <- svc.DrainRegistryInFlight(50 * time.Millisecond)
 	}()
 
 	time.Sleep(5 * time.Millisecond)
@@ -554,10 +549,12 @@ func TestDrainRegistryInFlight(t *testing.T) {
 	svc.registryInFlight.Add(-1)
 
 	select {
-	case <-done:
-		// good — drained cleanly
+	case drained := <-result:
+		if !drained {
+			t.Fatalf("DrainRegistryInFlight returned false; expected true after all requests completed")
+		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("DrainRegistryInFlight did not return true after requests completed")
+		t.Fatal("DrainRegistryInFlight did not return within timeout")
 	}
 }
 
