@@ -70,15 +70,16 @@ type Config struct {
 
 // Service implements the ProxyService interface.
 type Service struct {
-	runtime      out.ContainerRuntime
-	containerSvc in.ContainerService
-	configSvc    in.ConfigService
-	config       Config
-	targets      map[string]*domain.ProxyTarget
-	mu           sync.RWMutex
-	activeConns  atomic.Int64 // Atomic counter for concurrent connection limiting
-	inFlight     map[string]int
-	inFlightMu   sync.Mutex
+	runtime          out.ContainerRuntime
+	containerSvc     in.ContainerService
+	configSvc        in.ConfigService
+	config           Config
+	targets          map[string]*domain.ProxyTarget
+	mu               sync.RWMutex
+	activeConns      atomic.Int64 // Atomic counter for concurrent connection limiting
+	inFlight         map[string]int
+	inFlightMu       sync.Mutex
+	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
 }
 
 // NewService creates a new proxy service.
@@ -574,6 +575,26 @@ func (s *Service) trackInFlight(containerID string) func() {
 	}
 }
 
+// RegistryInFlight returns the current count of active registry proxy requests.
+func (s *Service) RegistryInFlight() int64 {
+	return s.registryInFlight.Load()
+}
+
+// DrainRegistryInFlight blocks until all in-flight registry proxy requests
+// complete or the timeout elapses. Returns true if drained cleanly, false if
+// timed out with requests still in flight. Call this before shutting down the
+// registry server.
+func (s *Service) DrainRegistryInFlight(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if s.registryInFlight.Load() == 0 {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
 // proxyToRegistry forwards requests to the local registry HTTP server.
 // SECURITY: This uses http://localhost:{port} which is safe because the registry
 // runs on the same host and traffic never leaves the loopback interface. If Gordon
@@ -584,6 +605,9 @@ func (s *Service) proxyToRegistry(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
+
+	s.registryInFlight.Add(1)
+	defer s.registryInFlight.Add(-1)
 
 	log := zerowrap.FromCtx(r.Context())
 

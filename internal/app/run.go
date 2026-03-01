@@ -1750,7 +1750,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	syncAndAutoStart(ctx, svc, log)
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
-	gracefulShutdown(registrySrv, proxySrv, tlsSrv, containerSvc, log)
+	gracefulShutdown(registrySrv, proxySrv, tlsSrv, containerSvc, svc.proxySvc, log)
 	return nil
 }
 
@@ -1950,18 +1950,34 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, log zerowrap.Logger) {
+func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	for _, srv := range []*http.Server{registrySrv, proxySrv, tlsSrv} {
+	// Phase 1: Stop ingress frontends (TLS, then proxy) — no new traffic accepted
+	for _, srv := range []*http.Server{tlsSrv, proxySrv} {
 		if srv == nil {
 			continue
 		}
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Warn().Err(err).Str("addr", srv.Addr).Msg("server shutdown error")
+		}
+	}
+
+	// Phase 2: Drain in-flight registry push sessions before stopping the backend
+	if proxySvc != nil {
+		log.Info().Msg("draining in-flight registry requests...")
+		if drained := proxySvc.DrainRegistryInFlight(25 * time.Second); !drained {
+			log.Warn().Int64("in_flight", proxySvc.RegistryInFlight()).Msg("registry drain timed out; some in-flight pushes may be interrupted")
+		}
+	}
+
+	// Phase 3: Stop the registry backend
+	if registrySrv != nil {
+		if err := registrySrv.Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Str("addr", registrySrv.Addr).Msg("server shutdown error")
 		}
 	}
 
