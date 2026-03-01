@@ -110,11 +110,14 @@ func TestMigrateAttachmentEnvFile(t *testing.T) {
 	require.NoError(t, err)
 
 	containerName := fmt.Sprintf("gitea-postgres-%d", time.Now().UnixNano())
+	envFileName := "gordon-" + containerName + ".env"
+	// extractContainerNameFromAttachmentFile strips the .env suffix, so the
+	// stored name includes the "gordon-" prefix from the filename.
+	storedContainerName := extractContainerNameFromAttachmentFile(envFileName)
 	keys := []string{"POSTGRES_USER", "POSTGRES_PASSWORD"}
-	defer cleanupPassAttachment(t, containerName, keys)
+	defer cleanupPassAttachment(t, storedContainerName, keys)
 
 	envContent := "POSTGRES_USER=gitea\nPOSTGRES_PASSWORD=secret123\n"
-	envFileName := "gordon-" + containerName + ".env"
 	envFilePath := filepath.Join(tmpDir, envFileName)
 	err = os.WriteFile(envFilePath, []byte(envContent), 0600)
 	require.NoError(t, err)
@@ -129,7 +132,7 @@ func TestMigrateAttachmentEnvFile(t *testing.T) {
 	_, err = os.Stat(migratedPath)
 	assert.NoError(t, err, ".env.migrated file should exist")
 
-	values, err := store.GetAllAttachment(containerName)
+	values, err := store.GetAllAttachment(storedContainerName)
 	require.NoError(t, err)
 	assert.Equal(t, "gitea", values["POSTGRES_USER"])
 	assert.Equal(t, "secret123", values["POSTGRES_PASSWORD"])
