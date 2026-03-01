@@ -1956,7 +1956,11 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	for _, srv := range []*http.Server{registrySrv, proxySrv, tlsSrv} {
+	// Shutdown order matters: stop ingress frontends (TLS, proxy) before the
+	// registry backend. If the backend stops first, the proxy—still alive—will
+	// forward registry traffic to a dead backend and return 503 on in-flight
+	// manifest pushes. Drain order: tlsSrv → proxySrv → registrySrv.
+	for _, srv := range []*http.Server{tlsSrv, proxySrv, registrySrv} {
 		if srv == nil {
 			continue
 		}
