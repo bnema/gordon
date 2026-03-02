@@ -1656,6 +1656,18 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 
 	for _, c := range allContainers {
 		if (c.Name == expectedName || c.Name == expectedNewName || c.Name == expectedNextName) && c.ID != skipContainerID {
+			// Never kill a running container with the canonical name — it may be
+			// the active container serving traffic. Only temp (-new/-next) containers
+			// and stopped canonical containers are safe to remove.
+			isCanonical := c.Name == expectedName
+			if isCanonical && c.Status == "running" {
+				log.Debug().
+					Str(zerowrap.FieldEntityID, c.ID).
+					Str(zerowrap.FieldStatus, c.Status).
+					Msg("skipping running canonical container during orphan cleanup")
+				continue
+			}
+
 			log.Info().Str(zerowrap.FieldEntityID, c.ID).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
 
 			if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
