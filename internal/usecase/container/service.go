@@ -276,7 +276,7 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		}
 	}()
 
-	existing, hasExisting := s.getTrackedContainer(route.Domain)
+	existing, hasExisting := s.resolveExistingContainer(ctx, route.Domain)
 
 	resources, err := s.prepareDeployResources(ctx, route, existing)
 	if err != nil {
@@ -386,6 +386,49 @@ func (s *Service) getTrackedContainer(domainName string) (*domain.Container, boo
 	container, ok := s.containers[domainName]
 	s.mu.RUnlock()
 	return container, ok
+}
+
+// resolveExistingContainer returns the currently running container for a domain.
+// It first checks the in-memory map (fast path). If not found, it queries the
+// runtime for a running container with matching name and managed label. This
+// handles cases where Gordon restarted and in-memory state is stale.
+func (s *Service) resolveExistingContainer(ctx context.Context, domainName string) (*domain.Container, bool) {
+	// Fast path: check in-memory state
+	s.mu.RLock()
+	container, ok := s.containers[domainName]
+	s.mu.RUnlock()
+	if ok {
+		return container, true
+	}
+
+	// Slow path: query runtime for running containers
+	log := zerowrap.FromCtx(ctx)
+	expectedName := fmt.Sprintf("gordon-%s", domainName)
+
+	running, err := s.runtime.ListContainers(ctx, false)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list running containers for existing container resolution")
+		return nil, false
+	}
+
+	for _, c := range running {
+		if c.Name == expectedName && c.Labels[domain.LabelManaged] == "true" {
+			log.Info().
+				Str("container_id", c.ID).
+				Str("container_name", c.Name).
+				Msg("resolved existing container from runtime (in-memory state was stale)")
+
+			// Update in-memory state so subsequent lookups are fast
+			s.mu.Lock()
+			s.containers[domainName] = c
+			s.managedCount++
+			s.mu.Unlock()
+
+			return c, true
+		}
+	}
+
+	return nil, false
 }
 
 func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route, existing *domain.Container) (*deployResources, error) {
