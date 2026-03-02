@@ -287,9 +287,15 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	// the exact same image (by Docker image ID), return it immediately.
 	// This prevents the double-deploy caused by the event-based deploy
 	// (triggered by image.pushed) racing with the explicit CLI deploy call.
-	if hasExisting && existing.ImageID != "" {
-		if skip, container := s.skipRedundantDeploy(ctx, existing, resources.actualImageRef); skip {
-			return container, nil
+	if hasExisting {
+		existingForSkip := existing
+		if existingForSkip.ImageID == "" && existingForSkip.Image != "" && normalizeImageRef(existingForSkip.Image) == normalizeImageRef(route.Image) {
+			existingForSkip = s.containerForRedundantCheck(ctx, existingForSkip)
+		}
+		if existingForSkip.ImageID != "" {
+			if skip, container := s.skipRedundantDeploy(ctx, existingForSkip, resources.actualImageRef); skip {
+				return container, nil
+			}
 		}
 	}
 
@@ -345,6 +351,26 @@ func (s *Service) skipRedundantDeploy(ctx context.Context, existing *domain.Cont
 		Msg("skipping redundant deploy: container already running this image")
 
 	return true, existing
+}
+
+func (s *Service) containerForRedundantCheck(ctx context.Context, existing *domain.Container) *domain.Container {
+	if existing == nil || existing.ImageID != "" || existing.ID == "" {
+		return existing
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	inspected, err := s.runtime.InspectContainer(ctx, existing.ID)
+	if err != nil {
+		log.Debug().Err(err).Str("container_id", existing.ID).Msg("cannot inspect existing container for redundancy check")
+		return existing
+	}
+	if inspected == nil || inspected.ImageID == "" {
+		return existing
+	}
+
+	existingCopy := *existing
+	existingCopy.ImageID = inspected.ImageID
+	return &existingCopy
 }
 
 type deployResources struct {

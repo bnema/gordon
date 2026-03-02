@@ -2273,6 +2273,60 @@ func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
 	assert.Equal(t, "existing-container", tracked.ID)
 }
 
+func TestService_Deploy_SkipsRedundantDeploy_WhenTrackedImageIDMissing(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// Pre-populate with existing container missing ImageID (common after stale in-memory state).
+	existingContainer := &domain.Container{
+		ID:     "existing-container",
+		Name:   "gordon-test.example.com",
+		Image:  "myapp:latest",
+		Status: "running",
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	// prepareDeployResources
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	// Existing container image ID is recovered from runtime inspection,
+	// then redundancy check can skip the deploy.
+	runtime.EXPECT().InspectContainer(mock.Anything, "existing-container").Return(&domain.Container{
+		ID:      "existing-container",
+		ImageID: "sha256:abc123",
+		Status:  "running",
+	}, nil)
+	runtime.EXPECT().GetImageID(mock.Anything, "myapp:latest").Return("sha256:abc123", nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "existing-container").Return(true, nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "existing-container", result.ID)
+
+	tracked, exists := svc.Get(ctx, "test.example.com")
+	assert.True(t, exists)
+	assert.Equal(t, "existing-container", tracked.ID)
+}
+
 func TestService_Deploy_DoesNotSkipWhenImageIDDiffers(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
