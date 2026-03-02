@@ -48,6 +48,7 @@ type Config struct {
 	DrainDelayConfigured     bool          // True when deploy.drain_delay was explicitly configured
 	DrainMode                string        // Drain strategy: auto, inflight, delay
 	DrainTimeout             time.Duration // Max wait for in-flight requests to drain
+	StabilizationDelay       time.Duration // Pause after traffic switch before verifying new container health
 }
 
 var tracer = otel.Tracer("gordon.container")
@@ -305,6 +306,15 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	}
 
 	invalidated := s.activateDeployedContainer(ctx, route.Domain, newContainer)
+
+	// Post-switch stabilization: verify new container stays running
+	if hasExisting {
+		if !s.stabilizeNewContainer(ctx, route.Domain, newContainer, existing) {
+			// Rollback performed — old container is restored
+			return existing, nil
+		}
+	}
+
 	s.finalizePreviousContainer(ctx, route.Domain, existing, hasExisting, invalidated, newContainer.ID)
 
 	// Start container log collection (non-blocking, errors don't fail deployment)
@@ -547,6 +557,60 @@ func (s *Service) activateDeployedContainer(ctx context.Context, domainName stri
 	}
 
 	return false
+}
+
+// stabilizeNewContainer monitors the new container briefly after traffic switch.
+// If it crashes during this window, rolls back to old container.
+// Returns true if stabilization succeeded, false if rollback was performed.
+func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, newContainer, oldContainer *domain.Container) bool {
+	log := zerowrap.FromCtx(ctx)
+
+	if oldContainer == nil {
+		return true
+	}
+
+	s.mu.RLock()
+	delay := s.config.StabilizationDelay
+	s.mu.RUnlock()
+	if delay == 0 {
+		delay = 2 * time.Second
+	}
+
+	// Brief stabilization: verify new container is still running after delay
+	select {
+	case <-time.After(delay):
+	case <-ctx.Done():
+		return true
+	}
+
+	running, err := s.runtime.IsContainerRunning(ctx, newContainer.ID)
+	if err != nil || !running {
+		log.Error().
+			Str("new_container", newContainer.ID).
+			Str("old_container", oldContainer.ID).
+			Msg("new container crashed during stabilization, rolling back to old")
+
+		// Rollback: restore old container as tracked
+		s.mu.Lock()
+		s.containers[domainName] = oldContainer
+		s.mu.Unlock()
+
+		// Re-invalidate proxy cache to point back to old
+		s.mu.RLock()
+		inv := s.cacheInvalidator
+		s.mu.RUnlock()
+		if inv != nil {
+			inv.InvalidateTarget(ctx, domainName)
+		}
+
+		// Cleanup failed new container
+		_ = s.runtime.StopContainer(ctx, newContainer.ID)
+		_ = s.runtime.RemoveContainer(ctx, newContainer.ID, true)
+
+		return false
+	}
+
+	return true
 }
 
 func (s *Service) finalizePreviousContainer(ctx context.Context, domainName string, existing *domain.Container, hasExisting, invalidated bool, newContainerID string) {
