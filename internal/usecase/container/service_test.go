@@ -198,6 +198,9 @@ func TestService_Deploy_Success(t *testing.T) {
 		Image:  "myapp:latest",
 	}
 
+	// No container in memory — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+
 	// Setup mocks - no orphaned containers
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 
@@ -275,6 +278,9 @@ func TestService_Deploy_ReadinessRecoveryWindow_AllowsTransientFlap(t *testing.T
 		Image:  "myapp:latest",
 	}
 
+	// No container in memory — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:latest").Return(nil)
@@ -328,6 +334,9 @@ func TestService_Deploy_ImagePullFailure(t *testing.T) {
 		Domain: "test.example.com",
 		Image:  "myapp:latest",
 	}
+
+	// No container in memory — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
 
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
@@ -471,10 +480,109 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "new-container", result.ID)
+}
 
-	// Ensure the service's tracked container entry now points to the new container.
-	tracked, ok := svc.Get(ctx, "test.example.com")
-	assert.True(t, ok)
+// TestService_Deploy_ResolvesExistingFromRuntime_WhenMemoryStale verifies that
+// when in-memory state has no tracked container for a domain, Deploy queries
+// the runtime and discovers the running container. This prevents orphan cleanup
+// from killing the real active container after a Gordon restart.
+func TestService_Deploy_ResolvesExistingFromRuntime_WhenMemoryStale(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
+
+	config := Config{
+		ReadinessDelay: time.Millisecond,
+		DrainDelay:     time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
+	ctx := testContext()
+
+	// NO tracked container in memory — simulates Gordon restart
+	// (svc.containers is empty for "test.example.com")
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:v2",
+	}
+
+	// resolveExistingContainer should query running containers from runtime
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID:     "runtime-active-container",
+			Name:   "gordon-test.example.com",
+			Status: "running",
+			Labels: map[string]string{
+				domain.LabelDomain:  "test.example.com",
+				domain.LabelManaged: "true",
+			},
+		},
+	}, nil)
+
+	// Orphan cleanup lists ALL containers (including stopped) — the runtime-active
+	// container should be skipped because it is now recognized as the existing one
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		{
+			ID:     "runtime-active-container",
+			Name:   "gordon-test.example.com",
+			Status: "running",
+			Labels: map[string]string{
+				domain.LabelDomain:  "test.example.com",
+				domain.LabelManaged: "true",
+			},
+		},
+	}, nil)
+
+	// Image operations
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+
+	// Environment
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
+
+	// Create new container with -new suffix (zero-downtime: existing was resolved from runtime)
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-test.example.com-new"
+	})).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+
+	// Wait for ready
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+
+	// Inspect after ready
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID:     "new-container",
+		Status: "running",
+	}, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// Synchronous cache invalidation
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Return()
+
+	// AFTER new container is ready: stop and remove old runtime-discovered container
+	// This is the key assertion — StopContainer on the runtime-active container
+	// happens during finalizePreviousContainer, NOT during orphan cleanup
+	runtime.EXPECT().StopContainer(mock.Anything, "runtime-active-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "runtime-active-container", true).Return(nil)
+
+	// Rename new container to canonical name
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
+
+	// Verify new container is now tracked
+	tracked, exists := svc.Get(ctx, "test.example.com")
+	assert.True(t, exists)
 	assert.Equal(t, "new-container", tracked.ID)
 }
 
@@ -555,6 +663,9 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 		Image:  "myapp:latest",
 	}
 
+	// No container in memory — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
@@ -606,6 +717,9 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 		Domain: "test.example.com",
 		Image:  "myapp:latest",
 	}
+
+	// No container in memory — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
 
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
@@ -1324,6 +1438,9 @@ func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 		Image:  "myapp:latest",
 	}
 
+	// No container in memory — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+
 	// Setup mocks - no orphaned containers
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 
@@ -1390,6 +1507,9 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 		{Domain: "app2.example.com", Image: "myapp2:latest"},
 	}
 
+	// No container in memory — runtime resolution returns nothing (one per route)
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Times(2)
+
 	// Setup mocks for route deployments
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Times(2)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp1:latest", "myapp2:latest"}, nil).Times(2)
@@ -1438,6 +1558,9 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 		{Domain: "app2.example.com", Image: "myapp2:latest"}, // New route
 	}
 
+	// No container in memory for app2 — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Once()
+
 	// Only deploy for app2 (app1 is skipped). Readiness is skipped — no IsContainerRunning.
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp2:latest"}, nil).Once()
@@ -1472,6 +1595,9 @@ func TestService_AutoStart_HandlesDeployErrors(t *testing.T) {
 		{Domain: "app1.example.com", Image: "myapp1:latest"},
 	}
 
+	// No container in memory — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+
 	// Setup mocks for failure
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
@@ -1503,6 +1629,9 @@ func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
 	routes := []domain.Route{
 		{Domain: "app1.example.com", Image: "reg.example.com/myapp:latest"},
 	}
+
+	// No container in memory — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
 
 	// Key assertion: PullImage should be called with localhost:5000 rewrite,
 	// NOT the original reg.example.com/myapp:latest.
@@ -1639,6 +1768,16 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 		Domain: "test.example.com",
 		Image:  "myapp:v1",
 	}
+
+	// No container in memory — runtime resolution finds no managed container
+	// (the orphan lacks LabelManaged so it won't match)
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID:     "orphan-container",
+			Name:   "gordon-test.example.com",
+			Status: "running",
+		},
+	}, nil)
 
 	// ListContainers returns an orphaned container (same name, but not tracked)
 	// This could happen if Gordon crashed and restarted, or container was created manually
@@ -1981,6 +2120,9 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 	// Setup mocks that will be called by both deploys sequentially.
 	// First deploy: no existing container → creates gordon-test.example.com
 	// Second deploy: sees first container → creates gordon-test.example.com-new
+
+	// First deploy resolves from runtime (no container in memory yet)
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Once()
 
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Times(2)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil).Times(2)
