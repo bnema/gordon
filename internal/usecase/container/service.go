@@ -507,7 +507,7 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 		return nil, log.WrapErr(err, "failed to start container")
 	}
 	if !domain.IsSkipReadiness(ctx) {
-		if err := s.waitForReady(ctx, newContainer.ID); err != nil {
+		if err := s.waitForReady(ctx, newContainer.ID, containerConfig); err != nil {
 			s.cleanupFailedContainer(ctx, newContainer.ID)
 			return nil, log.WrapErr(err, "container failed readiness check")
 		}
@@ -2146,7 +2146,7 @@ func (s *Service) findContainerByName(ctx context.Context, name string) *domain.
 	return nil
 }
 
-func (s *Service) waitForReady(ctx context.Context, containerID string) error {
+func (s *Service) waitForReady(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig) error {
 	if err := s.pollContainerRunning(ctx, containerID); err != nil {
 		return err
 	}
@@ -2173,15 +2173,75 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 		}
 		return s.waitForHealthy(ctx, containerID, cfg.HealthTimeout)
 	default: // auto
-		_, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(ctx, containerID)
-		if err != nil {
-			return err
-		}
-		if hasHealthcheck {
-			return s.waitForHealthy(ctx, containerID, cfg.HealthTimeout)
-		}
-		return s.waitForReadyByDelay(ctx, containerID)
+		return s.readinessCascade(ctx, containerID, containerConfig, cfg)
 	}
+}
+
+// readinessCascade auto-detects the strongest available readiness signal:
+//  1. Docker healthcheck (if present) → wait for healthy status
+//  2. HTTP probe (if gordon.health label set) → GET until 2xx/3xx
+//  3. TCP probe (if port info available) → connect until accepted
+//  4. Delay fallback (last resort) → waitForReadyByDelay
+func (s *Service) readinessCascade(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) error {
+	log := zerowrap.FromCtx(ctx)
+
+	// 1. Docker healthcheck
+	_, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(ctx, containerID)
+	if err != nil {
+		return err
+	}
+	if hasHealthcheck {
+		log.Info().Msg("readiness cascade: using Docker healthcheck")
+		return s.waitForHealthy(ctx, containerID, cfg.HealthTimeout)
+	}
+
+	// 2. HTTP probe via gordon.health label
+	if containerConfig != nil {
+		if healthPath, ok := containerConfig.Labels[domain.LabelHealth]; ok && healthPath != "" {
+			ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID, containerConfig)
+			if probeErr == nil && ip != "" && port > 0 {
+				url := fmt.Sprintf("http://%s:%d%s", ip, port, healthPath)
+				timeout := cfg.HealthTimeout
+				if timeout == 0 {
+					timeout = 60 * time.Second
+				}
+				log.Info().Str("url", url).Dur("timeout", timeout).Msg("readiness cascade: using HTTP probe")
+				return httpProbe(ctx, url, timeout)
+			}
+			// Could not resolve endpoint; fall through to next level
+			log.Debug().Err(probeErr).Msg("readiness cascade: HTTP probe skipped, could not resolve container endpoint")
+		}
+	}
+
+	// 3. TCP probe (if port info available)
+	if containerConfig != nil && len(containerConfig.Ports) > 0 {
+		ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID, containerConfig)
+		if probeErr == nil && ip != "" && port > 0 {
+			addr := fmt.Sprintf("%s:%d", ip, port)
+			timeout := cfg.HealthTimeout
+			if timeout == 0 {
+				timeout = 30 * time.Second
+			}
+			log.Info().Str("addr", addr).Dur("timeout", timeout).Msg("readiness cascade: using TCP probe")
+			return tcpProbe(ctx, addr, timeout)
+		}
+		// Could not resolve endpoint; fall through to delay
+		log.Debug().Err(probeErr).Msg("readiness cascade: TCP probe skipped, could not resolve container endpoint")
+	}
+
+	// 4. Delay fallback
+	log.Info().Msg("readiness cascade: using delay fallback")
+	return s.waitForReadyByDelay(ctx, containerID)
+}
+
+// resolveContainerEndpoint retrieves the container's IP and first port via
+// GetContainerNetworkInfo. The result can be used for HTTP or TCP probes.
+func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig) (string, int, error) {
+	ip, port, err := s.runtime.GetContainerNetworkInfo(ctx, containerID)
+	if err != nil {
+		return "", 0, err
+	}
+	return ip, port, nil
 }
 
 // waitForReadyByDelay waits using the legacy running+delay strategy.
