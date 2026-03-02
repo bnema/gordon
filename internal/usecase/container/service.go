@@ -48,7 +48,9 @@ type Config struct {
 	DrainDelayConfigured     bool          // True when deploy.drain_delay was explicitly configured
 	DrainMode                string        // Drain strategy: auto, inflight, delay
 	DrainTimeout             time.Duration // Max wait for in-flight requests to drain
-	StabilizationDelay       time.Duration // Pause after traffic switch before verifying new container health
+	StabilizationDelay       time.Duration // Post-switch monitoring window (default 2s)
+	TCPProbeTimeout          time.Duration // TCP probe timeout (default 30s)
+	HTTPProbeTimeout         time.Duration // HTTP probe timeout (default 60s)
 }
 
 var tracer = otel.Tracer("gordon.container")
@@ -2265,7 +2267,7 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 			ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID, containerConfig)
 			if probeErr == nil && ip != "" && port > 0 {
 				url := fmt.Sprintf("http://%s:%d%s", ip, port, healthPath)
-				timeout := cfg.HealthTimeout
+				timeout := cfg.HTTPProbeTimeout
 				if timeout == 0 {
 					timeout = 60 * time.Second
 				}
@@ -2282,7 +2284,7 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 		ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID, containerConfig)
 		if probeErr == nil && ip != "" && port > 0 {
 			addr := fmt.Sprintf("%s:%d", ip, port)
-			timeout := cfg.HealthTimeout
+			timeout := cfg.TCPProbeTimeout
 			if timeout == 0 {
 				timeout = 30 * time.Second
 			}
