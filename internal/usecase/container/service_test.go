@@ -2904,3 +2904,254 @@ func TestService_Deploy_StabilizationSuccess(t *testing.T) {
 	assert.True(t, existsSS)
 	assert.Equal(t, "new-container", trackedSS.ID)
 }
+
+// TestService_Deploy_ZeroDowntime_OldNeverStoppedBeforeNewReady verifies the strict
+// ordering invariant: StopContainer("old-container") must NEVER happen before
+// InspectContainer("new-container") completes (the last step of readiness).
+// Uses testify's NotBefore() to enforce mock call ordering.
+func TestService_Deploy_ZeroDowntime_OldNeverStoppedBeforeNewReady(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
+
+	config := Config{
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
+		StabilizationDelay:   time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
+	ctx := testContext()
+
+	// Pre-populate with existing tracked container
+	existingContainer := &domain.Container{
+		ID:     "old-container",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:v2",
+	}
+
+	// Cleanup orphans
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+
+	// Image operations
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+
+	// Environment
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
+
+	// Create new container with -new suffix for zero-downtime
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-test.example.com-new"
+	})).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+
+	// Readiness: pollContainerRunning (1 call) + waitForReadyByDelay verification (1 call)
+	// Stabilization check (1 call)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(3)
+
+	// KEY ORDERING CONSTRAINT: InspectContainer("new-container") is the last step
+	// of readiness inside createStartedContainer. StopContainer("old-container")
+	// must happen AFTER this call completes.
+	inspectCall := runtime.EXPECT().InspectContainer(mock.Anything, "new-container").
+		Return(&domain.Container{
+			ID:     "new-container",
+			Name:   "gordon-test.example.com-new",
+			Status: "running",
+		}, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// Synchronous cache invalidation
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Return()
+
+	// STRICT ORDERING: StopContainer on old container must NOT happen before
+	// InspectContainer on new container (readiness completion)
+	runtime.EXPECT().StopContainer(mock.Anything, "old-container").
+		Return(nil).
+		NotBefore(inspectCall.Call)
+
+	runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil)
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "new-container", result.ID)
+
+	// Verify new container is tracked
+	tracked, exists := svc.Get(ctx, "test.example.com")
+	assert.True(t, exists)
+	assert.Equal(t, "new-container", tracked.ID)
+}
+
+// TestService_Deploy_ZeroDowntime_ReadinessFailure_OldUntouched verifies that when a
+// new container fails readiness (IsContainerRunning returns false), the old container
+// is completely untouched: never stopped, never removed. Deploy returns an error and
+// the old container remains as the tracked container.
+func TestService_Deploy_ZeroDowntime_ReadinessFailure_OldUntouched(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
+		StabilizationDelay:   time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// Pre-populate with existing tracked container
+	existingContainer := &domain.Container{
+		ID:     "old-container",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:v2",
+	}
+
+	// Cleanup orphans
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+
+	// Image operations
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+
+	// Environment
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
+
+	// Create new container
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-test.example.com-new"
+	})).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+
+	// Readiness FAILS: pollContainerRunning succeeds (container starts) but
+	// waitForReadyByDelay verification finds it not running.
+	// pollContainerRunning: returns true (container initially starts)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Once()
+	// waitForReadyByDelay post-delay verification: returns false (container crashed)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(false, nil).Once()
+	// Recovery window poll: return error to fail fast instead of waiting 30s
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").
+		Return(false, errors.New("container exited")).Once()
+
+	// cleanupFailedContainer: stop and remove the failed new container
+	runtime.EXPECT().StopContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "new-container", true).Return(nil)
+
+	// NOTE: StopContainer("old-container") and RemoveContainer("old-container", true)
+	// are intentionally NOT mocked. If either is called, testify will panic with
+	// "unexpected method call" — verifying the old container is never touched.
+
+	result, err := svc.Deploy(ctx, route)
+
+	// Deploy should return an error (readiness failure)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "readiness check")
+
+	// Old container must still be tracked — completely untouched
+	tracked, exists := svc.Get(ctx, "test.example.com")
+	assert.True(t, exists, "old container should still be tracked after readiness failure")
+	assert.Equal(t, "old-container", tracked.ID, "old container ID should be unchanged")
+}
+
+// TestService_Deploy_ZeroDowntime_NoExisting_FirstDeploy is a sanity check:
+// first deploy with no existing container should work normally without any
+// finalize/drain logic being triggered.
+func TestService_Deploy_ZeroDowntime_NoExisting_FirstDeploy(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
+		StabilizationDelay:   time.Millisecond,
+	}
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	// NO existing container — this is a first deploy
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:v2",
+	}
+
+	// resolveExistingContainer: no container in memory, runtime returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+
+	// Cleanup orphans — nothing found
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+
+	// Image operations
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+
+	// Environment
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
+
+	// Create container — canonical name (no -new suffix since no existing container)
+	newContainer := &domain.Container{ID: "first-container", Name: "gordon-test.example.com", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-test.example.com"
+	})).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "first-container").Return(nil)
+
+	// Readiness: pollContainerRunning (1 call) + waitForReadyByDelay verification (1 call)
+	// No stabilization check for first deploy (hasExisting is false)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "first-container").Return(true, nil).Times(2)
+
+	// Inspect after readiness
+	runtime.EXPECT().InspectContainer(mock.Anything, "first-container").Return(&domain.Container{
+		ID:     "first-container",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+		Ports:  []int{8080},
+	}, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// NOTE: No StopContainer, RemoveContainer, or RenameContainer expectations —
+	// first deploy has no previous container to finalize, and no stabilization check.
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "first-container", result.ID)
+	assert.Equal(t, "running", result.Status)
+
+	// Verify container is tracked
+	tracked, exists := svc.Get(ctx, "test.example.com")
+	assert.True(t, exists)
+	assert.Equal(t, "first-container", tracked.ID)
+}
