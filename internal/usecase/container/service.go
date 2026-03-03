@@ -38,7 +38,6 @@ type Config struct {
 	VolumePreserve           bool
 	NetworkIsolation         bool
 	NetworkPrefix            string
-	DNSSuffix                string
 	NetworkGroups            map[string][]string
 	Attachments              map[string][]string
 	ReadinessDelay           time.Duration // Delay after container starts before considering it ready

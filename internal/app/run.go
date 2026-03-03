@@ -1187,7 +1187,6 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		VolumePreserve:           v.GetBool("volumes.preserve"),
 		NetworkIsolation:         v.GetBool("network_isolation.enabled"),
 		NetworkPrefix:            v.GetString("network_isolation.network_prefix"),
-		DNSSuffix:                v.GetString("network_isolation.dns_suffix"),
 		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
 		Attachments:              svc.configSvc.GetAttachments(),
 		ReadinessDelay:           v.GetDuration("deploy.readiness_delay"),
@@ -2349,7 +2348,6 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("auto_route.enabled", false)
 	v.SetDefault("network_isolation.enabled", false)
 	v.SetDefault("network_isolation.network_prefix", "gordon")
-	v.SetDefault("network_isolation.dns_suffix", ".internal")
 	v.SetDefault("volumes.auto_create", true)
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
