@@ -63,6 +63,7 @@ func TestTCPProbe_DelayedListener(t *testing.T) {
 		time.Sleep(time.Second)
 		newLn, err := net.Listen("tcp", addr)
 		if err != nil {
+			t.Logf("delayed listener failed to bind: %v", err)
 			return
 		}
 		defer newLn.Close()

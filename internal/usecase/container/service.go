@@ -2288,7 +2288,7 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 	// 2. HTTP probe via gordon.health label
 	if containerConfig != nil {
 		if healthPath, ok := containerConfig.Labels[domain.LabelHealth]; ok && healthPath != "" {
-			ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID, containerConfig)
+			ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
 			if probeErr == nil && ip != "" && port > 0 {
 				url := fmt.Sprintf("http://%s:%d%s", ip, port, healthPath)
 				timeout := cfg.HTTPProbeTimeout
@@ -2305,7 +2305,7 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 
 	// 3. TCP probe (if port info available)
 	if containerConfig != nil && len(containerConfig.Ports) > 0 {
-		ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID, containerConfig)
+		ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
 		if probeErr == nil && ip != "" && port > 0 {
 			addr := fmt.Sprintf("%s:%d", ip, port)
 			timeout := cfg.TCPProbeTimeout
@@ -2326,7 +2326,7 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 
 // resolveContainerEndpoint retrieves the container's IP and first port via
 // GetContainerNetworkInfo. The result can be used for HTTP or TCP probes.
-func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig) (string, int, error) {
+func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID string) (string, int, error) {
 	ip, port, err := s.runtime.GetContainerNetworkInfo(ctx, containerID)
 	if err != nil {
 		return "", 0, err
