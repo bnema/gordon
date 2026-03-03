@@ -141,12 +141,12 @@ func TestHTTPProbe_ContextCancelled(t *testing.T) {
 
 func TestHTTPProbe_RedirectIsSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(302)
+		http.Redirect(w, r, "/other", http.StatusFound)
 	}))
 	defer srv.Close()
 
 	ctx := testContext()
-	// Disable follow redirects for the test — the probe should treat 3xx as success
+	// The probe should treat 3xx as success without following the redirect
 	err := httpProbe(ctx, srv.URL+"/healthz", 5*time.Second)
 	assert.NoError(t, err)
 }

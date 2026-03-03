@@ -38,7 +38,13 @@ func tcpProbe(ctx context.Context, addr string, timeout time.Duration) error {
 // httpProbe performs HTTP GET requests to url, retrying every 1s until a
 // 2xx/3xx response or timeout. Used when gordon.health label is set.
 func httpProbe(ctx context.Context, url string, timeout time.Duration) error {
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Don't follow redirects — treat 3xx as a successful response.
+			return http.ErrUseLastResponse
+		},
+	}
 	deadline := time.Now().Add(timeout)
 	var lastStatus int
 
