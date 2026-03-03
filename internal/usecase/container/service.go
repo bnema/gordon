@@ -311,7 +311,12 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 
 	// Post-switch stabilization: verify new container stays running
 	if hasExisting {
-		if !s.stabilizeNewContainer(ctx, route.Domain, newContainer, existing) {
+		stable, stabilizeErr := s.stabilizeNewContainer(ctx, route.Domain, newContainer, existing)
+		if stabilizeErr != nil {
+			// Both old and new containers are dead
+			return nil, stabilizeErr
+		}
+		if !stable {
 			// Rollback performed — old container is restored
 			return existing, nil
 		}
@@ -432,8 +437,10 @@ func (s *Service) resolveExistingContainer(ctx context.Context, domainName strin
 
 			// Update in-memory state so subsequent lookups are fast
 			s.mu.Lock()
+			if _, alreadyTracked := s.containers[domainName]; !alreadyTracked {
+				s.managedCount++
+			}
 			s.containers[domainName] = c
-			s.managedCount++
 			s.mu.Unlock()
 
 			return c, true
@@ -564,11 +571,12 @@ func (s *Service) activateDeployedContainer(ctx context.Context, domainName stri
 // stabilizeNewContainer monitors the new container briefly after traffic switch.
 // If it crashes during this window, rolls back to old container.
 // Returns true if stabilization succeeded, false if rollback was performed.
-func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, newContainer, oldContainer *domain.Container) bool {
+// Returns an error only when both new and old containers are dead.
+func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, newContainer, oldContainer *domain.Container) (bool, error) {
 	log := zerowrap.FromCtx(ctx)
 
 	if oldContainer == nil {
-		return true
+		return true, nil
 	}
 
 	s.mu.RLock()
@@ -582,7 +590,7 @@ func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, 
 	select {
 	case <-time.After(delay):
 	case <-ctx.Done():
-		return true
+		return true, nil
 	}
 
 	running, err := s.runtime.IsContainerRunning(ctx, newContainer.ID)
@@ -591,6 +599,22 @@ func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, 
 			Str("new_container", newContainer.ID).
 			Str("old_container", oldContainer.ID).
 			Msg("new container crashed during stabilization, rolling back to old")
+
+		// Verify old container is still running before restoring it.
+		// If both old and new are dead (e.g., OOM), returning a dead
+		// container as "existing" would leave the domain in a broken state.
+		oldRunning, oldErr := s.runtime.IsContainerRunning(ctx, oldContainer.ID)
+		if oldErr != nil || !oldRunning {
+			log.Error().
+				Str("old_container", oldContainer.ID).
+				Msg("old container is also not running, cannot rollback")
+
+			// Cleanup failed new container
+			_ = s.runtime.StopContainer(ctx, newContainer.ID)
+			_ = s.runtime.RemoveContainer(ctx, newContainer.ID, true)
+
+			return false, fmt.Errorf("stabilization failed: new container crashed and old container %s is also not running", oldContainer.ID)
+		}
 
 		// Rollback: restore old container as tracked
 		s.mu.Lock()
@@ -609,10 +633,10 @@ func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, 
 		_ = s.runtime.StopContainer(ctx, newContainer.ID)
 		_ = s.runtime.RemoveContainer(ctx, newContainer.ID, true)
 
-		return false
+		return false, nil
 	}
 
-	return true
+	return true, nil
 }
 
 func (s *Service) finalizePreviousContainer(ctx context.Context, domainName string, existing *domain.Container, hasExisting, invalidated bool, newContainerID string) {

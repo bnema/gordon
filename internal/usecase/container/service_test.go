@@ -2788,6 +2788,9 @@ func TestService_Deploy_RollbackOnPostSwitchCrash(t *testing.T) {
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(false, nil).Once()
 
+	// Rollback: verify old container is still running before restoring
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "old-container").Return(true, nil).Once()
+
 	// Inspect after ready
 	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
 		ID:     "new-container",
