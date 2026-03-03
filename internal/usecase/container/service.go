@@ -259,24 +259,7 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	log := zerowrap.FromCtx(ctx)
 
 	// Record deploy metrics and trace status
-	defer func() {
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-		}
-		if s.metrics == nil {
-			return
-		}
-		attrs := metric.WithAttributes(
-			attribute.String("domain", route.Domain),
-			attribute.String("image", route.Image),
-		)
-		s.metrics.DeployTotal.Add(ctx, 1, attrs)
-		s.metrics.DeployDuration.Record(ctx, time.Since(deployStart).Seconds(), attrs)
-		if err != nil {
-			s.metrics.DeployErrors.Add(ctx, 1, attrs)
-		}
-	}()
+	defer s.recordDeployMetrics(ctx, span, route, deployStart, &err)
 
 	existing, hasExisting := s.resolveExistingContainer(ctx, route.Domain)
 
@@ -337,6 +320,29 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	return newContainer, nil
 }
 
+// recordDeployMetrics records span error status and deploy metrics at the end of a Deploy call.
+// It is called via defer and receives a pointer to the named return error so it can observe
+// the final error value after all deferred functions have run.
+func (s *Service) recordDeployMetrics(ctx context.Context, span trace.Span, route domain.Route, start time.Time, errPtr *error) {
+	err := *errPtr
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	if s.metrics == nil {
+		return
+	}
+	attrs := metric.WithAttributes(
+		attribute.String("domain", route.Domain),
+		attribute.String("image", route.Image),
+	)
+	s.metrics.DeployTotal.Add(ctx, 1, attrs)
+	s.metrics.DeployDuration.Record(ctx, time.Since(start).Seconds(), attrs)
+	if err != nil {
+		s.metrics.DeployErrors.Add(ctx, 1, attrs)
+	}
+}
+
 // skipRedundantDeploy checks whether the existing container is already running
 // the same image (by Docker image ID) as the one we are about to deploy.
 // When a push triggers both an event-based deploy and an explicit CLI deploy,
@@ -395,13 +401,6 @@ type deployResources struct {
 	exposedPorts   []int
 	envVars        []string
 	volumes        map[string]string
-}
-
-func (s *Service) getTrackedContainer(domainName string) (*domain.Container, bool) {
-	s.mu.RLock()
-	container, ok := s.containers[domainName]
-	s.mu.RUnlock()
-	return container, ok
 }
 
 // resolveExistingContainer returns the currently running container for a domain.
@@ -2285,42 +2284,64 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 	}
 
 	// 2. HTTP probe via gordon.health label
-	if containerConfig != nil {
-		if healthPath, ok := containerConfig.Labels[domain.LabelHealth]; ok && healthPath != "" {
-			ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
-			if probeErr == nil && ip != "" && port > 0 {
-				url := fmt.Sprintf("http://%s:%d%s", ip, port, healthPath)
-				timeout := cfg.HTTPProbeTimeout
-				if timeout == 0 {
-					timeout = 60 * time.Second
-				}
-				log.Info().Str("url", url).Dur("timeout", timeout).Msg("readiness cascade: using HTTP probe")
-				return httpProbe(ctx, url, timeout)
-			}
-			// Could not resolve endpoint; fall through to next level
-			log.Debug().Err(probeErr).Msg("readiness cascade: HTTP probe skipped, could not resolve container endpoint")
-		}
+	if probed, probeErr := s.tryHTTPProbe(ctx, containerID, containerConfig, cfg); probed {
+		return probeErr
 	}
 
 	// 3. TCP probe (if port info available)
-	if containerConfig != nil && len(containerConfig.Ports) > 0 {
-		ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
-		if probeErr == nil && ip != "" && port > 0 {
-			addr := fmt.Sprintf("%s:%d", ip, port)
-			timeout := cfg.TCPProbeTimeout
-			if timeout == 0 {
-				timeout = 30 * time.Second
-			}
-			log.Info().Str("addr", addr).Dur("timeout", timeout).Msg("readiness cascade: using TCP probe")
-			return tcpProbe(ctx, addr, timeout)
-		}
-		// Could not resolve endpoint; fall through to delay
-		log.Debug().Err(probeErr).Msg("readiness cascade: TCP probe skipped, could not resolve container endpoint")
+	if probed, probeErr := s.tryTCPProbe(ctx, containerID, containerConfig, cfg); probed {
+		return probeErr
 	}
 
 	// 4. Delay fallback
 	log.Info().Msg("readiness cascade: using delay fallback")
 	return s.waitForReadyByDelay(ctx, containerID)
+}
+
+// tryHTTPProbe attempts an HTTP probe if the gordon.health label is set.
+// Returns (true, err) if the probe was attempted, (false, nil) if skipped.
+func (s *Service) tryHTTPProbe(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) (bool, error) {
+	log := zerowrap.FromCtx(ctx)
+	if containerConfig == nil {
+		return false, nil
+	}
+	healthPath, ok := containerConfig.Labels[domain.LabelHealth]
+	if !ok || healthPath == "" {
+		return false, nil
+	}
+	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	if probeErr != nil || ip == "" || port <= 0 {
+		log.Debug().Err(probeErr).Msg("readiness cascade: HTTP probe skipped, could not resolve container endpoint")
+		return false, nil
+	}
+	url := fmt.Sprintf("http://%s:%d%s", ip, port, healthPath)
+	timeout := cfg.HTTPProbeTimeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+	log.Info().Str("url", url).Dur("timeout", timeout).Msg("readiness cascade: using HTTP probe")
+	return true, httpProbe(ctx, url, timeout)
+}
+
+// tryTCPProbe attempts a TCP probe if port info is available.
+// Returns (true, err) if the probe was attempted, (false, nil) if skipped.
+func (s *Service) tryTCPProbe(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) (bool, error) {
+	log := zerowrap.FromCtx(ctx)
+	if containerConfig == nil || len(containerConfig.Ports) == 0 {
+		return false, nil
+	}
+	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	if probeErr != nil || ip == "" || port <= 0 {
+		log.Debug().Err(probeErr).Msg("readiness cascade: TCP probe skipped, could not resolve container endpoint")
+		return false, nil
+	}
+	addr := fmt.Sprintf("%s:%d", ip, port)
+	timeout := cfg.TCPProbeTimeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	log.Info().Str("addr", addr).Dur("timeout", timeout).Msg("readiness cascade: using TCP probe")
+	return true, tcpProbe(ctx, addr, timeout)
 }
 
 // resolveContainerEndpoint retrieves the container's IP and first port via

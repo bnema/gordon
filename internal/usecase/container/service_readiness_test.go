@@ -1,16 +1,30 @@
 package container
 
 import (
+	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+// reserveEphemeralAddr binds on 127.0.0.1:0, captures the assigned port, closes
+// the listener, and returns the address string. The port is guaranteed to be
+// unreachable (no process listening) when the probe runs.
+func reserveEphemeralAddr(t *testing.T) (ip string, port int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().(*net.TCPAddr)
+	ln.Close()
+	return addr.IP.String(), addr.Port
+}
 
 func TestService_WaitForReady_AutoFallsBackToDelayWhenNoHealthcheck(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
@@ -47,21 +61,24 @@ func TestService_WaitForReady_AutoCascadeUsesTCPWhenNoHealthcheckAndNoHealthLabe
 		Labels: map[string]string{},
 	}
 
+	// Reserve an ephemeral loopback port that is guaranteed to be unreachable.
+	probeIP, probePort := reserveEphemeralAddr(t)
+
 	// Initial running poll
 	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
 	// No Docker healthcheck
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
 	// Cascade resolves container endpoint for TCP probe
-	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return("172.17.0.5", 8080, nil).Once()
+	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return(probeIP, probePort, nil).Once()
 
-	// TCP probe will try to connect to 172.17.0.5:8080 — which will fail since
-	// there's nothing listening. Use a short health timeout so the test doesn't hang.
+	// TCP probe will try to connect — which will fail since the port is closed.
+	// Use a short health timeout so the test doesn't hang.
 	svc.mu.Lock()
-	svc.config.HealthTimeout = 50 * time.Millisecond
+	svc.config.TCPProbeTimeout = 50 * time.Millisecond
 	svc.mu.Unlock()
 
 	err := svc.waitForReady(ctx, containerID, containerConfig)
-	// Expect TCP probe timeout (no server listening at 172.17.0.5:8080)
+	// Expect TCP probe timeout (no server listening)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "TCP probe timeout")
 }
@@ -69,8 +86,8 @@ func TestService_WaitForReady_AutoCascadeUsesTCPWhenNoHealthcheckAndNoHealthLabe
 func TestService_WaitForReady_AutoCascadeUsesHTTPProbeWhenHealthLabelSet(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	svc := NewService(runtime, nil, nil, nil, Config{
-		ReadinessMode: "auto",
-		HealthTimeout: 50 * time.Millisecond,
+		ReadinessMode:    "auto",
+		HTTPProbeTimeout: 50 * time.Millisecond,
 	})
 
 	ctx := testContext()
@@ -83,12 +100,15 @@ func TestService_WaitForReady_AutoCascadeUsesHTTPProbeWhenHealthLabelSet(t *test
 		},
 	}
 
+	// Reserve an ephemeral loopback port that is guaranteed to be unreachable.
+	probeIP, probePort := reserveEphemeralAddr(t)
+
 	// Initial running poll
 	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
 	// No Docker healthcheck
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
 	// Cascade resolves container endpoint for HTTP probe
-	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return("172.17.0.5", 8080, nil).Once()
+	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return(probeIP, probePort, nil).Once()
 
 	err := svc.waitForReady(ctx, containerID, containerConfig)
 	// Expect HTTP probe timeout (no server listening)

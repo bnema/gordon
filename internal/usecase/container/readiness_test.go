@@ -37,9 +37,15 @@ func TestTCPProbe_Success(t *testing.T) {
 }
 
 func TestTCPProbe_Timeout(t *testing.T) {
-	// Use a port that nothing listens on (port 1 is privileged, won't have a listener)
+	// Reserve an ephemeral port and close it immediately to get a deterministic
+	// unreachable target, avoiding assumptions about privileged ports.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	ln.Close()
+
 	ctx := testContext()
-	err := tcpProbe(ctx, "127.0.0.1:1", 200*time.Millisecond)
+	err = tcpProbe(ctx, addr, 200*time.Millisecond)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "TCP probe timeout")
 }

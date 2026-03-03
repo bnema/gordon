@@ -13,6 +13,7 @@ import (
 // it verifies the process is at least accepting connections.
 func tcpProbe(ctx context.Context, addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	dialer := &net.Dialer{}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -21,7 +22,14 @@ func tcpProbe(ctx context.Context, addr string, timeout time.Duration) error {
 			return fmt.Errorf("TCP probe timeout after %s: %s not reachable", timeout, addr)
 		}
 
-		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		remaining := time.Until(deadline)
+		attemptTimeout := time.Second
+		if remaining < attemptTimeout {
+			attemptTimeout = remaining
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		conn, err := dialer.DialContext(attemptCtx, "tcp", addr)
+		cancel()
 		if err == nil {
 			conn.Close()
 			return nil
@@ -39,7 +47,6 @@ func tcpProbe(ctx context.Context, addr string, timeout time.Duration) error {
 // 2xx/3xx response or timeout. Used when gordon.health label is set.
 func httpProbe(ctx context.Context, url string, timeout time.Duration) error {
 	client := &http.Client{
-		Timeout: 2 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			// Don't follow redirects — treat 3xx as a successful response.
 			return http.ErrUseLastResponse
@@ -56,7 +63,19 @@ func httpProbe(ctx context.Context, url string, timeout time.Duration) error {
 			return fmt.Errorf("HTTP probe timeout after %s: last status %d from %s", timeout, lastStatus, url)
 		}
 
-		resp, err := client.Get(url)
+		remaining := time.Until(deadline)
+		attemptTimeout := 2 * time.Second
+		if remaining < attemptTimeout {
+			attemptTimeout = remaining
+		}
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if reqErr != nil {
+			return reqErr
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		req = req.WithContext(attemptCtx)
+		resp, err := client.Do(req)
+		cancel()
 		if err == nil {
 			lastStatus = resp.StatusCode
 			resp.Body.Close()
