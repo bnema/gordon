@@ -2644,42 +2644,45 @@ func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 }
 
 // TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical verifies that orphan
-// cleanup never stops a running container with the canonical name, even if it is not
-// tracked in memory and was not resolved by resolveExistingContainer. Only stopped
+// cleanup never stops a running container with the canonical name. Only stopped
 // canonical containers and temp containers (-new/-next) should be cleaned up.
+// The active canonical container is resolved via resolveExistingContainer (it has the
+// managed label), so the new container is created with the "-new" suffix — Docker
+// disallows creating a container with the same name as an existing running container.
 func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: time.Millisecond,
-		DrainDelay:     time.Millisecond,
+		ReadinessDelay:     time.Millisecond,
+		DrainDelay:         time.Millisecond,
+		StabilizationDelay: time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
-	// NO tracked container in memory. resolveExistingContainer will NOT find it either
-	// because the running container lacks the managed label in this edge case.
+	// The canonical container is running and has the managed label — it will be
+	// discovered by resolveExistingContainer's slow path (no in-memory state).
+	existingContainer := &domain.Container{
+		ID:     "active-canonical",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+		Labels: map[string]string{domain.LabelManaged: "true"},
+	}
 
 	route := domain.Route{
 		Domain: "test.example.com",
 		Image:  "myapp:v2",
 	}
 
-	// resolveExistingContainer: ListContainers(ctx, false) returns empty —
-	// the canonical container is running but not discovered (e.g., missing label)
-	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+	// resolveExistingContainer: slow path finds the running canonical container via label.
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{existingContainer}, nil)
 
-	// cleanupOrphanedContainers: ListContainers(ctx, true) finds both the running
-	// canonical container AND a stale -new leftover. The canonical container should
-	// NOT be killed because it's running and has the canonical name.
+	// cleanupOrphanedContainers: finds the running canonical AND a stale -new leftover.
+	// The canonical container must NOT be killed because it's running.
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
-		{
-			ID:     "active-canonical",
-			Name:   "gordon-test.example.com",
-			Status: "running",
-		},
+		existingContainer,
 		{
 			ID:     "stale-leftover",
 			Name:   "gordon-test.example.com-new",
@@ -2687,11 +2690,11 @@ func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 		},
 	}, nil)
 
-	// Only the stale -new container should be stopped and removed during orphan cleanup
+	// Only the stale -new container should be stopped and removed during orphan cleanup.
 	runtime.EXPECT().StopContainer(mock.Anything, "stale-leftover").Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "stale-leftover", true).Return(nil).Once()
 
-	// Image operations
+	// Image operations: pull new image (existing.Image is empty so redundancy check is skipped)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
@@ -2700,15 +2703,17 @@ func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
 
-	// Create container — no existing tracked, so canonical name is used
-	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com", Status: "created"}
+	// Create container — existing is the canonical container, so the new one gets "-new" suffix.
+	// Docker enforces unique container names; using "-new" avoids a name collision.
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
-		return cfg.Name == "gordon-test.example.com"
+		return cfg.Name == "gordon-test.example.com-new"
 	})).Return(newContainer, nil)
 	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
 
-	// Wait for ready
-	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	// Wait for ready (delay mode): pollContainerRunning (1×) + waitForReadyByDelay (1×)
+	// Post-switch stabilization: 1×  — total 3 calls.
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(3)
 
 	// Inspect after ready
 	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
@@ -2716,6 +2721,13 @@ func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 		Status: "running",
 		Ports:  []int{8080},
 	}, nil)
+
+	// Rename new container to canonical name after stabilization.
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil).Once()
+
+	// Stop and remove old canonical container.
+	runtime.EXPECT().StopContainer(mock.Anything, "active-canonical").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "active-canonical", true).Return(nil).Once()
 
 	// Publish event
 	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
