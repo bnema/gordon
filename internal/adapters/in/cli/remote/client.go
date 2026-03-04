@@ -724,6 +724,20 @@ func (c *Client) Deploy(ctx context.Context, deployDomain string) (*DeployResult
 	return &result, nil
 }
 
+// DeployIntent tells the server that a CLI-managed push is about to happen,
+// suppressing event-based deploys for this image.
+func (c *Client) DeployIntent(ctx context.Context, imageName string) error {
+	resp, err := c.requestWithRetry(ctx, http.MethodPost, "/deploy-intent/"+url.PathEscape(imageName), nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("deploy-intent failed: %s", resp.Status)
+	}
+	return nil
+}
+
 // Restart API
 
 // RestartResult contains the result of a restart.
