@@ -731,11 +731,7 @@ func (c *Client) DeployIntent(ctx context.Context, imageName string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("deploy-intent failed: %s", resp.Status)
-	}
-	return nil
+	return parseResponse(resp, nil)
 }
 
 // Restart API
