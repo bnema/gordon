@@ -54,8 +54,13 @@ func NewService(
 // SuppressDeployEvent marks an image name to skip image.pushed events.
 // The suppression auto-expires after 2 minutes to prevent leaks.
 func (s *Service) SuppressDeployEvent(imageName string) {
-	timer := time.AfterFunc(2*time.Minute, func() {
-		s.suppressedImages.Delete(imageName)
+	var timer *time.Timer
+	timer = time.AfterFunc(2*time.Minute, func() {
+		// Only delete if this timer is still the current one, preventing an
+		// old timer's callback from removing a newer suppression entry.
+		if v, ok := s.suppressedImages.Load(imageName); ok && v == timer {
+			s.suppressedImages.Delete(imageName)
+		}
 	})
 	if existing, loaded := s.suppressedImages.LoadOrStore(imageName, timer); loaded {
 		existing.(*time.Timer).Stop()
@@ -68,6 +73,40 @@ func (s *Service) ClearDeployEventSuppression(imageName string) {
 	if v, loaded := s.suppressedImages.LoadAndDelete(imageName); loaded {
 		v.(*time.Timer).Stop()
 	}
+}
+
+// ExtractImageName returns just the repository path of a container image
+// reference, stripping any registry host prefix, tag, and digest.
+// Examples:
+//
+//	"reg.example.com/team/my-app:latest" -> "team/my-app"
+//	"reg.example.com/my-app@sha256:abc"  -> "my-app"
+//	"my-app:v1.2"                        -> "my-app"
+func ExtractImageName(imageRef string) string {
+	name := imageRef
+	// Strip digest
+	if idx := strings.Index(name, "@"); idx != -1 {
+		name = name[:idx]
+	}
+	// Strip tag
+	// Find the last colon, but only strip it if it comes after any slash
+	// (to avoid treating a port number in the host as a tag).
+	if idx := strings.LastIndex(name, ":"); idx != -1 {
+		slashIdx := strings.LastIndex(name, "/")
+		if idx > slashIdx {
+			name = name[:idx]
+		}
+	}
+	// Strip registry host: if the first segment contains a dot or colon it is
+	// a registry hostname; remove it.
+	parts := strings.SplitN(name, "/", 2)
+	if len(parts) == 2 {
+		host := parts[0]
+		if strings.ContainsAny(host, ".:") || host == "localhost" {
+			name = parts[1]
+		}
+	}
+	return name
 }
 
 // IsDeployEventSuppressed checks if deploy events are suppressed for an image.

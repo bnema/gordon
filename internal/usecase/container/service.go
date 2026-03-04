@@ -295,8 +295,10 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	if hasExisting {
 		stable, stabilizeErr := s.stabilizeNewContainer(ctx, route.Domain, newContainer, existing)
 		if stabilizeErr != nil {
-			// Both old and new containers are dead
-			return nil, stabilizeErr
+			// Both old and new containers are dead; assign to named return so
+			// the deferred recordDeployMetrics and span see the failure.
+			err = stabilizeErr
+			return nil, err
 		}
 		if !stable {
 			// Rollback performed — old container is restored
@@ -627,8 +629,12 @@ func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, 
 				Msg("old container is also not running, cannot rollback")
 
 			// Cleanup failed new container
-			_ = s.runtime.StopContainer(ctx, newContainer.ID)
-			_ = s.runtime.RemoveContainer(ctx, newContainer.ID, true)
+			if stopErr := s.runtime.StopContainer(ctx, newContainer.ID); stopErr != nil {
+				log.WrapErrWithFields(stopErr, "failed to stop failed new container during rollback", map[string]any{zerowrap.FieldEntityID: newContainer.ID})
+			}
+			if removeErr := s.runtime.RemoveContainer(ctx, newContainer.ID, true); removeErr != nil {
+				log.WrapErrWithFields(removeErr, "failed to remove failed new container during rollback", map[string]any{zerowrap.FieldEntityID: newContainer.ID})
+			}
 
 			return false, fmt.Errorf("stabilization failed: new container crashed and old container %s is also not running", oldContainer.ID)
 		}
@@ -647,8 +653,12 @@ func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, 
 		}
 
 		// Cleanup failed new container
-		_ = s.runtime.StopContainer(ctx, newContainer.ID)
-		_ = s.runtime.RemoveContainer(ctx, newContainer.ID, true)
+		if stopErr := s.runtime.StopContainer(ctx, newContainer.ID); stopErr != nil {
+			log.WrapErrWithFields(stopErr, "failed to stop failed new container during rollback", map[string]any{zerowrap.FieldEntityID: newContainer.ID})
+		}
+		if removeErr := s.runtime.RemoveContainer(ctx, newContainer.ID, true); removeErr != nil {
+			log.WrapErrWithFields(removeErr, "failed to remove failed new container during rollback", map[string]any{zerowrap.FieldEntityID: newContainer.ID})
+		}
 
 		return false, nil
 	}
@@ -1763,22 +1773,15 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 
 	for _, c := range allContainers {
 		if (c.Name == expectedName || c.Name == expectedNewName || c.Name == expectedNextName) && c.ID != skipContainerID {
-			// The skipContainerID is the container we resolved as the active
-			// one serving traffic. Any other container with a matching name is
-			// an orphan from a previous (possibly interrupted) deploy.
-			//
-			// Running containers with the canonical name are protected — they
-			// could be legitimate if resolveExistingContainer found a temp
-			// container instead. Running temp containers (-new/-next) that are
-			// NOT the skip container are safe to remove: they are leftovers
-			// from failed deploys.
-			isCanonical := c.Name == expectedName
-			if isCanonical && c.Status == "running" {
+			// Skip any running container regardless of name — a running
+			// temp container may be actively serving traffic while the
+			// new container stabilizes, or may be from a concurrent deploy.
+			if c.Status == "running" {
 				log.Debug().
 					Str(zerowrap.FieldEntityID, c.ID).
 					Str("container_name", c.Name).
 					Str(zerowrap.FieldStatus, c.Status).
-					Msg("skipping running canonical container during orphan cleanup")
+					Msg("skipping running container during orphan cleanup")
 				continue
 			}
 

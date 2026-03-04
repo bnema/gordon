@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -237,13 +238,30 @@ func (h *Handler) handleDeployIntent(w http.ResponseWriter, r *http.Request, pat
 		return
 	}
 
-	imageName := strings.TrimPrefix(path, "/deploy-intent/")
-	if imageName == "" || imageName == "/deploy-intent" {
+	ctx := r.Context()
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+
+	if h.registrySvc == nil {
+		h.sendError(w, http.StatusServiceUnavailable, "registry service unavailable")
+		return
+	}
+
+	rawName := strings.TrimPrefix(path, "/deploy-intent/")
+	if rawName == "" || rawName == "/deploy-intent" {
 		h.sendError(w, http.StatusBadRequest, "image name required")
 		return
 	}
 
-	log := zerowrap.FromCtx(r.Context())
+	imageName, err := url.PathUnescape(rawName)
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid image name encoding")
+		return
+	}
+
+	log := zerowrap.FromCtx(ctx)
 	log.Info().Str("image", imageName).Msg("deploy intent registered, suppressing image.pushed events")
 
 	h.registrySvc.SuppressDeployEvent(imageName)
@@ -1106,17 +1124,10 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 
 	// Clear deploy event suppression now that the explicit deploy has completed.
 	// This re-enables event-based deploys for future direct docker pushes.
-	if route.Image != "" {
-		// Extract image name (without registry prefix and tag) for suppression key
-		imageName := route.Image
-		// The suppression key is just the image name as stored in the registry
-		// (e.g., "my-app" not "reg.example.com/my-app:latest")
-		if parts := strings.SplitN(imageName, "/", 2); len(parts) == 2 {
-			imageName = parts[1]
-		}
-		if idx := strings.LastIndex(imageName, ":"); idx != -1 {
-			imageName = imageName[:idx]
-		}
+	if route.Image != "" && h.registrySvc != nil {
+		// Use the registry package's image name normaliser so digest-form refs
+		// and multi-segment paths are handled correctly.
+		imageName := registry.ExtractImageName(route.Image)
 		h.registrySvc.ClearDeployEventSuppression(imageName)
 	}
 
