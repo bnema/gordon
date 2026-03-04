@@ -25,6 +25,16 @@ func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
 }
 
+// testMinDelayConfig returns a Config with all timing delays set to 1ms,
+// suitable for unit tests that don't want to wait for real timeouts.
+func testMinDelayConfig() Config {
+	return Config{
+		ReadinessDelay:     time.Millisecond,
+		DrainDelay:         time.Millisecond,
+		StabilizationDelay: time.Millisecond,
+	}
+}
+
 func setupMetricsTest(t *testing.T) (*telemetry.Metrics, *sdkmetric.ManualReader) {
 	t.Helper()
 
@@ -493,11 +503,7 @@ func TestService_Deploy_ResolvesExistingFromRuntime_WhenMemoryStale(t *testing.T
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
@@ -593,11 +599,7 @@ func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
@@ -1839,11 +1841,7 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
@@ -1913,11 +1911,7 @@ func TestService_Deploy_TrackedTempContainerUsesAlternateTempName(t *testing.T) 
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
@@ -2104,11 +2098,7 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
@@ -2244,11 +2234,7 @@ func TestService_Deploy_CacheInvalidationBeforeOldContainerStop(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
@@ -2325,11 +2311,7 @@ func TestService_Deploy_NilCacheInvalidator(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	// Intentionally NOT setting cache invalidator
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -2484,11 +2466,7 @@ func TestService_Deploy_DoesNotSkipWhenImageIDDiffers(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
@@ -2587,11 +2565,7 @@ func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
@@ -2654,11 +2628,7 @@ func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	config := Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
-	}
+	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
 
