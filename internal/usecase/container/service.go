@@ -407,6 +407,11 @@ type deployResources struct {
 // It first checks the in-memory map (fast path). If not found, it queries the
 // runtime for a running container with matching name and managed label. This
 // handles cases where Gordon restarted and in-memory state is stale.
+//
+// The slow path checks canonical, -new, and -next names because a previous
+// deploy may have been interrupted (e.g. eventbus timeout, Gordon restart)
+// leaving the active container under a temp name. Canonical is preferred when
+// multiple matches exist.
 func (s *Service) resolveExistingContainer(ctx context.Context, domainName string) (*domain.Container, bool) {
 	// Fast path: check in-memory state
 	s.mu.RLock()
@@ -418,7 +423,12 @@ func (s *Service) resolveExistingContainer(ctx context.Context, domainName strin
 
 	// Slow path: query runtime for running containers
 	log := zerowrap.FromCtx(ctx)
-	expectedName := fmt.Sprintf("gordon-%s", domainName)
+	canonicalName := fmt.Sprintf("gordon-%s", domainName)
+	candidateNames := map[string]bool{
+		canonicalName:           true,
+		canonicalName + "-new":  true,
+		canonicalName + "-next": true,
+	}
 
 	running, err := s.runtime.ListContainers(ctx, false)
 	if err != nil {
@@ -426,23 +436,32 @@ func (s *Service) resolveExistingContainer(ctx context.Context, domainName strin
 		return nil, false
 	}
 
+	// Prefer canonical name; fall back to any running managed temp container.
+	var best *domain.Container
 	for _, c := range running {
-		if c.Name == expectedName && c.Labels[domain.LabelManaged] == "true" {
-			log.Info().
-				Str("container_id", c.ID).
-				Str("container_name", c.Name).
-				Msg("resolved existing container from runtime (in-memory state was stale)")
-
-			// Update in-memory state so subsequent lookups are fast
-			s.mu.Lock()
-			if _, alreadyTracked := s.containers[domainName]; !alreadyTracked {
-				s.managedCount++
-			}
-			s.containers[domainName] = c
-			s.mu.Unlock()
-
-			return c, true
+		if !candidateNames[c.Name] || c.Labels[domain.LabelManaged] != "true" {
+			continue
 		}
+		if best == nil || c.Name == canonicalName {
+			best = c
+		}
+	}
+
+	if best != nil {
+		log.Info().
+			Str("container_id", best.ID).
+			Str("container_name", best.Name).
+			Msg("resolved existing container from runtime (in-memory state was stale)")
+
+		// Update in-memory state so subsequent lookups are fast
+		s.mu.Lock()
+		if _, alreadyTracked := s.containers[domainName]; !alreadyTracked {
+			s.managedCount++
+		}
+		s.containers[domainName] = best
+		s.mu.Unlock()
+
+		return best, true
 	}
 
 	return nil, false
@@ -1744,19 +1763,26 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 
 	for _, c := range allContainers {
 		if (c.Name == expectedName || c.Name == expectedNewName || c.Name == expectedNextName) && c.ID != skipContainerID {
-			// Never kill a running container with the canonical name — it may be
-			// the active container serving traffic. Only temp (-new/-next) containers
-			// and stopped canonical containers are safe to remove.
+			// The skipContainerID is the container we resolved as the active
+			// one serving traffic. Any other container with a matching name is
+			// an orphan from a previous (possibly interrupted) deploy.
+			//
+			// Running containers with the canonical name are protected — they
+			// could be legitimate if resolveExistingContainer found a temp
+			// container instead. Running temp containers (-new/-next) that are
+			// NOT the skip container are safe to remove: they are leftovers
+			// from failed deploys.
 			isCanonical := c.Name == expectedName
 			if isCanonical && c.Status == "running" {
 				log.Debug().
 					Str(zerowrap.FieldEntityID, c.ID).
+					Str("container_name", c.Name).
 					Str(zerowrap.FieldStatus, c.Status).
 					Msg("skipping running canonical container during orphan cleanup")
 				continue
 			}
 
-			log.Info().Str(zerowrap.FieldEntityID, c.ID).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
+			log.Info().Str(zerowrap.FieldEntityID, c.ID).Str("container_name", c.Name).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
 
 			if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
 				log.WrapErrWithFields(err, "failed to stop orphaned container", map[string]any{zerowrap.FieldEntityID: c.ID})
@@ -2344,14 +2370,40 @@ func (s *Service) tryTCPProbe(ctx context.Context, containerID string, container
 	return true, tcpProbe(ctx, addr, timeout)
 }
 
-// resolveContainerEndpoint retrieves the container's IP and first port via
-// GetContainerNetworkInfo. The result can be used for HTTP or TCP probes.
+// resolveContainerEndpoint returns a host-reachable address for probing.
+// In rootless podman/Docker setups, container internal IPs are not routable
+// from the host. We use the host port binding (127.0.0.1:<mapped_port>)
+// which is always reachable. Falls back to the container's internal IP
+// only if no host port mapping exists (e.g. host-network mode).
 func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID string) (string, int, error) {
-	ip, port, err := s.runtime.GetContainerNetworkInfo(ctx, containerID)
+	log := zerowrap.FromCtx(ctx)
+
+	// First, get the container's internal port from network info
+	_, internalPort, err := s.runtime.GetContainerNetworkInfo(ctx, containerID)
 	if err != nil {
 		return "", 0, err
 	}
-	return ip, port, nil
+
+	// Try to resolve via host port binding (works in rootless podman/Docker)
+	hostPort, hostErr := s.runtime.GetContainerPort(ctx, containerID, internalPort)
+	if hostErr == nil && hostPort > 0 {
+		log.Debug().
+			Int("internal_port", internalPort).
+			Int("host_port", hostPort).
+			Msg("resolved container endpoint via host port binding")
+		return "127.0.0.1", hostPort, nil
+	}
+
+	// Fallback: use internal IP (works in Docker rootful / host network)
+	ip, _, fallbackErr := s.runtime.GetContainerNetworkInfo(ctx, containerID)
+	if fallbackErr != nil {
+		return "", 0, fallbackErr
+	}
+	log.Debug().
+		Str("ip", ip).
+		Int("port", internalPort).
+		Msg("resolved container endpoint via internal IP (no host port binding)")
+	return ip, internalPort, nil
 }
 
 // waitForReadyByDelay waits using the legacy running+delay strategy.
