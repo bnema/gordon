@@ -46,9 +46,20 @@ func tcpProbe(ctx context.Context, addr string, timeout time.Duration) error {
 			log.Debug().Err(err).Str("addr", addr).Int("attempt", attempts).Msg("TCP probe attempt failed")
 		}
 
+		sleepInterval := 500 * time.Millisecond
+		if deadline, ok := ctx.Deadline(); ok {
+			if rem := time.Until(deadline); rem < sleepInterval {
+				sleepInterval = rem
+			}
+		}
+		if sleepInterval <= 0 {
+			return ctx.Err()
+		}
+		t := time.NewTimer(sleepInterval)
 		select {
-		case <-time.After(500 * time.Millisecond):
+		case <-t.C:
 		case <-ctx.Done():
+			t.Stop()
 			return ctx.Err()
 		}
 	}
@@ -95,9 +106,20 @@ func httpProbe(ctx context.Context, url string, timeout time.Duration) error {
 			}
 		}
 
+		sleepInterval := time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			if rem := time.Until(deadline); rem < sleepInterval {
+				sleepInterval = rem
+			}
+		}
+		if sleepInterval <= 0 {
+			return ctx.Err()
+		}
+		t := time.NewTimer(sleepInterval)
 		select {
-		case <-time.After(time.Second):
+		case <-t.C:
 		case <-ctx.Done():
+			t.Stop()
 			return ctx.Err()
 		}
 	}
