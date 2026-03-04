@@ -223,6 +223,13 @@ func (l *localControlPlane) Reload(_ context.Context) error {
 	return app.SendReloadSignal()
 }
 
+func (l *localControlPlane) DeployIntent(_ context.Context, imageName string) error {
+	if l.registrySvc != nil {
+		l.registrySvc.SuppressDeployEvent(imageName)
+	}
+	return nil
+}
+
 func (l *localControlPlane) Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error) {
 	if l.containerSvc != nil && l.configSvc != nil {
 		route, err := l.configSvc.GetRoute(ctx, deployDomain)

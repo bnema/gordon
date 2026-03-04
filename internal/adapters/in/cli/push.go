@@ -154,6 +154,15 @@ func runPush(ctx context.Context, imageArg, domainFlag, tag string, build bool, 
 	}
 	fmt.Printf("Domain: %s\n", styles.Theme.Bold.Render(pushDomain))
 
+	// Signal the server to suppress event-based deploys for this image.
+	// The CLI will trigger an explicit deploy after push completes.
+	if !noDeploy {
+		if err := handle.plane.DeployIntent(ctx, imageName); err != nil {
+			// Non-fatal: worst case we get a redundant deploy via event
+			fmt.Fprintf(os.Stderr, "warning: failed to register deploy intent: %v\n", err)
+		}
+	}
+
 	if build {
 		if err := buildAndPush(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef); err != nil {
 			return err
