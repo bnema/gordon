@@ -28,6 +28,11 @@ const maxAdminRequestSize = 1 << 20 // 1MB
 // maxLogLines is the maximum allowed number of log lines that can be requested.
 const maxLogLines = 10000
 
+type registryDeployService interface {
+	in.RegistryService
+	in.DeployCoordinator
+}
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc    in.ConfigService
@@ -38,7 +43,7 @@ type Handler struct {
 	healthSvc    in.HealthService
 	secretSvc    in.SecretService
 	logSvc       in.LogService
-	registrySvc  in.RegistryService
+	registrySvc  registryDeployService
 	eventBus     out.EventPublisher
 	log          zerowrap.Logger
 }
@@ -130,7 +135,7 @@ func NewHandler(
 	healthSvc in.HealthService,
 	secretSvc in.SecretService,
 	logSvc in.LogService,
-	registrySvc in.RegistryService,
+	registrySvc registryDeployService,
 	eventBus out.EventPublisher,
 	log zerowrap.Logger,
 	backupSvc in.BackupService,
