@@ -47,13 +47,19 @@ func tcpProbe(ctx context.Context, addr string, timeout time.Duration) error {
 		}
 
 		sleepInterval := 500 * time.Millisecond
-		if deadline, ok := ctx.Deadline(); ok {
-			if rem := time.Until(deadline); rem < sleepInterval {
-				sleepInterval = rem
+		if remProbe := time.Until(deadline); remProbe < sleepInterval {
+			sleepInterval = remProbe
+		}
+		if ctxDeadline, ok := ctx.Deadline(); ok {
+			if remCtx := time.Until(ctxDeadline); remCtx < sleepInterval {
+				sleepInterval = remCtx
 			}
 		}
 		if sleepInterval <= 0 {
-			return ctx.Err()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("TCP probe timeout after %s: %s not reachable (attempts=%d, last_error=%v)", timeout, addr, attempts, lastErr)
 		}
 		t := time.NewTimer(sleepInterval)
 		select {
@@ -107,13 +113,19 @@ func httpProbe(ctx context.Context, url string, timeout time.Duration) error {
 		}
 
 		sleepInterval := time.Second
-		if deadline, ok := ctx.Deadline(); ok {
-			if rem := time.Until(deadline); rem < sleepInterval {
-				sleepInterval = rem
+		if remProbe := time.Until(deadline); remProbe < sleepInterval {
+			sleepInterval = remProbe
+		}
+		if ctxDeadline, ok := ctx.Deadline(); ok {
+			if remCtx := time.Until(ctxDeadline); remCtx < sleepInterval {
+				sleepInterval = remCtx
 			}
 		}
 		if sleepInterval <= 0 {
-			return ctx.Err()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("HTTP probe timeout after %s: last status %d from %s", timeout, lastStatus, url)
 		}
 		t := time.NewTimer(sleepInterval)
 		select {
