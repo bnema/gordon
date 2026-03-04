@@ -54,6 +54,11 @@ func NewService(
 // SuppressDeployEvent marks an image name to skip image.pushed events.
 // The suppression auto-expires after 2 minutes to prevent leaks.
 func (s *Service) SuppressDeployEvent(imageName string) {
+	imageName = ExtractImageName(strings.TrimSpace(imageName))
+	if imageName == "" {
+		return
+	}
+
 	var timer *time.Timer
 	timer = time.AfterFunc(2*time.Minute, func() {
 		// Only delete if this timer is still the current one, preventing an
@@ -70,6 +75,11 @@ func (s *Service) SuppressDeployEvent(imageName string) {
 
 // ClearDeployEventSuppression removes event suppression for an image.
 func (s *Service) ClearDeployEventSuppression(imageName string) {
+	imageName = ExtractImageName(strings.TrimSpace(imageName))
+	if imageName == "" {
+		return
+	}
+
 	if v, loaded := s.suppressedImages.LoadAndDelete(imageName); loaded {
 		v.(*time.Timer).Stop()
 	}
@@ -111,6 +121,11 @@ func ExtractImageName(imageRef string) string {
 
 // IsDeployEventSuppressed checks if deploy events are suppressed for an image.
 func (s *Service) IsDeployEventSuppressed(imageName string) bool {
+	imageName = ExtractImageName(strings.TrimSpace(imageName))
+	if imageName == "" {
+		return false
+	}
+
 	_, exists := s.suppressedImages.Load(imageName)
 	return exists
 }
