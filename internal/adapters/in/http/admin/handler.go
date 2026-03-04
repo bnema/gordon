@@ -213,6 +213,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		{"/routes/by-image", h.handleRoutesByImage},
 		{"/routes", h.handleRoutes},
 		{"/secrets", h.handleSecrets},
+		{"/deploy-intent", h.handleDeployIntent},
 		{"/deploy", h.handleDeploy},
 		{"/restart", h.handleRestart},
 		{"/tags", h.handleTags},
@@ -226,6 +227,31 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	}
 
 	return nil, false
+}
+
+// handleDeployIntent handles /admin/deploy-intent/:image endpoint.
+// It registers a deploy intent, suppressing event-based deploys for the image.
+func (h *Handler) handleDeployIntent(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodPost {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	imageName := strings.TrimPrefix(path, "/deploy-intent/")
+	if imageName == "" || imageName == "/deploy-intent" {
+		h.sendError(w, http.StatusBadRequest, "image name required")
+		return
+	}
+
+	log := zerowrap.FromCtx(r.Context())
+	log.Info().Str("image", imageName).Msg("deploy intent registered, suppressing image.pushed events")
+
+	h.registrySvc.SuppressDeployEvent(imageName)
+
+	h.sendJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+		"image":  imageName,
+	})
 }
 
 // sendJSON sends a JSON response.

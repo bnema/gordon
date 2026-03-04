@@ -6,20 +6,25 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/bnema/zerowrap"
 )
 
 // tcpProbe attempts a TCP connection to addr, retrying every 500ms until
 // success or timeout. This is the universal fallback readiness check —
 // it verifies the process is at least accepting connections.
 func tcpProbe(ctx context.Context, addr string, timeout time.Duration) error {
+	log := zerowrap.FromCtx(ctx)
 	deadline := time.Now().Add(timeout)
 	dialer := &net.Dialer{}
+	attempts := 0
+	var lastErr error
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("TCP probe timeout after %s: %s not reachable", timeout, addr)
+			return fmt.Errorf("TCP probe timeout after %s: %s not reachable (attempts=%d, last_error=%v)", timeout, addr, attempts, lastErr)
 		}
 
 		remaining := time.Until(deadline)
@@ -30,9 +35,15 @@ func tcpProbe(ctx context.Context, addr string, timeout time.Duration) error {
 		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		conn, err := dialer.DialContext(attemptCtx, "tcp", addr)
 		cancel()
+		attempts++
 		if err == nil {
 			conn.Close()
+			log.Debug().Str("addr", addr).Int("attempts", attempts).Msg("TCP probe connected")
 			return nil
+		}
+		lastErr = err
+		if attempts <= 3 || attempts%10 == 0 {
+			log.Debug().Err(err).Str("addr", addr).Int("attempt", attempts).Msg("TCP probe attempt failed")
 		}
 
 		select {

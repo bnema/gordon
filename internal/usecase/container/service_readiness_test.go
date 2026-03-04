@@ -70,6 +70,8 @@ func TestService_WaitForReady_AutoCascadeUsesTCPWhenNoHealthcheckAndNoHealthLabe
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
 	// Cascade resolves container endpoint for TCP probe
 	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return(probeIP, probePort, nil).Once()
+	// Host port binding resolution — return the same loopback addr so probe hits it
+	runtime.EXPECT().GetContainerPort(mock.Anything, containerID, probePort).Return(probePort, nil).Once()
 
 	// TCP probe will try to connect — which will fail since the port is closed.
 	// Use a short health timeout so the test doesn't hang.
@@ -109,6 +111,8 @@ func TestService_WaitForReady_AutoCascadeUsesHTTPProbeWhenHealthLabelSet(t *test
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
 	// Cascade resolves container endpoint for HTTP probe
 	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return(probeIP, probePort, nil).Once()
+	// Host port binding resolution — return the same loopback addr so probe hits it
+	runtime.EXPECT().GetContainerPort(mock.Anything, containerID, probePort).Return(probePort, nil).Once()
 
 	err := svc.waitForReady(ctx, containerID, containerConfig)
 	// Expect HTTP probe timeout (no server listening)
