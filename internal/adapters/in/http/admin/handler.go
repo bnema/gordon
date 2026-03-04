@@ -1104,6 +1104,22 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 		return
 	}
 
+	// Clear deploy event suppression now that the explicit deploy has completed.
+	// This re-enables event-based deploys for future direct docker pushes.
+	if route.Image != "" {
+		// Extract image name (without registry prefix and tag) for suppression key
+		imageName := route.Image
+		// The suppression key is just the image name as stored in the registry
+		// (e.g., "my-app" not "reg.example.com/my-app:latest")
+		if parts := strings.SplitN(imageName, "/", 2); len(parts) == 2 {
+			imageName = parts[1]
+		}
+		if idx := strings.LastIndex(imageName, ":"); idx != -1 {
+			imageName = imageName[:idx]
+		}
+		h.registrySvc.ClearDeployEventSuppression(imageName)
+	}
+
 	log.Info().Str("domain", deployDomain).Str("container_id", container.ID).Msg("container deployed via admin API")
 	h.sendJSON(w, http.StatusOK, dto.DeployResponse{
 		Status:      "deployed",
