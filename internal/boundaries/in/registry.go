@@ -29,8 +29,4 @@ type RegistryService interface {
 	// Tag operations
 	ListTags(ctx context.Context, name string) ([]string, error)
 	ListRepositories(ctx context.Context) ([]string, error)
-
-	// Deploy event suppression (prevents double-deploy when CLI manages the push)
-	SuppressDeployEvent(imageName string)
-	ClearDeployEventSuppression(imageName string)
 }
