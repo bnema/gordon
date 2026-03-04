@@ -727,6 +727,9 @@ func (c *Client) Deploy(ctx context.Context, deployDomain string) (*DeployResult
 // DeployIntent tells the server that a CLI-managed push is about to happen,
 // suppressing event-based deploys for this image.
 func (c *Client) DeployIntent(ctx context.Context, imageName string) error {
+	if strings.TrimSpace(imageName) == "" {
+		return fmt.Errorf("image name cannot be empty")
+	}
 	resp, err := c.requestWithRetry(ctx, http.MethodPost, "/deploy-intent/"+url.PathEscape(imageName), nil)
 	if err != nil {
 		return err

@@ -29,9 +29,10 @@ func testContext() context.Context {
 // suitable for unit tests that don't want to wait for real timeouts.
 func testMinDelayConfig() Config {
 	return Config{
-		ReadinessDelay:     time.Millisecond,
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
+		StabilizationDelay:   time.Millisecond,
 	}
 }
 
