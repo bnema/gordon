@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -67,7 +68,14 @@ func TestTCPProbe_DelayedListener(t *testing.T) {
 	// Re-open after 1 second
 	go func() {
 		time.Sleep(time.Second)
-		newLn, err := net.Listen("tcp", addr)
+		lc := net.ListenConfig{
+			Control: func(network, address string, c syscall.RawConn) error {
+				return c.Control(func(fd uintptr) {
+					_ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				})
+			},
+		}
+		newLn, err := lc.Listen(context.Background(), "tcp", addr)
 		if err != nil {
 			t.Logf("delayed listener failed to bind: %v", err)
 			return
