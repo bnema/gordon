@@ -38,7 +38,6 @@ type Config struct {
 	VolumePreserve           bool
 	NetworkIsolation         bool
 	NetworkPrefix            string
-	DNSSuffix                string
 	NetworkGroups            map[string][]string
 	Attachments              map[string][]string
 	ReadinessDelay           time.Duration // Delay after container starts before considering it ready
@@ -48,6 +47,9 @@ type Config struct {
 	DrainDelayConfigured     bool          // True when deploy.drain_delay was explicitly configured
 	DrainMode                string        // Drain strategy: auto, inflight, delay
 	DrainTimeout             time.Duration // Max wait for in-flight requests to drain
+	StabilizationDelay       time.Duration // Post-switch monitoring window (default 2s)
+	TCPProbeTimeout          time.Duration // TCP probe timeout (default 30s)
+	HTTPProbeTimeout         time.Duration // HTTP probe timeout (default 60s)
 }
 
 var tracer = otel.Tracer("gordon.container")
@@ -257,26 +259,9 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	log := zerowrap.FromCtx(ctx)
 
 	// Record deploy metrics and trace status
-	defer func() {
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-		}
-		if s.metrics == nil {
-			return
-		}
-		attrs := metric.WithAttributes(
-			attribute.String("domain", route.Domain),
-			attribute.String("image", route.Image),
-		)
-		s.metrics.DeployTotal.Add(ctx, 1, attrs)
-		s.metrics.DeployDuration.Record(ctx, time.Since(deployStart).Seconds(), attrs)
-		if err != nil {
-			s.metrics.DeployErrors.Add(ctx, 1, attrs)
-		}
-	}()
+	defer s.recordDeployMetrics(ctx, span, route, deployStart, &err)
 
-	existing, hasExisting := s.getTrackedContainer(route.Domain)
+	existing, hasExisting := s.resolveExistingContainer(ctx, route.Domain)
 
 	resources, err := s.prepareDeployResources(ctx, route, existing)
 	if err != nil {
@@ -287,9 +272,15 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	// the exact same image (by Docker image ID), return it immediately.
 	// This prevents the double-deploy caused by the event-based deploy
 	// (triggered by image.pushed) racing with the explicit CLI deploy call.
-	if hasExisting && existing.ImageID != "" {
-		if skip, container := s.skipRedundantDeploy(ctx, existing, resources.actualImageRef); skip {
-			return container, nil
+	if hasExisting {
+		existingForSkip := existing
+		if existingForSkip.ImageID == "" && existingForSkip.Image != "" && normalizeImageRef(existingForSkip.Image) == normalizeImageRef(route.Image) {
+			existingForSkip = s.containerForRedundantCheck(ctx, existingForSkip)
+		}
+		if existingForSkip.ImageID != "" {
+			if skip, container := s.skipRedundantDeploy(ctx, existingForSkip, resources.actualImageRef); skip {
+				return container, nil
+			}
 		}
 	}
 
@@ -299,6 +290,22 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	}
 
 	invalidated := s.activateDeployedContainer(ctx, route.Domain, newContainer)
+
+	// Post-switch stabilization: verify new container stays running
+	if hasExisting {
+		stable, stabilizeErr := s.stabilizeNewContainer(ctx, route.Domain, newContainer, existing)
+		if stabilizeErr != nil {
+			// Both old and new containers are dead; assign to named return so
+			// the deferred recordDeployMetrics and span see the failure.
+			err = stabilizeErr
+			return nil, err
+		}
+		if !stable {
+			// Rollback performed — old container is restored
+			return existing, nil
+		}
+	}
+
 	s.finalizePreviousContainer(ctx, route.Domain, existing, hasExisting, invalidated, newContainer.ID)
 
 	// Start container log collection (non-blocking, errors don't fail deployment)
@@ -313,6 +320,29 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		Msg("container deployed successfully")
 
 	return newContainer, nil
+}
+
+// recordDeployMetrics records span error status and deploy metrics at the end of a Deploy call.
+// It is called via defer and receives a pointer to the named return error so it can observe
+// the final error value after all deferred functions have run.
+func (s *Service) recordDeployMetrics(ctx context.Context, span trace.Span, route domain.Route, start time.Time, errPtr *error) {
+	err := *errPtr
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	if s.metrics == nil {
+		return
+	}
+	attrs := metric.WithAttributes(
+		attribute.String("domain", route.Domain),
+		attribute.String("image", route.Image),
+	)
+	s.metrics.DeployTotal.Add(ctx, 1, attrs)
+	s.metrics.DeployDuration.Record(ctx, time.Since(start).Seconds(), attrs)
+	if err != nil {
+		s.metrics.DeployErrors.Add(ctx, 1, attrs)
+	}
 }
 
 // skipRedundantDeploy checks whether the existing container is already running
@@ -347,6 +377,26 @@ func (s *Service) skipRedundantDeploy(ctx context.Context, existing *domain.Cont
 	return true, existing
 }
 
+func (s *Service) containerForRedundantCheck(ctx context.Context, existing *domain.Container) *domain.Container {
+	if existing == nil || existing.ImageID != "" || existing.ID == "" {
+		return existing
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	inspected, err := s.runtime.InspectContainer(ctx, existing.ID)
+	if err != nil {
+		log.Debug().Err(err).Str("container_id", existing.ID).Msg("cannot inspect existing container for redundancy check")
+		return existing
+	}
+	if inspected == nil || inspected.ImageID == "" {
+		return existing
+	}
+
+	existingCopy := *existing
+	existingCopy.ImageID = inspected.ImageID
+	return &existingCopy
+}
+
 type deployResources struct {
 	networkName    string
 	actualImageRef string
@@ -355,11 +405,68 @@ type deployResources struct {
 	volumes        map[string]string
 }
 
-func (s *Service) getTrackedContainer(domainName string) (*domain.Container, bool) {
+// resolveExistingContainer returns the currently running container for a domain.
+// It first checks the in-memory map (fast path). If not found, it queries the
+// runtime for a running container with matching name and managed label. This
+// handles cases where Gordon restarted and in-memory state is stale.
+//
+// The slow path checks canonical, -new, and -next names because a previous
+// deploy may have been interrupted (e.g. eventbus timeout, Gordon restart)
+// leaving the active container under a temp name. Canonical is preferred when
+// multiple matches exist.
+func (s *Service) resolveExistingContainer(ctx context.Context, domainName string) (*domain.Container, bool) {
+	// Fast path: check in-memory state
 	s.mu.RLock()
 	container, ok := s.containers[domainName]
 	s.mu.RUnlock()
-	return container, ok
+	if ok {
+		return container, true
+	}
+
+	// Slow path: query runtime for running containers
+	log := zerowrap.FromCtx(ctx)
+	canonicalName := fmt.Sprintf("gordon-%s", domainName)
+	candidateNames := map[string]bool{
+		canonicalName:           true,
+		canonicalName + "-new":  true,
+		canonicalName + "-next": true,
+	}
+
+	running, err := s.runtime.ListContainers(ctx, false)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list running containers for existing container resolution")
+		return nil, false
+	}
+
+	// Prefer canonical name; fall back to any running managed temp container.
+	var best *domain.Container
+	for _, c := range running {
+		if !candidateNames[c.Name] || c.Labels[domain.LabelManaged] != "true" {
+			continue
+		}
+		if best == nil || c.Name == canonicalName {
+			best = c
+		}
+	}
+
+	if best != nil {
+		log.Info().
+			Str("container_id", best.ID).
+			Str("container_name", best.Name).
+			Msg("resolved existing container from runtime (in-memory state was stale)")
+
+		// Update in-memory state so subsequent lookups are fast
+		s.mu.Lock()
+		if _, alreadyTracked := s.containers[domainName]; !alreadyTracked {
+			s.managedCount++
+		}
+		s.containers[domainName] = best
+		s.mu.Unlock()
+
+		return best, true
+	}
+
+	return nil, false
 }
 
 func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route, existing *domain.Container) (*deployResources, error) {
@@ -438,7 +545,7 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 		return nil, log.WrapErr(err, "failed to start container")
 	}
 	if !domain.IsSkipReadiness(ctx) {
-		if err := s.waitForReady(ctx, newContainer.ID); err != nil {
+		if err := s.waitForReady(ctx, newContainer.ID, containerConfig); err != nil {
 			s.cleanupFailedContainer(ctx, newContainer.ID)
 			return nil, log.WrapErr(err, "container failed readiness check")
 		}
@@ -478,6 +585,85 @@ func (s *Service) activateDeployedContainer(ctx context.Context, domainName stri
 	}
 
 	return false
+}
+
+// stabilizeNewContainer monitors the new container briefly after traffic switch.
+// If it crashes during this window, rolls back to old container.
+// Returns true if stabilization succeeded, false if rollback was performed.
+// Returns an error only when both new and old containers are dead.
+func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, newContainer, oldContainer *domain.Container) (bool, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	if oldContainer == nil {
+		return true, nil
+	}
+
+	s.mu.RLock()
+	delay := s.config.StabilizationDelay
+	s.mu.RUnlock()
+	if delay == 0 {
+		delay = 2 * time.Second
+	}
+
+	// Brief stabilization: verify new container is still running after delay
+	select {
+	case <-time.After(delay):
+	case <-ctx.Done():
+		return true, nil
+	}
+
+	running, err := s.runtime.IsContainerRunning(ctx, newContainer.ID)
+	if err != nil || !running {
+		log.Error().
+			Str("new_container", newContainer.ID).
+			Str("old_container", oldContainer.ID).
+			Msg("new container crashed during stabilization, rolling back to old")
+
+		// Verify old container is still running before restoring it.
+		// If both old and new are dead (e.g., OOM), returning a dead
+		// container as "existing" would leave the domain in a broken state.
+		oldRunning, oldErr := s.runtime.IsContainerRunning(ctx, oldContainer.ID)
+		if oldErr != nil || !oldRunning {
+			log.Error().
+				Str("old_container", oldContainer.ID).
+				Msg("old container is also not running, cannot rollback")
+
+			// Cleanup failed new container
+			if stopErr := s.runtime.StopContainer(ctx, newContainer.ID); stopErr != nil {
+				log.WrapErrWithFields(stopErr, "failed to stop failed new container during rollback", map[string]any{zerowrap.FieldEntityID: newContainer.ID})
+			}
+			if removeErr := s.runtime.RemoveContainer(ctx, newContainer.ID, true); removeErr != nil {
+				log.WrapErrWithFields(removeErr, "failed to remove failed new container during rollback", map[string]any{zerowrap.FieldEntityID: newContainer.ID})
+			}
+
+			return false, fmt.Errorf("stabilization failed: new container crashed and old container %s is also not running", oldContainer.ID)
+		}
+
+		// Rollback: restore old container as tracked
+		s.mu.Lock()
+		s.containers[domainName] = oldContainer
+		s.mu.Unlock()
+
+		// Re-invalidate proxy cache to point back to old
+		s.mu.RLock()
+		inv := s.cacheInvalidator
+		s.mu.RUnlock()
+		if inv != nil {
+			inv.InvalidateTarget(ctx, domainName)
+		}
+
+		// Cleanup failed new container
+		if stopErr := s.runtime.StopContainer(ctx, newContainer.ID); stopErr != nil {
+			log.WrapErrWithFields(stopErr, "failed to stop failed new container during rollback", map[string]any{zerowrap.FieldEntityID: newContainer.ID})
+		}
+		if removeErr := s.runtime.RemoveContainer(ctx, newContainer.ID, true); removeErr != nil {
+			log.WrapErrWithFields(removeErr, "failed to remove failed new container during rollback", map[string]any{zerowrap.FieldEntityID: newContainer.ID})
+		}
+
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func (s *Service) finalizePreviousContainer(ctx context.Context, domainName string, existing *domain.Container, hasExisting, invalidated bool, newContainerID string) {
@@ -1587,7 +1773,19 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 
 	for _, c := range allContainers {
 		if (c.Name == expectedName || c.Name == expectedNewName || c.Name == expectedNextName) && c.ID != skipContainerID {
-			log.Info().Str(zerowrap.FieldEntityID, c.ID).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
+			// Skip any running container regardless of name — a running
+			// temp container may be actively serving traffic while the
+			// new container stabilizes, or may be from a concurrent deploy.
+			if c.Status == "running" {
+				log.Debug().
+					Str(zerowrap.FieldEntityID, c.ID).
+					Str("container_name", c.Name).
+					Str(zerowrap.FieldStatus, c.Status).
+					Msg("skipping running container during orphan cleanup")
+				continue
+			}
+
+			log.Info().Str(zerowrap.FieldEntityID, c.ID).Str("container_name", c.Name).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
 
 			if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
 				log.WrapErrWithFields(err, "failed to stop orphaned container", map[string]any{zerowrap.FieldEntityID: c.ID})
@@ -2065,7 +2263,7 @@ func (s *Service) findContainerByName(ctx context.Context, name string) *domain.
 	return nil
 }
 
-func (s *Service) waitForReady(ctx context.Context, containerID string) error {
+func (s *Service) waitForReady(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig) error {
 	if err := s.pollContainerRunning(ctx, containerID); err != nil {
 		return err
 	}
@@ -2092,15 +2290,123 @@ func (s *Service) waitForReady(ctx context.Context, containerID string) error {
 		}
 		return s.waitForHealthy(ctx, containerID, cfg.HealthTimeout)
 	default: // auto
-		_, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(ctx, containerID)
-		if err != nil {
-			return err
-		}
-		if hasHealthcheck {
-			return s.waitForHealthy(ctx, containerID, cfg.HealthTimeout)
-		}
-		return s.waitForReadyByDelay(ctx, containerID)
+		return s.readinessCascade(ctx, containerID, containerConfig, cfg)
 	}
+}
+
+// readinessCascade auto-detects the strongest available readiness signal:
+//  1. Docker healthcheck (if present) → wait for healthy status
+//  2. HTTP probe (if gordon.health label set) → GET until 2xx/3xx
+//  3. TCP probe (if port info available) → connect until accepted
+//  4. Delay fallback (last resort) → waitForReadyByDelay
+func (s *Service) readinessCascade(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) error {
+	log := zerowrap.FromCtx(ctx)
+
+	// 1. Docker healthcheck
+	_, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(ctx, containerID)
+	if err != nil {
+		return err
+	}
+	if hasHealthcheck {
+		log.Info().Msg("readiness cascade: using Docker healthcheck")
+		return s.waitForHealthy(ctx, containerID, cfg.HealthTimeout)
+	}
+
+	// 2. HTTP probe via gordon.health label
+	if probed, probeErr := s.tryHTTPProbe(ctx, containerID, containerConfig, cfg); probed {
+		return probeErr
+	}
+
+	// 3. TCP probe (if port info available)
+	if probed, probeErr := s.tryTCPProbe(ctx, containerID, containerConfig, cfg); probed {
+		return probeErr
+	}
+
+	// 4. Delay fallback
+	log.Info().Msg("readiness cascade: using delay fallback")
+	return s.waitForReadyByDelay(ctx, containerID)
+}
+
+// tryHTTPProbe attempts an HTTP probe if the gordon.health label is set.
+// Returns (true, err) if the probe was attempted, (false, nil) if skipped.
+func (s *Service) tryHTTPProbe(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) (bool, error) {
+	log := zerowrap.FromCtx(ctx)
+	if containerConfig == nil {
+		return false, nil
+	}
+	healthPath, ok := containerConfig.Labels[domain.LabelHealth]
+	if !ok || healthPath == "" {
+		return false, nil
+	}
+	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	if probeErr != nil || ip == "" || port <= 0 {
+		log.Debug().Err(probeErr).Msg("readiness cascade: HTTP probe skipped, could not resolve container endpoint")
+		return false, nil
+	}
+	url := fmt.Sprintf("http://%s:%d%s", ip, port, healthPath)
+	timeout := cfg.HTTPProbeTimeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+	log.Info().Str("url", url).Dur("timeout", timeout).Msg("readiness cascade: using HTTP probe")
+	return true, httpProbe(ctx, url, timeout)
+}
+
+// tryTCPProbe attempts a TCP probe if port info is available.
+// Returns (true, err) if the probe was attempted, (false, nil) if skipped.
+func (s *Service) tryTCPProbe(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) (bool, error) {
+	log := zerowrap.FromCtx(ctx)
+	if containerConfig == nil || len(containerConfig.Ports) == 0 {
+		return false, nil
+	}
+	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	if probeErr != nil || ip == "" || port <= 0 {
+		log.Debug().Err(probeErr).Msg("readiness cascade: TCP probe skipped, could not resolve container endpoint")
+		return false, nil
+	}
+	addr := fmt.Sprintf("%s:%d", ip, port)
+	timeout := cfg.TCPProbeTimeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	log.Info().Str("addr", addr).Dur("timeout", timeout).Msg("readiness cascade: using TCP probe")
+	return true, tcpProbe(ctx, addr, timeout)
+}
+
+// resolveContainerEndpoint returns a host-reachable address for probing.
+// In rootless podman/Docker setups, container internal IPs are not routable
+// from the host. We use the host port binding (127.0.0.1:<mapped_port>)
+// which is always reachable. Falls back to the container's internal IP
+// only if no host port mapping exists (e.g. host-network mode).
+func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID string) (string, int, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	// First, get the container's internal port from network info
+	_, internalPort, err := s.runtime.GetContainerNetworkInfo(ctx, containerID)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// Try to resolve via host port binding (works in rootless podman/Docker)
+	hostPort, hostErr := s.runtime.GetContainerPort(ctx, containerID, internalPort)
+	if hostErr == nil && hostPort > 0 {
+		log.Debug().
+			Int("internal_port", internalPort).
+			Int("host_port", hostPort).
+			Msg("resolved container endpoint via host port binding")
+		return "127.0.0.1", hostPort, nil
+	}
+
+	// Fallback: use internal IP (works in Docker rootful / host network)
+	ip, _, fallbackErr := s.runtime.GetContainerNetworkInfo(ctx, containerID)
+	if fallbackErr != nil {
+		return "", 0, fallbackErr
+	}
+	log.Debug().
+		Str("ip", ip).
+		Int("port", internalPort).
+		Msg("resolved container endpoint via internal IP (no host port binding)")
+	return ip, internalPort, nil
 }
 
 // waitForReadyByDelay waits using the legacy running+delay strategy.

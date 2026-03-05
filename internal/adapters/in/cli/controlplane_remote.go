@@ -88,6 +88,10 @@ func (r *remoteControlPlane) Reload(ctx context.Context) error {
 	return r.client.Reload(ctx)
 }
 
+func (r *remoteControlPlane) DeployIntent(ctx context.Context, imageName string) error {
+	return r.client.DeployIntent(ctx, imageName)
+}
+
 func (r *remoteControlPlane) Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error) {
 	return r.client.Deploy(ctx, deployDomain)
 }

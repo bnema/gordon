@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"go.opentelemetry.io/otel"
@@ -24,10 +26,11 @@ var registryTracer = otel.Tracer("gordon.registry")
 
 // Service implements the RegistryService interface.
 type Service struct {
-	blobStorage     out.BlobStorage
-	manifestStorage out.ManifestStorage
-	eventBus        out.EventPublisher
-	metrics         *telemetry.Metrics
+	blobStorage      out.BlobStorage
+	manifestStorage  out.ManifestStorage
+	eventBus         out.EventPublisher
+	metrics          *telemetry.Metrics
+	suppressedImages sync.Map // imageName -> *time.Timer
 }
 
 // SetMetrics sets the telemetry metrics for the registry service.
@@ -46,6 +49,85 @@ func NewService(
 		manifestStorage: manifestStorage,
 		eventBus:        eventBus,
 	}
+}
+
+// SuppressDeployEvent marks an image name to skip image.pushed events.
+// The suppression auto-expires after 2 minutes to prevent leaks.
+func (s *Service) SuppressDeployEvent(imageName string) {
+	imageName = ExtractImageName(strings.TrimSpace(imageName))
+	if imageName == "" {
+		return
+	}
+
+	var timer *time.Timer
+	timer = time.AfterFunc(2*time.Minute, func() {
+		// Only delete if this timer is still the current one, preventing an
+		// old timer's callback from removing a newer suppression entry.
+		if v, ok := s.suppressedImages.Load(imageName); ok && v == timer {
+			s.suppressedImages.Delete(imageName)
+		}
+	})
+	if existing, loaded := s.suppressedImages.LoadOrStore(imageName, timer); loaded {
+		existing.(*time.Timer).Stop()
+		s.suppressedImages.Store(imageName, timer)
+	}
+}
+
+// ClearDeployEventSuppression removes event suppression for an image.
+func (s *Service) ClearDeployEventSuppression(imageName string) {
+	imageName = ExtractImageName(strings.TrimSpace(imageName))
+	if imageName == "" {
+		return
+	}
+
+	if v, loaded := s.suppressedImages.LoadAndDelete(imageName); loaded {
+		v.(*time.Timer).Stop()
+	}
+}
+
+// ExtractImageName returns just the repository path of a container image
+// reference, stripping any registry host prefix, tag, and digest.
+// Examples:
+//
+//	"reg.example.com/team/my-app:latest" -> "team/my-app"
+//	"reg.example.com/my-app@sha256:abc"  -> "my-app"
+//	"my-app:v1.2"                        -> "my-app"
+func ExtractImageName(imageRef string) string {
+	name := imageRef
+	// Strip digest
+	if idx := strings.Index(name, "@"); idx != -1 {
+		name = name[:idx]
+	}
+	// Strip tag
+	// Find the last colon, but only strip it if it comes after any slash
+	// (to avoid treating a port number in the host as a tag).
+	if idx := strings.LastIndex(name, ":"); idx != -1 {
+		slashIdx := strings.LastIndex(name, "/")
+		if idx > slashIdx {
+			name = name[:idx]
+		}
+	}
+	// Strip registry host: if the first segment contains a dot or colon it is
+	// a registry hostname; remove it.
+	parts := strings.SplitN(name, "/", 2)
+	if len(parts) == 2 {
+		host := parts[0]
+		if strings.ContainsAny(host, ".:") || host == "localhost" {
+			name = parts[1]
+		}
+	}
+	return name
+}
+
+// IsDeployEventSuppressed checks if deploy events are suppressed for an image.
+func (s *Service) IsDeployEventSuppressed(imageName string) bool {
+	imageName = ExtractImageName(strings.TrimSpace(imageName))
+	if imageName == "" {
+		return false
+	}
+
+	_, exists := s.suppressedImages.Load(imageName)
+	return exists
 }
 
 // GetManifest retrieves a manifest by name and reference.
@@ -110,13 +192,17 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 	// A docker push sends manifests by both digest and tag; firing only on
 	// tag prevents duplicate deploy triggers for the same push.
 	if s.eventBus != nil && !strings.HasPrefix(manifest.Reference, "sha256:") {
-		if err := s.eventBus.Publish(domain.EventImagePushed, domain.ImagePushedPayload{
-			Name:        manifest.Name,
-			Reference:   manifest.Reference,
-			Manifest:    manifest.Data,
-			Annotations: manifest.Annotations,
-		}); err != nil {
-			log.Warn().Err(err).Msg("failed to publish image pushed event")
+		if s.IsDeployEventSuppressed(manifest.Name) {
+			log.Info().Str("image", manifest.Name).Msg("skipping image.pushed event: CLI deploy intent active")
+		} else {
+			if err := s.eventBus.Publish(domain.EventImagePushed, domain.ImagePushedPayload{
+				Name:        manifest.Name,
+				Reference:   manifest.Reference,
+				Manifest:    manifest.Data,
+				Annotations: manifest.Annotations,
+			}); err != nil {
+				log.Warn().Err(err).Msg("failed to publish image pushed event")
+			}
 		}
 	}
 

@@ -106,7 +106,6 @@ preserve = true                          # Keep volumes on container removal
 [network_isolation]
 enabled = true                           # Per-app isolated networks
 network_prefix = "gordon"                # Network name prefix
-dns_suffix = ".internal"                 # DNS suffix for services
 
 # Auto-route
 [auto_route]

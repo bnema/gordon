@@ -105,7 +105,6 @@ enabled = false                              # Create routes from image labels a
 [network_isolation]
 enabled = false                              # Enable per-app Docker networks
 network_prefix = "gordon"                    # Prefix for created networks
-dns_suffix = ".internal"                     # DNS suffix for internal resolution
 
 # =============================================================================
 # VOLUMES
@@ -215,7 +214,6 @@ keep_last = 3                                # Keep N newest tags per repository
 | `auto_route.enabled` | `false` | Auto-route disabled |
 | `network_isolation.enabled` | `false` | Isolation disabled |
 | `network_isolation.network_prefix` | `"gordon"` | Network prefix |
-| `network_isolation.dns_suffix` | `".internal"` | DNS suffix |
 | `volumes.auto_create` | `true` | Auto-create volumes |
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |

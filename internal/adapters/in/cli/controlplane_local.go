@@ -18,6 +18,7 @@ type localControlPlane struct {
 	containerSvc in.ContainerService
 	backupSvc    in.BackupService
 	registrySvc  in.RegistryService
+	deployCoord  in.DeployCoordinator
 	healthSvc    in.HealthService
 	logSvc       in.LogService
 }
@@ -27,12 +28,21 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 		return &localControlPlane{}
 	}
 
+	registrySvc := kernel.Registry()
+	var deployCoord in.DeployCoordinator
+	if registrySvc != nil {
+		if coordinator, ok := any(registrySvc).(in.DeployCoordinator); ok {
+			deployCoord = coordinator
+		}
+	}
+
 	return &localControlPlane{
 		configSvc:    kernel.Config(),
 		secretSvc:    kernel.Secrets(),
 		containerSvc: kernel.Container(),
 		backupSvc:    kernel.Backup(),
-		registrySvc:  kernel.Registry(),
+		registrySvc:  registrySvc,
+		deployCoord:  deployCoord,
 		healthSvc:    kernel.Health(),
 		logSvc:       kernel.Logs(),
 	}
@@ -221,6 +231,13 @@ func (l *localControlPlane) GetStatus(ctx context.Context) (*remote.Status, erro
 
 func (l *localControlPlane) Reload(_ context.Context) error {
 	return app.SendReloadSignal()
+}
+
+func (l *localControlPlane) DeployIntent(_ context.Context, imageName string) error {
+	if l.deployCoord != nil {
+		l.deployCoord.SuppressDeployEvent(imageName)
+	}
+	return nil
 }
 
 func (l *localControlPlane) Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error) {

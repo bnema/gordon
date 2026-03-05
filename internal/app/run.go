@@ -1187,12 +1187,14 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		VolumePreserve:           v.GetBool("volumes.preserve"),
 		NetworkIsolation:         v.GetBool("network_isolation.enabled"),
 		NetworkPrefix:            v.GetString("network_isolation.network_prefix"),
-		DNSSuffix:                v.GetString("network_isolation.dns_suffix"),
 		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
 		Attachments:              svc.configSvc.GetAttachments(),
 		ReadinessDelay:           v.GetDuration("deploy.readiness_delay"),
 		ReadinessMode:            v.GetString("deploy.readiness_mode"),
 		HealthTimeout:            v.GetDuration("deploy.health_timeout"),
+		StabilizationDelay:       v.GetDuration("deploy.stabilization_delay"),
+		TCPProbeTimeout:          v.GetDuration("deploy.tcp_probe_timeout"),
+		HTTPProbeTimeout:         v.GetDuration("deploy.http_probe_timeout"),
 		DrainDelay:               v.GetDuration("deploy.drain_delay"),
 		DrainMode:                v.GetString("deploy.drain_mode"),
 		DrainTimeout:             v.GetDuration("deploy.drain_timeout"),
@@ -2346,7 +2348,6 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("auto_route.enabled", false)
 	v.SetDefault("network_isolation.enabled", false)
 	v.SetDefault("network_isolation.network_prefix", "gordon")
-	v.SetDefault("network_isolation.dns_suffix", ".internal")
 	v.SetDefault("volumes.auto_create", true)
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
@@ -2374,6 +2375,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("deploy.readiness_delay", "5s")
 	v.SetDefault("deploy.readiness_mode", "auto")
 	v.SetDefault("deploy.health_timeout", "90s")
+	v.SetDefault("deploy.stabilization_delay", "2s")
+	v.SetDefault("deploy.tcp_probe_timeout", "30s")
+	v.SetDefault("deploy.http_probe_timeout", "60s")
 	v.SetDefault("deploy.drain_mode", "auto")
 	v.SetDefault("deploy.drain_timeout", "30s")
 
