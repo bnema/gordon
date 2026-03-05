@@ -121,7 +121,7 @@ func TestFileLoader_LoadEnv(t *testing.T) {
 NODE_ENV=production
 API_URL=https://api.example.com
 `
-		envFile := filepath.Join(tmpDir, "app_example_com.env")
+		envFile := filepath.Join(tmpDir, "app__example__com.env")
 		require.NoError(t, os.WriteFile(envFile, []byte(envContent), 0600))
 
 		envVars, err := loader.LoadEnv(ctx, "app.example.com")
@@ -146,7 +146,7 @@ API_URL=https://api.example.com
 		envContent := `NODE_ENV=production
 API_KEY=${pass:app/api-key}
 `
-		envFile := filepath.Join(tmpDir, "app_example_com.env")
+		envFile := filepath.Join(tmpDir, "app__example__com.env")
 		require.NoError(t, os.WriteFile(envFile, []byte(envContent), 0600))
 
 		envVars, err := loader.LoadEnv(ctx, "app.example.com")
@@ -164,7 +164,7 @@ API_KEY=${pass:app/api-key}
 		envContent := `DOUBLE_QUOTED="hello world"
 SINGLE_QUOTED='hello world'
 `
-		envFile := filepath.Join(tmpDir, "app_example_com.env")
+		envFile := filepath.Join(tmpDir, "app__example__com.env")
 		require.NoError(t, os.WriteFile(envFile, []byte(envContent), 0600))
 
 		envVars, err := loader.LoadEnv(ctx, "app.example.com")
@@ -183,7 +183,7 @@ SINGLE_QUOTED='hello world'
 invalid line without equals
 ALSO_VALID=another
 `
-		envFile := filepath.Join(tmpDir, "app_example_com.env")
+		envFile := filepath.Join(tmpDir, "app__example__com.env")
 		require.NoError(t, os.WriteFile(envFile, []byte(envContent), 0600))
 
 		envVars, err := loader.LoadEnv(ctx, "app.example.com")
@@ -205,9 +205,9 @@ func TestFileLoader_GetEnvFilePath(t *testing.T) {
 		domain   string
 		expected string
 	}{
-		{"app.example.com", "app_example_com.env"},
-		{"api.sub.example.com", "api_sub_example_com.env"},
-		{"localhost:8080", "localhost_8080.env"},
+		{"app.example.com", "app__example__com.env"},
+		{"api.sub.example.com", "api__sub__example__com.env"},
+		{"localhost:8080", "localhost-_8080.env"},
 	}
 
 	for _, tt := range tests {
@@ -216,4 +216,20 @@ func TestFileLoader_GetEnvFilePath(t *testing.T) {
 			assert.Equal(t, filepath.Join(tmpDir, tt.expected), result)
 		})
 	}
+}
+
+func TestFileLoader_GetEnvFilePath_DistinguishesSeparators(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := zerowrap.New(zerowrap.Config{Level: "fatal"})
+
+	loader, err := NewFileLoader(tmpDir, log)
+	require.NoError(t, err)
+
+	dotPath := loader.getEnvFilePath("app.example.com")
+	portPath := loader.getEnvFilePath("app:example:com")
+	slashPath := loader.getEnvFilePath("app/example/com")
+
+	assert.NotEqual(t, dotPath, portPath)
+	assert.NotEqual(t, dotPath, slashPath)
+	assert.NotEqual(t, portPath, slashPath)
 }

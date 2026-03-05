@@ -181,6 +181,8 @@ func TestAuthMiddleware_MissingAuthHeader(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, rec.Body.String(), "missing authorization header")
+	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", rec.Header().Get("Pragma"))
 }
 
 func TestAuthMiddleware_InvalidToken(t *testing.T) {
@@ -390,6 +392,8 @@ func TestAuthMiddleware_ExtendTokenFailureIsNonFatal(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Empty(t, rec.Header().Get("X-Gordon-Token"))
+	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", rec.Header().Get("Pragma"))
 }
 
 func TestAuthMiddleware_ExtendTokenRotationHeader(t *testing.T) {
@@ -417,6 +421,8 @@ func TestAuthMiddleware_ExtendTokenRotationHeader(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "rotated-token", rec.Header().Get("X-Gordon-Token"))
+	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", rec.Header().Get("Pragma"))
 }
 
 func TestHasAccess(t *testing.T) {

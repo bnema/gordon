@@ -12,6 +12,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // FileLoader implements the EnvLoader interface using filesystem-based env files.
@@ -222,10 +223,10 @@ func (l *FileLoader) resolveSecrets(ctx context.Context, value string) (string, 
 	return result, nil
 }
 
-func (l *FileLoader) getEnvFilePath(domain string) string {
-	// Create domain-safe filename (replace dots and other chars with underscores)
-	safeDomain := strings.ReplaceAll(domain, ".", "_")
-	safeDomain = strings.ReplaceAll(safeDomain, ":", "_")
-	safeDomain = strings.ReplaceAll(safeDomain, "/", "_")
+func (l *FileLoader) getEnvFilePath(domainName string) string {
+	safeDomain, err := domain.SanitizeDomainForEnvFile(domainName)
+	if err != nil {
+		return filepath.Join(l.envDir, domainName+".env")
+	}
 	return filepath.Join(l.envDir, safeDomain+".env")
 }

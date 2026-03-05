@@ -15,12 +15,12 @@ func TestSanitizeDomainForEnvFile(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "simple domain", domain: "example.com", want: "example_com"},
-		{name: "subdomain", domain: "app.example.com", want: "app_example_com"},
-		{name: "domain with port", domain: "example.com:8080", want: "example_com_8080"},
-		{name: "domain with path", domain: "example.com/path", want: "example_com_path"},
+		{name: "simple domain", domain: "example.com", want: "example__com"},
+		{name: "subdomain", domain: "app.example.com", want: "app__example__com"},
+		{name: "domain with port", domain: "example.com:8080", want: "example__com-_8080"},
+		{name: "domain with path", domain: "example.com/path", want: "example__com--path"},
 		{name: "single char", domain: "a", want: "a"},
-		{name: "hyphenated", domain: "my-app.example.com", want: "my-app_example_com"},
+		{name: "hyphenated", domain: "my-app.example.com", want: "my-app__example__com"},
 		{name: "empty", domain: "", wantErr: true},
 		{name: "path traversal", domain: "../etc/passwd", wantErr: true},
 		{name: "double dots", domain: "foo..bar", wantErr: true},
@@ -28,8 +28,7 @@ func TestSanitizeDomainForEnvFile(t *testing.T) {
 		{name: "ends with dot", domain: "trailing.", wantErr: true},
 		{name: "space", domain: "has space", wantErr: true},
 		{name: "special chars", domain: "bad$domain", wantErr: true},
-		{name: "idempotent simple", domain: "example_com", want: "example_com"},
-		{name: "idempotent complex", domain: "my-app_example_com_8080", want: "my-app_example_com_8080"},
+		{name: "underscore rejected to avoid filename collision", domain: "example_com", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -43,6 +42,21 @@ func TestSanitizeDomainForEnvFile(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestSanitizeDomainForEnvFile_DistinguishesSeparators(t *testing.T) {
+	gotDot, err := SanitizeDomainForEnvFile("app.example.com")
+	require.NoError(t, err)
+
+	gotPort, err := SanitizeDomainForEnvFile("app:example:com")
+	require.NoError(t, err)
+
+	gotPath, err := SanitizeDomainForEnvFile("app/example/com")
+	require.NoError(t, err)
+
+	assert.NotEqual(t, gotDot, gotPort)
+	assert.NotEqual(t, gotDot, gotPath)
+	assert.NotEqual(t, gotPort, gotPath)
 }
 
 func TestParseEnvData(t *testing.T) {

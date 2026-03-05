@@ -468,10 +468,10 @@ func parseEnvFile(data []byte) (map[string]string, error) {
 // e.g., "app.mydomain.com" -> "app_mydomain_com.env"
 // Must match the naming convention in envloader.FileLoader.getEnvFilePath
 func domainToEnvFileName(domainName string) string {
-	// Replace special characters with underscores (matches envloader)
-	name := strings.ReplaceAll(domainName, ".", "_")
-	name = strings.ReplaceAll(name, ":", "_")
-	name = strings.ReplaceAll(name, "/", "_")
+	name, err := domain.SanitizeDomainForEnvFile(domainName)
+	if err != nil {
+		return domainName + ".env"
+	}
 	return name + ".env"
 }
 
