@@ -11,6 +11,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -436,4 +437,42 @@ func TestService_ListRepositories_Error(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, repos)
 	assert.Contains(t, err.Error(), "failed to list repositories")
+}
+
+func TestPutManifest_SkipsEventWhenDeployIntentSuppressed(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(blobStorage, manifestStorage, eventBus)
+
+	svc.SuppressDeployEvent("my-app")
+
+	manifestStorage.EXPECT().PutManifest("my-app", "latest", "application/vnd.oci.image.manifest.v1+json", mock.Anything).Return(nil)
+
+	manifest := &domain.Manifest{
+		Name:        "my-app",
+		Reference:   "latest",
+		ContentType: "application/vnd.oci.image.manifest.v1+json",
+		Data:        []byte(`{"schemaVersion":2}`),
+	}
+
+	_, err := svc.PutManifest(context.Background(), manifest)
+	require.NoError(t, err)
+
+	eventBus.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
+}
+
+func TestSuppressDeployEvent_ClearsCorrectly(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(blobStorage, manifestStorage, eventBus)
+
+	svc.SuppressDeployEvent("my-app")
+	assert.True(t, svc.IsDeployEventSuppressed("my-app"))
+
+	svc.ClearDeployEventSuppression("my-app")
+	assert.False(t, svc.IsDeployEventSuppressed("my-app"))
 }

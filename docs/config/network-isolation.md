@@ -8,7 +8,6 @@ Isolate applications in separate Docker networks for enhanced security.
 [network_isolation]
 enabled = true
 network_prefix = "gordon"
-dns_suffix = ".internal"
 ```
 
 ## Options
@@ -17,7 +16,6 @@ dns_suffix = ".internal"
 |--------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable per-app network isolation |
 | `network_prefix` | string | `"gordon"` | Prefix for created networks |
-| `dns_suffix` | string | `".internal"` | DNS suffix for service discovery |
 
 ## How It Works
 
@@ -99,19 +97,6 @@ db = connect("postgresql://postgres:5432/mydb")
 cache = connect("redis://redis:6379")
 ```
 
-## DNS Resolution
-
-The `dns_suffix` option adds a suffix for internal DNS resolution:
-
-```toml
-[network_isolation]
-dns_suffix = ".internal"
-```
-
-Services can be accessed as:
-- `postgres` (short form)
-- `postgres.internal` (with suffix)
-
 ## Examples
 
 ### Basic Isolation
@@ -137,7 +122,6 @@ Each app gets its own network with its own database.
 [network_isolation]
 enabled = true
 network_prefix = "prod"
-dns_suffix = ".internal"
 
 [routes]
 "app.company.com" = "company-app:v2.1.0"

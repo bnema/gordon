@@ -58,7 +58,6 @@ preserve = true
 [network_isolation]
 enabled = true
 network_prefix = "prod"
-dns_suffix = ".internal"
 
 # Application routes with pinned versions
 [routes]

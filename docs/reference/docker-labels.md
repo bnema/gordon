@@ -41,7 +41,27 @@ Labels you can set in your Dockerfile:
 
 | Label | Example | Description |
 |-------|---------|-------------|
-| `gordon.proxy.port` | `"3000"` | Port to proxy HTTP traffic to |
+| `gordon.domains` | `"app.example.com,www.app.example.com"` | Comma-separated domains for auto-route |
+| `gordon.port` | `"3000"` | Port to proxy HTTP traffic to |
+| `gordon.proxy.port` | `"3000"` | Port to proxy HTTP traffic to (legacy alias for `gordon.port`) |
+| `gordon.health` | `"/healthz"` | HTTP health check endpoint path for readiness probing |
+| `gordon.env-file` | `"/app/.env.example"` | Path to env template file inside the image |
+
+### Health Check Label
+
+When `gordon.health` is set, Gordon performs HTTP GET requests to the specified
+path during deployment and waits for a 2xx or 3xx response before routing traffic
+to the new container:
+
+```dockerfile
+FROM node:20-alpine
+LABEL gordon.health="/api/health"
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+Gordon probes `http://<container-ip>:3000/api/health` until it gets a successful
+response or the `deploy.http_probe_timeout` is reached.
 
 ### Proxy Port Label
 

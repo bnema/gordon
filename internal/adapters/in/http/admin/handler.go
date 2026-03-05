@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,11 @@ const maxAdminRequestSize = 1 << 20 // 1MB
 // maxLogLines is the maximum allowed number of log lines that can be requested.
 const maxLogLines = 10000
 
+type registryDeployService interface {
+	in.RegistryService
+	in.DeployCoordinator
+}
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc    in.ConfigService
@@ -37,7 +43,7 @@ type Handler struct {
 	healthSvc    in.HealthService
 	secretSvc    in.SecretService
 	logSvc       in.LogService
-	registrySvc  in.RegistryService
+	registrySvc  registryDeployService
 	eventBus     out.EventPublisher
 	log          zerowrap.Logger
 }
@@ -129,7 +135,7 @@ func NewHandler(
 	healthSvc in.HealthService,
 	secretSvc in.SecretService,
 	logSvc in.LogService,
-	registrySvc in.RegistryService,
+	registrySvc registryDeployService,
 	eventBus out.EventPublisher,
 	log zerowrap.Logger,
 	backupSvc in.BackupService,
@@ -213,6 +219,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		{"/routes/by-image", h.handleRoutesByImage},
 		{"/routes", h.handleRoutes},
 		{"/secrets", h.handleSecrets},
+		{"/deploy-intent", h.handleDeployIntent},
 		{"/deploy", h.handleDeploy},
 		{"/restart", h.handleRestart},
 		{"/tags", h.handleTags},
@@ -226,6 +233,48 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	}
 
 	return nil, false
+}
+
+// handleDeployIntent handles /admin/deploy-intent/:image endpoint.
+// It registers a deploy intent, suppressing event-based deploys for the image.
+func (h *Handler) handleDeployIntent(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodPost {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := r.Context()
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+
+	if h.registrySvc == nil {
+		h.sendError(w, http.StatusServiceUnavailable, "registry service unavailable")
+		return
+	}
+
+	rawName := strings.TrimPrefix(path, "/deploy-intent/")
+	if rawName == "" || rawName == "/deploy-intent" {
+		h.sendError(w, http.StatusBadRequest, "image name required")
+		return
+	}
+
+	imageName, err := url.PathUnescape(rawName)
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid image name encoding")
+		return
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	log.Info().Str("image", imageName).Msg("deploy intent registered, suppressing image.pushed events")
+
+	h.registrySvc.SuppressDeployEvent(imageName)
+
+	h.sendJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+		"image":  imageName,
+	})
 }
 
 // sendJSON sends a JSON response.
@@ -1076,6 +1125,15 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 		log.Error().Err(err).Str("domain", deployDomain).Msg("failed to deploy container")
 		h.sendError(w, http.StatusInternalServerError, "failed to deploy container")
 		return
+	}
+
+	// Clear deploy event suppression now that the explicit deploy has completed.
+	// This re-enables event-based deploys for future direct docker pushes.
+	if route.Image != "" && h.registrySvc != nil {
+		// Use the registry package's image name normaliser so digest-form refs
+		// and multi-segment paths are handled correctly.
+		imageName := registry.ExtractImageName(route.Image)
+		h.registrySvc.ClearDeployEventSuppression(imageName)
 	}
 
 	log.Info().Str("domain", deployDomain).Str("container_id", container.ID).Msg("container deployed via admin API")
