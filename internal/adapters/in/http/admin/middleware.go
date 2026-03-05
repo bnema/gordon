@@ -33,6 +33,8 @@ func AuthMiddleware(
 			// Check global rate limit
 			if globalLimiter != nil && !globalLimiter.Allow(ctx, "global") {
 				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("Pragma", "no-cache")
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
 				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "rate limit exceeded"})
@@ -44,6 +46,8 @@ func AuthMiddleware(
 				ip := middleware.GetClientIP(r, trustedNets)
 				if !ipLimiter.Allow(ctx, "ip:"+ip) {
 					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Cache-Control", "no-store")
+					w.Header().Set("Pragma", "no-cache")
 					w.Header().Set("Retry-After", "1")
 					w.WriteHeader(http.StatusTooManyRequests)
 					_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "rate limit exceeded"})

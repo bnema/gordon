@@ -7,6 +7,7 @@ import (
 
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/zerowrap"
+	"github.com/spf13/viper"
 )
 
 func TestBuildAuthConfig_UsesConfigEnabledFlag(t *testing.T) {
@@ -42,5 +43,18 @@ func TestResolveSecretsBackend_RejectsUnknownBackend(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `unsupported auth.secrets_backend "vault"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_DoesNotDefaultSecretsBackendToUnsafe(t *testing.T) {
+	v := viper.New()
+
+	err := loadConfig(v, "")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if got := v.GetString("auth.secrets_backend"); got != "" {
+		t.Fatalf("expected empty default for auth.secrets_backend, got %q", got)
 	}
 }

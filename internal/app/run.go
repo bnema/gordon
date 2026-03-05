@@ -2347,7 +2347,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("auth.enabled", true)
 	// Note: auth.type is intentionally not set - it's inferred from config
 	// If password_hash is set -> password mode, otherwise -> token mode
-	v.SetDefault("auth.secrets_backend", "unsafe")
+	v.SetDefault("auth.secrets_backend", "")
 	v.SetDefault("auth.token_expiry", "720h")
 	v.SetDefault("api.rate_limit.enabled", true)
 	v.SetDefault("api.rate_limit.global_rps", 500)

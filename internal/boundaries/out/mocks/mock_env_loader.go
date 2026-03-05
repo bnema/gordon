@@ -95,7 +95,7 @@ func (_c *MockEnvLoader_CreateEnvFile_Call) RunAndReturn(run func(ctx context.Co
 }
 
 // EnvFileExists provides a mock function for the type MockEnvLoader
-func (_mock *MockEnvLoader) EnvFileExists(domain string) bool {
+func (_mock *MockEnvLoader) EnvFileExists(domain string) (bool, error) {
 	ret := _mock.Called(domain)
 
 	if len(ret) == 0 {
@@ -103,12 +103,21 @@ func (_mock *MockEnvLoader) EnvFileExists(domain string) bool {
 	}
 
 	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (bool, error)); ok {
+		return returnFunc(domain)
+	}
 	if returnFunc, ok := ret.Get(0).(func(string) bool); ok {
 		r0 = returnFunc(domain)
 	} else {
 		r0 = ret.Get(0).(bool)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(domain)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
 }
 
 // MockEnvLoader_EnvFileExists_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'EnvFileExists'
@@ -135,12 +144,12 @@ func (_c *MockEnvLoader_EnvFileExists_Call) Run(run func(domain string)) *MockEn
 	return _c
 }
 
-func (_c *MockEnvLoader_EnvFileExists_Call) Return(b bool) *MockEnvLoader_EnvFileExists_Call {
-	_c.Call.Return(b)
+func (_c *MockEnvLoader_EnvFileExists_Call) Return(b bool, err error) *MockEnvLoader_EnvFileExists_Call {
+	_c.Call.Return(b, err)
 	return _c
 }
 
-func (_c *MockEnvLoader_EnvFileExists_Call) RunAndReturn(run func(domain string) bool) *MockEnvLoader_EnvFileExists_Call {
+func (_c *MockEnvLoader_EnvFileExists_Call) RunAndReturn(run func(domain string) (bool, error)) *MockEnvLoader_EnvFileExists_Call {
 	_c.Call.Return(run)
 	return _c
 }

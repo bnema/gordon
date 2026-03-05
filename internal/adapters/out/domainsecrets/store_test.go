@@ -101,7 +101,7 @@ func TestFileStore_PathContainment(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify file exists inside tmpDir
-	expectedFile := filepath.Join(tmpDir, "example__com.env")
+	expectedFile := filepath.Join(tmpDir, "ZXhhbXBsZS5jb20.env")
 	_, err = os.Stat(expectedFile)
 	assert.NoError(t, err, "expected env file to exist at %s", expectedFile)
 
@@ -407,21 +407,23 @@ func TestGetEnvFilePath(t *testing.T) {
 		wantEmpty    bool
 		wantFilename string
 	}{
-		{"example.com", false, "example__com.env"},
-		{"sub.example.com", false, "sub__example__com.env"},
-		{"example.com:8080", false, "example__com-_8080.env"},
-		{"example.com/path", false, "example__com--path.env"},
+		{"example.com", false, "ZXhhbXBsZS5jb20.env"},
+		{"sub.example.com", false, "c3ViLmV4YW1wbGUuY29t.env"},
+		{"example.com:8080", false, "ZXhhbXBsZS5jb206ODA4MA.env"},
+		{"example.com/path", false, "ZXhhbXBsZS5jb20vcGF0aA.env"},
 		{"../evil", true, ""},
 		{"", true, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.domain, func(t *testing.T) {
-			path := store.getEnvFilePath(tt.domain)
+			path, err := store.getEnvFilePath(tt.domain)
 
 			if tt.wantEmpty {
+				assert.Error(t, err)
 				assert.Empty(t, path)
 			} else {
+				require.NoError(t, err)
 				assert.NotEmpty(t, path)
 				assert.Equal(t, filepath.Join(tmpDir, tt.wantFilename), path)
 			}

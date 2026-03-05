@@ -273,7 +273,10 @@ func (h *AutoRouteHandler) extractAndMergeEnvFile(ctx context.Context, imageRef,
 	}
 
 	// Load existing env file for this domain
-	envFileName := domainToEnvFileName(routeDomain)
+	envFileName, err := domainToEnvFileName(routeDomain)
+	if err != nil {
+		return fmt.Errorf("invalid env storage domain: %w", err)
+	}
 	envFileDst := filepath.Join(h.envDir, envFileName)
 
 	existingEnv := make(map[string]string)
@@ -465,14 +468,14 @@ func parseEnvFile(data []byte) (map[string]string, error) {
 }
 
 // domainToEnvFileName converts a domain to an env file name.
-// e.g., "app.mydomain.com" -> "app_mydomain_com.env"
-// Must match the naming convention in envloader.FileLoader.getEnvFilePath
-func domainToEnvFileName(domainName string) string {
-	name, err := domain.SanitizeDomainForEnvFile(domainName)
+// Must match the naming convention in envloader.FileLoader.getEnvFilePath.
+func domainToEnvFileName(domainName string) (string, error) {
+	storageKey, err := domain.NewEnvStorageKey(domainName)
 	if err != nil {
-		return domainName + ".env"
+		return "", err
 	}
-	return name + ".env"
+
+	return storageKey.FileName(), nil
 }
 
 // writeEnvFile writes environment variables to a file.

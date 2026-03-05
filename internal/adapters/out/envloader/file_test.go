@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestFileLoader_ResolveSecrets(t *testing.T) {
@@ -121,7 +122,9 @@ func TestFileLoader_LoadEnv(t *testing.T) {
 NODE_ENV=production
 API_URL=https://api.example.com
 `
-		envFile := filepath.Join(tmpDir, "app__example__com.env")
+		storageKey, err := domain.NewEnvStorageKey("app.example.com")
+		require.NoError(t, err)
+		envFile := filepath.Join(tmpDir, storageKey.FileName())
 		require.NoError(t, os.WriteFile(envFile, []byte(envContent), 0600))
 
 		envVars, err := loader.LoadEnv(ctx, "app.example.com")
@@ -146,7 +149,9 @@ API_URL=https://api.example.com
 		envContent := `NODE_ENV=production
 API_KEY=${pass:app/api-key}
 `
-		envFile := filepath.Join(tmpDir, "app__example__com.env")
+		storageKey, err := domain.NewEnvStorageKey("app.example.com")
+		require.NoError(t, err)
+		envFile := filepath.Join(tmpDir, storageKey.FileName())
 		require.NoError(t, os.WriteFile(envFile, []byte(envContent), 0600))
 
 		envVars, err := loader.LoadEnv(ctx, "app.example.com")
@@ -164,7 +169,9 @@ API_KEY=${pass:app/api-key}
 		envContent := `DOUBLE_QUOTED="hello world"
 SINGLE_QUOTED='hello world'
 `
-		envFile := filepath.Join(tmpDir, "app__example__com.env")
+		storageKey, err := domain.NewEnvStorageKey("app.example.com")
+		require.NoError(t, err)
+		envFile := filepath.Join(tmpDir, storageKey.FileName())
 		require.NoError(t, os.WriteFile(envFile, []byte(envContent), 0600))
 
 		envVars, err := loader.LoadEnv(ctx, "app.example.com")
@@ -183,7 +190,9 @@ SINGLE_QUOTED='hello world'
 invalid line without equals
 ALSO_VALID=another
 `
-		envFile := filepath.Join(tmpDir, "app__example__com.env")
+		storageKey, err := domain.NewEnvStorageKey("app.example.com")
+		require.NoError(t, err)
+		envFile := filepath.Join(tmpDir, storageKey.FileName())
 		require.NoError(t, os.WriteFile(envFile, []byte(envContent), 0600))
 
 		envVars, err := loader.LoadEnv(ctx, "app.example.com")
@@ -205,14 +214,15 @@ func TestFileLoader_GetEnvFilePath(t *testing.T) {
 		domain   string
 		expected string
 	}{
-		{"app.example.com", "app__example__com.env"},
-		{"api.sub.example.com", "api__sub__example__com.env"},
-		{"localhost:8080", "localhost-_8080.env"},
+		{"app.example.com", "YXBwLmV4YW1wbGUuY29t.env"},
+		{"api.sub.example.com", "YXBpLnN1Yi5leGFtcGxlLmNvbQ.env"},
+		{"localhost:8080", "bG9jYWxob3N0OjgwODA.env"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.domain, func(t *testing.T) {
-			result := loader.getEnvFilePath(tt.domain)
+			result, err := loader.getEnvFilePath(tt.domain)
+			require.NoError(t, err)
 			assert.Equal(t, filepath.Join(tmpDir, tt.expected), result)
 		})
 	}
@@ -225,11 +235,25 @@ func TestFileLoader_GetEnvFilePath_DistinguishesSeparators(t *testing.T) {
 	loader, err := NewFileLoader(tmpDir, log)
 	require.NoError(t, err)
 
-	dotPath := loader.getEnvFilePath("app.example.com")
-	portPath := loader.getEnvFilePath("app:example:com")
-	slashPath := loader.getEnvFilePath("app/example/com")
+	dotPath, err := loader.getEnvFilePath("app.example.com")
+	require.NoError(t, err)
+	portPath, err := loader.getEnvFilePath("app:example:com")
+	require.NoError(t, err)
+	slashPath, err := loader.getEnvFilePath("app/example/com")
+	require.NoError(t, err)
 
 	assert.NotEqual(t, dotPath, portPath)
 	assert.NotEqual(t, dotPath, slashPath)
 	assert.NotEqual(t, portPath, slashPath)
+}
+
+func TestFileLoader_GetEnvFilePath_RejectsInvalidDomain(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := zerowrap.New(zerowrap.Config{Level: "fatal"})
+
+	loader, err := NewFileLoader(tmpDir, log)
+	require.NoError(t, err)
+
+	_, err = loader.getEnvFilePath("../etc/passwd")
+	require.ErrorIs(t, err, domain.ErrPathTraversal)
 }
