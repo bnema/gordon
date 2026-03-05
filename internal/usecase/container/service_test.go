@@ -195,10 +195,11 @@ func TestService_Deploy_Success(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		NetworkIsolation: false,
-		VolumeAutoCreate: false,
-		ReadinessDelay:   time.Millisecond, // Minimal delay for tests
-		DrainDelay:       time.Millisecond,
+		NetworkIsolation:     false,
+		VolumeAutoCreate:     false,
+		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
@@ -275,10 +276,11 @@ func TestService_Deploy_ReadinessRecoveryWindow_AllowsTransientFlap(t *testing.T
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		NetworkIsolation: false,
-		VolumeAutoCreate: false,
-		ReadinessDelay:   time.Millisecond,
-		DrainDelay:       time.Millisecond,
+		NetworkIsolation:     false,
+		VolumeAutoCreate:     false,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
@@ -426,9 +428,10 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
-		ReadinessDelay:     time.Millisecond, // Minimal delay for tests
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
+		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
+		StabilizationDelay:   time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
@@ -657,10 +660,11 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		NetworkIsolation: true,
-		NetworkPrefix:    "gordon",
-		ReadinessDelay:   time.Millisecond, // Minimal delay for tests
-		DrainDelay:       time.Millisecond,
+		NetworkIsolation:     true,
+		NetworkPrefix:        "gordon",
+		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -712,10 +716,11 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		VolumeAutoCreate: true,
-		VolumePrefix:     "gordon",
-		ReadinessDelay:   time.Millisecond, // Minimal delay for tests
-		DrainDelay:       time.Millisecond,
+		VolumeAutoCreate:     true,
+		VolumePrefix:         "gordon",
+		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -1433,6 +1438,7 @@ func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 		InternalRegistryPassword: "secret",
 		ReadinessDelay:           time.Millisecond,
 		DrainDelay:               time.Millisecond,
+		DrainDelayConfigured:     true,
 	}
 
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
@@ -1503,8 +1509,9 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: time.Millisecond,
-		DrainDelay:     time.Millisecond,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -1549,8 +1556,9 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: time.Millisecond,
-		DrainDelay:     time.Millisecond,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -1623,10 +1631,11 @@ func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		RegistryDomain: "reg.example.com",
-		RegistryPort:   5000,
-		ReadinessDelay: time.Millisecond,
-		DrainDelay:     time.Millisecond,
+		RegistryDomain:       "reg.example.com",
+		RegistryPort:         5000,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 
@@ -1674,9 +1683,10 @@ func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
-		ReadinessDelay:     time.Millisecond, // Minimal delay for tests
-		DrainDelay:         time.Millisecond,
-		StabilizationDelay: time.Millisecond,
+		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
+		StabilizationDelay:   time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
@@ -1765,8 +1775,9 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: time.Millisecond, // Minimal delay for tests
-		DrainDelay:     time.Millisecond,
+		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -2207,8 +2218,9 @@ func TestService_Deploy_ContextCancellation(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: time.Millisecond,
-		DrainDelay:     time.Millisecond,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 
@@ -2360,8 +2372,9 @@ func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: time.Millisecond,
-		DrainDelay:     time.Millisecond,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
@@ -2413,8 +2426,9 @@ func TestService_Deploy_SkipsRedundantDeploy_WhenTrackedImageIDMissing(t *testin
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		ReadinessDelay: time.Millisecond,
-		DrainDelay:     time.Millisecond,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
