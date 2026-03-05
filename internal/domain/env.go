@@ -9,13 +9,15 @@ import (
 
 // envDomainRegex validates domain names used for env secrets.
 // Allows: alphanumeric, dots, hyphens, colons (for ports), and forward slashes (for paths).
-var envDomainRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$`)
+// Underscores are intentionally disallowed because they would collide with the
+// on-disk filename encoding used for dots/ports/path separators.
+var envDomainRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.:/-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$`)
 var envKeyRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var containerNameRegex = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
 
 // SanitizeDomainForEnvFile validates and sanitizes a domain name for env file storage.
 // Returns a safe domain string suitable for filenames.
-// This function is idempotent: calling it on already-sanitized input returns the same value.
+// Uses distinct replacements to avoid collisions between ".", ":", and "/".
 func SanitizeDomainForEnvFile(domainName string) (string, error) {
 	if domainName == "" {
 		return "", ErrPathTraversal
@@ -29,9 +31,9 @@ func SanitizeDomainForEnvFile(domainName string) (string, error) {
 		return "", ErrPathTraversal
 	}
 
-	safeDomain := strings.ReplaceAll(domainName, ".", "_")
-	safeDomain = strings.ReplaceAll(safeDomain, ":", "_")
-	safeDomain = strings.ReplaceAll(safeDomain, "/", "_")
+	safeDomain := strings.ReplaceAll(domainName, ".", "__")
+	safeDomain = strings.ReplaceAll(safeDomain, ":", "-_")
+	safeDomain = strings.ReplaceAll(safeDomain, "/", "--")
 	return safeDomain, nil
 }
 

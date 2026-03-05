@@ -106,6 +106,11 @@ func AuthMiddleware(
 			ctx = context.WithValue(ctx, domain.ContextKeySubject, claims.Subject)
 			ctx = context.WithValue(ctx, domain.TokenClaimsKey, claims)
 
+			// Prevent intermediaries from storing admin API responses, especially
+			// when a rotated bearer token is returned in X-Gordon-Token.
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Pragma", "no-cache")
+
 			// Attempt to slide token expiry. Non-fatal if it fails.
 			// The new token is returned in X-Gordon-Token so the CLI can persist it atomically.
 			if newToken, extErr := authSvc.ExtendToken(ctx, token); extErr != nil {
@@ -163,6 +168,8 @@ func HasAccess(ctx context.Context, resource, action string) bool {
 
 func sendUnauthorized(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("WWW-Authenticate", `Bearer realm="gordon-admin"`)
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: message})
@@ -170,6 +177,8 @@ func sendUnauthorized(w http.ResponseWriter, message string) {
 
 func sendForbidden(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(http.StatusForbidden)
 	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: message})
 }

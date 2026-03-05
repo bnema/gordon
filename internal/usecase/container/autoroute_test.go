@@ -28,22 +28,22 @@ func TestDomainToEnvFileName(t *testing.T) {
 		{
 			name:     "simple domain",
 			domain:   "app.example.com",
-			expected: "app_example_com.env",
+			expected: "app__example__com.env",
 		},
 		{
 			name:     "domain with port",
 			domain:   "app.example.com:8080",
-			expected: "app_example_com_8080.env",
+			expected: "app__example__com-_8080.env",
 		},
 		{
 			name:     "domain with path",
 			domain:   "app.example.com/api",
-			expected: "app_example_com_api.env",
+			expected: "app__example__com--api.env",
 		},
 		{
 			name:     "complex domain",
 			domain:   "sub.app.example.com:443/v1",
-			expected: "sub_app_example_com_443_v1.env",
+			expected: "sub__app__example__com-_443--v1.env",
 		},
 		{
 			name:     "single word",
