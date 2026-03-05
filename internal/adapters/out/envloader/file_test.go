@@ -257,3 +257,32 @@ func TestFileLoader_GetEnvFilePath_RejectsInvalidDomain(t *testing.T) {
 	_, err = loader.getEnvFilePath("../etc/passwd")
 	require.ErrorIs(t, err, domain.ErrPathTraversal)
 }
+
+func TestFileLoader_EnvFileExists(t *testing.T) {
+	log := zerowrap.New(zerowrap.Config{Level: "fatal"})
+
+	t.Run("returns false nil when file is missing", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		loader, err := NewFileLoader(tmpDir, log)
+		require.NoError(t, err)
+
+		exists, err := loader.EnvFileExists("app.example.com")
+		require.NoError(t, err)
+		assert.False(t, exists)
+	})
+
+	t.Run("returns true nil when file exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		loader, err := NewFileLoader(tmpDir, log)
+		require.NoError(t, err)
+
+		storageKey, err := domain.NewEnvStorageKey("app.example.com")
+		require.NoError(t, err)
+		envFile := filepath.Join(tmpDir, storageKey.FileName())
+		require.NoError(t, os.WriteFile(envFile, []byte("KEY=value\n"), 0600))
+
+		exists, err := loader.EnvFileExists("app.example.com")
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+}

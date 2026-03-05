@@ -183,7 +183,14 @@ func (l *FileLoader) EnvFileExists(domain string) (bool, error) {
 	}
 
 	_, err = os.Stat(envFile)
-	return err == nil, nil
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 // resolveSecrets resolves any secret references in the value.
