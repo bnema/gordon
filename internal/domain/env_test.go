@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -15,12 +16,12 @@ func TestSanitizeDomainForEnvFile(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "simple domain", domain: "example.com", want: "example__com"},
-		{name: "subdomain", domain: "app.example.com", want: "app__example__com"},
-		{name: "domain with port", domain: "example.com:8080", want: "example__com-_8080"},
-		{name: "domain with path", domain: "example.com/path", want: "example__com--path"},
-		{name: "single char", domain: "a", want: "a"},
-		{name: "hyphenated", domain: "my-app.example.com", want: "my-app__example__com"},
+		{name: "simple domain", domain: "example.com", want: base64.RawURLEncoding.EncodeToString([]byte("example.com"))},
+		{name: "subdomain", domain: "app.example.com", want: base64.RawURLEncoding.EncodeToString([]byte("app.example.com"))},
+		{name: "domain with port", domain: "example.com:8080", want: base64.RawURLEncoding.EncodeToString([]byte("example.com:8080"))},
+		{name: "domain with path", domain: "example.com/path", want: base64.RawURLEncoding.EncodeToString([]byte("example.com/path"))},
+		{name: "single char", domain: "a", want: base64.RawURLEncoding.EncodeToString([]byte("a"))},
+		{name: "hyphenated", domain: "my-app.example.com", want: base64.RawURLEncoding.EncodeToString([]byte("my-app.example.com"))},
 		{name: "empty", domain: "", wantErr: true},
 		{name: "path traversal", domain: "../etc/passwd", wantErr: true},
 		{name: "double dots", domain: "foo..bar", wantErr: true},
@@ -28,7 +29,7 @@ func TestSanitizeDomainForEnvFile(t *testing.T) {
 		{name: "ends with dot", domain: "trailing.", wantErr: true},
 		{name: "space", domain: "has space", wantErr: true},
 		{name: "special chars", domain: "bad$domain", wantErr: true},
-		{name: "underscore rejected to avoid filename collision", domain: "example_com", wantErr: true},
+		{name: "underscore rejected as invalid domain character", domain: "example_com", wantErr: true},
 	}
 
 	for _, tt := range tests {

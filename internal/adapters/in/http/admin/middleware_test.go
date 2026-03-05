@@ -42,6 +42,8 @@ func TestAuthMiddleware_GlobalRateLimitHit(t *testing.T) {
 
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
 	assert.Contains(t, rec.Body.String(), "rate limit exceeded")
+	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", rec.Header().Get("Pragma"))
 }
 
 func TestAuthMiddleware_PerIPRateLimitHit(t *testing.T) {
@@ -67,6 +69,8 @@ func TestAuthMiddleware_PerIPRateLimitHit(t *testing.T) {
 
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
 	assert.Contains(t, rec.Body.String(), "rate limit exceeded")
+	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", rec.Header().Get("Pragma"))
 }
 
 func TestAuthMiddleware_TrustedProxy(t *testing.T) {

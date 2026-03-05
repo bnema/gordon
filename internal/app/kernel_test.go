@@ -22,6 +22,7 @@ data_dir = %q
 
 [auth]
 enabled = false
+secrets_backend = "unsafe"
 `, dataDir)
 
 	err := os.WriteFile(cfgPath, []byte(cfg), 0o600)

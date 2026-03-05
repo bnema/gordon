@@ -231,46 +231,6 @@ func (_c *MockRegistryService_CancelUpload_Call) RunAndReturn(run func(ctx conte
 	return _c
 }
 
-// ClearDeployEventSuppression provides a mock function for the type MockRegistryService
-func (_mock *MockRegistryService) ClearDeployEventSuppression(imageName string) {
-	_mock.Called(imageName)
-	return
-}
-
-// MockRegistryService_ClearDeployEventSuppression_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ClearDeployEventSuppression'
-type MockRegistryService_ClearDeployEventSuppression_Call struct {
-	*mock.Call
-}
-
-// ClearDeployEventSuppression is a helper method to define mock.On call
-//   - imageName string
-func (_e *MockRegistryService_Expecter) ClearDeployEventSuppression(imageName interface{}) *MockRegistryService_ClearDeployEventSuppression_Call {
-	return &MockRegistryService_ClearDeployEventSuppression_Call{Call: _e.mock.On("ClearDeployEventSuppression", imageName)}
-}
-
-func (_c *MockRegistryService_ClearDeployEventSuppression_Call) Run(run func(imageName string)) *MockRegistryService_ClearDeployEventSuppression_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockRegistryService_ClearDeployEventSuppression_Call) Return() *MockRegistryService_ClearDeployEventSuppression_Call {
-	_c.Call.Return()
-	return _c
-}
-
-func (_c *MockRegistryService_ClearDeployEventSuppression_Call) RunAndReturn(run func(imageName string)) *MockRegistryService_ClearDeployEventSuppression_Call {
-	_c.Run(run)
-	return _c
-}
-
 // DeleteManifest provides a mock function for the type MockRegistryService
 func (_mock *MockRegistryService) DeleteManifest(ctx context.Context, name string, reference string) error {
 	ret := _mock.Called(ctx, name, reference)
@@ -933,45 +893,5 @@ func (_c *MockRegistryService_StartUpload_Call) Return(s string, err error) *Moc
 
 func (_c *MockRegistryService_StartUpload_Call) RunAndReturn(run func(ctx context.Context, name string) (string, error)) *MockRegistryService_StartUpload_Call {
 	_c.Call.Return(run)
-	return _c
-}
-
-// SuppressDeployEvent provides a mock function for the type MockRegistryService
-func (_mock *MockRegistryService) SuppressDeployEvent(imageName string) {
-	_mock.Called(imageName)
-	return
-}
-
-// MockRegistryService_SuppressDeployEvent_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SuppressDeployEvent'
-type MockRegistryService_SuppressDeployEvent_Call struct {
-	*mock.Call
-}
-
-// SuppressDeployEvent is a helper method to define mock.On call
-//   - imageName string
-func (_e *MockRegistryService_Expecter) SuppressDeployEvent(imageName interface{}) *MockRegistryService_SuppressDeployEvent_Call {
-	return &MockRegistryService_SuppressDeployEvent_Call{Call: _e.mock.On("SuppressDeployEvent", imageName)}
-}
-
-func (_c *MockRegistryService_SuppressDeployEvent_Call) Run(run func(imageName string)) *MockRegistryService_SuppressDeployEvent_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockRegistryService_SuppressDeployEvent_Call) Return() *MockRegistryService_SuppressDeployEvent_Call {
-	_c.Call.Return()
-	return _c
-}
-
-func (_c *MockRegistryService_SuppressDeployEvent_Call) RunAndReturn(run func(imageName string)) *MockRegistryService_SuppressDeployEvent_Call {
-	_c.Run(run)
 	return _c
 }
