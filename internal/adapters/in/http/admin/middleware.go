@@ -32,9 +32,7 @@ func AuthMiddleware(
 
 			// Check global rate limit
 			if globalLimiter != nil && !globalLimiter.Allow(ctx, "global") {
-				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("Cache-Control", "no-store")
-				w.Header().Set("Pragma", "no-cache")
+				setAdminJSONHeaders(w)
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
 				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "rate limit exceeded"})
@@ -45,9 +43,7 @@ func AuthMiddleware(
 			if ipLimiter != nil {
 				ip := middleware.GetClientIP(r, trustedNets)
 				if !ipLimiter.Allow(ctx, "ip:"+ip) {
-					w.Header().Set("Content-Type", "application/json")
-					w.Header().Set("Cache-Control", "no-store")
-					w.Header().Set("Pragma", "no-cache")
+					setAdminJSONHeaders(w)
 					w.Header().Set("Retry-After", "1")
 					w.WriteHeader(http.StatusTooManyRequests)
 					_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "rate limit exceeded"})
@@ -112,8 +108,7 @@ func AuthMiddleware(
 
 			// Prevent intermediaries from storing admin API responses, especially
 			// when a rotated bearer token is returned in X-Gordon-Token.
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Pragma", "no-cache")
+			setNoStoreHeaders(w)
 
 			// Attempt to slide token expiry. Non-fatal if it fails.
 			// The new token is returned in X-Gordon-Token so the CLI can persist it atomically.
@@ -171,18 +166,24 @@ func HasAccess(ctx context.Context, resource, action string) bool {
 }
 
 func sendUnauthorized(w http.ResponseWriter, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
+	setAdminJSONHeaders(w)
 	w.Header().Set("WWW-Authenticate", `Bearer realm="gordon-admin"`)
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: message})
 }
 
 func sendForbidden(w http.ResponseWriter, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
+	setAdminJSONHeaders(w)
 	w.WriteHeader(http.StatusForbidden)
 	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: message})
+}
+
+func setAdminJSONHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	setNoStoreHeaders(w)
+}
+
+func setNoStoreHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 }
