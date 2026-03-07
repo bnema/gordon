@@ -108,6 +108,11 @@ func TestValidateDomain(t *testing.T) {
 			domain:  "\x00example.com",
 			wantErr: ErrDomainInvalidChars,
 		},
+		{
+			name:    "underscore rejected to avoid env filename collision",
+			domain:  "app_example.com",
+			wantErr: ErrDomainInvalidChars,
+		},
 	}
 
 	for _, tt := range tests {
@@ -119,6 +124,12 @@ func TestValidateDomain(t *testing.T) {
 				assert.NoError(t, err)
 			}
 		})
+	}
+}
+
+func TestValidateDomain_DistinguishesSeparatorsForEnvStorage(t *testing.T) {
+	for _, domain := range []string{"app.example.com", "app:example:com", "app/example/com"} {
+		assert.NoError(t, ValidateDomain(domain), "expected %q to remain valid", domain)
 	}
 }
 

@@ -30,6 +30,7 @@ data_dir = "`+filepath.Join(tmpDir, "data")+`"
 
 [auth]
 enabled = true
+secrets_backend = "unsafe"
 `), 0o600)
 	if err != nil {
 		t.Fatalf("failed to write config: %v", err)
@@ -70,6 +71,7 @@ data_dir = "`+filepath.Join(tmpDir, "data")+`"
 
 [auth]
 enabled = false
+secrets_backend = "unsafe"
 `), 0o600)
 	if err != nil {
 		t.Fatalf("failed to write config: %v", err)

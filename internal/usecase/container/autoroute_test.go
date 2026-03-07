@@ -28,33 +28,34 @@ func TestDomainToEnvFileName(t *testing.T) {
 		{
 			name:     "simple domain",
 			domain:   "app.example.com",
-			expected: "app_example_com.env",
+			expected: "YXBwLmV4YW1wbGUuY29t.env",
 		},
 		{
 			name:     "domain with port",
 			domain:   "app.example.com:8080",
-			expected: "app_example_com_8080.env",
+			expected: "YXBwLmV4YW1wbGUuY29tOjgwODA.env",
 		},
 		{
 			name:     "domain with path",
 			domain:   "app.example.com/api",
-			expected: "app_example_com_api.env",
+			expected: "YXBwLmV4YW1wbGUuY29tL2FwaQ.env",
 		},
 		{
 			name:     "complex domain",
 			domain:   "sub.app.example.com:443/v1",
-			expected: "sub_app_example_com_443_v1.env",
+			expected: "c3ViLmFwcC5leGFtcGxlLmNvbTo0NDMvdjE.env",
 		},
 		{
 			name:     "single word",
 			domain:   "localhost",
-			expected: "localhost.env",
+			expected: "bG9jYWxob3N0.env",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := domainToEnvFileName(tt.domain)
+			result, err := domainToEnvFileName(tt.domain)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

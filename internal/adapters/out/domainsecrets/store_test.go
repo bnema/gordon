@@ -101,7 +101,7 @@ func TestFileStore_PathContainment(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify file exists inside tmpDir
-	expectedFile := filepath.Join(tmpDir, "example_com.env")
+	expectedFile := filepath.Join(tmpDir, "ZXhhbXBsZS5jb20.env")
 	_, err = os.Stat(expectedFile)
 	assert.NoError(t, err, "expected env file to exist at %s", expectedFile)
 
@@ -114,6 +114,24 @@ func TestFileStore_PathContainment(t *testing.T) {
 			assert.NotContains(t, entry, ".env", "unexpected .env file outside tmpDir: %s", entry)
 		}
 	}
+}
+
+func TestFileStore_DistinctDomainsUseDistinctFiles(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), testLogger())
+	require.NoError(t, err)
+
+	dotPath, err := store.validateEnvFilePath("app.example.com")
+	require.NoError(t, err)
+
+	portPath, err := store.validateEnvFilePath("app:example:com")
+	require.NoError(t, err)
+
+	pathPath, err := store.validateEnvFilePath("app/example/com")
+	require.NoError(t, err)
+
+	assert.NotEqual(t, dotPath, portPath)
+	assert.NotEqual(t, dotPath, pathPath)
+	assert.NotEqual(t, portPath, pathPath)
 }
 
 func TestSanitizeDomainForContainer(t *testing.T) {
@@ -389,21 +407,23 @@ func TestGetEnvFilePath(t *testing.T) {
 		wantEmpty    bool
 		wantFilename string
 	}{
-		{"example.com", false, "example_com.env"},
-		{"sub.example.com", false, "sub_example_com.env"},
-		{"example.com:8080", false, "example_com_8080.env"},
-		{"example.com/path", false, "example_com_path.env"},
+		{"example.com", false, "ZXhhbXBsZS5jb20.env"},
+		{"sub.example.com", false, "c3ViLmV4YW1wbGUuY29t.env"},
+		{"example.com:8080", false, "ZXhhbXBsZS5jb206ODA4MA.env"},
+		{"example.com/path", false, "ZXhhbXBsZS5jb20vcGF0aA.env"},
 		{"../evil", true, ""},
 		{"", true, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.domain, func(t *testing.T) {
-			path := store.getEnvFilePath(tt.domain)
+			path, err := store.getEnvFilePath(tt.domain)
 
 			if tt.wantEmpty {
+				assert.Error(t, err)
 				assert.Empty(t, path)
 			} else {
+				require.NoError(t, err)
 				assert.NotEmpty(t, path)
 				assert.Equal(t, filepath.Join(tmpDir, tt.wantFilename), path)
 			}
