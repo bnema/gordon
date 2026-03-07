@@ -585,7 +585,10 @@ func setupInternalRegistryAuth(svc *services, log zerowrap.Logger) error {
 
 func createDomainSecretStore(cfg Config, log zerowrap.Logger) (string, domain.SecretsBackend, *domainsecrets.PassStore, out.DomainSecretStore, error) {
 	envDir := resolveEnvDir(cfg)
-	backend := resolveSecretsBackend(cfg.Auth.SecretsBackend)
+	backend, err := resolveSecretsBackend(cfg.Auth.SecretsBackend)
+	if err != nil {
+		return "", "", nil, nil, log.WrapErr(err, "failed to resolve secrets backend")
+	}
 
 	switch backend {
 	case domain.SecretsBackendPass:
@@ -896,7 +899,10 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 	}
 
 	authType := resolveAuthType(cfg)
-	backend := resolveSecretsBackend(cfg.Auth.SecretsBackend)
+	backend, err := resolveSecretsBackend(cfg.Auth.SecretsBackend)
+	if err != nil {
+		return nil, nil, log.WrapErr(err, "failed to resolve secrets backend")
+	}
 	dataDir := resolveDataDir(cfg.Server.DataDir)
 
 	store, err := createTokenStore(backend, dataDir, log)
@@ -941,16 +947,18 @@ func resolveAuthType(cfg Config) domain.AuthType {
 	return domain.AuthTypeToken
 }
 
-func resolveSecretsBackend(backend string) domain.SecretsBackend {
+func resolveSecretsBackend(backend string) (domain.SecretsBackend, error) {
 	switch backend {
 	case "pass":
-		return domain.SecretsBackendPass
+		return domain.SecretsBackendPass, nil
 	case "sops":
-		return domain.SecretsBackendSops
-	case "unsafe", "":
-		return domain.SecretsBackendUnsafe
+		return domain.SecretsBackendSops, nil
+	case "unsafe":
+		return domain.SecretsBackendUnsafe, nil
+	case "":
+		return "", fmt.Errorf("auth.secrets_backend is required")
 	default:
-		return domain.SecretsBackendUnsafe
+		return "", fmt.Errorf("unsupported auth.secrets_backend %q", backend)
 	}
 }
 
@@ -2339,7 +2347,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("auth.enabled", true)
 	// Note: auth.type is intentionally not set - it's inferred from config
 	// If password_hash is set -> password mode, otherwise -> token mode
-	v.SetDefault("auth.secrets_backend", "unsafe")
+	v.SetDefault("auth.secrets_backend", "")
 	v.SetDefault("auth.token_expiry", "720h")
 	v.SetDefault("api.rate_limit.enabled", true)
 	v.SetDefault("api.rate_limit.global_rps", 500)

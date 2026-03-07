@@ -104,11 +104,11 @@ func (l *PassLoader) CreateEnvFile(ctx context.Context, domain string) error {
 }
 
 // EnvFileExists checks if a manifest exists for a domain in pass.
-func (l *PassLoader) EnvFileExists(domain string) bool {
+func (l *PassLoader) EnvFileExists(domain string) (bool, error) {
 	exists, err := l.store.ManifestExists(domain)
 	if err != nil {
 		l.log.Warn().Err(err).Str("domain", domain).Msg("failed to check pass manifest")
-		return false
+		return false, err
 	}
-	return exists
+	return exists, nil
 }

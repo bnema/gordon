@@ -278,24 +278,30 @@ func resolveContainerName(domainName, service string) string {
 
 // ValidateDomain validates that a domain is safe to use for secret storage.
 // This prevents path traversal attacks and ensures the domain is valid.
-func ValidateDomain(domain string) error {
+func ValidateDomain(domainName string) error {
 	// Check for empty domain
-	if domain == "" {
+	if domainName == "" {
 		return ErrDomainEmpty
 	}
 
 	// Check domain length (max DNS name length is 253)
-	if len(domain) > 253 {
+	if len(domainName) > 253 {
 		return ErrDomainTooLong
 	}
 
 	// Check for path traversal attempts
-	if strings.Contains(domain, "..") {
+	if strings.Contains(domainName, "..") {
 		return ErrDomainPathTraversal
 	}
 
 	// Check for null bytes (can cause issues in file paths)
-	if strings.ContainsRune(domain, '\x00') {
+	if strings.ContainsRune(domainName, '\x00') {
+		return ErrDomainInvalidChars
+	}
+
+	// Reuse the env-file sanitizer so validation matches the on-disk naming
+	// scheme and rejects ambiguous names that would collide after sanitization.
+	if _, err := domain.SanitizeDomainForEnvFile(domainName); err != nil {
 		return ErrDomainInvalidChars
 	}
 

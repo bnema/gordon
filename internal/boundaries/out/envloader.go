@@ -12,5 +12,5 @@ type EnvLoader interface {
 	CreateEnvFile(ctx context.Context, domain string) error
 
 	// EnvFileExists checks if an environment file exists for a domain.
-	EnvFileExists(domain string) bool
+	EnvFileExists(domain string) (bool, error)
 }

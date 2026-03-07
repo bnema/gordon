@@ -12,6 +12,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // FileLoader implements the EnvLoader interface using filesystem-based env files.
@@ -62,7 +63,10 @@ func (l *FileLoader) LoadEnv(ctx context.Context, domain string) ([]string, erro
 	log := zerowrap.FromCtx(ctx)
 
 	envVars := []string{}
-	envFile := l.getEnvFilePath(domain)
+	envFile, err := l.getEnvFilePath(domain)
+	if err != nil {
+		return nil, log.WrapErr(err, "invalid env file domain")
+	}
 
 	// Check if env file exists
 	if _, err := os.Stat(envFile); os.IsNotExist(err) {
@@ -142,7 +146,10 @@ func (l *FileLoader) CreateEnvFile(ctx context.Context, domain string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	envFile := l.getEnvFilePath(domain)
+	envFile, err := l.getEnvFilePath(domain)
+	if err != nil {
+		return log.WrapErr(err, "invalid env file domain")
+	}
 
 	// Check if file already exists
 	if _, err := os.Stat(envFile); err == nil {
@@ -169,10 +176,21 @@ func (l *FileLoader) CreateEnvFile(ctx context.Context, domain string) error {
 }
 
 // EnvFileExists checks if an environment file exists for a domain.
-func (l *FileLoader) EnvFileExists(domain string) bool {
-	envFile := l.getEnvFilePath(domain)
-	_, err := os.Stat(envFile)
-	return err == nil
+func (l *FileLoader) EnvFileExists(domain string) (bool, error) {
+	envFile, err := l.getEnvFilePath(domain)
+	if err != nil {
+		return false, err
+	}
+
+	_, err = os.Stat(envFile)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 // resolveSecrets resolves any secret references in the value.
@@ -222,10 +240,11 @@ func (l *FileLoader) resolveSecrets(ctx context.Context, value string) (string, 
 	return result, nil
 }
 
-func (l *FileLoader) getEnvFilePath(domain string) string {
-	// Create domain-safe filename (replace dots and other chars with underscores)
-	safeDomain := strings.ReplaceAll(domain, ".", "_")
-	safeDomain = strings.ReplaceAll(safeDomain, ":", "_")
-	safeDomain = strings.ReplaceAll(safeDomain, "/", "_")
-	return filepath.Join(l.envDir, safeDomain+".env")
+func (l *FileLoader) getEnvFilePath(domainName string) (string, error) {
+	storageKey, err := domain.NewEnvStorageKey(domainName)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(l.envDir, storageKey.FileName()), nil
 }

@@ -285,8 +285,8 @@ func (s *FileStore) writeSecretsAtomic(domainName string, secrets map[string]str
 // This must match the naming convention in envloader.FileLoader.getEnvFilePath.
 //
 // SECURITY: Validates domain and ensures the resulting path stays within envDir.
-func (s *FileStore) getEnvFilePath(domainName string) string {
-	safeDomain, err := domain.SanitizeDomainForEnvFile(domainName)
+func (s *FileStore) getEnvFilePath(domainName string) (string, error) {
+	storageKey, err := domain.NewEnvStorageKey(domainName)
 	if err != nil {
 		s.log.Warn().
 			Str(zerowrap.FieldLayer, "adapter").
@@ -294,10 +294,10 @@ func (s *FileStore) getEnvFilePath(domainName string) string {
 			Str("domain", domainName).
 			Err(err).
 			Msg("rejected invalid domain")
-		return ""
+		return "", err
 	}
 
-	fullPath := filepath.Join(s.envDir, safeDomain+".env")
+	fullPath := filepath.Join(s.envDir, storageKey.FileName())
 
 	// SECURITY: Final validation - ensure path stays within envDir
 	cleanPath := filepath.Clean(fullPath)
@@ -309,20 +309,16 @@ func (s *FileStore) getEnvFilePath(domainName string) string {
 			Str("domain", domainName).
 			Str("attempted_path", fullPath).
 			Msg("path traversal attempt blocked - path escapes env directory")
-		return ""
+		return "", domain.ErrPathTraversal
 	}
 
-	return fullPath
+	return fullPath, nil
 }
 
 // validateEnvFilePath validates that a domain produces a valid env file path.
 // Returns an error if the domain is invalid or would result in path traversal.
 func (s *FileStore) validateEnvFilePath(domainName string) (string, error) {
-	path := s.getEnvFilePath(domainName)
-	if path == "" {
-		return "", domain.ErrPathTraversal
-	}
-	return path, nil
+	return s.getEnvFilePath(domainName)
 }
 
 // getAttachmentEnvFilePath converts a container name to its attachment env file path.
