@@ -23,7 +23,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.42.0
 	golang.org/x/crypto v0.47.0
 	golang.org/x/mod v0.33.0
-	golang.org/x/term v0.39.0
+	golang.org/x/term v0.40.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
