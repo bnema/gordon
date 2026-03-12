@@ -47,10 +47,11 @@ func TestService_WaitForReady_AutoFallsBackToDelayWhenNoHealthcheck(t *testing.T
 	assert.NoError(t, err)
 }
 
-func TestService_WaitForReady_AutoCascadeUsesTCPWhenNoHealthcheckAndNoHealthLabel(t *testing.T) {
+func TestService_WaitForReady_AutoCascadeUsesDefaultHTTPAliveProbeWhenNoHealthcheckAndNoHealthLabel(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	svc := NewService(runtime, nil, nil, nil, Config{
-		ReadinessMode: "auto",
+		ReadinessMode:    "auto",
+		HTTPProbeTimeout: 50 * time.Millisecond,
 	})
 
 	ctx := testContext()
@@ -68,21 +69,17 @@ func TestService_WaitForReady_AutoCascadeUsesTCPWhenNoHealthcheckAndNoHealthLabe
 	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
 	// No Docker healthcheck
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
-	// Cascade resolves container endpoint for TCP probe
+	// Cascade resolves container endpoint for default HTTP alive probe
 	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return(probeIP, probePort, nil).Once()
 	// Host port binding resolution — return the same loopback addr so probe hits it
 	runtime.EXPECT().GetContainerPort(mock.Anything, containerID, probePort).Return(probePort, nil).Once()
 
-	// TCP probe will try to connect — which will fail since the port is closed.
-	// Use a short health timeout so the test doesn't hang.
-	svc.mu.Lock()
-	svc.config.TCPProbeTimeout = 50 * time.Millisecond
-	svc.mu.Unlock()
+	// Default HTTP alive probe will try to connect — which will fail since the port is closed.
 
 	err := svc.waitForReady(ctx, containerID, containerConfig)
-	// Expect TCP probe timeout (no server listening)
+	// Expect HTTP alive probe timeout (no server listening)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "TCP probe timeout")
+	assert.Contains(t, err.Error(), "HTTP alive probe timeout")
 }
 
 func TestService_WaitForReady_AutoCascadeUsesHTTPProbeWhenHealthLabelSet(t *testing.T) {
@@ -169,8 +166,8 @@ func TestService_WaitForReady_AutoCascadeFallsToDelayWhenNoEndpoint(t *testing.T
 	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
 	// No Docker healthcheck
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
-	// Network info fails — can't do TCP probe, fall through to delay
-	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return("", 0, assert.AnError).Once()
+	// Network info fails for default HTTP alive probe, then again for TCP fallback before delay
+	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return("", 0, assert.AnError).Twice()
 	// Delay-mode fallback verification
 	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
 

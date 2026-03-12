@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -2344,7 +2345,7 @@ func (s *Service) tryHTTPProbe(ctx context.Context, containerID string, containe
 	if !ok || healthPath == "" {
 		return false, nil
 	}
-	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	ip, port, probeErr := s.resolveProbeEndpoint(ctx, containerID, containerConfig)
 	if probeErr != nil || ip == "" || port <= 0 {
 		log.Debug().Err(probeErr).Msg("readiness cascade: HTTP probe skipped, could not resolve container endpoint")
 		return false, nil
@@ -2367,7 +2368,7 @@ func (s *Service) tryDefaultHTTPProbe(ctx context.Context, containerID string, c
 	if containerConfig == nil || len(containerConfig.Ports) == 0 {
 		return false, nil
 	}
-	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	ip, port, probeErr := s.resolveProbeEndpoint(ctx, containerID, containerConfig)
 	if probeErr != nil || ip == "" || port <= 0 {
 		log.Debug().Err(probeErr).Msg("readiness cascade: default HTTP probe skipped, could not resolve container endpoint")
 		return false, nil
@@ -2388,7 +2389,7 @@ func (s *Service) tryTCPProbe(ctx context.Context, containerID string, container
 	if containerConfig == nil || len(containerConfig.Ports) == 0 {
 		return false, nil
 	}
-	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	ip, port, probeErr := s.resolveProbeEndpoint(ctx, containerID, containerConfig)
 	if probeErr != nil || ip == "" || port <= 0 {
 		log.Debug().Err(probeErr).Msg("readiness cascade: TCP probe skipped, could not resolve container endpoint")
 		return false, nil
@@ -2407,16 +2408,33 @@ func (s *Service) tryTCPProbe(ctx context.Context, containerID string, container
 // from the host. We use the host port binding (127.0.0.1:<mapped_port>)
 // which is always reachable. Falls back to the container's internal IP
 // only if no host port mapping exists (e.g. host-network mode).
-func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID string) (string, int, error) {
+func (s *Service) resolveProbeEndpoint(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig) (string, int, error) {
 	log := zerowrap.FromCtx(ctx)
 
-	// First, get the container's internal port from network info
-	_, internalPort, err := s.runtime.GetContainerNetworkInfo(ctx, containerID)
-	if err != nil {
-		return "", 0, err
+	internalPort := 0
+	if containerConfig != nil {
+		if labels := containerConfig.Labels; labels != nil {
+			for _, key := range []string{domain.LabelProxyPort, domain.LabelPort} {
+				if portStr, ok := labels[key]; ok && portStr != "" {
+					port, err := strconv.Atoi(portStr)
+					if err == nil && port > 0 {
+						internalPort = port
+						break
+					}
+					log.Warn().Str("label", key).Str("port_value", portStr).Msg("invalid probe port label value")
+				}
+			}
+		}
 	}
 
-	// Try to resolve via host port binding (works in rootless podman/Docker)
+	if internalPort == 0 {
+		_, resolvedPort, err := s.runtime.GetContainerNetworkInfo(ctx, containerID)
+		if err != nil {
+			return "", 0, err
+		}
+		internalPort = resolvedPort
+	}
+
 	hostPort, hostErr := s.runtime.GetContainerPort(ctx, containerID, internalPort)
 	if hostErr == nil && hostPort > 0 {
 		log.Debug().
@@ -2426,7 +2444,6 @@ func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID stri
 		return "127.0.0.1", hostPort, nil
 	}
 
-	// Fallback: use internal IP (works in Docker rootful / host network)
 	ip, _, fallbackErr := s.runtime.GetContainerNetworkInfo(ctx, containerID)
 	if fallbackErr != nil {
 		return "", 0, fallbackErr
@@ -2436,6 +2453,10 @@ func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID stri
 		Int("port", internalPort).
 		Msg("resolved container endpoint via internal IP (no host port binding)")
 	return ip, internalPort, nil
+}
+
+func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID string) (string, int, error) {
+	return s.resolveProbeEndpoint(ctx, containerID, nil)
 }
 
 // waitForReadyByDelay waits using the legacy running+delay strategy.
