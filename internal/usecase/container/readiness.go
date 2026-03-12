@@ -135,3 +135,36 @@ func httpProbe(ctx context.Context, url string, timeout time.Duration) error {
 	}
 	return err
 }
+
+// httpAliveProbe performs HTTP GET requests to url, retrying every 1s until
+// any HTTP response is received or timeout. Unlike httpProbe, ANY status code
+// counts as success -- the goal is to verify the HTTP server is accepting and
+// processing requests, not that a specific endpoint is healthy.
+// Used as the default readiness check for web containers.
+func httpAliveProbe(ctx context.Context, url string, timeout time.Duration) error {
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	deadline := time.Now().Add(timeout)
+	err := probeLoop(ctx, deadline, time.Second, 2*time.Second, func(attemptCtx context.Context) (bool, error) {
+		req, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodGet, url, nil)
+		if reqErr != nil {
+			return false, reqErr
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			// Connection refused, timeout, etc. -- not ready yet.
+			return false, nil
+		}
+		resp.Body.Close()
+		// Any HTTP response means the server is alive and processing.
+		return true, nil
+	})
+	if errors.Is(err, errProbeTimeout) {
+		return fmt.Errorf("HTTP alive probe timeout after %s: no HTTP response from %s", timeout, url)
+	}
+	return err
+}
