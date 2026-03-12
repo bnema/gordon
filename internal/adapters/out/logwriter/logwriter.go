@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/bnema/zerowrap"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -39,7 +40,7 @@ type streamInfo struct {
 	domain      string
 	logStream   io.ReadCloser
 	logger      *lumberjack.Logger
-	cancel      context.CancelFunc
+	stopped     atomic.Bool
 	done        chan struct{}
 }
 
@@ -89,8 +90,6 @@ func (w *LogWriter) StartLogging(ctx context.Context, containerID string, domain
 		Compress:   true,
 	}
 
-	// Create cancellable context for the streaming goroutine
-	streamCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 
 	info := &streamInfo{
@@ -98,14 +97,13 @@ func (w *LogWriter) StartLogging(ctx context.Context, containerID string, domain
 		domain:      domain,
 		logStream:   logStream,
 		logger:      logger,
-		cancel:      cancel,
 		done:        done,
 	}
 
 	w.streams[containerID] = info
 
 	// Start streaming goroutine
-	go w.streamLogs(streamCtx, info, log)
+	go w.streamLogs(info, log)
 
 	log.Info().Str("path", logPath).Msg("started container log collection")
 	return nil
@@ -138,7 +136,7 @@ func (w *LogWriter) Close() error {
 // stopStreamLocked stops a stream (must be called with lock held).
 func (w *LogWriter) stopStreamLocked(info *streamInfo) {
 	// Signal the goroutine to stop
-	info.cancel()
+	info.stopped.Store(true)
 
 	// Close the log stream to unblock reads
 	info.logStream.Close()
@@ -151,7 +149,7 @@ func (w *LogWriter) stopStreamLocked(info *streamInfo) {
 }
 
 // streamLogs copies from the Docker log stream to the file.
-func (w *LogWriter) streamLogs(ctx context.Context, info *streamInfo, log zerowrap.Logger) {
+func (w *LogWriter) streamLogs(info *streamInfo, log zerowrap.Logger) {
 	defer close(info.done)
 
 	// Docker container logs are multiplexed with 8-byte headers.
@@ -159,8 +157,8 @@ func (w *LogWriter) streamLogs(ctx context.Context, info *streamInfo, log zerowr
 	// We combine both to a single file.
 	_, err := stdcopy.StdCopy(info.logger, info.logger, info.logStream)
 
-	if err != nil && ctx.Err() == nil {
-		// Only log error if we weren't cancelled
+	if err != nil && !info.stopped.Load() {
+		// Only log error if we weren't intentionally stopped
 		log.Warn().Err(err).
 			Str("container_id", info.containerID).
 			Str("domain", info.domain).
