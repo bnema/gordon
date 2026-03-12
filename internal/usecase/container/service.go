@@ -1330,7 +1330,7 @@ func (s *Service) startLogCollection(ctx context.Context, containerID, domainNam
 		return
 	}
 
-	if err := s.logWriter.StartLogging(ctx, containerID, domainName, logStream); err != nil {
+	if err := s.logWriter.StartLogging(context.WithoutCancel(ctx), containerID, domainName, logStream); err != nil {
 		log.Warn().Err(err).Msg("failed to start container log collection")
 		logStream.Close()
 	}
@@ -2297,8 +2297,9 @@ func (s *Service) waitForReady(ctx context.Context, containerID string, containe
 // readinessCascade auto-detects the strongest available readiness signal:
 //  1. Docker healthcheck (if present) → wait for healthy status
 //  2. HTTP probe (if gordon.health label set) → GET until 2xx/3xx
-//  3. TCP probe (if port info available) → connect until accepted
-//  4. Delay fallback (last resort) → waitForReadyByDelay
+//  3. Default HTTP probe (GET / on exposed port) → wait for 2xx/3xx
+//  4. TCP probe (if port info available) → connect until accepted
+//  5. Delay fallback (last resort) → waitForReadyByDelay
 func (s *Service) readinessCascade(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) error {
 	log := zerowrap.FromCtx(ctx)
 
@@ -2317,12 +2318,17 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 		return probeErr
 	}
 
-	// 3. TCP probe (if port info available)
+	// 3. Default HTTP probe on root path (if port info available)
+	if probed, probeErr := s.tryDefaultHTTPProbe(ctx, containerID, containerConfig, cfg); probed {
+		return probeErr
+	}
+
+	// 4. TCP probe (if port info available)
 	if probed, probeErr := s.tryTCPProbe(ctx, containerID, containerConfig, cfg); probed {
 		return probeErr
 	}
 
-	// 4. Delay fallback
+	// 5. Delay fallback
 	log.Info().Msg("readiness cascade: using delay fallback")
 	return s.waitForReadyByDelay(ctx, containerID)
 }
@@ -2350,6 +2356,29 @@ func (s *Service) tryHTTPProbe(ctx context.Context, containerID string, containe
 	}
 	log.Info().Str("url", url).Dur("timeout", timeout).Msg("readiness cascade: using HTTP probe")
 	return true, httpProbe(ctx, url, timeout)
+}
+
+// tryDefaultHTTPProbe attempts an HTTP GET on "/" using the container's
+// exposed port. This is the default readiness check for web containers —
+// it verifies the app is actually serving HTTP, not just accepting TCP.
+// Returns (true, err) if the probe was attempted, (false, nil) if skipped.
+func (s *Service) tryDefaultHTTPProbe(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) (bool, error) {
+	log := zerowrap.FromCtx(ctx)
+	if containerConfig == nil || len(containerConfig.Ports) == 0 {
+		return false, nil
+	}
+	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	if probeErr != nil || ip == "" || port <= 0 {
+		log.Debug().Err(probeErr).Msg("readiness cascade: default HTTP probe skipped, could not resolve container endpoint")
+		return false, nil
+	}
+	url := fmt.Sprintf("http://%s:%d/", ip, port)
+	timeout := cfg.HTTPProbeTimeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+	log.Info().Str("url", url).Dur("timeout", timeout).Msg("readiness cascade: using default HTTP alive probe")
+	return true, httpAliveProbe(ctx, url, timeout)
 }
 
 // tryTCPProbe attempts a TCP probe if port info is available.
