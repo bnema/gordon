@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1330,7 +1331,7 @@ func (s *Service) startLogCollection(ctx context.Context, containerID, domainNam
 		return
 	}
 
-	if err := s.logWriter.StartLogging(ctx, containerID, domainName, logStream); err != nil {
+	if err := s.logWriter.StartLogging(context.WithoutCancel(ctx), containerID, domainName, logStream); err != nil {
 		log.Warn().Err(err).Msg("failed to start container log collection")
 		logStream.Close()
 	}
@@ -2297,8 +2298,9 @@ func (s *Service) waitForReady(ctx context.Context, containerID string, containe
 // readinessCascade auto-detects the strongest available readiness signal:
 //  1. Docker healthcheck (if present) → wait for healthy status
 //  2. HTTP probe (if gordon.health label set) → GET until 2xx/3xx
-//  3. TCP probe (if port info available) → connect until accepted
-//  4. Delay fallback (last resort) → waitForReadyByDelay
+//  3. Default HTTP probe (GET / on exposed port) → wait for 2xx/3xx
+//  4. TCP probe (if port info available) → connect until accepted
+//  5. Delay fallback (last resort) → waitForReadyByDelay
 func (s *Service) readinessCascade(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) error {
 	log := zerowrap.FromCtx(ctx)
 
@@ -2317,12 +2319,17 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 		return probeErr
 	}
 
-	// 3. TCP probe (if port info available)
+	// 3. Default HTTP probe on root path (if port info available)
+	if probed, probeErr := s.tryDefaultHTTPProbe(ctx, containerID, containerConfig, cfg); probed {
+		return probeErr
+	}
+
+	// 4. TCP probe (if port info available)
 	if probed, probeErr := s.tryTCPProbe(ctx, containerID, containerConfig, cfg); probed {
 		return probeErr
 	}
 
-	// 4. Delay fallback
+	// 5. Delay fallback
 	log.Info().Msg("readiness cascade: using delay fallback")
 	return s.waitForReadyByDelay(ctx, containerID)
 }
@@ -2338,7 +2345,7 @@ func (s *Service) tryHTTPProbe(ctx context.Context, containerID string, containe
 	if !ok || healthPath == "" {
 		return false, nil
 	}
-	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	ip, port, probeErr := s.resolveProbeEndpoint(ctx, containerID, containerConfig)
 	if probeErr != nil || ip == "" || port <= 0 {
 		log.Debug().Err(probeErr).Msg("readiness cascade: HTTP probe skipped, could not resolve container endpoint")
 		return false, nil
@@ -2352,6 +2359,29 @@ func (s *Service) tryHTTPProbe(ctx context.Context, containerID string, containe
 	return true, httpProbe(ctx, url, timeout)
 }
 
+// tryDefaultHTTPProbe attempts an HTTP GET on "/" using the container's
+// exposed port. This is the default readiness check for web containers —
+// it verifies the app is actually serving HTTP, not just accepting TCP.
+// Returns (true, err) if the probe was attempted, (false, nil) if skipped.
+func (s *Service) tryDefaultHTTPProbe(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) (bool, error) {
+	log := zerowrap.FromCtx(ctx)
+	if containerConfig == nil || len(containerConfig.Ports) == 0 {
+		return false, nil
+	}
+	ip, port, probeErr := s.resolveProbeEndpoint(ctx, containerID, containerConfig)
+	if probeErr != nil || ip == "" || port <= 0 {
+		log.Debug().Err(probeErr).Msg("readiness cascade: default HTTP probe skipped, could not resolve container endpoint")
+		return false, nil
+	}
+	url := fmt.Sprintf("http://%s:%d/", ip, port)
+	timeout := cfg.HTTPProbeTimeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+	log.Info().Str("url", url).Dur("timeout", timeout).Msg("readiness cascade: using default HTTP alive probe")
+	return true, httpAliveProbe(ctx, url, timeout)
+}
+
 // tryTCPProbe attempts a TCP probe if port info is available.
 // Returns (true, err) if the probe was attempted, (false, nil) if skipped.
 func (s *Service) tryTCPProbe(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig, cfg Config) (bool, error) {
@@ -2359,7 +2389,7 @@ func (s *Service) tryTCPProbe(ctx context.Context, containerID string, container
 	if containerConfig == nil || len(containerConfig.Ports) == 0 {
 		return false, nil
 	}
-	ip, port, probeErr := s.resolveContainerEndpoint(ctx, containerID)
+	ip, port, probeErr := s.resolveProbeEndpoint(ctx, containerID, containerConfig)
 	if probeErr != nil || ip == "" || port <= 0 {
 		log.Debug().Err(probeErr).Msg("readiness cascade: TCP probe skipped, could not resolve container endpoint")
 		return false, nil
@@ -2378,16 +2408,33 @@ func (s *Service) tryTCPProbe(ctx context.Context, containerID string, container
 // from the host. We use the host port binding (127.0.0.1:<mapped_port>)
 // which is always reachable. Falls back to the container's internal IP
 // only if no host port mapping exists (e.g. host-network mode).
-func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID string) (string, int, error) {
+func (s *Service) resolveProbeEndpoint(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig) (string, int, error) {
 	log := zerowrap.FromCtx(ctx)
 
-	// First, get the container's internal port from network info
-	_, internalPort, err := s.runtime.GetContainerNetworkInfo(ctx, containerID)
-	if err != nil {
-		return "", 0, err
+	internalPort := 0
+	if containerConfig != nil {
+		if labels := containerConfig.Labels; labels != nil {
+			for _, key := range []string{domain.LabelProxyPort, domain.LabelPort} {
+				if portStr, ok := labels[key]; ok && portStr != "" {
+					port, err := strconv.Atoi(portStr)
+					if err == nil && port > 0 {
+						internalPort = port
+						break
+					}
+					log.Warn().Str("label", key).Str("port_value", portStr).Msg("invalid probe port label value")
+				}
+			}
+		}
 	}
 
-	// Try to resolve via host port binding (works in rootless podman/Docker)
+	if internalPort == 0 {
+		_, resolvedPort, err := s.runtime.GetContainerNetworkInfo(ctx, containerID)
+		if err != nil {
+			return "", 0, err
+		}
+		internalPort = resolvedPort
+	}
+
 	hostPort, hostErr := s.runtime.GetContainerPort(ctx, containerID, internalPort)
 	if hostErr == nil && hostPort > 0 {
 		log.Debug().
@@ -2397,7 +2444,6 @@ func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID stri
 		return "127.0.0.1", hostPort, nil
 	}
 
-	// Fallback: use internal IP (works in Docker rootful / host network)
 	ip, _, fallbackErr := s.runtime.GetContainerNetworkInfo(ctx, containerID)
 	if fallbackErr != nil {
 		return "", 0, fallbackErr
