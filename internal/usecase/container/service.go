@@ -2455,10 +2455,6 @@ func (s *Service) resolveProbeEndpoint(ctx context.Context, containerID string, 
 	return ip, internalPort, nil
 }
 
-func (s *Service) resolveContainerEndpoint(ctx context.Context, containerID string) (string, int, error) {
-	return s.resolveProbeEndpoint(ctx, containerID, nil)
-}
-
 // waitForReadyByDelay waits using the legacy running+delay strategy.
 func (s *Service) waitForReadyByDelay(ctx context.Context, containerID string) error {
 	log := zerowrap.FromCtx(ctx)
