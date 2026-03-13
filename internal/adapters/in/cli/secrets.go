@@ -75,6 +75,13 @@ func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
 	}
 
 	if totalSecrets == 0 {
+		if jsonOut {
+			return writeJSON(cmd.OutOrStdout(), map[string]any{
+				"domain":      secretDomain,
+				"keys":        []string{},
+				"attachments": []any{},
+			})
+		}
 		fmt.Println(styles.Theme.Muted.Render(fmt.Sprintf("No secrets configured for %s", secretDomain)))
 		return nil
 	}

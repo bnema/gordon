@@ -12,7 +12,7 @@ type BootstrapRequest struct {
 // BootstrapStep represents the result of one bootstrap step.
 type BootstrapStep struct {
 	Name   string `json:"name"`
-	Status string `json:"status"` // "created", "updated", "noop", "failed"
+	Status string `json:"status"` // "created", "configured", "updated", "noop", "failed"
 }
 
 // BootstrapResponse represents the result of a bootstrap operation.
