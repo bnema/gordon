@@ -202,7 +202,7 @@ func TestUIAdoptionRuntimeSeams(t *testing.T) {
 	}
 
 	imgBuf := new(bytes.Buffer)
-	if err := runImagesList(context.Background(), imagesClientStub{listResp: []dto.Image{{Repository: "repo/app", Tag: "latest", ID: "sha256:abc", Size: 1}}}, imgBuf); err != nil {
+	if err := runImagesList(context.Background(), imagesClientStub{listResp: []dto.Image{{Repository: "repo/app", Tag: "latest", ID: "sha256:abc", Size: 1}}}, imgBuf, false); err != nil {
 		t.Fatalf("runImagesList failed: %v", err)
 	}
 

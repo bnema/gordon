@@ -81,7 +81,9 @@ These commands currently require remote mode with a configured target.`,
 }
 
 func newImagesListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List runtime images and registry tags",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -90,9 +92,13 @@ func newImagesListCmd() *cobra.Command {
 				return fmt.Errorf("images commands require a configured remote target")
 			}
 
-			return runImagesList(cmd.Context(), client, cmd.OutOrStdout())
+			return runImagesList(cmd.Context(), client, cmd.OutOrStdout(), jsonOut)
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 func newImagesPruneCmd() *cobra.Command {
@@ -191,10 +197,14 @@ func pruneWithSpinner(ctx context.Context, client imagesClient, req dto.ImagePru
 	}
 }
 
-func runImagesList(ctx context.Context, client imagesClient, out io.Writer) error {
+func runImagesList(ctx context.Context, client imagesClient, out io.Writer, jsonOut bool) error {
 	images, err := client.ListImages(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list images: %w", err)
+	}
+
+	if jsonOut {
+		return writeJSON(out, images)
 	}
 
 	if len(images) == 0 {

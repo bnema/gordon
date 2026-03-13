@@ -58,7 +58,7 @@ func TestRunImagesList_PrintsRowsAndSummary(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runImagesList(context.Background(), client, &out)
+	err := runImagesList(context.Background(), client, &out, false)
 	require.NoError(t, err)
 
 	text := out.String()
@@ -78,7 +78,7 @@ func TestRunImagesList_HeaderOrderAndSummaryLine(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runImagesList(context.Background(), client, &out)
+	err := runImagesList(context.Background(), client, &out, false)
 	require.NoError(t, err)
 
 	text := stripANSI(out.String())
@@ -103,7 +103,7 @@ func TestRunImagesList_TruncatesLongValuesAndKeepsBoundedRowShape(t *testing.T) 
 	}
 
 	var out bytes.Buffer
-	err := runImagesList(context.Background(), client, &out)
+	err := runImagesList(context.Background(), client, &out, false)
 	require.NoError(t, err)
 
 	text := stripANSI(out.String())
@@ -145,7 +145,7 @@ func TestRunImagesList_LongDigestLikeValuesAndEmptyFormattedFields(t *testing.T)
 	}
 
 	var out bytes.Buffer
-	err := runImagesList(context.Background(), client, &out)
+	err := runImagesList(context.Background(), client, &out, false)
 	require.NoError(t, err)
 
 	text := stripANSI(out.String())
@@ -177,7 +177,7 @@ func TestRunImagesList_EmptyOutput(t *testing.T) {
 	client := &fakeImagesClient{listImagesResp: []dto.Image{}}
 
 	var out bytes.Buffer
-	err := runImagesList(context.Background(), client, &out)
+	err := runImagesList(context.Background(), client, &out, false)
 	require.NoError(t, err)
 
 	text := out.String()

@@ -42,14 +42,20 @@ Examples:
 }
 
 func newRollbackListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "list <domain>",
 		Short: "List available rollback tags",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRollbackList(cmd.Context(), cmd.OutOrStdout(), args[0])
+			return runRollbackList(cmd.Context(), cmd.OutOrStdout(), args[0], jsonOut)
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
@@ -87,7 +93,7 @@ func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
 	return deploySelectedTag(ctx, handle.plane, route, rollbackDomain, imageName, selectedTag)
 }
 
-func runRollbackList(ctx context.Context, w io.Writer, rollbackDomain string) error {
+func runRollbackList(ctx context.Context, w io.Writer, rollbackDomain string, jsonOut bool) error {
 	handle, err := resolveControlPlane(configPath)
 	if err != nil {
 		return err
@@ -109,10 +115,14 @@ func runRollbackList(ctx context.Context, w io.Writer, rollbackDomain string) er
 		return err
 	}
 
-	return printRollbackTags(w, rollbackDomain, currentTag, tags)
+	return printRollbackTags(w, rollbackDomain, currentTag, tags, jsonOut)
 }
 
-func printRollbackTags(w io.Writer, rollbackDomain, currentTag string, tags []string) error {
+func printRollbackTags(w io.Writer, rollbackDomain, currentTag string, tags []string, jsonOut bool) error {
+	if jsonOut {
+		return writeJSON(w, tags)
+	}
+
 	if _, err := fmt.Fprintf(w, "Available tags for %s:\n", styles.Theme.Bold.Render(rollbackDomain)); err != nil {
 		return err
 	}
