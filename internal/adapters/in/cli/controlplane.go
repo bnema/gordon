@@ -20,6 +20,7 @@ type ControlPlane interface {
 	AddRoute(ctx context.Context, route domain.Route) error
 	UpdateRoute(ctx context.Context, route domain.Route) error
 	RemoveRoute(ctx context.Context, routeDomain string) error
+	Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error)
 
 	ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error)
 	SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error

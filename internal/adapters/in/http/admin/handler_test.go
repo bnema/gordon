@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -505,6 +506,88 @@ func TestHandler_AttachmentSecretsDelete(t *testing.T) {
 	}
 	assert.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
 	assert.Equal(t, "deleted", response.Status)
+}
+
+func TestHandler_Bootstrap_HappyPath(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, registrySvc, nil, testLogger(), nil)
+
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil).Once()
+	configSvc.EXPECT().AddAttachment(mock.Anything, "app.example.com", "postgres:16").Return(nil).Once()
+	secretSvc.EXPECT().Set(mock.Anything, "app.example.com", map[string]string{"APP_ENV": "prod"}).Return(nil).Once()
+	secretSvc.EXPECT().SetAttachment(mock.Anything, "app.example.com", "postgres", map[string]string{"POSTGRES_PASSWORD": "secret"}).Return(nil).Once()
+
+	body, err := json.Marshal(dto.BootstrapRequest{
+		Domain:      "app.example.com",
+		Image:       "myapp:latest",
+		Attachments: []string{"postgres:16"},
+		Env:         map[string]string{"APP_ENV": "prod"},
+		AttachmentEnv: map[string]map[string]string{
+			"postgres": {"POSTGRES_PASSWORD": "secret"},
+		},
+	})
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest("POST", "/admin/bootstrap", bytes.NewReader(body))
+	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	registrySvc.AssertNotCalled(t, "GetManifest", mock.Anything, mock.Anything, mock.Anything)
+
+	var response dto.BootstrapResponse
+	assert.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	assert.Equal(t, "app.example.com", response.Domain)
+	assert.Equal(t, "myapp:latest", response.Image)
+	assert.Equal(t, "push myapp:latest to trigger deployment", response.Next)
+	assert.Equal(t, []dto.BootstrapStep{
+		{Name: "route", Status: "created"},
+		{Name: "attachment:postgres:16", Status: "created"},
+		{Name: "env", Status: "updated"},
+		{Name: "attachment_env:postgres", Status: "updated"},
+	}, response.Steps)
+}
+
+func TestHandler_Bootstrap_RequiresPermissions(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+	tests := []struct {
+		name       string
+		scopes     []string
+		wantStatus int
+	}{
+		{name: "both permissions", scopes: []string{"admin:routes:write", "admin:secrets:write"}, wantStatus: http.StatusOK},
+		{name: "missing secrets permission", scopes: []string{"admin:routes:write"}, wantStatus: http.StatusForbidden},
+		{name: "missing routes permission", scopes: []string{"admin:secrets:write"}, wantStatus: http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantStatus == http.StatusOK {
+				configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil).Once()
+			}
+
+			req := httptest.NewRequest("POST", "/admin/bootstrap", bytes.NewBufferString(`{"domain":"app.example.com","image":"myapp:latest"}`))
+			req = req.WithContext(ctxWithScopes(tt.scopes...))
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+		})
+	}
 }
 
 // Status endpoint tests

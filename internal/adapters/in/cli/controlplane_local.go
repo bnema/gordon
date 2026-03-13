@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -120,6 +121,67 @@ func (l *localControlPlane) RemoveRoute(ctx context.Context, routeDomain string)
 		return fmt.Errorf("local config service unavailable")
 	}
 	return l.configSvc.RemoveRoute(ctx, routeDomain)
+}
+
+func (l *localControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
+	resp := &dto.BootstrapResponse{
+		Domain: req.Domain,
+		Image:  req.Image,
+		Next:   fmt.Sprintf("push %s to trigger deployment", req.Image),
+	}
+
+	if l.configSvc == nil {
+		return resp, fmt.Errorf("local config service unavailable")
+	}
+	if l.secretSvc == nil {
+		return resp, fmt.Errorf("local secret service unavailable")
+	}
+
+	addStep := func(name, status string) {
+		resp.Steps = append(resp.Steps, dto.BootstrapStep{Name: name, Status: status})
+	}
+
+	err := l.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: req.Image})
+	switch {
+	case err == nil:
+		addStep("route", "created")
+	case errors.Is(err, domain.ErrRouteExists):
+		addStep("route", "noop")
+	default:
+		addStep("route", "failed")
+		return resp, err
+	}
+
+	for _, attachment := range req.Attachments {
+		err = l.configSvc.AddAttachment(ctx, req.Domain, attachment)
+		switch {
+		case err == nil:
+			addStep("attachment:"+attachment, "created")
+		case errors.Is(err, domain.ErrAttachmentExists):
+			addStep("attachment:"+attachment, "noop")
+		default:
+			addStep("attachment:"+attachment, "failed")
+			return resp, err
+		}
+	}
+
+	if len(req.Env) > 0 {
+		if err := l.secretSvc.Set(ctx, req.Domain, req.Env); err != nil {
+			addStep("env", "failed")
+			return resp, err
+		}
+		addStep("env", "updated")
+	}
+
+	for service, env := range req.AttachmentEnv {
+		if err := l.secretSvc.SetAttachment(ctx, req.Domain, service, env); err != nil {
+			addStep("attachment_env:"+service, "failed")
+			return resp, err
+		}
+		addStep("attachment_env:"+service, "updated")
+	}
+
+	return resp, nil
 }
 
 func (l *localControlPlane) ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
