@@ -147,26 +147,29 @@ func TestTokenList_JSONShape_RoundTripsTokens(t *testing.T) {
 
 func TestRemotesList_JSONShape_RoundTripsRemoteObjects(t *testing.T) {
 	items := []struct {
-		Name   string `json:"name"`
-		URL    string `json:"url"`
-		Active bool   `json:"active"`
+		Name        string `json:"name"`
+		URL         string `json:"url"`
+		Active      bool   `json:"active"`
+		InsecureTLS bool   `json:"insecure_tls"`
 	}{
-		{Name: "prod", URL: "https://prod.example.com", Active: true},
+		{Name: "prod", URL: "https://prod.example.com", Active: true, InsecureTLS: true},
 	}
 
 	payload, err := json.Marshal(items)
 	require.NoError(t, err)
 
 	var got []struct {
-		Name   string `json:"name"`
-		URL    string `json:"url"`
-		Active bool   `json:"active"`
+		Name        string `json:"name"`
+		URL         string `json:"url"`
+		Active      bool   `json:"active"`
+		InsecureTLS bool   `json:"insecure_tls"`
 	}
 	require.NoError(t, json.Unmarshal(payload, &got))
 	require.Len(t, got, 1)
 	assert.Equal(t, "prod", got[0].Name)
 	assert.Equal(t, "https://prod.example.com", got[0].URL)
 	assert.True(t, got[0].Active)
+	assert.True(t, got[0].InsecureTLS)
 }
 
 func TestAttachmentsList_JSONShape_RoundTripsTargetPayload(t *testing.T) {
@@ -216,6 +219,31 @@ func TestSecretsList_JSONShape_RoundTripsPayload(t *testing.T) {
 	assert.Equal(t, payload.Domain, got.Domain)
 	assert.Equal(t, payload.Keys, got.Keys)
 	assert.Equal(t, payload.Attachments, got.Attachments)
+}
+
+func TestSecretsList_JSONShape_NormalizesNilAttachmentsToEmptySlice(t *testing.T) {
+	payload := struct {
+		Domain      string                     `json:"domain"`
+		Keys        []string                   `json:"keys"`
+		Attachments []remote.AttachmentSecrets `json:"attachments"`
+	}{
+		Domain:      "app.example.com",
+		Keys:        []string{"API_KEY"},
+		Attachments: []remote.AttachmentSecrets{},
+	}
+
+	encoded, err := json.Marshal(payload)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"attachments":[]`)
+
+	var got struct {
+		Domain      string                     `json:"domain"`
+		Keys        []string                   `json:"keys"`
+		Attachments []remote.AttachmentSecrets `json:"attachments"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &got))
+	assert.NotNil(t, got.Attachments)
+	assert.Empty(t, got.Attachments)
 }
 
 func TestRoutesList_JSONShape_RoundTripsLocalPayload(t *testing.T) {

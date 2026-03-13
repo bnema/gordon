@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -23,7 +22,7 @@ func newBootstrapCmd() *cobra.Command {
 		Short: "Create a route, attachments, and secrets together",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			req := dto.BootstrapRequest{
 				Domain:        args[0],
 				Image:         args[1],

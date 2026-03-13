@@ -87,6 +87,9 @@ func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
 	}
 
 	if jsonOut {
+		if attachments == nil {
+			attachments = []remote.AttachmentSecrets{}
+		}
 		return writeJSON(cmd.OutOrStdout(), map[string]any{
 			"domain":      secretDomain,
 			"keys":        keys,
