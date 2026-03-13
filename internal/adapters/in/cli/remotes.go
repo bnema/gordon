@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"sort"
 	"strings"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -35,67 +37,96 @@ Configuration is stored in ~/.config/gordon/remotes.toml`,
 
 // newRemotesListCmd creates the remotes list command.
 func newRemotesListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List saved remotes",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			remotes, active, err := remote.ListRemotes()
-			if err != nil {
-				return fmt.Errorf("failed to list remotes: %w", err)
-			}
-
-			if len(remotes) == 0 {
-				fmt.Println(styles.Theme.Muted.Render("No remotes configured"))
-				fmt.Println()
-				fmt.Println("Add a remote with:")
-				fmt.Println(styles.Theme.Bold.Render("  gordon remotes add <name> <url>"))
-				return nil
-			}
-
-			fmt.Println(styles.Theme.Title.Render("Saved Remotes"))
-			fmt.Println()
-
-			// Build table rows
-			rows := make([][]string, 0, len(remotes))
-			for name, r := range remotes {
-				status := ""
-				if name == active {
-					status = styles.Theme.Success.Render("active")
-				}
-
-				// Mask token if present
-				tokenStatus := styles.Theme.Muted.Render("none")
-				if r.Token != "" {
-					tokenStatus = styles.Theme.Success.Render("set")
-				} else if r.TokenEnv != "" {
-					tokenStatus = fmt.Sprintf("$%s", r.TokenEnv)
-				}
-
-				tlsStatus := ""
-				if r.InsecureTLS {
-					tlsStatus = styles.Theme.Warning.Render("insecure")
-				}
-
-				rows = append(rows, []string{name, r.URL, tokenStatus, tlsStatus, status})
-			}
-
-			// Render table
-			table := components.NewTable(
-				components.WithColumns([]components.TableColumn{
-					{Title: "Name", Width: 15},
-					{Title: "URL", Width: 35},
-					{Title: "Token", Width: 15},
-					{Title: "TLS", Width: 10},
-					{Title: "Status", Width: 10},
-				}),
-				components.WithRows(rows),
-			)
-
-			fmt.Println(table.View())
-
-			return nil
+			return runRemotesList(cmd.OutOrStdout(), jsonOut)
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func runRemotesList(out io.Writer, jsonOut bool) error {
+	remotes, active, err := remote.ListRemotes()
+	if err != nil {
+		return fmt.Errorf("failed to list remotes: %w", err)
+	}
+
+	if len(remotes) == 0 {
+		if jsonOut {
+			return writeJSON(out, []map[string]any{})
+		}
+		fmt.Println(styles.Theme.Muted.Render("No remotes configured"))
+		fmt.Println()
+		fmt.Println("Add a remote with:")
+		fmt.Println(styles.Theme.Bold.Render("  gordon remotes add <name> <url>"))
+		return nil
+	}
+
+	names := make([]string, 0, len(remotes))
+	for name := range remotes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	if jsonOut {
+		payload := make([]map[string]any, 0, len(names))
+		for _, name := range names {
+			r := remotes[name]
+			payload = append(payload, map[string]any{
+				"name":   name,
+				"url":    r.URL,
+				"active": name == active,
+			})
+		}
+		return writeJSON(out, payload)
+	}
+
+	fmt.Println(styles.Theme.Title.Render("Saved Remotes"))
+	fmt.Println()
+
+	rows := make([][]string, 0, len(names))
+	for _, name := range names {
+		r := remotes[name]
+		status := ""
+		if name == active {
+			status = styles.Theme.Success.Render("active")
+		}
+
+		tokenStatus := styles.Theme.Muted.Render("none")
+		if r.Token != "" {
+			tokenStatus = styles.Theme.Success.Render("set")
+		} else if r.TokenEnv != "" {
+			tokenStatus = fmt.Sprintf("$%s", r.TokenEnv)
+		}
+
+		tlsStatus := ""
+		if r.InsecureTLS {
+			tlsStatus = styles.Theme.Warning.Render("insecure")
+		}
+
+		rows = append(rows, []string{name, r.URL, tokenStatus, tlsStatus, status})
+	}
+
+	table := components.NewTable(
+		components.WithColumns([]components.TableColumn{
+			{Title: "Name", Width: 15},
+			{Title: "URL", Width: 35},
+			{Title: "Token", Width: 15},
+			{Title: "TLS", Width: 10},
+			{Title: "Status", Width: 10},
+		}),
+		components.WithRows(rows),
+	)
+
+	_, err = fmt.Fprintln(out, table.View())
+	return err
 }
 
 // newRemotesAddCmd creates the remotes add command.

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -111,7 +112,9 @@ func formatHTTPStatus(health *remote.RouteHealth) string {
 
 // newRoutesListCmd creates the routes list command.
 func newRoutesListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all routes",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -119,15 +122,19 @@ func newRoutesListCmd() *cobra.Command {
 
 			client, isRemote := GetRemoteClient()
 			if isRemote {
-				return runRoutesListRemote(ctx, client)
+				return runRoutesListRemote(ctx, client, jsonOut, cmd.OutOrStdout())
 			}
-			return runRoutesListLocal(ctx, configPath)
+			return runRoutesListLocal(ctx, configPath, jsonOut, cmd.OutOrStdout())
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 // runRoutesListRemote lists routes from a remote Gordon instance.
-func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
+func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut bool, out io.Writer) error {
 	routes, err := client.ListRoutesWithDetails(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list routes: %w", err)
@@ -142,6 +149,45 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 	health, _ := client.GetHealth(ctx)
 	if health == nil {
 		health = make(map[string]*remote.RouteHealth)
+	}
+
+	if jsonOut {
+		payload := make([]map[string]any, 0, len(routes))
+		for _, route := range routes {
+			routeHealth := health[route.Domain]
+			containerStatus := route.ContainerStatus
+			if containerStatus == "" {
+				if routeHealth != nil {
+					containerStatus = routeHealth.ContainerStatus
+				} else {
+					containerStatus = "unknown"
+				}
+			}
+
+			httpStatus := 0
+			if routeHealth != nil {
+				httpStatus = routeHealth.HTTPStatus
+			}
+
+			attachments := make([]map[string]string, 0, len(route.Attachments))
+			for _, attachment := range route.Attachments {
+				attachments = append(attachments, map[string]string{
+					"name":   attachment.Name,
+					"image":  attachment.Image,
+					"status": attachment.Status,
+				})
+			}
+
+			payload = append(payload, map[string]any{
+				"domain":           route.Domain,
+				"image":            route.Image,
+				"container_status": containerStatus,
+				"network":          route.Network,
+				"http_status":      httpStatus,
+				"attachments":      attachments,
+			})
+		}
+		return writeJSON(out, payload)
 	}
 
 	const imageColWidth = 35
@@ -207,13 +253,24 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 }
 
 // runRoutesListLocal lists routes from local configuration.
-func runRoutesListLocal(ctx context.Context, cfgPath string) error {
+func runRoutesListLocal(ctx context.Context, cfgPath string, jsonOut bool, out io.Writer) error {
 	local, err := GetLocalServices(cfgPath)
 	if err != nil {
 		return fmt.Errorf("failed to initialize local services: %w", err)
 	}
 
 	routes := local.GetConfigService().GetRoutes(ctx)
+
+	if jsonOut {
+		payload := make([]map[string]string, 0, len(routes))
+		for _, route := range routes {
+			payload = append(payload, map[string]string{
+				"domain": route.Domain,
+				"image":  route.Image,
+			})
+		}
+		return writeJSON(out, payload)
+	}
 
 	if len(routes) == 0 {
 		fmt.Println(styles.Theme.Muted.Render("No routes configured"))

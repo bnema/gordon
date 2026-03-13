@@ -63,7 +63,7 @@ func TestValidateTagExists(t *testing.T) {
 func TestPrintRollbackTags_WritesToProvidedWriter(t *testing.T) {
 	var buf bytes.Buffer
 
-	err := printRollbackTags(&buf, "myapp.example.com", "v1.2.0", []string{"v1.2.0", "v1.1.0"})
+	err := printRollbackTags(&buf, "myapp.example.com", "v1.2.0", []string{"v1.2.0", "v1.1.0"}, false)
 	assert.NoError(t, err)
 
 	output := buf.String()
@@ -74,7 +74,7 @@ func TestPrintRollbackTags_WritesToProvidedWriter(t *testing.T) {
 }
 
 func TestPrintRollbackTags_ReturnsWriteError(t *testing.T) {
-	err := printRollbackTags(failingWriter{}, "myapp.example.com", "v1.2.0", []string{"v1.2.0"})
+	err := printRollbackTags(failingWriter{}, "myapp.example.com", "v1.2.0", []string{"v1.2.0"}, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "write failed")
 }
