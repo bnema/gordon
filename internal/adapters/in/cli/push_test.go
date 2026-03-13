@@ -52,6 +52,10 @@ func (c *resolveFromImageTestControlPlane) RemoveRoute(context.Context, string) 
 	panic("unexpected call")
 }
 
+func (c *resolveFromImageTestControlPlane) Bootstrap(context.Context, dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
+	panic("unexpected call")
+}
+
 func (c *resolveFromImageTestControlPlane) ListSecretsWithAttachments(context.Context, string) (*remote.SecretsListResult, error) {
 	panic("unexpected call")
 }
