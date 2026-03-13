@@ -558,6 +558,7 @@ func runTokenList(configPath string, out io.Writer, jsonOut bool) error {
 				"scopes":      t.Scopes,
 				"created_at":  t.IssuedAt,
 				"expires_at":  expiresAt,
+				"revoked":     t.Revoked,
 			})
 		}
 		return writeJSON(out, payload)

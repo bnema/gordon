@@ -120,7 +120,11 @@ func runRollbackList(ctx context.Context, w io.Writer, rollbackDomain string, js
 
 func printRollbackTags(w io.Writer, rollbackDomain, currentTag string, tags []string, jsonOut bool) error {
 	if jsonOut {
-		return writeJSON(w, tags)
+		return writeJSON(w, map[string]any{
+			"domain":      rollbackDomain,
+			"current_tag": currentTag,
+			"tags":        tags,
+		})
 	}
 
 	if _, err := fmt.Fprintf(w, "Available tags for %s:\n", styles.Theme.Bold.Render(rollbackDomain)); err != nil {

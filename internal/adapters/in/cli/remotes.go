@@ -62,10 +62,10 @@ func runRemotesList(out io.Writer, jsonOut bool) error {
 		if jsonOut {
 			return writeJSON(out, []map[string]any{})
 		}
-		fmt.Println(styles.Theme.Muted.Render("No remotes configured"))
-		fmt.Println()
-		fmt.Println("Add a remote with:")
-		fmt.Println(styles.Theme.Bold.Render("  gordon remotes add <name> <url>"))
+		fmt.Fprintln(out, styles.Theme.Muted.Render("No remotes configured"))
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "Add a remote with:")
+		fmt.Fprintln(out, styles.Theme.Bold.Render("  gordon remotes add <name> <url>"))
 		return nil
 	}
 
@@ -88,8 +88,8 @@ func runRemotesList(out io.Writer, jsonOut bool) error {
 		return writeJSON(out, payload)
 	}
 
-	fmt.Println(styles.Theme.Title.Render("Saved Remotes"))
-	fmt.Println()
+	fmt.Fprintln(out, styles.Theme.Title.Render("Saved Remotes"))
+	fmt.Fprintln(out)
 
 	rows := make([][]string, 0, len(names))
 	for _, name := range names {

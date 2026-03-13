@@ -33,7 +33,8 @@ instance when --remote targeting is configured.`,
 
 func newBackupListCmd() *cobra.Command {
 	var jsonOut bool
-	_ = cliRenderTitle("Backups")
+
+	cliRenderTitle("Backups")
 
 	cmd := &cobra.Command{
 		Use:   "list [domain]",
@@ -76,8 +77,6 @@ func printBackupJobs(out io.Writer, jobs []dto.BackupJob, jsonOut bool) error {
 	if jsonOut {
 		return writeJSON(out, jobs)
 	}
-
-	_ = cliRenderTitle("Backups")
 
 	if err := cliWriteLine(out, cliRenderTitle("Backups")); err != nil {
 		return err
