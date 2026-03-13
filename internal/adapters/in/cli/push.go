@@ -206,8 +206,11 @@ func resolveFromImage(ctx context.Context, cp ControlPlane, imageArg, dockerfile
 	}
 
 	if len(routes) == 0 {
+		// bootstrap command is registered in bootstrap.go (see issue #98)
 		return "", "", "", fmt.Errorf(
-			"no route configured for image %q\n\nUse 'gordon routes add' to create a route first",
+			"no route configured for image %q\n\nFor a first deploy, use 'gordon bootstrap <domain> %s'\nOr configure the route directly with 'gordon routes add <domain> %s'",
+			imageArg,
+			imageArg,
 			imageArg,
 		)
 	}
