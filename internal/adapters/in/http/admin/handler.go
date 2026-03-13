@@ -305,6 +305,16 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Domain == "" {
+		h.sendError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+
+	if req.Image == "" {
+		h.sendError(w, http.StatusBadRequest, "image is required")
+		return
+	}
+
 	resp := dto.BootstrapResponse{
 		Domain: req.Domain,
 		Image:  req.Image,
@@ -320,6 +330,10 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		addStep("route", "created")
 	case errors.Is(err, domain.ErrRouteExists):
 		addStep("route", "noop")
+	case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+		addStep("route", "failed")
+		h.sendError(w, http.StatusBadRequest, err.Error())
+		return
 	default:
 		addStep("route", "failed")
 		log.Error().Err(err).Str("domain", req.Domain).Str("image", req.Image).Msg("failed to bootstrap route")
