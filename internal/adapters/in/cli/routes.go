@@ -250,7 +250,7 @@ func newRoutesAddCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "add <domain> <image>",
-		Short: "Add a new route",
+		Short: "Create or update a route",
 		Long: `Add a new route mapping a domain to a container image.
 
 Examples:
@@ -299,7 +299,7 @@ Examples:
 				}
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route added: %s -> %s", routeDomain, image)))
+			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route configured: %s -> %s", routeDomain, image)))
 			return nil
 		},
 	}
