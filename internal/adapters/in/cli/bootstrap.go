@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -77,10 +76,11 @@ func newBootstrapCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to bootstrap: %w", err)
 			}
-			if err := cliWriteLine(os.Stdout, cliRenderSuccess("Bootstrap complete")); err != nil {
+			out := cmd.OutOrStdout()
+			if err := cliWriteLine(out, cliRenderSuccess("Bootstrap complete")); err != nil {
 				return err
 			}
-			return cliWriteLine(os.Stdout, fmt.Sprintf("Next: gordon push %s --build", req.Image))
+			return cliWriteLine(out, fmt.Sprintf("Next: gordon push %s --build", req.Image))
 		},
 	}
 
