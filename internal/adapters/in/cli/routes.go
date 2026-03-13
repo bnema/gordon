@@ -152,42 +152,7 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut boo
 	}
 
 	if jsonOut {
-		payload := make([]map[string]any, 0, len(routes))
-		for _, route := range routes {
-			routeHealth := health[route.Domain]
-			containerStatus := route.ContainerStatus
-			if containerStatus == "" {
-				if routeHealth != nil {
-					containerStatus = routeHealth.ContainerStatus
-				} else {
-					containerStatus = "unknown"
-				}
-			}
-
-			httpStatus := 0
-			if routeHealth != nil {
-				httpStatus = routeHealth.HTTPStatus
-			}
-
-			attachments := make([]map[string]string, 0, len(route.Attachments))
-			for _, attachment := range route.Attachments {
-				attachments = append(attachments, map[string]string{
-					"name":   attachment.Name,
-					"image":  attachment.Image,
-					"status": attachment.Status,
-				})
-			}
-
-			payload = append(payload, map[string]any{
-				"domain":           route.Domain,
-				"image":            route.Image,
-				"container_status": containerStatus,
-				"network":          route.Network,
-				"http_status":      httpStatus,
-				"attachments":      attachments,
-			})
-		}
-		return writeJSON(out, payload)
+		return routesListJSON(out, routes, health)
 	}
 
 	const imageColWidth = 35
@@ -250,6 +215,46 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut boo
 	fmt.Println(table.View())
 
 	return nil
+}
+
+func routesListJSON(out io.Writer, routes []remote.RouteInfo, health map[string]*remote.RouteHealth) error {
+	payload := make([]map[string]any, 0, len(routes))
+	for _, route := range routes {
+		routeHealth := health[route.Domain]
+		containerStatus := route.ContainerStatus
+		if containerStatus == "" {
+			if routeHealth != nil {
+				containerStatus = routeHealth.ContainerStatus
+			} else {
+				containerStatus = "unknown"
+			}
+		}
+
+		httpStatus := 0
+		if routeHealth != nil {
+			httpStatus = routeHealth.HTTPStatus
+		}
+
+		attachments := make([]map[string]string, 0, len(route.Attachments))
+		for _, attachment := range route.Attachments {
+			attachments = append(attachments, map[string]string{
+				"name":   attachment.Name,
+				"image":  attachment.Image,
+				"status": attachment.Status,
+			})
+		}
+
+		payload = append(payload, map[string]any{
+			"domain":           route.Domain,
+			"image":            route.Image,
+			"container_status": containerStatus,
+			"network":          route.Network,
+			"http_status":      httpStatus,
+			"attachments":      attachments,
+		})
+	}
+
+	return writeJSON(out, payload)
 }
 
 // runRoutesListLocal lists routes from local configuration.

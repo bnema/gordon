@@ -142,44 +142,71 @@ func (l *localControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequ
 	}
 
 	err := l.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: req.Image})
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		addStep("route", "configured")
 	default:
 		addStep("route", "failed")
 		return resp, err
 	}
 
+	if err := l.bootstrapAttachments(ctx, req, addStep); err != nil {
+		return resp, err
+	}
+
+	if err := l.bootstrapSecrets(ctx, req, addStep); err != nil {
+		return resp, err
+	}
+
+	if err := l.bootstrapAttachmentSecrets(ctx, req, addStep); err != nil {
+		return resp, err
+	}
+
+	return resp, nil
+}
+
+func (l *localControlPlane) bootstrapAttachments(ctx context.Context, req dto.BootstrapRequest, addStep func(name, status string)) error {
 	for _, attachment := range req.Attachments {
-		err = l.configSvc.AddAttachment(ctx, req.Domain, attachment)
-		switch {
-		case err == nil:
+		err := l.configSvc.AddAttachment(ctx, req.Domain, attachment)
+		if err == nil {
 			addStep("attachment:"+attachment, "created")
-		case errors.Is(err, domain.ErrAttachmentExists):
+			continue
+		}
+		if errors.Is(err, domain.ErrAttachmentExists) {
 			addStep("attachment:"+attachment, "noop")
-		default:
-			addStep("attachment:"+attachment, "failed")
-			return resp, err
+			continue
 		}
+		addStep("attachment:"+attachment, "failed")
+		return err
 	}
 
-	if len(req.Env) > 0 {
-		if err := l.secretSvc.Set(ctx, req.Domain, req.Env); err != nil {
-			addStep("env", "failed")
-			return resp, err
-		}
-		addStep("env", "updated")
+	return nil
+}
+
+func (l *localControlPlane) bootstrapSecrets(ctx context.Context, req dto.BootstrapRequest, addStep func(name, status string)) error {
+	if len(req.Env) == 0 {
+		return nil
 	}
 
+	if err := l.secretSvc.Set(ctx, req.Domain, req.Env); err != nil {
+		addStep("env", "failed")
+		return err
+	}
+
+	addStep("env", "updated")
+	return nil
+}
+
+func (l *localControlPlane) bootstrapAttachmentSecrets(ctx context.Context, req dto.BootstrapRequest, addStep func(name, status string)) error {
 	for service, env := range req.AttachmentEnv {
 		if err := l.secretSvc.SetAttachment(ctx, req.Domain, service, env); err != nil {
 			addStep("attachment_env:"+service, "failed")
-			return resp, err
+			return err
 		}
 		addStep("attachment_env:"+service, "updated")
 	}
 
-	return resp, nil
+	return nil
 }
 
 func (l *localControlPlane) ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {

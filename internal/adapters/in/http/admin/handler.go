@@ -2,6 +2,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -311,12 +312,8 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if (len(req.Env) > 0 || len(req.AttachmentEnv) > 0) && !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
-		return
-	}
-	if len(req.Attachments) > 0 && !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+	if err := h.validateBootstrapPermissions(ctx, req); err != nil {
+		h.sendError(w, http.StatusForbidden, err.Error())
 		return
 	}
 
@@ -344,42 +341,80 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, attachment := range req.Attachments {
-		err = h.configSvc.AddAttachment(ctx, req.Domain, attachment)
-		switch {
-		case err == nil:
-			addStep("attachment:"+attachment, "created")
-		case errors.Is(err, domain.ErrAttachmentExists):
-			addStep("attachment:"+attachment, "noop")
-		default:
-			addStep("attachment:"+attachment, "failed")
-			log.Error().Err(err).Str("domain", req.Domain).Str("image", attachment).Msg("failed to bootstrap attachment")
-			h.sendJSON(w, http.StatusInternalServerError, resp)
-			return
-		}
+	if err := h.bootstrapAttachments(ctx, h.configSvc, req.Domain, req.Attachments, &resp.Steps); err != nil {
+		log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap attachments")
+		h.sendJSON(w, http.StatusInternalServerError, resp)
+		return
 	}
 
-	if len(req.Env) > 0 {
-		if err := h.secretSvc.Set(ctx, req.Domain, req.Env); err != nil {
-			addStep("env", "failed")
-			log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap env")
-			h.sendJSON(w, http.StatusInternalServerError, resp)
-			return
-		}
-		addStep("env", "updated")
+	if err := h.bootstrapSecrets(ctx, h.secretSvc, req.Domain, req.Env, &resp.Steps); err != nil {
+		log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap env")
+		h.sendJSON(w, http.StatusInternalServerError, resp)
+		return
 	}
 
-	for service, env := range req.AttachmentEnv {
-		if err := h.secretSvc.SetAttachment(ctx, req.Domain, service, env); err != nil {
-			addStep("attachment_env:"+service, "failed")
-			log.Error().Err(err).Str("domain", req.Domain).Str("service", service).Msg("failed to bootstrap attachment env")
-			h.sendJSON(w, http.StatusInternalServerError, resp)
-			return
-		}
-		addStep("attachment_env:"+service, "updated")
+	if err := h.bootstrapAttachmentSecrets(ctx, h.secretSvc, req.Domain, req.AttachmentEnv, &resp.Steps); err != nil {
+		log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap attachment env")
+		h.sendJSON(w, http.StatusInternalServerError, resp)
+		return
 	}
 
 	h.sendJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) validateBootstrapPermissions(ctx context.Context, req dto.BootstrapRequest) error {
+	if (len(req.Env) > 0 || len(req.AttachmentEnv) > 0) && !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
+		return errors.New("insufficient permissions for secrets:write")
+	}
+	if len(req.Attachments) > 0 && !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		return errors.New("insufficient permissions for config:write")
+	}
+
+	return nil
+}
+
+func (h *Handler) bootstrapAttachments(ctx context.Context, configSvc in.ConfigService, domainName string, attachments []string, steps *[]dto.BootstrapStep) error {
+	for _, attachment := range attachments {
+		err := configSvc.AddAttachment(ctx, domainName, attachment)
+		switch {
+		case err == nil:
+			*steps = append(*steps, dto.BootstrapStep{Name: "attachment:" + attachment, Status: "created"})
+		case errors.Is(err, domain.ErrAttachmentExists):
+			*steps = append(*steps, dto.BootstrapStep{Name: "attachment:" + attachment, Status: "noop"})
+		default:
+			*steps = append(*steps, dto.BootstrapStep{Name: "attachment:" + attachment, Status: "failed"})
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (h *Handler) bootstrapSecrets(ctx context.Context, secretSvc in.SecretService, domainName string, env map[string]string, steps *[]dto.BootstrapStep) error {
+	if len(env) == 0 {
+		return nil
+	}
+
+	if err := secretSvc.Set(ctx, domainName, env); err != nil {
+		*steps = append(*steps, dto.BootstrapStep{Name: "env", Status: "failed"})
+		return err
+	}
+
+	*steps = append(*steps, dto.BootstrapStep{Name: "env", Status: "updated"})
+	return nil
+}
+
+func (h *Handler) bootstrapAttachmentSecrets(ctx context.Context, secretSvc in.SecretService, domainName string, attachmentEnv map[string]map[string]string, steps *[]dto.BootstrapStep) error {
+	for service, env := range attachmentEnv {
+		if err := secretSvc.SetAttachment(ctx, domainName, service, env); err != nil {
+			*steps = append(*steps, dto.BootstrapStep{Name: "attachment_env:" + service, Status: "failed"})
+			return err
+		}
+
+		*steps = append(*steps, dto.BootstrapStep{Name: "attachment_env:" + service, Status: "updated"})
+	}
+
+	return nil
 }
 
 // sendJSON sends a JSON response.
