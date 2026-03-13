@@ -133,7 +133,8 @@ func (l *localControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequ
 	if l.configSvc == nil {
 		return resp, fmt.Errorf("local config service unavailable")
 	}
-	if l.secretSvc == nil {
+	needsSecrets := len(req.Env) > 0 || len(req.AttachmentEnv) > 0
+	if needsSecrets && l.secretSvc == nil {
 		return resp, fmt.Errorf("local secret service unavailable")
 	}
 
