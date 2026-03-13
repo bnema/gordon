@@ -291,10 +291,6 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		h.sendError(w, http.StatusForbidden, "insufficient permissions for routes:write")
 		return
 	}
-	if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
-		return
-	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
 
@@ -315,6 +311,15 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if (len(req.Env) > 0 || len(req.AttachmentEnv) > 0) && !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
+		return
+	}
+	if len(req.Attachments) > 0 && !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+
 	resp := dto.BootstrapResponse{
 		Domain: req.Domain,
 		Image:  req.Image,
@@ -327,9 +332,7 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	err := h.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: req.Image})
 	switch {
 	case err == nil:
-		addStep("route", "created")
-	case errors.Is(err, domain.ErrRouteExists):
-		addStep("route", "noop")
+		addStep("route", "configured")
 	case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
 		addStep("route", "failed")
 		h.sendError(w, http.StatusBadRequest, err.Error())

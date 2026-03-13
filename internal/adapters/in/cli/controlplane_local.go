@@ -144,9 +144,7 @@ func (l *localControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequ
 	err := l.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: req.Image})
 	switch {
 	case err == nil:
-		addStep("route", "created")
-	case errors.Is(err, domain.ErrRouteExists):
-		addStep("route", "noop")
+		addStep("route", "configured")
 	default:
 		addStep("route", "failed")
 		return resp, err

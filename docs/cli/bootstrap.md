@@ -1,6 +1,6 @@
 # Bootstrap Command
 
-Create or update a route, then push and deploy an image in one command.
+Create or update route configuration, attachments, and secrets in one command.
 
 ## gordon bootstrap
 
@@ -28,22 +28,25 @@ gordon bootstrap <domain> <image> [options]
 
 ### Description
 
-`gordon bootstrap` is the recommended first-deploy workflow.
+`gordon bootstrap` is the recommended first-step setup workflow.
 
 - It creates the route when it does not exist.
 - It updates the route when it already exists.
 - It can attach services and set environment variables as part of the same command.
-- It then pushes and deploys the image for the target route.
+- It does not push or deploy the image.
 
-Unlike `gordon push`, `gordon bootstrap` does not require the route to exist first.
+Unlike `gordon push`, `gordon bootstrap` does not require the route to exist first. Run `gordon push` separately after bootstrap to upload and deploy an image.
 
 ### Examples
 
 ```bash
-# First deploy
+# First-time route setup
 gordon bootstrap app.example.com myapp:latest
 
-# First deploy with a database attachment and environment variable
+# Then push and deploy the image
+gordon push app.example.com --build --no-confirm
+
+# First-time route setup with a database attachment and environment variable
 gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
 
 # Multiple attachments and environment variables
@@ -59,8 +62,8 @@ gordon bootstrap app.example.com myapp:latest --remote https://gordon.mydomain.c
 
 ### Notes
 
-- `gordon bootstrap` is idempotent for route configuration: rerunning it updates the route instead of failing.
-- Use `gordon push` for later image-only deploys when the route already exists.
+- `gordon bootstrap` is idempotent for route configuration: rerunning it re-applies config instead of failing.
+- Run `gordon push` after bootstrap to upload and deploy the image.
 
 ## Related
 

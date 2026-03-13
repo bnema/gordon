@@ -534,7 +534,7 @@ func TestHandler_Bootstrap_HappyPath(t *testing.T) {
 	assert.NoError(t, err)
 
 	req := httptest.NewRequest("POST", "/admin/bootstrap", bytes.NewReader(body))
-	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write"))
+	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write", "admin:config:write"))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -548,7 +548,7 @@ func TestHandler_Bootstrap_HappyPath(t *testing.T) {
 	assert.Equal(t, "myapp:latest", response.Image)
 	assert.Equal(t, "push myapp:latest to trigger deployment", response.Next)
 	assert.Equal(t, []dto.BootstrapStep{
-		{Name: "route", Status: "created"},
+		{Name: "route", Status: "configured"},
 		{Name: "attachment:postgres:16", Status: "created"},
 		{Name: "env", Status: "updated"},
 		{Name: "attachment_env:postgres", Status: "updated"},
@@ -566,11 +566,13 @@ func TestHandler_Bootstrap_RequiresPermissions(t *testing.T) {
 	tests := []struct {
 		name       string
 		scopes     []string
+		body       string
 		wantStatus int
 	}{
-		{name: "both permissions", scopes: []string{"admin:routes:write", "admin:secrets:write"}, wantStatus: http.StatusOK},
-		{name: "missing secrets permission", scopes: []string{"admin:routes:write"}, wantStatus: http.StatusForbidden},
-		{name: "missing routes permission", scopes: []string{"admin:secrets:write"}, wantStatus: http.StatusForbidden},
+		{name: "route only needs routes permission", scopes: []string{"admin:routes:write"}, body: `{"domain":"app.example.com","image":"myapp:latest"}`, wantStatus: http.StatusOK},
+		{name: "env requires secrets permission", scopes: []string{"admin:routes:write"}, body: `{"domain":"app.example.com","image":"myapp:latest","env":{"APP_ENV":"prod"}}`, wantStatus: http.StatusForbidden},
+		{name: "attachments require config permission", scopes: []string{"admin:routes:write"}, body: `{"domain":"app.example.com","image":"myapp:latest","attachments":["postgres:16"]}`, wantStatus: http.StatusForbidden},
+		{name: "missing routes permission", scopes: []string{"admin:secrets:write", "admin:config:write"}, body: `{"domain":"app.example.com","image":"myapp:latest"}`, wantStatus: http.StatusForbidden},
 	}
 
 	for _, tt := range tests {
@@ -579,7 +581,7 @@ func TestHandler_Bootstrap_RequiresPermissions(t *testing.T) {
 				configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil).Once()
 			}
 
-			req := httptest.NewRequest("POST", "/admin/bootstrap", bytes.NewBufferString(`{"domain":"app.example.com","image":"myapp:latest"}`))
+			req := httptest.NewRequest("POST", "/admin/bootstrap", bytes.NewBufferString(tt.body))
 			req = req.WithContext(ctxWithScopes(tt.scopes...))
 			rec := httptest.NewRecorder()
 
