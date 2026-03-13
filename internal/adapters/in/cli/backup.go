@@ -34,11 +34,10 @@ instance when --remote targeting is configured.`,
 func newBackupListCmd() *cobra.Command {
 	var jsonOut bool
 
-	cliRenderTitle("Backups")
-
 	cmd := &cobra.Command{
 		Use:   "list [domain]",
 		Short: "List backups",
+		Long:  cliRenderMuted("List backups for all domains or a specific domain."),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := resolveControlPlane(configPath)

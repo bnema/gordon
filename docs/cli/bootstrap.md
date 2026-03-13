@@ -30,10 +30,10 @@ gordon bootstrap <domain> <image> [options]
 
 `gordon bootstrap` is the recommended first-step setup workflow.
 
-- It creates the route when it does not exist.
-- It updates the route when it already exists.
-- It can attach services and set environment variables as part of the same command.
-- It does not push or deploy the image.
+- Creates the route when it does not exist.
+- Updates the route when it already exists.
+- Can attach services and set environment variables as part of the same command.
+- Does not push or deploy the image.
 
 Unlike `gordon push`, `gordon bootstrap` does not require the route to exist first. Run `gordon push` separately after bootstrap to upload and deploy an image.
 

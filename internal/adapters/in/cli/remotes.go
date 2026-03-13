@@ -80,9 +80,10 @@ func runRemotesList(out io.Writer, jsonOut bool) error {
 		for _, name := range names {
 			r := remotes[name]
 			payload = append(payload, map[string]any{
-				"name":   name,
-				"url":    r.URL,
-				"active": name == active,
+				"name":         name,
+				"url":          r.URL,
+				"active":       name == active,
+				"insecure_tls": r.InsecureTLS,
 			})
 		}
 		return writeJSON(out, payload)
