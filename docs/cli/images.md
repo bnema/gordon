@@ -19,10 +19,36 @@ Subcommands:
 
 ```bash
 gordon images list
+gordon images list --json
 ```
 
 Shows image rows with repository, tag, size, creation time, image id, and dangling status.
 Rows that exist only in the registry (not currently present in the runtime cache) are included with unavailable runtime fields shown as `-`.
+
+Flags:
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output images as JSON |
+
+### JSON Output
+
+```bash
+gordon images list --json
+```
+
+```json
+[
+  {
+    "repository": "myapp",
+    "tag": "latest",
+    "size": "148MB",
+    "created_at": "2026-03-13T10:15:00Z",
+    "image_id": "sha256:abc123def456",
+    "dangling": false
+  }
+]
+```
 
 ## gordon images prune
 

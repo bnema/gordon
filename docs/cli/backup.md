@@ -29,6 +29,7 @@ In normal usage, configure remotes once (`gordon remotes ...`) and run backup co
 ```bash
 # List all backups
 gordon backups list
+gordon backups list --json
 
 # List backups for one domain
 gordon backups list app.example.com
@@ -44,6 +45,26 @@ gordon backups detect app.example.com
 
 # Status summary
 gordon backups status
+```
+
+## JSON Output
+
+`gordon backups list` supports `--json` for machine-readable output.
+
+```bash
+gordon backups list --json
+```
+
+```json
+[
+  {
+    "domain": "app.example.com",
+    "db": "postgres",
+    "status": "completed",
+    "started_at": "2026-03-13T09:45:00Z",
+    "backup_id": "backup_20260313_094500"
+  }
+]
 ```
 
 ## Output Columns

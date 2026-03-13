@@ -2,6 +2,8 @@
 
 Gordon provides a command-line interface for server management, deployment, and authentication.
 
+Most `list` commands also support `--json` for machine-readable output.
+
 Commands are organized by where they run:
 
 - **Server Commands** - Must run on the machine hosting Gordon
@@ -26,6 +28,7 @@ Management commands run locally through in-process services by default. Add `--r
 | `gordon secrets` | Manage secrets | [secrets](./secrets.md) |
 | `gordon deploy` | Manually deploy or redeploy a route | [serve](./serve.md#gordon-deploy) |
 | `gordon restart` | Restart a running container | [restart](./restart.md) |
+| `gordon bootstrap` | Create or update a route, then push and deploy an image | [bootstrap](./bootstrap.md) |
 | `gordon push` | Tag, push, and optionally deploy an image | [push](./push.md) |
 | `gordon rollback` | Roll back to a previous image tag | [rollback](./rollback.md) |
 | `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
@@ -57,6 +60,9 @@ gordon deploy myapp.example.com
 
 # Restart a running container
 gordon restart myapp.example.com
+
+# First deploy for a route
+gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
 
 # Push an image and deploy
 gordon push myapp.example.com --build

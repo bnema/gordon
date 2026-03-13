@@ -40,6 +40,7 @@ List all configured attachments.
 ```bash
 # List all attachments
 gordon attachments list
+gordon attachments list --json
 
 # List attachments for a specific domain or group
 gordon attachments list app.example.com
@@ -58,6 +59,33 @@ app.example.com           postgres:18, redis:7-alpine
 api.example.com           postgres:18
 backend (group)           rabbitmq:3-management
 ```
+
+### JSON Output
+
+```bash
+gordon attachments list --json
+```
+
+```json
+[
+  {
+    "target": "app.example.com",
+    "attachments": ["postgres:18", "redis:7-alpine"]
+  },
+  {
+    "target": "backend",
+    "attachments": ["rabbitmq:3-management"]
+  }
+]
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output attachments as JSON |
+| `--remote` | Remote Gordon URL |
+| `--token` | Authentication token for remote |
 
 ---
 
