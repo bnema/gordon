@@ -59,39 +59,13 @@ func runRemotesList(out io.Writer, jsonOut bool) error {
 	}
 
 	if len(remotes) == 0 {
-		if jsonOut {
-			return writeJSON(out, []map[string]any{})
-		}
-		if err := cliWriteLine(out, cliRenderMuted("No remotes configured")); err != nil {
-			return err
-		}
-		if err := cliWriteLine(out, ""); err != nil {
-			return err
-		}
-		if err := cliWriteLine(out, "Add a remote with:"); err != nil {
-			return err
-		}
-		return cliWriteLine(out, styles.Theme.Bold.Render("  gordon remotes add <name> <url>"))
+		return remotesListEmpty(out, jsonOut)
 	}
 
-	names := make([]string, 0, len(remotes))
-	for name := range remotes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := sortedRemoteNames(remotes)
 
 	if jsonOut {
-		payload := make([]map[string]any, 0, len(names))
-		for _, name := range names {
-			r := remotes[name]
-			payload = append(payload, map[string]any{
-				"name":         name,
-				"url":          r.URL,
-				"active":       name == active,
-				"insecure_tls": r.InsecureTLS,
-			})
-		}
-		return writeJSON(out, payload)
+		return remotesListJSON(out, remotes, names, active)
 	}
 
 	if err := cliWriteLine(out, cliRenderTitle("Saved Remotes")); err != nil {
@@ -137,6 +111,45 @@ func runRemotesList(out io.Writer, jsonOut bool) error {
 
 	_, err = fmt.Fprintln(out, table.View())
 	return err
+}
+
+func remotesListEmpty(out io.Writer, jsonOut bool) error {
+	if jsonOut {
+		return writeJSON(out, []map[string]any{})
+	}
+	if err := cliWriteLine(out, cliRenderMuted("No remotes configured")); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, "Add a remote with:"); err != nil {
+		return err
+	}
+	return cliWriteLine(out, styles.Theme.Bold.Render("  gordon remotes add <name> <url>"))
+}
+
+func sortedRemoteNames(remotes map[string]remote.RemoteEntry) []string {
+	names := make([]string, 0, len(remotes))
+	for name := range remotes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func remotesListJSON(out io.Writer, remotes map[string]remote.RemoteEntry, names []string, active string) error {
+	payload := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		r := remotes[name]
+		payload = append(payload, map[string]any{
+			"name":         name,
+			"url":          r.URL,
+			"active":       name == active,
+			"insecure_tls": r.InsecureTLS,
+		})
+	}
+	return writeJSON(out, payload)
 }
 
 // newRemotesAddCmd creates the remotes add command.
