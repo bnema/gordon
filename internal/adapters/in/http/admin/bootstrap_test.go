@@ -45,7 +45,7 @@ func TestBootstrap_FullWorkflow_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/bootstrap", bytes.NewReader(body))
-	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write"))
+	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write", "admin:config:write"))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -59,7 +59,7 @@ func TestBootstrap_FullWorkflow_HappyPath(t *testing.T) {
 	assert.Equal(t, payload.Image, response.Image)
 	assert.Equal(t, "push myapp:latest to trigger deployment", response.Next)
 	assert.Equal(t, []dto.BootstrapStep{
-		{Name: "route", Status: "created"},
+		{Name: "route", Status: "configured"},
 		{Name: "attachment:postgres:16", Status: "created"},
 		{Name: "env", Status: "updated"},
 		{Name: "attachment_env:postgres", Status: "updated"},
@@ -89,7 +89,7 @@ func TestBootstrap_Idempotent_Rerun(t *testing.T) {
 	secretSvc.EXPECT().Set(mock.Anything, payload.Domain, map[string]string{"APP_ENV": "prod"}).Return(nil).Once()
 	secretSvc.EXPECT().SetAttachment(mock.Anything, payload.Domain, "postgres", map[string]string{"POSTGRES_PASSWORD": "secret"}).Return(nil).Once()
 
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: payload.Image}).Return(domain.ErrRouteExists).Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: payload.Image}).Return(nil).Once()
 	configSvc.EXPECT().AddAttachment(mock.Anything, payload.Domain, "postgres:16").Return(domain.ErrAttachmentExists).Once()
 	secretSvc.EXPECT().Set(mock.Anything, payload.Domain, map[string]string{"APP_ENV": "prod"}).Return(nil).Once()
 	secretSvc.EXPECT().SetAttachment(mock.Anything, payload.Domain, "postgres", map[string]string{"POSTGRES_PASSWORD": "secret"}).Return(nil).Once()
@@ -99,7 +99,7 @@ func TestBootstrap_Idempotent_Rerun(t *testing.T) {
 
 	for i := range 2 {
 		req := httptest.NewRequest(http.MethodPost, "/admin/bootstrap", bytes.NewReader(body))
-		req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write"))
+		req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write", "admin:config:write"))
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
@@ -113,14 +113,14 @@ func TestBootstrap_Idempotent_Rerun(t *testing.T) {
 		require.Len(t, response.Steps, 4)
 		if i == 0 {
 			assert.Equal(t, []dto.BootstrapStep{
-				{Name: "route", Status: "created"},
+				{Name: "route", Status: "configured"},
 				{Name: "attachment:postgres:16", Status: "created"},
 				{Name: "env", Status: "updated"},
 				{Name: "attachment_env:postgres", Status: "updated"},
 			}, response.Steps)
 		} else {
 			assert.Equal(t, []dto.BootstrapStep{
-				{Name: "route", Status: "noop"},
+				{Name: "route", Status: "configured"},
 				{Name: "attachment:postgres:16", Status: "noop"},
 				{Name: "env", Status: "updated"},
 				{Name: "attachment_env:postgres", Status: "updated"},
@@ -141,7 +141,7 @@ func TestBootstrap_MissingDomain(t *testing.T) {
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/bootstrap", bytes.NewReader(body))
-	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write"))
+	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:config:write"))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -162,7 +162,7 @@ func TestBootstrap_MissingImage(t *testing.T) {
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/bootstrap", bytes.NewReader(body))
-	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write"))
+	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:config:write"))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -202,7 +202,7 @@ func TestBootstrap_AddRouteValidationErrors(t *testing.T) {
 			require.NoError(t, err)
 
 			req := httptest.NewRequest(http.MethodPost, "/admin/bootstrap", bytes.NewReader(body))
-			req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write"))
+			req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:config:write"))
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, req)
@@ -234,7 +234,7 @@ func TestBootstrap_PartialFailure_AttachmentError(t *testing.T) {
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/bootstrap", bytes.NewReader(body))
-	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:secrets:write"))
+	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:config:write"))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -244,7 +244,7 @@ func TestBootstrap_PartialFailure_AttachmentError(t *testing.T) {
 	var response dto.BootstrapResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
 	assert.Equal(t, []dto.BootstrapStep{
-		{Name: "route", Status: "created"},
+		{Name: "route", Status: "configured"},
 		{Name: "attachment:postgres:16", Status: "failed"},
 	}, response.Steps)
 	secretSvc.AssertNotCalled(t, "Set", mock.Anything, mock.Anything, mock.Anything)

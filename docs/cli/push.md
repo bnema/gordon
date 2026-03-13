@@ -35,7 +35,7 @@ gordon push <domain> [options]
 `gordon push` resolves the route image for `<domain>`, tags the image for the
 Gordon registry, pushes it, and optionally deploys it.
 
-- For first deploys, prefer `gordon bootstrap`, which creates or updates the route and then pushes and deploys the image.
+- For first deploys, run `gordon bootstrap` first to create or update the route, attachments, and secrets, then run `gordon push` to upload and deploy the image.
 - The registry and repository are derived from the route image on the server.
 - The version tag defaults to a CI tag ref (like `refs/tags/v1.2.3`) when available,
   then falls back to `git describe --tags --dirty` (for example

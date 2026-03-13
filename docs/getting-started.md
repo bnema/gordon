@@ -143,16 +143,20 @@ On your local machine:
 gordon remotes add prod https://gordon.mydomain.com --token <your-token>
 gordon remotes use prod
 
-# Recommended first deploy path
+# Recommended first-time setup
 gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
+
+# Then build, push, and deploy
+gordon push app.example.com --build --no-confirm
 ```
 
 What this command does:
 
-- `gordon bootstrap` creates or updates the route, applies requested attachments
-  and environment variables, then pushes and deploys the image.
+- `gordon bootstrap` creates or updates the route, applies requested attachments,
+  and stores environment variables.
 - This is the recommended path for first deploys because it does not require the
   route to exist ahead of time.
+- Run `gordon push` separately after bootstrap to build, upload, and deploy the image.
 
 If the route already exists and you only need to push a new image version, use:
 
