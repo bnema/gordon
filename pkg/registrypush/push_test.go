@@ -3,14 +3,18 @@ package registrypush_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -115,6 +119,100 @@ func TestPusher_UploadBlob(t *testing.T) {
 			assert.Equal(t, tc.expectedPatchSizes, serverState.patchSizes)
 			assert.Equal(t, tc.expectedPatchSizes, serverState.rangeSizes)
 			assert.Equal(t, serverState.requestCount, serverState.authCount)
+		})
+	}
+}
+
+func TestPusher_Push(t *testing.T) {
+	testCases := []struct {
+		name                       string
+		imageSize                  int64
+		layerCount                 int64
+		existingBlobDigests        func(t *testing.T, img v1.Image) map[string]bool
+		expectedUploadedBlobCount  int
+		expectedManifestMediaTypes []string
+	}{
+		{
+			name:                      "single-layer image uploads config layer and manifest",
+			imageSize:                 1024,
+			layerCount:                1,
+			existingBlobDigests:       func(t *testing.T, img v1.Image) map[string]bool { return map[string]bool{} },
+			expectedUploadedBlobCount: 2,
+			expectedManifestMediaTypes: []string{
+				"application/vnd.docker.distribution.manifest.v2+json",
+				string(typesOCIManifestSchema1()),
+			},
+		},
+		{
+			name:                      "multi-layer image uploads all blobs and manifest",
+			imageSize:                 1024,
+			layerCount:                2,
+			existingBlobDigests:       func(t *testing.T, img v1.Image) map[string]bool { return map[string]bool{} },
+			expectedUploadedBlobCount: 3,
+			expectedManifestMediaTypes: []string{
+				"application/vnd.docker.distribution.manifest.v2+json",
+				string(typesOCIManifestSchema1()),
+			},
+		},
+		{
+			name:       "existing layer is skipped while others upload",
+			imageSize:  1024,
+			layerCount: 2,
+			existingBlobDigests: func(t *testing.T, img v1.Image) map[string]bool {
+				t.Helper()
+				layers, err := img.Layers()
+				require.NoError(t, err)
+				digest, err := layers[0].Digest()
+				require.NoError(t, err)
+				return map[string]bool{digest.String(): true}
+			},
+			expectedUploadedBlobCount: 2,
+			expectedManifestMediaTypes: []string{
+				"application/vnd.docker.distribution.manifest.v2+json",
+				string(typesOCIManifestSchema1()),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			img, err := random.Image(tc.imageSize, tc.layerCount)
+			require.NoError(t, err)
+
+			serverState := newFakePushRegistry(t, img, tc.existingBlobDigests(t, img))
+			server := httptest.NewServer(serverState.handler())
+			defer server.Close()
+
+			serverURL, err := url.Parse(server.URL)
+			require.NoError(t, err)
+			ref := serverURL.Host + "/demo/app:v1"
+
+			p := registrypush.New(
+				registrypush.WithTransport(server.Client().Transport),
+				registrypush.WithImageSource(func(context.Context, string) (v1.Image, error) {
+					return img, nil
+				}),
+			)
+
+			err = p.Push(context.Background(), ref)
+			require.NoError(t, err)
+
+			expectedDigests := make([]string, 0, len(serverState.expectedBlobs))
+			for digest := range serverState.expectedBlobs {
+				expectedDigests = append(expectedDigests, digest)
+				assert.Contains(t, serverState.headChecks, digest)
+			}
+			assert.Len(t, serverState.headChecks, len(expectedDigests))
+
+			assert.Len(t, serverState.uploadedBlobs, tc.expectedUploadedBlobCount)
+			for digest, content := range serverState.uploadedBlobs {
+				assert.Equal(t, serverState.expectedBlobs[digest], content)
+			}
+
+			manifestPut, ok := serverState.manifestPuts[serverState.expectedRepo+":"+serverState.expectedTag]
+			require.True(t, ok)
+			assert.Contains(t, tc.expectedManifestMediaTypes, manifestPut.contentType)
+			assert.Equal(t, serverState.expectedManifest, manifestPut.body)
 		})
 	}
 }
@@ -225,4 +323,166 @@ func rangeHeaderValue(start, end int) string {
 		return ""
 	}
 	return fmt.Sprintf("%d-%d", start, end)
+}
+
+type fakePushRegistry struct {
+	t                *testing.T
+	existingBlobs    map[string]bool
+	uploadedBlobs    map[string][]byte
+	manifestPuts     map[string]fakeManifestPut
+	uploads          map[string]*fakeUploadSession
+	nextUploadID     int
+	headChecks       []string
+	expectedBlobs    map[string][]byte
+	expectedRepo     string
+	expectedTag      string
+	expectedMT       string
+	expectedManifest []byte
+}
+
+type fakeUploadSession struct {
+	repo string
+	data []byte
+}
+
+type fakeManifestPut struct {
+	contentType string
+	body        []byte
+}
+
+func newFakePushRegistry(t *testing.T, img v1.Image, existingBlobs map[string]bool) *fakePushRegistry {
+	t.Helper()
+
+	layers, err := img.Layers()
+	require.NoError(t, err)
+
+	expectedBlobs := make(map[string][]byte, len(layers)+1)
+	for _, layer := range layers {
+		digest, err := layer.Digest()
+		require.NoError(t, err)
+		rc, err := layer.Compressed()
+		require.NoError(t, err)
+		content, err := io.ReadAll(rc)
+		require.NoError(t, err)
+		require.NoError(t, rc.Close())
+		expectedBlobs[digest.String()] = content
+	}
+
+	config, err := img.RawConfigFile()
+	require.NoError(t, err)
+	configDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(config))
+	expectedBlobs[configDigest] = config
+
+	manifest, err := img.RawManifest()
+	require.NoError(t, err)
+	mediaType, err := img.MediaType()
+	require.NoError(t, err)
+
+	return &fakePushRegistry{
+		t:                t,
+		existingBlobs:    existingBlobs,
+		uploadedBlobs:    make(map[string][]byte),
+		manifestPuts:     make(map[string]fakeManifestPut),
+		uploads:          make(map[string]*fakeUploadSession),
+		expectedBlobs:    expectedBlobs,
+		expectedRepo:     "demo/app",
+		expectedTag:      "v1",
+		expectedMT:       string(mediaType),
+		expectedManifest: manifest,
+	}
+}
+
+func (f *fakePushRegistry) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead && strings.HasPrefix(r.URL.Path, "/v2/") && strings.Contains(r.URL.Path, "/blobs/"):
+			f.handleBlobHead(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/blobs/uploads/"):
+			f.handleBlobStart(w, r)
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/blobs/uploads/"):
+			f.handleBlobPatch(w, r)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/blobs/uploads/"):
+			f.handleBlobFinalize(w, r)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/manifests/"):
+			f.handleManifestPut(w, r)
+		default:
+			f.t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	})
+}
+
+func (f *fakePushRegistry) handleBlobHead(w http.ResponseWriter, r *http.Request) {
+	digest := pathTail(r.URL.Path)
+	f.headChecks = append(f.headChecks, digest)
+	if f.existingBlobs[digest] {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.WriteHeader(http.StatusNotFound)
+}
+
+func (f *fakePushRegistry) handleBlobStart(w http.ResponseWriter, r *http.Request) {
+	repo := pathSegmentBetween(r.URL.Path, "/v2/", "/blobs/uploads/")
+	assert.Equal(f.t, f.expectedRepo, repo)
+	f.nextUploadID++
+	uploadPath := fmt.Sprintf("/v2/%s/blobs/uploads/upload-%d", repo, f.nextUploadID)
+	f.uploads[uploadPath] = &fakeUploadSession{repo: repo}
+	w.Header().Set("Location", uploadPath)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (f *fakePushRegistry) handleBlobPatch(w http.ResponseWriter, r *http.Request) {
+	session := f.uploads[r.URL.Path]
+	if session == nil {
+		f.t.Fatalf("missing upload session for %s", r.URL.Path)
+	}
+	body, err := io.ReadAll(r.Body)
+	require.NoError(f.t, err)
+	session.data = append(session.data, body...)
+	w.Header().Set("Location", r.URL.Path)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (f *fakePushRegistry) handleBlobFinalize(w http.ResponseWriter, r *http.Request) {
+	session := f.uploads[r.URL.Path]
+	if session == nil {
+		f.t.Fatalf("missing upload session for %s", r.URL.Path)
+	}
+	digest := r.URL.Query().Get("digest")
+	f.uploadedBlobs[digest] = append([]byte(nil), session.data...)
+	delete(f.uploads, r.URL.Path)
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (f *fakePushRegistry) handleManifestPut(w http.ResponseWriter, r *http.Request) {
+	repo := pathSegmentBetween(r.URL.Path, "/v2/", "/manifests/")
+	tag := pathTail(r.URL.Path)
+	assert.Equal(f.t, f.expectedRepo, repo)
+	assert.Equal(f.t, f.expectedTag, tag)
+	body, err := io.ReadAll(r.Body)
+	require.NoError(f.t, err)
+	f.manifestPuts[repo+":"+tag] = fakeManifestPut{contentType: r.Header.Get("Content-Type"), body: body}
+	w.WriteHeader(http.StatusCreated)
+}
+
+func pathTail(path string) string {
+	parts := strings.Split(path, "/")
+	return parts[len(parts)-1]
+}
+
+func pathSegmentBetween(value, start, end string) string {
+	startIdx := strings.Index(value, start)
+	if startIdx == -1 {
+		return ""
+	}
+	trimmed := value[startIdx+len(start):]
+	endIdx := strings.Index(trimmed, end)
+	if endIdx == -1 {
+		return ""
+	}
+	return trimmed[:endIdx]
+}
+
+func typesOCIManifestSchema1() string {
+	return "application/vnd.oci.image.manifest.v1+json"
 }
