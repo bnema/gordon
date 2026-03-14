@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1248,8 +1249,9 @@ backend = ["app.example.com"]
 		assert.Equal(t, "newapp:latest", savedRoutes["new.example.com"])
 		assert.Equal(t, "reg.example.com/myapp:latest", savedRoutes["app.example.com"])
 
-		_, err = os.Stat(configFile + ".bak")
-		assert.NoError(t, err)
+		matches, err := filepath.Glob(configFile + ".bak.*")
+		require.NoError(t, err)
+		assert.NotEmpty(t, matches)
 	})
 
 	t.Run("backup created before write", func(t *testing.T) {
@@ -1279,10 +1281,53 @@ port = 9999
 		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
 		require.NoError(t, err)
 
-		backupData, err := os.ReadFile(configFile + ".bak")
+		matches, err := filepath.Glob(configFile + ".bak.*")
+		require.NoError(t, err)
+		require.NotEmpty(t, matches)
+
+		backupData, err := os.ReadFile(matches[0])
 		require.NoError(t, err)
 		assert.Contains(t, string(backupData), "port = 9999")
 		assert.NotContains(t, string(backupData), "new.example.com")
+	})
+
+	t.Run("old backups are cleaned up keeping 5", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 9999
+
+[routes]
+"app.example.com" = "myapp:latest"
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		for i := 1000; i < 1007; i++ {
+			backupPath := fmt.Sprintf("%s.bak.%d", configFile, i)
+			err := os.WriteFile(backupPath, []byte("old backup"), 0600)
+			require.NoError(t, err)
+		}
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
+		require.NoError(t, err)
+
+		matches, err := filepath.Glob(configFile + ".bak.*")
+		require.NoError(t, err)
+		assert.LessOrEqual(t, len(matches), 5)
+		assert.GreaterOrEqual(t, len(matches), 1)
 	})
 
 	t.Run("network_groups are persisted to disk", func(t *testing.T) {

@@ -2,10 +2,13 @@
 package config
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -572,16 +575,84 @@ func backupConfigFile(configFile string) error {
 		return fmt.Errorf("failed to read config for backup: %w", err)
 	}
 
-	backupPath := configFile + ".bak"
+	backupPath := fmt.Sprintf("%s.bak.%d", configFile, time.Now().Unix())
 	if err := os.WriteFile(backupPath, src, 0600); err != nil {
 		return fmt.Errorf("failed to write backup config: %w", err)
+	}
+	if err := cleanupOldBackups(configFile, 5); err != nil {
+		return fmt.Errorf("failed to clean up old backups: %w", err)
 	}
 
 	return nil
 }
 
+// cleanupOldBackups removes old backup files, keeping only the most recent `keep` backups.
+// It only removes files matching the pattern `<configFile>.bak.<timestamp>`.
+func cleanupOldBackups(configFile string, keep int) error {
+	dir := filepath.Dir(configFile)
+	base := filepath.Base(configFile)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read backup directory: %w", err)
+	}
+
+	prefix := base + ".bak."
+	backups := make([]string, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), prefix) {
+			backups = append(backups, entry.Name())
+		}
+	}
+
+	slices.SortFunc(backups, func(a, b string) int {
+		return cmp.Compare(b, a)
+	})
+	if len(backups) <= keep {
+		return nil
+	}
+
+	var firstErr error
+	for _, backup := range backups[keep:] {
+		backupPath := filepath.Join(dir, backup)
+		if err := os.Remove(backupPath); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("failed to remove old backup %s: %w", backupPath, err)
+		}
+	}
+
+	return firstErr
+}
+
 func restoreConfigBackup(configFile string) error {
+	dir := filepath.Dir(configFile)
+	base := filepath.Base(configFile)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read backup directory: %w", err)
+	}
+
+	prefix := base + ".bak."
+	backups := make([]string, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), prefix) {
+			backups = append(backups, entry.Name())
+		}
+	}
+
+	slices.SortFunc(backups, func(a, b string) int {
+		return cmp.Compare(b, a)
+	})
+
 	backupPath := configFile + ".bak"
+	if len(backups) > 0 {
+		backupPath = filepath.Join(dir, backups[0])
+	}
+
 	src, err := os.ReadFile(backupPath)
 	if err != nil {
 		return fmt.Errorf("failed to read backup: %w", err)
