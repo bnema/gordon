@@ -313,7 +313,10 @@ func newRoutesAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <domain> <image>",
 		Short: "Create or update a route",
-		Long: `Add a new route mapping a domain to a container image.
+		Long: `Create or update a route mapping a domain to a container image.
+
+If the route already exists with the same image, this is a no-op.
+If it exists with a different image, the image is updated.
 
 Examples:
   gordon routes add app.mydomain.com myapp:latest
