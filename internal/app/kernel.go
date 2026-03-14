@@ -74,7 +74,7 @@ func NewKernel(configPath string) (*Kernel, error) {
 		return nil, fmt.Errorf("failed to create local secret store: %w", err)
 	}
 
-	secretSvc := secretsusecase.NewService(domainSecretStore, log)
+	secretSvc := secretsusecase.NewService(domainSecretStore, log, nil)
 
 	return &Kernel{
 		authEnabled: cfg.Auth.Enabled,

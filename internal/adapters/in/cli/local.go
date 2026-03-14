@@ -90,7 +90,7 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create domain secret store: %w", err)
 	}
-	secretSvc := secretsSvc.NewService(domainSecretStore, log)
+	secretSvc := secretsSvc.NewService(domainSecretStore, log, nil)
 
 	return &LocalServices{
 		configSvc: configSvc,
