@@ -77,6 +77,18 @@ func runAttachmentsPush(ctx context.Context, imageArg, tag string, build bool, p
 
 	versionRef, latestRef := resolveImageRefs(registry, imageName, version)
 
+	if err := printAttachmentPushInfo(out, imageArg, targets, versionRef, latestRef, version); err != nil {
+		return err
+	}
+
+	if err := performAttachmentPush(ctx, build, version, platform, dockerfile, buildArgs, registry, imageName, versionRef, latestRef); err != nil {
+		return err
+	}
+
+	return cliWriteLine(out, styles.RenderSuccess("Push complete"))
+}
+
+func printAttachmentPushInfo(out io.Writer, imageArg string, targets []string, versionRef, latestRef, version string) error {
 	if err := cliWritef(out, "Attachment image: %s\n", styles.Theme.Bold.Render(imageArg)); err != nil {
 		return err
 	}
@@ -91,21 +103,14 @@ func runAttachmentsPush(ctx context.Context, imageArg, tag string, build bool, p
 			return err
 		}
 	}
-
-	if build {
-		if err := buildAndPushFn(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef); err != nil {
-			return err
-		}
-	} else {
-		if err := tagAndPushFn(ctx, registry, imageName, version, versionRef, latestRef); err != nil {
-			return err
-		}
-	}
-
-	if err := cliWriteLine(out, styles.RenderSuccess("Push complete")); err != nil {
-		return err
-	}
 	return nil
+}
+
+func performAttachmentPush(ctx context.Context, build bool, version, platform, dockerfile string, buildArgs []string, registry, imageName, versionRef, latestRef string) error {
+	if build {
+		return buildAndPushFn(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef)
+	}
+	return tagAndPushFn(ctx, registry, imageName, version, versionRef, latestRef)
 }
 
 func resolveAttachmentImage(ctx context.Context, cp ControlPlane, imageArg string) (registry, imageName string, targets []string, err error) {
