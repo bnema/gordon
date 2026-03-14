@@ -19,6 +19,7 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/registry"
 	"github.com/bnema/gordon/pkg/validation"
 )
@@ -312,6 +313,12 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	normalizedImage, err := config.NormalizeBootstrapImage(req.Image, h.configSvc.GetRegistryDomain())
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if err := h.validateBootstrapPermissions(ctx, req); err != nil {
 		h.sendError(w, http.StatusForbidden, err.Error())
 		return
@@ -319,14 +326,14 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 
 	resp := dto.BootstrapResponse{
 		Domain: req.Domain,
-		Image:  req.Image,
-		Next:   fmt.Sprintf("push %s to trigger deployment", req.Image),
+		Image:  normalizedImage,
+		Next:   fmt.Sprintf("push %s to trigger deployment", normalizedImage),
 	}
 	addStep := func(name, status string) {
 		resp.Steps = append(resp.Steps, dto.BootstrapStep{Name: name, Status: status})
 	}
 
-	err := h.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: req.Image})
+	err = h.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: normalizedImage})
 	switch {
 	case err == nil:
 		addStep("route", "configured")

@@ -11,6 +11,7 @@ import (
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/config"
 )
 
 type localControlPlane struct {
@@ -124,10 +125,19 @@ func (l *localControlPlane) RemoveRoute(ctx context.Context, routeDomain string)
 }
 
 func (l *localControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
+	registryDomain := ""
+	if l.configSvc != nil {
+		registryDomain = l.configSvc.GetRegistryDomain()
+	}
+	normalizedImage, err := config.NormalizeBootstrapImage(req.Image, registryDomain)
+	if err != nil {
+		return nil, fmt.Errorf("invalid image: %w", err)
+	}
+
 	resp := &dto.BootstrapResponse{
 		Domain: req.Domain,
-		Image:  req.Image,
-		Next:   fmt.Sprintf("push %s to trigger deployment", req.Image),
+		Image:  normalizedImage,
+		Next:   fmt.Sprintf("push %s to trigger deployment", normalizedImage),
 	}
 
 	if l.configSvc == nil {
@@ -142,7 +152,7 @@ func (l *localControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequ
 		resp.Steps = append(resp.Steps, dto.BootstrapStep{Name: name, Status: status})
 	}
 
-	err := l.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: req.Image})
+	err = l.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: normalizedImage})
 	switch err {
 	case nil:
 		addStep("route", "configured")

@@ -36,7 +36,8 @@ func TestBootstrap_FullWorkflow_HappyPath(t *testing.T) {
 		},
 	}
 
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: payload.Image}).Return(nil).Once()
+	configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
 	configSvc.EXPECT().AddAttachment(mock.Anything, payload.Domain, "postgres:16").Return(nil).Once()
 	secretSvc.EXPECT().Set(mock.Anything, payload.Domain, map[string]string{"APP_ENV": "prod"}).Return(nil).Once()
 	secretSvc.EXPECT().SetAttachment(mock.Anything, payload.Domain, "postgres", map[string]string{"POSTGRES_PASSWORD": "secret"}).Return(nil).Once()
@@ -56,8 +57,8 @@ func TestBootstrap_FullWorkflow_HappyPath(t *testing.T) {
 	var response dto.BootstrapResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
 	assert.Equal(t, payload.Domain, response.Domain)
-	assert.Equal(t, payload.Image, response.Image)
-	assert.Equal(t, "push myapp:latest to trigger deployment", response.Next)
+	assert.Equal(t, "reg.bnema.dev/myapp", response.Image)
+	assert.Equal(t, "push reg.bnema.dev/myapp to trigger deployment", response.Next)
 	assert.Equal(t, []dto.BootstrapStep{
 		{Name: "route", Status: "configured"},
 		{Name: "attachment:postgres:16", Status: "created"},
@@ -84,12 +85,13 @@ func TestBootstrap_Idempotent_Rerun(t *testing.T) {
 		},
 	}
 
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: payload.Image}).Return(nil).Once()
+	configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Times(2)
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
 	configSvc.EXPECT().AddAttachment(mock.Anything, payload.Domain, "postgres:16").Return(nil).Once()
 	secretSvc.EXPECT().Set(mock.Anything, payload.Domain, map[string]string{"APP_ENV": "prod"}).Return(nil).Once()
 	secretSvc.EXPECT().SetAttachment(mock.Anything, payload.Domain, "postgres", map[string]string{"POSTGRES_PASSWORD": "secret"}).Return(nil).Once()
 
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: payload.Image}).Return(nil).Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
 	configSvc.EXPECT().AddAttachment(mock.Anything, payload.Domain, "postgres:16").Return(domain.ErrAttachmentExists).Once()
 	secretSvc.EXPECT().Set(mock.Anything, payload.Domain, map[string]string{"APP_ENV": "prod"}).Return(nil).Once()
 	secretSvc.EXPECT().SetAttachment(mock.Anything, payload.Domain, "postgres", map[string]string{"POSTGRES_PASSWORD": "secret"}).Return(nil).Once()
@@ -109,7 +111,7 @@ func TestBootstrap_Idempotent_Rerun(t *testing.T) {
 		var response dto.BootstrapResponse
 		require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
 		assert.Equal(t, payload.Domain, response.Domain)
-		assert.Equal(t, payload.Image, response.Image)
+		assert.Equal(t, "reg.bnema.dev/myapp", response.Image)
 		require.Len(t, response.Steps, 4)
 		if i == 0 {
 			assert.Equal(t, []dto.BootstrapStep{
@@ -171,6 +173,36 @@ func TestBootstrap_MissingImage(t *testing.T) {
 	assert.JSONEq(t, `{"error":"image is required"}`+"\n", rec.Body.String())
 }
 
+func TestBootstrap_NormalizesImageBeforeStoring(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+	payload := dto.BootstrapRequest{Domain: "app.example.com", Image: "pitlane:v1"}
+	configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: "reg.bnema.dev/pitlane"}).Return(nil).Once()
+
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/bootstrap", bytes.NewReader(body))
+	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response dto.BootstrapResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	assert.Equal(t, payload.Domain, response.Domain)
+	assert.Equal(t, "reg.bnema.dev/pitlane", response.Image)
+	assert.Equal(t, "push reg.bnema.dev/pitlane to trigger deployment", response.Next)
+}
+
 func TestBootstrap_AddRouteValidationErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -196,7 +228,8 @@ func TestBootstrap_AddRouteValidationErrors(t *testing.T) {
 			handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
 
 			payload := dto.BootstrapRequest{Domain: "app.example.com", Image: "myapp:latest"}
-			configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: payload.Image}).Return(tt.mockErr).Once()
+			configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
+			configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: "reg.bnema.dev/myapp"}).Return(tt.mockErr).Once()
 
 			body, err := json.Marshal(payload)
 			require.NoError(t, err)
@@ -227,7 +260,8 @@ func TestBootstrap_PartialFailure_AttachmentError(t *testing.T) {
 		Attachments: []string{"postgres:16"},
 	}
 
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: payload.Image}).Return(nil).Once()
+	configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
 	configSvc.EXPECT().AddAttachment(mock.Anything, payload.Domain, "postgres:16").Return(errors.New("attachment failed")).Once()
 
 	body, err := json.Marshal(payload)
