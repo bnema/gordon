@@ -157,9 +157,10 @@ func TestService_ListNetworks(t *testing.T) {
 	ctx := testContext()
 
 	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{
-		{Name: "gordon-app"},
+		{Name: "gordon-app", Labels: map[string]string{domain.LabelManaged: "true"}},
 		{Name: "bridge"},
-		{Name: "gordon-shared"},
+		{Name: "gordon-shared", Labels: map[string]string{domain.LabelManaged: "true"}},
+		{Name: "gordon-unmanaged"},
 	}, nil)
 
 	networks, err := svc.ListNetworks(ctx)
@@ -168,4 +169,5 @@ func TestService_ListNetworks(t *testing.T) {
 	assert.Len(t, networks, 2)
 	assert.Equal(t, "gordon-app", networks[0].Name)
 	assert.Equal(t, "gordon-shared", networks[1].Name)
+	assert.NotContains(t, []string{networks[0].Name, networks[1].Name}, "gordon-unmanaged")
 }
