@@ -321,6 +321,31 @@ func (l *localControlPlane) Reload(_ context.Context) error {
 	return app.SendReloadSignal()
 }
 
+func (l *localControlPlane) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error) {
+	if l.containerSvc == nil {
+		return nil, fmt.Errorf("container service unavailable")
+	}
+	return l.containerSvc.ListNetworks(ctx)
+}
+
+func (l *localControlPlane) GetConfig(ctx context.Context) (*remote.Config, error) {
+	if l.configSvc == nil {
+		return nil, fmt.Errorf("config service unavailable")
+	}
+	cfg := &remote.Config{
+		Routes:         l.configSvc.GetRoutes(ctx),
+		ExternalRoutes: l.configSvc.GetExternalRoutes(),
+	}
+	cfg.Server.Port = l.configSvc.GetServerPort()
+	cfg.Server.RegistryPort = l.configSvc.GetRegistryPort()
+	cfg.Server.RegistryDomain = l.configSvc.GetRegistryDomain()
+	cfg.Server.DataDir = l.configSvc.GetDataDir()
+	cfg.AutoRoute.Enabled = l.configSvc.IsAutoRouteEnabled()
+	cfg.NetworkIsolation.Enabled = l.configSvc.IsNetworkIsolationEnabled()
+	cfg.NetworkIsolation.Prefix = l.configSvc.GetNetworkPrefix()
+	return cfg, nil
+}
+
 func (l *localControlPlane) DeployIntent(_ context.Context, imageName string) error {
 	if l.deployCoord != nil {
 		l.deployCoord.SuppressDeployEvent(imageName)
