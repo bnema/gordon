@@ -1236,6 +1236,39 @@ func TestService_FindAttachmentTargetsByImage(t *testing.T) {
 }
 
 func TestSavePreservesAllConfigFields(t *testing.T) {
+	t.Run("does not write predictable tmp path", func(t *testing.T) {
+		dir := t.TempDir()
+		configFile := filepath.Join(dir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[server]\nport = 8080\n\n[routes]\n\"app.example.com\" = \"myapp:latest\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		maliciousTarget := filepath.Join(dir, "pwned.txt")
+		predictableTmp := configFile + ".tmp"
+		err = os.Symlink(maliciousTarget, predictableTmp)
+		require.NoError(t, err)
+
+		err = svc.Save(ctx)
+		require.NoError(t, err)
+
+		_, statErr := os.Stat(maliciousTarget)
+		assert.True(t, os.IsNotExist(statErr), "symlink target should not exist - temp file should use unpredictable name")
+
+		info, err := os.Lstat(predictableTmp)
+		require.NoError(t, err)
+		assert.NotZero(t, info.Mode()&os.ModeSymlink, "predictable .tmp path should still be the original symlink")
+	})
+
 	t.Run("with defaults does not corrupt config", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		configFile := filepath.Join(tmpDir, "gordon.toml")
