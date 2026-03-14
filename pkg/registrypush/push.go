@@ -2,12 +2,19 @@ package registrypush
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
+	"github.com/docker/docker/client"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 )
 
 // DefaultChunkSize is 50MB - safely under Cloudflare's 100MB per-request limit
@@ -70,8 +77,38 @@ func New(opts ...Option) *Pusher {
 //
 // The ref must be fully qualified: registry.example.com/name:tag
 func (p *Pusher) Push(ctx context.Context, ref string) error {
-	// Implementation in subsequent tasks
-	return nil
+	parsedRef, err := name.ParseReference(ref)
+	if err != nil {
+		return fmt.Errorf("failed to parse image ref %s: %w", ref, err)
+	}
+
+	tag, ok := parsedRef.(name.Tag)
+	if !ok {
+		return fmt.Errorf("image ref %s must include a tag", ref)
+	}
+
+	authHeader, err := resolveAuthHeader(parsedRef)
+	if err != nil {
+		return err
+	}
+
+	img, err := p.imageSource(ctx, ref)
+	if err != nil {
+		return err
+	}
+
+	baseURL := registryBaseURL(parsedRef.Context().RegistryStr())
+	repo := parsedRef.Context().RepositoryStr()
+
+	if err := p.uploadImageLayers(ctx, img, baseURL, repo, authHeader); err != nil {
+		return err
+	}
+
+	if err := p.uploadImageConfig(ctx, img, baseURL, repo, authHeader); err != nil {
+		return err
+	}
+
+	return p.uploadManifest(ctx, baseURL, repo, tag.Identifier(), img, authHeader)
 }
 
 // UploadBlob uploads a single blob to the registry using chunked uploads.
@@ -105,8 +142,141 @@ func (p *Pusher) UploadBlob(ctx context.Context, baseURL, repo, digest string, s
 
 // defaultImageSource reads an image from the local Docker/Podman daemon.
 func defaultImageSource(ctx context.Context, ref string) (v1.Image, error) {
-	// Implementation in Task 3
-	return nil, nil
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+	}
+	defer cli.Close()
+
+	tag, err := name.NewTag(ref)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse image ref %s: %w", ref, err)
+	}
+
+	rc, err := cli.ImageSave(ctx, []string{ref})
+	if err != nil {
+		return nil, fmt.Errorf("failed to export image %s: %w", ref, err)
+	}
+	defer rc.Close()
+
+	img, err := tarball.Image(func() (io.ReadCloser, error) {
+		return rc, nil
+	}, &tag)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse image tar for %s: %w", ref, err)
+	}
+	return img, nil
+}
+
+func (p *Pusher) uploadImageLayers(ctx context.Context, img v1.Image, baseURL, repo, auth string) error {
+	layers, err := img.Layers()
+	if err != nil {
+		return fmt.Errorf("failed to read image layers: %w", err)
+	}
+
+	for _, layer := range layers {
+		if err := p.uploadLayer(ctx, baseURL, repo, layer, auth); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (p *Pusher) uploadLayer(ctx context.Context, baseURL, repo string, layer v1.Layer, auth string) error {
+	digest, err := layer.Digest()
+	if err != nil {
+		return fmt.Errorf("failed to get layer digest: %w", err)
+	}
+
+	size, err := layer.Size()
+	if err != nil {
+		return fmt.Errorf("failed to get layer size for %s: %w", digest, err)
+	}
+
+	content, err := layer.Compressed()
+	if err != nil {
+		return fmt.Errorf("failed to read layer %s: %w", digest, err)
+	}
+	defer content.Close()
+
+	if err := p.UploadBlob(ctx, baseURL, repo, digest.String(), size, content, auth); err != nil {
+		return fmt.Errorf("failed to upload layer %s: %w", digest, err)
+	}
+
+	return nil
+}
+
+func (p *Pusher) uploadImageConfig(ctx context.Context, img v1.Image, baseURL, repo, auth string) error {
+	config, err := img.RawConfigFile()
+	if err != nil {
+		return fmt.Errorf("failed to read image config: %w", err)
+	}
+
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(config))
+	if err := p.UploadBlob(ctx, baseURL, repo, digest, int64(len(config)), bytesReader(config), auth); err != nil {
+		return fmt.Errorf("failed to upload image config %s: %w", digest, err)
+	}
+
+	return nil
+}
+
+func (p *Pusher) uploadManifest(ctx context.Context, baseURL, repo, tag string, img v1.Image, auth string) error {
+	manifest, err := img.RawManifest()
+	if err != nil {
+		return fmt.Errorf("failed to read image manifest: %w", err)
+	}
+
+	mediaType, err := img.MediaType()
+	if err != nil {
+		return fmt.Errorf("failed to read image media type: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, tag), bytesReader(manifest))
+	if err != nil {
+		return fmt.Errorf("failed to create manifest upload request: %w", err)
+	}
+	setAuthHeader(req, auth)
+	req.Header.Set("Content-Type", string(mediaType))
+	req.ContentLength = int64(len(manifest))
+
+	resp, err := p.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to upload manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("manifest upload returned status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func resolveAuthHeader(ref name.Reference) (string, error) {
+	authenticator, err := authn.DefaultKeychain.Resolve(ref.Context().Registry)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve registry credentials for %s: %w", ref.Context().RegistryStr(), err)
+	}
+
+	authConfig, err := authenticator.Authorization()
+	if err != nil {
+		return "", fmt.Errorf("failed to authorize for registry %s: %w", ref.Context().RegistryStr(), err)
+	}
+
+	if authConfig == nil || (authConfig.Username == "" && authConfig.Password == "") {
+		return "", nil
+	}
+
+	encoded := base64.StdEncoding.EncodeToString([]byte(authConfig.Username + ":" + authConfig.Password))
+	return "Basic " + encoded, nil
+}
+
+func registryBaseURL(host string) string {
+	if strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1:") || host == "localhost" || host == "127.0.0.1" {
+		return "http://" + host
+	}
+	return "https://" + host
 }
 
 var errBlobMissing = fmt.Errorf("blob missing")
