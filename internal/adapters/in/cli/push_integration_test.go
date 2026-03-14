@@ -51,7 +51,13 @@ func TestIntegration_TagAndPush_NativeRegistry(t *testing.T) {
 	versionRef := registry + "/testapp:v1.0.0"
 	latestRef := registry + "/testapp:latest"
 
-	err = tagAndPush(ctx, ops, registry, "testapp", "v1.0.0", versionRef, latestRef)
+	err = tagAndPush(ctx, ops, imagePush{
+		Registry:   registry,
+		ImageName:  "testapp",
+		Version:    "v1.0.0",
+		VersionRef: versionRef,
+		LatestRef:  latestRef,
+	})
 	require.NoError(t, err)
 
 	harness.RequireManifest(t, "v1.0.0")
