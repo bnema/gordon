@@ -1304,7 +1304,7 @@ port = 9999
 		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
 		require.NoError(t, err)
 
-		for i := 1000; i < 1007; i++ {
+		for i := 1000000000000; i < 1000000000007; i++ {
 			backupPath := fmt.Sprintf("%s.bak.%d", configFile, i)
 			err := os.WriteFile(backupPath, []byte("old backup"), 0600)
 			require.NoError(t, err)
@@ -1326,8 +1326,7 @@ port = 9999
 
 		matches, err := filepath.Glob(configFile + ".bak.*")
 		require.NoError(t, err)
-		assert.LessOrEqual(t, len(matches), 5)
-		assert.GreaterOrEqual(t, len(matches), 1)
+		assert.Equal(t, 5, len(matches))
 	})
 
 	t.Run("network_groups are persisted to disk", func(t *testing.T) {

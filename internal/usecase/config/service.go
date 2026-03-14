@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -575,7 +576,7 @@ func backupConfigFile(configFile string) error {
 		return fmt.Errorf("failed to read config for backup: %w", err)
 	}
 
-	backupPath := fmt.Sprintf("%s.bak.%d", configFile, time.Now().Unix())
+	backupPath := fmt.Sprintf("%s.bak.%d", configFile, time.Now().UnixNano())
 	if err := os.WriteFile(backupPath, src, 0600); err != nil {
 		return fmt.Errorf("failed to write backup config: %w", err)
 	}
@@ -587,7 +588,7 @@ func backupConfigFile(configFile string) error {
 }
 
 // cleanupOldBackups removes old backup files, keeping only the most recent `keep` backups.
-// It only removes files matching the pattern `<configFile>.bak.<timestamp>`.
+// It only removes files matching the pattern `<configFile>.bak.<numeric-timestamp>`.
 func cleanupOldBackups(configFile string, keep int) error {
 	dir := filepath.Dir(configFile)
 	base := filepath.Base(configFile)
@@ -597,18 +598,29 @@ func cleanupOldBackups(configFile string, keep int) error {
 	}
 
 	prefix := base + ".bak."
-	backups := make([]string, 0)
+	type tsBackup struct {
+		ts   int64
+		name string
+	}
+	var backups []tsBackup
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		if strings.HasPrefix(entry.Name(), prefix) {
-			backups = append(backups, entry.Name())
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
 		}
+		suffix := strings.TrimPrefix(name, prefix)
+		ts, err := strconv.ParseInt(suffix, 10, 64)
+		if err != nil {
+			continue
+		}
+		backups = append(backups, tsBackup{ts: ts, name: name})
 	}
 
-	slices.SortFunc(backups, func(a, b string) int {
-		return cmp.Compare(b, a)
+	slices.SortFunc(backups, func(a, b tsBackup) int {
+		return cmp.Compare(b.ts, a.ts)
 	})
 	if len(backups) <= keep {
 		return nil
@@ -616,7 +628,7 @@ func cleanupOldBackups(configFile string, keep int) error {
 
 	var firstErr error
 	for _, backup := range backups[keep:] {
-		backupPath := filepath.Join(dir, backup)
+		backupPath := filepath.Join(dir, backup.name)
 		if err := os.Remove(backupPath); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("failed to remove old backup %s: %w", backupPath, err)
 		}
@@ -634,23 +646,34 @@ func restoreConfigBackup(configFile string) error {
 	}
 
 	prefix := base + ".bak."
-	backups := make([]string, 0)
+	type tsBackup struct {
+		ts   int64
+		name string
+	}
+	var backups []tsBackup
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		if strings.HasPrefix(entry.Name(), prefix) {
-			backups = append(backups, entry.Name())
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
 		}
+		suffix := strings.TrimPrefix(name, prefix)
+		ts, err := strconv.ParseInt(suffix, 10, 64)
+		if err != nil {
+			continue
+		}
+		backups = append(backups, tsBackup{ts: ts, name: name})
 	}
 
-	slices.SortFunc(backups, func(a, b string) int {
-		return cmp.Compare(b, a)
+	slices.SortFunc(backups, func(a, b tsBackup) int {
+		return cmp.Compare(b.ts, a.ts)
 	})
 
 	backupPath := configFile + ".bak"
 	if len(backups) > 0 {
-		backupPath = filepath.Join(dir, backups[0])
+		backupPath = filepath.Join(dir, backups[0].name)
 	}
 
 	src, err := os.ReadFile(backupPath)
