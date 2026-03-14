@@ -2172,8 +2172,7 @@ func (s *Service) handleRunningAttachment(ctx context.Context, existing *domain.
 	// Check env drift
 	envDrifted, err := s.attachmentEnvDrifted(ctx, existing, containerName, serviceImage)
 	if err != nil {
-		log.WrapErr(err, "failed to check attachment env drift")
-		return true, nil
+		return false, log.WrapErr(err, "failed to check attachment env drift")
 	}
 
 	if !envDrifted && !imageDrifted {
