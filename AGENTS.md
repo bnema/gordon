@@ -154,5 +154,5 @@ Only boundary interfaces are mocked. Run `mockery` after modifying any interface
 
 1. **Run `golangci-lint run ./...` before committing** — CI enforces it.
 2. **gocyclo max 15** — extract helpers to reduce complexity.
-3. **errcheck enabled** — always handle all error returns gracefully or wrap them with zerowrap.
+3. **errcheck enabled** — always handle all error returns gracefully by wrapping with context (fmt.Errorf) and logging critical errors with zerowrap.
 
