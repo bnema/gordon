@@ -3,7 +3,7 @@
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Go Report Card](https://goreportcard.com/badge/github.com/bnema/gordon)](https://goreportcard.com/report/github.com/bnema/gordon)
 
-Self-hosted web app deployments. Push to your registry, Gordon does the rest.
+Self-hosted container deployment. Push an image, Gordon routes it to the web.
 
 - Website: https://gordon.bnema.dev
 - Documentation: [Docs](https://gordon.bnema.dev/docs) | [Wiki](https://gordon.bnema.dev/wiki)
@@ -13,17 +13,119 @@ Self-hosted web app deployments. Push to your registry, Gordon does the rest.
 
 ## What is Gordon?
 
-Gordon is a private container registry + HTTP reverse proxy for your VPS. Push a container image exposing a web port, it deploys automatically with zero downtime.
+Gordon is a private container registry and HTTP reverse proxy for your VPS. Push a container image that exposes a web port — Gordon deploys it with zero downtime.
+
+## Quick Start
 
 ```bash
-docker build -t myapp .
-docker push registry.your-server.com/myapp:latest
-# → Live at https://app.your-server.com
+# Install
+curl -fsSL https://gordon.bnema.dev/install.sh | sh
+
+# Start the server
+gordon serve
 ```
 
-Build on your machine, push to deploy. Works from your laptop or CI.
+Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started guide](https://gordon.bnema.dev/docs/getting-started) for full setup.
 
-**Features:**
+## Deploy with the CLI
+
+Build locally, push directly to your Gordon server:
+
+```bash
+# Push an image and deploy it to a domain
+gordon push app.example.com --image myapp:latest
+
+# Or add a route manually, then deploy
+gordon routes add app.example.com myapp:latest
+gordon routes deploy app.example.com
+
+# Check status
+gordon status
+```
+
+Roll back, restart, or manage secrets — all from the command line:
+
+```bash
+gordon rollback app.example.com    # Revert to a previous image tag
+gordon restart app.example.com     # Restart the container
+gordon secrets set app.example.com DB_HOST=db.internal API_KEY=secret123
+```
+
+## Deploy from CI/CD
+
+Push to Gordon's registry from any CI pipeline. Gordon deploys automatically on image push.
+
+### GitHub Actions
+
+```yaml
+- uses: bnema/gordon/.github/actions/deploy@main
+  with:
+    registry: registry.mydomain.com
+    username: ${{ secrets.GORDON_USERNAME }}
+    password: ${{ secrets.GORDON_TOKEN }}
+```
+
+### Docker CLI
+
+```bash
+docker login registry.mydomain.com
+docker build -t registry.mydomain.com/myapp:v1.0.0 .
+docker push registry.mydomain.com/myapp:v1.0.0
+# -> Deployed automatically
+```
+
+See the [Deploy Action README](.github/actions/deploy/README.md) for multi-platform builds, monorepo support, and all available options.
+
+## CLI Commands
+
+### Server
+
+| Command | Description |
+|---------|-------------|
+| `gordon serve` | Start the Gordon server |
+| `gordon status` | Show server and route health |
+| `gordon config show` | Display server configuration |
+
+### Deployment
+
+| Command | Description |
+|---------|-------------|
+| `gordon push <domain>` | Tag and push an image to deploy |
+| `gordon routes list` | List all routes |
+| `gordon routes add <domain> <image>` | Create or update a route |
+| `gordon routes remove <domain>` | Remove a route |
+| `gordon routes deploy <domain>` | Redeploy a route |
+| `gordon rollback <domain>` | Roll back to a previous image |
+| `gordon restart <domain>` | Restart a route container |
+
+### Images & Registry
+
+| Command | Description |
+|---------|-------------|
+| `gordon images list` | List runtime and registry images |
+| `gordon images prune` | Clean up dangling images and old tags |
+| `gordon images tags <repo>` | List registry tags for a repository |
+
+### Secrets & Config
+
+| Command | Description |
+|---------|-------------|
+| `gordon secrets list <domain>` | List secrets for a route |
+| `gordon secrets set <domain> KEY=VAL` | Set secrets |
+| `gordon secrets remove <domain> <key>` | Remove a secret |
+
+### Remotes & Auth
+
+| Command | Description |
+|---------|-------------|
+| `gordon remotes list` | List remote Gordon endpoints |
+| `gordon remotes add <name> <url>` | Add a remote |
+| `gordon remotes use <name>` | Set the active remote |
+| `gordon auth login` | Authenticate to a remote |
+| `gordon auth token generate` | Generate a JWT token |
+
+## Features
+
 - Private Docker registry on your VPS
 - Domain-to-container routing via HTTP reverse proxy
 - Automatic deployment on image push
@@ -37,23 +139,10 @@ Build on your machine, push to deploy. Works from your laptop or CI.
 
 ## Documentation
 
-Full documentation is available at **[gordon.bnema.dev](https://gordon.bnema.dev)**
+Full documentation at **[gordon.bnema.dev](https://gordon.bnema.dev)**
 
-- [Documentation](https://gordon.bnema.dev/docs) - Installation, configuration, CLI reference
-- [Wiki](https://gordon.bnema.dev/wiki) - Tutorials, guides, and examples
-
-## Quick Start
-
-```bash
-# Install Gordon
-curl -fsSL https://gordon.bnema.dev/install.sh | sh
-# Or: curl -fsSL https://raw.githubusercontent.com/bnema/gordon/main/install.sh | sh
-
-# Start Gordon (generates config on first run)
-gordon serve
-```
-
-Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started guide](https://gordon.bnema.dev/docs/getting-started) for complete setup instructions.
+- [Docs](https://gordon.bnema.dev/docs) — Installation, configuration, CLI reference
+- [Wiki](https://gordon.bnema.dev/wiki) — Tutorials, guides, and examples
 
 ## Community
 
@@ -63,4 +152,4 @@ Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started gu
 
 ## License
 
-GPL-3.0 - Use freely, contribute back.
+GPL-3.0 — Use freely, contribute back.
