@@ -220,8 +220,9 @@ max_blob_chunk_size = "1GB"    # Allow larger layers
 
 **Behavior:**
 - When a blob chunk exceeds the limit, Gordon returns `413 Request Entity Too Large`
-- Docker/Podman may send a full layer in one request, so set this high enough for your base images
-- Default (`95MB`) is compatible with Cloudflare and most CDN proxies; increase if pushing very large layers directly
+- Gordon CLI uploads image layers in 50MB chunks by default, and this setting caps the maximum chunk accepted per request
+- Keep this below Cloudflare's 100MB per-request limit when operating behind Cloudflare; the default (`95MB`) is fine
+- Increase it only if you expect larger direct registry uploads from other clients
 
 ## Registry IP Allowlist
 
