@@ -1,6 +1,7 @@
 package registrypush
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -299,12 +300,24 @@ func resolveAuthHeader(ref name.Reference) (string, error) {
 		return "", fmt.Errorf("failed to authorize for registry %s: %w", ref.Context().RegistryStr(), err)
 	}
 
-	if authConfig == nil || (authConfig.Username == "" && authConfig.Password == "") {
+	if authConfig == nil {
 		return "", nil
 	}
 
-	encoded := base64.StdEncoding.EncodeToString([]byte(authConfig.Username + ":" + authConfig.Password))
-	return "Basic " + encoded, nil
+	if authConfig.RegistryToken != "" {
+		return "Bearer " + authConfig.RegistryToken, nil
+	}
+
+	if authConfig.Auth != "" {
+		return "Basic " + authConfig.Auth, nil
+	}
+
+	if authConfig.Username != "" || authConfig.Password != "" {
+		encoded := base64.StdEncoding.EncodeToString([]byte(authConfig.Username + ":" + authConfig.Password))
+		return "Basic " + encoded, nil
+	}
+
+	return "", nil
 }
 
 func registryBaseURL(host string) string {
@@ -488,19 +501,5 @@ func chunkCount(size, chunkSize int64) int64 {
 }
 
 func bytesReader(chunk []byte) io.Reader {
-	return &sliceReader{chunk: chunk}
-}
-
-type sliceReader struct {
-	chunk []byte
-	off   int
-}
-
-func (r *sliceReader) Read(p []byte) (int, error) {
-	if r.off >= len(r.chunk) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.chunk[r.off:])
-	r.off += n
-	return n, nil
+	return bytes.NewReader(chunk)
 }
