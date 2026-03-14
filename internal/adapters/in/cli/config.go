@@ -36,7 +36,7 @@ Examples:
   gordon config show --json
   gordon config show --remote https://gordon.mydomain.com --token $TOKEN`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			handle, err := resolveControlPlane(configPath)
 			if err != nil {
 				return err
