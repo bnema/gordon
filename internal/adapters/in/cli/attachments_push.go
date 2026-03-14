@@ -15,8 +15,6 @@ import (
 
 var (
 	resolveControlPlaneFn = resolveControlPlane
-	tagAndPushFn          = tagAndPush
-	buildAndPushFn        = buildAndPush
 	determineVersionFn    = determineVersion
 )
 
@@ -77,11 +75,16 @@ func runAttachmentsPush(ctx context.Context, imageArg, tag string, build bool, p
 
 	versionRef, latestRef := resolveImageRefs(registry, imageName, version)
 
+	imageOps, err := newImageOpsFn()
+	if err != nil {
+		return err
+	}
+
 	if err := printAttachmentPushInfo(out, imageArg, targets, versionRef, latestRef, version); err != nil {
 		return err
 	}
 
-	if err := performAttachmentPush(ctx, build, version, platform, dockerfile, buildArgs, registry, imageName, versionRef, latestRef); err != nil {
+	if err := performAttachmentPush(ctx, imageOps, build, version, platform, dockerfile, buildArgs, registry, imageName, versionRef, latestRef); err != nil {
 		return err
 	}
 
@@ -106,11 +109,11 @@ func printAttachmentPushInfo(out io.Writer, imageArg string, targets []string, v
 	return nil
 }
 
-func performAttachmentPush(ctx context.Context, build bool, version, platform, dockerfile string, buildArgs []string, registry, imageName, versionRef, latestRef string) error {
+func performAttachmentPush(ctx context.Context, ops pushImageOps, build bool, version, platform, dockerfile string, buildArgs []string, registry, imageName, versionRef, latestRef string) error {
 	if build {
-		return buildAndPushFn(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef)
+		return buildAndPush(ctx, ops, version, platform, dockerfile, buildArgs, versionRef, latestRef)
 	}
-	return tagAndPushFn(ctx, registry, imageName, version, versionRef, latestRef)
+	return tagAndPush(ctx, ops, registry, imageName, version, versionRef, latestRef)
 }
 
 func resolveAttachmentImage(ctx context.Context, cp ControlPlane, imageArg string) (registry, imageName string, targets []string, err error) {
