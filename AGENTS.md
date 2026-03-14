@@ -154,8 +154,5 @@ Only boundary interfaces are mocked. Run `mockery` after modifying any interface
 
 1. **Run `golangci-lint run ./...` before committing** — CI enforces it.
 2. **gocyclo max 15** — extract helpers to reduce complexity.
-3. **errcheck enabled** — handle or explicitly discard (`_, _ =`) all error returns.
-4. **`AddRoute` is an upsert** — same domain+image = noop, different image = overwrite. No `ErrRouteExists` in practice.
-5. **Never expose Docker IDs or raw labels** in CLI/API output — security hardening.
-6. **Networks are filtered** by both name prefix AND `gordon.managed=true` label.
-7. **Secrets list shows names only** — values are never exposed via CLI or API (by design).
+3. **errcheck enabled** — always handle all error returns gracefully or wrap them with zerowrap.
+
