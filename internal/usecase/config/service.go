@@ -2,10 +2,14 @@
 package config
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -237,25 +241,9 @@ func (s *Service) FindRoutesByImage(_ context.Context, imageName string) []domai
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	registryDomain := s.config.RegistryDomain
-	normalizedImage := NormalizeRegistryImage(imageName, registryDomain)
-	inputName, inputHasTag := splitImageNameTag(normalizedImage)
-
 	var routes []domain.Route
 	for domainName, image := range s.config.Routes {
-		normalizedRouteImage := NormalizeRegistryImage(image, registryDomain)
-
-		match := false
-		if inputHasTag {
-			// Exact match when the caller provided a tag (e.g. event handler).
-			match = strings.EqualFold(normalizedRouteImage, normalizedImage)
-		} else {
-			// Name-only match when no tag was provided (e.g. CLI push).
-			routeName, _ := splitImageNameTag(normalizedRouteImage)
-			match = strings.EqualFold(routeName, inputName)
-		}
-
-		if match {
+		if matchesImageName(imageName, image, s.config.RegistryDomain) {
 			route := domain.Route{
 				Image: image,
 				HTTPS: true,
@@ -271,6 +259,37 @@ func (s *Service) FindRoutesByImage(_ context.Context, imageName string) []domai
 	}
 
 	return routes
+}
+
+// FindAttachmentTargetsByImage returns all attachment targets whose image matches the given image name.
+func (s *Service) FindAttachmentTargetsByImage(_ context.Context, imageName string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var targets []string
+	for target, images := range s.config.Attachments {
+		for _, image := range images {
+			if matchesImageName(imageName, image, s.config.RegistryDomain) {
+				targets = append(targets, target)
+				break
+			}
+		}
+	}
+
+	return targets
+}
+
+func matchesImageName(inputImage, candidateImage, registryDomain string) bool {
+	normalizedInput := NormalizeRegistryImage(inputImage, registryDomain)
+	inputName, inputHasTag := splitImageNameTag(normalizedInput)
+	normalizedCandidate := NormalizeRegistryImage(candidateImage, registryDomain)
+
+	if inputHasTag {
+		return strings.EqualFold(normalizedCandidate, normalizedInput)
+	}
+
+	candidateName, _ := splitImageNameTag(normalizedCandidate)
+	return strings.EqualFold(candidateName, inputName)
 }
 
 // splitImageNameTag splits "name:tag" into ("name", true) or ("name", false) when no tag is present.
@@ -593,16 +612,106 @@ func backupConfigFile(configFile string) error {
 		return fmt.Errorf("failed to read config for backup: %w", err)
 	}
 
-	backupPath := configFile + ".bak"
+	backupPath := fmt.Sprintf("%s.bak.%d", configFile, time.Now().UnixNano())
 	if err := os.WriteFile(backupPath, src, 0600); err != nil {
 		return fmt.Errorf("failed to write backup config: %w", err)
+	}
+	if err := cleanupOldBackups(configFile, 5); err != nil {
+		return fmt.Errorf("failed to clean up old backups: %w", err)
 	}
 
 	return nil
 }
 
+// cleanupOldBackups removes old backup files, keeping only the most recent `keep` backups.
+// It only removes files matching the pattern `<configFile>.bak.<numeric-timestamp>`.
+func cleanupOldBackups(configFile string, keep int) error {
+	dir := filepath.Dir(configFile)
+	base := filepath.Base(configFile)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read backup directory: %w", err)
+	}
+
+	prefix := base + ".bak."
+	type tsBackup struct {
+		ts   int64
+		name string
+	}
+	var backups []tsBackup
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(name, prefix)
+		ts, err := strconv.ParseInt(suffix, 10, 64)
+		if err != nil {
+			continue
+		}
+		backups = append(backups, tsBackup{ts: ts, name: name})
+	}
+
+	slices.SortFunc(backups, func(a, b tsBackup) int {
+		return cmp.Compare(b.ts, a.ts)
+	})
+	if len(backups) <= keep {
+		return nil
+	}
+
+	var firstErr error
+	for _, backup := range backups[keep:] {
+		backupPath := filepath.Join(dir, backup.name)
+		if err := os.Remove(backupPath); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("failed to remove old backup %s: %w", backupPath, err)
+		}
+	}
+
+	return firstErr
+}
+
 func restoreConfigBackup(configFile string) error {
+	dir := filepath.Dir(configFile)
+	base := filepath.Base(configFile)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read backup directory: %w", err)
+	}
+
+	prefix := base + ".bak."
+	type tsBackup struct {
+		ts   int64
+		name string
+	}
+	var backups []tsBackup
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(name, prefix)
+		ts, err := strconv.ParseInt(suffix, 10, 64)
+		if err != nil {
+			continue
+		}
+		backups = append(backups, tsBackup{ts: ts, name: name})
+	}
+
+	slices.SortFunc(backups, func(a, b tsBackup) int {
+		return cmp.Compare(b.ts, a.ts)
+	})
+
 	backupPath := configFile + ".bak"
+	if len(backups) > 0 {
+		backupPath = filepath.Join(dir, backups[0].name)
+	}
+
 	src, err := os.ReadFile(backupPath)
 	if err != nil {
 		return fmt.Errorf("failed to read backup: %w", err)

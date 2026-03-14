@@ -76,6 +76,10 @@ func (r *remoteControlPlane) GetAttachmentsConfig(ctx context.Context, domainOrG
 	return r.client.GetAttachmentsConfig(ctx, domainOrGroup)
 }
 
+func (r *remoteControlPlane) FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error) {
+	return r.client.FindAttachmentTargetsByImage(ctx, imageName)
+}
+
 func (r *remoteControlPlane) AddAttachment(ctx context.Context, domainOrGroup, image string) error {
 	return r.client.AddAttachment(ctx, domainOrGroup, image)
 }

@@ -84,6 +84,10 @@ func (c *resolveFromImageTestControlPlane) GetAttachmentsConfig(context.Context,
 	panic("unexpected call")
 }
 
+func (c *resolveFromImageTestControlPlane) FindAttachmentTargetsByImage(context.Context, string) ([]string, error) {
+	panic("unexpected call")
+}
+
 func (c *resolveFromImageTestControlPlane) AddAttachment(context.Context, string, string) error {
 	panic("unexpected call")
 }

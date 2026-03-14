@@ -30,6 +30,7 @@ Management commands run locally through in-process services by default. Add `--r
 | `gordon restart` | Restart a running container | [restart](./restart.md) |
 | `gordon bootstrap` | Configure a route, attachments, and secrets for an app | [bootstrap](./bootstrap.md) |
 | `gordon push` | Tag, push, and optionally deploy an image | [push](./push.md) |
+| `gordon attachments push` | Build/push attachment images to registry | [attachments](./attachments.md) |
 | `gordon rollback` | Roll back to a previous image tag | [rollback](./rollback.md) |
 | `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
 | `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |

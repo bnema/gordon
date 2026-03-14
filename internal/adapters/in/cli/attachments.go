@@ -32,6 +32,7 @@ the local Gordon configuration.`,
 	cmd.AddCommand(newAttachmentsListCmd())
 	cmd.AddCommand(newAttachmentsAddCmd())
 	cmd.AddCommand(newAttachmentsRemoveCmd())
+	cmd.AddCommand(newAttachmentsPushCmd())
 
 	return cmd
 }

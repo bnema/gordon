@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1154,6 +1155,86 @@ func TestService_FindRoutesByImage(t *testing.T) {
 	})
 }
 
+func TestService_FindAttachmentTargetsByImage(t *testing.T) {
+	t.Run("exact tagged matches", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest", "postgres:18"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "postgres:18")
+		assert.Equal(t, []string{"app.example.com"}, targets)
+	})
+
+	t.Run("bare name matches tagged attachments", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"postgres:18"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "postgres")
+		assert.Equal(t, []string{"app.example.com"}, targets)
+	})
+
+	t.Run("registry qualified input is normalized", func(t *testing.T) {
+		v := viper.New()
+		v.Set("server.registry_domain", "reg.example.com")
+		v.Set("attachments", map[string]interface{}{
+			"backend": []interface{}{"reg.example.com/postgres:18"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "reg.example.com/postgres:18")
+		assert.Equal(t, []string{"backend"}, targets)
+	})
+
+	t.Run("shared attachment used by multiple targets", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+			"backend":         []interface{}{"redis:latest", "postgres:18"},
+			"worker":          []interface{}{"rabbitmq:3"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "redis")
+		assert.ElementsMatch(t, []string{"app.example.com", "backend"}, targets)
+	})
+
+	t.Run("no matches", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "postgres")
+		assert.Empty(t, targets)
+	})
+}
+
 func TestSavePreservesAllConfigFields(t *testing.T) {
 	t.Run("with defaults does not corrupt config", func(t *testing.T) {
 		tmpDir := t.TempDir()
@@ -1248,8 +1329,9 @@ backend = ["app.example.com"]
 		assert.Equal(t, "newapp:latest", savedRoutes["new.example.com"])
 		assert.Equal(t, "reg.example.com/myapp:latest", savedRoutes["app.example.com"])
 
-		_, err = os.Stat(configFile + ".bak")
-		assert.NoError(t, err)
+		matches, err := filepath.Glob(configFile + ".bak.*")
+		require.NoError(t, err)
+		assert.NotEmpty(t, matches)
 	})
 
 	t.Run("backup created before write", func(t *testing.T) {
@@ -1279,10 +1361,52 @@ port = 9999
 		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
 		require.NoError(t, err)
 
-		backupData, err := os.ReadFile(configFile + ".bak")
+		matches, err := filepath.Glob(configFile + ".bak.*")
+		require.NoError(t, err)
+		require.NotEmpty(t, matches)
+
+		backupData, err := os.ReadFile(matches[0])
 		require.NoError(t, err)
 		assert.Contains(t, string(backupData), "port = 9999")
 		assert.NotContains(t, string(backupData), "new.example.com")
+	})
+
+	t.Run("old backups are cleaned up keeping 5", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 9999
+
+[routes]
+"app.example.com" = "myapp:latest"
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		for i := 1000000000000; i < 1000000000007; i++ {
+			backupPath := fmt.Sprintf("%s.bak.%d", configFile, i)
+			err := os.WriteFile(backupPath, []byte("old backup"), 0600)
+			require.NoError(t, err)
+		}
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
+		require.NoError(t, err)
+
+		matches, err := filepath.Glob(configFile + ".bak.*")
+		require.NoError(t, err)
+		assert.Equal(t, 5, len(matches))
 	})
 
 	t.Run("AddRoute updates existing dotted domain route", func(t *testing.T) {
@@ -1378,7 +1502,6 @@ token_secret = "testsecret123"
 		assert.Equal(t, "testadmin", v2.GetString("auth.username"))
 		assert.Equal(t, "testsecret123", v2.GetString("auth.token_secret"))
 	})
-
 	t.Run("network_groups are persisted to disk", func(t *testing.T) {
 		// Setup: config file with auth, server, and network_groups
 		tmpDir := t.TempDir()
