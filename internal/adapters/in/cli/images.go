@@ -76,6 +76,7 @@ These commands currently require remote mode with a configured target.`,
 
 	cmd.AddCommand(newImagesListCmd())
 	cmd.AddCommand(newImagesPruneCmd())
+	cmd.AddCommand(newImagesTagsCmd())
 
 	return cmd
 }
@@ -129,6 +130,72 @@ release tags per repository. Use --dangling or --registry to restrict scope.`,
 	cmd.Flags().BoolVar(&opts.NoConfirm, "no-confirm", false, "Skip confirmation prompt")
 
 	return cmd
+}
+
+func newImagesTagsCmd() *cobra.Command {
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "tags <repository>",
+		Short: "List registry tags for a repository",
+		Long: `Display all tags in the Gordon registry for a given repository.
+
+Examples:
+  gordon images tags myapp
+  gordon images tags myapp --json
+  gordon images tags myapp --remote https://gordon.mydomain.com --token $TOKEN`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			handle, err := resolveControlPlane(configPath)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			return runImagesTags(ctx, handle.plane, cmd.OutOrStdout(), args[0], jsonOut)
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func runImagesTags(ctx context.Context, cp ControlPlane, out io.Writer, repository string, jsonOut bool) error {
+	tags, err := cp.ListTags(ctx, repository)
+	if err != nil {
+		return fmt.Errorf("failed to list tags: %w", err)
+	}
+
+	if jsonOut {
+		payload := map[string]any{
+			"repository": repository,
+			"tags":       tags,
+		}
+		return writeJSON(out, payload)
+	}
+
+	if len(tags) == 0 {
+		return cliWriteLine(out, cliRenderMuted(fmt.Sprintf("No tags found for %s", repository)))
+	}
+
+	if err := cliWriteLine(out, cliRenderTitle(fmt.Sprintf("Tags for %s", repository))); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+
+	for _, tag := range tags {
+		if err := cliWriteLine(out, cliRenderListItem(tag)); err != nil {
+			return err
+		}
+	}
+
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	return cliWritef(out, "Total: %d tags\n", len(tags))
 }
 
 // resolvePruneScopes determines which prune subsystems are active.
