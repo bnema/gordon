@@ -253,9 +253,12 @@ func Run(ctx context.Context, configPath string) error {
 	}
 
 	// Register event handlers
-	if err := registerEventHandlers(ctx, svc, cfg); err != nil {
+	cleanupHandlers, err := registerEventHandlers(ctx, svc, cfg)
+	if err != nil {
 		return err
 	}
+	// cleanupHandlers is passed into runServers so it can stop debounce
+	// timers before graceful shutdown, preventing deploys during drain.
 
 	// Set up config hot reload
 	setupConfigHotReload(ctx, v, svc, log)
@@ -270,7 +273,7 @@ func Run(ctx context.Context, configPath string) error {
 	registryHandler, proxyHandler := createHTTPHandlers(svc, cfg, log)
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
-	return runServers(ctx, v, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, svc, log)
+	return runServers(ctx, v, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, svc, cleanupHandlers, log)
 }
 
 func ensureTLSConfig(cfg *Config, log zerowrap.Logger) error {
@@ -490,7 +493,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	svc.secretSvc = secretsSvc.NewService(domainSecretStore, log)
+	svc.secretSvc = secretsSvc.NewService(domainSecretStore, log, svc.eventBus)
 
 	if svc.containerSvc, err = createContainerService(ctx, v, cfg, svc, log); err != nil {
 		return nil, err
@@ -1298,41 +1301,50 @@ func validateBackupRetention(cfg Config) (domain.RetentionPolicy, error) {
 }
 
 // registerEventHandlers registers all event handlers.
-func registerEventHandlers(ctx context.Context, svc *services, cfg Config) error {
+func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func(), error) {
 	imagePushedHandler := container.NewImagePushedHandler(ctx, svc.containerSvc, svc.configSvc)
 	if err := svc.eventBus.Subscribe(imagePushedHandler); err != nil {
-		return fmt.Errorf("failed to subscribe image pushed handler: %w", err)
+		return nil, fmt.Errorf("failed to subscribe image pushed handler: %w", err)
 	}
 
 	// Auto-route handler for creating routes from image labels
 	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, cfg.Server.RegistryDomain).
 		WithEnvExtractor(svc.runtime, svc.envDir)
 	if err := svc.eventBus.Subscribe(autoRouteHandler); err != nil {
-		return fmt.Errorf("failed to subscribe auto-route handler: %w", err)
+		return nil, fmt.Errorf("failed to subscribe auto-route handler: %w", err)
 	}
 
 	configReloadHandler := container.NewConfigReloadHandler(ctx, svc.containerSvc, svc.configSvc)
 	if err := svc.eventBus.Subscribe(configReloadHandler); err != nil {
-		return fmt.Errorf("failed to subscribe config reload handler: %w", err)
+		return nil, fmt.Errorf("failed to subscribe config reload handler: %w", err)
 	}
 
 	manualReloadHandler := container.NewManualReloadHandler(ctx, svc.containerSvc, svc.configSvc)
 	if err := svc.eventBus.Subscribe(manualReloadHandler); err != nil {
-		return fmt.Errorf("failed to subscribe manual reload handler: %w", err)
+		return nil, fmt.Errorf("failed to subscribe manual reload handler: %w", err)
 	}
 
 	manualDeployHandler := container.NewManualDeployHandler(ctx, svc.containerSvc, svc.configSvc)
 	if err := svc.eventBus.Subscribe(manualDeployHandler); err != nil {
-		return fmt.Errorf("failed to subscribe manual deploy handler: %w", err)
+		return nil, fmt.Errorf("failed to subscribe manual deploy handler: %w", err)
+	}
+
+	secretsChangedHandler := container.NewSecretsChangedHandler(ctx, svc.containerSvc, svc.configSvc, 60*time.Second)
+	if err := svc.eventBus.Subscribe(secretsChangedHandler); err != nil {
+		return nil, fmt.Errorf("failed to subscribe secrets changed handler: %w", err)
 	}
 
 	// Proxy cache invalidation on config reload (clears stale targets for removed routes)
 	configReloadProxyHandler := proxy.NewConfigReloadProxyHandler(ctx, svc.proxySvc)
 	if err := svc.eventBus.Subscribe(configReloadProxyHandler); err != nil {
-		return fmt.Errorf("failed to subscribe config reload proxy handler: %w", err)
+		return nil, fmt.Errorf("failed to subscribe config reload proxy handler: %w", err)
 	}
 
-	return nil
+	cleanup := func() {
+		secretsChangedHandler.Stop()
+	}
+
+	return cleanup, nil
 }
 
 // setupConfigHotReload sets up Viper config hot reload.
@@ -1689,7 +1701,7 @@ func isLoopbackHost(host string) bool {
 // - SIGUSR2: Triggers manual deploy for a specific route
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, svc *services, log zerowrap.Logger) error {
+func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -1760,6 +1772,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	syncAndAutoStart(ctx, svc, log)
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
+	cleanupHandlers() // Stop debounce timers before draining containers
 	gracefulShutdown(registrySrv, proxySrv, tlsSrv, containerSvc, svc.proxySvc, log)
 	return nil
 }

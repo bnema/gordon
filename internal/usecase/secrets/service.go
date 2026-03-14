@@ -24,15 +24,35 @@ var (
 
 // Service implements the SecretService interface.
 type Service struct {
-	store out.DomainSecretStore
-	log   zerowrap.Logger
+	store    out.DomainSecretStore
+	log      zerowrap.Logger
+	eventBus out.EventPublisher
 }
 
 // NewService creates a new secrets service.
-func NewService(store out.DomainSecretStore, log zerowrap.Logger) *Service {
+func NewService(store out.DomainSecretStore, log zerowrap.Logger, eventBus out.EventPublisher) *Service {
 	return &Service{
-		store: store,
-		log:   log,
+		store:    store,
+		log:      log,
+		eventBus: eventBus,
+	}
+}
+
+// publishSecretsChanged publishes a secrets.changed event.
+// Failures are logged but do not fail the mutation - secret storage
+// is the source of truth; the event is a best-effort notification.
+func (s *Service) publishSecretsChanged(ctx context.Context, domainName, operation string, keys []string) {
+	if s.eventBus == nil {
+		return
+	}
+	log := zerowrap.FromCtx(ctx)
+	payload := domain.SecretsChangedPayload{
+		Domain:    domainName,
+		Operation: operation,
+		Keys:      keys,
+	}
+	if err := s.eventBus.Publish(domain.EventSecretsChanged, payload); err != nil {
+		log.Warn().Err(err).Str("domain", domainName).Msg("failed to publish secrets.changed event")
 	}
 }
 
@@ -140,6 +160,12 @@ func (s *Service) Set(ctx context.Context, domain string, secrets map[string]str
 		return err
 	}
 
+	keys := make([]string, 0, len(secrets))
+	for k := range secrets {
+		keys = append(keys, k)
+	}
+	s.publishSecretsChanged(ctx, domain, "set", keys)
+
 	log.Info().Int("count", len(secrets)).Msg("secrets set")
 	return nil
 }
@@ -163,6 +189,8 @@ func (s *Service) Delete(ctx context.Context, domain, key string) error {
 		log.Error().Err(err).Msg("failed to delete secret")
 		return err
 	}
+
+	s.publishSecretsChanged(ctx, domain, "delete", []string{key})
 
 	log.Info().Msg("secret deleted")
 	return nil
@@ -195,6 +223,12 @@ func (s *Service) SetAttachment(ctx context.Context, domainName, service string,
 		return err
 	}
 
+	keys := make([]string, 0, len(secrets))
+	for k := range secrets {
+		keys = append(keys, k)
+	}
+	s.publishSecretsChanged(ctx, domainName, "set", keys)
+
 	log.Info().Int("count", len(secrets)).Str("container", containerName).Msg("attachment secrets set")
 	return nil
 }
@@ -226,6 +260,8 @@ func (s *Service) DeleteAttachment(ctx context.Context, domainName, service, key
 		log.Error().Err(err).Msg("failed to delete attachment secret")
 		return err
 	}
+
+	s.publishSecretsChanged(ctx, domainName, "delete", []string{key})
 
 	log.Info().Str("container", containerName).Msg("attachment secret deleted")
 	return nil

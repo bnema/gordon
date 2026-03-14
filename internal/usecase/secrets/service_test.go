@@ -11,6 +11,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func testLogger() zerowrap.Logger {
@@ -135,7 +136,7 @@ func TestValidateDomain_DistinguishesSeparatorsForEnvStorage(t *testing.T) {
 
 func TestService_ListKeys_ValidationErrors(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	tests := []struct {
 		name    string
@@ -170,7 +171,7 @@ func TestService_ListKeys_ValidationErrors(t *testing.T) {
 
 func TestService_ListKeys_Success(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	expectedKeys := []string{"API_KEY", "DB_PASSWORD"}
 	store.EXPECT().ListKeys("app.example.com").Return(expectedKeys, nil)
@@ -182,7 +183,7 @@ func TestService_ListKeys_Success(t *testing.T) {
 
 func TestService_ListKeysWithAttachments_ValidationErrors(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	tests := []struct {
 		name    string
@@ -219,7 +220,7 @@ func TestService_ListKeysWithAttachments_ValidationErrors(t *testing.T) {
 func TestService_ListKeysWithAttachments_Success(t *testing.T) {
 	t.Run("returns both domain and attachment secrets", func(t *testing.T) {
 		store := outmocks.NewMockDomainSecretStore(t)
-		svc := NewService(store, testLogger())
+		svc := NewService(store, testLogger(), nil)
 
 		expectedKeys := []string{"API_KEY", "DB_PASSWORD"}
 		expectedAttachments := []out.AttachmentSecrets{
@@ -238,7 +239,7 @@ func TestService_ListKeysWithAttachments_Success(t *testing.T) {
 
 	t.Run("returns empty attachments when none exist", func(t *testing.T) {
 		store := outmocks.NewMockDomainSecretStore(t)
-		svc := NewService(store, testLogger())
+		svc := NewService(store, testLogger(), nil)
 
 		expectedKeys := []string{"API_KEY"}
 
@@ -253,7 +254,7 @@ func TestService_ListKeysWithAttachments_Success(t *testing.T) {
 
 	t.Run("continues without attachments on attachment error", func(t *testing.T) {
 		store := outmocks.NewMockDomainSecretStore(t)
-		svc := NewService(store, testLogger())
+		svc := NewService(store, testLogger(), nil)
 
 		expectedKeys := []string{"API_KEY"}
 		attachmentErr := assert.AnError
@@ -271,7 +272,7 @@ func TestService_ListKeysWithAttachments_Success(t *testing.T) {
 
 func TestService_ListKeysWithAttachments_StoreError(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	storeErr := assert.AnError
 	store.EXPECT().ListKeys("app.example.com").Return(nil, storeErr)
@@ -284,7 +285,7 @@ func TestService_ListKeysWithAttachments_StoreError(t *testing.T) {
 
 func TestService_GetAll_ValidationErrors(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	tests := []struct {
 		name    string
@@ -314,7 +315,7 @@ func TestService_GetAll_ValidationErrors(t *testing.T) {
 
 func TestService_GetAll_Success(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	expectedSecrets := map[string]string{"API_KEY": "secret123", "DB_PASSWORD": "pass456"}
 	store.EXPECT().GetAll("app.example.com").Return(expectedSecrets, nil)
@@ -326,7 +327,7 @@ func TestService_GetAll_Success(t *testing.T) {
 
 func TestService_Set_ValidationErrors(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	secrets := map[string]string{"API_KEY": "secret123"}
 
@@ -357,10 +358,30 @@ func TestService_Set_ValidationErrors(t *testing.T) {
 
 func TestService_Set_Success(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	eventBus := outmocks.NewMockEventPublisher(t)
+	svc := NewService(store, testLogger(), eventBus)
 
 	secrets := map[string]string{"API_KEY": "secret123"}
 	store.EXPECT().Set("app.example.com", secrets).Return(nil)
+	eventBus.EXPECT().Publish(domain.EventSecretsChanged, mock.AnythingOfType("domain.SecretsChangedPayload")).Return(nil)
+
+	err := svc.Set(context.Background(), "app.example.com", secrets)
+	assert.NoError(t, err)
+}
+
+func TestService_Set_PublishesSecretsChangedEvent(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	eventBus := outmocks.NewMockEventPublisher(t)
+	svc := NewService(store, testLogger(), eventBus)
+
+	secrets := map[string]string{"API_KEY": "secret123", "DB_PASSWORD": "pass456"}
+	store.EXPECT().Set("app.example.com", secrets).Return(nil)
+	eventBus.EXPECT().Publish(domain.EventSecretsChanged, mock.MatchedBy(func(payload domain.SecretsChangedPayload) bool {
+		assert.Equal(t, "app.example.com", payload.Domain)
+		assert.Equal(t, "set", payload.Operation)
+		assert.ElementsMatch(t, []string{"API_KEY", "DB_PASSWORD"}, payload.Keys)
+		return true
+	})).Return(nil)
 
 	err := svc.Set(context.Background(), "app.example.com", secrets)
 	assert.NoError(t, err)
@@ -368,7 +389,7 @@ func TestService_Set_Success(t *testing.T) {
 
 func TestService_Delete_ValidationErrors(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	tests := []struct {
 		name    string
@@ -397,17 +418,62 @@ func TestService_Delete_ValidationErrors(t *testing.T) {
 
 func TestService_Delete_Success(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	eventBus := outmocks.NewMockEventPublisher(t)
+	svc := NewService(store, testLogger(), eventBus)
 
 	store.EXPECT().Delete("app.example.com", "API_KEY").Return(nil)
+	eventBus.EXPECT().Publish(domain.EventSecretsChanged, mock.AnythingOfType("domain.SecretsChangedPayload")).Return(nil)
 
 	err := svc.Delete(context.Background(), "app.example.com", "API_KEY")
 	assert.NoError(t, err)
 }
 
+func TestService_Delete_PublishesSecretsChangedEvent(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	eventBus := outmocks.NewMockEventPublisher(t)
+	svc := NewService(store, testLogger(), eventBus)
+
+	store.EXPECT().Delete("app.example.com", "API_KEY").Return(nil)
+	eventBus.EXPECT().Publish(domain.EventSecretsChanged, mock.MatchedBy(func(payload domain.SecretsChangedPayload) bool {
+		assert.Equal(t, "app.example.com", payload.Domain)
+		assert.Equal(t, "delete", payload.Operation)
+		assert.Equal(t, []string{"API_KEY"}, payload.Keys)
+		return true
+	})).Return(nil)
+
+	err := svc.Delete(context.Background(), "app.example.com", "API_KEY")
+	assert.NoError(t, err)
+}
+
+func TestService_Set_SucceedsEvenIfEventPublishFails(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	eventBus := outmocks.NewMockEventPublisher(t)
+	svc := NewService(store, testLogger(), eventBus)
+
+	secrets := map[string]string{"API_KEY": "secret123"}
+	store.EXPECT().Set("app.example.com", secrets).Return(nil)
+	eventBus.EXPECT().Publish(domain.EventSecretsChanged, mock.AnythingOfType("domain.SecretsChangedPayload")).Return(assert.AnError)
+
+	err := svc.Set(context.Background(), "app.example.com", secrets)
+	assert.NoError(t, err)
+}
+
+func TestService_NilEventPublisher_DoesNotPanic(t *testing.T) {
+	store := outmocks.NewMockDomainSecretStore(t)
+	svc := NewService(store, testLogger(), nil)
+
+	secrets := map[string]string{"API_KEY": "secret123"}
+	store.EXPECT().Set("app.example.com", secrets).Return(nil)
+
+	assert.NotPanics(t, func() {
+		err := svc.Set(context.Background(), "app.example.com", secrets)
+		assert.NoError(t, err)
+	})
+}
+
 func TestService_StoreError_PropagatedCorrectly(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	storeErr := assert.AnError
 	store.EXPECT().ListKeys("app.example.com").Return(nil, storeErr)
@@ -450,7 +516,7 @@ func TestPathTraversalVariants(t *testing.T) {
 // TestService_ValidationHappensBeforeStore ensures validation runs before any store calls.
 func TestService_ValidationHappensBeforeStore(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	// With path traversal domain, store methods should never be called
 	// We don't set up any expectations, so if store is called, the test will fail
@@ -473,10 +539,12 @@ func TestService_ValidationHappensBeforeStore(t *testing.T) {
 
 func TestService_SetAttachment(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	eventBus := outmocks.NewMockEventPublisher(t)
+	svc := NewService(store, testLogger(), eventBus)
 
 	secrets := map[string]string{"POSTGRES_PASSWORD": "secret123"}
 	store.EXPECT().SetAttachment("gordon-app__example__com-postgres", secrets).Return(nil)
+	eventBus.EXPECT().Publish(domain.EventSecretsChanged, mock.AnythingOfType("domain.SecretsChangedPayload")).Return(nil)
 
 	err := svc.SetAttachment(context.Background(), "app.example.com", "postgres", secrets)
 	assert.NoError(t, err)
@@ -484,9 +552,11 @@ func TestService_SetAttachment(t *testing.T) {
 
 func TestService_DeleteAttachment(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	eventBus := outmocks.NewMockEventPublisher(t)
+	svc := NewService(store, testLogger(), eventBus)
 
 	store.EXPECT().DeleteAttachment("gordon-app__example__com-postgres", "OLD_KEY").Return(nil)
+	eventBus.EXPECT().Publish(domain.EventSecretsChanged, mock.AnythingOfType("domain.SecretsChangedPayload")).Return(nil)
 
 	err := svc.DeleteAttachment(context.Background(), "app.example.com", "postgres", "OLD_KEY")
 	assert.NoError(t, err)
@@ -494,7 +564,7 @@ func TestService_DeleteAttachment(t *testing.T) {
 
 func TestService_SetAttachment_InvalidDomain(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	err := svc.SetAttachment(context.Background(), "", "postgres", map[string]string{"KEY": "val"})
 	assert.ErrorIs(t, err, ErrDomainEmpty)
@@ -502,7 +572,7 @@ func TestService_SetAttachment_InvalidDomain(t *testing.T) {
 
 func TestService_SetAttachment_EmptyService(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	err := svc.SetAttachment(context.Background(), "app.example.com", "", map[string]string{"KEY": "val"})
 	assert.ErrorIs(t, err, ErrServiceEmpty)
@@ -510,7 +580,7 @@ func TestService_SetAttachment_EmptyService(t *testing.T) {
 
 func TestService_DeleteAttachment_InvalidDomain(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	err := svc.DeleteAttachment(context.Background(), "", "postgres", "SOME_KEY")
 	assert.ErrorIs(t, err, ErrDomainEmpty)
@@ -518,7 +588,7 @@ func TestService_DeleteAttachment_InvalidDomain(t *testing.T) {
 
 func TestService_DeleteAttachment_EmptyService(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	err := svc.DeleteAttachment(context.Background(), "app.example.com", "", "SOME_KEY")
 	assert.ErrorIs(t, err, ErrServiceEmpty)
@@ -526,7 +596,7 @@ func TestService_DeleteAttachment_EmptyService(t *testing.T) {
 
 func TestService_SetAttachment_InvalidServiceName(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	err := svc.SetAttachment(context.Background(), "app.example.com", "../evil", map[string]string{"K": "V"})
 	assert.ErrorIs(t, err, ErrInvalidServiceName)
@@ -534,7 +604,7 @@ func TestService_SetAttachment_InvalidServiceName(t *testing.T) {
 
 func TestService_DeleteAttachment_InvalidServiceName(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	err := svc.DeleteAttachment(context.Background(), "app.example.com", "foo/bar", "SOME_KEY")
 	assert.ErrorIs(t, err, ErrInvalidServiceName)
@@ -542,7 +612,7 @@ func TestService_DeleteAttachment_InvalidServiceName(t *testing.T) {
 
 func TestService_SetAttachment_ServiceNameTooLong(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	// Service name exceeds DNS label limit of 63 characters
 	longService := strings.Repeat("a", 64)
@@ -552,7 +622,7 @@ func TestService_SetAttachment_ServiceNameTooLong(t *testing.T) {
 
 func TestService_SetAttachment_ServiceNameTrailingHyphen(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	err := svc.SetAttachment(context.Background(), "app.example.com", "postgres-", map[string]string{"K": "V"})
 	assert.ErrorIs(t, err, ErrInvalidServiceName)
@@ -560,7 +630,7 @@ func TestService_SetAttachment_ServiceNameTrailingHyphen(t *testing.T) {
 
 func TestService_DeleteAttachment_ServiceNameTooLong(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	// Service name exceeds DNS label limit of 63 characters
 	longService := strings.Repeat("a", 64)
@@ -570,7 +640,7 @@ func TestService_DeleteAttachment_ServiceNameTooLong(t *testing.T) {
 
 func TestService_DeleteAttachment_ServiceNameTrailingHyphen(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	err := svc.DeleteAttachment(context.Background(), "app.example.com", "redis-", "SOME_KEY")
 	assert.ErrorIs(t, err, ErrInvalidServiceName)
@@ -578,7 +648,7 @@ func TestService_DeleteAttachment_ServiceNameTrailingHyphen(t *testing.T) {
 
 func TestService_AttachmentValidationHappensBeforeStore(t *testing.T) {
 	store := outmocks.NewMockDomainSecretStore(t)
-	svc := NewService(store, testLogger())
+	svc := NewService(store, testLogger(), nil)
 
 	// With invalid service name, store methods should never be called
 	err := svc.SetAttachment(context.Background(), "app.example.com", "../evil", map[string]string{"key": "value"})
