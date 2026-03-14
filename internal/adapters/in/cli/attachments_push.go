@@ -77,11 +77,19 @@ func runAttachmentsPush(ctx context.Context, imageArg, tag string, build bool, p
 
 	versionRef, latestRef := resolveImageRefs(registry, imageName, version)
 
-	cliWritef(out, "Attachment image: %s\n", styles.Theme.Bold.Render(imageArg))
-	cliWritef(out, "Targets:          %s\n", styles.Theme.Bold.Render(formatAttachmentTargets(targets)))
-	cliWritef(out, "Image:            %s\n", styles.Theme.Bold.Render(versionRef))
+	if err := cliWritef(out, "Attachment image: %s\n", styles.Theme.Bold.Render(imageArg)); err != nil {
+		return err
+	}
+	if err := cliWritef(out, "Targets:          %s\n", styles.Theme.Bold.Render(formatAttachmentTargets(targets))); err != nil {
+		return err
+	}
+	if err := cliWritef(out, "Image:            %s\n", styles.Theme.Bold.Render(versionRef)); err != nil {
+		return err
+	}
 	if version != "latest" {
-		cliWritef(out, "Also:             %s\n", styles.Theme.Bold.Render(latestRef))
+		if err := cliWritef(out, "Also:             %s\n", styles.Theme.Bold.Render(latestRef)); err != nil {
+			return err
+		}
 	}
 
 	if build {
@@ -94,7 +102,9 @@ func runAttachmentsPush(ctx context.Context, imageArg, tag string, build bool, p
 		}
 	}
 
-	cliWriteLine(out, styles.RenderSuccess("Push complete"))
+	if err := cliWriteLine(out, styles.RenderSuccess("Push complete")); err != nil {
+		return err
+	}
 	return nil
 }
 
