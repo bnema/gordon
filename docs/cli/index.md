@@ -37,6 +37,7 @@ Management commands run locally through in-process services by default. Add `--r
 | `gordon backups` | Manage database backups | [backup](./backup.md) |
 | `gordon images` | List and prune images | [images](./images.md) |
 | `gordon config show` | Show server configuration | [config](./config.md) |
+| `gordon networks list` | List Gordon-managed Docker networks | [networks](./networks.md) |
 
 ## Client Commands
 

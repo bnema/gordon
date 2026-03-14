@@ -133,6 +133,10 @@ Commands are organized by where they run:
 	configCmd.GroupID = groupManage
 	rootCmd.AddCommand(configCmd)
 
+	networksCmd := newNetworksCmd()
+	networksCmd.GroupID = groupManage
+	rootCmd.AddCommand(networksCmd)
+
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
 	remotesCmd.GroupID = groupClient
