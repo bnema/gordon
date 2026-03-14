@@ -12,6 +12,12 @@ type AttachmentConfigResponse struct {
 	Images []string `json:"images"`
 }
 
+// AttachmentTargetsByImageResponse represents attachment targets for a specific image.
+type AttachmentTargetsByImageResponse struct {
+	Image   string   `json:"image"`
+	Targets []string `json:"targets"`
+}
+
 // AttachmentAddRequest represents a request to add an attachment.
 type AttachmentAddRequest struct {
 	Image string `json:"image"`

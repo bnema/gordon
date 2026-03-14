@@ -286,6 +286,13 @@ func (l *localControlPlane) GetAttachmentsConfig(ctx context.Context, domainOrGr
 	return l.configSvc.GetAttachmentsFor(ctx, domainOrGroup)
 }
 
+func (l *localControlPlane) FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error) {
+	if l.configSvc == nil {
+		return nil, fmt.Errorf("local config service unavailable")
+	}
+	return l.configSvc.FindAttachmentTargetsByImage(ctx, imageName), nil
+}
+
 func (l *localControlPlane) AddAttachment(ctx context.Context, domainOrGroup, image string) error {
 	if l.configSvc == nil {
 		return fmt.Errorf("local config service unavailable")

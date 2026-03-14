@@ -35,6 +35,8 @@ gordon push <domain> [options]
 `gordon push` resolves the route image for `<domain>`, tags the image for the
 Gordon registry, pushes it, and optionally deploys it.
 
+To push attachment images (databases, caches, etc.), use `gordon attachments push`.
+
 - For first deploys, run `gordon bootstrap` first to create or update the route, attachments, and secrets, then run `gordon push` to upload and deploy the image.
 - The registry and repository are derived from the route image on the server.
 - The version tag defaults to a CI tag ref (like `refs/tags/v1.2.3`) when available,
@@ -74,5 +76,6 @@ gordon push myapp.example.com --build -f docker/app/Dockerfile
 ## Related
 
 - [CLI Overview](./index.md)
+- [Attachments Commands](./attachments.md)
 - [Routes Command](./routes.md)
 - [Serve Command](./serve.md)

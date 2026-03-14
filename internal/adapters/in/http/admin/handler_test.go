@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -262,6 +263,141 @@ func TestHandler_RoutesPut_AllowsRouteUpdateWithoutRegistryManifest(t *testing.T
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:v2","https":false}`, rec.Body.String())
 	registrySvc.AssertNotCalled(t, "GetManifest", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestHandler_AttachmentsByImageGet_OneTarget(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+	configSvc.EXPECT().FindAttachmentTargetsByImage(mock.Anything, "postgres:16").Return([]string{"app.example.com"}).Once()
+
+	req := httptest.NewRequest("GET", "/admin/attachments/by-image/postgres:16", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"image":"postgres:16","targets":["app.example.com"]}`, rec.Body.String())
+}
+
+func TestHandler_AttachmentsByImageGet_MultipleTargets(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+	configSvc.EXPECT().FindAttachmentTargetsByImage(mock.Anything, "postgres").Return([]string{"app.example.com", "workers"}).Once()
+
+	req := httptest.NewRequest("GET", "/admin/attachments/by-image/postgres", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"image":"postgres","targets":["app.example.com","workers"]}`, rec.Body.String())
+}
+
+func TestHandler_AttachmentsByImageGet_URLDecodedImage(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+	configSvc.EXPECT().FindAttachmentTargetsByImage(mock.Anything, "registry/org/image:tag").Return([]string{"app.example.com"}).Once()
+
+	req := httptest.NewRequest("GET", "/admin/attachments/by-image/registry%2Forg%2Fimage:tag", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"image":"registry/org/image:tag","targets":["app.example.com"]}`, rec.Body.String())
+}
+
+func TestHandler_AttachmentsByImageGet_EmptyResultSet(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+	configSvc.EXPECT().FindAttachmentTargetsByImage(mock.Anything, "missing:latest").Return([]string{}).Once()
+
+	req := httptest.NewRequest("GET", "/admin/attachments/by-image/missing:latest", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"image":"missing:latest","targets":[]}`, rec.Body.String())
+}
+
+func TestHandler_AttachmentsByImageGet_MissingImagePath(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+	req := httptest.NewRequest("GET", "/admin/attachments/by-image", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error":"image name required in path"}`, rec.Body.String())
+}
+
+func TestHandler_AttachmentsByImageGet_InvalidEncoding(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+	req := httptest.NewRequest("GET", "/admin/attachments/by-image/placeholder", nil)
+	req.URL = &url.URL{Path: "/admin/attachments/by-image/%zz"}
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error":"invalid image name encoding"}`, rec.Body.String())
+}
+
+func TestHandler_AttachmentsByImageGet_RequiresReadScope(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+
+	req := httptest.NewRequest("GET", "/admin/attachments/by-image/postgres:16", nil)
+	req = req.WithContext(ctxWithScopes("admin:routes:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.JSONEq(t, `{"error":"insufficient permissions for config:read"}`, rec.Body.String())
 }
 
 func TestHandler_RoutesDelete_RequiresWriteScope(t *testing.T) {

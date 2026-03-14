@@ -162,3 +162,34 @@ func TestClientPruneImages(t *testing.T) {
 	assert.Equal(t, 2, resp.Runtime.DeletedCount)
 	assert.Equal(t, 3, resp.Registry.TagsRemoved)
 }
+
+func TestClientFindAttachmentTargetsByImage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/attachments/by-image/postgres:16", r.URL.Path)
+		require.Equal(t, "", r.URL.RawQuery)
+		require.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"image":"postgres:16","targets":["app.example.com","workers"]}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	targets, err := client.FindAttachmentTargetsByImage(context.Background(), "postgres:16")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"app.example.com", "workers"}, targets)
+}
+
+func TestClientFindAttachmentTargetsByImage_WithSlashContainingImage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/attachments/by-image/registry/org/image:tag", r.URL.Path)
+		require.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"image":"registry/org/image:tag","targets":["workers"]}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	targets, err := client.FindAttachmentTargetsByImage(context.Background(), "registry/org/image:tag")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"workers"}, targets)
+}

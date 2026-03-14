@@ -58,15 +58,23 @@ gordon bootstrap app.example.com myapp:latest \
 
 # Remote target
 gordon bootstrap app.example.com myapp:latest --remote https://gordon.mydomain.com --token $TOKEN
+
+# Push custom attachment image first
+gordon attachments push pitlane-pgsql --build
+
+# Then push and deploy the route image
+gordon push app.example.com --build --no-confirm
 ```
 
 ### Notes
 
 - `gordon bootstrap` is idempotent for route configuration: rerunning it re-applies config instead of failing.
 - Run `gordon push` after bootstrap to upload and deploy the image.
+- If attachments use custom images that are not available from a public registry, push those attachment images with `gordon attachments push` before deploying the route image.
 
 ## Related
 
 - [CLI Overview](./index.md)
+- [Attachments Commands](./attachments.md)
 - [Routes Commands](./routes.md)
 - [Push Command](./push.md)
