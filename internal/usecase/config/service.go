@@ -3,6 +3,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -290,6 +291,37 @@ func NormalizeRegistryImage(imageName, registryDomain string) string {
 	}
 
 	return imageName
+}
+
+// NormalizeBootstrapImage converts a user-supplied image argument into
+// the canonical "registry/name" format expected by push.
+// Bare names get the registry domain prepended; tags are stripped.
+func NormalizeBootstrapImage(image, registryDomain string) (string, error) {
+	if image == "" {
+		return "", fmt.Errorf("image is required")
+	}
+	if registryDomain == "" {
+		return "", fmt.Errorf("registry domain is not configured")
+	}
+
+	registryDomain = strings.TrimSuffix(registryDomain, "/")
+
+	if slashIdx := strings.LastIndex(image, "/"); slashIdx != -1 {
+		nameTag := image[slashIdx+1:]
+		if colonIdx := strings.LastIndex(nameTag, ":"); colonIdx != -1 {
+			image = image[:slashIdx+1] + nameTag[:colonIdx]
+		}
+	} else {
+		if colonIdx := strings.LastIndex(image, ":"); colonIdx != -1 {
+			image = image[:colonIdx]
+		}
+	}
+
+	if !strings.Contains(image, "/") {
+		image = registryDomain + "/" + image
+	}
+
+	return image, nil
 }
 
 // AddRoute adds a new route to the configuration and persists it.
