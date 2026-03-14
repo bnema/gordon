@@ -4,6 +4,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"github.com/fsnotify/fsnotify"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/viper"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -454,24 +456,141 @@ func (s *Service) Save(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Sync ALL mutable config sections back to Viper before writing.
-	// Using explicit Set() ensures the values are stored as proper flat maps,
-	// preventing viper from splitting dotted keys (e.g. "reg.example.com") into
-	// nested TOML subtrees which corrupts the data on re-read.
-	s.viper.Set("routes", s.config.Routes)
-	s.viper.Set("external_routes", s.config.ExternalRoutes)
-	s.viper.Set("attachments", s.config.Attachments)
-	s.viper.Set("network_groups", s.config.NetworkGroups)
+	configFile := s.viper.ConfigFileUsed()
+	if configFile == "" {
+		return log.WrapErr(fmt.Errorf("no config file path"), "cannot save config")
+	}
 
-	// Record save time to debounce file watcher events
-	atomic.StoreInt64(&s.lastSaveTime, time.Now().UnixNano())
+	if err := backupConfigFile(configFile); err != nil {
+		log.Warn().Err(err).Msg("failed to create config backup")
+	}
 
-	// Write config to disk
-	if err := s.viper.WriteConfig(); err != nil {
+	snapshot := s.snapshotCriticalFields()
+
+	if err := s.writeConfigSurgical(configFile); err != nil {
 		return log.WrapErr(err, "failed to write config")
 	}
 
+	atomic.StoreInt64(&s.lastSaveTime, time.Now().UnixNano())
+
+	if err := s.viper.ReadInConfig(); err != nil {
+		return log.WrapErr(err, "failed to re-read config after save")
+	}
+
+	if err := s.verifyCriticalFields(snapshot); err != nil {
+		log.Error().Err(err).Msg("config corruption detected after save, restoring backup")
+		if restoreErr := restoreConfigBackup(configFile); restoreErr != nil {
+			log.Error().Err(restoreErr).Msg("CRITICAL: failed to restore config backup")
+		}
+		_ = s.viper.ReadInConfig()
+		return log.WrapErr(err, "config verification failed after save")
+	}
+
 	log.Info().Msg("configuration saved to disk")
+	return nil
+}
+
+type configSnapshot struct {
+	values map[string]any
+}
+
+func (s *Service) snapshotCriticalFields() configSnapshot {
+	snap := configSnapshot{values: make(map[string]any)}
+	for _, key := range s.viper.AllKeys() {
+		snap.values[key] = s.viper.Get(key)
+	}
+	return snap
+}
+
+func (s *Service) verifyCriticalFields(snap configSnapshot) error {
+	for key, oldVal := range snap.values {
+		oldStr, ok := oldVal.(string)
+		if !ok || oldStr == "" {
+			continue
+		}
+
+		newVal := s.viper.GetString(key)
+		if newVal != oldStr {
+			return fmt.Errorf("config key %q changed from %q to %q after save", key, oldStr, newVal)
+		}
+	}
+
+	return nil
+}
+
+func (s *Service) writeConfigSurgical(configFile string) error {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.viper.Set("routes", s.config.Routes)
+			s.viper.Set("external_routes", s.config.ExternalRoutes)
+			s.viper.Set("attachments", s.config.Attachments)
+			s.viper.Set("network_groups", s.config.NetworkGroups)
+			return s.viper.WriteConfigAs(configFile)
+		}
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var config map[string]any
+	if len(data) > 0 {
+		if err := toml.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("failed to parse config file: %w", err)
+		}
+	}
+	if config == nil {
+		config = make(map[string]any)
+	}
+
+	config["routes"] = s.config.Routes
+	config["external_routes"] = s.config.ExternalRoutes
+	config["attachments"] = s.config.Attachments
+	config["network_groups"] = s.config.NetworkGroups
+
+	out, err := toml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	tmpFile := configFile + ".tmp"
+	if err := os.WriteFile(tmpFile, out, 0600); err != nil {
+		return fmt.Errorf("failed to write temp config: %w", err)
+	}
+	if err := os.Rename(tmpFile, configFile); err != nil {
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("failed to rename temp config: %w", err)
+	}
+
+	return nil
+}
+
+func backupConfigFile(configFile string) error {
+	src, err := os.ReadFile(configFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read config for backup: %w", err)
+	}
+
+	backupPath := configFile + ".bak"
+	if err := os.WriteFile(backupPath, src, 0600); err != nil {
+		return fmt.Errorf("failed to write backup config: %w", err)
+	}
+
+	return nil
+}
+
+func restoreConfigBackup(configFile string) error {
+	backupPath := configFile + ".bak"
+	src, err := os.ReadFile(backupPath)
+	if err != nil {
+		return fmt.Errorf("failed to read backup: %w", err)
+	}
+
+	if err := os.WriteFile(configFile, src, 0600); err != nil {
+		return fmt.Errorf("failed to restore backup: %w", err)
+	}
+
 	return nil
 }
 
