@@ -72,6 +72,11 @@ gordon push myapp.example.com --build -f docker/app/Dockerfile
 - `gordon push` still requires the route to already exist so it can resolve the target image.
 - `--build` requires Docker with Buildx. Docker Desktop includes it; on Linux,
   install the `docker-buildx-plugin` package.
+- Gordon uses native registry uploads instead of shelling out to `docker push`.
+  Image layers are sent in 50MB chunks, which stays under Cloudflare's 100MB
+  per-request limit so proxied pushes keep working. Keep the server's
+  `max_blob_chunk_size` larger than the client chunk size; the default `95MB`
+  works out of the box.
 
 ## Related
 
