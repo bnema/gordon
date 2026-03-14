@@ -149,7 +149,7 @@ func (h *SecretsChangedHandler) fireDeploy(ctx context.Context, domainName strin
 
 	log.Info().Str("image", route.Image).Msg("debounce fired, deploying after secrets change")
 
-	if _, err := h.containerSvc.Deploy(ctx, *route); err != nil {
+	if _, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route); err != nil {
 		log.WrapErr(err, "secrets-changed deploy failed")
 	}
 }
