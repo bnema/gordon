@@ -137,9 +137,9 @@ gordon images prune --no-confirm
 
 ## Required Permissions
 
-- `list` requires `admin:status:read`.
-- `prune` requires `admin:config:write`.
-- `tags` requires `admin:status:read`.
+- The `list` subcommand requires `admin:status:read`.
+- The `prune` subcommand requires `admin:config:write`.
+- The `tags` subcommand requires `admin:status:read`.
 
 ## Related
 

@@ -37,9 +37,9 @@ gordon networks list --remote https://gordon.mydomain.com --token $TOKEN
 ```json
 [
   {
-	"Name": "gordon_myapp",
-	"Driver": "bridge",
-	"Containers": ["container1", "container2"]
+	"name": "gordon_myapp",
+	"driver": "bridge",
+	"containers": ["container1", "container2"]
   }
 ]
 ```

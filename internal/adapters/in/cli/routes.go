@@ -2,16 +2,17 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/spf13/cobra"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/internal/domain"
-
-	"github.com/spf13/cobra"
 )
 
 // configPath for local operations. If empty, config is auto-discovered
@@ -167,7 +168,10 @@ Examples:
 func runRoutesShow(ctx context.Context, cp ControlPlane, out io.Writer, routeDomain string, jsonOut bool) error {
 	route, err := cp.GetRoute(ctx, routeDomain)
 	if err != nil {
-		return fmt.Errorf("route not found: %w", err)
+		if errors.Is(err, domain.ErrRouteNotFound) {
+			return fmt.Errorf("route %q not found", routeDomain)
+		}
+		return fmt.Errorf("failed to get route: %w", err)
 	}
 
 	health, _ := cp.GetHealth(ctx)

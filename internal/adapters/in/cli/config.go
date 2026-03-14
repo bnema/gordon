@@ -57,6 +57,10 @@ func runConfigShow(ctx context.Context, cp ControlPlane, out io.Writer, jsonOut 
 		return fmt.Errorf("failed to get config: %w", err)
 	}
 
+	if config == nil {
+		return fmt.Errorf("no config available")
+	}
+
 	if jsonOut {
 		return writeJSON(out, config)
 	}
@@ -138,34 +142,35 @@ func renderConfigRoutes(out io.Writer, config *remote.Config) error {
 }
 
 func renderConfigExternalRoutes(out io.Writer, config *remote.Config) error {
-	if len(config.ExternalRoutes) > 0 {
-		if err := cliWriteLine(out, ""); err != nil {
-			return err
-		}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if len(config.ExternalRoutes) == 0 {
 		if err := cliWriteLine(out, cliRenderTitle("External Routes")); err != nil {
 			return err
 		}
-		domains := make([]string, 0, len(config.ExternalRoutes))
-		for d := range config.ExternalRoutes {
-			domains = append(domains, d)
-		}
-		sort.Strings(domains)
-
-		rows := make([][]string, 0, len(domains))
-		for _, d := range domains {
-			rows = append(rows, []string{d, config.ExternalRoutes[d]})
-		}
-		table := components.NewTable(
-			components.WithColumns([]components.TableColumn{
-				{Title: "Domain", Width: 30},
-				{Title: "Target", Width: 45},
-			}),
-			components.WithRows(rows),
-		)
-		if err := cliWriteLine(out, table.View()); err != nil {
-			return err
-		}
+		return cliWriteLine(out, cliRenderMuted("No external routes configured"))
 	}
 
-	return nil
+	if err := cliWriteLine(out, cliRenderTitle("External Routes")); err != nil {
+		return err
+	}
+	domains := make([]string, 0, len(config.ExternalRoutes))
+	for d := range config.ExternalRoutes {
+		domains = append(domains, d)
+	}
+	sort.Strings(domains)
+
+	rows := make([][]string, 0, len(domains))
+	for _, d := range domains {
+		rows = append(rows, []string{d, config.ExternalRoutes[d]})
+	}
+	table := components.NewTable(
+		components.WithColumns([]components.TableColumn{
+			{Title: "Domain", Width: 30},
+			{Title: "Target", Width: 45},
+		}),
+		components.WithRows(rows),
+	)
+	return cliWriteLine(out, table.View())
 }
