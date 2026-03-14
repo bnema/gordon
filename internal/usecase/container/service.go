@@ -1038,7 +1038,7 @@ func (s *Service) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, erro
 
 	var filtered []*domain.NetworkInfo
 	for _, network := range networks {
-		if strings.HasPrefix(network.Name, cfg.NetworkPrefix+"-") {
+		if strings.HasPrefix(network.Name, cfg.NetworkPrefix+"-") && network.Labels[domain.LabelManaged] == "true" {
 			filtered = append(filtered, network)
 		}
 	}
