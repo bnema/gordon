@@ -951,12 +951,12 @@ func TestNormalizeBootstrapImage(t *testing.T) {
 		expected       string
 		wantErr        string
 	}{
-		{name: "bare name prepends registry", image: "pitlane", registryDomain: "reg.bnema.dev", expected: "reg.bnema.dev/pitlane"},
-		{name: "bare name strips tag", image: "pitlane:v1", registryDomain: "reg.bnema.dev", expected: "reg.bnema.dev/pitlane"},
-		{name: "qualified image unchanged", image: "reg.bnema.dev/pitlane", registryDomain: "reg.bnema.dev", expected: "reg.bnema.dev/pitlane"},
-		{name: "qualified image strips tag", image: "reg.bnema.dev/pitlane:abc123", registryDomain: "reg.bnema.dev", expected: "reg.bnema.dev/pitlane"},
-		{name: "other registry strips tag", image: "other.registry.com/myapp:v2", registryDomain: "reg.bnema.dev", expected: "other.registry.com/myapp"},
-		{name: "empty image", image: "", registryDomain: "reg.bnema.dev", wantErr: "image is required"},
+		{name: "bare name prepends registry", image: "myapp", registryDomain: "reg.example.com", expected: "reg.example.com/myapp"},
+		{name: "bare name strips tag", image: "myapp:v1", registryDomain: "reg.example.com", expected: "reg.example.com/myapp"},
+		{name: "qualified image unchanged", image: "reg.example.com/myapp", registryDomain: "reg.example.com", expected: "reg.example.com/myapp"},
+		{name: "qualified image strips tag", image: "reg.example.com/myapp:abc123", registryDomain: "reg.example.com", expected: "reg.example.com/myapp"},
+		{name: "other registry strips tag", image: "other.registry.com/myapp:v2", registryDomain: "reg.example.com", expected: "other.registry.com/myapp"},
+		{name: "empty image", image: "", registryDomain: "reg.example.com", wantErr: "image is required"},
 		{name: "empty registry domain", image: "pitlane", registryDomain: "", wantErr: "registry domain is not configured"},
 	}
 
@@ -1155,6 +1155,136 @@ func TestService_FindRoutesByImage(t *testing.T) {
 }
 
 func TestSavePreservesAllConfigFields(t *testing.T) {
+	t.Run("with defaults does not corrupt config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 8088
+registry_port = 5000
+registry_domain = "reg.example.com"
+tls_enabled = true
+tls_port = 8443
+data_dir = "/tmp/test-gordon"
+runtime = "auto"
+
+[auth]
+enabled = true
+secrets_backend = "pass"
+username = "testadmin"
+password_hash = "test/auth/password_hash"
+token_secret = "test/auth/token_secret"
+token_expiry = "720h"
+type = "password"
+
+[auto_route]
+enabled = true
+
+[network_isolation]
+enabled = true
+network_prefix = "gordon"
+dns_suffix = ".internal"
+
+[backups]
+enabled = true
+schedule = "daily"
+storage_dir = "~/.gordon/backups"
+
+[routes]
+"app.example.com" = "reg.example.com/myapp:latest"
+
+[attachments]
+"app.example.com" = ["postgres:15"]
+
+[network_groups]
+backend = ["app.example.com"]
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.SetDefault("server.port", 80)
+		v.SetDefault("server.tls_port", 443)
+		v.SetDefault("auth.secrets_backend", "")
+		v.SetDefault("auto_route.enabled", false)
+		v.SetDefault("network_isolation.enabled", false)
+		v.SetDefault("backups.enabled", false)
+
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
+		require.NoError(t, err)
+
+		v2 := viper.New()
+		v2.SetConfigFile(configFile)
+		err = v2.ReadInConfig()
+		require.NoError(t, err)
+
+		assert.Equal(t, 8088, v2.GetInt("server.port"))
+		assert.Equal(t, 8443, v2.GetInt("server.tls_port"))
+		assert.Equal(t, "reg.example.com", v2.GetString("server.registry_domain"))
+		assert.Equal(t, "auto", v2.GetString("server.runtime"))
+		assert.Equal(t, "pass", v2.GetString("auth.secrets_backend"))
+		assert.Equal(t, "testadmin", v2.GetString("auth.username"))
+		assert.Equal(t, "test/auth/password_hash", v2.GetString("auth.password_hash"))
+		assert.Equal(t, "test/auth/token_secret", v2.GetString("auth.token_secret"))
+		assert.Equal(t, "password", v2.GetString("auth.type"))
+		assert.True(t, v2.GetBool("auto_route.enabled"))
+		assert.True(t, v2.GetBool("network_isolation.enabled"))
+		assert.Equal(t, ".internal", v2.GetString("network_isolation.dns_suffix"))
+		assert.True(t, v2.GetBool("backups.enabled"))
+		assert.Equal(t, "~/.gordon/backups", v2.GetString("backups.storage_dir"))
+
+		savedRoutes := loadStringMap(v2.Get("routes"))
+		assert.Equal(t, "newapp:latest", savedRoutes["new.example.com"])
+		assert.Equal(t, "reg.example.com/myapp:latest", savedRoutes["app.example.com"])
+
+		_, err = os.Stat(configFile + ".bak")
+		assert.NoError(t, err)
+	})
+
+	t.Run("backup created before write", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 9999
+
+[routes]
+"app.example.com" = "myapp:latest"
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest"})
+		require.NoError(t, err)
+
+		backupData, err := os.ReadFile(configFile + ".bak")
+		require.NoError(t, err)
+		assert.Contains(t, string(backupData), "port = 9999")
+		assert.NotContains(t, string(backupData), "new.example.com")
+	})
+
 	t.Run("network_groups are persisted to disk", func(t *testing.T) {
 		// Setup: config file with auth, server, and network_groups
 		tmpDir := t.TempDir()
