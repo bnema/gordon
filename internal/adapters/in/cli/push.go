@@ -22,6 +22,12 @@ import (
 	"github.com/bnema/gordon/pkg/validation"
 )
 
+var (
+	dockerTagFn         = dockerTag
+	dockerPushFn        = dockerPush
+	dockerImageExistsFn = dockerImageExists
+)
+
 func newPushCmd() *cobra.Command {
 	var (
 		noDeploy   bool
@@ -486,11 +492,11 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 	}
 
 	fmt.Println("Pushing...")
-	if err := dockerPush(ctx, latestRef); err != nil {
+	if err := dockerPushFn(ctx, latestRef); err != nil {
 		return fmt.Errorf("failed to push %s: %w", latestRef, err)
 	}
 	if version != "latest" {
-		if err := dockerPush(ctx, versionRef); err != nil {
+		if err := dockerPushFn(ctx, versionRef); err != nil {
 			return fmt.Errorf("failed to push %s: %w", versionRef, err)
 		}
 	}
@@ -552,26 +558,26 @@ func tagAndPush(ctx context.Context, registry, imageName, version, versionRef, l
 	localImage := fmt.Sprintf("%s/%s", registry, imageName)
 
 	fmt.Println("\nChecking local image...")
-	if !dockerImageExists(ctx, localImage) {
+	if !dockerImageExistsFn(ctx, localImage) {
 		return fmt.Errorf("local image %s not found; build and tag it before pushing", localImage)
 	}
 
 	fmt.Println("Tagging...")
-	if err := dockerTag(ctx, localImage, versionRef); err != nil {
+	if err := dockerTagFn(ctx, localImage, versionRef); err != nil {
 		return fmt.Errorf("failed to tag %s: %w", versionRef, err)
 	}
 	if version != "latest" {
-		if err := dockerTag(ctx, localImage, latestRef); err != nil {
+		if err := dockerTagFn(ctx, localImage, latestRef); err != nil {
 			return fmt.Errorf("failed to tag %s: %w", latestRef, err)
 		}
 	}
 
 	fmt.Println("Pushing...")
-	if err := dockerPush(ctx, versionRef); err != nil {
+	if err := dockerPushFn(ctx, versionRef); err != nil {
 		return fmt.Errorf("failed to push %s: %w", versionRef, err)
 	}
 	if version != "latest" {
-		if err := dockerPush(ctx, latestRef); err != nil {
+		if err := dockerPushFn(ctx, latestRef); err != nil {
 			return fmt.Errorf("failed to push %s: %w", latestRef, err)
 		}
 	}
