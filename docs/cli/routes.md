@@ -12,6 +12,7 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 | Subcommand | Description |
 |------------|-------------|
 | `list` | List all routes |
+| `show` | Show details for a single route |
 | `add` | Create or update a route |
 | `remove` | Remove a route |
 | `deploy` | Deploy a specific route |
@@ -113,6 +114,61 @@ gordon routes add myapp.example.com myapp:latest --remote https://gordon.mydomai
 
 - `gordon routes add` is idempotent: it creates the route when missing and updates it when present.
 - You can add the route before the image is pushed. Deploy happens when the image is later available or when you deploy an available image.
+
+---
+
+## gordon routes show
+
+Show detailed information about a single route.
+
+```bash
+gordon routes show <domain>
+gordon routes show myapp.example.com
+gordon routes show myapp.example.com --json
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<domain>` | The domain name of the route to inspect |
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output route details as JSON |
+| `--remote` | Remote Gordon URL |
+| `--token` | Authentication token for remote |
+
+### Description
+
+Displays the configured image for the route plus any available container and HTTP health information.
+In local-only mode, health data may be unavailable.
+
+### Examples
+
+```bash
+# Local
+gordon routes show myapp.example.com
+
+# JSON
+gordon routes show myapp.example.com --json
+
+# Remote (override)
+gordon routes show myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### JSON Output
+
+```json
+{
+  "domain": "myapp.example.com",
+  "image": "myapp:latest",
+  "container_status": "running",
+  "http_status": 200
+}
+```
 
 ---
 
