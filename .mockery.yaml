@@ -35,3 +35,11 @@ packages:
       HTTPProber:
       SecretService:
       LogService:
+  # Exception: pushImageOps is a CLI-local interface, not a boundary port.
+  # Mocked here because it abstracts Docker SDK calls that require a running
+  # daemon, making unit/integration tests impractical without a test double.
+  # Moving it to boundaries/out would violate interface segregation — no use
+  # case depends on it.
+  github.com/bnema/gordon/internal/adapters/in/cli:
+    interfaces:
+      pushImageOps:
