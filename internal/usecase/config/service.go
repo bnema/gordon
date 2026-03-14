@@ -515,9 +515,30 @@ type configSnapshot struct {
 	values map[string]any
 }
 
+// mutableSections lists config sections that are intentionally modified by service operations.
+var mutableSections = []string{"routes.", "external_routes.", "attachments.", "network_groups."}
+
+func isMutableKey(key string) bool {
+	for _, prefix := range mutableSections {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+
+	switch key {
+	case "routes", "external_routes", "attachments", "network_groups":
+		return true
+	}
+
+	return false
+}
+
 func (s *Service) snapshotCriticalFields() configSnapshot {
 	snap := configSnapshot{values: make(map[string]any)}
 	for _, key := range s.viper.AllKeys() {
+		if isMutableKey(key) {
+			continue
+		}
 		snap.values[key] = s.viper.Get(key)
 	}
 	return snap
