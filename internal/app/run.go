@@ -273,7 +273,7 @@ func Run(ctx context.Context, configPath string) error {
 	registryHandler, proxyHandler := createHTTPHandlers(svc, cfg, log)
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
-	return runServers(ctx, v, cfg, registryHandler, proxyHandler, svc.containerSvc, svc.eventBus, svc, cleanupHandlers, log)
+	return runServers(ctx, v, cfg, registryHandler, proxyHandler, svc, cleanupHandlers, log)
 }
 
 func ensureTLSConfig(cfg *Config, log zerowrap.Logger) error {
@@ -1329,7 +1329,7 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 		return nil, fmt.Errorf("failed to subscribe manual deploy handler: %w", err)
 	}
 
-	secretsChangedHandler := container.NewSecretsChangedHandler(ctx, svc.containerSvc, svc.configSvc, 60*time.Second)
+	secretsChangedHandler := container.NewSecretsChangedHandler(ctx, svc.containerSvc, svc.configSvc, container.DefaultSecretsDebounce)
 	if err := svc.eventBus.Subscribe(secretsChangedHandler); err != nil {
 		return nil, fmt.Errorf("failed to subscribe secrets changed handler: %w", err)
 	}
@@ -1701,7 +1701,7 @@ func isLoopbackHost(host string) bool {
 // - SIGUSR2: Triggers manual deploy for a specific route
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, containerSvc *container.Service, eventBus out.EventBus, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
+func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -1771,9 +1771,9 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	// Auto-start after servers are listening (registry port is now bound).
 	syncAndAutoStart(ctx, svc, log)
 
-	waitForShutdown(ctx, errChan, reloadChan, deployChan, eventBus, log)
+	waitForShutdown(ctx, errChan, reloadChan, deployChan, svc.eventBus, log)
 	cleanupHandlers() // Stop debounce timers before draining containers
-	gracefulShutdown(registrySrv, proxySrv, tlsSrv, containerSvc, svc.proxySvc, log)
+	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, log)
 	return nil
 }
 

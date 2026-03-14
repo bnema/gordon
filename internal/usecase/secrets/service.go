@@ -4,6 +4,7 @@ package secrets
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/bnema/zerowrap"
@@ -54,6 +55,16 @@ func (s *Service) publishSecretsChanged(ctx context.Context, domainName, operati
 	if err := s.eventBus.Publish(domain.EventSecretsChanged, payload); err != nil {
 		log.Warn().Err(err).Str("domain", domainName).Msg("failed to publish secrets.changed event")
 	}
+}
+
+// sortedKeys returns the keys of a map in sorted order.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ListKeys returns the list of secret keys for a domain (not values).
@@ -160,11 +171,7 @@ func (s *Service) Set(ctx context.Context, domain string, secrets map[string]str
 		return err
 	}
 
-	keys := make([]string, 0, len(secrets))
-	for k := range secrets {
-		keys = append(keys, k)
-	}
-	s.publishSecretsChanged(ctx, domain, "set", keys)
+	s.publishSecretsChanged(ctx, domain, "set", sortedKeys(secrets))
 
 	log.Info().Int("count", len(secrets)).Msg("secrets set")
 	return nil
@@ -223,11 +230,7 @@ func (s *Service) SetAttachment(ctx context.Context, domainName, service string,
 		return err
 	}
 
-	keys := make([]string, 0, len(secrets))
-	for k := range secrets {
-		keys = append(keys, k)
-	}
-	s.publishSecretsChanged(ctx, domainName, "set", keys)
+	s.publishSecretsChanged(ctx, domainName, "set", sortedKeys(secrets))
 
 	log.Info().Int("count", len(secrets)).Str("container", containerName).Msg("attachment secrets set")
 	return nil

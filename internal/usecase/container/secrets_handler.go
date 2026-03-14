@@ -11,6 +11,8 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+const DefaultSecretsDebounce = 60 * time.Second
+
 // SecretsChangedHandler handles secrets.changed events with per-domain
 // debouncing. When secrets are modified rapidly (e.g. multiple
 // "gordon secrets set" calls), the handler resets a timer on each

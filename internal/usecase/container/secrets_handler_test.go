@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -55,8 +56,9 @@ func TestSecretsChangedHandler_DebouncesBurstEvents(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	time.Sleep(debounceDelay + 100*time.Millisecond)
-	assert.Equal(t, int32(1), deployCalls.Load())
+	require.Eventually(t, func() bool {
+		return deployCalls.Load() == 1
+	}, debounceDelay+time.Second, 10*time.Millisecond, "expected exactly 1 deploy call after debounce")
 }
 
 func TestSecretsChangedHandler_IndependentDomains(t *testing.T) {
@@ -73,8 +75,15 @@ func TestSecretsChangedHandler_IndependentDomains(t *testing.T) {
 	configSvc.EXPECT().GetRoute(mock.Anything, routeOne.Domain).Return(routeOne, nil).Once()
 	configSvc.EXPECT().GetRoute(mock.Anything, routeTwo.Domain).Return(routeTwo, nil).Once()
 
-	containerSvc.EXPECT().Deploy(mock.Anything, *routeOne).Return(&domain.Container{ID: "container-1"}, nil).Once()
-	containerSvc.EXPECT().Deploy(mock.Anything, *routeTwo).Return(&domain.Container{ID: "container-2"}, nil).Once()
+	var deployCalls atomic.Int32
+	containerSvc.EXPECT().Deploy(mock.Anything, *routeOne).RunAndReturn(func(_ context.Context, _ domain.Route) (*domain.Container, error) {
+		deployCalls.Add(1)
+		return &domain.Container{ID: "container-1"}, nil
+	}).Once()
+	containerSvc.EXPECT().Deploy(mock.Anything, *routeTwo).RunAndReturn(func(_ context.Context, _ domain.Route) (*domain.Container, error) {
+		deployCalls.Add(1)
+		return &domain.Container{ID: "container-2"}, nil
+	}).Once()
 
 	assert.NoError(t, h.Handle(context.Background(), domain.Event{
 		Type: domain.EventSecretsChanged,
@@ -85,7 +94,9 @@ func TestSecretsChangedHandler_IndependentDomains(t *testing.T) {
 		Data: domain.SecretsChangedPayload{Domain: routeTwo.Domain, Operation: "delete", Keys: []string{"B"}},
 	}))
 
-	time.Sleep(debounceDelay + 100*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return deployCalls.Load() == 2
+	}, debounceDelay+time.Second, 10*time.Millisecond, "expected 2 independent deploy calls")
 }
 
 func TestSecretsChangedHandler_NoRouteFound_NoOp(t *testing.T) {
