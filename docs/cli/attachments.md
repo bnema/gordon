@@ -159,6 +159,11 @@ gordon attachments push <image> [options]
 
 `gordon attachments push` pushes attachment images such as databases and caches to the Gordon registry so they are available when routes deploy. It does not trigger deployment. The image must already be configured as an attachment first.
 
+It uses the same native chunked upload transport as `gordon push`, sending image
+layers in 50MB chunks so pushes work through Cloudflare-proxied Gordon
+instances. Keep the server's `max_blob_chunk_size` larger than the client chunk
+size; the default `95MB` is compatible.
+
 ### Examples
 
 ```bash
