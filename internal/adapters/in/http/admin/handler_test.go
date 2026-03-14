@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -517,7 +518,8 @@ func TestHandler_Bootstrap_HappyPath(t *testing.T) {
 
 	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, registrySvc, nil, testLogger(), nil)
 
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil).Once()
+	configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
 	configSvc.EXPECT().AddAttachment(mock.Anything, "app.example.com", "postgres:16").Return(nil).Once()
 	secretSvc.EXPECT().Set(mock.Anything, "app.example.com", map[string]string{"APP_ENV": "prod"}).Return(nil).Once()
 	secretSvc.EXPECT().SetAttachment(mock.Anything, "app.example.com", "postgres", map[string]string{"POSTGRES_PASSWORD": "secret"}).Return(nil).Once()
@@ -545,8 +547,8 @@ func TestHandler_Bootstrap_HappyPath(t *testing.T) {
 	var response dto.BootstrapResponse
 	assert.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
 	assert.Equal(t, "app.example.com", response.Domain)
-	assert.Equal(t, "myapp:latest", response.Image)
-	assert.Equal(t, "push myapp:latest to trigger deployment", response.Next)
+	assert.Equal(t, "reg.bnema.dev/myapp", response.Image)
+	assert.Equal(t, "push reg.bnema.dev/myapp to trigger deployment", response.Next)
 	assert.Equal(t, []dto.BootstrapStep{
 		{Name: "route", Status: "configured"},
 		{Name: "attachment:postgres:16", Status: "created"},
@@ -577,8 +579,11 @@ func TestHandler_Bootstrap_RequiresPermissions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantStatus == http.StatusOK || strings.Contains(tt.body, `"env"`) || strings.Contains(tt.body, `"attachments"`) {
+				configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
+			}
 			if tt.wantStatus == http.StatusOK {
-				configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil).Once()
+				configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
 			}
 
 			req := httptest.NewRequest("POST", "/admin/bootstrap", bytes.NewBufferString(tt.body))

@@ -943,6 +943,39 @@ func TestNormalizeRegistryImage(t *testing.T) {
 	}
 }
 
+func TestNormalizeBootstrapImage(t *testing.T) {
+	tests := []struct {
+		name           string
+		image          string
+		registryDomain string
+		expected       string
+		wantErr        string
+	}{
+		{name: "bare name prepends registry", image: "pitlane", registryDomain: "reg.bnema.dev", expected: "reg.bnema.dev/pitlane"},
+		{name: "bare name strips tag", image: "pitlane:v1", registryDomain: "reg.bnema.dev", expected: "reg.bnema.dev/pitlane"},
+		{name: "qualified image unchanged", image: "reg.bnema.dev/pitlane", registryDomain: "reg.bnema.dev", expected: "reg.bnema.dev/pitlane"},
+		{name: "qualified image strips tag", image: "reg.bnema.dev/pitlane:abc123", registryDomain: "reg.bnema.dev", expected: "reg.bnema.dev/pitlane"},
+		{name: "other registry strips tag", image: "other.registry.com/myapp:v2", registryDomain: "reg.bnema.dev", expected: "other.registry.com/myapp"},
+		{name: "empty image", image: "", registryDomain: "reg.bnema.dev", wantErr: "image is required"},
+		{name: "empty registry domain", image: "pitlane", registryDomain: "", wantErr: "registry domain is not configured"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := NormalizeBootstrapImage(tt.image, tt.registryDomain)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tt.wantErr, err.Error())
+				assert.Empty(t, result)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestService_FindRoutesByImage(t *testing.T) {
 	t.Run("exact match with tag", func(t *testing.T) {
 		v := viper.New()
