@@ -147,12 +147,12 @@ func (p *Pusher) UploadBlob(ctx context.Context, baseURL, repo, digest string, s
 		}
 	}
 
-	uploadURL, err = p.uploadBlobChunks(ctx, uploadURL, content, auth)
+	uploadURL, err = p.uploadBlobChunks(ctx, baseURL, uploadURL, content, auth)
 	if err != nil {
 		return err
 	}
 
-	return p.finalizeBlobUpload(ctx, uploadURL, digest, auth)
+	return p.finalizeBlobUpload(ctx, baseURL, uploadURL, digest, auth)
 }
 
 // defaultImageSource reads an image from the local Docker/Podman daemon.
@@ -283,7 +283,7 @@ func (p *Pusher) uploadManifest(ctx context.Context, baseURL, repo, tag string, 
 	if err != nil {
 		return fmt.Errorf("failed to create manifest upload request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 	req.Header.Set("Content-Type", string(mediaType))
 	req.ContentLength = int64(len(manifest))
 
@@ -346,7 +346,7 @@ func (p *Pusher) checkBlobExists(ctx context.Context, baseURL, repo, digest, aut
 	if err != nil {
 		return fmt.Errorf("failed to create blob HEAD request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
@@ -370,7 +370,7 @@ func (p *Pusher) startBlobUpload(ctx context.Context, baseURL, repo, auth string
 	if err != nil {
 		return "", fmt.Errorf("failed to create blob upload start request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
@@ -391,7 +391,7 @@ func (p *Pusher) startBlobUpload(ctx context.Context, baseURL, repo, auth string
 	return location, nil
 }
 
-func (p *Pusher) uploadBlobChunks(ctx context.Context, uploadURL string, content io.Reader, auth string) (string, error) {
+func (p *Pusher) uploadBlobChunks(ctx context.Context, baseURL, uploadURL string, content io.Reader, auth string) (string, error) {
 	buffer := make([]byte, p.chunkSize)
 	offset := int64(0)
 
@@ -404,7 +404,7 @@ func (p *Pusher) uploadBlobChunks(ctx context.Context, uploadURL string, content
 			return "", fmt.Errorf("failed to read blob chunk: %w", err)
 		}
 
-		nextURL, patchErr := p.uploadBlobChunk(ctx, uploadURL, buffer[:readBytes], offset, auth)
+		nextURL, patchErr := p.uploadBlobChunk(ctx, baseURL, uploadURL, buffer[:readBytes], offset, auth)
 		if patchErr != nil {
 			return "", patchErr
 		}
@@ -418,12 +418,12 @@ func (p *Pusher) uploadBlobChunks(ctx context.Context, uploadURL string, content
 	}
 }
 
-func (p *Pusher) uploadBlobChunk(ctx context.Context, uploadURL string, chunk []byte, offset int64, auth string) (string, error) {
+func (p *Pusher) uploadBlobChunk(ctx context.Context, baseURL, uploadURL string, chunk []byte, offset int64, auth string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, uploadURL, bytesReader(chunk))
 	if err != nil {
 		return "", fmt.Errorf("failed to create blob chunk request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Range", fmt.Sprintf("%d-%d", offset, offset+int64(len(chunk))-1))
 	req.ContentLength = int64(len(chunk))
@@ -447,7 +447,7 @@ func (p *Pusher) uploadBlobChunk(ctx context.Context, uploadURL string, chunk []
 	return nextURL, nil
 }
 
-func (p *Pusher) finalizeBlobUpload(ctx context.Context, uploadURL, digest, auth string) error {
+func (p *Pusher) finalizeBlobUpload(ctx context.Context, baseURL, uploadURL, digest, auth string) error {
 	parsedURL, err := url.Parse(uploadURL)
 	if err != nil {
 		return fmt.Errorf("failed to parse blob upload location: %w", err)
@@ -461,7 +461,7 @@ func (p *Pusher) finalizeBlobUpload(ctx context.Context, uploadURL, digest, auth
 	if err != nil {
 		return fmt.Errorf("failed to create blob finalize request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
@@ -481,10 +481,21 @@ func (p *Pusher) httpClient() *http.Client {
 	return &http.Client{Transport: p.transport}
 }
 
-func setAuthHeader(req *http.Request, auth string) {
-	if auth != "" {
-		req.Header.Set("Authorization", auth)
+// setScopedAuth attaches the auth header only if the request URL matches the
+// registry origin (scheme + host). This prevents credential leakage if a
+// redirect somehow escapes origin pinning.
+func setScopedAuth(req *http.Request, auth, registryOrigin string) {
+	if auth == "" {
+		return
 	}
+	origin, err := url.Parse(registryOrigin)
+	if err != nil {
+		return
+	}
+	if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
+		return
+	}
+	req.Header.Set("Authorization", auth)
 }
 
 func resolveLocation(baseURL, location string) (string, error) {

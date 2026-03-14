@@ -284,6 +284,67 @@ func TestUploadBlob_RejectsCrossOriginRedirect(t *testing.T) {
 	assert.Contains(t, err.Error(), "cross-origin")
 }
 
+// authRecordingTransport records Authorization headers per request URL.
+type authRecordingTransport struct {
+	inner   http.RoundTripper
+	records []authRecord
+}
+
+type authRecord struct {
+	URL  string
+	Auth string
+}
+
+func (t *authRecordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.records = append(t.records, authRecord{
+		URL:  req.URL.String(),
+		Auth: req.Header.Get("Authorization"),
+	})
+	return t.inner.RoundTrip(req)
+}
+
+func TestUploadBlob_AuthHeaderOnlySentToSameOrigin(t *testing.T) {
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead:
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost:
+			w.Header().Set("Location", "/v2/repo/blobs/uploads/abc?chunk=0")
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPatch:
+			w.Header().Set("Location", "/v2/repo/blobs/uploads/abc?chunk=1")
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPut:
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer registry.Close()
+
+	recorder := &authRecordingTransport{inner: http.DefaultTransport}
+	p := registrypush.New(
+		registrypush.WithChunkSize(1024),
+		registrypush.WithTransport(recorder),
+	)
+	ctx := context.Background()
+	secret := "Basic dXNlcjpwYXNz"
+	err := p.UploadBlob(ctx, registry.URL, "test/repo", "sha256:abc", 5, strings.NewReader("hello"), secret)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, recorder.records)
+
+	registryURL, _ := url.Parse(registry.URL)
+	for _, rec := range recorder.records {
+		reqURL, _ := url.Parse(rec.URL)
+		if reqURL.Host == registryURL.Host {
+			assert.Equal(t, secret, rec.Auth, "same-origin request to %s should have auth", rec.URL)
+		} else {
+			assert.Empty(t, rec.Auth, "cross-origin request to %s should NOT have auth", rec.URL)
+		}
+	}
+}
+
 type fakeBlobUploadRegistry struct {
 	t              *testing.T
 	expectedAuth   string
