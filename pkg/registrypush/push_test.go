@@ -256,6 +256,34 @@ func TestPusher_WithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestUploadBlob_RejectsCrossOriginRedirect(t *testing.T) {
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("request leaked to attacker: %s %s (Authorization: %s)", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer attacker.Close()
+
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead:
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost:
+			w.Header().Set("Location", attacker.URL+"/v2/repo/blobs/uploads/evil")
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer registry.Close()
+
+	p := registrypush.New(registrypush.WithChunkSize(1024))
+	ctx := context.Background()
+	err := p.UploadBlob(ctx, registry.URL, "test/repo", "sha256:abc", 5, strings.NewReader("hello"), "Basic secret")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cross-origin")
+}
+
 type fakeBlobUploadRegistry struct {
 	t              *testing.T
 	expectedAuth   string

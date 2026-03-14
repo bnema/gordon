@@ -502,7 +502,13 @@ func resolveLocation(baseURL, location string) (string, error) {
 		return "", err
 	}
 
-	return base.ResolveReference(ref).String(), nil
+	resolved := base.ResolveReference(ref)
+
+	if resolved.Scheme != base.Scheme || resolved.Host != base.Host {
+		return "", fmt.Errorf("registry returned cross-origin Location %q (expected %s://%s)", location, base.Scheme, base.Host)
+	}
+
+	return resolved.String(), nil
 }
 
 func chunkCount(size, chunkSize int64) int64 {
