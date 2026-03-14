@@ -92,6 +92,14 @@ func (r *remoteControlPlane) Reload(ctx context.Context) error {
 	return r.client.Reload(ctx)
 }
 
+func (r *remoteControlPlane) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error) {
+	return r.client.ListNetworks(ctx)
+}
+
+func (r *remoteControlPlane) GetConfig(ctx context.Context) (*remote.Config, error) {
+	return r.client.GetConfig(ctx)
+}
+
 func (r *remoteControlPlane) DeployIntent(ctx context.Context, imageName string) error {
 	return r.client.DeployIntent(ctx, imageName)
 }

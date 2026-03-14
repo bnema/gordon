@@ -12,6 +12,7 @@ Subcommands:
 
 - `list` - List runtime images and registry tags.
 - `prune` - Prune dangling runtime images and old registry tags.
+- `tags` - List registry tags for a specific repository.
 
 > **Note:** Images commands require remote mode (`--remote` + `--token`, or configured remotes).
 
@@ -81,6 +82,34 @@ Flags:
 - `--keep-releases` counts non-`latest` tags, ordered by most recent first.
 - `--keep-releases=0` with registry scope enabled still runs registry cleanup but keeps no non-`latest` tags.
 
+## gordon images tags
+
+```bash
+gordon images tags <repository>
+gordon images tags <repository> --json
+```
+
+Lists all tags in the Gordon registry for the specified repository.
+
+Flags:
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output repository and tags as JSON |
+
+### JSON Output
+
+```bash
+gordon images tags myapp --json
+```
+
+```json
+{
+  "repository": "myapp",
+  "tags": ["latest", "v1.2.0", "v1.1.0"]
+}
+```
+
 ## Examples
 
 ```bash
@@ -89,6 +118,9 @@ gordon images list
 
 # Prune everything with defaults (dangling + registry, keep latest + 3)
 gordon images prune
+
+# List tags for a repository
+gordon images tags myapp
 
 # Prune dangling runtime images only
 gordon images prune --dangling
@@ -105,8 +137,9 @@ gordon images prune --no-confirm
 
 ## Required Permissions
 
-- `list` requires `admin:status:read`.
-- `prune` requires `admin:config:write`.
+- The `list` subcommand requires `admin:status:read`.
+- The `prune` subcommand requires `admin:config:write`.
+- The `tags` subcommand requires `admin:status:read`.
 
 ## Related
 

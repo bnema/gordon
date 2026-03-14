@@ -129,6 +129,14 @@ Commands are organized by where they run:
 	bootstrapCmd.GroupID = groupManage
 	rootCmd.AddCommand(bootstrapCmd)
 
+	configCmd := newConfigCmd()
+	configCmd.GroupID = groupManage
+	rootCmd.AddCommand(configCmd)
+
+	networksCmd := newNetworksCmd()
+	networksCmd.GroupID = groupManage
+	rootCmd.AddCommand(networksCmd)
+
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
 	remotesCmd.GroupID = groupClient

@@ -20,6 +20,10 @@ func TestAllListCommands_AcceptJSONFlag(t *testing.T) {
 		{"auth token list", newTokenListCmd},
 		{"remotes list", newRemotesListCmd},
 		{"rollback list", newRollbackListCmd},
+		{"config show", newConfigShowCmd},
+		{"routes show", newRoutesShowCmd},
+		{"networks list", newNetworksListCmd},
+		{"images tags", newImagesTagsCmd},
 	}
 
 	for _, tc := range commands {
