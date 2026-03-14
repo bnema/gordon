@@ -606,6 +606,7 @@ func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
 	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
+	expectedEnvHash := hashEnvironment([]string{})
 
 	// Existing container has ImageID, but GetImageID will fail
 	existingContainer := &domain.Container{
@@ -614,6 +615,9 @@ func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
 		Image:   "myapp:latest",
 		ImageID: "sha256:abc123",
 		Status:  "running",
+		Labels: map[string]string{
+			domain.LabelEnvHash: expectedEnvHash,
+		},
 	}
 	svc.containers["test.example.com"] = existingContainer
 
@@ -2378,6 +2382,7 @@ func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
+	expectedEnvHash := hashEnvironment([]string{})
 
 	// Pre-populate with existing container that has an ImageID (set by InspectContainer).
 	// This simulates the first deploy (from image.pushed event) having already completed.
@@ -2387,6 +2392,9 @@ func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
 		Image:   "myapp:latest",
 		ImageID: "sha256:abc123",
 		Status:  "running",
+		Labels: map[string]string{
+			domain.LabelEnvHash: expectedEnvHash,
+		},
 	}
 	svc.containers["test.example.com"] = existingContainer
 
@@ -2432,6 +2440,7 @@ func TestService_Deploy_SkipsRedundantDeploy_WhenTrackedImageIDMissing(t *testin
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
+	expectedEnvHash := hashEnvironment([]string{})
 
 	// Pre-populate with existing container missing ImageID (common after stale in-memory state).
 	existingContainer := &domain.Container{
@@ -2439,6 +2448,9 @@ func TestService_Deploy_SkipsRedundantDeploy_WhenTrackedImageIDMissing(t *testin
 		Name:   "gordon-test.example.com",
 		Image:  "myapp:latest",
 		Status: "running",
+		Labels: map[string]string{
+			domain.LabelEnvHash: expectedEnvHash,
+		},
 	}
 	svc.containers["test.example.com"] = existingContainer
 
@@ -2583,6 +2595,7 @@ func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 	config := testMinDelayConfig()
 	svc := NewService(runtime, envLoader, eventBus, nil, config)
 	ctx := testContext()
+	expectedEnvHash := hashEnvironment([]string{})
 
 	// Existing container has same image ID but is NOT running (crashed)
 	existingContainer := &domain.Container{
@@ -2591,6 +2604,9 @@ func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 		Image:   "myapp:latest",
 		ImageID: "sha256:abc123",
 		Status:  "exited",
+		Labels: map[string]string{
+			domain.LabelEnvHash: expectedEnvHash,
+		},
 	}
 	svc.containers["test.example.com"] = existingContainer
 
@@ -2630,6 +2646,180 @@ func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "new-container", result.ID)
+}
+
+func TestService_Deploy_DoesNotSkip_WhenEnvHashDiffers(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := testMinDelayConfig()
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+	expectedEnvHash := hashEnvironment([]string{})
+
+	existingContainer := &domain.Container{
+		ID:      "existing-container",
+		Name:    "gordon-test.example.com",
+		Image:   "myapp:latest",
+		ImageID: "sha256:abc123",
+		Status:  "running",
+		Labels: map[string]string{
+			domain.LabelEnvHash: "different-hash",
+		},
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	runtime.EXPECT().GetImageID(mock.Anything, "myapp:latest").Return("sha256:abc123", nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "existing-container").Return(true, nil)
+
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Labels[domain.LabelEnvHash] == expectedEnvHash
+	})).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(3)
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID: "new-container", Status: "running",
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+	runtime.EXPECT().StopContainer(mock.Anything, "existing-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "existing-container", true).Return(nil)
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
+}
+
+func TestService_Deploy_DoesNotSkip_WhenEnvHashMissing(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := testMinDelayConfig()
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+	expectedEnvHash := hashEnvironment([]string{})
+
+	existingContainer := &domain.Container{
+		ID:      "existing-container",
+		Name:    "gordon-test.example.com",
+		Image:   "myapp:latest",
+		ImageID: "sha256:abc123",
+		Status:  "running",
+		Labels:  map[string]string{},
+	}
+	svc.containers["test.example.com"] = existingContainer
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	runtime.EXPECT().GetImageID(mock.Anything, "myapp:latest").Return("sha256:abc123", nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "existing-container").Return(true, nil)
+
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Labels[domain.LabelEnvHash] == expectedEnvHash
+	})).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(3)
+	runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID: "new-container", Status: "running",
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+	runtime.EXPECT().StopContainer(mock.Anything, "existing-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "existing-container", true).Return(nil)
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-test.example.com").Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-container", result.ID)
+}
+
+func TestService_attachmentEnvDrifted_ReturnsFalseWhenHashMatches(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig())
+	ctx := testContext()
+	imageRef := svc.buildImageRef("postgres:16")
+	envVars := []string{"POSTGRES_PASSWORD=secret"}
+	envHash := hashEnvironment(envVars)
+
+	envLoader.EXPECT().LoadEnv(mock.Anything, "gordon-app-example-com-postgres").Return(envVars, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, imageRef).Return([]string{}, nil)
+
+	drifted, err := svc.attachmentEnvDrifted(ctx, &domain.Container{
+		Labels: map[string]string{domain.LabelEnvHash: envHash},
+	}, "gordon-app-example-com-postgres", "postgres:16")
+
+	assert.NoError(t, err)
+	assert.False(t, drifted)
+}
+
+func TestService_attachmentEnvDrifted_ReturnsTrueWhenHashDiffers(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig())
+	ctx := testContext()
+	imageRef := svc.buildImageRef("postgres:16")
+	envVars := []string{"POSTGRES_PASSWORD=secret"}
+
+	envLoader.EXPECT().LoadEnv(mock.Anything, "gordon-app-example-com-postgres").Return(envVars, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, imageRef).Return([]string{}, nil)
+
+	drifted, err := svc.attachmentEnvDrifted(ctx, &domain.Container{
+		Labels: map[string]string{domain.LabelEnvHash: "stale-hash"},
+	}, "gordon-app-example-com-postgres", "postgres:16")
+
+	assert.NoError(t, err)
+	assert.True(t, drifted)
+}
+
+func TestService_attachmentEnvDrifted_ReturnsTrueWhenHashMissing(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig())
+	ctx := testContext()
+	imageRef := svc.buildImageRef("postgres:16")
+	envVars := []string{"POSTGRES_PASSWORD=secret"}
+
+	envLoader.EXPECT().LoadEnv(mock.Anything, "gordon-app-example-com-postgres").Return(envVars, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, imageRef).Return([]string{}, nil)
+
+	drifted, err := svc.attachmentEnvDrifted(ctx, &domain.Container{
+		Labels: map[string]string{},
+	}, "gordon-app-example-com-postgres", "postgres:16")
+
+	assert.NoError(t, err)
+	assert.True(t, drifted)
 }
 
 // TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical verifies that orphan
