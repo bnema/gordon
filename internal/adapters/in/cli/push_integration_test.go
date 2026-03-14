@@ -8,10 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/zerowrap"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	registryhttp "github.com/bnema/gordon/internal/adapters/in/http/registry"
@@ -31,16 +33,10 @@ func TestIntegration_TagAndPush_NativeRegistry(t *testing.T) {
 	img, err := random.Image(512, 1)
 	require.NoError(t, err)
 
-	originalPush := dockerPushFn
-	originalTag := dockerTagFn
-	originalImageExists := dockerImageExistsFn
-	t.Cleanup(func() {
-		dockerPushFn = originalPush
-		dockerTagFn = originalTag
-		dockerImageExistsFn = originalImageExists
-	})
-
-	dockerPushFn = func(ctx context.Context, ref string) error {
+	ops := climocks.NewMockpushImageOps(t)
+	ops.On("Tag", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	ops.On("Exists", mock.Anything, mock.Anything).Return(true, nil)
+	ops.EXPECT().Push(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, ref string) error {
 		pusher := registrypush.New(
 			registrypush.WithChunkSize(256),
 			registrypush.WithTransport(harness.server.Client().Transport),
@@ -49,19 +45,13 @@ func TestIntegration_TagAndPush_NativeRegistry(t *testing.T) {
 			}),
 		)
 		return pusher.Push(ctx, ref)
-	}
-	dockerTagFn = func(context.Context, string, string) error {
-		return nil
-	}
-	dockerImageExistsFn = func(context.Context, string) bool {
-		return true
-	}
+	})
 
 	registry := strings.TrimPrefix(harness.server.URL, "http://")
 	versionRef := registry + "/testapp:v1.0.0"
 	latestRef := registry + "/testapp:latest"
 
-	err = tagAndPush(ctx, registry, "testapp", "v1.0.0", versionRef, latestRef)
+	err = tagAndPush(ctx, ops, registry, "testapp", "v1.0.0", versionRef, latestRef)
 	require.NoError(t, err)
 
 	harness.RequireManifest(t, "v1.0.0")

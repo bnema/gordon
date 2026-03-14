@@ -35,3 +35,6 @@ packages:
       HTTPProber:
       SecretService:
       LogService:
+  github.com/bnema/gordon/internal/adapters/in/cli:
+    interfaces:
+      pushImageOps:

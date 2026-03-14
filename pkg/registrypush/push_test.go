@@ -217,6 +217,45 @@ func TestPusher_Push(t *testing.T) {
 	}
 }
 
+func TestPusher_WithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method == http.MethodPost {
+			w.Header().Set("Location", "/v2/repo/blobs/uploads/test-uuid")
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if r.Method == http.MethodPatch {
+			w.Header().Set("Location", "/v2/repo/blobs/uploads/test-uuid")
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	content := []byte("test-blob-data")
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(content))
+
+	pusherSecure := registrypush.New(registrypush.WithChunkSize(1024))
+	err := pusherSecure.UploadBlob(ctx, srv.URL, "repo", digest, int64(len(content)), bytes.NewReader(content), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "certificate")
+
+	pusherInsecure := registrypush.New(registrypush.WithChunkSize(1024), registrypush.WithInsecureTLS(true))
+	err = pusherInsecure.UploadBlob(ctx, srv.URL, "repo", digest, int64(len(content)), bytes.NewReader(content), "")
+	require.NoError(t, err)
+}
+
 type fakeBlobUploadRegistry struct {
 	t              *testing.T
 	expectedAuth   string

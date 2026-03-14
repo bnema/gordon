@@ -18,15 +18,10 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/internal/domain"
-	"github.com/bnema/gordon/pkg/registrypush"
 	"github.com/bnema/gordon/pkg/validation"
 )
 
-var (
-	dockerTagFn         = dockerTag
-	dockerPushFn        = dockerPush
-	dockerImageExistsFn = dockerImageExists
-)
+var newImageOpsFn = newImageOpsFromFlags
 
 func newPushCmd() *cobra.Command {
 	var (
@@ -155,6 +150,11 @@ func runPush(ctx context.Context, imageArg, domainFlag, tag string, build bool, 
 
 	versionRef, latestRef := resolveImageRefs(registry, imageName, version)
 
+	imageOps, err := newImageOpsFn()
+	if err != nil {
+		return err
+	}
+
 	fmt.Printf("Image:  %s\n", styles.Theme.Bold.Render(versionRef))
 	if version != "latest" {
 		fmt.Printf("Also:   %s\n", styles.Theme.Bold.Render(latestRef))
@@ -171,11 +171,11 @@ func runPush(ctx context.Context, imageArg, domainFlag, tag string, build bool, 
 	}
 
 	if build {
-		if err := buildAndPush(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef); err != nil {
+		if err := buildAndPush(ctx, imageOps, version, platform, dockerfile, buildArgs, versionRef, latestRef); err != nil {
 			return err
 		}
 	} else {
-		if err := tagAndPush(ctx, registry, imageName, version, versionRef, latestRef); err != nil {
+		if err := tagAndPush(ctx, imageOps, registry, imageName, version, versionRef, latestRef); err != nil {
 			return err
 		}
 	}
@@ -474,7 +474,7 @@ func parseTagRef(ref string) string {
 	return tag
 }
 
-func buildAndPush(ctx context.Context, version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) error {
+func buildAndPush(ctx context.Context, ops pushImageOps, version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) error {
 	if _, err := os.Stat(dockerfile); os.IsNotExist(err) {
 		return fmt.Errorf("dockerfile not found: %s", dockerfile)
 	}
@@ -483,20 +483,16 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 	// The native registry push client handles chunked uploads to stay
 	// within Cloudflare's 100MB per-request limit.
 	fmt.Println("\nBuilding image...")
-	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
-	buildCmd.Env = os.Environ()                                                                                                             // VERSION is now passed as --build-arg VERSION=<value>
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-	if err := buildCmd.Run(); err != nil {
-		return fmt.Errorf("docker buildx build failed: %w", err)
+	if err := ops.Build(ctx, buildImageArgs(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef)); err != nil {
+		return err
 	}
 
 	fmt.Println("Pushing...")
-	if err := dockerPushFn(ctx, latestRef); err != nil {
+	if err := ops.Push(ctx, latestRef); err != nil {
 		return fmt.Errorf("failed to push %s: %w", latestRef, err)
 	}
 	if version != "latest" {
-		if err := dockerPushFn(ctx, versionRef); err != nil {
+		if err := ops.Push(ctx, versionRef); err != nil {
 			return fmt.Errorf("failed to push %s: %w", versionRef, err)
 		}
 	}
@@ -554,30 +550,34 @@ func buildImageArgs(ctx context.Context, version, platform, dockerfile string, b
 	return args
 }
 
-func tagAndPush(ctx context.Context, registry, imageName, version, versionRef, latestRef string) error {
+func tagAndPush(ctx context.Context, ops pushImageOps, registry, imageName, version, versionRef, latestRef string) error {
 	localImage := fmt.Sprintf("%s/%s", registry, imageName)
 
 	fmt.Println("\nChecking local image...")
-	if !dockerImageExistsFn(ctx, localImage) {
+	exists, err := ops.Exists(ctx, localImage)
+	if err != nil {
+		return fmt.Errorf("failed to inspect local image %s: %w", localImage, err)
+	}
+	if !exists {
 		return fmt.Errorf("local image %s not found; build and tag it before pushing", localImage)
 	}
 
 	fmt.Println("Tagging...")
-	if err := dockerTagFn(ctx, localImage, versionRef); err != nil {
+	if err := ops.Tag(ctx, localImage, versionRef); err != nil {
 		return fmt.Errorf("failed to tag %s: %w", versionRef, err)
 	}
 	if version != "latest" {
-		if err := dockerTagFn(ctx, localImage, latestRef); err != nil {
+		if err := ops.Tag(ctx, localImage, latestRef); err != nil {
 			return fmt.Errorf("failed to tag %s: %w", latestRef, err)
 		}
 	}
 
 	fmt.Println("Pushing...")
-	if err := dockerPushFn(ctx, versionRef); err != nil {
+	if err := ops.Push(ctx, versionRef); err != nil {
 		return fmt.Errorf("failed to push %s: %w", versionRef, err)
 	}
 	if version != "latest" {
-		if err := dockerPushFn(ctx, latestRef); err != nil {
+		if err := ops.Push(ctx, latestRef); err != nil {
 			return fmt.Errorf("failed to push %s: %w", latestRef, err)
 		}
 	}
@@ -740,27 +740,6 @@ func getGitVersion(ctx context.Context) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
-}
-
-func dockerTag(ctx context.Context, src, dst string) error {
-	cmd := exec.CommandContext(ctx, "docker", "tag", src, dst) //nolint:gosec // binary is constant; image refs validated by OCI ref parser
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func dockerPush(ctx context.Context, ref string) error {
-	pusher := registrypush.New(
-		registrypush.WithProgress(os.Stderr),
-	)
-	return pusher.Push(ctx, ref)
-}
-
-func dockerImageExists(ctx context.Context, image string) bool {
-	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", image) // #nosec G204
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Run() == nil
 }
 
 // buildArgPattern matches KEY=VALUE where KEY starts with a letter or underscore.

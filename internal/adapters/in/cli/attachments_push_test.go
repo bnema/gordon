@@ -6,9 +6,11 @@ import (
 	"testing"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -212,12 +214,12 @@ func TestResolveAttachmentImage_NotConfigured(t *testing.T) {
 
 func TestAttachmentPushCmd_NoDeploy(t *testing.T) {
 	origResolveControlPlane := resolveControlPlaneFn
-	origTagAndPush := tagAndPushFn
 	origDetermineVersion := determineVersionFn
+	origNewImageOps := newImageOpsFn
 	t.Cleanup(func() {
 		resolveControlPlaneFn = origResolveControlPlane
-		tagAndPushFn = origTagAndPush
 		determineVersionFn = origDetermineVersion
+		newImageOpsFn = origNewImageOps
 	})
 
 	cp := &attachmentPushTestControlPlane{
@@ -233,10 +235,15 @@ func TestAttachmentPushCmd_NoDeploy(t *testing.T) {
 		return &controlPlaneHandle{plane: cp}, nil
 	}
 	determineVersionFn = func(context.Context, string) string { return "v1.2.3" }
-	called := false
-	tagAndPushFn = func(context.Context, string, string, string, string, string) error {
-		called = true
-		return nil
+	pushCalled := false
+	newImageOpsFn = func() (pushImageOps, error) {
+		m := climocks.NewMockpushImageOps(t)
+		m.On("Tag", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		m.On("Exists", mock.Anything, mock.Anything).Return(true, nil)
+		m.On("Push", mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+			pushCalled = true
+		}).Return(nil)
+		return m, nil
 	}
 
 	cmd := newAttachmentsPushCmd()
@@ -248,18 +255,18 @@ func TestAttachmentPushCmd_NoDeploy(t *testing.T) {
 	err := cmd.Execute()
 
 	require.NoError(t, err)
-	assert.True(t, called)
+	assert.True(t, pushCalled)
 	assert.Contains(t, out.String(), "Push complete")
 }
 
 func TestAttachmentPushCmd_TaggedImageInputBuildsValidRefs(t *testing.T) {
 	origResolveControlPlane := resolveControlPlaneFn
-	origTagAndPush := tagAndPushFn
 	origDetermineVersion := determineVersionFn
+	origNewImageOps := newImageOpsFn
 	t.Cleanup(func() {
 		resolveControlPlaneFn = origResolveControlPlane
-		tagAndPushFn = origTagAndPush
 		determineVersionFn = origDetermineVersion
+		newImageOpsFn = origNewImageOps
 	})
 
 	cp := &attachmentPushTestControlPlane{
@@ -278,10 +285,19 @@ func TestAttachmentPushCmd_TaggedImageInputBuildsValidRefs(t *testing.T) {
 
 	var gotVersionRef string
 	var gotLatestRef string
-	tagAndPushFn = func(_ context.Context, registry, imageName, version, versionRef, latestRef string) error {
-		gotVersionRef = versionRef
-		gotLatestRef = latestRef
-		return nil
+	newImageOpsFn = func() (pushImageOps, error) {
+		m := climocks.NewMockpushImageOps(t)
+		m.On("Tag", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		m.On("Exists", mock.Anything, mock.Anything).Return(true, nil)
+		m.On("Push", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			ref := args.Get(1).(string)
+			if gotVersionRef == "" {
+				gotVersionRef = ref
+			} else if gotLatestRef == "" {
+				gotLatestRef = ref
+			}
+		}).Return(nil)
+		return m, nil
 	}
 
 	cmd := newAttachmentsPushCmd()
