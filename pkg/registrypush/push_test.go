@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/random"
@@ -279,6 +280,23 @@ func TestPusher_WithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
 	pusherInsecure := registrypush.New(registrypush.WithChunkSize(1024), registrypush.WithInsecureTLS(true))
 	err = pusherInsecure.UploadBlob(ctx, srv.URL, "repo", digest, int64(len(content)), bytes.NewReader(content), "")
 	require.NoError(t, err)
+}
+
+func TestPusher_WithTimeout_RespectsDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p := registrypush.New(
+		registrypush.WithChunkSize(1024),
+		registrypush.WithTimeout(100*time.Millisecond),
+	)
+
+	ctx := context.Background()
+	err := p.UploadBlob(ctx, srv.URL, "test/repo", "sha256:abc123", 10, strings.NewReader("0123456789"), "")
+
+	require.Error(t, err)
 }
 
 func TestUploadBlob_RejectsCrossOriginRedirect(t *testing.T) {

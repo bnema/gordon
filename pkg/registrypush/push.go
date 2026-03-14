@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/client"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -25,6 +26,8 @@ import (
 // and Gordon's default max_blob_chunk_size of 95MB.
 const DefaultChunkSize = 50 * 1024 * 1024
 
+const defaultHTTPTimeout = 5 * time.Minute
+
 // ImageSource provides a v1.Image for a given ref.
 // The default reads from the local Docker/Podman daemon.
 // Override with WithImageSource for testing.
@@ -33,6 +36,7 @@ type ImageSource func(ctx context.Context, ref string) (v1.Image, error)
 // Pusher uploads container images to a registry using chunked blob uploads.
 type Pusher struct {
 	chunkSize   int64
+	timeout     time.Duration
 	transport   http.RoundTripper
 	insecureTLS bool
 	imageSource ImageSource
@@ -51,6 +55,11 @@ func WithChunkSize(size int64) Option {
 // WithTransport sets a custom HTTP transport (for testing).
 func WithTransport(t http.RoundTripper) Option {
 	return func(p *Pusher) { p.transport = t }
+}
+
+// WithTimeout sets the HTTP client timeout for registry operations.
+func WithTimeout(d time.Duration) Option {
+	return func(p *Pusher) { p.timeout = d }
 }
 
 // WithInsecureTLS disables TLS certificate verification for registry requests.
@@ -77,7 +86,7 @@ func WithProgress(w io.Writer) Option {
 
 // New creates a Pusher with the given options.
 func New(opts ...Option) *Pusher {
-	p := &Pusher{chunkSize: DefaultChunkSize}
+	p := &Pusher{chunkSize: DefaultChunkSize, timeout: defaultHTTPTimeout}
 	for _, o := range opts {
 		o(p)
 	}
@@ -502,7 +511,7 @@ func (p *Pusher) finalizeBlobUpload(ctx context.Context, baseURL, uploadURL, dig
 }
 
 func (p *Pusher) httpClient() *http.Client {
-	return &http.Client{Transport: p.transport}
+	return &http.Client{Transport: p.transport, Timeout: p.timeout}
 }
 
 // setScopedAuth attaches the auth header only if the request URL matches the
