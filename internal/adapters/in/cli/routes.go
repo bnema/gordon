@@ -140,11 +140,6 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut boo
 		return fmt.Errorf("failed to list routes: %w", err)
 	}
 
-	if len(routes) == 0 {
-		fmt.Println(styles.Theme.Muted.Render("No routes configured"))
-		return nil
-	}
-
 	// Get health status for each route (includes container status and HTTP probe)
 	health, _ := client.GetHealth(ctx)
 	if health == nil {
@@ -153,6 +148,11 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut boo
 
 	if jsonOut {
 		return routesListJSON(out, routes, health)
+	}
+
+	if len(routes) == 0 {
+		_, _ = fmt.Fprintln(out, styles.Theme.Muted.Render("No routes configured"))
+		return nil
 	}
 
 	const imageColWidth = 35
@@ -210,9 +210,9 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut boo
 		components.WithRows(rows),
 	)
 
-	fmt.Println(styles.Theme.Title.Render("Routes"))
-	fmt.Println()
-	fmt.Println(table.View())
+	_, _ = fmt.Fprintln(out, styles.Theme.Title.Render("Routes"))
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, table.View())
 
 	return nil
 }
@@ -278,7 +278,7 @@ func runRoutesListLocal(ctx context.Context, cfgPath string, jsonOut bool, out i
 	}
 
 	if len(routes) == 0 {
-		fmt.Println(styles.Theme.Muted.Render("No routes configured"))
+		_, _ = fmt.Fprintln(out, styles.Theme.Muted.Render("No routes configured"))
 		return nil
 	}
 
@@ -299,9 +299,9 @@ func runRoutesListLocal(ctx context.Context, cfgPath string, jsonOut bool, out i
 		components.WithRows(rows),
 	)
 
-	fmt.Println(styles.Theme.Title.Render("Routes (local)"))
-	fmt.Println()
-	fmt.Println(table.View())
+	_, _ = fmt.Fprintln(out, styles.Theme.Title.Render("Routes (local)"))
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, table.View())
 
 	return nil
 }
