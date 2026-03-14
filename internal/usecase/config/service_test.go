@@ -1285,6 +1285,100 @@ port = 9999
 		assert.NotContains(t, string(backupData), "new.example.com")
 	})
 
+	t.Run("AddRoute updates existing dotted domain route", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 8088
+
+[auth]
+username = "testadmin"
+token_secret = "testsecret123"
+
+[routes]
+"pitlane.example.com" = "pitlane:latest"
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		err = svc.AddRoute(ctx, domain.Route{
+			Domain: "pitlane.example.com",
+			Image:  "reg.example.com/pitlane:latest",
+		})
+		require.NoError(t, err, "AddRoute should succeed when updating an existing dotted-domain route")
+
+		routes := svc.GetRoutes(ctx)
+		require.Len(t, routes, 1)
+		assert.Equal(t, "pitlane.example.com", routes[0].Domain)
+		assert.Equal(t, "reg.example.com/pitlane:latest", routes[0].Image)
+
+		v2 := viper.New()
+		v2.SetConfigFile(configFile)
+		err = v2.ReadInConfig()
+		require.NoError(t, err)
+		assert.Equal(t, 8088, v2.GetInt("server.port"))
+		assert.Equal(t, "testadmin", v2.GetString("auth.username"))
+		assert.Equal(t, "testsecret123", v2.GetString("auth.token_secret"))
+	})
+
+	t.Run("RemoveRoute removes dotted domain route", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `
+[server]
+port = 8088
+
+[auth]
+username = "testadmin"
+token_secret = "testsecret123"
+
+[routes]
+"pitlane.example.com" = "reg.example.com/pitlane:latest"
+"other.example.com" = "reg.example.com/other:latest"
+`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		err = v.ReadInConfig()
+		require.NoError(t, err)
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		err = svc.Load(ctx)
+		require.NoError(t, err)
+
+		err = svc.RemoveRoute(ctx, "pitlane.example.com")
+		require.NoError(t, err, "RemoveRoute should succeed for a dotted-domain route")
+
+		routes := svc.GetRoutes(ctx)
+		require.Len(t, routes, 1)
+		assert.Equal(t, "other.example.com", routes[0].Domain, "other routes should be preserved")
+		assert.Equal(t, "reg.example.com/other:latest", routes[0].Image, "other routes should be preserved")
+
+		v2 := viper.New()
+		v2.SetConfigFile(configFile)
+		err = v2.ReadInConfig()
+		require.NoError(t, err)
+		assert.Equal(t, 8088, v2.GetInt("server.port"))
+		assert.Equal(t, "testadmin", v2.GetString("auth.username"))
+		assert.Equal(t, "testsecret123", v2.GetString("auth.token_secret"))
+	})
+
 	t.Run("network_groups are persisted to disk", func(t *testing.T) {
 		// Setup: config file with auth, server, and network_groups
 		tmpDir := t.TempDir()
