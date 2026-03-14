@@ -57,3 +57,9 @@ gordon config show --remote https://gordon.mydomain.com --token $TOKEN
   }
 }
 ```
+
+## Related
+
+- [CLI Overview](./index.md)
+- [Status Command](./status.md)
+- [Routes Command](./routes.md)
