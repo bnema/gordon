@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/docker/docker/client"
@@ -157,12 +159,44 @@ func defaultImageSource(ctx context.Context, ref string) (v1.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to export image %s: %w", ref, err)
 	}
-	defer rc.Close()
 
-	img, err := tarball.Image(func() (io.ReadCloser, error) {
-		return rc, nil
-	}, &tag)
+	tmpFile, err := os.CreateTemp("", "gordon-push-*.tar")
 	if err != nil {
+		if closeErr := rc.Close(); closeErr != nil {
+			return nil, fmt.Errorf("failed to create temp file for image export: %w (also failed to close image export stream: %v)", err, closeErr)
+		}
+		return nil, fmt.Errorf("failed to create temp file for image export: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	if _, err := io.Copy(tmpFile, rc); err != nil {
+		if closeErr := rc.Close(); closeErr != nil {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpPath)
+			return nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close image export stream: %v)", err, closeErr)
+		}
+		if closeErr := tmpFile.Close(); closeErr != nil {
+			_ = os.Remove(tmpPath)
+			return nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close temp file: %v)", err, closeErr)
+		}
+		if removeErr := os.Remove(tmpPath); removeErr != nil {
+			return nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to remove temp file %s: %v)", err, tmpPath, removeErr)
+		}
+		return nil, fmt.Errorf("failed to write image tar to temp file: %w", err)
+	}
+	if err := rc.Close(); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("failed to close image export stream: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("failed to close temp file %s: %w", tmpPath, err)
+	}
+
+	img, err := tarball.ImageFromPath(tmpPath, &tag)
+	if err != nil {
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("failed to parse image tar for %s: %w", ref, err)
 	}
 	return img, nil
@@ -247,7 +281,8 @@ func (p *Pusher) uploadManifest(ctx context.Context, baseURL, repo, tag string, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("manifest upload returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("manifest upload returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -279,7 +314,7 @@ func registryBaseURL(host string) string {
 	return "https://" + host
 }
 
-var errBlobMissing = fmt.Errorf("blob missing")
+var errBlobMissing = errors.New("blob missing")
 
 func (p *Pusher) checkBlobExists(ctx context.Context, baseURL, repo, digest, auth string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, fmt.Sprintf("%s/v2/%s/blobs/%s", baseURL, repo, digest), nil)
@@ -300,7 +335,8 @@ func (p *Pusher) checkBlobExists(ctx context.Context, baseURL, repo, digest, aut
 	case http.StatusNotFound:
 		return errBlobMissing
 	default:
-		return fmt.Errorf("blob existence check returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("blob existence check returned status %d: %s", resp.StatusCode, string(body))
 	}
 }
 
@@ -318,7 +354,8 @@ func (p *Pusher) startBlobUpload(ctx context.Context, baseURL, repo, auth string
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusAccepted {
-		return "", fmt.Errorf("blob upload start returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("blob upload start returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	location, err := resolveLocation(baseURL, resp.Header.Get("Location"))
@@ -357,7 +394,7 @@ func (p *Pusher) uploadBlobChunks(ctx context.Context, uploadURL string, content
 }
 
 func (p *Pusher) uploadBlobChunk(ctx context.Context, uploadURL string, chunk []byte, offset int64, auth string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, uploadURL, io.NopCloser(io.LimitReader(bytesReader(chunk), int64(len(chunk)))))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, uploadURL, bytesReader(chunk))
 	if err != nil {
 		return "", fmt.Errorf("failed to create blob chunk request: %w", err)
 	}
@@ -373,7 +410,8 @@ func (p *Pusher) uploadBlobChunk(ctx context.Context, uploadURL string, chunk []
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusAccepted {
-		return "", fmt.Errorf("blob chunk upload returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("blob chunk upload returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	nextURL, err := resolveLocation(uploadURL, resp.Header.Get("Location"))
@@ -407,7 +445,8 @@ func (p *Pusher) finalizeBlobUpload(ctx context.Context, uploadURL, digest, auth
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("blob upload finalize returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("blob upload finalize returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
