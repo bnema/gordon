@@ -10,6 +10,10 @@ const (
 	LabelAttachment = "gordon.attachment"
 	LabelAttachedTo = "gordon.attached-to"
 	LabelCreated    = "gordon.created"
+	// LabelEnvHash stores a SHA-256 hash of the effective environment
+	// variables at deploy time, used to detect env drift without
+	// exposing secret values.
+	LabelEnvHash = "gordon.env-hash"
 
 	// Image labels (set in Dockerfile)
 	LabelProxyPort = "gordon.proxy.port"
