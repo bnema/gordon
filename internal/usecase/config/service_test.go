@@ -260,6 +260,41 @@ func TestService_AddRoute(t *testing.T) {
 		assert.Equal(t, "newapp:latest", config.Routes["new.example.com"])
 	})
 
+	t.Run("idempotent same domain and image saves once", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "new.example.com",
+			Image:  "newapp:latest",
+		}
+
+		err = svc.AddRoute(ctx, route)
+		require.NoError(t, err)
+
+		before, err := os.Stat(configFile)
+		require.NoError(t, err)
+
+		err = svc.AddRoute(ctx, route)
+		require.NoError(t, err)
+
+		after, err := os.Stat(configFile)
+		require.NoError(t, err)
+
+		assert.Equal(t, before.ModTime(), after.ModTime())
+		assert.Equal(t, "newapp:latest", svc.GetConfig().Routes["new.example.com"])
+	})
+
 	t.Run("empty domain", func(t *testing.T) {
 		v := viper.New()
 		eventBus := mocks.NewMockEventPublisher(t)

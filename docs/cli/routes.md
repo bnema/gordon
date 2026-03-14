@@ -12,7 +12,7 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 | Subcommand | Description |
 |------------|-------------|
 | `list` | List all routes |
-| `add` | Add a new route |
+| `add` | Create or update a route |
 | `remove` | Remove a route |
 | `deploy` | Deploy a specific route |
 
@@ -24,6 +24,7 @@ List all configured routes.
 
 ```bash
 gordon routes list
+gordon routes list --json
 gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
@@ -37,16 +38,48 @@ api.example.com           myapi:v2.1.0              running
 admin.example.com         admin-panel:latest        stopped
 ```
 
+### JSON Output
+
+```bash
+gordon routes list --json
+```
+
+```json
+[
+  {
+    "domain": "app.example.com",
+    "image": "myapp:latest",
+    "status": "running"
+  },
+  {
+    "domain": "api.example.com",
+    "image": "myapi:v2.1.0",
+    "status": "running"
+  }
+]
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output routes as JSON |
+| `--remote` | Remote Gordon URL |
+| `--token` | Authentication token for remote |
+
 ---
 
 ## gordon routes add
 
-Add a new route.
+Create a new route or update an existing route.
 
 ```bash
 gordon routes add <domain> <image>
 gordon routes add myapp.example.com myapp:latest
 ```
+
+If the route already exists, Gordon updates it to the new image instead of failing.
+The image does not need to be pushed to the Gordon registry before you add the route.
 
 ### Arguments
 
@@ -69,9 +102,17 @@ gordon routes add myapp.example.com myapp:latest
 gordon routes add myapp.example.com myapp:latest
 gordon routes add api.example.com myapi:v2.1.0
 
+# Update an existing route
+gordon routes add myapp.example.com myapp:v2
+
 # Remote (override)
 gordon routes add myapp.example.com myapp:latest --remote https://gordon.mydomain.com --token $TOKEN
 ```
+
+### Notes
+
+- `gordon routes add` is idempotent: it creates the route when missing and updates it when present.
+- You can add the route before the image is pushed. Deploy happens when the image is later available or when you deploy an available image.
 
 ---
 

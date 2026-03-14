@@ -1,0 +1,72 @@
+# Bootstrap Command
+
+Create or update route configuration, attachments, and secrets in one command.
+
+## gordon bootstrap
+
+### Synopsis
+
+```bash
+gordon bootstrap <domain> <image> [options]
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<domain>` | The route domain to create or update |
+| `<image>` | The image to assign to the route |
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--attachment` | Add an attachment to the route (repeatable) |
+| `--env` | Set an environment variable for the route (repeatable, `KEY=VALUE`) |
+| `--remote` | Remote Gordon URL |
+| `--token` | Authentication token for remote |
+
+### Description
+
+`gordon bootstrap` is the recommended first-step setup workflow.
+
+- Creates the route when it does not exist.
+- Updates the route when it already exists.
+- Can attach services and set environment variables as part of the same command.
+- Does not push or deploy the image.
+
+Unlike `gordon push`, `gordon bootstrap` does not require the route to exist first. Run `gordon push` separately after bootstrap to upload and deploy an image.
+
+### Examples
+
+```bash
+# First-time route setup
+gordon bootstrap app.example.com myapp:latest
+
+# Then push and deploy the image
+gordon push app.example.com --build --no-confirm
+
+# First-time route setup with a database attachment and environment variable
+gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
+
+# Multiple attachments and environment variables
+gordon bootstrap app.example.com myapp:latest \
+  --attachment postgres:18 \
+  --attachment redis:7-alpine \
+  --env APP_ENV=production \
+  --env LOG_LEVEL=info
+
+# Remote target
+gordon bootstrap app.example.com myapp:latest --remote https://gordon.mydomain.com --token $TOKEN
+```
+
+### Notes
+
+- `gordon bootstrap` is idempotent for route configuration: rerunning it re-applies config instead of failing.
+- Run `gordon push` after bootstrap to upload and deploy the image.
+
+## Related
+
+- [CLI Overview](./index.md)
+- [Routes Commands](./routes.md)
+- [Push Command](./push.md)

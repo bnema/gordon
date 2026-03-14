@@ -9,8 +9,144 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 )
+
+type resolveFromImageTestControlPlane struct {
+	findRoutesByImage func(context.Context, string) ([]domain.Route, error)
+}
+
+var _ ControlPlane = (*resolveFromImageTestControlPlane)(nil)
+
+func (c *resolveFromImageTestControlPlane) ListRoutesWithDetails(context.Context) ([]remote.RouteInfo, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) GetHealth(context.Context) (map[string]*remote.RouteHealth, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) GetRoute(context.Context, string) (*domain.Route, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
+	if c.findRoutesByImage != nil {
+		return c.findRoutesByImage(ctx, imageName)
+	}
+	return nil, nil
+}
+
+func (c *resolveFromImageTestControlPlane) AddRoute(context.Context, domain.Route) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) UpdateRoute(context.Context, domain.Route) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) RemoveRoute(context.Context, string) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) Bootstrap(context.Context, dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) ListSecretsWithAttachments(context.Context, string) (*remote.SecretsListResult, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) SetSecrets(context.Context, string, map[string]string) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) DeleteSecret(context.Context, string, string) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) SetAttachmentSecrets(context.Context, string, string, map[string]string) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) DeleteAttachmentSecret(context.Context, string, string, string) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) GetAllAttachmentsConfig(context.Context) (map[string][]string, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) GetAttachmentsConfig(context.Context, string) ([]string, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) AddAttachment(context.Context, string, string) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) RemoveAttachment(context.Context, string, string) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) GetStatus(context.Context) (*remote.Status, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) Reload(context.Context) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) DeployIntent(context.Context, string) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) Deploy(context.Context, string) (*remote.DeployResult, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) Restart(context.Context, string, bool) (*remote.RestartResult, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) ListTags(context.Context, string) ([]string, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) ListBackups(context.Context, string) ([]dto.BackupJob, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) BackupStatus(context.Context) ([]dto.BackupJob, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) RunBackup(context.Context, string, string) (*dto.BackupRunResponse, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) DetectDatabases(context.Context, string) ([]dto.DatabaseInfo, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) GetProcessLogs(context.Context, int) ([]string, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) GetContainerLogs(context.Context, string, int) ([]string, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) StreamProcessLogs(context.Context, int) (<-chan string, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) StreamContainerLogs(context.Context, string, int) (<-chan string, error) {
+	panic("unexpected call")
+}
 
 func TestValidateBuildArg(t *testing.T) {
 	tests := []struct {
@@ -420,4 +556,18 @@ func TestParseLabelPair(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveFromImage_NoRouteSuggestsBootstrap(t *testing.T) {
+	cp := &resolveFromImageTestControlPlane{
+		findRoutesByImage: func(context.Context, string) ([]domain.Route, error) {
+			return nil, nil
+		},
+	}
+
+	_, _, _, err := resolveFromImage(context.Background(), cp, "myapp", "Dockerfile")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), `no route configured for image "myapp"`)
+	assert.Contains(t, err.Error(), "gordon bootstrap")
 }

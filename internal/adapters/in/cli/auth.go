@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -130,18 +131,22 @@ Use --expiry=0 for a token that never expires (useful for CI).`,
 
 // newTokenListCmd creates the token list command.
 func newTokenListCmd() *cobra.Command {
-	var configPath string
+	var (
+		configPath string
+		jsonOut    bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all authentication tokens",
 		Long:  `List all stored authentication tokens with their subjects and expiry information.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTokenList(configPath)
+			return runTokenList(configPath, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
 }
@@ -514,7 +519,7 @@ func runTokenGenerate(subject, scopesStr, expiryStr, configPath string) error {
 }
 
 // runTokenList lists all stored tokens.
-func runTokenList(configPath string) error {
+func runTokenList(configPath string, out io.Writer, jsonOut bool) error {
 	cfg, err := loadAuthConfig(configPath)
 	if err != nil {
 		return err
@@ -533,8 +538,30 @@ func runTokenList(configPath string) error {
 	}
 
 	if len(tokens) == 0 {
+		if jsonOut {
+			return writeJSON(out, []map[string]any{})
+		}
 		fmt.Println("No tokens found.")
 		return nil
+	}
+
+	if jsonOut {
+		payload := make([]map[string]any, 0, len(tokens))
+		for _, t := range tokens {
+			var expiresAt *time.Time
+			if !t.ExpiresAt.IsZero() {
+				expiresAt = &t.ExpiresAt
+			}
+			payload = append(payload, map[string]any{
+				"id":          t.ID,
+				"description": t.Subject,
+				"scopes":      t.Scopes,
+				"created_at":  t.IssuedAt,
+				"expires_at":  expiresAt,
+				"revoked":     t.Revoked,
+			})
+		}
+		return writeJSON(out, payload)
 	}
 
 	fmt.Printf("%-36s  %-20s  %-20s  %-10s\n", "ID", "Subject", "Expires", "Revoked")

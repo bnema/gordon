@@ -39,6 +39,7 @@ gordon secrets list <domain>
 
 | Option | Description |
 |--------|-------------|
+| `--json` | Output secrets as JSON |
 | `--remote` | Remote Gordon URL |
 | `--token` | Authentication token for remote |
 
@@ -65,6 +66,31 @@ API_KEY                   ****
 │  └─ POSTGRES_PASSWORD   ****
 └─ [redis]
    └─ REDIS_PASSWORD      ****
+```
+
+### JSON Output
+
+```bash
+gordon secrets list app.mydomain.com --json
+```
+
+```json
+{
+  "domain": "app.mydomain.com",
+  "secrets": {
+    "DATABASE_URL": "****",
+    "API_KEY": "****"
+  },
+  "attachments": {
+    "postgres": {
+      "POSTGRES_USER": "****",
+      "POSTGRES_PASSWORD": "****"
+    },
+    "redis": {
+      "REDIS_PASSWORD": "****"
+    }
+  }
+}
 ```
 
 ---

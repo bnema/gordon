@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -111,7 +112,9 @@ func formatHTTPStatus(health *remote.RouteHealth) string {
 
 // newRoutesListCmd creates the routes list command.
 func newRoutesListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all routes",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -119,29 +122,37 @@ func newRoutesListCmd() *cobra.Command {
 
 			client, isRemote := GetRemoteClient()
 			if isRemote {
-				return runRoutesListRemote(ctx, client)
+				return runRoutesListRemote(ctx, client, jsonOut, cmd.OutOrStdout())
 			}
-			return runRoutesListLocal(ctx, configPath)
+			return runRoutesListLocal(ctx, configPath, jsonOut, cmd.OutOrStdout())
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 // runRoutesListRemote lists routes from a remote Gordon instance.
-func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
+func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut bool, out io.Writer) error {
 	routes, err := client.ListRoutesWithDetails(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list routes: %w", err)
-	}
-
-	if len(routes) == 0 {
-		fmt.Println(styles.Theme.Muted.Render("No routes configured"))
-		return nil
 	}
 
 	// Get health status for each route (includes container status and HTTP probe)
 	health, _ := client.GetHealth(ctx)
 	if health == nil {
 		health = make(map[string]*remote.RouteHealth)
+	}
+
+	if jsonOut {
+		return routesListJSON(out, routes, health)
+	}
+
+	if len(routes) == 0 {
+		_, _ = fmt.Fprintln(out, styles.Theme.Muted.Render("No routes configured"))
+		return nil
 	}
 
 	const imageColWidth = 35
@@ -199,15 +210,55 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client) error {
 		components.WithRows(rows),
 	)
 
-	fmt.Println(styles.Theme.Title.Render("Routes"))
-	fmt.Println()
-	fmt.Println(table.View())
+	_, _ = fmt.Fprintln(out, styles.Theme.Title.Render("Routes"))
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, table.View())
 
 	return nil
 }
 
+func routesListJSON(out io.Writer, routes []remote.RouteInfo, health map[string]*remote.RouteHealth) error {
+	payload := make([]map[string]any, 0, len(routes))
+	for _, route := range routes {
+		routeHealth := health[route.Domain]
+		containerStatus := route.ContainerStatus
+		if containerStatus == "" {
+			if routeHealth != nil {
+				containerStatus = routeHealth.ContainerStatus
+			} else {
+				containerStatus = "unknown"
+			}
+		}
+
+		httpStatus := 0
+		if routeHealth != nil {
+			httpStatus = routeHealth.HTTPStatus
+		}
+
+		attachments := make([]map[string]string, 0, len(route.Attachments))
+		for _, attachment := range route.Attachments {
+			attachments = append(attachments, map[string]string{
+				"name":   attachment.Name,
+				"image":  attachment.Image,
+				"status": attachment.Status,
+			})
+		}
+
+		payload = append(payload, map[string]any{
+			"domain":           route.Domain,
+			"image":            route.Image,
+			"container_status": containerStatus,
+			"network":          route.Network,
+			"http_status":      httpStatus,
+			"attachments":      attachments,
+		})
+	}
+
+	return writeJSON(out, payload)
+}
+
 // runRoutesListLocal lists routes from local configuration.
-func runRoutesListLocal(ctx context.Context, cfgPath string) error {
+func runRoutesListLocal(ctx context.Context, cfgPath string, jsonOut bool, out io.Writer) error {
 	local, err := GetLocalServices(cfgPath)
 	if err != nil {
 		return fmt.Errorf("failed to initialize local services: %w", err)
@@ -215,8 +266,19 @@ func runRoutesListLocal(ctx context.Context, cfgPath string) error {
 
 	routes := local.GetConfigService().GetRoutes(ctx)
 
+	if jsonOut {
+		payload := make([]map[string]string, 0, len(routes))
+		for _, route := range routes {
+			payload = append(payload, map[string]string{
+				"domain": route.Domain,
+				"image":  route.Image,
+			})
+		}
+		return writeJSON(out, payload)
+	}
+
 	if len(routes) == 0 {
-		fmt.Println(styles.Theme.Muted.Render("No routes configured"))
+		_, _ = fmt.Fprintln(out, styles.Theme.Muted.Render("No routes configured"))
 		return nil
 	}
 
@@ -237,9 +299,9 @@ func runRoutesListLocal(ctx context.Context, cfgPath string) error {
 		components.WithRows(rows),
 	)
 
-	fmt.Println(styles.Theme.Title.Render("Routes (local)"))
-	fmt.Println()
-	fmt.Println(table.View())
+	_, _ = fmt.Fprintln(out, styles.Theme.Title.Render("Routes (local)"))
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, table.View())
 
 	return nil
 }
@@ -250,8 +312,11 @@ func newRoutesAddCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "add <domain> <image>",
-		Short: "Add a new route",
-		Long: `Add a new route mapping a domain to a container image.
+		Short: "Create or update a route",
+		Long: `Create or update a route mapping a domain to a container image.
+
+If the route already exists with the same image, this is a no-op.
+If it exists with a different image, the image is updated.
 
 Examples:
   gordon routes add app.mydomain.com myapp:latest
@@ -299,7 +364,7 @@ Examples:
 				}
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route added: %s -> %s", routeDomain, image)))
+			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route configured: %s -> %s", routeDomain, image)))
 			return nil
 		},
 	}

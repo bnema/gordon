@@ -35,6 +35,7 @@ gordon push <domain> [options]
 `gordon push` resolves the route image for `<domain>`, tags the image for the
 Gordon registry, pushes it, and optionally deploys it.
 
+- For first deploys, run `gordon bootstrap` first to create or update the route, attachments, and secrets, then run `gordon push` to upload and deploy the image.
 - The registry and repository are derived from the route image on the server.
 - The version tag defaults to a CI tag ref (like `refs/tags/v1.2.3`) when available,
   then falls back to `git describe --tags --dirty` (for example
@@ -66,6 +67,7 @@ gordon push myapp.example.com --build -f docker/app/Dockerfile
 ### Notes
 
 - Remote mode required. See [CLI Overview](./index.md) for targeting options.
+- `gordon push` still requires the route to already exist so it can resolve the target image.
 - `--build` requires Docker with Buildx. Docker Desktop includes it; on Linux,
   install the `docker-buildx-plugin` package.
 

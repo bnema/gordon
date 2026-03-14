@@ -2,10 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"text/tabwriter"
 	"time"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/spf13/cobra"
 )
 
@@ -30,9 +32,12 @@ instance when --remote targeting is configured.`,
 }
 
 func newBackupListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "list [domain]",
 		Short: "List backups",
+		Long:  cliRenderMuted("List backups for all domains or a specific domain."),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := resolveControlPlane(configPath)
@@ -51,32 +56,41 @@ func newBackupListCmd() *cobra.Command {
 				return fmt.Errorf("failed to list backups: %w", err)
 			}
 
-			if len(jobs) == 0 {
-				if err := cliWriteLine(os.Stdout, cliRenderMuted("No backups found")); err != nil {
-					return err
-				}
-				return nil
-			}
-			if err := cliWriteLine(os.Stdout, cliRenderTitle("Backups")); err != nil {
-				return err
-			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tBACKUP_ID"); err != nil {
-				return err
-			}
-
-			for _, job := range jobs {
-				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt), job.ID); err != nil {
-					return err
-				}
-			}
-			if err := w.Flush(); err != nil {
-				return err
-			}
-
-			return nil
+			return printBackupJobs(cmd.OutOrStdout(), jobs, jsonOut)
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func printBackupJobs(out io.Writer, jobs []dto.BackupJob, jsonOut bool) error {
+	if len(jobs) == 0 {
+		if jsonOut {
+			return writeJSON(out, []dto.BackupJob{})
+		}
+		return cliWriteLine(out, cliRenderMuted("No backups found"))
+	}
+
+	if jsonOut {
+		return writeJSON(out, jobs)
+	}
+
+	if err := cliWriteLine(out, cliRenderTitle("Backups")); err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tBACKUP_ID"); err != nil {
+		return err
+	}
+
+	for _, job := range jobs {
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt), job.ID); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
 }
 
 func newBackupRunCmd() *cobra.Command {
