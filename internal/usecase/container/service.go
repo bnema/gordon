@@ -210,7 +210,7 @@ func (s *Service) deploymentContainerName(containerDomain string, existing *doma
 	}
 }
 
-func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef string, exposedPorts []int, envVars []string, volumes map[string]string, networkName string, existing *domain.Container) *domain.ContainerConfig {
+func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef string, exposedPorts []int, envVars []string, envHash string, volumes map[string]string, networkName string, existing *domain.Container) *domain.ContainerConfig {
 	containerName := s.deploymentContainerName(containerDomain, existing)
 
 	return &domain.ContainerConfig{
@@ -223,6 +223,7 @@ func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef st
 		Hostname:    containerDomain,
 		Labels: map[string]string{
 			domain.LabelDomain:  containerDomain,
+			domain.LabelEnvHash: envHash,
 			domain.LabelImage:   image,
 			domain.LabelManaged: "true",
 			domain.LabelRoute:   containerDomain,
@@ -279,7 +280,7 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 			existingForSkip = s.containerForRedundantCheck(ctx, existingForSkip)
 		}
 		if existingForSkip.ImageID != "" {
-			if skip, container := s.skipRedundantDeploy(ctx, existingForSkip, resources.actualImageRef); skip {
+			if skip, container := s.skipRedundantDeploy(ctx, existingForSkip, resources.actualImageRef, resources.envHash); skip {
 				return container, nil
 			}
 		}
@@ -351,7 +352,7 @@ func (s *Service) recordDeployMetrics(ctx context.Context, span trace.Span, rout
 // When a push triggers both an event-based deploy and an explicit CLI deploy,
 // the second one arrives after the first has already completed; this avoids
 // a full redundant create-start-readiness cycle.
-func (s *Service) skipRedundantDeploy(ctx context.Context, existing *domain.Container, actualImageRef string) (bool, *domain.Container) {
+func (s *Service) skipRedundantDeploy(ctx context.Context, existing *domain.Container, actualImageRef, envHash string) (bool, *domain.Container) {
 	log := zerowrap.FromCtx(ctx)
 
 	newImageID, err := s.runtime.GetImageID(ctx, actualImageRef)
@@ -367,6 +368,19 @@ func (s *Service) skipRedundantDeploy(ctx context.Context, existing *domain.Cont
 	// Verify the container is actually still running before skipping.
 	running, err := s.runtime.IsContainerRunning(ctx, existing.ID)
 	if err != nil || !running {
+		return false, nil
+	}
+
+	if existing.Labels != nil {
+		existingEnvHash, hasEnvHash := existing.Labels[domain.LabelEnvHash]
+		if !hasEnvHash || existingEnvHash != envHash {
+			log.Info().
+				Str("container_id", existing.ID).
+				Bool("has_env_hash", hasEnvHash).
+				Msg("env changed, proceeding with deploy despite same image")
+			return false, nil
+		}
+	} else {
 		return false, nil
 	}
 
@@ -403,6 +417,7 @@ type deployResources struct {
 	actualImageRef string
 	exposedPorts   []int
 	envVars        []string
+	envHash        string
 	volumes        map[string]string
 }
 
@@ -505,6 +520,7 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 	if err != nil {
 		return nil, err
 	}
+	envHash := hashEnvironment(envVars)
 
 	volumes, err := s.setupVolumes(ctx, route.Domain, actualImageRef)
 	if err != nil {
@@ -516,6 +532,7 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 		actualImageRef: actualImageRef,
 		exposedPorts:   exposedPorts,
 		envVars:        envVars,
+		envHash:        envHash,
 		volumes:        volumes,
 	}, nil
 }
@@ -532,6 +549,7 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 		resources.actualImageRef,
 		resources.exposedPorts,
 		resources.envVars,
+		resources.envHash,
 		resources.volumes,
 		resources.networkName,
 		existing,
@@ -2031,35 +2049,26 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 
 	// Check if already running (idempotent)
 	// Try new name first, then fall back to legacy name for backwards compatibility
-	existingContainer := s.findContainerByName(ctx, containerName)
-	if existingContainer == nil {
-		// Try legacy naming scheme for backwards compatibility during upgrades
-		containerNameLegacy := fmt.Sprintf("gordon-%s-%s", sanitizeNameLegacy(ownerDomain), serviceName)
-		existingContainer = s.findContainerByName(ctx, containerNameLegacy)
-		if existingContainer != nil {
-			log.Info().Str("container_name", containerNameLegacy).Msg("found attachment with legacy naming, will be replaced")
-			// Remove the old container and recreate with new name
-			if err := s.runtime.StopContainer(ctx, existingContainer.ID); err != nil {
-				return log.WrapErr(err, "failed to stop legacy attachment container")
-			}
-			if err := s.runtime.RemoveContainer(ctx, existingContainer.ID, true); err != nil {
-				return log.WrapErr(err, "failed to remove legacy attachment container")
-			}
-			existingContainer = nil // Clear so we create new one below
-		}
+	existingContainer, err := s.resolveExistingAttachment(ctx, ownerDomain, serviceName)
+	if err != nil {
+		return err
 	}
 
-	if existingContainer != nil && existingContainer.Status == string(domain.ContainerStatusRunning) {
-		log.Debug().Str("container_name", containerName).Msg("attachment already running, skipping")
-		return nil
-	}
-
-	// Remove existing stopped container if present
 	if existingContainer != nil {
-		log.Info().Str("container_name", containerName).Msg("removing stopped attachment container")
-		if err := s.runtime.RemoveContainer(ctx, existingContainer.ID, true); err != nil {
-			return log.WrapErr(err, "failed to remove existing attachment container")
+		shouldSkip, err := s.handleRunningAttachment(ctx, existingContainer, containerName, serviceImage)
+		if err != nil {
+			return err
 		}
+		if shouldSkip {
+			return nil
+		}
+		if existingContainer.Status == string(domain.ContainerStatusRunning) {
+			existingContainer = nil
+		}
+	}
+
+	if err := s.removeStoppedAttachment(ctx, existingContainer, containerName); err != nil {
+		return err
 	}
 
 	log.Info().Str(zerowrap.FieldService, serviceImage).Msg("deploying attached service")
@@ -2091,6 +2100,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 		log.WrapErr(err, "failed to load environment for attachment")
 		envVars = []string{}
 	}
+	envHash := hashEnvironment(envVars)
 
 	// Create container with attachment labels (use actual ref, track original in labels)
 	config := &domain.ContainerConfig{
@@ -2105,6 +2115,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 			domain.LabelManaged:    "true",
 			domain.LabelAttachment: "true",
 			domain.LabelAttachedTo: ownerDomain,
+			domain.LabelEnvHash:    envHash,
 			domain.LabelImage:      serviceImage,
 		},
 	}
@@ -2130,6 +2141,87 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 
 	log.Info().Str(zerowrap.FieldEntityID, container.ID).Msg("attachment deployed successfully")
 	return nil
+}
+
+func (s *Service) attachmentEnvDrifted(ctx context.Context, existing *domain.Container, containerName, serviceImage string) (bool, error) {
+	currentEnv, err := s.loadEnvironment(ctx, containerName, s.buildImageRef(serviceImage))
+	if err != nil {
+		return false, err
+	}
+
+	currentHash := hashEnvironment(currentEnv)
+	existingHash, ok := existing.Labels[domain.LabelEnvHash]
+	if ok && existingHash == currentHash {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func (s *Service) handleRunningAttachment(ctx context.Context, existing *domain.Container, containerName, serviceImage string) (bool, error) {
+	if existing.Status != string(domain.ContainerStatusRunning) {
+		return false, nil
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	envDrifted, err := s.attachmentEnvDrifted(ctx, existing, containerName, serviceImage)
+	if err != nil {
+		log.WrapErr(err, "failed to check attachment env drift")
+		return true, nil
+	}
+	if !envDrifted {
+		log.Debug().Str("container_name", containerName).Msg("attachment already running with current env, skipping")
+		return true, nil
+	}
+
+	log.Info().Str("container_name", containerName).Msg("attachment env changed, recreating")
+	if err := s.runtime.StopContainer(ctx, existing.ID); err != nil {
+		return false, log.WrapErr(err, "failed to stop attachment for env update")
+	}
+	if err := s.runtime.RemoveContainer(ctx, existing.ID, true); err != nil {
+		return false, log.WrapErr(err, "failed to remove attachment for env update")
+	}
+
+	return false, nil
+}
+
+func (s *Service) removeStoppedAttachment(ctx context.Context, existing *domain.Container, containerName string) error {
+	if existing == nil {
+		return nil
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	log.Info().Str("container_name", containerName).Msg("removing stopped attachment container")
+	if err := s.runtime.RemoveContainer(ctx, existing.ID, true); err != nil {
+		return log.WrapErr(err, "failed to remove existing attachment container")
+	}
+
+	return nil
+}
+
+func (s *Service) resolveExistingAttachment(ctx context.Context, ownerDomain, serviceName string) (*domain.Container, error) {
+	log := zerowrap.FromCtx(ctx)
+	containerName := fmt.Sprintf("gordon-%s-%s", sanitizeName(ownerDomain), serviceName)
+	existingContainer := s.findContainerByName(ctx, containerName)
+	if existingContainer != nil {
+		return existingContainer, nil
+	}
+
+	containerNameLegacy := fmt.Sprintf("gordon-%s-%s", sanitizeNameLegacy(ownerDomain), serviceName)
+	existingContainer = s.findContainerByName(ctx, containerNameLegacy)
+	if existingContainer == nil {
+		return nil, nil
+	}
+
+	log.Info().Str("container_name", containerNameLegacy).Msg("found attachment with legacy naming, will be replaced")
+	if err := s.runtime.StopContainer(ctx, existingContainer.ID); err != nil {
+		return nil, log.WrapErr(err, "failed to stop legacy attachment container")
+	}
+	if err := s.runtime.RemoveContainer(ctx, existingContainer.ID, true); err != nil {
+		return nil, log.WrapErr(err, "failed to remove legacy attachment container")
+	}
+
+	return nil, nil
 }
 
 // Utility functions
@@ -2192,9 +2284,15 @@ func mergeEnvironmentVariables(dockerfileEnv, userEnv []string) []string {
 		}
 	}
 
+	keys := make([]string, 0, len(envMap))
+	for k := range envMap {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+
 	result := make([]string, 0, len(envMap))
-	for k, v := range envMap {
-		result = append(result, k+"="+v)
+	for _, k := range keys {
+		result = append(result, k+"="+envMap[k])
 	}
 
 	return result

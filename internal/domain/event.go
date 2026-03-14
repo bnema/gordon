@@ -18,6 +18,7 @@ const (
 	EventContainerStart       EventType = "container.start"
 	EventContainerHealthCheck EventType = "container.health_check"
 	EventContainerDeployed    EventType = "container.deployed"
+	EventSecretsChanged       EventType = "secrets.changed"
 )
 
 // Event represents a domain event that occurred in the system.
@@ -59,6 +60,13 @@ type ConfigReloadPayload struct {
 // ManualDeployPayload contains data for manual.deploy events.
 type ManualDeployPayload struct {
 	Domain string `json:"domain"`
+}
+
+// SecretsChangedPayload contains data for secrets.changed events.
+type SecretsChangedPayload struct {
+	Domain    string   // Route domain whose secrets changed
+	Operation string   // "set" or "delete"
+	Keys      []string // Secret key names (not values)
 }
 
 // Context keys for domain-level concerns.
