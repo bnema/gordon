@@ -140,7 +140,7 @@ func TestPusher_Push(t *testing.T) {
 			expectedUploadedBlobCount: 2,
 			expectedManifestMediaTypes: []string{
 				"application/vnd.docker.distribution.manifest.v2+json",
-				string(typesOCIManifestSchema1()),
+				typesOCIManifestSchema1(),
 			},
 		},
 		{
@@ -151,7 +151,7 @@ func TestPusher_Push(t *testing.T) {
 			expectedUploadedBlobCount: 3,
 			expectedManifestMediaTypes: []string{
 				"application/vnd.docker.distribution.manifest.v2+json",
-				string(typesOCIManifestSchema1()),
+				typesOCIManifestSchema1(),
 			},
 		},
 		{
@@ -169,7 +169,7 @@ func TestPusher_Push(t *testing.T) {
 			expectedUploadedBlobCount: 2,
 			expectedManifestMediaTypes: []string{
 				"application/vnd.docker.distribution.manifest.v2+json",
-				string(typesOCIManifestSchema1()),
+				typesOCIManifestSchema1(),
 			},
 		},
 	}
