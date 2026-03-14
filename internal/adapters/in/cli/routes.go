@@ -83,6 +83,7 @@ the local Gordon configuration.`,
 	}
 
 	cmd.AddCommand(newRoutesListCmd())
+	cmd.AddCommand(newRoutesShowCmd())
 	cmd.AddCommand(newRoutesAddCmd())
 	cmd.AddCommand(newRoutesRemoveCmd())
 
@@ -131,6 +132,89 @@ func newRoutesListCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
+}
+
+func newRoutesShowCmd() *cobra.Command {
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "show <domain>",
+		Short: "Show details for a single route",
+		Long: `Display detailed information about a specific route including its image,
+container status, and health.
+
+Examples:
+  gordon routes show app.mydomain.com
+  gordon routes show app.mydomain.com --json
+  gordon routes show app.mydomain.com --remote https://gordon.mydomain.com`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			handle, err := resolveControlPlane(configPath)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			return runRoutesShow(ctx, handle.plane, cmd.OutOrStdout(), args[0], jsonOut)
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func runRoutesShow(ctx context.Context, cp ControlPlane, out io.Writer, routeDomain string, jsonOut bool) error {
+	route, err := cp.GetRoute(ctx, routeDomain)
+	if err != nil {
+		return fmt.Errorf("route not found: %w", err)
+	}
+
+	health, _ := cp.GetHealth(ctx)
+	var routeHealth *remote.RouteHealth
+	if health != nil {
+		routeHealth = health[routeDomain]
+	}
+
+	containerStatus := "unknown"
+	httpStatus := 0
+	if routeHealth != nil {
+		containerStatus = routeHealth.ContainerStatus
+		httpStatus = routeHealth.HTTPStatus
+	}
+
+	if jsonOut {
+		payload := map[string]any{
+			"domain":           route.Domain,
+			"image":            route.Image,
+			"container_status": containerStatus,
+			"http_status":      httpStatus,
+		}
+		return writeJSON(out, payload)
+	}
+
+	if err := cliWriteLine(out, cliRenderTitle("Route: "+route.Domain)); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, cliRenderMeta("Domain:", route.Domain)); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, cliRenderMeta("Image:", route.Image)); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, cliRenderMeta("Container:", containerStatus)); err != nil {
+		return err
+	}
+	if httpStatus > 0 {
+		if err := cliWriteLine(out, cliRenderMeta("HTTP Status:", fmt.Sprintf("%d", httpStatus))); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // runRoutesListRemote lists routes from a remote Gordon instance.
