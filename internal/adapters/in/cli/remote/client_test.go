@@ -3,8 +3,10 @@ package remote
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -192,4 +194,59 @@ func TestClientFindAttachmentTargetsByImage_WithSlashContainingImage(t *testing.
 	targets, err := client.FindAttachmentTargetsByImage(context.Background(), "registry/org/image:tag")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"workers"}, targets)
+}
+
+func TestParseResponse_CapsErrorBodySize(t *testing.T) {
+	largeBody := strings.Repeat("x", 10*1024*1024)
+	resp := &http.Response{
+		StatusCode: 500,
+		Status:     "500 Internal Server Error",
+		Body:       io.NopCloser(strings.NewReader(largeBody)),
+		Header:     make(http.Header),
+	}
+
+	err := parseResponse(resp, nil)
+
+	require.Error(t, err)
+	assert.Less(t, len(err.Error()), 2*1024, "error body should be capped to ~1KB")
+}
+
+func TestStreamLogs_CapsErrorBodySize(t *testing.T) {
+	largeBody := strings.Repeat("x", 10*1024*1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(largeBody))
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		baseURL:    srv.URL,
+		httpClient: srv.Client(),
+	}
+
+	_, err := c.StreamProcessLogs(context.Background(), 100)
+
+	require.Error(t, err)
+	assert.Less(t, len(err.Error()), 2*1024, "streaming error body should be capped to ~1KB")
+}
+
+func TestRequestWithRetry_CapsErrorBodySize(t *testing.T) {
+	withFastRetry(t)
+
+	largeBody := strings.Repeat("x", 10*1024*1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(largeBody))
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		baseURL:    srv.URL,
+		httpClient: srv.Client(),
+	}
+
+	_, err := c.requestWithRetry(context.Background(), http.MethodPost, "/test", nil)
+
+	require.Error(t, err)
+	assert.Less(t, len(err.Error()), 2*1024, "retry error body should be capped to ~1KB")
 }
