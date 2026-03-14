@@ -45,3 +45,9 @@ gordon networks list --remote https://gordon.mydomain.com --token $TOKEN
   }
 ]
 ```
+
+## Related
+
+- [CLI Overview](./index.md)
+- [Routes Command](./routes.md)
+- [Attachments Command](./attachments.md)
