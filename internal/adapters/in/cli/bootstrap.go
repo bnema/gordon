@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -21,66 +23,11 @@ func newBootstrapCmd() *cobra.Command {
 		Short: "Create a route, attachments, and secrets together",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			req := dto.BootstrapRequest{
-				Domain:        args[0],
-				Image:         args[1],
-				Attachments:   append([]string(nil), attachments...),
-				Env:           map[string]string{},
-				AttachmentEnv: map[string]map[string]string{},
-			}
-
-			for _, pair := range envPairs {
-				parts := strings.SplitN(pair, "=", 2)
-				if len(parts) != 2 {
-					return fmt.Errorf("invalid --env value %q (expected KEY=VALUE)", pair)
-				}
-				req.Env[parts[0]] = parts[1]
-			}
-
-			for _, pair := range attachmentEnvPairs {
-				serviceAndKV := strings.SplitN(pair, ":", 2)
-				if len(serviceAndKV) != 2 {
-					return fmt.Errorf("invalid --attachment-env value %q (expected service:KEY=VALUE)", pair)
-				}
-				keyValue := strings.SplitN(serviceAndKV[1], "=", 2)
-				if len(keyValue) != 2 {
-					return fmt.Errorf("invalid --attachment-env value %q (expected service:KEY=VALUE)", pair)
-				}
-				service := serviceAndKV[0]
-				if req.AttachmentEnv[service] == nil {
-					req.AttachmentEnv[service] = map[string]string{}
-				}
-				req.AttachmentEnv[service][keyValue[0]] = keyValue[1]
-			}
-
-			if len(req.Env) == 0 {
-				req.Env = nil
-			}
-			if len(req.AttachmentEnv) == 0 {
-				req.AttachmentEnv = nil
-			}
-
-			handle, err := resolveControlPlane(configPath)
+			req, err := parseBootstrapRequest(args, attachments, envPairs, attachmentEnvPairs)
 			if err != nil {
 				return err
 			}
-			defer handle.close()
-
-			resp, err := handle.plane.Bootstrap(ctx, req)
-			if resp != nil {
-				if writeErr := printBootstrapSummary(cmd, resp); writeErr != nil {
-					return writeErr
-				}
-			}
-			if err != nil {
-				return fmt.Errorf("failed to bootstrap: %w", err)
-			}
-			out := cmd.OutOrStdout()
-			if err := cliWriteLine(out, cliRenderSuccess("Bootstrap complete")); err != nil {
-				return err
-			}
-			return cliWriteLine(out, fmt.Sprintf("Next: gordon push %s --build", req.Image))
+			return runBootstrap(cmd.Context(), req, configPath, cmd.OutOrStdout())
 		},
 	}
 
@@ -92,8 +39,76 @@ func newBootstrapCmd() *cobra.Command {
 	return cmd
 }
 
-func printBootstrapSummary(cmd *cobra.Command, resp *dto.BootstrapResponse) error {
-	out := cmd.OutOrStdout()
+func parseBootstrapRequest(args []string, attachments, envPairs, attachmentEnvPairs []string) (dto.BootstrapRequest, error) {
+	req := dto.BootstrapRequest{
+		Domain:        args[0],
+		Image:         args[1],
+		Attachments:   append([]string(nil), attachments...),
+		Env:           map[string]string{},
+		AttachmentEnv: map[string]map[string]string{},
+	}
+
+	for _, pair := range envPairs {
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 {
+			return dto.BootstrapRequest{}, fmt.Errorf("invalid --env value %q (expected KEY=VALUE)", pair)
+		}
+		req.Env[parts[0]] = parts[1]
+	}
+
+	for _, pair := range attachmentEnvPairs {
+		serviceAndKV := strings.SplitN(pair, ":", 2)
+		if len(serviceAndKV) != 2 {
+			return dto.BootstrapRequest{}, fmt.Errorf("invalid --attachment-env value %q (expected service:KEY=VALUE)", pair)
+		}
+		keyValue := strings.SplitN(serviceAndKV[1], "=", 2)
+		if len(keyValue) != 2 {
+			return dto.BootstrapRequest{}, fmt.Errorf("invalid --attachment-env value %q (expected service:KEY=VALUE)", pair)
+		}
+		service := serviceAndKV[0]
+		if req.AttachmentEnv[service] == nil {
+			req.AttachmentEnv[service] = map[string]string{}
+		}
+		req.AttachmentEnv[service][keyValue[0]] = keyValue[1]
+	}
+
+	if len(req.Env) == 0 {
+		req.Env = nil
+	}
+	if len(req.AttachmentEnv) == 0 {
+		req.AttachmentEnv = nil
+	}
+
+	return req, nil
+}
+
+func runBootstrap(ctx context.Context, req dto.BootstrapRequest, configPath string, out io.Writer) error {
+	handle, err := resolveControlPlane(configPath)
+	if err != nil {
+		return err
+	}
+	defer handle.close()
+
+	resp, err := handle.plane.Bootstrap(ctx, req)
+	if resp != nil {
+		if writeErr := printBootstrapSummary(out, resp); writeErr != nil {
+			return writeErr
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("failed to bootstrap: %w", err)
+	}
+	if err := cliWriteLine(out, cliRenderSuccess("Bootstrap complete")); err != nil {
+		return err
+	}
+	nextImage := req.Image
+	if resp != nil && resp.Image != "" {
+		nextImage = resp.Image
+	}
+	return cliWriteLine(out, fmt.Sprintf("Next: gordon push %s --build", nextImage))
+}
+
+func printBootstrapSummary(out io.Writer, resp *dto.BootstrapResponse) error {
 	if err := cliWriteLine(out, cliRenderTitle("Bootstrap")); err != nil {
 		return err
 	}
