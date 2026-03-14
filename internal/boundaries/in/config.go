@@ -71,6 +71,9 @@ type ConfigService interface {
 	// GetAttachmentsFor returns attachments for a specific domain or network group.
 	GetAttachmentsFor(ctx context.Context, domainOrGroup string) ([]string, error)
 
+	// FindAttachmentTargetsByImage returns all attachment targets that match the given image name.
+	FindAttachmentTargetsByImage(ctx context.Context, imageName string) []string
+
 	// AddAttachment adds an image to a domain/group's attachments.
 	AddAttachment(ctx context.Context, domainOrGroup, image string) error
 

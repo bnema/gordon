@@ -30,6 +30,7 @@ type ControlPlane interface {
 
 	GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error)
 	GetAttachmentsConfig(ctx context.Context, domainOrGroup string) ([]string, error)
+	FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error)
 	AddAttachment(ctx context.Context, domainOrGroup, image string) error
 	RemoveAttachment(ctx context.Context, domainOrGroup, image string) error
 

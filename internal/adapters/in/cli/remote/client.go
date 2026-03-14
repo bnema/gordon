@@ -895,6 +895,21 @@ func (c *Client) GetAttachmentsConfig(ctx context.Context, domainOrGroup string)
 	return result.Images, nil
 }
 
+// FindAttachmentTargetsByImage returns all attachment targets associated with the given image name.
+func (c *Client) FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/attachments/by-image/"+url.PathEscape(imageName), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.AttachmentTargetsByImageResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Targets, nil
+}
+
 // AddAttachment adds an attachment to a domain/group.
 func (c *Client) AddAttachment(ctx context.Context, domainOrGroup, image string) error {
 	if domainOrGroup == "" {

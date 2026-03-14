@@ -218,6 +218,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		handler routeHandler
 	}{
 		{"/backups", h.handleBackups},
+		{"/attachments/by-image", h.handleAttachmentsByImage},
 		{"/attachments", h.handleAttachmentsConfig},
 		{"/routes/by-image", h.handleRoutesByImage},
 		{"/routes", h.handleRoutes},
@@ -236,6 +237,41 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	}
 
 	return nil, false
+}
+
+// handleAttachmentsByImage handles GET /admin/attachments/by-image/{image} endpoint.
+// Returns all attachment targets associated with the given image name.
+func (h *Handler) handleAttachmentsByImage(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := r.Context()
+
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
+		return
+	}
+
+	imageName := strings.TrimPrefix(path, "/attachments/by-image/")
+	if imageName == "" || imageName == "/attachments/by-image" {
+		h.sendError(w, http.StatusBadRequest, "image name required in path")
+		return
+	}
+
+	imageName, err := url.PathUnescape(imageName)
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid image name encoding")
+		return
+	}
+
+	targets := h.configSvc.FindAttachmentTargetsByImage(ctx, imageName)
+
+	h.sendJSON(w, http.StatusOK, dto.AttachmentTargetsByImageResponse{
+		Image:   imageName,
+		Targets: targets,
+	})
 }
 
 // handleDeployIntent handles /admin/deploy-intent/:image endpoint.
