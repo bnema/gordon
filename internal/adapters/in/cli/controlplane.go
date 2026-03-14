@@ -35,6 +35,8 @@ type ControlPlane interface {
 
 	GetStatus(ctx context.Context) (*remote.Status, error)
 	Reload(ctx context.Context) error
+	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
+	GetConfig(ctx context.Context) (*remote.Config, error)
 	DeployIntent(ctx context.Context, imageName string) error
 	Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error)
 	Restart(ctx context.Context, restartDomain string, withAttachments bool) (*remote.RestartResult, error)

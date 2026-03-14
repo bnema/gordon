@@ -100,6 +100,14 @@ func (c *resolveFromImageTestControlPlane) Reload(context.Context) error {
 	panic("unexpected call")
 }
 
+func (c *resolveFromImageTestControlPlane) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) GetConfig(context.Context) (*remote.Config, error) {
+	panic("unexpected call")
+}
+
 func (c *resolveFromImageTestControlPlane) DeployIntent(context.Context, string) error {
 	panic("unexpected call")
 }
