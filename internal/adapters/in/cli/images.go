@@ -168,6 +168,9 @@ func runImagesTags(ctx context.Context, cp ControlPlane, out io.Writer, reposito
 	}
 
 	if jsonOut {
+		if tags == nil {
+			tags = []string{}
+		}
 		payload := map[string]any{
 			"repository": repository,
 			"tags":       tags,

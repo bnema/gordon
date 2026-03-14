@@ -58,7 +58,18 @@ func runNetworksList(ctx context.Context, cp ControlPlane, out io.Writer, jsonOu
 	}
 
 	if jsonOut {
-		return writeJSON(out, networks)
+		result := make([]map[string]any, 0, len(networks))
+		for _, net := range networks {
+			if net == nil {
+				continue
+			}
+			result = append(result, map[string]any{
+				"name":       net.Name,
+				"driver":     net.Driver,
+				"containers": net.Containers,
+			})
+		}
+		return writeJSON(out, result)
 	}
 
 	if len(networks) == 0 {
