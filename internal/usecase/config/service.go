@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -481,8 +482,9 @@ func (s *Service) Save(ctx context.Context) error {
 		log.Error().Err(err).Msg("config corruption detected after save, restoring backup")
 		if restoreErr := restoreConfigBackup(configFile); restoreErr != nil {
 			log.Error().Err(restoreErr).Msg("CRITICAL: failed to restore config backup")
+		} else if reloadErr := s.viper.ReadInConfig(); reloadErr != nil {
+			log.Error().Err(reloadErr).Msg("failed to reload config after restore")
 		}
-		_ = s.viper.ReadInConfig()
 		return log.WrapErr(err, "config verification failed after save")
 	}
 
@@ -504,14 +506,12 @@ func (s *Service) snapshotCriticalFields() configSnapshot {
 
 func (s *Service) verifyCriticalFields(snap configSnapshot) error {
 	for key, oldVal := range snap.values {
-		oldStr, ok := oldVal.(string)
-		if !ok || oldStr == "" {
+		if oldVal == nil {
 			continue
 		}
-
-		newVal := s.viper.GetString(key)
-		if newVal != oldStr {
-			return fmt.Errorf("config key %q changed from %q to %q after save", key, oldStr, newVal)
+		newVal := s.viper.Get(key)
+		if !reflect.DeepEqual(oldVal, newVal) {
+			return fmt.Errorf("config key %q changed from %v to %v after save", key, oldVal, newVal)
 		}
 	}
 
