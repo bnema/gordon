@@ -36,6 +36,7 @@ type Pusher struct {
 	transport   http.RoundTripper
 	insecureTLS bool
 	imageSource ImageSource
+	cleanupFn   func()
 	progress    io.Writer
 }
 
@@ -63,6 +64,12 @@ func WithImageSource(src ImageSource) Option {
 	return func(p *Pusher) { p.imageSource = src }
 }
 
+// WithImageCleanup sets a function called after Push completes to clean up
+// resources created by the image source (e.g., temp tar files).
+func WithImageCleanup(fn func()) Option {
+	return func(p *Pusher) { p.cleanupFn = fn }
+}
+
 // WithProgress sets a writer for progress messages.
 func WithProgress(w io.Writer) Option {
 	return func(p *Pusher) { p.progress = w }
@@ -82,7 +89,14 @@ func New(opts ...Option) *Pusher {
 		}
 	}
 	if p.imageSource == nil {
-		p.imageSource = defaultImageSource
+		p.imageSource = func(ctx context.Context, ref string) (v1.Image, error) {
+			img, cleanup, err := defaultImageSourceWithCleanup(ctx, ref)
+			if err != nil {
+				return nil, err
+			}
+			p.cleanupFn = cleanup
+			return img, nil
+		}
 	}
 	return p
 }
@@ -102,6 +116,9 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 		return fmt.Errorf("image ref %s must include a tag", ref)
 	}
 
+	cleanup := p.cleanupFn
+	p.cleanupFn = nil
+
 	authHeader, err := resolveAuthHeader(parsedRef)
 	if err != nil {
 		return err
@@ -110,6 +127,12 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 	img, err := p.imageSource(ctx, ref)
 	if err != nil {
 		return err
+	}
+	if p.cleanupFn != nil {
+		cleanup = p.cleanupFn
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 
 	baseURL := registryBaseURL(parsedRef.Context().RegistryStr())
@@ -155,30 +178,30 @@ func (p *Pusher) UploadBlob(ctx context.Context, baseURL, repo, digest string, s
 	return p.finalizeBlobUpload(ctx, baseURL, uploadURL, digest, auth)
 }
 
-// defaultImageSource reads an image from the local Docker/Podman daemon.
-func defaultImageSource(ctx context.Context, ref string) (v1.Image, error) {
+// defaultImageSourceWithCleanup reads an image from the local Docker/Podman daemon.
+func defaultImageSourceWithCleanup(ctx context.Context, ref string) (v1.Image, func(), error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
 	defer cli.Close()
 
 	tag, err := name.NewTag(ref)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse image ref %s: %w", ref, err)
+		return nil, nil, fmt.Errorf("failed to parse image ref %s: %w", ref, err)
 	}
 
 	rc, err := cli.ImageSave(ctx, []string{ref})
 	if err != nil {
-		return nil, fmt.Errorf("failed to export image %s: %w", ref, err)
+		return nil, nil, fmt.Errorf("failed to export image %s: %w", ref, err)
 	}
 
 	tmpFile, err := os.CreateTemp("", "gordon-push-*.tar")
 	if err != nil {
 		if closeErr := rc.Close(); closeErr != nil {
-			return nil, fmt.Errorf("failed to create temp file for image export: %w (also failed to close image export stream: %v)", err, closeErr)
+			return nil, nil, fmt.Errorf("failed to create temp file for image export: %w (also failed to close image export stream: %v)", err, closeErr)
 		}
-		return nil, fmt.Errorf("failed to create temp file for image export: %w", err)
+		return nil, nil, fmt.Errorf("failed to create temp file for image export: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 
@@ -186,33 +209,34 @@ func defaultImageSource(ctx context.Context, ref string) (v1.Image, error) {
 		if closeErr := rc.Close(); closeErr != nil {
 			_ = tmpFile.Close()
 			_ = os.Remove(tmpPath)
-			return nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close image export stream: %v)", err, closeErr)
+			return nil, nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close image export stream: %v)", err, closeErr)
 		}
 		if closeErr := tmpFile.Close(); closeErr != nil {
 			_ = os.Remove(tmpPath)
-			return nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close temp file: %v)", err, closeErr)
+			return nil, nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close temp file: %v)", err, closeErr)
 		}
 		if removeErr := os.Remove(tmpPath); removeErr != nil {
-			return nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to remove temp file %s: %v)", err, tmpPath, removeErr)
+			return nil, nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to remove temp file %s: %v)", err, tmpPath, removeErr)
 		}
-		return nil, fmt.Errorf("failed to write image tar to temp file: %w", err)
+		return nil, nil, fmt.Errorf("failed to write image tar to temp file: %w", err)
 	}
 	if err := rc.Close(); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("failed to close image export stream: %w", err)
+		return nil, nil, fmt.Errorf("failed to close image export stream: %w", err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("failed to close temp file %s: %w", tmpPath, err)
+		return nil, nil, fmt.Errorf("failed to close temp file %s: %w", tmpPath, err)
 	}
 
 	img, err := tarball.ImageFromPath(tmpPath, &tag)
 	if err != nil {
 		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("failed to parse image tar for %s: %w", ref, err)
+		return nil, nil, fmt.Errorf("failed to parse image tar for %s: %w", ref, err)
 	}
-	return img, nil
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	return img, cleanup, nil
 }
 
 func (p *Pusher) uploadImageLayers(ctx context.Context, img v1.Image, baseURL, repo, auth string) error {
