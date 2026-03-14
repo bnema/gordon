@@ -241,25 +241,9 @@ func (s *Service) FindRoutesByImage(_ context.Context, imageName string) []domai
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	registryDomain := s.config.RegistryDomain
-	normalizedImage := NormalizeRegistryImage(imageName, registryDomain)
-	inputName, inputHasTag := splitImageNameTag(normalizedImage)
-
 	var routes []domain.Route
 	for domainName, image := range s.config.Routes {
-		normalizedRouteImage := NormalizeRegistryImage(image, registryDomain)
-
-		match := false
-		if inputHasTag {
-			// Exact match when the caller provided a tag (e.g. event handler).
-			match = strings.EqualFold(normalizedRouteImage, normalizedImage)
-		} else {
-			// Name-only match when no tag was provided (e.g. CLI push).
-			routeName, _ := splitImageNameTag(normalizedRouteImage)
-			match = strings.EqualFold(routeName, inputName)
-		}
-
-		if match {
+		if matchesImageName(imageName, image, s.config.RegistryDomain) {
 			route := domain.Route{
 				Image: image,
 				HTTPS: true,
@@ -275,6 +259,37 @@ func (s *Service) FindRoutesByImage(_ context.Context, imageName string) []domai
 	}
 
 	return routes
+}
+
+// FindAttachmentTargetsByImage returns all attachment targets whose image matches the given image name.
+func (s *Service) FindAttachmentTargetsByImage(_ context.Context, imageName string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var targets []string
+	for target, images := range s.config.Attachments {
+		for _, image := range images {
+			if matchesImageName(imageName, image, s.config.RegistryDomain) {
+				targets = append(targets, target)
+				break
+			}
+		}
+	}
+
+	return targets
+}
+
+func matchesImageName(inputImage, candidateImage, registryDomain string) bool {
+	normalizedInput := NormalizeRegistryImage(inputImage, registryDomain)
+	inputName, inputHasTag := splitImageNameTag(normalizedInput)
+	normalizedCandidate := NormalizeRegistryImage(candidateImage, registryDomain)
+
+	if inputHasTag {
+		return strings.EqualFold(normalizedCandidate, normalizedInput)
+	}
+
+	candidateName, _ := splitImageNameTag(normalizedCandidate)
+	return strings.EqualFold(candidateName, inputName)
 }
 
 // splitImageNameTag splits "name:tag" into ("name", true) or ("name", false) when no tag is present.

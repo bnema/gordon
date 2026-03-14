@@ -1155,6 +1155,86 @@ func TestService_FindRoutesByImage(t *testing.T) {
 	})
 }
 
+func TestService_FindAttachmentTargetsByImage(t *testing.T) {
+	t.Run("exact tagged matches", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest", "postgres:18"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "postgres:18")
+		assert.Equal(t, []string{"app.example.com"}, targets)
+	})
+
+	t.Run("bare name matches tagged attachments", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"postgres:18"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "postgres")
+		assert.Equal(t, []string{"app.example.com"}, targets)
+	})
+
+	t.Run("registry qualified input is normalized", func(t *testing.T) {
+		v := viper.New()
+		v.Set("server.registry_domain", "reg.example.com")
+		v.Set("attachments", map[string]interface{}{
+			"backend": []interface{}{"reg.example.com/postgres:18"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "reg.example.com/postgres:18")
+		assert.Equal(t, []string{"backend"}, targets)
+	})
+
+	t.Run("shared attachment used by multiple targets", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+			"backend":         []interface{}{"redis:latest", "postgres:18"},
+			"worker":          []interface{}{"rabbitmq:3"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "redis")
+		assert.ElementsMatch(t, []string{"app.example.com", "backend"}, targets)
+	})
+
+	t.Run("no matches", func(t *testing.T) {
+		v := viper.New()
+		v.Set("attachments", map[string]interface{}{
+			"app.example.com": []interface{}{"redis:latest"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "postgres")
+		assert.Empty(t, targets)
+	})
+}
+
 func TestSavePreservesAllConfigFields(t *testing.T) {
 	t.Run("with defaults does not corrupt config", func(t *testing.T) {
 		tmpDir := t.TempDir()

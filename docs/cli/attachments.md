@@ -19,6 +19,7 @@ The CLI will warn you if you try to add an attachment without network isolation 
 |------------|-------------|
 | `list` | List all attachments or attachments for a specific target |
 | `add` | Add an attachment to a domain or network group |
+| `push` | Build or push attachment images to the Gordon registry |
 | `remove` | Remove an attachment from a domain or network group |
 
 ### Alias
@@ -128,6 +129,51 @@ gordon attachments add app.example.com postgres:18 --remote https://gordon.mydom
 
 ---
 
+## gordon attachments push
+
+Push attachment images to the Gordon registry.
+
+```bash
+gordon attachments push <image> [options]
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<image>` | The attachment image to build/tag and push |
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--build` | Build the image first using `docker buildx` |
+| `-f, --file` | Path to Dockerfile (default: `./Dockerfile`, used with `--build`) |
+| `--platform` | Target platform for buildx (default: `linux/amd64`) |
+| `--build-arg` | Additional build args (repeatable, `KEY=VALUE`) |
+| `--tag` | Override version tag |
+| `--remote` | Remote Gordon URL |
+| `--token` | Authentication token for remote |
+
+### Description
+
+`gordon attachments push` pushes attachment images such as databases and caches to the Gordon registry so they are available when routes deploy. It does not trigger deployment. The image must already be configured as an attachment first.
+
+### Examples
+
+```bash
+# Push a pre-built attachment image
+gordon attachments push pitlane-pgsql
+
+# Build and push an attachment image
+gordon attachments push pitlane-pgsql --build
+
+# Push with a specific tag
+gordon attachments push pitlane-pgsql --tag v18
+```
+
+---
+
 ## gordon attachments remove
 
 Remove an attachment.
@@ -192,6 +238,19 @@ gordon attachments list app.example.com
 gordon attachments add backend redis:7-alpine
 
 # Both app.example.com and api.example.com can now access the shared Redis
+```
+
+### First Deploy with Custom Attachment Image
+
+```bash
+# Configure the route and attachment
+gordon bootstrap app.example.com myapp:latest --attachment pitlane-pgsql
+
+# Push the custom attachment image first
+gordon attachments push pitlane-pgsql --build
+
+# Then push and deploy the route image
+gordon push app.example.com --build --no-confirm
 ```
 
 ### CI/CD Integration
