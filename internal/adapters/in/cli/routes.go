@@ -149,7 +149,7 @@ Examples:
   gordon routes show app.mydomain.com --remote https://gordon.mydomain.com`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			handle, err := resolveControlPlane(configPath)
 			if err != nil {
 				return err

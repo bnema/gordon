@@ -146,7 +146,7 @@ Examples:
   gordon images tags myapp --remote https://gordon.mydomain.com --token $TOKEN`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			handle, err := resolveControlPlane(configPath)
 			if err != nil {
 				return err
