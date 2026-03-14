@@ -18,6 +18,13 @@ var (
 	determineVersionFn    = determineVersion
 )
 
+// attachmentPushRequest holds all inputs for the attachments push command.
+type attachmentPushRequest struct {
+	ImageArg string
+	Tag      string
+	Build    buildConfig
+}
+
 func newAttachmentsPushCmd() *cobra.Command {
 	var (
 		build      bool
@@ -32,7 +39,11 @@ func newAttachmentsPushCmd() *cobra.Command {
 		Short: "Build, tag, and push an attachment image",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAttachmentsPush(cmd.Context(), args[0], tag, build, platform, dockerfile, buildArgs, cmd.OutOrStdout())
+			return runAttachmentsPush(cmd.Context(), attachmentPushRequest{
+				ImageArg: args[0],
+				Tag:      tag,
+				Build:    buildConfig{Enabled: build, Platform: platform, Dockerfile: dockerfile, BuildArgs: buildArgs},
+			}, cmd.OutOrStdout())
 		},
 	}
 
@@ -45,46 +56,58 @@ func newAttachmentsPushCmd() *cobra.Command {
 	return cmd
 }
 
-func runAttachmentsPush(ctx context.Context, imageArg, tag string, build bool, platform string, dockerfile string, buildArgs []string, out io.Writer) error {
+func runAttachmentsPush(ctx context.Context, req attachmentPushRequest, out io.Writer) error {
 	handle, err := resolveControlPlaneFn(configPath)
 	if err != nil {
 		return err
 	}
 	defer handle.close()
 
-	dockerfile, err = resolveDockerfile(dockerfile, build)
+	dockerfile, err := resolveDockerfile(req.Build.Dockerfile, req.Build.Enabled)
 	if err != nil {
 		return err
 	}
 
-	for _, ba := range buildArgs {
+	for _, ba := range req.Build.BuildArgs {
 		if err := validateBuildArg(ba); err != nil {
 			return err
 		}
 	}
 
-	registry, imageName, targets, err := resolveAttachmentImage(ctx, handle.plane, imageArg)
+	registry, imageName, targets, err := resolveAttachmentImage(ctx, handle.plane, req.ImageArg)
 	if err != nil {
 		return err
 	}
 
-	version, err := resolveVersionWithFn(ctx, tag)
+	version, err := resolveVersionWithFn(ctx, req.Tag)
 	if err != nil {
 		return err
 	}
 
-	versionRef, latestRef := resolveImageRefs(registry, imageName, version)
+	img := imagePush{
+		Registry:  registry,
+		ImageName: imageName,
+		Version:   version,
+	}
+	img.VersionRef, img.LatestRef = resolveImageRefs(registry, imageName, version)
 
 	imageOps, err := newImageOpsFn()
 	if err != nil {
 		return err
 	}
 
-	if err := printAttachmentPushInfo(out, imageArg, targets, versionRef, latestRef, version); err != nil {
+	if err := printAttachmentPushInfo(out, req.ImageArg, targets, img.VersionRef, img.LatestRef, version); err != nil {
 		return err
 	}
 
-	if err := performAttachmentPush(ctx, imageOps, build, version, platform, dockerfile, buildArgs, registry, imageName, versionRef, latestRef); err != nil {
+	build := buildConfig{
+		Enabled:    req.Build.Enabled,
+		Platform:   req.Build.Platform,
+		Dockerfile: dockerfile,
+		BuildArgs:  req.Build.BuildArgs,
+	}
+
+	if err := performAttachmentPush(ctx, imageOps, build, img); err != nil {
 		return err
 	}
 
@@ -109,11 +132,11 @@ func printAttachmentPushInfo(out io.Writer, imageArg string, targets []string, v
 	return nil
 }
 
-func performAttachmentPush(ctx context.Context, ops pushImageOps, build bool, version, platform, dockerfile string, buildArgs []string, registry, imageName, versionRef, latestRef string) error {
-	if build {
-		return buildAndPush(ctx, ops, version, platform, dockerfile, buildArgs, versionRef, latestRef)
+func performAttachmentPush(ctx context.Context, ops pushImageOps, build buildConfig, img imagePush) error {
+	if build.Enabled {
+		return buildAndPush(ctx, ops, build, img)
 	}
-	return tagAndPush(ctx, ops, registry, imageName, version, versionRef, latestRef)
+	return tagAndPush(ctx, ops, img)
 }
 
 func resolveAttachmentImage(ctx context.Context, cp ControlPlane, imageArg string) (registry, imageName string, targets []string, err error) {
