@@ -18,15 +18,37 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/internal/domain"
-	"github.com/bnema/gordon/pkg/registrypush"
 	"github.com/bnema/gordon/pkg/validation"
 )
 
-var (
-	dockerTagFn         = dockerTag
-	dockerPushFn        = dockerPush
-	dockerImageExistsFn = dockerImageExists
-)
+var newImageOpsFn = newImageOpsFromFlags
+
+// buildConfig holds image build settings for push commands.
+type buildConfig struct {
+	Enabled    bool
+	Platform   string
+	Dockerfile string
+	BuildArgs  []string
+}
+
+// imagePush holds resolved image identity for push operations.
+type imagePush struct {
+	Registry   string
+	ImageName  string
+	Version    string
+	VersionRef string
+	LatestRef  string
+}
+
+// pushRequest holds all inputs for the push command.
+type pushRequest struct {
+	ImageArg  string
+	Domain    string
+	Tag       string
+	Build     buildConfig
+	NoDeploy  bool
+	NoConfirm bool
+}
 
 func newPushCmd() *cobra.Command {
 	var (
@@ -65,7 +87,14 @@ Examples:
 			if len(args) > 0 {
 				imageArg = args[0]
 			}
-			return runPush(cmd.Context(), imageArg, domainFlag, tag, build, platform, dockerfile, buildArgs, noDeploy, noConfirm)
+			return runPush(cmd.Context(), pushRequest{
+				ImageArg:  imageArg,
+				Domain:    domainFlag,
+				Tag:       tag,
+				Build:     buildConfig{Enabled: build, Platform: platform, Dockerfile: dockerfile, BuildArgs: buildArgs},
+				NoDeploy:  noDeploy,
+				NoConfirm: noConfirm,
+			})
 		},
 	}
 
@@ -125,65 +154,82 @@ func resolveVersion(ctx context.Context, tag string) (string, error) {
 	return version, nil
 }
 
-func runPush(ctx context.Context, imageArg, domainFlag, tag string, build bool, platform string, dockerfile string, buildArgs []string, noDeploy bool, noConfirm bool) error {
+func runPush(ctx context.Context, req pushRequest) error {
 	handle, err := resolveControlPlane(configPath)
 	if err != nil {
 		return err
 	}
 	defer handle.close()
 
-	dockerfile, err = resolveDockerfile(dockerfile, build)
+	dockerfile, err := resolveDockerfile(req.Build.Dockerfile, req.Build.Enabled)
 	if err != nil {
 		return err
 	}
 
-	registry, imageName, pushDomain, err := resolveRoute(ctx, handle.plane, imageArg, domainFlag, dockerfile)
+	registry, imageName, pushDomain, err := resolveRoute(ctx, handle.plane, req.ImageArg, req.Domain, dockerfile)
 	if err != nil {
 		return err
 	}
 
-	version, err := resolveVersion(ctx, tag)
+	version, err := resolveVersion(ctx, req.Tag)
 	if err != nil {
 		return err
 	}
 
-	for _, ba := range buildArgs {
+	for _, ba := range req.Build.BuildArgs {
 		if err := validateBuildArg(ba); err != nil {
 			return err
 		}
 	}
 
-	versionRef, latestRef := resolveImageRefs(registry, imageName, version)
+	img := imagePush{
+		Registry:  registry,
+		ImageName: imageName,
+		Version:   version,
+	}
+	img.VersionRef, img.LatestRef = resolveImageRefs(registry, imageName, version)
 
-	fmt.Printf("Image:  %s\n", styles.Theme.Bold.Render(versionRef))
+	imageOps, err := newImageOpsFn()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Image:  %s\n", styles.Theme.Bold.Render(img.VersionRef))
 	if version != "latest" {
-		fmt.Printf("Also:   %s\n", styles.Theme.Bold.Render(latestRef))
+		fmt.Printf("Also:   %s\n", styles.Theme.Bold.Render(img.LatestRef))
 	}
 	fmt.Printf("Domain: %s\n", styles.Theme.Bold.Render(pushDomain))
 
 	// Signal the server to suppress event-based deploys for this image.
 	// The CLI will trigger an explicit deploy after push completes.
-	if !noDeploy {
+	if !req.NoDeploy {
 		if err := handle.plane.DeployIntent(ctx, imageName); err != nil {
 			// Non-fatal: worst case we get a redundant deploy via event
 			fmt.Fprintf(os.Stderr, "warning: failed to register deploy intent: %v\n", err)
 		}
 	}
 
-	if build {
-		if err := buildAndPush(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef); err != nil {
+	build := buildConfig{
+		Enabled:    req.Build.Enabled,
+		Platform:   req.Build.Platform,
+		Dockerfile: dockerfile,
+		BuildArgs:  req.Build.BuildArgs,
+	}
+
+	if build.Enabled {
+		if err := buildAndPush(ctx, imageOps, build, img); err != nil {
 			return err
 		}
 	} else {
-		if err := tagAndPush(ctx, registry, imageName, version, versionRef, latestRef); err != nil {
+		if err := tagAndPush(ctx, imageOps, img); err != nil {
 			return err
 		}
 	}
 
 	fmt.Println(styles.RenderSuccess("Push complete"))
 
-	if !noDeploy {
-		return deployAfterPush(ctx, handle.plane, pushDomain, noConfirm)
+	if !req.NoDeploy {
+		return deployAfterPush(ctx, handle.plane, pushDomain, req.NoConfirm)
 	}
 
 	return nil
@@ -474,30 +520,26 @@ func parseTagRef(ref string) string {
 	return tag
 }
 
-func buildAndPush(ctx context.Context, version, platform, dockerfile string, buildArgs []string, versionRef, latestRef string) error {
-	if _, err := os.Stat(dockerfile); os.IsNotExist(err) {
-		return fmt.Errorf("dockerfile not found: %s", dockerfile)
+func buildAndPush(ctx context.Context, ops pushImageOps, build buildConfig, img imagePush) error {
+	if _, err := os.Stat(build.Dockerfile); os.IsNotExist(err) {
+		return fmt.Errorf("dockerfile not found: %s", build.Dockerfile)
 	}
 
 	// Build and load into local daemon (NOT --push).
 	// The native registry push client handles chunked uploads to stay
 	// within Cloudflare's 100MB per-request limit.
 	fmt.Println("\nBuilding image...")
-	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
-	buildCmd.Env = os.Environ()                                                                                                             // VERSION is now passed as --build-arg VERSION=<value>
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-	if err := buildCmd.Run(); err != nil {
-		return fmt.Errorf("docker buildx build failed: %w", err)
+	if err := ops.Build(ctx, buildImageArgs(ctx, img.Version, build.Platform, build.Dockerfile, build.BuildArgs, img.VersionRef, img.LatestRef)); err != nil {
+		return err
 	}
 
 	fmt.Println("Pushing...")
-	if err := dockerPushFn(ctx, latestRef); err != nil {
-		return fmt.Errorf("failed to push %s: %w", latestRef, err)
+	if err := ops.Push(ctx, img.LatestRef); err != nil {
+		return fmt.Errorf("failed to push %s: %w", img.LatestRef, err)
 	}
-	if version != "latest" {
-		if err := dockerPushFn(ctx, versionRef); err != nil {
-			return fmt.Errorf("failed to push %s: %w", versionRef, err)
+	if img.Version != "latest" {
+		if err := ops.Push(ctx, img.VersionRef); err != nil {
+			return fmt.Errorf("failed to push %s: %w", img.VersionRef, err)
 		}
 	}
 
@@ -554,31 +596,35 @@ func buildImageArgs(ctx context.Context, version, platform, dockerfile string, b
 	return args
 }
 
-func tagAndPush(ctx context.Context, registry, imageName, version, versionRef, latestRef string) error {
-	localImage := fmt.Sprintf("%s/%s", registry, imageName)
+func tagAndPush(ctx context.Context, ops pushImageOps, img imagePush) error {
+	localImage := fmt.Sprintf("%s/%s", img.Registry, img.ImageName)
 
 	fmt.Println("\nChecking local image...")
-	if !dockerImageExistsFn(ctx, localImage) {
+	exists, err := ops.Exists(ctx, localImage)
+	if err != nil {
+		return fmt.Errorf("failed to inspect local image %s: %w", localImage, err)
+	}
+	if !exists {
 		return fmt.Errorf("local image %s not found; build and tag it before pushing", localImage)
 	}
 
 	fmt.Println("Tagging...")
-	if err := dockerTagFn(ctx, localImage, versionRef); err != nil {
-		return fmt.Errorf("failed to tag %s: %w", versionRef, err)
+	if err := ops.Tag(ctx, localImage, img.VersionRef); err != nil {
+		return fmt.Errorf("failed to tag %s: %w", img.VersionRef, err)
 	}
-	if version != "latest" {
-		if err := dockerTagFn(ctx, localImage, latestRef); err != nil {
-			return fmt.Errorf("failed to tag %s: %w", latestRef, err)
+	if img.Version != "latest" {
+		if err := ops.Tag(ctx, localImage, img.LatestRef); err != nil {
+			return fmt.Errorf("failed to tag %s: %w", img.LatestRef, err)
 		}
 	}
 
 	fmt.Println("Pushing...")
-	if err := dockerPushFn(ctx, versionRef); err != nil {
-		return fmt.Errorf("failed to push %s: %w", versionRef, err)
+	if err := ops.Push(ctx, img.VersionRef); err != nil {
+		return fmt.Errorf("failed to push %s: %w", img.VersionRef, err)
 	}
-	if version != "latest" {
-		if err := dockerPushFn(ctx, latestRef); err != nil {
-			return fmt.Errorf("failed to push %s: %w", latestRef, err)
+	if img.Version != "latest" {
+		if err := ops.Push(ctx, img.LatestRef); err != nil {
+			return fmt.Errorf("failed to push %s: %w", img.LatestRef, err)
 		}
 	}
 	return nil
@@ -740,27 +786,6 @@ func getGitVersion(ctx context.Context) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
-}
-
-func dockerTag(ctx context.Context, src, dst string) error {
-	cmd := exec.CommandContext(ctx, "docker", "tag", src, dst) //nolint:gosec // binary is constant; image refs validated by OCI ref parser
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func dockerPush(ctx context.Context, ref string) error {
-	pusher := registrypush.New(
-		registrypush.WithProgress(os.Stderr),
-	)
-	return pusher.Push(ctx, ref)
-}
-
-func dockerImageExists(ctx context.Context, image string) bool {
-	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", image) // #nosec G204
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Run() == nil
 }
 
 // buildArgPattern matches KEY=VALUE where KEY starts with a letter or underscore.

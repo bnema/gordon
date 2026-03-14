@@ -158,6 +158,65 @@ func (_c *MockConfigService_AddRoute_Call) RunAndReturn(run func(ctx context.Con
 	return _c
 }
 
+// FindAttachmentTargetsByImage provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) FindAttachmentTargetsByImage(ctx context.Context, imageName string) []string {
+	ret := _mock.Called(ctx, imageName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for FindAttachmentTargetsByImage")
+	}
+
+	var r0 []string
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []string); ok {
+		r0 = returnFunc(ctx, imageName)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	return r0
+}
+
+// MockConfigService_FindAttachmentTargetsByImage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FindAttachmentTargetsByImage'
+type MockConfigService_FindAttachmentTargetsByImage_Call struct {
+	*mock.Call
+}
+
+// FindAttachmentTargetsByImage is a helper method to define mock.On call
+//   - ctx context.Context
+//   - imageName string
+func (_e *MockConfigService_Expecter) FindAttachmentTargetsByImage(ctx interface{}, imageName interface{}) *MockConfigService_FindAttachmentTargetsByImage_Call {
+	return &MockConfigService_FindAttachmentTargetsByImage_Call{Call: _e.mock.On("FindAttachmentTargetsByImage", ctx, imageName)}
+}
+
+func (_c *MockConfigService_FindAttachmentTargetsByImage_Call) Run(run func(ctx context.Context, imageName string)) *MockConfigService_FindAttachmentTargetsByImage_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockConfigService_FindAttachmentTargetsByImage_Call) Return(strings []string) *MockConfigService_FindAttachmentTargetsByImage_Call {
+	_c.Call.Return(strings)
+	return _c
+}
+
+func (_c *MockConfigService_FindAttachmentTargetsByImage_Call) RunAndReturn(run func(ctx context.Context, imageName string) []string) *MockConfigService_FindAttachmentTargetsByImage_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // FindRoutesByImage provides a mock function for the type MockConfigService
 func (_mock *MockConfigService) FindRoutesByImage(ctx context.Context, imageName string) []domain.Route {
 	ret := _mock.Called(ctx, imageName)
@@ -213,65 +272,6 @@ func (_c *MockConfigService_FindRoutesByImage_Call) Return(routes []domain.Route
 }
 
 func (_c *MockConfigService_FindRoutesByImage_Call) RunAndReturn(run func(ctx context.Context, imageName string) []domain.Route) *MockConfigService_FindRoutesByImage_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// FindAttachmentTargetsByImage provides a mock function for the type MockConfigService
-func (_mock *MockConfigService) FindAttachmentTargetsByImage(ctx context.Context, imageName string) []string {
-	ret := _mock.Called(ctx, imageName)
-
-	if len(ret) == 0 {
-		panic("no return value specified for FindAttachmentTargetsByImage")
-	}
-
-	var r0 []string
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []string); ok {
-		r0 = returnFunc(ctx, imageName)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]string)
-		}
-	}
-	return r0
-}
-
-// MockConfigService_FindAttachmentTargetsByImage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FindAttachmentTargetsByImage'
-type MockConfigService_FindAttachmentTargetsByImage_Call struct {
-	*mock.Call
-}
-
-// FindAttachmentTargetsByImage is a helper method to define mock.On call
-//   - ctx context.Context
-//   - imageName string
-func (_e *MockConfigService_Expecter) FindAttachmentTargetsByImage(ctx interface{}, imageName interface{}) *MockConfigService_FindAttachmentTargetsByImage_Call {
-	return &MockConfigService_FindAttachmentTargetsByImage_Call{Call: _e.mock.On("FindAttachmentTargetsByImage", ctx, imageName)}
-}
-
-func (_c *MockConfigService_FindAttachmentTargetsByImage_Call) Run(run func(ctx context.Context, imageName string)) *MockConfigService_FindAttachmentTargetsByImage_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockConfigService_FindAttachmentTargetsByImage_Call) Return(targets []string) *MockConfigService_FindAttachmentTargetsByImage_Call {
-	_c.Call.Return(targets)
-	return _c
-}
-
-func (_c *MockConfigService_FindAttachmentTargetsByImage_Call) RunAndReturn(run func(ctx context.Context, imageName string) []string) *MockConfigService_FindAttachmentTargetsByImage_Call {
 	_c.Call.Return(run)
 	return _c
 }

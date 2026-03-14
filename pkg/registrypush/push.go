@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -33,6 +34,7 @@ type ImageSource func(ctx context.Context, ref string) (v1.Image, error)
 type Pusher struct {
 	chunkSize   int64
 	transport   http.RoundTripper
+	insecureTLS bool
 	imageSource ImageSource
 	progress    io.Writer
 }
@@ -48,6 +50,12 @@ func WithChunkSize(size int64) Option {
 // WithTransport sets a custom HTTP transport (for testing).
 func WithTransport(t http.RoundTripper) Option {
 	return func(p *Pusher) { p.transport = t }
+}
+
+// WithInsecureTLS disables TLS certificate verification for registry requests.
+// This is ignored when a custom transport is provided via WithTransport.
+func WithInsecureTLS(insecure bool) Option {
+	return func(p *Pusher) { p.insecureTLS = insecure }
 }
 
 // WithImageSource overrides the default daemon-based image reader.
@@ -67,7 +75,11 @@ func New(opts ...Option) *Pusher {
 		o(p)
 	}
 	if p.transport == nil {
-		p.transport = http.DefaultTransport
+		if p.insecureTLS {
+			p.transport = insecureTransport()
+		} else {
+			p.transport = http.DefaultTransport
+		}
 	}
 	if p.imageSource == nil {
 		p.imageSource = defaultImageSource
@@ -498,6 +510,21 @@ func chunkCount(size, chunkSize int64) int64 {
 		return 0
 	}
 	return (size + chunkSize - 1) / chunkSize
+}
+
+func insecureTransport() http.RoundTripper {
+	var transport *http.Transport
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = t.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	//nolint:gosec // Explicit CLI opt-in via --insecure for self-signed/private cert deployments.
+	transport.TLSClientConfig.InsecureSkipVerify = true
+	return transport
 }
 
 func bytesReader(chunk []byte) io.Reader {
