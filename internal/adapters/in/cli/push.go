@@ -18,6 +18,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/registrypush"
 	"github.com/bnema/gordon/pkg/validation"
 )
 
@@ -473,9 +474,8 @@ func buildAndPush(ctx context.Context, version, platform, dockerfile string, bui
 	}
 
 	// Build and load into local daemon (NOT --push).
-	// BuildKit's --push uses monolithic blob uploads that exceed
-	// Cloudflare's 100MB per-request limit. Loading locally then
-	// using docker push gives us chunked uploads (~5MB per request).
+	// The native registry push client handles chunked uploads to stay
+	// within Cloudflare's 100MB per-request limit.
 	fmt.Println("\nBuilding image...")
 	buildCmd := exec.CommandContext(ctx, "docker", buildImageArgs(ctx, version, platform, dockerfile, buildArgs, versionRef, latestRef)...) // #nosec G204
 	buildCmd.Env = os.Environ()                                                                                                             // VERSION is now passed as --build-arg VERSION=<value>
@@ -744,10 +744,10 @@ func dockerTag(ctx context.Context, src, dst string) error {
 }
 
 func dockerPush(ctx context.Context, ref string) error {
-	cmd := exec.CommandContext(ctx, "docker", "push", ref) //nolint:gosec // binary is constant; image ref validated by OCI ref parser
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	pusher := registrypush.New(
+		registrypush.WithProgress(os.Stderr),
+	)
+	return pusher.Push(ctx, ref)
 }
 
 func dockerImageExists(ctx context.Context, image string) bool {
