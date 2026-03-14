@@ -2164,22 +2164,35 @@ func (s *Service) handleRunningAttachment(ctx context.Context, existing *domain.
 	}
 
 	log := zerowrap.FromCtx(ctx)
+
+	// Check image drift
+	existingImage := existing.Labels[domain.LabelImage]
+	imageDrifted := existingImage != "" && existingImage != serviceImage
+
+	// Check env drift
 	envDrifted, err := s.attachmentEnvDrifted(ctx, existing, containerName, serviceImage)
 	if err != nil {
 		log.WrapErr(err, "failed to check attachment env drift")
 		return true, nil
 	}
-	if !envDrifted {
-		log.Debug().Str("container_name", containerName).Msg("attachment already running with current env, skipping")
+
+	if !envDrifted && !imageDrifted {
+		log.Debug().Str("container_name", containerName).Msg("attachment already running with current env and image, skipping")
 		return true, nil
 	}
 
-	log.Info().Str("container_name", containerName).Msg("attachment env changed, recreating")
+	if imageDrifted {
+		log.Info().Str("container_name", containerName).Str("existing_image", existingImage).Str("desired_image", serviceImage).Msg("attachment image changed, recreating")
+	}
+	if envDrifted {
+		log.Info().Str("container_name", containerName).Msg("attachment env changed, recreating")
+	}
+
 	if err := s.runtime.StopContainer(ctx, existing.ID); err != nil {
-		return false, log.WrapErr(err, "failed to stop attachment for env update")
+		return false, log.WrapErr(err, "failed to stop attachment for drift update")
 	}
 	if err := s.runtime.RemoveContainer(ctx, existing.ID, true); err != nil {
-		return false, log.WrapErr(err, "failed to remove attachment for env update")
+		return false, log.WrapErr(err, "failed to remove attachment for drift update")
 	}
 
 	return false, nil
