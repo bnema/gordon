@@ -143,19 +143,29 @@ On your local machine:
 gordon remotes add prod https://gordon.mydomain.com --token <your-token>
 gordon remotes use prod
 
-# Build, push, and deploy through Gordon
-gordon push myapp --build --no-confirm
+# Recommended first-time setup
+gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
+
+# Then build, push, and deploy
+gordon push app.example.com --build --no-confirm
 ```
 
 What this command does:
 
-- `gordon push myapp` resolves the route for `myapp`, chooses a version tag,
-  pushes image tags to Gordon's registry, and triggers deploy.
-- `--build` runs `docker buildx build` first, injecting `VERSION` from the tag
-  into the build and then pushing both version and `latest` tags. This requires
-  Docker with Buildx; a Podman-only setup is not supported for `--build`.
-- `--no-confirm` skips the interactive "Deploy now?" prompt so the deploy runs
-  immediately.
+- `gordon bootstrap` creates or updates the route, applies requested attachments,
+  and stores environment variables.
+- This is the recommended path for first deploys because it does not require the
+  route to exist ahead of time.
+- Run `gordon push` separately after bootstrap to build, upload, and deploy the image.
+
+If the route already exists and you only need to push a new image version, use:
+
+```bash
+gordon push app.example.com --build --no-confirm
+```
+
+`gordon push` still requires the route to already exist so it can resolve the
+target image.
 
 Your app is now live at `https://app.mydomain.com`!
 

@@ -35,7 +35,9 @@ these commands operate on the remote server.`,
 
 // newSecretsListCmd creates the secrets list command.
 func newSecretsListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "list <domain>",
 		Short: "List secrets for a domain",
 		Long: `List all secret keys configured for a domain.
@@ -47,12 +49,18 @@ Examples:
   gordon secrets list app.mydomain.com
   gordon --remote https://gordon.mydomain.com secrets list api.mydomain.com`,
 		Args: cobra.ExactArgs(1),
-		RunE: runSecretsListCmd,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSecretsListCmd(cmd, args, jsonOut)
+		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 // runSecretsListCmd executes the secrets list command.
-func runSecretsListCmd(_ *cobra.Command, args []string) error {
+func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
 	ctx := context.Background()
 	secretDomain := args[0]
 
@@ -67,8 +75,26 @@ func runSecretsListCmd(_ *cobra.Command, args []string) error {
 	}
 
 	if totalSecrets == 0 {
+		if jsonOut {
+			return writeJSON(cmd.OutOrStdout(), map[string]any{
+				"domain":      secretDomain,
+				"keys":        []string{},
+				"attachments": []any{},
+			})
+		}
 		fmt.Println(styles.Theme.Muted.Render(fmt.Sprintf("No secrets configured for %s", secretDomain)))
 		return nil
+	}
+
+	if jsonOut {
+		if attachments == nil {
+			attachments = []remote.AttachmentSecrets{}
+		}
+		return writeJSON(cmd.OutOrStdout(), map[string]any{
+			"domain":      secretDomain,
+			"keys":        keys,
+			"attachments": attachments,
+		})
 	}
 
 	title := fmt.Sprintf("Secrets for %s", secretDomain)

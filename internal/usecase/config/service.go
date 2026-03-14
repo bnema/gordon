@@ -315,6 +315,10 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	if s.config.Routes == nil {
 		s.config.Routes = make(map[string]string)
 	}
+	if existed && previousImage == route.Image {
+		s.mu.Unlock()
+		return nil
+	}
 	s.config.Routes[route.Domain] = route.Image
 	s.mu.Unlock()
 

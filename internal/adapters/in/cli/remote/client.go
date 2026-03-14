@@ -407,6 +407,18 @@ func (c *Client) RemoveRoute(ctx context.Context, routeDomain string) error {
 	return parseResponse(resp, nil)
 }
 
+func (c *Client) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
+	resp, err := c.request(ctx, http.MethodPost, "/bootstrap", req)
+	if err != nil {
+		return nil, err
+	}
+	var result dto.BootstrapResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // Secrets API
 
 // AttachmentSecrets represents secrets for an attachment container.

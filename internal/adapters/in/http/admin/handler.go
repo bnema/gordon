@@ -2,6 +2,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -201,6 +202,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		"/networks":    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
 		"/status":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
 		"/health":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
+		"/bootstrap":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
 		"/reload":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
 		"/config":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
 		"/auth/verify": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
@@ -275,6 +277,144 @@ func (h *Handler) handleDeployIntent(w http.ResponseWriter, r *http.Request, pat
 		"status": "ok",
 		"image":  imageName,
 	})
+}
+
+func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	if !HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for routes:write")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+
+	var req dto.BootstrapRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Warn().Err(err).Msg("invalid bootstrap JSON")
+		h.sendError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if req.Domain == "" {
+		h.sendError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+
+	if req.Image == "" {
+		h.sendError(w, http.StatusBadRequest, "image is required")
+		return
+	}
+
+	if err := h.validateBootstrapPermissions(ctx, req); err != nil {
+		h.sendError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	resp := dto.BootstrapResponse{
+		Domain: req.Domain,
+		Image:  req.Image,
+		Next:   fmt.Sprintf("push %s to trigger deployment", req.Image),
+	}
+	addStep := func(name, status string) {
+		resp.Steps = append(resp.Steps, dto.BootstrapStep{Name: name, Status: status})
+	}
+
+	err := h.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: req.Image})
+	switch {
+	case err == nil:
+		addStep("route", "configured")
+	case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+		addStep("route", "failed")
+		h.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	default:
+		addStep("route", "failed")
+		log.Error().Err(err).Str("domain", req.Domain).Str("image", req.Image).Msg("failed to bootstrap route")
+		h.sendJSON(w, http.StatusInternalServerError, resp)
+		return
+	}
+
+	if err := h.bootstrapAttachments(ctx, h.configSvc, req.Domain, req.Attachments, &resp.Steps); err != nil {
+		log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap attachments")
+		h.sendJSON(w, http.StatusInternalServerError, resp)
+		return
+	}
+
+	if err := h.bootstrapSecrets(ctx, h.secretSvc, req.Domain, req.Env, &resp.Steps); err != nil {
+		log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap env")
+		h.sendJSON(w, http.StatusInternalServerError, resp)
+		return
+	}
+
+	if err := h.bootstrapAttachmentSecrets(ctx, h.secretSvc, req.Domain, req.AttachmentEnv, &resp.Steps); err != nil {
+		log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap attachment env")
+		h.sendJSON(w, http.StatusInternalServerError, resp)
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) validateBootstrapPermissions(ctx context.Context, req dto.BootstrapRequest) error {
+	if (len(req.Env) > 0 || len(req.AttachmentEnv) > 0) && !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
+		return errors.New("insufficient permissions for secrets:write")
+	}
+	if len(req.Attachments) > 0 && !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		return errors.New("insufficient permissions for config:write")
+	}
+
+	return nil
+}
+
+func (h *Handler) bootstrapAttachments(ctx context.Context, configSvc in.ConfigService, domainName string, attachments []string, steps *[]dto.BootstrapStep) error {
+	for _, attachment := range attachments {
+		err := configSvc.AddAttachment(ctx, domainName, attachment)
+		switch {
+		case err == nil:
+			*steps = append(*steps, dto.BootstrapStep{Name: "attachment:" + attachment, Status: "created"})
+		case errors.Is(err, domain.ErrAttachmentExists):
+			*steps = append(*steps, dto.BootstrapStep{Name: "attachment:" + attachment, Status: "noop"})
+		default:
+			*steps = append(*steps, dto.BootstrapStep{Name: "attachment:" + attachment, Status: "failed"})
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (h *Handler) bootstrapSecrets(ctx context.Context, secretSvc in.SecretService, domainName string, env map[string]string, steps *[]dto.BootstrapStep) error {
+	if len(env) == 0 {
+		return nil
+	}
+
+	if err := secretSvc.Set(ctx, domainName, env); err != nil {
+		*steps = append(*steps, dto.BootstrapStep{Name: "env", Status: "failed"})
+		return err
+	}
+
+	*steps = append(*steps, dto.BootstrapStep{Name: "env", Status: "updated"})
+	return nil
+}
+
+func (h *Handler) bootstrapAttachmentSecrets(ctx context.Context, secretSvc in.SecretService, domainName string, attachmentEnv map[string]map[string]string, steps *[]dto.BootstrapStep) error {
+	for service, env := range attachmentEnv {
+		if err := secretSvc.SetAttachment(ctx, domainName, service, env); err != nil {
+			*steps = append(*steps, dto.BootstrapStep{Name: "attachment_env:" + service, Status: "failed"})
+			return err
+		}
+
+		*steps = append(*steps, dto.BootstrapStep{Name: "attachment_env:" + service, Status: "updated"})
+	}
+
+	return nil
 }
 
 // sendJSON sends a JSON response.
@@ -385,21 +525,6 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate image exists in registry before adding route
-	if h.registrySvc != nil && route.Image != "" {
-		imageName, imageRef := validation.ParseImageReference(route.Image)
-		if _, err := h.registrySvc.GetManifest(ctx, imageName, imageRef); err != nil {
-			if errors.Is(err, domain.ErrManifestNotFound) {
-				log.Error().Err(err).Str("image", route.Image).Msg("image not found in registry")
-				h.sendError(w, http.StatusBadRequest, fmt.Sprintf("image '%s' not found in Gordon's registry. Please push it first using: gordon push %s", route.Image, route.Image))
-			} else {
-				log.Error().Err(err).Str("image", route.Image).Msg("failed to check image in registry")
-				h.sendError(w, http.StatusServiceUnavailable, "failed to verify image in registry")
-			}
-			return
-		}
-	}
-
 	if err := h.configSvc.AddRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", route.Domain).Msg("failed to add route")
 		switch {
@@ -441,21 +566,6 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 	}
 
 	route.Domain = routeDomain
-
-	// Validate image exists in registry before updating route
-	if h.registrySvc != nil && route.Image != "" {
-		imageName, imageRef := validation.ParseImageReference(route.Image)
-		if _, err := h.registrySvc.GetManifest(ctx, imageName, imageRef); err != nil {
-			if errors.Is(err, domain.ErrManifestNotFound) {
-				log.Error().Err(err).Str("image", route.Image).Msg("image not found in registry")
-				h.sendError(w, http.StatusBadRequest, fmt.Sprintf("image '%s' not found in Gordon's registry. Please push it first using: gordon push %s", route.Image, route.Image))
-			} else {
-				log.Error().Err(err).Str("image", route.Image).Msg("failed to check image in registry")
-				h.sendError(w, http.StatusServiceUnavailable, "failed to verify image in registry")
-			}
-			return
-		}
-	}
 
 	if err := h.configSvc.UpdateRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to update route")

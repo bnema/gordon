@@ -44,6 +44,10 @@ func (r *remoteControlPlane) RemoveRoute(ctx context.Context, routeDomain string
 	return r.client.RemoveRoute(ctx, routeDomain)
 }
 
+func (r *remoteControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
+	return r.client.Bootstrap(ctx, req)
+}
+
 func (r *remoteControlPlane) ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
 	return r.client.ListSecretsWithAttachments(ctx, secretDomain)
 }

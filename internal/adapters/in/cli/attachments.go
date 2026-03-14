@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -37,7 +38,9 @@ the local Gordon configuration.`,
 
 // newAttachmentsListCmd creates the attachments list command.
 func newAttachmentsListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "list [domain-or-group]",
 		Short: "List configured attachments",
 		Long: `List all configured attachments, or attachments for a specific domain/group.
@@ -56,15 +59,19 @@ Examples:
 
 			client, isRemote := GetRemoteClient()
 			if isRemote {
-				return runAttachmentsListRemote(ctx, client, target)
+				return runAttachmentsListRemote(ctx, client, target, jsonOut, cmd.OutOrStdout())
 			}
-			return runAttachmentsListLocal(ctx, configPath, target)
+			return runAttachmentsListLocal(ctx, configPath, target, jsonOut, cmd.OutOrStdout())
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 // runAttachmentsListRemote lists attachments from a remote Gordon instance.
-func runAttachmentsListRemote(ctx context.Context, client *remote.Client, target string) error {
+func runAttachmentsListRemote(ctx context.Context, client *remote.Client, target string, jsonOut bool, out io.Writer) error {
 	if target != "" {
 		// List for specific target
 		images, err := client.GetAttachmentsConfig(ctx, target)
@@ -75,6 +82,10 @@ func runAttachmentsListRemote(ctx context.Context, client *remote.Client, target
 		if len(images) == 0 {
 			fmt.Printf("No attachments configured for '%s'\n", target)
 			return nil
+		}
+
+		if jsonOut {
+			return writeJSON(out, map[string]any{"target": target, "images": images})
 		}
 
 		fmt.Println(styles.Theme.Title.Render(fmt.Sprintf("Attachments for %s", target)))
@@ -94,6 +105,10 @@ func runAttachmentsListRemote(ctx context.Context, client *remote.Client, target
 	if len(attachments) == 0 {
 		fmt.Println(styles.Theme.Muted.Render("No attachments configured"))
 		return nil
+	}
+
+	if jsonOut {
+		return writeJSON(out, map[string]any{"attachments": attachments})
 	}
 
 	// Sort targets for consistent output
@@ -118,7 +133,7 @@ func runAttachmentsListRemote(ctx context.Context, client *remote.Client, target
 }
 
 // runAttachmentsListLocal lists attachments from local configuration.
-func runAttachmentsListLocal(ctx context.Context, cfgPath string, target string) error {
+func runAttachmentsListLocal(ctx context.Context, cfgPath string, target string, jsonOut bool, out io.Writer) error {
 	local, err := GetLocalServices(cfgPath)
 	if err != nil {
 		return fmt.Errorf("failed to initialize local services: %w", err)
@@ -136,6 +151,10 @@ func runAttachmentsListLocal(ctx context.Context, cfgPath string, target string)
 			return nil
 		}
 
+		if jsonOut {
+			return writeJSON(out, map[string]any{"target": target, "images": images})
+		}
+
 		fmt.Println(styles.Theme.Title.Render(fmt.Sprintf("Attachments for %s (local)", target)))
 		fmt.Println()
 		for _, img := range images {
@@ -150,6 +169,10 @@ func runAttachmentsListLocal(ctx context.Context, cfgPath string, target string)
 	if len(attachments) == 0 {
 		fmt.Println(styles.Theme.Muted.Render("No attachments configured"))
 		return nil
+	}
+
+	if jsonOut {
+		return writeJSON(out, map[string]any{"attachments": attachments})
 	}
 
 	// Sort targets for consistent output
