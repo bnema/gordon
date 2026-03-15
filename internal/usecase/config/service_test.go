@@ -891,6 +891,69 @@ func TestService_RemoveAttachment(t *testing.T) {
 	})
 }
 
+func TestService_AutoRouteAllowedDomains(t *testing.T) {
+	t.Run("get returns copy", func(t *testing.T) {
+		v := viper.New()
+		v.Set("auto_route_allowed_domains", []string{"example.com", "*.example.com"})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		require.NoError(t, svc.Load(ctx))
+
+		domains, err := svc.GetAutoRouteAllowedDomains(ctx)
+		require.NoError(t, err)
+		domains[0] = "changed.com"
+
+		again, err := svc.GetAutoRouteAllowedDomains(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"example.com", "*.example.com"}, again)
+	})
+
+	t.Run("add and remove persist idempotently", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		require.NoError(t, os.WriteFile(configFile, []byte("auto_route_allowed_domains = [\"example.com\"]\n"), 0600))
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("auto_route_allowed_domains", []interface{}{"example.com"})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		require.NoError(t, svc.Load(ctx))
+		require.NoError(t, svc.AddAutoRouteAllowedDomain(ctx, "*.example.com"))
+		require.NoError(t, svc.AddAutoRouteAllowedDomain(ctx, "*.example.com"))
+
+		domains, err := svc.GetAutoRouteAllowedDomains(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"example.com", "*.example.com"}, domains)
+
+		require.NoError(t, svc.RemoveAutoRouteAllowedDomain(ctx, "example.com"))
+		require.NoError(t, svc.RemoveAutoRouteAllowedDomain(ctx, "missing.com"))
+
+		domains, err = svc.GetAutoRouteAllowedDomains(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"*.example.com"}, domains)
+	})
+
+	t.Run("add validates patterns", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		invalid := []string{"", "EXAMPLE.com", "example.com.", "**.example.com", "foo.*.example.com", "*.example.com."}
+		for _, pattern := range invalid {
+			err := svc.AddAutoRouteAllowedDomain(ctx, pattern)
+			assert.Error(t, err)
+		}
+	})
+}
+
 func TestService_GetExternalRoutes(t *testing.T) {
 	v := viper.New()
 	v.Set("external_routes", map[string]interface{}{
