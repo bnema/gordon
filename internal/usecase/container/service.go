@@ -851,11 +851,26 @@ func (s *Service) Restart(ctx context.Context, domainName string, withAttachment
 		return domain.ErrContainerNotFound
 	}
 
-	// When attachments are requested, check if configured attachments are deployed.
+	// When attachments are requested, sync runtime state first to get accurate
+	// attachment tracking, then check if configured attachments are deployed.
 	// If fewer attachment containers are tracked than configured, fail early with
 	// guidance rather than restarting the main container into a broken state
 	// (e.g., missing database hostname).
 	if withAttachments {
+		if syncErr := s.SyncContainers(ctx); syncErr != nil {
+			log.Warn().Err(syncErr).Msg("failed to sync container state before attachment check")
+		}
+
+		// Re-read attachment IDs after sync
+		s.mu.RLock()
+		if freshAttachments := s.attachments[domainName]; len(freshAttachments) > 0 {
+			attachmentIDs = make([]string, len(freshAttachments))
+			copy(attachmentIDs, freshAttachments)
+		} else {
+			attachmentIDs = nil
+		}
+		s.mu.RUnlock()
+
 		configuredAttachments := s.resolveAttachmentsForDomain(domainName)
 		if len(configuredAttachments) > 0 && len(attachmentIDs) < len(configuredAttachments) {
 			missing := len(configuredAttachments) - len(attachmentIDs)
@@ -1806,7 +1821,8 @@ func (s *Service) getNetworkForApp(domainName string) string {
 	var networkGroups map[string][]string
 
 	if s.configProvider != nil {
-		networkGroups = s.configProvider.GetNetworkGroups()
+		snap := s.configProvider.GetAttachmentConfig()
+		networkGroups = snap.NetworkGroups
 		s.mu.RLock()
 		networkIsolation = s.config.NetworkIsolation
 		s.mu.RUnlock()
@@ -1993,8 +2009,9 @@ func (s *Service) resolveAttachmentsForDomain(domainName string) []string {
 	var networkGroups map[string][]string
 
 	if s.configProvider != nil {
-		attachments = s.configProvider.GetAttachments()
-		networkGroups = s.configProvider.GetNetworkGroups()
+		snap := s.configProvider.GetAttachmentConfig()
+		attachments = snap.Attachments
+		networkGroups = snap.NetworkGroups
 	} else {
 		s.mu.RLock()
 		attachments = s.config.Attachments

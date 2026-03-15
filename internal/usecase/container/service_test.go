@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/bnema/gordon/internal/adapters/out/telemetry"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	mocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -86,8 +87,10 @@ func TestService_NewService_WithConfigProvider(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	provider := mocks.NewMockAttachmentConfigProvider(t)
-	provider.EXPECT().GetAttachments().Return(map[string][]string{"test.com": {"postgres:16"}}).Maybe()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{"group1": {"test.com"}}).Maybe()
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments:   map[string][]string{"test.com": {"postgres:16"}},
+		NetworkGroups: map[string][]string{"group1": {"test.com"}},
+	}).Maybe()
 
 	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
 	assert.NotNil(t, svc)
@@ -99,9 +102,14 @@ func TestService_ResolveAttachments_UsesLiveConfigProvider(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	provider := mocks.NewMockAttachmentConfigProvider(t)
-	provider.EXPECT().GetAttachments().Return(map[string][]string{"app.example.com": {"postgres:16"}}).Once()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{}).Maybe()
-	provider.EXPECT().GetAttachments().Return(map[string][]string{"app.example.com": {"postgres:16", "redis:7"}}).Once()
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments:   map[string][]string{"app.example.com": {"postgres:16"}},
+		NetworkGroups: map[string][]string{},
+	}).Once()
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments:   map[string][]string{"app.example.com": {"postgres:16", "redis:7"}},
+		NetworkGroups: map[string][]string{},
+	}).Once()
 
 	// Create service with EMPTY static config but a live provider
 	svc := NewService(runtime, envLoader, eventBus, nil, Config{
@@ -119,12 +127,14 @@ func TestService_ResolveAttachments_UsesLiveConfigProvider(t *testing.T) {
 
 func TestService_ResolveAttachments_GroupBasedViaProvider(t *testing.T) {
 	provider := mocks.NewMockAttachmentConfigProvider(t)
-	provider.EXPECT().GetAttachments().Return(map[string][]string{
-		"shared-group": {"postgres:16"},
-	}).Maybe()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{
-		"shared-group": {"app1.example.com", "app2.example.com"},
-	}).Maybe()
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments: map[string][]string{
+			"shared-group": {"postgres:16"},
+		},
+		NetworkGroups: map[string][]string{
+			"shared-group": {"app1.example.com", "app2.example.com"},
+		},
+	}).Twice()
 
 	svc := NewService(
 		mocks.NewMockContainerRuntime(t),
@@ -144,15 +154,23 @@ func TestService_ResolveAttachments_GroupBasedViaProvider(t *testing.T) {
 
 func TestService_GetNetworkForApp_UsesLiveConfigProvider(t *testing.T) {
 	provider := mocks.NewMockAttachmentConfigProvider(t)
-	provider.EXPECT().GetAttachments().Return(map[string][]string{}).Maybe()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{
-		"shared-group": {"app1.example.com", "app2.example.com"},
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments: map[string][]string{},
+		NetworkGroups: map[string][]string{
+			"shared-group": {"app1.example.com", "app2.example.com"},
+		},
 	}).Once()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{
-		"shared-group": {"app1.example.com", "app2.example.com", "app3.example.com"},
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments: map[string][]string{},
+		NetworkGroups: map[string][]string{
+			"shared-group": {"app1.example.com", "app2.example.com", "app3.example.com"},
+		},
 	}).Once()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{
-		"shared-group": {"app1.example.com", "app2.example.com", "app3.example.com"},
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments: map[string][]string{},
+		NetworkGroups: map[string][]string{
+			"shared-group": {"app1.example.com", "app2.example.com", "app3.example.com"},
+		},
 	}).Once()
 
 	svc := NewService(
@@ -1216,6 +1234,31 @@ func TestService_Restart_WithAttachments(t *testing.T) {
 		Status: "running",
 	}
 	svc.attachments["test.example.com"] = []string{"container-attach-1", "container-attach-2"}
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID: "container-123",
+			Labels: map[string]string{
+				domain.LabelDomain:  "test.example.com",
+				domain.LabelManaged: "true",
+			},
+		},
+		{
+			ID: "container-attach-1",
+			Labels: map[string]string{
+				domain.LabelManaged:    "true",
+				domain.LabelAttachment: "true",
+				domain.LabelAttachedTo: "test.example.com",
+			},
+		},
+		{
+			ID: "container-attach-2",
+			Labels: map[string]string{
+				domain.LabelManaged:    "true",
+				domain.LabelAttachment: "true",
+				domain.LabelAttachedTo: "test.example.com",
+			},
+		},
+	}, nil).Maybe()
 
 	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(nil)
 	runtime.EXPECT().RestartContainer(mock.Anything, "container-attach-1").Return(nil)
@@ -1232,8 +1275,10 @@ func TestService_Restart_WithAttachments_ErrorsWhenConfiguredButNotDeployed(t *t
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	provider := mocks.NewMockAttachmentConfigProvider(t)
-	provider.EXPECT().GetAttachments().Return(map[string][]string{"test.example.com": {"postgres:16"}}).Maybe()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{}).Maybe()
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments:   map[string][]string{"test.example.com": {"postgres:16"}},
+		NetworkGroups: map[string][]string{},
+	}).Maybe()
 
 	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
 
@@ -1243,6 +1288,7 @@ func TestService_Restart_WithAttachments_ErrorsWhenConfiguredButNotDeployed(t *t
 		Status: "running",
 	}
 	// No attachment containers tracked — s.attachments is empty
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Maybe()
 
 	err := svc.Restart(testContext(), "test.example.com", true)
 
@@ -1258,8 +1304,10 @@ func TestService_Restart_WithAttachments_ErrorsWhenPartiallyDeployed(t *testing.
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	provider := mocks.NewMockAttachmentConfigProvider(t)
-	provider.EXPECT().GetAttachments().Return(map[string][]string{"test.example.com": {"postgres:16", "redis:7"}}).Maybe()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{}).Maybe()
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments:   map[string][]string{"test.example.com": {"postgres:16", "redis:7"}},
+		NetworkGroups: map[string][]string{},
+	}).Maybe()
 
 	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
 
@@ -1270,6 +1318,23 @@ func TestService_Restart_WithAttachments_ErrorsWhenPartiallyDeployed(t *testing.
 	}
 	// Only 1 of 2 attachments deployed
 	svc.attachments["test.example.com"] = []string{"attach-postgres"}
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID: "container-123",
+			Labels: map[string]string{
+				domain.LabelDomain:  "test.example.com",
+				domain.LabelManaged: "true",
+			},
+		},
+		{
+			ID: "attach-postgres",
+			Labels: map[string]string{
+				domain.LabelManaged:    "true",
+				domain.LabelAttachment: "true",
+				domain.LabelAttachedTo: "test.example.com",
+			},
+		},
+	}, nil).Maybe()
 
 	err := svc.Restart(testContext(), "test.example.com", true)
 
@@ -1286,8 +1351,10 @@ func TestService_Restart_WithAttachments_SucceedsWhenAllDeployed(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	provider := mocks.NewMockAttachmentConfigProvider(t)
-	provider.EXPECT().GetAttachments().Return(map[string][]string{"test.example.com": {"postgres:16"}}).Maybe()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{}).Maybe()
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments:   map[string][]string{"test.example.com": {"postgres:16"}},
+		NetworkGroups: map[string][]string{},
+	}).Maybe()
 
 	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
 
@@ -1297,6 +1364,23 @@ func TestService_Restart_WithAttachments_SucceedsWhenAllDeployed(t *testing.T) {
 		Status: "running",
 	}
 	svc.attachments["test.example.com"] = []string{"attach-456"}
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		{
+			ID: "container-123",
+			Labels: map[string]string{
+				domain.LabelDomain:  "test.example.com",
+				domain.LabelManaged: "true",
+			},
+		},
+		{
+			ID: "attach-456",
+			Labels: map[string]string{
+				domain.LabelManaged:    "true",
+				domain.LabelAttachment: "true",
+				domain.LabelAttachedTo: "test.example.com",
+			},
+		},
+	}, nil).Maybe()
 
 	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(nil)
 	runtime.EXPECT().RestartContainer(mock.Anything, "attach-456").Return(nil)
@@ -1311,8 +1395,10 @@ func TestService_Restart_WithoutAttachmentFlag_IgnoresMissingAttachments(t *test
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	provider := mocks.NewMockAttachmentConfigProvider(t)
-	provider.EXPECT().GetAttachments().Return(map[string][]string{"test.example.com": {"postgres:16"}}).Maybe()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{}).Maybe()
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments:   map[string][]string{"test.example.com": {"postgres:16"}},
+		NetworkGroups: map[string][]string{},
+	}).Maybe()
 
 	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
 
@@ -1334,8 +1420,10 @@ func TestService_Restart_WithAttachments_NoConfiguredNoDeployed_Succeeds(t *test
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	provider := mocks.NewMockAttachmentConfigProvider(t)
-	provider.EXPECT().GetAttachments().Return(map[string][]string{}).Maybe()
-	provider.EXPECT().GetNetworkGroups().Return(map[string][]string{}).Maybe()
+	provider.EXPECT().GetAttachmentConfig().Return(out.AttachmentConfigSnapshot{
+		Attachments:   map[string][]string{},
+		NetworkGroups: map[string][]string{},
+	}).Maybe()
 
 	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
 
@@ -1344,6 +1432,7 @@ func TestService_Restart_WithAttachments_NoConfiguredNoDeployed_Succeeds(t *test
 		Name:   "gordon-test.example.com",
 		Status: "running",
 	}
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Maybe()
 
 	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(nil)
 
