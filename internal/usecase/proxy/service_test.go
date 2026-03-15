@@ -572,7 +572,7 @@ func TestDrainRegistryInFlightTimeout(t *testing.T) {
 	}
 }
 
-func TestService_GetTarget_HostMode_UsesGordonPortLabel(t *testing.T) {
+func TestService_GetTarget_HostMode_UsesProxyPortLabel(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	configSvc := inmocks.NewMockConfigService(t)
@@ -595,9 +595,9 @@ func TestService_GetTarget_HostMode_UsesGordonPortLabel(t *testing.T) {
 		{Domain: "git.example.com", Image: "gitea/gitea:latest"},
 	})
 
-	// Image has gordon.port=3000 label — should use 3000, not first exposed port
+	// Image has gordon.proxy.port=3000 label
 	runtime.EXPECT().GetImageLabels(mock.Anything, "gitea/gitea:latest").Return(map[string]string{
-		domain.LabelPort: "3000",
+		domain.LabelProxyPort: "3000",
 	}, nil)
 
 	// Host port mapping for internal port 3000
@@ -611,7 +611,7 @@ func TestService_GetTarget_HostMode_UsesGordonPortLabel(t *testing.T) {
 	assert.Equal(t, "c-gitea", result.ContainerID)
 }
 
-func TestService_GetTarget_HostMode_UsesDeprecatedProxyPortLabel(t *testing.T) {
+func TestService_GetTarget_HostMode_UsesDeprecatedPortLabel(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	configSvc := inmocks.NewMockConfigService(t)
@@ -631,9 +631,9 @@ func TestService_GetTarget_HostMode_UsesDeprecatedProxyPortLabel(t *testing.T) {
 		{Domain: "app.example.com", Image: "myapp:latest"},
 	})
 
-	// Image has deprecated gordon.proxy.port label — should still work
+	// Image has deprecated gordon.port label — should still work
 	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(map[string]string{
-		domain.LabelProxyPort: "8080",
+		domain.LabelPort: "8080",
 	}, nil)
 
 	runtime.EXPECT().GetContainerPort(mock.Anything, "c-app", 8080).Return(33000, nil)
@@ -644,7 +644,7 @@ func TestService_GetTarget_HostMode_UsesDeprecatedProxyPortLabel(t *testing.T) {
 	assert.Equal(t, 33000, result.Port)
 }
 
-func TestService_GetTarget_HostMode_GordonPortWinsOverProxyPort(t *testing.T) {
+func TestService_GetTarget_HostMode_ProxyPortWinsOverPort(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	configSvc := inmocks.NewMockConfigService(t)
@@ -664,13 +664,13 @@ func TestService_GetTarget_HostMode_GordonPortWinsOverProxyPort(t *testing.T) {
 		{Domain: "dual.example.com", Image: "dualapp:latest"},
 	})
 
-	// Both labels set — gordon.port=9000 should win over gordon.proxy.port=3000
+	// Both labels set — gordon.proxy.port=9000 should win over gordon.port=3000
 	runtime.EXPECT().GetImageLabels(mock.Anything, "dualapp:latest").Return(map[string]string{
-		domain.LabelPort:      "9000",
-		domain.LabelProxyPort: "3000",
+		domain.LabelProxyPort: "9000",
+		domain.LabelPort:      "3000",
 	}, nil)
 
-	// Should use 9000 (gordon.port), NOT 3000 (gordon.proxy.port)
+	// Should use 9000 (gordon.proxy.port), NOT 3000 (gordon.port)
 	runtime.EXPECT().GetContainerPort(mock.Anything, "c-dual", 9000).Return(34000, nil)
 
 	result, err := svc.GetTarget(ctx, "dual.example.com")

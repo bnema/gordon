@@ -357,20 +357,20 @@ func TestParseDockerfileLabels(t *testing.T) {
 		{
 			name: "multiple labels",
 			content: `LABEL gordon.domain="myapp.example.com"
-LABEL gordon.port="8080"
+LABEL gordon.proxy.port="8080"
 LABEL gordon.health="/health"`,
 			expected: map[string]string{
-				"gordon.domain": "myapp.example.com",
-				"gordon.port":   "8080",
-				"gordon.health": "/health",
+				"gordon.domain":     "myapp.example.com",
+				"gordon.proxy.port": "8080",
+				"gordon.health":     "/health",
 			},
 		},
 		{
 			name:    "multi-label on one line",
-			content: `LABEL gordon.domain="myapp.example.com" gordon.port="8080"`,
+			content: `LABEL gordon.domain="myapp.example.com" gordon.proxy.port="8080"`,
 			expected: map[string]string{
-				"gordon.domain": "myapp.example.com",
-				"gordon.port":   "8080",
+				"gordon.domain":     "myapp.example.com",
+				"gordon.proxy.port": "8080",
 			},
 		},
 		{
@@ -471,13 +471,13 @@ func TestSplitLabelPairs(t *testing.T) {
 		},
 		{
 			name:     "two pairs",
-			content:  `gordon.domain="test.com" gordon.port="8080"`,
-			expected: []string{`gordon.domain="test.com"`, `gordon.port="8080"`},
+			content:  `gordon.domain="test.com" gordon.proxy.port="8080"`,
+			expected: []string{`gordon.domain="test.com"`, `gordon.proxy.port="8080"`},
 		},
 		{
 			name:     "unquoted",
-			content:  `gordon.domain=test.com gordon.port=8080`,
-			expected: []string{`gordon.domain=test.com`, `gordon.port=8080`},
+			content:  `gordon.domain=test.com gordon.proxy.port=8080`,
+			expected: []string{`gordon.domain=test.com`, `gordon.proxy.port=8080`},
 		},
 		{
 			name:     "quoted with spaces in value",

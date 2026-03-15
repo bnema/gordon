@@ -693,18 +693,18 @@ func (s *Service) isRunningInContainer() bool {
 }
 
 // getProxyPort determines the port to proxy to for an image.
-// It checks for gordon.port first, then the deprecated gordon.proxy.port alias, then falls back to the first exposed port.
+// It checks for gordon.proxy.port first, then the deprecated gordon.port alias, then falls back to the first exposed port.
 func (s *Service) getProxyPort(ctx context.Context, imageRef string) (int, error) {
 	log := zerowrap.FromCtx(ctx)
 
 	log.Debug().Str("image_ref", imageRef).Msg("determining proxy port for image")
 
-	// Check for explicit port label (gordon.port preferred, gordon.proxy.port as deprecated alias)
+	// Check for explicit port label (gordon.proxy.port preferred, gordon.port as deprecated alias)
 	labels, err := s.runtime.GetImageLabels(ctx, imageRef)
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to get image labels, falling back to exposed ports")
 	} else {
-		for _, key := range []string{domain.LabelPort, domain.LabelProxyPort} {
+		for _, key := range []string{domain.LabelProxyPort, domain.LabelPort} {
 			if portStr, ok := labels[key]; ok && portStr != "" {
 				port, err := strconv.Atoi(portStr)
 				if err == nil && port > 0 && port <= 65535 {
