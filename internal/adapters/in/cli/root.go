@@ -137,6 +137,10 @@ Commands are organized by where they run:
 	networksCmd.GroupID = groupManage
 	rootCmd.AddCommand(networksCmd)
 
+	autorouteCmd := newAutorouteCmd()
+	autorouteCmd.GroupID = groupManage
+	rootCmd.AddCommand(autorouteCmd)
+
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
 	remotesCmd.GroupID = groupClient

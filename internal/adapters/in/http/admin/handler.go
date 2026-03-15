@@ -200,13 +200,14 @@ type routeHandler func(w http.ResponseWriter, r *http.Request, path string)
 func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	// Exact match routes
 	exactRoutes := map[string]routeHandler{
-		"/networks":    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
-		"/status":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
-		"/health":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
-		"/bootstrap":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
-		"/reload":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
-		"/config":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
-		"/auth/verify": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
+		"/networks":                  func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
+		"/status":                    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
+		"/health":                    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
+		"/bootstrap":                 func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
+		"/reload":                    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
+		"/config":                    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
+		"/auth/verify":               func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
+		"/autoroute/allowed-domains": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAutoRouteAllowedDomains(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true
@@ -1706,6 +1707,85 @@ func (h *Handler) handleAttachmentsConfigDelete(w http.ResponseWriter, r *http.R
 	}
 
 	log.Info().Str("target", domainOrGroup).Str("image", image).Msg("attachment removed")
+	h.sendJSON(w, http.StatusOK, dto.AttachmentStatusResponse{Status: "removed"})
+}
+
+func (h *Handler) handleAutoRouteAllowedDomains(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.handleAutoRouteAllowedDomainsGet(w, r)
+	case http.MethodPost:
+		h.handleAutoRouteAllowedDomainsPost(w, r)
+	case http.MethodDelete:
+		h.handleAutoRouteAllowedDomainsDelete(w, r)
+	default:
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (h *Handler) handleAutoRouteAllowedDomainsGet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
+		return
+	}
+
+	domains, err := h.configSvc.GetAutoRouteAllowedDomains(ctx)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "failed to get auto-route allowed domains")
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, dto.AutoRouteAllowedDomainsResponse{Domains: domains})
+}
+
+func (h *Handler) handleAutoRouteAllowedDomainsPost(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+	var req dto.AutoRouteAllowedDomainRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Warn().Err(err).Msg("invalid auto-route allowlist JSON")
+		h.sendError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if err := h.configSvc.AddAutoRouteAllowedDomain(ctx, req.Pattern); err != nil {
+		log.Error().Err(err).Str("pattern", req.Pattern).Msg("failed to add auto-route allowed domain")
+		h.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	h.sendJSON(w, http.StatusCreated, dto.AttachmentStatusResponse{Status: "added"})
+}
+
+func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+	var req dto.AutoRouteAllowedDomainRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Warn().Err(err).Msg("invalid auto-route allowlist JSON")
+		h.sendError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if err := h.configSvc.RemoveAutoRouteAllowedDomain(ctx, req.Pattern); err != nil {
+		log.Error().Err(err).Str("pattern", req.Pattern).Msg("failed to remove auto-route allowed domain")
+		h.sendError(w, http.StatusInternalServerError, "failed to remove auto-route allowed domain")
+		return
+	}
+
 	h.sendJSON(w, http.StatusOK, dto.AttachmentStatusResponse{Status: "removed"})
 }
 
