@@ -276,9 +276,7 @@ func extractRepoName(imageRef, registryDomain string) string {
 	registryPrefix := strings.ToLower(strings.TrimSuffix(registryDomain, "/"))
 	if registryPrefix != "" {
 		prefix := registryPrefix + "/"
-		if strings.HasPrefix(imageRef, prefix) {
-			imageRef = strings.TrimPrefix(imageRef, prefix)
-		}
+		imageRef = strings.TrimPrefix(imageRef, prefix)
 	}
 	return imageRef
 }

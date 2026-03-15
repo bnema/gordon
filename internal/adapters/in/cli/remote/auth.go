@@ -72,6 +72,27 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 
 // UpdateRemoteToken updates the token for a named remote.
 func UpdateRemoteToken(name, token string) error {
+	// Try pass first
+	if passAvailable() {
+		if err := passWriteToken(name, token); err == nil {
+			// Successfully stored in pass. Remove plaintext token from TOML (best-effort).
+			config, err := LoadRemotes("")
+			if err != nil {
+				return nil
+			}
+			if remote, ok := config.Remotes[name]; ok {
+				remote.Token = ""
+				remote.TokenEnv = ""
+				config.Remotes[name] = remote
+				_ = SaveRemotes("", config)
+			}
+			return nil
+		}
+		// pass write failed, fall through to TOML
+	} else {
+		warnPassUnavailable()
+	}
+
 	config, err := LoadRemotes("")
 	if err != nil {
 		return err

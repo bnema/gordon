@@ -191,6 +191,8 @@ func resolveRemoteURL(flagRemote string, config *ClientConfig, remotes *ClientCo
 
 // resolveToken resolves the authentication token from various sources.
 func resolveToken(flagToken string, config *ClientConfig, remotes *ClientConfig) string {
+	activeRemote := activeRemoteEntry(remotes)
+
 	// 1. Flag token takes precedence
 	if flagToken != "" {
 		return flagToken
@@ -211,18 +213,44 @@ func resolveToken(flagToken string, config *ClientConfig, remotes *ClientConfig)
 		}
 	}
 
-	// 4. Active remote token
-	if remotes != nil && remotes.Active != "" {
-		if remote, ok := remotes.Remotes[remotes.Active]; ok {
-			if remote.Token != "" {
-				return remote.Token
-			}
-			if remote.TokenEnv != "" {
-				return os.Getenv(remote.TokenEnv)
-			}
+	// 4. Try pass store for active remote
+	if remotes != nil && remotes.Active != "" && passAvailable() {
+		if token, err := passReadToken(remotes.Active); err == nil && token != "" {
+			return token
 		}
 	}
 
+	// 5. Active remote token
+	if token := resolveRemoteEntryToken(activeRemote); token != "" {
+		return token
+	}
+
+	return ""
+}
+
+func activeRemoteEntry(remotes *ClientConfig) *RemoteEntry {
+	if remotes == nil || remotes.Active == "" {
+		return nil
+	}
+
+	remote, ok := remotes.Remotes[remotes.Active]
+	if !ok {
+		return nil
+	}
+
+	return &remote
+}
+
+func resolveRemoteEntryToken(remote *RemoteEntry) string {
+	if remote == nil {
+		return ""
+	}
+	if remote.Token != "" {
+		return remote.Token
+	}
+	if remote.TokenEnv != "" {
+		return os.Getenv(remote.TokenEnv)
+	}
 	return ""
 }
 
