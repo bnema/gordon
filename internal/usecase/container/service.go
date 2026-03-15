@@ -813,6 +813,19 @@ func (s *Service) Restart(ctx context.Context, domainName string, withAttachment
 		return domain.ErrContainerNotFound
 	}
 
+	// When attachments are requested, check if configured attachments are deployed.
+	// If fewer attachment containers are tracked than configured, fail early with
+	// guidance rather than restarting the main container into a broken state
+	// (e.g., missing database hostname).
+	if withAttachments {
+		configuredAttachments := s.resolveAttachmentsForDomain(domainName)
+		if len(configuredAttachments) > 0 && len(attachmentIDs) < len(configuredAttachments) {
+			missing := len(configuredAttachments) - len(attachmentIDs)
+			return fmt.Errorf("%w: domain %q has %d configured attachment(s) but only %d deployed (%d missing)",
+				domain.ErrAttachmentNotDeployed, domainName, len(configuredAttachments), len(attachmentIDs), missing)
+		}
+	}
+
 	// Restart the main container
 	if err := s.runtime.RestartContainer(ctx, container.ID); err != nil {
 		if !isContainerNotFoundError(err) {

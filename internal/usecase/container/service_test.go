@@ -1236,6 +1236,136 @@ func TestService_Restart_WithAttachments(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestService_Restart_WithAttachments_ErrorsWhenConfiguredButNotDeployed(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	provider := &fakeConfigProvider{
+		attachments:   map[string][]string{"test.example.com": {"postgres:16"}},
+		networkGroups: map[string][]string{},
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+	// No attachment containers tracked — s.attachments is empty
+
+	err := svc.Restart(testContext(), "test.example.com", true)
+
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrAttachmentNotDeployed))
+	// Main container should NOT have been restarted
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+}
+
+func TestService_Restart_WithAttachments_ErrorsWhenPartiallyDeployed(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	provider := &fakeConfigProvider{
+		attachments:   map[string][]string{"test.example.com": {"postgres:16", "redis:7"}},
+		networkGroups: map[string][]string{},
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+	// Only 1 of 2 attachments deployed
+	svc.attachments["test.example.com"] = []string{"attach-postgres"}
+
+	err := svc.Restart(testContext(), "test.example.com", true)
+
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrAttachmentNotDeployed))
+	assert.Contains(t, err.Error(), "1 missing")
+	// Main container should NOT have been restarted
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+}
+
+func TestService_Restart_WithAttachments_SucceedsWhenAllDeployed(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	provider := &fakeConfigProvider{
+		attachments:   map[string][]string{"test.example.com": {"postgres:16"}},
+		networkGroups: map[string][]string{},
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+	svc.attachments["test.example.com"] = []string{"attach-456"}
+
+	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(nil)
+	runtime.EXPECT().RestartContainer(mock.Anything, "attach-456").Return(nil)
+
+	err := svc.Restart(testContext(), "test.example.com", true)
+	assert.NoError(t, err)
+}
+
+func TestService_Restart_WithoutAttachmentFlag_IgnoresMissingAttachments(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	provider := &fakeConfigProvider{
+		attachments:   map[string][]string{"test.example.com": {"postgres:16"}},
+		networkGroups: map[string][]string{},
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+
+	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(nil)
+
+	err := svc.Restart(testContext(), "test.example.com", false)
+	assert.NoError(t, err)
+}
+
+func TestService_Restart_WithAttachments_NoConfiguredNoDeployed_Succeeds(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	provider := &fakeConfigProvider{
+		attachments:   map[string][]string{},
+		networkGroups: map[string][]string{},
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "container-123",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+
+	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(nil)
+
+	err := svc.Restart(testContext(), "test.example.com", true)
+	assert.NoError(t, err)
+}
+
 func TestNormalizeImageRef(t *testing.T) {
 	tests := []struct {
 		name     string
