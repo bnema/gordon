@@ -15,7 +15,8 @@ const (
 	// exposing secret values.
 	LabelEnvHash = "gordon.env-hash"
 
-	// Image labels (set in Dockerfile)
+	// LabelProxyPort is a deprecated alias for LabelPort.
+	// Kept for backward compatibility; prefer LabelPort for new images.
 	LabelProxyPort = "gordon.proxy.port"
 
 	// Auto-route image labels (for automatic route discovery)

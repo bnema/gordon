@@ -210,25 +210,47 @@ func (s *Service) deploymentContainerName(containerDomain string, existing *doma
 	}
 }
 
-func (s *Service) buildContainerConfig(containerDomain, image, actualImageRef string, exposedPorts []int, envVars []string, envHash string, volumes map[string]string, networkName string, existing *domain.Container) *domain.ContainerConfig {
-	containerName := s.deploymentContainerName(containerDomain, existing)
+// containerConfigInput groups the parameters for building a container configuration.
+type containerConfigInput struct {
+	Domain       string
+	Image        string
+	ImageRef     string
+	ExposedPorts []int
+	EnvVars      []string
+	EnvHash      string
+	Volumes      map[string]string
+	NetworkName  string
+	ImageLabels  map[string]string
+	Existing     *domain.Container
+}
+
+func (s *Service) buildContainerConfig(in containerConfigInput) *domain.ContainerConfig {
+	containerName := s.deploymentContainerName(in.Domain, in.Existing)
+	labels := map[string]string{
+		domain.LabelDomain:  in.Domain,
+		domain.LabelEnvHash: in.EnvHash,
+		domain.LabelImage:   in.Image,
+		domain.LabelManaged: "true",
+		domain.LabelRoute:   in.Domain,
+	}
+
+	// Propagate proxy/port labels from image so readiness probes can find them
+	for _, key := range []string{domain.LabelProxyPort, domain.LabelPort, domain.LabelHealth} {
+		if v, ok := in.ImageLabels[key]; ok && v != "" {
+			labels[key] = v
+		}
+	}
 
 	return &domain.ContainerConfig{
-		Image:       actualImageRef,
+		Image:       in.ImageRef,
 		Name:        containerName,
-		Ports:       exposedPorts,
-		Env:         envVars,
-		Volumes:     volumes,
-		NetworkMode: networkName,
-		Hostname:    containerDomain,
-		Labels: map[string]string{
-			domain.LabelDomain:  containerDomain,
-			domain.LabelEnvHash: envHash,
-			domain.LabelImage:   image,
-			domain.LabelManaged: "true",
-			domain.LabelRoute:   containerDomain,
-		},
-		AutoRemove: false,
+		Ports:       in.ExposedPorts,
+		Env:         in.EnvVars,
+		Volumes:     in.Volumes,
+		NetworkMode: in.NetworkName,
+		Hostname:    in.Domain,
+		Labels:      labels,
+		AutoRemove:  false,
 	}
 }
 
@@ -416,6 +438,7 @@ type deployResources struct {
 	networkName    string
 	actualImageRef string
 	exposedPorts   []int
+	imageLabels    map[string]string
 	envVars        []string
 	envHash        string
 	volumes        map[string]string
@@ -516,6 +539,12 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 		exposedPorts = []int{80, 8080, 3000}
 	}
 
+	imageLabels, err := s.runtime.GetImageLabels(ctx, actualImageRef)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get image labels, skipping label propagation")
+		imageLabels = nil
+	}
+
 	envVars, err := s.loadEnvironment(ctx, route.Domain, actualImageRef)
 	if err != nil {
 		return nil, err
@@ -531,6 +560,7 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 		networkName:    networkName,
 		actualImageRef: actualImageRef,
 		exposedPorts:   exposedPorts,
+		imageLabels:    imageLabels,
 		envVars:        envVars,
 		envHash:        envHash,
 		volumes:        volumes,
@@ -543,17 +573,18 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 
 	log := zerowrap.FromCtx(ctx)
 
-	containerConfig := s.buildContainerConfig(
-		route.Domain,
-		route.Image,
-		resources.actualImageRef,
-		resources.exposedPorts,
-		resources.envVars,
-		resources.envHash,
-		resources.volumes,
-		resources.networkName,
-		existing,
-	)
+	containerConfig := s.buildContainerConfig(containerConfigInput{
+		Domain:       route.Domain,
+		Image:        route.Image,
+		ImageRef:     resources.actualImageRef,
+		ExposedPorts: resources.exposedPorts,
+		EnvVars:      resources.envVars,
+		EnvHash:      resources.envHash,
+		Volumes:      resources.volumes,
+		NetworkName:  resources.networkName,
+		ImageLabels:  resources.imageLabels,
+		Existing:     existing,
+	})
 
 	newContainer, err := s.runtime.CreateContainer(ctx, containerConfig)
 	if err != nil {
@@ -2524,10 +2555,10 @@ func (s *Service) resolveProbeEndpoint(ctx context.Context, containerID string, 
 	internalPort := 0
 	if containerConfig != nil {
 		if labels := containerConfig.Labels; labels != nil {
-			for _, key := range []string{domain.LabelProxyPort, domain.LabelPort} {
+			for _, key := range []string{domain.LabelPort, domain.LabelProxyPort} {
 				if portStr, ok := labels[key]; ok && portStr != "" {
 					port, err := strconv.Atoi(portStr)
-					if err == nil && port > 0 {
+					if err == nil && port > 0 && port <= 65535 {
 						internalPort = port
 						break
 					}

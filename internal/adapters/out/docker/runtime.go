@@ -890,7 +890,8 @@ func (r *Runtime) GetContainerNetworkInfo(ctx context.Context, containerID strin
 		return "", 0, fmt.Errorf("no EXPOSE directives found for container %s - please add EXPOSE directive to Dockerfile", containerID)
 	}
 
-	// Use the first exposed port
+	// Sort ports with HTTP-friendly ports first, pushing SSH (22) to the end
+	sortPortsHTTPFirst(exposedPorts)
 	selectedPort := exposedPorts[0]
 
 	log.Info().
