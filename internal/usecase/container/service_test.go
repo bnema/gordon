@@ -3408,11 +3408,11 @@ func TestService_Deploy_PropagatesImageLabelsToContainerConfig(t *testing.T) {
 	// Exposed ports — image exposes both SSH and HTTP
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "gitea/gitea:latest").Return([]int{22, 3000}, nil)
 
-	// Image labels include gordon.port and gordon.health
+	// Image labels include gordon.proxy.port and gordon.health
 	runtime.EXPECT().GetImageLabels(mock.Anything, "gitea/gitea:latest").Return(map[string]string{
-		domain.LabelPort:   "3000",
-		domain.LabelHealth: "/healthz",
-		"some.other.label": "ignored",
+		domain.LabelProxyPort: "3000",
+		domain.LabelHealth:    "/healthz",
+		"some.other.label":    "ignored",
 	}, nil)
 
 	// Load environment
@@ -3427,8 +3427,8 @@ func TestService_Deploy_PropagatesImageLabelsToContainerConfig(t *testing.T) {
 		Status: "created",
 	}
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
-		// Verify gordon.port was propagated from image labels
-		if cfg.Labels[domain.LabelPort] != "3000" {
+		// Verify gordon.proxy.port was propagated from image labels
+		if cfg.Labels[domain.LabelProxyPort] != "3000" {
 			return false
 		}
 		// Verify gordon.health was propagated from image labels

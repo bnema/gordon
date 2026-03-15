@@ -217,7 +217,7 @@ func TestService_WaitForHealthy_EmptyStatusIsReportedAsStarting(t *testing.T) {
 	assert.True(t, strings.Contains(err.Error(), "last status: starting"))
 }
 
-func TestService_WaitForReady_ProbeUsesGordonPortLabel(t *testing.T) {
+func TestService_WaitForReady_ProbeUsesGordonProxyPortLabel(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:    "auto",
@@ -231,11 +231,11 @@ func TestService_WaitForReady_ProbeUsesGordonPortLabel(t *testing.T) {
 	probeIP, probePort := reserveEphemeralAddr(t)
 	_ = probeIP
 
-	// Container config has gordon.port label — should be used for probe endpoint
+	// Container config has gordon.proxy.port label — should be used for probe endpoint
 	containerConfig := &domain.ContainerConfig{
 		Ports: []int{22, 3000},
 		Labels: map[string]string{
-			domain.LabelPort: "3000",
+			domain.LabelProxyPort: "3000",
 		},
 	}
 
@@ -250,7 +250,7 @@ func TestService_WaitForReady_ProbeUsesGordonPortLabel(t *testing.T) {
 	assert.Contains(t, err.Error(), "HTTP alive probe timeout")
 }
 
-func TestService_WaitForReady_ProbeUsesDeprecatedProxyPortLabel(t *testing.T) {
+func TestService_WaitForReady_ProbeUsesDeprecatedPortLabel(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:    "auto",
@@ -264,11 +264,11 @@ func TestService_WaitForReady_ProbeUsesDeprecatedProxyPortLabel(t *testing.T) {
 	probeIP, probePort := reserveEphemeralAddr(t)
 	_ = probeIP // probeIP not used directly but port is
 
-	// Container config has deprecated gordon.proxy.port — should still work
+	// Container config has deprecated gordon.port — should still work
 	containerConfig := &domain.ContainerConfig{
 		Ports: []int{22, 3000},
 		Labels: map[string]string{
-			domain.LabelProxyPort: "3000",
+			domain.LabelPort: "3000",
 		},
 	}
 
@@ -281,7 +281,7 @@ func TestService_WaitForReady_ProbeUsesDeprecatedProxyPortLabel(t *testing.T) {
 	assert.Contains(t, err.Error(), "HTTP alive probe timeout")
 }
 
-func TestService_WaitForReady_GordonPortTakesPriorityOverProxyPort(t *testing.T) {
+func TestService_WaitForReady_ProxyPortTakesPriorityOverPort(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:    "auto",
@@ -294,18 +294,18 @@ func TestService_WaitForReady_GordonPortTakesPriorityOverProxyPort(t *testing.T)
 	probeIP, probePort := reserveEphemeralAddr(t)
 	_ = probeIP
 
-	// Both labels set — gordon.port (8080) should win over gordon.proxy.port (3000)
+	// Both labels set — gordon.proxy.port (8080) should win over gordon.port (3000)
 	containerConfig := &domain.ContainerConfig{
 		Ports: []int{22, 3000, 8080},
 		Labels: map[string]string{
-			domain.LabelPort:      "8080",
-			domain.LabelProxyPort: "3000",
+			domain.LabelProxyPort: "8080",
+			domain.LabelPort:      "3000",
 		},
 	}
 
 	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
-	// Should use gordon.port=8080, NOT gordon.proxy.port=3000
+	// Should use gordon.proxy.port=8080, NOT gordon.port=3000
 	runtime.EXPECT().GetContainerPort(mock.Anything, containerID, 8080).Return(probePort, nil).Once()
 
 	err := svc.waitForReady(ctx, containerID, containerConfig)

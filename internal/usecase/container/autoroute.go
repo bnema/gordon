@@ -414,8 +414,11 @@ func parseImageLabels(configData []byte) (*domain.ImageLabels, error) {
 		labels.Health = strings.TrimSpace(v)
 	}
 
-	if v, ok := config.Config.Labels[domain.LabelPort]; ok {
-		labels.Port = strings.TrimSpace(v)
+	for _, key := range []string{domain.LabelProxyPort, domain.LabelPort} {
+		if v, ok := config.Config.Labels[key]; ok {
+			labels.Port = strings.TrimSpace(v)
+			break
+		}
 	}
 
 	if v, ok := config.Config.Labels[domain.LabelEnvFile]; ok {

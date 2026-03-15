@@ -2555,7 +2555,7 @@ func (s *Service) resolveProbeEndpoint(ctx context.Context, containerID string, 
 	internalPort := 0
 	if containerConfig != nil {
 		if labels := containerConfig.Labels; labels != nil {
-			for _, key := range []string{domain.LabelPort, domain.LabelProxyPort} {
+			for _, key := range []string{domain.LabelProxyPort, domain.LabelPort} {
 				if portStr, ok := labels[key]; ok && portStr != "" {
 					port, err := strconv.Atoi(portStr)
 					if err == nil && port > 0 && port <= 65535 {
