@@ -39,7 +39,7 @@ type Pusher struct {
 	timeout     time.Duration
 	transport   http.RoundTripper
 	insecureTLS bool
-	imageSource ImageSource
+	imageSource func(ctx context.Context, ref string) (v1.Image, func(), error)
 	cleanupFn   func()
 	progress    io.Writer
 }
@@ -70,7 +70,12 @@ func WithInsecureTLS(insecure bool) Option {
 
 // WithImageSource overrides the default daemon-based image reader.
 func WithImageSource(src ImageSource) Option {
-	return func(p *Pusher) { p.imageSource = src }
+	return func(p *Pusher) {
+		p.imageSource = func(ctx context.Context, ref string) (v1.Image, func(), error) {
+			img, err := src(ctx, ref)
+			return img, nil, err
+		}
+	}
 }
 
 // WithImageCleanup sets a function called after Push completes to clean up
@@ -98,13 +103,8 @@ func New(opts ...Option) *Pusher {
 		}
 	}
 	if p.imageSource == nil {
-		p.imageSource = func(ctx context.Context, ref string) (v1.Image, error) {
-			img, cleanup, err := defaultImageSourceWithCleanup(ctx, ref)
-			if err != nil {
-				return nil, err
-			}
-			p.cleanupFn = cleanup
-			return img, nil
+		p.imageSource = func(ctx context.Context, ref string) (v1.Image, func(), error) {
+			return defaultImageSourceWithCleanup(ctx, ref)
 		}
 	}
 	return p
@@ -125,19 +125,16 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 		return fmt.Errorf("image ref %s must include a tag", ref)
 	}
 
-	userCleanup := p.cleanupFn
-	p.cleanupFn = nil
-
 	authHeader, err := resolveAuthHeader(parsedRef)
 	if err != nil {
 		return err
 	}
 
-	img, err := p.imageSource(ctx, ref)
+	img, sourceCleanup, err := p.imageSource(ctx, ref)
 	if err != nil {
 		return err
 	}
-	sourceCleanup := p.cleanupFn
+	userCleanup := p.cleanupFn
 	switch {
 	case sourceCleanup != nil && userCleanup != nil:
 		defer func() {
