@@ -155,6 +155,35 @@ func TestService_ResolveAttachments_GroupBasedViaProvider(t *testing.T) {
 	assert.Empty(t, result)
 }
 
+func TestService_GetNetworkForApp_UsesLiveConfigProvider(t *testing.T) {
+	provider := &fakeConfigProvider{
+		attachments: map[string][]string{},
+		networkGroups: map[string][]string{
+			"shared-group": {"app1.example.com", "app2.example.com"},
+		},
+	}
+
+	svc := NewService(
+		mocks.NewMockContainerRuntime(t),
+		mocks.NewMockEnvLoader(t),
+		mocks.NewMockEventPublisher(t),
+		nil, Config{NetworkIsolation: true, NetworkPrefix: "gordon"}, provider,
+	)
+
+	// Should use group network: generateNetworkName produces "gordon-shared-group"
+	network := svc.getNetworkForApp("app1.example.com")
+	assert.Equal(t, "gordon-shared-group", network)
+
+	// Simulate adding a domain to a group after construction
+	provider.networkGroups["shared-group"] = append(provider.networkGroups["shared-group"], "app3.example.com")
+	network = svc.getNetworkForApp("app3.example.com")
+	assert.Equal(t, "gordon-shared-group", network)
+
+	// Domain not in any group gets its own network: "gordon-solo-example-com"
+	network = svc.getNetworkForApp("solo.example.com")
+	assert.Equal(t, "gordon-solo-example-com", network)
+}
+
 func TestService_ManagedContainersMetric_GlobalSeriesOnDeployReplaceAndRemove(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
