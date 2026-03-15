@@ -211,10 +211,9 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 
 	if s.isRunningInContainer() {
 		// Gordon is in a container - use container network
-		// Determine target port: check for explicit label first, then fall back to network detection
-		targetPort, err := s.getProxyPort(ctx, container.Image)
+		meta, err := s.resolveTargetMetadata(ctx, container.Image)
 		if err != nil {
-			return nil, log.WrapErr(err, "failed to determine proxy port")
+			return nil, log.WrapErr(err, "failed to resolve target metadata")
 		}
 		containerIP, _, err := s.runtime.GetContainerNetworkInfo(ctx, container.ID)
 		if err != nil {
@@ -222,9 +221,10 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 		}
 		target = &domain.ProxyTarget{
 			Host:        containerIP,
-			Port:        targetPort,
+			Port:        meta.Port,
 			ContainerID: container.ID,
 			Scheme:      "http",
+			Protocol:    meta.Protocol,
 		}
 	} else {
 		// Gordon is on the host - use host port mapping
@@ -241,16 +241,14 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 			return nil, domain.ErrRouteNotFound
 		}
 
-		// Determine target port: check for label first, then fall back to first exposed port
-		// Use container.Image (the actual running image) instead of route.Image (config shorthand)
-		targetPort, err := s.getProxyPort(ctx, container.Image)
+		meta, err := s.resolveTargetMetadata(ctx, container.Image)
 		if err != nil {
-			return nil, log.WrapErr(err, "failed to determine proxy port")
+			return nil, log.WrapErr(err, "failed to resolve target metadata")
 		}
 
-		hostPort, err := s.runtime.GetContainerPort(ctx, container.ID, targetPort)
+		hostPort, err := s.runtime.GetContainerPort(ctx, container.ID, meta.Port)
 		if err != nil {
-			return nil, log.WrapErrWithFields(err, "failed to get host port mapping", map[string]any{"internal_port": targetPort})
+			return nil, log.WrapErrWithFields(err, "failed to get host port mapping", map[string]any{"internal_port": meta.Port})
 		}
 
 		target = &domain.ProxyTarget{
@@ -258,6 +256,7 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 			Port:        hostPort,
 			ContainerID: container.ID,
 			Scheme:      "http",
+			Protocol:    meta.Protocol,
 		}
 	}
 
@@ -690,41 +689,4 @@ func (s *Service) isRunningInContainer() bool {
 	}
 
 	return false
-}
-
-// getProxyPort determines the port to proxy to for an image.
-// It checks for gordon.proxy.port first, then the deprecated gordon.port alias, then falls back to the first exposed port.
-func (s *Service) getProxyPort(ctx context.Context, imageRef string) (int, error) {
-	log := zerowrap.FromCtx(ctx)
-
-	log.Debug().Str("image_ref", imageRef).Msg("determining proxy port for image")
-
-	// Check for explicit port label (gordon.proxy.port preferred, gordon.port as deprecated alias)
-	labels, err := s.runtime.GetImageLabels(ctx, imageRef)
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to get image labels, falling back to exposed ports")
-	} else {
-		for _, key := range []string{domain.LabelProxyPort, domain.LabelPort} {
-			if portStr, ok := labels[key]; ok && portStr != "" {
-				port, err := strconv.Atoi(portStr)
-				if err == nil && port > 0 && port <= 65535 {
-					log.Debug().Int("port", port).Str("label", key).Msg("using proxy port from image label")
-					return port, nil
-				}
-				log.Warn().Str("label", key).Str("port_value", portStr).Msg("invalid port label value")
-			}
-		}
-	}
-
-	// Fall back to first exposed port
-	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, imageRef)
-	if err != nil {
-		return 0, err
-	}
-	if len(exposedPorts) == 0 {
-		return 0, fmt.Errorf("no exposed ports found for image %s", imageRef)
-	}
-
-	log.Debug().Int("port", exposedPorts[0]).Msg("using first exposed port")
-	return exposedPorts[0], nil
 }
