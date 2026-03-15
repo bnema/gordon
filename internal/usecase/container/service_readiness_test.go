@@ -31,7 +31,7 @@ func TestService_WaitForReady_AutoFallsBackToDelayWhenNoHealthcheck(t *testing.T
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:  "auto",
 		ReadinessDelay: time.Millisecond,
-	})
+	}, nil)
 
 	ctx := testContext()
 	containerID := "container-1"
@@ -52,7 +52,7 @@ func TestService_WaitForReady_AutoCascadeUsesDefaultHTTPAliveProbeWhenNoHealthch
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:    "auto",
 		HTTPProbeTimeout: 50 * time.Millisecond,
-	})
+	}, nil)
 
 	ctx := testContext()
 	containerID := "container-1"
@@ -87,7 +87,7 @@ func TestService_WaitForReady_AutoCascadeUsesHTTPProbeWhenHealthLabelSet(t *test
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:    "auto",
 		HTTPProbeTimeout: 50 * time.Millisecond,
-	})
+	}, nil)
 
 	ctx := testContext()
 	containerID := "container-1"
@@ -122,7 +122,7 @@ func TestService_WaitForReady_AutoCascadeUsesHealthcheckWhenPresent(t *testing.T
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode: "auto",
 		HealthTimeout: 50 * time.Millisecond,
-	})
+	}, nil)
 
 	ctx := testContext()
 	containerID := "container-1"
@@ -151,7 +151,7 @@ func TestService_WaitForReady_AutoCascadeFallsToDelayWhenNoEndpoint(t *testing.T
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:  "auto",
 		ReadinessDelay: time.Millisecond,
-	})
+	}, nil)
 
 	ctx := testContext()
 	containerID := "container-1"
@@ -180,7 +180,7 @@ func TestService_WaitForReady_ExplicitDelayModeIgnoresCascade(t *testing.T) {
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:  "delay",
 		ReadinessDelay: time.Millisecond,
-	})
+	}, nil)
 
 	ctx := testContext()
 	containerID := "container-1"
@@ -205,7 +205,7 @@ func TestService_WaitForReady_ExplicitDelayModeIgnoresCascade(t *testing.T) {
 
 func TestService_WaitForHealthy_EmptyStatusIsReportedAsStarting(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	svc := NewService(runtime, nil, nil, nil, Config{})
+	svc := NewService(runtime, nil, nil, nil, Config{}, nil)
 
 	ctx := testContext()
 	containerID := "container-1"
@@ -222,7 +222,7 @@ func TestService_WaitForReady_ProbeUsesGordonProxyPortLabel(t *testing.T) {
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:    "auto",
 		HTTPProbeTimeout: 50 * time.Millisecond,
-	})
+	}, nil)
 
 	ctx := testContext()
 	containerID := "container-port-label"
@@ -255,7 +255,7 @@ func TestService_WaitForReady_ProbeUsesDeprecatedPortLabel(t *testing.T) {
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:    "auto",
 		HTTPProbeTimeout: 50 * time.Millisecond,
-	})
+	}, nil)
 
 	ctx := testContext()
 	containerID := "container-proxy-port"
@@ -286,7 +286,7 @@ func TestService_WaitForReady_ProxyPortTakesPriorityOverPort(t *testing.T) {
 	svc := NewService(runtime, nil, nil, nil, Config{
 		ReadinessMode:    "auto",
 		HTTPProbeTimeout: 50 * time.Millisecond,
-	})
+	}, nil)
 
 	ctx := testContext()
 	containerID := "container-priority"

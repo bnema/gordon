@@ -21,6 +21,15 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+// fakeConfigProvider implements AttachmentConfigProvider for tests.
+type fakeConfigProvider struct {
+	attachments   map[string][]string
+	networkGroups map[string][]string
+}
+
+func (f *fakeConfigProvider) GetAttachments() map[string][]string   { return f.attachments }
+func (f *fakeConfigProvider) GetNetworkGroups() map[string][]string { return f.networkGroups }
+
 func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
 }
@@ -80,12 +89,26 @@ func managedMetricState(t *testing.T, reader *sdkmetric.ManualReader) (int64, in
 	return 0, 0, nil
 }
 
+func TestService_NewService_WithConfigProvider(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	provider := &fakeConfigProvider{
+		attachments:   map[string][]string{"test.com": {"postgres:16"}},
+		networkGroups: map[string][]string{"group1": {"test.com"}},
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, provider)
+	assert.NotNil(t, svc)
+}
+
 func TestService_ManagedContainersMetric_GlobalSeriesOnDeployReplaceAndRemove(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 	metrics, reader := setupMetricsTest(t)
 	svc.SetMetrics(metrics)
@@ -119,7 +142,7 @@ func TestService_SyncContainers_ManagedContainersMetricTracksDelta(t *testing.T)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 	metrics, reader := setupMetricsTest(t)
 	svc.SetMetrics(metrics)
@@ -202,7 +225,7 @@ func TestService_Deploy_Success(t *testing.T) {
 		DrainDelayConfigured: true,
 	}
 
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -284,7 +307,7 @@ func TestService_Deploy_ReadinessRecoveryWindow_AllowsTransientFlap(t *testing.T
 		DrainDelayConfigured: true,
 	}
 
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -342,7 +365,7 @@ func TestService_Deploy_ImagePullFailure(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -373,7 +396,7 @@ func TestService_PullImage_UsesServiceTokenForExternalPull(t *testing.T) {
 		ServiceToken:         "service-token",
 	}
 
-	svc := NewService(runtime, nil, nil, nil, config)
+	svc := NewService(runtime, nil, nil, nil, config, nil)
 	ctx := testContext()
 
 	runtime.EXPECT().PullImageWithAuth(mock.Anything, "registry.example.com/myapp:latest", "gordon-service", "service-token").Return(nil)
@@ -390,7 +413,7 @@ func TestService_PullImage_RequiresServiceTokenForExternalPull(t *testing.T) {
 		RegistryAuthEnabled: true,
 	}
 
-	svc := NewService(runtime, nil, nil, nil, config)
+	svc := NewService(runtime, nil, nil, nil, config, nil)
 	ctx := testContext()
 
 	err := svc.pullImage(ctx, "registry.example.com/myapp:latest", false)
@@ -408,7 +431,7 @@ func TestService_PullImage_InternalRetriesOnConnectionRefused(t *testing.T) {
 		InternalRegistryPassword: "secret",
 	}
 
-	svc := NewService(runtime, nil, nil, nil, config)
+	svc := NewService(runtime, nil, nil, nil, config, nil)
 	ctx := testContext()
 
 	runtime.EXPECT().PullImageWithAuth(mock.Anything, "localhost:5000/myapp:latest", "internal", "secret").
@@ -435,7 +458,7 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 		DrainDelayConfigured: true,
 		StabilizationDelay:   time.Millisecond,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -511,7 +534,7 @@ func TestService_Deploy_ResolvesExistingFromRuntime_WhenMemoryStale(t *testing.T
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -608,7 +631,7 @@ func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 	expectedEnvHash := hashEnvironment([]string{})
 
@@ -675,7 +698,7 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -732,7 +755,7 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -784,7 +807,7 @@ func TestService_Stop(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	runtime.EXPECT().StopContainer(mock.Anything, "container-123").Return(nil)
@@ -799,7 +822,7 @@ func TestService_Stop_Error(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	runtime.EXPECT().StopContainer(mock.Anything, "container-123").Return(errors.New("container not found"))
@@ -815,7 +838,7 @@ func TestService_Remove(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	// Add tracked container
@@ -844,7 +867,7 @@ func TestService_Remove_WithNetworkCleanup(t *testing.T) {
 		NetworkIsolation: true,
 		NetworkPrefix:    "gordon",
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	svc.containers["test.example.com"] = &domain.Container{
@@ -868,7 +891,7 @@ func TestService_Get(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	container := &domain.Container{ID: "container-123"}
@@ -885,7 +908,7 @@ func TestService_Get_NotFound(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	result, exists := svc.Get(ctx, "nonexistent.example.com")
@@ -899,7 +922,7 @@ func TestService_List(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	svc.containers["app1.example.com"] = &domain.Container{ID: "container-1"}
@@ -917,7 +940,7 @@ func TestService_HealthCheck(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	svc.containers["healthy.example.com"] = &domain.Container{ID: "healthy-container"}
@@ -937,7 +960,7 @@ func TestService_SyncContainers(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
@@ -977,7 +1000,7 @@ func TestService_Shutdown(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	svc.containers["app1.example.com"] = &domain.Container{ID: "container-1"}
@@ -997,7 +1020,7 @@ func TestService_Restart_NotFound(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	err := svc.Restart(ctx, "nonexistent.example.com", false)
@@ -1011,7 +1034,7 @@ func TestService_Restart_Success(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	svc.containers["test.example.com"] = &domain.Container{
@@ -1032,7 +1055,7 @@ func TestService_Restart_Error(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	svc.containers["test.example.com"] = &domain.Container{
@@ -1054,7 +1077,7 @@ func TestService_Restart_ReconcilesStaleContainerID(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	svc.containers["test.example.com"] = &domain.Container{
@@ -1088,7 +1111,7 @@ func TestService_Restart_ReconcilesStaleContainerID_NotFoundAfterSync(t *testing
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	svc.containers["test.example.com"] = &domain.Container{
@@ -1113,7 +1136,7 @@ func TestService_Restart_WithAttachments(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	svc.containers["test.example.com"] = &domain.Container{
@@ -1452,7 +1475,7 @@ func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 		DrainDelayConfigured:     true,
 	}
 
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 
 	// Use internal deploy context (simulating image push event)
 	ctx := domain.WithInternalDeploy(testContext())
@@ -1525,7 +1548,7 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	routes := []domain.Route{
@@ -1573,7 +1596,7 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	// Pre-populate with existing container
@@ -1617,7 +1640,7 @@ func TestService_AutoStart_HandlesDeployErrors(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	routes := []domain.Route{
@@ -1651,7 +1674,7 @@ func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 
 	// Mark context as internal deploy — this is what syncAndAutoStart should do
 	ctx := domain.WithInternalDeploy(testContext())
@@ -1703,7 +1726,7 @@ func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 		DrainDelayConfigured: true,
 		StabilizationDelay:   time.Millisecond,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -1795,7 +1818,7 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	// NO tracked container - service is empty for this domain
@@ -1871,7 +1894,7 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -1942,7 +1965,7 @@ func TestService_Deploy_TrackedTempContainerUsesAlternateTempName(t *testing.T) 
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -2053,7 +2076,7 @@ func TestService_StripRegistryPrefix(t *testing.T) {
 			config := Config{
 				RegistryDomain: tt.registryDomain,
 			}
-			svc := NewService(runtime, envLoader, eventBus, nil, config)
+			svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 
 			result := svc.stripRegistryPrefix(tt.image)
 			assert.Equal(t, tt.expected, result)
@@ -2130,7 +2153,7 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -2242,7 +2265,7 @@ func TestService_Deploy_ContextCancellation(t *testing.T) {
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 
 	route := domain.Route{
 		Domain: "test.example.com",
@@ -2268,7 +2291,7 @@ func TestService_Deploy_CacheInvalidationBeforeOldContainerStop(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -2347,7 +2370,7 @@ func TestService_Deploy_NilCacheInvalidator(t *testing.T) {
 
 	config := testMinDelayConfig()
 	// Intentionally NOT setting cache invalidator
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	// Pre-populate with existing container
@@ -2398,7 +2421,7 @@ func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 	expectedEnvHash := hashEnvironment([]string{})
 
@@ -2457,7 +2480,7 @@ func TestService_Deploy_SkipsRedundantDeploy_WhenTrackedImageIDMissing(t *testin
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 	expectedEnvHash := hashEnvironment([]string{})
 
@@ -2514,7 +2537,7 @@ func TestService_Deploy_DoesNotSkipWhenImageIDDiffers(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -2570,7 +2593,7 @@ func TestSyncContainersRebuildsAttachmentMap(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{})
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
 	// ListContainers returns one main container and one attachment container
@@ -2614,7 +2637,7 @@ func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 	expectedEnvHash := hashEnvironment([]string{})
 
@@ -2676,7 +2699,7 @@ func TestService_Deploy_DoesNotSkip_WhenEnvHashDiffers(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 	expectedEnvHash := hashEnvironment([]string{})
 
@@ -2733,7 +2756,7 @@ func TestService_Deploy_DoesNotSkip_WhenEnvHashMissing(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 	expectedEnvHash := hashEnvironment([]string{})
 
@@ -2787,7 +2810,7 @@ func TestService_attachmentEnvDrifted_ReturnsFalseWhenHashMatches(t *testing.T) 
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig())
+	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig(), nil)
 	ctx := testContext()
 	imageRef := svc.buildImageRef("postgres:16")
 	envVars := []string{"POSTGRES_PASSWORD=secret"}
@@ -2809,7 +2832,7 @@ func TestService_attachmentEnvDrifted_ReturnsTrueWhenHashDiffers(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig())
+	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig(), nil)
 	ctx := testContext()
 	imageRef := svc.buildImageRef("postgres:16")
 	envVars := []string{"POSTGRES_PASSWORD=secret"}
@@ -2830,7 +2853,7 @@ func TestService_attachmentEnvDrifted_ReturnsTrueWhenHashMissing(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig())
+	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig(), nil)
 	ctx := testContext()
 	imageRef := svc.buildImageRef("postgres:16")
 	envVars := []string{"POSTGRES_PASSWORD=secret"}
@@ -2858,7 +2881,7 @@ func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := testMinDelayConfig()
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	// The canonical container is running and has the managed label — it will be
@@ -2959,7 +2982,7 @@ func TestService_Deploy_RollbackOnPostSwitchCrash(t *testing.T) {
 		DrainDelayConfigured: true,
 		StabilizationDelay:   time.Millisecond,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -3052,7 +3075,7 @@ func TestService_Deploy_StabilizationSuccess(t *testing.T) {
 		DrainDelayConfigured: true,
 		StabilizationDelay:   time.Millisecond,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -3138,7 +3161,7 @@ func TestService_Deploy_ZeroDowntime_OldNeverStoppedBeforeNewReady(t *testing.T)
 		DrainDelayConfigured: true,
 		StabilizationDelay:   time.Millisecond,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
@@ -3231,7 +3254,7 @@ func TestService_Deploy_ZeroDowntime_ReadinessFailure_OldUntouched(t *testing.T)
 		DrainDelayConfigured: true,
 		StabilizationDelay:   time.Millisecond,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	// Pre-populate with existing tracked container
@@ -3312,7 +3335,7 @@ func TestService_Deploy_ZeroDowntime_NoExisting_FirstDeploy(t *testing.T) {
 		DrainDelayConfigured: true,
 		StabilizationDelay:   time.Millisecond,
 	}
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	// NO existing container — this is a first deploy
@@ -3389,7 +3412,7 @@ func TestService_Deploy_PropagatesImageLabelsToContainerConfig(t *testing.T) {
 		DrainDelayConfigured: true,
 	}
 
-	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
 	route := domain.Route{

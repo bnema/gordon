@@ -12,7 +12,7 @@ import (
 
 func TestService_ListRoutesWithDetails(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"})
+	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"}, nil)
 	ctx := testContext()
 
 	svc.containers["app.example.com"] = &domain.Container{
@@ -80,7 +80,7 @@ func TestService_ListRoutesWithDetails(t *testing.T) {
 
 func TestService_ListRoutesWithDetails_Empty(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"})
+	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"}, nil)
 	ctx := testContext()
 
 	// getAllAttachments is called even with empty containers
@@ -93,7 +93,7 @@ func TestService_ListRoutesWithDetails_Empty(t *testing.T) {
 
 func TestService_ListRoutesWithDetails_NetworkError(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"})
+	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"}, nil)
 	ctx := testContext()
 
 	svc.containers["app.example.com"] = &domain.Container{
@@ -113,7 +113,7 @@ func TestService_ListRoutesWithDetails_NetworkError(t *testing.T) {
 
 func TestService_ListAttachments(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	svc := NewService(runtime, nil, nil, nil, Config{})
+	svc := NewService(runtime, nil, nil, nil, Config{}, nil)
 	ctx := testContext()
 
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
@@ -153,7 +153,7 @@ func TestService_ListAttachments(t *testing.T) {
 
 func TestService_ListNetworks(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"})
+	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"}, nil)
 	ctx := testContext()
 
 	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{
