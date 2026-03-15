@@ -5,6 +5,7 @@
 package mocks
 
 import (
+	"github.com/bnema/gordon/internal/boundaries/out"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -33,6 +34,50 @@ type MockAttachmentConfigProvider_Expecter struct {
 
 func (_m *MockAttachmentConfigProvider) EXPECT() *MockAttachmentConfigProvider_Expecter {
 	return &MockAttachmentConfigProvider_Expecter{mock: &_m.Mock}
+}
+
+// GetAttachmentConfig provides a mock function for the type MockAttachmentConfigProvider
+func (_mock *MockAttachmentConfigProvider) GetAttachmentConfig() out.AttachmentConfigSnapshot {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAttachmentConfig")
+	}
+
+	var r0 out.AttachmentConfigSnapshot
+	if returnFunc, ok := ret.Get(0).(func() out.AttachmentConfigSnapshot); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(out.AttachmentConfigSnapshot)
+	}
+	return r0
+}
+
+// MockAttachmentConfigProvider_GetAttachmentConfig_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAttachmentConfig'
+type MockAttachmentConfigProvider_GetAttachmentConfig_Call struct {
+	*mock.Call
+}
+
+// GetAttachmentConfig is a helper method to define mock.On call
+func (_e *MockAttachmentConfigProvider_Expecter) GetAttachmentConfig() *MockAttachmentConfigProvider_GetAttachmentConfig_Call {
+	return &MockAttachmentConfigProvider_GetAttachmentConfig_Call{Call: _e.mock.On("GetAttachmentConfig")}
+}
+
+func (_c *MockAttachmentConfigProvider_GetAttachmentConfig_Call) Run(run func()) *MockAttachmentConfigProvider_GetAttachmentConfig_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockAttachmentConfigProvider_GetAttachmentConfig_Call) Return(attachmentConfigSnapshot out.AttachmentConfigSnapshot) *MockAttachmentConfigProvider_GetAttachmentConfig_Call {
+	_c.Call.Return(attachmentConfigSnapshot)
+	return _c
+}
+
+func (_c *MockAttachmentConfigProvider_GetAttachmentConfig_Call) RunAndReturn(run func() out.AttachmentConfigSnapshot) *MockAttachmentConfigProvider_GetAttachmentConfig_Call {
+	_c.Call.Return(run)
+	return _c
 }
 
 // GetAttachments provides a mock function for the type MockAttachmentConfigProvider
