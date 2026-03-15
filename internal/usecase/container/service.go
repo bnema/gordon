@@ -790,6 +790,44 @@ func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
 	}
 }
 
+// restartContainerWithRecovery restarts a container, reconciling stale state if needed.
+// It returns the (possibly refreshed) container and updated attachment IDs.
+func (s *Service) restartContainerWithRecovery(ctx context.Context, domainName string, container *domain.Container, attachmentIDs []string) (*domain.Container, []string, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	if err := s.runtime.RestartContainer(ctx, container.ID); err != nil {
+		if !isContainerNotFoundError(err) {
+			return nil, nil, log.WrapErr(err, "failed to restart container")
+		}
+
+		// In-memory container ID can become stale after external runtime changes.
+		// Re-sync and retry once with the latest tracked container.
+		log.Warn().
+			Err(err).
+			Str(zerowrap.FieldEntityID, container.ID).
+			Msg("tracked container missing during restart, attempting state reconciliation")
+
+		if syncErr := s.SyncContainers(ctx); syncErr != nil {
+			log.Warn().Err(syncErr).Msg("failed to sync container state during restart recovery")
+		}
+
+		s.mu.RLock()
+		refreshed, refreshedExists := s.containers[domainName]
+		attachmentIDs = append([]string{}, s.attachments[domainName]...)
+		s.mu.RUnlock()
+
+		if !refreshedExists || refreshed == nil {
+			return nil, nil, domain.ErrContainerNotFound
+		}
+		if err := s.runtime.RestartContainer(ctx, refreshed.ID); err != nil {
+			return nil, nil, log.WrapErr(err, "failed to restart container after state reconciliation")
+		}
+		return refreshed, attachmentIDs, nil
+	}
+
+	return container, attachmentIDs, nil
+}
+
 // Restart restarts a running container for the given domain.
 func (s *Service) Restart(ctx context.Context, domainName string, withAttachments bool) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -826,35 +864,10 @@ func (s *Service) Restart(ctx context.Context, domainName string, withAttachment
 		}
 	}
 
-	// Restart the main container
-	if err := s.runtime.RestartContainer(ctx, container.ID); err != nil {
-		if !isContainerNotFoundError(err) {
-			return log.WrapErr(err, "failed to restart container")
-		}
-
-		// In-memory container ID can become stale after external runtime changes.
-		// Re-sync and retry once with the latest tracked container.
-		log.Warn().
-			Err(err).
-			Str(zerowrap.FieldEntityID, container.ID).
-			Msg("tracked container missing during restart, attempting state reconciliation")
-
-		if syncErr := s.SyncContainers(ctx); syncErr != nil {
-			log.Warn().Err(syncErr).Msg("failed to sync container state during restart recovery")
-		}
-
-		s.mu.RLock()
-		refreshed, refreshedExists := s.containers[domainName]
-		attachmentIDs = append([]string{}, s.attachments[domainName]...)
-		s.mu.RUnlock()
-
-		if !refreshedExists || refreshed == nil {
-			return domain.ErrContainerNotFound
-		}
-		if err := s.runtime.RestartContainer(ctx, refreshed.ID); err != nil {
-			return log.WrapErr(err, "failed to restart container after state reconciliation")
-		}
-		container = refreshed
+	// Restart the main container (with stale-state recovery)
+	container, attachmentIDs, err := s.restartContainerWithRecovery(ctx, domainName, container, attachmentIDs)
+	if err != nil {
+		return err
 	}
 	log.Info().Str(zerowrap.FieldEntityID, container.ID).Msg("container restarted")
 
