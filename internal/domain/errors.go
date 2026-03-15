@@ -71,4 +71,5 @@ var (
 	ErrAttachmentExists      = errors.New("attachment already exists")
 	ErrAttachmentImageEmpty  = errors.New("attachment image cannot be empty")
 	ErrAttachmentTargetEmpty = errors.New("attachment target (domain or group) cannot be empty")
+	ErrAttachmentNotDeployed = errors.New("configured attachment is not deployed; run gordon deploy to create it")
 )
