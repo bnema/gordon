@@ -13,6 +13,7 @@ type ProxyTarget struct {
 	Port         int
 	ContainerID  string
 	Scheme       string // "http" or "https"
+	Protocol     string // "" (default HTTP/1.1) or "h2c" (cleartext HTTP/2)
 	OriginalHost string // Original hostname before DNS resolution (for Host header)
 }
 

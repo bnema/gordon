@@ -18,6 +18,10 @@ const (
 	// LabelProxyPort specifies the container port to proxy HTTP traffic to.
 	LabelProxyPort = "gordon.proxy.port"
 
+	// LabelProxyProtocol specifies the backend protocol the container speaks.
+	// Supported values: "h2c" (cleartext HTTP/2). When unset, HTTP/1.1 is assumed.
+	LabelProxyProtocol = "gordon.proxy.protocol"
+
 	// Auto-route image labels (for automatic route discovery)
 	// LabelDomains specifies multiple route domains (comma-separated).
 	LabelDomains = "gordon.domains"
