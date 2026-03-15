@@ -1239,7 +1239,7 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		log.Warn().Msg("registry auth disabled; container image pulls will use unauthenticated mode")
 	}
 
-	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig), nil
+	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig, svc.configSvc), nil
 }
 
 func createBackupService(cfg Config, svc *services, log zerowrap.Logger) (*filesystem.BackupStorage, *backup.Service, error) {

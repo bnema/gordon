@@ -76,6 +76,7 @@ type Service struct {
 	cacheInvalidator out.ProxyCacheInvalidator
 	drainWaiter      out.ProxyDrainWaiter
 	config           Config
+	configProvider   AttachmentConfigProvider // live config reads for attachments/networks (may be nil)
 	metrics          *telemetry.Metrics
 	containers       map[string]*domain.Container
 	attachments      map[string][]string // ownerDomain → []containerIDs
@@ -136,15 +137,17 @@ func NewService(
 	eventBus out.EventPublisher,
 	logWriter out.ContainerLogWriter,
 	config Config,
+	configProvider AttachmentConfigProvider,
 ) *Service {
 	return &Service{
-		runtime:     runtime,
-		envLoader:   envLoader,
-		eventBus:    eventBus,
-		logWriter:   logWriter,
-		config:      config,
-		containers:  make(map[string]*domain.Container),
-		attachments: make(map[string][]string),
+		runtime:        runtime,
+		envLoader:      envLoader,
+		eventBus:       eventBus,
+		logWriter:      logWriter,
+		config:         config,
+		configProvider: configProvider,
+		containers:     make(map[string]*domain.Container),
+		attachments:    make(map[string][]string),
 	}
 }
 
