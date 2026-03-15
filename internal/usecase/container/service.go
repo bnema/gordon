@@ -76,6 +76,7 @@ type Service struct {
 	cacheInvalidator out.ProxyCacheInvalidator
 	drainWaiter      out.ProxyDrainWaiter
 	config           Config
+	configProvider   AttachmentConfigProvider // live config reads for attachments/networks (may be nil)
 	metrics          *telemetry.Metrics
 	containers       map[string]*domain.Container
 	attachments      map[string][]string // ownerDomain → []containerIDs
@@ -136,15 +137,17 @@ func NewService(
 	eventBus out.EventPublisher,
 	logWriter out.ContainerLogWriter,
 	config Config,
+	configProvider AttachmentConfigProvider,
 ) *Service {
 	return &Service{
-		runtime:     runtime,
-		envLoader:   envLoader,
-		eventBus:    eventBus,
-		logWriter:   logWriter,
-		config:      config,
-		containers:  make(map[string]*domain.Container),
-		attachments: make(map[string][]string),
+		runtime:        runtime,
+		envLoader:      envLoader,
+		eventBus:       eventBus,
+		logWriter:      logWriter,
+		config:         config,
+		configProvider: configProvider,
+		containers:     make(map[string]*domain.Container),
+		attachments:    make(map[string][]string),
 	}
 }
 
@@ -787,6 +790,44 @@ func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
 	}
 }
 
+// restartContainerWithRecovery restarts a container, reconciling stale state if needed.
+// It returns the (possibly refreshed) container and updated attachment IDs.
+func (s *Service) restartContainerWithRecovery(ctx context.Context, domainName string, container *domain.Container, attachmentIDs []string) (*domain.Container, []string, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	if err := s.runtime.RestartContainer(ctx, container.ID); err != nil {
+		if !isContainerNotFoundError(err) {
+			return nil, nil, log.WrapErr(err, "failed to restart container")
+		}
+
+		// In-memory container ID can become stale after external runtime changes.
+		// Re-sync and retry once with the latest tracked container.
+		log.Warn().
+			Err(err).
+			Str(zerowrap.FieldEntityID, container.ID).
+			Msg("tracked container missing during restart, attempting state reconciliation")
+
+		if syncErr := s.SyncContainers(ctx); syncErr != nil {
+			log.Warn().Err(syncErr).Msg("failed to sync container state during restart recovery")
+		}
+
+		s.mu.RLock()
+		refreshed, refreshedExists := s.containers[domainName]
+		attachmentIDs = append([]string{}, s.attachments[domainName]...)
+		s.mu.RUnlock()
+
+		if !refreshedExists || refreshed == nil {
+			return nil, nil, domain.ErrContainerNotFound
+		}
+		if err := s.runtime.RestartContainer(ctx, refreshed.ID); err != nil {
+			return nil, nil, log.WrapErr(err, "failed to restart container after state reconciliation")
+		}
+		return refreshed, attachmentIDs, nil
+	}
+
+	return container, attachmentIDs, nil
+}
+
 // Restart restarts a running container for the given domain.
 func (s *Service) Restart(ctx context.Context, domainName string, withAttachments bool) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -810,35 +851,38 @@ func (s *Service) Restart(ctx context.Context, domainName string, withAttachment
 		return domain.ErrContainerNotFound
 	}
 
-	// Restart the main container
-	if err := s.runtime.RestartContainer(ctx, container.ID); err != nil {
-		if !isContainerNotFoundError(err) {
-			return log.WrapErr(err, "failed to restart container")
-		}
-
-		// In-memory container ID can become stale after external runtime changes.
-		// Re-sync and retry once with the latest tracked container.
-		log.Warn().
-			Err(err).
-			Str(zerowrap.FieldEntityID, container.ID).
-			Msg("tracked container missing during restart, attempting state reconciliation")
-
+	// When attachments are requested, sync runtime state first to get accurate
+	// attachment tracking, then check if configured attachments are deployed.
+	// If fewer attachment containers are tracked than configured, fail early with
+	// guidance rather than restarting the main container into a broken state
+	// (e.g., missing database hostname).
+	if withAttachments {
 		if syncErr := s.SyncContainers(ctx); syncErr != nil {
-			log.Warn().Err(syncErr).Msg("failed to sync container state during restart recovery")
+			log.Warn().Err(syncErr).Msg("failed to sync container state before attachment check")
 		}
 
+		// Re-read attachment IDs after sync
 		s.mu.RLock()
-		refreshed, refreshedExists := s.containers[domainName]
-		attachmentIDs = append([]string{}, s.attachments[domainName]...)
+		if freshAttachments := s.attachments[domainName]; len(freshAttachments) > 0 {
+			attachmentIDs = make([]string, len(freshAttachments))
+			copy(attachmentIDs, freshAttachments)
+		} else {
+			attachmentIDs = nil
+		}
 		s.mu.RUnlock()
 
-		if !refreshedExists || refreshed == nil {
-			return domain.ErrContainerNotFound
+		configuredAttachments := s.resolveAttachmentsForDomain(domainName)
+		if len(configuredAttachments) > 0 && len(attachmentIDs) < len(configuredAttachments) {
+			missing := len(configuredAttachments) - len(attachmentIDs)
+			return fmt.Errorf("%w: domain %q has %d configured attachment(s) but only %d deployed (%d missing)",
+				domain.ErrAttachmentNotDeployed, domainName, len(configuredAttachments), len(attachmentIDs), missing)
 		}
-		if err := s.runtime.RestartContainer(ctx, refreshed.ID); err != nil {
-			return log.WrapErr(err, "failed to restart container after state reconciliation")
-		}
-		container = refreshed
+	}
+
+	// Restart the main container (with stale-state recovery)
+	container, attachmentIDs, err := s.restartContainerWithRecovery(ctx, domainName, container, attachmentIDs)
+	if err != nil {
+		return err
 	}
 	log.Info().Str(zerowrap.FieldEntityID, container.ID).Msg("container restarted")
 
@@ -1773,15 +1817,27 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 }
 
 func (s *Service) getNetworkForApp(domainName string) string {
-	s.mu.RLock()
-	cfg := s.config
-	s.mu.RUnlock()
+	var networkIsolation bool
+	var networkGroups map[string][]string
 
-	if !cfg.NetworkIsolation {
+	if s.configProvider != nil {
+		snap := s.configProvider.GetAttachmentConfig()
+		networkGroups = snap.NetworkGroups
+		s.mu.RLock()
+		networkIsolation = s.config.NetworkIsolation
+		s.mu.RUnlock()
+	} else {
+		s.mu.RLock()
+		networkIsolation = s.config.NetworkIsolation
+		networkGroups = s.config.NetworkGroups
+		s.mu.RUnlock()
+	}
+
+	if !networkIsolation {
 		return "bridge"
 	}
 
-	for groupName, domains := range cfg.NetworkGroups {
+	for groupName, domains := range networkGroups {
 		if slices.Contains(domains, domainName) {
 			return s.generateNetworkName(groupName)
 		}
@@ -1949,15 +2005,25 @@ func (s *Service) deployAttachments(ctx context.Context, domainName, networkName
 // 1. Direct domain attachments (attachments[domain])
 // 2. Network group attachments (attachments[group] where domain is in network_groups[group])
 func (s *Service) resolveAttachmentsForDomain(domainName string) []string {
-	s.mu.RLock()
-	cfg := s.config
-	s.mu.RUnlock()
+	var attachments map[string][]string
+	var networkGroups map[string][]string
+
+	if s.configProvider != nil {
+		snap := s.configProvider.GetAttachmentConfig()
+		attachments = snap.Attachments
+		networkGroups = snap.NetworkGroups
+	} else {
+		s.mu.RLock()
+		attachments = s.config.Attachments
+		networkGroups = s.config.NetworkGroups
+		s.mu.RUnlock()
+	}
 
 	seen := make(map[string]bool)
 	var result []string
 
 	// First, add domain-specific attachments
-	if domainAttachments, ok := cfg.Attachments[domainName]; ok {
+	if domainAttachments, ok := attachments[domainName]; ok {
 		for _, img := range domainAttachments {
 			if !seen[img] {
 				seen[img] = true
@@ -1967,9 +2033,9 @@ func (s *Service) resolveAttachmentsForDomain(domainName string) []string {
 	}
 
 	// Then, find which network group this domain belongs to and add group attachments
-	for groupName, domains := range cfg.NetworkGroups {
+	for groupName, domains := range networkGroups {
 		if slices.Contains(domains, domainName) {
-			if groupAttachments, ok := cfg.Attachments[groupName]; ok {
+			if groupAttachments, ok := attachments[groupName]; ok {
 				for _, img := range groupAttachments {
 					if !seen[img] {
 						seen[img] = true
