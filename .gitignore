@@ -2,3 +2,4 @@ gordon
 .env
 dist/
 docs/plans/
+.worktrees/

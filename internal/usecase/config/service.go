@@ -860,6 +860,28 @@ func (s *Service) GetNetworkGroups() map[string][]string {
 	return result
 }
 
+// GetAttachmentConfig returns a consistent snapshot of attachments and network
+// groups under a single lock, preventing cross-field races during config reloads.
+func (s *Service) GetAttachmentConfig() out.AttachmentConfigSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	attachments := make(map[string][]string, len(s.config.Attachments))
+	for k, v := range s.config.Attachments {
+		attachments[k] = append([]string{}, v...)
+	}
+
+	networkGroups := make(map[string][]string, len(s.config.NetworkGroups))
+	for k, v := range s.config.NetworkGroups {
+		networkGroups[k] = append([]string{}, v...)
+	}
+
+	return out.AttachmentConfigSnapshot{
+		Attachments:   attachments,
+		NetworkGroups: networkGroups,
+	}
+}
+
 // GetAttachments returns attachment configuration.
 // Deprecated: Use GetAllAttachments instead.
 func (s *Service) GetAttachments() map[string][]string {

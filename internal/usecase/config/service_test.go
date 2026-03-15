@@ -487,6 +487,36 @@ func TestService_GetAttachments(t *testing.T) {
 	assert.ElementsMatch(t, []string{"redis:latest", "postgres:18"}, attachments["app.example.com"])
 }
 
+func TestService_GetAttachmentConfig(t *testing.T) {
+	v := viper.New()
+	v.Set("attachments", map[string]interface{}{
+		"app.example.com": []interface{}{"redis:latest", "postgres:18"},
+	})
+	v.Set("network_groups", map[string]interface{}{
+		"shared": []interface{}{"app.example.com", "api.example.com"},
+	})
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	_ = svc.Load(ctx)
+
+	snapshot := svc.GetAttachmentConfig()
+
+	assert.Len(t, snapshot.Attachments, 1)
+	assert.ElementsMatch(t, []string{"redis:latest", "postgres:18"}, snapshot.Attachments["app.example.com"])
+	assert.Len(t, snapshot.NetworkGroups, 1)
+	assert.ElementsMatch(t, []string{"app.example.com", "api.example.com"}, snapshot.NetworkGroups["shared"])
+
+	snapshot.Attachments["app.example.com"][0] = "mutated"
+	snapshot.NetworkGroups["shared"][0] = "mutated.example.com"
+
+	freshSnapshot := svc.GetAttachmentConfig()
+	assert.ElementsMatch(t, []string{"redis:latest", "postgres:18"}, freshSnapshot.Attachments["app.example.com"])
+	assert.ElementsMatch(t, []string{"app.example.com", "api.example.com"}, freshSnapshot.NetworkGroups["shared"])
+}
+
 func TestService_GetAllAttachments(t *testing.T) {
 	t.Run("returns all attachments", func(t *testing.T) {
 		v := viper.New()
