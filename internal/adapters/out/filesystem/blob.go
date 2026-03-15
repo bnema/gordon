@@ -313,7 +313,13 @@ func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
 
 	mu := s.getUploadLock(uuid)
 	mu.Lock()
-	defer mu.Unlock()
+	var finalized bool
+	defer func() {
+		mu.Unlock()
+		if finalized {
+			s.cleanupUploadLock(uuid)
+		}
+	}()
 
 	blobPath, err := s.getBlobPath(digest)
 	if err != nil {
@@ -334,7 +340,7 @@ func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
 	if err := os.Rename(uploadPath, blobPath); err != nil {
 		return fmt.Errorf("failed to move upload to blob location: %w", err)
 	}
-	s.cleanupUploadLock(uuid)
+	finalized = true
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
@@ -355,7 +361,13 @@ func (s *BlobStorage) CancelBlobUpload(uuid string) error {
 
 	mu := s.getUploadLock(uuid)
 	mu.Lock()
-	defer mu.Unlock()
+	var finalized bool
+	defer func() {
+		mu.Unlock()
+		if finalized {
+			s.cleanupUploadLock(uuid)
+		}
+	}()
 
 	if err := os.Remove(uploadPath); err != nil {
 		if os.IsNotExist(err) {
@@ -363,7 +375,7 @@ func (s *BlobStorage) CancelBlobUpload(uuid string) error {
 		}
 		return fmt.Errorf("failed to cancel upload: %w", err)
 	}
-	s.cleanupUploadLock(uuid)
+	finalized = true
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").

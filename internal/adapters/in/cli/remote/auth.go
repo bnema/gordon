@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 )
 
 // PasswordRequest represents the request body for POST /auth/password.
@@ -87,8 +88,9 @@ func UpdateRemoteToken(name, token string) error {
 				_ = SaveRemotes("", config)
 			}
 			return nil
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: failed to store token in pass: %v. Falling back to plaintext config.\n", err)
 		}
-		// pass write failed, fall through to TOML
 	} else {
 		warnPassUnavailable()
 	}

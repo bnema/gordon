@@ -969,7 +969,7 @@ func (c *Client) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) 
 }
 
 func (c *Client) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
-	resp, err := c.request(ctx, http.MethodDelete, "/autoroute/allowed-domains", dto.AutoRouteAllowedDomainRequest{Pattern: pattern})
+	resp, err := c.request(ctx, http.MethodDelete, "/autoroute/allowed-domains/"+url.PathEscape(pattern), nil)
 	if err != nil {
 		return err
 	}

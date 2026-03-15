@@ -68,7 +68,7 @@ func passReadToken(name string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("pass show failed: %w", err)
+		return "", fmt.Errorf("pass show failed: %w: %s", err, stderr.String())
 	}
 
 	return strings.TrimSpace(stdout.String()), nil

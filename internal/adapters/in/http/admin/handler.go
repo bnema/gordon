@@ -200,14 +200,13 @@ type routeHandler func(w http.ResponseWriter, r *http.Request, path string)
 func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	// Exact match routes
 	exactRoutes := map[string]routeHandler{
-		"/networks":                  func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
-		"/status":                    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
-		"/health":                    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
-		"/bootstrap":                 func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
-		"/reload":                    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
-		"/config":                    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
-		"/auth/verify":               func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
-		"/autoroute/allowed-domains": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAutoRouteAllowedDomains(w, r) },
+		"/networks":    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
+		"/status":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
+		"/health":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
+		"/bootstrap":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
+		"/reload":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
+		"/config":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
+		"/auth/verify": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true
@@ -230,6 +229,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		{"/tags", h.handleTags},
 		{"/images", h.handleImages},
 		{"/logs", h.handleLogs},
+		{"/autoroute/allowed-domains", h.handleAutoRouteAllowedDomains},
 	}
 	for _, route := range prefixRoutes {
 		if path == route.prefix || strings.HasPrefix(path, route.prefix+"/") {
@@ -1710,14 +1710,14 @@ func (h *Handler) handleAttachmentsConfigDelete(w http.ResponseWriter, r *http.R
 	h.sendJSON(w, http.StatusOK, dto.AttachmentStatusResponse{Status: "removed"})
 }
 
-func (h *Handler) handleAutoRouteAllowedDomains(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleAutoRouteAllowedDomains(w http.ResponseWriter, r *http.Request, path string) {
 	switch r.Method {
 	case http.MethodGet:
 		h.handleAutoRouteAllowedDomainsGet(w, r)
 	case http.MethodPost:
 		h.handleAutoRouteAllowedDomainsPost(w, r)
 	case http.MethodDelete:
-		h.handleAutoRouteAllowedDomainsDelete(w, r)
+		h.handleAutoRouteAllowedDomainsDelete(w, r, path)
 	default:
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -1764,7 +1764,7 @@ func (h *Handler) handleAutoRouteAllowedDomainsPost(w http.ResponseWriter, r *ht
 	h.sendJSON(w, http.StatusCreated, dto.AttachmentStatusResponse{Status: "added"})
 }
 
-func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *http.Request, path string) {
 	ctx := r.Context()
 	log := zerowrap.FromCtx(ctx)
 	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
@@ -1772,16 +1772,14 @@ func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-	var req dto.AutoRouteAllowedDomainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Warn().Err(err).Msg("invalid auto-route allowlist JSON")
-		h.sendError(w, http.StatusBadRequest, "invalid JSON")
+	pattern := strings.TrimPrefix(path, "/")
+	if pattern == "" {
+		h.sendError(w, http.StatusBadRequest, "missing domain pattern")
 		return
 	}
 
-	if err := h.configSvc.RemoveAutoRouteAllowedDomain(ctx, req.Pattern); err != nil {
-		log.Error().Err(err).Str("pattern", req.Pattern).Msg("failed to remove auto-route allowed domain")
+	if err := h.configSvc.RemoveAutoRouteAllowedDomain(ctx, pattern); err != nil {
+		log.Error().Err(err).Str("pattern", pattern).Msg("failed to remove auto-route allowed domain")
 		h.sendError(w, http.StatusInternalServerError, "failed to remove auto-route allowed domain")
 		return
 	}

@@ -1071,18 +1071,14 @@ func (s *Service) AddAutoRouteAllowedDomain(ctx context.Context, pattern string)
 			return nil
 		}
 	}
+	snapshot := make([]string, len(s.config.AutoRouteAllowedDomains))
+	copy(snapshot, s.config.AutoRouteAllowedDomains)
 	s.config.AutoRouteAllowedDomains = append(s.config.AutoRouteAllowedDomains, pattern)
 	s.mu.Unlock()
 
 	if err := s.Save(ctx); err != nil {
 		s.mu.Lock()
-		filtered := s.config.AutoRouteAllowedDomains[:0]
-		for _, existing := range s.config.AutoRouteAllowedDomains {
-			if existing != pattern {
-				filtered = append(filtered, existing)
-			}
-		}
-		s.config.AutoRouteAllowedDomains = filtered
+		s.config.AutoRouteAllowedDomains = snapshot
 		s.mu.Unlock()
 		return err
 	}
