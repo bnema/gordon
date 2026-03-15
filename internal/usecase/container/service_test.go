@@ -27,8 +27,13 @@ type fakeConfigProvider struct {
 	networkGroups map[string][]string
 }
 
-func (f *fakeConfigProvider) GetAttachments() map[string][]string   { return f.attachments }
-func (f *fakeConfigProvider) GetNetworkGroups() map[string][]string { return f.networkGroups }
+func (f *fakeConfigProvider) GetAttachments() map[string][]string {
+	return deepCopyStringMap(f.attachments)
+}
+
+func (f *fakeConfigProvider) GetNetworkGroups() map[string][]string {
+	return deepCopyStringMap(f.networkGroups)
+}
 
 func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
