@@ -103,6 +103,58 @@ func TestService_NewService_WithConfigProvider(t *testing.T) {
 	assert.NotNil(t, svc)
 }
 
+func TestService_ResolveAttachments_UsesLiveConfigProvider(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	provider := &fakeConfigProvider{
+		attachments:   map[string][]string{"app.example.com": {"postgres:16"}},
+		networkGroups: map[string][]string{},
+	}
+
+	// Create service with EMPTY static config but a live provider
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{
+		NetworkIsolation: true,
+		NetworkPrefix:    "gordon",
+	}, provider)
+
+	// resolveAttachmentsForDomain should return the provider's data, not the empty snapshot
+	result := svc.resolveAttachmentsForDomain("app.example.com")
+	assert.Equal(t, []string{"postgres:16"}, result)
+
+	// Simulate adding a new attachment after construction
+	provider.attachments["app.example.com"] = append(provider.attachments["app.example.com"], "redis:7")
+	result = svc.resolveAttachmentsForDomain("app.example.com")
+	assert.Equal(t, []string{"postgres:16", "redis:7"}, result)
+}
+
+func TestService_ResolveAttachments_GroupBasedViaProvider(t *testing.T) {
+	provider := &fakeConfigProvider{
+		attachments: map[string][]string{
+			"shared-group": {"postgres:16"},
+		},
+		networkGroups: map[string][]string{
+			"shared-group": {"app1.example.com", "app2.example.com"},
+		},
+	}
+
+	svc := NewService(
+		mocks.NewMockContainerRuntime(t),
+		mocks.NewMockEnvLoader(t),
+		mocks.NewMockEventPublisher(t),
+		nil, Config{NetworkIsolation: true, NetworkPrefix: "gordon"}, provider,
+	)
+
+	// Domain in group should see group attachments
+	result := svc.resolveAttachmentsForDomain("app1.example.com")
+	assert.Equal(t, []string{"postgres:16"}, result)
+
+	// Domain not in any group should see nothing
+	result = svc.resolveAttachmentsForDomain("other.example.com")
+	assert.Empty(t, result)
+}
+
 func TestService_ManagedContainersMetric_GlobalSeriesOnDeployReplaceAndRemove(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)

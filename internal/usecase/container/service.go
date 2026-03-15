@@ -1776,15 +1776,26 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 }
 
 func (s *Service) getNetworkForApp(domainName string) string {
-	s.mu.RLock()
-	cfg := s.config
-	s.mu.RUnlock()
+	var networkIsolation bool
+	var networkGroups map[string][]string
 
-	if !cfg.NetworkIsolation {
+	if s.configProvider != nil {
+		networkGroups = s.configProvider.GetNetworkGroups()
+		s.mu.RLock()
+		networkIsolation = s.config.NetworkIsolation
+		s.mu.RUnlock()
+	} else {
+		s.mu.RLock()
+		networkIsolation = s.config.NetworkIsolation
+		networkGroups = s.config.NetworkGroups
+		s.mu.RUnlock()
+	}
+
+	if !networkIsolation {
 		return "bridge"
 	}
 
-	for groupName, domains := range cfg.NetworkGroups {
+	for groupName, domains := range networkGroups {
 		if slices.Contains(domains, domainName) {
 			return s.generateNetworkName(groupName)
 		}
@@ -1952,15 +1963,24 @@ func (s *Service) deployAttachments(ctx context.Context, domainName, networkName
 // 1. Direct domain attachments (attachments[domain])
 // 2. Network group attachments (attachments[group] where domain is in network_groups[group])
 func (s *Service) resolveAttachmentsForDomain(domainName string) []string {
-	s.mu.RLock()
-	cfg := s.config
-	s.mu.RUnlock()
+	var attachments map[string][]string
+	var networkGroups map[string][]string
+
+	if s.configProvider != nil {
+		attachments = s.configProvider.GetAttachments()
+		networkGroups = s.configProvider.GetNetworkGroups()
+	} else {
+		s.mu.RLock()
+		attachments = s.config.Attachments
+		networkGroups = s.config.NetworkGroups
+		s.mu.RUnlock()
+	}
 
 	seen := make(map[string]bool)
 	var result []string
 
 	// First, add domain-specific attachments
-	if domainAttachments, ok := cfg.Attachments[domainName]; ok {
+	if domainAttachments, ok := attachments[domainName]; ok {
 		for _, img := range domainAttachments {
 			if !seen[img] {
 				seen[img] = true
@@ -1970,9 +1990,9 @@ func (s *Service) resolveAttachmentsForDomain(domainName string) []string {
 	}
 
 	// Then, find which network group this domain belongs to and add group attachments
-	for groupName, domains := range cfg.NetworkGroups {
+	for groupName, domains := range networkGroups {
 		if slices.Contains(domains, domainName) {
-			if groupAttachments, ok := cfg.Attachments[groupName]; ok {
+			if groupAttachments, ok := attachments[groupName]; ok {
 				for _, img := range groupAttachments {
 					if !seen[img] {
 						seen[img] = true
