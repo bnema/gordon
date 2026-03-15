@@ -33,6 +33,8 @@ var (
 	retryBaseDelay   = 250 * time.Millisecond
 )
 
+const maxErrorBodySize int64 = 1024 // cap error response reads at 1 KB
+
 // ClientOption configures the Client.
 type ClientOption func(*Client)
 
@@ -188,7 +190,7 @@ func parseResponse(resp *http.Response, target any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
 		return parseErrorResponse(resp, body)
 	}
 
@@ -245,7 +247,7 @@ func (c *Client) requestWithRetry(ctx context.Context, method, path string, body
 				return resp, nil
 			}
 
-			respBody, _ := io.ReadAll(resp.Body)
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
 			_ = resp.Body.Close()
 			lastErr = parseErrorResponse(resp, respBody)
 			if attempt == retryMaxAttempts {
@@ -972,7 +974,7 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 	c.observeTokenRotation(resp)
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
 		resp.Body.Close()
 		return nil, fmt.Errorf("%s: %s", resp.Status, string(body))
 	}
