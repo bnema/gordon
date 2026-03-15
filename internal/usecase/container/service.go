@@ -241,10 +241,21 @@ func (s *Service) buildContainerConfig(in containerConfigInput) *domain.Containe
 		}
 	}
 
+	// Ensure the label-specified proxy port is included in exposed ports
+	// so Docker creates a host port binding for it.
+	ports := in.ExposedPorts
+	if portStr, ok := labels[domain.LabelProxyPort]; ok {
+		if port, err := strconv.Atoi(portStr); err == nil && port > 0 && port <= 65535 {
+			if !slices.Contains(ports, port) {
+				ports = append(ports, port)
+			}
+		}
+	}
+
 	return &domain.ContainerConfig{
 		Image:       in.ImageRef,
 		Name:        containerName,
-		Ports:       in.ExposedPorts,
+		Ports:       ports,
 		Env:         in.EnvVars,
 		Volumes:     in.Volumes,
 		NetworkMode: in.NetworkName,

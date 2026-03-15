@@ -203,7 +203,7 @@ When you push an image with Gordon labels:
 
 1. Gordon reads the `gordon.domains` label
 2. Creates routes for each domain automatically
-3. Uses `gordon.proxy.port` for the proxy target (or first EXPOSE port)
+3. Uses `gordon.proxy.port` for the proxy target, otherwise auto-detects an exposed port preferring common HTTP ports
 4. Configures health checks if `gordon.health` is set
 5. Extracts environment variables from `gordon.env-file` if specified
 
