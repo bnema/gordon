@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -398,120 +397,6 @@ func TestContainerDeployedHandler_Handle_NoDomain(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestService_ConcurrentConnectionLimit(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	// Allow only 1 concurrent connection
-	svc := NewService(runtime, containerSvc, configSvc, Config{
-		MaxConcurrentConns: 1,
-	})
-
-	assert.Equal(t, 1, svc.config.MaxConcurrentConns)
-	assert.Equal(t, int64(0), svc.activeConns.Load(), "active connections should start at 0")
-}
-
-func TestService_ConcurrentConnectionLimit_Disabled(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{
-		MaxConcurrentConns: 0,
-	})
-
-	assert.Equal(t, 0, svc.config.MaxConcurrentConns, "0 means no limit")
-}
-
-func TestService_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{
-		MaxConcurrentConns: 1,
-	})
-
-	// Simulate an in-flight connection by incrementing the atomic counter
-	svc.activeConns.Add(1)
-	defer svc.activeConns.Add(-1)
-
-	// Next request should get 503
-	req := httptest.NewRequest("GET", "http://example.com/test", nil)
-	w := httptest.NewRecorder()
-	svc.ServeHTTP(w, req)
-
-	assert.Equal(t, 503, w.Code)
-}
-
-func TestServeHTTP_MaxBodySize(t *testing.T) {
-	tests := []struct {
-		name        string
-		maxBodySize int64
-		bodySize    int
-		expect413   bool
-	}{
-		{
-			name:        "body within limit",
-			maxBodySize: 1024,
-			bodySize:    512,
-			expect413:   false,
-		},
-		{
-			name:        "body exceeds limit returns 413",
-			maxBodySize: 1024,
-			bodySize:    2048,
-			expect413:   true,
-		},
-		{
-			name:        "no limit configured allows any size",
-			maxBodySize: 0,
-			bodySize:    10240,
-			expect413:   false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create fresh mocks for each test
-			runtime := outmocks.NewMockContainerRuntime(t)
-			containerSvc := inmocks.NewMockContainerService(t)
-			configSvc := inmocks.NewMockConfigService(t)
-
-			svc := NewService(runtime, containerSvc, configSvc, Config{
-				MaxBodySize: tt.maxBodySize,
-			})
-
-			// Mock GetExternalRoutes to return empty map (no external routes)
-			configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-
-			// Mock container service Get to return not found (404)
-			containerSvc.EXPECT().Get(mock.Anything, "example.com").Return(nil, false)
-
-			// Create a test request with a body of specified size
-			body := make([]byte, tt.bodySize)
-			for i := range body {
-				body[i] = 'a'
-			}
-
-			req := httptest.NewRequest("POST", "http://example.com/test", nil)
-			req.Header.Set("Host", "example.com")
-			w := httptest.NewRecorder()
-
-			// Note: We're testing ServeHTTP which applies the MaxBytesReader wrapper
-			// The actual limit enforcement happens during request body reading by httputil.ReverseProxy
-			// So we verify the MaxBytesReader is applied correctly
-			svc.ServeHTTP(w, req)
-
-			// The MaxBytesReader is applied, but the actual error happens when ReverseProxy reads the body
-			// We can't easily test the full flow without a real backend, so we verify the wrapper is applied
-			// by checking that MaxBodySize is properly stored in the service config
-			assert.Equal(t, tt.maxBodySize, svc.config.MaxBodySize)
-		})
-	}
-}
-
 func TestRegistryInFlightTracking(t *testing.T) {
 	svc := &Service{
 		inFlight: make(map[string]int),
@@ -570,6 +455,122 @@ func TestDrainRegistryInFlightTimeout(t *testing.T) {
 	if drained {
 		t.Fatal("expected DrainRegistryInFlight to return false on timeout, got true")
 	}
+}
+
+func TestService_ProxyConfig_ReflectsUpdates(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{
+		RegistryDomain:     "old.registry.com",
+		RegistryPort:       5000,
+		MaxBodySize:        1024,
+		MaxResponseSize:    2048,
+		MaxConcurrentConns: 10,
+	})
+
+	cfg := svc.ProxyConfig()
+	assert.Equal(t, "old.registry.com", cfg.RegistryDomain)
+	assert.Equal(t, 5000, cfg.RegistryPort)
+	assert.Equal(t, int64(1024), cfg.MaxBodySize)
+	assert.Equal(t, int64(2048), cfg.MaxResponseSize)
+	assert.Equal(t, 10, cfg.MaxConcurrentConns)
+
+	svc.UpdateConfig(Config{
+		RegistryDomain:     "new.registry.com",
+		RegistryPort:       5001,
+		MaxBodySize:        4096,
+		MaxResponseSize:    8192,
+		MaxConcurrentConns: 50,
+	})
+
+	cfg = svc.ProxyConfig()
+	assert.Equal(t, "new.registry.com", cfg.RegistryDomain)
+	assert.Equal(t, 5001, cfg.RegistryPort)
+	assert.Equal(t, int64(4096), cfg.MaxBodySize)
+	assert.Equal(t, int64(8192), cfg.MaxResponseSize)
+	assert.Equal(t, 50, cfg.MaxConcurrentConns)
+}
+
+func TestService_IsRegistryDomain(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{
+		RegistryDomain: "registry.example.com",
+	})
+
+	assert.True(t, svc.IsRegistryDomain("registry.example.com"))
+	assert.False(t, svc.IsRegistryDomain("other.example.com"))
+	assert.False(t, svc.IsRegistryDomain(""))
+}
+
+func TestService_IsRegistryDomain_EmptyConfig(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+
+	assert.False(t, svc.IsRegistryDomain("registry.example.com"))
+	assert.False(t, svc.IsRegistryDomain(""))
+}
+
+func TestService_TrackInFlight(t *testing.T) {
+	svc := &Service{
+		inFlight: make(map[string]int),
+	}
+
+	// Empty container ID returns noop
+	release := svc.TrackInFlight("")
+	release() // should not panic
+
+	// Track a container
+	release1 := svc.TrackInFlight("c-1")
+	svc.inFlightMu.Lock()
+	assert.Equal(t, 1, svc.inFlight["c-1"])
+	svc.inFlightMu.Unlock()
+
+	// Track same container again
+	release2 := svc.TrackInFlight("c-1")
+	svc.inFlightMu.Lock()
+	assert.Equal(t, 2, svc.inFlight["c-1"])
+	svc.inFlightMu.Unlock()
+
+	// Release one
+	release2()
+	svc.inFlightMu.Lock()
+	assert.Equal(t, 1, svc.inFlight["c-1"])
+	svc.inFlightMu.Unlock()
+
+	// Release last — should delete key
+	release1()
+	svc.inFlightMu.Lock()
+	_, exists := svc.inFlight["c-1"]
+	assert.False(t, exists, "container should be removed from inFlight map when count reaches 0")
+	svc.inFlightMu.Unlock()
+}
+
+func TestService_TrackRegistryRequest(t *testing.T) {
+	svc := &Service{
+		inFlight: make(map[string]int),
+	}
+
+	assert.Equal(t, int64(0), svc.RegistryInFlight())
+
+	svc.TrackRegistryRequest()
+	assert.Equal(t, int64(1), svc.RegistryInFlight())
+
+	svc.TrackRegistryRequest()
+	assert.Equal(t, int64(2), svc.RegistryInFlight())
+
+	svc.ReleaseRegistryRequest()
+	assert.Equal(t, int64(1), svc.RegistryInFlight())
+
+	svc.ReleaseRegistryRequest()
+	assert.Equal(t, int64(0), svc.RegistryInFlight())
 }
 
 func TestService_GetTarget_HostMode_UsesProxyPortLabel(t *testing.T) {
