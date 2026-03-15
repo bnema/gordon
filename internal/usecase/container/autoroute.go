@@ -169,9 +169,9 @@ func (h *AutoRouteHandler) processRoutes(ctx context.Context, domains []string, 
 			continue
 		}
 
-		h.createOrUpdateRoute(ctx, routeDomain, imageName)
+		created := h.createOrUpdateRoute(ctx, routeDomain, imageName)
 
-		if labels.EnvFile != "" && h.extractor != nil && h.envDir != "" {
+		if created && labels.EnvFile != "" && h.extractor != nil && h.envDir != "" {
 			// Use full image ref for extraction (Docker knows image by this name)
 			if err := h.extractAndMergeEnvFile(ctx, fullImageRef, routeDomain, labels.EnvFile); err != nil {
 				log.Warn().
@@ -187,8 +187,13 @@ func (h *AutoRouteHandler) processRoutes(ctx context.Context, domains []string, 
 // createOrUpdateRoute creates a new route or updates an existing one.
 // It also triggers deployment for new routes since the ImagePushedHandler
 // may have already finished processing (handlers run concurrently).
-func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain, imageName string) {
+func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain, imageName string) bool {
 	log := zerowrap.FromCtx(ctx)
+	allowedDomains, err := h.configSvc.GetAutoRouteAllowedDomains(ctx)
+	if err != nil {
+		log.Warn().Err(err).Str("domain", routeDomain).Msg("failed to load auto-route allowed domains")
+		return false
+	}
 
 	route := domain.Route{
 		Domain: routeDomain,
@@ -198,6 +203,10 @@ func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain,
 	existingRoutes := h.configSvc.GetRoutes(ctx)
 	for _, existing := range existingRoutes {
 		if existing.Domain == routeDomain {
+			if extractRepoName(existing.Image, h.registryDomain) != extractRepoName(imageName, h.registryDomain) {
+				log.Warn().Str("domain", routeDomain).Str("existing_image", existing.Image).Str("image", imageName).Msg("auto-route update rejected due to repository ownership mismatch")
+				return false
+			}
 			if existing.Image != imageName {
 				if err := h.configSvc.UpdateRoute(ctx, route); err != nil {
 					log.Warn().Err(err).Str("domain", routeDomain).Msg("failed to update route")
@@ -207,8 +216,13 @@ func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain,
 					h.triggerDeploy(ctx, route)
 				}
 			}
-			return
+			return false
 		}
+	}
+
+	if !matchesDomainAllowlist(routeDomain, allowedDomains) {
+		log.Warn().Str("domain", routeDomain).Strs("allowed_domains", allowedDomains).Msg("auto-route create rejected due to domain allowlist")
+		return false
 	}
 
 	if err := h.configSvc.AddRoute(ctx, route); err != nil {
@@ -217,7 +231,56 @@ func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain,
 		log.Info().Str("domain", routeDomain).Str("image", imageName).Msg("auto-route added from image labels")
 		// Trigger deploy for new route since ImagePushedHandler may have already finished
 		h.triggerDeploy(ctx, route)
+		return true
 	}
+
+	return false
+}
+
+func matchesDomainAllowlist(domain string, patterns []string) bool {
+	domain = strings.ToLower(domain)
+	for _, pattern := range patterns {
+		pattern = strings.ToLower(strings.TrimSpace(pattern))
+		if pattern == "" {
+			continue
+		}
+		if pattern == domain {
+			return true
+		}
+		if !strings.HasPrefix(pattern, "*.") {
+			continue
+		}
+		suffix := strings.TrimPrefix(pattern, "*.")
+		if !strings.HasSuffix(domain, "."+suffix) {
+			continue
+		}
+		prefix := strings.TrimSuffix(domain, "."+suffix)
+		if prefix != "" && !strings.Contains(prefix, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+func extractRepoName(imageRef, registryDomain string) string {
+	imageRef = strings.ToLower(imageRef)
+	if idx := strings.Index(imageRef, "@"); idx != -1 {
+		imageRef = imageRef[:idx]
+	}
+	if idx := strings.LastIndex(imageRef, ":"); idx != -1 {
+		slashIdx := strings.LastIndex(imageRef, "/")
+		if idx > slashIdx {
+			imageRef = imageRef[:idx]
+		}
+	}
+	registryPrefix := strings.ToLower(strings.TrimSuffix(registryDomain, "/"))
+	if registryPrefix != "" {
+		prefix := registryPrefix + "/"
+		if strings.HasPrefix(imageRef, prefix) {
+			imageRef = strings.TrimPrefix(imageRef, prefix)
+		}
+	}
+	return imageRef
 }
 
 // triggerDeploy initiates deployment for a route.
