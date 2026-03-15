@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/bnema/zerowrap"
 	"github.com/google/uuid"
@@ -20,8 +21,9 @@ import (
 
 // BlobStorage implements the BlobStorage interface using the local filesystem.
 type BlobStorage struct {
-	rootDir string
-	log     zerowrap.Logger
+	rootDir     string
+	log         zerowrap.Logger
+	uploadLocks sync.Map
 }
 
 // NewBlobStorage creates a new filesystem blob storage instance.
@@ -249,6 +251,10 @@ func (s *BlobStorage) AppendBlobChunk(name, uuid string, data io.Reader) (int64,
 		return 0, fmt.Errorf("invalid upload path: %w", err)
 	}
 
+	mu := s.getUploadLock(uuid)
+	mu.Lock()
+	defer mu.Unlock()
+
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -304,6 +310,11 @@ func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
 	if err != nil {
 		return fmt.Errorf("invalid upload path: %w", err)
 	}
+
+	mu := s.getUploadLock(uuid)
+	mu.Lock()
+	defer mu.Unlock()
+
 	blobPath, err := s.getBlobPath(digest)
 	if err != nil {
 		return fmt.Errorf("invalid blob path: %w", err)
@@ -323,6 +334,7 @@ func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
 	if err := os.Rename(uploadPath, blobPath); err != nil {
 		return fmt.Errorf("failed to move upload to blob location: %w", err)
 	}
+	s.cleanupUploadLock(uuid)
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
@@ -341,12 +353,17 @@ func (s *BlobStorage) CancelBlobUpload(uuid string) error {
 		return fmt.Errorf("invalid upload path: %w", err)
 	}
 
+	mu := s.getUploadLock(uuid)
+	mu.Lock()
+	defer mu.Unlock()
+
 	if err := os.Remove(uploadPath); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("upload not found: %s", uuid)
 		}
 		return fmt.Errorf("failed to cancel upload: %w", err)
 	}
+	s.cleanupUploadLock(uuid)
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
@@ -404,6 +421,15 @@ func (s *BlobStorage) getUploadPath(uuid string) (string, error) {
 	}
 
 	return path, nil
+}
+
+func (s *BlobStorage) getUploadLock(uuid string) *sync.Mutex {
+	v, _ := s.uploadLocks.LoadOrStore(uuid, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
+func (s *BlobStorage) cleanupUploadLock(uuid string) {
+	s.uploadLocks.Delete(uuid)
 }
 
 // verifyUploadDigest computes and verifies the digest of an uploaded file.
