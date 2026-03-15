@@ -219,7 +219,7 @@ func TestPusher_Push(t *testing.T) {
 }
 
 func TestPusher_Push_InvokesCleanup(t *testing.T) {
-	var cleanupCalled bool
+	var cleanupCount int
 	img, err := random.Image(1024, 1)
 	require.NoError(t, err)
 
@@ -232,15 +232,18 @@ func TestPusher_Push_InvokesCleanup(t *testing.T) {
 			return img, nil
 		}),
 		registrypush.WithImageCleanup(func() {
-			cleanupCalled = true
+			cleanupCount++
 		}),
 	)
 
 	registryHost := strings.TrimPrefix(registry.URL, "http://")
 	err = p.Push(context.Background(), registryHost+"/demo/app:v1")
-
 	require.NoError(t, err)
-	assert.True(t, cleanupCalled, "cleanup callback should have been invoked after push")
+	assert.Equal(t, 1, cleanupCount, "cleanup callback should have been invoked after first push")
+
+	err = p.Push(context.Background(), registryHost+"/demo/app:v1")
+	require.NoError(t, err)
+	assert.Equal(t, 2, cleanupCount, "cleanup callback should have been invoked after second push")
 }
 
 func TestPusher_WithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
