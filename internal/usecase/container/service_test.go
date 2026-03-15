@@ -222,6 +222,7 @@ func TestService_Deploy_Success(t *testing.T) {
 
 	// Get exposed ports
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 
 	// Load environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{"FOO=bar"}, nil)
@@ -298,6 +299,7 @@ func TestService_Deploy_ReadinessRecoveryWindow_AllowsTransientFlap(t *testing.T
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:latest").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -457,6 +459,7 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -551,6 +554,7 @@ func TestService_Deploy_ResolvesExistingFromRuntime_WhenMemoryStale(t *testing.T
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -630,6 +634,7 @@ func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -684,6 +689,7 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -740,6 +746,7 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -1471,6 +1478,7 @@ func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 
 	// Get exposed ports
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "registry.example.com/myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "registry.example.com/myapp:latest").Return(nil, nil)
 
 	// Load environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -1532,6 +1540,7 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Times(2)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp1:latest", "myapp2:latest"}, nil).Times(2)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, mock.AnythingOfType("string")).Return([]int{8080}, nil).Times(2)
+	runtime.EXPECT().GetImageLabels(mock.Anything, mock.AnythingOfType("string")).Return(nil, nil).Times(2)
 	envLoader.EXPECT().LoadEnv(mock.Anything, mock.AnythingOfType("string")).Return([]string{}, nil).Times(2)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, mock.AnythingOfType("string")).Return([]string{}, nil).Times(2)
 
@@ -1584,6 +1593,7 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp2:latest"}, nil).Once()
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp2:latest").Return([]int{8080}, nil).Once()
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp2:latest").Return(nil, nil).Once()
 	envLoader.EXPECT().LoadEnv(mock.Anything, "app2.example.com").Return([]string{}, nil).Once()
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp2:latest").Return([]string{}, nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{
@@ -1661,6 +1671,7 @@ func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
 	runtime.EXPECT().TagImage(mock.Anything, "localhost:5000/myapp:latest", "reg.example.com/myapp:latest").Return(nil)
 	runtime.EXPECT().UntagImage(mock.Anything, "localhost:5000/myapp:latest").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "reg.example.com/myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "reg.example.com/myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "app1.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "reg.example.com/myapp:latest").Return([]string{}, nil)
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{
@@ -1724,6 +1735,7 @@ func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -1815,6 +1827,7 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v1").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v1").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v1").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -1892,6 +1905,7 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
 
@@ -1955,6 +1969,7 @@ func TestService_Deploy_TrackedTempContainerUsesAlternateTempName(t *testing.T) 
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
 
@@ -2138,6 +2153,7 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Times(2)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil).Times(2)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil).Times(2)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil).Times(2)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return(nil, nil).Times(2)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return(nil, nil).Times(2)
 
@@ -2277,6 +2293,7 @@ func TestService_Deploy_CacheInvalidationBeforeOldContainerStop(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:v2"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
 
@@ -2348,6 +2365,7 @@ func TestService_Deploy_NilCacheInvalidator(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:v2"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
 
@@ -2407,6 +2425,7 @@ func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -2463,6 +2482,7 @@ func TestService_Deploy_SkipsRedundantDeploy_WhenTrackedImageIDMissing(t *testin
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -2517,6 +2537,7 @@ func TestService_Deploy_DoesNotSkipWhenImageIDDiffers(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -2619,6 +2640,7 @@ func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -2678,6 +2700,7 @@ func TestService_Deploy_DoesNotSkip_WhenEnvHashDiffers(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -2732,6 +2755,7 @@ func TestService_Deploy_DoesNotSkip_WhenEnvHashMissing(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
@@ -2873,6 +2897,7 @@ func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -2958,6 +2983,7 @@ func TestService_Deploy_RollbackOnPostSwitchCrash(t *testing.T) {
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -3050,6 +3076,7 @@ func TestService_Deploy_StabilizationSuccess(t *testing.T) {
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -3135,6 +3162,7 @@ func TestService_Deploy_ZeroDowntime_OldNeverStoppedBeforeNewReady(t *testing.T)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -3226,6 +3254,7 @@ func TestService_Deploy_ZeroDowntime_ReadinessFailure_OldUntouched(t *testing.T)
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -3303,6 +3332,7 @@ func TestService_Deploy_ZeroDowntime_NoExisting_FirstDeploy(t *testing.T) {
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
 	runtime.EXPECT().PullImage(mock.Anything, "myapp:v2").Return(nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
 
 	// Environment
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
@@ -3344,4 +3374,99 @@ func TestService_Deploy_ZeroDowntime_NoExisting_FirstDeploy(t *testing.T) {
 	tracked, exists := svc.Get(ctx, "test.example.com")
 	assert.True(t, exists)
 	assert.Equal(t, "first-container", tracked.ID)
+}
+
+func TestService_Deploy_PropagatesImageLabelsToContainerConfig(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		NetworkIsolation:     false,
+		VolumeAutoCreate:     false,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, config)
+	ctx := testContext()
+
+	route := domain.Route{
+		Domain: "gitea.example.com",
+		Image:  "gitea/gitea:latest",
+	}
+
+	// No container in memory — runtime resolution returns nothing
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+	// No orphaned containers
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+
+	// Image is found locally
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"gitea/gitea:latest"}, nil)
+
+	// Exposed ports — image exposes both SSH and HTTP
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "gitea/gitea:latest").Return([]int{22, 3000}, nil)
+
+	// Image labels include gordon.proxy.port and gordon.health
+	runtime.EXPECT().GetImageLabels(mock.Anything, "gitea/gitea:latest").Return(map[string]string{
+		domain.LabelProxyPort: "3000",
+		domain.LabelHealth:    "/healthz",
+		"some.other.label":    "ignored",
+	}, nil)
+
+	// Load environment
+	envLoader.EXPECT().LoadEnv(mock.Anything, "gitea.example.com").Return(nil, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "gitea/gitea:latest").Return(nil, nil)
+
+	// Create container — ASSERT that labels include propagated image labels
+	createdContainer := &domain.Container{
+		ID:     "c-gitea-123",
+		Name:   "gordon-gitea.example.com",
+		Image:  "gitea/gitea:latest",
+		Status: "created",
+	}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		// Verify gordon.proxy.port was propagated from image labels
+		if cfg.Labels[domain.LabelProxyPort] != "3000" {
+			return false
+		}
+		// Verify gordon.health was propagated from image labels
+		if cfg.Labels[domain.LabelHealth] != "/healthz" {
+			return false
+		}
+		// Verify non-gordon labels were NOT propagated
+		if _, exists := cfg.Labels["some.other.label"]; exists {
+			return false
+		}
+		// Verify standard container labels are still present
+		if cfg.Labels[domain.LabelManaged] != "true" {
+			return false
+		}
+		return true
+	})).Return(createdContainer, nil)
+
+	runtime.EXPECT().StartContainer(mock.Anything, "c-gitea-123").Return(nil)
+
+	// Readiness: delay mode (minimal)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "c-gitea-123").Return(true, nil).Times(2)
+
+	// Re-inspect
+	runningContainer := &domain.Container{
+		ID:     "c-gitea-123",
+		Name:   "gordon-gitea.example.com",
+		Image:  "gitea/gitea:latest",
+		Status: "running",
+		Ports:  []int{22, 3000},
+	}
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-gitea-123").Return(runningContainer, nil)
+
+	// Publish event
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	require.NoError(t, err)
+	assert.Equal(t, "c-gitea-123", result.ID)
+	assert.Equal(t, "running", result.Status)
 }

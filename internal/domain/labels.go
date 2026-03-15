@@ -15,7 +15,7 @@ const (
 	// exposing secret values.
 	LabelEnvHash = "gordon.env-hash"
 
-	// Image labels (set in Dockerfile)
+	// LabelProxyPort specifies the container port to proxy HTTP traffic to.
 	LabelProxyPort = "gordon.proxy.port"
 
 	// Auto-route image labels (for automatic route discovery)
@@ -23,7 +23,8 @@ const (
 	LabelDomains = "gordon.domains"
 	// LabelHealth specifies the health check endpoint path.
 	LabelHealth = "gordon.health"
-	// LabelPort specifies the container port to proxy.
+	// LabelPort is a deprecated alias for LabelProxyPort.
+	// Kept for backward compatibility; prefer LabelProxyPort for new images.
 	LabelPort = "gordon.port"
 	// LabelEnvFile specifies the path to .env file inside the image.
 	LabelEnvFile = "gordon.env-file"

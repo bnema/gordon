@@ -175,7 +175,7 @@ The preferred method for automatic routing uses Dockerfile labels. This gives yo
 | Label | Description | Example |
 |-------|-------------|---------|
 | `gordon.domains` | Comma-separated list of domains | `app.example.com,www.app.example.com` |
-| `gordon.port` | Container port to proxy | `3000` |
+| `gordon.proxy.port` | Container port to proxy | `3000` |
 | `gordon.health` | Health check endpoint path | `/health` |
 | `gordon.env-file` | Path to .env file in image | `/app/.env.example` |
 
@@ -189,7 +189,7 @@ RUN npm install
 
 # Gordon routing labels
 LABEL gordon.domains="myapp.example.com,www.myapp.example.com"
-LABEL gordon.port="3000"
+LABEL gordon.proxy.port="3000"
 LABEL gordon.health="/api/health"
 LABEL gordon.env-file="/app/.env.example"
 
@@ -203,7 +203,7 @@ When you push an image with Gordon labels:
 
 1. Gordon reads the `gordon.domains` label
 2. Creates routes for each domain automatically
-3. Uses `gordon.port` for the proxy target (or first EXPOSE port)
+3. Uses `gordon.proxy.port` for the proxy target, otherwise auto-detects an exposed port preferring common HTTP ports
 4. Configures health checks if `gordon.health` is set
 5. Extracts environment variables from `gordon.env-file` if specified
 
@@ -241,7 +241,7 @@ Gordon will:
 
 ### Best Practices
 
-1. **Always set `gordon.port`** - Don't rely on EXPOSE detection
+1. **Always set `gordon.proxy.port`** - Don't rely on EXPOSE detection
 2. **Use `gordon.health`** - Enables reliable deployment verification
 3. **Include `.env.example`** - Self-documenting environment requirements
 4. **Separate domains with commas** - No spaces around commas
@@ -261,7 +261,7 @@ COPY .env.example .
 
 # Gordon labels
 LABEL gordon.domains="api.mycompany.com"
-LABEL gordon.port="8080"
+LABEL gordon.proxy.port="8080"
 LABEL gordon.health="/health"
 LABEL gordon.env-file="/app/.env.example"
 

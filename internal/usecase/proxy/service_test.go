@@ -571,3 +571,142 @@ func TestDrainRegistryInFlightTimeout(t *testing.T) {
 		t.Fatal("expected DrainRegistryInFlight to return false on timeout, got true")
 	}
 }
+
+func TestService_GetTarget_HostMode_UsesProxyPortLabel(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	// No external routes
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+
+	// Container exists for this domain
+	container := &domain.Container{
+		ID:    "c-gitea",
+		Image: "gitea/gitea:latest",
+	}
+	containerSvc.EXPECT().Get(mock.Anything, "git.example.com").Return(container, true)
+
+	// Route exists
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "git.example.com", Image: "gitea/gitea:latest"},
+	})
+
+	// Image has gordon.proxy.port=3000 label
+	runtime.EXPECT().GetImageLabels(mock.Anything, "gitea/gitea:latest").Return(map[string]string{
+		domain.LabelProxyPort: "3000",
+	}, nil)
+
+	// Host port mapping for internal port 3000
+	runtime.EXPECT().GetContainerPort(mock.Anything, "c-gitea", 3000).Return(32000, nil)
+
+	result, err := svc.GetTarget(ctx, "git.example.com")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "localhost", result.Host)
+	assert.Equal(t, 32000, result.Port)
+	assert.Equal(t, "c-gitea", result.ContainerID)
+}
+
+func TestService_GetTarget_HostMode_UsesDeprecatedPortLabel(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+
+	container := &domain.Container{
+		ID:    "c-app",
+		Image: "myapp:latest",
+	}
+	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(container, true)
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "app.example.com", Image: "myapp:latest"},
+	})
+
+	// Image has deprecated gordon.port label — should still work
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(map[string]string{
+		domain.LabelPort: "8080",
+	}, nil)
+
+	runtime.EXPECT().GetContainerPort(mock.Anything, "c-app", 8080).Return(33000, nil)
+
+	result, err := svc.GetTarget(ctx, "app.example.com")
+
+	assert.NoError(t, err)
+	assert.Equal(t, 33000, result.Port)
+}
+
+func TestService_GetTarget_HostMode_ProxyPortWinsOverPort(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+
+	container := &domain.Container{
+		ID:    "c-dual",
+		Image: "dualapp:latest",
+	}
+	containerSvc.EXPECT().Get(mock.Anything, "dual.example.com").Return(container, true)
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "dual.example.com", Image: "dualapp:latest"},
+	})
+
+	// Both labels set — gordon.proxy.port=9000 should win over gordon.port=3000
+	runtime.EXPECT().GetImageLabels(mock.Anything, "dualapp:latest").Return(map[string]string{
+		domain.LabelProxyPort: "9000",
+		domain.LabelPort:      "3000",
+	}, nil)
+
+	// Should use 9000 (gordon.proxy.port), NOT 3000 (gordon.port)
+	runtime.EXPECT().GetContainerPort(mock.Anything, "c-dual", 9000).Return(34000, nil)
+
+	result, err := svc.GetTarget(ctx, "dual.example.com")
+
+	assert.NoError(t, err)
+	assert.Equal(t, 34000, result.Port)
+}
+
+func TestService_GetTarget_HostMode_FallsBackToExposedPort(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+
+	container := &domain.Container{
+		ID:    "c-plain",
+		Image: "plain:latest",
+	}
+	containerSvc.EXPECT().Get(mock.Anything, "plain.example.com").Return(container, true)
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "plain.example.com", Image: "plain:latest"},
+	})
+
+	// No port labels — should fall back to first exposed port
+	runtime.EXPECT().GetImageLabels(mock.Anything, "plain:latest").Return(map[string]string{}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "plain:latest").Return([]int{8080}, nil)
+
+	runtime.EXPECT().GetContainerPort(mock.Anything, "c-plain", 8080).Return(35000, nil)
+
+	result, err := svc.GetTarget(ctx, "plain.example.com")
+
+	assert.NoError(t, err)
+	assert.Equal(t, 35000, result.Port)
+}
