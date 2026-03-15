@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/client"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -25,6 +26,8 @@ import (
 // and Gordon's default max_blob_chunk_size of 95MB.
 const DefaultChunkSize = 50 * 1024 * 1024
 
+const defaultHTTPTimeout = 5 * time.Minute
+
 // ImageSource provides a v1.Image for a given ref.
 // The default reads from the local Docker/Podman daemon.
 // Override with WithImageSource for testing.
@@ -33,9 +36,11 @@ type ImageSource func(ctx context.Context, ref string) (v1.Image, error)
 // Pusher uploads container images to a registry using chunked blob uploads.
 type Pusher struct {
 	chunkSize   int64
+	timeout     time.Duration
 	transport   http.RoundTripper
 	insecureTLS bool
-	imageSource ImageSource
+	imageSource func(ctx context.Context, ref string) (v1.Image, func(), error)
+	cleanupFn   func()
 	progress    io.Writer
 }
 
@@ -52,6 +57,11 @@ func WithTransport(t http.RoundTripper) Option {
 	return func(p *Pusher) { p.transport = t }
 }
 
+// WithTimeout sets the HTTP client timeout for registry operations.
+func WithTimeout(d time.Duration) Option {
+	return func(p *Pusher) { p.timeout = d }
+}
+
 // WithInsecureTLS disables TLS certificate verification for registry requests.
 // This is ignored when a custom transport is provided via WithTransport.
 func WithInsecureTLS(insecure bool) Option {
@@ -60,7 +70,18 @@ func WithInsecureTLS(insecure bool) Option {
 
 // WithImageSource overrides the default daemon-based image reader.
 func WithImageSource(src ImageSource) Option {
-	return func(p *Pusher) { p.imageSource = src }
+	return func(p *Pusher) {
+		p.imageSource = func(ctx context.Context, ref string) (v1.Image, func(), error) {
+			img, err := src(ctx, ref)
+			return img, nil, err
+		}
+	}
+}
+
+// WithImageCleanup sets a function called after Push completes to clean up
+// resources created by the image source (e.g., temp tar files).
+func WithImageCleanup(fn func()) Option {
+	return func(p *Pusher) { p.cleanupFn = fn }
 }
 
 // WithProgress sets a writer for progress messages.
@@ -70,7 +91,7 @@ func WithProgress(w io.Writer) Option {
 
 // New creates a Pusher with the given options.
 func New(opts ...Option) *Pusher {
-	p := &Pusher{chunkSize: DefaultChunkSize}
+	p := &Pusher{chunkSize: DefaultChunkSize, timeout: defaultHTTPTimeout}
 	for _, o := range opts {
 		o(p)
 	}
@@ -82,7 +103,9 @@ func New(opts ...Option) *Pusher {
 		}
 	}
 	if p.imageSource == nil {
-		p.imageSource = defaultImageSource
+		p.imageSource = func(ctx context.Context, ref string) (v1.Image, func(), error) {
+			return defaultImageSourceWithCleanup(ctx, ref)
+		}
 	}
 	return p
 }
@@ -107,9 +130,21 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 		return err
 	}
 
-	img, err := p.imageSource(ctx, ref)
+	img, sourceCleanup, err := p.imageSource(ctx, ref)
 	if err != nil {
 		return err
+	}
+	userCleanup := p.cleanupFn
+	switch {
+	case sourceCleanup != nil && userCleanup != nil:
+		defer func() {
+			sourceCleanup()
+			userCleanup()
+		}()
+	case sourceCleanup != nil:
+		defer sourceCleanup()
+	case userCleanup != nil:
+		defer userCleanup()
 	}
 
 	baseURL := registryBaseURL(parsedRef.Context().RegistryStr())
@@ -147,38 +182,38 @@ func (p *Pusher) UploadBlob(ctx context.Context, baseURL, repo, digest string, s
 		}
 	}
 
-	uploadURL, err = p.uploadBlobChunks(ctx, uploadURL, content, auth)
+	uploadURL, err = p.uploadBlobChunks(ctx, baseURL, uploadURL, content, auth)
 	if err != nil {
 		return err
 	}
 
-	return p.finalizeBlobUpload(ctx, uploadURL, digest, auth)
+	return p.finalizeBlobUpload(ctx, baseURL, uploadURL, digest, auth)
 }
 
-// defaultImageSource reads an image from the local Docker/Podman daemon.
-func defaultImageSource(ctx context.Context, ref string) (v1.Image, error) {
+// defaultImageSourceWithCleanup reads an image from the local Docker/Podman daemon.
+func defaultImageSourceWithCleanup(ctx context.Context, ref string) (v1.Image, func(), error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
 	defer cli.Close()
 
 	tag, err := name.NewTag(ref)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse image ref %s: %w", ref, err)
+		return nil, nil, fmt.Errorf("failed to parse image ref %s: %w", ref, err)
 	}
 
 	rc, err := cli.ImageSave(ctx, []string{ref})
 	if err != nil {
-		return nil, fmt.Errorf("failed to export image %s: %w", ref, err)
+		return nil, nil, fmt.Errorf("failed to export image %s: %w", ref, err)
 	}
 
 	tmpFile, err := os.CreateTemp("", "gordon-push-*.tar")
 	if err != nil {
 		if closeErr := rc.Close(); closeErr != nil {
-			return nil, fmt.Errorf("failed to create temp file for image export: %w (also failed to close image export stream: %v)", err, closeErr)
+			return nil, nil, fmt.Errorf("failed to create temp file for image export: %w (also failed to close image export stream: %v)", err, closeErr)
 		}
-		return nil, fmt.Errorf("failed to create temp file for image export: %w", err)
+		return nil, nil, fmt.Errorf("failed to create temp file for image export: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 
@@ -186,33 +221,34 @@ func defaultImageSource(ctx context.Context, ref string) (v1.Image, error) {
 		if closeErr := rc.Close(); closeErr != nil {
 			_ = tmpFile.Close()
 			_ = os.Remove(tmpPath)
-			return nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close image export stream: %v)", err, closeErr)
+			return nil, nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close image export stream: %v)", err, closeErr)
 		}
 		if closeErr := tmpFile.Close(); closeErr != nil {
 			_ = os.Remove(tmpPath)
-			return nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close temp file: %v)", err, closeErr)
+			return nil, nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to close temp file: %v)", err, closeErr)
 		}
 		if removeErr := os.Remove(tmpPath); removeErr != nil {
-			return nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to remove temp file %s: %v)", err, tmpPath, removeErr)
+			return nil, nil, fmt.Errorf("failed to write image tar to temp file: %w (also failed to remove temp file %s: %v)", err, tmpPath, removeErr)
 		}
-		return nil, fmt.Errorf("failed to write image tar to temp file: %w", err)
+		return nil, nil, fmt.Errorf("failed to write image tar to temp file: %w", err)
 	}
 	if err := rc.Close(); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("failed to close image export stream: %w", err)
+		return nil, nil, fmt.Errorf("failed to close image export stream: %w", err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("failed to close temp file %s: %w", tmpPath, err)
+		return nil, nil, fmt.Errorf("failed to close temp file %s: %w", tmpPath, err)
 	}
 
 	img, err := tarball.ImageFromPath(tmpPath, &tag)
 	if err != nil {
 		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("failed to parse image tar for %s: %w", ref, err)
+		return nil, nil, fmt.Errorf("failed to parse image tar for %s: %w", ref, err)
 	}
-	return img, nil
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	return img, cleanup, nil
 }
 
 func (p *Pusher) uploadImageLayers(ctx context.Context, img v1.Image, baseURL, repo, auth string) error {
@@ -283,7 +319,7 @@ func (p *Pusher) uploadManifest(ctx context.Context, baseURL, repo, tag string, 
 	if err != nil {
 		return fmt.Errorf("failed to create manifest upload request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 	req.Header.Set("Content-Type", string(mediaType))
 	req.ContentLength = int64(len(manifest))
 
@@ -346,7 +382,7 @@ func (p *Pusher) checkBlobExists(ctx context.Context, baseURL, repo, digest, aut
 	if err != nil {
 		return fmt.Errorf("failed to create blob HEAD request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
@@ -370,7 +406,7 @@ func (p *Pusher) startBlobUpload(ctx context.Context, baseURL, repo, auth string
 	if err != nil {
 		return "", fmt.Errorf("failed to create blob upload start request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
@@ -391,7 +427,7 @@ func (p *Pusher) startBlobUpload(ctx context.Context, baseURL, repo, auth string
 	return location, nil
 }
 
-func (p *Pusher) uploadBlobChunks(ctx context.Context, uploadURL string, content io.Reader, auth string) (string, error) {
+func (p *Pusher) uploadBlobChunks(ctx context.Context, baseURL, uploadURL string, content io.Reader, auth string) (string, error) {
 	buffer := make([]byte, p.chunkSize)
 	offset := int64(0)
 
@@ -404,7 +440,7 @@ func (p *Pusher) uploadBlobChunks(ctx context.Context, uploadURL string, content
 			return "", fmt.Errorf("failed to read blob chunk: %w", err)
 		}
 
-		nextURL, patchErr := p.uploadBlobChunk(ctx, uploadURL, buffer[:readBytes], offset, auth)
+		nextURL, patchErr := p.uploadBlobChunk(ctx, baseURL, uploadURL, buffer[:readBytes], offset, auth)
 		if patchErr != nil {
 			return "", patchErr
 		}
@@ -418,12 +454,12 @@ func (p *Pusher) uploadBlobChunks(ctx context.Context, uploadURL string, content
 	}
 }
 
-func (p *Pusher) uploadBlobChunk(ctx context.Context, uploadURL string, chunk []byte, offset int64, auth string) (string, error) {
+func (p *Pusher) uploadBlobChunk(ctx context.Context, baseURL, uploadURL string, chunk []byte, offset int64, auth string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, uploadURL, bytesReader(chunk))
 	if err != nil {
 		return "", fmt.Errorf("failed to create blob chunk request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Range", fmt.Sprintf("%d-%d", offset, offset+int64(len(chunk))-1))
 	req.ContentLength = int64(len(chunk))
@@ -447,7 +483,7 @@ func (p *Pusher) uploadBlobChunk(ctx context.Context, uploadURL string, chunk []
 	return nextURL, nil
 }
 
-func (p *Pusher) finalizeBlobUpload(ctx context.Context, uploadURL, digest, auth string) error {
+func (p *Pusher) finalizeBlobUpload(ctx context.Context, baseURL, uploadURL, digest, auth string) error {
 	parsedURL, err := url.Parse(uploadURL)
 	if err != nil {
 		return fmt.Errorf("failed to parse blob upload location: %w", err)
@@ -461,7 +497,7 @@ func (p *Pusher) finalizeBlobUpload(ctx context.Context, uploadURL, digest, auth
 	if err != nil {
 		return fmt.Errorf("failed to create blob finalize request: %w", err)
 	}
-	setAuthHeader(req, auth)
+	setScopedAuth(req, auth, baseURL)
 
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
@@ -478,13 +514,24 @@ func (p *Pusher) finalizeBlobUpload(ctx context.Context, uploadURL, digest, auth
 }
 
 func (p *Pusher) httpClient() *http.Client {
-	return &http.Client{Transport: p.transport}
+	return &http.Client{Transport: p.transport, Timeout: p.timeout}
 }
 
-func setAuthHeader(req *http.Request, auth string) {
-	if auth != "" {
-		req.Header.Set("Authorization", auth)
+// setScopedAuth attaches the auth header only if the request URL matches the
+// registry origin (scheme + host). This prevents credential leakage if a
+// redirect somehow escapes origin pinning.
+func setScopedAuth(req *http.Request, auth, registryOrigin string) {
+	if auth == "" {
+		return
 	}
+	origin, err := url.Parse(registryOrigin)
+	if err != nil {
+		return
+	}
+	if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
+		return
+	}
+	req.Header.Set("Authorization", auth)
 }
 
 func resolveLocation(baseURL, location string) (string, error) {
@@ -502,7 +549,13 @@ func resolveLocation(baseURL, location string) (string, error) {
 		return "", err
 	}
 
-	return base.ResolveReference(ref).String(), nil
+	resolved := base.ResolveReference(ref)
+
+	if resolved.Scheme != base.Scheme || resolved.Host != base.Host {
+		return "", fmt.Errorf("registry returned cross-origin Location %q (expected %s://%s)", location, base.Scheme, base.Host)
+	}
+
+	return resolved.String(), nil
 }
 
 func chunkCount(size, chunkSize int64) int64 {

@@ -591,13 +591,30 @@ func (s *Service) writeConfigSurgical(configFile string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	tmpFile := configFile + ".tmp"
-	if err := os.WriteFile(tmpFile, out, 0600); err != nil {
-		return fmt.Errorf("failed to write temp config: %w", err)
+	configDir := filepath.Dir(configFile)
+	tmpFile, err := os.CreateTemp(configDir, ".gordon-config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp config file: %w", err)
 	}
-	if err := os.Rename(tmpFile, configFile); err != nil {
-		_ = os.Remove(tmpFile)
-		return fmt.Errorf("failed to rename temp config: %w", err)
+	tmpPath := tmpFile.Name()
+
+	if _, writeErr := tmpFile.Write(out); writeErr != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp config: %w", writeErr)
+	}
+	if chmodErr := tmpFile.Chmod(0600); chmodErr != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to set temp config permissions: %w", chmodErr)
+	}
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to close temp config: %w", closeErr)
+	}
+	if renameErr := os.Rename(tmpPath, configFile); renameErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename temp config: %w", renameErr)
 	}
 
 	return nil

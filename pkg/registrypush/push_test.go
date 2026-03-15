@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/random"
@@ -217,6 +218,34 @@ func TestPusher_Push(t *testing.T) {
 	}
 }
 
+func TestPusher_Push_InvokesCleanup(t *testing.T) {
+	var cleanupCount int
+	img, err := random.Image(1024, 1)
+	require.NoError(t, err)
+
+	registry := httptest.NewServer(newFakePushRegistry(t, img, map[string]bool{}).handler())
+	defer registry.Close()
+
+	p := registrypush.New(
+		registrypush.WithChunkSize(1024),
+		registrypush.WithImageSource(func(ctx context.Context, ref string) (v1.Image, error) {
+			return img, nil
+		}),
+		registrypush.WithImageCleanup(func() {
+			cleanupCount++
+		}),
+	)
+
+	registryHost := strings.TrimPrefix(registry.URL, "http://")
+	err = p.Push(context.Background(), registryHost+"/demo/app:v1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, cleanupCount, "cleanup callback should have been invoked after first push")
+
+	err = p.Push(context.Background(), registryHost+"/demo/app:v1")
+	require.NoError(t, err)
+	assert.Equal(t, 2, cleanupCount, "cleanup callback should have been invoked after second push")
+}
+
 func TestPusher_WithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
 	t.Parallel()
 
@@ -254,6 +283,112 @@ func TestPusher_WithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
 	pusherInsecure := registrypush.New(registrypush.WithChunkSize(1024), registrypush.WithInsecureTLS(true))
 	err = pusherInsecure.UploadBlob(ctx, srv.URL, "repo", digest, int64(len(content)), bytes.NewReader(content), "")
 	require.NoError(t, err)
+}
+
+func TestPusher_WithTimeout_RespectsDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p := registrypush.New(
+		registrypush.WithChunkSize(1024),
+		registrypush.WithTimeout(100*time.Millisecond),
+	)
+
+	ctx := context.Background()
+	err := p.UploadBlob(ctx, srv.URL, "test/repo", "sha256:abc123", 10, strings.NewReader("0123456789"), "")
+
+	require.Error(t, err)
+}
+
+func TestUploadBlob_RejectsCrossOriginRedirect(t *testing.T) {
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("request leaked to attacker: %s %s (Authorization: %s)", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer attacker.Close()
+
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			w.WriteHeader(http.StatusNotFound)
+		case http.MethodPost:
+			w.Header().Set("Location", attacker.URL+"/v2/repo/blobs/uploads/evil")
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer registry.Close()
+
+	p := registrypush.New(registrypush.WithChunkSize(1024))
+	ctx := context.Background()
+	err := p.UploadBlob(ctx, registry.URL, "test/repo", "sha256:abc", 5, strings.NewReader("hello"), "Basic secret")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cross-origin")
+}
+
+// authRecordingTransport records Authorization headers per request URL.
+type authRecordingTransport struct {
+	inner   http.RoundTripper
+	records []authRecord
+}
+
+type authRecord struct {
+	URL  string
+	Auth string
+}
+
+func (t *authRecordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.records = append(t.records, authRecord{
+		URL:  req.URL.String(),
+		Auth: req.Header.Get("Authorization"),
+	})
+	return t.inner.RoundTrip(req)
+}
+
+func TestUploadBlob_AuthHeaderOnlySentToSameOrigin(t *testing.T) {
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			w.WriteHeader(http.StatusNotFound)
+		case http.MethodPost:
+			w.Header().Set("Location", "/v2/repo/blobs/uploads/abc?chunk=0")
+			w.WriteHeader(http.StatusAccepted)
+		case http.MethodPatch:
+			w.Header().Set("Location", "/v2/repo/blobs/uploads/abc?chunk=1")
+			w.WriteHeader(http.StatusAccepted)
+		case http.MethodPut:
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer registry.Close()
+
+	recorder := &authRecordingTransport{inner: http.DefaultTransport}
+	p := registrypush.New(
+		registrypush.WithChunkSize(1024),
+		registrypush.WithTransport(recorder),
+	)
+	ctx := context.Background()
+	secret := "Basic dXNlcjpwYXNz"
+	err := p.UploadBlob(ctx, registry.URL, "test/repo", "sha256:abc", 5, strings.NewReader("hello"), secret)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, recorder.records)
+
+	registryURL, _ := url.Parse(registry.URL)
+	for _, rec := range recorder.records {
+		reqURL, _ := url.Parse(rec.URL)
+		if reqURL.Host == registryURL.Host {
+			assert.Equal(t, secret, rec.Auth, "same-origin request to %s should have auth", rec.URL)
+		} else {
+			assert.Empty(t, rec.Auth, "cross-origin request to %s should NOT have auth", rec.URL)
+		}
+	}
 }
 
 type fakeBlobUploadRegistry struct {
