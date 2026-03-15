@@ -211,13 +211,18 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 
 	if s.isRunningInContainer() {
 		// Gordon is in a container - use container network
-		containerIP, containerPort, err := s.runtime.GetContainerNetworkInfo(ctx, container.ID)
+		// Determine target port: check for explicit label first, then fall back to network detection
+		targetPort, err := s.getProxyPort(ctx, container.Image)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to determine proxy port")
+		}
+		containerIP, _, err := s.runtime.GetContainerNetworkInfo(ctx, container.ID)
 		if err != nil {
 			return nil, log.WrapErrWithFields(err, "failed to get container network info", map[string]any{zerowrap.FieldEntityID: container.ID})
 		}
 		target = &domain.ProxyTarget{
 			Host:        containerIP,
-			Port:        containerPort,
+			Port:        targetPort,
 			ContainerID: container.ID,
 			Scheme:      "http",
 		}
@@ -688,23 +693,27 @@ func (s *Service) isRunningInContainer() bool {
 }
 
 // getProxyPort determines the port to proxy to for an image.
-// It checks for the gordon.proxy.port label first, then falls back to the first exposed port.
+// It checks for gordon.proxy.port first, then the deprecated gordon.port alias, then falls back to the first exposed port.
 func (s *Service) getProxyPort(ctx context.Context, imageRef string) (int, error) {
 	log := zerowrap.FromCtx(ctx)
 
 	log.Debug().Str("image_ref", imageRef).Msg("determining proxy port for image")
 
-	// Check for explicit port label
+	// Check for explicit port label (gordon.proxy.port preferred, gordon.port as deprecated alias)
 	labels, err := s.runtime.GetImageLabels(ctx, imageRef)
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to get image labels, falling back to exposed ports")
-	} else if portStr, ok := labels[domain.LabelProxyPort]; ok {
-		port, err := strconv.Atoi(portStr)
-		if err == nil && port > 0 {
-			log.Debug().Int("port", port).Msg("using proxy port from image label")
-			return port, nil
+	} else {
+		for _, key := range []string{domain.LabelProxyPort, domain.LabelPort} {
+			if portStr, ok := labels[key]; ok && portStr != "" {
+				port, err := strconv.Atoi(portStr)
+				if err == nil && port > 0 && port <= 65535 {
+					log.Debug().Int("port", port).Str("label", key).Msg("using proxy port from image label")
+					return port, nil
+				}
+				log.Warn().Str("label", key).Str("port_value", portStr).Msg("invalid port label value")
+			}
 		}
-		log.Warn().Str("port_value", portStr).Msg("invalid gordon.proxy.port label value")
 	}
 
 	// Fall back to first exposed port

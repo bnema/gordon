@@ -263,10 +263,10 @@ func TestParseImageLabels(t *testing.T) {
 			config: map[string]any{
 				"config": map[string]any{
 					"Labels": map[string]any{
-						"gordon.domain":   "app.example.com",
-						"gordon.health":   "/healthz",
-						"gordon.port":     "8080",
-						"gordon.env-file": ".env.prod",
+						"gordon.domain":     "app.example.com",
+						"gordon.health":     "/healthz",
+						"gordon.proxy.port": "8080",
+						"gordon.env-file":   ".env.prod",
 					},
 				},
 			},

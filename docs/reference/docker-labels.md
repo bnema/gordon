@@ -14,6 +14,17 @@ Gordon adds these labels to managed containers:
 | `gordon.route` | Domain name | Route this container handles |
 | `gordon.created` | Timestamp | When Gordon created the container |
 
+### Propagated Image Labels
+
+When an image defines these labels, Gordon copies them onto the container for runtime use (readiness probing, proxy routing):
+
+| Label | Example | Description |
+|-------|---------|-------------|
+| `gordon.proxy.port` | `"3000"` | Port the proxy routes HTTP traffic to |
+| `gordon.health` | `"/healthz"` | Health check endpoint for readiness probing |
+
+These labels only appear on containers whose source image defined them.
+
 ### Attachment Labels
 
 Additional labels for attachment containers:
@@ -42,8 +53,7 @@ Labels you can set in your Dockerfile:
 | Label | Example | Description |
 |-------|---------|-------------|
 | `gordon.domains` | `"app.example.com,www.app.example.com"` | Comma-separated domains for auto-route |
-| `gordon.port` | `"3000"` | Port to proxy HTTP traffic to |
-| `gordon.proxy.port` | `"3000"` | Port to proxy HTTP traffic to (legacy alias for `gordon.port`) |
+| `gordon.proxy.port` | `"3000"` | Port to proxy HTTP traffic to |
 | `gordon.health` | `"/healthz"` | HTTP health check endpoint path for readiness probing |
 | `gordon.env-file` | `"/app/.env.example"` | Path to env template file inside the image |
 
@@ -108,6 +118,7 @@ Example output:
   "gordon.domain": "app.mydomain.com",
   "gordon.image": "myapp:latest",
   "gordon.managed": "true",
+  "gordon.proxy.port": "3000",
   "gordon.route": "app.mydomain.com"
 }
 ```
