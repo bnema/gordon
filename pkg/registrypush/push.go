@@ -125,7 +125,7 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 		return fmt.Errorf("image ref %s must include a tag", ref)
 	}
 
-	cleanup := p.cleanupFn
+	userCleanup := p.cleanupFn
 	p.cleanupFn = nil
 
 	authHeader, err := resolveAuthHeader(parsedRef)
@@ -137,11 +137,17 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 	if err != nil {
 		return err
 	}
-	if p.cleanupFn != nil {
-		cleanup = p.cleanupFn
-	}
-	if cleanup != nil {
-		defer cleanup()
+	sourceCleanup := p.cleanupFn
+	switch {
+	case sourceCleanup != nil && userCleanup != nil:
+		defer func() {
+			sourceCleanup()
+			userCleanup()
+		}()
+	case sourceCleanup != nil:
+		defer sourceCleanup()
+	case userCleanup != nil:
+		defer userCleanup()
 	}
 
 	baseURL := registryBaseURL(parsedRef.Context().RegistryStr())

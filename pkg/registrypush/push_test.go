@@ -307,10 +307,10 @@ func TestUploadBlob_RejectsCrossOriginRedirect(t *testing.T) {
 	defer attacker.Close()
 
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodHead:
+		switch r.Method {
+		case http.MethodHead:
 			w.WriteHeader(http.StatusNotFound)
-		case r.Method == http.MethodPost:
+		case http.MethodPost:
 			w.Header().Set("Location", attacker.URL+"/v2/repo/blobs/uploads/evil")
 			w.WriteHeader(http.StatusAccepted)
 		default:
@@ -348,16 +348,16 @@ func (t *authRecordingTransport) RoundTrip(req *http.Request) (*http.Response, e
 
 func TestUploadBlob_AuthHeaderOnlySentToSameOrigin(t *testing.T) {
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodHead:
+		switch r.Method {
+		case http.MethodHead:
 			w.WriteHeader(http.StatusNotFound)
-		case r.Method == http.MethodPost:
+		case http.MethodPost:
 			w.Header().Set("Location", "/v2/repo/blobs/uploads/abc?chunk=0")
 			w.WriteHeader(http.StatusAccepted)
-		case r.Method == http.MethodPatch:
+		case http.MethodPatch:
 			w.Header().Set("Location", "/v2/repo/blobs/uploads/abc?chunk=1")
 			w.WriteHeader(http.StatusAccepted)
-		case r.Method == http.MethodPut:
+		case http.MethodPut:
 			w.WriteHeader(http.StatusCreated)
 		default:
 			w.WriteHeader(http.StatusInternalServerError)
