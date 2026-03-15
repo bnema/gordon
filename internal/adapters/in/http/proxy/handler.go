@@ -2,77 +2,91 @@
 package proxy
 
 import (
-	"context"
 	"net/http"
-	"strconv"
-	"time"
+	"sync/atomic"
 
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 )
 
-// Handler wraps the proxy service for HTTP.
-// The actual proxying logic is in the usecase layer (ProxyService implements http.Handler).
+// Handler implements http.Handler for the reverse proxy.
+// It owns all HTTP-level concerns: concurrency limiting, body size enforcement,
+// transport selection, and reverse proxy execution.
+// Routing decisions are delegated to the ProxyService usecase.
 type Handler struct {
-	proxySvc in.ProxyService
-	log      zerowrap.Logger
-	port     int
+	proxySvc          in.ProxyService
+	log               zerowrap.Logger
+	appTransport      http.RoundTripper
+	h2cTransport      http.RoundTripper
+	registryTransport http.RoundTripper
+	activeConns       atomic.Int64
 }
 
 // NewHandler creates a new proxy HTTP handler.
-func NewHandler(proxySvc in.ProxyService, port int, log zerowrap.Logger) *Handler {
+func NewHandler(proxySvc in.ProxyService, log zerowrap.Logger) *Handler {
 	return &Handler{
-		proxySvc: proxySvc,
-		port:     port,
-		log:      log,
+		proxySvc:          proxySvc,
+		log:               log,
+		appTransport:      newAppTransport(),
+		h2cTransport:      newH2CTransport(),
+		registryTransport: newRegistryTransport(),
 	}
 }
 
-// ServeHTTP implements http.Handler by delegating to the proxy service.
+// ServeHTTP handles incoming HTTP requests and proxies them to the appropriate backend.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.proxySvc.ServeHTTP(w, r)
-}
+	cfg := h.proxySvc.ProxyConfig()
 
-// Start starts the proxy HTTP server.
-func (h *Handler) Start(ctx context.Context, handler http.Handler) error {
-	addr := ":" + strconv.Itoa(h.port)
-
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       5 * time.Minute,   // Timeout for reading entire request
-		WriteTimeout:      5 * time.Minute,   // Timeout for writing response
-		IdleTimeout:       120 * time.Second, // Timeout for idle keep-alive connections
-		MaxHeaderBytes:    1 << 20,           // 1MB max header size
-	}
-
-	h.log.Info().
-		Str(zerowrap.FieldLayer, "adapter").
-		Str(zerowrap.FieldAdapter, "http").
-		Str("address", addr).
-		Msg("proxy server starting")
-
-	// Start server in a goroutine
-	errChan := make(chan error, 1)
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errChan <- err
+	// SECURITY: Limit concurrent connections to prevent resource exhaustion.
+	if cfg.MaxConcurrentConns > 0 {
+		current := h.activeConns.Add(1)
+		if current > int64(cfg.MaxConcurrentConns) {
+			h.activeConns.Add(-1)
+			proxyError(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
 		}
-	}()
-
-	// Wait for context cancellation or server error
-	select {
-	case err := <-errChan:
-		return err
-	case <-ctx.Done():
-		h.log.Info().
-			Str(zerowrap.FieldLayer, "adapter").
-			Str(zerowrap.FieldAdapter, "http").
-			Msg("proxy server shutting down")
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-		return server.Shutdown(shutdownCtx)
+		defer h.activeConns.Add(-1)
 	}
+
+	// SECURITY: Limit request body size to prevent resource exhaustion.
+	if cfg.MaxBodySize > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxBodySize)
+	}
+
+	// Enrich request context with fields for downstream logging
+	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "http",
+		zerowrap.FieldMethod:   r.Method,
+		zerowrap.FieldPath:     r.URL.Path,
+		zerowrap.FieldHost:     r.Host,
+		zerowrap.FieldClientIP: r.RemoteAddr,
+	})
+	r = r.WithContext(ctx)
+	log := zerowrap.FromCtx(ctx)
+
+	// Check if this is the registry domain
+	if h.proxySvc.IsRegistryDomain(r.Host) {
+		log.Info().Msg("routing request to registry")
+		h.forwardToRegistry(w, r, cfg.RegistryPort)
+		return
+	}
+
+	// Get target for this domain
+	log.Debug().Str("resolving_target_for", r.Host).Msg("looking up proxy target")
+	target, err := h.proxySvc.GetTarget(ctx, r.Host)
+	if err != nil {
+		log.Warn().Err(err).Msg("no route found for domain")
+		proxyError(w, "404 page not found", http.StatusNotFound)
+		return
+	}
+
+	log.Debug().
+		Str("host", target.Host).
+		Int("port", target.Port).
+		Str("container_id", target.ContainerID).
+		Msg("resolved proxy target")
+
+	h.forwardToTarget(w, r, target, cfg.MaxResponseSize)
 }

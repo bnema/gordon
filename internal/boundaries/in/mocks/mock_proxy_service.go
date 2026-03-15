@@ -6,8 +6,8 @@ package mocks
 
 import (
 	"context"
-	"net/http"
 
+	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -103,6 +103,101 @@ func (_c *MockProxyService_GetTarget_Call) Return(proxyTarget *domain.ProxyTarge
 }
 
 func (_c *MockProxyService_GetTarget_Call) RunAndReturn(run func(ctx context.Context, domain1 string) (*domain.ProxyTarget, error)) *MockProxyService_GetTarget_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// IsRegistryDomain provides a mock function for the type MockProxyService
+func (_mock *MockProxyService) IsRegistryDomain(host string) bool {
+	ret := _mock.Called(host)
+
+	if len(ret) == 0 {
+		panic("no return value specified for IsRegistryDomain")
+	}
+
+	var r0 bool
+	if returnFunc, ok := ret.Get(0).(func(string) bool); ok {
+		r0 = returnFunc(host)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	return r0
+}
+
+// MockProxyService_IsRegistryDomain_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsRegistryDomain'
+type MockProxyService_IsRegistryDomain_Call struct {
+	*mock.Call
+}
+
+// IsRegistryDomain is a helper method to define mock.On call
+//   - host string
+func (_e *MockProxyService_Expecter) IsRegistryDomain(host interface{}) *MockProxyService_IsRegistryDomain_Call {
+	return &MockProxyService_IsRegistryDomain_Call{Call: _e.mock.On("IsRegistryDomain", host)}
+}
+
+func (_c *MockProxyService_IsRegistryDomain_Call) Run(run func(host string)) *MockProxyService_IsRegistryDomain_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockProxyService_IsRegistryDomain_Call) Return(b bool) *MockProxyService_IsRegistryDomain_Call {
+	_c.Call.Return(b)
+	return _c
+}
+
+func (_c *MockProxyService_IsRegistryDomain_Call) RunAndReturn(run func(host string) bool) *MockProxyService_IsRegistryDomain_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ProxyConfig provides a mock function for the type MockProxyService
+func (_mock *MockProxyService) ProxyConfig() in.ProxyServiceConfig {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for ProxyConfig")
+	}
+
+	var r0 in.ProxyServiceConfig
+	if returnFunc, ok := ret.Get(0).(func() in.ProxyServiceConfig); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(in.ProxyServiceConfig)
+	}
+	return r0
+}
+
+// MockProxyService_ProxyConfig_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ProxyConfig'
+type MockProxyService_ProxyConfig_Call struct {
+	*mock.Call
+}
+
+// ProxyConfig is a helper method to define mock.On call
+func (_e *MockProxyService_Expecter) ProxyConfig() *MockProxyService_ProxyConfig_Call {
+	return &MockProxyService_ProxyConfig_Call{Call: _e.mock.On("ProxyConfig")}
+}
+
+func (_c *MockProxyService_ProxyConfig_Call) Run(run func()) *MockProxyService_ProxyConfig_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockProxyService_ProxyConfig_Call) Return(proxyServiceConfig in.ProxyServiceConfig) *MockProxyService_ProxyConfig_Call {
+	_c.Call.Return(proxyServiceConfig)
+	return _c
+}
+
+func (_c *MockProxyService_ProxyConfig_Call) RunAndReturn(run func() in.ProxyServiceConfig) *MockProxyService_ProxyConfig_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -221,48 +316,121 @@ func (_c *MockProxyService_RegisterTarget_Call) RunAndReturn(run func(ctx contex
 	return _c
 }
 
-// ServeHTTP provides a mock function for the type MockProxyService
-func (_mock *MockProxyService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	_mock.Called(w, r)
+// ReleaseRegistryRequest provides a mock function for the type MockProxyService
+func (_mock *MockProxyService) ReleaseRegistryRequest() {
+	_mock.Called()
 	return
 }
 
-// MockProxyService_ServeHTTP_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ServeHTTP'
-type MockProxyService_ServeHTTP_Call struct {
+// MockProxyService_ReleaseRegistryRequest_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReleaseRegistryRequest'
+type MockProxyService_ReleaseRegistryRequest_Call struct {
 	*mock.Call
 }
 
-// ServeHTTP is a helper method to define mock.On call
-//   - w http.ResponseWriter
-//   - r *http.Request
-func (_e *MockProxyService_Expecter) ServeHTTP(w interface{}, r interface{}) *MockProxyService_ServeHTTP_Call {
-	return &MockProxyService_ServeHTTP_Call{Call: _e.mock.On("ServeHTTP", w, r)}
+// ReleaseRegistryRequest is a helper method to define mock.On call
+func (_e *MockProxyService_Expecter) ReleaseRegistryRequest() *MockProxyService_ReleaseRegistryRequest_Call {
+	return &MockProxyService_ReleaseRegistryRequest_Call{Call: _e.mock.On("ReleaseRegistryRequest")}
 }
 
-func (_c *MockProxyService_ServeHTTP_Call) Run(run func(w http.ResponseWriter, r *http.Request)) *MockProxyService_ServeHTTP_Call {
+func (_c *MockProxyService_ReleaseRegistryRequest_Call) Run(run func()) *MockProxyService_ReleaseRegistryRequest_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 http.ResponseWriter
-		if args[0] != nil {
-			arg0 = args[0].(http.ResponseWriter)
+		run()
+	})
+	return _c
+}
+
+func (_c *MockProxyService_ReleaseRegistryRequest_Call) Return() *MockProxyService_ReleaseRegistryRequest_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockProxyService_ReleaseRegistryRequest_Call) RunAndReturn(run func()) *MockProxyService_ReleaseRegistryRequest_Call {
+	_c.Run(run)
+	return _c
+}
+
+// TrackInFlight provides a mock function for the type MockProxyService
+func (_mock *MockProxyService) TrackInFlight(containerID string) func() {
+	ret := _mock.Called(containerID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for TrackInFlight")
+	}
+
+	var r0 func()
+	if returnFunc, ok := ret.Get(0).(func(string) func()); ok {
+		r0 = returnFunc(containerID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(func())
 		}
-		var arg1 *http.Request
-		if args[1] != nil {
-			arg1 = args[1].(*http.Request)
+	}
+	return r0
+}
+
+// MockProxyService_TrackInFlight_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'TrackInFlight'
+type MockProxyService_TrackInFlight_Call struct {
+	*mock.Call
+}
+
+// TrackInFlight is a helper method to define mock.On call
+//   - containerID string
+func (_e *MockProxyService_Expecter) TrackInFlight(containerID interface{}) *MockProxyService_TrackInFlight_Call {
+	return &MockProxyService_TrackInFlight_Call{Call: _e.mock.On("TrackInFlight", containerID)}
+}
+
+func (_c *MockProxyService_TrackInFlight_Call) Run(run func(containerID string)) *MockProxyService_TrackInFlight_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
 		}
 		run(
 			arg0,
-			arg1,
 		)
 	})
 	return _c
 }
 
-func (_c *MockProxyService_ServeHTTP_Call) Return() *MockProxyService_ServeHTTP_Call {
+func (_c *MockProxyService_TrackInFlight_Call) Return(fn func()) *MockProxyService_TrackInFlight_Call {
+	_c.Call.Return(fn)
+	return _c
+}
+
+func (_c *MockProxyService_TrackInFlight_Call) RunAndReturn(run func(containerID string) func()) *MockProxyService_TrackInFlight_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// TrackRegistryRequest provides a mock function for the type MockProxyService
+func (_mock *MockProxyService) TrackRegistryRequest() {
+	_mock.Called()
+	return
+}
+
+// MockProxyService_TrackRegistryRequest_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'TrackRegistryRequest'
+type MockProxyService_TrackRegistryRequest_Call struct {
+	*mock.Call
+}
+
+// TrackRegistryRequest is a helper method to define mock.On call
+func (_e *MockProxyService_Expecter) TrackRegistryRequest() *MockProxyService_TrackRegistryRequest_Call {
+	return &MockProxyService_TrackRegistryRequest_Call{Call: _e.mock.On("TrackRegistryRequest")}
+}
+
+func (_c *MockProxyService_TrackRegistryRequest_Call) Run(run func()) *MockProxyService_TrackRegistryRequest_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockProxyService_TrackRegistryRequest_Call) Return() *MockProxyService_TrackRegistryRequest_Call {
 	_c.Call.Return()
 	return _c
 }
 
-func (_c *MockProxyService_ServeHTTP_Call) RunAndReturn(run func(w http.ResponseWriter, r *http.Request)) *MockProxyService_ServeHTTP_Call {
+func (_c *MockProxyService_TrackRegistryRequest_Call) RunAndReturn(run func()) *MockProxyService_TrackRegistryRequest_Call {
 	_c.Run(run)
 	return _c
 }
