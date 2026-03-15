@@ -710,3 +710,69 @@ func TestService_GetTarget_HostMode_FallsBackToExposedPort(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 35000, result.Port)
 }
+
+func TestService_GetTarget_HostMode_H2CProtocolPropagated(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+
+	container := &domain.Container{
+		ID:    "c-grpc",
+		Image: "grpc-app:latest",
+	}
+	containerSvc.EXPECT().Get(mock.Anything, "grpc.example.com").Return(container, true)
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "grpc.example.com", Image: "grpc-app:latest"},
+	})
+
+	runtime.EXPECT().GetImageLabels(mock.Anything, "grpc-app:latest").Return(map[string]string{
+		domain.LabelProxyPort:     "50051",
+		domain.LabelProxyProtocol: "h2c",
+	}, nil)
+
+	runtime.EXPECT().GetContainerPort(mock.Anything, "c-grpc", 50051).Return(50051, nil)
+
+	result, err := svc.GetTarget(ctx, "grpc.example.com")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "h2c", result.Protocol)
+	assert.Equal(t, 50051, result.Port)
+}
+
+func TestService_GetTarget_HostMode_DefaultProtocol(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+
+	container := &domain.Container{
+		ID:    "c-web",
+		Image: "web:latest",
+	}
+	containerSvc.EXPECT().Get(mock.Anything, "web.example.com").Return(container, true)
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
+		{Domain: "web.example.com", Image: "web:latest"},
+	})
+
+	runtime.EXPECT().GetImageLabels(mock.Anything, "web:latest").Return(map[string]string{
+		domain.LabelProxyPort: "8080",
+	}, nil)
+
+	runtime.EXPECT().GetContainerPort(mock.Anything, "c-web", 8080).Return(8080, nil)
+
+	result, err := svc.GetTarget(ctx, "web.example.com")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "", result.Protocol)
+}
