@@ -1060,6 +1060,13 @@ func (s *Service) GetAutoRouteAllowedDomains(_ context.Context) ([]string, error
 
 // AddAutoRouteAllowedDomain adds a domain pattern to the auto-route allowlist.
 func (s *Service) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "AddAutoRouteAllowedDomain",
+		"pattern":             pattern,
+	})
+	log := zerowrap.FromCtx(ctx)
+
 	if err := validateDomainPattern(pattern); err != nil {
 		return err
 	}
@@ -1077,17 +1084,26 @@ func (s *Service) AddAutoRouteAllowedDomain(ctx context.Context, pattern string)
 	s.mu.Unlock()
 
 	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist allowed domain, rolling back")
 		s.mu.Lock()
 		s.config.AutoRouteAllowedDomains = snapshot
 		s.mu.Unlock()
 		return err
 	}
 
+	log.Info().Msg("auto-route allowed domain added")
 	return nil
 }
 
 // RemoveAutoRouteAllowedDomain removes a domain pattern from the auto-route allowlist.
 func (s *Service) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "RemoveAutoRouteAllowedDomain",
+		"pattern":             pattern,
+	})
+	log := zerowrap.FromCtx(ctx)
+
 	s.mu.Lock()
 	previous := append([]string{}, s.config.AutoRouteAllowedDomains...)
 	filtered := make([]string, 0, len(s.config.AutoRouteAllowedDomains))
@@ -1103,16 +1119,19 @@ func (s *Service) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern stri
 	s.mu.Unlock()
 
 	if !removed {
+		log.Debug().Msg("pattern not found in allowlist")
 		return nil
 	}
 
 	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist allowed domain removal, rolling back")
 		s.mu.Lock()
 		s.config.AutoRouteAllowedDomains = previous
 		s.mu.Unlock()
 		return err
 	}
 
+	log.Info().Msg("auto-route allowed domain removed")
 	return nil
 }
 

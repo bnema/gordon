@@ -311,8 +311,9 @@ func (s *BlobStorage) GetBlobUpload(uuid string) (io.WriteCloser, error) {
 
 // lockedWriteCloser wraps an io.WriteCloser and releases a mutex on Close.
 type lockedWriteCloser struct {
-	file io.WriteCloser
-	mu   *sync.Mutex
+	file      io.WriteCloser
+	mu        *sync.Mutex
+	closeOnce sync.Once
 }
 
 func (lw *lockedWriteCloser) Write(p []byte) (int, error) {
@@ -320,8 +321,12 @@ func (lw *lockedWriteCloser) Write(p []byte) (int, error) {
 }
 
 func (lw *lockedWriteCloser) Close() error {
-	defer lw.mu.Unlock()
-	return lw.file.Close()
+	var err error
+	lw.closeOnce.Do(func() {
+		defer lw.mu.Unlock()
+		err = lw.file.Close()
+	})
+	return err
 }
 
 // FinishBlobUpload completes an upload and moves it to blob storage.
