@@ -258,6 +258,7 @@ func (s *BlobStorage) AppendBlobChunk(name, uuid string, data io.Reader) (int64,
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.cleanupUploadLock(uuid)
 			return 0, fmt.Errorf("upload not found: %s", uuid)
 		}
 		return 0, fmt.Errorf("failed to open upload file: %w", err)
@@ -301,6 +302,7 @@ func (s *BlobStorage) GetBlobUpload(uuid string) (io.WriteCloser, error) {
 	if err != nil {
 		mu.Unlock()
 		if os.IsNotExist(err) {
+			s.cleanupUploadLock(uuid)
 			return nil, fmt.Errorf("upload not found: %s", uuid)
 		}
 		return nil, fmt.Errorf("failed to open upload file: %w", err)
@@ -314,6 +316,7 @@ type lockedWriteCloser struct {
 	file      io.WriteCloser
 	mu        *sync.Mutex
 	closeOnce sync.Once
+	closeErr  error
 }
 
 func (lw *lockedWriteCloser) Write(p []byte) (int, error) {
@@ -321,12 +324,11 @@ func (lw *lockedWriteCloser) Write(p []byte) (int, error) {
 }
 
 func (lw *lockedWriteCloser) Close() error {
-	var err error
 	lw.closeOnce.Do(func() {
 		defer lw.mu.Unlock()
-		err = lw.file.Close()
+		lw.closeErr = lw.file.Close()
 	})
-	return err
+	return lw.closeErr
 }
 
 // FinishBlobUpload completes an upload and moves it to blob storage.

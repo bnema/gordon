@@ -41,9 +41,10 @@ var (
 	ErrVolumeExists   = errors.New("volume already exists")
 
 	// Config errors
-	ErrConfigNotFound   = errors.New("configuration not found")
-	ErrInvalidConfig    = errors.New("invalid configuration")
-	ErrConfigLoadFailed = errors.New("failed to load configuration")
+	ErrConfigNotFound       = errors.New("configuration not found")
+	ErrInvalidConfig        = errors.New("invalid configuration")
+	ErrConfigLoadFailed     = errors.New("failed to load configuration")
+	ErrInvalidDomainPattern = errors.New("invalid domain pattern")
 
 	// Environment errors
 	ErrEnvFileNotFound      = errors.New("environment file not found")

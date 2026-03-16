@@ -1137,31 +1137,34 @@ func (s *Service) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern stri
 
 func validateDomainPattern(pattern string) error {
 	if pattern == "" {
-		return fmt.Errorf("domain pattern is required")
+		return fmt.Errorf("%w: pattern is required", domain.ErrInvalidDomainPattern)
+	}
+	if pattern == "*" {
+		return nil
 	}
 	if pattern != strings.ToLower(pattern) {
-		return fmt.Errorf("domain pattern must be lowercase")
+		return fmt.Errorf("%w: must be lowercase", domain.ErrInvalidDomainPattern)
 	}
 	if strings.HasSuffix(pattern, ".") {
-		return fmt.Errorf("domain pattern must not have trailing dots")
+		return fmt.Errorf("%w: must not have trailing dots", domain.ErrInvalidDomainPattern)
 	}
 	if strings.Contains(pattern, "**") {
-		return fmt.Errorf("domain pattern must not contain double wildcards")
+		return fmt.Errorf("%w: must not contain double wildcards", domain.ErrInvalidDomainPattern)
 	}
 	if strings.Count(pattern, "*") > 1 {
-		return fmt.Errorf("domain pattern must not contain multiple wildcards")
+		return fmt.Errorf("%w: must not contain multiple wildcards", domain.ErrInvalidDomainPattern)
 	}
 	if strings.Contains(pattern, "*") {
 		if !strings.HasPrefix(pattern, "*.") {
-			return fmt.Errorf("domain pattern wildcard must be in *.domain form")
+			return fmt.Errorf("%w: wildcard must be in *.domain form", domain.ErrInvalidDomainPattern)
 		}
 		if !isValidExactDomain(strings.TrimPrefix(pattern, "*.")) {
-			return fmt.Errorf("invalid domain pattern")
+			return fmt.Errorf("%w: invalid domain after wildcard", domain.ErrInvalidDomainPattern)
 		}
 		return nil
 	}
 	if !isValidExactDomain(pattern) {
-		return fmt.Errorf("invalid domain pattern")
+		return fmt.Errorf("%w: invalid domain format", domain.ErrInvalidDomainPattern)
 	}
 	return nil
 }

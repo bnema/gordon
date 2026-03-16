@@ -64,7 +64,7 @@ gordon auth login --token <token>
 
 When `pass` is available:
 
-```
+```text
 Username: admin
 Password: ********
 Authenticating with prod...
@@ -76,7 +76,7 @@ Expires in: 604800 seconds
 
 When `pass` is not available:
 
-```
+```text
 Username: admin
 Password: ********
 Authenticating with prod...

@@ -1756,12 +1756,16 @@ func (h *Handler) handleAutoRouteAllowedDomainsPost(w http.ResponseWriter, r *ht
 	}
 
 	if err := h.configSvc.AddAutoRouteAllowedDomain(ctx, req.Pattern); err != nil {
-		log.Error().Err(err).Str("pattern", req.Pattern).Msg("failed to add auto-route allowed domain")
-		h.sendError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, domain.ErrInvalidDomainPattern) {
+			h.sendError(w, http.StatusBadRequest, err.Error())
+		} else {
+			log.Error().Err(err).Str("pattern", req.Pattern).Msg("failed to add auto-route allowed domain")
+			h.sendError(w, http.StatusInternalServerError, "failed to add auto-route allowed domain")
+		}
 		return
 	}
 
-	h.sendJSON(w, http.StatusCreated, dto.AttachmentStatusResponse{Status: "added"})
+	h.sendJSON(w, http.StatusCreated, dto.AutoRouteStatusResponse{Status: "added"})
 }
 
 func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *http.Request, path string) {
@@ -1773,9 +1777,13 @@ func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *
 	}
 
 	raw := strings.TrimPrefix(path, "/autoroute/allowed-domains/")
+	if raw == path || raw == "" || raw == "/" {
+		h.sendError(w, http.StatusBadRequest, "missing domain pattern")
+		return
+	}
 	pattern, err := url.PathUnescape(raw)
-	if err != nil || pattern == "" {
-		h.sendError(w, http.StatusBadRequest, "missing or invalid domain pattern")
+	if err != nil || strings.TrimSpace(pattern) == "" {
+		h.sendError(w, http.StatusBadRequest, "invalid domain pattern")
 		return
 	}
 

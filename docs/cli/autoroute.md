@@ -65,7 +65,7 @@ gordon autoroute allow add example.com --remote https://gordon.mydomain.com --to
 ### Description
 
 Patterns must be lowercase and must not have trailing dots.
-Wildcards are only allowed in `*.domain.tld` form and match exactly one subdomain level, so `*.example.com` matches `app.example.com` but not `api.app.example.com`.
+A bare `*` matches all domains. Wildcards in `*.domain.tld` form match exactly one subdomain level, so `*.example.com` matches `app.example.com` but not `api.app.example.com`.
 
 ### Examples
 
