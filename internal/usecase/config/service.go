@@ -1089,7 +1089,8 @@ func (s *Service) AddAutoRouteAllowedDomain(ctx context.Context, pattern string)
 // RemoveAutoRouteAllowedDomain removes a domain pattern from the auto-route allowlist.
 func (s *Service) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
 	s.mu.Lock()
-	filtered := s.config.AutoRouteAllowedDomains[:0]
+	previous := append([]string{}, s.config.AutoRouteAllowedDomains...)
+	filtered := make([]string, 0, len(s.config.AutoRouteAllowedDomains))
 	removed := false
 	for _, existing := range s.config.AutoRouteAllowedDomains {
 		if existing == pattern {
@@ -1098,7 +1099,6 @@ func (s *Service) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern stri
 		}
 		filtered = append(filtered, existing)
 	}
-	previous := append([]string{}, s.config.AutoRouteAllowedDomains...)
 	s.config.AutoRouteAllowedDomains = filtered
 	s.mu.Unlock()
 

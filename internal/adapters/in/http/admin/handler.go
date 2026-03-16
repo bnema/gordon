@@ -1772,7 +1772,7 @@ func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *
 		return
 	}
 
-	pattern := strings.TrimPrefix(path, "/")
+	pattern := strings.TrimPrefix(path, "/autoroute/allowed-domains/")
 	if pattern == "" {
 		h.sendError(w, http.StatusBadRequest, "missing domain pattern")
 		return
