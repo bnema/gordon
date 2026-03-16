@@ -67,6 +67,12 @@ var (
 	ErrSSRFBlocked       = errors.New("request to internal/blocked network not allowed")
 	ErrInvalidEnvKey     = errors.New("invalid environment variable key")
 
+	// Remote errors
+	ErrEmptyRemoteName       = errors.New("remote name must not be empty")
+	ErrInvalidRemoteNameChar = errors.New("remote name contains invalid characters")
+	ErrConsecutiveDots       = errors.New("remote name must not contain consecutive dots")
+	ErrPassUnavailable       = errors.New("pass is not available")
+
 	// Attachment errors
 	ErrAttachmentNotFound    = errors.New("attachment not found")
 	ErrAttachmentExists      = errors.New("attachment already exists")

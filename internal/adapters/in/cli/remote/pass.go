@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 var (
@@ -19,13 +21,13 @@ var (
 
 func validateRemoteName(name string) error {
 	if name == "" {
-		return fmt.Errorf("remote name must not be empty")
+		return domain.ErrEmptyRemoteName
 	}
 	if !validRemoteName.MatchString(name) {
-		return fmt.Errorf("remote name contains invalid characters (allowed: a-z, A-Z, 0-9, '.', '_', '-')")
+		return fmt.Errorf("%w (allowed: a-z, A-Z, 0-9, '.', '_', '-')", domain.ErrInvalidRemoteNameChar)
 	}
 	if strings.Contains(name, "..") {
-		return fmt.Errorf("remote name must not contain consecutive dots")
+		return domain.ErrConsecutiveDots
 	}
 	return nil
 }
@@ -59,7 +61,7 @@ func passReadToken(name string) (string, error) {
 		return "", err
 	}
 	if !passAvailable() {
-		return "", fmt.Errorf("pass is not available")
+		return "", domain.ErrPassUnavailable
 	}
 
 	cmd := exec.Command("pass", "show", passTokenPath(name)) //nolint:gosec // pass binary name is constant; remote names are validated
@@ -79,7 +81,7 @@ func passWriteToken(name, token string) error {
 		return err
 	}
 	if !passAvailable() {
-		return fmt.Errorf("pass is not available")
+		return domain.ErrPassUnavailable
 	}
 
 	cmd := exec.Command("pass", "insert", "--multiline", passTokenPath(name)) //nolint:gosec // pass binary name is constant; remote names are validated
