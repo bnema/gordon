@@ -79,4 +79,9 @@ type ConfigService interface {
 
 	// RemoveAttachment removes an image from a domain/group's attachments.
 	RemoveAttachment(ctx context.Context, domainOrGroup, image string) error
+
+	// Auto-route domain allowlist
+	GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error)
+	AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error
+	RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error
 }

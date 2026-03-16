@@ -96,6 +96,18 @@ func (c *resolveFromImageTestControlPlane) RemoveAttachment(context.Context, str
 	panic("unexpected call")
 }
 
+func (c *resolveFromImageTestControlPlane) GetAutoRouteAllowedDomains(context.Context) ([]string, error) {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) AddAutoRouteAllowedDomain(context.Context, string) error {
+	panic("unexpected call")
+}
+
+func (c *resolveFromImageTestControlPlane) RemoveAutoRouteAllowedDomain(context.Context, string) error {
+	panic("unexpected call")
+}
+
 func (c *resolveFromImageTestControlPlane) GetStatus(context.Context) (*remote.Status, error) {
 	panic("unexpected call")
 }

@@ -96,6 +96,18 @@ func (c *attachmentPushTestControlPlane) RemoveAttachment(context.Context, strin
 	panic("unexpected call")
 }
 
+func (c *attachmentPushTestControlPlane) GetAutoRouteAllowedDomains(context.Context) ([]string, error) {
+	panic("unexpected call")
+}
+
+func (c *attachmentPushTestControlPlane) AddAutoRouteAllowedDomain(context.Context, string) error {
+	panic("unexpected call")
+}
+
+func (c *attachmentPushTestControlPlane) RemoveAutoRouteAllowedDomain(context.Context, string) error {
+	panic("unexpected call")
+}
+
 func (c *attachmentPushTestControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {
 	if c.getStatus != nil {
 		return c.getStatus(ctx)

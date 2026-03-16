@@ -41,9 +41,10 @@ var (
 	ErrVolumeExists   = errors.New("volume already exists")
 
 	// Config errors
-	ErrConfigNotFound   = errors.New("configuration not found")
-	ErrInvalidConfig    = errors.New("invalid configuration")
-	ErrConfigLoadFailed = errors.New("failed to load configuration")
+	ErrConfigNotFound       = errors.New("configuration not found")
+	ErrInvalidConfig        = errors.New("invalid configuration")
+	ErrConfigLoadFailed     = errors.New("failed to load configuration")
+	ErrInvalidDomainPattern = errors.New("invalid domain pattern")
 
 	// Environment errors
 	ErrEnvFileNotFound      = errors.New("environment file not found")
@@ -65,6 +66,12 @@ var (
 	ErrInvalidScope      = errors.New("invalid scope format")
 	ErrSSRFBlocked       = errors.New("request to internal/blocked network not allowed")
 	ErrInvalidEnvKey     = errors.New("invalid environment variable key")
+
+	// Remote errors
+	ErrEmptyRemoteName       = errors.New("remote name must not be empty")
+	ErrInvalidRemoteNameChar = errors.New("remote name contains invalid characters")
+	ErrConsecutiveDots       = errors.New("remote name must not contain consecutive dots")
+	ErrPassUnavailable       = errors.New("pass is not available")
 
 	// Attachment errors
 	ErrAttachmentNotFound    = errors.New("attachment not found")

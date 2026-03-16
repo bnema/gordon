@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 )
 
 // PasswordRequest represents the request body for POST /auth/password.
@@ -72,6 +73,30 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 
 // UpdateRemoteToken updates the token for a named remote.
 func UpdateRemoteToken(name, token string) error {
+	// Try pass first
+	if passAvailable() {
+		if err := passWriteToken(name, token); err == nil {
+			// Successfully stored in pass. Remove plaintext token from TOML (best-effort).
+			config, err := LoadRemotes("")
+			if err != nil {
+				return nil
+			}
+			remote, ok := config.Remotes[name]
+			if !ok {
+				return nil
+			}
+			remote.Token = ""
+			remote.TokenEnv = ""
+			config.Remotes[name] = remote
+			_ = SaveRemotes("", config)
+			return nil
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: failed to store token in pass: %v. Falling back to plaintext config.\n", err)
+		}
+	} else {
+		warnPassUnavailable()
+	}
+
 	config, err := LoadRemotes("")
 	if err != nil {
 		return err

@@ -334,6 +334,53 @@ func TestParseImageLabels_InvalidJSON(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestMatchesDomainAllowlist(t *testing.T) {
+	tests := []struct {
+		name     string
+		domain   string
+		patterns []string
+		want     bool
+	}{
+		{name: "exact match", domain: "app.example.com", patterns: []string{"app.example.com"}, want: true},
+		{name: "no match", domain: "app.example.com", patterns: []string{"api.example.com"}, want: false},
+		{name: "wildcard match", domain: "app.example.com", patterns: []string{"*.example.com"}, want: true},
+		{name: "wildcard no match on root", domain: "example.com", patterns: []string{"*.example.com"}, want: false},
+		{name: "wildcard matches one level only", domain: "api.app.example.com", patterns: []string{"*.example.com"}, want: false},
+		{name: "empty allowlist", domain: "app.example.com", patterns: nil, want: false},
+		{name: "case insensitive", domain: "App.Example.Com", patterns: []string{"APP.EXAMPLE.COM"}, want: true},
+		{name: "multiple patterns", domain: "api.example.com", patterns: []string{"foo.com", "*.example.com"}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, matchesDomainAllowlist(tt.domain, tt.patterns))
+		})
+	}
+}
+
+func TestExtractRepoName(t *testing.T) {
+	tests := []struct {
+		name           string
+		imageRef       string
+		registryDomain string
+		want           string
+	}{
+		{name: "simple tag", imageRef: "myapp:latest", want: "myapp"},
+		{name: "version tag", imageRef: "myapp:v2.0.0", want: "myapp"},
+		{name: "digest", imageRef: "myapp@sha256:abc123", want: "myapp"},
+		{name: "strip registry", imageRef: "registry.example.com/myapp:latest", registryDomain: "registry.example.com", want: "myapp"},
+		{name: "org image", imageRef: "org/myapp:latest", want: "org/myapp"},
+		{name: "registry org image", imageRef: "registry.example.com/org/myapp:latest", registryDomain: "registry.example.com", want: "org/myapp"},
+		{name: "lowercase", imageRef: "MyApp:Latest", want: "myapp"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractRepoName(tt.imageRef, tt.registryDomain))
+		})
+	}
+}
+
 // AutoRouteHandler tests
 
 func TestAutoRouteHandler_CanHandle(t *testing.T) {
@@ -450,6 +497,7 @@ func TestAutoRouteHandler_Handle_CreatesNewRoute(t *testing.T) {
 
 	configSvc.EXPECT().IsAutoRouteEnabled().Return(true)
 	blobStorage.EXPECT().GetBlob("sha256:configdigest123").Return(io.NopCloser(strings.NewReader(string(configData))), nil)
+	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"app.example.com"}, nil)
 
 	// No existing routes
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
@@ -510,6 +558,7 @@ func TestAutoRouteHandler_Handle_UpdatesExistingRoute(t *testing.T) {
 
 	configSvc.EXPECT().IsAutoRouteEnabled().Return(true)
 	blobStorage.EXPECT().GetBlob("sha256:configdigest123").Return(io.NopCloser(strings.NewReader(string(configData))), nil)
+	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"*"}, nil)
 
 	// Existing route with different image
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
@@ -572,6 +621,7 @@ func TestAutoRouteHandler_Handle_NoUpdateIfSameImage(t *testing.T) {
 
 	configSvc.EXPECT().IsAutoRouteEnabled().Return(true)
 	blobStorage.EXPECT().GetBlob("sha256:configdigest123").Return(io.NopCloser(strings.NewReader(string(configData))), nil)
+	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"*"}, nil)
 
 	// Existing route with same image - no update needed
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
@@ -672,6 +722,7 @@ func TestAutoRouteHandler_Handle_MultipleDomains(t *testing.T) {
 
 	configSvc.EXPECT().IsAutoRouteEnabled().Return(true)
 	blobStorage.EXPECT().GetBlob("sha256:configdigest123").Return(io.NopCloser(strings.NewReader(string(configData))), nil)
+	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"app.example.com", "api.example.com", "www.example.com"}, nil).Once()
 
 	// No existing routes
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{}).Times(3)
@@ -723,6 +774,98 @@ func TestAutoRouteHandler_TriggerDeploy_NilContainerService(t *testing.T) {
 
 	// Should not panic, just log and skip
 	handler.triggerDeploy(ctx, route)
+}
+
+func TestAutoRouteHandler_NewDomain_Allowed(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(&domain.Container{ID: "c1"}, nil)
+
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:latest", []string{"*.example.com"})
+	assert.True(t, created)
+}
+
+func TestAutoRouteHandler_NewDomain_NotAllowed(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
+
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:latest", []string{"*.allowed.com"})
+	assert.False(t, created)
+}
+
+func TestAutoRouteHandler_ExistingDomain_SameRepo(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "myapp:v1"}})
+	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2"}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2"}).Return(&domain.Container{ID: "c1"}, nil)
+
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:v2", []string{"*.example.com"})
+	assert.False(t, created)
+}
+
+func TestAutoRouteHandler_ExistingDomain_DifferentRepo(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "oldapp:v1"}})
+
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "newapp:v2", []string{"*.example.com"})
+	assert.False(t, created)
+}
+
+func TestAutoRouteHandler_EnvExtractionOnlyOnCreate(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	extractor := &testEnvExtractor{}
+
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com").WithEnvExtractor(extractor, t.TempDir())
+
+	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"*.example.com"}, nil).Twice()
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{}).Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(&domain.Container{ID: "c1"}, nil)
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "myapp:latest"}}).Once()
+
+	handler.processRoutes(context.Background(), []string{"app.example.com"}, "myapp:latest", &domain.ImageLabels{EnvFile: ".env"})
+	handler.processRoutes(context.Background(), []string{"app.example.com"}, "myapp:latest", &domain.ImageLabels{EnvFile: ".env"})
+
+	assert.Equal(t, 1, extractor.calls)
+	assert.Equal(t, "registry.example.com/myapp:latest", extractor.lastImage)
+	assert.Equal(t, ".env", extractor.lastPath)
+}
+
+type testEnvExtractor struct {
+	calls     int
+	lastImage string
+	lastPath  string
+}
+
+func (e *testEnvExtractor) ExtractEnvFileFromImage(_ context.Context, imageRef, envFilePath string) ([]byte, error) {
+	e.calls++
+	e.lastImage = imageRef
+	e.lastPath = envFilePath
+	return []byte("FOO=bar\n"), nil
 }
 
 // collectDomains tests

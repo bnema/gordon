@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/bnema/zerowrap"
 	"github.com/google/uuid"
@@ -20,8 +21,9 @@ import (
 
 // BlobStorage implements the BlobStorage interface using the local filesystem.
 type BlobStorage struct {
-	rootDir string
-	log     zerowrap.Logger
+	rootDir     string
+	log         zerowrap.Logger
+	uploadLocks sync.Map
 }
 
 // NewBlobStorage creates a new filesystem blob storage instance.
@@ -249,9 +251,14 @@ func (s *BlobStorage) AppendBlobChunk(name, uuid string, data io.Reader) (int64,
 		return 0, fmt.Errorf("invalid upload path: %w", err)
 	}
 
+	mu := s.getUploadLock(uuid)
+	mu.Lock()
+	defer mu.Unlock()
+
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.cleanupUploadLock(uuid)
 			return 0, fmt.Errorf("upload not found: %s", uuid)
 		}
 		return 0, fmt.Errorf("failed to open upload file: %w", err)
@@ -281,21 +288,47 @@ func (s *BlobStorage) AppendBlobChunk(name, uuid string, data io.Reader) (int64,
 }
 
 // GetBlobUpload returns a writer for the upload.
+// The returned WriteCloser holds the per-upload lock; callers must Close it to release the lock.
 func (s *BlobStorage) GetBlobUpload(uuid string) (io.WriteCloser, error) {
 	uploadPath, err := s.getUploadPath(uuid)
 	if err != nil {
 		return nil, fmt.Errorf("invalid upload path: %w", err)
 	}
 
+	mu := s.getUploadLock(uuid)
+	mu.Lock()
+
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
+		mu.Unlock()
 		if os.IsNotExist(err) {
+			s.cleanupUploadLock(uuid)
 			return nil, fmt.Errorf("upload not found: %s", uuid)
 		}
 		return nil, fmt.Errorf("failed to open upload file: %w", err)
 	}
 
-	return file, nil
+	return &lockedWriteCloser{file: file, mu: mu}, nil
+}
+
+// lockedWriteCloser wraps an io.WriteCloser and releases a mutex on Close.
+type lockedWriteCloser struct {
+	file      io.WriteCloser
+	mu        *sync.Mutex
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (lw *lockedWriteCloser) Write(p []byte) (int, error) {
+	return lw.file.Write(p)
+}
+
+func (lw *lockedWriteCloser) Close() error {
+	lw.closeOnce.Do(func() {
+		defer lw.mu.Unlock()
+		lw.closeErr = lw.file.Close()
+	})
+	return lw.closeErr
 }
 
 // FinishBlobUpload completes an upload and moves it to blob storage.
@@ -304,6 +337,17 @@ func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
 	if err != nil {
 		return fmt.Errorf("invalid upload path: %w", err)
 	}
+
+	mu := s.getUploadLock(uuid)
+	mu.Lock()
+	var finalized bool
+	defer func() {
+		mu.Unlock()
+		if finalized {
+			s.cleanupUploadLock(uuid)
+		}
+	}()
+
 	blobPath, err := s.getBlobPath(digest)
 	if err != nil {
 		return fmt.Errorf("invalid blob path: %w", err)
@@ -323,6 +367,7 @@ func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
 	if err := os.Rename(uploadPath, blobPath); err != nil {
 		return fmt.Errorf("failed to move upload to blob location: %w", err)
 	}
+	finalized = true
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
@@ -341,12 +386,24 @@ func (s *BlobStorage) CancelBlobUpload(uuid string) error {
 		return fmt.Errorf("invalid upload path: %w", err)
 	}
 
+	mu := s.getUploadLock(uuid)
+	mu.Lock()
+	var finalized bool
+	defer func() {
+		mu.Unlock()
+		if finalized {
+			s.cleanupUploadLock(uuid)
+		}
+	}()
+
 	if err := os.Remove(uploadPath); err != nil {
 		if os.IsNotExist(err) {
+			s.cleanupUploadLock(uuid)
 			return fmt.Errorf("upload not found: %s", uuid)
 		}
 		return fmt.Errorf("failed to cancel upload: %w", err)
 	}
+	finalized = true
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
@@ -404,6 +461,15 @@ func (s *BlobStorage) getUploadPath(uuid string) (string, error) {
 	}
 
 	return path, nil
+}
+
+func (s *BlobStorage) getUploadLock(uuid string) *sync.Mutex {
+	v, _ := s.uploadLocks.LoadOrStore(uuid, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
+func (s *BlobStorage) cleanupUploadLock(uuid string) {
+	s.uploadLocks.Delete(uuid)
 }
 
 // verifyUploadDigest computes and verifies the digest of an uploaded file.

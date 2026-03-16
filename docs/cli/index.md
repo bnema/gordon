@@ -39,6 +39,7 @@ Management commands run locally through in-process services by default. Add `--r
 | `gordon images` | List and prune images | [images](./images.md) |
 | `gordon config show` | Show server configuration | [config](./config.md) |
 | `gordon networks list` | List Gordon-managed Docker networks | [networks](./networks.md) |
+| `gordon autoroute` | Manage auto-route domain allowlist | [autoroute](./autoroute.md) |
 
 ## Client Commands
 
@@ -127,6 +128,12 @@ gordon secrets remove myapp.local DATABASE_URL
 gordon remotes add prod https://gordon.mydomain.com --token $TOKEN
 gordon remotes list
 gordon remotes use prod
+
+# Auto-route allowlist
+gordon autoroute allow list
+gordon autoroute allow add example.com
+gordon autoroute allow add "*.staging.example.com"
+gordon autoroute allow remove example.com
 ```
 
 ## Global Options

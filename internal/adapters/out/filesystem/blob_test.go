@@ -2,9 +2,12 @@ package filesystem
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/bnema/zerowrap"
@@ -483,4 +486,182 @@ func TestBlobStorage_CompleteUploadFlow(t *testing.T) {
 	// 3. Cancel upload (since we can't easily compute the real digest)
 	err = storage.CancelBlobUpload(uuid)
 	require.NoError(t, err)
+}
+
+func TestBlobStorage_ConcurrentAppendAndFinalize(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewBlobStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+
+	initialData := []byte("initial-")
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(initialData))
+	require.NoError(t, err)
+
+	appendChunk := []byte("chunk")
+	appenders := 8
+	var wg sync.WaitGroup
+	appendReady := make(chan struct{})
+	finalizeErrs := make(chan error, 1)
+	appendErrs := make(chan error, appenders)
+
+	for range appenders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-appendReady
+			_, appendErr := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(appendChunk))
+			appendErrs <- appendErr
+		}()
+	}
+
+	close(appendReady)
+	fullyAppended := appendRepeated(initialData, appendChunk, appenders)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		finalizeErrs <- storage.FinishBlobUpload(uuid, digestForData(fullyAppended))
+	}()
+
+	wg.Wait()
+	close(appendErrs)
+
+	finalizeErr := <-finalizeErrs
+	if finalizeErr == nil {
+		for appendErr := range appendErrs {
+			require.NoError(t, appendErr)
+		}
+
+		reader, err := storage.GetBlob(digestForData(fullyAppended))
+		require.NoError(t, err)
+		defer reader.Close()
+
+		blobData, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		assert.Equal(t, fullyAppended, blobData)
+	} else {
+		assert.Contains(t, finalizeErr.Error(), "digest verification failed")
+
+		appendCount := 0
+		for appendErr := range appendErrs {
+			require.NoError(t, appendErr)
+			appendCount++
+		}
+
+		require.Equal(t, appenders, appendCount)
+
+		retryDigest := digestForData(fullyAppended)
+		err = storage.FinishBlobUpload(uuid, retryDigest)
+		require.NoError(t, err)
+
+		reader, err := storage.GetBlob(retryDigest)
+		require.NoError(t, err)
+		defer reader.Close()
+
+		blobData, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		assert.Equal(t, fullyAppended, blobData)
+	}
+
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("after")))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "upload not found")
+}
+
+func TestBlobStorage_AppendAfterFinalize(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewBlobStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+
+	blobData := []byte("finalized content")
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData))
+	require.NoError(t, err)
+
+	err = storage.FinishBlobUpload(uuid, digestForData(blobData))
+	require.NoError(t, err)
+
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("more")))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "upload not found")
+}
+
+func TestBlobStorage_FailedFinalizeRetryable(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewBlobStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+
+	blobData := []byte("retryable finalize")
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData))
+	require.NoError(t, err)
+
+	err = storage.FinishBlobUpload(uuid, testDigest1)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "digest verification failed")
+
+	err = storage.FinishBlobUpload(uuid, digestForData(blobData))
+	require.NoError(t, err)
+}
+
+func TestBlobStorage_SequentialFlow(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewBlobStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+
+	chunks := [][]byte{
+		[]byte("one-"),
+		[]byte("two-"),
+		[]byte("three"),
+	}
+
+	var blobData []byte
+	for _, chunk := range chunks {
+		blobData = append(blobData, chunk...)
+		_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(chunk))
+		require.NoError(t, err)
+	}
+
+	digest := digestForData(blobData)
+	err = storage.FinishBlobUpload(uuid, digest)
+	require.NoError(t, err)
+
+	reader, err := storage.GetBlob(digest)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	storedData, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, blobData, storedData)
+}
+
+func digestForData(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func appendRepeated(initialData, chunk []byte, repetitions int) []byte {
+	data := append([]byte{}, initialData...)
+	for range repetitions {
+		data = append(data, chunk...)
+	}
+	return data
 }
