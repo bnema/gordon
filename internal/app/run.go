@@ -1464,7 +1464,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	proxyMux := http.NewServeMux()
 	proxyMux.Handle("/", proxyWithMiddleware)
 
-	registerAdminRoutes(registryMux, proxyMux, svc, cfg, trustedNets, log)
+	registerAdminRoutes(registryMux, svc, cfg, trustedNets, log)
 
 	return registryMux, proxyMux
 }
@@ -1607,7 +1607,7 @@ func wrapRegistryForLocalMode(registryWithMiddleware http.Handler, cfg Config, l
 	return registryWithMiddleware
 }
 
-func registerAdminRoutes(registryMux, proxyMux *http.ServeMux, svc *services, cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) {
+func registerAdminRoutes(registryMux *http.ServeMux, svc *services, cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) {
 	if svc.adminHandler == nil {
 		return
 	}
@@ -1646,54 +1646,6 @@ func registerAdminRoutes(registryMux, proxyMux *http.ServeMux, svc *services, cf
 		"gordon.admin",
 	)
 	registryMux.Handle("/admin/", loopbackOnly(adminWithMiddleware, log))
-	proxyMux.Handle("/admin/", adminHostOnly(adminWithMiddleware, cfg.Server.RegistryDomain, log))
-}
-
-func adminHostOnly(next http.Handler, allowedHost string, log zerowrap.Logger) http.Handler {
-	canonicalAllowedHost := canonicalHost(allowedHost)
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := canonicalHost(r.Host)
-		if host == "" {
-			host = canonicalHost(r.URL.Host)
-		}
-
-		if !isLoopbackHost(host) && (canonicalAllowedHost == "" || !strings.EqualFold(host, canonicalAllowedHost)) {
-			log.Warn().
-				Str("path", r.URL.Path).
-				Str("host", r.Host).
-				Str("allowed_host", canonicalAllowedHost).
-				Msg("blocked admin request on unauthorized host")
-			http.NotFound(w, r)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-func canonicalHost(rawHost string) string {
-	host := strings.TrimSpace(rawHost)
-	if host == "" {
-		return ""
-	}
-
-	if splitHost, _, err := net.SplitHostPort(host); err == nil {
-		host = splitHost
-	}
-
-	host = strings.TrimPrefix(host, "[")
-	host = strings.TrimSuffix(host, "]")
-	return strings.ToLower(host)
-}
-
-func isLoopbackHost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // runServers starts the HTTP servers and waits for shutdown.
