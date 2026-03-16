@@ -36,7 +36,7 @@ gordon auth login [options]
 
 ### Description
 
-This command prompts for your username and password, authenticates with the remote server's `/auth/password` endpoint, and stores the returned token in your remotes configuration.
+This command prompts for your username and password, authenticates with the remote server's `/auth/password` endpoint, and stores the returned token. When [pass](https://www.passwordstore.org/) is available, the token is stored encrypted at `gordon/remotes/<name>/token` and any plaintext token fields are cleared from `remotes.toml`. When `pass` is unavailable, the token is stored in plaintext in `remotes.toml` with a warning.
 
 If you provide `--token`, the token is stored directly and verified against `/admin/status` on a best-effort basis.
 
@@ -68,7 +68,7 @@ Password: ********
 Authenticating with prod...
 
 ✓ Authentication successful!
-Token stored for remote 'prod'
+Token stored in pass for remote 'prod'
 Expires in: 604800 seconds
 ```
 
