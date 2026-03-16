@@ -2,16 +2,13 @@ package in
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// ProxyService defines the contract for reverse proxy operations.
+// ProxyService defines the contract for proxy routing and state management.
+// HTTP request handling is the adapter's responsibility (adapters/in/http/proxy).
 type ProxyService interface {
-	// ServeHTTP handles incoming HTTP requests and proxies them to the appropriate backend.
-	ServeHTTP(w http.ResponseWriter, r *http.Request)
-
 	// GetTarget returns the proxy target for a given domain.
 	GetTarget(ctx context.Context, domain string) (*domain.ProxyTarget, error)
 
@@ -23,4 +20,31 @@ type ProxyService interface {
 
 	// RefreshTargets refreshes all proxy targets from container state.
 	RefreshTargets(ctx context.Context) error
+
+	// IsRegistryDomain returns true if the host matches the configured registry domain.
+	IsRegistryDomain(host string) bool
+
+	// TrackInFlight records an in-flight request for a container.
+	// Returns a release function that must be called when the request completes.
+	TrackInFlight(containerID string) func()
+
+	// TrackRegistryRequest increments the registry in-flight counter.
+	TrackRegistryRequest()
+
+	// ReleaseRegistryRequest decrements the registry in-flight counter.
+	ReleaseRegistryRequest()
+
+	// ProxyConfig returns the current proxy configuration.
+	// The adapter uses this for HTTP-level enforcement (body size, response size, concurrency).
+	ProxyConfig() ProxyServiceConfig
+}
+
+// ProxyServiceConfig holds configuration that the proxy adapter needs
+// from the usecase layer for HTTP-level enforcement.
+type ProxyServiceConfig struct {
+	RegistryDomain     string
+	RegistryPort       int
+	MaxBodySize        int64
+	MaxResponseSize    int64
+	MaxConcurrentConns int
 }
