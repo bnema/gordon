@@ -79,7 +79,13 @@ gordon remotes add dev https://dev.internal --insecure
 
 ### Token Security
 
-**Option 1: Environment Variable Reference (Recommended)**
+**Option 1: pass Store (Recommended)**
+
+When [pass](https://www.passwordstore.org/) is installed and initialized, Gordon stores tokens encrypted via GPG automatically. No extra flags are needed -- `gordon auth login` and `gordon remotes set-token` use `pass` when available.
+
+Tokens are stored at the path `gordon/remotes/<name>/token` inside the pass store. If `pass` is unavailable, Gordon falls back to plaintext config with a warning.
+
+**Option 2: Environment Variable Reference**
 
 ```bash
 gordon remotes add prod https://gordon.mydomain.com --token-env PROD_TOKEN
@@ -95,7 +101,7 @@ token_env = "PROD_TOKEN"
 
 At runtime, Gordon reads `$PROD_TOKEN` from the environment.
 
-**Option 2: Direct Token Storage**
+**Option 3: Direct Token Storage**
 
 ```bash
 gordon remotes add prod https://gordon.mydomain.com --token eyJ...
@@ -245,7 +251,9 @@ When multiple sources specify remote or token, the CLI uses this priority:
 **Token:**
 1. `--token` flag
 2. `GORDON_TOKEN` environment variable
-3. Token from active remote in `remotes.toml`
+3. Token from client config (`gordon.toml`)
+4. `pass` store (`gordon/remotes/<name>/token`)
+5. Token from active remote in `remotes.toml`
 
 **Insecure TLS:**
 1. `--insecure` flag

@@ -43,7 +43,8 @@ gordon config show --remote https://gordon.mydomain.com --token $TOKEN
     "data_dir": "/var/lib/gordon"
   },
   "auto_route": {
-    "enabled": true
+    "enabled": true,
+    "allowed_domains": ["example.com", "*.staging.example.com"]
   },
   "network_isolation": {
     "enabled": true,
@@ -58,8 +59,13 @@ gordon config show --remote https://gordon.mydomain.com --token $TOKEN
 }
 ```
 
+### Auto-Route Allowed Domains
+
+The `auto_route.allowed_domains` field lists domain patterns that auto-route may assign to containers. Manage this list with [`gordon autoroute allow`](./autoroute.md).
+
 ## Related
 
 - [CLI Overview](./index.md)
+- [Auto-Route Commands](./autoroute.md)
 - [Status Command](./status.md)
 - [Routes Command](./routes.md)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,23 +27,24 @@ import (
 
 // Config holds the loaded configuration.
 type Config struct {
-	ServerPort           int
-	RegistryPort         int
-	RegistryDomain       string
-	DataDir              string
-	AutoRouteEnabled     bool
-	NetworkIsolation     bool
-	NetworkPrefix        string
-	Routes               map[string]string
-	ExternalRoutes       map[string]string // domain -> "host:port"
-	RegistryAuthEnabled  bool
-	RegistryAuthUsername string
-	RegistryAuthPassword string
-	VolumeAutoCreate     bool
-	VolumePrefix         string
-	VolumePreserve       bool
-	NetworkGroups        map[string][]string
-	Attachments          map[string][]string
+	ServerPort              int
+	RegistryPort            int
+	RegistryDomain          string
+	DataDir                 string
+	AutoRouteEnabled        bool
+	AutoRouteAllowedDomains []string `mapstructure:"auto_route_allowed_domains" json:"auto_route_allowed_domains,omitempty"`
+	NetworkIsolation        bool
+	NetworkPrefix           string
+	Routes                  map[string]string
+	ExternalRoutes          map[string]string // domain -> "host:port"
+	RegistryAuthEnabled     bool
+	RegistryAuthUsername    string
+	RegistryAuthPassword    string
+	VolumeAutoCreate        bool
+	VolumePrefix            string
+	VolumePreserve          bool
+	NetworkGroups           map[string][]string
+	Attachments             map[string][]string
 }
 
 // Service implements the ConfigService interface.
@@ -121,23 +123,24 @@ func (s *Service) loadConfigValues() Config {
 	}
 
 	return Config{
-		ServerPort:           s.viper.GetInt("server.port"),
-		RegistryPort:         s.viper.GetInt("server.registry_port"),
-		RegistryDomain:       registryDomain,
-		DataDir:              s.viper.GetString("server.data_dir"),
-		AutoRouteEnabled:     s.viper.GetBool("auto_route.enabled"),
-		NetworkIsolation:     s.viper.GetBool("network_isolation.enabled"),
-		NetworkPrefix:        s.viper.GetString("network_isolation.network_prefix"),
-		RegistryAuthEnabled:  s.viper.GetBool("auth.enabled"),
-		RegistryAuthUsername: s.viper.GetString("auth.username"),
-		RegistryAuthPassword: s.viper.GetString("auth.password"),
-		VolumeAutoCreate:     s.viper.GetBool("volumes.auto_create"),
-		VolumePrefix:         s.viper.GetString("volumes.prefix"),
-		VolumePreserve:       s.viper.GetBool("volumes.preserve"),
-		Routes:               make(map[string]string),
-		ExternalRoutes:       make(map[string]string),
-		NetworkGroups:        make(map[string][]string),
-		Attachments:          make(map[string][]string),
+		ServerPort:              s.viper.GetInt("server.port"),
+		RegistryPort:            s.viper.GetInt("server.registry_port"),
+		RegistryDomain:          registryDomain,
+		DataDir:                 s.viper.GetString("server.data_dir"),
+		AutoRouteEnabled:        s.viper.GetBool("auto_route.enabled"),
+		AutoRouteAllowedDomains: append([]string{}, s.viper.GetStringSlice("auto_route_allowed_domains")...),
+		NetworkIsolation:        s.viper.GetBool("network_isolation.enabled"),
+		NetworkPrefix:           s.viper.GetString("network_isolation.network_prefix"),
+		RegistryAuthEnabled:     s.viper.GetBool("auth.enabled"),
+		RegistryAuthUsername:    s.viper.GetString("auth.username"),
+		RegistryAuthPassword:    s.viper.GetString("auth.password"),
+		VolumeAutoCreate:        s.viper.GetBool("volumes.auto_create"),
+		VolumePrefix:            s.viper.GetString("volumes.prefix"),
+		VolumePreserve:          s.viper.GetBool("volumes.preserve"),
+		Routes:                  make(map[string]string),
+		ExternalRoutes:          make(map[string]string),
+		NetworkGroups:           make(map[string][]string),
+		Attachments:             make(map[string][]string),
 	}
 }
 
@@ -516,7 +519,7 @@ type configSnapshot struct {
 }
 
 // mutableSections lists config sections that are intentionally modified by service operations.
-var mutableSections = []string{"routes.", "external_routes.", "attachments.", "network_groups."}
+var mutableSections = []string{"routes.", "external_routes.", "attachments.", "network_groups.", "auto_route_allowed_domains"}
 
 func isMutableKey(key string) bool {
 	for _, prefix := range mutableSections {
@@ -526,7 +529,7 @@ func isMutableKey(key string) bool {
 	}
 
 	switch key {
-	case "routes", "external_routes", "attachments", "network_groups":
+	case "routes", "external_routes", "attachments", "network_groups", "auto_route_allowed_domains":
 		return true
 	}
 
@@ -566,6 +569,7 @@ func (s *Service) writeConfigSurgical(configFile string) error {
 			s.viper.Set("external_routes", s.config.ExternalRoutes)
 			s.viper.Set("attachments", s.config.Attachments)
 			s.viper.Set("network_groups", s.config.NetworkGroups)
+			s.viper.Set("auto_route_allowed_domains", s.config.AutoRouteAllowedDomains)
 			return s.viper.WriteConfigAs(configFile)
 		}
 		return fmt.Errorf("failed to read config file: %w", err)
@@ -585,6 +589,7 @@ func (s *Service) writeConfigSurgical(configFile string) error {
 	config["external_routes"] = s.config.ExternalRoutes
 	config["attachments"] = s.config.Attachments
 	config["network_groups"] = s.config.NetworkGroups
+	config["auto_route_allowed_domains"] = s.config.AutoRouteAllowedDomains
 
 	out, err := toml.Marshal(config)
 	if err != nil {
@@ -1043,6 +1048,131 @@ func (s *Service) RemoveAttachment(ctx context.Context, domainOrGroup, image str
 
 	log.Info().Msg("attachment removed from configuration")
 	return nil
+}
+
+// GetAutoRouteAllowedDomains returns the configured auto-route domain allowlist.
+func (s *Service) GetAutoRouteAllowedDomains(_ context.Context) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return append([]string{}, s.config.AutoRouteAllowedDomains...), nil
+}
+
+// AddAutoRouteAllowedDomain adds a domain pattern to the auto-route allowlist.
+func (s *Service) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "AddAutoRouteAllowedDomain",
+		"pattern":             pattern,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	if err := validateDomainPattern(pattern); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	for _, existing := range s.config.AutoRouteAllowedDomains {
+		if existing == pattern {
+			s.mu.Unlock()
+			return nil
+		}
+	}
+	snapshot := make([]string, len(s.config.AutoRouteAllowedDomains))
+	copy(snapshot, s.config.AutoRouteAllowedDomains)
+	s.config.AutoRouteAllowedDomains = append(s.config.AutoRouteAllowedDomains, pattern)
+	s.mu.Unlock()
+
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist allowed domain, rolling back")
+		s.mu.Lock()
+		s.config.AutoRouteAllowedDomains = snapshot
+		s.mu.Unlock()
+		return err
+	}
+
+	log.Info().Msg("auto-route allowed domain added")
+	return nil
+}
+
+// RemoveAutoRouteAllowedDomain removes a domain pattern from the auto-route allowlist.
+func (s *Service) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "RemoveAutoRouteAllowedDomain",
+		"pattern":             pattern,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	s.mu.Lock()
+	previous := append([]string{}, s.config.AutoRouteAllowedDomains...)
+	filtered := make([]string, 0, len(s.config.AutoRouteAllowedDomains))
+	removed := false
+	for _, existing := range s.config.AutoRouteAllowedDomains {
+		if existing == pattern {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	s.config.AutoRouteAllowedDomains = filtered
+	s.mu.Unlock()
+
+	if !removed {
+		log.Debug().Msg("pattern not found in allowlist")
+		return nil
+	}
+
+	if err := s.Save(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist allowed domain removal, rolling back")
+		s.mu.Lock()
+		s.config.AutoRouteAllowedDomains = previous
+		s.mu.Unlock()
+		return err
+	}
+
+	log.Info().Msg("auto-route allowed domain removed")
+	return nil
+}
+
+func validateDomainPattern(pattern string) error {
+	if pattern == "" {
+		return fmt.Errorf("%w: pattern is required", domain.ErrInvalidDomainPattern)
+	}
+	if pattern == "*" {
+		return nil
+	}
+	if pattern != strings.ToLower(pattern) {
+		return fmt.Errorf("%w: must be lowercase", domain.ErrInvalidDomainPattern)
+	}
+	if strings.HasSuffix(pattern, ".") {
+		return fmt.Errorf("%w: must not have trailing dots", domain.ErrInvalidDomainPattern)
+	}
+	if strings.Contains(pattern, "**") {
+		return fmt.Errorf("%w: must not contain double wildcards", domain.ErrInvalidDomainPattern)
+	}
+	if strings.Count(pattern, "*") > 1 {
+		return fmt.Errorf("%w: must not contain multiple wildcards", domain.ErrInvalidDomainPattern)
+	}
+	if strings.Contains(pattern, "*") {
+		if !strings.HasPrefix(pattern, "*.") {
+			return fmt.Errorf("%w: wildcard must be in *.domain form", domain.ErrInvalidDomainPattern)
+		}
+		if !isValidExactDomain(strings.TrimPrefix(pattern, "*.")) {
+			return fmt.Errorf("%w: invalid domain after wildcard", domain.ErrInvalidDomainPattern)
+		}
+		return nil
+	}
+	if !isValidExactDomain(pattern) {
+		return fmt.Errorf("%w: invalid domain format", domain.ErrInvalidDomainPattern)
+	}
+	return nil
+}
+
+var exactDomainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+func isValidExactDomain(pattern string) bool {
+	return exactDomainPattern.MatchString(pattern)
 }
 
 // GetExternalRoutes returns all configured external routes.

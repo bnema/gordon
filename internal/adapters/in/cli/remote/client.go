@@ -946,6 +946,42 @@ func (c *Client) RemoveAttachment(ctx context.Context, domainOrGroup, image stri
 	return parseResponse(resp, nil)
 }
 
+func (c *Client) GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/autoroute/allowed-domains", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.AutoRouteAllowedDomainsResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Domains, nil
+}
+
+func (c *Client) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	if strings.TrimSpace(pattern) == "" {
+		return fmt.Errorf("pattern must not be empty")
+	}
+	resp, err := c.request(ctx, http.MethodPost, "/autoroute/allowed-domains", dto.AutoRouteAllowedDomainRequest{Pattern: pattern})
+	if err != nil {
+		return err
+	}
+	return parseResponse(resp, nil)
+}
+
+func (c *Client) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	if strings.TrimSpace(pattern) == "" {
+		return fmt.Errorf("pattern must not be empty")
+	}
+	resp, err := c.request(ctx, http.MethodDelete, "/autoroute/allowed-domains/"+url.PathEscape(pattern), nil)
+	if err != nil {
+		return err
+	}
+	return parseResponse(resp, nil)
+}
+
 // streamLogs handles SSE streaming for log endpoints.
 func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, error) {
 	url := c.baseURL + "/admin" + path

@@ -88,6 +88,18 @@ func (r *remoteControlPlane) RemoveAttachment(ctx context.Context, domainOrGroup
 	return r.client.RemoveAttachment(ctx, domainOrGroup, image)
 }
 
+func (r *remoteControlPlane) GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error) {
+	return r.client.GetAutoRouteAllowedDomains(ctx)
+}
+
+func (r *remoteControlPlane) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	return r.client.AddAutoRouteAllowedDomain(ctx, pattern)
+}
+
+func (r *remoteControlPlane) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	return r.client.RemoveAutoRouteAllowedDomain(ctx, pattern)
+}
+
 func (r *remoteControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {
 	return r.client.GetStatus(ctx)
 }

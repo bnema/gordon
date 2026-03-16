@@ -3,6 +3,7 @@ package cli
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,6 +13,7 @@ import (
 
 func TestRunAuthLoginWithToken_VerifiesAndStores(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PATH", filepath.Join("/nonexistent", "pass-disabled"))
 
 	var receivedAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +47,7 @@ func TestRunAuthLoginWithToken_VerifiesAndStores(t *testing.T) {
 
 func TestRunAuthLoginWithToken_StoresTokenOnVerificationFailure(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PATH", filepath.Join("/nonexistent", "pass-disabled"))
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/admin/status" {

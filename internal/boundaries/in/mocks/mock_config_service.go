@@ -101,6 +101,63 @@ func (_c *MockConfigService_AddAttachment_Call) RunAndReturn(run func(ctx contex
 	return _c
 }
 
+// AddAutoRouteAllowedDomain provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	ret := _mock.Called(ctx, pattern)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AddAutoRouteAllowedDomain")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
+		r0 = returnFunc(ctx, pattern)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockConfigService_AddAutoRouteAllowedDomain_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddAutoRouteAllowedDomain'
+type MockConfigService_AddAutoRouteAllowedDomain_Call struct {
+	*mock.Call
+}
+
+// AddAutoRouteAllowedDomain is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pattern string
+func (_e *MockConfigService_Expecter) AddAutoRouteAllowedDomain(ctx interface{}, pattern interface{}) *MockConfigService_AddAutoRouteAllowedDomain_Call {
+	return &MockConfigService_AddAutoRouteAllowedDomain_Call{Call: _e.mock.On("AddAutoRouteAllowedDomain", ctx, pattern)}
+}
+
+func (_c *MockConfigService_AddAutoRouteAllowedDomain_Call) Run(run func(ctx context.Context, pattern string)) *MockConfigService_AddAutoRouteAllowedDomain_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockConfigService_AddAutoRouteAllowedDomain_Call) Return(err error) *MockConfigService_AddAutoRouteAllowedDomain_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockConfigService_AddAutoRouteAllowedDomain_Call) RunAndReturn(run func(ctx context.Context, pattern string) error) *MockConfigService_AddAutoRouteAllowedDomain_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // AddRoute provides a mock function for the type MockConfigService
 func (_mock *MockConfigService) AddRoute(ctx context.Context, route domain.Route) error {
 	ret := _mock.Called(ctx, route)
@@ -393,6 +450,68 @@ func (_c *MockConfigService_GetAttachmentsFor_Call) Return(strings []string, err
 }
 
 func (_c *MockConfigService_GetAttachmentsFor_Call) RunAndReturn(run func(ctx context.Context, domainOrGroup string) ([]string, error)) *MockConfigService_GetAttachmentsFor_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetAutoRouteAllowedDomains provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAutoRouteAllowedDomains")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]string, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []string); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockConfigService_GetAutoRouteAllowedDomains_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAutoRouteAllowedDomains'
+type MockConfigService_GetAutoRouteAllowedDomains_Call struct {
+	*mock.Call
+}
+
+// GetAutoRouteAllowedDomains is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockConfigService_Expecter) GetAutoRouteAllowedDomains(ctx interface{}) *MockConfigService_GetAutoRouteAllowedDomains_Call {
+	return &MockConfigService_GetAutoRouteAllowedDomains_Call{Call: _e.mock.On("GetAutoRouteAllowedDomains", ctx)}
+}
+
+func (_c *MockConfigService_GetAutoRouteAllowedDomains_Call) Run(run func(ctx context.Context)) *MockConfigService_GetAutoRouteAllowedDomains_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockConfigService_GetAutoRouteAllowedDomains_Call) Return(strings []string, err error) *MockConfigService_GetAutoRouteAllowedDomains_Call {
+	_c.Call.Return(strings, err)
+	return _c
+}
+
+func (_c *MockConfigService_GetAutoRouteAllowedDomains_Call) RunAndReturn(run func(ctx context.Context) ([]string, error)) *MockConfigService_GetAutoRouteAllowedDomains_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1033,6 +1152,63 @@ func (_c *MockConfigService_RemoveAttachment_Call) Return(err error) *MockConfig
 }
 
 func (_c *MockConfigService_RemoveAttachment_Call) RunAndReturn(run func(ctx context.Context, domainOrGroup string, image string) error) *MockConfigService_RemoveAttachment_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RemoveAutoRouteAllowedDomain provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	ret := _mock.Called(ctx, pattern)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RemoveAutoRouteAllowedDomain")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
+		r0 = returnFunc(ctx, pattern)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockConfigService_RemoveAutoRouteAllowedDomain_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveAutoRouteAllowedDomain'
+type MockConfigService_RemoveAutoRouteAllowedDomain_Call struct {
+	*mock.Call
+}
+
+// RemoveAutoRouteAllowedDomain is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pattern string
+func (_e *MockConfigService_Expecter) RemoveAutoRouteAllowedDomain(ctx interface{}, pattern interface{}) *MockConfigService_RemoveAutoRouteAllowedDomain_Call {
+	return &MockConfigService_RemoveAutoRouteAllowedDomain_Call{Call: _e.mock.On("RemoveAutoRouteAllowedDomain", ctx, pattern)}
+}
+
+func (_c *MockConfigService_RemoveAutoRouteAllowedDomain_Call) Run(run func(ctx context.Context, pattern string)) *MockConfigService_RemoveAutoRouteAllowedDomain_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockConfigService_RemoveAutoRouteAllowedDomain_Call) Return(err error) *MockConfigService_RemoveAutoRouteAllowedDomain_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockConfigService_RemoveAutoRouteAllowedDomain_Call) RunAndReturn(run func(ctx context.Context, pattern string) error) *MockConfigService_RemoveAutoRouteAllowedDomain_Call {
 	_c.Call.Return(run)
 	return _c
 }

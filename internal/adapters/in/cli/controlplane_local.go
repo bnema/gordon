@@ -307,6 +307,27 @@ func (l *localControlPlane) RemoveAttachment(ctx context.Context, domainOrGroup,
 	return l.configSvc.RemoveAttachment(ctx, domainOrGroup, image)
 }
 
+func (l *localControlPlane) GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error) {
+	if l.configSvc == nil {
+		return nil, fmt.Errorf("local config service unavailable")
+	}
+	return l.configSvc.GetAutoRouteAllowedDomains(ctx)
+}
+
+func (l *localControlPlane) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	if l.configSvc == nil {
+		return fmt.Errorf("local config service unavailable")
+	}
+	return l.configSvc.AddAutoRouteAllowedDomain(ctx, pattern)
+}
+
+func (l *localControlPlane) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	if l.configSvc == nil {
+		return fmt.Errorf("local config service unavailable")
+	}
+	return l.configSvc.RemoveAutoRouteAllowedDomain(ctx, pattern)
+}
+
 func (l *localControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {
 	if l.configSvc == nil {
 		return nil, fmt.Errorf("local config service unavailable")

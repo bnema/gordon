@@ -33,6 +33,9 @@ type ControlPlane interface {
 	FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error)
 	AddAttachment(ctx context.Context, domainOrGroup, image string) error
 	RemoveAttachment(ctx context.Context, domainOrGroup, image string) error
+	GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error)
+	AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error
+	RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error
 
 	GetStatus(ctx context.Context) (*remote.Status, error)
 	Reload(ctx context.Context) error
