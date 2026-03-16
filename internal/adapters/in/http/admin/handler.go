@@ -1662,7 +1662,7 @@ func (h *Handler) handleAttachmentsConfigPost(w http.ResponseWriter, r *http.Req
 	}
 
 	log.Info().Str("target", target).Str("image", req.Image).Msg("attachment added")
-	h.sendJSON(w, http.StatusCreated, dto.AttachmentStatusResponse{Status: "added"})
+	h.sendJSON(w, http.StatusCreated, dto.AutoRouteStatusResponse{Status: "added"})
 }
 
 func (h *Handler) handleAttachmentsConfigDelete(w http.ResponseWriter, r *http.Request, target string) {
@@ -1772,9 +1772,10 @@ func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *
 		return
 	}
 
-	pattern := strings.TrimPrefix(path, "/autoroute/allowed-domains/")
-	if pattern == "" {
-		h.sendError(w, http.StatusBadRequest, "missing domain pattern")
+	raw := strings.TrimPrefix(path, "/autoroute/allowed-domains/")
+	pattern, err := url.PathUnescape(raw)
+	if err != nil || pattern == "" {
+		h.sendError(w, http.StatusBadRequest, "missing or invalid domain pattern")
 		return
 	}
 
@@ -1784,7 +1785,7 @@ func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *
 		return
 	}
 
-	h.sendJSON(w, http.StatusOK, dto.AttachmentStatusResponse{Status: "removed"})
+	h.sendJSON(w, http.StatusOK, dto.AutoRouteStatusResponse{Status: "removed"})
 }
 
 // handleAuthVerify handles /admin/auth/verify endpoint.

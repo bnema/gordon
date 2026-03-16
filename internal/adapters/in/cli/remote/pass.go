@@ -25,7 +25,7 @@ func validateRemoteName(name string) error {
 		return fmt.Errorf("remote name contains invalid characters (allowed: a-z, A-Z, 0-9, '.', '_', '-')")
 	}
 	if strings.Contains(name, "..") {
-		return fmt.Errorf("remote name must not contain '..'")
+		return fmt.Errorf("remote name must not contain consecutive dots")
 	}
 	return nil
 }

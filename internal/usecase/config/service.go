@@ -1155,9 +1155,6 @@ func validateDomainPattern(pattern string) error {
 		if !strings.HasPrefix(pattern, "*.") {
 			return fmt.Errorf("domain pattern wildcard must be in *.domain form")
 		}
-		if strings.Contains(pattern[2:], "*") {
-			return fmt.Errorf("domain pattern wildcard must be in *.domain form")
-		}
 		if !isValidExactDomain(strings.TrimPrefix(pattern, "*.")) {
 			return fmt.Errorf("invalid domain pattern")
 		}

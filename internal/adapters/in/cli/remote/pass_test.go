@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,11 @@ func TestValidateRemoteName(t *testing.T) {
 		{"invalid dotdot", "my..server", true},
 		{"invalid space", "my server", true},
 		{"empty", "", true},
+		{"leading dot", ".server", false},
+		{"trailing dot", "server.", false},
+		{"only dots", "...", true},
+		{"only dashes", "---", false},
+		{"very long name", strings.Repeat("a", 256), false},
 	}
 
 	for _, tt := range tests {

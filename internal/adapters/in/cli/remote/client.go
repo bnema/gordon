@@ -961,6 +961,9 @@ func (c *Client) GetAutoRouteAllowedDomains(ctx context.Context) ([]string, erro
 }
 
 func (c *Client) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	if strings.TrimSpace(pattern) == "" {
+		return fmt.Errorf("pattern must not be empty")
+	}
 	resp, err := c.request(ctx, http.MethodPost, "/autoroute/allowed-domains", dto.AutoRouteAllowedDomainRequest{Pattern: pattern})
 	if err != nil {
 		return err
@@ -969,6 +972,9 @@ func (c *Client) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) 
 }
 
 func (c *Client) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
+	if strings.TrimSpace(pattern) == "" {
+		return fmt.Errorf("pattern must not be empty")
+	}
 	resp, err := c.request(ctx, http.MethodDelete, "/autoroute/allowed-domains/"+url.PathEscape(pattern), nil)
 	if err != nil {
 		return err

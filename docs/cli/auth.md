@@ -62,6 +62,8 @@ gordon auth login --token <token>
 
 ### Output
 
+When `pass` is available:
+
 ```
 Username: admin
 Password: ********
@@ -69,6 +71,19 @@ Authenticating with prod...
 
 ✓ Authentication successful!
 Token stored in pass for remote 'prod'
+Expires in: 604800 seconds
+```
+
+When `pass` is not available:
+
+```
+Username: admin
+Password: ********
+Authenticating with prod...
+
+Warning: 'pass' not available. Storing token in plaintext config. Consider installing pass (https://www.passwordstore.org/) for secure token storage.
+✓ Authentication successful!
+Token stored for remote 'prod'
 Expires in: 604800 seconds
 ```
 

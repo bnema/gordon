@@ -244,6 +244,9 @@ func matchesDomainAllowlist(domain string, patterns []string) bool {
 		if pattern == "" {
 			continue
 		}
+		if pattern == "*" {
+			return true
+		}
 		if pattern == domain {
 			return true
 		}

@@ -81,12 +81,14 @@ func UpdateRemoteToken(name, token string) error {
 			if err != nil {
 				return nil
 			}
-			if remote, ok := config.Remotes[name]; ok {
-				remote.Token = ""
-				remote.TokenEnv = ""
-				config.Remotes[name] = remote
-				_ = SaveRemotes("", config)
+			remote, ok := config.Remotes[name]
+			if !ok {
+				return fmt.Errorf("remote '%s' not found", name)
 			}
+			remote.Token = ""
+			remote.TokenEnv = ""
+			config.Remotes[name] = remote
+			_ = SaveRemotes("", config)
 			return nil
 		} else {
 			fmt.Fprintf(os.Stderr, "Warning: failed to store token in pass: %v. Falling back to plaintext config.\n", err)

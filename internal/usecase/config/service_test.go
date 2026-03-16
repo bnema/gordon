@@ -945,6 +945,7 @@ func TestService_AutoRouteAllowedDomains(t *testing.T) {
 		eventBus := mocks.NewMockEventPublisher(t)
 		svc := NewService(v, eventBus)
 		ctx := testContext()
+		require.NoError(t, svc.Load(ctx))
 
 		invalid := []string{"", "EXAMPLE.com", "example.com.", "**.example.com", "foo.*.example.com", "*.example.com."}
 		for _, pattern := range invalid {
