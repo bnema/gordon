@@ -722,7 +722,7 @@ func TestAutoRouteHandler_Handle_MultipleDomains(t *testing.T) {
 
 	configSvc.EXPECT().IsAutoRouteEnabled().Return(true)
 	blobStorage.EXPECT().GetBlob("sha256:configdigest123").Return(io.NopCloser(strings.NewReader(string(configData))), nil)
-	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"app.example.com", "api.example.com", "www.example.com"}, nil).Times(3)
+	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"app.example.com", "api.example.com", "www.example.com"}, nil).Once()
 
 	// No existing routes
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{}).Times(3)
@@ -783,12 +783,11 @@ func TestAutoRouteHandler_NewDomain_Allowed(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
 
-	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"*.example.com"}, nil)
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil)
 	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(&domain.Container{ID: "c1"}, nil)
 
-	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:latest")
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:latest", []string{"*.example.com"})
 	assert.True(t, created)
 }
 
@@ -799,10 +798,9 @@ func TestAutoRouteHandler_NewDomain_NotAllowed(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
 
-	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"*.allowed.com"}, nil)
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
 
-	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:latest")
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:latest", []string{"*.allowed.com"})
 	assert.False(t, created)
 }
 
@@ -813,12 +811,11 @@ func TestAutoRouteHandler_ExistingDomain_SameRepo(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
 
-	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"*.example.com"}, nil)
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "myapp:v1"}})
 	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2"}).Return(nil)
 	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2"}).Return(&domain.Container{ID: "c1"}, nil)
 
-	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:v2")
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:v2", []string{"*.example.com"})
 	assert.False(t, created)
 }
 
@@ -829,10 +826,9 @@ func TestAutoRouteHandler_ExistingDomain_DifferentRepo(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
 
-	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"*.example.com"}, nil)
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "oldapp:v1"}})
 
-	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "newapp:v2")
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "newapp:v2", []string{"*.example.com"})
 	assert.False(t, created)
 }
 

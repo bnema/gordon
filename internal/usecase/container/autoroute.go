@@ -160,6 +160,13 @@ func (h *AutoRouteHandler) buildFullImageRef(imageName string) string {
 func (h *AutoRouteHandler) processRoutes(ctx context.Context, domains []string, imageName string, labels *domain.ImageLabels) {
 	log := zerowrap.FromCtx(ctx)
 
+	// Load allowed domains once for all routes in this event.
+	allowedDomains, err := h.configSvc.GetAutoRouteAllowedDomains(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load auto-route allowed domains, skipping route processing")
+		return
+	}
+
 	// Build full image reference for env extraction (Docker needs fully qualified name)
 	fullImageRef := h.buildFullImageRef(imageName)
 
@@ -169,7 +176,7 @@ func (h *AutoRouteHandler) processRoutes(ctx context.Context, domains []string, 
 			continue
 		}
 
-		created := h.createOrUpdateRoute(ctx, routeDomain, imageName)
+		created := h.createOrUpdateRoute(ctx, routeDomain, imageName, allowedDomains)
 
 		if created && labels.EnvFile != "" && h.extractor != nil && h.envDir != "" {
 			// Use full image ref for extraction (Docker knows image by this name)
@@ -187,13 +194,8 @@ func (h *AutoRouteHandler) processRoutes(ctx context.Context, domains []string, 
 // createOrUpdateRoute creates a new route or updates an existing one.
 // It also triggers deployment for new routes since the ImagePushedHandler
 // may have already finished processing (handlers run concurrently).
-func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain, imageName string) bool {
+func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain, imageName string, allowedDomains []string) bool {
 	log := zerowrap.FromCtx(ctx)
-	allowedDomains, err := h.configSvc.GetAutoRouteAllowedDomains(ctx)
-	if err != nil {
-		log.Warn().Err(err).Str("domain", routeDomain).Msg("failed to load auto-route allowed domains")
-		return false
-	}
 
 	route := domain.Route{
 		Domain: routeDomain,
