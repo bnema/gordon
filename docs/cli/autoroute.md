@@ -82,7 +82,7 @@ gordon autoroute allow add example.com --remote https://gordon.mydomain.com --to
 
 ### Output
 
-```
+```text
 ✓ Allowed domain added
 ```
 
@@ -126,14 +126,14 @@ gordon autoroute allow list --remote https://gordon.mydomain.com --token $TOKEN
 
 ### Output
 
-```
+```text
 example.com
 *.staging.example.com
 ```
 
 When the allowlist is empty:
 
-```
+```text
 No allowed domains configured
 ```
 
@@ -194,7 +194,7 @@ gordon autoroute allow remove example.com --remote https://gordon.mydomain.com -
 
 ### Output
 
-```
+```text
 ✓ Allowed domain removed
 ```
 

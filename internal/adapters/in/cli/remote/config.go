@@ -209,7 +209,9 @@ func resolveToken(flagToken string, config *ClientConfig, remotes *ClientConfig)
 			return config.Client.Token
 		}
 		if config.Client.TokenEnv != "" {
-			return os.Getenv(config.Client.TokenEnv)
+			if envToken := os.Getenv(config.Client.TokenEnv); envToken != "" {
+				return envToken
+			}
 		}
 	}
 
