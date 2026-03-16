@@ -68,7 +68,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Check if this is the registry domain
 	if h.proxySvc.IsRegistryDomain(r.Host) {
-		log.Info().Msg("routing request to registry")
+		log.Debug().Msg("routing request to registry")
 		h.forwardToRegistry(w, r, cfg.RegistryPort)
 		return
 	}

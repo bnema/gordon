@@ -110,7 +110,7 @@ func TestHandler_ProxiesToTarget(t *testing.T) {
 	assert.Equal(t, "ok", w.Body.String())
 }
 
-func TestHandler_MaxBodySize_Applied(t *testing.T) {
+func TestHandler_ReadsMaxBodySizeConfig(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{

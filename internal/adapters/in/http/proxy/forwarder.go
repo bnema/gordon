@@ -35,7 +35,7 @@ func newAppTransport() *http.Transport {
 
 // newH2CTransport creates a dedicated cleartext HTTP/2 transport for containers
 // that opt in via the gordon.proxy.protocol=h2c label.
-// Uses Go 1.26 native UnencryptedHTTP2 protocol support.
+// Uses Go 1.24+ native UnencryptedHTTP2 protocol support.
 // HTTP/1 is disabled so http:// URLs use HTTP/2 prior-knowledge.
 func newH2CTransport() *http.Transport {
 	var protos http.Protocols
@@ -248,10 +248,11 @@ func (l *limitedReadCloser) Read(p []byte) (int, error) {
 		}
 		return 0, fmt.Errorf("response body exceeded maximum size limit")
 	}
-	if int64(len(p)) > l.remaining {
-		p = p[:l.remaining]
+	toRead := len(p)
+	if int64(toRead) > l.remaining {
+		toRead = int(l.remaining)
 	}
-	n, err := l.ReadCloser.Read(p)
+	n, err := l.ReadCloser.Read(p[:toRead])
 	l.remaining -= int64(n)
 	return n, err
 }
