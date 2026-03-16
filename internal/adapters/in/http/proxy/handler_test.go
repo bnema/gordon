@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"bytes"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -111,22 +113,38 @@ func TestHandler_ProxiesToTarget(t *testing.T) {
 }
 
 func TestHandler_ReadsMaxBodySizeConfig(t *testing.T) {
+	// Backend that reads the full request body, triggering MaxBytesReader.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
 	proxySvc := inmocks.NewMockProxyService(t)
+	backendPort := backend.Listener.Addr().(*net.TCPAddr).Port
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{
 		MaxBodySize: 1024,
 	})
 	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
-	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(nil, domain.ErrNoTargetAvailable)
+	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+		Host:        "127.0.0.1",
+		Port:        backendPort,
+		ContainerID: "c-1",
+		Scheme:      "http",
+	}, nil)
+	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
 
 	handler := NewHandler(proxySvc, testLogger())
 
-	req := httptest.NewRequest(http.MethodPost, "http://app.example.com/test", nil)
+	// Send a body larger than the 1024-byte limit.
+	largeBody := bytes.NewReader(make([]byte, 2048))
+	req := httptest.NewRequest(http.MethodPost, "http://app.example.com/test", largeBody)
 	req.Host = "app.example.com"
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
 }
 
 func TestHandler_UpdatedConfigReflected(t *testing.T) {

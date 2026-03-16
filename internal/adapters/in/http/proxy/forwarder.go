@@ -156,10 +156,19 @@ func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, regi
 			log.Error().Err(proxyErr).Int("registry_port", registryPort).Msg("registry proxy error")
 			proxyError(w, "Registry Unavailable", http.StatusServiceUnavailable)
 		},
+		// ModifyResponse adjusts registry responses for Docker client consumption.
+		// Registry API responses are consumed by Docker CLI/daemon, not browsers.
+		// Upstream registry servers may inject browser-oriented security headers
+		// (e.g., HSTS, CSP, X-Frame-Options) that are irrelevant for API clients
+		// and could conflict with Gordon's own security headers on browser-facing
+		// routes. We strip them here to ensure clean, predictable registry responses.
 		ModifyResponse: func(resp *http.Response) error {
 			resp.Header.Set("X-Proxied-By", "Gordon")
 			resp.Header.Set("X-Registry-Backend", "gordon-registry")
 
+			// Remove browser-oriented security headers injected by the upstream
+			// registry. These are unnecessary for Docker client API traffic and
+			// would conflict with headers set on browser-facing proxy routes.
 			resp.Header.Del("X-Content-Type-Options")
 			resp.Header.Del("X-Frame-Options")
 			resp.Header.Del("X-XSS-Protection")
@@ -246,14 +255,22 @@ func (l *limitedReadCloser) Read(p []byte) (int, error) {
 			l.closed = true
 			l.ReadCloser.Close()
 		}
-		return 0, fmt.Errorf("response body exceeded maximum size limit")
+		return 0, fmt.Errorf("response body exceeded maximum size limit (remaining: %d bytes)", l.remaining)
 	}
 	toRead := len(p)
 	if int64(toRead) > l.remaining {
 		toRead = int(l.remaining)
 	}
 	n, err := l.ReadCloser.Read(p[:toRead])
+	// Cap n to the requested slice to guard against misbehaving readers
+	// that return more bytes than the buffer length.
+	if n > toRead {
+		n = toRead
+	}
 	l.remaining -= int64(n)
+	if l.remaining < 0 {
+		l.remaining = 0
+	}
 	return n, err
 }
 

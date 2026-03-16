@@ -48,7 +48,7 @@ func (s *Service) resolveTargetMetadata(ctx context.Context, imageRef string) (T
 	if port == 0 {
 		exposedPorts, portsErr := s.runtime.GetImageExposedPorts(ctx, imageRef)
 		if portsErr != nil {
-			return TargetMetadata{}, portsErr
+			return TargetMetadata{}, fmt.Errorf("failed to get exposed ports for image %s: %w", imageRef, portsErr)
 		}
 		if len(exposedPorts) == 0 {
 			return TargetMetadata{}, fmt.Errorf("no exposed ports found for image %s", imageRef)
