@@ -50,6 +50,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/http/admin"
 	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	proxyadapter "github.com/bnema/gordon/internal/adapters/in/http/proxy"
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 
 	// Boundaries
@@ -1455,8 +1456,9 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		middleware.SecurityHeaders,
 	}
 
+	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, log)
 	proxyWithMiddleware := otelhttp.NewHandler(
-		middleware.Chain(proxyMiddlewares...)(svc.proxySvc),
+		middleware.Chain(proxyMiddlewares...)(proxyHandler),
 		"gordon.proxy",
 	)
 	proxyMux := http.NewServeMux()
@@ -1719,8 +1721,14 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	errChan := make(chan error, 3)
 
-	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", errChan, log)
-	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", errChan, log)
+	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", nil, errChan, log)
+
+	// Enable both HTTP/1.1 and cleartext HTTP/2 on the proxy server so Gordon can
+	// accept h2c traffic from clients and load balancers (e.g. Cloudflare).
+	var proxyProtos http.Protocols
+	proxyProtos.SetHTTP1(true)
+	proxyProtos.SetUnencryptedHTTP2(true)
+	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", &proxyProtos, errChan, log)
 	var tlsSrv *http.Server
 	var tlsReady <-chan struct{}
 	if cfg.Server.TLSEnabled {
@@ -2019,12 +2027,13 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 // port to be ready before taking actions that depend on it (e.g. auto-start
 // pulling from the local registry). The returned *http.Server can be used for
 // graceful shutdown.
-func startServer(addr string, handler http.Handler, name string, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
+func startServer(addr string, handler http.Handler, name string, protocols *http.Protocols, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
 	ready := make(chan struct{})
 
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
+		Protocols:         protocols,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       5 * time.Minute,
 		WriteTimeout:      5 * time.Minute,
