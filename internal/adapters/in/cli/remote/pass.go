@@ -84,7 +84,7 @@ func passWriteToken(name, token string) error {
 		return domain.ErrPassUnavailable
 	}
 
-	cmd := exec.Command("pass", "insert", "--multiline", passTokenPath(name)) //nolint:gosec // pass binary name is constant; remote names are validated
+	cmd := exec.Command("pass", "insert", "--multiline", "--force", passTokenPath(name)) //nolint:gosec // pass binary name is constant; remote names are validated
 	cmd.Stdin = strings.NewReader(token + "\n")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

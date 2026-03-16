@@ -398,6 +398,7 @@ func (s *BlobStorage) CancelBlobUpload(uuid string) error {
 
 	if err := os.Remove(uploadPath); err != nil {
 		if os.IsNotExist(err) {
+			s.cleanupUploadLock(uuid)
 			return fmt.Errorf("upload not found: %s", uuid)
 		}
 		return fmt.Errorf("failed to cancel upload: %w", err)

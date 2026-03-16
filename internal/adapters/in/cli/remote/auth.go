@@ -83,7 +83,7 @@ func UpdateRemoteToken(name, token string) error {
 			}
 			remote, ok := config.Remotes[name]
 			if !ok {
-				return fmt.Errorf("remote '%s' not found", name)
+				return nil
 			}
 			remote.Token = ""
 			remote.TokenEnv = ""

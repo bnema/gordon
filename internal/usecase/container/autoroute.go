@@ -253,6 +253,8 @@ func matchesDomainAllowlist(domain string, patterns []string) bool {
 		if !strings.HasPrefix(pattern, "*.") {
 			continue
 		}
+		// Wildcard patterns match single-level subdomains only (per DNS/TLS conventions).
+		// e.g., "*.example.com" matches "foo.example.com" but not "bar.foo.example.com"
 		suffix := strings.TrimPrefix(pattern, "*.")
 		if !strings.HasSuffix(domain, "."+suffix) {
 			continue

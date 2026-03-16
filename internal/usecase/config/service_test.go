@@ -950,7 +950,7 @@ func TestService_AutoRouteAllowedDomains(t *testing.T) {
 		invalid := []string{"", "EXAMPLE.com", "example.com.", "**.example.com", "foo.*.example.com", "*.example.com."}
 		for _, pattern := range invalid {
 			err := svc.AddAutoRouteAllowedDomain(ctx, pattern)
-			assert.Error(t, err)
+			assert.ErrorIs(t, err, domain.ErrInvalidDomainPattern, "pattern: %s", pattern)
 		}
 	})
 }

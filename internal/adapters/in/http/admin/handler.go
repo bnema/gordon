@@ -1662,7 +1662,7 @@ func (h *Handler) handleAttachmentsConfigPost(w http.ResponseWriter, r *http.Req
 	}
 
 	log.Info().Str("target", target).Str("image", req.Image).Msg("attachment added")
-	h.sendJSON(w, http.StatusCreated, dto.AutoRouteStatusResponse{Status: "added"})
+	h.sendJSON(w, http.StatusCreated, dto.AttachmentStatusResponse{Status: "added"})
 }
 
 func (h *Handler) handleAttachmentsConfigDelete(w http.ResponseWriter, r *http.Request, target string) {
