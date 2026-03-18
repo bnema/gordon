@@ -38,6 +38,7 @@ type Service struct {
 	deployer       Deployer
 	routeManager   RouteManager
 	volumeCloner   VolumeCloner
+	envLoader      out.EnvLoader
 	registryDomain string
 	previews       []domain.PreviewRoute
 	mu             sync.RWMutex
@@ -70,6 +71,11 @@ func (s *Service) WithVolumeCloner(vc VolumeCloner) *Service {
 
 func (s *Service) WithRegistryDomain(d string) *Service {
 	s.registryDomain = d
+	return s
+}
+
+func (s *Service) WithEnvLoader(el out.EnvLoader) *Service {
+	s.envLoader = el
 	return s
 }
 
@@ -367,6 +373,15 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 		}
 	}
 
+	var baseEnv []string
+	if s.envLoader != nil {
+		var envErr error
+		baseEnv, envErr = s.envLoader.LoadEnv(ctx, req.BaseRoute)
+		if envErr != nil {
+			log.Warn().Err(envErr).Str("base_route", req.BaseRoute).Msg("failed to load base route env, deploying without env vars")
+		}
+	}
+
 	if s.deployer != nil {
 		imageRef := s.qualifyImage(req.Image)
 		deployCtx := domain.WithInternalDeploy(ctx)
@@ -374,6 +389,7 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 			Domain: req.Domain,
 			Image:  imageRef,
 			HTTPS:  req.HTTPS,
+			Env:    baseEnv,
 		})
 		if err != nil {
 			preview.Status = domain.PreviewStatusFailed
