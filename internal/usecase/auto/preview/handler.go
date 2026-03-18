@@ -62,10 +62,16 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 	previewConfig := h.config.GetPreviewConfig()
 	previewName := ExtractPreviewName(payload.Reference, previewConfig.TagPatterns)
 
-	// Resolve base route from labels
+	// Resolve base route: labels first, then route config fallback
 	domains := collectDomains(labels)
 	if len(domains) == 0 {
-		log.Debug().Str("image", payload.Name).Msg("no gordon.domain label found, skipping preview handler")
+		routes := h.config.FindRoutesByImage(ctx, payload.Name)
+		for _, r := range routes {
+			domains = append(domains, r.Domain)
+		}
+	}
+	if len(domains) == 0 {
+		log.Debug().Str("image", payload.Name).Msg("no domain found from labels or routes, skipping preview")
 		return nil
 	}
 	baseRouteDomain := domains[0]
