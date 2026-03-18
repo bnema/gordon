@@ -45,6 +45,7 @@ type Handler struct {
 	healthSvc    in.HealthService
 	secretSvc    in.SecretService
 	logSvc       in.LogService
+	volumeSvc    in.VolumeService
 	registrySvc  registryDeployService
 	eventBus     out.EventPublisher
 	log          zerowrap.Logger
@@ -163,6 +164,12 @@ func NewHandler(
 	}
 }
 
+// WithVolumeService sets the volume service on the handler.
+func (h *Handler) WithVolumeService(volumeSvc in.VolumeService) *Handler {
+	h.volumeSvc = volumeSvc
+	return h
+}
+
 // RegisterRoutes registers the admin routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/", h.handleAdminRoutes)
@@ -200,13 +207,15 @@ type routeHandler func(w http.ResponseWriter, r *http.Request, path string)
 func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	// Exact match routes
 	exactRoutes := map[string]routeHandler{
-		"/networks":    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
-		"/status":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
-		"/health":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
-		"/bootstrap":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
-		"/reload":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
-		"/config":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
-		"/auth/verify": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
+		"/networks":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
+		"/status":        func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
+		"/health":        func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
+		"/bootstrap":     func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
+		"/reload":        func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
+		"/config":        func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
+		"/auth/verify":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
+		"/volumes":       func(w http.ResponseWriter, r *http.Request, _ string) { h.handleListVolumes(w, r) },
+		"/volumes/prune": func(w http.ResponseWriter, r *http.Request, _ string) { h.handlePruneVolumes(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true

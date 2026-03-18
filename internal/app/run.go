@@ -554,7 +554,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		log,
 		svc.backupSvc,
 		svc.imageSvc,
-	)
+	).WithVolumeService(svc.volumeSvc)
 
 	return svc, nil
 }
