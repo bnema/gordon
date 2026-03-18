@@ -3,6 +3,7 @@ package preview
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/bnema/zerowrap"
 
@@ -62,12 +63,16 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 	previewConfig := h.config.GetPreviewConfig()
 	previewName := ExtractPreviewName(payload.Reference, previewConfig.TagPatterns)
 
-	// Resolve base route: labels first, then route config fallback
+	// Resolve base route: labels first, then route config fallback.
+	// When falling back to routes, skip preview domains (they contain the separator)
+	// to avoid using a preview as the base for another preview.
 	domains := collectDomains(labels)
 	if len(domains) == 0 {
 		routes := h.config.FindRoutesByImage(ctx, payload.Name)
 		for _, r := range routes {
-			domains = append(domains, r.Domain)
+			if !strings.Contains(r.Domain, previewConfig.Separator) {
+				domains = append(domains, r.Domain)
+			}
 		}
 	}
 	if len(domains) == 0 {
