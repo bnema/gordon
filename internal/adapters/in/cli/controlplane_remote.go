@@ -163,3 +163,11 @@ func (r *remoteControlPlane) StreamProcessLogs(ctx context.Context, lines int) (
 func (r *remoteControlPlane) StreamContainerLogs(ctx context.Context, logDomain string, lines int) (<-chan string, error) {
 	return r.client.StreamContainerLogs(ctx, logDomain, lines)
 }
+
+func (r *remoteControlPlane) ListVolumes(ctx context.Context) ([]dto.Volume, error) {
+	return r.client.ListVolumes(ctx)
+}
+
+func (r *remoteControlPlane) PruneVolumes(ctx context.Context, req dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
+	return r.client.PruneVolumes(ctx, req)
+}

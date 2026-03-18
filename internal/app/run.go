@@ -74,6 +74,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/proxy"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
+	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
 
 	// Pkg
 	"github.com/bnema/gordon/pkg/bytesize"
@@ -184,6 +185,7 @@ type services struct {
 	healthSvc        *health.Service
 	logSvc           *logs.Service
 	imageSvc         *images.Service
+	volumeSvc        *volumesSvc.Service
 	proxySvc         *proxy.Service
 	authSvc          *auth.Service
 	authHandler      *authhandler.Handler
@@ -507,6 +509,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
 	svc.imageSvc = images.NewService(svc.runtime, svc.manifestStorage, svc.blobStorage, log)
+	svc.volumeSvc = volumesSvc.NewService(svc.runtime)
 
 	injectTelemetryMetrics(cfg, svc, log)
 
