@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -29,7 +31,9 @@ func (h *Handler) handleListVolumes(w http.ResponseWriter, r *http.Request) {
 
 	vols, err := h.volumeSvc.ListVolumes(ctx)
 	if err != nil {
-		h.sendError(w, http.StatusInternalServerError, err.Error())
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Msg("failed to list volumes")
+		h.sendError(w, http.StatusInternalServerError, "failed to list volumes")
 		return
 	}
 
@@ -78,7 +82,9 @@ func (h *Handler) handlePruneVolumes(w http.ResponseWriter, r *http.Request) {
 
 	report, removed, err := h.volumeSvc.PruneVolumes(ctx, req.DryRun)
 	if err != nil {
-		h.sendError(w, http.StatusInternalServerError, err.Error())
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Msg("failed to prune volumes")
+		h.sendError(w, http.StatusInternalServerError, "failed to prune volumes")
 		return
 	}
 

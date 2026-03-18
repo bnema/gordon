@@ -438,6 +438,7 @@ func (s *BlobStorage) CleanupStaleUploads(maxAge time.Duration) (int, int64, err
 
 		info, err := entry.Info()
 		if err != nil {
+			s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to get file info for stale upload")
 			continue
 		}
 
@@ -445,11 +446,16 @@ func (s *BlobStorage) CleanupStaleUploads(maxAge time.Duration) (int, int64, err
 			path := filepath.Join(uploadsDir, entry.Name())
 			size := info.Size()
 
+			mu := s.getUploadLock(entry.Name())
+			mu.Lock()
+
 			if err := os.Remove(path); err != nil {
+				mu.Unlock()
 				s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to remove stale upload")
 				continue
 			}
 
+			mu.Unlock()
 			s.cleanupUploadLock(entry.Name())
 			removed++
 			bytesReclaimed += size
