@@ -32,6 +32,9 @@ func (m *mockAutoConfig) IsPreviewEnabled() bool                 { return m.prev
 func (m *mockAutoConfig) GetPreviewTagPatterns() []string        { return m.tagPatterns }
 func (m *mockAutoConfig) GetPreviewConfig() domain.PreviewConfig { return domain.PreviewConfig{} }
 func (m *mockAutoConfig) GetAllowedDomains() []string            { return nil }
+func (m *mockAutoConfig) FindRoutesByImage(_ context.Context, _ string) []domain.Route {
+	return nil
+}
 
 func TestDispatcher_PreviewTag_DelegatesToPreview(t *testing.T) {
 	route := &mockHandler{}

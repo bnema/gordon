@@ -17,6 +17,7 @@ type AutoConfigProvider interface {
 	GetPreviewTagPatterns() []string
 	GetPreviewConfig() domain.PreviewConfig
 	GetAllowedDomains() []string
+	FindRoutesByImage(ctx context.Context, imageName string) []domain.Route
 }
 
 // ImagePushDispatcher classifies image push events and delegates

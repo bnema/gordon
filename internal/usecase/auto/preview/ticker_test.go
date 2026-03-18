@@ -1,7 +1,6 @@
 package preview
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -19,13 +18,13 @@ func TestPreviewService_CleanupExpired(t *testing.T) {
 		},
 	}
 	svc := NewService(store, 48*time.Hour)
-	require.NoError(t, svc.Load(context.Background()))
+	require.NoError(t, svc.Load(t.Context()))
 
-	expired := svc.CleanupExpired(context.Background())
+	expired := svc.CleanupExpired(t.Context())
 	assert.Len(t, expired, 1)
 	assert.Equal(t, "expired", expired[0].Name)
 
-	all, err := svc.List(context.Background())
+	all, err := svc.List(t.Context())
 	require.NoError(t, err)
 	assert.Len(t, all, 1)
 	assert.Equal(t, "active", all[0].Name)

@@ -38,6 +38,7 @@ type Config struct {
 	PreviewSeparator        string
 	PreviewTagPatterns      []string
 	PreviewDataCopy         bool
+	PreviewEnvCopy          bool
 	NetworkIsolation        bool
 	NetworkPrefix           string
 	Routes                  map[string]string
@@ -164,6 +165,7 @@ func (s *Service) loadConfigValues() Config {
 		PreviewSeparator:        previewSep,
 		PreviewTagPatterns:      append([]string{}, s.viper.GetStringSlice("auto.preview.tag_patterns")...),
 		PreviewDataCopy:         s.viper.GetBool("auto.preview.data_copy"),
+		PreviewEnvCopy:          !s.viper.IsSet("auto.preview.env_copy") || s.viper.GetBool("auto.preview.env_copy"),
 		NetworkIsolation:        s.viper.GetBool("network_isolation.enabled"),
 		NetworkPrefix:           s.viper.GetString("network_isolation.network_prefix"),
 		RegistryAuthEnabled:     s.viper.GetBool("auth.enabled"),
@@ -1104,6 +1106,7 @@ func (s *Service) GetPreviewConfig() domain.PreviewConfig {
 		Separator:   s.config.PreviewSeparator,
 		TagPatterns: s.config.PreviewTagPatterns,
 		DataCopy:    s.config.PreviewDataCopy,
+		EnvCopy:     s.config.PreviewEnvCopy,
 	}
 }
 

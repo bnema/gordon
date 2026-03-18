@@ -10,17 +10,20 @@ import (
 	"text/tabwriter"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/auto/preview"
 )
 
 func newPreviewCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "preview [name]",
+		Use:   "preview",
 		Short: "Create or manage preview environments",
-		Long:  "Build, push, and deploy an ephemeral preview environment. Defaults to current git branch name.",
+		Long:  "Build, push, and deploy an ephemeral preview environment. Use a subcommand (create, list, delete, extend).",
 	}
 
 	createCmd := newPreviewCreateCmd()
@@ -31,11 +34,6 @@ func newPreviewCmd() *cobra.Command {
 		newPreviewDeleteCmd(),
 		newPreviewExtendCmd(),
 	)
-
-	// Default action (no subcommand) = create
-	cmd.RunE = createCmd.RunE
-	cmd.Args = cobra.MaximumNArgs(1)
-	cmd.Flags().AddFlagSet(createCmd.Flags())
 
 	return cmd
 }
@@ -84,7 +82,7 @@ func newPreviewCreateCmd() *cobra.Command {
 				return err
 			}
 
-			return printPreviewCreateSummary(out, name, ttl, noData)
+			return waitForPreview(ctx, out, name, ttl, noData)
 		},
 	}
 
@@ -234,9 +232,11 @@ func resolvePreviewImageRef(ctx context.Context, cp ControlPlane, out io.Writer,
 		return "", err
 	}
 
-	registry, _, _, err := resolveRoute(ctx, cp, "", "", dockerfile)
+	// Resolve registry from existing routes without showing the interactive
+	// selector — preview only needs the registry URL, not a target domain.
+	registry, err := resolveRegistryForImage(ctx, cp, imageName)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve registry: %w", err)
+		return "", err
 	}
 
 	previewRef := fmt.Sprintf("%s/%s:%s", registry, imageName, previewTag)
@@ -244,6 +244,27 @@ func resolvePreviewImageRef(ctx context.Context, cp ControlPlane, out io.Writer,
 		return "", err
 	}
 	return previewRef, nil
+}
+
+// resolveRegistryForImage finds the registry URL from any existing non-preview
+// route for the given image, without prompting.
+func resolveRegistryForImage(ctx context.Context, cp ControlPlane, imageName string) (string, error) {
+	routes, err := cp.FindRoutesByImage(ctx, imageName)
+	if err != nil {
+		return "", fmt.Errorf("failed to find routes for image %q: %w", imageName, err)
+	}
+
+	for _, r := range routes {
+		if strings.Contains(r.Domain, domain.DefaultPreviewSeparator) {
+			continue
+		}
+		reg, _, _ := parseImageRef(r.Image)
+		if reg != "" {
+			return reg, nil
+		}
+	}
+
+	return "", fmt.Errorf("no route configured for image %q", imageName)
 }
 
 func buildAndPushPreview(ctx context.Context, out io.Writer, previewRef, previewTag, platform string, noBuild bool) error {
@@ -275,13 +296,7 @@ func buildAndPushPreview(ctx context.Context, out io.Writer, previewRef, preview
 	return nil
 }
 
-func printPreviewCreateSummary(out io.Writer, name, ttl string, noData bool) error {
-	if err := cliWriteLine(out, cliRenderSuccess("Push complete")); err != nil {
-		return err
-	}
-	if err := cliWritef(out, "Preview %s will be created by the server's autopreview handler.\n", name); err != nil {
-		return err
-	}
+func printPreviewFlags(out io.Writer, ttl string, noData bool) error {
 	if ttl != "" {
 		if err := cliWritef(out, "Requested TTL: %s (server config controls actual TTL)\n", ttl); err != nil {
 			return err
@@ -293,6 +308,144 @@ func printPreviewCreateSummary(out io.Writer, name, ttl string, noData bool) err
 		}
 	}
 	return nil
+}
+
+func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData bool) error {
+	if err := printPreviewFlags(out, ttl, noData); err != nil {
+		return err
+	}
+
+	client, isRemote := GetRemoteClient()
+	if !isRemote {
+		return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Push complete. Preview %q will be created by the server (use --remote to poll status).", name)))
+	}
+
+	result, err := pollPreviewWithSpinner(ctx, out, client, name)
+	if err != nil {
+		return err
+	}
+
+	switch result.Status {
+	case domain.PreviewStatusRunning:
+		scheme := "http"
+		if result.HTTPS {
+			scheme = "https"
+		}
+		previewURL := fmt.Sprintf("%s://%s", scheme, result.Domain)
+		if err := cliWriteLine(out, cliRenderSuccess("Preview deployed")); err != nil {
+			return err
+		}
+		return cliWriteLine(out, cliRenderMeta("URL:", previewURL))
+	case domain.PreviewStatusFailed:
+		return fmt.Errorf("preview deployment failed")
+	default:
+		return cliWriteLine(out, cliRenderInfo("Preview is still deploying. Check status with: gordon preview list --remote"))
+	}
+}
+
+type previewPollResult struct {
+	preview *domain.PreviewRoute
+	err     error
+}
+
+type previewPollDoneMsg previewPollResult
+
+type previewSpinnerModel struct {
+	spinner  components.SpinnerModel
+	done     <-chan previewPollResult
+	outcome  previewPollResult
+	finished bool
+}
+
+func newPreviewSpinnerModel(name string, done <-chan previewPollResult) previewSpinnerModel {
+	return previewSpinnerModel{
+		spinner: components.NewSpinner(
+			components.WithMessage(fmt.Sprintf("Deploying preview %s...", name)),
+			components.WithSpinnerType(components.SpinnerMiniDot),
+		),
+		done: done,
+	}
+}
+
+func (m previewSpinnerModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Init(), waitForPreviewPollDone(m.done))
+}
+
+func (m previewSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case previewPollDoneMsg:
+		m.outcome = previewPollResult(msg)
+		m.finished = true
+		return m, tea.Quit
+	default:
+		updated, cmd := m.spinner.Update(msg)
+		if sm, ok := updated.(components.SpinnerModel); ok {
+			m.spinner = sm
+		}
+		return m, cmd
+	}
+}
+
+func (m previewSpinnerModel) View() string {
+	return m.spinner.View()
+}
+
+func waitForPreviewPollDone(done <-chan previewPollResult) tea.Cmd {
+	return func() tea.Msg {
+		return previewPollDoneMsg(<-done)
+	}
+}
+
+func pollPreviewWithSpinner(ctx context.Context, out io.Writer, client *remote.Client, name string) (*domain.PreviewRoute, error) {
+	done := make(chan previewPollResult, 1)
+	go func() {
+		result, err := pollPreviewStatus(ctx, client, name)
+		done <- previewPollResult{preview: result, err: err}
+	}()
+
+	if !isInteractiveTerminal() {
+		if err := cliWritef(out, "Waiting for preview %s...\n", name); err != nil {
+			return nil, err
+		}
+		r := <-done
+		return r.preview, r.err
+	}
+
+	model := newPreviewSpinnerModel(name, done)
+	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	fmt.Print("\r\033[K")
+	if err != nil {
+		return nil, err
+	}
+
+	m, ok := final.(previewSpinnerModel)
+	if !ok || !m.finished {
+		return nil, fmt.Errorf("preview spinner exited unexpectedly")
+	}
+	return m.outcome.preview, m.outcome.err
+}
+
+func pollPreviewStatus(ctx context.Context, client *remote.Client, name string) (*domain.PreviewRoute, error) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	timeout := time.After(3 * time.Minute)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timeout:
+			return &domain.PreviewRoute{Status: domain.PreviewStatusTimeout}, nil
+		case <-ticker.C:
+			p, err := client.GetPreview(ctx, name)
+			if err != nil {
+				continue
+			}
+			if p.Status == domain.PreviewStatusRunning || p.Status == domain.PreviewStatusFailed {
+				return p, nil
+			}
+		}
+	}
 }
 
 func detectGitBranch(ctx context.Context) (string, error) {

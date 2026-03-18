@@ -13,6 +13,7 @@ ttl = "48h"
 separator = "--"
 tag_patterns = ["preview-*", "pr-*"]
 data_copy = true
+env_copy = true
 ```
 
 ## Options
@@ -24,6 +25,7 @@ data_copy = true
 | `separator` | string | `"--"` | String inserted between the base domain and the branch slug |
 | `tag_patterns` | string array | `[]` | Glob patterns matched against image tags to trigger preview creation |
 | `data_copy` | bool | `true` | Clone the production route's volumes into the preview environment on creation |
+| `env_copy` | bool | `true` | Inherit environment variables from the base route's secret store into the preview container |
 
 ### `ttl` Format
 
@@ -179,8 +181,9 @@ When a push matches a `tag_patterns` entry:
 
 1. Gordon creates a new route: `<app><separator><preview-name><rest-of-domain>` → pushed image
 2. If `data_copy = true`, volumes from the base route are cloned into the preview
-3. The preview TTL timer starts
-4. The container is deployed with zero-downtime rules disabled (previews are always cold-starts)
+3. If `env_copy = true`, environment variables from the base route's secret store are loaded and passed to the preview container (without persisting them)
+4. The preview TTL timer starts
+5. The container is deployed with zero-downtime rules disabled (previews are always cold-starts)
 
 ### TTL and Automatic Teardown
 
@@ -201,6 +204,35 @@ When `data_copy = true`, Gordon copies the named volumes attached to the base ro
 - Cloned volumes are removed on preview teardown unless `volumes.preserve = true`
 - Set `data_copy = false` to start previews with empty volumes (faster creation, no production data)
 
+### Environment Variable Inheritance
+
+Preview containers receive environment variables from three sources, merged in this order (last wins):
+
+1. **Dockerfile `ENV`** — baked into the image at build time
+2. **Base route secrets** — inherited from the production domain's secret store on first deploy (when `env_copy = true`)
+3. **Preview domain secrets** — set directly on the preview domain, picked up on redeploy
+
+On initial creation, Gordon loads the base route's secrets and passes them to the container. The variables are **not** persisted under the preview domain — they are resolved at deploy time.
+
+#### Overriding variables for a preview
+
+To change a variable for a specific preview, set it on the preview domain:
+
+```bash
+gordon secrets set gordon--pr42.example.com API_URL=https://staging-api.example.com
+```
+
+This writes the secret to the preview domain's store and triggers an automatic redeploy (~60s debounce). On redeploy, the container picks up its own domain secrets instead of the inherited base route ones.
+
+#### Disabling env inheritance
+
+To start previews with a clean environment (Dockerfile `ENV` only):
+
+```toml
+[auto.preview]
+env_copy = false
+```
+
 ## Example Config
 
 ```toml
@@ -216,6 +248,7 @@ ttl = "48h"
 separator = "--"
 tag_patterns = ["preview-*", "pr-*"]
 data_copy = true
+env_copy = true
 
 [routes]
 "app.example.com" = "myapp:latest"
@@ -227,9 +260,10 @@ preserve = false
 ```
 
 With this config:
-- Pushing `myapp:pr-99` creates `myapp--99.example.com` with cloned volumes
+- Pushing `myapp:pr-99` creates `myapp--99.example.com` with cloned volumes and inherited env vars
 - Pushing `myapi:preview-auth-refactor` creates `myapi--auth-refactor.example.com`
 - Both previews expire after 48 hours and volumes are removed on teardown
+- Env vars are loaded at deploy time from the base route's secret store and are not persisted for the preview domain
 
 ## Related
 

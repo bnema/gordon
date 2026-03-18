@@ -572,7 +572,12 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 	previewStorePath := filepath.Join(resolveDataDir(cfg.Server.DataDir), "previews.json")
 	svc.previewStore = filesystem.NewPreviewStore(previewStorePath)
 	previewConfig := svc.configSvc.GetPreviewConfig()
-	svc.previewService = preview.NewService(svc.previewStore, previewConfig.TTL)
+	svc.previewService = preview.NewService(svc.previewStore, previewConfig.TTL).
+		WithDeployer(svc.containerSvc).
+		WithRouteManager(svc.configSvc).
+		WithVolumeCloner(svc.runtime).
+		WithRegistryDomain(svc.configSvc.GetRegistryDomain()).
+		WithEnvLoader(svc.envLoader)
 	if err := svc.previewService.Load(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to load previews")
 	}
@@ -590,6 +595,14 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 		for _, volName := range p.Volumes {
 			if err := svc.runtime.RemoveVolume(ctx, volName, true); err != nil {
 				log.Warn().Err(err).Str("volume", volName).Str("preview", p.Domain).Msg("failed to remove preview volume")
+			}
+		}
+		// Remove route from config so proxy stops routing to this domain
+		if err := svc.configSvc.RemoveRoute(ctx, p.Domain); err != nil {
+			if errors.Is(err, domain.ErrRouteNotFound) {
+				log.Debug().Str("domain", p.Domain).Msg("preview route already removed from config")
+			} else {
+				log.Warn().Err(err).Str("domain", p.Domain).Msg("failed to remove preview route from config")
 			}
 		}
 		svc.proxySvc.InvalidateTarget(ctx, p.Domain)

@@ -5,6 +5,7 @@ type Route struct {
 	Domain string
 	Image  string
 	HTTPS  bool
+	Env    []string // Pre-resolved env vars ("KEY=VALUE"); when set, Deploy skips EnvLoader lookup.
 }
 
 // ProxyTarget represents the destination for proxying requests.

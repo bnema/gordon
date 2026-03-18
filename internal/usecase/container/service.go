@@ -568,7 +568,7 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 		imageLabels = nil
 	}
 
-	envVars, err := s.loadEnvironment(ctx, route.Domain, actualImageRef)
+	envVars, err := s.loadEnvironment(ctx, route.Env, route.Domain, actualImageRef)
 	if err != nil {
 		return nil, err
 	}
@@ -1774,12 +1774,18 @@ func (s *Service) tagImageIfNeeded(ctx context.Context, sourceRef, targetRef str
 	return nil
 }
 
-func (s *Service) loadEnvironment(ctx context.Context, domainName, imageRef string) ([]string, error) {
+func (s *Service) loadEnvironment(ctx context.Context, preResolved []string, domainName, imageRef string) ([]string, error) {
 	log := zerowrap.FromCtx(ctx)
 
-	userEnvVars, err := s.envLoader.LoadEnv(ctx, domainName)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to load environment variables")
+	var userEnvVars []string
+	if len(preResolved) > 0 {
+		userEnvVars = preResolved
+	} else {
+		var err error
+		userEnvVars, err = s.envLoader.LoadEnv(ctx, domainName)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to load environment variables")
+		}
 	}
 
 	dockerfileEnvVars, err := s.runtime.InspectImageEnv(ctx, imageRef)
@@ -2219,7 +2225,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	}
 
 	// Load environment (attachment-specific env file)
-	envVars, err := s.loadEnvironment(ctx, containerName, actualImageRef)
+	envVars, err := s.loadEnvironment(ctx, nil, containerName, actualImageRef)
 	if err != nil {
 		log.WrapErr(err, "failed to load environment for attachment")
 		envVars = []string{}
@@ -2268,7 +2274,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 }
 
 func (s *Service) attachmentEnvDrifted(ctx context.Context, existing *domain.Container, containerName, serviceImage string) (bool, error) {
-	currentEnv, err := s.loadEnvironment(ctx, containerName, s.buildImageRef(serviceImage))
+	currentEnv, err := s.loadEnvironment(ctx, nil, containerName, s.buildImageRef(serviceImage))
 	if err != nil {
 		return false, err
 	}

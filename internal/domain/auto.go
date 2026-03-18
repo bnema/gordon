@@ -20,4 +20,5 @@ type PreviewConfig struct {
 	Separator   string
 	TagPatterns []string
 	DataCopy    bool
+	EnvCopy     bool
 }

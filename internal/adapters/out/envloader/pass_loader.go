@@ -86,8 +86,11 @@ func (l *PassLoader) LoadEnv(ctx context.Context, domain string) ([]string, erro
 // This is an acceptable trade-off for simplicity, but if such domains become common,
 // this should be replaced with a more robust detection mechanism (e.g., checking both
 // GetAll() and GetAllAttachment() and seeing which returns results).
-func isAttachmentContainer(domain string) bool {
-	return strings.HasPrefix(domain, "gordon-")
+func isAttachmentContainer(name string) bool {
+	// Attachment container names start with "gordon-" and never contain dots.
+	// Domain names (including preview domains like "gordon--test.bnema.dev")
+	// always contain dots, so checking for dots distinguishes them.
+	return strings.HasPrefix(name, "gordon-") && !strings.Contains(name, ".")
 }
 
 // CreateEnvFile is a no-op for pass-backed loader.
