@@ -3794,3 +3794,44 @@ func TestService_Deploy_PropagatesImageLabelsToContainerConfig(t *testing.T) {
 	assert.Equal(t, "c-gitea-123", result.ID)
 	assert.Equal(t, "running", result.Status)
 }
+
+func TestLoadEnvironment_PreResolvedEnv(t *testing.T) {
+	ctx := testContext()
+
+	mockEnvLoader := mocks.NewMockEnvLoader(t)
+	mockRuntime := mocks.NewMockContainerRuntime(t)
+
+	// EnvLoader should NOT be called when pre-resolved env is provided
+	mockRuntime.EXPECT().InspectImageEnv(ctx, "myapp:latest").
+		Return([]string{"FROM_DOCKERFILE=base"}, nil)
+
+	svc := NewService(mockRuntime, mockEnvLoader, mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+
+	preResolved := []string{"DB_HOST=localhost", "API_KEY=secret"}
+	result, err := svc.loadEnvironment(ctx, preResolved, "ignored-domain", "myapp:latest")
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "DB_HOST=localhost")
+	assert.Contains(t, result, "API_KEY=secret")
+	assert.Contains(t, result, "FROM_DOCKERFILE=base")
+}
+
+func TestLoadEnvironment_NoPreResolvedEnv(t *testing.T) {
+	ctx := testContext()
+
+	mockEnvLoader := mocks.NewMockEnvLoader(t)
+	mockRuntime := mocks.NewMockContainerRuntime(t)
+
+	mockEnvLoader.EXPECT().LoadEnv(ctx, "myapp.example.com").
+		Return([]string{"DB_HOST=prod"}, nil)
+	mockRuntime.EXPECT().InspectImageEnv(ctx, "myapp:latest").
+		Return([]string{"FROM_DOCKERFILE=base"}, nil)
+
+	svc := NewService(mockRuntime, mockEnvLoader, mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+
+	result, err := svc.loadEnvironment(ctx, nil, "myapp.example.com", "myapp:latest")
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "DB_HOST=prod")
+	assert.Contains(t, result, "FROM_DOCKERFILE=base")
+}
