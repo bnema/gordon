@@ -276,6 +276,16 @@ func resolveFromImage(ctx context.Context, cp ControlPlane, imageArg, dockerfile
 		return "", "", "", fmt.Errorf("failed to find routes for image %q: %w", imageArg, err)
 	}
 
+	// Filter out preview routes (domains containing "--") so they don't
+	// pollute the selection when pushing the base image.
+	filtered := routes[:0]
+	for _, r := range routes {
+		if !strings.Contains(r.Domain, "--") {
+			filtered = append(filtered, r)
+		}
+	}
+	routes = filtered
+
 	if len(routes) == 0 {
 		// bootstrap command is registered in bootstrap.go (see issue #98)
 		return "", "", "", fmt.Errorf(
