@@ -45,6 +45,10 @@ type RegistryPruneResult struct {
 	BlobsRemoved int
 	// SpaceReclaimed is reported in bytes.
 	SpaceReclaimed int64
+	// UploadsRemoved is the number of stale upload files removed.
+	UploadsRemoved int
+	// UploadSpaceReclaimed is bytes recovered from stale uploads.
+	UploadSpaceReclaimed int64
 }
 
 // ImagePruneReport aggregates runtime and registry cleanup results.

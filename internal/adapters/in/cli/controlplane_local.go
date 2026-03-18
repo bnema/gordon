@@ -23,6 +23,7 @@ type localControlPlane struct {
 	deployCoord  in.DeployCoordinator
 	healthSvc    in.HealthService
 	logSvc       in.LogService
+	volumeSvc    in.VolumeService
 }
 
 func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
@@ -47,6 +48,7 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 		deployCoord:  deployCoord,
 		healthSvc:    kernel.Health(),
 		logSvc:       kernel.Logs(),
+		volumeSvc:    kernel.Volumes(),
 	}
 }
 
@@ -530,6 +532,55 @@ func (l *localControlPlane) StreamContainerLogs(ctx context.Context, logDomain s
 		return nil, fmt.Errorf("local log service unavailable")
 	}
 	return l.logSvc.FollowContainerLogs(ctx, logDomain, lines)
+}
+
+func (l *localControlPlane) ListVolumes(ctx context.Context) ([]dto.Volume, error) {
+	if l.volumeSvc == nil {
+		return nil, fmt.Errorf("volume service unavailable")
+	}
+	vols, err := l.volumeSvc.ListVolumes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]dto.Volume, len(vols))
+	for i, v := range vols {
+		result[i] = dto.Volume{
+			Name:       v.Name,
+			Driver:     v.Driver,
+			MountPoint: v.MountPoint,
+			Size:       v.Size,
+			CreatedAt:  v.CreatedAt,
+			InUse:      v.InUse,
+			Containers: v.Containers,
+			Labels:     v.Labels,
+		}
+	}
+	return result, nil
+}
+
+func (l *localControlPlane) PruneVolumes(ctx context.Context, req dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
+	if l.volumeSvc == nil {
+		return nil, fmt.Errorf("volume service unavailable")
+	}
+	report, removed, err := l.volumeSvc.PruneVolumes(ctx, req.DryRun)
+	if err != nil {
+		return nil, err
+	}
+
+	vols := make([]dto.Volume, len(removed))
+	for i, v := range removed {
+		vols[i] = dto.Volume{
+			Name: v.Name,
+			Size: v.Size,
+		}
+	}
+
+	return &dto.VolumePruneResponse{
+		VolumesRemoved: report.VolumesRemoved,
+		SpaceReclaimed: report.SpaceReclaimed,
+		Volumes:        vols,
+	}, nil
 }
 
 func toRemoteRouteInfos(routes []domain.RouteInfo) []remote.RouteInfo {

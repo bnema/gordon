@@ -249,6 +249,15 @@ func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.Image
 		report.Registry.BlobsRemoved++
 	}
 
+	// Clean up stale uploads (abandoned push operations)
+	uploadsRemoved, uploadBytes, err := s.blobStorage.CleanupStaleUploads(24 * time.Hour)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to clean up stale uploads, continuing")
+	} else {
+		report.Registry.UploadsRemoved = uploadsRemoved
+		report.Registry.UploadSpaceReclaimed = uploadBytes
+	}
+
 	return report, nil
 }
 

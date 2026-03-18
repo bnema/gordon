@@ -1083,3 +1083,33 @@ func (c *Client) VerifyAuth(ctx context.Context) (*dto.AuthVerifyResponse, error
 
 	return &result, nil
 }
+
+// ListVolumes lists all volumes via the admin API.
+func (c *Client) ListVolumes(ctx context.Context) ([]dto.Volume, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/volumes", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var volumes []dto.Volume
+	if err := parseResponse(resp, &volumes); err != nil {
+		return nil, err
+	}
+
+	return volumes, nil
+}
+
+// PruneVolumes prunes orphaned volumes via the admin API.
+func (c *Client) PruneVolumes(ctx context.Context, req dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
+	resp, err := c.request(ctx, http.MethodPost, "/volumes/prune", req)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.VolumePruneResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}

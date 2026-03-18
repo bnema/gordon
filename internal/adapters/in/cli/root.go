@@ -137,6 +137,10 @@ Commands are organized by where they run:
 	networksCmd.GroupID = groupManage
 	rootCmd.AddCommand(networksCmd)
 
+	volumesCmd := newVolumesCmd()
+	volumesCmd.GroupID = groupManage
+	rootCmd.AddCommand(volumesCmd)
+
 	autorouteCmd := newAutorouteCmd()
 	autorouteCmd.GroupID = groupManage
 	rootCmd.AddCommand(autorouteCmd)

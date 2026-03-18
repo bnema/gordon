@@ -74,6 +74,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/proxy"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
+	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
 
 	// Pkg
 	"github.com/bnema/gordon/pkg/bytesize"
@@ -184,6 +185,7 @@ type services struct {
 	healthSvc        *health.Service
 	logSvc           *logs.Service
 	imageSvc         *images.Service
+	volumeSvc        *volumesSvc.Service
 	proxySvc         *proxy.Service
 	authSvc          *auth.Service
 	authHandler      *authhandler.Handler
@@ -452,7 +454,8 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	var err error
 
 	// Create output adapters
-	if svc.runtime, svc.eventBus, err = createOutputAdapters(ctx, log); err != nil {
+	runtimeSocket := resolveRuntimeConfig(v.GetString("server.runtime"))
+	if svc.runtime, svc.eventBus, err = createOutputAdapters(ctx, log, runtimeSocket); err != nil {
 		return nil, err
 	}
 
@@ -506,6 +509,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
 	svc.imageSvc = images.NewService(svc.runtime, svc.manifestStorage, svc.blobStorage, log)
+	svc.volumeSvc = volumesSvc.NewService(svc.runtime)
 
 	injectTelemetryMetrics(cfg, svc, log)
 
@@ -550,7 +554,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		log,
 		svc.backupSvc,
 		svc.imageSvc,
-	)
+	).WithVolumeService(svc.volumeSvc)
 
 	return svc, nil
 }
@@ -625,19 +629,53 @@ func resolveLogFilePath(cfg Config) string {
 	return filepath.Join(dataDir, "logs", "gordon.log")
 }
 
-// createOutputAdapters creates the Docker runtime and event bus.
-func createOutputAdapters(ctx context.Context, log zerowrap.Logger) (*docker.Runtime, *eventbus.InMemory, error) {
-	runtime, err := docker.NewRuntime()
+// resolveRuntimeConfig converts a server.runtime config value to a socket path.
+// "auto" or "" means auto-detect; any other value is treated as an explicit socket path.
+// URI schemes (unix://, tcp://) are stripped so callers receive a bare path.
+func resolveRuntimeConfig(value string) string {
+	if value == "" || value == "auto" {
+		return ""
+	}
+	if strings.HasPrefix(value, "unix://") {
+		return strings.TrimPrefix(value, "unix://")
+	}
+	return value
+}
+
+// createOutputAdapters creates the container runtime and event bus.
+func createOutputAdapters(ctx context.Context, log zerowrap.Logger, runtimeSocket string) (*docker.Runtime, *eventbus.InMemory, error) {
+	detection := docker.DetectRuntimeSocket(runtimeSocket)
+
+	var runtime *docker.Runtime
+	var err error
+
+	switch detection.Source {
+	case "none":
+		return nil, nil, fmt.Errorf("no container runtime found: checked Docker socket, Podman socket, DOCKER_HOST env var. Install Docker or Podman, or set server.runtime in config")
+	case "DOCKER_HOST_passthrough":
+		detection.RuntimeName = "docker"
+		runtime, err = docker.NewRuntime()
+	default:
+		if detection.SocketPath != "" {
+			runtime, err = docker.NewRuntimeWithSocket(detection.SocketPath)
+		} else {
+			runtime, err = docker.NewRuntime()
+		}
+	}
 	if err != nil {
-		return nil, nil, log.WrapErr(err, "failed to create Docker runtime")
+		return nil, nil, log.WrapErr(err, "failed to create container runtime")
 	}
 
 	if err := runtime.Ping(ctx); err != nil {
-		return nil, nil, log.WrapErr(err, "Docker is not available")
+		return nil, nil, log.WrapErr(err, fmt.Sprintf("container runtime not available (detected: %s via %s)", detection.RuntimeName, detection.Source))
 	}
 
-	dockerVersion, _ := runtime.Version(ctx)
-	log.Info().Str("docker_version", dockerVersion).Msg("Docker runtime initialized")
+	runtimeVersion, _ := runtime.Version(ctx)
+	log.Info().
+		Str("runtime", detection.RuntimeName).
+		Str("version", runtimeVersion).
+		Str("source", detection.Source).
+		Msg("container runtime initialized")
 
 	eventBus := eventbus.NewInMemory(100, log)
 
@@ -1865,6 +1903,8 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 				Int64("runtime_reclaimed_bytes", report.Runtime.SpaceReclaimed).
 				Int("registry_tags_removed", report.Registry.TagsRemoved).
 				Int("registry_blobs_removed", report.Registry.BlobsRemoved).
+				Int("registry_uploads_removed", report.Registry.UploadsRemoved).
+				Int64("registry_upload_bytes_reclaimed", report.Registry.UploadSpaceReclaimed).
 				Msg("scheduled image prune complete")
 			return nil
 		},
@@ -2306,6 +2346,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.tls_cert_file", "")
 	v.SetDefault("server.tls_key_file", "")
 	v.SetDefault("server.data_dir", DefaultDataDir())
+	v.SetDefault("server.runtime", "auto")
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "console")
 	v.SetDefault("logging.file.enabled", false)
