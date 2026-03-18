@@ -572,7 +572,11 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 	previewStorePath := filepath.Join(resolveDataDir(cfg.Server.DataDir), "previews.json")
 	svc.previewStore = filesystem.NewPreviewStore(previewStorePath)
 	previewConfig := svc.configSvc.GetPreviewConfig()
-	svc.previewService = preview.NewService(svc.previewStore, previewConfig.TTL)
+	svc.previewService = preview.NewService(svc.previewStore, previewConfig.TTL).
+		WithDeployer(svc.containerSvc).
+		WithRouteManager(svc.configSvc).
+		WithVolumeCloner(svc.runtime).
+		WithRegistryDomain(svc.configSvc.GetRegistryDomain())
 	if err := svc.previewService.Load(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to load previews")
 	}
