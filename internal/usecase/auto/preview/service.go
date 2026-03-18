@@ -3,6 +3,7 @@ package preview
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,6 +91,21 @@ func (s *Service) Add(ctx context.Context, p domain.PreviewRoute) error {
 	copy(cp, s.previews)
 	s.mu.Unlock()
 	return s.store.Save(ctx, cp)
+}
+
+func (s *Service) Update(ctx context.Context, p domain.PreviewRoute) error {
+	s.mu.Lock()
+	for i := range s.previews {
+		if s.previews[i].Name == p.Name {
+			s.previews[i] = p
+			cp := make([]domain.PreviewRoute, len(s.previews))
+			copy(cp, s.previews)
+			s.mu.Unlock()
+			return s.store.Save(ctx, cp)
+		}
+	}
+	s.mu.Unlock()
+	return fmt.Errorf("preview %q: %w", p.Name, domain.ErrPreviewNotFound)
 }
 
 func (s *Service) Delete(ctx context.Context, name string) error {
@@ -235,6 +251,63 @@ func (s *Service) ReleaseNameLock(name string) {
 	}
 }
 
+func (s *Service) qualifyImage(image string) string {
+	if s.registryDomain != "" && !strings.Contains(image, "/") {
+		return s.registryDomain + "/" + image
+	}
+	return image
+}
+
+// generateVolumeName mirrors the naming convention in container/service.go.
+// This MUST stay in sync with the container service's generateVolumeName.
+func generateVolumeName(prefix, domainName, volumePath string) string {
+	return fmt.Sprintf("%s-%s-%s",
+		prefix,
+		strings.ReplaceAll(domainName, ".", "-"),
+		strings.ReplaceAll(strings.Trim(volumePath, "/"), "/", "-"))
+}
+
+func (s *Service) cloneBaseRouteVolumes(ctx context.Context, baseRoute, previewDomain string) ([]string, error) {
+	if s.volumeCloner == nil || s.routeManager == nil {
+		return nil, nil
+	}
+
+	_, prefix, _ := s.routeManager.GetVolumeConfig()
+	if prefix == "" {
+		prefix = "gordon"
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	basePrefix := prefix + "-" + strings.ReplaceAll(baseRoute, ".", "-") + "-"
+
+	vols, err := s.volumeCloner.ListVolumes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list volumes: %w", err)
+	}
+
+	var sourceVols []string
+	for _, v := range vols {
+		if strings.HasPrefix(v.Name, basePrefix) {
+			sourceVols = append(sourceVols, v.Name)
+		}
+	}
+
+	if len(sourceVols) == 0 {
+		return nil, nil
+	}
+
+	namer := func(sourceVolName string) string {
+		pathSuffix := strings.TrimPrefix(sourceVolName, basePrefix)
+		return generateVolumeName(prefix, previewDomain, pathSuffix)
+	}
+
+	for _, src := range sourceVols {
+		log.Debug().Str("source", src).Str("target", namer(src)).Msg("will clone volume for preview")
+	}
+
+	return CloneVolumes(ctx, s.volumeCloner, namer, sourceVols)
+}
+
 // CreatePreviewRequest contains parameters for creating a preview.
 type CreatePreviewRequest struct {
 	Name          string
@@ -254,7 +327,9 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 		s.ReleaseNameLock(req.Name)
 	}()
 
+	log := zerowrap.FromCtx(ctx)
 	now := time.Now()
+
 	preview := domain.PreviewRoute{
 		Domain:    req.Domain,
 		Image:     req.Image,
@@ -263,11 +338,62 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 		CreatedAt: now,
 		ExpiresAt: now.Add(req.PreviewConfig.TTL),
 		HTTPS:     req.HTTPS,
+		Status:    "deploying",
 	}
 
-	// TODO: Volume cloning and container startup will be wired in Task 13
 	if err := s.Add(ctx, preview); err != nil {
 		return fmt.Errorf("register preview %q: %w", req.Name, err)
 	}
+
+	if req.PreviewConfig.DataCopy {
+		cloned, err := s.cloneBaseRouteVolumes(ctx, req.BaseRoute, req.Domain)
+		if err != nil {
+			log.Warn().Err(err).Str("base_route", req.BaseRoute).Msg("failed to clone volumes, deploying with empty volumes")
+		} else if len(cloned) > 0 {
+			preview.Volumes = cloned
+		}
+	}
+
+	if s.routeManager != nil {
+		imageRef := s.qualifyImage(req.Image)
+		if err := s.routeManager.AddRoute(ctx, domain.Route{
+			Domain: req.Domain,
+			Image:  imageRef,
+			HTTPS:  req.HTTPS,
+		}); err != nil {
+			preview.Status = "failed"
+			_ = s.Update(ctx, preview)
+			return fmt.Errorf("register preview route %q: %w", req.Domain, err)
+		}
+	}
+
+	if s.deployer != nil {
+		imageRef := s.qualifyImage(req.Image)
+		deployCtx := domain.WithInternalDeploy(ctx)
+		container, err := s.deployer.Deploy(deployCtx, domain.Route{
+			Domain: req.Domain,
+			Image:  imageRef,
+			HTTPS:  req.HTTPS,
+		})
+		if err != nil {
+			preview.Status = "failed"
+			_ = s.Update(ctx, preview)
+			return fmt.Errorf("deploy preview %q: %w", req.Name, err)
+		}
+		preview.Containers = []string{container.Name}
+	}
+
+	preview.Status = "running"
+	if err := s.Update(ctx, preview); err != nil {
+		return fmt.Errorf("finalize preview %q: %w", req.Name, err)
+	}
+
+	log.Info().
+		Str("name", req.Name).
+		Str("domain", req.Domain).
+		Str("image", req.Image).
+		Str("base_route", req.BaseRoute).
+		Msg("preview environment created")
+
 	return nil
 }
