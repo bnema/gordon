@@ -35,11 +35,6 @@ func newPreviewCmd() *cobra.Command {
 		newPreviewExtendCmd(),
 	)
 
-	// Default action (no subcommand) = create
-	cmd.RunE = createCmd.RunE
-	cmd.Args = cobra.MaximumNArgs(1)
-	cmd.Flags().AddFlagSet(createCmd.Flags())
-
 	return cmd
 }
 
