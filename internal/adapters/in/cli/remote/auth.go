@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+
+	"github.com/bnema/gordon/internal/adapters/dto"
 )
 
 // PasswordRequest represents the request body for POST /auth/password.
@@ -69,6 +71,54 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 	}
 
 	return &result, nil
+}
+
+// ExchangeRegistryToken exchanges the client's long-lived Gordon token for a
+// short-lived registry access token via the Docker v2 token endpoint.
+// The subject must match the token's sub claim (use VerifyAuth to obtain it).
+// Returns the short-lived Bearer token string.
+func (c *Client) ExchangeRegistryToken(ctx context.Context, subject string) (string, error) {
+	url := c.baseURL + "/auth/token?scope=repository:*:push,pull&service=gordon-registry"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.SetBasicAuth(subject, c.token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
+			return "", fmt.Errorf("%s: %s", resp.Status, errResp.Error)
+		}
+		return "", fmt.Errorf("%s: %s", resp.Status, string(body))
+	}
+
+	var result dto.TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	token := result.Token
+	if token == "" {
+		token = result.AccessToken
+	}
+	if token == "" {
+		return "", fmt.Errorf("registry token exchange returned empty token")
+	}
+
+	return token, nil
 }
 
 // UpdateRemoteToken updates the token for a named remote.
