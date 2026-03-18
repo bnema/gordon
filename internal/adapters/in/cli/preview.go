@@ -275,8 +275,7 @@ func buildAndPushPreview(ctx context.Context, out io.Writer, previewRef, preview
 	return nil
 }
 
-func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData bool) error {
-	// Print TTL/no-data info upfront
+func printPreviewFlags(out io.Writer, ttl string, noData bool) error {
 	if ttl != "" {
 		if err := cliWritef(out, "Requested TTL: %s (server config controls actual TTL)\n", ttl); err != nil {
 			return err
@@ -286,6 +285,13 @@ func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData
 		if err := cliWriteLine(out, cliRenderInfo("Data copy: skipped (--no-data)")); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData bool) error {
+	if err := printPreviewFlags(out, ttl, noData); err != nil {
+		return err
 	}
 
 	client, isRemote := GetRemoteClient()
@@ -297,7 +303,6 @@ func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData
 		return err
 	}
 
-	// Poll every 2s for up to 3 minutes
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	timeout := time.After(3 * time.Minute)
