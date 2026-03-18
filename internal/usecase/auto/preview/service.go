@@ -116,11 +116,13 @@ func (s *Service) Update(ctx context.Context, p domain.PreviewRoute) error {
 
 func (s *Service) Delete(ctx context.Context, name string) error {
 	s.mu.Lock()
+	var deleted domain.PreviewRoute
 	found := false
 	filtered := make([]domain.PreviewRoute, 0, len(s.previews))
 	for _, p := range s.previews {
 		if p.Name == name {
 			found = true
+			deleted = p
 		} else {
 			filtered = append(filtered, p)
 		}
@@ -133,7 +135,19 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	cp := make([]domain.PreviewRoute, len(s.previews))
 	copy(cp, s.previews)
 	s.mu.Unlock()
-	return s.store.Save(ctx, cp)
+
+	if err := s.store.Save(ctx, cp); err != nil {
+		return err
+	}
+
+	// Clean up the route from config so proxy stops routing to this domain.
+	if s.routeManager != nil && deleted.Domain != "" {
+		log := zerowrap.FromCtx(ctx)
+		if err := s.routeManager.RemoveRoute(ctx, deleted.Domain); err != nil {
+			log.Debug().Err(err).Str("domain", deleted.Domain).Msg("preview route already removed from config")
+		}
+	}
+	return nil
 }
 
 func (s *Service) Get(_ context.Context, name string) (*domain.PreviewRoute, error) {
