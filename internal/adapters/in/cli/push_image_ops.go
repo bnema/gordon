@@ -30,9 +30,10 @@ type pushImageOps interface {
 
 // dockerImageOps implements pushImageOps using the Docker SDK and registrypush.
 type dockerImageOps struct {
-	cli         client.APIClient
-	insecureTLS bool
-	progress    io.Writer
+	cli          client.APIClient
+	insecureTLS  bool
+	progress     io.Writer
+	remoteClient *remote.Client // nil when local
 }
 
 // newDockerImageOps creates a dockerImageOps from the Docker environment.
@@ -50,8 +51,20 @@ func newDockerImageOps(insecureTLS bool, progress io.Writer) (*dockerImageOps, e
 
 // newImageOpsFromFlags resolves TLS settings from CLI flags/config and creates ops.
 func newImageOpsFromFlags() (pushImageOps, error) {
-	_, _, insecureTLS, _ := remote.ResolveRemote(remoteFlag, tokenFlag, insecureTLSFlag)
-	return newDockerImageOps(insecureTLS, os.Stderr)
+	remoteURL, token, insecureTLS, _ := remote.ResolveRemote(remoteFlag, tokenFlag, insecureTLSFlag)
+	ops, err := newDockerImageOps(insecureTLS, os.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	if remoteURL != "" && token != "" {
+		var clientOpts []remote.ClientOption
+		clientOpts = append(clientOpts, remote.WithToken(token))
+		if insecureTLS {
+			clientOpts = append(clientOpts, remote.WithInsecureTLS(true))
+		}
+		ops.remoteClient = remote.NewClient(remoteURL, clientOpts...)
+	}
+	return ops, nil
 }
 
 func (d *dockerImageOps) Tag(ctx context.Context, sourceRef, targetRef string) error {
@@ -62,11 +75,42 @@ func (d *dockerImageOps) Tag(ctx context.Context, sourceRef, targetRef string) e
 }
 
 func (d *dockerImageOps) Push(ctx context.Context, ref string) error {
-	pusher := registrypush.New(
+	opts := []registrypush.Option{
 		registrypush.WithProgress(d.progress),
 		registrypush.WithInsecureTLS(d.insecureTLS),
-	)
+	}
+
+	if d.remoteClient != nil {
+		authHeader, err := d.exchangeRegistryAuth(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to obtain registry credentials: %w", err)
+		}
+		opts = append(opts, registrypush.WithAuth(authHeader))
+	}
+
+	pusher := registrypush.New(opts...)
 	return pusher.Push(ctx, ref)
+}
+
+// exchangeRegistryAuth exchanges the long-lived Gordon token for a short-lived
+// registry access token. Returns the Authorization header value (e.g. "Bearer <token>").
+func (d *dockerImageOps) exchangeRegistryAuth(ctx context.Context) (string, error) {
+	// Step 1: Get subject from server (validates token is still active)
+	verifyResp, err := d.remoteClient.VerifyAuth(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to verify token: %w", err)
+	}
+	if !verifyResp.Valid {
+		return "", fmt.Errorf("token is not valid")
+	}
+
+	// Step 2: Exchange long-lived token for short-lived registry token
+	shortToken, err := d.remoteClient.ExchangeRegistryToken(ctx, verifyResp.Subject)
+	if err != nil {
+		return "", fmt.Errorf("failed to exchange registry token: %w", err)
+	}
+
+	return "Bearer " + shortToken, nil
 }
 
 func (d *dockerImageOps) Exists(ctx context.Context, imageRef string) (bool, error) {

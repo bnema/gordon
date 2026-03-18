@@ -42,6 +42,7 @@ type Pusher struct {
 	imageSource func(ctx context.Context, ref string) (v1.Image, func(), error)
 	cleanupFn   func()
 	progress    io.Writer
+	authHeader  string
 }
 
 // Option configures a Pusher.
@@ -89,6 +90,14 @@ func WithProgress(w io.Writer) Option {
 	return func(p *Pusher) { p.progress = w }
 }
 
+// WithAuth sets an explicit Authorization header value (e.g. "Bearer <token>")
+// to use for all registry requests. When set, the Docker credential keychain
+// is not consulted. This is useful when a pre-computed token is available
+// without requiring a local docker login.
+func WithAuth(header string) Option {
+	return func(p *Pusher) { p.authHeader = header }
+}
+
 // New creates a Pusher with the given options.
 func New(opts ...Option) *Pusher {
 	p := &Pusher{chunkSize: DefaultChunkSize, timeout: defaultHTTPTimeout}
@@ -125,9 +134,15 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 		return fmt.Errorf("image ref %s must include a tag", ref)
 	}
 
-	authHeader, err := resolveAuthHeader(parsedRef)
-	if err != nil {
-		return err
+	var authHeader string
+	if p.authHeader != "" {
+		authHeader = p.authHeader
+	} else {
+		var resolveErr error
+		authHeader, resolveErr = resolveAuthHeader(parsedRef)
+		if resolveErr != nil {
+			return resolveErr
+		}
 	}
 
 	img, sourceCleanup, err := p.imageSource(ctx, ref)
