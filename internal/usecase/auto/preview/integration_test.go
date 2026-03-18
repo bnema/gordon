@@ -176,6 +176,6 @@ func TestPreviewLifecycle_WithDeploy(t *testing.T) {
 	all, err := svc.List(ctx)
 	require.NoError(t, err)
 	require.Len(t, all, 1)
-	assert.Equal(t, "running", all[0].Status)
+	assert.Equal(t, domain.PreviewStatusRunning, all[0].Status)
 	assert.Equal(t, []string{"gordon-myapp--test-feat.example.com"}, all[0].Containers)
 }

@@ -319,7 +319,7 @@ func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData
 				continue // not found yet, keep polling
 			}
 			switch p.Status {
-			case "running":
+			case domain.PreviewStatusRunning:
 				scheme := "http"
 				if p.HTTPS {
 					scheme = "https"
@@ -329,10 +329,10 @@ func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData
 					return err
 				}
 				return cliWriteLine(out, cliRenderMeta("URL:", previewURL))
-			case "failed":
+			case domain.PreviewStatusFailed:
 				return fmt.Errorf("preview deployment failed")
 			}
-			// status is "deploying", keep polling
+			// status is PreviewStatusDeploying, keep polling
 		}
 	}
 }

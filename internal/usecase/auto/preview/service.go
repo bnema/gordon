@@ -338,7 +338,7 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 		CreatedAt: now,
 		ExpiresAt: now.Add(req.PreviewConfig.TTL),
 		HTTPS:     req.HTTPS,
-		Status:    "deploying",
+		Status:    domain.PreviewStatusDeploying,
 	}
 
 	if err := s.Add(ctx, preview); err != nil {
@@ -361,7 +361,7 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 			Image:  imageRef,
 			HTTPS:  req.HTTPS,
 		}); err != nil {
-			preview.Status = "failed"
+			preview.Status = domain.PreviewStatusFailed
 			_ = s.Update(ctx, preview)
 			return fmt.Errorf("register preview route %q: %w", req.Domain, err)
 		}
@@ -376,14 +376,14 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 			HTTPS:  req.HTTPS,
 		})
 		if err != nil {
-			preview.Status = "failed"
+			preview.Status = domain.PreviewStatusFailed
 			_ = s.Update(ctx, preview)
 			return fmt.Errorf("deploy preview %q: %w", req.Name, err)
 		}
 		preview.Containers = []string{container.Name}
 	}
 
-	preview.Status = "running"
+	preview.Status = domain.PreviewStatusRunning
 	if err := s.Update(ctx, preview); err != nil {
 		return fmt.Errorf("finalize preview %q: %w", req.Name, err)
 	}

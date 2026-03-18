@@ -111,7 +111,7 @@ func TestPreviewService_GetExpired(t *testing.T) {
 func TestPreviewService_Update(t *testing.T) {
 	store := &fakeStore{
 		previews: []domain.PreviewRoute{
-			{Name: "feat", Domain: "myapp--feat.example.com", Status: "deploying"},
+			{Name: "feat", Domain: "myapp--feat.example.com", Status: domain.PreviewStatusDeploying},
 		},
 	}
 	svc := NewService(store, 48*time.Hour)
@@ -120,7 +120,7 @@ func TestPreviewService_Update(t *testing.T) {
 	updated := domain.PreviewRoute{
 		Name:       "feat",
 		Domain:     "myapp--feat.example.com",
-		Status:     "running",
+		Status:     domain.PreviewStatusRunning,
 		Containers: []string{"gordon-myapp--feat.example.com"},
 	}
 	err := svc.Update(t.Context(), updated)
@@ -128,7 +128,7 @@ func TestPreviewService_Update(t *testing.T) {
 
 	p, err := svc.Get(t.Context(), "feat")
 	require.NoError(t, err)
-	assert.Equal(t, "running", p.Status)
+	assert.Equal(t, domain.PreviewStatusRunning, p.Status)
 	assert.Equal(t, []string{"gordon-myapp--feat.example.com"}, p.Containers)
 }
 
