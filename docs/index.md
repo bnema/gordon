@@ -60,8 +60,10 @@ Gordon runs on your VPS and provides:
 
 ### Deployment
 
-- [Deployment Overview](./deployment/index.md) - Deployment strategies
+- [Deployment Overview](./deployment/index.md) - Deployment strategies and methods
 - [GitHub Actions](./deployment/github-actions.md) - CI/CD with GitHub
+- [GitLab CI](./deployment/gitlab-ci.md) - CI/CD with GitLab
+- [Generic CI](./deployment/generic-ci.md) - Jenkins, CircleCI, Drone, and others
 - [Rollback](./deployment/rollback.md) - Version management and rollback
 
 ### Reference
