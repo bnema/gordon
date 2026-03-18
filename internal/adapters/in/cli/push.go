@@ -280,7 +280,7 @@ func resolveFromImage(ctx context.Context, cp ControlPlane, imageArg, dockerfile
 	// pollute the selection when pushing the base image.
 	filtered := routes[:0]
 	for _, r := range routes {
-		if !strings.Contains(r.Domain, "--") {
+		if !strings.Contains(r.Domain, domain.DefaultPreviewSeparator) {
 			filtered = append(filtered, r)
 		}
 	}

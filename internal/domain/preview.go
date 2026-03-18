@@ -9,6 +9,11 @@ const (
 	PreviewStatusDeploying PreviewStatus = "deploying"
 	PreviewStatusRunning   PreviewStatus = "running"
 	PreviewStatusFailed    PreviewStatus = "failed"
+	PreviewStatusTimeout   PreviewStatus = "timeout"
+
+	// DefaultPreviewSeparator is the subdomain separator used to construct
+	// preview domain names (e.g. "myapp--feat.example.com").
+	DefaultPreviewSeparator = "--"
 )
 
 // PreviewRoute represents an ephemeral preview environment.

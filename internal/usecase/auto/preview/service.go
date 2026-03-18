@@ -382,7 +382,9 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 			HTTPS:  req.HTTPS,
 		}); err != nil {
 			preview.Status = domain.PreviewStatusFailed
-			_ = s.Update(ctx, preview)
+			if updateErr := s.Update(ctx, preview); updateErr != nil {
+				log.Warn().Err(updateErr).Str("preview", req.Name).Msg("failed to update preview status")
+			}
 			return fmt.Errorf("register preview route %q: %w", req.Domain, err)
 		}
 	}
@@ -407,7 +409,9 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 		})
 		if err != nil {
 			preview.Status = domain.PreviewStatusFailed
-			_ = s.Update(ctx, preview)
+			if updateErr := s.Update(ctx, preview); updateErr != nil {
+				log.Warn().Err(updateErr).Str("preview", req.Name).Msg("failed to update preview status")
+			}
 			return fmt.Errorf("deploy preview %q: %w", req.Name, err)
 		}
 		preview.Containers = []string{container.Name}

@@ -59,12 +59,12 @@ func (c *Client) ExtendPreview(ctx context.Context, name string, ttl string) err
 func (c *Client) GetPreview(ctx context.Context, name string) (*domain.PreviewRoute, error) {
 	previews, err := c.ListPreviews(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list previews: %w", err)
 	}
 	for _, p := range previews {
 		if p.Name == name {
 			return &p, nil
 		}
 	}
-	return nil, fmt.Errorf("preview %q not found", name)
+	return nil, fmt.Errorf("preview %q: %w", name, domain.ErrPreviewNotFound)
 }

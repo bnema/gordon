@@ -44,7 +44,7 @@ func (f *fakeRouteManager) GetRoute(ctx context.Context, d string) (*domain.Rout
 	if f.getRouteFn != nil {
 		return f.getRouteFn(ctx, d)
 	}
-	return nil, fmt.Errorf("not found")
+	return nil, fmt.Errorf("route %q: %w", d, domain.ErrRouteNotFound)
 }
 
 func (f *fakeRouteManager) GetVolumeConfig() (bool, string, bool) {

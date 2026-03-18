@@ -599,7 +599,11 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 		}
 		// Remove route from config so proxy stops routing to this domain
 		if err := svc.configSvc.RemoveRoute(ctx, p.Domain); err != nil {
-			log.Debug().Err(err).Str("domain", p.Domain).Msg("preview route already removed from config")
+			if errors.Is(err, domain.ErrRouteNotFound) {
+				log.Debug().Str("domain", p.Domain).Msg("preview route already removed from config")
+			} else {
+				log.Warn().Err(err).Str("domain", p.Domain).Msg("failed to remove preview route from config")
+			}
 		}
 		svc.proxySvc.InvalidateTarget(ctx, p.Domain)
 	})

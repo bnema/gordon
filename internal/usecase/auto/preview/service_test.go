@@ -89,7 +89,8 @@ func TestPreviewService_Extend(t *testing.T) {
 	err := svc.Extend(t.Context(), "feat", 24*time.Hour)
 	require.NoError(t, err)
 
-	p, _ := svc.Get(t.Context(), "feat")
+	p, err := svc.Get(t.Context(), "feat")
+	require.NoError(t, err)
 	assert.True(t, p.ExpiresAt.After(now.Add(23*time.Hour)))
 }
 

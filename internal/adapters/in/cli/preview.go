@@ -255,7 +255,7 @@ func resolveRegistryForImage(ctx context.Context, cp ControlPlane, imageName str
 	}
 
 	for _, r := range routes {
-		if strings.Contains(r.Domain, "--") {
+		if strings.Contains(r.Domain, domain.DefaultPreviewSeparator) {
 			continue
 		}
 		reg, _, _ := parseImageRef(r.Image)
@@ -320,7 +320,7 @@ func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData
 		return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Push complete. Preview %q will be created by the server (use --remote to poll status).", name)))
 	}
 
-	result, err := pollPreviewWithSpinner(ctx, client, name)
+	result, err := pollPreviewWithSpinner(ctx, out, client, name)
 	if err != nil {
 		return err
 	}
@@ -396,7 +396,7 @@ func waitForPreviewPollDone(done <-chan previewPollResult) tea.Cmd {
 	}
 }
 
-func pollPreviewWithSpinner(ctx context.Context, client *remote.Client, name string) (*domain.PreviewRoute, error) {
+func pollPreviewWithSpinner(ctx context.Context, out io.Writer, client *remote.Client, name string) (*domain.PreviewRoute, error) {
 	done := make(chan previewPollResult, 1)
 	go func() {
 		result, err := pollPreviewStatus(ctx, client, name)
@@ -404,7 +404,9 @@ func pollPreviewWithSpinner(ctx context.Context, client *remote.Client, name str
 	}()
 
 	if !isInteractiveTerminal() {
-		fmt.Printf("Waiting for preview %s...\n", name)
+		if err := cliWritef(out, "Waiting for preview %s...\n", name); err != nil {
+			return nil, err
+		}
 		r := <-done
 		return r.preview, r.err
 	}
@@ -433,7 +435,7 @@ func pollPreviewStatus(ctx context.Context, client *remote.Client, name string) 
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-timeout:
-			return &domain.PreviewRoute{Status: "timeout"}, nil
+			return &domain.PreviewRoute{Status: domain.PreviewStatusTimeout}, nil
 		case <-ticker.C:
 			p, err := client.GetPreview(ctx, name)
 			if err != nil {
