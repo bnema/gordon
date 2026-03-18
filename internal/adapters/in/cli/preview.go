@@ -10,8 +10,11 @@ import (
 	"text/tabwriter"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/auto/preview"
 )
@@ -299,10 +302,110 @@ func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData
 		return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Push complete. Preview %q will be created by the server (use --remote to poll status).", name)))
 	}
 
-	if err := cliWriteLine(out, "Waiting for preview deployment..."); err != nil {
+	result, err := pollPreviewWithSpinner(ctx, client, name)
+	if err != nil {
 		return err
 	}
 
+	switch result.Status {
+	case domain.PreviewStatusRunning:
+		scheme := "http"
+		if result.HTTPS {
+			scheme = "https"
+		}
+		previewURL := fmt.Sprintf("%s://%s", scheme, result.Domain)
+		if err := cliWriteLine(out, cliRenderSuccess("Preview deployed")); err != nil {
+			return err
+		}
+		return cliWriteLine(out, cliRenderMeta("URL:", previewURL))
+	case domain.PreviewStatusFailed:
+		return fmt.Errorf("preview deployment failed")
+	default:
+		return cliWriteLine(out, cliRenderInfo("Preview is still deploying. Check status with: gordon preview list --remote"))
+	}
+}
+
+type previewPollResult struct {
+	preview *domain.PreviewRoute
+	err     error
+}
+
+type previewPollDoneMsg previewPollResult
+
+type previewSpinnerModel struct {
+	spinner  components.SpinnerModel
+	done     <-chan previewPollResult
+	outcome  previewPollResult
+	finished bool
+}
+
+func newPreviewSpinnerModel(name string, done <-chan previewPollResult) previewSpinnerModel {
+	return previewSpinnerModel{
+		spinner: components.NewSpinner(
+			components.WithMessage(fmt.Sprintf("Deploying preview %s...", name)),
+			components.WithSpinnerType(components.SpinnerMiniDot),
+		),
+		done: done,
+	}
+}
+
+func (m previewSpinnerModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Init(), waitForPreviewPollDone(m.done))
+}
+
+func (m previewSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case previewPollDoneMsg:
+		m.outcome = previewPollResult(msg)
+		m.finished = true
+		return m, tea.Quit
+	default:
+		updated, cmd := m.spinner.Update(msg)
+		if sm, ok := updated.(components.SpinnerModel); ok {
+			m.spinner = sm
+		}
+		return m, cmd
+	}
+}
+
+func (m previewSpinnerModel) View() string {
+	return m.spinner.View()
+}
+
+func waitForPreviewPollDone(done <-chan previewPollResult) tea.Cmd {
+	return func() tea.Msg {
+		return previewPollDoneMsg(<-done)
+	}
+}
+
+func pollPreviewWithSpinner(ctx context.Context, client *remote.Client, name string) (*domain.PreviewRoute, error) {
+	done := make(chan previewPollResult, 1)
+	go func() {
+		result, err := pollPreviewStatus(ctx, client, name)
+		done <- previewPollResult{preview: result, err: err}
+	}()
+
+	if !isInteractiveTerminal() {
+		fmt.Printf("Waiting for preview %s...\n", name)
+		r := <-done
+		return r.preview, r.err
+	}
+
+	model := newPreviewSpinnerModel(name, done)
+	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	fmt.Print("\r\033[K")
+	if err != nil {
+		return nil, err
+	}
+
+	m, ok := final.(previewSpinnerModel)
+	if !ok || !m.finished {
+		return nil, fmt.Errorf("preview spinner exited unexpectedly")
+	}
+	return m.outcome.preview, m.outcome.err
+}
+
+func pollPreviewStatus(ctx context.Context, client *remote.Client, name string) (*domain.PreviewRoute, error) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	timeout := time.After(3 * time.Minute)
@@ -310,29 +413,17 @@ func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-timeout:
-			return cliWriteLine(out, cliRenderInfo("Preview is still deploying. Check status with: gordon preview list --remote"))
+			return &domain.PreviewRoute{Status: "timeout"}, nil
 		case <-ticker.C:
 			p, err := client.GetPreview(ctx, name)
 			if err != nil {
-				continue // not found yet, keep polling
+				continue
 			}
-			switch p.Status {
-			case domain.PreviewStatusRunning:
-				scheme := "http"
-				if p.HTTPS {
-					scheme = "https"
-				}
-				previewURL := fmt.Sprintf("%s://%s", scheme, p.Domain)
-				if err := cliWriteLine(out, cliRenderSuccess("Preview deployed")); err != nil {
-					return err
-				}
-				return cliWriteLine(out, cliRenderMeta("URL:", previewURL))
-			case domain.PreviewStatusFailed:
-				return fmt.Errorf("preview deployment failed")
+			if p.Status == domain.PreviewStatusRunning || p.Status == domain.PreviewStatusFailed {
+				return p, nil
 			}
-			// status is PreviewStatusDeploying, keep polling
 		}
 	}
 }
