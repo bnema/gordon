@@ -55,7 +55,7 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		var errResp struct {
 			Error string `json:"error"`
 		}
@@ -95,7 +95,7 @@ func (c *Client) ExchangeRegistryToken(ctx context.Context, subject string) (str
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		var errResp struct {
 			Error string `json:"error"`
 		}
