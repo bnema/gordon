@@ -576,7 +576,8 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 		WithDeployer(svc.containerSvc).
 		WithRouteManager(svc.configSvc).
 		WithVolumeCloner(svc.runtime).
-		WithRegistryDomain(svc.configSvc.GetRegistryDomain())
+		WithRegistryDomain(svc.configSvc.GetRegistryDomain()).
+		WithEnvLoader(svc.envLoader)
 	if err := svc.previewService.Load(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to load previews")
 	}
