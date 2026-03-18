@@ -5,9 +5,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/adapters/dto"
 )
 
 type fakeVolumesClient struct {

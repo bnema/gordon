@@ -649,6 +649,7 @@ func createOutputAdapters(ctx context.Context, log zerowrap.Logger, runtimeSocke
 	case "none":
 		return nil, nil, fmt.Errorf("no container runtime found: checked Docker socket, Podman socket, DOCKER_HOST env var. Install Docker or Podman, or set server.runtime in config")
 	case "DOCKER_HOST_passthrough":
+		detection.RuntimeName = "docker"
 		runtime, err = docker.NewRuntime()
 	default:
 		if detection.SocketPath != "" {

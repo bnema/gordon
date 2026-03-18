@@ -2,6 +2,7 @@ package volumes
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
@@ -73,4 +74,34 @@ func TestService_PruneVolumes_AllInUse(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, report.VolumesRemoved)
 	assert.Empty(t, removed)
+}
+
+func TestService_ListVolumes_PropagatesError(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListVolumes(context.Background()).Return(nil, fmt.Errorf("connection refused"))
+
+	svc := NewService(runtime)
+	_, err := svc.ListVolumes(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection refused")
+}
+
+func TestService_PruneVolumes_SkipsFailedRemoval(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+
+	vols := []*domain.VolumeInfo{
+		{Name: "vol-fail", InUse: false, Size: 1024},
+		{Name: "vol-ok", InUse: false, Size: 2048},
+	}
+	runtime.EXPECT().ListVolumes(context.Background()).Return(vols, nil)
+	runtime.EXPECT().RemoveVolume(context.Background(), "vol-fail", false).Return(fmt.Errorf("volume in use"))
+	runtime.EXPECT().RemoveVolume(context.Background(), "vol-ok", false).Return(nil)
+
+	svc := NewService(runtime)
+	report, removed, err := svc.PruneVolumes(context.Background(), false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.VolumesRemoved)
+	assert.Equal(t, int64(2048), report.SpaceReclaimed)
+	assert.Len(t, removed, 1)
+	assert.Equal(t, "vol-ok", removed[0].Name)
 }

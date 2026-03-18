@@ -172,12 +172,12 @@ func (c *resolveFromImageTestControlPlane) StreamContainerLogs(context.Context, 
 	panic("unexpected call")
 }
 
-func (c *resolveFromImageTestControlPlane) ListVolumes(_ context.Context) ([]dto.Volume, error) {
-	return nil, nil
+func (c *resolveFromImageTestControlPlane) ListVolumes(context.Context) ([]dto.Volume, error) {
+	panic("unexpected call")
 }
 
-func (c *resolveFromImageTestControlPlane) PruneVolumes(_ context.Context, _ dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
-	return nil, nil
+func (c *resolveFromImageTestControlPlane) PruneVolumes(context.Context, dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
+	panic("unexpected call")
 }
 
 func TestValidateBuildArg(t *testing.T) {

@@ -594,6 +594,7 @@ func TestService_PruneRegistry_CleansUpStaleUploads(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, report.Registry.UploadsRemoved)
 	assert.Equal(t, int64(1024*1024), report.Registry.UploadSpaceReclaimed)
+	assert.Equal(t, 24*time.Hour, blobStorage.capturedMaxAge)
 }
 
 func TestService_Prune_RegistryOnlySkipsRuntime(t *testing.T) {
@@ -669,9 +670,11 @@ type fakeCleanupBlobStorage struct {
 	*fakeBlobStorage
 	uploadsRemoved int
 	uploadBytes    int64
+	capturedMaxAge time.Duration
 }
 
-func (f *fakeCleanupBlobStorage) CleanupStaleUploads(_ time.Duration) (int, int64, error) {
+func (f *fakeCleanupBlobStorage) CleanupStaleUploads(maxAge time.Duration) (int, int64, error) {
+	f.capturedMaxAge = maxAge
 	return f.uploadsRemoved, f.uploadBytes, nil
 }
 

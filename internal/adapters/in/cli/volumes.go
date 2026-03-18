@@ -19,6 +19,7 @@ type volumesClient interface {
 type volumesPruneOptions struct {
 	DryRun    bool
 	NoConfirm bool
+	Json      bool
 }
 
 func newVolumesCmd() *cobra.Command {
@@ -66,6 +67,7 @@ func newVolumesPruneCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "show what would be removed")
 	cmd.Flags().BoolVar(&opts.NoConfirm, "no-confirm", false, "skip confirmation prompt")
+	cmd.Flags().BoolVar(&opts.Json, "json", false, "output as JSON")
 	return cmd
 }
 
@@ -112,6 +114,18 @@ func runVolumesList(ctx context.Context, client volumesClient, out io.Writer, js
 	return cliWritef(out, "\n%d volumes (%d in-use, %d orphaned)\n", len(volumes), inUse, orphaned)
 }
 
+func renderPrunePreview(out io.Writer, resp *dto.VolumePruneResponse) error {
+	if err := cliWriteLine(out, cliRenderTitle("Volumes to remove")); err != nil {
+		return err
+	}
+	for _, v := range resp.Volumes {
+		if err := cliWritef(out, "  %s (%s)\n", v.Name, formatImageSize(v.Size)); err != nil {
+			return err
+		}
+	}
+	return cliWritef(out, "\n%d volumes, %s total\n", resp.VolumesRemoved, formatImageSize(resp.SpaceReclaimed))
+}
+
 func runVolumesPrune(ctx context.Context, client volumesClient, opts volumesPruneOptions, out io.Writer) error {
 	preview, err := client.PruneVolumes(ctx, dto.VolumePruneRequest{DryRun: true})
 	if err != nil {
@@ -119,23 +133,21 @@ func runVolumesPrune(ctx context.Context, client volumesClient, opts volumesPrun
 	}
 
 	if preview.VolumesRemoved == 0 {
+		if opts.Json {
+			return writeJSON(out, preview)
+		}
 		return cliWriteLine(out, "No orphaned volumes to remove.")
 	}
 
-	if err := cliWriteLine(out, cliRenderTitle("Volumes to remove")); err != nil {
-		return err
-	}
-	for _, v := range preview.Volumes {
-		if err := cliWritef(out, "  %s (%s)\n", v.Name, formatImageSize(v.Size)); err != nil {
-			return err
+	if opts.DryRun || opts.Json {
+		if opts.Json {
+			return writeJSON(out, preview)
 		}
-	}
-	if err := cliWritef(out, "\n%d volumes, %s total\n", preview.VolumesRemoved, formatImageSize(preview.SpaceReclaimed)); err != nil {
-		return err
+		return renderPrunePreview(out, preview)
 	}
 
-	if opts.DryRun {
-		return nil
+	if err := renderPrunePreview(out, preview); err != nil {
+		return err
 	}
 
 	if !opts.NoConfirm {
@@ -151,6 +163,10 @@ func runVolumesPrune(ctx context.Context, client volumesClient, opts volumesPrun
 	result, err := client.PruneVolumes(ctx, dto.VolumePruneRequest{DryRun: false})
 	if err != nil {
 		return err
+	}
+
+	if opts.Json {
+		return writeJSON(out, result)
 	}
 
 	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Removed %d volumes, reclaimed %s", result.VolumesRemoved, formatImageSize(result.SpaceReclaimed))))
