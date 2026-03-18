@@ -139,18 +139,20 @@ func runVolumesPrune(ctx context.Context, client volumesClient, opts volumesPrun
 		return cliWriteLine(out, "No orphaned volumes to remove.")
 	}
 
-	if opts.DryRun || opts.Json {
+	if opts.DryRun {
 		if opts.Json {
 			return writeJSON(out, preview)
 		}
 		return renderPrunePreview(out, preview)
 	}
 
-	if err := renderPrunePreview(out, preview); err != nil {
-		return err
+	if !opts.Json {
+		if err := renderPrunePreview(out, preview); err != nil {
+			return err
+		}
 	}
 
-	if !opts.NoConfirm {
+	if !opts.NoConfirm && !opts.Json {
 		confirmed, err := components.RunConfirm("Remove these volumes?")
 		if err != nil {
 			return err

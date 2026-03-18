@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"testing"
 
-	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestService_ListVolumes(t *testing.T) {

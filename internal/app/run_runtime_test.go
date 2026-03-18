@@ -17,3 +17,7 @@ func TestResolveRuntimeConfig_AutoReturnsEmpty(t *testing.T) {
 func TestResolveRuntimeConfig_EmptyReturnsEmpty(t *testing.T) {
 	assert.Equal(t, "", resolveRuntimeConfig(""))
 }
+
+func TestResolveRuntimeConfig_StripsUnixScheme(t *testing.T) {
+	assert.Equal(t, "/var/run/docker.sock", resolveRuntimeConfig("unix:///var/run/docker.sock"))
+}

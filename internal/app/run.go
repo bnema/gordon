@@ -631,9 +631,13 @@ func resolveLogFilePath(cfg Config) string {
 
 // resolveRuntimeConfig converts a server.runtime config value to a socket path.
 // "auto" or "" means auto-detect; any other value is treated as an explicit socket path.
+// URI schemes (unix://, tcp://) are stripped so callers receive a bare path.
 func resolveRuntimeConfig(value string) string {
 	if value == "" || value == "auto" {
 		return ""
+	}
+	if strings.HasPrefix(value, "unix://") {
+		return strings.TrimPrefix(value, "unix://")
 	}
 	return value
 }
