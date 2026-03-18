@@ -232,9 +232,11 @@ func resolvePreviewImageRef(ctx context.Context, cp ControlPlane, out io.Writer,
 		return "", err
 	}
 
-	registry, _, _, err := resolveRoute(ctx, cp, "", "", dockerfile)
+	// Resolve registry from existing routes without showing the interactive
+	// selector — preview only needs the registry URL, not a target domain.
+	registry, err := resolveRegistryForImage(ctx, cp, imageName)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve registry: %w", err)
+		return "", err
 	}
 
 	previewRef := fmt.Sprintf("%s/%s:%s", registry, imageName, previewTag)
@@ -242,6 +244,27 @@ func resolvePreviewImageRef(ctx context.Context, cp ControlPlane, out io.Writer,
 		return "", err
 	}
 	return previewRef, nil
+}
+
+// resolveRegistryForImage finds the registry URL from any existing non-preview
+// route for the given image, without prompting.
+func resolveRegistryForImage(ctx context.Context, cp ControlPlane, imageName string) (string, error) {
+	routes, err := cp.FindRoutesByImage(ctx, imageName)
+	if err != nil {
+		return "", fmt.Errorf("failed to find routes for image %q: %w", imageName, err)
+	}
+
+	for _, r := range routes {
+		if strings.Contains(r.Domain, "--") {
+			continue
+		}
+		reg, _, _ := parseImageRef(r.Image)
+		if reg != "" {
+			return reg, nil
+		}
+	}
+
+	return "", fmt.Errorf("no route configured for image %q", imageName)
 }
 
 func buildAndPushPreview(ctx context.Context, out io.Writer, previewRef, previewTag, platform string, noBuild bool) error {
