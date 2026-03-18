@@ -596,6 +596,10 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 				log.Warn().Err(err).Str("volume", volName).Str("preview", p.Domain).Msg("failed to remove preview volume")
 			}
 		}
+		// Remove route from config so proxy stops routing to this domain
+		if err := svc.configSvc.RemoveRoute(ctx, p.Domain); err != nil {
+			log.Debug().Err(err).Str("domain", p.Domain).Msg("preview route already removed from config")
+		}
 		svc.proxySvc.InvalidateTarget(ctx, p.Domain)
 	})
 }
