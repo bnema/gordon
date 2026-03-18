@@ -81,6 +81,20 @@ func NewRuntime() (*Runtime, error) {
 	}, nil
 }
 
+// NewRuntimeWithSocket creates a Docker runtime targeting a specific socket path.
+func NewRuntimeWithSocket(socketPath string) (*Runtime, error) {
+	host := "unix://" + socketPath
+	cli, err := client.NewClientWithOpts(
+		client.WithHost(host),
+		client.WithAPIVersionNegotiation(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Docker client for %s: %w", socketPath, err)
+	}
+
+	return &Runtime{client: cli}, nil
+}
+
 // NewRuntimeWithClient creates a new Docker runtime instance with a custom client (for testing).
 func NewRuntimeWithClient(cli *client.Client) *Runtime {
 	return &Runtime{
