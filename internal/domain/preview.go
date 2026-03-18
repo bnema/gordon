@@ -11,6 +11,7 @@ type PreviewRoute struct {
 	CreatedAt  time.Time `json:"created_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	HTTPS      bool      `json:"https"`
+	Status     string    `json:"status"` // "deploying", "running", "failed"
 	Volumes    []string  `json:"volumes"`
 	Containers []string  `json:"containers"`
 }
