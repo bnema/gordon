@@ -21,9 +21,9 @@ import (
 
 func newPreviewCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "preview [name]",
+		Use:   "preview",
 		Short: "Create or manage preview environments",
-		Long:  "Build, push, and deploy an ephemeral preview environment. Defaults to current git branch name.",
+		Long:  "Build, push, and deploy an ephemeral preview environment. Use a subcommand (create, list, delete, extend).",
 	}
 
 	createCmd := newPreviewCreateCmd()
