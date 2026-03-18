@@ -581,6 +581,21 @@ func TestService_Prune_DanglingOnlyRuntimeFailureReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "docker daemon unavailable")
 }
 
+func TestService_PruneRegistry_CleansUpStaleUploads(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	blobStorage := &fakeCleanupBlobStorage{
+		fakeBlobStorage: &fakeBlobStorage{},
+		uploadsRemoved:  3,
+		uploadBytes:     1024 * 1024,
+	}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
+
+	report, err := svc.PruneRegistry(context.Background(), 5)
+	require.NoError(t, err)
+	assert.Equal(t, 3, report.Registry.UploadsRemoved)
+	assert.Equal(t, int64(1024*1024), report.Registry.UploadSpaceReclaimed)
+}
+
 func TestService_Prune_RegistryOnlySkipsRuntime(t *testing.T) {
 	manifestStorage := newFakeManifestStorage()
 	manifestStorage.repositories = []string{"gordon/api"}
@@ -648,6 +663,16 @@ type fakeBlobStorage struct {
 
 	blobs        []string
 	deletedBlobs []string
+}
+
+type fakeCleanupBlobStorage struct {
+	*fakeBlobStorage
+	uploadsRemoved int
+	uploadBytes    int64
+}
+
+func (f *fakeCleanupBlobStorage) CleanupStaleUploads(_ time.Duration) (int, int64, error) {
+	return f.uploadsRemoved, f.uploadBytes, nil
 }
 
 func (f *fakeRuntime) ListImagesDetailed(context.Context) ([]pkgruntime.ImageDetail, error) {
@@ -771,6 +796,10 @@ func (f *fakeBlobStorage) DeleteBlob(digest string) error {
 		break
 	}
 	return nil
+}
+
+func (f *fakeBlobStorage) CleanupStaleUploads(_ time.Duration) (int, int64, error) {
+	return 0, 0, nil
 }
 
 func TestSplitRepoTag(t *testing.T) {

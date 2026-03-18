@@ -452,7 +452,8 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	var err error
 
 	// Create output adapters
-	if svc.runtime, svc.eventBus, err = createOutputAdapters(ctx, log); err != nil {
+	runtimeSocket := resolveRuntimeConfig(v.GetString("server.runtime"))
+	if svc.runtime, svc.eventBus, err = createOutputAdapters(ctx, log, runtimeSocket); err != nil {
 		return nil, err
 	}
 
@@ -625,19 +626,48 @@ func resolveLogFilePath(cfg Config) string {
 	return filepath.Join(dataDir, "logs", "gordon.log")
 }
 
-// createOutputAdapters creates the Docker runtime and event bus.
-func createOutputAdapters(ctx context.Context, log zerowrap.Logger) (*docker.Runtime, *eventbus.InMemory, error) {
-	runtime, err := docker.NewRuntime()
+// resolveRuntimeConfig converts a server.runtime config value to a socket path.
+// "auto" or "" means auto-detect; any other value is treated as an explicit socket path.
+func resolveRuntimeConfig(value string) string {
+	if value == "" || value == "auto" {
+		return ""
+	}
+	return value
+}
+
+// createOutputAdapters creates the container runtime and event bus.
+func createOutputAdapters(ctx context.Context, log zerowrap.Logger, runtimeSocket string) (*docker.Runtime, *eventbus.InMemory, error) {
+	detection := docker.DetectRuntimeSocket(runtimeSocket)
+
+	var runtime *docker.Runtime
+	var err error
+
+	switch detection.Source {
+	case "none":
+		return nil, nil, fmt.Errorf("no container runtime found: checked Docker socket, Podman socket, DOCKER_HOST env var. Install Docker or Podman, or set server.runtime in config")
+	case "DOCKER_HOST_passthrough":
+		runtime, err = docker.NewRuntime()
+	default:
+		if detection.SocketPath != "" {
+			runtime, err = docker.NewRuntimeWithSocket(detection.SocketPath)
+		} else {
+			runtime, err = docker.NewRuntime()
+		}
+	}
 	if err != nil {
-		return nil, nil, log.WrapErr(err, "failed to create Docker runtime")
+		return nil, nil, log.WrapErr(err, "failed to create container runtime")
 	}
 
 	if err := runtime.Ping(ctx); err != nil {
-		return nil, nil, log.WrapErr(err, "Docker is not available")
+		return nil, nil, log.WrapErr(err, fmt.Sprintf("container runtime not available (detected: %s via %s)", detection.RuntimeName, detection.Source))
 	}
 
-	dockerVersion, _ := runtime.Version(ctx)
-	log.Info().Str("docker_version", dockerVersion).Msg("Docker runtime initialized")
+	runtimeVersion, _ := runtime.Version(ctx)
+	log.Info().
+		Str("runtime", detection.RuntimeName).
+		Str("version", runtimeVersion).
+		Str("source", detection.Source).
+		Msg("container runtime initialized")
 
 	eventBus := eventbus.NewInMemory(100, log)
 
@@ -1865,6 +1895,8 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 				Int64("runtime_reclaimed_bytes", report.Runtime.SpaceReclaimed).
 				Int("registry_tags_removed", report.Registry.TagsRemoved).
 				Int("registry_blobs_removed", report.Registry.BlobsRemoved).
+				Int("registry_uploads_removed", report.Registry.UploadsRemoved).
+				Int64("registry_upload_bytes_reclaimed", report.Registry.UploadSpaceReclaimed).
 				Msg("scheduled image prune complete")
 			return nil
 		},
@@ -2295,6 +2327,73 @@ func isProcessAlive(pid int) bool {
 	}
 
 	return errors.Is(err, syscall.EPERM)
+}
+
+// setConfigDefaults sets all viper configuration defaults.
+func setConfigDefaults(v *viper.Viper) {
+	v.SetDefault("server.port", 80)
+	v.SetDefault("server.registry_port", 5000)
+	v.SetDefault("server.tls_enabled", false)
+	v.SetDefault("server.tls_port", 443)
+	v.SetDefault("server.tls_cert_file", "")
+	v.SetDefault("server.tls_key_file", "")
+	v.SetDefault("server.data_dir", DefaultDataDir())
+	v.SetDefault("server.runtime", "auto")
+	v.SetDefault("logging.level", "info")
+	v.SetDefault("logging.format", "console")
+	v.SetDefault("logging.file.enabled", false)
+	v.SetDefault("logging.file.max_size", 100)
+	v.SetDefault("logging.file.max_backups", 3)
+	v.SetDefault("logging.file.max_age", 28)
+	v.SetDefault("logging.container_logs.enabled", true)
+	v.SetDefault("logging.container_logs.dir", "")
+	v.SetDefault("logging.container_logs.max_size", 100)
+	v.SetDefault("logging.container_logs.max_backups", 3)
+	v.SetDefault("logging.container_logs.max_age", 28)
+	v.SetDefault("env.dir", "") // defaults to {data_dir}/env when empty
+	v.SetDefault("auth.enabled", true)
+	// Note: auth.type is intentionally not set - it's inferred from config
+	// If password_hash is set -> password mode, otherwise -> token mode
+	v.SetDefault("auth.secrets_backend", "")
+	v.SetDefault("auth.token_expiry", "720h")
+	v.SetDefault("api.rate_limit.enabled", true)
+	v.SetDefault("api.rate_limit.global_rps", 500)
+	v.SetDefault("api.rate_limit.per_ip_rps", 50)
+	v.SetDefault("api.rate_limit.burst", 100)
+	v.SetDefault("auto_route.enabled", false)
+	v.SetDefault("network_isolation.enabled", false)
+	v.SetDefault("network_isolation.network_prefix", "gordon")
+	v.SetDefault("volumes.auto_create", true)
+	v.SetDefault("volumes.prefix", "gordon")
+	v.SetDefault("volumes.preserve", true)
+	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
+	v.SetDefault("backups.enabled", false)
+	v.SetDefault("backups.schedule", string(domain.ScheduleDaily))
+	v.SetDefault("backups.storage_dir", "")
+	v.SetDefault("backups.retention.hourly", 0)
+	v.SetDefault("backups.retention.daily", 0)
+	v.SetDefault("backups.retention.weekly", 0)
+	v.SetDefault("backups.retention.monthly", 0)
+	v.SetDefault("images.prune.enabled", false)
+	v.SetDefault("images.prune.schedule", string(domain.ScheduleDaily))
+	v.SetDefault("images.prune.keep_last", domain.DefaultImagePruneKeepLast)
+	v.SetDefault("telemetry.enabled", false)
+	v.SetDefault("telemetry.endpoint", "")
+	v.SetDefault("telemetry.auth_token", "")
+	v.SetDefault("telemetry.traces", true)
+	v.SetDefault("telemetry.metrics", true)
+	v.SetDefault("telemetry.logs", true)
+	v.SetDefault("telemetry.trace_sample_rate", 1.0)
+	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
+	v.SetDefault("server.registry_allowed_ips", []string{})
+	v.SetDefault("deploy.readiness_delay", "5s")
+	v.SetDefault("deploy.readiness_mode", "auto")
+	v.SetDefault("deploy.health_timeout", "90s")
+	v.SetDefault("deploy.stabilization_delay", "2s")
+	v.SetDefault("deploy.tcp_probe_timeout", "30s")
+	v.SetDefault("deploy.http_probe_timeout", "60s")
+	v.SetDefault("deploy.drain_mode", "auto")
+	v.SetDefault("deploy.drain_timeout", "30s")
 }
 
 // loadConfig loads configuration from file and sets defaults.
