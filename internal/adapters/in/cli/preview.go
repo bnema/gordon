@@ -84,7 +84,7 @@ func newPreviewCreateCmd() *cobra.Command {
 				return err
 			}
 
-			return printPreviewCreateSummary(out, name, ttl, noData)
+			return waitForPreview(ctx, out, name, ttl, noData)
 		},
 	}
 
@@ -275,13 +275,8 @@ func buildAndPushPreview(ctx context.Context, out io.Writer, previewRef, preview
 	return nil
 }
 
-func printPreviewCreateSummary(out io.Writer, name, ttl string, noData bool) error {
-	if err := cliWriteLine(out, cliRenderSuccess("Push complete")); err != nil {
-		return err
-	}
-	if err := cliWritef(out, "Preview %s will be created by the server's autopreview handler.\n", name); err != nil {
-		return err
-	}
+func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData bool) error {
+	// Print TTL/no-data info upfront
 	if ttl != "" {
 		if err := cliWritef(out, "Requested TTL: %s (server config controls actual TTL)\n", ttl); err != nil {
 			return err
@@ -292,7 +287,49 @@ func printPreviewCreateSummary(out io.Writer, name, ttl string, noData bool) err
 			return err
 		}
 	}
-	return nil
+
+	client, isRemote := GetRemoteClient()
+	if !isRemote {
+		return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Push complete. Preview %q will be created by the server (use --remote to poll status).", name)))
+	}
+
+	if err := cliWriteLine(out, "Waiting for preview deployment..."); err != nil {
+		return err
+	}
+
+	// Poll every 2s for up to 3 minutes
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	timeout := time.After(3 * time.Minute)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout:
+			return cliWriteLine(out, cliRenderInfo("Preview is still deploying. Check status with: gordon preview list --remote"))
+		case <-ticker.C:
+			p, err := client.GetPreview(ctx, name)
+			if err != nil {
+				continue // not found yet, keep polling
+			}
+			switch p.Status {
+			case "running":
+				scheme := "http"
+				if p.HTTPS {
+					scheme = "https"
+				}
+				previewURL := fmt.Sprintf("%s://%s", scheme, p.Domain)
+				if err := cliWriteLine(out, cliRenderSuccess("Preview deployed")); err != nil {
+					return err
+				}
+				return cliWriteLine(out, cliRenderMeta("URL:", previewURL))
+			case "failed":
+				return fmt.Errorf("preview deployment failed")
+			}
+			// status is "deploying", keep polling
+		}
+	}
 }
 
 func detectGitBranch(ctx context.Context) (string, error) {
