@@ -175,6 +175,14 @@ func (c *attachmentPushTestControlPlane) StreamContainerLogs(context.Context, st
 	panic("unexpected call")
 }
 
+func (c *attachmentPushTestControlPlane) ListVolumes(context.Context) ([]dto.Volume, error) {
+	panic("unexpected call")
+}
+
+func (c *attachmentPushTestControlPlane) PruneVolumes(context.Context, dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
+	panic("unexpected call")
+}
+
 func TestResolveAttachmentImage_OneTarget(t *testing.T) {
 	cp := &attachmentPushTestControlPlane{
 		findAttachmentTargets: func(context.Context, string) ([]string, error) {

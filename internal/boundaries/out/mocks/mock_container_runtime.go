@@ -1590,6 +1590,68 @@ func (_c *MockContainerRuntime_ListNetworks_Call) RunAndReturn(run func(ctx cont
 	return _c
 }
 
+// ListVolumes provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListVolumes")
+	}
+
+	var r0 []*domain.VolumeInfo
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]*domain.VolumeInfo, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []*domain.VolumeInfo); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*domain.VolumeInfo)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerRuntime_ListVolumes_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListVolumes'
+type MockContainerRuntime_ListVolumes_Call struct {
+	*mock.Call
+}
+
+// ListVolumes is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockContainerRuntime_Expecter) ListVolumes(ctx interface{}) *MockContainerRuntime_ListVolumes_Call {
+	return &MockContainerRuntime_ListVolumes_Call{Call: _e.mock.On("ListVolumes", ctx)}
+}
+
+func (_c *MockContainerRuntime_ListVolumes_Call) Run(run func(ctx context.Context)) *MockContainerRuntime_ListVolumes_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_ListVolumes_Call) Return(volumeInfos []*domain.VolumeInfo, err error) *MockContainerRuntime_ListVolumes_Call {
+	_c.Call.Return(volumeInfos, err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_ListVolumes_Call) RunAndReturn(run func(ctx context.Context) ([]*domain.VolumeInfo, error)) *MockContainerRuntime_ListVolumes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NetworkExists provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) NetworkExists(ctx context.Context, name string) (bool, error) {
 	ret := _mock.Called(ctx, name)

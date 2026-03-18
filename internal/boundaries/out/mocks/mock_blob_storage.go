@@ -6,6 +6,7 @@ package mocks
 
 import (
 	"io"
+	"time"
 
 	mock "github.com/stretchr/testify/mock"
 )
@@ -207,6 +208,72 @@ func (_c *MockBlobStorage_CancelBlobUpload_Call) Return(err error) *MockBlobStor
 }
 
 func (_c *MockBlobStorage_CancelBlobUpload_Call) RunAndReturn(run func(uuid string) error) *MockBlobStorage_CancelBlobUpload_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CleanupStaleUploads provides a mock function for the type MockBlobStorage
+func (_mock *MockBlobStorage) CleanupStaleUploads(maxAge time.Duration) (int, int64, error) {
+	ret := _mock.Called(maxAge)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CleanupStaleUploads")
+	}
+
+	var r0 int
+	var r1 int64
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(time.Duration) (int, int64, error)); ok {
+		return returnFunc(maxAge)
+	}
+	if returnFunc, ok := ret.Get(0).(func(time.Duration) int); ok {
+		r0 = returnFunc(maxAge)
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func(time.Duration) int64); ok {
+		r1 = returnFunc(maxAge)
+	} else {
+		r1 = ret.Get(1).(int64)
+	}
+	if returnFunc, ok := ret.Get(2).(func(time.Duration) error); ok {
+		r2 = returnFunc(maxAge)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockBlobStorage_CleanupStaleUploads_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CleanupStaleUploads'
+type MockBlobStorage_CleanupStaleUploads_Call struct {
+	*mock.Call
+}
+
+// CleanupStaleUploads is a helper method to define mock.On call
+//   - maxAge time.Duration
+func (_e *MockBlobStorage_Expecter) CleanupStaleUploads(maxAge interface{}) *MockBlobStorage_CleanupStaleUploads_Call {
+	return &MockBlobStorage_CleanupStaleUploads_Call{Call: _e.mock.On("CleanupStaleUploads", maxAge)}
+}
+
+func (_c *MockBlobStorage_CleanupStaleUploads_Call) Run(run func(maxAge time.Duration)) *MockBlobStorage_CleanupStaleUploads_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 time.Duration
+		if args[0] != nil {
+			arg0 = args[0].(time.Duration)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockBlobStorage_CleanupStaleUploads_Call) Return(removed int, bytesReclaimed int64, err error) *MockBlobStorage_CleanupStaleUploads_Call {
+	_c.Call.Return(removed, bytesReclaimed, err)
+	return _c
+}
+
+func (_c *MockBlobStorage_CleanupStaleUploads_Call) RunAndReturn(run func(maxAge time.Duration) (int, int64, error)) *MockBlobStorage_CleanupStaleUploads_Call {
 	_c.Call.Return(run)
 	return _c
 }

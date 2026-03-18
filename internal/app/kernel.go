@@ -23,6 +23,7 @@ type Kernel struct {
 	registrySvc  in.RegistryService
 	healthSvc    in.HealthService
 	logSvc       in.LogService
+	volumeSvc    in.VolumeService
 	cleanup      func()
 }
 
@@ -56,6 +57,7 @@ func NewKernel(configPath string) (*Kernel, error) {
 			registrySvc:  svc.registrySvc,
 			healthSvc:    svc.healthSvc,
 			logSvc:       svc.logSvc,
+			volumeSvc:    svc.volumeSvc,
 			cleanup:      cleanup,
 		}, nil
 	} else {
@@ -105,5 +107,7 @@ func (k *Kernel) Registry() in.RegistryService { return k.registrySvc }
 func (k *Kernel) Health() in.HealthService { return k.healthSvc }
 
 func (k *Kernel) Logs() in.LogService { return k.logSvc }
+
+func (k *Kernel) Volumes() in.VolumeService { return k.volumeSvc }
 
 func (k *Kernel) AuthEnabled() bool { return k != nil && k.authEnabled }

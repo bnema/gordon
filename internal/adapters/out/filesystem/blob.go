@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/google/uuid"
@@ -412,6 +413,63 @@ func (s *BlobStorage) CancelBlobUpload(uuid string) error {
 		Msg("blob upload cancelled")
 
 	return nil
+}
+
+// CleanupStaleUploads removes upload files older than maxAge.
+func (s *BlobStorage) CleanupStaleUploads(maxAge time.Duration) (int, int64, error) {
+	uploadsDir := filepath.Join(s.rootDir, "uploads")
+
+	entries, err := os.ReadDir(uploadsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, nil
+		}
+		return 0, 0, fmt.Errorf("failed to read uploads directory: %w", err)
+	}
+
+	cutoff := time.Now().Add(-maxAge)
+	var removed int
+	var bytesReclaimed int64
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to get file info for stale upload")
+			continue
+		}
+
+		if info.ModTime().Before(cutoff) {
+			path := filepath.Join(uploadsDir, entry.Name())
+			size := info.Size()
+
+			mu := s.getUploadLock(entry.Name())
+			mu.Lock()
+
+			if err := os.Remove(path); err != nil {
+				mu.Unlock()
+				s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to remove stale upload")
+				continue
+			}
+
+			mu.Unlock()
+			s.cleanupUploadLock(entry.Name())
+			removed++
+			bytesReclaimed += size
+
+			s.log.Info().
+				Str(zerowrap.FieldLayer, "adapter").
+				Str(zerowrap.FieldAdapter, "filesystem").
+				Str("uuid", entry.Name()).
+				Int64("size", size).
+				Msg("removed stale upload")
+		}
+	}
+
+	return removed, bytesReclaimed, nil
 }
 
 // Helper methods for path generation with security validation
