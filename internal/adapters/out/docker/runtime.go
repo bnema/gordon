@@ -1067,6 +1067,63 @@ func (r *Runtime) RemoveVolume(ctx context.Context, volumeName string, force boo
 	return nil
 }
 
+// ListVolumes returns all named volumes with their usage status.
+func (r *Runtime) ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error) {
+	volumeList, err := r.client.VolumeList(ctx, volume.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list volumes: %w", err)
+	}
+
+	// Get all containers to determine volume usage
+	containers, err := r.client.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers for volume usage: %w", err)
+	}
+
+	// Build a map of volume name -> container names
+	volumeUsers := make(map[string][]string)
+	for _, c := range containers {
+		for _, m := range c.Mounts {
+			if m.Type == "volume" {
+				name := ""
+				if len(c.Names) > 0 {
+					name = strings.TrimPrefix(c.Names[0], "/")
+				}
+				volumeUsers[m.Name] = append(volumeUsers[m.Name], name)
+			}
+		}
+	}
+
+	var result []*domain.VolumeInfo
+	for _, v := range volumeList.Volumes {
+		if v == nil {
+			continue
+		}
+
+		var size int64
+		if v.UsageData != nil {
+			size = v.UsageData.Size
+		}
+
+		created, _ := time.Parse(time.RFC3339, v.CreatedAt)
+
+		users := volumeUsers[v.Name]
+		info := &domain.VolumeInfo{
+			Name:       v.Name,
+			Driver:     v.Driver,
+			MountPoint: v.Mountpoint,
+			Size:       size,
+			CreatedAt:  created,
+			InUse:      len(users) > 0,
+			Containers: users,
+			Labels:     v.Labels,
+		}
+		result = append(result, info)
+	}
+
+	return result, nil
+}
+
 // InspectImageEnv gets the environment variables declared in the image.
 func (r *Runtime) InspectImageEnv(ctx context.Context, imageRef string) ([]string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
