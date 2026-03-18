@@ -39,6 +39,10 @@ type BlobStorage interface {
 
 	// CancelBlobUpload cancels an in-progress upload.
 	CancelBlobUpload(uuid string) error
+
+	// CleanupStaleUploads removes upload files older than maxAge.
+	// Returns the number of uploads removed and total bytes reclaimed.
+	CleanupStaleUploads(maxAge time.Duration) (removed int, bytesReclaimed int64, err error)
 }
 
 // ManifestStorage defines the contract for manifest storage operations.
