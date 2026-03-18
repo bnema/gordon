@@ -16,6 +16,17 @@ type VolumeCloner interface {
 	StartContainer(ctx context.Context, containerID string) error
 	WaitForContainer(ctx context.Context, containerID string) error
 	RemoveContainer(ctx context.Context, containerID string, force bool) error
+	ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error)
+}
+
+// VolumeNamer is a function that maps a source volume name to a destination volume name.
+type VolumeNamer func(sourceVolName string) string
+
+// DefaultNamer returns a VolumeNamer that uses BuildCloneVolumeName with the given preview name.
+func DefaultNamer(previewName string) VolumeNamer {
+	return func(sourceVolName string) string {
+		return BuildCloneVolumeName(previewName, sourceVolName)
+	}
 }
 
 // BuildCloneVolumeName generates a preview volume name.
@@ -36,11 +47,11 @@ func BuildCloneContainerName(previewName, image string) string {
 }
 
 // CloneVolumes copies volumes from source using a read-only helper container.
-// sourceVolumes maps volume display names to actual Docker volume names.
-func CloneVolumes(ctx context.Context, cloner VolumeCloner, previewName string, sourceVolumes map[string]string) ([]string, error) {
+// sourceVolumes is a list of actual Docker volume names to clone.
+func CloneVolumes(ctx context.Context, cloner VolumeCloner, namer VolumeNamer, sourceVolumes []string) ([]string, error) {
 	var clonedNames []string
-	for volName, sourceVolName := range sourceVolumes {
-		destName := BuildCloneVolumeName(previewName, volName)
+	for _, sourceVolName := range sourceVolumes {
+		destName := namer(sourceVolName)
 
 		if err := cloner.CreateVolume(ctx, destName); err != nil {
 			cleanupVolumes(ctx, cloner, clonedNames)

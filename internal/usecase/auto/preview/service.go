@@ -17,14 +17,31 @@ type nameLockEntry struct {
 	refs int
 }
 
+// Deployer abstracts the container service deploy method.
+type Deployer interface {
+	Deploy(ctx context.Context, route domain.Route) (*domain.Container, error)
+}
+
+// RouteManager abstracts config service methods needed for preview route lifecycle.
+type RouteManager interface {
+	AddRoute(ctx context.Context, route domain.Route) error
+	RemoveRoute(ctx context.Context, domain string) error
+	GetRoute(ctx context.Context, domain string) (*domain.Route, error)
+	GetVolumeConfig() (autoCreate bool, prefix string, preserve bool)
+}
+
 // Service manages preview lifecycle: CRUD, TTL, persistence.
 type Service struct {
-	store      out.PreviewStore
-	defaultTTL time.Duration
-	previews   []domain.PreviewRoute
-	mu         sync.RWMutex
-	nameLocks  map[string]*nameLockEntry
-	nameLockMu sync.Mutex
+	store          out.PreviewStore
+	defaultTTL     time.Duration
+	deployer       Deployer
+	routeManager   RouteManager
+	volumeCloner   VolumeCloner
+	registryDomain string
+	previews       []domain.PreviewRoute
+	mu             sync.RWMutex
+	nameLocks      map[string]*nameLockEntry
+	nameLockMu     sync.Mutex
 }
 
 func NewService(store out.PreviewStore, defaultTTL time.Duration) *Service {
@@ -33,6 +50,26 @@ func NewService(store out.PreviewStore, defaultTTL time.Duration) *Service {
 		defaultTTL: defaultTTL,
 		nameLocks:  make(map[string]*nameLockEntry),
 	}
+}
+
+func (s *Service) WithDeployer(d Deployer) *Service {
+	s.deployer = d
+	return s
+}
+
+func (s *Service) WithRouteManager(rm RouteManager) *Service {
+	s.routeManager = rm
+	return s
+}
+
+func (s *Service) WithVolumeCloner(vc VolumeCloner) *Service {
+	s.volumeCloner = vc
+	return s
+}
+
+func (s *Service) WithRegistryDomain(d string) *Service {
+	s.registryDomain = d
+	return s
 }
 
 func (s *Service) Load(ctx context.Context) error {
