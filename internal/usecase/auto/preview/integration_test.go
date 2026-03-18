@@ -182,6 +182,7 @@ func TestPreviewLifecycle_WithEnvInheritance(t *testing.T) {
 		PreviewConfig: domain.PreviewConfig{
 			TTL:       2 * time.Second,
 			Separator: "--",
+			EnvCopy:   true,
 		},
 	})
 	require.NoError(t, err)

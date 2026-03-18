@@ -388,7 +388,7 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) e
 	}
 
 	var baseEnv []string
-	if s.envLoader != nil {
+	if s.envLoader != nil && req.PreviewConfig.EnvCopy {
 		var envErr error
 		baseEnv, envErr = s.envLoader.LoadEnv(ctx, req.BaseRoute)
 		if envErr != nil {
