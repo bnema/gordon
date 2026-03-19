@@ -145,6 +145,10 @@ Commands are organized by where they run:
 	autorouteCmd.GroupID = groupManage
 	rootCmd.AddCommand(autorouteCmd)
 
+	previewCmd := newPreviewCmd()
+	previewCmd.GroupID = groupManage
+	rootCmd.AddCommand(previewCmd)
+
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
 	remotesCmd.GroupID = groupClient
