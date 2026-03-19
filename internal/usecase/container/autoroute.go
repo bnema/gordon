@@ -4,9 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +15,7 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/auto"
 )
 
 // EnvFileExtractor defines the interface for extracting env files from images.
@@ -205,7 +204,7 @@ func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain,
 	existingRoutes := h.configSvc.GetRoutes(ctx)
 	for _, existing := range existingRoutes {
 		if existing.Domain == routeDomain {
-			if extractRepoName(existing.Image, h.registryDomain) != extractRepoName(imageName, h.registryDomain) {
+			if auto.ExtractRepoName(existing.Image, h.registryDomain) != auto.ExtractRepoName(imageName, h.registryDomain) {
 				log.Warn().Str("domain", routeDomain).Str("existing_image", existing.Image).Str("image", imageName).Msg("auto-route update rejected due to repository ownership mismatch")
 				return false
 			}
@@ -222,7 +221,7 @@ func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain,
 		}
 	}
 
-	if !matchesDomainAllowlist(routeDomain, allowedDomains) {
+	if !auto.MatchesDomainAllowlist(routeDomain, allowedDomains) {
 		log.Warn().Str("domain", routeDomain).Strs("allowed_domains", allowedDomains).Msg("auto-route create rejected due to domain allowlist")
 		return false
 	}
@@ -237,55 +236,6 @@ func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain,
 	}
 
 	return false
-}
-
-func matchesDomainAllowlist(domain string, patterns []string) bool {
-	domain = strings.ToLower(domain)
-	for _, pattern := range patterns {
-		pattern = strings.ToLower(strings.TrimSpace(pattern))
-		if pattern == "" {
-			continue
-		}
-		if pattern == "*" {
-			return true
-		}
-		if pattern == domain {
-			return true
-		}
-		if !strings.HasPrefix(pattern, "*.") {
-			continue
-		}
-		// Wildcard patterns match single-level subdomains only (per DNS/TLS conventions).
-		// e.g., "*.example.com" matches "foo.example.com" but not "bar.foo.example.com"
-		suffix := strings.TrimPrefix(pattern, "*.")
-		if !strings.HasSuffix(domain, "."+suffix) {
-			continue
-		}
-		prefix := strings.TrimSuffix(domain, "."+suffix)
-		if prefix != "" && !strings.Contains(prefix, ".") {
-			return true
-		}
-	}
-	return false
-}
-
-func extractRepoName(imageRef, registryDomain string) string {
-	imageRef = strings.ToLower(imageRef)
-	if idx := strings.Index(imageRef, "@"); idx != -1 {
-		imageRef = imageRef[:idx]
-	}
-	if idx := strings.LastIndex(imageRef, ":"); idx != -1 {
-		slashIdx := strings.LastIndex(imageRef, "/")
-		if idx > slashIdx {
-			imageRef = imageRef[:idx]
-		}
-	}
-	registryPrefix := strings.ToLower(strings.TrimSuffix(registryDomain, "/"))
-	if registryPrefix != "" {
-		prefix := registryPrefix + "/"
-		imageRef = strings.TrimPrefix(imageRef, prefix)
-	}
-	return imageRef
 }
 
 // triggerDeploy initiates deployment for a route.
@@ -389,108 +339,14 @@ func (h *AutoRouteHandler) CanHandle(eventType domain.EventType) bool {
 func (h *AutoRouteHandler) extractLabels(ctx context.Context, manifestData []byte) (*domain.ImageLabels, error) {
 	log := zerowrap.FromCtx(ctx)
 
-	// Parse manifest to get config digest
-	configDigest, err := parseConfigDigest(manifestData)
+	labels, err := auto.ExtractLabels(ctx, manifestData, h.blobStorage)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %w", err)
-	}
-
-	if configDigest == "" {
-		return nil, fmt.Errorf("no config digest found in manifest")
-	}
-
-	log.Debug().Str("config_digest", configDigest).Msg("found config digest")
-
-	// Read config blob
-	reader, err := h.blobStorage.GetBlob(configDigest)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get config blob: %w", err)
-	}
-	defer reader.Close()
-
-	configData, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config blob: %w", err)
-	}
-
-	// Parse config to extract labels
-	labels, err := parseImageLabels(configData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-
-	return labels, nil
-}
-
-// manifestSchema represents the relevant parts of an OCI/Docker manifest.
-type manifestSchema struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	MediaType     string `json:"mediaType"`
-	Config        struct {
-		MediaType string `json:"mediaType"`
-		Digest    string `json:"digest"`
-		Size      int64  `json:"size"`
-	} `json:"config"`
-}
-
-// parseConfigDigest extracts the config digest from a manifest.
-func parseConfigDigest(manifestData []byte) (string, error) {
-	var manifest manifestSchema
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return "", err
-	}
-
-	return manifest.Config.Digest, nil
-}
-
-// imageConfig represents the relevant parts of an OCI/Docker image config.
-type imageConfig struct {
-	Config struct {
-		Labels map[string]string `json:"Labels"`
-	} `json:"config"`
-}
-
-// parseImageLabels extracts Gordon labels from an image config.
-func parseImageLabels(configData []byte) (*domain.ImageLabels, error) {
-	var config imageConfig
-	if err := json.Unmarshal(configData, &config); err != nil {
 		return nil, err
 	}
 
-	labels := &domain.ImageLabels{}
-
-	if config.Config.Labels == nil {
-		return labels, nil
-	}
-
-	// Extract gordon.* labels
-	if v, ok := config.Config.Labels[domain.LabelDomain]; ok {
-		labels.Domain = strings.TrimSpace(v)
-	}
-
-	if v, ok := config.Config.Labels[domain.LabelDomains]; ok {
-		// Parse comma-separated domains
-		for _, d := range strings.Split(v, ",") {
-			d = strings.TrimSpace(d)
-			if d != "" {
-				labels.Domains = append(labels.Domains, d)
-			}
-		}
-	}
-
-	if v, ok := config.Config.Labels[domain.LabelHealth]; ok {
-		labels.Health = strings.TrimSpace(v)
-	}
-
-	for _, key := range []string{domain.LabelProxyPort, domain.LabelPort} {
-		if v, ok := config.Config.Labels[key]; ok {
-			labels.Port = strings.TrimSpace(v)
-			break
-		}
-	}
-
-	if v, ok := config.Config.Labels[domain.LabelEnvFile]; ok {
-		labels.EnvFile = strings.TrimSpace(v)
+	// Log the config digest for observability (best-effort parse for logging only)
+	if digest, parseErr := auto.ParseConfigDigest(manifestData); parseErr == nil && digest != "" {
+		log.Debug().Str("config_digest", digest).Msg("found config digest")
 	}
 
 	return labels, nil
