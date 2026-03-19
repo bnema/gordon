@@ -45,18 +45,19 @@ type RouteInfo struct {
 
 // ContainerConfig holds configuration for creating a container.
 type ContainerConfig struct {
-	Image       string
-	Name        string
-	Env         []string
-	Ports       []int
-	Labels      map[string]string
-	WorkingDir  string
-	Cmd         []string
-	AutoRemove  bool
-	Volumes     map[string]string // map[containerPath]volumeName
-	NetworkMode string            // Network to join
-	Hostname    string            // Container hostname for DNS
-	Aliases     []string          // Additional network aliases
+	Image           string
+	Name            string
+	Env             []string
+	Ports           []int
+	Labels          map[string]string
+	WorkingDir      string
+	Cmd             []string
+	AutoRemove      bool
+	Volumes         map[string]string // map[containerPath]volumeName
+	ReadOnlyVolumes map[string]string // containerPath -> volumeName (mounted read-only)
+	NetworkMode     string            // Network to join
+	Hostname        string            // Container hostname for DNS
+	Aliases         []string          // Additional network aliases
 }
 
 // ContainerStatus represents the current state of a container.
