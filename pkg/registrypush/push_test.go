@@ -660,3 +660,78 @@ func pathSegmentBetween(value, start, end string) string {
 func typesOCIManifestSchema1() string {
 	return "application/vnd.oci.image.manifest.v1+json"
 }
+
+// TestPusher_WithAuth verifies that when WithAuth is provided, its header is
+// used for all registry requests instead of the Docker keychain, and that
+// omitting WithAuth leaves existing behavior unchanged.
+func TestPusher_WithAuth(t *testing.T) {
+	t.Run("WithAuth header is sent on every registry request", func(t *testing.T) {
+		img, err := random.Image(1024, 1)
+		require.NoError(t, err)
+
+		const explicitToken = "Bearer my-token"
+
+		// authAssertingRegistry fails the test if any request lacks the expected
+		// Authorization header.
+		var requestCount int
+		registry := httptest.NewServer(newFakePushRegistry(t, img, map[string]bool{}).handlerWithAuthCheck(t, explicitToken, &requestCount))
+		defer registry.Close()
+
+		serverURL, err := url.Parse(registry.URL)
+		require.NoError(t, err)
+		ref := serverURL.Host + "/demo/app:v1"
+
+		p := registrypush.New(
+			registrypush.WithTransport(registry.Client().Transport),
+			registrypush.WithImageSource(func(context.Context, string) (v1.Image, error) {
+				return img, nil
+			}),
+			registrypush.WithAuth(explicitToken),
+		)
+
+		err = p.Push(context.Background(), ref)
+		require.NoError(t, err)
+		assert.Positive(t, requestCount, "at least one request should have been made")
+	})
+
+	t.Run("without WithAuth, existing push behavior is unchanged", func(t *testing.T) {
+		img, err := random.Image(1024, 1)
+		require.NoError(t, err)
+
+		serverState := newFakePushRegistry(t, img, map[string]bool{})
+		registry := httptest.NewServer(serverState.handler())
+		defer registry.Close()
+
+		serverURL, err := url.Parse(registry.URL)
+		require.NoError(t, err)
+		ref := serverURL.Host + "/demo/app:v1"
+
+		// No WithAuth — relies on Docker keychain (returns empty string for localhost).
+		p := registrypush.New(
+			registrypush.WithTransport(registry.Client().Transport),
+			registrypush.WithImageSource(func(context.Context, string) (v1.Image, error) {
+				return img, nil
+			}),
+		)
+
+		err = p.Push(context.Background(), ref)
+		require.NoError(t, err)
+
+		// Manifest should have been pushed — verifies the push completed normally.
+		_, ok := serverState.manifestPuts[serverState.expectedRepo+":"+serverState.expectedTag]
+		assert.True(t, ok, "manifest should have been uploaded")
+	})
+}
+
+// handlerWithAuthCheck wraps the fakePushRegistry handler and asserts that
+// every request carries the expected Authorization header.
+func (f *fakePushRegistry) handlerWithAuthCheck(t *testing.T, expectedAuth string, requestCount *int) http.Handler {
+	t.Helper()
+	inner := f.handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*requestCount++
+		assert.Equal(t, expectedAuth, r.Header.Get("Authorization"),
+			"expected Authorization header on %s %s", r.Method, r.URL.Path)
+		inner.ServeHTTP(w, r)
+	})
+}

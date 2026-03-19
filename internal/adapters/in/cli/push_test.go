@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -602,4 +603,23 @@ func TestResolveFromImage_NoRouteSuggestsBootstrap(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), `no route configured for image "myapp"`)
 	assert.Contains(t, err.Error(), "gordon bootstrap")
+}
+
+func TestIsInsufficientScope(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"HTTPError 403", &remote.HTTPError{StatusCode: 403, Status: "403 Forbidden", Body: "insufficient scope"}, true},
+		{"wrapped HTTPError 403", fmt.Errorf("deploy intent: %w", &remote.HTTPError{StatusCode: 403, Status: "403 Forbidden", Body: "scope"}), true},
+		{"HTTPError 500", &remote.HTTPError{StatusCode: 500, Status: "500 Internal Server Error", Body: "broke"}, false},
+		{"plain error", fmt.Errorf("connection refused"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isInsufficientScope(tt.err))
+		})
+	}
 }

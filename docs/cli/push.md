@@ -7,14 +7,14 @@ Tag, push, and optionally deploy an image to the Gordon registry.
 ### Synopsis
 
 ```bash
-gordon push <domain> [options]
+gordon push [image] [options]
 ```
 
 ### Arguments
 
 | Argument | Description |
 |----------|-------------|
-| `<domain>` | The route domain to resolve the registry and repository from |
+| `[image]` | Image name to push (optional). If omitted, auto-detected from Dockerfile labels or current directory name |
 
 ### Options
 
@@ -27,13 +27,19 @@ gordon push <domain> [options]
 | `--tag` | Override version tag (default: tag ref from CI, then `git describe --tags --dirty`) |
 | `--no-confirm` | Skip deploy confirmation prompt |
 | `--no-deploy` | Push only; skip deployment prompt |
+| `--domain` | Explicit domain override (legacy mode) |
 | `--remote` | Remote Gordon URL |
 | `--token` | Authentication token for remote |
 
 ### Description
 
-`gordon push` resolves the route image for `<domain>`, tags the image for the
+`gordon push` resolves the target image from the backend, tags it for the
 Gordon registry, pushes it, and optionally deploys it.
+
+Image resolution order:
+1. If `--domain` is provided, uses domain-based route lookup
+2. If an image name is provided as argument, resolves domain(s) from the backend
+3. If no argument, auto-detects from Dockerfile `gordon.domain` label or current directory name
 
 To push attachment images (databases, caches, etc.), use `gordon attachments push`.
 
@@ -43,33 +49,75 @@ To push attachment images (databases, caches, etc.), use `gordon attachments pus
   then falls back to `git describe --tags --dirty` (for example
   `v1.2.3-4-gabc1234` or `v1.2.3-dirty`). If no tag is found, `latest` is used.
 - When `--build` is set, the command builds with `docker buildx build --load`
-  and injects `VERSION` into the build environment plus any `--build-arg` values.
+  and injects `VERSION`, `GIT_TAG`, `GIT_SHA`, and `BUILD_TIME` into the build
+  environment plus any `--build-arg` values. To use these in your Dockerfile,
+  declare them with `ARG` (e.g., `ARG VERSION`) then reference via `ENV` or
+  in build steps.
 - Use `-f/--file` to build from a Dockerfile outside the current directory root.
 - The version tag and `latest` are both pushed (unless the version is `latest`).
+
+### Authentication
+
+When used with `--remote`, gordon push authenticates in two ways:
+
+- **Admin API** (route resolution, deploy): uses `--token` or `$GORDON_TOKEN` as Bearer token
+- **Registry push**: automatically exchanges the token for a short-lived (5 min) registry access token via `/auth/token` -- no `docker login` required
+
+This means CI/CD pipelines only need a single secret (`GORDON_TOKEN`).
+
+### Deploy Modes
+
+When the token has `admin:config:write` scope, the CLI manages deployment explicitly
+(DeployIntent → push → Deploy). This gives the CLI control over deploy timing.
+
+When the token lacks `admin:config:write`, the CLI pushes the image and the server
+auto-deploys when it receives it via its event listener. The CLI logs:
+`info: deploy intent skipped (insufficient scope), server will auto-deploy on image receive`
+
+### Version Auto-Detection
+
+Gordon reads version tags from CI environment variables (in priority order):
+
+| CI System | Variable | Example |
+|-----------|----------|---------|
+| GitHub Actions | `$GITHUB_REF` | `refs/tags/v1.2.0` |
+| GitHub Actions | `$GITHUB_REF_TYPE` + `$GITHUB_REF_NAME` | `tag` + `v1.2.0` |
+| GitLab CI | `$CI_COMMIT_TAG` | `v1.2.0` |
+| Azure DevOps | `$BUILD_SOURCEBRANCH` | `refs/tags/v1.2.0` |
+| Any | `git describe --tags` | `v1.2.3-4-gabc1234` |
+| Fallback | - | `latest` |
 
 ### Examples
 
 ```bash
-# Build, push, and deploy
-gordon push myapp.example.com --build
+# Build, push, and deploy (auto-detect image name)
+gordon push --build --remote https://gordon.example.com --no-confirm
+
+# Specify image name explicitly
+gordon push myapp --build --remote https://gordon.example.com --no-confirm
 
 # Push existing local image, skip deploy
-gordon push myapp.example.com --tag v1.2.0 --no-deploy
+gordon push myapp --tag v1.2.0 --no-deploy
 
 # Push and deploy without confirmation
-gordon push myapp.example.com --no-confirm
+gordon push myapp --no-confirm
 
 # Build for ARM and pass build args
-gordon push myapp.example.com --build --platform linux/arm64 --build-arg CGO_ENABLED=0
+gordon push myapp --build --platform linux/arm64 --build-arg CGO_ENABLED=0
 
 # Build from a custom Dockerfile path
-gordon push myapp.example.com --build -f docker/app/Dockerfile
+gordon push myapp --build -f docker/app/Dockerfile
+
+# CI/CD usage (single env var, no docker login needed)
+export GORDON_TOKEN="your-token"
+gordon push --build --remote https://gordon.example.com --no-confirm
 ```
 
 ### Notes
 
 - Remote mode required. See [CLI Overview](./index.md) for targeting options.
-- `gordon push` still requires the route to already exist so it can resolve the target image.
+- `gordon push` requires the route to already exist so it can resolve the target image.
+  Use `gordon bootstrap` for first deploys.
 - `--build` requires Docker with Buildx. Docker Desktop includes it; on Linux,
   install the `docker-buildx-plugin` package.
 - Gordon uses native registry uploads instead of shelling out to `docker push`.
@@ -81,6 +129,8 @@ gordon push myapp.example.com --build -f docker/app/Dockerfile
 ## Related
 
 - [CLI Overview](./index.md)
+- [Deployment Overview](../deployment/index.md)
+- [GitHub Actions](../deployment/github-actions.md)
 - [Attachments Commands](./attachments.md)
 - [Routes Command](./routes.md)
-- [Serve Command](./serve.md)
+- [Authentication](../config/auth.md)

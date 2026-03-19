@@ -74,6 +74,7 @@ func newTokenGenerateCmd() *cobra.Command {
 		scopes     string
 		expiry     string
 		configPath string
+		repo       string
 	)
 
 	cmd := &cobra.Command{
@@ -101,10 +102,15 @@ Admin scopes (for remote CLI access):
     admin:routes:read      Read-only routes access
     admin:status:read      Read-only status access
 
+Repository scoping:
+  --repo myapp           Scope to specific repository
+  --repo "*"             All repositories (default)
+
 Combined examples:
-  --scopes "push,pull"                Registry only (default)
-  --scopes "admin:*:*"                Admin CLI only
-  --scopes "push,pull,admin:*:*"      Registry + full admin
+  --scopes "push,pull"                          All repos, registry only (default)
+  --scopes "push" --repo myapp                  Push to myapp only
+  --scopes "push,pull,admin:routes:read"        Minimum CI scope (all repos)
+  --scopes "push,admin:routes:read" --repo app  Minimum CI scope (specific repo)
 
 EXPIRY:
 
@@ -115,7 +121,7 @@ Supports human-friendly durations:
 Examples: 1y, 30d, 2w, 6M, 1y6M, 2w3d
 Use --expiry=0 for a token that never expires (useful for CI).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTokenGenerate(subject, scopes, expiry, configPath)
+			return runTokenGenerate(subject, scopes, expiry, configPath, repo)
 		},
 	}
 
@@ -123,6 +129,7 @@ Use --expiry=0 for a token that never expires (useful for CI).`,
 	cmd.Flags().StringVar(&scopes, "scopes", "push,pull", "Comma-separated list of scopes")
 	cmd.Flags().StringVar(&expiry, "expiry", "30d", "Token expiry duration (e.g., 1y, 30d, 2w, 24h, 0 for never)")
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	cmd.Flags().StringVar(&repo, "repo", "*", "Repository to scope the token to (default: * for all repositories)")
 
 	_ = cmd.MarkFlagRequired("subject")
 
@@ -434,7 +441,12 @@ The hash can be stored in your secrets backend and referenced in the config:
 // runTokenGenerate generates a new authentication token.
 // parseAndConvertScopes parses a comma-separated scope string and converts
 // simple scopes (push, pull, *) to Docker v2 format (repository:*:action).
-func parseAndConvertScopes(scopesStr string) []string {
+func parseAndConvertScopes(scopesStr, repo string) ([]string, error) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil, fmt.Errorf("repository name cannot be empty")
+	}
+
 	rawScopes := strings.Split(scopesStr, ",")
 	for i := range rawScopes {
 		rawScopes[i] = strings.TrimSpace(rawScopes[i])
@@ -450,10 +462,10 @@ func parseAndConvertScopes(scopesStr string) []string {
 	}
 
 	if !hasSimpleScope {
-		return rawScopes
+		return rawScopes, nil
 	}
 
-	// Convert simple scopes to v2 format: repository:*:push,pull
+	// Convert simple scopes to v2 format: repository:<repo>:push,pull
 	var scopes []string
 	var actions []string
 	for _, s := range rawScopes {
@@ -465,12 +477,12 @@ func parseAndConvertScopes(scopesStr string) []string {
 		}
 	}
 	if len(actions) > 0 {
-		scopes = append(scopes, "repository:*:"+strings.Join(actions, ","))
+		scopes = append(scopes, "repository:"+repo+":"+strings.Join(actions, ","))
 	}
-	return scopes
+	return scopes, nil
 }
 
-func runTokenGenerate(subject, scopesStr, expiryStr, configPath string) error {
+func runTokenGenerate(subject, scopesStr, expiryStr, configPath, repo string) error {
 	cfg, err := loadAuthConfig(configPath)
 	if err != nil {
 		return err
@@ -485,7 +497,10 @@ func runTokenGenerate(subject, scopesStr, expiryStr, configPath string) error {
 		}
 	}
 
-	scopes := parseAndConvertScopes(scopesStr)
+	scopes, err := parseAndConvertScopes(scopesStr, repo)
+	if err != nil {
+		return fmt.Errorf("invalid scopes: %w", err)
+	}
 
 	// Create auth service
 	log := zerowrap.New(zerowrap.Config{Level: "warn"})
