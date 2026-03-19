@@ -92,7 +92,11 @@ func (h *Handler) handlePreviewAction(w http.ResponseWriter, r *http.Request, pa
 
 		if err := h.previewSvc.Delete(ctx, name); err != nil {
 			log.Error().Err(err).Str("name", name).Msg("failed to delete preview")
-			h.sendError(w, http.StatusNotFound, "preview not found")
+			if strings.Contains(err.Error(), "not found") {
+				http.Error(w, err.Error(), http.StatusNotFound)
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -127,7 +131,11 @@ func (h *Handler) handlePreviewAction(w http.ResponseWriter, r *http.Request, pa
 
 		if err := h.previewSvc.Extend(ctx, name, ttl); err != nil {
 			log.Error().Err(err).Str("name", name).Dur("ttl", ttl).Msg("failed to extend preview TTL")
-			h.sendError(w, http.StatusNotFound, "preview not found")
+			if strings.Contains(err.Error(), "not found") {
+				http.Error(w, err.Error(), http.StatusNotFound)
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 
