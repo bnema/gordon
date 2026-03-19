@@ -48,7 +48,15 @@ func (d *ImagePushDispatcher) Handle(ctx context.Context, event domain.Event) er
 		return d.routeHandler.Handle(ctx, event)
 	}
 
-	if d.config.IsPreviewEnabled() && d.matchesTagPatterns(payload.Reference) {
+	previewEnabled := d.config.IsPreviewEnabled()
+	tagMatch := d.matchesTagPatterns(payload.Reference)
+	log.Debug().
+		Bool("preview_enabled", previewEnabled).
+		Bool("tag_match", tagMatch).
+		Str("reference", payload.Reference).
+		Msg("dispatcher classifying push event")
+
+	if previewEnabled && tagMatch {
 		return d.previewHandler.Handle(ctx, event)
 	}
 	return d.routeHandler.Handle(ctx, event)

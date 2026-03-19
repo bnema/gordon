@@ -44,7 +44,7 @@ func NewInMemory(bufferSize int, log zerowrap.Logger) *InMemory {
 		bufferSize = 100
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(zerowrap.WithCtx(context.Background(), log))
 
 	return &InMemory{
 		handlers:   make([]out.EventHandler, 0),
