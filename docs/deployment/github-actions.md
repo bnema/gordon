@@ -34,15 +34,15 @@ In your repository: Settings → Secrets → Actions → New repository secret
 | `GORDON_TOKEN` | The generated token |
 | `GORDON_REMOTE` | `https://gordon.example.com` |
 
-### 3. Install Gordon Binary
+### 3. Setup Gordon CLI
 
-Add this step to your workflow to download the Gordon binary:
+Add this step to your workflow to install the Gordon binary:
 
 ```yaml
-- name: Install Gordon
-  run: |
-    curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
-    chmod +x /usr/local/bin/gordon
+- name: Setup Gordon
+  uses: bnema/gordon/.github/actions/setup-gordon@main
+  # with:
+  #   version: latest  # default, or pin to e.g. v2.0.0
 ```
 
 ### 4. Workflow Examples
@@ -64,10 +64,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Gordon
-        run: |
-          curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
-          chmod +x /usr/local/bin/gordon
+      - name: Setup Gordon
+        uses: bnema/gordon/.github/actions/setup-gordon@main
 
       - name: Build and Deploy
         env:
@@ -98,10 +96,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Gordon
-        run: |
-          curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
-          chmod +x /usr/local/bin/gordon
+      - name: Setup Gordon
+        uses: bnema/gordon/.github/actions/setup-gordon@main
 
       - name: Build and Deploy
         env:
@@ -136,10 +132,8 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
 
-      - name: Install Gordon
-        run: |
-          curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
-          chmod +x /usr/local/bin/gordon
+      - name: Setup Gordon
+        uses: bnema/gordon/.github/actions/setup-gordon@main
 
       - name: Build and Deploy
         env:
@@ -168,10 +162,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Gordon
-        run: |
-          curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
-          chmod +x /usr/local/bin/gordon
+      - name: Setup Gordon
+        uses: bnema/gordon/.github/actions/setup-gordon@main
 
       - name: Deploy API
         env:
@@ -210,6 +202,17 @@ Pass build arguments to the Docker build:
       --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
       --no-confirm
 ```
+
+### setup-gordon Action Reference
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `version` | No | `latest` | Gordon version to install (`v2.0.0` or `latest`) |
+
+| Output | Description |
+|--------|-------------|
+| `version` | The version actually installed |
+| `path` | Path to the installed binary |
 
 ## Alternative: Docker-based Workflow
 
