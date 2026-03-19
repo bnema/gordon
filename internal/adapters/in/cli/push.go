@@ -3,7 +3,9 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -202,10 +204,16 @@ func runPush(ctx context.Context, req pushRequest) error {
 
 	// Signal the server to suppress event-based deploys for this image.
 	// The CLI will trigger an explicit deploy after push completes.
+	skipExplicitDeploy := req.NoDeploy
 	if !req.NoDeploy {
 		if err := handle.plane.DeployIntent(ctx, imageName); err != nil {
-			// Non-fatal: worst case we get a redundant deploy via event
-			fmt.Fprintf(os.Stderr, "warning: failed to register deploy intent: %v\n", err)
+			if isInsufficientScope(err) {
+				fmt.Fprintln(os.Stderr, "info: deploy intent skipped (insufficient scope), server will auto-deploy on image receive")
+				skipExplicitDeploy = true
+			} else {
+				// Non-fatal: worst case we get a redundant deploy via event
+				fmt.Fprintf(os.Stderr, "warning: failed to register deploy intent: %v\n", err)
+			}
 		}
 	}
 
@@ -228,11 +236,18 @@ func runPush(ctx context.Context, req pushRequest) error {
 
 	fmt.Println(styles.RenderSuccess("Push complete"))
 
-	if !req.NoDeploy {
+	if !skipExplicitDeploy {
 		return deployAfterPush(ctx, handle.plane, pushDomain, req.NoConfirm)
 	}
 
 	return nil
+}
+
+// isInsufficientScope returns true if the error is an HTTP 403 Forbidden response,
+// meaning the token lacks the required admin scope.
+func isInsufficientScope(err error) bool {
+	var httpErr *remote.HTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusForbidden
 }
 
 // resolveFromDomain resolves image info from a domain name (legacy mode).
