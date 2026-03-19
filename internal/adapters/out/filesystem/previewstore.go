@@ -65,7 +65,7 @@ func (s *PreviewStore) Save(_ context.Context, previews []domain.PreviewRoute) e
 
 	// Atomic write: temp file → rename
 	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(dir, ".previews-*.json.tmp")
