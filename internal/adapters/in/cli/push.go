@@ -202,20 +202,7 @@ func runPush(ctx context.Context, req pushRequest) error {
 	}
 	fmt.Printf("Domain: %s\n", styles.Theme.Bold.Render(pushDomain))
 
-	// Signal the server to suppress event-based deploys for this image.
-	// The CLI will trigger an explicit deploy after push completes.
-	skipExplicitDeploy := req.NoDeploy
-	if !req.NoDeploy {
-		if err := handle.plane.DeployIntent(ctx, imageName); err != nil {
-			if isInsufficientScope(err) {
-				fmt.Fprintln(os.Stderr, "info: deploy intent skipped (insufficient scope), server will auto-deploy on image receive")
-				skipExplicitDeploy = true
-			} else {
-				// Non-fatal: worst case we get a redundant deploy via event
-				fmt.Fprintf(os.Stderr, "warning: failed to register deploy intent: %v\n", err)
-			}
-		}
-	}
+	skipExplicitDeploy := shouldSkipDeploy(ctx, handle.plane, imageName, req.NoDeploy)
 
 	build := buildConfig{
 		Enabled:    req.Build.Enabled,
@@ -241,6 +228,23 @@ func runPush(ctx context.Context, req pushRequest) error {
 	}
 
 	return nil
+}
+
+// shouldSkipDeploy signals deploy intent and returns whether the explicit deploy
+// should be skipped (either because --no-deploy was set, or the token lacks scope).
+func shouldSkipDeploy(ctx context.Context, plane ControlPlane, imageName string, noDeploy bool) bool {
+	if noDeploy {
+		return true
+	}
+	if err := plane.DeployIntent(ctx, imageName); err != nil {
+		if isInsufficientScope(err) {
+			fmt.Fprintln(os.Stderr, "info: deploy intent skipped (insufficient scope), server will auto-deploy on image receive")
+			return true
+		}
+		// Non-fatal: worst case we get a redundant deploy via event
+		fmt.Fprintf(os.Stderr, "warning: failed to register deploy intent: %v\n", err)
+	}
+	return false
 }
 
 // isInsufficientScope returns true if the error is an HTTP 403 Forbidden response,

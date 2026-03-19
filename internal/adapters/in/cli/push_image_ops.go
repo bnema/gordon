@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -111,10 +113,16 @@ func (d *dockerImageOps) Push(ctx context.Context, ref string) error {
 	return pusher.Push(ctx, ref)
 }
 
-// isAuthError returns true if the error looks like an HTTP 401 authentication failure.
+// isAuthError returns true if the error indicates an HTTP 401 authentication failure.
+// Prefers typed HTTPError from the remote client; falls back to string matching for
+// errors from registrypush which uses its own error format.
 func isAuthError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var httpErr *remote.HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode == http.StatusUnauthorized
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "status 401") || strings.Contains(msg, "401 Unauthorized")
