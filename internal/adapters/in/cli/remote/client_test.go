@@ -3,6 +3,8 @@ package remote
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -302,6 +304,48 @@ func TestExchangeRegistryToken_EmptyToken(t *testing.T) {
 	_, err := client.ExchangeRegistryToken(context.Background(), "user")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty")
+}
+
+func TestHTTPError_ErrorString(t *testing.T) {
+	err := &HTTPError{StatusCode: 403, Status: "403 Forbidden", Body: "insufficient scope"}
+	assert.Equal(t, "403 Forbidden: insufficient scope", err.Error())
+}
+
+func TestHTTPError_Unwrap(t *testing.T) {
+	httpErr := &HTTPError{StatusCode: 403, Status: "403 Forbidden", Body: "insufficient scope"}
+	wrapped := fmt.Errorf("deploy intent: %w", httpErr)
+
+	var target *HTTPError
+	assert.True(t, errors.As(wrapped, &target))
+	assert.Equal(t, 403, target.StatusCode)
+}
+
+func TestParseErrorResponse_ReturnsHTTPError(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: 403,
+		Status:     "403 Forbidden",
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+	err := parseErrorResponse(resp, []byte(`{"error":"insufficient scope"}`))
+
+	var httpErr *HTTPError
+	require.True(t, errors.As(err, &httpErr))
+	assert.Equal(t, 403, httpErr.StatusCode)
+	assert.Equal(t, "insufficient scope", httpErr.Body)
+}
+
+func TestParseErrorResponse_NonJSON(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: 500,
+		Status:     "500 Internal Server Error",
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+	err := parseErrorResponse(resp, []byte("plain text error"))
+
+	var httpErr *HTTPError
+	require.True(t, errors.As(err, &httpErr))
+	assert.Equal(t, 500, httpErr.StatusCode)
+	assert.Equal(t, "plain text error", httpErr.Body)
 }
 
 func TestExchangeRegistryToken_AccessTokenFallback(t *testing.T) {
