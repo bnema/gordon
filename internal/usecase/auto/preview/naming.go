@@ -10,7 +10,11 @@ import (
 // "preview-login-redesign" with pattern "preview-*" → "login-redesign"
 func ExtractPreviewName(tag string, patterns []string) string {
 	for _, pattern := range patterns {
-		if matched, _ := filepath.Match(pattern, tag); matched {
+		matched, err := filepath.Match(pattern, tag)
+		if err != nil {
+			continue // skip malformed patterns
+		}
+		if matched {
 			prefix := strings.TrimSuffix(pattern, "*")
 			return strings.TrimPrefix(tag, prefix)
 		}
@@ -30,7 +34,7 @@ func GeneratePreviewDomain(baseRoute, previewName, separator string) (string, er
 	return app + separator + previewName + rest, nil
 }
 
-// SanitizeBranchName converts a git branch name to a valid preview name.
+// SanitizeBranchName converts a git branch name to a valid DNS-safe preview name.
 // "feat/login-redesign" → "login-redesign"
 func SanitizeBranchName(branch string) string {
 	branch = strings.ToLower(branch)
@@ -40,6 +44,30 @@ func SanitizeBranchName(branch string) string {
 			break
 		}
 	}
+	// Replace disallowed characters with dashes
 	branch = strings.ReplaceAll(branch, "/", "-")
+	branch = strings.ReplaceAll(branch, "_", "-")
+	branch = strings.ReplaceAll(branch, ".", "-")
+
+	// Remove any remaining non DNS-safe characters
+	var result strings.Builder
+	for _, c := range branch {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+			result.WriteRune(c)
+		}
+	}
+	branch = result.String()
+
+	// Collapse consecutive dashes and trim
+	for strings.Contains(branch, "--") {
+		branch = strings.ReplaceAll(branch, "--", "-")
+	}
+	branch = strings.Trim(branch, "-")
+
+	// Truncate to 63 chars (DNS label limit)
+	if len(branch) > 63 {
+		branch = branch[:63]
+		branch = strings.TrimRight(branch, "-")
+	}
 	return branch
 }
