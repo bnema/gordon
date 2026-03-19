@@ -139,7 +139,11 @@ func (s *Service) loadConfigValues() Config {
 
 	// Preview config
 	previewTTLStr := s.viper.GetString("auto.preview.ttl")
-	previewTTL, _ := time.ParseDuration(previewTTLStr)
+	previewTTL, err := time.ParseDuration(previewTTLStr)
+	if err != nil && previewTTLStr != "" {
+		log := zerowrap.FromCtx(context.Background())
+		log.Warn().Err(err).Str("ttl", previewTTLStr).Msg("invalid preview TTL format, using default 48h (use Go duration strings, e.g. \"168h\" for 7 days)")
+	}
 	if previewTTL == 0 {
 		previewTTL = 48 * time.Hour
 	}

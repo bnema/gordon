@@ -50,7 +50,8 @@ func TestPreviewLifecycle_Integration(t *testing.T) {
 	err = svc.Delete(ctx, "test-feat")
 	require.NoError(t, err)
 
-	all, _ = svc.List(ctx)
+	all, err = svc.List(ctx)
+	require.NoError(t, err)
 	assert.Empty(t, all)
 }
 
@@ -83,6 +84,7 @@ func TestPreviewLifecycle_CleanupExpired(t *testing.T) {
 	assert.Equal(t, "short-lived", expired[0].Name)
 
 	// Should be gone
-	all, _ := svc.List(ctx)
+	all, err := svc.List(ctx)
+	require.NoError(t, err)
 	assert.Empty(t, all)
 }
