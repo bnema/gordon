@@ -203,14 +203,31 @@ func parseResponse(resp *http.Response, target any) error {
 	return nil
 }
 
+// HTTPError represents an HTTP error response with a status code.
+// Use errors.As to check for specific status codes in error handling.
+type HTTPError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return e.Status + ": " + e.Body
+}
+
 func parseErrorResponse(resp *http.Response, body []byte) error {
+	msg := string(body)
 	var errResp struct {
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
-		return fmt.Errorf("%s: %s", resp.Status, errResp.Error)
+		msg = errResp.Error
 	}
-	return fmt.Errorf("%s: %s", resp.Status, string(body))
+	return &HTTPError{
+		StatusCode: resp.StatusCode,
+		Status:     resp.Status,
+		Body:       msg,
+	}
 }
 
 func isRetryableRequestError(err error) bool {
