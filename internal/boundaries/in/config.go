@@ -84,4 +84,11 @@ type ConfigService interface {
 	GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error)
 	AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error
 	RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error
+
+	// Preview and auto config
+	GetPreviewConfig() domain.PreviewConfig
+	IsPreviewEnabled() bool
+	IsAutoEnabled() bool
+	GetPreviewTagPatterns() []string
+	GetAllowedDomains() []string
 }
