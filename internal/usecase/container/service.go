@@ -82,7 +82,8 @@ type Service struct {
 	attachments      map[string][]string // ownerDomain → []containerIDs
 	managedCount     int64               // tracks UpDownCounter value for delta computation
 	mu               sync.RWMutex
-	deployMu         sync.Map // per-domain deploy locks (domain → *domainDeployLock)
+	deployMu         sync.Map       // per-domain deploy locks (domain → *domainDeployLock)
+	cleanupWg        sync.WaitGroup // tracks background old-container cleanup goroutines
 	monitor          *Monitor
 }
 
@@ -344,7 +345,15 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		}
 	}
 
-	s.finalizePreviousContainer(ctx, route.Domain, existing, hasExisting, invalidated, newContainer.ID)
+	// Finalize old container in the background — the new container is already
+	// serving traffic, so there's no reason to block the deploy response while
+	// waiting for the old container to stop (which can take 20s if the app
+	// doesn't handle SIGTERM).
+	s.cleanupWg.Add(1)
+	go func() {
+		defer s.cleanupWg.Done()
+		s.finalizePreviousContainer(context.WithoutCancel(ctx), route.Domain, existing, hasExisting, invalidated, newContainer.ID)
+	}()
 
 	// Start container log collection (non-blocking, errors don't fail deployment)
 	s.startLogCollection(ctx, newContainer.ID, route.Domain)
@@ -734,15 +743,9 @@ func (s *Service) finalizePreviousContainer(ctx context.Context, domainName stri
 	if !hasExisting {
 		return
 	}
-	log := zerowrap.FromCtx(ctx)
 
 	if invalidated {
 		s.waitForDrain(ctx, existing.ID)
-	}
-
-	if err := ctx.Err(); err != nil {
-		log.Debug().Err(err).Str("domain", domainName).Str("new_container_id", newContainerID).Msg("skipping old container cleanup due to canceled context")
-		return
 	}
 
 	s.cleanupOldContainer(ctx, existing, newContainerID, domainName)
@@ -1314,6 +1317,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	log := zerowrap.FromCtx(ctx)
 	log.Info().Msg("shutting down container manager...")
 
+	// Wait for any in-flight background cleanup goroutines to finish
+	s.cleanupWg.Wait()
+
 	// Containers are left running across Gordon restarts.
 	// SyncContainers + AutoStart will pick them back up on next boot.
 
@@ -1326,6 +1332,12 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	log.Info().Msg("container manager shutdown complete")
 	return nil
+}
+
+// WaitForCleanup blocks until all background cleanup goroutines complete.
+// Intended for use in tests to avoid mock assertion races.
+func (s *Service) WaitForCleanup() {
+	s.cleanupWg.Wait()
 }
 
 // StartMonitor begins background monitoring of tracked containers.
@@ -1429,13 +1441,17 @@ func (s *Service) startLogCollection(ctx context.Context, containerID, domainNam
 
 	log := zerowrap.FromCtx(ctx)
 
-	logStream, err := s.runtime.GetContainerLogs(ctx, containerID, true)
+	// Use context.WithoutCancel so the log stream outlives the HTTP request.
+	// Without this, the Docker log stream closes when the deploy response completes.
+	bgCtx := context.WithoutCancel(ctx)
+
+	logStream, err := s.runtime.GetContainerLogs(bgCtx, containerID, true)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get container logs for collection")
 		return
 	}
 
-	if err := s.logWriter.StartLogging(context.WithoutCancel(ctx), containerID, domainName, logStream); err != nil {
+	if err := s.logWriter.StartLogging(bgCtx, containerID, domainName, logStream); err != nil {
 		log.Warn().Err(err).Msg("failed to start container log collection")
 		logStream.Close()
 	}

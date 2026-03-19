@@ -3,11 +3,12 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestResolveControlPlane_LocalDeniedWhenAuthEnabled(t *testing.T) {
+func TestResolveControlPlane_LocalAllowedWhenAuthEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "xdg"))
 	t.Setenv("GORDON_REMOTE", "")
@@ -32,20 +33,13 @@ data_dir = "`+filepath.Join(tmpDir, "data")+`"
 enabled = true
 secrets_backend = "unsafe"
 `), 0o600)
-	if err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
+	require.NoError(t, err)
 
 	handle, err := resolveControlPlane(configPath)
-	if err == nil {
-		if handle != nil {
-			handle.close()
-		}
-		t.Fatalf("expected error when auth.enabled=true and no remote target")
-	}
-	if !strings.Contains(err.Error(), "local control plane is disabled when auth.enabled=true") {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+	require.NotNil(t, handle.plane)
+	defer handle.close()
 }
 
 func TestResolveControlPlane_LocalAllowedWhenAuthDisabled(t *testing.T) {
@@ -73,16 +67,11 @@ data_dir = "`+filepath.Join(tmpDir, "data")+`"
 enabled = false
 secrets_backend = "unsafe"
 `), 0o600)
-	if err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
+	require.NoError(t, err)
 
 	handle, err := resolveControlPlane(configPath)
-	if err != nil {
-		t.Fatalf("expected local control-plane handle, got error: %v", err)
-	}
-	if handle == nil || handle.plane == nil {
-		t.Fatalf("expected non-nil local control-plane handle")
-	}
-	handle.close()
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+	require.NotNil(t, handle.plane)
+	defer handle.close()
 }

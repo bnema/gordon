@@ -217,7 +217,7 @@ func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	timeout := 30 // 30 seconds timeout
+	timeout := 20 // 20 seconds before SIGKILL
 	err := r.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout})
 	if err != nil {
 		return log.WrapErr(err, "failed to stop container")
@@ -237,7 +237,7 @@ func (r *Runtime) RestartContainer(ctx context.Context, containerID string) erro
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	timeout := 30 // 30 seconds timeout
+	timeout := 20 // 20 seconds before SIGKILL
 	err := r.client.ContainerRestart(ctx, containerID, container.StopOptions{Timeout: &timeout})
 	if err != nil {
 		return log.WrapErr(err, "failed to restart container")
