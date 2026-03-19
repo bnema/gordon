@@ -578,12 +578,19 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 	}
 
 	svc.previewService.StartTicker(ctx, 60*time.Second, func(ctx context.Context, p domain.PreviewRoute) {
+		log := zerowrap.FromCtx(ctx)
 		for _, containerName := range p.Containers {
-			_ = svc.runtime.StopContainer(ctx, containerName)
-			_ = svc.runtime.RemoveContainer(ctx, containerName, true)
+			if err := svc.runtime.StopContainer(ctx, containerName); err != nil {
+				log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to stop preview container")
+			}
+			if err := svc.runtime.RemoveContainer(ctx, containerName, true); err != nil {
+				log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to remove preview container")
+			}
 		}
 		for _, volName := range p.Volumes {
-			_ = svc.runtime.RemoveVolume(ctx, volName, true)
+			if err := svc.runtime.RemoveVolume(ctx, volName, true); err != nil {
+				log.Warn().Err(err).Str("volume", volName).Str("preview", p.Domain).Msg("failed to remove preview volume")
+			}
 		}
 		svc.proxySvc.InvalidateTarget(ctx, p.Domain)
 	})

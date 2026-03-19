@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -92,10 +93,10 @@ func (h *Handler) handlePreviewAction(w http.ResponseWriter, r *http.Request, pa
 
 		if err := h.previewSvc.Delete(ctx, name); err != nil {
 			log.Error().Err(err).Str("name", name).Msg("failed to delete preview")
-			if strings.Contains(err.Error(), "not found") {
-				http.Error(w, err.Error(), http.StatusNotFound)
+			if errors.Is(err, domain.ErrPreviewNotFound) {
+				h.sendError(w, http.StatusNotFound, "preview not found")
 			} else {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				h.sendError(w, http.StatusInternalServerError, "failed to delete preview")
 			}
 			return
 		}
@@ -131,10 +132,10 @@ func (h *Handler) handlePreviewAction(w http.ResponseWriter, r *http.Request, pa
 
 		if err := h.previewSvc.Extend(ctx, name, ttl); err != nil {
 			log.Error().Err(err).Str("name", name).Dur("ttl", ttl).Msg("failed to extend preview TTL")
-			if strings.Contains(err.Error(), "not found") {
-				http.Error(w, err.Error(), http.StatusNotFound)
+			if errors.Is(err, domain.ErrPreviewNotFound) {
+				h.sendError(w, http.StatusNotFound, "preview not found")
 			} else {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				h.sendError(w, http.StatusInternalServerError, "failed to extend preview")
 			}
 			return
 		}

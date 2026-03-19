@@ -50,17 +50,17 @@ Patterns use standard glob syntax. A tag must match at least one pattern in the 
 
 Preview domains are derived from the base route for the deployed image. Gordon combines the base domain, the separator, and a URL-safe slug of the image tag.
 
-```
-<base-domain><separator><tag-slug>
+```text
+<app><separator><preview-name><rest-of-domain>
 ```
 
-For example, with `separator = "--"` and base route `app.example.com`:
+For example, with `separator = "--"` and base route `myapp.example.com`:
 
 | Image Tag | Preview Domain |
 |-----------|----------------|
-| `preview-my-feature` | `my-feature--app.example.com` |
-| `pr-42` | `42--app.example.com` |
-| `preview-fix-login` | `fix-login--app.example.com` |
+| `preview-my-feature` | `myapp--my-feature.example.com` |
+| `pr-42` | `myapp--42.example.com` |
+| `preview-fix-login` | `myapp--fix-login.example.com` |
 
 The tag prefix matched by `tag_patterns` is stripped to keep domains short. Slashes in tags are replaced with hyphens.
 
@@ -87,8 +87,8 @@ gordon preview create app.example.com --tag preview-my-feature
 Reset the TTL on an existing preview without redeploying:
 
 ```bash
-gordon preview extend my-feature--app.example.com
-gordon preview extend my-feature--app.example.com --ttl 24h
+gordon preview extend myapp--my-feature.example.com
+gordon preview extend myapp--my-feature.example.com --ttl 24h
 ```
 
 Without `--ttl`, the configured default TTL is applied from the current time.
@@ -96,7 +96,7 @@ Without `--ttl`, the configured default TTL is applied from the current time.
 ### Delete a Preview
 
 ```bash
-gordon preview delete my-feature--app.example.com
+gordon preview delete myapp--my-feature.example.com
 ```
 
 Stops the container, removes the route, and (unless `volumes.preserve = true`) removes any cloned volumes.
@@ -138,7 +138,7 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `Preview deployed: https://${{ github.event.pull_request.number }}--app.example.com`
+              body: `Preview deployed: https://app--${{ github.event.pull_request.number }}.example.com`
             })
 ```
 
@@ -168,7 +168,7 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gordon --server ${{ vars.GORDON_SERVER }} preview delete ${PR_NUMBER}--app.example.com
+          gordon --server ${{ vars.GORDON_SERVER }} preview delete app--${PR_NUMBER}.example.com
 ```
 
 ## Lifecycle
@@ -177,7 +177,7 @@ jobs:
 
 When a push matches a `tag_patterns` entry:
 
-1. Gordon creates a new route: `<slug>--<base-domain>` → pushed image
+1. Gordon creates a new route: `<app><separator><preview-name><rest-of-domain>` → pushed image
 2. If `data_copy = true`, volumes from the base route are cloned into the preview
 3. The preview TTL timer starts
 4. The container is deployed with zero-downtime rules disabled (previews are always cold-starts)
@@ -227,8 +227,8 @@ preserve = false
 ```
 
 With this config:
-- Pushing `myapp:pr-99` creates `99--app.example.com` with cloned volumes
-- Pushing `myapi:preview-auth-refactor` creates `auth-refactor--api.example.com`
+- Pushing `myapp:pr-99` creates `myapp--99.example.com` with cloned volumes
+- Pushing `myapi:preview-auth-refactor` creates `myapi--auth-refactor.example.com`
 - Both previews expire after 48 hours and volumes are removed on teardown
 
 ## Related

@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 type fakeStore struct {

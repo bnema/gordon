@@ -2,6 +2,7 @@ package preview
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/bnema/zerowrap"
 
@@ -47,6 +48,7 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 
 	payload, ok := event.Data.(domain.ImagePushedPayload)
 	if !ok {
+		log.Debug().Str("actual_type", fmt.Sprintf("%T", event.Data)).Msg("unexpected event data type, skipping")
 		return nil
 	}
 

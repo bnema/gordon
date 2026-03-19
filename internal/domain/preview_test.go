@@ -8,19 +8,20 @@ import (
 )
 
 func TestPreviewRoute_IsExpired(t *testing.T) {
+	now := time.Now()
 	tests := []struct {
 		name      string
 		expiresAt time.Time
 		want      bool
 	}{
-		{"expired", time.Now().Add(-1 * time.Hour), true},
-		{"not expired", time.Now().Add(1 * time.Hour), false},
-		{"just expired", time.Now().Add(-1 * time.Second), true},
+		{"expired", now.Add(-1 * time.Hour), true},
+		{"not expired", now.Add(1 * time.Hour), false},
+		{"just expired", now.Add(-1 * time.Second), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := PreviewRoute{ExpiresAt: tt.expiresAt}
-			assert.Equal(t, tt.want, p.IsExpired(time.Now()))
+			assert.Equal(t, tt.want, p.IsExpired(now))
 		})
 	}
 }

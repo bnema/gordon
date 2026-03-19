@@ -7,6 +7,8 @@ import (
 )
 
 // ExtractPreviewName strips the matched pattern prefix from a tag.
+// Only simple trailing-wildcard patterns like "preview-*" or "pr-*" are supported.
+// Complex globs (e.g., "pr-*-test", "*-preview") are not supported.
 // "preview-login-redesign" with pattern "preview-*" → "login-redesign"
 func ExtractPreviewName(tag string, patterns []string) string {
 	for _, pattern := range patterns {

@@ -69,6 +69,8 @@ func TestSanitizeBranchName(t *testing.T) {
 		{"special chars", "feat/hello@world!", "helloworld"},
 		{"long branch", strings.Repeat("a", 70), strings.Repeat("a", 63)},
 		{"consecutive dashes", "feat/a--b--c", "a-b-c"},
+		{"empty branch", "", ""},
+		{"whitespace branch", "   ", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

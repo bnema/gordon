@@ -12,13 +12,18 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+type nameLockEntry struct {
+	mu   *sync.Mutex
+	refs int
+}
+
 // Service manages preview lifecycle: CRUD, TTL, persistence.
 type Service struct {
 	store      out.PreviewStore
 	defaultTTL time.Duration
 	previews   []domain.PreviewRoute
 	mu         sync.RWMutex
-	nameLocks  map[string]*sync.Mutex
+	nameLocks  map[string]*nameLockEntry
 	nameLockMu sync.Mutex
 }
 
@@ -26,7 +31,7 @@ func NewService(store out.PreviewStore, defaultTTL time.Duration) *Service {
 	return &Service{
 		store:      store,
 		defaultTTL: defaultTTL,
-		nameLocks:  make(map[string]*sync.Mutex),
+		nameLocks:  make(map[string]*nameLockEntry),
 	}
 }
 
@@ -52,11 +57,18 @@ func (s *Service) Add(ctx context.Context, p domain.PreviewRoute) error {
 
 func (s *Service) Delete(ctx context.Context, name string) error {
 	s.mu.Lock()
+	found := false
 	filtered := make([]domain.PreviewRoute, 0, len(s.previews))
 	for _, p := range s.previews {
-		if p.Name != name {
+		if p.Name == name {
+			found = true
+		} else {
 			filtered = append(filtered, p)
 		}
+	}
+	if !found {
+		s.mu.Unlock()
+		return fmt.Errorf("preview %q: %w", name, domain.ErrPreviewNotFound)
 	}
 	s.previews = filtered
 	cp := make([]domain.PreviewRoute, len(s.previews))
@@ -74,7 +86,7 @@ func (s *Service) Get(_ context.Context, name string) (*domain.PreviewRoute, err
 			return &p, nil
 		}
 	}
-	return nil, fmt.Errorf("preview %q not found", name)
+	return nil, fmt.Errorf("preview %q: %w", name, domain.ErrPreviewNotFound)
 }
 
 func (s *Service) List(_ context.Context) ([]domain.PreviewRoute, error) {
@@ -97,7 +109,7 @@ func (s *Service) Extend(ctx context.Context, name string, ttl time.Duration) er
 		}
 	}
 	s.mu.Unlock()
-	return fmt.Errorf("preview %q not found", name)
+	return fmt.Errorf("preview %q: %w", name, domain.ErrPreviewNotFound)
 }
 
 func (s *Service) GetExpired() []domain.PreviewRoute {
@@ -163,19 +175,27 @@ func (s *Service) StartTicker(ctx context.Context, interval time.Duration, teard
 func (s *Service) AcquireNameLock(name string) *sync.Mutex {
 	s.nameLockMu.Lock()
 	defer s.nameLockMu.Unlock()
-	mu, ok := s.nameLocks[name]
+	entry, ok := s.nameLocks[name]
 	if !ok {
-		mu = &sync.Mutex{}
-		s.nameLocks[name] = mu
+		entry = &nameLockEntry{mu: &sync.Mutex{}}
+		s.nameLocks[name] = entry
 	}
-	return mu
+	entry.refs++
+	return entry.mu
 }
 
-// ReleaseNameLock removes the per-name mutex from the map after use.
+// ReleaseNameLock decrements the refcount and removes the per-name mutex when no longer in use.
 func (s *Service) ReleaseNameLock(name string) {
 	s.nameLockMu.Lock()
 	defer s.nameLockMu.Unlock()
-	delete(s.nameLocks, name)
+	entry, ok := s.nameLocks[name]
+	if !ok {
+		return
+	}
+	entry.refs--
+	if entry.refs <= 0 {
+		delete(s.nameLocks, name)
+	}
 }
 
 // CreatePreviewRequest contains parameters for creating a preview.

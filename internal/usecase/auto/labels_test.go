@@ -226,7 +226,8 @@ func TestExtractLabels(t *testing.T) {
 			"digest": "sha256:configdigest123",
 		},
 	}
-	manifestData, _ := json.Marshal(manifest)
+	manifestData, err := json.Marshal(manifest)
+	require.NoError(t, err)
 
 	imageConf := map[string]any{
 		"config": map[string]any{
@@ -236,7 +237,8 @@ func TestExtractLabels(t *testing.T) {
 			},
 		},
 	}
-	configData, _ := json.Marshal(imageConf)
+	configData, err := json.Marshal(imageConf)
+	require.NoError(t, err)
 
 	blobStorage := mocks.NewMockBlobStorage(t)
 	blobStorage.EXPECT().GetBlob("sha256:configdigest123").Return(io.NopCloser(strings.NewReader(string(configData))), nil)
@@ -264,11 +266,12 @@ func TestExtractLabels_EmptyConfigDigest(t *testing.T) {
 			"digest": "",
 		},
 	}
-	manifestData, _ := json.Marshal(manifest)
+	manifestData, err := json.Marshal(manifest)
+	require.NoError(t, err)
 
 	blobStorage := mocks.NewMockBlobStorage(t)
 
-	_, err := ExtractLabels(ctx, manifestData, blobStorage)
+	_, err = ExtractLabels(ctx, manifestData, blobStorage)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no config digest")
 }

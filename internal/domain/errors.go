@@ -40,6 +40,9 @@ var (
 	ErrVolumeNotFound = errors.New("volume not found")
 	ErrVolumeExists   = errors.New("volume already exists")
 
+	// Preview errors
+	ErrPreviewNotFound = errors.New("preview not found")
+
 	// Config errors
 	ErrConfigNotFound       = errors.New("configuration not found")
 	ErrInvalidConfig        = errors.New("invalid configuration")

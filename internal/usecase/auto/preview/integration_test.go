@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestPreviewLifecycle_Integration(t *testing.T) {
@@ -17,7 +18,7 @@ func TestPreviewLifecycle_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Create
-	svc.CreatePreview(ctx, CreatePreviewRequest{
+	err := svc.CreatePreview(ctx, CreatePreviewRequest{
 		Name:      "test-feat",
 		Domain:    "myapp--test-feat.example.com",
 		BaseRoute: "myapp.example.com",
@@ -29,6 +30,7 @@ func TestPreviewLifecycle_Integration(t *testing.T) {
 			DataCopy:  false,
 		},
 	})
+	require.NoError(t, err)
 
 	// Verify created
 	all, err := svc.List(ctx)
@@ -62,7 +64,7 @@ func TestPreviewLifecycle_CleanupExpired(t *testing.T) {
 	ctx := context.Background()
 
 	// Create with very short TTL
-	svc.CreatePreview(ctx, CreatePreviewRequest{
+	err := svc.CreatePreview(ctx, CreatePreviewRequest{
 		Name:      "short-lived",
 		Domain:    "myapp--short-lived.example.com",
 		BaseRoute: "myapp.example.com",
@@ -74,6 +76,7 @@ func TestPreviewLifecycle_CleanupExpired(t *testing.T) {
 			DataCopy:  false,
 		},
 	})
+	require.NoError(t, err)
 
 	// Wait for expiry
 	time.Sleep(10 * time.Millisecond)
