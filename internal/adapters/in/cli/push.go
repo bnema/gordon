@@ -3,7 +3,9 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -200,14 +202,7 @@ func runPush(ctx context.Context, req pushRequest) error {
 	}
 	fmt.Printf("Domain: %s\n", styles.Theme.Bold.Render(pushDomain))
 
-	// Signal the server to suppress event-based deploys for this image.
-	// The CLI will trigger an explicit deploy after push completes.
-	if !req.NoDeploy {
-		if err := handle.plane.DeployIntent(ctx, imageName); err != nil {
-			// Non-fatal: worst case we get a redundant deploy via event
-			fmt.Fprintf(os.Stderr, "warning: failed to register deploy intent: %v\n", err)
-		}
-	}
+	skipExplicitDeploy := shouldSkipDeploy(ctx, handle.plane, imageName, req.NoDeploy)
 
 	build := buildConfig{
 		Enabled:    req.Build.Enabled,
@@ -228,11 +223,34 @@ func runPush(ctx context.Context, req pushRequest) error {
 
 	fmt.Println(styles.RenderSuccess("Push complete"))
 
-	if !req.NoDeploy {
+	if !skipExplicitDeploy {
 		return deployAfterPush(ctx, handle.plane, pushDomain, req.NoConfirm)
 	}
 
 	return nil
+}
+
+// shouldSkipDeploy signals deploy intent and returns whether the explicit deploy
+// should be skipped (either because --no-deploy was set, or the token lacks scope).
+func shouldSkipDeploy(ctx context.Context, plane ControlPlane, imageName string, noDeploy bool) bool {
+	// Always call DeployIntent to suppress server-side auto-deploy, even with --no-deploy.
+	// Without this, the server's event listener would still auto-deploy the pushed image.
+	if err := plane.DeployIntent(ctx, imageName); err != nil {
+		if isInsufficientScope(err) {
+			fmt.Fprintln(os.Stderr, "info: deploy intent skipped (insufficient scope), server will auto-deploy on image receive")
+			return true
+		}
+		// Non-fatal: worst case we get a redundant deploy via event
+		fmt.Fprintf(os.Stderr, "warning: failed to register deploy intent: %v\n", err)
+	}
+	return noDeploy
+}
+
+// isInsufficientScope returns true if the error is an HTTP 403 Forbidden response,
+// meaning the token lacks the required admin scope.
+func isInsufficientScope(err error) bool {
+	var httpErr *remote.HTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusForbidden
 }
 
 // resolveFromDomain resolves image info from a domain name (legacy mode).

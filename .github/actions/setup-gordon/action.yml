@@ -1,0 +1,78 @@
+name: 'Setup Gordon'
+description: 'Install the Gordon CLI binary into the runner PATH'
+author: 'Gordon Contributors'
+
+branding:
+  icon: 'download-cloud'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Gordon version to install (e.g. v2.0.0 or latest)'
+    required: false
+    default: 'latest'
+
+outputs:
+  version:
+    description: 'The version of Gordon that was installed'
+    value: ${{ steps.install.outputs.version }}
+  path:
+    description: 'Path to the installed Gordon binary'
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Gordon
+      id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Map RUNNER_OS to gordon OS identifier
+        case "${RUNNER_OS}" in
+          Linux)  os="linux" ;;
+          macOS)  os="darwin" ;;
+          *)      echo "Unsupported OS: ${RUNNER_OS}" >&2; exit 1 ;;
+        esac
+
+        # Map RUNNER_ARCH to gordon arch identifier
+        case "${RUNNER_ARCH}" in
+          X64)    arch="amd64" ;;
+          ARM64)  arch="arm64" ;;
+          *)      echo "Unsupported architecture: ${RUNNER_ARCH}" >&2; exit 1 ;;
+        esac
+
+        version="${{ inputs.version }}"
+
+        # Resolve 'latest' to an actual tag via redirect URL
+        if [ "${version}" = "latest" ]; then
+          redirect_url="$(curl -fsSL -o /dev/null -w '%{redirect_url}' "https://github.com/bnema/gordon/releases/latest")"
+          version="${redirect_url##*/}"
+          if [ -z "${version}" ]; then
+            echo "Failed to resolve latest Gordon version" >&2
+            exit 1
+          fi
+        fi
+
+        archive="gordon_${os}_${arch}.tar.gz"
+        url="https://github.com/bnema/gordon/releases/download/${version}/${archive}"
+        dest="/tmp/${archive}"
+        install_path="/usr/local/bin/gordon"
+
+        echo "Installing Gordon ${version} (${os}/${arch}) from ${url}"
+
+        # Download the release archive
+        curl -fsSL -o "${dest}" "${url}"
+
+        # Extract just the gordon binary and clean up
+        tar -xzf "${dest}" -C /usr/local/bin/ gordon
+        rm -f "${dest}"
+
+        # Make executable and verify
+        chmod +x "${install_path}"
+        gordon version
+
+        # Set outputs
+        echo "version=${version}" >> "${GITHUB_OUTPUT}"
+        echo "path=${install_path}" >> "${GITHUB_OUTPUT}"
