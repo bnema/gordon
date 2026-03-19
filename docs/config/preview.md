@@ -33,7 +33,7 @@ The `ttl` field accepts Go duration strings:
 |-------|---------|
 | `"24h"` | 24 hours |
 | `"48h"` | 48 hours (default) |
-| `"7d"` | 7 days |
+| `"168h"` | 7 days |
 | `"0"` | Never expire (manual deletion only) |
 
 ### `tag_patterns` Matching
@@ -59,7 +59,7 @@ For example, with `separator = "--"` and base route `app.example.com`:
 | Image Tag | Preview Domain |
 |-----------|----------------|
 | `preview-my-feature` | `my-feature--app.example.com` |
-| `pr-42` | `pr-42--app.example.com` |
+| `pr-42` | `42--app.example.com` |
 | `preview-fix-login` | `fix-login--app.example.com` |
 
 The tag prefix matched by `tag_patterns` is stripped to keep domains short. Slashes in tags are replaced with hyphens.
@@ -138,7 +138,7 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `Preview deployed: https://pr-${{ github.event.pull_request.number }}--app.example.com`
+              body: `Preview deployed: https://${{ github.event.pull_request.number }}--app.example.com`
             })
 ```
 
@@ -166,9 +166,9 @@ jobs:
     steps:
       - name: Delete preview environment
         env:
-          TAG: pr-${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gordon --server ${{ vars.GORDON_SERVER }} preview delete ${TAG}--app.example.com
+          gordon --server ${{ vars.GORDON_SERVER }} preview delete ${PR_NUMBER}--app.example.com
 ```
 
 ## Lifecycle
@@ -227,8 +227,8 @@ preserve = false
 ```
 
 With this config:
-- Pushing `myapp:pr-99` creates `pr-99--app.example.com` with cloned volumes
-- Pushing `myapi:preview-auth-refactor` creates `preview-auth-refactor--api.example.com`
+- Pushing `myapp:pr-99` creates `99--app.example.com` with cloned volumes
+- Pushing `myapi:preview-auth-refactor` creates `auth-refactor--api.example.com`
 - Both previews expire after 48 hours and volumes are removed on teardown
 
 ## Related
