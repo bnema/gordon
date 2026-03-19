@@ -1,8 +1,9 @@
 package cli
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -11,7 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/auto/preview"
 )
 
@@ -56,20 +57,16 @@ func newPreviewCreateCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 
 			// Resolve preview name from arg or git branch.
-			name := ""
-			if len(args) > 0 {
-				name = args[0]
-			} else {
-				branch, err := detectGitBranch()
-				if err != nil {
-					return fmt.Errorf("no preview name provided and could not detect git branch: %w", err)
-				}
-				name = preview.SanitizeBranchName(branch)
+			name, err := resolvePreviewName(args)
+			if err != nil {
+				return err
 			}
 
 			previewTag := "preview-" + name
 
-			fmt.Fprintf(out, "Creating preview: %s\n", styles.Theme.Bold.Render(name))
+			if err := cliWriteLine(out, cliRenderTitle("Preview: "+name)); err != nil {
+				return err
+			}
 
 			// Resolve control plane (remote or local) — same as push.
 			handle, err := resolveControlPlane(configPath)
@@ -78,61 +75,16 @@ func newPreviewCreateCmd() *cobra.Command {
 			}
 			defer handle.close()
 
-			// Detect image name and registry using the same logic as push.
-			dockerfile := "Dockerfile"
-			imageName, err := detectImageName(dockerfile)
+			previewRef, err := resolvePreviewImageRef(ctx, handle.plane, out, previewTag)
 			if err != nil {
 				return err
 			}
 
-			fmt.Fprintf(out, "Image:  %s\n", styles.Theme.Bold.Render(imageName))
-
-			// Resolve registry from routes.
-			registry, _, _, err := resolveRoute(ctx, handle.plane, "", "", dockerfile)
-			if err != nil {
-				return fmt.Errorf("failed to resolve registry: %w", err)
-			}
-
-			// Build the image ref with the preview tag.
-			previewRef := fmt.Sprintf("%s/%s:%s", registry, imageName, previewTag)
-			fmt.Fprintf(out, "Tag:    %s\n", styles.Theme.Bold.Render(previewRef))
-
-			// Build and push.
-			imageOps, err := newImageOpsFn()
-			if err != nil {
+			if err := buildAndPushPreview(ctx, out, previewRef, previewTag, platform, noBuild); err != nil {
 				return err
 			}
 
-			if !noBuild {
-				if _, statErr := os.Stat(dockerfile); os.IsNotExist(statErr) {
-					return fmt.Errorf("dockerfile not found: %s", dockerfile)
-				}
-
-				buildPlatform := platform
-				buildArgs := buildImageArgs(ctx, previewTag, buildPlatform, dockerfile, nil, previewRef, previewRef)
-				fmt.Fprintln(out, "\nBuilding image...")
-				if err := imageOps.Build(ctx, buildArgs); err != nil {
-					return err
-				}
-			}
-
-			fmt.Fprintln(out, "Pushing...")
-			if err := imageOps.Push(ctx, previewRef); err != nil {
-				return fmt.Errorf("failed to push %s: %w", previewRef, err)
-			}
-
-			fmt.Fprintln(out, styles.RenderSuccess("Push complete"))
-			fmt.Fprintf(out, "Preview %s will be created by the server's autopreview handler.\n",
-				styles.Theme.Bold.Render(name))
-
-			if ttl != "" {
-				fmt.Fprintf(out, "Requested TTL: %s (server config controls actual TTL)\n", ttl)
-			}
-			if noData {
-				fmt.Fprintf(out, "Data copy: skipped (--no-data)\n")
-			}
-
-			return nil
+			return printPreviewCreateSummary(out, name, ttl, noData)
 		},
 	}
 
@@ -163,38 +115,14 @@ func newPreviewListCmd() *cobra.Command {
 			}
 
 			if jsonOutput {
-				enc := json.NewEncoder(out)
-				enc.SetIndent("", "  ")
-				return enc.Encode(previews)
+				return writeJSON(out, previews)
 			}
 
 			if len(previews) == 0 {
-				fmt.Fprintln(out, "No active previews")
-				return nil
+				return cliWriteLine(out, cliRenderEmptyState("No active previews"))
 			}
 
-			w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-			if _, err := fmt.Fprintln(w, "NAME\tDOMAIN\tIMAGE\tCREATED\tEXPIRES"); err != nil {
-				return err
-			}
-			now := time.Now()
-			for _, p := range previews {
-				remaining := time.Until(p.ExpiresAt).Truncate(time.Minute)
-				expiresStr := remaining.String()
-				if p.IsExpired(now) {
-					expiresStr = "expired"
-				}
-				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-					p.Name,
-					p.Domain,
-					truncateImage(p.Image, 40),
-					p.CreatedAt.Format(time.DateTime),
-					expiresStr,
-				); err != nil {
-					return err
-				}
-			}
-			return w.Flush()
+			return printPreviewTable(out, previews)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON")
@@ -220,8 +148,7 @@ func newPreviewDeleteCmd() *cobra.Command {
 				return fmt.Errorf("failed to delete preview %q: %w", name, err)
 			}
 
-			fmt.Fprintln(out, styles.RenderSuccess(fmt.Sprintf("Preview %q deleted", name)))
-			return nil
+			return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Preview %q deleted", name)))
 		},
 	}
 }
@@ -246,12 +173,118 @@ func newPreviewExtendCmd() *cobra.Command {
 				return fmt.Errorf("failed to extend preview %q: %w", name, err)
 			}
 
-			fmt.Fprintln(out, styles.RenderSuccess(fmt.Sprintf("Preview %q extended by %s", name, ttl)))
-			return nil
+			return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Preview %q extended by %s", name, ttl)))
 		},
 	}
 	cmd.Flags().StringVar(&ttl, "ttl", "24h", "Additional TTL duration")
 	return cmd
+}
+
+func printPreviewTable(out io.Writer, previews []domain.PreviewRoute) error {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(w, "NAME\tDOMAIN\tIMAGE\tCREATED\tEXPIRES"); err != nil {
+		return err
+	}
+	now := time.Now()
+	for _, p := range previews {
+		remaining := time.Until(p.ExpiresAt).Truncate(time.Minute)
+		expiresStr := remaining.String()
+		if p.IsExpired(now) {
+			expiresStr = "expired"
+		}
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			p.Name,
+			p.Domain,
+			truncateImage(p.Image, 40),
+			p.CreatedAt.Format(time.DateTime),
+			expiresStr,
+		); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
+func resolvePreviewName(args []string) (string, error) {
+	if len(args) > 0 {
+		return args[0], nil
+	}
+	branch, err := detectGitBranch()
+	if err != nil {
+		return "", fmt.Errorf("no preview name provided and could not detect git branch: %w", err)
+	}
+	return preview.SanitizeBranchName(branch), nil
+}
+
+func resolvePreviewImageRef(ctx context.Context, cp ControlPlane, out io.Writer, previewTag string) (string, error) {
+	dockerfile := "Dockerfile"
+	imageName, err := detectImageName(dockerfile)
+	if err != nil {
+		return "", err
+	}
+	if err := cliWriteLine(out, cliRenderMeta("Image:", imageName)); err != nil {
+		return "", err
+	}
+
+	registry, _, _, err := resolveRoute(ctx, cp, "", "", dockerfile)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve registry: %w", err)
+	}
+
+	previewRef := fmt.Sprintf("%s/%s:%s", registry, imageName, previewTag)
+	if err := cliWriteLine(out, cliRenderMeta("Tag:", previewRef)); err != nil {
+		return "", err
+	}
+	return previewRef, nil
+}
+
+func buildAndPushPreview(ctx context.Context, out io.Writer, previewRef, previewTag, platform string, noBuild bool) error {
+	imageOps, err := newImageOpsFn()
+	if err != nil {
+		return err
+	}
+
+	if !noBuild {
+		dockerfile := "Dockerfile"
+		if _, statErr := os.Stat(dockerfile); os.IsNotExist(statErr) {
+			return fmt.Errorf("dockerfile not found: %s", dockerfile)
+		}
+		buildArgs := buildImageArgs(ctx, previewTag, platform, dockerfile, nil, previewRef, previewRef)
+		if err := cliWriteLine(out, "\nBuilding image..."); err != nil {
+			return err
+		}
+		if err := imageOps.Build(ctx, buildArgs); err != nil {
+			return err
+		}
+	}
+
+	if err := cliWriteLine(out, "Pushing..."); err != nil {
+		return err
+	}
+	if err := imageOps.Push(ctx, previewRef); err != nil {
+		return fmt.Errorf("failed to push %s: %w", previewRef, err)
+	}
+	return nil
+}
+
+func printPreviewCreateSummary(out io.Writer, name, ttl string, noData bool) error {
+	if err := cliWriteLine(out, cliRenderSuccess("Push complete")); err != nil {
+		return err
+	}
+	if err := cliWritef(out, "Preview %s will be created by the server's autopreview handler.\n", name); err != nil {
+		return err
+	}
+	if ttl != "" {
+		if err := cliWritef(out, "Requested TTL: %s (server config controls actual TTL)\n", ttl); err != nil {
+			return err
+		}
+	}
+	if noData {
+		if err := cliWriteLine(out, cliRenderInfo("Data copy: skipped (--no-data)")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func detectGitBranch() (string, error) {
