@@ -69,8 +69,8 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 				return
 			}
 
-			// Warn if not using TLS
-			if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" {
+			// Warn if not using TLS (skip for localhost — internal proxy traffic)
+			if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" && !httputil.IsLocalhostRequest(r) {
 				log.Warn().
 					Str(zerowrap.FieldLayer, "adapter").
 					Str(zerowrap.FieldAdapter, "http").

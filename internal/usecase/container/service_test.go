@@ -609,6 +609,7 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 }
 
@@ -706,6 +707,7 @@ func TestService_Deploy_ResolvesExistingFromRuntime_WhenMemoryStale(t *testing.T
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 
 	// Verify new container is now tracked
@@ -772,6 +774,7 @@ func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 }
 
@@ -2082,6 +2085,7 @@ func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 
 	// Verify new container is now tracked
@@ -2239,6 +2243,7 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 
 	result, err := svc.Deploy(ctx, route)
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.NotNil(t, result)
 	assert.Equal(t, "new-container", result.ID)
 }
@@ -2303,6 +2308,7 @@ func TestService_Deploy_TrackedTempContainerUsesAlternateTempName(t *testing.T) 
 
 	result, err := svc.Deploy(ctx, route)
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.NotNil(t, result)
 	assert.Equal(t, "new-container", result.ID)
 }
@@ -2525,6 +2531,7 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+	svc.WaitForCleanup()
 
 	// Both should succeed (second deploy waits for the first to finish)
 	assert.NoError(t, errs[0], "first deploy should succeed")
@@ -2637,6 +2644,7 @@ func TestService_Deploy_CacheInvalidationBeforeOldContainerStop(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 
 	// Verify ordering: cache invalidation MUST happen before old container stop
@@ -2693,6 +2701,7 @@ func TestService_Deploy_NilCacheInvalidator(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 }
 
@@ -2870,6 +2879,7 @@ func TestService_Deploy_DoesNotSkipWhenImageIDDiffers(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 }
 
@@ -2975,6 +2985,7 @@ func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 }
 
@@ -3032,6 +3043,7 @@ func TestService_Deploy_DoesNotSkip_WhenEnvHashDiffers(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 }
 
@@ -3087,6 +3099,7 @@ func TestService_Deploy_DoesNotSkip_WhenEnvHashMissing(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 }
 
@@ -3243,6 +3256,7 @@ func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.Equal(t, "new-container", result.ID)
 
 	// Verify new container is tracked
@@ -3421,6 +3435,7 @@ func TestService_Deploy_StabilizationSuccess(t *testing.T) {
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.NotNil(t, result)
 	assert.Equal(t, "new-container", result.ID, "should return new container on successful stabilization")
 
@@ -3515,6 +3530,7 @@ func TestService_Deploy_ZeroDowntime_OldNeverStoppedBeforeNewReady(t *testing.T)
 	result, err := svc.Deploy(ctx, route)
 
 	assert.NoError(t, err)
+	svc.WaitForCleanup()
 	assert.NotNil(t, result)
 	assert.Equal(t, "new-container", result.ID)
 
