@@ -743,15 +743,9 @@ func (s *Service) finalizePreviousContainer(ctx context.Context, domainName stri
 	if !hasExisting {
 		return
 	}
-	log := zerowrap.FromCtx(ctx)
 
 	if invalidated {
 		s.waitForDrain(ctx, existing.ID)
-	}
-
-	if err := ctx.Err(); err != nil {
-		log.Debug().Err(err).Str("domain", domainName).Str("new_container_id", newContainerID).Msg("skipping old container cleanup due to canceled context")
-		return
 	}
 
 	s.cleanupOldContainer(ctx, existing, newContainerID, domainName)
