@@ -88,6 +88,7 @@ func ParseImageLabels(configData []byte) (*domain.ImageLabels, error) {
 // ExtractLabels extracts Gordon labels from an image manifest by fetching the
 // config blob from blobStorage and parsing it. It is the shared implementation
 // used by both AutoRouteHandler and AutoPreviewHandler.
+// ctx is accepted for future use when BlobStorage gains context support.
 func ExtractLabels(ctx context.Context, manifestData []byte, blobStorage out.BlobStorage) (*domain.ImageLabels, error) {
 	configDigest, err := ParseConfigDigest(manifestData)
 	if err != nil {

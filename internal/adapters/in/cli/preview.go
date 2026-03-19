@@ -57,7 +57,7 @@ func newPreviewCreateCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 
 			// Resolve preview name from arg or git branch.
-			name, err := resolvePreviewName(args)
+			name, err := resolvePreviewName(ctx, args)
 			if err != nil {
 				return err
 			}
@@ -205,15 +205,23 @@ func printPreviewTable(out io.Writer, previews []domain.PreviewRoute) error {
 	return w.Flush()
 }
 
-func resolvePreviewName(args []string) (string, error) {
+func resolvePreviewName(ctx context.Context, args []string) (string, error) {
 	if len(args) > 0 {
-		return args[0], nil
+		name := preview.SanitizeBranchName(args[0])
+		if name == "" {
+			return "", fmt.Errorf("invalid preview name after sanitization: %q", args[0])
+		}
+		return name, nil
 	}
-	branch, err := detectGitBranch()
+	branch, err := detectGitBranch(ctx)
 	if err != nil {
 		return "", fmt.Errorf("no preview name provided and could not detect git branch: %w", err)
 	}
-	return preview.SanitizeBranchName(branch), nil
+	name := preview.SanitizeBranchName(branch)
+	if name == "" {
+		return "", fmt.Errorf("git branch %q produced empty preview name after sanitization", branch)
+	}
+	return name, nil
 }
 
 func resolvePreviewImageRef(ctx context.Context, cp ControlPlane, out io.Writer, previewTag string) (string, error) {
@@ -287,8 +295,8 @@ func printPreviewCreateSummary(out io.Writer, name, ttl string, noData bool) err
 	return nil
 }
 
-func detectGitBranch() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output() // #nosec G204
+func detectGitBranch(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD").Output() // #nosec G204
 	if err != nil {
 		return "", fmt.Errorf("detect git branch: %w", err)
 	}

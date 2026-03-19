@@ -4,8 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 type mockHandler struct {

@@ -10,7 +10,7 @@ type AutoConfig struct {
 	Preview        PreviewConfig
 }
 
-// AutoRouteConfig holds auto-route specific settings.
+// AutoRouteConfig holds auto-route specific settings (reserved for future use).
 type AutoRouteConfig struct{}
 
 // PreviewConfig holds auto-preview specific settings.
