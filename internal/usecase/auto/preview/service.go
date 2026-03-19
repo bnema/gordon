@@ -110,6 +110,50 @@ func (s *Service) GetExpired() []domain.PreviewRoute {
 	return expired
 }
 
+// CleanupExpired removes expired previews from the service and persists.
+// Returns the removed previews so the caller can teardown their resources.
+func (s *Service) CleanupExpired(ctx context.Context) []domain.PreviewRoute {
+	s.mu.Lock()
+	var expired []domain.PreviewRoute
+	var active []domain.PreviewRoute
+	for _, p := range s.previews {
+		if p.IsExpired() {
+			expired = append(expired, p)
+		} else {
+			active = append(active, p)
+		}
+	}
+	s.previews = active
+	cp := make([]domain.PreviewRoute, len(active))
+	copy(cp, active)
+	s.mu.Unlock()
+
+	if len(expired) > 0 {
+		_ = s.store.Save(ctx, cp)
+	}
+	return expired
+}
+
+// StartTicker starts a background goroutine that checks for expired previews.
+// The teardownFn is called for each expired preview to clean up containers/volumes.
+func (s *Service) StartTicker(ctx context.Context, interval time.Duration, teardownFn func(context.Context, domain.PreviewRoute)) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				expired := s.CleanupExpired(ctx)
+				for _, p := range expired {
+					teardownFn(ctx, p)
+				}
+			}
+		}
+	}()
+}
+
 func (s *Service) AcquireNameLock(name string) *sync.Mutex {
 	s.nameLockMu.Lock()
 	defer s.nameLockMu.Unlock()
