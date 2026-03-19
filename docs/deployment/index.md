@@ -50,7 +50,7 @@ Standard Docker workflow — no Gordon binary required on the runner.
 - Registry endpoint is `gordon.example.com` (not a separate registry host)
 
 ```bash
-docker login -u ci-bot -p "$GORDON_TOKEN" gordon.example.com
+echo "$GORDON_TOKEN" | docker login -u ci-bot --password-stdin gordon.example.com
 docker build -t gordon.example.com/myapp:v1.2.0 .
 docker push gordon.example.com/myapp:v1.2.0
 ```

@@ -50,7 +50,9 @@ To push attachment images (databases, caches, etc.), use `gordon attachments pus
   `v1.2.3-4-gabc1234` or `v1.2.3-dirty`). If no tag is found, `latest` is used.
 - When `--build` is set, the command builds with `docker buildx build --load`
   and injects `VERSION`, `GIT_TAG`, `GIT_SHA`, and `BUILD_TIME` into the build
-  environment plus any `--build-arg` values.
+  environment plus any `--build-arg` values. To use these in your Dockerfile,
+  declare them with `ARG` (e.g., `ARG VERSION`) then reference via `ENV` or
+  in build steps.
 - Use `-f/--file` to build from a Dockerfile outside the current directory root.
 - The version tag and `latest` are both pushed (unless the version is `latest`).
 

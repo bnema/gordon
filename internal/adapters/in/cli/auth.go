@@ -441,7 +441,12 @@ The hash can be stored in your secrets backend and referenced in the config:
 // runTokenGenerate generates a new authentication token.
 // parseAndConvertScopes parses a comma-separated scope string and converts
 // simple scopes (push, pull, *) to Docker v2 format (repository:*:action).
-func parseAndConvertScopes(scopesStr, repo string) []string {
+func parseAndConvertScopes(scopesStr, repo string) ([]string, error) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil, fmt.Errorf("repository name cannot be empty")
+	}
+
 	rawScopes := strings.Split(scopesStr, ",")
 	for i := range rawScopes {
 		rawScopes[i] = strings.TrimSpace(rawScopes[i])
@@ -457,10 +462,10 @@ func parseAndConvertScopes(scopesStr, repo string) []string {
 	}
 
 	if !hasSimpleScope {
-		return rawScopes
+		return rawScopes, nil
 	}
 
-	// Convert simple scopes to v2 format: repository:*:push,pull
+	// Convert simple scopes to v2 format: repository:<repo>:push,pull
 	var scopes []string
 	var actions []string
 	for _, s := range rawScopes {
@@ -474,7 +479,7 @@ func parseAndConvertScopes(scopesStr, repo string) []string {
 	if len(actions) > 0 {
 		scopes = append(scopes, "repository:"+repo+":"+strings.Join(actions, ","))
 	}
-	return scopes
+	return scopes, nil
 }
 
 func runTokenGenerate(subject, scopesStr, expiryStr, configPath, repo string) error {
@@ -492,7 +497,10 @@ func runTokenGenerate(subject, scopesStr, expiryStr, configPath, repo string) er
 		}
 	}
 
-	scopes := parseAndConvertScopes(scopesStr, repo)
+	scopes, err := parseAndConvertScopes(scopesStr, repo)
+	if err != nil {
+		return fmt.Errorf("invalid scopes: %w", err)
+	}
 
 	// Create auth service
 	log := zerowrap.New(zerowrap.Config{Level: "warn"})
