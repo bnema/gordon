@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -38,8 +40,11 @@ func (d *ImagePushDispatcher) CanHandle(t domain.EventType) bool {
 }
 
 func (d *ImagePushDispatcher) Handle(ctx context.Context, event domain.Event) error {
+	log := zerowrap.FromCtx(ctx)
+
 	payload, ok := event.Data.(domain.ImagePushedPayload)
 	if !ok {
+		log.Warn().Str("event_type", string(event.Type)).Msg("dispatcher received event with unexpected payload type; forwarding to route handler")
 		return d.routeHandler.Handle(ctx, event)
 	}
 
@@ -51,7 +56,11 @@ func (d *ImagePushDispatcher) Handle(ctx context.Context, event domain.Event) er
 
 func (d *ImagePushDispatcher) matchesTagPatterns(reference string) bool {
 	for _, pattern := range d.config.GetPreviewTagPatterns() {
-		if matched, _ := filepath.Match(pattern, reference); matched {
+		matched, err := filepath.Match(pattern, reference)
+		if err != nil {
+			continue // skip malformed patterns
+		}
+		if matched {
 			return true
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/bnema/gordon/internal/domain"
@@ -61,5 +62,28 @@ func (s *PreviewStore) Save(_ context.Context, previews []domain.PreviewRoute) e
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o644)
+
+	// Atomic write: temp file → rename
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".previews-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, s.path)
 }

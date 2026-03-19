@@ -48,7 +48,7 @@ func CloneVolumes(ctx context.Context, cloner VolumeCloner, previewName string, 
 		}
 
 		helperConfig := &domain.ContainerConfig{
-			Image: "busybox:latest",
+			Image: "busybox:1.37",
 			Name:  "gordon-vol-copy-" + destName,
 			Cmd:   []string{"cp", "-a", "/src/.", "/dst/"},
 			Volumes: map[string]string{
