@@ -82,7 +82,8 @@ type Service struct {
 	attachments      map[string][]string // ownerDomain → []containerIDs
 	managedCount     int64               // tracks UpDownCounter value for delta computation
 	mu               sync.RWMutex
-	deployMu         sync.Map // per-domain deploy locks (domain → *domainDeployLock)
+	deployMu         sync.Map       // per-domain deploy locks (domain → *domainDeployLock)
+	cleanupWg        sync.WaitGroup // tracks background old-container cleanup goroutines
 	monitor          *Monitor
 }
 
@@ -344,7 +345,15 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		}
 	}
 
-	s.finalizePreviousContainer(ctx, route.Domain, existing, hasExisting, invalidated, newContainer.ID)
+	// Finalize old container in the background — the new container is already
+	// serving traffic, so there's no reason to block the deploy response while
+	// waiting for the old container to stop (which can take 20s if the app
+	// doesn't handle SIGTERM).
+	s.cleanupWg.Add(1)
+	go func() {
+		defer s.cleanupWg.Done()
+		s.finalizePreviousContainer(context.WithoutCancel(ctx), route.Domain, existing, hasExisting, invalidated, newContainer.ID)
+	}()
 
 	// Start container log collection (non-blocking, errors don't fail deployment)
 	s.startLogCollection(ctx, newContainer.ID, route.Domain)
@@ -1314,6 +1323,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	log := zerowrap.FromCtx(ctx)
 	log.Info().Msg("shutting down container manager...")
 
+	// Wait for any in-flight background cleanup goroutines to finish
+	s.cleanupWg.Wait()
+
 	// Containers are left running across Gordon restarts.
 	// SyncContainers + AutoStart will pick them back up on next boot.
 
@@ -1326,6 +1338,12 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	log.Info().Msg("container manager shutdown complete")
 	return nil
+}
+
+// WaitForCleanup blocks until all background cleanup goroutines complete.
+// Intended for use in tests to avoid mock assertion races.
+func (s *Service) WaitForCleanup() {
+	s.cleanupWg.Wait()
 }
 
 // StartMonitor begins background monitoring of tracked containers.
