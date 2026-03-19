@@ -164,3 +164,36 @@ func (s *Service) AcquireNameLock(name string) *sync.Mutex {
 	}
 	return mu
 }
+
+// CreatePreviewRequest contains parameters for creating a preview.
+type CreatePreviewRequest struct {
+	Name          string
+	Domain        string
+	BaseRoute     string
+	Image         string
+	HTTPS         bool
+	PreviewConfig domain.PreviewConfig
+}
+
+// CreatePreview orchestrates the full preview creation: lock, clone volumes, start containers, register.
+func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) {
+	lock := s.AcquireNameLock(req.Name)
+	lock.Lock()
+	defer lock.Unlock()
+
+	now := time.Now()
+	preview := domain.PreviewRoute{
+		Domain:    req.Domain,
+		Image:     req.Image,
+		BaseRoute: req.BaseRoute,
+		Name:      req.Name,
+		CreatedAt: now,
+		ExpiresAt: now.Add(req.PreviewConfig.TTL),
+		HTTPS:     req.HTTPS,
+	}
+
+	// TODO: Volume cloning and container startup will be wired in Task 13
+	if err := s.Add(ctx, preview); err != nil {
+		return
+	}
+}
