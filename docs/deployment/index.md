@@ -84,18 +84,34 @@ Gordon's registry is served through the main gordon domain over HTTPS on port 44
 
 ## Token Setup
 
+See the examples below for the right scopes for each workflow.
+
 ```bash
-# For gordon push (recommended) — needs admin scopes for route resolution and deploy
+# Minimum scope for gordon push — route lookup + registry push
+# Server auto-deploys when it receives the image
+gordon auth token generate \
+  --subject ci-bot \
+  --scopes "push,pull,admin:routes:read" \
+  --expiry 90d
+
+# With explicit CLI-managed deploy (adds config:write for deploy control)
 gordon auth token generate \
   --subject ci-bot \
   --scopes "push,pull,admin:routes:read,admin:config:write" \
-  --expiry 0
+  --expiry 90d
+
+# Scoped to a specific repository
+gordon auth token generate \
+  --subject ci-bot \
+  --repo myapp \
+  --scopes "push,pull,admin:routes:read" \
+  --expiry 90d
 
 # For docker push — registry scopes only
 gordon auth token generate \
   --subject ci-bot \
   --scopes "push,pull" \
-  --expiry 0
+  --expiry 90d
 ```
 
 Set the generated token as `GORDON_TOKEN` in your CI environment.

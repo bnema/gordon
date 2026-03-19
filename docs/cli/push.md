@@ -63,6 +63,15 @@ When used with `--remote`, gordon push authenticates in two ways:
 
 This means CI/CD pipelines only need a single secret (`GORDON_TOKEN`).
 
+### Deploy Modes
+
+When the token has `admin:config:write` scope, the CLI manages deployment explicitly
+(DeployIntent → push → Deploy). This gives the CLI control over deploy timing.
+
+When the token lacks `admin:config:write`, the CLI pushes the image and the server
+auto-deploys when it receives it via its event listener. The CLI logs:
+`info: deploy intent skipped (insufficient scope), server will auto-deploy on image receive`
+
 ### Version Auto-Detection
 
 Gordon reads version tags from CI environment variables (in priority order):
