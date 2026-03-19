@@ -16,6 +16,6 @@ type PreviewRoute struct {
 }
 
 // IsExpired returns true if the preview has exceeded its TTL.
-func (p PreviewRoute) IsExpired() bool {
-	return time.Now().After(p.ExpiresAt)
+func (p PreviewRoute) IsExpired(now time.Time) bool {
+	return now.After(p.ExpiresAt)
 }

@@ -54,7 +54,7 @@ func newPreviewCreateCmd() *cobra.Command {
 				name = preview.SanitizeBranchName(branch)
 			}
 
-			fmt.Printf("Creating preview: %s\n", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Creating preview: %s\n", name)
 			// TODO: Reuse push mechanics (build, tag with preview-{name}, push)
 			// TODO: Wire to remote API or local service
 			_ = ttl
@@ -77,7 +77,12 @@ func newPreviewListCmd() *cobra.Command {
 		Short: "List active preview environments",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// TODO: Wire to local service or admin API
-			fmt.Println("No active previews")
+			if jsonOutput {
+				// Output empty JSON array for now (will be wired later)
+				fmt.Fprintln(cmd.OutOrStdout(), "[]")
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "No active previews")
+			}
 			return nil
 		},
 	}
@@ -92,7 +97,7 @@ func newPreviewDeleteCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// TODO: Wire to local service or admin API
-			fmt.Printf("Deleting preview: %s\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleting preview: %s\n", args[0])
 			return nil
 		},
 	}
@@ -106,7 +111,7 @@ func newPreviewExtendCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// TODO: Wire to local service or admin API
-			fmt.Printf("Extending preview %s by %s\n", args[0], ttl)
+			fmt.Fprintf(cmd.OutOrStdout(), "Extending preview %s by %s\n", args[0], ttl)
 			return nil
 		},
 	}
@@ -117,7 +122,7 @@ func newPreviewExtendCmd() *cobra.Command {
 func detectGitBranch() (string, error) {
 	out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output() // #nosec G204
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("detect git branch: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

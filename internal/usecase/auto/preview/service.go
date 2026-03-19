@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -103,7 +105,7 @@ func (s *Service) GetExpired() []domain.PreviewRoute {
 	defer s.mu.RUnlock()
 	var expired []domain.PreviewRoute
 	for _, p := range s.previews {
-		if p.IsExpired() {
+		if p.IsExpired(time.Now()) {
 			expired = append(expired, p)
 		}
 	}
@@ -117,7 +119,7 @@ func (s *Service) CleanupExpired(ctx context.Context) []domain.PreviewRoute {
 	var expired []domain.PreviewRoute
 	var active []domain.PreviewRoute
 	for _, p := range s.previews {
-		if p.IsExpired() {
+		if p.IsExpired(time.Now()) {
 			expired = append(expired, p)
 		} else {
 			active = append(active, p)
@@ -129,7 +131,11 @@ func (s *Service) CleanupExpired(ctx context.Context) []domain.PreviewRoute {
 	s.mu.Unlock()
 
 	if len(expired) > 0 {
-		_ = s.store.Save(ctx, cp)
+		if err := s.store.Save(ctx, cp); err != nil {
+			// Log but don't fail — expired previews are already removed from memory
+			log := zerowrap.FromCtx(ctx)
+			log.Warn().Err(err).Msg("failed to persist preview state after cleanup")
+		}
 	}
 	return expired
 }
@@ -165,6 +171,13 @@ func (s *Service) AcquireNameLock(name string) *sync.Mutex {
 	return mu
 }
 
+// ReleaseNameLock removes the per-name mutex from the map after use.
+func (s *Service) ReleaseNameLock(name string) {
+	s.nameLockMu.Lock()
+	defer s.nameLockMu.Unlock()
+	delete(s.nameLocks, name)
+}
+
 // CreatePreviewRequest contains parameters for creating a preview.
 type CreatePreviewRequest struct {
 	Name          string
@@ -176,10 +189,13 @@ type CreatePreviewRequest struct {
 }
 
 // CreatePreview orchestrates the full preview creation: lock, clone volumes, start containers, register.
-func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) {
+func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) error {
 	lock := s.AcquireNameLock(req.Name)
 	lock.Lock()
-	defer lock.Unlock()
+	defer func() {
+		lock.Unlock()
+		s.ReleaseNameLock(req.Name)
+	}()
 
 	now := time.Now()
 	preview := domain.PreviewRoute{
@@ -194,6 +210,7 @@ func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) {
 
 	// TODO: Volume cloning and container startup will be wired in Task 13
 	if err := s.Add(ctx, preview); err != nil {
-		return
+		return fmt.Errorf("register preview %q: %w", req.Name, err)
 	}
+	return nil
 }
