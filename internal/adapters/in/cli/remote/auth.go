@@ -76,7 +76,7 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 // ExchangeRegistryToken exchanges the client's long-lived Gordon token for a
 // short-lived registry access token via the Docker v2 token endpoint.
 // The subject must match the token's sub claim (use VerifyAuth to obtain it).
-// Returns the short-lived Bearer token string.
+// Returns the raw short-lived token string (without a "Bearer " prefix).
 func (c *Client) ExchangeRegistryToken(ctx context.Context, subject string) (string, error) {
 	url := c.baseURL + "/auth/token?scope=repository:*:push,pull&service=gordon-registry"
 

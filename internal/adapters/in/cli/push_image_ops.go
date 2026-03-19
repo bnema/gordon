@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/client"
@@ -86,10 +87,37 @@ func (d *dockerImageOps) Push(ctx context.Context, ref string) error {
 			return fmt.Errorf("failed to obtain registry credentials: %w", err)
 		}
 		opts = append(opts, registrypush.WithAuth(authHeader))
+
+		pusher := registrypush.New(opts...)
+		err = pusher.Push(ctx, ref)
+		if err != nil && isAuthError(err) {
+			// Token may have expired mid-push; refresh once and retry.
+			authHeader, refreshErr := d.exchangeRegistryAuth(ctx)
+			if refreshErr != nil {
+				return fmt.Errorf("failed to refresh registry credentials after auth error: %w (original: %v)", refreshErr, err)
+			}
+			retryOpts := []registrypush.Option{
+				registrypush.WithProgress(d.progress),
+				registrypush.WithInsecureTLS(d.insecureTLS),
+				registrypush.WithAuth(authHeader),
+			}
+			pusher = registrypush.New(retryOpts...)
+			return pusher.Push(ctx, ref)
+		}
+		return err
 	}
 
 	pusher := registrypush.New(opts...)
 	return pusher.Push(ctx, ref)
+}
+
+// isAuthError returns true if the error looks like an HTTP 401 authentication failure.
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "status 401") || strings.Contains(msg, "401 Unauthorized")
 }
 
 // exchangeRegistryAuth exchanges the long-lived Gordon token for a short-lived
@@ -102,6 +130,9 @@ func (d *dockerImageOps) exchangeRegistryAuth(ctx context.Context) (string, erro
 	}
 	if !verifyResp.Valid {
 		return "", fmt.Errorf("token is not valid")
+	}
+	if verifyResp.Subject == "" {
+		return "", fmt.Errorf("empty subject in verified token")
 	}
 
 	// Step 2: Exchange long-lived token for short-lived registry token
