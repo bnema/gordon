@@ -151,8 +151,7 @@ steps:
         from_secret: gordon_remote
     commands:
       - apk add --no-cache curl
-      - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64
-          -o /usr/local/bin/gordon
+      - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
       - chmod +x /usr/local/bin/gordon
       - gordon push --build --remote "$GORDON_REMOTE" --no-confirm
 
