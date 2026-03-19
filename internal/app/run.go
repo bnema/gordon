@@ -64,6 +64,8 @@ import (
 
 	// Use cases
 	"github.com/bnema/gordon/internal/usecase/auth"
+	"github.com/bnema/gordon/internal/usecase/auto"
+	"github.com/bnema/gordon/internal/usecase/auto/preview"
 	"github.com/bnema/gordon/internal/usecase/backup"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
@@ -192,6 +194,8 @@ type services struct {
 	adminHandler     *admin.Handler
 	internalRegUser  string
 	internalRegPass  string
+	previewStore     *filesystem.PreviewStore
+	previewService   *preview.Service
 	envDir           string
 	maxBlobChunkSize int64
 }
@@ -541,22 +545,55 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	// Create log service for accessing logs via admin API
 	svc.logSvc = logs.NewService(resolveLogFilePath(cfg), cfg.Logging.File.Enabled, svc.containerSvc, svc.runtime, log)
 
+	initPreviewService(ctx, cfg, svc, log)
+
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(
-		svc.configSvc,
-		svc.authSvc,
-		svc.containerSvc,
-		svc.healthSvc,
-		svc.secretSvc,
-		svc.logSvc,
-		svc.registrySvc,
-		svc.eventBus,
-		log,
-		svc.backupSvc,
-		svc.imageSvc,
-	).WithVolumeService(svc.volumeSvc)
+	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
+		ConfigSvc:    svc.configSvc,
+		AuthSvc:      svc.authSvc,
+		ContainerSvc: svc.containerSvc,
+		HealthSvc:    svc.healthSvc,
+		SecretSvc:    svc.secretSvc,
+		LogSvc:       svc.logSvc,
+		RegistrySvc:  svc.registrySvc,
+		EventBus:     svc.eventBus,
+		Log:          log,
+		BackupSvc:    svc.backupSvc,
+		PreviewSvc:   svc.previewService,
+		ImageSvc:     svc.imageSvc,
+		VolumeSvc:    svc.volumeSvc,
+	})
 
 	return svc, nil
+}
+
+// initPreviewService sets up the preview store, service, and TTL ticker.
+func initPreviewService(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) {
+	previewStorePath := filepath.Join(resolveDataDir(cfg.Server.DataDir), "previews.json")
+	svc.previewStore = filesystem.NewPreviewStore(previewStorePath)
+	previewConfig := svc.configSvc.GetPreviewConfig()
+	svc.previewService = preview.NewService(svc.previewStore, previewConfig.TTL)
+	if err := svc.previewService.Load(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to load previews")
+	}
+
+	svc.previewService.StartTicker(ctx, 60*time.Second, func(ctx context.Context, p domain.PreviewRoute) {
+		log := zerowrap.FromCtx(ctx)
+		for _, containerName := range p.Containers {
+			if err := svc.runtime.StopContainer(ctx, containerName); err != nil {
+				log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to stop preview container")
+			}
+			if err := svc.runtime.RemoveContainer(ctx, containerName, true); err != nil {
+				log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to remove preview container")
+			}
+		}
+		for _, volName := range p.Volumes {
+			if err := svc.runtime.RemoveVolume(ctx, volName, true); err != nil {
+				log.Warn().Err(err).Str("volume", volName).Str("preview", p.Domain).Msg("failed to remove preview volume")
+			}
+		}
+		svc.proxySvc.InvalidateTarget(ctx, p.Domain)
+	})
 }
 
 // injectTelemetryMetrics creates and injects OTel metrics into services when
@@ -1349,8 +1386,19 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	// Auto-route handler for creating routes from image labels
 	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, cfg.Server.RegistryDomain).
 		WithEnvExtractor(svc.runtime, svc.envDir)
-	if err := svc.eventBus.Subscribe(autoRouteHandler); err != nil {
-		return nil, fmt.Errorf("failed to subscribe auto-route handler: %w", err)
+
+	// Preview handler for creating preview environments from tagged images
+	autoPreviewHandler := preview.NewAutoPreviewHandler(
+		ctx,
+		svc.configSvc,
+		svc.blobStorage,
+		svc.previewService,
+	)
+
+	// Dispatcher routes image push events to either auto-route or preview handler
+	dispatcher := auto.NewImagePushDispatcher(svc.configSvc, autoRouteHandler, autoPreviewHandler)
+	if err := svc.eventBus.Subscribe(dispatcher); err != nil {
+		return nil, fmt.Errorf("subscribe image push dispatcher: %w", err)
 	}
 
 	configReloadHandler := container.NewConfigReloadHandler(ctx, svc.containerSvc, svc.configSvc)

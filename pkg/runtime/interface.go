@@ -67,6 +67,7 @@ type Runtime interface {
 	CreateContainer(ctx context.Context, config *ContainerConfig) (*Container, error)
 	StartContainer(ctx context.Context, containerID string) error
 	StopContainer(ctx context.Context, containerID string) error
+	WaitForContainer(ctx context.Context, containerID string) error
 	RestartContainer(ctx context.Context, containerID string) error
 	RemoveContainer(ctx context.Context, containerID string, force bool) error
 

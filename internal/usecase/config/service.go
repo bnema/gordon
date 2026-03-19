@@ -33,6 +33,11 @@ type Config struct {
 	DataDir                 string
 	AutoRouteEnabled        bool
 	AutoRouteAllowedDomains []string `mapstructure:"auto_route_allowed_domains" json:"auto_route_allowed_domains,omitempty"`
+	PreviewEnabled          bool
+	PreviewTTL              time.Duration
+	PreviewSeparator        string
+	PreviewTagPatterns      []string
+	PreviewDataCopy         bool
 	NetworkIsolation        bool
 	NetworkPrefix           string
 	Routes                  map[string]string
@@ -122,13 +127,43 @@ func (s *Service) loadConfigValues() Config {
 		registryDomain = s.viper.GetString("server.registry_domain")
 	}
 
+	// Backward compat: try new keys first, fall back to old
+	autoEnabled := s.viper.GetBool("auto.enabled")
+	if !autoEnabled {
+		autoEnabled = s.viper.GetBool("auto_route.enabled")
+	}
+	allowedDomains := s.viper.GetStringSlice("auto.allowed_domains")
+	if len(allowedDomains) == 0 {
+		allowedDomains = s.viper.GetStringSlice("auto_route_allowed_domains")
+	}
+
+	// Preview config
+	previewTTLStr := s.viper.GetString("auto.preview.ttl")
+	previewTTL, err := time.ParseDuration(previewTTLStr)
+	if err != nil && previewTTLStr != "" {
+		log := zerowrap.FromCtx(context.Background())
+		log.Warn().Err(err).Str("ttl", previewTTLStr).Msg("invalid preview TTL format, using default 48h (use Go duration strings, e.g. \"168h\" for 7 days)")
+	}
+	if previewTTL == 0 {
+		previewTTL = 48 * time.Hour
+	}
+	previewSep := s.viper.GetString("auto.preview.separator")
+	if previewSep == "" {
+		previewSep = "--"
+	}
+
 	return Config{
 		ServerPort:              s.viper.GetInt("server.port"),
 		RegistryPort:            s.viper.GetInt("server.registry_port"),
 		RegistryDomain:          registryDomain,
 		DataDir:                 s.viper.GetString("server.data_dir"),
-		AutoRouteEnabled:        s.viper.GetBool("auto_route.enabled"),
-		AutoRouteAllowedDomains: append([]string{}, s.viper.GetStringSlice("auto_route_allowed_domains")...),
+		AutoRouteEnabled:        autoEnabled,
+		AutoRouteAllowedDomains: append([]string{}, allowedDomains...),
+		PreviewEnabled:          s.viper.GetBool("auto.preview.enabled"),
+		PreviewTTL:              previewTTL,
+		PreviewSeparator:        previewSep,
+		PreviewTagPatterns:      append([]string{}, s.viper.GetStringSlice("auto.preview.tag_patterns")...),
+		PreviewDataCopy:         s.viper.GetBool("auto.preview.data_copy"),
 		NetworkIsolation:        s.viper.GetBool("network_isolation.enabled"),
 		NetworkPrefix:           s.viper.GetString("network_isolation.network_prefix"),
 		RegistryAuthEnabled:     s.viper.GetBool("auth.enabled"),
@@ -519,7 +554,7 @@ type configSnapshot struct {
 }
 
 // mutableSections lists config sections that are intentionally modified by service operations.
-var mutableSections = []string{"routes.", "external_routes.", "attachments.", "network_groups.", "auto_route_allowed_domains"}
+var mutableSections = []string{"routes.", "external_routes.", "attachments.", "network_groups.", "auto_route_allowed_domains", "auto."}
 
 func isMutableKey(key string) bool {
 	for _, prefix := range mutableSections {
@@ -529,7 +564,7 @@ func isMutableKey(key string) bool {
 	}
 
 	switch key {
-	case "routes", "external_routes", "attachments", "network_groups", "auto_route_allowed_domains":
+	case "routes", "external_routes", "attachments", "network_groups", "auto_route_allowed_domains", "auto":
 		return true
 	}
 
@@ -570,6 +605,7 @@ func (s *Service) writeConfigSurgical(configFile string) error {
 			s.viper.Set("attachments", s.config.Attachments)
 			s.viper.Set("network_groups", s.config.NetworkGroups)
 			s.viper.Set("auto_route_allowed_domains", s.config.AutoRouteAllowedDomains)
+			s.viper.Set("auto.allowed_domains", s.config.AutoRouteAllowedDomains)
 			return s.viper.WriteConfigAs(configFile)
 		}
 		return fmt.Errorf("failed to read config file: %w", err)
@@ -589,7 +625,15 @@ func (s *Service) writeConfigSurgical(configFile string) error {
 	config["external_routes"] = s.config.ExternalRoutes
 	config["attachments"] = s.config.Attachments
 	config["network_groups"] = s.config.NetworkGroups
+	// Write to both old and new keys for backward compat
 	config["auto_route_allowed_domains"] = s.config.AutoRouteAllowedDomains
+	if autoSection, ok := config["auto"].(map[string]any); ok {
+		autoSection["allowed_domains"] = s.config.AutoRouteAllowedDomains
+	} else {
+		config["auto"] = map[string]any{
+			"allowed_domains": s.config.AutoRouteAllowedDomains,
+		}
+	}
 
 	out, err := toml.Marshal(config)
 	if err != nil {
@@ -1048,6 +1092,45 @@ func (s *Service) RemoveAttachment(ctx context.Context, domainOrGroup, image str
 
 	log.Info().Msg("attachment removed from configuration")
 	return nil
+}
+
+// GetPreviewConfig returns the preview environment configuration.
+func (s *Service) GetPreviewConfig() domain.PreviewConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return domain.PreviewConfig{
+		Enabled:     s.config.PreviewEnabled,
+		TTL:         s.config.PreviewTTL,
+		Separator:   s.config.PreviewSeparator,
+		TagPatterns: s.config.PreviewTagPatterns,
+		DataCopy:    s.config.PreviewDataCopy,
+	}
+}
+
+// IsPreviewEnabled returns whether preview environments are enabled.
+func (s *Service) IsPreviewEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.PreviewEnabled
+}
+
+// IsAutoEnabled returns whether the auto feature is enabled (alias for IsAutoRouteEnabled).
+func (s *Service) IsAutoEnabled() bool {
+	return s.IsAutoRouteEnabled()
+}
+
+// GetPreviewTagPatterns returns the configured tag patterns for preview environments.
+func (s *Service) GetPreviewTagPatterns() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string{}, s.config.PreviewTagPatterns...)
+}
+
+// GetAllowedDomains returns the auto-route allowed domain patterns.
+func (s *Service) GetAllowedDomains() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string{}, s.config.AutoRouteAllowedDomains...)
 }
 
 // GetAutoRouteAllowedDomains returns the configured auto-route domain allowlist.

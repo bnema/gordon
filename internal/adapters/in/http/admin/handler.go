@@ -47,6 +47,7 @@ type Handler struct {
 	logSvc       in.LogService
 	volumeSvc    in.VolumeService
 	registrySvc  registryDeployService
+	previewSvc   previewService
 	eventBus     out.EventPublisher
 	log          zerowrap.Logger
 }
@@ -130,44 +131,40 @@ func toDatabaseInfoResponse(db domain.DBInfo) dto.DatabaseInfo {
 	}
 }
 
-// NewHandler creates a new admin HTTP handler.
-func NewHandler(
-	configSvc in.ConfigService,
-	authSvc in.AuthService,
-	containerSvc in.ContainerService,
-	healthSvc in.HealthService,
-	secretSvc in.SecretService,
-	logSvc in.LogService,
-	registrySvc registryDeployService,
-	eventBus out.EventPublisher,
-	log zerowrap.Logger,
-	backupSvc in.BackupService,
-	imageSvcs ...in.ImageService,
-) *Handler {
-	var imageSvc in.ImageService
-	if len(imageSvcs) > 0 {
-		imageSvc = imageSvcs[0]
-	}
-
-	return &Handler{
-		configSvc:    configSvc,
-		authSvc:      authSvc,
-		containerSvc: containerSvc,
-		backupSvc:    backupSvc,
-		imageSvc:     imageSvc,
-		healthSvc:    healthSvc,
-		secretSvc:    secretSvc,
-		logSvc:       logSvc,
-		registrySvc:  registrySvc,
-		eventBus:     eventBus,
-		log:          log,
-	}
+// HandlerDeps contains all dependencies for the admin HTTP handler.
+type HandlerDeps struct {
+	ConfigSvc    in.ConfigService
+	AuthSvc      in.AuthService
+	ContainerSvc in.ContainerService
+	HealthSvc    in.HealthService
+	SecretSvc    in.SecretService
+	LogSvc       in.LogService
+	RegistrySvc  registryDeployService
+	EventBus     out.EventPublisher
+	Log          zerowrap.Logger
+	BackupSvc    in.BackupService
+	PreviewSvc   previewService
+	ImageSvc     in.ImageService
+	VolumeSvc    in.VolumeService
 }
 
-// WithVolumeService sets the volume service on the handler.
-func (h *Handler) WithVolumeService(volumeSvc in.VolumeService) *Handler {
-	h.volumeSvc = volumeSvc
-	return h
+// NewHandler creates a new admin HTTP handler.
+func NewHandler(deps HandlerDeps) *Handler {
+	return &Handler{
+		configSvc:    deps.ConfigSvc,
+		authSvc:      deps.AuthSvc,
+		containerSvc: deps.ContainerSvc,
+		backupSvc:    deps.BackupSvc,
+		imageSvc:     deps.ImageSvc,
+		healthSvc:    deps.HealthSvc,
+		secretSvc:    deps.SecretSvc,
+		logSvc:       deps.LogSvc,
+		volumeSvc:    deps.VolumeSvc,
+		registrySvc:  deps.RegistrySvc,
+		previewSvc:   deps.PreviewSvc,
+		eventBus:     deps.EventBus,
+		log:          deps.Log,
+	}
 }
 
 // RegisterRoutes registers the admin routes on the given mux.
@@ -239,6 +236,8 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		{"/images", h.handleImages},
 		{"/logs", h.handleLogs},
 		{"/autoroute/allowed-domains", h.handleAutoRouteAllowedDomains},
+		{"/previews", h.handlePreviewList},
+		{"/preview", h.handlePreviewAction},
 	}
 	for _, route := range prefixRoutes {
 		if path == route.prefix || strings.HasPrefix(path, route.prefix+"/") {

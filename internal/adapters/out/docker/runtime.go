@@ -142,6 +142,13 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 			log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding volume mount")
 		}
 	}
+	if config.ReadOnlyVolumes != nil {
+		for containerPath, volumeName := range config.ReadOnlyVolumes {
+			bind := fmt.Sprintf("%s:%s:ro", volumeName, containerPath)
+			binds = append(binds, bind)
+			log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding read-only volume mount")
+		}
+	}
 
 	// Create container configuration
 	containerConfig := &container.Config{
@@ -204,6 +211,29 @@ func (r *Runtime) StartContainer(ctx context.Context, containerID string) error 
 	}
 
 	log.Info().Msg("container started")
+	return nil
+}
+
+// WaitForContainer waits for a container to stop running.
+func (r *Runtime) WaitForContainer(ctx context.Context, containerID string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "docker",
+		zerowrap.FieldAction:   "WaitForContainer",
+		zerowrap.FieldEntityID: containerID,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	statusCh, errCh := r.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return log.WrapErr(err, "failed to wait for container")
+		}
+	case <-statusCh:
+	}
+
+	log.Debug().Msg("container wait completed")
 	return nil
 }
 

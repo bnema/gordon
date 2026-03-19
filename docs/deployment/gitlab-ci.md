@@ -181,7 +181,7 @@ Gordon automatically detects the version tag from GitLab CI environment variable
 
 ### Authentication Failed
 
-```
+```text
 Error: failed to verify token
 ```
 

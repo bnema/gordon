@@ -15,6 +15,7 @@ import (
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/auto"
 )
 
 // domainToEnvFileName tests
@@ -154,7 +155,8 @@ func TestParseEnvFile(t *testing.T) {
 	}
 }
 
-// parseConfigDigest tests
+// parseConfigDigest tests — now delegated to auto package; tested there directly.
+// These tests call auto.ParseConfigDigest to maintain coverage for this package.
 
 func TestParseConfigDigest(t *testing.T) {
 	tests := []struct {
@@ -206,7 +208,7 @@ func TestParseConfigDigest(t *testing.T) {
 			data, err := json.Marshal(tt.manifest)
 			require.NoError(t, err)
 
-			result, err := parseConfigDigest(data)
+			result, err := auto.ParseConfigDigest(data)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -220,11 +222,11 @@ func TestParseConfigDigest(t *testing.T) {
 }
 
 func TestParseConfigDigest_InvalidJSON(t *testing.T) {
-	_, err := parseConfigDigest([]byte("invalid json"))
+	_, err := auto.ParseConfigDigest([]byte("invalid json"))
 	assert.Error(t, err)
 }
 
-// parseImageLabels tests
+// parseImageLabels tests — now delegated to auto package; tested there directly.
 
 func TestParseImageLabels(t *testing.T) {
 	tests := []struct {
@@ -317,7 +319,7 @@ func TestParseImageLabels(t *testing.T) {
 			data, err := json.Marshal(tt.config)
 			require.NoError(t, err)
 
-			result, err := parseImageLabels(data)
+			result, err := auto.ParseImageLabels(data)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.expected.Domain, result.Domain)
@@ -330,7 +332,7 @@ func TestParseImageLabels(t *testing.T) {
 }
 
 func TestParseImageLabels_InvalidJSON(t *testing.T) {
-	_, err := parseImageLabels([]byte("invalid json"))
+	_, err := auto.ParseImageLabels([]byte("invalid json"))
 	assert.Error(t, err)
 }
 
@@ -353,7 +355,7 @@ func TestMatchesDomainAllowlist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, matchesDomainAllowlist(tt.domain, tt.patterns))
+			assert.Equal(t, tt.want, auto.MatchesDomainAllowlist(tt.domain, tt.patterns))
 		})
 	}
 }
@@ -376,7 +378,7 @@ func TestExtractRepoName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractRepoName(tt.imageRef, tt.registryDomain))
+			assert.Equal(t, tt.want, auto.ExtractRepoName(tt.imageRef, tt.registryDomain))
 		})
 	}
 }
