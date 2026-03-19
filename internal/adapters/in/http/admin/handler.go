@@ -47,6 +47,7 @@ type Handler struct {
 	logSvc       in.LogService
 	volumeSvc    in.VolumeService
 	registrySvc  registryDeployService
+	previewSvc   previewService
 	eventBus     out.EventPublisher
 	log          zerowrap.Logger
 }
@@ -142,6 +143,7 @@ func NewHandler(
 	eventBus out.EventPublisher,
 	log zerowrap.Logger,
 	backupSvc in.BackupService,
+	previewSvc previewService,
 	imageSvcs ...in.ImageService,
 ) *Handler {
 	var imageSvc in.ImageService
@@ -159,6 +161,7 @@ func NewHandler(
 		secretSvc:    secretSvc,
 		logSvc:       logSvc,
 		registrySvc:  registrySvc,
+		previewSvc:   previewSvc,
 		eventBus:     eventBus,
 		log:          log,
 	}
@@ -239,6 +242,8 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		{"/images", h.handleImages},
 		{"/logs", h.handleLogs},
 		{"/autoroute/allowed-domains", h.handleAutoRouteAllowedDomains},
+		{"/previews", h.handlePreviewList},
+		{"/preview", h.handlePreviewAction},
 	}
 	for _, route := range prefixRoutes {
 		if path == route.prefix || strings.HasPrefix(path, route.prefix+"/") {

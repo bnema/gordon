@@ -24,7 +24,7 @@ func TestBootstrap_FullWorkflow_HappyPath(t *testing.T) {
 	secretSvc := inmocks.NewMockSecretService(t)
 	registrySvc := inmocks.NewMockRegistryService(t)
 
-	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, registrySvc, nil, testLogger(), nil)
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, registrySvc, nil, testLogger(), nil, nil)
 
 	payload := dto.BootstrapRequest{
 		Domain:      "app.example.com",
@@ -73,7 +73,7 @@ func TestBootstrap_Idempotent_Rerun(t *testing.T) {
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 
-	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, nil)
 
 	payload := dto.BootstrapRequest{
 		Domain:      "app.example.com",
@@ -137,7 +137,7 @@ func TestBootstrap_MissingDomain(t *testing.T) {
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 
-	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, nil)
 
 	body, err := json.Marshal(dto.BootstrapRequest{Image: "myapp:latest"})
 	require.NoError(t, err)
@@ -158,7 +158,7 @@ func TestBootstrap_MissingImage(t *testing.T) {
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 
-	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, nil)
 
 	body, err := json.Marshal(dto.BootstrapRequest{Domain: "app.example.com"})
 	require.NoError(t, err)
@@ -179,7 +179,7 @@ func TestBootstrap_NormalizesImageBeforeStoring(t *testing.T) {
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 
-	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, nil)
 
 	payload := dto.BootstrapRequest{Domain: "app.example.com", Image: "pitlane:v1"}
 	configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
@@ -225,7 +225,7 @@ func TestBootstrap_AddRouteValidationErrors(t *testing.T) {
 			containerSvc := inmocks.NewMockContainerService(t)
 			secretSvc := inmocks.NewMockSecretService(t)
 
-			handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+			handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, nil)
 
 			payload := dto.BootstrapRequest{Domain: "app.example.com", Image: "myapp:latest"}
 			configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
@@ -252,7 +252,7 @@ func TestBootstrap_PartialFailure_AttachmentError(t *testing.T) {
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 
-	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil)
+	handler := NewHandler(configSvc, authSvc, containerSvc, inmocks.NewMockHealthService(t), secretSvc, nil, inmocks.NewMockRegistryService(t), nil, testLogger(), nil, nil)
 
 	payload := dto.BootstrapRequest{
 		Domain:      "app.example.com",
