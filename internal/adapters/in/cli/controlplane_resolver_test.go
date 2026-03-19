@@ -3,11 +3,10 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-func TestResolveControlPlane_LocalDeniedWhenAuthEnabled(t *testing.T) {
+func TestResolveControlPlane_LocalAllowedWhenAuthEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "xdg"))
 	t.Setenv("GORDON_REMOTE", "")
@@ -37,15 +36,13 @@ secrets_backend = "unsafe"
 	}
 
 	handle, err := resolveControlPlane(configPath)
-	if err == nil {
-		if handle != nil {
-			handle.close()
-		}
-		t.Fatalf("expected error when auth.enabled=true and no remote target")
+	if err != nil {
+		t.Fatalf("expected local control-plane handle, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "local control plane is disabled when auth.enabled=true") {
-		t.Fatalf("unexpected error: %v", err)
+	if handle == nil || handle.plane == nil {
+		t.Fatalf("expected non-nil local control-plane handle")
 	}
+	handle.close()
 }
 
 func TestResolveControlPlane_LocalAllowedWhenAuthDisabled(t *testing.T) {

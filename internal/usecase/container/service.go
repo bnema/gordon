@@ -1429,13 +1429,17 @@ func (s *Service) startLogCollection(ctx context.Context, containerID, domainNam
 
 	log := zerowrap.FromCtx(ctx)
 
-	logStream, err := s.runtime.GetContainerLogs(ctx, containerID, true)
+	// Use context.WithoutCancel so the log stream outlives the HTTP request.
+	// Without this, the Docker log stream closes when the deploy response completes.
+	bgCtx := context.WithoutCancel(ctx)
+
+	logStream, err := s.runtime.GetContainerLogs(bgCtx, containerID, true)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get container logs for collection")
 		return
 	}
 
-	if err := s.logWriter.StartLogging(context.WithoutCancel(ctx), containerID, domainName, logStream); err != nil {
+	if err := s.logWriter.StartLogging(bgCtx, containerID, domainName, logStream); err != nil {
 		log.Warn().Err(err).Msg("failed to start container log collection")
 		logStream.Close()
 	}
