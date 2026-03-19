@@ -1325,7 +1325,12 @@ func (h *Handler) handleRestart(w http.ResponseWriter, r *http.Request, path str
 
 	withAttachments := r.URL.Query().Get("attachments") == "true"
 
-	if err := h.containerSvc.Restart(ctx, restartDomain, withAttachments); err != nil {
+	// Use a detached context so the restart completes even if the HTTP client
+	// disconnects. Podman restart can take 30+ seconds (SIGTERM + wait + start).
+	restartCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+
+	if err := h.containerSvc.Restart(restartCtx, restartDomain, withAttachments); err != nil {
 		log.Error().Err(err).Str("domain", restartDomain).Msg("failed to restart container")
 		if errors.Is(err, domain.ErrContainerNotFound) {
 			h.sendError(w, http.StatusNotFound, "container not found")
