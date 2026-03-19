@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -158,6 +159,8 @@ func TestHandler_Token_Success(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 
 	authSvc.EXPECT().IsEnabled().Return(true)
+	// ValidateToken is tried first; plain password fails JWT parsing
+	authSvc.EXPECT().ValidateToken(mock.Anything, "secret").Return(nil, fmt.Errorf("not a token"))
 	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypePassword)
 	authSvc.EXPECT().ValidatePassword(mock.Anything, "admin", "secret").Return(true)
 	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "admin", []string{"repository:myrepo:pull"}, 5*time.Minute).
@@ -215,6 +218,7 @@ func TestHandler_Token_InvalidCredentials(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 
 	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "wrongpassword").Return(nil, fmt.Errorf("not a token"))
 	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypePassword)
 	authSvc.EXPECT().ValidatePassword(mock.Anything, "admin", "wrongpassword").Return(false)
 
@@ -261,7 +265,6 @@ func TestHandler_Token_TokenAuth(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 
 	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypeToken)
 	authSvc.EXPECT().ValidateToken(mock.Anything, "existing-jwt-token").Return(&domain.TokenClaims{
 		Subject: "myuser",
 		Scopes:  []string{"repository:*:pull"},
@@ -289,7 +292,6 @@ func TestHandler_Token_TokenAuthScopeIntersection(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 
 	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypeToken)
 	authSvc.EXPECT().ValidateToken(mock.Anything, "existing-jwt-token").Return(&domain.TokenClaims{
 		Subject: "myuser",
 		Scopes:  []string{"repository:myrepo:pull"},
@@ -316,7 +318,6 @@ func TestHandler_Token_TokenAuthScopeDenied(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 
 	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypeToken)
 	authSvc.EXPECT().ValidateToken(mock.Anything, "existing-jwt-token").Return(&domain.TokenClaims{
 		Subject: "myuser",
 		Scopes:  []string{"repository:myrepo:pull"},
@@ -332,6 +333,33 @@ func TestHandler_Token_TokenAuthScopeDenied(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "insufficient scope")
+}
+
+func TestHandler_Token_PasswordAuthWithJWT(t *testing.T) {
+	authSvc := mocks.NewMockAuthService(t)
+
+	// Auth type is password, but the client sends a JWT (from gordon auth login)
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "jwt-from-login").Return(&domain.TokenClaims{
+		Subject: "brissou",
+		Scopes:  []string{"*"},
+	}, nil)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "brissou", []string{"repository:*:push,pull"}, 5*time.Minute).
+		Return("short-lived-token", nil)
+
+	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=repository:*:push,pull", nil)
+	req.SetBasicAuth("brissou", "jwt-from-login")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	assert.NoError(t, err)
+	assert.Equal(t, "short-lived-token", resp["token"])
 }
 
 func TestHandler_Token_MethodNotAllowed(t *testing.T) {

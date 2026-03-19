@@ -275,13 +275,18 @@ func (h *Handler) authenticateTokenCredentials(ctx context.Context, r *http.Requ
 		return true, nil
 	}
 
-	switch h.authSvc.GetAuthType() {
-	case domain.AuthTypePassword:
-		return h.authSvc.ValidatePassword(ctx, username, password), nil
-	case domain.AuthTypeToken:
-		claims, err := h.authSvc.ValidateToken(ctx, password)
-		if err == nil && claims.Subject == username {
-			return true, claims
+	// Always try JWT token validation first — even in password-auth mode the
+	// server issues JWTs on login, and the CLI sends them back via Basic Auth
+	// for registry token exchange.
+	claims, err := h.authSvc.ValidateToken(ctx, password)
+	if err == nil && claims.Subject == username {
+		return true, claims
+	}
+
+	// Fall back to password validation for direct username/password credentials.
+	if h.authSvc.GetAuthType() == domain.AuthTypePassword {
+		if h.authSvc.ValidatePassword(ctx, username, password) {
+			return true, nil
 		}
 	}
 
