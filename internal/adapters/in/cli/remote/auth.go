@@ -78,6 +78,8 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 // The subject must match the token's sub claim (use VerifyAuth to obtain it).
 // Returns the raw short-lived token string (without a "Bearer " prefix).
 func (c *Client) ExchangeRegistryToken(ctx context.Context, subject string) (string, error) {
+	// Wildcard scope (repository:*:push,pull) grants push/pull to all repositories.
+	// The server downsopes this to the parent token's actual scopes during exchange.
 	url := c.baseURL + "/auth/token?scope=repository:*:push,pull&service=gordon-registry"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
