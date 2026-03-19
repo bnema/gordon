@@ -567,20 +567,21 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	})
 
 	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(
-		svc.configSvc,
-		svc.authSvc,
-		svc.containerSvc,
-		svc.healthSvc,
-		svc.secretSvc,
-		svc.logSvc,
-		svc.registrySvc,
-		svc.eventBus,
-		log,
-		svc.backupSvc,
-		svc.previewService,
-		svc.imageSvc,
-	).WithVolumeService(svc.volumeSvc)
+	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
+		ConfigSvc:    svc.configSvc,
+		AuthSvc:      svc.authSvc,
+		ContainerSvc: svc.containerSvc,
+		HealthSvc:    svc.healthSvc,
+		SecretSvc:    svc.secretSvc,
+		LogSvc:       svc.logSvc,
+		RegistrySvc:  svc.registrySvc,
+		EventBus:     svc.eventBus,
+		Log:          log,
+		BackupSvc:    svc.backupSvc,
+		PreviewSvc:   svc.previewService,
+		ImageSvc:     svc.imageSvc,
+		VolumeSvc:    svc.volumeSvc,
+	})
 
 	return svc, nil
 }
