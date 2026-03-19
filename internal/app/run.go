@@ -545,26 +545,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	// Create log service for accessing logs via admin API
 	svc.logSvc = logs.NewService(resolveLogFilePath(cfg), cfg.Logging.File.Enabled, svc.containerSvc, svc.runtime, log)
 
-	// Preview store and service
-	previewStorePath := filepath.Join(resolveDataDir(cfg.Server.DataDir), "previews.json")
-	svc.previewStore = filesystem.NewPreviewStore(previewStorePath)
-	previewConfig := svc.configSvc.GetPreviewConfig()
-	svc.previewService = preview.NewService(svc.previewStore, previewConfig.TTL)
-	if err := svc.previewService.Load(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to load previews")
-	}
-
-	// Start TTL ticker to expire and clean up preview environments
-	svc.previewService.StartTicker(ctx, 60*time.Second, func(ctx context.Context, p domain.PreviewRoute) {
-		for _, containerName := range p.Containers {
-			_ = svc.runtime.StopContainer(ctx, containerName)
-			_ = svc.runtime.RemoveContainer(ctx, containerName, true)
-		}
-		for _, volName := range p.Volumes {
-			_ = svc.runtime.RemoveVolume(ctx, volName, true)
-		}
-		svc.proxySvc.InvalidateTarget(ctx, p.Domain)
-	})
+	initPreviewService(ctx, cfg, svc, log)
 
 	// Create admin handler for admin API
 	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
@@ -584,6 +565,28 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	})
 
 	return svc, nil
+}
+
+// initPreviewService sets up the preview store, service, and TTL ticker.
+func initPreviewService(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) {
+	previewStorePath := filepath.Join(resolveDataDir(cfg.Server.DataDir), "previews.json")
+	svc.previewStore = filesystem.NewPreviewStore(previewStorePath)
+	previewConfig := svc.configSvc.GetPreviewConfig()
+	svc.previewService = preview.NewService(svc.previewStore, previewConfig.TTL)
+	if err := svc.previewService.Load(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to load previews")
+	}
+
+	svc.previewService.StartTicker(ctx, 60*time.Second, func(ctx context.Context, p domain.PreviewRoute) {
+		for _, containerName := range p.Containers {
+			_ = svc.runtime.StopContainer(ctx, containerName)
+			_ = svc.runtime.RemoveContainer(ctx, containerName, true)
+		}
+		for _, volName := range p.Volumes {
+			_ = svc.runtime.RemoveVolume(ctx, volName, true)
+		}
+		svc.proxySvc.InvalidateTarget(ctx, p.Domain)
+	})
 }
 
 // injectTelemetryMetrics creates and injects OTel metrics into services when
