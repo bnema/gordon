@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveControlPlane_LocalAllowedWhenAuthEnabled(t *testing.T) {
@@ -31,18 +33,13 @@ data_dir = "`+filepath.Join(tmpDir, "data")+`"
 enabled = true
 secrets_backend = "unsafe"
 `), 0o600)
-	if err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
+	require.NoError(t, err)
 
 	handle, err := resolveControlPlane(configPath)
-	if err != nil {
-		t.Fatalf("expected local control-plane handle, got error: %v", err)
-	}
-	if handle == nil || handle.plane == nil {
-		t.Fatalf("expected non-nil local control-plane handle")
-	}
-	handle.close()
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+	require.NotNil(t, handle.plane)
+	defer handle.close()
 }
 
 func TestResolveControlPlane_LocalAllowedWhenAuthDisabled(t *testing.T) {
@@ -70,16 +67,11 @@ data_dir = "`+filepath.Join(tmpDir, "data")+`"
 enabled = false
 secrets_backend = "unsafe"
 `), 0o600)
-	if err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
+	require.NoError(t, err)
 
 	handle, err := resolveControlPlane(configPath)
-	if err != nil {
-		t.Fatalf("expected local control-plane handle, got error: %v", err)
-	}
-	if handle == nil || handle.plane == nil {
-		t.Fatalf("expected non-nil local control-plane handle")
-	}
-	handle.close()
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+	require.NotNil(t, handle.plane)
+	defer handle.close()
 }
