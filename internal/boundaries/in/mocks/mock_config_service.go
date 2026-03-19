@@ -1378,6 +1378,230 @@ func (_c *MockConfigService_UpdateRoute_Call) RunAndReturn(run func(ctx context.
 	return _c
 }
 
+// GetPreviewConfig provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) GetPreviewConfig() domain.PreviewConfig {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetPreviewConfig")
+	}
+
+	var r0 domain.PreviewConfig
+	if returnFunc, ok := ret.Get(0).(func() domain.PreviewConfig); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(domain.PreviewConfig)
+	}
+	return r0
+}
+
+// MockConfigService_GetPreviewConfig_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetPreviewConfig'
+type MockConfigService_GetPreviewConfig_Call struct {
+	*mock.Call
+}
+
+// GetPreviewConfig is a helper method to define mock.On call
+func (_e *MockConfigService_Expecter) GetPreviewConfig() *MockConfigService_GetPreviewConfig_Call {
+	return &MockConfigService_GetPreviewConfig_Call{Call: _e.mock.On("GetPreviewConfig")}
+}
+
+func (_c *MockConfigService_GetPreviewConfig_Call) Run(run func()) *MockConfigService_GetPreviewConfig_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockConfigService_GetPreviewConfig_Call) Return(cfg domain.PreviewConfig) *MockConfigService_GetPreviewConfig_Call {
+	_c.Call.Return(cfg)
+	return _c
+}
+
+func (_c *MockConfigService_GetPreviewConfig_Call) RunAndReturn(run func() domain.PreviewConfig) *MockConfigService_GetPreviewConfig_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// IsPreviewEnabled provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) IsPreviewEnabled() bool {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for IsPreviewEnabled")
+	}
+
+	var r0 bool
+	if returnFunc, ok := ret.Get(0).(func() bool); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	return r0
+}
+
+// MockConfigService_IsPreviewEnabled_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsPreviewEnabled'
+type MockConfigService_IsPreviewEnabled_Call struct {
+	*mock.Call
+}
+
+// IsPreviewEnabled is a helper method to define mock.On call
+func (_e *MockConfigService_Expecter) IsPreviewEnabled() *MockConfigService_IsPreviewEnabled_Call {
+	return &MockConfigService_IsPreviewEnabled_Call{Call: _e.mock.On("IsPreviewEnabled")}
+}
+
+func (_c *MockConfigService_IsPreviewEnabled_Call) Run(run func()) *MockConfigService_IsPreviewEnabled_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockConfigService_IsPreviewEnabled_Call) Return(b bool) *MockConfigService_IsPreviewEnabled_Call {
+	_c.Call.Return(b)
+	return _c
+}
+
+func (_c *MockConfigService_IsPreviewEnabled_Call) RunAndReturn(run func() bool) *MockConfigService_IsPreviewEnabled_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// IsAutoEnabled provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) IsAutoEnabled() bool {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for IsAutoEnabled")
+	}
+
+	var r0 bool
+	if returnFunc, ok := ret.Get(0).(func() bool); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	return r0
+}
+
+// MockConfigService_IsAutoEnabled_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsAutoEnabled'
+type MockConfigService_IsAutoEnabled_Call struct {
+	*mock.Call
+}
+
+// IsAutoEnabled is a helper method to define mock.On call
+func (_e *MockConfigService_Expecter) IsAutoEnabled() *MockConfigService_IsAutoEnabled_Call {
+	return &MockConfigService_IsAutoEnabled_Call{Call: _e.mock.On("IsAutoEnabled")}
+}
+
+func (_c *MockConfigService_IsAutoEnabled_Call) Run(run func()) *MockConfigService_IsAutoEnabled_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockConfigService_IsAutoEnabled_Call) Return(b bool) *MockConfigService_IsAutoEnabled_Call {
+	_c.Call.Return(b)
+	return _c
+}
+
+func (_c *MockConfigService_IsAutoEnabled_Call) RunAndReturn(run func() bool) *MockConfigService_IsAutoEnabled_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetPreviewTagPatterns provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) GetPreviewTagPatterns() []string {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetPreviewTagPatterns")
+	}
+
+	var r0 []string
+	if returnFunc, ok := ret.Get(0).(func() []string); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	return r0
+}
+
+// MockConfigService_GetPreviewTagPatterns_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetPreviewTagPatterns'
+type MockConfigService_GetPreviewTagPatterns_Call struct {
+	*mock.Call
+}
+
+// GetPreviewTagPatterns is a helper method to define mock.On call
+func (_e *MockConfigService_Expecter) GetPreviewTagPatterns() *MockConfigService_GetPreviewTagPatterns_Call {
+	return &MockConfigService_GetPreviewTagPatterns_Call{Call: _e.mock.On("GetPreviewTagPatterns")}
+}
+
+func (_c *MockConfigService_GetPreviewTagPatterns_Call) Run(run func()) *MockConfigService_GetPreviewTagPatterns_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockConfigService_GetPreviewTagPatterns_Call) Return(patterns []string) *MockConfigService_GetPreviewTagPatterns_Call {
+	_c.Call.Return(patterns)
+	return _c
+}
+
+func (_c *MockConfigService_GetPreviewTagPatterns_Call) RunAndReturn(run func() []string) *MockConfigService_GetPreviewTagPatterns_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetAllowedDomains provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) GetAllowedDomains() []string {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllowedDomains")
+	}
+
+	var r0 []string
+	if returnFunc, ok := ret.Get(0).(func() []string); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	return r0
+}
+
+// MockConfigService_GetAllowedDomains_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllowedDomains'
+type MockConfigService_GetAllowedDomains_Call struct {
+	*mock.Call
+}
+
+// GetAllowedDomains is a helper method to define mock.On call
+func (_e *MockConfigService_Expecter) GetAllowedDomains() *MockConfigService_GetAllowedDomains_Call {
+	return &MockConfigService_GetAllowedDomains_Call{Call: _e.mock.On("GetAllowedDomains")}
+}
+
+func (_c *MockConfigService_GetAllowedDomains_Call) Run(run func()) *MockConfigService_GetAllowedDomains_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockConfigService_GetAllowedDomains_Call) Return(domains []string) *MockConfigService_GetAllowedDomains_Call {
+	_c.Call.Return(domains)
+	return _c
+}
+
+func (_c *MockConfigService_GetAllowedDomains_Call) RunAndReturn(run func() []string) *MockConfigService_GetAllowedDomains_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Watch provides a mock function for the type MockConfigService
 func (_mock *MockConfigService) Watch(ctx context.Context, onChange func()) error {
 	ret := _mock.Called(ctx, onChange)
