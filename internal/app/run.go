@@ -553,6 +553,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		svc.eventBus,
 		log,
 		svc.backupSvc,
+		nil, // previewSvc: wired in Task 13
 		svc.imageSvc,
 	).WithVolumeService(svc.volumeSvc)
 
