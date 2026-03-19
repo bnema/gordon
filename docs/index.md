@@ -50,6 +50,7 @@ Gordon runs on your VPS and provides:
 - [Authentication](./config/auth.md) - Registry auth plus remote CLI login/token workflows
 - [Secrets](./config/secrets.md) - Secure credential storage
 - [Network Isolation](./config/network-isolation.md) - Per-app network isolation
+- [Preview Environments](./config/preview.md) - Ephemeral per-branch deployments
 - [Attachments](./config/attachments.md) - Service dependencies
 - [Logging](./config/logging.md) - Log collection and rotation
 - [Environment Variables](./config/env.md) - Per-route environment configuration
