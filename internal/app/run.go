@@ -1382,7 +1382,6 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 		svc.configSvc,
 		svc.blobStorage,
 		svc.previewService,
-		cfg.Server.RegistryDomain,
 	)
 
 	// Dispatcher routes image push events to either auto-route or preview handler

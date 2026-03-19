@@ -3,6 +3,8 @@ package preview
 import (
 	"context"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/auto"
@@ -14,7 +16,6 @@ type AutoPreviewHandler struct {
 	config         auto.AutoConfigProvider
 	blobStorage    out.BlobStorage
 	previewService *Service
-	registryDomain string
 }
 
 func NewAutoPreviewHandler(
@@ -22,14 +23,12 @@ func NewAutoPreviewHandler(
 	config auto.AutoConfigProvider,
 	blobStorage out.BlobStorage,
 	previewService *Service,
-	registryDomain string,
 ) *AutoPreviewHandler {
 	return &AutoPreviewHandler{
 		serviceCtx:     serviceCtx,
 		config:         config,
 		blobStorage:    blobStorage,
 		previewService: previewService,
-		registryDomain: registryDomain,
 	}
 }
 
@@ -38,6 +37,14 @@ func (h *AutoPreviewHandler) CanHandle(t domain.EventType) bool {
 }
 
 func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldHandler: "AutoPreviewHandler",
+		zerowrap.FieldEvent:   string(event.Type),
+		"event_id":            event.ID,
+	})
+	log := zerowrap.FromCtx(ctx)
+
 	payload, ok := event.Data.(domain.ImagePushedPayload)
 	if !ok {
 		return nil
@@ -46,6 +53,7 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 	// Extract labels from manifest
 	labels, err := auto.ExtractLabels(ctx, payload.Manifest, h.blobStorage)
 	if err != nil {
+		log.Debug().Err(err).Msg("failed to extract labels, skipping preview handler")
 		return nil
 	}
 
@@ -55,6 +63,7 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 	// Resolve base route from labels
 	domains := collectDomains(labels)
 	if len(domains) == 0 {
+		log.Debug().Str("image", payload.Name).Msg("no gordon.domain label found, skipping preview handler")
 		return nil
 	}
 	baseRouteDomain := domains[0]
@@ -63,23 +72,29 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 	allowedDomains := h.config.GetAllowedDomains()
 	previewDomain, err := GeneratePreviewDomain(baseRouteDomain, previewName, previewConfig.Separator)
 	if err != nil {
+		log.Debug().Err(err).Str("base_domain", baseRouteDomain).Msg("failed to generate preview domain")
 		return nil
 	}
 	if !auto.MatchesDomainAllowlist(previewDomain, allowedDomains) {
+		log.Debug().Str("domain", previewDomain).Strs("patterns", allowedDomains).Msg("preview domain not in allowlist, skipping")
 		return nil
 	}
 
 	imageName := payload.Name + ":" + payload.Reference
 
 	// Launch async — volume cloning may exceed event bus timeout
-	go h.previewService.CreatePreview(h.serviceCtx, CreatePreviewRequest{
-		Name:          previewName,
-		Domain:        previewDomain,
-		BaseRoute:     baseRouteDomain,
-		Image:         imageName,
-		HTTPS:         true,
-		PreviewConfig: previewConfig,
-	})
+	go func() {
+		if err := h.previewService.CreatePreview(h.serviceCtx, CreatePreviewRequest{
+			Name:          previewName,
+			Domain:        previewDomain,
+			BaseRoute:     baseRouteDomain,
+			Image:         imageName,
+			HTTPS:         true,
+			PreviewConfig: previewConfig,
+		}); err != nil {
+			log.Error().Err(err).Str("preview", previewName).Msg("failed to create preview")
+		}
+	}()
 
 	return nil
 }
