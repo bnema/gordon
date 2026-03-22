@@ -1796,49 +1796,9 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", nil, errChan, log)
 
-	var proxySrv *http.Server
-	var proxyReady <-chan struct{}
-	var tlsSrv *http.Server
-	var tlsReady <-chan struct{}
-	if cfg.Server.TLSEnabled {
-		if cfg.Server.TLSCertFile == "" || cfg.Server.TLSKeyFile == "" {
-			return fmt.Errorf("server.tls_enabled=true requires both server.tls_cert_file and server.tls_key_file")
-		}
-		// When TLS is enabled, HTTP port becomes redirect-only.
-		tlsPort := cfg.Server.TLSPort
-		redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			host := r.Host
-			if h, _, err := net.SplitHostPort(host); err == nil {
-				host = h
-			} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-				host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
-			}
-			if tlsPort != 443 {
-				host = net.JoinHostPort(host, strconv.Itoa(tlsPort))
-			} else if strings.Contains(host, ":") {
-				// Re-bracket bare IPv6 literal for the URL.
-				host = "[" + host + "]"
-			}
-			target := "https://" + host + r.RequestURI
-			http.Redirect(w, r, target, http.StatusPermanentRedirect)
-		})
-		proxySrv, proxyReady = startServer(fmt.Sprintf(":%d", cfg.Server.Port), redirectHandler, "proxy-redirect", nil, errChan, log)
-		tlsSrv, tlsReady = startTLSServer(
-			fmt.Sprintf(":%d", cfg.Server.TLSPort),
-			proxyHandler,
-			"proxy-tls",
-			cfg.Server.TLSCertFile,
-			cfg.Server.TLSKeyFile,
-			errChan,
-			log,
-		)
-	} else {
-		// Enable both HTTP/1.1 and cleartext HTTP/2 on the proxy server so Gordon can
-		// accept h2c traffic from clients and load balancers (e.g. Cloudflare).
-		var proxyProtos http.Protocols
-		proxyProtos.SetHTTP1(true)
-		proxyProtos.SetUnencryptedHTTP2(true)
-		proxySrv, proxyReady = startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", &proxyProtos, errChan, log)
+	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, proxyHandler, errChan, log)
+	if err != nil {
+		return err
 	}
 
 	// Wait for all enabled servers to bind their ports before auto-starting containers.
@@ -2117,6 +2077,52 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 
 	cleanupInternalCredentials()
 	log.Info().Msg("Gordon stopped")
+}
+
+// startProxyServers sets up proxy server(s) depending on TLS configuration.
+// With TLS enabled, the HTTP port becomes a redirect-only server and a separate TLS server handles traffic.
+// Without TLS, a single server handles both HTTP/1.1 and cleartext HTTP/2.
+func startProxyServers(cfg Config, proxyHandler http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+	if !cfg.Server.TLSEnabled {
+		var proxyProtos http.Protocols
+		proxyProtos.SetHTTP1(true)
+		proxyProtos.SetUnencryptedHTTP2(true)
+		srv, ready := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", &proxyProtos, errChan, log)
+		return srv, ready, nil, nil, nil
+	}
+
+	if cfg.Server.TLSCertFile == "" || cfg.Server.TLSKeyFile == "" {
+		return nil, nil, nil, nil, fmt.Errorf("server.tls_enabled=true requires both server.tls_cert_file and server.tls_key_file")
+	}
+
+	tlsPort := cfg.Server.TLSPort
+	redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		}
+		if tlsPort != 443 {
+			host = net.JoinHostPort(host, strconv.Itoa(tlsPort))
+		} else if strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+		target := "https://" + host + r.RequestURI
+		http.Redirect(w, r, target, http.StatusPermanentRedirect)
+	})
+
+	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), redirectHandler, "proxy-redirect", nil, errChan, log)
+	tlsSrv, tlsReady := startTLSServer(
+		fmt.Sprintf(":%d", cfg.Server.TLSPort),
+		proxyHandler,
+		"proxy-tls",
+		cfg.Server.TLSCertFile,
+		cfg.Server.TLSKeyFile,
+		errChan,
+		log,
+	)
+	return proxySrv, proxyReady, tlsSrv, tlsReady, nil
 }
 
 // startServer starts an HTTP server, returning the server instance and a channel
