@@ -743,8 +743,9 @@ func runAuthStatus(remoteNameArg string) error {
 	}
 
 	// Create client
+	token := remote.ResolveTokenForRemote(remoteName, remoteConfig)
 	insecureTLS := remote.ResolveInsecureTLSForRemote(insecureTLSFlag, remoteName)
-	client := remote.NewClient(remoteConfig.URL, remoteClientOptions(remoteConfig.Token, insecureTLS)...)
+	client := remote.NewClient(remoteConfig.URL, remoteClientOptions(token, insecureTLS)...)
 
 	// Verify auth
 	ctx := context.Background()

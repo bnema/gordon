@@ -256,6 +256,20 @@ func resolveRemoteEntryToken(remote *RemoteEntry) string {
 	return ""
 }
 
+// ResolveTokenForRemote resolves the token for a named remote.
+// Precedence: TOML token field > token_env > pass store.
+func ResolveTokenForRemote(name string, entry RemoteEntry) string {
+	if token := resolveRemoteEntryToken(&entry); token != "" {
+		return token
+	}
+	if passAvailable() {
+		if token, err := passReadToken(name); err == nil && token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
 // ResolveInsecureTLSForRemote resolves insecure TLS behavior for a named remote.
 // Precedence: flag > env > client config > specific remote config.
 func ResolveInsecureTLSForRemote(flagInsecure bool, remoteName string) bool {
