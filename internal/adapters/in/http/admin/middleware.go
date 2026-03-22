@@ -117,17 +117,8 @@ func AuthMiddleware(
 			ctx = context.WithValue(ctx, domain.ContextKeySubject, claims.Subject)
 			ctx = context.WithValue(ctx, domain.TokenClaimsKey, claims)
 
-			// Prevent intermediaries from storing admin API responses, especially
-			// when a rotated bearer token is returned in X-Gordon-Token.
+			// Prevent intermediaries from caching admin API responses.
 			setNoStoreHeaders(w)
-
-			// Attempt to slide token expiry. Non-fatal if it fails.
-			// The new token is returned in X-Gordon-Token so the CLI can persist it atomically.
-			if newToken, extErr := authSvc.ExtendToken(ctx, token); extErr != nil {
-				log.Warn().Err(extErr).Str("subject", claims.Subject).Msg("token extension failed")
-			} else if newToken != token {
-				w.Header().Set("X-Gordon-Token", newToken)
-			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

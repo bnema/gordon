@@ -1,18 +1,15 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"golang.org/x/term"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -24,16 +21,6 @@ import (
 	"github.com/bnema/gordon/internal/usecase/auth"
 	"github.com/bnema/gordon/pkg/duration"
 )
-
-// stdinFD returns os.Stdin's file descriptor as an int, guarded against
-// uintptr overflow on platforms where uintptr > int.
-func stdinFD() (int, error) {
-	fd := os.Stdin.Fd()
-	if fd > uintptr(^uint(0)>>1) {
-		return 0, fmt.Errorf("stdin fd value %d overflows int", fd)
-	}
-	return int(fd), nil
-}
 
 // newAuthCmd creates the auth command group.
 func newAuthCmd() *cobra.Command {
@@ -214,124 +201,34 @@ available while Gordon is running.`,
 func newAuthLoginCmd() *cobra.Command {
 	var (
 		remoteName string
-		username   string
 		token      string
-		password   string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate with a Gordon server",
-		Long: `Authenticate with a Gordon server using password authentication or a pre-generated token.
+		Long: `Store a pre-generated token for a Gordon server remote.
 
-This command prompts for your username and password, authenticates with the
-remote server's /auth/password endpoint, and stores the returned token.
-
-The token is stored in your remote configuration and used for subsequent
-CLI operations.
-
-If --token is provided, the token is stored for the remote and verified
+The token is stored in your remote configuration and verified
 against /admin/status on a best-effort basis.
 
+Generate a token on the server with: gordon auth token generate
+
 Examples:
-	gordon auth login                    Login using active remote
-	gordon auth login --remote prod      Login to specific remote
-	gordon auth login --username admin   Pre-fill username
-	gordon auth login --token <token>    Store a token for token-only servers`,
+	gordon auth login --token <token>              Store token for active remote
+	gordon auth login --remote prod --token <tok>  Store token for specific remote`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if token != "" {
-				return runAuthLoginWithToken(remoteName, token)
+			if token == "" {
+				return fmt.Errorf("--token is required; generate a token on the server with: gordon auth token generate")
 			}
-			return runAuthLogin(remoteName, username, password)
+			return runAuthLoginWithToken(remoteName, token)
 		},
 	}
 
 	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to authenticate with (defaults to active remote)")
-	cmd.Flags().StringVarP(&username, "username", "u", "", "Username for authentication")
-	cmd.Flags().StringVarP(&password, "password", "p", "", "Password (visible in process listings; prefer interactive prompt)")
 	cmd.Flags().StringVarP(&token, "token", "t", "", "Authentication token to store for the remote")
 
-	cmd.MarkFlagsMutuallyExclusive("token", "password")
-	cmd.MarkFlagsMutuallyExclusive("token", "username")
-
 	return cmd
-}
-
-// runAuthLogin authenticates with a remote Gordon server.
-func runAuthLogin(remoteName, username, password string) error {
-	resolvedName, remoteConfig, err := resolveRemoteEntry(remoteName)
-	if err != nil {
-		return err
-	}
-
-	// Prompt for username if not provided
-	if username == "" {
-		fmt.Print("Username: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read username: %w", err)
-		}
-		username = strings.TrimSpace(input)
-	}
-
-	if username == "" {
-		return fmt.Errorf("username cannot be empty")
-	}
-
-	if password == "" {
-		// Prompt for password (hidden input)
-		fmt.Print("Password: ")
-		fd, err := stdinFD()
-		if err != nil {
-			return fmt.Errorf("failed to get stdin fd: %w", err)
-		}
-		passwordBytes, err := term.ReadPassword(fd)
-		if err != nil {
-			// Fallback for non-terminal input
-			reader := bufio.NewReader(os.Stdin)
-			passwordInput, readErr := reader.ReadString('\n')
-			if readErr != nil {
-				return fmt.Errorf("failed to read password: %w", readErr)
-			}
-			// Only trim trailing newline from fallback input
-			passwordBytes = []byte(strings.TrimRight(passwordInput, "\r\n"))
-		}
-		fmt.Println()
-		password = string(passwordBytes)
-	} else {
-		// Only trim trailing newline from flag-provided password
-		password = strings.TrimRight(password, "\r\n")
-	}
-
-	if password == "" {
-		return fmt.Errorf("password cannot be empty")
-	}
-
-	// Create remote client
-	insecureTLS := remote.ResolveInsecureTLSForRemote(insecureTLSFlag, resolvedName)
-	client := remote.NewClient(remoteConfig.URL, remoteClientOptions("", insecureTLS)...)
-
-	// Authenticate
-	ctx := context.Background()
-	fmt.Printf("Authenticating with %s...\n", resolvedName)
-
-	resp, err := client.Authenticate(ctx, username, password)
-	if err != nil {
-		return fmt.Errorf("authentication failed: %w", err)
-	}
-
-	// Update remote config with new token
-	if err := remote.UpdateRemoteToken(resolvedName, resp.Token); err != nil {
-		return fmt.Errorf("failed to save token: %w", err)
-	}
-
-	fmt.Println()
-	fmt.Println(styles.RenderSuccess("Authentication successful!"))
-	fmt.Printf("Token stored for remote '%s'\n", resolvedName)
-	fmt.Printf("Expires in: %d seconds\n", resp.ExpiresIn)
-
-	return nil
 }
 
 func runAuthLoginWithToken(remoteName, token string) error {

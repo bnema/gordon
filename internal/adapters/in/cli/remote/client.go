@@ -23,11 +23,10 @@ import (
 
 // Client is an HTTP client for the Gordon admin API.
 type Client struct {
-	baseURL          string
-	token            string
-	httpClient       *http.Client
-	insecureTLS      bool
-	onTokenRefreshed func(newToken string) // optional callback to persist a refreshed token
+	baseURL     string
+	token       string
+	httpClient  *http.Client
+	insecureTLS bool
 
 	// Ephemeral admin token exchange fields.
 	subject      string    // JWT subject extracted from long-lived token
@@ -112,37 +111,6 @@ func WithTimeout(timeout time.Duration) ClientOption {
 func WithInsecureTLS(insecure bool) ClientOption {
 	return func(c *Client) {
 		c.insecureTLS = insecure
-	}
-}
-
-// WithTokenRefreshCallback sets a callback that is invoked when the server
-// returns a refreshed token in the X-Gordon-Token response header.
-// The CLI uses this to persist the new token to the remotes config atomically.
-func WithTokenRefreshCallback(fn func(newToken string)) ClientOption {
-	return func(c *Client) {
-		c.onTokenRefreshed = fn
-	}
-}
-
-// observeTokenRotation checks the X-Gordon-Token header on a response and, if
-// the server issued a refreshed token, updates the client's in-memory token and
-// invokes the optional persistence callback. Panics in the callback are caught
-// so they never propagate to the caller.
-func (c *Client) observeTokenRotation(resp *http.Response) {
-	newToken := resp.Header.Get("X-Gordon-Token")
-	if newToken == "" || newToken == c.token {
-		return
-	}
-	c.token = newToken
-	if c.onTokenRefreshed != nil {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Fprintf(os.Stderr, "warning: token refresh callback panicked: %v\n", r)
-				}
-			}()
-			c.onTokenRefreshed(newToken)
-		}()
 	}
 }
 
@@ -316,9 +284,6 @@ func (c *Client) doRequest(ctx context.Context, method, path string, jsonBody []
 	if err != nil {
 		return nil, err
 	}
-
-	// Observe token rotation: the server re-signs and returns the token via X-Gordon-Token.
-	c.observeTokenRotation(resp)
 
 	return resp, nil
 }
@@ -1164,9 +1129,6 @@ func (c *Client) openSSEStream(ctx context.Context, path string) (*http.Response
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
-
-	// Observe token rotation on streaming responses, same as request().
-	c.observeTokenRotation(resp)
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
