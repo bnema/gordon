@@ -46,6 +46,41 @@ func TestResolveSecretsBackend_RejectsUnknownBackend(t *testing.T) {
 	}
 }
 
+func TestResolveAuthType_RejectsPassword(t *testing.T) {
+	cfg := Config{}
+	cfg.Auth.Type = "password"
+	_, err := resolveAuthType(cfg)
+	if err == nil {
+		t.Fatal("expected error for auth.type=password")
+	}
+	if !strings.Contains(err.Error(), "unsupported auth.type") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveAuthType_AcceptsToken(t *testing.T) {
+	cfg := Config{}
+	cfg.Auth.Type = "token"
+	authType, err := resolveAuthType(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if authType != domain.AuthTypeToken {
+		t.Fatalf("expected AuthTypeToken, got %v", authType)
+	}
+}
+
+func TestResolveAuthType_AcceptsEmpty(t *testing.T) {
+	cfg := Config{}
+	authType, err := resolveAuthType(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if authType != domain.AuthTypeToken {
+		t.Fatalf("expected AuthTypeToken, got %v", authType)
+	}
+}
+
 func TestLoadConfig_DoesNotDefaultSecretsBackendToUnsafe(t *testing.T) {
 	v := viper.New()
 
