@@ -127,13 +127,12 @@ type Config struct {
 
 	Auth struct {
 		Enabled        bool   `mapstructure:"enabled"`
-		Type           string `mapstructure:"type"`            // "password" or "token"
+		Type           string `mapstructure:"type"`            // only "token" is supported
 		SecretsBackend string `mapstructure:"secrets_backend"` // "pass", "sops", or "unsafe"
 		Username       string `mapstructure:"username"`
-		Password       string `mapstructure:"password"`      // deprecated: use password_hash
-		PasswordHash   string `mapstructure:"password_hash"` // path in secrets backend
-		TokenSecret    string `mapstructure:"token_secret"`  // path in secrets backend
-		TokenExpiry    string `mapstructure:"token_expiry"`  // e.g., "720h", "30d"
+		TokenSecret    string `mapstructure:"token_secret"`     // path in secrets backend
+		TokenExpiry    string `mapstructure:"token_expiry"`     // e.g., "720h", "30d"
+		AccessTokenTTL string `mapstructure:"access_token_ttl"` // e.g., "15m", "30m" (default: 15m)
 	} `mapstructure:"auth"`
 
 	API struct {
@@ -996,7 +995,10 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 		return nil, nil, nil
 	}
 
-	authType := resolveAuthType(cfg)
+	authType, err := resolveAuthType(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	backend, err := resolveSecretsBackend(cfg.Auth.SecretsBackend)
 	if err != nil {
 		return nil, nil, log.WrapErr(err, "failed to resolve secrets backend")
@@ -1024,25 +1026,12 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 }
 
 // resolveAuthType determines the auth type from config.
-// If password_hash is configured, password auth is available (plus tokens).
-// If only token_secret is configured, token-only mode.
-// The explicit "type" field is deprecated but still respected for backwards compat.
-func resolveAuthType(cfg Config) domain.AuthType {
-	// Explicit type takes precedence (backwards compatibility)
-	if cfg.Auth.Type == "token" {
-		return domain.AuthTypeToken
+// Token-only authentication is the only supported mode.
+func resolveAuthType(cfg Config) (domain.AuthType, error) {
+	if cfg.Auth.Type != "" && cfg.Auth.Type != "token" {
+		return "", fmt.Errorf("unsupported auth.type %q; only \"token\" is supported", cfg.Auth.Type)
 	}
-	if cfg.Auth.Type == "password" {
-		return domain.AuthTypePassword
-	}
-
-	// Infer from config: password auth if password_hash is configured
-	if cfg.Auth.PasswordHash != "" || cfg.Auth.Password != "" {
-		return domain.AuthTypePassword
-	}
-
-	// Default to token-only
-	return domain.AuthTypeToken
+	return domain.AuthTypeToken, nil
 }
 
 func resolveSecretsBackend(backend string) (domain.SecretsBackend, error) {
@@ -1086,10 +1075,6 @@ func createTokenStore(backend domain.SecretsBackend, dataDir string, log zerowra
 }
 
 func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (auth.Config, error) {
-	if cfg.Auth.Password != "" {
-		return auth.Config{}, fmt.Errorf("auth.password is no longer supported; use auth.password_hash with a secrets backend instead")
-	}
-
 	authConfig := auth.Config{
 		Enabled:  cfg.Auth.Enabled,
 		AuthType: authType,
@@ -1104,40 +1089,20 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 	authConfig.TokenSecret = secret
 	authConfig.TokenExpiry = expiry
 
-	// Password config only needed for password auth mode
-	if authType == domain.AuthTypePassword {
-		hash, err := loadPasswordHash(ctx, cfg, backend, dataDir, log)
+	accessTokenTTL := 15 * time.Minute // default
+	if cfg.Auth.AccessTokenTTL != "" {
+		parsed, err := time.ParseDuration(cfg.Auth.AccessTokenTTL)
 		if err != nil {
-			return auth.Config{}, err
+			return auth.Config{}, fmt.Errorf("invalid auth.access_token_ttl %q: %w", cfg.Auth.AccessTokenTTL, err)
 		}
-		if hash == "" {
-			return auth.Config{}, errAuthNotConfigured()
+		if parsed <= 0 {
+			return auth.Config{}, fmt.Errorf("auth.access_token_ttl must be positive")
 		}
-		authConfig.PasswordHash = hash
+		accessTokenTTL = parsed
 	}
+	authConfig.AccessTokenTTL = accessTokenTTL
 
 	return authConfig, nil
-}
-
-// errAuthNotConfigured returns an error when auth is enabled but credentials are not configured.
-func errAuthNotConfigured() error {
-	return fmt.Errorf("auth is enabled by default, configure auth type and secrets backend. See: https://gordon.bnema.dev/docs/config/auth")
-}
-
-func loadPasswordHash(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (string, error) {
-	if cfg.Auth.PasswordHash != "" {
-		hash, err := loadSecret(ctx, backend, cfg.Auth.PasswordHash, dataDir, log)
-		if err != nil {
-			return "", log.WrapErr(err, "failed to load password hash")
-		}
-		return hash, nil
-	}
-
-	if cfg.Auth.Password != "" {
-		return "", fmt.Errorf("auth.password is no longer supported; use auth.password_hash with a secrets backend instead")
-	}
-
-	return "", nil
 }
 
 func loadTokenConfig(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) ([]byte, time.Duration, error) {
@@ -2492,8 +2457,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("logging.container_logs.max_age", 28)
 	v.SetDefault("env.dir", "") // defaults to {data_dir}/env when empty
 	v.SetDefault("auth.enabled", true)
-	// Note: auth.type is intentionally not set - it's inferred from config
-	// If password_hash is set -> password mode, otherwise -> token mode
+	// Note: auth.type defaults to "token" (the only supported mode)
 	v.SetDefault("auth.secrets_backend", "")
 	v.SetDefault("auth.token_expiry", "720h")
 	v.SetDefault("api.rate_limit.enabled", true)

@@ -183,66 +183,6 @@ func (_c *MockAuthService_GenerateAccessToken_Call) RunAndReturn(run func(ctx co
 	return _c
 }
 
-// GeneratePasswordHash provides a mock function for the type MockAuthService
-func (_mock *MockAuthService) GeneratePasswordHash(password string) (string, error) {
-	ret := _mock.Called(password)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GeneratePasswordHash")
-	}
-
-	var r0 string
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (string, error)); ok {
-		return returnFunc(password)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) string); ok {
-		r0 = returnFunc(password)
-	} else {
-		r0 = ret.Get(0).(string)
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(password)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockAuthService_GeneratePasswordHash_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GeneratePasswordHash'
-type MockAuthService_GeneratePasswordHash_Call struct {
-	*mock.Call
-}
-
-// GeneratePasswordHash is a helper method to define mock.On call
-//   - password string
-func (_e *MockAuthService_Expecter) GeneratePasswordHash(password interface{}) *MockAuthService_GeneratePasswordHash_Call {
-	return &MockAuthService_GeneratePasswordHash_Call{Call: _e.mock.On("GeneratePasswordHash", password)}
-}
-
-func (_c *MockAuthService_GeneratePasswordHash_Call) Run(run func(password string)) *MockAuthService_GeneratePasswordHash_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAuthService_GeneratePasswordHash_Call) Return(s string, err error) *MockAuthService_GeneratePasswordHash_Call {
-	_c.Call.Return(s, err)
-	return _c
-}
-
-func (_c *MockAuthService_GeneratePasswordHash_Call) RunAndReturn(run func(password string) (string, error)) *MockAuthService_GeneratePasswordHash_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GenerateToken provides a mock function for the type MockAuthService
 func (_mock *MockAuthService) GenerateToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error) {
 	ret := _mock.Called(ctx, subject, scopes, expiry)
@@ -317,6 +257,50 @@ func (_c *MockAuthService_GenerateToken_Call) Return(s string, err error) *MockA
 }
 
 func (_c *MockAuthService_GenerateToken_Call) RunAndReturn(run func(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error)) *MockAuthService_GenerateToken_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetAccessTokenTTL provides a mock function for the type MockAuthService
+func (_mock *MockAuthService) GetAccessTokenTTL() time.Duration {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAccessTokenTTL")
+	}
+
+	var r0 time.Duration
+	if returnFunc, ok := ret.Get(0).(func() time.Duration); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(time.Duration)
+	}
+	return r0
+}
+
+// MockAuthService_GetAccessTokenTTL_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAccessTokenTTL'
+type MockAuthService_GetAccessTokenTTL_Call struct {
+	*mock.Call
+}
+
+// GetAccessTokenTTL is a helper method to define mock.On call
+func (_e *MockAuthService_Expecter) GetAccessTokenTTL() *MockAuthService_GetAccessTokenTTL_Call {
+	return &MockAuthService_GetAccessTokenTTL_Call{Call: _e.mock.On("GetAccessTokenTTL")}
+}
+
+func (_c *MockAuthService_GetAccessTokenTTL_Call) Run(run func()) *MockAuthService_GetAccessTokenTTL_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockAuthService_GetAccessTokenTTL_Call) Return(duration time.Duration) *MockAuthService_GetAccessTokenTTL_Call {
+	_c.Call.Return(duration)
+	return _c
+}
+
+func (_c *MockAuthService_GetAccessTokenTTL_Call) RunAndReturn(run func() time.Duration) *MockAuthService_GetAccessTokenTTL_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -646,69 +630,6 @@ func (_c *MockAuthService_RevokeToken_Call) Return(err error) *MockAuthService_R
 }
 
 func (_c *MockAuthService_RevokeToken_Call) RunAndReturn(run func(ctx context.Context, tokenID string) error) *MockAuthService_RevokeToken_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// ValidatePassword provides a mock function for the type MockAuthService
-func (_mock *MockAuthService) ValidatePassword(ctx context.Context, username string, password string) bool {
-	ret := _mock.Called(ctx, username, password)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ValidatePassword")
-	}
-
-	var r0 bool
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) bool); ok {
-		r0 = returnFunc(ctx, username, password)
-	} else {
-		r0 = ret.Get(0).(bool)
-	}
-	return r0
-}
-
-// MockAuthService_ValidatePassword_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ValidatePassword'
-type MockAuthService_ValidatePassword_Call struct {
-	*mock.Call
-}
-
-// ValidatePassword is a helper method to define mock.On call
-//   - ctx context.Context
-//   - username string
-//   - password string
-func (_e *MockAuthService_Expecter) ValidatePassword(ctx interface{}, username interface{}, password interface{}) *MockAuthService_ValidatePassword_Call {
-	return &MockAuthService_ValidatePassword_Call{Call: _e.mock.On("ValidatePassword", ctx, username, password)}
-}
-
-func (_c *MockAuthService_ValidatePassword_Call) Run(run func(ctx context.Context, username string, password string)) *MockAuthService_ValidatePassword_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAuthService_ValidatePassword_Call) Return(b bool) *MockAuthService_ValidatePassword_Call {
-	_c.Call.Return(b)
-	return _c
-}
-
-func (_c *MockAuthService_ValidatePassword_Call) RunAndReturn(run func(ctx context.Context, username string, password string) bool) *MockAuthService_ValidatePassword_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -20,13 +20,13 @@ func testLogger() zerowrap.Logger {
 
 func TestRegistryAuthV2_LocalhostBypassRequiresInternalAuth(t *testing.T) {
 	log := testLogger()
-	called := false
+	tokenCalled := false
 	authSvc := stubAuthService{
 		enabled:  true,
-		authType: domain.AuthTypePassword,
-		validatePassword: func(_ context.Context, _ string, _ string) bool {
-			called = true
-			return false
+		authType: domain.AuthTypeToken,
+		validateToken: func(_ context.Context, _ string) (*domain.TokenClaims, error) {
+			tokenCalled = true
+			return nil, errors.New("not a token")
 		},
 	}
 	internalAuth := InternalRegistryAuth{
@@ -46,18 +46,18 @@ func TestRegistryAuthV2_LocalhostBypassRequiresInternalAuth(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.False(t, called, "auth service should not be used for internal loopback auth")
+	assert.False(t, tokenCalled, "auth service should not be used for internal loopback auth")
 }
 
 func TestRegistryAuthV2_LocalhostWrongInternalAuthFallsBack(t *testing.T) {
 	log := testLogger()
-	called := false
+	tokenCalled := false
 	authSvc := stubAuthService{
 		enabled:  true,
-		authType: domain.AuthTypePassword,
-		validatePassword: func(_ context.Context, _ string, _ string) bool {
-			called = true
-			return false
+		authType: domain.AuthTypeToken,
+		validateToken: func(_ context.Context, _ string) (*domain.TokenClaims, error) {
+			tokenCalled = true
+			return nil, errors.New("invalid token")
 		},
 	}
 	internalAuth := InternalRegistryAuth{
@@ -77,19 +77,19 @@ func TestRegistryAuthV2_LocalhostWrongInternalAuthFallsBack(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-	assert.Equal(t, `Basic realm="Gordon Registry"`, rec.Header().Get("WWW-Authenticate"))
-	assert.True(t, called, "auth service should be used when internal auth fails")
+	assert.Contains(t, rec.Header().Get("WWW-Authenticate"), "Bearer")
+	assert.True(t, tokenCalled, "auth service should be used when internal auth fails")
 }
 
 func TestRegistryAuthV2_NonLocalhostIgnoresInternalAuth(t *testing.T) {
 	log := testLogger()
-	called := false
+	tokenCalled := false
 	authSvc := stubAuthService{
 		enabled:  true,
-		authType: domain.AuthTypePassword,
-		validatePassword: func(_ context.Context, _ string, _ string) bool {
-			called = true
-			return false
+		authType: domain.AuthTypeToken,
+		validateToken: func(_ context.Context, _ string) (*domain.TokenClaims, error) {
+			tokenCalled = true
+			return nil, errors.New("invalid token")
 		},
 	}
 	internalAuth := InternalRegistryAuth{
@@ -109,15 +109,14 @@ func TestRegistryAuthV2_NonLocalhostIgnoresInternalAuth(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-	assert.Equal(t, `Basic realm="Gordon Registry"`, rec.Header().Get("WWW-Authenticate"))
-	assert.True(t, called, "auth service should be used for non-localhost requests")
+	assert.Contains(t, rec.Header().Get("WWW-Authenticate"), "Bearer")
+	assert.True(t, tokenCalled, "auth service should be used for non-localhost requests")
 }
 
 type stubAuthService struct {
-	enabled          bool
-	authType         domain.AuthType
-	validatePassword func(ctx context.Context, username, password string) bool
-	validateToken    func(ctx context.Context, tokenString string) (*domain.TokenClaims, error)
+	enabled       bool
+	authType      domain.AuthType
+	validateToken func(ctx context.Context, tokenString string) (*domain.TokenClaims, error)
 }
 
 func (s stubAuthService) GetAuthType() domain.AuthType {
@@ -126,13 +125,6 @@ func (s stubAuthService) GetAuthType() domain.AuthType {
 
 func (s stubAuthService) IsEnabled() bool {
 	return s.enabled
-}
-
-func (s stubAuthService) ValidatePassword(ctx context.Context, username, password string) bool {
-	if s.validatePassword != nil {
-		return s.validatePassword(ctx, username, password)
-	}
-	return false
 }
 
 func (s stubAuthService) ValidateToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error) {
@@ -162,16 +154,16 @@ func (s stubAuthService) ListTokens(context.Context) ([]domain.Token, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (s stubAuthService) GeneratePasswordHash(string) (string, error) {
-	return "", errors.New("not implemented")
-}
-
 func (s stubAuthService) GetAuthStatus(context.Context) (*domain.AuthStatus, error) {
 	return nil, errors.New("not implemented")
 }
 
 func (s stubAuthService) ExtendToken(context.Context, string) (string, error) {
 	return "", errors.New("not implemented")
+}
+
+func (s stubAuthService) GetAccessTokenTTL() time.Duration {
+	return 15 * time.Minute
 }
 
 // Tests for checkScopeAccess function

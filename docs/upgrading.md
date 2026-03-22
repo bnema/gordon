@@ -2,6 +2,107 @@
 
 This guide covers breaking changes and migration steps between major versions.
 
+## v2.16.0 to v2.30.0
+
+### Breaking: Password Authentication Removed
+
+Gordon v2.30.0 removes password-based authentication entirely. Only token-based authentication is supported.
+
+**What changed:**
+
+- `auth.type = "password"` is no longer accepted
+- `auth.password` and `auth.password_hash` config fields are removed
+- The `gordon auth password hash` CLI command is removed
+- The `gordon auth login` command no longer accepts `--username` or `--password` flags
+- The `/auth/password` endpoint is removed
+
+**New features:**
+
+- `auth.access_token_ttl` configures the lifetime of ephemeral access tokens issued by `/auth/token` (default: `"15m"`)
+- Admin scopes (`admin:*:*`, `admin:routes:read`, etc.) allow fine-grained access control for remote CLI operations
+
+**Migration steps:**
+
+1. **Before upgrading**, generate a token on your current Gordon instance:
+
+   ```bash
+   gordon auth token generate --subject deploy --scopes "push,pull,admin:*:*" --expiry 0
+   ```
+
+   Save this token securely. You will need it after upgrading.
+
+2. **Update remotes** to use the generated token:
+
+   ```bash
+   gordon auth login --token <token>
+   # or
+   gordon remotes set-token prod <token>
+   ```
+
+3. **Update your config** to remove password fields:
+
+   **Before (v2.16.0):**
+   ```toml
+   [auth]
+   enabled = true
+   secrets_backend = "pass"
+   username = "deploy"
+   password_hash = "gordon/auth/password_hash"
+   token_secret = "gordon/auth/token_secret"
+   ```
+
+   **After (v2.30.0):**
+   ```toml
+   [auth]
+   enabled = true
+   secrets_backend = "pass"
+   token_secret = "gordon/auth/token_secret"
+   access_token_ttl = "15m"
+   ```
+
+4. **Update CI/CD pipelines** to use `GORDON_TOKEN` environment variable for authentication. See the [deployment guides](./deployment/index.md).
+
+5. **Upgrade the binary** and restart:
+
+   ```bash
+   curl -fsSL https://gordon.bnema.dev/install | bash
+   systemctl --user restart gordon
+   ```
+
+6. **Verify** the server starts without errors:
+
+   ```bash
+   journalctl --user -u gordon -f
+   ```
+
+### New: Configurable Access Token TTL
+
+Ephemeral access tokens issued by `/auth/token` now have a configurable lifetime via `auth.access_token_ttl` (default `"15m"`, maximum `"1h"`).
+
+Tokens with a lifetime at or below `MaxAccessTokenLifetime` (1 hour) are treated as ephemeral: they skip token store validation for performance, which means they **cannot be individually revoked**. They become invalid only when they naturally expire. If you need tighter revocation control, use a shorter TTL.
+
+```toml
+[auth]
+access_token_ttl = "30m"
+```
+
+### New: Admin Scopes
+
+Tokens can now include fine-grained admin scopes for remote CLI operations:
+
+```bash
+# Full admin access
+gordon auth token generate --subject admin --scopes "push,pull,admin:*:*" --expiry 0
+
+# Read-only monitoring
+gordon auth token generate --subject monitor --scopes "admin:status:read" --expiry 30d
+
+# CI deploy with route read + config write
+gordon auth token generate --subject ci --scopes "push,pull,admin:routes:read,admin:config:write" --expiry 0
+```
+
+See [Token Scopes](./config/auth.md#token-scopes) for the full list.
+
 ## v2.6.0 to v2.7.0
 
 ### Breaking: Token Secret Required

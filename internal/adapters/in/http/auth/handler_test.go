@@ -22,154 +22,36 @@ func testLogger() zerowrap.Logger {
 	return zerowrap.Default()
 }
 
-func TestHandler_Password_Success(t *testing.T) {
-	authSvc := mocks.NewMockAuthService(t)
-
-	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypePassword)
-	authSvc.EXPECT().ValidatePassword(mock.Anything, "admin", "secret").Return(true)
-	authSvc.EXPECT().GenerateToken(mock.Anything, "admin", []string{"push", "pull", "admin:*:*"}, 24*time.Hour).
-		Return("jwt-token-here", nil)
-
-	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
-
-	body := `{"username":"admin","password":"secret"}`
-	req := httptest.NewRequest(http.MethodPost, "/auth/password", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	var resp PasswordResponse
-	err := json.NewDecoder(rec.Body).Decode(&resp)
-	assert.NoError(t, err)
-	assert.Equal(t, "jwt-token-here", resp.Token)
-	assert.Equal(t, 24*60*60, resp.ExpiresIn)
-	assert.NotEmpty(t, resp.IssuedAt)
-}
-
-func TestHandler_Password_InvalidCredentials(t *testing.T) {
-	authSvc := mocks.NewMockAuthService(t)
-
-	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypePassword)
-	authSvc.EXPECT().ValidatePassword(mock.Anything, "admin", "wrongpassword").Return(false)
-
-	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
-
-	body := `{"username":"admin","password":"wrongpassword"}`
-	req := httptest.NewRequest(http.MethodPost, "/auth/password", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-	assert.Contains(t, rec.Body.String(), "invalid credentials")
-}
-
-func TestHandler_Password_AuthTypeToken(t *testing.T) {
-	authSvc := mocks.NewMockAuthService(t)
-
-	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypeToken)
-
-	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
-
-	body := `{"username":"admin","password":"secret"}`
-	req := httptest.NewRequest(http.MethodPost, "/auth/password", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Contains(t, rec.Body.String(), "password authentication not configured")
-}
-
-func TestHandler_Password_AuthDisabled(t *testing.T) {
-	authSvc := mocks.NewMockAuthService(t)
-
-	authSvc.EXPECT().IsEnabled().Return(false)
-
-	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
-
-	body := `{"username":"admin","password":"secret"}`
-	req := httptest.NewRequest(http.MethodPost, "/auth/password", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "authentication is required")
-}
-
-func TestHandler_Password_MissingFields(t *testing.T) {
-	authSvc := mocks.NewMockAuthService(t)
-
-	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypePassword)
-
-	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
-
-	tests := []struct {
-		name string
-		body string
-	}{
-		{"missing username", `{"password":"secret"}`},
-		{"missing password", `{"username":"admin"}`},
-		{"empty username", `{"username":"","password":"secret"}`},
-		{"empty password", `{"username":"admin","password":""}`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/auth/password", bytes.NewBufferString(tt.body))
-			req.Header.Set("Content-Type", "application/json")
-			rec := httptest.NewRecorder()
-
-			handler.ServeHTTP(rec, req)
-
-			assert.Equal(t, http.StatusBadRequest, rec.Code)
-		})
-	}
-}
-
-func TestHandler_Password_MethodNotAllowed(t *testing.T) {
+func TestHandler_Password_AlwaysGone(t *testing.T) {
 	handler := NewHandler(nil, InternalAuth{}, testLogger())
 
-	methods := []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch}
+	body := `{"username":"admin","password":"secret"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/password", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
 
-	for _, method := range methods {
-		t.Run(method, func(t *testing.T) {
-			req := httptest.NewRequest(method, "/auth/password", nil)
-			rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 
-			handler.ServeHTTP(rec, req)
-
-			assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
-		})
-	}
+	assert.Equal(t, http.StatusGone, rec.Code)
+	assert.Contains(t, rec.Body.String(), "password authentication has been removed")
 }
 
 func TestHandler_Token_Success(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 
 	authSvc.EXPECT().IsEnabled().Return(true)
-	// ValidateToken is tried first; plain password fails JWT parsing
-	authSvc.EXPECT().ValidateToken(mock.Anything, "secret").Return(nil, fmt.Errorf("not a token"))
-	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypePassword)
-	authSvc.EXPECT().ValidatePassword(mock.Anything, "admin", "secret").Return(true)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "admin", []string{"repository:myrepo:pull"}, 5*time.Minute).
+	authSvc.EXPECT().ValidateToken(mock.Anything, "existing-jwt-token").Return(&domain.TokenClaims{
+		Subject: "admin",
+		Scopes:  []string{"repository:myrepo:pull"},
+	}, nil)
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "admin", []string{"repository:myrepo:pull"}, 15*time.Minute).
 		Return("access-token", nil)
 
 	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=repository:myrepo:pull", nil)
-	req.SetBasicAuth("admin", "secret")
+	req.SetBasicAuth("admin", "existing-jwt-token")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -180,7 +62,7 @@ func TestHandler_Token_Success(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	assert.NoError(t, err)
 	assert.Equal(t, "access-token", resp["token"])
-	assert.Equal(t, float64(300), resp["expires_in"])
+	assert.Equal(t, float64(900), resp["expires_in"])
 }
 
 func TestHandler_Token_MissingCredentials(t *testing.T) {
@@ -218,14 +100,12 @@ func TestHandler_Token_InvalidCredentials(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 
 	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().ValidateToken(mock.Anything, "wrongpassword").Return(nil, fmt.Errorf("not a token"))
-	authSvc.EXPECT().GetAuthType().Return(domain.AuthTypePassword)
-	authSvc.EXPECT().ValidatePassword(mock.Anything, "admin", "wrongpassword").Return(false)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "invalid-token").Return(nil, fmt.Errorf("invalid token"))
 
 	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/token", nil)
-	req.SetBasicAuth("admin", "wrongpassword")
+	req.SetBasicAuth("admin", "invalid-token")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -237,7 +117,8 @@ func TestHandler_Token_InternalAuth(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 
 	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "gordon-internal", []string{"repository:*:pull"}, 5*time.Minute).
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "gordon-internal", []string{"repository:*:pull"}, 15*time.Minute).
 		Return("internal-access-token", nil)
 
 	internalAuth := InternalAuth{
@@ -269,7 +150,8 @@ func TestHandler_Token_TokenAuth(t *testing.T) {
 		Subject: "myuser",
 		Scopes:  []string{"repository:*:pull"},
 	}, nil)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "myuser", []string{"repository:*:pull"}, 5*time.Minute).
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "myuser", []string{"repository:*:pull"}, 15*time.Minute).
 		Return("short-lived-token", nil)
 
 	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
@@ -296,7 +178,8 @@ func TestHandler_Token_TokenAuthScopeIntersection(t *testing.T) {
 		Subject: "myuser",
 		Scopes:  []string{"repository:myrepo:pull"},
 	}, nil)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "myuser", []string{"repository:myrepo:pull"}, 5*time.Minute).
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "myuser", []string{"repository:myrepo:pull"}, 15*time.Minute).
 		Return("scoped-token", nil)
 
 	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
@@ -344,7 +227,8 @@ func TestHandler_Token_PasswordAuthWithJWT(t *testing.T) {
 		Subject: "brissou",
 		Scopes:  []string{"*"},
 	}, nil)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "brissou", []string{"repository:*:push,pull"}, 5*time.Minute).
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "brissou", []string{"repository:*:push,pull"}, 15*time.Minute).
 		Return("short-lived-token", nil)
 
 	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
@@ -562,4 +446,81 @@ func TestHandler_isInternalAuth(t *testing.T) {
 			assert.Equal(t, tt.wantResult, result)
 		})
 	}
+}
+
+func TestHandler_Token_AdminScopeSuccess(t *testing.T) {
+	authSvc := mocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "admin-jwt-token").Return(&domain.TokenClaims{
+		Subject: "admin",
+		Scopes:  []string{"admin:routes:read,write"},
+	}, nil)
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "admin", []string{"admin:routes:read"}, 15*time.Minute).
+		Return("admin-access-token", nil)
+
+	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=admin:routes:read", nil)
+	req.SetBasicAuth("admin", "admin-jwt-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	assert.NoError(t, err)
+	assert.Equal(t, "admin-access-token", resp["token"])
+}
+
+func TestHandler_Token_AdminScopeDeniedWithRegistryOnly(t *testing.T) {
+	authSvc := mocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "registry-jwt-token").Return(&domain.TokenClaims{
+		Subject: "myuser",
+		Scopes:  []string{"repository:myrepo:pull,push"},
+	}, nil)
+
+	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=admin:routes:read", nil)
+	req.SetBasicAuth("myuser", "registry-jwt-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "insufficient scope")
+}
+
+func TestHandler_Token_AdminScopeWildcard(t *testing.T) {
+	authSvc := mocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "admin-wildcard-token").Return(&domain.TokenClaims{
+		Subject: "superadmin",
+		Scopes:  []string{"admin:*:*"},
+	}, nil)
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "superadmin", []string{"admin:routes:read"}, 15*time.Minute).
+		Return("wildcard-access-token", nil)
+
+	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=admin:routes:read", nil)
+	req.SetBasicAuth("superadmin", "admin-wildcard-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	assert.NoError(t, err)
+	assert.Equal(t, "wildcard-access-token", resp["token"])
 }

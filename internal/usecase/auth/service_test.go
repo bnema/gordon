@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -26,7 +25,6 @@ func TestService_GetAuthType(t *testing.T) {
 		name     string
 		authType domain.AuthType
 	}{
-		{"password type", domain.AuthTypePassword},
 		{"token type", domain.AuthTypeToken},
 	}
 
@@ -53,53 +51,6 @@ func TestService_IsEnabled(t *testing.T) {
 			assert.Equal(t, tt.enabled, svc.IsEnabled())
 		})
 	}
-}
-
-func TestService_ValidatePassword_Success(t *testing.T) {
-	password := "testpassword123"
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	require.NoError(t, err)
-
-	svc := NewService(Config{
-		Enabled:      true,
-		AuthType:     domain.AuthTypePassword,
-		Username:     "testuser",
-		PasswordHash: string(hash),
-	}, nil, zerowrap.Default())
-
-	ctx := testContext()
-	assert.True(t, svc.ValidatePassword(ctx, "testuser", password))
-}
-
-func TestService_ValidatePassword_WrongPassword(t *testing.T) {
-	hash, err := bcrypt.GenerateFromPassword([]byte("correctpassword"), bcrypt.DefaultCost)
-	require.NoError(t, err)
-
-	svc := NewService(Config{
-		Enabled:      true,
-		AuthType:     domain.AuthTypePassword,
-		Username:     "testuser",
-		PasswordHash: string(hash),
-	}, nil, zerowrap.Default())
-
-	ctx := testContext()
-	assert.False(t, svc.ValidatePassword(ctx, "testuser", "wrongpassword"))
-}
-
-func TestService_ValidatePassword_WrongUsername(t *testing.T) {
-	password := "testpassword123"
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	require.NoError(t, err)
-
-	svc := NewService(Config{
-		Enabled:      true,
-		AuthType:     domain.AuthTypePassword,
-		Username:     "testuser",
-		PasswordHash: string(hash),
-	}, nil, zerowrap.Default())
-
-	ctx := testContext()
-	assert.False(t, svc.ValidatePassword(ctx, "wronguser", password))
 }
 
 func TestService_GenerateToken_Success(t *testing.T) {
@@ -229,13 +180,13 @@ func TestService_GenerateAccessToken_RejectsInvalidExpiry(t *testing.T) {
 	assert.Contains(t, err.Error(), "expiry must be positive")
 
 	// Expiry exceeding max should be rejected
-	_, err = svc.GenerateAccessToken(ctx, "testuser", []string{"repository:myrepo:pull"}, 10*time.Minute)
+	_, err = svc.GenerateAccessToken(ctx, "testuser", []string{"repository:myrepo:pull"}, 2*time.Hour)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds maximum")
 }
 
 func TestService_ValidateToken_LongLivedRequiresStore(t *testing.T) {
-	// Tokens with expiry > 5 minutes must exist in store
+	// Tokens with expiry > MaxAccessTokenLifetime (1h) must exist in store
 	tokenStore := mocks.NewMockTokenStore(t)
 
 	svc := NewService(Config{
@@ -255,7 +206,7 @@ func TestService_ValidateToken_LongLivedRequiresStore(t *testing.T) {
 		}).
 		Return(nil)
 
-	token, err := svc.GenerateToken(ctx, "testuser", []string{"push", "pull"}, time.Hour)
+	token, err := svc.GenerateToken(ctx, "testuser", []string{"push", "pull"}, 2*time.Hour)
 	assert.NoError(t, err)
 
 	// Validation should call GetToken and IsRevoked
@@ -332,7 +283,7 @@ func TestService_ValidateToken_Success(t *testing.T) {
 		Return(nil)
 
 	ctx := testContext()
-	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, time.Hour)
+	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, 2*time.Hour)
 	require.NoError(t, err)
 
 	// Expect GetToken to be called to verify token exists
@@ -390,7 +341,7 @@ func TestService_ValidateToken_Revoked(t *testing.T) {
 		Return(nil)
 
 	ctx := testContext()
-	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, time.Hour)
+	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, 2*time.Hour)
 	require.NoError(t, err)
 
 	// Expect GetToken to be called to verify token exists
@@ -720,43 +671,6 @@ func TestService_ListTokens(t *testing.T) {
 	assert.True(t, tokens[1].ExpiresAt.IsZero(), "CI bot token should never expire")
 }
 
-func TestService_GeneratePasswordHash(t *testing.T) {
-	svc := NewService(Config{}, nil, zerowrap.Default())
-
-	password := "securePassword123!"
-	hash, err := svc.GeneratePasswordHash(password)
-
-	assert.NoError(t, err)
-	assert.NotEmpty(t, hash)
-	assert.NotEqual(t, password, hash, "hash should not equal plain password")
-
-	// Verify the hash works with bcrypt
-	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	assert.NoError(t, err)
-
-	// Verify wrong password fails
-	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte("wrongpassword"))
-	assert.Error(t, err)
-}
-
-func TestService_GeneratePasswordHash_DifferentHashesForSamePassword(t *testing.T) {
-	svc := NewService(Config{}, nil, zerowrap.Default())
-
-	password := "testpassword"
-	hash1, err := svc.GeneratePasswordHash(password)
-	require.NoError(t, err)
-
-	hash2, err := svc.GeneratePasswordHash(password)
-	require.NoError(t, err)
-
-	// Bcrypt should generate different hashes each time due to salt
-	assert.NotEqual(t, hash1, hash2, "bcrypt should generate unique hashes")
-
-	// But both should validate correctly
-	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash1), []byte(password)))
-	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash2), []byte(password)))
-}
-
 func TestService_GenerateToken_HasNbfClaim(t *testing.T) {
 	// Test that generated tokens include the nbf (not-before) claim
 	// This is a security requirement per SEC-MED-006
@@ -829,7 +743,7 @@ func TestExtendTokenSlidesExpiry(t *testing.T) {
 
 	ctx := testContext()
 
-	// Generate a token with a short remaining life (1h) so ExtendToken produces a different exp
+	// Generate a token with a short remaining life (2h) so ExtendToken produces a different exp
 	var capturedToken *domain.Token
 	tokenStore.EXPECT().
 		SaveToken(mock.Anything, mock.Anything, mock.Anything).
@@ -838,7 +752,7 @@ func TestExtendTokenSlidesExpiry(t *testing.T) {
 		}).
 		Return(nil)
 
-	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, time.Hour)
+	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, 2*time.Hour)
 	require.NoError(t, err)
 
 	// ExtendToken flow:
@@ -901,7 +815,7 @@ func TestExtendTokenDebounce(t *testing.T) {
 
 	ctx := testContext()
 
-	// Generate a short-lived token (1h) so the first extension produces a different JWT
+	// Generate a short-lived token (2h) so the first extension produces a different JWT
 	var capturedToken *domain.Token
 	tokenStore.EXPECT().
 		SaveToken(mock.Anything, mock.Anything, mock.Anything).
@@ -910,7 +824,7 @@ func TestExtendTokenDebounce(t *testing.T) {
 		}).
 		Return(nil)
 
-	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, time.Hour)
+	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, 2*time.Hour)
 	require.NoError(t, err)
 
 	// First extend: flow is ValidateToken(GetToken+IsRevoked) + GetToken(debounce) + UpdateTokenExpiry
