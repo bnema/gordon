@@ -93,22 +93,7 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 			// (allows CI/CD tokens while still supporting interactive password login)
 			var authenticated bool
 			var tokenClaims *domain.TokenClaims
-			switch authSvc.GetAuthType() {
-			case domain.AuthTypePassword:
-				// Try password auth first
-				authenticated = authenticatePassword(ctx, r, authSvc, log)
-				if !authenticated {
-					// Fall back to token auth (for CI/CD tokens)
-					authenticated, tokenClaims = authenticateToken(ctx, r, authSvc, log)
-				}
-			case domain.AuthTypeToken:
-				authenticated, tokenClaims = authenticateToken(ctx, r, authSvc, log)
-			default:
-				log.Error().
-					Str("auth_type", string(authSvc.GetAuthType())).
-					Msg("unknown auth type")
-				authenticated = false
-			}
+			authenticated, tokenClaims = authenticateToken(ctx, r, authSvc, log)
 
 			if !authenticated {
 				sendUnauthorized(w, authSvc.GetAuthType(), r.Host, log, r)
@@ -130,34 +115,6 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// authenticatePassword handles password-based authentication.
-func authenticatePassword(ctx context.Context, r *http.Request, authSvc in.AuthService, log zerowrap.Logger) bool {
-	username, password, ok := r.BasicAuth()
-	if !ok {
-		log.Debug().
-			Str(zerowrap.FieldMethod, r.Method).
-			Str(zerowrap.FieldPath, r.URL.Path).
-			Msg("no basic auth provided")
-		return false
-	}
-
-	if authSvc.ValidatePassword(ctx, username, password) {
-		log.Debug().
-			Str("username", username).
-			Str(zerowrap.FieldMethod, r.Method).
-			Str(zerowrap.FieldPath, r.URL.Path).
-			Msg("password authentication successful")
-		return true
-	}
-
-	log.Debug().
-		Str("provided_username", redactUsername(username)).
-		Str(zerowrap.FieldMethod, r.Method).
-		Str(zerowrap.FieldPath, r.URL.Path).
-		Msg("password authentication failed")
-	return false
 }
 
 // authenticateToken handles token-based authentication.

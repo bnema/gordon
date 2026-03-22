@@ -39,21 +39,6 @@ func NewHandler(authSvc in.AuthService, internalAuth InternalAuth, log zerowrap.
 	}
 }
 
-// PasswordRequest represents the request body for POST /auth/password.
-type PasswordRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-// PasswordResponse represents the response from POST /auth/password.
-type PasswordResponse struct {
-	Token     string `json:"token"`
-	ExpiresIn int    `json:"expires_in"`
-	IssuedAt  string `json:"issued_at"`
-}
-
-const passwordSessionTTL = 24 * time.Hour
-
 func setNoStoreHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
@@ -76,107 +61,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePassword handles POST /auth/password requests.
-// Validates username/password and returns a daily session JWT.
-// Only works when auth type is "password" - returns error for "token" auth type.
+// Password authentication has been removed; this endpoint always returns Gone.
 func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request) {
 	setNoStoreHeaders(w)
-
-	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
-		zerowrap.FieldLayer:   "adapter",
-		zerowrap.FieldAdapter: "http",
-		zerowrap.FieldHandler: "auth",
-		zerowrap.FieldMethod:  r.Method,
-		zerowrap.FieldPath:    r.URL.Path,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	if r.Method != http.MethodPost {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "method not allowed"})
-		return
-	}
-
-	// Check if auth is enabled
-	if h.authSvc == nil || !h.authSvc.IsEnabled() {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication is required"})
-		return
-	}
-
-	// Password endpoint only works with password auth type
-	if h.authSvc.GetAuthType() != domain.AuthTypePassword {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{
-			Error: "password authentication not configured, use token-based auth",
-		})
-		return
-	}
-
-	// Limit request body size
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
-
-	// Parse request body
-	var req PasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "invalid request body"})
-		return
-	}
-
-	if req.Username == "" || req.Password == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "username and password are required"})
-		return
-	}
-
-	// Validate password
-	if !h.authSvc.ValidatePassword(ctx, req.Username, req.Password) {
-		log.Debug().
-			Str("username", req.Username).
-			Msg("password authentication failed")
-		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon"`)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "invalid credentials"})
-		return
-	}
-
-	// Generate daily session token with full access (push, pull, admin).
-	// This enforces regular re-authentication similar to short-session UX.
-	expiry := passwordSessionTTL
-	scopes := []string{"push", "pull", "admin:*:*"}
-
-	token, err := h.authSvc.GenerateToken(ctx, req.Username, scopes, expiry)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to generate token")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "failed to generate token"})
-		return
-	}
-
-	response := PasswordResponse{
-		Token:     token,
-		ExpiresIn: int(expiry.Seconds()),
-		IssuedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error().Err(err).Msg("failed to encode password response")
-	}
-
-	log.Debug().
-		Str("username", req.Username).
-		Int("expires_in", response.ExpiresIn).
-		Msg("long-lived token issued via password auth")
+	w.WriteHeader(http.StatusGone)
+	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{
+		Error: "password authentication has been removed, use token-based auth",
+	})
 }
 
 // handleToken handles GET /auth/token requests.
@@ -278,19 +170,10 @@ func (h *Handler) authenticateTokenCredentials(ctx context.Context, r *http.Requ
 		return true, nil
 	}
 
-	// Always try JWT token validation first — even in password-auth mode the
-	// server issues JWTs on login, and the CLI sends them back via Basic Auth
-	// for registry token exchange.
+	// Validate JWT token sent via Basic Auth password field.
 	claims, err := h.authSvc.ValidateToken(ctx, password)
 	if err == nil && claims.Subject == username {
 		return true, claims
-	}
-
-	// Fall back to password validation for direct username/password credentials.
-	if h.authSvc.GetAuthType() == domain.AuthTypePassword {
-		if h.authSvc.ValidatePassword(ctx, username, password) {
-			return true, nil
-		}
 	}
 
 	return false, nil
