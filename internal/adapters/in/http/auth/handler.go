@@ -177,6 +177,10 @@ func (h *Handler) authenticateTokenCredentials(ctx context.Context, r *http.Requ
 	// Validate JWT token sent via Basic Auth password field.
 	claims, err := h.authSvc.ValidateToken(ctx, password)
 	if err == nil && claims.Subject == username {
+		if claims.IsEphemeral {
+			log.Debug().Msg("rejected ephemeral token as exchange credential")
+			return false, nil
+		}
 		return true, claims
 	}
 
