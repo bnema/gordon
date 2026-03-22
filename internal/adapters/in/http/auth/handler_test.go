@@ -44,7 +44,8 @@ func TestHandler_Token_Success(t *testing.T) {
 		Subject: "admin",
 		Scopes:  []string{"repository:myrepo:pull"},
 	}, nil)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "admin", []string{"repository:myrepo:pull"}, 5*time.Minute).
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "admin", []string{"repository:myrepo:pull"}, 15*time.Minute).
 		Return("access-token", nil)
 
 	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
@@ -61,7 +62,7 @@ func TestHandler_Token_Success(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	assert.NoError(t, err)
 	assert.Equal(t, "access-token", resp["token"])
-	assert.Equal(t, float64(300), resp["expires_in"])
+	assert.Equal(t, float64(900), resp["expires_in"])
 }
 
 func TestHandler_Token_MissingCredentials(t *testing.T) {
@@ -116,7 +117,8 @@ func TestHandler_Token_InternalAuth(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 
 	authSvc.EXPECT().IsEnabled().Return(true)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "gordon-internal", []string{"repository:*:pull"}, 5*time.Minute).
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "gordon-internal", []string{"repository:*:pull"}, 15*time.Minute).
 		Return("internal-access-token", nil)
 
 	internalAuth := InternalAuth{
@@ -148,7 +150,8 @@ func TestHandler_Token_TokenAuth(t *testing.T) {
 		Subject: "myuser",
 		Scopes:  []string{"repository:*:pull"},
 	}, nil)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "myuser", []string{"repository:*:pull"}, 5*time.Minute).
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "myuser", []string{"repository:*:pull"}, 15*time.Minute).
 		Return("short-lived-token", nil)
 
 	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
@@ -175,7 +178,8 @@ func TestHandler_Token_TokenAuthScopeIntersection(t *testing.T) {
 		Subject: "myuser",
 		Scopes:  []string{"repository:myrepo:pull"},
 	}, nil)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "myuser", []string{"repository:myrepo:pull"}, 5*time.Minute).
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "myuser", []string{"repository:myrepo:pull"}, 15*time.Minute).
 		Return("scoped-token", nil)
 
 	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
@@ -223,7 +227,8 @@ func TestHandler_Token_PasswordAuthWithJWT(t *testing.T) {
 		Subject: "brissou",
 		Scopes:  []string{"*"},
 	}, nil)
-	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "brissou", []string{"repository:*:push,pull"}, 5*time.Minute).
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "brissou", []string{"repository:*:push,pull"}, 15*time.Minute).
 		Return("short-lived-token", nil)
 
 	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
@@ -441,4 +446,81 @@ func TestHandler_isInternalAuth(t *testing.T) {
 			assert.Equal(t, tt.wantResult, result)
 		})
 	}
+}
+
+func TestHandler_Token_AdminScopeSuccess(t *testing.T) {
+	authSvc := mocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "admin-jwt-token").Return(&domain.TokenClaims{
+		Subject: "admin",
+		Scopes:  []string{"admin:routes:read,write"},
+	}, nil)
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "admin", []string{"admin:routes:read"}, 15*time.Minute).
+		Return("admin-access-token", nil)
+
+	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=admin:routes:read", nil)
+	req.SetBasicAuth("admin", "admin-jwt-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	assert.NoError(t, err)
+	assert.Equal(t, "admin-access-token", resp["token"])
+}
+
+func TestHandler_Token_AdminScopeDeniedWithRegistryOnly(t *testing.T) {
+	authSvc := mocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "registry-jwt-token").Return(&domain.TokenClaims{
+		Subject: "myuser",
+		Scopes:  []string{"repository:myrepo:pull,push"},
+	}, nil)
+
+	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=admin:routes:read", nil)
+	req.SetBasicAuth("myuser", "registry-jwt-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "insufficient scope")
+}
+
+func TestHandler_Token_AdminScopeWildcard(t *testing.T) {
+	authSvc := mocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "admin-wildcard-token").Return(&domain.TokenClaims{
+		Subject: "superadmin",
+		Scopes:  []string{"admin:*:*"},
+	}, nil)
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "superadmin", []string{"admin:routes:read"}, 15*time.Minute).
+		Return("wildcard-access-token", nil)
+
+	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=admin:routes:read", nil)
+	req.SetBasicAuth("superadmin", "admin-wildcard-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	assert.NoError(t, err)
+	assert.Equal(t, "wildcard-access-token", resp["token"])
 }

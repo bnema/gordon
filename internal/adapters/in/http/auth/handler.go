@@ -135,8 +135,9 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Generate a short-lived access token (5 minutes) - not stored
-	accessToken, err := h.authSvc.GenerateAccessToken(ctx, username, requestedScopes, 5*time.Minute)
+	// Generate a short-lived access token with configurable TTL - not stored
+	ttl := h.authSvc.GetAccessTokenTTL()
+	accessToken, err := h.authSvc.GenerateAccessToken(ctx, username, requestedScopes, ttl)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to generate access token")
 		w.Header().Set("Content-Type", "application/json")
@@ -147,7 +148,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 
 	response := dto.TokenResponse{
 		Token:     accessToken,
-		ExpiresIn: 300, // 5 minutes in seconds
+		ExpiresIn: int(ttl.Seconds()),
 		IssuedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -184,26 +185,47 @@ func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []stri
 
 	for _, reqScopeStr := range requestedScopes {
 		reqScope, err := domain.ParseScope(reqScopeStr)
-		if err != nil || reqScope.Type != domain.ScopeTypeRepository {
+		if err != nil {
 			continue
 		}
 
-		allowedActions := make([]string, 0, len(reqScope.Actions))
-		for _, action := range reqScope.Actions {
-			if hasGrantedRegistryAccess(grantedScopes, reqScope.Name, action) {
-				allowedActions = append(allowedActions, action)
+		switch reqScope.Type {
+		case domain.ScopeTypeRepository:
+			allowedActions := make([]string, 0, len(reqScope.Actions))
+			for _, action := range reqScope.Actions {
+				if hasGrantedRegistryAccess(grantedScopes, reqScope.Name, action) {
+					allowedActions = append(allowedActions, action)
+				}
 			}
-		}
 
-		if len(allowedActions) == 0 {
-			continue
-		}
+			if len(allowedActions) == 0 {
+				continue
+			}
 
-		effective = append(effective, (&domain.Scope{
-			Type:    reqScope.Type,
-			Name:    reqScope.Name,
-			Actions: allowedActions,
-		}).String())
+			effective = append(effective, (&domain.Scope{
+				Type:    reqScope.Type,
+				Name:    reqScope.Name,
+				Actions: allowedActions,
+			}).String())
+
+		case domain.ScopeTypeAdmin:
+			allowedActions := make([]string, 0, len(reqScope.Actions))
+			for _, action := range reqScope.Actions {
+				if hasGrantedAdminAccess(grantedScopes, reqScope.Name, action) {
+					allowedActions = append(allowedActions, action)
+				}
+			}
+
+			if len(allowedActions) == 0 {
+				continue
+			}
+
+			effective = append(effective, (&domain.Scope{
+				Type:    reqScope.Type,
+				Name:    reqScope.Name,
+				Actions: allowedActions,
+			}).String())
+		}
 	}
 
 	log.Debug().
@@ -242,6 +264,26 @@ func hasGrantedRegistryAccess(grantedScopes []string, repoName, action string) b
 	return false
 }
 
+func hasGrantedAdminAccess(grantedScopes []string, resource, action string) bool {
+	for _, grantedScopeStr := range grantedScopes {
+		scopeStr := strings.TrimSpace(grantedScopeStr)
+		if scopeStr == domain.ScopeActionAll {
+			return true
+		}
+
+		adminScope, err := domain.ParseAdminScope(scopeStr)
+		if err != nil {
+			continue
+		}
+
+		if adminScope.CanAccess(resource, action) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // parseRequestedScopes extracts and validates scope parameters from the request.
 // Per Docker Registry v2 auth spec, scope format is: repository:name:actions
 // Example: GET /auth/token?scope=repository:myrepo:push,pull&scope=repository:other:pull
@@ -266,8 +308,8 @@ func (h *Handler) parseRequestedScopes(r *http.Request, log zerowrap.Logger) []s
 			continue
 		}
 
-		// Only allow repository scopes
-		if scope.Type != "repository" {
+		// Allow repository and admin scopes
+		if scope.Type != domain.ScopeTypeRepository && scope.Type != domain.ScopeTypeAdmin {
 			log.Debug().
 				Str("scope_type", scope.Type).
 				Str("scope", scopeStr).

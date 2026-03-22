@@ -130,10 +130,11 @@ type Config struct {
 		Type           string `mapstructure:"type"`            // "password" or "token"
 		SecretsBackend string `mapstructure:"secrets_backend"` // "pass", "sops", or "unsafe"
 		Username       string `mapstructure:"username"`
-		Password       string `mapstructure:"password"`      // deprecated: use password_hash
-		PasswordHash   string `mapstructure:"password_hash"` // path in secrets backend
-		TokenSecret    string `mapstructure:"token_secret"`  // path in secrets backend
-		TokenExpiry    string `mapstructure:"token_expiry"`  // e.g., "720h", "30d"
+		Password       string `mapstructure:"password"`         // deprecated: use password_hash
+		PasswordHash   string `mapstructure:"password_hash"`    // path in secrets backend
+		TokenSecret    string `mapstructure:"token_secret"`     // path in secrets backend
+		TokenExpiry    string `mapstructure:"token_expiry"`     // e.g., "720h", "30d"
+		AccessTokenTTL string `mapstructure:"access_token_ttl"` // e.g., "15m", "30m" (default: 15m)
 	} `mapstructure:"auth"`
 
 	API struct {
@@ -1087,6 +1088,19 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 	}
 	authConfig.TokenSecret = secret
 	authConfig.TokenExpiry = expiry
+
+	accessTokenTTL := 15 * time.Minute // default
+	if cfg.Auth.AccessTokenTTL != "" {
+		parsed, err := time.ParseDuration(cfg.Auth.AccessTokenTTL)
+		if err != nil {
+			return auth.Config{}, fmt.Errorf("invalid auth.access_token_ttl %q: %w", cfg.Auth.AccessTokenTTL, err)
+		}
+		if parsed <= 0 {
+			return auth.Config{}, fmt.Errorf("auth.access_token_ttl must be positive")
+		}
+		accessTokenTTL = parsed
+	}
+	authConfig.AccessTokenTTL = accessTokenTTL
 
 	return authConfig, nil
 }
