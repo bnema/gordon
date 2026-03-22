@@ -261,6 +261,50 @@ func (_c *MockAuthService_GenerateToken_Call) RunAndReturn(run func(ctx context.
 	return _c
 }
 
+// GetAccessTokenTTL provides a mock function for the type MockAuthService
+func (_mock *MockAuthService) GetAccessTokenTTL() time.Duration {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAccessTokenTTL")
+	}
+
+	var r0 time.Duration
+	if returnFunc, ok := ret.Get(0).(func() time.Duration); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(time.Duration)
+	}
+	return r0
+}
+
+// MockAuthService_GetAccessTokenTTL_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAccessTokenTTL'
+type MockAuthService_GetAccessTokenTTL_Call struct {
+	*mock.Call
+}
+
+// GetAccessTokenTTL is a helper method to define mock.On call
+func (_e *MockAuthService_Expecter) GetAccessTokenTTL() *MockAuthService_GetAccessTokenTTL_Call {
+	return &MockAuthService_GetAccessTokenTTL_Call{Call: _e.mock.On("GetAccessTokenTTL")}
+}
+
+func (_c *MockAuthService_GetAccessTokenTTL_Call) Run(run func()) *MockAuthService_GetAccessTokenTTL_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockAuthService_GetAccessTokenTTL_Call) Return(duration time.Duration) *MockAuthService_GetAccessTokenTTL_Call {
+	_c.Call.Return(duration)
+	return _c
+}
+
+func (_c *MockAuthService_GetAccessTokenTTL_Call) RunAndReturn(run func() time.Duration) *MockAuthService_GetAccessTokenTTL_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAuthStatus provides a mock function for the type MockAuthService
 func (_mock *MockAuthService) GetAuthStatus(ctx context.Context) (*domain.AuthStatus, error) {
 	ret := _mock.Called(ctx)

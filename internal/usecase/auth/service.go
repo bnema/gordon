@@ -18,9 +18,11 @@ import (
 const (
 	// TokenIssuer is the issuer claim for generated tokens.
 	TokenIssuer = "gordon-registry"
+	// DefaultAccessTokenTTL is the default lifetime for ephemeral access tokens.
+	DefaultAccessTokenTTL = 15 * time.Minute
 	// MaxAccessTokenLifetime is the maximum lifetime for ephemeral access tokens.
 	// Tokens with this lifetime or less skip store validation.
-	MaxAccessTokenLifetime = 5 * time.Minute
+	MaxAccessTokenLifetime = 1 * time.Hour
 	// maxAccessTokenLifetimeSecs is MaxAccessTokenLifetime in seconds for JWT comparisons.
 	maxAccessTokenLifetimeSecs = int64(MaxAccessTokenLifetime / time.Second)
 	// tokenExtensionTTL is the amount of time added to a token's expiry when extended.
@@ -34,11 +36,12 @@ const (
 
 // Config holds the authentication configuration.
 type Config struct {
-	Enabled     bool
-	AuthType    domain.AuthType
-	Username    string
-	TokenSecret []byte        // signing secret for token auth
-	TokenExpiry time.Duration // default token expiry (0 = never)
+	Enabled        bool
+	AuthType       domain.AuthType
+	Username       string
+	TokenSecret    []byte        // signing secret for token auth
+	TokenExpiry    time.Duration // default token expiry (0 = never)
+	AccessTokenTTL time.Duration // ephemeral token lifetime (default: 15m)
 }
 
 // Service implements the AuthService interface.
@@ -65,6 +68,14 @@ func (s *Service) GetAuthType() domain.AuthType {
 // IsEnabled returns whether authentication is enabled.
 func (s *Service) IsEnabled() bool {
 	return s.config.Enabled
+}
+
+// GetAccessTokenTTL returns the configured ephemeral access token lifetime.
+func (s *Service) GetAccessTokenTTL() time.Duration {
+	if s.config.AccessTokenTTL > 0 {
+		return s.config.AccessTokenTTL
+	}
+	return DefaultAccessTokenTTL
 }
 
 // ValidateToken validates a JWT token and returns its claims.

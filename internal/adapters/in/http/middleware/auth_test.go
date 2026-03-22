@@ -162,6 +162,10 @@ func (s stubAuthService) ExtendToken(context.Context, string) (string, error) {
 	return "", errors.New("not implemented")
 }
 
+func (s stubAuthService) GetAccessTokenTTL() time.Duration {
+	return 15 * time.Minute
+}
+
 // Tests for checkScopeAccess function
 
 func TestCheckScopeAccess_ActionMapping(t *testing.T) {
