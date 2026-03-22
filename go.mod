@@ -74,7 +74,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	go.uber.org/mock v0.5.2 // direct
-	golang.org/x/time v0.14.0
+	golang.org/x/time v0.15.0
 )
 
 require (
