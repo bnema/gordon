@@ -51,6 +51,9 @@ type Config struct {
 	StabilizationDelay       time.Duration // Post-switch monitoring window (default 2s)
 	TCPProbeTimeout          time.Duration // TCP probe timeout (default 30s)
 	HTTPProbeTimeout         time.Duration // HTTP probe timeout (default 60s)
+	DefaultMemoryLimit       int64         // Default memory limit in bytes for containers (0 = no limit)
+	DefaultNanoCPUs          int64         // Default CPU quota in nanoseconds for containers (0 = no limit)
+	DefaultPidsLimit         int64         // Default max PIDs for containers (0 = no limit)
 }
 
 var tracer = otel.Tracer("gordon.container")
@@ -229,6 +232,10 @@ type containerConfigInput struct {
 }
 
 func (s *Service) buildContainerConfig(in containerConfigInput) *domain.ContainerConfig {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	containerName := s.deploymentContainerName(in.Domain, in.Existing)
 	labels := map[string]string{
 		domain.LabelDomain:  in.Domain,
@@ -266,6 +273,9 @@ func (s *Service) buildContainerConfig(in containerConfigInput) *domain.Containe
 		Hostname:    in.Domain,
 		Labels:      labels,
 		AutoRemove:  false,
+		MemoryLimit: cfg.DefaultMemoryLimit,
+		NanoCPUs:    cfg.DefaultNanoCPUs,
+		PidsLimit:   cfg.DefaultPidsLimit,
 	}
 }
 
@@ -2232,6 +2242,10 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	}
 	envHash := hashEnvironment(envVars)
 
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
 	// Create container with attachment labels (use actual ref, track original in labels)
 	config := &domain.ContainerConfig{
 		Image:       actualImageRef,
@@ -2248,6 +2262,9 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 			domain.LabelEnvHash:    envHash,
 			domain.LabelImage:      serviceImage,
 		},
+		MemoryLimit: cfg.DefaultMemoryLimit,
+		NanoCPUs:    cfg.DefaultNanoCPUs,
+		PidsLimit:   cfg.DefaultPidsLimit,
 	}
 
 	container, err := s.runtime.CreateContainer(ctx, config)

@@ -201,6 +201,34 @@ func TestValidateUUID(t *testing.T) {
 	}
 }
 
+func TestValidateDomainParam(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		valid bool
+	}{
+		{"valid domain", "example.com", true},
+		{"valid subdomain", "app.example.com", true},
+		{"path traversal", "../etc/passwd", false},
+		{"null byte", "example\x00.com", false},
+		{"newline", "example\n.com", false},
+		{"carriage return", "example\r.com", false},
+		{"empty", "", false},
+		{"double dot in middle", "foo..bar", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDomainParam(tt.input)
+			if tt.valid && err != nil {
+				t.Errorf("expected valid, got error: %v", err)
+			}
+			if !tt.valid && err == nil {
+				t.Errorf("expected error for input %q", tt.input)
+			}
+		})
+	}
+}
+
 func TestValidatePath(t *testing.T) {
 	tests := []struct {
 		name     string

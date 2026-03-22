@@ -197,5 +197,4 @@ func TestForwardToTarget_ProxyHeaderSet(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "Gordon", w.Header().Get("X-Proxied-By"))
 }

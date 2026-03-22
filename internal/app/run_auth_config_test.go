@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildAuthConfig_UsesConfigEnabledFlag(t *testing.T) {
-	t.Setenv(TokenSecretEnvVar, "test-token-secret")
+	t.Setenv(TokenSecretEnvVar, "test-token-secret-that-is-at-least-32-bytes-long")
 
 	cfg := Config{}
 	cfg.Auth.Enabled = false
