@@ -28,9 +28,7 @@ enabled = true                               # Enable registry authentication (d
 secrets_backend = "unsafe"                   # "pass", "sops", or "unsafe"
 token_secret = ""                            # Path in secrets backend to JWT signing key (REQUIRED)
 token_expiry = "720h"                        # Token expiry duration (720h = 30 days)
-# Optional: enable password authentication (for interactive login)
-# username = ""                              # Username for password auth
-# password_hash = ""                         # Path in secrets backend to bcrypt hash
+access_token_ttl = "15m"                     # Ephemeral access token lifetime (default: 15m)
 
 # =============================================================================
 # API (applies to both Registry and Admin endpoints)
@@ -182,6 +180,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `auth.enabled` | `true` | Enable authentication; when `false`, run local-only mode (loopback-only `/v2/*`, `/admin/*` disabled) |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |
+| `auth.access_token_ttl` | `"15m"` | Ephemeral access token lifetime |
 | `api.rate_limit.enabled` | `true` | Enable rate limiting |
 | `api.rate_limit.global_rps` | `500` | Global requests/second |
 | `api.rate_limit.per_ip_rps` | `50` | Per-IP requests/second |

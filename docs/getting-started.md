@@ -132,7 +132,7 @@ gordon auth token generate --subject deploy --scopes push,pull --expiry 0
 
 `--expiry 0` creates a non-expiring token. Prefer a finite expiry and a rotation policy unless you explicitly need a long-lived deploy token.
 
-Save this token securely - you'll use it with `gordon --remote` (or a saved remote), and it should be limited to remote deploy use.
+Save this token securely -- you will use it to authenticate with your Gordon server from CI/CD pipelines and remote CLI sessions.
 
 ## 8. Deploy Your First App
 

@@ -4,28 +4,17 @@ Configure authentication for the Gordon registry and Admin API.
 
 Authentication is enabled by default. Gordon will not start without a valid `token_secret` (or `GORDON_AUTH_TOKEN_SECRET`).
 
-## Pick a Mode
+## Configuration
 
-### Token-only (recommended for CI/CD)
+Gordon uses token-only authentication. All registry and Admin API access is controlled through JWT tokens.
 
 ```toml
 [auth]
 secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"
+access_token_ttl = "15m"
 ```
-
-### Password + Token (interactive + CI/CD)
-
-```toml
-[auth]
-secrets_backend = "pass"
-username = "deploy"
-password_hash = "gordon/auth/password_hash"
-token_secret = "gordon/auth/token_secret"
-```
-
-Token auth always works. Adding `username` + `password_hash` enables interactive login.
 
 ## Options
 
@@ -35,12 +24,11 @@ Token auth always works. Adding `username` + `password_hash` enables interactive
 | `secrets_backend` | string | `"unsafe"` | Secrets backend: `"pass"`, `"sops"`, or `"unsafe"` |
 | `token_secret` | string | - | **Required.** Path to JWT signing secret in secrets backend |
 | `token_expiry` | string | `"30d"` | Token validity duration (0 = never expires) |
-| `username` | string | - | Username for password auth (optional) |
-| `password_hash` | string | - | Path to bcrypt hash in secrets backend (optional) |
+| `access_token_ttl` | string | `"15m"` | Lifetime of ephemeral access tokens issued by `/auth/token` |
 
 ## Secrets Backends
 
-`token_secret` and `password_hash` are read through the configured backend:
+`token_secret` is read through the configured backend:
 
 | Backend | Description |
 | --------- | ------------- |
@@ -52,7 +40,7 @@ See [Secret Providers](./secrets.md) for setup details.
 
 ## Environment Variable
 
-`GORDON_AUTH_TOKEN_SECRET` overrides `token_secret` in the config. If you don’t set the env var, `token_secret` is loaded from the configured secrets backend (including `pass`).
+`GORDON_AUTH_TOKEN_SECRET` overrides `token_secret` in the config. If you don't set the env var, `token_secret` is loaded from the configured secrets backend (including `pass`).
 
 ```bash
 export GORDON_AUTH_TOKEN_SECRET="your-32-character-secret-here"
@@ -60,8 +48,6 @@ gordon serve
 ```
 
 ## Setup
-
-### Token-only setup
 
 ```bash
 # Create token secret (random 32+ characters)
@@ -76,28 +62,9 @@ gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
 docker login -u ci-bot -p <token> registry.mydomain.com
 ```
 
-### Password + token setup
-
-```bash
-# Generate bcrypt hash
-gordon auth password hash
-
-# Store hash and token secret
-pass insert gordon/auth/password_hash
-pass insert gordon/auth/token_secret
-```
-
-```bash
-# Docker registry access
-docker login -u deploy -p <password> registry.mydomain.com
-
-# Remote CLI login (stores a token for you)
-gordon auth login --remote prod
-```
-
 ## Remote CLI Tokens
 
-If you already have a token (token-only servers), store it directly:
+Store a token for remote CLI access:
 
 ```bash
 gordon auth login --token <token>
@@ -134,6 +101,23 @@ Examples:
 gordon auth token generate --subject reader --scopes pull --expiry 30d
 gordon auth token generate --subject builder --scopes push --expiry 0
 gordon auth token generate --subject admin --scopes "push,pull,admin:*:*" --expiry 0
+```
+
+## Access Token TTL
+
+The `access_token_ttl` setting controls the lifetime of ephemeral access tokens issued by the `/auth/token` endpoint. These short-lived tokens are used internally for registry operations and Admin API sessions.
+
+| Value | Meaning |
+|-------|---------|
+| `"15m"` | 15 minutes (default) |
+| `"30m"` | 30 minutes |
+| `"1h"` | 1 hour (maximum before store validation applies) |
+
+Tokens with a lifetime of 1 hour or less skip store validation for performance. Longer-lived tokens (generated via `gordon auth token generate`) are always validated against the token store.
+
+```toml
+[auth]
+access_token_ttl = "30m"
 ```
 
 ## Token Expiry
