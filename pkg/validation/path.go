@@ -136,7 +136,7 @@ func ValidateDomainParam(domain string) error {
 	if strings.Contains(domain, "..") {
 		return fmt.Errorf("domain contains path traversal sequence")
 	}
-	if strings.ContainsAny(domain, "\x00\n\r") {
+	if strings.ContainsAny(domain, "\x00\n\r/") {
 		return fmt.Errorf("domain contains invalid characters")
 	}
 	return nil

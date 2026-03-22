@@ -219,14 +219,21 @@ func (s *FileStore) GetAllAttachment(containerName string) (map[string]string, e
 	return secrets, nil
 }
 
-// writeSecretsAtomic writes all secrets to the domain's env file atomically.
-// It writes to a temporary file first, syncs it, then renames to the final path.
-func (s *FileStore) writeSecretsAtomic(domainName string, secrets map[string]string) error {
-	// Validate secret values before any file operations
+// validateSecretValues checks that no secret value contains newline characters.
+func validateSecretValues(secrets map[string]string) error {
 	for key, value := range secrets {
 		if strings.ContainsAny(value, "\n\r") {
 			return fmt.Errorf("secret value for %q contains newline characters", key)
 		}
+	}
+	return nil
+}
+
+// writeSecretsAtomic writes all secrets to the domain's env file atomically.
+// It writes to a temporary file first, syncs it, then renames to the final path.
+func (s *FileStore) writeSecretsAtomic(domainName string, secrets map[string]string) error {
+	if err := validateSecretValues(secrets); err != nil {
+		return err
 	}
 
 	envFile, err := s.validateEnvFilePath(domainName)
@@ -370,11 +377,8 @@ func (s *FileStore) validateAttachmentEnvFilePath(containerName string) (string,
 // writeAttachmentSecretsAtomic writes all secrets to the attachment's env file atomically.
 // It writes to a temporary file first, syncs it, then renames to the final path.
 func (s *FileStore) writeAttachmentSecretsAtomic(containerName string, secrets map[string]string) error {
-	// Validate secret values before any file operations
-	for key, value := range secrets {
-		if strings.ContainsAny(value, "\n\r") {
-			return fmt.Errorf("secret value for %q contains newline characters", key)
-		}
+	if err := validateSecretValues(secrets); err != nil {
+		return err
 	}
 
 	envFile, err := s.validateAttachmentEnvFilePath(containerName)
