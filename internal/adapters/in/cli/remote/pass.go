@@ -95,6 +95,18 @@ func passWriteToken(name, token string) error {
 	return nil
 }
 
+func passDeleteToken(name string) error {
+	if err := validateRemoteName(name); err != nil {
+		return err
+	}
+	if !passAvailable() {
+		return nil // nothing to delete
+	}
+
+	cmd := exec.Command("pass", "rm", "-f", passTokenPath(name)) //nolint:gosec // pass binary name is constant; remote names are validated
+	return cmd.Run()
+}
+
 func warnPassUnavailable() {
 	passWarnOnce.Do(func() {
 		fmt.Fprintf(os.Stderr, "Warning: 'pass' not available. Storing token in plaintext config. Consider installing pass (https://www.passwordstore.org/) for secure token storage.\n")

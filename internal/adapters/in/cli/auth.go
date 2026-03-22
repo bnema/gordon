@@ -34,6 +34,8 @@ func newAuthCmd() *cobra.Command {
 	cmd.AddCommand(newAuthInternalCmd())
 	cmd.AddCommand(newAuthLoginCmd())
 	cmd.AddCommand(newAuthStatusCmd())
+	cmd.AddCommand(newAuthShowTokenCmd())
+	cmd.AddCommand(newAuthLogoutCmd())
 
 	return cmd
 }
@@ -261,6 +263,98 @@ func runAuthLoginWithToken(remoteName, token string) error {
 	if verified {
 		fmt.Println(styles.RenderSuccess("Token verified with remote status endpoint"))
 	}
+	return nil
+}
+
+// newAuthShowTokenCmd creates the show-token command.
+func newAuthShowTokenCmd() *cobra.Command {
+	var remoteName string
+
+	cmd := &cobra.Command{
+		Use:   "show-token",
+		Short: "Print the stored token for a remote",
+		Long: `Print the raw authentication token for a remote to stdout.
+
+The token is resolved from pass, TOML config, or environment variable
+using the same precedence as other commands.
+
+Output is suitable for piping (no decoration, single line).
+
+Examples:
+  gordon auth show-token                     Show token for active remote
+  gordon auth show-token --remote prod       Show token for specific remote
+  gordon auth show-token | pbcopy            Copy token to clipboard`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthShowToken(remoteName)
+		},
+	}
+
+	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to show token for (defaults to active remote)")
+
+	return cmd
+}
+
+func runAuthShowToken(remoteName string) error {
+	resolvedName, entry, err := resolveRemoteEntry(remoteName)
+	if err != nil {
+		return err
+	}
+
+	token := remote.ResolveTokenForRemote(resolvedName, entry)
+	if token == "" {
+		return fmt.Errorf("no token found for remote '%s'", resolvedName)
+	}
+
+	fmt.Println(token)
+	return nil
+}
+
+// newAuthLogoutCmd creates the logout command.
+func newAuthLogoutCmd() *cobra.Command {
+	var (
+		remoteName string
+		revoke     bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "logout",
+		Short: "Remove stored authentication for a remote",
+		Long: `Remove the stored token for a remote from pass and TOML config.
+
+This clears the token from all local storage but does not revoke the
+token on the server. Use --revoke to also invalidate the token server-side
+(not yet implemented).
+
+Examples:
+  gordon auth logout                   Logout from active remote
+  gordon auth logout --remote prod     Logout from specific remote
+  gordon auth logout --revoke          Logout and revoke token on server`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthLogout(remoteName, revoke)
+		},
+	}
+
+	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to logout from (defaults to active remote)")
+	cmd.Flags().BoolVar(&revoke, "revoke", false, "Also revoke the token on the server (not yet implemented)")
+
+	return cmd
+}
+
+func runAuthLogout(remoteName string, revoke bool) error {
+	resolvedName, _, err := resolveRemoteEntry(remoteName)
+	if err != nil {
+		return err
+	}
+
+	if revoke {
+		fmt.Println(styles.RenderWarning("Token revocation not yet implemented; clearing local credentials only"))
+	}
+
+	if err := remote.ClearRemoteToken(resolvedName); err != nil {
+		return fmt.Errorf("failed to clear token: %w", err)
+	}
+
+	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Logged out from remote '%s'", resolvedName)))
 	return nil
 }
 

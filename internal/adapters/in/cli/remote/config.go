@@ -353,6 +353,30 @@ func SetActiveRemote(name string) error {
 	return SaveRemotes("", config)
 }
 
+// ClearRemoteToken removes the token and token_env fields for a named remote
+// from the remotes TOML config, and deletes the pass store entry if present.
+func ClearRemoteToken(name string) error {
+	// Delete from pass (best-effort, no error if pass unavailable)
+	_ = passDeleteToken(name)
+
+	// Clear TOML fields
+	config, err := LoadRemotes("")
+	if err != nil {
+		return err
+	}
+
+	entry, ok := config.Remotes[name]
+	if !ok {
+		return fmt.Errorf("remote '%s' not found", name)
+	}
+
+	entry.Token = ""
+	entry.TokenEnv = ""
+	config.Remotes[name] = entry
+
+	return SaveRemotes("", config)
+}
+
 // ListRemotes returns all saved remotes.
 func ListRemotes() (map[string]RemoteEntry, string, error) {
 	config, err := LoadRemotes("")
