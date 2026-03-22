@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -26,7 +25,6 @@ func TestService_GetAuthType(t *testing.T) {
 		name     string
 		authType domain.AuthType
 	}{
-		{"password type", domain.AuthTypePassword},
 		{"token type", domain.AuthTypeToken},
 	}
 
@@ -53,53 +51,6 @@ func TestService_IsEnabled(t *testing.T) {
 			assert.Equal(t, tt.enabled, svc.IsEnabled())
 		})
 	}
-}
-
-func TestService_ValidatePassword_Success(t *testing.T) {
-	password := "testpassword123"
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	require.NoError(t, err)
-
-	svc := NewService(Config{
-		Enabled:      true,
-		AuthType:     domain.AuthTypePassword,
-		Username:     "testuser",
-		PasswordHash: string(hash),
-	}, nil, zerowrap.Default())
-
-	ctx := testContext()
-	assert.True(t, svc.ValidatePassword(ctx, "testuser", password))
-}
-
-func TestService_ValidatePassword_WrongPassword(t *testing.T) {
-	hash, err := bcrypt.GenerateFromPassword([]byte("correctpassword"), bcrypt.DefaultCost)
-	require.NoError(t, err)
-
-	svc := NewService(Config{
-		Enabled:      true,
-		AuthType:     domain.AuthTypePassword,
-		Username:     "testuser",
-		PasswordHash: string(hash),
-	}, nil, zerowrap.Default())
-
-	ctx := testContext()
-	assert.False(t, svc.ValidatePassword(ctx, "testuser", "wrongpassword"))
-}
-
-func TestService_ValidatePassword_WrongUsername(t *testing.T) {
-	password := "testpassword123"
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	require.NoError(t, err)
-
-	svc := NewService(Config{
-		Enabled:      true,
-		AuthType:     domain.AuthTypePassword,
-		Username:     "testuser",
-		PasswordHash: string(hash),
-	}, nil, zerowrap.Default())
-
-	ctx := testContext()
-	assert.False(t, svc.ValidatePassword(ctx, "wronguser", password))
 }
 
 func TestService_GenerateToken_Success(t *testing.T) {
@@ -718,43 +669,6 @@ func TestService_ListTokens(t *testing.T) {
 	assert.Equal(t, "user1", tokens[0].Subject)
 	assert.Equal(t, "ci-bot", tokens[1].Subject)
 	assert.True(t, tokens[1].ExpiresAt.IsZero(), "CI bot token should never expire")
-}
-
-func TestService_GeneratePasswordHash(t *testing.T) {
-	svc := NewService(Config{}, nil, zerowrap.Default())
-
-	password := "securePassword123!"
-	hash, err := svc.GeneratePasswordHash(password)
-
-	assert.NoError(t, err)
-	assert.NotEmpty(t, hash)
-	assert.NotEqual(t, password, hash, "hash should not equal plain password")
-
-	// Verify the hash works with bcrypt
-	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	assert.NoError(t, err)
-
-	// Verify wrong password fails
-	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte("wrongpassword"))
-	assert.Error(t, err)
-}
-
-func TestService_GeneratePasswordHash_DifferentHashesForSamePassword(t *testing.T) {
-	svc := NewService(Config{}, nil, zerowrap.Default())
-
-	password := "testpassword"
-	hash1, err := svc.GeneratePasswordHash(password)
-	require.NoError(t, err)
-
-	hash2, err := svc.GeneratePasswordHash(password)
-	require.NoError(t, err)
-
-	// Bcrypt should generate different hashes each time due to salt
-	assert.NotEqual(t, hash1, hash2, "bcrypt should generate unique hashes")
-
-	// But both should validate correctly
-	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash1), []byte(password)))
-	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash2), []byte(password)))
 }
 
 func TestService_GenerateToken_HasNbfClaim(t *testing.T) {

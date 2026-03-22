@@ -1024,24 +1024,8 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 }
 
 // resolveAuthType determines the auth type from config.
-// If password_hash is configured, password auth is available (plus tokens).
-// If only token_secret is configured, token-only mode.
-// The explicit "type" field is deprecated but still respected for backwards compat.
-func resolveAuthType(cfg Config) domain.AuthType {
-	// Explicit type takes precedence (backwards compatibility)
-	if cfg.Auth.Type == "token" {
-		return domain.AuthTypeToken
-	}
-	if cfg.Auth.Type == "password" {
-		return domain.AuthTypePassword
-	}
-
-	// Infer from config: password auth if password_hash is configured
-	if cfg.Auth.PasswordHash != "" || cfg.Auth.Password != "" {
-		return domain.AuthTypePassword
-	}
-
-	// Default to token-only
+// Token-only authentication is the only supported mode.
+func resolveAuthType(_ Config) domain.AuthType {
 	return domain.AuthTypeToken
 }
 
@@ -1104,40 +1088,7 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 	authConfig.TokenSecret = secret
 	authConfig.TokenExpiry = expiry
 
-	// Password config only needed for password auth mode
-	if authType == domain.AuthTypePassword {
-		hash, err := loadPasswordHash(ctx, cfg, backend, dataDir, log)
-		if err != nil {
-			return auth.Config{}, err
-		}
-		if hash == "" {
-			return auth.Config{}, errAuthNotConfigured()
-		}
-		authConfig.PasswordHash = hash
-	}
-
 	return authConfig, nil
-}
-
-// errAuthNotConfigured returns an error when auth is enabled but credentials are not configured.
-func errAuthNotConfigured() error {
-	return fmt.Errorf("auth is enabled by default, configure auth type and secrets backend. See: https://gordon.bnema.dev/docs/config/auth")
-}
-
-func loadPasswordHash(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (string, error) {
-	if cfg.Auth.PasswordHash != "" {
-		hash, err := loadSecret(ctx, backend, cfg.Auth.PasswordHash, dataDir, log)
-		if err != nil {
-			return "", log.WrapErr(err, "failed to load password hash")
-		}
-		return hash, nil
-	}
-
-	if cfg.Auth.Password != "" {
-		return "", fmt.Errorf("auth.password is no longer supported; use auth.password_hash with a secrets backend instead")
-	}
-
-	return "", nil
 }
 
 func loadTokenConfig(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) ([]byte, time.Duration, error) {

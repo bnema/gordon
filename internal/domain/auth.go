@@ -12,8 +12,6 @@ import (
 type AuthType string
 
 const (
-	// AuthTypePassword uses bcrypt-hashed password authentication.
-	AuthTypePassword AuthType = "password"
 	// AuthTypeToken uses JWT token-based authentication.
 	AuthTypeToken AuthType = "token"
 )
