@@ -41,7 +41,7 @@ type AuthService interface {
 
 	// ExtendToken re-issues the token with expiry slid forward by 24h.
 	// Returns the same token string if it was already extended within the debounce window (1h).
-	// Skips extension for ephemeral access tokens (≤5min) and service tokens.
+	// Skips extension for ephemeral access tokens (≤1h) and service tokens.
 	ExtendToken(ctx context.Context, tokenString string) (string, error)
 
 	// GetAccessTokenTTL returns the configured ephemeral access token lifetime.

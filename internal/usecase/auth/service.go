@@ -94,11 +94,12 @@ func (s *Service) ValidateToken(ctx context.Context, tokenString string) (*domai
 
 	tokenClaims := buildTokenClaims(claims)
 
-	// Access tokens (short-lived, ≤5min, recently issued) skip store validation.
+	// Access tokens (short-lived, ≤1h, recently issued) skip store validation.
 	// CLI-generated tokens must exist in store to prevent use of externally-created tokens.
 	// Security: require token to be recently issued (within MaxAccessTokenLifetime) to prevent
 	// attackers with stolen secrets from creating arbitrary short-lived tokens.
 	isAccessToken := s.isEphemeralAccessToken(tokenClaims)
+	tokenClaims.IsEphemeral = isAccessToken
 
 	if !isAccessToken {
 		if err := s.ensureTokenExists(ctx, tokenClaims, log); err != nil {
@@ -430,7 +431,7 @@ func (s *Service) ListTokens(ctx context.Context) ([]domain.Token, error) {
 
 // ExtendToken re-issues the token with expiry slid forward by 24h.
 // Returns the same token string if it was already extended within the debounce window (1h).
-// Skips extension for ephemeral access tokens (≤5min) and service tokens.
+// Skips extension for ephemeral access tokens (≤1h) and service tokens.
 func (s *Service) ExtendToken(ctx context.Context, tokenString string) (string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -446,7 +447,7 @@ func (s *Service) ExtendToken(ctx context.Context, tokenString string) (string, 
 
 	tokenClaims := buildTokenClaims(rawClaims)
 
-	// Skip ephemeral access tokens (≤5min lifetime)
+	// Skip ephemeral access tokens (≤1h lifetime)
 	if s.isEphemeralAccessToken(tokenClaims) {
 		log.Debug().Msg("skipping extension for ephemeral access token")
 		return tokenString, nil
