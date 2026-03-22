@@ -86,6 +86,17 @@ func AuthMiddleware(
 				return
 			}
 
+			// SECURITY: Reject long-lived (stored) tokens — they must be exchanged
+			// for ephemeral access tokens via /auth/token first.
+			if !claims.IsEphemeral {
+				log.Warn().
+					Str("subject", claims.Subject).
+					Str("path", r.URL.Path).
+					Msg("long-lived token rejected on admin endpoint")
+				sendUnauthorized(w, "long-lived tokens must be exchanged via /auth/token")
+				return
+			}
+
 			// Check if token has admin scopes
 			hasAdminScope := false
 			for _, scope := range claims.Scopes {

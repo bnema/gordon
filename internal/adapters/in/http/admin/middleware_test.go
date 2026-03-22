@@ -85,8 +85,9 @@ func TestAuthMiddleware_TrustedProxy(t *testing.T) {
 	ipLimiter.EXPECT().Allow(context.Background(), "ip:203.0.113.50").Return(true)
 	authSvc.EXPECT().IsEnabled().Return(true)
 	authSvc.EXPECT().ValidateToken(mock.Anything, "valid-admin-token").Return(&domain.TokenClaims{
-		Subject: "admin",
-		Scopes:  []string{"admin:*:*"},
+		Subject:     "admin",
+		Scopes:      []string{"admin:*:*"},
+		IsEphemeral: true,
 	}, nil)
 	// ExtendToken is called after successful validation; non-fatal if it fails
 	authSvc.EXPECT().ExtendToken(mock.Anything, "valid-admin-token").Return("valid-admin-token", nil)
@@ -114,8 +115,9 @@ func TestAuthMiddleware_NoRateLimiting(t *testing.T) {
 	// No rate limiters, auth still required
 	authSvc.EXPECT().IsEnabled().Return(true)
 	authSvc.EXPECT().ValidateToken(mock.Anything, "valid-admin-token").Return(&domain.TokenClaims{
-		Subject: "admin",
-		Scopes:  []string{"admin:*:*"},
+		Subject:     "admin",
+		Scopes:      []string{"admin:*:*"},
+		IsEphemeral: true,
 	}, nil)
 	// ExtendToken is called after successful validation; non-fatal if it fails
 	authSvc.EXPECT().ExtendToken(mock.Anything, "valid-admin-token").Return("valid-admin-token", nil)
@@ -216,6 +218,64 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "invalid token")
 }
 
+func TestAuthMiddleware_RejectsLongLivedToken(t *testing.T) {
+	authSvc := inmocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "long-lived-token").Return(&domain.TokenClaims{
+		Subject:     "admin",
+		Scopes:      []string{"admin:*:*"},
+		IsEphemeral: false, // long-lived stored token
+	}, nil)
+
+	handlerCalled := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := AuthMiddleware(authSvc, nil, nil, nil, adminTestLogger())
+	wrappedHandler := mw(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.Header.Set("Authorization", "Bearer long-lived-token")
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "long-lived tokens must be exchanged via /auth/token")
+	assert.False(t, handlerCalled, "handler should not be called for long-lived tokens")
+}
+
+func TestAuthMiddleware_AcceptsEphemeralToken(t *testing.T) {
+	authSvc := inmocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "ephemeral-token").Return(&domain.TokenClaims{
+		Subject:     "admin",
+		Scopes:      []string{"admin:*:*"},
+		IsEphemeral: true, // short-lived ephemeral token
+	}, nil)
+	authSvc.EXPECT().ExtendToken(mock.Anything, "ephemeral-token").Return("ephemeral-token", nil)
+
+	handlerCalled := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := AuthMiddleware(authSvc, nil, nil, nil, adminTestLogger())
+	wrappedHandler := mw(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.Header.Set("Authorization", "Bearer ephemeral-token")
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, handlerCalled, "handler should be called for ephemeral tokens")
+}
+
 func TestAuthMiddleware_MissingAdminScope(t *testing.T) {
 	authSvc := inmocks.NewMockAuthService(t)
 	globalLimiter := outmocks.NewMockRateLimiter(t)
@@ -225,8 +285,9 @@ func TestAuthMiddleware_MissingAdminScope(t *testing.T) {
 	ipLimiter.EXPECT().Allow(context.Background(), "ip:192.168.1.100").Return(true)
 	authSvc.EXPECT().IsEnabled().Return(true)
 	authSvc.EXPECT().ValidateToken(mock.Anything, "valid-token").Return(&domain.TokenClaims{
-		Subject: "user1",
-		Scopes:  []string{"push", "pull"}, // No admin scopes
+		Subject:     "user1",
+		Scopes:      []string{"push", "pull"}, // No admin scopes
+		IsEphemeral: true,
 	}, nil)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -255,8 +316,9 @@ func TestAuthMiddleware_Success(t *testing.T) {
 	ipLimiter.EXPECT().Allow(context.Background(), "ip:192.168.1.100").Return(true)
 	authSvc.EXPECT().IsEnabled().Return(true)
 	authSvc.EXPECT().ValidateToken(mock.Anything, "valid-admin-token").Return(&domain.TokenClaims{
-		Subject: "admin",
-		Scopes:  []string{"admin:*:*"},
+		Subject:     "admin",
+		Scopes:      []string{"admin:*:*"},
+		IsEphemeral: true,
 	}, nil)
 	// ExtendToken is called after successful validation; non-fatal if it fails
 	authSvc.EXPECT().ExtendToken(mock.Anything, "valid-admin-token").Return("valid-admin-token", nil)
@@ -376,8 +438,9 @@ func TestAuthMiddleware_ExtendTokenFailureIsNonFatal(t *testing.T) {
 
 	authSvc.EXPECT().IsEnabled().Return(true)
 	authSvc.EXPECT().ValidateToken(mock.Anything, "valid-admin-token").Return(&domain.TokenClaims{
-		Subject: "admin",
-		Scopes:  []string{"admin:*:*"},
+		Subject:     "admin",
+		Scopes:      []string{"admin:*:*"},
+		IsEphemeral: true,
 	}, nil)
 	// ExtendToken fails — response must still be 200 (non-fatal)
 	authSvc.EXPECT().ExtendToken(mock.Anything, "valid-admin-token").Return("", errors.New("store unavailable"))
@@ -405,8 +468,9 @@ func TestAuthMiddleware_ExtendTokenRotationHeader(t *testing.T) {
 
 	authSvc.EXPECT().IsEnabled().Return(true)
 	authSvc.EXPECT().ValidateToken(mock.Anything, "old-token").Return(&domain.TokenClaims{
-		Subject: "admin",
-		Scopes:  []string{"admin:*:*"},
+		Subject:     "admin",
+		Scopes:      []string{"admin:*:*"},
+		IsEphemeral: true,
 	}, nil)
 	// ExtendToken returns a rotated token — must appear in response header
 	authSvc.EXPECT().ExtendToken(mock.Anything, "old-token").Return("rotated-token", nil)

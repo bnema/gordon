@@ -341,6 +341,107 @@ func TestCheckScopeAccess_SpecialRoutes(t *testing.T) {
 	}
 }
 
+func TestRegistryAuthV2_RejectsLongLivedToken(t *testing.T) {
+	log := testLogger()
+	authSvc := stubAuthService{
+		enabled:  true,
+		authType: domain.AuthTypeToken,
+		validateToken: func(_ context.Context, _ string) (*domain.TokenClaims, error) {
+			return &domain.TokenClaims{
+				Subject:     "admin",
+				Scopes:      []string{"repository:*:pull,push"},
+				IsEphemeral: false, // long-lived stored token
+			}, nil
+		},
+	}
+	internalAuth := InternalRegistryAuth{
+		Username: "internal",
+		Password: "secret",
+	}
+
+	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/v2/myrepo/manifests/latest", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("Authorization", "Bearer some-long-lived-jwt")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "long-lived tokens must be exchanged via /auth/token")
+}
+
+func TestRegistryAuthV2_AcceptsEphemeralToken(t *testing.T) {
+	log := testLogger()
+	authSvc := stubAuthService{
+		enabled:  true,
+		authType: domain.AuthTypeToken,
+		validateToken: func(_ context.Context, _ string) (*domain.TokenClaims, error) {
+			return &domain.TokenClaims{
+				Subject:     "admin",
+				Scopes:      []string{"repository:*:pull,push"},
+				IsEphemeral: true, // short-lived ephemeral token
+			}, nil
+		},
+	}
+	internalAuth := InternalRegistryAuth{
+		Username: "internal",
+		Password: "secret",
+	}
+
+	handlerCalled := false
+	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/v2/myrepo/manifests/latest", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("Authorization", "Bearer some-ephemeral-jwt")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, handlerCalled, "handler should be called for ephemeral tokens")
+}
+
+func TestRegistryAuthV2_RejectsLongLivedTokenAsPassword(t *testing.T) {
+	log := testLogger()
+	authSvc := stubAuthService{
+		enabled:  true,
+		authType: domain.AuthTypeToken,
+		validateToken: func(_ context.Context, _ string) (*domain.TokenClaims, error) {
+			return &domain.TokenClaims{
+				Subject:     "ci-user",
+				Scopes:      []string{"repository:*:pull,push"},
+				IsEphemeral: false, // long-lived stored token
+			}, nil
+		},
+	}
+	internalAuth := InternalRegistryAuth{
+		Username: "internal",
+		Password: "secret",
+	}
+
+	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/v2/myrepo/manifests/latest", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.SetBasicAuth("ci-user", "some-long-lived-jwt")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "long-lived tokens must be exchanged via /auth/token")
+}
+
 func TestCheckScopeAccess_DenialCases(t *testing.T) {
 	log := testLogger()
 
