@@ -218,21 +218,57 @@ func (s *AdminScope) String() string {
 
 // HasAdminAccess checks if a list of scope strings grants admin access to the resource and action.
 func HasAdminAccess(scopes []string, resource, action string) bool {
-	for _, scopeStr := range scopes {
+	return ScopesGrantAdminAccess(scopes, resource, action)
+}
+
+// ScopesGrantRegistryAccess reports whether any of the granted scope strings
+// authorise the given action on the named repository.
+// It handles simple shorthand scopes ("pull", "push", "*") for backwards
+// compatibility as well as full Docker v2 format scopes (repository:name:actions).
+func ScopesGrantRegistryAccess(grantedScopes []string, repoName, action string) bool {
+	for _, raw := range grantedScopes {
+		scopeStr := strings.TrimSpace(raw)
+
+		// Shorthand scopes: "*", "pull", "push"
+		switch scopeStr {
+		case ScopeActionAll:
+			return true
+		case ScopeActionPull, ScopeActionPush:
+			if scopeStr == action {
+				return true
+			}
+		}
+
+		// Full Docker v2 format: repository:name:actions
 		scope, err := ParseScope(scopeStr)
 		if err != nil {
 			continue
 		}
-
-		if !scope.IsAdminScope() {
+		if scope.Type != ScopeTypeRepository {
 			continue
+		}
+		if scope.CanAccess(repoName, action) {
+			return true
+		}
+	}
+	return false
+}
+
+// ScopesGrantAdminAccess reports whether any of the granted scope strings
+// authorise the given action on the named admin resource.
+// It handles the wildcard shorthand ("*") as well as full admin scope format
+// (admin:resource:actions).
+func ScopesGrantAdminAccess(grantedScopes []string, resource, action string) bool {
+	for _, raw := range grantedScopes {
+		scopeStr := strings.TrimSpace(raw)
+		if scopeStr == ScopeActionAll {
+			return true
 		}
 
 		adminScope, err := ParseAdminScope(scopeStr)
 		if err != nil {
 			continue
 		}
-
 		if adminScope.CanAccess(resource, action) {
 			return true
 		}
