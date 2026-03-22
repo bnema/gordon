@@ -8,7 +8,10 @@ Manage Gordon server authentication tokens.
 
 | Subcommand | Description |
 |------------|-------------|
-| `login` | Authenticate with a remote Gordon server |
+| `login` | Store a token for a remote Gordon server |
+| `show-token` | Print the stored token for a remote |
+| `logout` | Remove stored token for a remote |
+| `status` | Check authentication session status |
 | `token generate` | Generate a new JWT token |
 | `token list` | List all stored tokens |
 | `token revoke` | Revoke a token by ID (use `--all` to revoke all tokens) |
@@ -18,32 +21,31 @@ Manage Gordon server authentication tokens.
 
 ## gordon auth login
 
-Authenticate with a remote Gordon server using a pre-generated token.
+Store a pre-generated token for a remote Gordon server.
 
 ```bash
-gordon auth login [options]
+gordon auth login --token <token> [options]
 ```
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
+| `-t, --token` | **Required.** Authentication token to store |
 | `-r, --remote` | Remote to authenticate with (defaults to active remote) |
-| `-t, --token` | Authentication token to store for the remote |
 
 ### Description
 
-This command stores a pre-generated token for use with a remote Gordon server. When [pass](https://www.passwordstore.org/) is available, the token is stored encrypted at `gordon/remotes/<name>/token` and any plaintext token fields are cleared from `remotes.toml`. When `pass` is unavailable, the token is stored in plaintext in `remotes.toml` with a warning.
+Stores a token for use with a remote Gordon server. The `--token` flag is required — generate a token on the server with `gordon auth token generate`.
+
+When [pass](https://www.passwordstore.org/) is available, the token is stored encrypted at `gordon/remotes/<name>/token` and plaintext fields are cleared from `remotes.toml`. When `pass` is unavailable, the token is stored in plaintext with a warning.
 
 The token is verified against `/admin/status` on a best-effort basis.
 
 ### Examples
 
 ```bash
-# Store a token for the active remote
 gordon auth login --token <token>
-
-# Store a token for a specific remote
 gordon auth login --remote prod --token <token>
 ```
 
@@ -61,6 +63,41 @@ When `pass` is not available:
 Warning: 'pass' not available. Storing token in plaintext config. Consider installing pass (https://www.passwordstore.org/) for secure token storage.
 Token stored for remote 'prod'
 ```
+
+---
+
+## gordon auth show-token
+
+Print the stored token for a remote.
+
+```bash
+gordon auth show-token [--remote <name>]
+```
+
+Output is the raw token string, suitable for piping. Returns an error if no token is stored.
+
+```bash
+gordon auth show-token
+gordon auth show-token --remote prod
+gordon auth show-token | pbcopy  # copy to clipboard
+```
+
+---
+
+## gordon auth logout
+
+Remove the stored token for a remote.
+
+```bash
+gordon auth logout [--remote <name>] [--revoke]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-r, --remote` | Remote to log out from (defaults to active remote) |
+| `--revoke` | Also revoke the token server-side (not yet implemented) |
+
+Deletes the token from pass and clears token fields in `remotes.toml`.
 
 ---
 
