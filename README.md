@@ -137,6 +137,9 @@ See the [Deploy Action README](.github/actions/deploy/README.md) for multi-platf
 - Network isolation per application
 - Single binary, ~15MB RAM
 
+> [!WARNING]
+> Gordon does not handle TLS termination. Place it behind Cloudflare Proxy or any upstream reverse proxy that manages HTTPS certificates.
+
 ## Documentation
 
 Full documentation at **[gordon.bnema.dev](https://gordon.bnema.dev)**
