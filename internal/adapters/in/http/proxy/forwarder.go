@@ -163,9 +163,6 @@ func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, regi
 		// and could conflict with Gordon's own security headers on browser-facing
 		// routes. We strip them here to ensure clean, predictable registry responses.
 		ModifyResponse: func(resp *http.Response) error {
-			resp.Header.Set("X-Proxied-By", "Gordon")
-			resp.Header.Set("X-Registry-Backend", "gordon-registry")
-
 			// Remove browser-oriented security headers injected by the upstream
 			// registry. These are unnecessary for Docker client API traffic and
 			// would conflict with headers set on browser-facing proxy routes.
@@ -213,8 +210,6 @@ func newReverseProxy(targetURL *url.URL, originalHost string, transport http.Rou
 // modifyResponse returns a function that adds proxy headers and enforces response size limits.
 func modifyResponse(maxResponseSize int64) func(*http.Response) error {
 	return func(resp *http.Response) error {
-		resp.Header.Set("X-Proxied-By", "Gordon")
-
 		if maxResponseSize > 0 {
 			if resp.ContentLength > maxResponseSize {
 				resp.Body.Close()

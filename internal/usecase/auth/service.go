@@ -3,7 +3,6 @@ package auth
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -20,11 +18,11 @@ import (
 const (
 	// TokenIssuer is the issuer claim for generated tokens.
 	TokenIssuer = "gordon-registry"
-	// DefaultBcryptCost is the default cost for bcrypt hashing.
-	DefaultBcryptCost = 12
+	// DefaultAccessTokenTTL is the default lifetime for ephemeral access tokens.
+	DefaultAccessTokenTTL = 15 * time.Minute
 	// MaxAccessTokenLifetime is the maximum lifetime for ephemeral access tokens.
 	// Tokens with this lifetime or less skip store validation.
-	MaxAccessTokenLifetime = 5 * time.Minute
+	MaxAccessTokenLifetime = 1 * time.Hour
 	// maxAccessTokenLifetimeSecs is MaxAccessTokenLifetime in seconds for JWT comparisons.
 	maxAccessTokenLifetimeSecs = int64(MaxAccessTokenLifetime / time.Second)
 	// tokenExtensionTTL is the amount of time added to a token's expiry when extended.
@@ -38,12 +36,12 @@ const (
 
 // Config holds the authentication configuration.
 type Config struct {
-	Enabled      bool
-	AuthType     domain.AuthType
-	Username     string
-	PasswordHash string        // bcrypt hash for password auth
-	TokenSecret  []byte        // signing secret for token auth
-	TokenExpiry  time.Duration // default token expiry (0 = never)
+	Enabled        bool
+	AuthType       domain.AuthType
+	Username       string
+	TokenSecret    []byte        // signing secret for token auth
+	TokenExpiry    time.Duration // default token expiry (0 = never)
+	AccessTokenTTL time.Duration // ephemeral token lifetime (default: 15m)
 }
 
 // Service implements the AuthService interface.
@@ -72,29 +70,12 @@ func (s *Service) IsEnabled() bool {
 	return s.config.Enabled
 }
 
-// ValidatePassword checks if the username and password are valid.
-func (s *Service) ValidatePassword(ctx context.Context, username, password string) bool {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "ValidatePassword",
-		"username":            username,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	// Constant-time username comparison
-	usernameMatch := subtle.ConstantTimeCompare([]byte(username), []byte(s.config.Username)) == 1
-
-	// Bcrypt comparison (already constant-time)
-	err := bcrypt.CompareHashAndPassword([]byte(s.config.PasswordHash), []byte(password))
-	passwordMatch := err == nil
-
-	if !usernameMatch || !passwordMatch {
-		log.Debug().Bool("username_match", usernameMatch).Msg("password validation failed")
-		return false
+// GetAccessTokenTTL returns the configured ephemeral access token lifetime.
+func (s *Service) GetAccessTokenTTL() time.Duration {
+	if s.config.AccessTokenTTL > 0 {
+		return s.config.AccessTokenTTL
 	}
-
-	log.Debug().Msg("password validation successful")
-	return true
+	return DefaultAccessTokenTTL
 }
 
 // ValidateToken validates a JWT token and returns its claims.
@@ -558,15 +539,6 @@ func (s *Service) ExtendToken(ctx context.Context, tokenString string) (string, 
 		Msg("token expiry extended")
 
 	return newTokenString, nil
-}
-
-// GeneratePasswordHash generates a bcrypt hash for a password.
-func (s *Service) GeneratePasswordHash(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), DefaultBcryptCost)
-	if err != nil {
-		return "", err
-	}
-	return string(hash), nil
 }
 
 // getStringClaim safely extracts a string claim from JWT claims.

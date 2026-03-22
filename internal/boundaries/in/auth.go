@@ -15,11 +15,6 @@ type AuthService interface {
 	// IsEnabled returns whether authentication is enabled.
 	IsEnabled() bool
 
-	// Password authentication
-	// ValidatePassword checks if the username and password are valid.
-	ValidatePassword(ctx context.Context, username, password string) bool
-
-	// Token authentication
 	// ValidateToken validates a JWT token and returns its claims.
 	ValidateToken(ctx context.Context, tokenString string) (*domain.TokenClaims, error)
 
@@ -40,9 +35,6 @@ type AuthService interface {
 	// ListTokens returns all stored tokens.
 	ListTokens(ctx context.Context) ([]domain.Token, error)
 
-	// GeneratePasswordHash generates a bcrypt hash for a password.
-	GeneratePasswordHash(password string) (string, error)
-
 	// GetAuthStatus returns authentication status from context.
 	// Extracts and validates token claims that were set by auth middleware.
 	GetAuthStatus(ctx context.Context) (*domain.AuthStatus, error)
@@ -51,4 +43,7 @@ type AuthService interface {
 	// Returns the same token string if it was already extended within the debounce window (1h).
 	// Skips extension for ephemeral access tokens (≤5min) and service tokens.
 	ExtendToken(ctx context.Context, tokenString string) (string, error)
+
+	// GetAccessTokenTTL returns the configured ephemeral access token lifetime.
+	GetAccessTokenTTL() time.Duration
 }

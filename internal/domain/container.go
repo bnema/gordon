@@ -58,6 +58,9 @@ type ContainerConfig struct {
 	NetworkMode     string            // Network to join
 	Hostname        string            // Container hostname for DNS
 	Aliases         []string          // Additional network aliases
+	MemoryLimit     int64             // Memory limit in bytes (0 = no limit)
+	NanoCPUs        int64             // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
+	PidsLimit       int64             // Max number of PIDs (0 = no limit)
 }
 
 // ContainerStatus represents the current state of a container.

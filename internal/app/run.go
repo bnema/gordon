@@ -127,13 +127,12 @@ type Config struct {
 
 	Auth struct {
 		Enabled        bool   `mapstructure:"enabled"`
-		Type           string `mapstructure:"type"`            // "password" or "token"
+		Type           string `mapstructure:"type"`            // only "token" is supported
 		SecretsBackend string `mapstructure:"secrets_backend"` // "pass", "sops", or "unsafe"
 		Username       string `mapstructure:"username"`
-		Password       string `mapstructure:"password"`      // deprecated: use password_hash
-		PasswordHash   string `mapstructure:"password_hash"` // path in secrets backend
-		TokenSecret    string `mapstructure:"token_secret"`  // path in secrets backend
-		TokenExpiry    string `mapstructure:"token_expiry"`  // e.g., "720h", "30d"
+		TokenSecret    string `mapstructure:"token_secret"`     // path in secrets backend
+		TokenExpiry    string `mapstructure:"token_expiry"`     // e.g., "720h", "30d"
+		AccessTokenTTL string `mapstructure:"access_token_ttl"` // e.g., "15m", "30m" (default: 15m)
 	} `mapstructure:"auth"`
 
 	API struct {
@@ -165,6 +164,12 @@ type Config struct {
 			KeepLast int    `mapstructure:"keep_last"`
 		} `mapstructure:"prune"`
 	} `mapstructure:"images"`
+
+	Containers struct {
+		MemoryLimit string  `mapstructure:"memory_limit"` // e.g., "512MB", "1GB"
+		CPULimit    float64 `mapstructure:"cpu_limit"`    // CPU cores, e.g., 1.0 = 1 core
+		PidsLimit   int64   `mapstructure:"pids_limit"`   // e.g., 512
+	} `mapstructure:"containers"`
 
 	Telemetry telemetry.Config `mapstructure:"telemetry"`
 }
@@ -990,7 +995,10 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 		return nil, nil, nil
 	}
 
-	authType := resolveAuthType(cfg)
+	authType, err := resolveAuthType(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve auth type: %w", err)
+	}
 	backend, err := resolveSecretsBackend(cfg.Auth.SecretsBackend)
 	if err != nil {
 		return nil, nil, log.WrapErr(err, "failed to resolve secrets backend")
@@ -1018,25 +1026,12 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 }
 
 // resolveAuthType determines the auth type from config.
-// If password_hash is configured, password auth is available (plus tokens).
-// If only token_secret is configured, token-only mode.
-// The explicit "type" field is deprecated but still respected for backwards compat.
-func resolveAuthType(cfg Config) domain.AuthType {
-	// Explicit type takes precedence (backwards compatibility)
-	if cfg.Auth.Type == "token" {
-		return domain.AuthTypeToken
+// Token-only authentication is the only supported mode.
+func resolveAuthType(cfg Config) (domain.AuthType, error) {
+	if cfg.Auth.Type != "" && cfg.Auth.Type != "token" {
+		return "", fmt.Errorf("unsupported auth.type %q; only \"token\" is supported", cfg.Auth.Type)
 	}
-	if cfg.Auth.Type == "password" {
-		return domain.AuthTypePassword
-	}
-
-	// Infer from config: password auth if password_hash is configured
-	if cfg.Auth.PasswordHash != "" || cfg.Auth.Password != "" {
-		return domain.AuthTypePassword
-	}
-
-	// Default to token-only
-	return domain.AuthTypeToken
+	return domain.AuthTypeToken, nil
 }
 
 func resolveSecretsBackend(backend string) (domain.SecretsBackend, error) {
@@ -1094,41 +1089,23 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 	authConfig.TokenSecret = secret
 	authConfig.TokenExpiry = expiry
 
-	// Password config only needed for password auth mode
-	if authType == domain.AuthTypePassword {
-		hash, err := loadPasswordHash(ctx, cfg, backend, dataDir, log)
+	accessTokenTTL := 15 * time.Minute // default
+	if cfg.Auth.AccessTokenTTL != "" {
+		parsed, err := time.ParseDuration(cfg.Auth.AccessTokenTTL)
 		if err != nil {
-			return auth.Config{}, err
+			return auth.Config{}, fmt.Errorf("invalid auth.access_token_ttl %q: %w", cfg.Auth.AccessTokenTTL, err)
 		}
-		if hash == "" {
-			return auth.Config{}, errAuthNotConfigured()
+		if parsed <= 0 {
+			return auth.Config{}, fmt.Errorf("auth.access_token_ttl must be positive")
 		}
-		authConfig.PasswordHash = hash
+		if parsed > auth.MaxAccessTokenLifetime {
+			return auth.Config{}, fmt.Errorf("auth.access_token_ttl must not exceed %v", auth.MaxAccessTokenLifetime)
+		}
+		accessTokenTTL = parsed
 	}
+	authConfig.AccessTokenTTL = accessTokenTTL
 
 	return authConfig, nil
-}
-
-// errAuthNotConfigured returns an error when auth is enabled but credentials are not configured.
-func errAuthNotConfigured() error {
-	return fmt.Errorf("auth is enabled by default, configure auth type and secrets backend. See: https://gordon.bnema.dev/docs/config/auth")
-}
-
-func loadPasswordHash(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (string, error) {
-	if cfg.Auth.PasswordHash != "" {
-		hash, err := loadSecret(ctx, backend, cfg.Auth.PasswordHash, dataDir, log)
-		if err != nil {
-			return "", log.WrapErr(err, "failed to load password hash")
-		}
-		return hash, nil
-	}
-
-	if cfg.Auth.Password != "" {
-		log.Warn().Msg("using plain password in config is deprecated, use password_hash with a secrets backend")
-		return cfg.Auth.Password, nil
-	}
-
-	return "", nil
 }
 
 func loadTokenConfig(ctx context.Context, cfg Config, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) ([]byte, time.Duration, error) {
@@ -1155,8 +1132,13 @@ func loadTokenSecret(ctx context.Context, cfg Config, backend domain.SecretsBack
 	// 2. Secrets backend (pass/sops - encrypted)
 	// 3. Config file path (least preferred)
 
+	const minTokenSecretLength = 32
+
 	// Check environment variable first
 	if envSecret := os.Getenv(TokenSecretEnvVar); envSecret != "" {
+		if len(envSecret) < minTokenSecretLength {
+			return nil, fmt.Errorf("token secret from %s must be at least %d bytes (got %d)", TokenSecretEnvVar, minTokenSecretLength, len(envSecret))
+		}
 		log.Debug().Msg("using token secret from environment variable")
 		return []byte(envSecret), nil
 	}
@@ -1169,6 +1151,10 @@ func loadTokenSecret(ctx context.Context, cfg Config, backend domain.SecretsBack
 	secret, err := loadSecret(ctx, backend, cfg.Auth.TokenSecret, dataDir, log)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to load token secret")
+	}
+
+	if len(secret) < minTokenSecretLength {
+		return nil, fmt.Errorf("token_secret must be at least %d bytes (got %d); use a strong random secret", minTokenSecretLength, len(secret))
 	}
 
 	return []byte(secret), nil
@@ -1275,6 +1261,29 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 
 // createContainerService creates the container service with configuration.
 func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (*container.Service, error) {
+	// Parse and validate container resource limits from config
+	if cfg.Containers.CPULimit < 0 {
+		return nil, fmt.Errorf("containers.cpu_limit must be >= 0 (got %f)", cfg.Containers.CPULimit)
+	}
+	if cfg.Containers.PidsLimit < 0 {
+		return nil, fmt.Errorf("containers.pids_limit must be >= 0 (got %d)", cfg.Containers.PidsLimit)
+	}
+	var defaultMemoryLimit int64
+	if cfg.Containers.MemoryLimit != "" {
+		parsed, err := bytesize.Parse(cfg.Containers.MemoryLimit)
+		if err != nil {
+			return nil, fmt.Errorf("invalid containers.memory_limit %q: %w", cfg.Containers.MemoryLimit, err)
+		}
+		if parsed <= 0 {
+			return nil, fmt.Errorf("containers.memory_limit must be positive (got %q)", cfg.Containers.MemoryLimit)
+		}
+		defaultMemoryLimit = parsed
+	}
+	var defaultNanoCPUs int64
+	if cfg.Containers.CPULimit > 0 {
+		defaultNanoCPUs = int64(cfg.Containers.CPULimit * 1e9)
+	}
+
 	containerConfig := container.Config{
 		RegistryAuthEnabled:      cfg.Auth.Enabled,
 		RegistryDomain:           cfg.Server.RegistryDomain,
@@ -1298,6 +1307,9 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		DrainDelay:               v.GetDuration("deploy.drain_delay"),
 		DrainMode:                v.GetString("deploy.drain_mode"),
 		DrainTimeout:             v.GetDuration("deploy.drain_timeout"),
+		DefaultMemoryLimit:       defaultMemoryLimit,
+		DefaultNanoCPUs:          defaultNanoCPUs,
+		DefaultPidsLimit:         cfg.Containers.PidsLimit,
 	}
 	if v.IsSet("deploy.drain_delay") {
 		containerConfig.DrainDelayConfigured = true
@@ -1542,7 +1554,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	)
 
 	registryMux := http.NewServeMux()
-	registerAuthRoutes(registryMux, svc, trustedNets, cidrAllowlistMiddleware, rateLimitMiddleware, log)
+	registerAuthRoutes(registryMux, svc, trustedNets, cidrAllowlistMiddleware, rateLimitMiddleware, cfg, log)
 	registryMux.Handle("/v2/", wrapRegistryForLocalMode(registryWithMiddleware, cfg, log))
 
 	// SECURITY: No CORS middleware on the proxy chain. Backend applications
@@ -1675,10 +1687,20 @@ func registerAuthRoutes(
 	trustedNets []*net.IPNet,
 	cidrAllowlistMiddleware func(http.Handler) http.Handler,
 	rateLimitMiddleware func(http.Handler) http.Handler,
+	cfg Config,
 	log zerowrap.Logger,
 ) {
 	if svc.authHandler == nil {
 		return
+	}
+
+	// Auth endpoints always get rate limiting, even if global rate limiting is disabled.
+	// This prevents brute-force attacks against password/token endpoints.
+	authRateLimitMiddleware := rateLimitMiddleware
+	if !cfg.API.RateLimit.Enabled {
+		authGlobalLimiter := ratelimit.NewMemoryStore(50, 100, log)
+		authIPLimiter := ratelimit.NewMemoryStore(5, 10, log)
+		authRateLimitMiddleware = registry.RateLimitMiddleware(authGlobalLimiter, authIPLimiter, cfg.API.RateLimit.TrustedProxies, log)
 	}
 
 	// Auth endpoints are NOT protected by auth - they're where clients authenticate
@@ -1691,7 +1713,7 @@ func registerAuthRoutes(
 	if cidrAllowlistMiddleware != nil {
 		authMiddlewares = append(authMiddlewares, cidrAllowlistMiddleware)
 	}
-	authMiddlewares = append(authMiddlewares, rateLimitMiddleware)
+	authMiddlewares = append(authMiddlewares, authRateLimitMiddleware)
 	authWithMiddleware := otelhttp.NewHandler(
 		middleware.Chain(authMiddlewares...)(svc.authHandler),
 		"gordon.auth",
@@ -1774,27 +1796,9 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", nil, errChan, log)
 
-	// Enable both HTTP/1.1 and cleartext HTTP/2 on the proxy server so Gordon can
-	// accept h2c traffic from clients and load balancers (e.g. Cloudflare).
-	var proxyProtos http.Protocols
-	proxyProtos.SetHTTP1(true)
-	proxyProtos.SetUnencryptedHTTP2(true)
-	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", &proxyProtos, errChan, log)
-	var tlsSrv *http.Server
-	var tlsReady <-chan struct{}
-	if cfg.Server.TLSEnabled {
-		if cfg.Server.TLSCertFile == "" || cfg.Server.TLSKeyFile == "" {
-			return fmt.Errorf("server.tls_enabled=true requires both server.tls_cert_file and server.tls_key_file")
-		}
-		tlsSrv, tlsReady = startTLSServer(
-			fmt.Sprintf(":%d", cfg.Server.TLSPort),
-			proxyHandler,
-			"proxy-tls",
-			cfg.Server.TLSCertFile,
-			cfg.Server.TLSKeyFile,
-			errChan,
-			log,
-		)
+	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, proxyHandler, errChan, log)
+	if err != nil {
+		return err
 	}
 
 	// Wait for all enabled servers to bind their ports before auto-starting containers.
@@ -2073,6 +2077,52 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 
 	cleanupInternalCredentials()
 	log.Info().Msg("Gordon stopped")
+}
+
+// startProxyServers sets up proxy server(s) depending on TLS configuration.
+// With TLS enabled, the HTTP port becomes a redirect-only server and a separate TLS server handles traffic.
+// Without TLS, a single server handles both HTTP/1.1 and cleartext HTTP/2.
+func startProxyServers(cfg Config, proxyHandler http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+	if !cfg.Server.TLSEnabled {
+		var proxyProtos http.Protocols
+		proxyProtos.SetHTTP1(true)
+		proxyProtos.SetUnencryptedHTTP2(true)
+		srv, ready := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", &proxyProtos, errChan, log)
+		return srv, ready, nil, nil, nil
+	}
+
+	if cfg.Server.TLSCertFile == "" || cfg.Server.TLSKeyFile == "" {
+		return nil, nil, nil, nil, fmt.Errorf("server.tls_enabled=true requires both server.tls_cert_file and server.tls_key_file")
+	}
+
+	tlsPort := cfg.Server.TLSPort
+	redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		}
+		if tlsPort != 443 {
+			host = net.JoinHostPort(host, strconv.Itoa(tlsPort))
+		} else if strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+		target := "https://" + host + r.RequestURI
+		http.Redirect(w, r, target, http.StatusPermanentRedirect)
+	})
+
+	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), redirectHandler, "proxy-redirect", nil, errChan, log)
+	tlsSrv, tlsReady := startTLSServer(
+		fmt.Sprintf(":%d", cfg.Server.TLSPort),
+		proxyHandler,
+		"proxy-tls",
+		cfg.Server.TLSCertFile,
+		cfg.Server.TLSKeyFile,
+		errChan,
+		log,
+	)
+	return proxySrv, proxyReady, tlsSrv, tlsReady, nil
 }
 
 // startServer starts an HTTP server, returning the server instance and a channel
@@ -2421,8 +2471,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("logging.container_logs.max_age", 28)
 	v.SetDefault("env.dir", "") // defaults to {data_dir}/env when empty
 	v.SetDefault("auth.enabled", true)
-	// Note: auth.type is intentionally not set - it's inferred from config
-	// If password_hash is set -> password mode, otherwise -> token mode
+	// Note: auth.type defaults to "token" (the only supported mode)
 	v.SetDefault("auth.secrets_backend", "")
 	v.SetDefault("auth.token_expiry", "720h")
 	v.SetDefault("api.rate_limit.enabled", true)

@@ -1,6 +1,6 @@
 # Authentication Commands
 
-Manage Gordon server authentication tokens and passwords.
+Manage Gordon server authentication tokens.
 
 ## gordon auth
 
@@ -12,14 +12,13 @@ Manage Gordon server authentication tokens and passwords.
 | `token generate` | Generate a new JWT token |
 | `token list` | List all stored tokens |
 | `token revoke` | Revoke a token by ID (use `--all` to revoke all tokens) |
-| `password hash` | Generate bcrypt password hash |
 | `internal` | Show internal registry credentials |
 
 ---
 
 ## gordon auth login
 
-Authenticate with a remote Gordon server using password authentication or a pre-generated token.
+Authenticate with a remote Gordon server using a pre-generated token.
 
 ```bash
 gordon auth login [options]
@@ -30,34 +29,22 @@ gordon auth login [options]
 | Option | Description |
 |--------|-------------|
 | `-r, --remote` | Remote to authenticate with (defaults to active remote) |
-| `-u, --username` | Username for authentication |
-| `-p, --password` | Password for authentication |
 | `-t, --token` | Authentication token to store for the remote |
 
 ### Description
 
-This command prompts for your username and password, authenticates with the remote server's `/auth/password` endpoint, and stores the returned token. When [pass](https://www.passwordstore.org/) is available, the token is stored encrypted at `gordon/remotes/<name>/token` and any plaintext token fields are cleared from `remotes.toml`. When `pass` is unavailable, the token is stored in plaintext in `remotes.toml` with a warning.
+This command stores a pre-generated token for use with a remote Gordon server. When [pass](https://www.passwordstore.org/) is available, the token is stored encrypted at `gordon/remotes/<name>/token` and any plaintext token fields are cleared from `remotes.toml`. When `pass` is unavailable, the token is stored in plaintext in `remotes.toml` with a warning.
 
-If you provide `--token`, the token is stored directly and verified against `/admin/status` on a best-effort basis.
-
-The token is a long-lived JWT (7 days) that's used for subsequent CLI operations against the remote.
-
-> **Note:** For token-only servers, you can pass `--token` here or use `gordon remotes set-token`.
+The token is verified against `/admin/status` on a best-effort basis.
 
 ### Examples
 
 ```bash
-# Login using active remote
-gordon auth login
-
-# Login to specific remote
-gordon auth login --remote prod
-
-# Pre-fill username
-gordon auth login --username admin
-
-# Store a pre-generated token
+# Store a token for the active remote
 gordon auth login --token <token>
+
+# Store a token for a specific remote
+gordon auth login --remote prod --token <token>
 ```
 
 ### Output
@@ -65,26 +52,14 @@ gordon auth login --token <token>
 When `pass` is available:
 
 ```text
-Username: admin
-Password: ********
-Authenticating with prod...
-
-✓ Authentication successful!
 Token stored in pass for remote 'prod'
-Expires in: 604800 seconds
 ```
 
 When `pass` is not available:
 
 ```text
-Username: admin
-Password: ********
-Authenticating with prod...
-
 Warning: 'pass' not available. Storing token in plaintext config. Consider installing pass (https://www.passwordstore.org/) for secure token storage.
-✓ Authentication successful!
 Token stored for remote 'prod'
-Expires in: 604800 seconds
 ```
 
 ---
@@ -121,6 +96,18 @@ Compound durations are also supported: `1y6M`, `2w3d`, `1d12h`
 
 Standard Go durations also work: `24h`, `30m`, `1h30m`
 
+### Scopes
+
+Registry scopes: `push`, `pull`, `push,pull`
+
+Admin scopes: `admin:*:*`, `admin:routes:read`, `admin:routes:write`, `admin:config:read`, `admin:config:write`, `admin:status:read`, `admin:secrets:read`, `admin:secrets:write`
+
+Combine scopes with commas:
+
+```bash
+gordon auth token generate --subject admin --scopes "push,pull,admin:*:*" --expiry 0
+```
+
 ### Examples
 
 ```bash
@@ -136,8 +123,11 @@ gordon auth token generate --subject builder --scopes push --expiry 1y
 # Temporary token (24 hours)
 gordon auth token generate --subject temp --expiry 24h
 
-# Token for 6 months
-gordon auth token generate --subject deploy --expiry 6M
+# Full admin access token
+gordon auth token generate --subject admin --scopes "push,pull,admin:*:*" --expiry 6M
+
+# Read-only admin token
+gordon auth token generate --subject monitor --scopes "admin:status:read" --expiry 30d
 ```
 
 ### Output
@@ -199,33 +189,6 @@ Token a1b2c3d4-e5f6-7890-abcd-ef1234567890 has been revoked.
 
 ---
 
-## gordon auth password hash
-
-Generate a bcrypt hash for password authentication.
-
-```bash
-gordon auth password hash
-```
-
-Interactively prompts for a password and outputs the bcrypt hash.
-
-### Output
-
-```
-Enter password: ********
-
-Bcrypt hash (store in your secrets backend):
-$2a$10$N9qo8uLOickgx2ZMRZoMye...
-
-Then reference the path in your config:
-  [auth]
-  username = "deploy"
-  password_hash = "gordon/auth/password_hash"
-  token_secret = "gordon/auth/token_secret"
-```
-
----
-
 ## gordon auth internal
 
 Display the auto-generated internal registry credentials.
@@ -272,6 +235,14 @@ Usage:
 | `push` | Push images to registry |
 | `pull` | Pull images from registry |
 | `push,pull` | Both push and pull (default) |
+| `admin:*:*` | Full admin access |
+| `admin:routes:read` | Read-only routes access |
+| `admin:routes:write` | Routes write access |
+| `admin:config:read` | Read-only config access |
+| `admin:config:write` | Config write access |
+| `admin:status:read` | Read-only status/health |
+| `admin:secrets:read` | List secret keys |
+| `admin:secrets:write` | Set/delete secrets |
 
 ## Token Expiry Formats
 
@@ -293,8 +264,8 @@ Usage:
 gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
 
 # Save token as CI secret
-# GitHub: Settings → Secrets → New repository secret
-# GitLab: Settings → CI/CD → Variables
+# GitHub: Settings > Secrets > New repository secret
+# GitLab: Settings > CI/CD > Variables
 ```
 
 ### Docker Login
@@ -319,17 +290,9 @@ gordon auth token generate --subject ci-bot --expiry 0
 gordon auth token revoke <old-token-id>
 ```
 
-### Password Setup
+### Token-only Setup
 
 ```bash
-# Generate hash
-gordon auth password hash
-# Enter: mypassword
-
-# Store in pass
-pass insert gordon/auth/password_hash
-# Paste: $2a$10$...
-
 # Create token secret
 pass insert gordon/auth/token_secret
 # Enter a random 32+ character string
@@ -338,9 +301,10 @@ pass insert gordon/auth/token_secret
 [auth]
 enabled = true
 secrets_backend = "pass"
-username = "deploy"
-password_hash = "gordon/auth/password_hash"
 token_secret = "gordon/auth/token_secret"
+
+# Generate a deploy token
+gordon auth token generate --subject deploy --scopes "push,pull" --expiry 0
 ```
 
 ## Related

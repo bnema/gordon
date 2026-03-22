@@ -161,11 +161,19 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		Labels:       config.Labels,
 	}
 
+	resources := container.Resources{
+		Memory:   config.MemoryLimit,
+		NanoCPUs: config.NanoCPUs,
+	}
+	if config.PidsLimit > 0 {
+		resources.PidsLimit = &config.PidsLimit
+	}
 	hostConfig := &container.HostConfig{
 		PortBindings: portBindings,
 		AutoRemove:   config.AutoRemove,
 		Binds:        binds,
 		NetworkMode:  container.NetworkMode(config.NetworkMode),
+		Resources:    resources,
 	}
 
 	// Create network configuration for container

@@ -44,7 +44,6 @@ func newAuthCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newAuthTokenCmd())
-	cmd.AddCommand(newAuthPasswordCmd())
 	cmd.AddCommand(newAuthInternalCmd())
 	cmd.AddCommand(newAuthLoginCmd())
 	cmd.AddCommand(newAuthStatusCmd())
@@ -187,19 +186,6 @@ Examples:
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
 	cmd.Flags().BoolVar(&all, "all", false, "Revoke all tokens")
-
-	return cmd
-}
-
-// newAuthPasswordCmd creates the password subcommand group.
-func newAuthPasswordCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "password",
-		Short: "Password utilities",
-		Long:  `Utilities for managing password authentication.`,
-	}
-
-	cmd.AddCommand(newPasswordHashCmd())
 
 	return cmd
 }
@@ -420,24 +406,6 @@ func runShowInternalAuth() error {
 	return nil
 }
 
-// newPasswordHashCmd creates the password hash command.
-func newPasswordHashCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "hash",
-		Short: "Generate a bcrypt hash for a password",
-		Long: `Interactively prompt for a password and output its bcrypt hash.
-
-The hash can be stored in your secrets backend and referenced in the config:
-
-  [auth]
-  type = "password"
-  password_hash = "github.com/bnema/gordon/auth/password_hash"`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPasswordHash()
-		},
-	}
-}
-
 // runTokenGenerate generates a new authentication token.
 // parseAndConvertScopes parses a comma-separated scope string and converts
 // simple scopes (push, pull, *) to Docker v2 format (repository:*:action).
@@ -646,50 +614,6 @@ func runTokenRevokeAll(configPath string) error {
 	return nil
 }
 
-// runPasswordHash generates a bcrypt hash for a password.
-func runPasswordHash() error {
-	fmt.Print("Enter password: ")
-
-	// Read password without echo (use os.Stdin.Fd() for better compatibility)
-	fd, err := stdinFD()
-	if err != nil {
-		return fmt.Errorf("failed to get stdin fd: %w", err)
-	}
-	passwordBytes, err := term.ReadPassword(fd)
-	if err != nil {
-		// Fallback for non-terminal input
-		reader := bufio.NewReader(os.Stdin)
-		password, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read password: %w", err)
-		}
-		passwordBytes = []byte(strings.TrimSpace(password))
-	}
-	fmt.Println()
-
-	if len(passwordBytes) == 0 {
-		return fmt.Errorf("password cannot be empty")
-	}
-
-	// Create a temporary auth service to generate the hash
-	authSvc := auth.NewService(auth.Config{}, nil, zerowrap.Default())
-	hash, err := authSvc.GeneratePasswordHash(string(passwordBytes))
-	if err != nil {
-		return fmt.Errorf("failed to generate hash: %w", err)
-	}
-
-	fmt.Println()
-	fmt.Println("Bcrypt hash (store in your secrets backend):")
-	fmt.Println(hash)
-	fmt.Println()
-	fmt.Println("Then reference the path in your config:")
-	fmt.Println("  [auth]")
-	fmt.Println("  type = \"password\"")
-	fmt.Println("  password_hash = \"github.com/bnema/gordon/auth/password_hash\"")
-
-	return nil
-}
-
 // cliConfig holds the configuration needed for CLI commands.
 type cliConfig struct {
 	Backend     domain.SecretsBackend
@@ -748,8 +672,7 @@ func loadAuthConfig(configPath string) (*cliConfig, error) {
 			cfg.TokenSecret = []byte(tokenSecretPath)
 		}
 	} else {
-		// Generate a default secret for CLI token generation
-		cfg.TokenSecret = []byte("gordon-cli-default-secret")
+		return nil, fmt.Errorf("token_secret is required for JWT token generation; set --token-secret flag or configure auth.token_secret")
 	}
 
 	return cfg, nil

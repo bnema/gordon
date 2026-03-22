@@ -39,21 +39,6 @@ func NewHandler(authSvc in.AuthService, internalAuth InternalAuth, log zerowrap.
 	}
 }
 
-// PasswordRequest represents the request body for POST /auth/password.
-type PasswordRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-// PasswordResponse represents the response from POST /auth/password.
-type PasswordResponse struct {
-	Token     string `json:"token"`
-	ExpiresIn int    `json:"expires_in"`
-	IssuedAt  string `json:"issued_at"`
-}
-
-const passwordSessionTTL = 24 * time.Hour
-
 func setNoStoreHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
@@ -76,104 +61,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePassword handles POST /auth/password requests.
-// Validates username/password and returns a daily session JWT.
-// Only works when auth type is "password" - returns error for "token" auth type.
+// Password authentication has been removed; this endpoint always returns Gone.
 func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request) {
 	setNoStoreHeaders(w)
-
-	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
-		zerowrap.FieldLayer:   "adapter",
-		zerowrap.FieldAdapter: "http",
-		zerowrap.FieldHandler: "auth",
-		zerowrap.FieldMethod:  r.Method,
-		zerowrap.FieldPath:    r.URL.Path,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	if r.Method != http.MethodPost {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "method not allowed"})
-		return
-	}
-
-	// Check if auth is enabled
-	if h.authSvc == nil || !h.authSvc.IsEnabled() {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "authentication is required"})
-		return
-	}
-
-	// Password endpoint only works with password auth type
-	if h.authSvc.GetAuthType() != domain.AuthTypePassword {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{
-			Error: "password authentication not configured, use token-based auth",
-		})
-		return
-	}
-
-	// Parse request body
-	var req PasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "invalid request body"})
-		return
-	}
-
-	if req.Username == "" || req.Password == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "username and password are required"})
-		return
-	}
-
-	// Validate password
-	if !h.authSvc.ValidatePassword(ctx, req.Username, req.Password) {
-		log.Debug().
-			Str("username", req.Username).
-			Msg("password authentication failed")
-		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon"`)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "invalid credentials"})
-		return
-	}
-
-	// Generate daily session token with full access (push, pull, admin).
-	// This enforces regular re-authentication similar to short-session UX.
-	expiry := passwordSessionTTL
-	scopes := []string{"push", "pull", "admin:*:*"}
-
-	token, err := h.authSvc.GenerateToken(ctx, req.Username, scopes, expiry)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to generate token")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "failed to generate token"})
-		return
-	}
-
-	response := PasswordResponse{
-		Token:     token,
-		ExpiresIn: int(expiry.Seconds()),
-		IssuedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error().Err(err).Msg("failed to encode password response")
-	}
-
-	log.Debug().
-		Str("username", req.Username).
-		Int("expires_in", response.ExpiresIn).
-		Msg("long-lived token issued via password auth")
+	w.WriteHeader(http.StatusGone)
+	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{
+		Error: "password authentication has been removed, use token-based auth",
+	})
 }
 
 // handleToken handles GET /auth/token requests.
@@ -240,8 +135,9 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Generate a short-lived access token (5 minutes) - not stored
-	accessToken, err := h.authSvc.GenerateAccessToken(ctx, username, requestedScopes, 5*time.Minute)
+	// Generate a short-lived access token with configurable TTL - not stored
+	ttl := h.authSvc.GetAccessTokenTTL()
+	accessToken, err := h.authSvc.GenerateAccessToken(ctx, username, requestedScopes, ttl)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to generate access token")
 		w.Header().Set("Content-Type", "application/json")
@@ -252,7 +148,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 
 	response := dto.TokenResponse{
 		Token:     accessToken,
-		ExpiresIn: 300, // 5 minutes in seconds
+		ExpiresIn: int(ttl.Seconds()),
 		IssuedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -272,22 +168,16 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) authenticateTokenCredentials(ctx context.Context, r *http.Request, username, password string, log zerowrap.Logger) (bool, *domain.TokenClaims) {
 	if httputil.IsLocalhostRequest(r) && h.isInternalAuth(username, password) {
 		log.Debug().Str("username", username).Msg("internal registry auth accepted")
-		return true, nil
+		return true, &domain.TokenClaims{
+			Subject: username,
+			Scopes:  []string{"push", "pull"},
+		}
 	}
 
-	// Always try JWT token validation first — even in password-auth mode the
-	// server issues JWTs on login, and the CLI sends them back via Basic Auth
-	// for registry token exchange.
+	// Validate JWT token sent via Basic Auth password field.
 	claims, err := h.authSvc.ValidateToken(ctx, password)
 	if err == nil && claims.Subject == username {
 		return true, claims
-	}
-
-	// Fall back to password validation for direct username/password credentials.
-	if h.authSvc.GetAuthType() == domain.AuthTypePassword {
-		if h.authSvc.ValidatePassword(ctx, username, password) {
-			return true, nil
-		}
 	}
 
 	return false, nil
@@ -298,26 +188,23 @@ func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []stri
 
 	for _, reqScopeStr := range requestedScopes {
 		reqScope, err := domain.ParseScope(reqScopeStr)
-		if err != nil || reqScope.Type != domain.ScopeTypeRepository {
+		if err != nil {
 			continue
 		}
 
-		allowedActions := make([]string, 0, len(reqScope.Actions))
-		for _, action := range reqScope.Actions {
-			if hasGrantedRegistryAccess(grantedScopes, reqScope.Name, action) {
-				allowedActions = append(allowedActions, action)
-			}
-		}
-
-		if len(allowedActions) == 0 {
+		var checkAccess func([]string, string, string) bool
+		switch reqScope.Type {
+		case domain.ScopeTypeRepository:
+			checkAccess = domain.ScopesGrantRegistryAccess
+		case domain.ScopeTypeAdmin:
+			checkAccess = domain.ScopesGrantAdminAccess
+		default:
 			continue
 		}
 
-		effective = append(effective, (&domain.Scope{
-			Type:    reqScope.Type,
-			Name:    reqScope.Name,
-			Actions: allowedActions,
-		}).String())
+		if s := buildEffectiveScope(reqScope, grantedScopes, checkAccess); s != "" {
+			effective = append(effective, s)
+		}
 	}
 
 	log.Debug().
@@ -329,31 +216,23 @@ func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []stri
 	return effective
 }
 
-func hasGrantedRegistryAccess(grantedScopes []string, repoName, action string) bool {
-	for _, grantedScopeStr := range grantedScopes {
-		scopeStr := strings.TrimSpace(grantedScopeStr)
-		switch scopeStr {
-		case domain.ScopeActionAll:
-			return true
-		case domain.ScopeActionPull, domain.ScopeActionPush:
-			if scopeStr == action {
-				return true
-			}
-		}
-
-		scope, err := domain.ParseScope(scopeStr)
-		if err != nil {
-			continue
-		}
-		if scope.Type != domain.ScopeTypeRepository {
-			continue
-		}
-		if scope.CanAccess(repoName, action) {
-			return true
+// buildEffectiveScope filters a requested scope's actions through checkAccess and returns
+// the resulting scope string, or "" if no actions were granted.
+func buildEffectiveScope(reqScope *domain.Scope, grantedScopes []string, checkAccess func([]string, string, string) bool) string {
+	allowedActions := make([]string, 0, len(reqScope.Actions))
+	for _, action := range reqScope.Actions {
+		if checkAccess(grantedScopes, reqScope.Name, action) {
+			allowedActions = append(allowedActions, action)
 		}
 	}
-
-	return false
+	if len(allowedActions) == 0 {
+		return ""
+	}
+	return (&domain.Scope{
+		Type:    reqScope.Type,
+		Name:    reqScope.Name,
+		Actions: allowedActions,
+	}).String()
 }
 
 // parseRequestedScopes extracts and validates scope parameters from the request.
@@ -380,8 +259,8 @@ func (h *Handler) parseRequestedScopes(r *http.Request, log zerowrap.Logger) []s
 			continue
 		}
 
-		// Only allow repository scopes
-		if scope.Type != "repository" {
+		// Allow repository and admin scopes
+		if scope.Type != domain.ScopeTypeRepository && scope.Type != domain.ScopeTypeAdmin {
 			log.Debug().
 				Str("scope_type", scope.Type).
 				Str("scope", scopeStr).
