@@ -193,7 +193,7 @@ func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []stri
 		case domain.ScopeTypeRepository:
 			allowedActions := make([]string, 0, len(reqScope.Actions))
 			for _, action := range reqScope.Actions {
-				if hasGrantedRegistryAccess(grantedScopes, reqScope.Name, action) {
+				if domain.ScopesGrantRegistryAccess(grantedScopes, reqScope.Name, action) {
 					allowedActions = append(allowedActions, action)
 				}
 			}
@@ -211,7 +211,7 @@ func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []stri
 		case domain.ScopeTypeAdmin:
 			allowedActions := make([]string, 0, len(reqScope.Actions))
 			for _, action := range reqScope.Actions {
-				if hasGrantedAdminAccess(grantedScopes, reqScope.Name, action) {
+				if domain.ScopesGrantAdminAccess(grantedScopes, reqScope.Name, action) {
 					allowedActions = append(allowedActions, action)
 				}
 			}
@@ -235,53 +235,6 @@ func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []stri
 		Msg("calculated effective scopes from parent token")
 
 	return effective
-}
-
-func hasGrantedRegistryAccess(grantedScopes []string, repoName, action string) bool {
-	for _, grantedScopeStr := range grantedScopes {
-		scopeStr := strings.TrimSpace(grantedScopeStr)
-		switch scopeStr {
-		case domain.ScopeActionAll:
-			return true
-		case domain.ScopeActionPull, domain.ScopeActionPush:
-			if scopeStr == action {
-				return true
-			}
-		}
-
-		scope, err := domain.ParseScope(scopeStr)
-		if err != nil {
-			continue
-		}
-		if scope.Type != domain.ScopeTypeRepository {
-			continue
-		}
-		if scope.CanAccess(repoName, action) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func hasGrantedAdminAccess(grantedScopes []string, resource, action string) bool {
-	for _, grantedScopeStr := range grantedScopes {
-		scopeStr := strings.TrimSpace(grantedScopeStr)
-		if scopeStr == domain.ScopeActionAll {
-			return true
-		}
-
-		adminScope, err := domain.ParseAdminScope(scopeStr)
-		if err != nil {
-			continue
-		}
-
-		if adminScope.CanAccess(resource, action) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // parseRequestedScopes extracts and validates scope parameters from the request.

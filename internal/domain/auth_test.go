@@ -325,6 +325,203 @@ func TestScope_String(t *testing.T) {
 	}
 }
 
+func TestScopesGrantRegistryAccess(t *testing.T) {
+	tests := []struct {
+		name     string
+		granted  []string
+		repoName string
+		action   string
+		want     bool
+	}{
+		{
+			name:     "wildcard shorthand grants any action",
+			granted:  []string{"*"},
+			repoName: "myrepo",
+			action:   "push",
+			want:     true,
+		},
+		{
+			name:     "pull shorthand grants pull",
+			granted:  []string{"pull"},
+			repoName: "myrepo",
+			action:   "pull",
+			want:     true,
+		},
+		{
+			name:     "pull shorthand does not grant push",
+			granted:  []string{"pull"},
+			repoName: "myrepo",
+			action:   "push",
+			want:     false,
+		},
+		{
+			name:     "push shorthand grants push",
+			granted:  []string{"push"},
+			repoName: "myrepo",
+			action:   "push",
+			want:     true,
+		},
+		{
+			name:     "full scope grants matching repo and action",
+			granted:  []string{"repository:myrepo:push,pull"},
+			repoName: "myrepo",
+			action:   "pull",
+			want:     true,
+		},
+		{
+			name:     "full scope does not grant different repo",
+			granted:  []string{"repository:myrepo:push,pull"},
+			repoName: "other",
+			action:   "pull",
+			want:     false,
+		},
+		{
+			name:     "wildcard repo scope grants any repo",
+			granted:  []string{"repository:*:pull"},
+			repoName: "anything",
+			action:   "pull",
+			want:     true,
+		},
+		{
+			name:     "org wildcard scope grants repo in org",
+			granted:  []string{"repository:myorg/*:push"},
+			repoName: "myorg/app",
+			action:   "push",
+			want:     true,
+		},
+		{
+			name:     "org wildcard scope rejects repo outside org",
+			granted:  []string{"repository:myorg/*:push"},
+			repoName: "other/app",
+			action:   "push",
+			want:     false,
+		},
+		{
+			name:     "admin scope is ignored for registry access",
+			granted:  []string{"admin:routes:read"},
+			repoName: "myrepo",
+			action:   "pull",
+			want:     false,
+		},
+		{
+			name:     "no granted scopes",
+			granted:  []string{},
+			repoName: "myrepo",
+			action:   "pull",
+			want:     false,
+		},
+		{
+			name:     "whitespace around scope is trimmed",
+			granted:  []string{"  repository:myrepo:pull  "},
+			repoName: "myrepo",
+			action:   "pull",
+			want:     true,
+		},
+		{
+			name:     "invalid scope string is skipped",
+			granted:  []string{"garbage", "repository:myrepo:pull"},
+			repoName: "myrepo",
+			action:   "pull",
+			want:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ScopesGrantRegistryAccess(tt.granted, tt.repoName, tt.action)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestScopesGrantAdminAccess(t *testing.T) {
+	tests := []struct {
+		name     string
+		granted  []string
+		resource string
+		action   string
+		want     bool
+	}{
+		{
+			name:     "wildcard shorthand grants any admin access",
+			granted:  []string{"*"},
+			resource: "routes",
+			action:   "read",
+			want:     true,
+		},
+		{
+			name:     "exact admin scope grants matching resource and action",
+			granted:  []string{"admin:routes:read"},
+			resource: "routes",
+			action:   "read",
+			want:     true,
+		},
+		{
+			name:     "exact admin scope denies wrong action",
+			granted:  []string{"admin:routes:read"},
+			resource: "routes",
+			action:   "write",
+			want:     false,
+		},
+		{
+			name:     "exact admin scope denies wrong resource",
+			granted:  []string{"admin:routes:read"},
+			resource: "secrets",
+			action:   "read",
+			want:     false,
+		},
+		{
+			name:     "admin wildcard resource grants any resource",
+			granted:  []string{"admin:*:read"},
+			resource: "secrets",
+			action:   "read",
+			want:     true,
+		},
+		{
+			name:     "admin wildcard action grants any action",
+			granted:  []string{"admin:routes:*"},
+			resource: "routes",
+			action:   "write",
+			want:     true,
+		},
+		{
+			name:     "full admin wildcard grants everything",
+			granted:  []string{"admin:*:*"},
+			resource: "config",
+			action:   "write",
+			want:     true,
+		},
+		{
+			name:     "repository scope is ignored for admin access",
+			granted:  []string{"repository:myrepo:push"},
+			resource: "routes",
+			action:   "read",
+			want:     false,
+		},
+		{
+			name:     "no granted scopes",
+			granted:  []string{},
+			resource: "routes",
+			action:   "read",
+			want:     false,
+		},
+		{
+			name:     "whitespace around scope is trimmed",
+			granted:  []string{"  admin:routes:read  "},
+			resource: "routes",
+			action:   "read",
+			want:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ScopesGrantAdminAccess(tt.granted, tt.resource, tt.action)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestParseScope_RoundTrip(t *testing.T) {
 	// Test that parsing and stringifying produces the same result
 	inputs := []string{

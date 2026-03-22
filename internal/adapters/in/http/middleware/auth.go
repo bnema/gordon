@@ -249,32 +249,14 @@ func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.
 		return true
 	}
 
-	// Check if any token scope grants access
-	for _, scopeStr := range claims.Scopes {
-		// Handle simple scopes (e.g., "push", "pull") for backwards compatibility
-		if scopeStr == action || scopeStr == "*" {
-			log.Debug().
-				Str("repo", repoName).
-				Str("action", action).
-				Str("scope", scopeStr).
-				Msg("simple scope access granted")
-			return true
-		}
-
-		// Handle Docker v2 format scopes (e.g., "repository:myrepo:push,pull")
-		scope, err := domain.ParseScope(scopeStr)
-		if err != nil {
-			continue
-		}
-
-		if scope.CanAccess(repoName, action) {
-			log.Debug().
-				Str("repo", repoName).
-				Str("action", action).
-				Str("scope", scopeStr).
-				Msg("scope access granted")
-			return true
-		}
+	// Delegate matching to domain layer
+	if domain.ScopesGrantRegistryAccess(claims.Scopes, repoName, action) {
+		log.Debug().
+			Str("repo", repoName).
+			Str("action", action).
+			Strs("scopes", claims.Scopes).
+			Msg("scope access granted")
+		return true
 	}
 
 	log.Debug().
