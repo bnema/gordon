@@ -2,11 +2,11 @@
 
 This guide covers breaking changes and migration steps between major versions.
 
-## v2.7.0 to v2.8.0
+## v2.16.0 to v2.30.0
 
 ### Breaking: Password Authentication Removed
 
-Gordon v2.8.0 removes password-based authentication entirely. Only token-based authentication is supported.
+Gordon v2.30.0 removes password-based authentication entirely. Only token-based authentication is supported.
 
 **What changed:**
 
@@ -41,7 +41,7 @@ Gordon v2.8.0 removes password-based authentication entirely. Only token-based a
 
 3. **Update your config** to remove password fields:
 
-   **Before (v2.7.0):**
+   **Before (v2.16.0):**
    ```toml
    [auth]
    enabled = true
@@ -51,7 +51,7 @@ Gordon v2.8.0 removes password-based authentication entirely. Only token-based a
    token_secret = "gordon/auth/token_secret"
    ```
 
-   **After (v2.8.0):**
+   **After (v2.30.0):**
    ```toml
    [auth]
    enabled = true
@@ -77,7 +77,9 @@ Gordon v2.8.0 removes password-based authentication entirely. Only token-based a
 
 ### New: Configurable Access Token TTL
 
-Ephemeral access tokens issued by `/auth/token` now have a configurable lifetime via `auth.access_token_ttl`. The default is `"15m"`. Tokens with a lifetime of 1 hour or less skip store validation for performance.
+Ephemeral access tokens issued by `/auth/token` now have a configurable lifetime via `auth.access_token_ttl` (default `"15m"`, maximum `"1h"`).
+
+Tokens with a lifetime at or below `MaxAccessTokenLifetime` (1 hour) are treated as ephemeral: they skip token store validation for performance, which means they **cannot be individually revoked**. They become invalid only when they naturally expire. If you need tighter revocation control, use a shorter TTL.
 
 ```toml
 [auth]
