@@ -14,7 +14,7 @@ Gordon v2.30.0 removes password-based authentication entirely. Only token-based 
 - `auth.password` and `auth.password_hash` config fields are removed
 - The `gordon auth password hash` CLI command is removed
 - The `gordon auth login` command no longer accepts `--username` or `--password` flags
-- The `/auth/password` endpoint is removed
+- The `/auth/password` endpoint now returns `410 Gone`
 
 **New features:**
 

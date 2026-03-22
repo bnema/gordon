@@ -218,6 +218,7 @@ func TestValidateDomainParam(t *testing.T) {
 		{"empty", "", false},
 		{"double dot in middle", "foo..bar", false},
 		{"forward slash", "example/com", false},
+		{"tab character", "example\t.com", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

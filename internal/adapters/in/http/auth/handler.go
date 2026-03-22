@@ -189,42 +189,18 @@ func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []stri
 			continue
 		}
 
+		var checkAccess func([]string, string, string) bool
 		switch reqScope.Type {
 		case domain.ScopeTypeRepository:
-			allowedActions := make([]string, 0, len(reqScope.Actions))
-			for _, action := range reqScope.Actions {
-				if domain.ScopesGrantRegistryAccess(grantedScopes, reqScope.Name, action) {
-					allowedActions = append(allowedActions, action)
-				}
-			}
-
-			if len(allowedActions) == 0 {
-				continue
-			}
-
-			effective = append(effective, (&domain.Scope{
-				Type:    reqScope.Type,
-				Name:    reqScope.Name,
-				Actions: allowedActions,
-			}).String())
-
+			checkAccess = domain.ScopesGrantRegistryAccess
 		case domain.ScopeTypeAdmin:
-			allowedActions := make([]string, 0, len(reqScope.Actions))
-			for _, action := range reqScope.Actions {
-				if domain.ScopesGrantAdminAccess(grantedScopes, reqScope.Name, action) {
-					allowedActions = append(allowedActions, action)
-				}
-			}
+			checkAccess = domain.ScopesGrantAdminAccess
+		default:
+			continue
+		}
 
-			if len(allowedActions) == 0 {
-				continue
-			}
-
-			effective = append(effective, (&domain.Scope{
-				Type:    reqScope.Type,
-				Name:    reqScope.Name,
-				Actions: allowedActions,
-			}).String())
+		if s := buildEffectiveScope(reqScope, grantedScopes, checkAccess); s != "" {
+			effective = append(effective, s)
 		}
 	}
 
@@ -235,6 +211,25 @@ func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []stri
 		Msg("calculated effective scopes from parent token")
 
 	return effective
+}
+
+// buildEffectiveScope filters a requested scope's actions through checkAccess and returns
+// the resulting scope string, or "" if no actions were granted.
+func buildEffectiveScope(reqScope *domain.Scope, grantedScopes []string, checkAccess func([]string, string, string) bool) string {
+	allowedActions := make([]string, 0, len(reqScope.Actions))
+	for _, action := range reqScope.Actions {
+		if checkAccess(grantedScopes, reqScope.Name, action) {
+			allowedActions = append(allowedActions, action)
+		}
+	}
+	if len(allowedActions) == 0 {
+		return ""
+	}
+	return (&domain.Scope{
+		Type:    reqScope.Type,
+		Name:    reqScope.Name,
+		Actions: allowedActions,
+	}).String()
 }
 
 // parseRequestedScopes extracts and validates scope parameters from the request.

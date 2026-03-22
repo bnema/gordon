@@ -180,7 +180,7 @@ func TestService_GenerateAccessToken_RejectsInvalidExpiry(t *testing.T) {
 	assert.Contains(t, err.Error(), "expiry must be positive")
 
 	// Expiry exceeding max should be rejected
-	_, err = svc.GenerateAccessToken(ctx, "testuser", []string{"repository:myrepo:pull"}, 2*time.Hour)
+	_, err = svc.GenerateAccessToken(ctx, "testuser", []string{"repository:myrepo:pull"}, MaxAccessTokenLifetime+time.Minute)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds maximum")
 }
@@ -206,7 +206,7 @@ func TestService_ValidateToken_LongLivedRequiresStore(t *testing.T) {
 		}).
 		Return(nil)
 
-	token, err := svc.GenerateToken(ctx, "testuser", []string{"push", "pull"}, 2*time.Hour)
+	token, err := svc.GenerateToken(ctx, "testuser", []string{"push", "pull"}, MaxAccessTokenLifetime+time.Minute)
 	assert.NoError(t, err)
 
 	// Validation should call GetToken and IsRevoked
@@ -283,7 +283,7 @@ func TestService_ValidateToken_Success(t *testing.T) {
 		Return(nil)
 
 	ctx := testContext()
-	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, 2*time.Hour)
+	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, MaxAccessTokenLifetime+time.Minute)
 	require.NoError(t, err)
 
 	// Expect GetToken to be called to verify token exists
@@ -341,7 +341,7 @@ func TestService_ValidateToken_Revoked(t *testing.T) {
 		Return(nil)
 
 	ctx := testContext()
-	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, 2*time.Hour)
+	tokenStr, err := svc.GenerateToken(ctx, "testsubject", []string{"push", "pull"}, MaxAccessTokenLifetime+time.Minute)
 	require.NoError(t, err)
 
 	// Expect GetToken to be called to verify token exists
@@ -752,7 +752,7 @@ func TestExtendTokenSlidesExpiry(t *testing.T) {
 		}).
 		Return(nil)
 
-	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, 2*time.Hour)
+	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, MaxAccessTokenLifetime+time.Minute)
 	require.NoError(t, err)
 
 	// ExtendToken flow:
@@ -824,7 +824,7 @@ func TestExtendTokenDebounce(t *testing.T) {
 		}).
 		Return(nil)
 
-	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, 2*time.Hour)
+	tokenStr, err := svc.GenerateToken(ctx, "testuser", []string{"admin:*:*"}, MaxAccessTokenLifetime+time.Minute)
 	require.NoError(t, err)
 
 	// First extend: flow is ValidateToken(GetToken+IsRevoked) + GetToken(debounce) + UpdateTokenExpiry

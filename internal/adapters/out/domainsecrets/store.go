@@ -233,7 +233,7 @@ func validateSecretValues(secrets map[string]string) error {
 // It writes to a temporary file first, syncs it, then renames to the final path.
 func (s *FileStore) writeSecretsAtomic(domainName string, secrets map[string]string) error {
 	if err := validateSecretValues(secrets); err != nil {
-		return err
+		return fmt.Errorf("invalid domain secret values for %q: %w", domainName, err)
 	}
 
 	envFile, err := s.validateEnvFilePath(domainName)
@@ -378,7 +378,7 @@ func (s *FileStore) validateAttachmentEnvFilePath(containerName string) (string,
 // It writes to a temporary file first, syncs it, then renames to the final path.
 func (s *FileStore) writeAttachmentSecretsAtomic(containerName string, secrets map[string]string) error {
 	if err := validateSecretValues(secrets); err != nil {
-		return err
+		return fmt.Errorf("invalid attachment secret values for %q: %w", containerName, err)
 	}
 
 	envFile, err := s.validateAttachmentEnvFilePath(containerName)

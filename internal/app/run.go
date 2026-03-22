@@ -997,7 +997,7 @@ func createAuthService(ctx context.Context, cfg Config, log zerowrap.Logger) (ou
 
 	authType, err := resolveAuthType(cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("resolve auth type: %w", err)
 	}
 	backend, err := resolveSecretsBackend(cfg.Auth.SecretsBackend)
 	if err != nil {
@@ -1807,12 +1807,14 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 			host := r.Host
 			if h, _, err := net.SplitHostPort(host); err == nil {
 				host = h
+			} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+				host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 			}
 			if tlsPort != 443 {
 				host = net.JoinHostPort(host, strconv.Itoa(tlsPort))
 			}
 			target := "https://" + host + r.RequestURI
-			http.Redirect(w, r, target, http.StatusMovedPermanently)
+			http.Redirect(w, r, target, http.StatusPermanentRedirect)
 		})
 		proxySrv, proxyReady = startServer(fmt.Sprintf(":%d", cfg.Server.Port), redirectHandler, "proxy-redirect", nil, errChan, log)
 		tlsSrv, tlsReady = startTLSServer(
