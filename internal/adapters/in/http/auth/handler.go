@@ -168,7 +168,10 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) authenticateTokenCredentials(ctx context.Context, r *http.Request, username, password string, log zerowrap.Logger) (bool, *domain.TokenClaims) {
 	if httputil.IsLocalhostRequest(r) && h.isInternalAuth(username, password) {
 		log.Debug().Str("username", username).Msg("internal registry auth accepted")
-		return true, nil
+		return true, &domain.TokenClaims{
+			Subject: username,
+			Scopes:  []string{"push", "pull"},
+		}
 	}
 
 	// Validate JWT token sent via Basic Auth password field.

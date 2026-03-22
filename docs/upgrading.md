@@ -26,10 +26,10 @@ Gordon v2.30.0 removes password-based authentication entirely. Only token-based 
 1. **Before upgrading**, generate a token on your current Gordon instance:
 
    ```bash
-   gordon auth token generate --subject deploy --scopes "push,pull,admin:*:*" --expiry 0
+   gordon auth token generate --subject deploy --scopes "push,pull" --expiry 0
    ```
 
-   Save this token securely. You will need it after upgrading.
+   Save this token securely. You will need it after upgrading. Admin scopes (`admin:*:*`) are only available after upgrading to v2.30.0 — regenerate your token with admin scopes after the upgrade if needed.
 
 2. **Update remotes** to use the generated token:
 

@@ -743,7 +743,7 @@ func TestExtendTokenSlidesExpiry(t *testing.T) {
 
 	ctx := testContext()
 
-	// Generate a token with a short remaining life (2h) so ExtendToken produces a different exp
+	// Generate a token with a short remaining life (MaxAccessTokenLifetime+1m) so ExtendToken produces a different exp
 	var capturedToken *domain.Token
 	tokenStore.EXPECT().
 		SaveToken(mock.Anything, mock.Anything, mock.Anything).
@@ -815,7 +815,7 @@ func TestExtendTokenDebounce(t *testing.T) {
 
 	ctx := testContext()
 
-	// Generate a short-lived token (2h) so the first extension produces a different JWT
+	// Generate a short-lived token (MaxAccessTokenLifetime+1m) so the first extension produces a different JWT
 	var capturedToken *domain.Token
 	tokenStore.EXPECT().
 		SaveToken(mock.Anything, mock.Anything, mock.Anything).

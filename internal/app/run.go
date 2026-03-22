@@ -1098,6 +1098,9 @@ func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, 
 		if parsed <= 0 {
 			return auth.Config{}, fmt.Errorf("auth.access_token_ttl must be positive")
 		}
+		if parsed > auth.MaxAccessTokenLifetime {
+			return auth.Config{}, fmt.Errorf("auth.access_token_ttl must not exceed %v", auth.MaxAccessTokenLifetime)
+		}
 		accessTokenTTL = parsed
 	}
 	authConfig.AccessTokenTTL = accessTokenTTL
@@ -1812,6 +1815,9 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 			}
 			if tlsPort != 443 {
 				host = net.JoinHostPort(host, strconv.Itoa(tlsPort))
+			} else if strings.Contains(host, ":") {
+				// Re-bracket bare IPv6 literal for the URL.
+				host = "[" + host + "]"
 			}
 			target := "https://" + host + r.RequestURI
 			http.Redirect(w, r, target, http.StatusPermanentRedirect)
