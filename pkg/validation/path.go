@@ -127,6 +127,21 @@ func ValidateUUID(uuid string) error {
 	return nil
 }
 
+// ValidateDomainParam validates a domain name extracted from a URL path parameter.
+// Rejects path traversal, null bytes, and control characters.
+func ValidateDomainParam(domain string) error {
+	if domain == "" {
+		return fmt.Errorf("domain parameter is empty")
+	}
+	if strings.Contains(domain, "..") {
+		return fmt.Errorf("domain contains path traversal sequence")
+	}
+	if strings.ContainsAny(domain, "\x00\n\r") {
+		return fmt.Errorf("domain contains invalid characters")
+	}
+	return nil
+}
+
 // ValidatePath sanitizes and validates a path component to prevent traversal attacks.
 // Returns the cleaned path or an error if the path is unsafe.
 func ValidatePath(path string) (string, error) {

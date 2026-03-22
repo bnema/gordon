@@ -105,9 +105,14 @@ func ExtractLabels(ctx context.Context, manifestData []byte, blobStorage out.Blo
 	}
 	defer reader.Close()
 
-	configData, err := io.ReadAll(reader)
+	const maxConfigBlobSize = 1 << 20 // 1 MB
+	limited := io.LimitReader(reader, maxConfigBlobSize+1)
+	configData, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config blob: %w", err)
+	}
+	if len(configData) > maxConfigBlobSize {
+		return nil, fmt.Errorf("config blob exceeds maximum size of %d bytes", maxConfigBlobSize)
 	}
 
 	labels, err := ParseImageLabels(configData)

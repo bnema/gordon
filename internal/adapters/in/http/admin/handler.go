@@ -1264,6 +1264,10 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 		h.sendError(w, http.StatusBadRequest, "domain required in path")
 		return
 	}
+	if err := validation.ValidateDomainParam(deployDomain); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
 
 	// Get the route for this domain
 	route, err := h.configSvc.GetRoute(ctx, deployDomain)
@@ -1317,7 +1321,7 @@ func (h *Handler) handleRestart(w http.ResponseWriter, r *http.Request, path str
 		h.sendError(w, http.StatusBadRequest, "domain required in path")
 		return
 	}
-	if strings.Contains(restartDomain, "..") || strings.ContainsAny(restartDomain, "\x00\n\r") {
+	if err := validation.ValidateDomainParam(restartDomain); err != nil {
 		h.sendError(w, http.StatusBadRequest, "invalid domain")
 		return
 	}
@@ -1431,6 +1435,13 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request, path string
 	logDomain := strings.TrimPrefix(path, "/logs/")
 	if logDomain == "/logs" {
 		logDomain = ""
+	}
+
+	if logDomain != "" {
+		if err := validation.ValidateDomainParam(logDomain); err != nil {
+			h.sendError(w, http.StatusBadRequest, "invalid domain")
+			return
+		}
 	}
 
 	if logDomain == "" {

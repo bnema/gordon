@@ -115,6 +115,9 @@ func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit request body size
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
+
 	// Parse request body
 	var req PasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

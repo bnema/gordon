@@ -748,8 +748,7 @@ func loadAuthConfig(configPath string) (*cliConfig, error) {
 			cfg.TokenSecret = []byte(tokenSecretPath)
 		}
 	} else {
-		// Generate a default secret for CLI token generation
-		cfg.TokenSecret = []byte("gordon-cli-default-secret")
+		return nil, fmt.Errorf("token_secret is required for JWT token generation; set --token-secret flag or configure auth.token_secret")
 	}
 
 	return cfg, nil

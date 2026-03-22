@@ -166,6 +166,12 @@ type Config struct {
 		} `mapstructure:"prune"`
 	} `mapstructure:"images"`
 
+	Containers struct {
+		MemoryLimit string  `mapstructure:"memory_limit"` // e.g., "512MB", "1GB"
+		CPULimit    float64 `mapstructure:"cpu_limit"`    // CPU cores, e.g., 1.0 = 1 core
+		PidsLimit   int64   `mapstructure:"pids_limit"`   // e.g., 512
+	} `mapstructure:"containers"`
+
 	Telemetry telemetry.Config `mapstructure:"telemetry"`
 }
 
@@ -1080,6 +1086,10 @@ func createTokenStore(backend domain.SecretsBackend, dataDir string, log zerowra
 }
 
 func buildAuthConfig(ctx context.Context, cfg Config, authType domain.AuthType, backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (auth.Config, error) {
+	if cfg.Auth.Password != "" {
+		return auth.Config{}, fmt.Errorf("auth.password is no longer supported; use auth.password_hash with a secrets backend instead")
+	}
+
 	authConfig := auth.Config{
 		Enabled:  cfg.Auth.Enabled,
 		AuthType: authType,
@@ -1124,8 +1134,7 @@ func loadPasswordHash(ctx context.Context, cfg Config, backend domain.SecretsBac
 	}
 
 	if cfg.Auth.Password != "" {
-		log.Warn().Msg("using plain password in config is deprecated, use password_hash with a secrets backend")
-		return cfg.Auth.Password, nil
+		return "", fmt.Errorf("auth.password is no longer supported; use auth.password_hash with a secrets backend instead")
 	}
 
 	return "", nil
@@ -1155,8 +1164,13 @@ func loadTokenSecret(ctx context.Context, cfg Config, backend domain.SecretsBack
 	// 2. Secrets backend (pass/sops - encrypted)
 	// 3. Config file path (least preferred)
 
+	const minTokenSecretLength = 32
+
 	// Check environment variable first
 	if envSecret := os.Getenv(TokenSecretEnvVar); envSecret != "" {
+		if len(envSecret) < minTokenSecretLength {
+			return nil, fmt.Errorf("token secret from %s must be at least %d bytes (got %d)", TokenSecretEnvVar, minTokenSecretLength, len(envSecret))
+		}
 		log.Debug().Msg("using token secret from environment variable")
 		return []byte(envSecret), nil
 	}
@@ -1169,6 +1183,10 @@ func loadTokenSecret(ctx context.Context, cfg Config, backend domain.SecretsBack
 	secret, err := loadSecret(ctx, backend, cfg.Auth.TokenSecret, dataDir, log)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to load token secret")
+	}
+
+	if len(secret) < minTokenSecretLength {
+		return nil, fmt.Errorf("token_secret must be at least %d bytes (got %d); use a strong random secret", minTokenSecretLength, len(secret))
 	}
 
 	return []byte(secret), nil
@@ -1275,6 +1293,29 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 
 // createContainerService creates the container service with configuration.
 func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (*container.Service, error) {
+	// Parse and validate container resource limits from config
+	if cfg.Containers.CPULimit < 0 {
+		return nil, fmt.Errorf("containers.cpu_limit must be >= 0 (got %f)", cfg.Containers.CPULimit)
+	}
+	if cfg.Containers.PidsLimit < 0 {
+		return nil, fmt.Errorf("containers.pids_limit must be >= 0 (got %d)", cfg.Containers.PidsLimit)
+	}
+	var defaultMemoryLimit int64
+	if cfg.Containers.MemoryLimit != "" {
+		parsed, err := bytesize.Parse(cfg.Containers.MemoryLimit)
+		if err != nil {
+			return nil, fmt.Errorf("invalid containers.memory_limit %q: %w", cfg.Containers.MemoryLimit, err)
+		}
+		if parsed <= 0 {
+			return nil, fmt.Errorf("containers.memory_limit must be positive (got %q)", cfg.Containers.MemoryLimit)
+		}
+		defaultMemoryLimit = parsed
+	}
+	var defaultNanoCPUs int64
+	if cfg.Containers.CPULimit > 0 {
+		defaultNanoCPUs = int64(cfg.Containers.CPULimit * 1e9)
+	}
+
 	containerConfig := container.Config{
 		RegistryAuthEnabled:      cfg.Auth.Enabled,
 		RegistryDomain:           cfg.Server.RegistryDomain,
@@ -1298,6 +1339,9 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		DrainDelay:               v.GetDuration("deploy.drain_delay"),
 		DrainMode:                v.GetString("deploy.drain_mode"),
 		DrainTimeout:             v.GetDuration("deploy.drain_timeout"),
+		DefaultMemoryLimit:       defaultMemoryLimit,
+		DefaultNanoCPUs:          defaultNanoCPUs,
+		DefaultPidsLimit:         cfg.Containers.PidsLimit,
 	}
 	if v.IsSet("deploy.drain_delay") {
 		containerConfig.DrainDelayConfigured = true
@@ -1542,7 +1586,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	)
 
 	registryMux := http.NewServeMux()
-	registerAuthRoutes(registryMux, svc, trustedNets, cidrAllowlistMiddleware, rateLimitMiddleware, log)
+	registerAuthRoutes(registryMux, svc, trustedNets, cidrAllowlistMiddleware, rateLimitMiddleware, cfg, log)
 	registryMux.Handle("/v2/", wrapRegistryForLocalMode(registryWithMiddleware, cfg, log))
 
 	// SECURITY: No CORS middleware on the proxy chain. Backend applications
@@ -1675,10 +1719,20 @@ func registerAuthRoutes(
 	trustedNets []*net.IPNet,
 	cidrAllowlistMiddleware func(http.Handler) http.Handler,
 	rateLimitMiddleware func(http.Handler) http.Handler,
+	cfg Config,
 	log zerowrap.Logger,
 ) {
 	if svc.authHandler == nil {
 		return
+	}
+
+	// Auth endpoints always get rate limiting, even if global rate limiting is disabled.
+	// This prevents brute-force attacks against password/token endpoints.
+	authRateLimitMiddleware := rateLimitMiddleware
+	if !cfg.API.RateLimit.Enabled {
+		authGlobalLimiter := ratelimit.NewMemoryStore(50, 100, log)
+		authIPLimiter := ratelimit.NewMemoryStore(5, 10, log)
+		authRateLimitMiddleware = registry.RateLimitMiddleware(authGlobalLimiter, authIPLimiter, cfg.API.RateLimit.TrustedProxies, log)
 	}
 
 	// Auth endpoints are NOT protected by auth - they're where clients authenticate
@@ -1691,7 +1745,7 @@ func registerAuthRoutes(
 	if cidrAllowlistMiddleware != nil {
 		authMiddlewares = append(authMiddlewares, cidrAllowlistMiddleware)
 	}
-	authMiddlewares = append(authMiddlewares, rateLimitMiddleware)
+	authMiddlewares = append(authMiddlewares, authRateLimitMiddleware)
 	authWithMiddleware := otelhttp.NewHandler(
 		middleware.Chain(authMiddlewares...)(svc.authHandler),
 		"gordon.auth",
@@ -1774,18 +1828,28 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", nil, errChan, log)
 
-	// Enable both HTTP/1.1 and cleartext HTTP/2 on the proxy server so Gordon can
-	// accept h2c traffic from clients and load balancers (e.g. Cloudflare).
-	var proxyProtos http.Protocols
-	proxyProtos.SetHTTP1(true)
-	proxyProtos.SetUnencryptedHTTP2(true)
-	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", &proxyProtos, errChan, log)
+	var proxySrv *http.Server
+	var proxyReady <-chan struct{}
 	var tlsSrv *http.Server
 	var tlsReady <-chan struct{}
 	if cfg.Server.TLSEnabled {
 		if cfg.Server.TLSCertFile == "" || cfg.Server.TLSKeyFile == "" {
 			return fmt.Errorf("server.tls_enabled=true requires both server.tls_cert_file and server.tls_key_file")
 		}
+		// When TLS is enabled, HTTP port becomes redirect-only.
+		tlsPort := cfg.Server.TLSPort
+		redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			host := r.Host
+			if h, _, err := net.SplitHostPort(host); err == nil {
+				host = h
+			}
+			if tlsPort != 443 {
+				host = net.JoinHostPort(host, strconv.Itoa(tlsPort))
+			}
+			target := "https://" + host + r.RequestURI
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+		})
+		proxySrv, proxyReady = startServer(fmt.Sprintf(":%d", cfg.Server.Port), redirectHandler, "proxy-redirect", nil, errChan, log)
 		tlsSrv, tlsReady = startTLSServer(
 			fmt.Sprintf(":%d", cfg.Server.TLSPort),
 			proxyHandler,
@@ -1795,6 +1859,13 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 			errChan,
 			log,
 		)
+	} else {
+		// Enable both HTTP/1.1 and cleartext HTTP/2 on the proxy server so Gordon can
+		// accept h2c traffic from clients and load balancers (e.g. Cloudflare).
+		var proxyProtos http.Protocols
+		proxyProtos.SetHTTP1(true)
+		proxyProtos.SetUnencryptedHTTP2(true)
+		proxySrv, proxyReady = startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", &proxyProtos, errChan, log)
 	}
 
 	// Wait for all enabled servers to bind their ports before auto-starting containers.
