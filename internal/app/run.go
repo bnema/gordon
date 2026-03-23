@@ -2512,6 +2512,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("deploy.stabilization_delay", "2s")
 	v.SetDefault("deploy.tcp_probe_timeout", "30s")
 	v.SetDefault("deploy.http_probe_timeout", "60s")
+	v.SetDefault("deploy.attachment_readiness_timeout", "30s")
 	v.SetDefault("deploy.drain_mode", "auto")
 	v.SetDefault("deploy.drain_timeout", "30s")
 
