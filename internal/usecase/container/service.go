@@ -2283,7 +2283,9 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	// Wait for attachment to be ready before proceeding
 	if err := s.waitForAttachmentReady(ctx, container.ID, config); err != nil {
 		log.WrapErr(err, "attachment readiness check failed, cleaning up")
-		s.runtime.StopContainer(ctx, container.ID)
+		if stopErr := s.runtime.StopContainer(ctx, container.ID); stopErr != nil {
+			log.Warn().Err(stopErr).Str(zerowrap.FieldEntityID, container.ID).Msg("failed to stop unready attachment")
+		}
 		s.runtime.RemoveContainer(ctx, container.ID, true)
 		return fmt.Errorf("attachment %q not ready: %w", serviceName, err)
 	}
