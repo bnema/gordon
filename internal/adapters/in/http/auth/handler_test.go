@@ -448,6 +448,57 @@ func TestHandler_isInternalAuth(t *testing.T) {
 	}
 }
 
+func TestHandler_Token_EphemeralTokenRejected(t *testing.T) {
+	authSvc := mocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "ephemeral-jwt-token").Return(&domain.TokenClaims{
+		Subject:     "myuser",
+		Scopes:      []string{"repository:*:pull"},
+		IsEphemeral: true,
+	}, nil)
+
+	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=repository:myrepo:pull", nil)
+	req.SetBasicAuth("myuser", "ephemeral-jwt-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "unauthorized")
+}
+
+func TestHandler_Token_LongLivedTokenAccepted(t *testing.T) {
+	authSvc := mocks.NewMockAuthService(t)
+
+	authSvc.EXPECT().IsEnabled().Return(true)
+	authSvc.EXPECT().ValidateToken(mock.Anything, "long-lived-jwt-token").Return(&domain.TokenClaims{
+		Subject:     "myuser",
+		Scopes:      []string{"repository:*:pull"},
+		IsEphemeral: false,
+	}, nil)
+	authSvc.EXPECT().GetAccessTokenTTL().Return(15 * time.Minute)
+	authSvc.EXPECT().GenerateAccessToken(mock.Anything, "myuser", []string{"repository:myrepo:pull"}, 15*time.Minute).
+		Return("new-access-token", nil)
+
+	handler := NewHandler(authSvc, InternalAuth{}, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/token?scope=repository:myrepo:pull", nil)
+	req.SetBasicAuth("myuser", "long-lived-jwt-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	assert.NoError(t, err)
+	assert.Equal(t, "new-access-token", resp["token"])
+}
+
 func TestHandler_Token_AdminScopeSuccess(t *testing.T) {
 	authSvc := mocks.NewMockAuthService(t)
 

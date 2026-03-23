@@ -7,6 +7,8 @@ import (
 	"strconv"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // ClientConfig represents the client-mode configuration.
@@ -256,6 +258,20 @@ func resolveRemoteEntryToken(remote *RemoteEntry) string {
 	return ""
 }
 
+// ResolveTokenForRemote resolves the token for a named remote.
+// Precedence: TOML token field > token_env > pass store.
+func ResolveTokenForRemote(name string, entry RemoteEntry) string {
+	if token := resolveRemoteEntryToken(&entry); token != "" {
+		return token
+	}
+	if passAvailable() {
+		if token, err := passReadToken(name); err == nil && token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
 // ResolveInsecureTLSForRemote resolves insecure TLS behavior for a named remote.
 // Precedence: flag > env > client config > specific remote config.
 func ResolveInsecureTLSForRemote(flagInsecure bool, remoteName string) bool {
@@ -331,10 +347,34 @@ func SetActiveRemote(name string) error {
 
 	// Verify remote exists
 	if _, ok := config.Remotes[name]; !ok {
-		return fmt.Errorf("remote '%s' not found", name)
+		return fmt.Errorf("%w: %s", domain.ErrRemoteNotFound, name)
 	}
 
 	config.Active = name
+
+	return SaveRemotes("", config)
+}
+
+// ClearRemoteToken removes the token and token_env fields for a named remote
+// from the remotes TOML config, and deletes the pass store entry if present.
+func ClearRemoteToken(name string) error {
+	// Delete from pass (best-effort, no error if pass unavailable)
+	_ = passDeleteToken(name)
+
+	// Clear TOML fields
+	config, err := LoadRemotes("")
+	if err != nil {
+		return err
+	}
+
+	entry, ok := config.Remotes[name]
+	if !ok {
+		return fmt.Errorf("%w: %s", domain.ErrRemoteNotFound, name)
+	}
+
+	entry.Token = ""
+	entry.TokenEnv = ""
+	config.Remotes[name] = entry
 
 	return SaveRemotes("", config)
 }

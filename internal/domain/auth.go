@@ -29,12 +29,13 @@ type Token struct {
 
 // TokenClaims represents the JWT claims for a token.
 type TokenClaims struct {
-	ID        string   `json:"jti"`
-	Subject   string   `json:"sub"`
-	Scopes    []string `json:"scopes"`
-	IssuedAt  int64    `json:"iat"`
-	ExpiresAt int64    `json:"exp,omitempty"` // 0 means never expires
-	Issuer    string   `json:"iss"`
+	ID          string   `json:"jti"`
+	Subject     string   `json:"sub"`
+	Scopes      []string `json:"scopes"`
+	IssuedAt    int64    `json:"iat"`
+	ExpiresAt   int64    `json:"exp,omitempty"` // 0 means never expires
+	Issuer      string   `json:"iss"`
+	IsEphemeral bool     `json:"-"` // true when token was issued by /auth/token (not stored)
 }
 
 // IsExpired checks if the token has expired.

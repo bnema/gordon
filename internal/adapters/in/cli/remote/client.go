@@ -13,7 +13,10 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/domain"
@@ -21,11 +24,16 @@ import (
 
 // Client is an HTTP client for the Gordon admin API.
 type Client struct {
-	baseURL          string
-	token            string
-	httpClient       *http.Client
-	insecureTLS      bool
-	onTokenRefreshed func(newToken string) // optional callback to persist a refreshed token
+	baseURL     string
+	token       string
+	httpClient  *http.Client
+	insecureTLS bool
+
+	// Ephemeral admin token exchange fields.
+	mu           sync.Mutex // protects ephemeral and ephemeralExp
+	subject      string     // JWT subject extracted from long-lived token
+	ephemeral    string     // cached ephemeral admin token
+	ephemeralExp time.Time  // expiry of cached ephemeral token
 }
 
 var (
@@ -60,10 +68,31 @@ func NewClient(baseURL string, opts ...ClientOption) *Client {
 }
 
 // WithToken sets the authentication token.
+// The token must be a valid JWT — the subject claim is extracted for
+// ephemeral token exchange. If parsing fails, requests will return
+// an error rather than sending the long-lived token directly.
 func WithToken(token string) ClientOption {
 	return func(c *Client) {
 		c.token = token
+		c.subject = extractJWTSubject(token)
 	}
+}
+
+// extractJWTSubject parses a JWT without verification and returns the
+// "sub" claim.  Returns "" if the token is not a valid JWT or has no sub.
+func extractJWTSubject(tokenStr string) string {
+	if tokenStr == "" {
+		return ""
+	}
+	parser := jwt.NewParser()
+	claims := jwt.MapClaims{}
+	// We only need the claims; signature verification happens server-side.
+	_, _, err := parser.ParseUnverified(tokenStr, claims)
+	if err != nil {
+		return ""
+	}
+	sub, _ := claims.GetSubject()
+	return sub
 }
 
 // WithHTTPClient sets a custom HTTP client.
@@ -87,35 +116,86 @@ func WithInsecureTLS(insecure bool) ClientOption {
 	}
 }
 
-// WithTokenRefreshCallback sets a callback that is invoked when the server
-// returns a refreshed token in the X-Gordon-Token response header.
-// The CLI uses this to persist the new token to the remotes config atomically.
-func WithTokenRefreshCallback(fn func(newToken string)) ClientOption {
-	return func(c *Client) {
-		c.onTokenRefreshed = fn
-	}
+// ephemeralMargin is the safety margin before expiry at which
+// the cached ephemeral token is considered stale.
+const ephemeralMargin = 30 * time.Second
+
+// ephemeralValid reports whether the cached ephemeral token is still usable.
+func (c *Client) ephemeralValid() bool {
+	return c.ephemeral != "" && time.Now().Before(c.ephemeralExp.Add(-ephemeralMargin))
 }
 
-// observeTokenRotation checks the X-Gordon-Token header on a response and, if
-// the server issued a refreshed token, updates the client's in-memory token and
-// invokes the optional persistence callback. Panics in the callback are caught
-// so they never propagate to the caller.
-func (c *Client) observeTokenRotation(resp *http.Response) {
-	newToken := resp.Header.Get("X-Gordon-Token")
-	if newToken == "" || newToken == c.token {
-		return
+// exchangeToken exchanges the long-lived token for a short-lived ephemeral
+// admin token via /auth/token. Follows the same pattern as ExchangeRegistryToken.
+// The caller must hold c.mu.
+func (c *Client) exchangeToken(ctx context.Context) error {
+	url := c.baseURL + "/auth/token?scope=admin:*:*&service=gordon-registry"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("ephemeral token exchange: %w", err)
 	}
-	c.token = newToken
-	if c.onTokenRefreshed != nil {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Fprintf(os.Stderr, "warning: token refresh callback panicked: %v\n", r)
-				}
-			}()
-			c.onTokenRefreshed(newToken)
-		}()
+
+	req.SetBasicAuth(c.subject, c.token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("ephemeral token exchange: %w", err)
 	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
+			return fmt.Errorf("ephemeral token exchange: %s: %s", resp.Status, errResp.Error)
+		}
+		return fmt.Errorf("ephemeral token exchange: %s: %s", resp.Status, string(body))
+	}
+
+	var result dto.TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("ephemeral token exchange: decode: %w", err)
+	}
+
+	token := result.Token
+	if token == "" {
+		token = result.AccessToken
+	}
+	if token == "" {
+		return fmt.Errorf("ephemeral token exchange returned empty token")
+	}
+
+	if result.ExpiresIn <= 0 {
+		return fmt.Errorf("ephemeral token exchange: invalid expires_in value: %d", result.ExpiresIn)
+	}
+
+	c.ephemeral = token
+	c.ephemeralExp = time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
+	return nil
+}
+
+// bearerToken returns the token to use in Authorization headers.
+// It exchanges the long-lived token for an ephemeral one via /auth/token.
+// If subject extraction failed, uses "unknown" — the server validates everything.
+func (c *Client) bearerToken(ctx context.Context) (string, error) {
+	if c.token == "" {
+		return "", nil
+	}
+	if c.subject == "" {
+		c.subject = "unknown"
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.ephemeralValid() {
+		if err := c.exchangeToken(ctx); err != nil {
+			return "", err
+		}
+	}
+	return c.ephemeral, nil
 }
 
 func (c *Client) applyTLSConfig() {
@@ -151,18 +231,51 @@ func (c *Client) applyTLSConfig() {
 
 // request performs an HTTP request to the admin API.
 func (c *Client) request(ctx context.Context, method, path string, body any) (*http.Response, error) {
-	url := c.baseURL + "/admin" + path
-
-	var bodyReader io.Reader
+	// Marshal body once so it can be replayed on 401 retry.
+	var jsonBody []byte
 	if body != nil {
-		jsonBody, err := json.Marshal(body)
+		var err error
+		jsonBody, err = json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
+	}
+
+	resp, err := c.doRequest(ctx, method, path, jsonBody)
+	if err != nil {
+		return nil, err
+	}
+
+	// On 401: invalidate ephemeral, re-exchange, retry once.
+	if resp.StatusCode == http.StatusUnauthorized && c.subject != "" && c.ephemeral != "" {
+		// Drain and close the first response.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodySize))
+		resp.Body.Close()
+
+		c.mu.Lock()
+		c.ephemeral = ""
+		c.ephemeralExp = time.Time{}
+		if exErr := c.exchangeToken(ctx); exErr != nil {
+			c.mu.Unlock()
+			return nil, fmt.Errorf("token re-exchange after 401: %w", exErr)
+		}
+		c.mu.Unlock()
+		return c.doRequest(ctx, method, path, jsonBody)
+	}
+
+	return resp, nil
+}
+
+// doRequest builds and executes a single HTTP request to the admin API.
+func (c *Client) doRequest(ctx context.Context, method, path string, jsonBody []byte) (*http.Response, error) {
+	reqURL := c.baseURL + "/admin" + path
+
+	var bodyReader io.Reader
+	if jsonBody != nil {
 		bodyReader = bytes.NewReader(jsonBody)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -170,17 +283,18 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	bearer, err := c.bearerToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
-
-	// Observe token rotation: the server re-signs and returns the token via X-Gordon-Token.
-	c.observeTokenRotation(resp)
 
 	return resp, nil
 }
@@ -999,18 +1113,22 @@ func (c *Client) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern strin
 	return parseResponse(resp, nil)
 }
 
-// streamLogs handles SSE streaming for log endpoints.
-func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, error) {
-	url := c.baseURL + "/admin" + path
+// openSSEStream opens an SSE connection to the given admin path and returns the response.
+func (c *Client) openSSEStream(ctx context.Context, path string) (*http.Response, error) {
+	streamURL := c.baseURL + "/admin" + path
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Accept", "text/event-stream")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	bearer, err := c.bearerToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	// Use the same transport as the main client (honoring TLS config and
@@ -1023,13 +1141,20 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
 
-	// Observe token rotation on streaming responses, same as request().
-	c.observeTokenRotation(resp)
-
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
 		resp.Body.Close()
 		return nil, fmt.Errorf("%s: %s", resp.Status, string(body))
+	}
+
+	return resp, nil
+}
+
+// streamLogs handles SSE streaming for log endpoints.
+func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, error) {
+	resp, err := c.openSSEStream(ctx, path)
+	if err != nil {
+		return nil, err
 	}
 
 	ch := make(chan string, 100)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -91,12 +92,14 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 			// Authenticate based on auth type
 			// When auth type is "password", accept BOTH password and token auth
 			// (allows CI/CD tokens while still supporting interactive password login)
-			var authenticated bool
-			var tokenClaims *domain.TokenClaims
-			authenticated, tokenClaims = authenticateToken(ctx, r, authSvc, log)
+			tokenClaims, authErr := authenticateToken(ctx, r, authSvc, log)
 
-			if !authenticated {
-				sendUnauthorized(w, authSvc.GetAuthType(), r.Host, log, r)
+			if authErr != nil {
+				if errors.Is(authErr, domain.ErrLongLivedToken) {
+					sendUnauthorizedMsg(w, authSvc.GetAuthType(), r.Host, log, r, domain.ErrLongLivedToken.Error())
+				} else {
+					sendUnauthorized(w, authSvc.GetAuthType(), r.Host, log, r)
+				}
 				return
 			}
 
@@ -119,8 +122,9 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 
 // authenticateToken handles token-based authentication.
 // It supports both Bearer token in Authorization header and token-as-password for CI.
-// Returns (authenticated, tokenClaims) where tokenClaims may be nil on failure.
-func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthService, log zerowrap.Logger) (bool, *domain.TokenClaims) {
+// Returns (tokenClaims, error). A nil error means authentication succeeded.
+// Returns domain.ErrLongLivedToken when a stored (non-ephemeral) token is used.
+func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthService, log zerowrap.Logger) (*domain.TokenClaims, error) {
 	// First, check for Bearer token
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
@@ -132,7 +136,16 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 				Str(zerowrap.FieldMethod, r.Method).
 				Str(zerowrap.FieldPath, r.URL.Path).
 				Msg("bearer token validation failed")
-			return false, nil
+			return nil, err
+		}
+
+		if !claims.IsEphemeral {
+			log.Warn().
+				Str("subject", claims.Subject).
+				Str(zerowrap.FieldMethod, r.Method).
+				Str(zerowrap.FieldPath, r.URL.Path).
+				Msg("long-lived token rejected on registry endpoint")
+			return nil, domain.ErrLongLivedToken
 		}
 
 		log.Debug().
@@ -140,7 +153,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("bearer token authentication successful")
-		return true, claims
+		return claims, nil
 	}
 
 	// Fall back to token-as-password (for CI/automation)
@@ -151,7 +164,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("no auth credentials provided")
-		return false, nil
+		return nil, errors.New("no auth credentials provided")
 	}
 
 	// Try to validate the password as a JWT token
@@ -163,7 +176,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("token-as-password validation failed")
-		return false, nil
+		return nil, err
 	}
 
 	// Verify the username matches the token subject
@@ -174,7 +187,16 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("username does not match token subject")
-		return false, nil
+		return nil, errors.New("username does not match token subject")
+	}
+
+	if !claims.IsEphemeral {
+		log.Warn().
+			Str("subject", claims.Subject).
+			Str(zerowrap.FieldMethod, r.Method).
+			Str(zerowrap.FieldPath, r.URL.Path).
+			Msg("long-lived token rejected on registry endpoint")
+		return nil, domain.ErrLongLivedToken
 	}
 
 	log.Debug().
@@ -182,7 +204,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 		Str(zerowrap.FieldMethod, r.Method).
 		Str(zerowrap.FieldPath, r.URL.Path).
 		Msg("token-as-password authentication successful")
-	return true, claims
+	return claims, nil
 }
 
 func isInternalRegistryAuth(r *http.Request, internalAuth InternalRegistryAuth) bool {
@@ -281,6 +303,37 @@ func sendForbidden(w http.ResponseWriter, log zerowrap.Logger, r *http.Request) 
 		Str(zerowrap.FieldPath, r.URL.Path).
 		Str(zerowrap.FieldClientIP, r.RemoteAddr).
 		Msg("forbidden: insufficient scope for operation")
+}
+
+// sendUnauthorizedMsg sends an HTTP 401 response with a custom error message.
+func sendUnauthorizedMsg(w http.ResponseWriter, authType domain.AuthType, host string, log zerowrap.Logger, r *http.Request, msg string) {
+	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
+
+	switch authType {
+	case domain.AuthTypeToken:
+		realmHost := host
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		realmHost = sanitizeHeaderValue(realmHost)
+		realm := scheme + "://" + realmHost + "/auth/token"
+		w.Header().Set("WWW-Authenticate", `Bearer realm="`+realm+`",service="gordon-registry"`)
+	default:
+		w.Header().Set("WWW-Authenticate", `Basic realm="Gordon Registry"`)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: msg})
+
+	log.Warn().
+		Str(zerowrap.FieldLayer, "adapter").
+		Str(zerowrap.FieldAdapter, "http").
+		Str(zerowrap.FieldMethod, r.Method).
+		Str(zerowrap.FieldPath, r.URL.Path).
+		Str(zerowrap.FieldClientIP, r.RemoteAddr).
+		Msg("unauthorized registry access attempt")
 }
 
 // sendUnauthorized sends an HTTP 401 response with appropriate headers.

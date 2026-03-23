@@ -13,12 +13,16 @@ Gordon v2.30.0 removes password-based authentication entirely. Only token-based 
 - `auth.type = "password"` is no longer accepted
 - `auth.password` and `auth.password_hash` config fields are removed
 - The `gordon auth password hash` CLI command is removed
-- The `gordon auth login` command no longer accepts `--username` or `--password` flags
+- The `gordon auth login` command now requires `--token` (no more interactive password prompt)
 - The `/auth/password` endpoint now returns `410 Gone`
+- Long-lived tokens are no longer accepted on admin/registry endpoints — they must be exchanged for ephemeral tokens via `/auth/token`
 
 **New features:**
 
 - `auth.access_token_ttl` configures the lifetime of ephemeral access tokens issued by `/auth/token` (default: `"15m"`)
+- `gordon auth show-token` prints the stored token for a remote
+- `gordon auth logout` removes the stored token (with optional `--revoke`)
+- Automatic token exchange: the CLI transparently exchanges long-lived tokens for ephemeral ones before API calls
 - Admin scopes (`admin:*:*`, `admin:routes:read`, etc.) allow fine-grained access control for remote CLI operations
 
 **Migration steps:**

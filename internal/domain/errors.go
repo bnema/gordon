@@ -69,12 +69,14 @@ var (
 	ErrInvalidScope      = errors.New("invalid scope format")
 	ErrSSRFBlocked       = errors.New("request to internal/blocked network not allowed")
 	ErrInvalidEnvKey     = errors.New("invalid environment variable key")
+	ErrLongLivedToken    = errors.New("long-lived tokens must be exchanged via /auth/token")
 
 	// Remote errors
 	ErrEmptyRemoteName       = errors.New("remote name must not be empty")
 	ErrInvalidRemoteNameChar = errors.New("remote name contains invalid characters")
 	ErrConsecutiveDots       = errors.New("remote name must not contain consecutive dots")
 	ErrPassUnavailable       = errors.New("pass is not available")
+	ErrRemoteNotFound        = errors.New("remote not found")
 
 	// Attachment errors
 	ErrAttachmentNotFound    = errors.New("attachment not found")
