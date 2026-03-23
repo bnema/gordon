@@ -211,21 +211,22 @@ func newAuthLoginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate with a Gordon server",
-		Long: `Store a pre-generated token for a Gordon server remote.
+		Long: `Store or verify a token for a Gordon server remote.
 
-The token is stored in your remote configuration and verified
-against /admin/status on a best-effort basis.
+With --token: stores the token and verifies it.
+Without --token: verifies the existing stored token still works.
 
 Generate a token on the server with: gordon auth token generate
 
 Examples:
 	gordon auth login --token <token>              Store token for active remote
-	gordon auth login --remote prod --token <tok>  Store token for specific remote`,
+	gordon auth login --remote prod --token <tok>  Store token for specific remote
+	gordon auth login                              Verify existing token`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if token == "" {
-				return fmt.Errorf("--token is required; generate a token on the server with: gordon auth token generate")
+			if token != "" {
+				return runAuthLoginWithToken(cmd.Context(), remoteName, token, cmd.OutOrStdout())
 			}
-			return runAuthLoginWithToken(cmd.Context(), remoteName, token, cmd.OutOrStdout())
+			return runAuthLoginVerify(cmd.Context(), remoteName, cmd.OutOrStdout())
 		},
 	}
 
@@ -265,6 +266,31 @@ func runAuthLoginWithToken(ctx context.Context, remoteName, token string, out io
 	if verified {
 		_ = cliWriteLine(out, styles.RenderSuccess("Token verified with remote status endpoint"))
 	}
+	return nil
+}
+
+func runAuthLoginVerify(ctx context.Context, remoteName string, out io.Writer) error {
+	resolvedName, entry, err := resolveRemoteEntry(remoteName)
+	if err != nil {
+		return err
+	}
+
+	token := remote.ResolveTokenForRemote(resolvedName, entry)
+	if token == "" {
+		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token <token>", resolvedName)
+	}
+
+	insecureTLS := remote.ResolveInsecureTLSForRemote(insecureTLSFlag, resolvedName)
+	client := remote.NewClient(entry.URL, remoteClientOptions(token, insecureTLS)...)
+	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if _, err := client.GetStatus(verifyCtx); err != nil {
+		_ = cliWriteLine(out, styles.RenderWarning(fmt.Sprintf("Token verification failed for '%s': %v", resolvedName, err)))
+		return fmt.Errorf("authentication failed")
+	}
+
+	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Authenticated to '%s'", resolvedName)))
 	return nil
 }
 
