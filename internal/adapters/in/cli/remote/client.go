@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -29,9 +30,10 @@ type Client struct {
 	insecureTLS bool
 
 	// Ephemeral admin token exchange fields.
-	subject      string    // JWT subject extracted from long-lived token
-	ephemeral    string    // cached ephemeral admin token
-	ephemeralExp time.Time // expiry of cached ephemeral token
+	mu           sync.Mutex // protects ephemeral and ephemeralExp
+	subject      string     // JWT subject extracted from long-lived token
+	ephemeral    string     // cached ephemeral admin token
+	ephemeralExp time.Time  // expiry of cached ephemeral token
 }
 
 var (
@@ -125,10 +127,11 @@ func (c *Client) ephemeralValid() bool {
 
 // exchangeToken exchanges the long-lived token for a short-lived ephemeral
 // admin token via /auth/token. Follows the same pattern as ExchangeRegistryToken.
-func (c *Client) exchangeToken() error {
+// The caller must hold c.mu.
+func (c *Client) exchangeToken(ctx context.Context) error {
 	url := c.baseURL + "/auth/token?scope=admin:*:*&service=gordon-registry"
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("ephemeral token exchange: %w", err)
 	}
@@ -166,6 +169,10 @@ func (c *Client) exchangeToken() error {
 		return fmt.Errorf("ephemeral token exchange returned empty token")
 	}
 
+	if result.ExpiresIn <= 0 {
+		return fmt.Errorf("ephemeral token exchange: invalid expires_in value: %d", result.ExpiresIn)
+	}
+
 	c.ephemeral = token
 	c.ephemeralExp = time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
 	return nil
@@ -174,7 +181,7 @@ func (c *Client) exchangeToken() error {
 // bearerToken returns the token to use in Authorization headers.
 // If the client has a subject (valid JWT), it exchanges for an ephemeral token.
 // Otherwise it falls back to sending the long-lived token directly.
-func (c *Client) bearerToken() (string, error) {
+func (c *Client) bearerToken(ctx context.Context) (string, error) {
 	if c.token == "" {
 		return "", nil
 	}
@@ -182,8 +189,10 @@ func (c *Client) bearerToken() (string, error) {
 	if c.subject == "" {
 		return c.token, nil
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.ephemeralValid() {
-		if err := c.exchangeToken(); err != nil {
+		if err := c.exchangeToken(ctx); err != nil {
 			return "", err
 		}
 	}
@@ -244,11 +253,14 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodySize))
 		resp.Body.Close()
 
+		c.mu.Lock()
 		c.ephemeral = ""
 		c.ephemeralExp = time.Time{}
-		if exErr := c.exchangeToken(); exErr != nil {
+		if exErr := c.exchangeToken(ctx); exErr != nil {
+			c.mu.Unlock()
 			return nil, fmt.Errorf("token re-exchange after 401: %w", exErr)
 		}
+		c.mu.Unlock()
 		return c.doRequest(ctx, method, path, jsonBody)
 	}
 
@@ -272,7 +284,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, jsonBody []
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	bearer, err := c.bearerToken()
+	bearer, err := c.bearerToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1112,7 +1124,7 @@ func (c *Client) openSSEStream(ctx context.Context, path string) (*http.Response
 	}
 
 	req.Header.Set("Accept", "text/event-stream")
-	bearer, err := c.bearerToken()
+	bearer, err := c.bearerToken(ctx)
 	if err != nil {
 		return nil, err
 	}

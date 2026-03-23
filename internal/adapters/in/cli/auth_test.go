@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -36,7 +38,8 @@ func TestRunAuthLoginWithToken_VerifiesAndStores(t *testing.T) {
 	}
 	assert.NoError(t, remote.SaveRemotes(remote.DefaultRemotesPath(), config))
 
-	err := runAuthLoginWithToken("", "token123")
+	var out bytes.Buffer
+	err := runAuthLoginWithToken(context.Background(), "", "token123", &out)
 	assert.NoError(t, err)
 
 	loaded, err := remote.LoadRemotes("")
@@ -67,7 +70,8 @@ func TestRunAuthLoginWithToken_StoresTokenOnVerificationFailure(t *testing.T) {
 	}
 	assert.NoError(t, remote.SaveRemotes(remote.DefaultRemotesPath(), config))
 
-	err := runAuthLoginWithToken("", "token123")
+	var out bytes.Buffer
+	err := runAuthLoginWithToken(context.Background(), "", "token123", &out)
 	assert.NoError(t, err)
 
 	loaded, err := remote.LoadRemotes("")

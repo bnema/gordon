@@ -104,7 +104,12 @@ func passDeleteToken(name string) error {
 	}
 
 	cmd := exec.Command("pass", "rm", "-f", passTokenPath(name)) //nolint:gosec // pass binary name is constant; remote names are validated
-	return cmd.Run()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pass rm failed: %w: %s", err, stderr.String())
+	}
+	return nil
 }
 
 func warnPassUnavailable() {

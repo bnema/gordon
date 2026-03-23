@@ -7,6 +7,8 @@ import (
 	"strconv"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // ClientConfig represents the client-mode configuration.
@@ -345,7 +347,7 @@ func SetActiveRemote(name string) error {
 
 	// Verify remote exists
 	if _, ok := config.Remotes[name]; !ok {
-		return fmt.Errorf("remote '%s' not found", name)
+		return fmt.Errorf("%w: %s", domain.ErrRemoteNotFound, name)
 	}
 
 	config.Active = name
@@ -367,7 +369,7 @@ func ClearRemoteToken(name string) error {
 
 	entry, ok := config.Remotes[name]
 	if !ok {
-		return fmt.Errorf("remote '%s' not found", name)
+		return fmt.Errorf("%w: %s", domain.ErrRemoteNotFound, name)
 	}
 
 	entry.Token = ""

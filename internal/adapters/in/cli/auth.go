@@ -223,7 +223,7 @@ Examples:
 			if token == "" {
 				return fmt.Errorf("--token is required; generate a token on the server with: gordon auth token generate")
 			}
-			return runAuthLoginWithToken(remoteName, token)
+			return runAuthLoginWithToken(cmd.Context(), remoteName, token, cmd.OutOrStdout())
 		},
 	}
 
@@ -233,7 +233,7 @@ Examples:
 	return cmd
 }
 
-func runAuthLoginWithToken(remoteName, token string) error {
+func runAuthLoginWithToken(ctx context.Context, remoteName, token string, out io.Writer) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return fmt.Errorf("token cannot be empty")
@@ -246,11 +246,11 @@ func runAuthLoginWithToken(remoteName, token string) error {
 
 	insecureTLS := remote.ResolveInsecureTLSForRemote(insecureTLSFlag, resolvedName)
 	client := remote.NewClient(remoteConfig.URL, remoteClientOptions(token, insecureTLS)...)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	verified := true
-	if _, err := client.GetStatus(ctx); err != nil {
-		fmt.Println(styles.RenderWarning(fmt.Sprintf("Token verification failed: %v", err)))
+	if _, err := client.GetStatus(verifyCtx); err != nil {
+		fmt.Fprintln(out, styles.RenderWarning(fmt.Sprintf("Token verification failed: %v", err)))
 		verified = false
 	}
 
@@ -258,10 +258,10 @@ func runAuthLoginWithToken(remoteName, token string) error {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
-	fmt.Println()
-	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Token stored for remote '%s'", resolvedName)))
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, styles.RenderSuccess(fmt.Sprintf("Token stored for remote '%s'", resolvedName)))
 	if verified {
-		fmt.Println(styles.RenderSuccess("Token verified with remote status endpoint"))
+		fmt.Fprintln(out, styles.RenderSuccess("Token verified with remote status endpoint"))
 	}
 	return nil
 }
@@ -285,7 +285,7 @@ Examples:
   gordon auth show-token --remote prod       Show token for specific remote
   gordon auth show-token | pbcopy            Copy token to clipboard`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthShowToken(remoteName)
+			return runAuthShowToken(remoteName, cmd.OutOrStdout())
 		},
 	}
 
@@ -294,7 +294,7 @@ Examples:
 	return cmd
 }
 
-func runAuthShowToken(remoteName string) error {
+func runAuthShowToken(remoteName string, out io.Writer) error {
 	resolvedName, entry, err := resolveRemoteEntry(remoteName)
 	if err != nil {
 		return err
@@ -305,7 +305,7 @@ func runAuthShowToken(remoteName string) error {
 		return fmt.Errorf("no token found for remote '%s'", resolvedName)
 	}
 
-	fmt.Println(token)
+	fmt.Fprintln(out, token)
 	return nil
 }
 
@@ -330,7 +330,7 @@ Examples:
   gordon auth logout --remote prod     Logout from specific remote
   gordon auth logout --revoke          Logout and revoke token on server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthLogout(remoteName, revoke)
+			return runAuthLogout(remoteName, revoke, cmd.OutOrStdout())
 		},
 	}
 
@@ -340,21 +340,21 @@ Examples:
 	return cmd
 }
 
-func runAuthLogout(remoteName string, revoke bool) error {
+func runAuthLogout(remoteName string, revoke bool, out io.Writer) error {
 	resolvedName, _, err := resolveRemoteEntry(remoteName)
 	if err != nil {
 		return err
 	}
 
 	if revoke {
-		fmt.Println(styles.RenderWarning("Token revocation not yet implemented; clearing local credentials only"))
+		fmt.Fprintln(out, styles.RenderWarning("Token revocation not yet implemented; clearing local credentials only"))
 	}
 
 	if err := remote.ClearRemoteToken(resolvedName); err != nil {
 		return fmt.Errorf("failed to clear token: %w", err)
 	}
 
-	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Logged out from remote '%s'", resolvedName)))
+	fmt.Fprintln(out, styles.RenderSuccess(fmt.Sprintf("Logged out from remote '%s'", resolvedName)))
 	return nil
 }
 

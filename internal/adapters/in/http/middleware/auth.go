@@ -16,10 +16,6 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// errLongLivedToken is returned when a long-lived (stored) token is used on an
-// endpoint that requires an ephemeral access token from /auth/token.
-var errLongLivedToken = errors.New("long-lived tokens must be exchanged via /auth/token")
-
 // TokenClaimsKey is context key for storing token claims.
 // Using domain key for consistency across all auth flows.
 const TokenClaimsKey = domain.TokenClaimsKey
@@ -99,8 +95,8 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 			tokenClaims, authErr := authenticateToken(ctx, r, authSvc, log)
 
 			if authErr != nil {
-				if errors.Is(authErr, errLongLivedToken) {
-					sendUnauthorizedMsg(w, authSvc.GetAuthType(), r.Host, log, r, errLongLivedToken.Error())
+				if errors.Is(authErr, domain.ErrLongLivedToken) {
+					sendUnauthorizedMsg(w, authSvc.GetAuthType(), r.Host, log, r, domain.ErrLongLivedToken.Error())
 				} else {
 					sendUnauthorized(w, authSvc.GetAuthType(), r.Host, log, r)
 				}
@@ -127,7 +123,7 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 // authenticateToken handles token-based authentication.
 // It supports both Bearer token in Authorization header and token-as-password for CI.
 // Returns (tokenClaims, error). A nil error means authentication succeeded.
-// Returns errLongLivedToken when a stored (non-ephemeral) token is used.
+// Returns domain.ErrLongLivedToken when a stored (non-ephemeral) token is used.
 func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthService, log zerowrap.Logger) (*domain.TokenClaims, error) {
 	// First, check for Bearer token
 	authHeader := r.Header.Get("Authorization")
@@ -149,7 +145,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 				Str(zerowrap.FieldMethod, r.Method).
 				Str(zerowrap.FieldPath, r.URL.Path).
 				Msg("long-lived token rejected on registry endpoint")
-			return nil, errLongLivedToken
+			return nil, domain.ErrLongLivedToken
 		}
 
 		log.Debug().
@@ -200,7 +196,7 @@ func authenticateToken(ctx context.Context, r *http.Request, authSvc in.AuthServ
 			Str(zerowrap.FieldMethod, r.Method).
 			Str(zerowrap.FieldPath, r.URL.Path).
 			Msg("long-lived token rejected on registry endpoint")
-		return nil, errLongLivedToken
+		return nil, domain.ErrLongLivedToken
 	}
 
 	log.Debug().
