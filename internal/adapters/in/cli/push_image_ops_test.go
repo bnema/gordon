@@ -14,6 +14,24 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 )
 
+// newTestServer creates a mock server that handles admin token exchange
+// and custom handlers for specific paths.
+func newTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Handle admin token exchange for all tests — the client does this automatically.
+		if r.URL.Path == "/auth/token" && r.URL.Query().Get("scope") == "admin:*:*" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(dto.TokenResponse{
+				Token:     "ephemeral-admin-token",
+				ExpiresIn: 900,
+			}) //nolint:errcheck
+			return
+		}
+		handler(w, r)
+	}))
+}
+
 // TestExchangeRegistryAuth_Success verifies the happy path:
 // VerifyAuth is called, then ExchangeRegistryToken is called with the
 // subject from VerifyAuth, and the result is "Bearer <short-lived-token>".
@@ -24,7 +42,7 @@ func TestExchangeRegistryAuth_Success(t *testing.T) {
 	verifyHandled := false
 	tokenHandled := false
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/admin/auth/verify":
 			verifyHandled = true
@@ -36,8 +54,8 @@ func TestExchangeRegistryAuth_Success(t *testing.T) {
 			}
 			json.NewEncoder(w).Encode(resp) //nolint:errcheck
 		case "/auth/token":
+			// Registry token exchange (scope != admin:*:*)
 			tokenHandled = true
-			// Verify basic auth was set with subject as username
 			u, p, ok := r.BasicAuth()
 			assert.True(t, ok, "expected basic auth")
 			assert.Equal(t, subject, u, "expected subject as username")
@@ -49,7 +67,7 @@ func TestExchangeRegistryAuth_Success(t *testing.T) {
 		default:
 			http.NotFound(w, r)
 		}
-	}))
+	})
 	defer srv.Close()
 
 	client := remote.NewClient(srv.URL, remote.WithToken("long-lived-token"))
@@ -68,13 +86,13 @@ func TestExchangeRegistryAuth_Success(t *testing.T) {
 // TestExchangeRegistryAuth_VerifyAuthFails verifies that when VerifyAuth fails,
 // exchangeRegistryAuth returns an error.
 func TestExchangeRegistryAuth_VerifyAuthFails(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/admin/auth/verify" {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
 		http.NotFound(w, r)
-	}))
+	})
 	defer srv.Close()
 
 	client := remote.NewClient(srv.URL, remote.WithToken("bad-token"))
@@ -91,7 +109,7 @@ func TestExchangeRegistryAuth_VerifyAuthFails(t *testing.T) {
 // TestExchangeRegistryAuth_TokenNotValid verifies that when VerifyAuth returns
 // Valid=false, exchangeRegistryAuth returns an error.
 func TestExchangeRegistryAuth_TokenNotValid(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/admin/auth/verify" {
 			w.Header().Set("Content-Type", "application/json")
 			resp := dto.AuthVerifyResponse{Valid: false}
@@ -99,7 +117,7 @@ func TestExchangeRegistryAuth_TokenNotValid(t *testing.T) {
 			return
 		}
 		http.NotFound(w, r)
-	}))
+	})
 	defer srv.Close()
 
 	client := remote.NewClient(srv.URL, remote.WithToken("expired-token"))

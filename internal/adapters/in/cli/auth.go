@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -305,16 +307,17 @@ func runAuthShowToken(remoteName string, out io.Writer) error {
 		return fmt.Errorf("no token found for remote '%s'", resolvedName)
 	}
 
+	if f, ok := out.(*os.File); ok && isatty.IsTerminal(f.Fd()) {
+		fmt.Fprintln(os.Stderr, styles.RenderWarning("Warning: token will be visible in terminal scrollback"))
+	}
+
 	fmt.Fprintln(out, token)
 	return nil
 }
 
 // newAuthLogoutCmd creates the logout command.
 func newAuthLogoutCmd() *cobra.Command {
-	var (
-		remoteName string
-		revoke     bool
-	)
+	var remoteName string
 
 	cmd := &cobra.Command{
 		Use:   "logout",
@@ -322,32 +325,25 @@ func newAuthLogoutCmd() *cobra.Command {
 		Long: `Remove the stored token for a remote from pass and TOML config.
 
 This clears the token from all local storage but does not revoke the
-token on the server. Use --revoke to also invalidate the token server-side
-(not yet implemented).
+token on the server. To revoke server-side, use: gordon auth token revoke
 
 Examples:
   gordon auth logout                   Logout from active remote
-  gordon auth logout --remote prod     Logout from specific remote
-  gordon auth logout --revoke          Logout and revoke token on server`,
+  gordon auth logout --remote prod     Logout from specific remote`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthLogout(remoteName, revoke, cmd.OutOrStdout())
+			return runAuthLogout(remoteName, cmd.OutOrStdout())
 		},
 	}
 
 	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to logout from (defaults to active remote)")
-	cmd.Flags().BoolVar(&revoke, "revoke", false, "Also revoke the token on the server (not yet implemented)")
 
 	return cmd
 }
 
-func runAuthLogout(remoteName string, revoke bool, out io.Writer) error {
+func runAuthLogout(remoteName string, out io.Writer) error {
 	resolvedName, _, err := resolveRemoteEntry(remoteName)
 	if err != nil {
 		return err
-	}
-
-	if revoke {
-		fmt.Fprintln(out, styles.RenderWarning("Token revocation not yet implemented; clearing local credentials only"))
 	}
 
 	if err := remote.ClearRemoteToken(resolvedName); err != nil {
