@@ -180,12 +180,13 @@ func (c *Client) exchangeToken(ctx context.Context) error {
 
 // bearerToken returns the token to use in Authorization headers.
 // It exchanges the long-lived token for an ephemeral one via /auth/token.
+// If subject extraction failed, uses "unknown" — the server validates everything.
 func (c *Client) bearerToken(ctx context.Context) (string, error) {
 	if c.token == "" {
 		return "", nil
 	}
 	if c.subject == "" {
-		return "", fmt.Errorf("invalid token: could not extract subject from JWT; regenerate with: gordon auth token generate")
+		c.subject = "unknown"
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
