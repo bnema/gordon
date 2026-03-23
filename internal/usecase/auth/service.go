@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -263,6 +264,10 @@ func (s *Service) isEphemeralAccessToken(claims *domain.TokenClaims) bool {
 
 // GenerateToken creates a new JWT token for the given subject.
 func (s *Service) GenerateToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error) {
+	if strings.Contains(subject, ":") {
+		return "", fmt.Errorf("subject %q must not contain ':' (used as Basic Auth username)", subject)
+	}
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "GenerateToken",
