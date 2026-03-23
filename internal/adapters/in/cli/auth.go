@@ -252,7 +252,7 @@ func runAuthLoginWithToken(ctx context.Context, remoteName, token string, out io
 	defer cancel()
 	verified := true
 	if _, err := client.GetStatus(verifyCtx); err != nil {
-		fmt.Fprintln(out, styles.RenderWarning(fmt.Sprintf("Token verification failed: %v", err)))
+		_ = cliWriteLine(out, styles.RenderWarning(fmt.Sprintf("Token verification failed: %v", err)))
 		verified = false
 	}
 
@@ -260,10 +260,10 @@ func runAuthLoginWithToken(ctx context.Context, remoteName, token string, out io
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, styles.RenderSuccess(fmt.Sprintf("Token stored for remote '%s'", resolvedName)))
+	_ = cliWriteLine(out, "")
+	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Token stored for remote '%s'", resolvedName)))
 	if verified {
-		fmt.Fprintln(out, styles.RenderSuccess("Token verified with remote status endpoint"))
+		_ = cliWriteLine(out, styles.RenderSuccess("Token verified with remote status endpoint"))
 	}
 	return nil
 }
@@ -308,10 +308,10 @@ func runAuthShowToken(remoteName string, out io.Writer) error {
 	}
 
 	if f, ok := out.(*os.File); ok && isatty.IsTerminal(f.Fd()) {
-		fmt.Fprintln(os.Stderr, styles.RenderWarning("Warning: token will be visible in terminal scrollback"))
+		_ = cliWriteLine(os.Stderr, styles.RenderWarning("Warning: token will be visible in terminal scrollback"))
 	}
 
-	fmt.Fprintln(out, token)
+	_ = cliWriteLine(out, token)
 	return nil
 }
 
@@ -350,7 +350,7 @@ func runAuthLogout(remoteName string, out io.Writer) error {
 		return fmt.Errorf("failed to clear token: %w", err)
 	}
 
-	fmt.Fprintln(out, styles.RenderSuccess(fmt.Sprintf("Logged out from remote '%s'", resolvedName)))
+	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Logged out from remote '%s'", resolvedName)))
 	return nil
 }
 

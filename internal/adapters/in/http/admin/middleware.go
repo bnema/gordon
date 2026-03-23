@@ -93,7 +93,7 @@ func AuthMiddleware(
 					Str("subject", claims.Subject).
 					Str("path", r.URL.Path).
 					Msg("long-lived token rejected on admin endpoint")
-				sendUnauthorized(w, "long-lived tokens must be exchanged via /auth/token")
+				sendUnauthorized(w, domain.ErrLongLivedToken.Error())
 				return
 			}
 
