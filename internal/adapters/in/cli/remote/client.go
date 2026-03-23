@@ -68,9 +68,9 @@ func NewClient(baseURL string, opts ...ClientOption) *Client {
 }
 
 // WithToken sets the authentication token.
-// If the token is a valid JWT, the subject claim is extracted for use
-// in ephemeral token exchange. If parsing fails the subject is left
-// empty and the token will be sent directly (backward compat).
+// The token must be a valid JWT — the subject claim is extracted for
+// ephemeral token exchange. If parsing fails, requests will return
+// an error rather than sending the long-lived token directly.
 func WithToken(token string) ClientOption {
 	return func(c *Client) {
 		c.token = token
@@ -179,15 +179,13 @@ func (c *Client) exchangeToken(ctx context.Context) error {
 }
 
 // bearerToken returns the token to use in Authorization headers.
-// If the client has a subject (valid JWT), it exchanges for an ephemeral token.
-// Otherwise it falls back to sending the long-lived token directly.
+// It exchanges the long-lived token for an ephemeral one via /auth/token.
 func (c *Client) bearerToken(ctx context.Context) (string, error) {
 	if c.token == "" {
 		return "", nil
 	}
-	// No subject means we couldn't parse the JWT; send token as-is (backward compat).
 	if c.subject == "" {
-		return c.token, nil
+		return "", fmt.Errorf("invalid token: could not extract subject from JWT; regenerate with: gordon auth token generate")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
