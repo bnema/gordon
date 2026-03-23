@@ -26,34 +26,35 @@ import (
 
 // Config holds configuration needed by the container service.
 type Config struct {
-	RegistryAuthEnabled      bool
-	RegistryDomain           string
-	RegistryPort             int
-	ServiceTokenUsername     string
-	ServiceToken             string
-	InternalRegistryUsername string
-	InternalRegistryPassword string
-	PullPolicy               string
-	VolumeAutoCreate         bool
-	VolumePrefix             string
-	VolumePreserve           bool
-	NetworkIsolation         bool
-	NetworkPrefix            string
-	NetworkGroups            map[string][]string
-	Attachments              map[string][]string
-	ReadinessDelay           time.Duration // Delay after container starts before considering it ready
-	ReadinessMode            string        // Readiness strategy: auto, docker-health, delay
-	HealthTimeout            time.Duration // Max wait for health-based readiness
-	DrainDelay               time.Duration // Grace period after cache invalidation before stopping old container
-	DrainDelayConfigured     bool          // True when deploy.drain_delay was explicitly configured
-	DrainMode                string        // Drain strategy: auto, inflight, delay
-	DrainTimeout             time.Duration // Max wait for in-flight requests to drain
-	StabilizationDelay       time.Duration // Post-switch monitoring window (default 2s)
-	TCPProbeTimeout          time.Duration // TCP probe timeout (default 30s)
-	HTTPProbeTimeout         time.Duration // HTTP probe timeout (default 60s)
-	DefaultMemoryLimit       int64         // Default memory limit in bytes for containers (0 = no limit)
-	DefaultNanoCPUs          int64         // Default CPU quota in nanoseconds for containers (0 = no limit)
-	DefaultPidsLimit         int64         // Default max PIDs for containers (0 = no limit)
+	RegistryAuthEnabled        bool
+	RegistryDomain             string
+	RegistryPort               int
+	ServiceTokenUsername       string
+	ServiceToken               string
+	InternalRegistryUsername   string
+	InternalRegistryPassword   string
+	PullPolicy                 string
+	VolumeAutoCreate           bool
+	VolumePrefix               string
+	VolumePreserve             bool
+	NetworkIsolation           bool
+	NetworkPrefix              string
+	NetworkGroups              map[string][]string
+	Attachments                map[string][]string
+	ReadinessDelay             time.Duration // Delay after container starts before considering it ready
+	ReadinessMode              string        // Readiness strategy: auto, docker-health, delay
+	HealthTimeout              time.Duration // Max wait for health-based readiness
+	DrainDelay                 time.Duration // Grace period after cache invalidation before stopping old container
+	DrainDelayConfigured       bool          // True when deploy.drain_delay was explicitly configured
+	DrainMode                  string        // Drain strategy: auto, inflight, delay
+	DrainTimeout               time.Duration // Max wait for in-flight requests to drain
+	StabilizationDelay         time.Duration // Post-switch monitoring window (default 2s)
+	TCPProbeTimeout            time.Duration // TCP probe timeout (default 30s)
+	HTTPProbeTimeout           time.Duration // HTTP probe timeout (default 60s)
+	AttachmentReadinessTimeout time.Duration // Max wait for attachment readiness (default 30s)
+	DefaultMemoryLimit         int64         // Default memory limit in bytes for containers (0 = no limit)
+	DefaultNanoCPUs            int64         // Default CPU quota in nanoseconds for containers (0 = no limit)
+	DefaultPidsLimit           int64         // Default max PIDs for containers (0 = no limit)
 }
 
 var tracer = otel.Tracer("gordon.container")
