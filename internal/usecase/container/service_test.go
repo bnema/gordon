@@ -3965,6 +3965,13 @@ func TestDeployAttachedService_SetsAliasOnContainerConfig(t *testing.T) {
 	// StartContainer
 	runtime.EXPECT().StartContainer(mock.Anything, "pg-container-1").Return(nil)
 
+	// waitForAttachmentReady: pollContainerRunning
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "pg-container-1").Return(true, nil).Times(2)
+	// No Docker healthcheck
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "pg-container-1").Return("", false, nil)
+	// TCP probe: resolve endpoint fails -> falls back to delay
+	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, "pg-container-1").Return("", 0, errors.New("no network"))
+
 	err := svc.deployAttachedService(ctx, ownerDomain, serviceImage, networkName)
 	require.NoError(t, err)
 
