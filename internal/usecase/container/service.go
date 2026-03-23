@@ -2252,6 +2252,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 		Image:       actualImageRef,
 		Name:        containerName,
 		Hostname:    serviceName, // Internal DNS: postgres, redis, etc.
+		Aliases:     []string{serviceName},
 		Ports:       exposedPorts,
 		Env:         envVars,
 		Volumes:     volumes,
@@ -2277,6 +2278,14 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	if err := s.runtime.StartContainer(ctx, container.ID); err != nil {
 		s.runtime.RemoveContainer(ctx, container.ID, true)
 		return log.WrapErr(err, "failed to start attachment container")
+	}
+
+	// Wait for attachment to be ready before proceeding
+	if err := s.waitForAttachmentReady(ctx, container.ID, config); err != nil {
+		log.WrapErr(err, "attachment readiness check failed, cleaning up")
+		s.runtime.StopContainer(ctx, container.ID)
+		s.runtime.RemoveContainer(ctx, container.ID, true)
+		return fmt.Errorf("attachment %q not ready: %w", serviceName, err)
 	}
 
 	// Track attachment
@@ -2589,6 +2598,54 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 
 	// 5. Delay fallback
 	log.Info().Msg("readiness cascade: using delay fallback")
+	return s.waitForReadyByDelay(ctx, containerID)
+}
+
+// waitForAttachmentReady runs a reduced readiness cascade for attachments:
+// Docker healthcheck → TCP probe → delay fallback.
+// HTTP probes are skipped — attachments are typically databases/caches.
+func (s *Service) waitForAttachmentReady(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig) error {
+	if err := s.pollContainerRunning(ctx, containerID); err != nil {
+		return err
+	}
+
+	log := zerowrap.FromCtx(ctx)
+
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	// 1. Docker healthcheck (if present)
+	_, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(ctx, containerID)
+	if err != nil {
+		return err
+	}
+	if hasHealthcheck {
+		log.Info().Msg("attachment readiness: using Docker healthcheck")
+		timeout := cfg.HealthTimeout
+		if timeout == 0 {
+			timeout = 90 * time.Second
+		}
+		return s.waitForHealthy(ctx, containerID, timeout)
+	}
+
+	// 2. TCP probe (if port info available)
+	if containerConfig != nil && len(containerConfig.Ports) > 0 {
+		ip, port, probeErr := s.resolveProbeEndpoint(ctx, containerID, containerConfig)
+		if probeErr == nil && ip != "" && port > 0 {
+			addr := fmt.Sprintf("%s:%d", ip, port)
+			timeout := cfg.AttachmentReadinessTimeout
+			if timeout == 0 {
+				timeout = 30 * time.Second
+			}
+			log.Info().Str("addr", addr).Dur("timeout", timeout).Msg("attachment readiness: using TCP probe")
+			return tcpProbe(ctx, addr, timeout)
+		}
+		log.Debug().Err(probeErr).Msg("attachment readiness: TCP probe skipped, could not resolve endpoint")
+	}
+
+	// 3. Delay fallback
+	log.Info().Msg("attachment readiness: using delay fallback")
 	return s.waitForReadyByDelay(ctx, containerID)
 }
 
