@@ -26,34 +26,35 @@ import (
 
 // Config holds configuration needed by the container service.
 type Config struct {
-	RegistryAuthEnabled      bool
-	RegistryDomain           string
-	RegistryPort             int
-	ServiceTokenUsername     string
-	ServiceToken             string
-	InternalRegistryUsername string
-	InternalRegistryPassword string
-	PullPolicy               string
-	VolumeAutoCreate         bool
-	VolumePrefix             string
-	VolumePreserve           bool
-	NetworkIsolation         bool
-	NetworkPrefix            string
-	NetworkGroups            map[string][]string
-	Attachments              map[string][]string
-	ReadinessDelay           time.Duration // Delay after container starts before considering it ready
-	ReadinessMode            string        // Readiness strategy: auto, docker-health, delay
-	HealthTimeout            time.Duration // Max wait for health-based readiness
-	DrainDelay               time.Duration // Grace period after cache invalidation before stopping old container
-	DrainDelayConfigured     bool          // True when deploy.drain_delay was explicitly configured
-	DrainMode                string        // Drain strategy: auto, inflight, delay
-	DrainTimeout             time.Duration // Max wait for in-flight requests to drain
-	StabilizationDelay       time.Duration // Post-switch monitoring window (default 2s)
-	TCPProbeTimeout          time.Duration // TCP probe timeout (default 30s)
-	HTTPProbeTimeout         time.Duration // HTTP probe timeout (default 60s)
-	DefaultMemoryLimit       int64         // Default memory limit in bytes for containers (0 = no limit)
-	DefaultNanoCPUs          int64         // Default CPU quota in nanoseconds for containers (0 = no limit)
-	DefaultPidsLimit         int64         // Default max PIDs for containers (0 = no limit)
+	RegistryAuthEnabled        bool
+	RegistryDomain             string
+	RegistryPort               int
+	ServiceTokenUsername       string
+	ServiceToken               string
+	InternalRegistryUsername   string
+	InternalRegistryPassword   string
+	PullPolicy                 string
+	VolumeAutoCreate           bool
+	VolumePrefix               string
+	VolumePreserve             bool
+	NetworkIsolation           bool
+	NetworkPrefix              string
+	NetworkGroups              map[string][]string
+	Attachments                map[string][]string
+	ReadinessDelay             time.Duration // Delay after container starts before considering it ready
+	ReadinessMode              string        // Readiness strategy: auto, docker-health, delay
+	HealthTimeout              time.Duration // Max wait for health-based readiness
+	DrainDelay                 time.Duration // Grace period after cache invalidation before stopping old container
+	DrainDelayConfigured       bool          // True when deploy.drain_delay was explicitly configured
+	DrainMode                  string        // Drain strategy: auto, inflight, delay
+	DrainTimeout               time.Duration // Max wait for in-flight requests to drain
+	StabilizationDelay         time.Duration // Post-switch monitoring window (default 2s)
+	TCPProbeTimeout            time.Duration // TCP probe timeout (default 30s)
+	HTTPProbeTimeout           time.Duration // HTTP probe timeout (default 60s)
+	AttachmentReadinessTimeout time.Duration // Max wait for attachment readiness (default 30s)
+	DefaultMemoryLimit         int64         // Default memory limit in bytes for containers (0 = no limit)
+	DefaultNanoCPUs            int64         // Default CPU quota in nanoseconds for containers (0 = no limit)
+	DefaultPidsLimit           int64         // Default max PIDs for containers (0 = no limit)
 }
 
 var tracer = otel.Tracer("gordon.container")
@@ -2251,6 +2252,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 		Image:       actualImageRef,
 		Name:        containerName,
 		Hostname:    serviceName, // Internal DNS: postgres, redis, etc.
+		Aliases:     []string{serviceName},
 		Ports:       exposedPorts,
 		Env:         envVars,
 		Volumes:     volumes,
@@ -2276,6 +2278,16 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	if err := s.runtime.StartContainer(ctx, container.ID); err != nil {
 		s.runtime.RemoveContainer(ctx, container.ID, true)
 		return log.WrapErr(err, "failed to start attachment container")
+	}
+
+	// Wait for attachment to be ready before proceeding
+	if err := s.waitForAttachmentReady(ctx, container.ID, config); err != nil {
+		log.WrapErr(err, "attachment readiness check failed, cleaning up")
+		if stopErr := s.runtime.StopContainer(ctx, container.ID); stopErr != nil {
+			log.Warn().Err(stopErr).Str(zerowrap.FieldEntityID, container.ID).Msg("failed to stop unready attachment")
+		}
+		s.runtime.RemoveContainer(ctx, container.ID, true)
+		return fmt.Errorf("attachment %q not ready: %w", serviceName, err)
 	}
 
 	// Track attachment
@@ -2588,6 +2600,54 @@ func (s *Service) readinessCascade(ctx context.Context, containerID string, cont
 
 	// 5. Delay fallback
 	log.Info().Msg("readiness cascade: using delay fallback")
+	return s.waitForReadyByDelay(ctx, containerID)
+}
+
+// waitForAttachmentReady runs a reduced readiness cascade for attachments:
+// Docker healthcheck → TCP probe → delay fallback.
+// HTTP probes are skipped — attachments are typically databases/caches.
+func (s *Service) waitForAttachmentReady(ctx context.Context, containerID string, containerConfig *domain.ContainerConfig) error {
+	if err := s.pollContainerRunning(ctx, containerID); err != nil {
+		return err
+	}
+
+	log := zerowrap.FromCtx(ctx)
+
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	// 1. Docker healthcheck (if present)
+	_, hasHealthcheck, err := s.runtime.GetContainerHealthStatus(ctx, containerID)
+	if err != nil {
+		return err
+	}
+	if hasHealthcheck {
+		log.Info().Msg("attachment readiness: using Docker healthcheck")
+		timeout := cfg.HealthTimeout
+		if timeout == 0 {
+			timeout = 90 * time.Second
+		}
+		return s.waitForHealthy(ctx, containerID, timeout)
+	}
+
+	// 2. TCP probe (if port info available)
+	if containerConfig != nil && len(containerConfig.Ports) > 0 {
+		ip, port, probeErr := s.resolveProbeEndpoint(ctx, containerID, containerConfig)
+		if probeErr == nil && ip != "" && port > 0 {
+			addr := fmt.Sprintf("%s:%d", ip, port)
+			timeout := cfg.AttachmentReadinessTimeout
+			if timeout == 0 {
+				timeout = 30 * time.Second
+			}
+			log.Info().Str("addr", addr).Dur("timeout", timeout).Msg("attachment readiness: using TCP probe")
+			return tcpProbe(ctx, addr, timeout)
+		}
+		log.Debug().Err(probeErr).Msg("attachment readiness: TCP probe skipped, could not resolve endpoint")
+	}
+
+	// 3. Delay fallback
+	log.Info().Msg("attachment readiness: using delay fallback")
 	return s.waitForReadyByDelay(ctx, containerID)
 }
 

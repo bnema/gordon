@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -3834,4 +3835,150 @@ func TestLoadEnvironment_NoPreResolvedEnv(t *testing.T) {
 
 	assert.Contains(t, result, "DB_HOST=prod")
 	assert.Contains(t, result, "FROM_DOCKERFILE=base")
+}
+
+func TestService_WaitForAttachmentReady_TCPProbe(t *testing.T) {
+	// Start a real TCP listener
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	addr := ln.Addr().(*net.TCPAddr)
+
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{
+		AttachmentReadinessTimeout: 5 * time.Second,
+	}, nil)
+
+	ctx := testContext()
+	containerID := "attachment-1"
+	containerConfig := &domain.ContainerConfig{
+		Ports: []int{5432},
+	}
+
+	// pollContainerRunning
+	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
+	// No healthcheck
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
+	// Resolve endpoint to our real listener
+	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return(addr.IP.String(), addr.Port, nil).Once()
+	runtime.EXPECT().GetContainerPort(mock.Anything, containerID, addr.Port).Return(addr.Port, nil).Once()
+
+	err = svc.waitForAttachmentReady(ctx, containerID, containerConfig)
+	assert.NoError(t, err)
+}
+
+func TestService_WaitForAttachmentReady_Timeout(t *testing.T) {
+	// Reserve a port with no listener
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().(*net.TCPAddr)
+	ln.Close() // Close so nothing listens
+
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{
+		AttachmentReadinessTimeout: 300 * time.Millisecond,
+	}, nil)
+
+	ctx := testContext()
+	containerID := "attachment-1"
+	containerConfig := &domain.ContainerConfig{
+		Ports: []int{5432},
+	}
+
+	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
+	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, containerID).Return(addr.IP.String(), addr.Port, nil).Once()
+	runtime.EXPECT().GetContainerPort(mock.Anything, containerID, addr.Port).Return(addr.Port, nil).Once()
+
+	err = svc.waitForAttachmentReady(ctx, containerID, containerConfig)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "TCP probe timeout")
+}
+
+func TestService_WaitForAttachmentReady_FallsBackToDelay(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{
+		ReadinessDelay: time.Millisecond,
+	}, nil)
+
+	ctx := testContext()
+	containerID := "attachment-1"
+	// No ports → skip TCP probe → fall back to delay
+	containerConfig := &domain.ContainerConfig{}
+
+	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, containerID).Return("", false, nil).Once()
+	// Delay fallback checks IsContainerRunning again
+	runtime.EXPECT().IsContainerRunning(mock.Anything, containerID).Return(true, nil).Once()
+
+	err := svc.waitForAttachmentReady(ctx, containerID, containerConfig)
+	assert.NoError(t, err)
+}
+
+func TestDeployAttachedService_SetsAliasOnContainerConfig(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig(), nil)
+	ctx := testContext()
+
+	ownerDomain := "app.example.com"
+	serviceImage := "postgres:16"
+	networkName := "gordon-net"
+	containerName := fmt.Sprintf("gordon-%s-postgres", domain.SanitizeDomainForContainer(ownerDomain))
+
+	// resolveExistingAttachment: findContainerByName for new name, then legacy name — both miss
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Times(2)
+
+	// ensureImage: pullRefForDeploy returns imageRef unchanged (no registry configured);
+	// ensureLocalImage checks ListImages and finds it locally.
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"postgres:16"}, nil)
+
+	// GetImageExposedPorts
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "postgres:16").Return([]int{5432}, nil)
+
+	// loadEnvironment
+	envLoader.EXPECT().LoadEnv(mock.Anything, containerName).Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "postgres:16").Return([]string{}, nil)
+
+	// setupVolumes: VolumeAutoCreate is false (default), so no volume calls needed
+
+	// CreateContainer — capture the config and verify Aliases
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).
+		Run(func(_ context.Context, cfg *domain.ContainerConfig) {
+			assert.Equal(t, []string{"postgres"}, cfg.Aliases, "attachment container must have network aliases for DNS resolution")
+			assert.Equal(t, "postgres", cfg.Hostname)
+			assert.Equal(t, networkName, cfg.NetworkMode)
+		}).
+		Return(&domain.Container{ID: "pg-container-1", Name: containerName}, nil)
+
+	// StartContainer
+	runtime.EXPECT().StartContainer(mock.Anything, "pg-container-1").Return(nil)
+
+	// waitForAttachmentReady: pollContainerRunning
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "pg-container-1").Return(true, nil).Times(2)
+	// No Docker healthcheck
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "pg-container-1").Return("", false, nil)
+	// TCP probe: resolve endpoint fails -> falls back to delay
+	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, "pg-container-1").Return("", 0, errors.New("no network"))
+
+	err := svc.deployAttachedService(ctx, ownerDomain, serviceImage, networkName)
+	require.NoError(t, err)
+
+	// Verify the attachment is tracked
+	svc.mu.RLock()
+	attachIDs := svc.attachments[ownerDomain]
+	svc.mu.RUnlock()
+	require.Len(t, attachIDs, 1)
+	assert.Equal(t, "pg-container-1", attachIDs[0])
 }

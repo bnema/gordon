@@ -1285,31 +1285,32 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 	}
 
 	containerConfig := container.Config{
-		RegistryAuthEnabled:      cfg.Auth.Enabled,
-		RegistryDomain:           cfg.Server.RegistryDomain,
-		RegistryPort:             cfg.Server.RegistryPort,
-		InternalRegistryUsername: svc.internalRegUser,
-		InternalRegistryPassword: svc.internalRegPass,
-		PullPolicy:               v.GetString("deploy.pull_policy"),
-		VolumeAutoCreate:         v.GetBool("volumes.auto_create"),
-		VolumePrefix:             v.GetString("volumes.prefix"),
-		VolumePreserve:           v.GetBool("volumes.preserve"),
-		NetworkIsolation:         v.GetBool("network_isolation.enabled"),
-		NetworkPrefix:            v.GetString("network_isolation.network_prefix"),
-		NetworkGroups:            svc.configSvc.GetNetworkGroups(),
-		Attachments:              svc.configSvc.GetAttachments(),
-		ReadinessDelay:           v.GetDuration("deploy.readiness_delay"),
-		ReadinessMode:            v.GetString("deploy.readiness_mode"),
-		HealthTimeout:            v.GetDuration("deploy.health_timeout"),
-		StabilizationDelay:       v.GetDuration("deploy.stabilization_delay"),
-		TCPProbeTimeout:          v.GetDuration("deploy.tcp_probe_timeout"),
-		HTTPProbeTimeout:         v.GetDuration("deploy.http_probe_timeout"),
-		DrainDelay:               v.GetDuration("deploy.drain_delay"),
-		DrainMode:                v.GetString("deploy.drain_mode"),
-		DrainTimeout:             v.GetDuration("deploy.drain_timeout"),
-		DefaultMemoryLimit:       defaultMemoryLimit,
-		DefaultNanoCPUs:          defaultNanoCPUs,
-		DefaultPidsLimit:         cfg.Containers.PidsLimit,
+		RegistryAuthEnabled:        cfg.Auth.Enabled,
+		RegistryDomain:             cfg.Server.RegistryDomain,
+		RegistryPort:               cfg.Server.RegistryPort,
+		InternalRegistryUsername:   svc.internalRegUser,
+		InternalRegistryPassword:   svc.internalRegPass,
+		PullPolicy:                 v.GetString("deploy.pull_policy"),
+		VolumeAutoCreate:           v.GetBool("volumes.auto_create"),
+		VolumePrefix:               v.GetString("volumes.prefix"),
+		VolumePreserve:             v.GetBool("volumes.preserve"),
+		NetworkIsolation:           v.GetBool("network_isolation.enabled"),
+		NetworkPrefix:              v.GetString("network_isolation.network_prefix"),
+		NetworkGroups:              svc.configSvc.GetNetworkGroups(),
+		Attachments:                svc.configSvc.GetAttachments(),
+		ReadinessDelay:             v.GetDuration("deploy.readiness_delay"),
+		ReadinessMode:              v.GetString("deploy.readiness_mode"),
+		HealthTimeout:              v.GetDuration("deploy.health_timeout"),
+		StabilizationDelay:         v.GetDuration("deploy.stabilization_delay"),
+		TCPProbeTimeout:            v.GetDuration("deploy.tcp_probe_timeout"),
+		HTTPProbeTimeout:           v.GetDuration("deploy.http_probe_timeout"),
+		DrainDelay:                 v.GetDuration("deploy.drain_delay"),
+		DrainMode:                  v.GetString("deploy.drain_mode"),
+		DrainTimeout:               v.GetDuration("deploy.drain_timeout"),
+		DefaultMemoryLimit:         defaultMemoryLimit,
+		DefaultNanoCPUs:            defaultNanoCPUs,
+		DefaultPidsLimit:           cfg.Containers.PidsLimit,
+		AttachmentReadinessTimeout: v.GetDuration("deploy.attachment_readiness_timeout"),
 	}
 	if v.IsSet("deploy.drain_delay") {
 		containerConfig.DrainDelayConfigured = true
@@ -2511,6 +2512,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("deploy.stabilization_delay", "2s")
 	v.SetDefault("deploy.tcp_probe_timeout", "30s")
 	v.SetDefault("deploy.http_probe_timeout", "60s")
+	v.SetDefault("deploy.attachment_readiness_timeout", "30s")
 	v.SetDefault("deploy.drain_mode", "auto")
 	v.SetDefault("deploy.drain_timeout", "30s")
 
