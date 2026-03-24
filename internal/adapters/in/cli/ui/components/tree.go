@@ -89,6 +89,10 @@ func (t *Tree) renderGroup(b *strings.Builder, group *Group) {
 	name := styles.Theme.Bold.Render(group.Name)
 	b.WriteString("  " + icon + " " + name + "\n")
 
+	if len(group.Nodes) == 0 {
+		return
+	}
+
 	vertBar := styles.Theme.Muted.Render(styles.IconTreeVert)
 	b.WriteString("  " + vertBar + "\n")
 
