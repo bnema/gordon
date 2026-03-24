@@ -8,7 +8,7 @@ Monitor your Gordon routes and get desktop notifications when something goes dow
 - `jq` and `notify-send` (libnotify) available
 - systemd user session (most Linux desktops)
 
-For remote instances, pass `--remote` and `--token` to the gordon command (see [Remote CLI Management](./remote-cli.md)).
+For remote instances, configure a saved remote with `gordon remotes add` and `gordon remotes use` (see [Remote CLI Management](./remote-cli.md)). The CLI uses the active remote automatically.
 
 ---
 
@@ -21,10 +21,12 @@ Create `~/.local/bin/gordon-watchdog.sh`:
 set -euo pipefail
 
 GORDON_CMD="gordon routes list --json"
-# For remote monitoring, use:
-# GORDON_CMD="gordon routes list --json --remote https://gordon.example.com --token $GORDON_TOKEN"
+# For remote monitoring, configure a saved remote first:
+#   gordon remotes add myserver https://gordon.example.com --token-env GORDON_TOKEN
+#   gordon remotes use myserver
+# The CLI then targets the remote automatically.
 
-json=$($GORDON_CMD 2>&1) || {
+json=$($GORDON_CMD) || {
     notify-send -u critical "Gordon Watchdog" "Cannot reach Gordon"
     exit 1
 }
@@ -79,7 +81,7 @@ Test it:
 
 ```bash
 ~/.local/bin/gordon-watchdog.sh
-# Expected: [2024-01-15T10:30:00+01:00] OK: all routes healthy
+# Expected: [YYYY-MM-DDThh:mm:ss+00:00] OK: all routes healthy
 ```
 
 ## What Gets Flagged
@@ -173,7 +175,7 @@ if [[ "$http_status" -ne 200 ]]; then
 fi
 ```
 
-**Remote monitoring**: set `GORDON_CMD` to include `--remote` and `--token` flags, or export `GORDON_TOKEN` as an environment variable in the service unit.
+**Remote monitoring**: configure a saved remote with `gordon remotes add` and `gordon remotes use`. The script picks it up automatically from `~/.config/gordon/remotes.toml`.
 
 ---
 
