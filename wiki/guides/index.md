@@ -17,6 +17,10 @@ In-depth guides for specific Gordon setups and integrations.
 
 - [Remote CLI Management](./remote-cli.md) - Manage Gordon instances remotely
 
+## Monitoring
+
+- [Health Monitoring with systemd](./health-monitoring.md) - Desktop alerts when routes go down
+
 ## Secrets Management
 
 - [Using Pass for Secrets](./secrets-pass.md) - Unix password manager integration

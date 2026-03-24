@@ -21,6 +21,7 @@ In-depth guides for specific setups:
 - [Remote CLI Management](./guides/remote-cli.md) - Manage Gordon instances remotely
 - [Using Pass for Secrets](./guides/secrets-pass.md) - Unix password manager integration
 - [Using SOPS for Secrets](./guides/secrets-sops.md) - Encrypted secrets with SOPS
+- [Health Monitoring with systemd](./guides/health-monitoring.md) - Desktop alerts when routes go down
 
 ## Agents
 
