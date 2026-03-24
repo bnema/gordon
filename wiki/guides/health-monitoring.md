@@ -38,8 +38,10 @@ while IFS= read -r route; do
     http_status=$(echo "$route" | jq -r '.http_status')
     container_status=$(echo "$route" | jq -r '.container_status')
 
-    # HTTP status: flag 4xx, 5xx, or 0 (no response)
-    if [[ "$http_status" -eq 0 ]] || [[ "$http_status" -ge 400 ]]; then
+    # HTTP status: flag 4xx, 5xx, 0 (no response), or unavailable
+    if ! [[ "$http_status" =~ ^[0-9]+$ ]]; then
+        problems+=("$domain: HTTP status unavailable ($http_status)")
+    elif [[ "$http_status" -eq 0 ]] || [[ "$http_status" -ge 400 ]]; then
         problems+=("$domain: HTTP $http_status")
     fi
 
@@ -170,7 +172,9 @@ StandardError=append:%h/.local/share/gordon-watchdog.log
 **Stricter HTTP checks**: if you want to flag anything that isn't exactly 200, replace the HTTP check with:
 
 ```bash
-if [[ "$http_status" -ne 200 ]]; then
+if ! [[ "$http_status" =~ ^[0-9]+$ ]]; then
+    problems+=("$domain: HTTP status unavailable ($http_status)")
+elif [[ "$http_status" -ne 200 ]]; then
     problems+=("$domain: HTTP $http_status")
 fi
 ```
