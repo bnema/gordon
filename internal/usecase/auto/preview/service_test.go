@@ -140,3 +140,76 @@ func TestPreviewService_Update_NotFound(t *testing.T) {
 	err := svc.Update(t.Context(), domain.PreviewRoute{Name: "nonexistent"})
 	assert.ErrorIs(t, err, domain.ErrPreviewNotFound)
 }
+
+type fakeRuntime struct {
+	containers []*domain.Container
+}
+
+func (f *fakeRuntime) ListContainers(_ context.Context, _ bool) ([]*domain.Container, error) {
+	return f.containers, nil
+}
+
+func TestPreviewService_CollectOrphans(t *testing.T) {
+	store := &fakeStore{
+		previews: []domain.PreviewRoute{
+			{Name: "tracked", Domain: "myapp--tracked.example.com"},
+		},
+	}
+	svc := NewService(store, 48*time.Hour)
+	require.NoError(t, svc.Load(t.Context()))
+
+	runtime := &fakeRuntime{
+		containers: []*domain.Container{
+			{
+				Name:    "gordon-myapp--orphan.example.com",
+				Created: time.Now().Add(-72 * time.Hour),
+				Labels: map[string]string{
+					domain.LabelImage:  "myapp:preview-orphan",
+					domain.LabelDomain: "myapp--orphan.example.com",
+				},
+			},
+			{
+				Name:    "gordon-myapp--tracked.example.com",
+				Created: time.Now().Add(-72 * time.Hour),
+				Labels: map[string]string{
+					domain.LabelImage:  "myapp:preview-tracked",
+					domain.LabelDomain: "myapp--tracked.example.com",
+				},
+			},
+			{
+				Name:    "gordon-prod.example.com",
+				Created: time.Now().Add(-72 * time.Hour),
+				Labels: map[string]string{
+					domain.LabelImage:  "myapp:latest",
+					domain.LabelDomain: "prod.example.com",
+				},
+			},
+		},
+	}
+
+	orphans := svc.CollectOrphans(t.Context(), runtime, []string{"preview-*"}, "--")
+	assert.Len(t, orphans, 1)
+	assert.Equal(t, "gordon-myapp--orphan.example.com", orphans[0].Name)
+}
+
+func TestPreviewService_CollectOrphans_NotExpired(t *testing.T) {
+	store := &fakeStore{}
+	svc := NewService(store, 48*time.Hour)
+	require.NoError(t, svc.Load(t.Context()))
+
+	runtime := &fakeRuntime{
+		containers: []*domain.Container{
+			{
+				Name:    "gordon-myapp--recent.example.com",
+				Created: time.Now().Add(-12 * time.Hour),
+				Labels: map[string]string{
+					domain.LabelImage:  "myapp:preview-recent",
+					domain.LabelDomain: "myapp--recent.example.com",
+				},
+			},
+		},
+	}
+
+	orphans := svc.CollectOrphans(t.Context(), runtime, []string{"preview-*"}, "--")
+	assert.Empty(t, orphans)
+}
