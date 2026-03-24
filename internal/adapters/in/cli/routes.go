@@ -340,10 +340,10 @@ func routeTitle(route remote.RouteInfo, health map[string]*remote.RouteHealth) s
 		}
 	}
 
-	containerIcon := components.StatusIcon(styles.IconContainerStatus, components.ParseStatus(containerStatus))
 	httpIcon := components.StatusIcon(styles.IconHTTPStatus, httpHealthToStatus(health[route.Domain]))
+	containerIcon := components.StatusIcon(styles.IconContainerStatus, components.ParseStatus(containerStatus))
 
-	return containerIcon + " " + httpIcon + "  " + route.Domain
+	return httpIcon + " " + containerIcon + " " + route.Domain
 }
 
 // addAttachmentChildren adds attachment nodes as children of a route node.

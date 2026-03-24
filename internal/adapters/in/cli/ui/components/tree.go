@@ -70,10 +70,7 @@ func (t *Tree) Render() string {
 	}
 
 	var b strings.Builder
-	for i, item := range t.items {
-		if i > 0 {
-			b.WriteString("\n")
-		}
+	for _, item := range t.items {
 		if item.group != nil {
 			t.renderGroup(&b, item.group)
 		} else {
@@ -105,10 +102,17 @@ func (t *Tree) renderNode(b *strings.Builder, node *Node, prefix string) {
 	// Title line
 	b.WriteString(prefix + node.Title + "\n")
 
-	// Subtitle line (muted, aligned with title text after icons)
+	// Subtitle line (muted, with tree connector aligned under container icon)
 	if node.Subtitle != "" {
+		var connectorGlyph string
+		if len(node.Children) > 0 {
+			connectorGlyph = styles.IconTreeBranch + styles.IconTreeLine // ├─ more items below
+		} else {
+			connectorGlyph = styles.IconTreeLast + styles.IconTreeLine // └─ last item
+		}
+		connector := styles.Theme.Muted.Render(connectorGlyph)
 		subtitle := styles.Theme.Muted.Render(node.Subtitle)
-		b.WriteString(prefix + "     " + subtitle + "\n")
+		b.WriteString(prefix + "  " + connector + " " + subtitle + "\n")
 	}
 
 	// Children
@@ -128,10 +132,11 @@ func (t *Tree) renderNode(b *strings.Builder, node *Node, prefix string) {
 		// Child title
 		b.WriteString(prefix + "  " + branch + " " + child.Title + "\n")
 
-		// Child subtitle (indented to align under child name)
+		// Child subtitle (with tree connector under child name)
 		if child.Subtitle != "" {
+			connector := styles.Theme.Muted.Render(styles.IconTreeLast + styles.IconTreeLine)
 			subtitle := styles.Theme.Muted.Render(child.Subtitle)
-			b.WriteString(prefix + "  " + childPrefix + "   " + subtitle + "\n")
+			b.WriteString(prefix + "  " + childPrefix + " " + connector + " " + subtitle + "\n")
 		}
 	}
 }
