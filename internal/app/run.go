@@ -588,88 +588,103 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 	}
 
 	svc.previewService.StartTicker(ctx, 1*time.Hour, func(ctx context.Context, p domain.PreviewRoute) {
-		// Tracked preview teardown.
-		log := zerowrap.FromCtx(ctx)
-		for _, containerName := range p.Containers {
-			if err := svc.runtime.StopContainer(ctx, containerName); err != nil {
-				log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to stop preview container")
-			}
-			if err := svc.runtime.RemoveContainer(ctx, containerName, true); err != nil {
-				log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to remove preview container")
-			}
-		}
-		for _, volName := range p.Volumes {
-			if err := svc.runtime.RemoveVolume(ctx, volName, true); err != nil {
-				log.Warn().Err(err).Str("volume", volName).Str("preview", p.Domain).Msg("failed to remove preview volume")
-			}
-		}
-		// Remove network (naming convention: {networkPrefix}-{domain-sanitized}).
-		networkPrefix := svc.configSvc.GetNetworkPrefix()
-		networkName := networkPrefix + "-" + strings.ReplaceAll(p.Domain, ".", "-")
-		if err := svc.runtime.RemoveNetwork(ctx, networkName); err != nil {
-			log.Warn().Err(err).Str("network", networkName).Str("preview", p.Domain).Msg("failed to remove preview network")
-		}
-		// Remove route from config so proxy stops routing to this domain.
-		if err := svc.configSvc.RemoveRoute(ctx, p.Domain); err != nil {
-			if errors.Is(err, domain.ErrRouteNotFound) {
-				log.Debug().Str("domain", p.Domain).Msg("preview route already removed from config")
-			} else {
-				log.Warn().Err(err).Str("domain", p.Domain).Msg("failed to remove preview route from config")
-			}
-		}
-		svc.proxySvc.InvalidateTarget(ctx, p.Domain)
+		teardownTrackedPreview(ctx, svc, p)
 	}, func(ctx context.Context) {
-		// Orphan GC: find and tear down untracked preview containers.
-		log := zerowrap.FromCtx(ctx)
-		orphans := svc.previewService.CollectOrphans(ctx, svc.runtime, previewConfig.TagPatterns, previewConfig.Separator)
-		for _, c := range orphans {
-			orphanDomain := c.Labels[domain.LabelDomain]
-			log.Warn().Str("container", c.Name).Str("image", c.Image).Str("domain", orphanDomain).
-				Time("created", c.Created).Msg("orphaned preview container detected, cleaning up")
-
-			// Stop and remove container.
-			if err := svc.runtime.StopContainer(ctx, c.Name); err != nil {
-				log.Warn().Err(err).Str("container", c.Name).Msg("failed to stop orphan container")
-			}
-			if err := svc.runtime.RemoveContainer(ctx, c.Name, true); err != nil {
-				log.Warn().Err(err).Str("container", c.Name).Msg("failed to remove orphan container")
-			}
-
-			if orphanDomain != "" {
-				// Remove volumes matching domain prefix (convention: {volPrefix}-{domain-sanitized}-).
-				_, volPrefix, _ := svc.configSvc.GetVolumeConfig()
-				domainSanitized := strings.ReplaceAll(orphanDomain, ".", "-")
-				fullVolumePrefix := volPrefix + "-" + domainSanitized + "-"
-				volumes, err := svc.runtime.ListVolumes(ctx)
-				if err == nil {
-					for _, v := range volumes {
-						if strings.HasPrefix(v.Name, fullVolumePrefix) {
-							if err := svc.runtime.RemoveVolume(ctx, v.Name, true); err != nil {
-								log.Warn().Err(err).Str("volume", v.Name).Msg("failed to remove orphan volume")
-							}
-						}
-					}
-				}
-
-				// Remove network (convention: {networkPrefix}-{domain-sanitized}).
-				networkPrefix := svc.configSvc.GetNetworkPrefix()
-				networkName := networkPrefix + "-" + domainSanitized
-				if err := svc.runtime.RemoveNetwork(ctx, networkName); err != nil {
-					log.Warn().Err(err).Str("network", networkName).Msg("failed to remove orphan network")
-				}
-
-				// Remove route and invalidate proxy.
-				if err := svc.configSvc.RemoveRoute(ctx, orphanDomain); err != nil {
-					if !errors.Is(err, domain.ErrRouteNotFound) {
-						log.Warn().Err(err).Str("domain", orphanDomain).Msg("failed to remove orphan route")
-					}
-				}
-				svc.proxySvc.InvalidateTarget(ctx, orphanDomain)
-			}
-
-			log.Info().Str("container", c.Name).Str("domain", orphanDomain).Msg("orphaned preview container cleaned up")
-		}
+		gcOrphanedPreviews(ctx, svc, previewConfig)
 	})
+}
+
+// teardownTrackedPreview removes all resources for a tracked preview that has expired.
+func teardownTrackedPreview(ctx context.Context, svc *services, p domain.PreviewRoute) {
+	log := zerowrap.FromCtx(ctx)
+	for _, containerName := range p.Containers {
+		if err := svc.runtime.StopContainer(ctx, containerName); err != nil {
+			log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to stop preview container")
+		}
+		if err := svc.runtime.RemoveContainer(ctx, containerName, true); err != nil {
+			log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to remove preview container")
+		}
+	}
+	for _, volName := range p.Volumes {
+		if err := svc.runtime.RemoveVolume(ctx, volName, true); err != nil {
+			log.Warn().Err(err).Str("volume", volName).Str("preview", p.Domain).Msg("failed to remove preview volume")
+		}
+	}
+	// Remove network (naming convention: {networkPrefix}-{domain-sanitized}).
+	networkPrefix := svc.configSvc.GetNetworkPrefix()
+	networkName := networkPrefix + "-" + strings.ReplaceAll(p.Domain, ".", "-")
+	if err := svc.runtime.RemoveNetwork(ctx, networkName); err != nil {
+		log.Warn().Err(err).Str("network", networkName).Str("preview", p.Domain).Msg("failed to remove preview network")
+	}
+	// Remove route from config so proxy stops routing to this domain.
+	if err := svc.configSvc.RemoveRoute(ctx, p.Domain); err != nil {
+		if errors.Is(err, domain.ErrRouteNotFound) {
+			log.Debug().Str("domain", p.Domain).Msg("preview route already removed from config")
+		} else {
+			log.Warn().Err(err).Str("domain", p.Domain).Msg("failed to remove preview route from config")
+		}
+	}
+	svc.proxySvc.InvalidateTarget(ctx, p.Domain)
+}
+
+// gcOrphanedPreviews finds and tears down untracked preview containers.
+func gcOrphanedPreviews(ctx context.Context, svc *services, previewConfig domain.PreviewConfig) {
+	log := zerowrap.FromCtx(ctx)
+	orphans := svc.previewService.CollectOrphans(ctx, svc.runtime, previewConfig.TagPatterns, previewConfig.Separator)
+	for _, c := range orphans {
+		orphanDomain := c.Labels[domain.LabelDomain]
+		log.Warn().Str("container", c.Name).Str("image", c.Image).Str("domain", orphanDomain).
+			Time("created", c.Created).Msg("orphaned preview container detected, cleaning up")
+
+		// Stop and remove container.
+		if err := svc.runtime.StopContainer(ctx, c.Name); err != nil {
+			log.Warn().Err(err).Str("container", c.Name).Msg("failed to stop orphan container")
+		}
+		if err := svc.runtime.RemoveContainer(ctx, c.Name, true); err != nil {
+			log.Warn().Err(err).Str("container", c.Name).Msg("failed to remove orphan container")
+		}
+
+		if orphanDomain != "" {
+			cleanupOrphanDomainResources(ctx, svc, orphanDomain)
+		}
+
+		log.Info().Str("container", c.Name).Str("domain", orphanDomain).Msg("orphaned preview container cleaned up")
+	}
+}
+
+// cleanupOrphanDomainResources removes volumes, network, and route for an orphaned preview domain.
+func cleanupOrphanDomainResources(ctx context.Context, svc *services, orphanDomain string) {
+	log := zerowrap.FromCtx(ctx)
+	domainSanitized := strings.ReplaceAll(orphanDomain, ".", "-")
+
+	// Remove volumes matching domain prefix (convention: {volPrefix}-{domain-sanitized}-).
+	_, volPrefix, _ := svc.configSvc.GetVolumeConfig()
+	fullVolumePrefix := volPrefix + "-" + domainSanitized + "-"
+	volumes, err := svc.runtime.ListVolumes(ctx)
+	if err == nil {
+		for _, v := range volumes {
+			if strings.HasPrefix(v.Name, fullVolumePrefix) {
+				if err := svc.runtime.RemoveVolume(ctx, v.Name, true); err != nil {
+					log.Warn().Err(err).Str("volume", v.Name).Msg("failed to remove orphan volume")
+				}
+			}
+		}
+	}
+
+	// Remove network (convention: {networkPrefix}-{domain-sanitized}).
+	networkPrefix := svc.configSvc.GetNetworkPrefix()
+	networkName := networkPrefix + "-" + domainSanitized
+	if err := svc.runtime.RemoveNetwork(ctx, networkName); err != nil {
+		log.Warn().Err(err).Str("network", networkName).Msg("failed to remove orphan network")
+	}
+
+	// Remove route and invalidate proxy.
+	if err := svc.configSvc.RemoveRoute(ctx, orphanDomain); err != nil {
+		if !errors.Is(err, domain.ErrRouteNotFound) {
+			log.Warn().Err(err).Str("domain", orphanDomain).Msg("failed to remove orphan route")
+		}
+	}
+	svc.proxySvc.InvalidateTarget(ctx, orphanDomain)
 }
 
 // injectTelemetryMetrics creates and injects OTel metrics into services when
