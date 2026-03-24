@@ -3,6 +3,8 @@ package cli
 import (
 	"testing"
 
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -102,80 +104,96 @@ func TestTruncateImage(t *testing.T) {
 	}
 }
 
-func TestTruncateNetwork(t *testing.T) {
+func TestHTTPHealthToStatus(t *testing.T) {
 	tests := []struct {
 		name     string
-		network  string
-		maxLen   int
-		expected string
+		health   *remote.RouteHealth
+		expected components.Status
 	}{
-		// Basic cases
 		{
-			name:     "short network fits",
-			network:  "gordon-net",
-			maxLen:   20,
-			expected: "gordon-net",
+			name:     "nil health returns unknown",
+			health:   nil,
+			expected: components.StatusUnknown,
 		},
 		{
-			name:     "exact fit",
-			network:  "gordon-net",
-			maxLen:   10,
-			expected: "gordon-net",
-		},
-
-		// Truncation
-		{
-			name:     "truncate long network with ellipsis",
-			network:  "gordon-my-very-long-network-name",
-			maxLen:   20,
-			expected: "gordon-my-very-lo...",
-		},
-
-		// Special values
-		{
-			name:     "empty returns dash",
-			network:  "",
-			maxLen:   10,
-			expected: "-",
+			name:     "zero status no error returns unknown",
+			health:   &remote.RouteHealth{HTTPStatus: 0},
+			expected: components.StatusUnknown,
 		},
 		{
-			name:     "dash returns dash",
-			network:  "-",
-			maxLen:   10,
-			expected: "-",
-		},
-
-		// Edge cases
-		{
-			name:     "maxLen zero returns empty",
-			network:  "gordon-net",
-			maxLen:   0,
-			expected: "",
+			name:     "zero status with error returns error",
+			health:   &remote.RouteHealth{HTTPStatus: 0, Error: "connection refused"},
+			expected: components.StatusError,
 		},
 		{
-			name:     "maxLen negative returns empty",
-			network:  "gordon-net",
-			maxLen:   -1,
-			expected: "",
+			name:     "200 returns success",
+			health:   &remote.RouteHealth{HTTPStatus: 200},
+			expected: components.StatusSuccess,
 		},
 		{
-			name:     "maxLen 3 or less - no ellipsis",
-			network:  "gordon-net",
-			maxLen:   3,
-			expected: "gor",
+			name:     "301 returns success",
+			health:   &remote.RouteHealth{HTTPStatus: 301},
+			expected: components.StatusSuccess,
 		},
 		{
-			name:     "maxLen 4 - truncate with ellipsis",
-			network:  "gordon-net",
-			maxLen:   4,
-			expected: "g...",
+			name:     "500 returns error",
+			health:   &remote.RouteHealth{HTTPStatus: 500},
+			expected: components.StatusError,
+		},
+		{
+			name:     "404 returns error",
+			health:   &remote.RouteHealth{HTTPStatus: 404},
+			expected: components.StatusError,
+		},
+		{
+			name:     "100 informational returns error",
+			health:   &remote.RouteHealth{HTTPStatus: 100},
+			expected: components.StatusError,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := truncateNetwork(tt.network, tt.maxLen)
+			result := httpHealthToStatus(tt.health)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestGroupRoutesByNetwork(t *testing.T) {
+	routes := []remote.RouteInfo{
+		{Domain: "alpha.dev", Network: "gordon-alpha-dev"},
+		{Domain: "beta.dev", Network: "gordon-shared"},
+		{Domain: "gamma.dev", Network: "gordon-shared"},
+		{Domain: "delta.dev", Network: "gordon-delta-dev"},
+	}
+
+	groups, solo := groupRoutesByNetwork(routes)
+
+	assert.Len(t, solo, 2)
+	assert.Equal(t, "alpha.dev", solo[0].Domain)
+	assert.Equal(t, "delta.dev", solo[1].Domain)
+
+	assert.Len(t, groups, 1)
+	assert.Equal(t, "shared", groups[0].name)
+	assert.Len(t, groups[0].routes, 2)
+}
+
+func TestStripNetworkPrefix(t *testing.T) {
+	tests := []struct {
+		network  string
+		expected string
+	}{
+		{"gordon-shared-services", "shared-services"},
+		{"gordon-my-app-dev", "my-app-dev"},
+		{"custom-network", "custom-network"},
+		{"gordon-", ""},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.network, func(t *testing.T) {
+			assert.Equal(t, tt.expected, stripNetworkPrefix(tt.network))
 		})
 	}
 }

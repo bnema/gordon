@@ -31,6 +31,11 @@ const (
 	IconImage     = "\uf187"     // nf-fa-archive
 	IconDocker    = "\ue7b0"     // nf-dev-docker
 
+	// Tree view status icons
+	IconContainerStatus = "\U000f01a7" // nf-md-cube_outline — container health in tree view
+	IconHTTPStatus      = "\U000f059f" // nf-md-web — HTTP probe status in tree view
+	IconGroup           = "\u25c6"     // ◆ — network group header
+
 	// Actions
 	IconAdd     = "\uf067" // nf-fa-plus
 	IconRemove  = "\uf068" // nf-fa-minus

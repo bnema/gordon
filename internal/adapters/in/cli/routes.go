@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -55,20 +56,71 @@ func truncateImage(image string, maxLen int) string {
 	return image[:maxLen-3] + "..."
 }
 
-func truncateNetwork(network string, maxLen int) string {
-	if network == "" || network == "-" {
-		return "-"
+const networkPrefix = "gordon-"
+
+// httpHealthToStatus maps an HTTP health probe result to a components.Status.
+func httpHealthToStatus(health *remote.RouteHealth) components.Status {
+	if health == nil {
+		return components.StatusUnknown
 	}
-	if maxLen <= 0 {
-		return ""
+	if health.HTTPStatus == 0 {
+		if health.Error != "" {
+			return components.StatusError
+		}
+		return components.StatusUnknown
 	}
-	if len(network) <= maxLen {
-		return network
+	if health.HTTPStatus >= 200 && health.HTTPStatus < 400 {
+		return components.StatusSuccess
 	}
-	if maxLen <= 3 {
-		return network[:maxLen]
+	return components.StatusError
+}
+
+// stripNetworkPrefix removes the "gordon-" prefix from a network name for display.
+func stripNetworkPrefix(network string) string {
+	return strings.TrimPrefix(network, networkPrefix)
+}
+
+// networkGroup holds routes that share a network.
+type networkGroup struct {
+	name   string
+	routes []remote.RouteInfo
+}
+
+// groupRoutesByNetwork separates routes into network groups (2+ routes sharing a network)
+// and solo routes. Both are sorted alphabetically by domain.
+func groupRoutesByNetwork(routes []remote.RouteInfo) ([]networkGroup, []remote.RouteInfo) {
+	byNetwork := make(map[string][]remote.RouteInfo)
+	var networkOrder []string
+	for _, route := range routes {
+		if _, seen := byNetwork[route.Network]; !seen {
+			networkOrder = append(networkOrder, route.Network)
+		}
+		byNetwork[route.Network] = append(byNetwork[route.Network], route)
 	}
-	return network[:maxLen-3] + "..."
+
+	var groups []networkGroup
+	var solo []remote.RouteInfo
+
+	for _, net := range networkOrder {
+		members := byNetwork[net]
+		if len(members) >= 2 {
+			sort.Slice(members, func(i, j int) bool {
+				return members[i].Domain < members[j].Domain
+			})
+			groups = append(groups, networkGroup{
+				name:   stripNetworkPrefix(net),
+				routes: members,
+			})
+		} else {
+			solo = append(solo, members[0])
+		}
+	}
+
+	sort.Slice(solo, func(i, j int) bool {
+		return solo[i].Domain < solo[j].Domain
+	})
+
+	return groups, solo
 }
 
 // newRoutesCmd creates the routes command group.
@@ -84,32 +136,18 @@ the local Gordon configuration.`,
 	}
 
 	cmd.AddCommand(newRoutesListCmd())
+
+	// "status" is an alias for "list"
+	statusCmd := newRoutesListCmd()
+	statusCmd.Use = "status"
+	statusCmd.Short = "Show status of all routes (alias for list)"
+	cmd.AddCommand(statusCmd)
+
 	cmd.AddCommand(newRoutesShowCmd())
 	cmd.AddCommand(newRoutesAddCmd())
 	cmd.AddCommand(newRoutesRemoveCmd())
 
 	return cmd
-}
-
-// formatHTTPStatus formats the HTTP status for display.
-func formatHTTPStatus(health *remote.RouteHealth) string {
-	if health == nil {
-		return styles.Theme.Muted.Render("-")
-	}
-	if health.HTTPStatus == 0 {
-		if health.Error != "" {
-			return styles.Theme.BadgeError.Render("err")
-		}
-		return styles.Theme.Muted.Render("-")
-	}
-	status := fmt.Sprintf("%d", health.HTTPStatus)
-	if health.ResponseTimeMs > 0 {
-		status = fmt.Sprintf("%d (%dms)", health.HTTPStatus, health.ResponseTimeMs)
-	}
-	if health.HTTPStatus >= 200 && health.HTTPStatus < 400 {
-		return styles.Theme.BadgeSuccess.Render(status)
-	}
-	return styles.Theme.BadgeError.Render(status)
 }
 
 // newRoutesListCmd creates the routes list command.
@@ -120,7 +158,7 @@ func newRoutesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all routes",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 
 			client, isRemote := GetRemoteClient()
 			if isRemote {
@@ -228,7 +266,6 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut boo
 		return fmt.Errorf("failed to list routes: %w", err)
 	}
 
-	// Get health status for each route (includes container status and HTTP probe)
 	health, _ := client.GetHealth(ctx)
 	if health == nil {
 		health = make(map[string]*remote.RouteHealth)
@@ -243,66 +280,84 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut boo
 		return nil
 	}
 
-	const imageColWidth = 35
-	const networkColWidth = 22
-	rows := make([][]string, 0, len(routes))
-	for _, route := range routes {
-		routeHealth := health[route.Domain]
+	groups, solo := groupRoutesByNetwork(routes)
 
-		// Container status column
-		containerStatus := route.ContainerStatus
-		if containerStatus == "" {
-			if routeHealth != nil {
-				containerStatus = routeHealth.ContainerStatus
-			} else {
-				containerStatus = "unknown"
+	type sortableItem struct {
+		sortKey string
+		group   *networkGroup
+		route   *remote.RouteInfo
+	}
+
+	var items []sortableItem
+	for i := range groups {
+		items = append(items, sortableItem{
+			sortKey: groups[i].routes[0].Domain,
+			group:   &groups[i],
+		})
+	}
+	for i := range solo {
+		items = append(items, sortableItem{
+			sortKey: solo[i].Domain,
+			route:   &solo[i],
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].sortKey < items[j].sortKey
+	})
+
+	tree := components.NewTree()
+
+	for _, item := range items {
+		if item.group != nil {
+			g := tree.AddGroup(item.group.name)
+			for _, route := range item.group.routes {
+				title := routeTitle(route, health)
+				node := g.AddNode(title, route.Image)
+				addAttachmentChildren(node, route)
 			}
-		}
-		containerBadge := components.ContainerStatusBadge(containerStatus)
-
-		// HTTP status column
-		httpStatus := formatHTTPStatus(routeHealth)
-
-		displayImage := truncateImage(route.Image, imageColWidth)
-		displayNetwork := truncateNetwork(route.Network, networkColWidth)
-		rows = append(rows, []string{route.Domain, displayImage, displayNetwork, containerBadge, httpStatus})
-
-		for i, attachment := range route.Attachments {
-			// Unicode box-drawing tree structure for nested attachments
-			prefix := styles.IconTreeBranch + styles.IconTreeLine
-			if i == len(route.Attachments)-1 {
-				prefix = styles.IconTreeLast + styles.IconTreeLine
-			}
-			attachmentName := prefix + " " + attachment.Name
-			runes := []rune(attachmentName)
-			if len(runes) > 25 {
-				attachmentName = string(runes[:22]) + "..."
-			}
-			attachmentStatus := components.ContainerStatusBadge(attachment.Status)
-			attachmentImage := truncateImage(attachment.Image, imageColWidth)
-			// Display the attachment's actual network in the routes table
-			attachmentNetwork := truncateNetwork(attachment.Network, networkColWidth)
-			rows = append(rows, []string{attachmentName, attachmentImage, attachmentNetwork, attachmentStatus, "-"})
+		} else {
+			title := routeTitle(*item.route, health)
+			node := tree.AddNode(title, item.route.Image)
+			addAttachmentChildren(node, *item.route)
 		}
 	}
 
-	// Render table
-	table := components.NewTable(
-		components.WithColumns([]components.TableColumn{
-			{Title: "Domain", Width: 25},
-			{Title: "Image", Width: imageColWidth},
-			{Title: "Network", Width: networkColWidth},
-			{Title: "Container", Width: 12},
-			{Title: "HTTP", Width: 14},
-		}),
-		components.WithRows(rows),
-	)
+	if err := cliWriteLine(out, cliRenderTitle("Routes")); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	return cliWriteLine(out, tree.Render())
+}
 
-	_, _ = fmt.Fprintln(out, styles.Theme.Title.Render("Routes"))
-	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintln(out, table.View())
+// routeTitle builds the pre-styled title line for a route node.
+func routeTitle(route remote.RouteInfo, health map[string]*remote.RouteHealth) string {
+	containerStatus := route.ContainerStatus
+	if containerStatus == "" {
+		if h := health[route.Domain]; h != nil {
+			containerStatus = h.ContainerStatus
+		} else {
+			containerStatus = "unknown"
+		}
+	}
 
-	return nil
+	httpIcon := components.StatusIcon(styles.IconHTTPStatus, httpHealthToStatus(health[route.Domain]))
+	containerIcon := components.StatusIcon(styles.IconContainerStatus, components.ParseStatus(containerStatus))
+
+	return httpIcon + " " + containerIcon + " " + route.Domain
+}
+
+// addAttachmentChildren adds attachment nodes as children of a route node.
+func addAttachmentChildren(node *components.Node, route remote.RouteInfo) {
+	for _, att := range route.Attachments {
+		attStatus := att.Status
+		if attStatus == "" {
+			attStatus = "unknown"
+		}
+		attIcon := components.StatusIcon(styles.IconContainerStatus, components.ParseStatus(attStatus))
+		node.AddChild(attIcon+" "+att.Name, att.Image)
+	}
 }
 
 func routesListJSON(out io.Writer, routes []remote.RouteInfo, health map[string]*remote.RouteHealth) error {
