@@ -248,9 +248,11 @@ func (s *Service) CollectOrphans(ctx context.Context, lister ContainerLister, ta
 	return orphans
 }
 
-// StartTicker starts a background goroutine that checks for expired previews.
-// The teardownFn is called for each expired preview to clean up containers/volumes.
-func (s *Service) StartTicker(ctx context.Context, interval time.Duration, teardownFn func(context.Context, domain.PreviewRoute)) {
+// StartTicker starts a background goroutine that checks for expired previews
+// and orphaned preview containers. The teardownFn is called for each expired
+// tracked preview. The orphanGCFn, if non-nil, is called on each tick to
+// clean up orphaned containers.
+func (s *Service) StartTicker(ctx context.Context, interval time.Duration, teardownFn func(context.Context, domain.PreviewRoute), orphanGCFn func(context.Context)) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -262,6 +264,9 @@ func (s *Service) StartTicker(ctx context.Context, interval time.Duration, teard
 				expired := s.CleanupExpired(ctx)
 				for _, p := range expired {
 					teardownFn(ctx, p)
+				}
+				if orphanGCFn != nil {
+					orphanGCFn(ctx)
 				}
 			}
 		}
