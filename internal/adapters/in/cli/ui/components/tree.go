@@ -101,10 +101,10 @@ func (t *Tree) renderNode(b *strings.Builder, node *Node, prefix string) {
 	// Title line
 	b.WriteString(prefix + node.Title + "\n")
 
-	// Subtitle line (muted)
+	// Subtitle line (muted, aligned with title text after icons)
 	if node.Subtitle != "" {
 		subtitle := styles.Theme.Muted.Render(node.Subtitle)
-		b.WriteString(prefix + "    " + subtitle + "\n")
+		b.WriteString(prefix + "     " + subtitle + "\n")
 	}
 
 	// Children
@@ -127,7 +127,7 @@ func (t *Tree) renderNode(b *strings.Builder, node *Node, prefix string) {
 		// Child subtitle (indented to align under child name)
 		if child.Subtitle != "" {
 			subtitle := styles.Theme.Muted.Render(child.Subtitle)
-			b.WriteString(prefix + "  " + childPrefix + "  " + subtitle + "\n")
+			b.WriteString(prefix + "  " + childPrefix + "   " + subtitle + "\n")
 		}
 	}
 }
