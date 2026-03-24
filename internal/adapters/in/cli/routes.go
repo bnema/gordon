@@ -322,11 +322,13 @@ func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut boo
 		}
 	}
 
-	_, _ = fmt.Fprintln(out, styles.Theme.Title.Render("Routes"))
-	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintln(out, tree.Render())
-
-	return nil
+	if err := cliWriteLine(out, cliRenderTitle("Routes")); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	return cliWriteLine(out, tree.Render())
 }
 
 // routeTitle builds the pre-styled title line for a route node.
