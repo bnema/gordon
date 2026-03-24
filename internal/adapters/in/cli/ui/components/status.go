@@ -188,3 +188,10 @@ func ContainerStatusBadge(status string) string {
 	parsed := ParseStatus(status)
 	return RenderStatusBadge(parsed)
 }
+
+// StatusIcon renders an icon string colored by status.
+// Green for success/running, red for error/stopped/exited, muted for unknown/pending.
+func StatusIcon(icon string, status Status) string {
+	config := DefaultStatusConfigs[status]
+	return config.Style.Render(icon)
+}
