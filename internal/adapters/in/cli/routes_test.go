@@ -145,6 +145,11 @@ func TestHTTPHealthToStatus(t *testing.T) {
 			health:   &remote.RouteHealth{HTTPStatus: 404},
 			expected: components.StatusError,
 		},
+		{
+			name:     "100 informational returns error",
+			health:   &remote.RouteHealth{HTTPStatus: 100},
+			expected: components.StatusError,
+		},
 	}
 
 	for _, tt := range tests {
