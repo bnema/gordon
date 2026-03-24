@@ -158,7 +158,7 @@ func newRoutesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all routes",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 
 			client, isRemote := GetRemoteClient()
 			if isRemote {
