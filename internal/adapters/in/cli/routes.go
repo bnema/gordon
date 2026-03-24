@@ -136,6 +136,13 @@ the local Gordon configuration.`,
 	}
 
 	cmd.AddCommand(newRoutesListCmd())
+
+	// "status" is an alias for "list"
+	statusCmd := newRoutesListCmd()
+	statusCmd.Use = "status"
+	statusCmd.Short = "Show status of all routes (alias for list)"
+	cmd.AddCommand(statusCmd)
+
 	cmd.AddCommand(newRoutesShowCmd())
 	cmd.AddCommand(newRoutesAddCmd())
 	cmd.AddCommand(newRoutesRemoveCmd())
