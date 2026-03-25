@@ -587,7 +587,16 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 		log.Warn().Err(err).Msg("failed to load previews")
 	}
 
-	svc.previewService.StartTicker(ctx, 1*time.Hour, func(ctx context.Context, p domain.PreviewRoute) {
+	// Derive sweep interval from TTL: half the TTL, capped at 1 hour, minimum 1 minute.
+	sweepInterval := previewConfig.TTL / 2
+	if sweepInterval > 1*time.Hour {
+		sweepInterval = 1 * time.Hour
+	}
+	if sweepInterval < 1*time.Minute {
+		sweepInterval = 1 * time.Minute
+	}
+
+	svc.previewService.StartTicker(ctx, sweepInterval, func(ctx context.Context, p domain.PreviewRoute) {
 		teardownTrackedPreview(ctx, svc, p)
 	}, func(ctx context.Context) {
 		gcOrphanedPreviews(ctx, svc, previewConfig)
@@ -636,16 +645,18 @@ func gcOrphanedPreviews(ctx context.Context, svc *services, previewConfig domain
 		log.Warn().Str("container", c.Name).Str("image", c.Image).Str("domain", orphanDomain).
 			Time("created", c.Created).Msg("orphaned preview container detected, cleaning up")
 
-		// Stop and remove container.
+		// Stop container first, then clean up domain resources while container
+		// still exists (so future scans can rediscover it on failure), then remove.
 		if err := svc.runtime.StopContainer(ctx, c.Name); err != nil {
 			log.Warn().Err(err).Str("container", c.Name).Msg("failed to stop orphan container")
-		}
-		if err := svc.runtime.RemoveContainer(ctx, c.Name, true); err != nil {
-			log.Warn().Err(err).Str("container", c.Name).Msg("failed to remove orphan container")
 		}
 
 		if orphanDomain != "" {
 			cleanupOrphanDomainResources(ctx, svc, orphanDomain)
+		}
+
+		if err := svc.runtime.RemoveContainer(ctx, c.Name, true); err != nil {
+			log.Warn().Err(err).Str("container", c.Name).Msg("failed to remove orphan container")
 		}
 
 		log.Info().Str("container", c.Name).Str("domain", orphanDomain).Msg("orphaned preview container cleaned up")

@@ -1,7 +1,6 @@
 package preview
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"time"
@@ -10,11 +9,6 @@ import (
 )
 
 const orphanGracePeriod = 5 * time.Minute
-
-// ContainerLister is the subset of ContainerRuntime needed by the orphan GC.
-type ContainerLister interface {
-	ListContainers(ctx context.Context, all bool) ([]*domain.Container, error)
-}
 
 // IsOrphanPreview returns true if the container looks like a preview (by image
 // tag pattern and domain separator) but is not in the tracked preview list.
@@ -56,7 +50,7 @@ func IsOrphanPreview(c *domain.Container, tracked []domain.PreviewRoute, tagPatt
 // its creation time.
 func IsExpiredOrphan(c *domain.Container, ttl time.Duration) bool {
 	if c.Created.IsZero() {
-		return true // no creation time — treat as expired
+		return false // unknown creation time — don't delete, play it safe
 	}
 	return time.Since(c.Created) > ttl
 }

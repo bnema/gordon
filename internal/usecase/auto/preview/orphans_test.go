@@ -130,9 +130,9 @@ func TestIsExpiredOrphan(t *testing.T) {
 			want:    false,
 		},
 		{
-			name:    "zero time — treat as expired",
+			name:    "zero time — unknown, skip to be safe",
 			created: time.Time{},
-			want:    true,
+			want:    false,
 		},
 	}
 

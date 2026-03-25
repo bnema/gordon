@@ -78,6 +78,11 @@ type ContainerRuntime interface {
 	DisconnectContainerFromNetwork(ctx context.Context, containerName, networkName string) error
 }
 
+// ContainerLister is the subset of ContainerRuntime needed by the orphan GC.
+type ContainerLister interface {
+	ListContainers(ctx context.Context, all bool) ([]*domain.Container, error)
+}
+
 // ExecResult holds the result of executing a command in a container.
 type ExecResult struct {
 	ExitCode int

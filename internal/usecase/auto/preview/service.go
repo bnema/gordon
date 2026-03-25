@@ -228,9 +228,11 @@ func (s *Service) CleanupExpired(ctx context.Context) []domain.PreviewRoute {
 // CollectOrphans lists Docker containers and returns those that look like
 // expired preview orphans (not tracked, matching tag pattern + separator,
 // past TTL based on container creation time).
-func (s *Service) CollectOrphans(ctx context.Context, lister ContainerLister, tagPatterns []string, separator string) []*domain.Container {
-	containers, err := lister.ListContainers(ctx, false)
+func (s *Service) CollectOrphans(ctx context.Context, lister out.ContainerLister, tagPatterns []string, separator string) []*domain.Container {
+	containers, err := lister.ListContainers(ctx, true)
 	if err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Warn().Err(err).Msg("orphan GC: failed to list containers")
 		return nil
 	}
 
