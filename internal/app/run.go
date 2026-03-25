@@ -652,7 +652,11 @@ func gcOrphanedPreviews(ctx context.Context, svc *services, previewConfig domain
 		}
 
 		if orphanDomain != "" {
-			cleanupOrphanDomainResources(ctx, svc, orphanDomain)
+			if err := cleanupOrphanDomainResources(ctx, svc, orphanDomain); err != nil {
+				log.Warn().Err(err).Str("container", c.Name).Str("domain", orphanDomain).
+					Msg("orphan resource cleanup failed, deferring container removal to next scan")
+				continue
+			}
 		}
 
 		if err := svc.runtime.RemoveContainer(ctx, c.Name, true); err != nil {
@@ -663,20 +667,27 @@ func gcOrphanedPreviews(ctx context.Context, svc *services, previewConfig domain
 	}
 }
 
-// cleanupOrphanDomainResources removes volumes, network, and route for an orphaned preview domain.
-func cleanupOrphanDomainResources(ctx context.Context, svc *services, orphanDomain string) {
+// cleanupOrphanDomainResources removes volumes, network, and route for an
+// orphaned preview domain. Returns an error if any step fails so the caller
+// can defer container removal until the next scan.
+func cleanupOrphanDomainResources(ctx context.Context, svc *services, orphanDomain string) error {
 	log := zerowrap.FromCtx(ctx)
 	domainSanitized := strings.ReplaceAll(orphanDomain, ".", "-")
+	var cleanupErr error
 
 	// Remove volumes matching domain prefix (convention: {volPrefix}-{domain-sanitized}-).
 	_, volPrefix, _ := svc.configSvc.GetVolumeConfig()
 	fullVolumePrefix := volPrefix + "-" + domainSanitized + "-"
 	volumes, err := svc.runtime.ListVolumes(ctx)
-	if err == nil {
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list volumes for orphan cleanup")
+		cleanupErr = err
+	} else {
 		for _, v := range volumes {
 			if strings.HasPrefix(v.Name, fullVolumePrefix) {
 				if err := svc.runtime.RemoveVolume(ctx, v.Name, true); err != nil {
 					log.Warn().Err(err).Str("volume", v.Name).Msg("failed to remove orphan volume")
+					cleanupErr = err
 				}
 			}
 		}
@@ -687,15 +698,19 @@ func cleanupOrphanDomainResources(ctx context.Context, svc *services, orphanDoma
 	networkName := networkPrefix + "-" + domainSanitized
 	if err := svc.runtime.RemoveNetwork(ctx, networkName); err != nil {
 		log.Warn().Err(err).Str("network", networkName).Msg("failed to remove orphan network")
+		cleanupErr = err
 	}
 
 	// Remove route and invalidate proxy.
 	if err := svc.configSvc.RemoveRoute(ctx, orphanDomain); err != nil {
 		if !errors.Is(err, domain.ErrRouteNotFound) {
 			log.Warn().Err(err).Str("domain", orphanDomain).Msg("failed to remove orphan route")
+			cleanupErr = err
 		}
 	}
 	svc.proxySvc.InvalidateTarget(ctx, orphanDomain)
+
+	return cleanupErr
 }
 
 // injectTelemetryMetrics creates and injects OTel metrics into services when
