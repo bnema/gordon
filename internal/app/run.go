@@ -682,9 +682,10 @@ func gcOrphanedPreviews(ctx context.Context, svc *services, previewConfig domain
 	}
 }
 
-// cleanupOrphanDomainResources removes volumes, network, and route for an
-// orphaned preview domain. Returns an error if any step fails so the caller
-// can defer container removal until the next scan.
+// cleanupOrphanDomainResources removes volumes and route for an orphaned
+// preview domain. Network removal is handled separately in gcOrphanedPreviews
+// after the container is removed. Returns an error if any step fails so the
+// caller can defer container removal until the next scan.
 func cleanupOrphanDomainResources(ctx context.Context, svc *services, orphanDomain string) error {
 	log := zerowrap.FromCtx(ctx)
 	domainSanitized := strings.ReplaceAll(orphanDomain, ".", "-")
