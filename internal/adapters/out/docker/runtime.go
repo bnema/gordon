@@ -364,6 +364,7 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 			Status:  c.State, // Use State (e.g., "running") not Status (e.g., "Up 2 days")
 			Ports:   ports,
 			Labels:  c.Labels,
+			Created: time.Unix(c.Created, 0),
 		})
 	}
 
@@ -402,6 +403,8 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	// Get container name (remove leading slash)
 	name := strings.TrimPrefix(resp.Name, "/")
 
+	created, _ := time.Parse(time.RFC3339Nano, resp.Created)
+
 	return &domain.Container{
 		ID:       resp.ID,
 		Image:    resp.Config.Image,
@@ -411,6 +414,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		ExitCode: resp.State.ExitCode,
 		Ports:    ports,
 		Labels:   resp.Config.Labels,
+		Created:  created,
 	}, nil
 }
 

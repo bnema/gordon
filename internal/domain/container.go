@@ -2,6 +2,8 @@
 // These types are used throughout the application and have no tags or framework dependencies.
 package domain
 
+import "time"
+
 // Container represents a running container in the system.
 type Container struct {
 	ID       string
@@ -12,6 +14,7 @@ type Container struct {
 	ExitCode int
 	Ports    []int
 	Labels   map[string]string
+	Created  time.Time
 }
 
 // NetworkInfo represents network configuration and state.

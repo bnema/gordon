@@ -225,9 +225,36 @@ func (s *Service) CleanupExpired(ctx context.Context) []domain.PreviewRoute {
 	return expired
 }
 
-// StartTicker starts a background goroutine that checks for expired previews.
-// The teardownFn is called for each expired preview to clean up containers/volumes.
-func (s *Service) StartTicker(ctx context.Context, interval time.Duration, teardownFn func(context.Context, domain.PreviewRoute)) {
+// CollectOrphans lists Docker containers and returns those that look like
+// expired preview orphans (not tracked, matching tag pattern + separator,
+// past TTL based on container creation time).
+func (s *Service) CollectOrphans(ctx context.Context, lister out.ContainerLister, tagPatterns []string, separator string) []*domain.Container {
+	containers, err := lister.ListContainers(ctx, true)
+	if err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Warn().Err(err).Msg("orphan GC: failed to list containers")
+		return nil
+	}
+
+	s.mu.RLock()
+	tracked := make([]domain.PreviewRoute, len(s.previews))
+	copy(tracked, s.previews)
+	s.mu.RUnlock()
+
+	var orphans []*domain.Container
+	for _, c := range containers {
+		if IsOrphanPreview(c, tracked, tagPatterns, separator) && IsExpiredOrphan(c, s.defaultTTL) {
+			orphans = append(orphans, c)
+		}
+	}
+	return orphans
+}
+
+// StartTicker starts a background goroutine that checks for expired previews
+// and orphaned preview containers. The teardownFn is called for each expired
+// tracked preview. The orphanGCFn, if non-nil, is called on each tick to
+// clean up orphaned containers.
+func (s *Service) StartTicker(ctx context.Context, interval time.Duration, teardownFn func(context.Context, domain.PreviewRoute), orphanGCFn func(context.Context)) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -239,6 +266,9 @@ func (s *Service) StartTicker(ctx context.Context, interval time.Duration, teard
 				expired := s.CleanupExpired(ctx)
 				for _, p := range expired {
 					teardownFn(ctx, p)
+				}
+				if orphanGCFn != nil {
+					orphanGCFn(ctx)
 				}
 			}
 		}
