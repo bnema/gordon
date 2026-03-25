@@ -645,8 +645,9 @@ func gcOrphanedPreviews(ctx context.Context, svc *services, previewConfig domain
 		log.Warn().Str("container", c.Name).Str("image", c.Image).Str("domain", orphanDomain).
 			Time("created", c.Created).Msg("orphaned preview container detected, cleaning up")
 
-		// Stop container first, then clean up domain resources while container
-		// still exists (so future scans can rediscover it on failure), then remove.
+		// Order: stop → remove volumes/route → remove container → remove network.
+		// Network removal must happen after container removal because the runtime
+		// refuses to delete a network that still has containers attached.
 		if err := svc.runtime.StopContainer(ctx, c.Name); err != nil {
 			log.Warn().Err(err).Str("container", c.Name).Msg("failed to stop orphan container")
 		}
@@ -663,7 +664,21 @@ func gcOrphanedPreviews(ctx context.Context, svc *services, previewConfig domain
 			log.Warn().Err(err).Str("container", c.Name).Msg("failed to remove orphan container")
 		}
 
+		// Remove network after container is gone.
+		if orphanDomain != "" {
+			if err := removeOrphanNetwork(ctx, svc, strings.ReplaceAll(orphanDomain, ".", "-"), log); err != nil {
+				log.Warn().Err(err).Str("container", c.Name).Msg("failed to remove orphan network after container removal")
+			}
+		}
+
 		log.Info().Str("container", c.Name).Str("domain", orphanDomain).Msg("orphaned preview container cleaned up")
+	}
+
+	// Re-sync container state so stale routes disappear from routes list.
+	if len(orphans) > 0 {
+		if err := svc.containerSvc.SyncContainers(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to sync containers after orphan GC")
+		}
 	}
 }
 
@@ -676,7 +691,6 @@ func cleanupOrphanDomainResources(ctx context.Context, svc *services, orphanDoma
 	var errs []error
 
 	errs = append(errs, removeOrphanVolumes(ctx, svc, domainSanitized, log)...)
-	errs = append(errs, removeOrphanNetwork(ctx, svc, domainSanitized, log))
 	errs = append(errs, removeOrphanRoute(ctx, svc, orphanDomain, log))
 	svc.proxySvc.InvalidateTarget(ctx, orphanDomain)
 
