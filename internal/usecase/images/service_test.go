@@ -789,7 +789,7 @@ func (f *fakeBlobStorage) ListBlobs() ([]string, error) {
 	return append([]string(nil), f.blobs...), nil
 }
 
-func (f *fakeBlobStorage) DeleteBlob(digest string) error {
+func (f *fakeBlobStorage) DeleteBlob(digest string) (int64, error) {
 	f.deletedBlobs = append(f.deletedBlobs, digest)
 	for i, existing := range f.blobs {
 		if existing != digest {
@@ -798,7 +798,7 @@ func (f *fakeBlobStorage) DeleteBlob(digest string) error {
 		f.blobs = append(f.blobs[:i], f.blobs[i+1:]...)
 		break
 	}
-	return nil
+	return 0, nil
 }
 
 func (f *fakeBlobStorage) CleanupStaleUploads(_ time.Duration) (int, int64, error) {
