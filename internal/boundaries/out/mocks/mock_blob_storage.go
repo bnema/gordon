@@ -279,20 +279,29 @@ func (_c *MockBlobStorage_CleanupStaleUploads_Call) RunAndReturn(run func(maxAge
 }
 
 // DeleteBlob provides a mock function for the type MockBlobStorage
-func (_mock *MockBlobStorage) DeleteBlob(digest string) error {
+func (_mock *MockBlobStorage) DeleteBlob(digest string) (int64, error) {
 	ret := _mock.Called(digest)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DeleteBlob")
 	}
 
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+	var r0 int64
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (int64, error)); ok {
+		return returnFunc(digest)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) int64); ok {
 		r0 = returnFunc(digest)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(int64)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(digest)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
 }
 
 // MockBlobStorage_DeleteBlob_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteBlob'
@@ -319,12 +328,12 @@ func (_c *MockBlobStorage_DeleteBlob_Call) Run(run func(digest string)) *MockBlo
 	return _c
 }
 
-func (_c *MockBlobStorage_DeleteBlob_Call) Return(err error) *MockBlobStorage_DeleteBlob_Call {
-	_c.Call.Return(err)
+func (_c *MockBlobStorage_DeleteBlob_Call) Return(n int64, err error) *MockBlobStorage_DeleteBlob_Call {
+	_c.Call.Return(n, err)
 	return _c
 }
 
-func (_c *MockBlobStorage_DeleteBlob_Call) RunAndReturn(run func(digest string) error) *MockBlobStorage_DeleteBlob_Call {
+func (_c *MockBlobStorage_DeleteBlob_Call) RunAndReturn(run func(digest string) (int64, error)) *MockBlobStorage_DeleteBlob_Call {
 	_c.Call.Return(run)
 	return _c
 }

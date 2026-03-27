@@ -243,10 +243,12 @@ func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.Image
 		if _, referenced := referencedDigests[digest]; referenced {
 			continue
 		}
-		if err := s.blobStorage.DeleteBlob(digest); err != nil {
+		size, err := s.blobStorage.DeleteBlob(digest)
+		if err != nil {
 			return domain.ImagePruneReport{}, log.WrapErr(err, "failed to delete blob")
 		}
 		report.Registry.BlobsRemoved++
+		report.Registry.SpaceReclaimed += size
 	}
 
 	// Clean up stale uploads (abandoned push operations)

@@ -17,7 +17,8 @@ type BlobStorage interface {
 	PutBlob(digest string, data io.Reader, size int64) error
 
 	// DeleteBlob removes a blob by digest.
-	DeleteBlob(digest string) error
+	// Returns the size in bytes of the removed blob.
+	DeleteBlob(digest string) (int64, error)
 
 	// BlobExists checks if a blob exists.
 	BlobExists(digest string) bool

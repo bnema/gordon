@@ -136,26 +136,34 @@ func (s *BlobStorage) PutBlob(digest string, data io.Reader, size int64) error {
 }
 
 // DeleteBlob removes a blob by digest.
-func (s *BlobStorage) DeleteBlob(digest string) error {
+// Returns the size in bytes of the removed blob.
+func (s *BlobStorage) DeleteBlob(digest string) (int64, error) {
 	blobPath, err := s.getBlobPath(digest)
 	if err != nil {
-		return fmt.Errorf("invalid path: %w", err)
+		return 0, fmt.Errorf("invalid path: %w", err)
 	}
 
-	if err := os.Remove(blobPath); err != nil {
+	info, err := os.Stat(blobPath)
+	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("blob not found: %s", digest)
+			return 0, fmt.Errorf("blob not found: %s", digest)
 		}
-		return fmt.Errorf("failed to delete blob: %w", err)
+		return 0, fmt.Errorf("failed to stat blob: %w", err)
+	}
+	size := info.Size()
+
+	if err := os.Remove(blobPath); err != nil {
+		return 0, fmt.Errorf("failed to delete blob: %w", err)
 	}
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
 		Str(zerowrap.FieldAdapter, "filesystem").
 		Str("digest", digest).
+		Int64(zerowrap.FieldSize, size).
 		Msg("blob deleted")
 
-	return nil
+	return size, nil
 }
 
 // BlobExists checks if a blob exists.
