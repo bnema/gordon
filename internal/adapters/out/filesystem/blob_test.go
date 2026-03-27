@@ -175,8 +175,9 @@ func TestBlobStorage_DeleteBlob(t *testing.T) {
 	assert.True(t, storage.BlobExists(testDigest2))
 
 	// Delete blob
-	err = storage.DeleteBlob(testDigest2)
+	size, err := storage.DeleteBlob(testDigest2)
 	require.NoError(t, err)
+	assert.Equal(t, int64(len(blobData)), size)
 
 	// Verify it's gone
 	assert.False(t, storage.BlobExists(testDigest2))
@@ -189,9 +190,10 @@ func TestBlobStorage_DeleteBlob_NotFound(t *testing.T) {
 	storage, err := NewBlobStorage(tmpDir, log)
 	require.NoError(t, err)
 
-	err = storage.DeleteBlob(testDigestMissing)
+	size, err := storage.DeleteBlob(testDigestMissing)
 
 	assert.Error(t, err)
+	assert.Equal(t, int64(0), size)
 	assert.Contains(t, err.Error(), "blob not found")
 }
 
