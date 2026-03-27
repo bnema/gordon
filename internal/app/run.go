@@ -1805,7 +1805,9 @@ func buildProxyCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log
 					Str("host", r.Host).
 					Str(zerowrap.FieldClientIP, middleware.GetClientIP(r, trustedNets)).
 					Msg("proxy access denied due to invalid proxy_allowed_ips configuration")
-				http.Error(w, "Forbidden", http.StatusForbidden)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
 			})
 		}
 	}
