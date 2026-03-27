@@ -49,3 +49,44 @@ func RegistryCIDRAllowlist(allowedNets, trustedNets []*net.IPNet, log zerowrap.L
 		})
 	}
 }
+
+// ProxyCIDRAllowlist returns middleware that restricts proxy access to the given CIDR ranges.
+// This is used to ensure only trusted sources (e.g. Cloudflare edge IPs) can reach the
+// proxy server, preventing direct-to-origin attacks that bypass CDN protections.
+// An empty allowedNets slice is a no-op (all traffic passes through).
+func ProxyCIDRAllowlist(allowedNets, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if len(allowedNets) == 0 {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// For proxy allowlisting we check the direct connection IP (RemoteAddr),
+			// not the client IP from headers, because we're validating the network
+			// peer (e.g. Cloudflare edge), not the end-user.
+			remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				remoteIP = r.RemoteAddr
+			}
+
+			if IsTrustedProxy(remoteIP, localhostNets) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if IsTrustedProxy(remoteIP, allowedNets) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			log.Warn().
+				Str(zerowrap.FieldLayer, "adapter").
+				Str(zerowrap.FieldAdapter, "http").
+				Str(zerowrap.FieldMethod, r.Method).
+				Str("host", r.Host).
+				Str(zerowrap.FieldClientIP, remoteIP).
+				Msg("proxy access denied by origin IP allowlist")
+
+			http.Error(w, "Forbidden", http.StatusForbidden)
+		})
+	}
+}

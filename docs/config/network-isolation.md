@@ -14,7 +14,7 @@ network_prefix = "gordon"
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable per-app network isolation |
+| `enabled` | bool | `true` | Enable per-app network isolation |
 | `network_prefix` | string | `"gordon"` | Prefix for created networks |
 
 ## How It Works

@@ -84,6 +84,15 @@ func GetClientIP(r *http.Request, trustedNets []*net.IPNet) string {
 
 	// Only honor proxy headers if the request comes from a trusted proxy
 	if IsTrustedProxy(remoteIP, trustedNets) {
+		// Cf-Connecting-IP is set by Cloudflare to the true client IP.
+		// It is a single IP (not a chain) and cannot be spoofed through Cloudflare.
+		// Check it first as it is the most reliable source behind Cloudflare.
+		if cfIP := r.Header.Get("Cf-Connecting-Ip"); cfIP != "" {
+			if ip := normalizeIP(cfIP); ip != "" {
+				return ip
+			}
+		}
+
 		// Check X-Forwarded-For for proxied requests.
 		// SECURITY: Parse from right to left and return the first untrusted IP.
 		// This prevents spoofing when a trusted proxy appends to an attacker-

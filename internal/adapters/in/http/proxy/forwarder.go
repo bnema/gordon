@@ -204,6 +204,9 @@ func newReverseProxy(targetURL *url.URL, originalHost string, transport http.Rou
 		Transport:      transport,
 		ErrorHandler:   errorHandler,
 		ModifyResponse: modifyResp,
+		// Flush immediately so SSE, chunked streaming, and long-polling responses
+		// are forwarded to the client without buffering delay.
+		FlushInterval: -1,
 	}
 }
 

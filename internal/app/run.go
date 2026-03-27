@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -100,6 +101,9 @@ type Config struct {
 		MaxProxyResponseSize string   `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
 		MaxConcurrentConns   int      `mapstructure:"max_concurrent_connections"`
 		RegistryAllowedIPs   []string `mapstructure:"registry_allowed_ips"`
+		ProxyAllowedIPs      []string `mapstructure:"proxy_allowed_ips"`
+		RegistryListenAddr   string   `mapstructure:"registry_listen_address"`
+		ForceHSTS            bool     `mapstructure:"force_hsts"`
 	} `mapstructure:"server"`
 
 	Logging struct {
@@ -1690,7 +1694,14 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	proxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
-		middleware.SecurityHeaders,
+		middleware.SecurityHeadersWithOptions(cfg.Server.ForceHSTS),
+	}
+
+	// SECURITY: When proxy_allowed_ips is set, only connections from those CIDRs
+	// can reach the proxy. This prevents direct-to-origin attacks that bypass
+	// CDN protections (e.g. Cloudflare WAF, DDoS mitigation).
+	if proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log); proxyCIDRMiddleware != nil {
+		proxyMiddlewares = append(proxyMiddlewares, proxyCIDRMiddleware)
 	}
 
 	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, log)
@@ -1768,6 +1779,42 @@ func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, 
 	}
 
 	return middleware.RegistryCIDRAllowlist(allowedNets, trustedNets, log)
+}
+
+func buildProxyCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	if len(cfg.Server.ProxyAllowedIPs) == 0 {
+		return nil
+	}
+
+	allowedNets := middleware.ParseTrustedProxies(cfg.Server.ProxyAllowedIPs)
+	if len(allowedNets) != len(cfg.Server.ProxyAllowedIPs) {
+		for _, entry := range cfg.Server.ProxyAllowedIPs {
+			if nets := middleware.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
+				log.Warn().Str("entry", entry).Msg("ignoring invalid proxy_allowed_ips entry")
+			}
+		}
+	}
+
+	if len(allowedNets) == 0 {
+		log.Error().
+			Strs("proxy_allowed_ips", cfg.Server.ProxyAllowedIPs).
+			Msg("proxy_allowed_ips is set but no valid entries were parsed; proxy will deny all traffic (fail-closed)")
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				log.Warn().
+					Str("host", r.Host).
+					Str(zerowrap.FieldClientIP, middleware.GetClientIP(r, trustedNets)).
+					Msg("proxy access denied due to invalid proxy_allowed_ips configuration")
+				http.Error(w, "Forbidden", http.StatusForbidden)
+			})
+		}
+	}
+
+	log.Info().
+		Strs("proxy_allowed_ips", cfg.Server.ProxyAllowedIPs).
+		Msg("proxy origin IP allowlist enabled")
+
+	return middleware.ProxyCIDRAllowlist(allowedNets, trustedNets, log)
 }
 
 func buildRegistryRateLimitMiddleware(cfg Config, log zerowrap.Logger) func(http.Handler) http.Handler {
@@ -1920,7 +1967,8 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	errChan := make(chan error, 3)
 
-	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", nil, errChan, log)
+	registryAddr := fmt.Sprintf("%s:%d", cfg.Server.RegistryListenAddr, cfg.Server.RegistryPort)
+	registrySrv, registryReady := startServer(registryAddr, registryHandler, "registry", nil, errChan, log)
 
 	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, proxyHandler, errChan, log)
 	if err != nil {
@@ -2301,6 +2349,9 @@ func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile s
 		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
+		TLSConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
 	}
 
 	go func() {
@@ -2605,7 +2656,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("api.rate_limit.per_ip_rps", 50)
 	v.SetDefault("api.rate_limit.burst", 100)
 	v.SetDefault("auto_route.enabled", false)
-	v.SetDefault("network_isolation.enabled", false)
+	v.SetDefault("network_isolation.enabled", true)
 	v.SetDefault("network_isolation.network_prefix", "gordon")
 	v.SetDefault("volumes.auto_create", true)
 	v.SetDefault("volumes.prefix", "gordon")
@@ -2631,6 +2682,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
+	v.SetDefault("server.proxy_allowed_ips", []string{})
+	v.SetDefault("server.registry_listen_address", "")
+	v.SetDefault("server.force_hsts", false)
 	v.SetDefault("deploy.readiness_delay", "5s")
 	v.SetDefault("deploy.readiness_mode", "auto")
 	v.SetDefault("deploy.health_timeout", "90s")
