@@ -318,13 +318,17 @@ func TestService_PruneRegistry_GarbageCollectsUnreferencedBlobs(t *testing.T) {
 	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
 	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-live", "sha256:layer-live")
 
-	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:cfg-live", "sha256:layer-live", "sha256:orphan"}}
+	blobStorage := &fakeBlobStorage{
+		blobs:     []string{"sha256:cfg-live", "sha256:layer-live", "sha256:orphan"},
+		blobSizes: map[string]int64{"sha256:orphan": 4096},
+	}
 	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default())
 
 	report, err := svc.PruneRegistry(context.Background(), 1)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Registry.BlobsRemoved)
+	assert.Equal(t, int64(4096), report.Registry.SpaceReclaimed)
 	assert.Equal(t, []string{"sha256:orphan"}, blobStorage.deletedBlobs)
 }
 
@@ -663,6 +667,7 @@ type fakeBlobStorage struct {
 	out.BlobStorage
 
 	blobs        []string
+	blobSizes    map[string]int64
 	deletedBlobs []string
 }
 
@@ -791,6 +796,10 @@ func (f *fakeBlobStorage) ListBlobs() ([]string, error) {
 
 func (f *fakeBlobStorage) DeleteBlob(digest string) (int64, error) {
 	f.deletedBlobs = append(f.deletedBlobs, digest)
+	var size int64
+	if f.blobSizes != nil {
+		size = f.blobSizes[digest]
+	}
 	for i, existing := range f.blobs {
 		if existing != digest {
 			continue
@@ -798,7 +807,7 @@ func (f *fakeBlobStorage) DeleteBlob(digest string) (int64, error) {
 		f.blobs = append(f.blobs[:i], f.blobs[i+1:]...)
 		break
 	}
-	return 0, nil
+	return size, nil
 }
 
 func (f *fakeBlobStorage) CleanupStaleUploads(_ time.Duration) (int, int64, error) {
