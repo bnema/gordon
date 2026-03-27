@@ -1747,76 +1747,71 @@ func buildRegistryHandlerWithMiddleware(
 	return registryWithOtel, cidrAllowlistMiddleware, rateLimitMiddleware
 }
 
-func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
-	if len(cfg.Server.RegistryAllowedIPs) == 0 {
-		return nil
+// parseCIDRAllowlist parses a list of IPs/CIDRs, logs warnings for invalid entries,
+// and returns the parsed nets. label is used in log messages (e.g. "registry_allowed_ips").
+func parseCIDRAllowlist(ips []string, label string, log zerowrap.Logger) ([]*net.IPNet, bool) {
+	if len(ips) == 0 {
+		return nil, false
 	}
 
-	allowedNets := middleware.ParseTrustedProxies(cfg.Server.RegistryAllowedIPs)
-	if len(allowedNets) != len(cfg.Server.RegistryAllowedIPs) {
-		for _, entry := range cfg.Server.RegistryAllowedIPs {
+	allowedNets := middleware.ParseTrustedProxies(ips)
+	if len(allowedNets) != len(ips) {
+		for _, entry := range ips {
 			if nets := middleware.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
-				log.Warn().Str("entry", entry).Msg("ignoring invalid registry_allowed_ips entry")
+				log.Warn().Str("entry", entry).Msgf("ignoring invalid %s entry", label)
 			}
 		}
 	}
 
 	if len(allowedNets) == 0 {
 		log.Error().
-			Strs("registry_allowed_ips", cfg.Server.RegistryAllowedIPs).
-			Msg("registry_allowed_ips is set but no valid entries were parsed; registry will deny all traffic (fail-closed)")
-		return func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				log.Warn().
-					Str(zerowrap.FieldPath, r.URL.Path).
-					Str(zerowrap.FieldClientIP, middleware.GetClientIP(r, trustedNets)).
-					Msg("registry access denied due to invalid registry_allowed_ips configuration")
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
-			})
-		}
+			Strs(label, ips).
+			Msgf("%s is set but no valid entries were parsed; will deny all traffic (fail-closed)", label)
+		return nil, true // allInvalid
 	}
 
+	return allowedNets, false
+}
+
+// denyAllHandler returns a middleware that rejects every request with 403 Forbidden.
+func denyAllHandler(label string, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Warn().
+				Str(zerowrap.FieldClientIP, middleware.GetClientIP(r, trustedNets)).
+				Msgf("access denied due to invalid %s configuration", label)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
+		})
+	}
+}
+
+func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	allowedNets, allInvalid := parseCIDRAllowlist(cfg.Server.RegistryAllowedIPs, "registry_allowed_ips", log)
+	if allInvalid {
+		return denyAllHandler("registry_allowed_ips", trustedNets, log)
+	}
+	if allowedNets == nil {
+		return nil
+	}
 	return middleware.RegistryCIDRAllowlist(allowedNets, trustedNets, log)
 }
 
 func buildProxyCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
-	if len(cfg.Server.ProxyAllowedIPs) == 0 {
+	allowedNets, allInvalid := parseCIDRAllowlist(cfg.Server.ProxyAllowedIPs, "proxy_allowed_ips", log)
+	if allInvalid {
+		return denyAllHandler("proxy_allowed_ips", trustedNets, log)
+	}
+	if allowedNets == nil {
 		return nil
-	}
-
-	allowedNets := middleware.ParseTrustedProxies(cfg.Server.ProxyAllowedIPs)
-	if len(allowedNets) != len(cfg.Server.ProxyAllowedIPs) {
-		for _, entry := range cfg.Server.ProxyAllowedIPs {
-			if nets := middleware.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
-				log.Warn().Str("entry", entry).Msg("ignoring invalid proxy_allowed_ips entry")
-			}
-		}
-	}
-
-	if len(allowedNets) == 0 {
-		log.Error().
-			Strs("proxy_allowed_ips", cfg.Server.ProxyAllowedIPs).
-			Msg("proxy_allowed_ips is set but no valid entries were parsed; proxy will deny all traffic (fail-closed)")
-		return func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				log.Warn().
-					Str("host", r.Host).
-					Str(zerowrap.FieldClientIP, middleware.GetClientIP(r, trustedNets)).
-					Msg("proxy access denied due to invalid proxy_allowed_ips configuration")
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
-			})
-		}
 	}
 
 	log.Info().
 		Strs("proxy_allowed_ips", cfg.Server.ProxyAllowedIPs).
 		Msg("proxy origin IP allowlist enabled")
 
-	return middleware.ProxyCIDRAllowlist(allowedNets, trustedNets, log)
+	return middleware.ProxyCIDRAllowlist(allowedNets, log)
 }
 
 func buildRegistryRateLimitMiddleware(cfg Config, log zerowrap.Logger) func(http.Handler) http.Handler {

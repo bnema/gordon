@@ -16,7 +16,7 @@ func normalizeIP(raw string) string {
 		ip = host
 	}
 
-	parsed := net.ParseIP(strings.TrimSpace(ip))
+	parsed := net.ParseIP(ip)
 	if parsed == nil {
 		return ""
 	}
