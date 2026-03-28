@@ -32,6 +32,9 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 | `max_proxy_body_size` | string | `"512MB"` | Maximum request body size for proxied requests |
 | `max_blob_chunk_size` | string | `"95MB"` | Maximum request body size for a single registry blob upload chunk |
 | `registry_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
+| `proxy_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
+| `registry_listen_address` | string | `""` | Bind address for registry (empty = all interfaces) |
+| `force_hsts` | bool | `false` | Always send HSTS header (for TLS-terminating proxy setups) |
 
 ## Port Configuration
 
@@ -253,6 +256,48 @@ Via environment variable:
 
 ```bash
 GORDON_SERVER_REGISTRY_ALLOWED_IPS=100.64.0.0/10
+```
+
+## Proxy Origin IP Allowlist
+
+The `proxy_allowed_ips` setting restricts which IPs can reach the proxy server. This prevents direct-to-origin attacks that bypass CDN protections (e.g. Cloudflare WAF, DDoS mitigation). When set, only connections from listed CIDRs (plus localhost) are accepted.
+
+```toml
+[server]
+# Only accept proxy traffic from Cloudflare edge IPs
+proxy_allowed_ips = [
+  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22",
+  "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+  "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22",
+  "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+  "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+]
+```
+
+**Behavior:**
+- Checks the direct connection IP (`RemoteAddr`), not `X-Forwarded-For`
+- Localhost is always allowed
+- Denied requests receive `403 Forbidden`
+- An empty list allows all traffic (default)
+
+**Important:** Cloudflare publishes their IP ranges at [cloudflare.com/ips](https://www.cloudflare.com/ips/). Keep your allowlist updated when Cloudflare adds new ranges.
+
+## Registry Listen Address
+
+The `registry_listen_address` controls which interface the registry server binds to. By default it binds to all interfaces. Set to `127.0.0.1` to restrict registry access to localhost only, preventing containers from reaching the registry via the Docker bridge gateway.
+
+```toml
+[server]
+registry_listen_address = "127.0.0.1"  # Loopback only
+```
+
+## Force HSTS
+
+When Gordon runs behind a TLS-terminating proxy (e.g. Cloudflare), `r.TLS` is nil so the HSTS header is not sent by default. Enable `force_hsts` to always include the `Strict-Transport-Security` header.
+
+```toml
+[server]
+force_hsts = true
 ```
 
 ## Examples

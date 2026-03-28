@@ -6,6 +6,36 @@ import (
 	"strings"
 )
 
+// cloudflareNets contains Cloudflare's published IPv4 and IPv6 ranges.
+// Cf-Connecting-Ip is only trusted when the immediate upstream matches these.
+// Source: https://www.cloudflare.com/ips/
+var cloudflareNets = ParseTrustedProxies([]string{
+	// IPv4
+	"173.245.48.0/20",
+	"103.21.244.0/22",
+	"103.22.200.0/22",
+	"103.31.4.0/22",
+	"141.101.64.0/18",
+	"108.162.192.0/18",
+	"190.93.240.0/20",
+	"188.114.96.0/20",
+	"197.234.240.0/22",
+	"198.41.128.0/17",
+	"162.158.0.0/15",
+	"104.16.0.0/13",
+	"104.24.0.0/14",
+	"172.64.0.0/13",
+	"131.0.72.0/22",
+	// IPv6
+	"2400:cb00::/32",
+	"2606:4700::/32",
+	"2803:f800::/32",
+	"2405:b500::/32",
+	"2405:8100::/32",
+	"2a06:98c0::/29",
+	"2c0f:f248::/32",
+})
+
 func normalizeIP(raw string) string {
 	ip := strings.TrimSpace(raw)
 	if ip == "" {
@@ -16,7 +46,7 @@ func normalizeIP(raw string) string {
 		ip = host
 	}
 
-	parsed := net.ParseIP(strings.TrimSpace(ip))
+	parsed := net.ParseIP(ip)
 	if parsed == nil {
 		return ""
 	}
@@ -84,6 +114,18 @@ func GetClientIP(r *http.Request, trustedNets []*net.IPNet) string {
 
 	// Only honor proxy headers if the request comes from a trusted proxy
 	if IsTrustedProxy(remoteIP, trustedNets) {
+		// Cf-Connecting-IP is set by Cloudflare to the true client IP.
+		// Only trust it when the immediate upstream is a known Cloudflare IP,
+		// not any generic trusted proxy (e.g. local LB/nginx), because a
+		// non-Cloudflare proxy would blindly forward a spoofed header.
+		if IsTrustedProxy(remoteIP, cloudflareNets) {
+			if cfIP := r.Header.Get("Cf-Connecting-Ip"); cfIP != "" {
+				if ip := normalizeIP(cfIP); ip != "" {
+					return ip
+				}
+			}
+		}
+
 		// Check X-Forwarded-For for proxied requests.
 		// SECURITY: Parse from right to left and return the first untrusted IP.
 		// This prevents spoofing when a trusted proxy appends to an attacker-

@@ -197,7 +197,7 @@ keep_last = 3
 | `volumes.auto_create` | `true` |
 | `volumes.prefix` | `"gordon"` |
 | `volumes.preserve` | `true` |
-| `network_isolation.enabled` | `false` |
+| `network_isolation.enabled` | `true` |
 | `auto_route.enabled` | `false` |
 | `backups.enabled` | `false` |
 | `backups.schedule` | `"daily"` (`"hourly"`, `"daily"`, `"weekly"`, `"monthly"`) |

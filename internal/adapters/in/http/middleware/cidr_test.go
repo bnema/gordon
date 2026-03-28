@@ -109,3 +109,71 @@ func TestRegistryCIDRAllowlist(t *testing.T) {
 		})
 	}
 }
+
+func TestProxyCIDRAllowlist(t *testing.T) {
+	log := testLogger()
+	redirect := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://"+r.Host+r.RequestURI, http.StatusPermanentRedirect)
+	})
+
+	tests := []struct {
+		name        string
+		allowedNets []*net.IPNet
+		remoteAddr  string
+		wantStatus  int
+	}{
+		{
+			name:        "no CIDRs configured passes through",
+			allowedNets: nil,
+			remoteAddr:  "203.0.113.50:1234",
+			wantStatus:  http.StatusPermanentRedirect,
+		},
+		{
+			name:        "allowed IP gets redirect",
+			allowedNets: ParseTrustedProxies([]string{"173.245.48.0/20"}),
+			remoteAddr:  "173.245.48.1:1234",
+			wantStatus:  http.StatusPermanentRedirect,
+		},
+		{
+			name:        "blocked IP gets 403",
+			allowedNets: ParseTrustedProxies([]string{"173.245.48.0/20"}),
+			remoteAddr:  "203.0.113.50:1234",
+			wantStatus:  http.StatusForbidden,
+		},
+		{
+			name:        "localhost always allowed",
+			allowedNets: ParseTrustedProxies([]string{"173.245.48.0/20"}),
+			remoteAddr:  "127.0.0.1:1234",
+			wantStatus:  http.StatusPermanentRedirect,
+		},
+		{
+			name:        "ignores XFF (uses RemoteAddr only)",
+			allowedNets: ParseTrustedProxies([]string{"173.245.48.0/20"}),
+			remoteAddr:  "203.0.113.50:1234",
+			wantStatus:  http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := ProxyCIDRAllowlist(tt.allowedNets, log)(redirect)
+
+			req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+			req.RemoteAddr = tt.remoteAddr
+			// Even with XFF from an "allowed" range, the proxy middleware
+			// must check RemoteAddr, not forwarded headers.
+			req.Header.Set("X-Forwarded-For", "173.245.48.1")
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			assert.Equal(t, tt.wantStatus, rr.Code)
+
+			if tt.wantStatus == http.StatusForbidden {
+				var errResp dto.ErrorResponse
+				require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
+				assert.Equal(t, "Forbidden", errResp.Error)
+			}
+		})
+	}
+}

@@ -35,7 +35,7 @@ func TestCreateHTTPHandlers_LocalMode_DisablesAdminRoutes(t *testing.T) {
 	cfg.Auth.Enabled = false
 
 	svc := &services{adminHandler: &adminhttp.Handler{}}
-	registryHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	registryHandler, _, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
 	req.RemoteAddr = "192.0.2.10:12345"
@@ -54,7 +54,7 @@ func TestCreateHTTPHandlers_LocalMode_RestrictsRegistryToLoopback(t *testing.T) 
 	cfg := Config{}
 	cfg.Auth.Enabled = false
 
-	registryHandler, _ := createHTTPHandlers(&services{}, cfg, zerowrap.Default())
+	registryHandler, _, _ := createHTTPHandlers(&services{}, cfg, zerowrap.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/test/manifests/latest", nil)
 	req.RemoteAddr = "192.0.2.20:12345"

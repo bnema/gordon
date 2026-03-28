@@ -13,12 +13,15 @@ func TestGetClientIP(t *testing.T) {
 	// Parse trusted proxies for tests
 	trustedNets := ParseTrustedProxies([]string{"127.0.0.1", "10.0.0.0/8"})
 	noTrustedNets := []*net.IPNet{}
+	// Include a Cloudflare IP in trusted proxies to test Cf-Connecting-Ip
+	trustedWithCF := ParseTrustedProxies([]string{"127.0.0.1", "10.0.0.0/8", "173.245.48.0/20"})
 
 	tests := []struct {
 		name        string
 		remoteAddr  string
 		xff         string
 		xRealIP     string
+		cfIP        string
 		trustedNets []*net.IPNet
 		wantIP      string
 	}{
@@ -99,6 +102,28 @@ func TestGetClientIP(t *testing.T) {
 			wantIP:      "203.0.113.50",
 		},
 		{
+			name:        "Cf-Connecting-Ip honored from Cloudflare IP",
+			remoteAddr:  "173.245.48.1:12345",
+			cfIP:        "203.0.113.99",
+			trustedNets: trustedWithCF,
+			wantIP:      "203.0.113.99",
+		},
+		{
+			name:        "Cf-Connecting-Ip ignored from non-Cloudflare trusted proxy",
+			remoteAddr:  "127.0.0.1:12345",
+			cfIP:        "203.0.113.99",
+			xff:         "203.0.113.50",
+			trustedNets: trustedNets,
+			wantIP:      "203.0.113.50",
+		},
+		{
+			name:        "Cf-Connecting-Ip ignored from untrusted IP",
+			remoteAddr:  "192.168.1.100:12345",
+			cfIP:        "203.0.113.99",
+			trustedNets: trustedNets,
+			wantIP:      "192.168.1.100",
+		},
+		{
 			name:        "IPv6 RemoteAddr",
 			remoteAddr:  "[::1]:12345",
 			trustedNets: noTrustedNets,
@@ -115,6 +140,9 @@ func TestGetClientIP(t *testing.T) {
 			}
 			if tt.xRealIP != "" {
 				req.Header.Set("X-Real-IP", tt.xRealIP)
+			}
+			if tt.cfIP != "" {
+				req.Header.Set("Cf-Connecting-Ip", tt.cfIP)
 			}
 
 			ip := GetClientIP(req, tt.trustedNets)

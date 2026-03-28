@@ -19,6 +19,9 @@ gordon_domain = ""                           # Required: Gordon domain (registry
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
 max_blob_chunk_size = "512MB"                # Max size per registry blob upload chunk
 registry_allowed_ips = []                    # IPs or CIDR ranges allowed to access the registry (empty = allow all)
+proxy_allowed_ips = []                       # IPs or CIDR ranges allowed to reach the proxy (empty = allow all, e.g. Cloudflare IPs)
+registry_listen_address = ""                 # Bind address for registry (empty = all interfaces, "127.0.0.1" = loopback only)
+force_hsts = false                           # Always send HSTS header (enable when behind TLS-terminating proxy)
 
 # =============================================================================
 # AUTHENTICATION (required - Gordon won't start without credentials configured)
@@ -101,7 +104,7 @@ enabled = false                              # Create routes from image labels a
 # NETWORK ISOLATION
 # =============================================================================
 [network_isolation]
-enabled = false                              # Enable per-app Docker networks
+enabled = true                               # Enable per-app Docker networks
 network_prefix = "gordon"                    # Prefix for created networks
 
 # =============================================================================
@@ -177,6 +180,9 @@ keep_last = 3                                # Keep N newest tags per repository
 | `server.data_dir` | `~/.gordon` | Data directory |
 | `server.max_blob_chunk_size` | `"512MB"` | Max size per registry blob upload chunk |
 | `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
+| `server.proxy_allowed_ips` | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
+| `server.registry_listen_address` | `""` | Bind address for registry (empty = all interfaces) |
+| `server.force_hsts` | `false` | Always send HSTS header (for TLS-terminating proxy setups) |
 | `auth.enabled` | `true` | Enable authentication; when `false`, run local-only mode (loopback-only `/v2/*`, `/admin/*` disabled) |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |
@@ -211,7 +217,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `deploy.drain_timeout` | `"30s"` | Max wait for in-flight request drain before old stop |
 | `deploy.drain_delay` | `"2s"` | Delay before stopping previous container after cache invalidation |
 | `auto_route.enabled` | `false` | Auto-route disabled |
-| `network_isolation.enabled` | `false` | Isolation disabled |
+| `network_isolation.enabled` | `true` | Network isolation enabled |
 | `network_isolation.network_prefix` | `"gordon"` | Network prefix |
 | `volumes.auto_create` | `true` | Auto-create volumes |
 | `volumes.prefix` | `"gordon"` | Volume prefix |

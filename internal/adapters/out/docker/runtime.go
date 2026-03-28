@@ -25,10 +25,12 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/registry"
+	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
+	"github.com/docker/go-units"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -164,6 +166,9 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	resources := container.Resources{
 		Memory:   config.MemoryLimit,
 		NanoCPUs: config.NanoCPUs,
+		Ulimits: []*units.Ulimit{
+			{Name: "nofile", Soft: 65536, Hard: 65536},
+		},
 	}
 	if config.PidsLimit > 0 {
 		resources.PidsLimit = &config.PidsLimit
@@ -174,6 +179,12 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		Binds:        binds,
 		NetworkMode:  container.NetworkMode(config.NetworkMode),
 		Resources:    resources,
+		SecurityOpt:  []string{"no-new-privileges:true"},
+		CapDrop:      strslice.StrSlice{"ALL"},
+		// Re-add the minimal set of capabilities that standard images need.
+		// Without these, containers that chown files (e.g. postgres, mysql)
+		// or bind to ports <1024 (e.g. nginx) would fail to start.
+		CapAdd: strslice.StrSlice{"CHOWN", "SETUID", "SETGID", "NET_BIND_SERVICE"},
 	}
 
 	// Create network configuration for container

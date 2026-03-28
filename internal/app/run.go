@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -100,6 +101,9 @@ type Config struct {
 		MaxProxyResponseSize string   `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
 		MaxConcurrentConns   int      `mapstructure:"max_concurrent_connections"`
 		RegistryAllowedIPs   []string `mapstructure:"registry_allowed_ips"`
+		ProxyAllowedIPs      []string `mapstructure:"proxy_allowed_ips"`
+		RegistryListenAddr   string   `mapstructure:"registry_listen_address"`
+		ForceHSTS            bool     `mapstructure:"force_hsts"`
 	} `mapstructure:"server"`
 
 	Logging struct {
@@ -282,10 +286,10 @@ func Run(ctx context.Context, configPath string) error {
 	defer svc.eventBus.Stop()
 
 	// Create HTTP handlers
-	registryHandler, proxyHandler := createHTTPHandlers(svc, cfg, log)
+	registryHandler, proxyHandler, proxyCIDRMiddleware := createHTTPHandlers(svc, cfg, log)
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
-	return runServers(ctx, v, cfg, registryHandler, proxyHandler, svc, cleanupHandlers, log)
+	return runServers(ctx, v, cfg, registryHandler, proxyHandler, proxyCIDRMiddleware, svc, cleanupHandlers, log)
 }
 
 func ensureTLSConfig(cfg *Config, log zerowrap.Logger) error {
@@ -1665,7 +1669,9 @@ func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 }
 
 // createHTTPHandlers creates HTTP handlers with middleware.
-func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler) {
+// The returned proxyCIDRMiddleware is non-nil when proxy_allowed_ips is configured;
+// callers must also apply it to the HTTP-to-HTTPS redirect listener.
+func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler, func(http.Handler) http.Handler) {
 	// Parse trusted proxies once for all middleware chains.
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
 	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
@@ -1690,7 +1696,15 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	proxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
-		middleware.SecurityHeaders,
+		middleware.SecurityHeadersWithOptions(cfg.Server.ForceHSTS),
+	}
+
+	// SECURITY: When proxy_allowed_ips is set, only connections from those CIDRs
+	// can reach the proxy. This prevents direct-to-origin attacks that bypass
+	// CDN protections (e.g. Cloudflare WAF, DDoS mitigation).
+	proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
+	if proxyCIDRMiddleware != nil {
+		proxyMiddlewares = append(proxyMiddlewares, proxyCIDRMiddleware)
 	}
 
 	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, log)
@@ -1703,7 +1717,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 
 	registerAdminRoutes(registryMux, svc, cfg, trustedNets, log)
 
-	return registryMux, proxyMux
+	return registryMux, proxyMux, proxyCIDRMiddleware
 }
 
 func buildRegistryHandlerWithMiddleware(
@@ -1736,38 +1750,71 @@ func buildRegistryHandlerWithMiddleware(
 	return registryWithOtel, cidrAllowlistMiddleware, rateLimitMiddleware
 }
 
-func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
-	if len(cfg.Server.RegistryAllowedIPs) == 0 {
-		return nil
+// parseCIDRAllowlist parses a list of IPs/CIDRs, logs warnings for invalid entries,
+// and returns the parsed nets. label is used in log messages (e.g. "registry_allowed_ips").
+func parseCIDRAllowlist(ips []string, label string, log zerowrap.Logger) ([]*net.IPNet, bool) {
+	if len(ips) == 0 {
+		return nil, false
 	}
 
-	allowedNets := middleware.ParseTrustedProxies(cfg.Server.RegistryAllowedIPs)
-	if len(allowedNets) != len(cfg.Server.RegistryAllowedIPs) {
-		for _, entry := range cfg.Server.RegistryAllowedIPs {
+	allowedNets := middleware.ParseTrustedProxies(ips)
+	if len(allowedNets) != len(ips) {
+		for _, entry := range ips {
 			if nets := middleware.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
-				log.Warn().Str("entry", entry).Msg("ignoring invalid registry_allowed_ips entry")
+				log.Warn().Str("entry", entry).Msgf("ignoring invalid %s entry", label)
 			}
 		}
 	}
 
 	if len(allowedNets) == 0 {
 		log.Error().
-			Strs("registry_allowed_ips", cfg.Server.RegistryAllowedIPs).
-			Msg("registry_allowed_ips is set but no valid entries were parsed; registry will deny all traffic (fail-closed)")
-		return func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				log.Warn().
-					Str(zerowrap.FieldPath, r.URL.Path).
-					Str(zerowrap.FieldClientIP, middleware.GetClientIP(r, trustedNets)).
-					Msg("registry access denied due to invalid registry_allowed_ips configuration")
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
-			})
-		}
+			Strs(label, ips).
+			Msgf("%s is set but no valid entries were parsed; will deny all traffic (fail-closed)", label)
+		return nil, true // allInvalid
 	}
 
+	return allowedNets, false
+}
+
+// denyAllHandler returns a middleware that rejects every request with 403 Forbidden.
+func denyAllHandler(label string, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Warn().
+				Str(zerowrap.FieldClientIP, middleware.GetClientIP(r, trustedNets)).
+				Msgf("access denied due to invalid %s configuration", label)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
+		})
+	}
+}
+
+func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	allowedNets, allInvalid := parseCIDRAllowlist(cfg.Server.RegistryAllowedIPs, "registry_allowed_ips", log)
+	if allInvalid {
+		return denyAllHandler("registry_allowed_ips", trustedNets, log)
+	}
+	if allowedNets == nil {
+		return nil
+	}
 	return middleware.RegistryCIDRAllowlist(allowedNets, trustedNets, log)
+}
+
+func buildProxyCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	allowedNets, allInvalid := parseCIDRAllowlist(cfg.Server.ProxyAllowedIPs, "proxy_allowed_ips", log)
+	if allInvalid {
+		return denyAllHandler("proxy_allowed_ips", trustedNets, log)
+	}
+	if allowedNets == nil {
+		return nil
+	}
+
+	log.Info().
+		Strs("proxy_allowed_ips", cfg.Server.ProxyAllowedIPs).
+		Msg("proxy origin IP allowlist enabled")
+
+	return middleware.ProxyCIDRAllowlist(allowedNets, log)
 }
 
 func buildRegistryRateLimitMiddleware(cfg Config, log zerowrap.Logger) func(http.Handler) http.Handler {
@@ -1902,7 +1949,7 @@ func registerAdminRoutes(registryMux *http.ServeMux, svc *services, cfg Config, 
 // - SIGUSR2: Triggers manual deploy for a specific route
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
+func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, proxyCIDRMiddleware func(http.Handler) http.Handler, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -1920,9 +1967,10 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	errChan := make(chan error, 3)
 
-	registrySrv, registryReady := startServer(fmt.Sprintf(":%d", cfg.Server.RegistryPort), registryHandler, "registry", nil, errChan, log)
+	registryAddr := net.JoinHostPort(cfg.Server.RegistryListenAddr, strconv.Itoa(cfg.Server.RegistryPort))
+	registrySrv, registryReady := startServer(registryAddr, registryHandler, "registry", nil, errChan, log)
 
-	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, proxyHandler, errChan, log)
+	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, proxyHandler, proxyCIDRMiddleware, errChan, log)
 	if err != nil {
 		return err
 	}
@@ -2208,7 +2256,9 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 // startProxyServers sets up proxy server(s) depending on TLS configuration.
 // With TLS enabled, the HTTP port becomes a redirect-only server and a separate TLS server handles traffic.
 // Without TLS, a single server handles both HTTP/1.1 and cleartext HTTP/2.
-func startProxyServers(cfg Config, proxyHandler http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+// proxyCIDRMiddleware, when non-nil, is also applied to the HTTP redirect listener
+// so that proxy_allowed_ips cannot be bypassed via the plain-HTTP port.
+func startProxyServers(cfg Config, proxyHandler http.Handler, proxyCIDRMiddleware func(http.Handler) http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
 	if !cfg.Server.TLSEnabled {
 		var proxyProtos http.Protocols
 		proxyProtos.SetHTTP1(true)
@@ -2238,7 +2288,11 @@ func startProxyServers(cfg Config, proxyHandler http.Handler, errChan chan<- err
 		http.Redirect(w, r, target, http.StatusPermanentRedirect)
 	})
 
-	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), redirectHandler, "proxy-redirect", nil, errChan, log)
+	var redirectWithMiddleware http.Handler = redirectHandler
+	if proxyCIDRMiddleware != nil {
+		redirectWithMiddleware = proxyCIDRMiddleware(redirectHandler)
+	}
+	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), redirectWithMiddleware, "proxy-redirect", nil, errChan, log)
 	tlsSrv, tlsReady := startTLSServer(
 		fmt.Sprintf(":%d", cfg.Server.TLSPort),
 		proxyHandler,
@@ -2301,6 +2355,9 @@ func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile s
 		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
+		TLSConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
 	}
 
 	go func() {
@@ -2605,7 +2662,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("api.rate_limit.per_ip_rps", 50)
 	v.SetDefault("api.rate_limit.burst", 100)
 	v.SetDefault("auto_route.enabled", false)
-	v.SetDefault("network_isolation.enabled", false)
+	v.SetDefault("network_isolation.enabled", true)
 	v.SetDefault("network_isolation.network_prefix", "gordon")
 	v.SetDefault("volumes.auto_create", true)
 	v.SetDefault("volumes.prefix", "gordon")
@@ -2631,6 +2688,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})
+	v.SetDefault("server.proxy_allowed_ips", []string{})
+	v.SetDefault("server.registry_listen_address", "")
+	v.SetDefault("server.force_hsts", false)
 	v.SetDefault("deploy.readiness_delay", "5s")
 	v.SetDefault("deploy.readiness_mode", "auto")
 	v.SetDefault("deploy.health_timeout", "90s")
