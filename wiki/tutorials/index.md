@@ -8,12 +8,7 @@ Step-by-step guides for common Gordon tasks.
 
 ## Framework Tutorials
 
-- [Deploy a Next.js App](./nextjs-deploy.md) - Full-stack Next.js deployment
 - [Add PostgreSQL to Your App](./postgres-service.md) - Database attachments
-
-## Advanced
-
-- [Deploy Multi-Service Applications](./multi-service-app.md) - Microservices with shared services
 
 ## Prerequisites
 

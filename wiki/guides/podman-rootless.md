@@ -229,6 +229,5 @@ loginctl show-user $USER | grep Linger
 
 ## Next Steps
 
-- [Configure Cloudflare](./cloudflare-setup.md)
 - [Set up secrets](./secrets-pass.md)
 - [Deploy your first app](/wiki/tutorials/first-deploy.md)

@@ -200,6 +200,5 @@ cat backup.sql | docker exec -i gordon-app-mydomain-com-my-postgres \
 
 ## Next Steps
 
-- [Add Redis cache](./multi-service-app.md)
 - [Configure secrets](/docs/config/secrets.md)
 - [Network isolation](/docs/config/network-isolation.md)
