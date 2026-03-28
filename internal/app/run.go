@@ -286,10 +286,10 @@ func Run(ctx context.Context, configPath string) error {
 	defer svc.eventBus.Stop()
 
 	// Create HTTP handlers
-	registryHandler, proxyHandler := createHTTPHandlers(svc, cfg, log)
+	registryHandler, proxyHandler, proxyCIDRMiddleware := createHTTPHandlers(svc, cfg, log)
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
-	return runServers(ctx, v, cfg, registryHandler, proxyHandler, svc, cleanupHandlers, log)
+	return runServers(ctx, v, cfg, registryHandler, proxyHandler, proxyCIDRMiddleware, svc, cleanupHandlers, log)
 }
 
 func ensureTLSConfig(cfg *Config, log zerowrap.Logger) error {
@@ -1669,7 +1669,9 @@ func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 }
 
 // createHTTPHandlers creates HTTP handlers with middleware.
-func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler) {
+// The returned proxyCIDRMiddleware is non-nil when proxy_allowed_ips is configured;
+// callers must also apply it to the HTTP-to-HTTPS redirect listener.
+func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler, func(http.Handler) http.Handler) {
 	// Parse trusted proxies once for all middleware chains.
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
 	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
@@ -1700,7 +1702,8 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	// SECURITY: When proxy_allowed_ips is set, only connections from those CIDRs
 	// can reach the proxy. This prevents direct-to-origin attacks that bypass
 	// CDN protections (e.g. Cloudflare WAF, DDoS mitigation).
-	if proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log); proxyCIDRMiddleware != nil {
+	proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
+	if proxyCIDRMiddleware != nil {
 		proxyMiddlewares = append(proxyMiddlewares, proxyCIDRMiddleware)
 	}
 
@@ -1714,7 +1717,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 
 	registerAdminRoutes(registryMux, svc, cfg, trustedNets, log)
 
-	return registryMux, proxyMux
+	return registryMux, proxyMux, proxyCIDRMiddleware
 }
 
 func buildRegistryHandlerWithMiddleware(
@@ -1946,7 +1949,7 @@ func registerAdminRoutes(registryMux *http.ServeMux, svc *services, cfg Config, 
 // - SIGUSR2: Triggers manual deploy for a specific route
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
+func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, proxyCIDRMiddleware func(http.Handler) http.Handler, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -1964,10 +1967,10 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	errChan := make(chan error, 3)
 
-	registryAddr := fmt.Sprintf("%s:%d", cfg.Server.RegistryListenAddr, cfg.Server.RegistryPort)
+	registryAddr := net.JoinHostPort(cfg.Server.RegistryListenAddr, strconv.Itoa(cfg.Server.RegistryPort))
 	registrySrv, registryReady := startServer(registryAddr, registryHandler, "registry", nil, errChan, log)
 
-	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, proxyHandler, errChan, log)
+	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, proxyHandler, proxyCIDRMiddleware, errChan, log)
 	if err != nil {
 		return err
 	}
@@ -2253,7 +2256,9 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 // startProxyServers sets up proxy server(s) depending on TLS configuration.
 // With TLS enabled, the HTTP port becomes a redirect-only server and a separate TLS server handles traffic.
 // Without TLS, a single server handles both HTTP/1.1 and cleartext HTTP/2.
-func startProxyServers(cfg Config, proxyHandler http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+// proxyCIDRMiddleware, when non-nil, is also applied to the HTTP redirect listener
+// so that proxy_allowed_ips cannot be bypassed via the plain-HTTP port.
+func startProxyServers(cfg Config, proxyHandler http.Handler, proxyCIDRMiddleware func(http.Handler) http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
 	if !cfg.Server.TLSEnabled {
 		var proxyProtos http.Protocols
 		proxyProtos.SetHTTP1(true)
@@ -2283,7 +2288,11 @@ func startProxyServers(cfg Config, proxyHandler http.Handler, errChan chan<- err
 		http.Redirect(w, r, target, http.StatusPermanentRedirect)
 	})
 
-	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), redirectHandler, "proxy-redirect", nil, errChan, log)
+	var redirectWithMiddleware http.Handler = redirectHandler
+	if proxyCIDRMiddleware != nil {
+		redirectWithMiddleware = proxyCIDRMiddleware(redirectHandler)
+	}
+	proxySrv, proxyReady := startServer(fmt.Sprintf(":%d", cfg.Server.Port), redirectWithMiddleware, "proxy-redirect", nil, errChan, log)
 	tlsSrv, tlsReady := startTLSServer(
 		fmt.Sprintf(":%d", cfg.Server.TLSPort),
 		proxyHandler,

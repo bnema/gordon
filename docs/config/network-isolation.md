@@ -10,11 +10,21 @@ enabled = true
 network_prefix = "gordon"
 ```
 
+## Migration Note
+
+As of this release, `network_isolation.enabled` defaults to `true` (previously `false`).
+Existing installs that rely on a shared network must explicitly opt out:
+
+```toml
+[network_isolation]
+enabled = false
+```
+
 ## Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable per-app network isolation |
+| `enabled` | bool | `true` | Enable per-app network isolation (changed from `false`) |
 | `network_prefix` | string | `"gordon"` | Prefix for created networks |
 
 ## How It Works

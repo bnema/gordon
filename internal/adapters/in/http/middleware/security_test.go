@@ -51,6 +51,22 @@ func TestSecurityHeaders_HSTS_WithTLS(t *testing.T) {
 	assert.Equal(t, "max-age=31536000; includeSubDomains", rec.Header().Get("Strict-Transport-Security"))
 }
 
+func TestSecurityHeaders_HSTS_ForceWithoutTLS(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrapped := SecurityHeadersWithOptions(true)(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// r.TLS is nil — no TLS on the connection, but forceHSTS is true
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	assert.Equal(t, "max-age=31536000; includeSubDomains", rec.Header().Get("Strict-Transport-Security"),
+		"HSTS should be set when forceHSTS is true even without TLS")
+}
+
 func TestSecurityHeaders_HSTS_WithForwardedProto_NotTrusted(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
