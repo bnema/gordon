@@ -37,15 +37,13 @@ sudo apt install pass
 pass init your-gpg-key-id
 
 # Store secrets
-pass insert gordon/auth/password_hash
 pass insert gordon/auth/token_secret
 ```
 
 **Usage in config:**
 ```toml
 [auth]
-password_hash = "gordon/auth/password_hash"  # Path in pass store
-token_secret = "gordon/auth/token_secret"
+token_secret = "gordon/auth/token_secret"  # Path in pass store
 ```
 
 **Benefits:**
@@ -119,7 +117,6 @@ secrets_backend = "unsafe"
 {data_dir}/secrets/
 ├── gordon/
 │   └── auth/
-│       ├── password_hash
 │       └── token_secret
 ```
 
@@ -132,7 +129,7 @@ secrets_backend = "unsafe"
 ```bash
 # Create secret
 mkdir -p ~/.gordon/secrets/gordon/auth
-echo "your-bcrypt-hash" > ~/.gordon/secrets/gordon/auth/password_hash
+echo "your-token-secret" > ~/.gordon/secrets/gordon/auth/token_secret
 ```
 
 > **Warning:** Only use for local development. Secrets are stored in plain text.

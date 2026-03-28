@@ -41,9 +41,7 @@ enabled = true                           # Enable registry authentication (defau
 secrets_backend = "pass"                 # "pass", "sops", or "unsafe"
 token_secret = "gordon/auth/token_secret"  # Required: JWT signing secret
 token_expiry = "30d"                     # Duration (1y, 30d, 2w) or 0 for never
-# Optional: enable password authentication (for interactive login)
-# username = "deploy"
-# password_hash = "gordon/auth/password_hash"
+# Token-only authentication (password login was removed in v2.30.0)
 
 # API rate limiting
 [api.rate_limit]

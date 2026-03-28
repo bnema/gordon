@@ -187,7 +187,7 @@ This is intentional to encourage secure secret storage in production. The warnin
 ### New Features
 
 - **Attachment secrets discovery**: `gordon secrets list <domain>` now shows secrets for attachment containers
-- **Auth login command**: `gordon auth login --remote <name>` for password authentication
+- **Auth login command**: `gordon auth login --remote <name>` for token authentication
 - **Rate limiting**: Configurable rate limits under `[api.rate_limit]`
 
 ### Security Improvements

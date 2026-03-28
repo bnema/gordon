@@ -195,11 +195,8 @@ gordon remotes set-token <name> <token>
 
 This command is useful when:
 
-- The server uses token-based authentication (not password auth)
 - You have a pre-generated token from `gordon auth token generate`
 - You want to update an expired token
-
-For servers with password authentication, use `gordon auth login` instead.
 
 ### Examples
 
