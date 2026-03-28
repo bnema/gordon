@@ -23,23 +23,25 @@ Management commands run locally through in-process services by default. Add `--r
 
 | Command | Description | Documentation |
 |---------|-------------|---------------|
-| `gordon routes` | Manage routes | [routes](./routes.md) |
 | `gordon attachments` | Manage container attachments | [attachments](./attachments.md) |
-| `gordon secrets` | Manage secrets | [secrets](./secrets.md) |
-| `gordon deploy` | Manually deploy or redeploy a route | [serve](./serve.md#gordon-deploy) |
-| `gordon restart` | Restart a running container | [restart](./restart.md) |
+| `gordon autoroute` | Manage auto-route domain allowlist | [autoroute](./autoroute.md) |
+| `gordon backups` | Manage database backups | [backup](./backup.md) |
 | `gordon bootstrap` | Configure a route, attachments, and secrets for an app | [bootstrap](./bootstrap.md) |
+| `gordon config show` | Show server configuration | [config](./config.md) |
+| `gordon deploy` | Manually deploy or redeploy a route | [serve](./serve.md#gordon-deploy) |
+| `gordon images` | List and prune images | [images](./images.md) |
+| `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
+| `gordon networks list` | List Gordon-managed Docker networks | [networks](./networks.md) |
+| `gordon preview` | Create or manage preview environments | [preview](../config/preview.md) |
 | `gordon push` | Tag, push, and optionally deploy an image | [push](./push.md) |
 | `gordon attachments push` | Build/push attachment images to registry | [attachments](./attachments.md) |
-| `gordon rollback` | Roll back to a previous image tag | [rollback](./rollback.md) |
 | `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
-| `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
+| `gordon restart` | Restart a running container | [restart](./restart.md) |
+| `gordon rollback` | Roll back to a previous image version | [rollback](./rollback.md) |
+| `gordon routes` | Manage routes | [routes](./routes.md) |
+| `gordon secrets` | Manage secrets | [secrets](./secrets.md) |
 | `gordon status` | Show Gordon server status | [status](./status.md) |
-| `gordon backups` | Manage database backups | [backup](./backup.md) |
-| `gordon images` | List and prune images | [images](./images.md) |
-| `gordon config show` | Show server configuration | [config](./config.md) |
-| `gordon networks list` | List Gordon-managed Docker networks | [networks](./networks.md) |
-| `gordon autoroute` | Manage auto-route domain allowlist | [autoroute](./autoroute.md) |
+| `gordon volumes` | Manage volumes | - |
 
 ## Client Commands
 
@@ -102,10 +104,13 @@ gordon images prune --runtime-only
 gordon images prune --keep 3
 
 # Authentication
+gordon auth login --remote https://gordon.example.com --token $TOKEN
+gordon auth status
+gordon auth show-token
+gordon auth logout
 gordon auth token generate --subject ci-bot --expiry 0
 gordon auth token list
 gordon auth token revoke <token-id>
-gordon auth password hash
 gordon auth internal
 
 # Routes
@@ -128,6 +133,16 @@ gordon secrets remove myapp.local DATABASE_URL
 gordon remotes add prod https://gordon.mydomain.com --token $TOKEN
 gordon remotes list
 gordon remotes use prod
+
+# Preview environments
+gordon preview create app.example.com --branch feature-x
+gordon preview list
+gordon preview extend app.example.com --branch feature-x
+gordon preview delete app.example.com --branch feature-x
+
+# Volumes
+gordon volumes list
+gordon volumes prune
 
 # Auto-route allowlist
 gordon autoroute allow list
