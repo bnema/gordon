@@ -62,6 +62,7 @@ func TestTLSHandshake_OnDemandCert(t *testing.T) {
 	client := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
 				RootCAs:    rootPool,
 				ServerName: "test.local",
 			},
@@ -108,6 +109,7 @@ func TestTLSHandshake_UnknownDomain_Rejected(t *testing.T) {
 	client := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
 				RootCAs:    rootPool,
 				ServerName: "unknown.local", // not in route table
 			},

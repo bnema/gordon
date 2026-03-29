@@ -5,8 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bnema/gordon/internal/adapters/in/http/onboarding"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/bnema/gordon/internal/adapters/in/http/onboarding"
 )
 
 func TestHandler_CACert(t *testing.T) {

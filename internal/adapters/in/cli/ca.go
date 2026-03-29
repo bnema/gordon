@@ -9,10 +9,11 @@ import (
 	"path/filepath"
 	"time"
 
-	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/zerowrap"
 	"github.com/spf13/cobra"
+
+	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
+	"github.com/bnema/gordon/internal/app"
 )
 
 func newCACmd() *cobra.Command {

@@ -5,12 +5,13 @@ import (
 	"crypto/tls"
 	"testing"
 
-	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
-	"github.com/bnema/gordon/internal/domain"
-	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
+	"github.com/bnema/gordon/internal/domain"
+	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 )
 
 // stubConfigService satisfies pkiusecase.RouteChecker

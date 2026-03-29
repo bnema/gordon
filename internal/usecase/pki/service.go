@@ -7,9 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
-	"github.com/bnema/zerowrap"
 )
 
 const (

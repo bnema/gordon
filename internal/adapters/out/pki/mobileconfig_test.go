@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bnema/gordon/internal/adapters/out/pki"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/adapters/out/pki"
 )
 
 func TestGenerateMobileconfig(t *testing.T) {
