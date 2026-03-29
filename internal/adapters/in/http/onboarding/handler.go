@@ -30,7 +30,7 @@ func NewHandler(rootPEM, rootDER []byte, rootCN string, cloudflareCIDRs []*net.I
 func (h *Handler) ServeCACert(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
 	w.Header().Set("Content-Disposition", "attachment; filename=gordon-ca.crt")
-	w.Write(h.rootPEM)
+	_, _ = w.Write(h.rootPEM)
 }
 
 // ServeMobileconfig serves an iOS configuration profile with the root CA.
@@ -38,7 +38,7 @@ func (h *Handler) ServeMobileconfig(w http.ResponseWriter, _ *http.Request) {
 	mc := pkiadapter.GenerateMobileconfig(h.rootDER, h.rootCN)
 	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
 	w.Header().Set("Content-Disposition", "attachment; filename=gordon-ca.mobileconfig")
-	w.Write(mc)
+	_, _ = w.Write(mc)
 }
 
 // ServeOnboardingPage serves the CA trust onboarding HTML page.
@@ -49,7 +49,7 @@ func (h *Handler) ServeOnboardingPage(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	redirectURL := fmt.Sprintf("%s://%s/", scheme, host)
 
-	fmt.Fprintf(w, `<!DOCTYPE html>
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">

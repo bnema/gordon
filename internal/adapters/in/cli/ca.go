@@ -91,10 +91,10 @@ func runCAExport(out io.Writer, outPath string) error {
 	rootPEM := ca.RootCertificate()
 
 	if outPath != "" {
-		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(outPath), 0750); err != nil {
 			return err
 		}
-		if err := os.WriteFile(outPath, rootPEM, 0644); err != nil {
+		if err := os.WriteFile(outPath, rootPEM, 0600); err != nil {
 			return err
 		}
 		return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Root CA certificate written to %s", outPath)))
