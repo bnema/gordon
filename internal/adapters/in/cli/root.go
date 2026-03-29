@@ -76,6 +76,10 @@ Commands are organized by where they run:
 	authCmd.GroupID = groupServer
 	rootCmd.AddCommand(authCmd)
 
+	caCmd := newCACmd()
+	caCmd.GroupID = groupServer
+	rootCmd.AddCommand(caCmd)
+
 	// Management commands (work locally or via --remote)
 	routesCmd := newRoutesCmd()
 	routesCmd.GroupID = groupManage
