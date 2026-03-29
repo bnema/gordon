@@ -182,9 +182,11 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		SecurityOpt:  []string{"no-new-privileges:true"},
 		CapDrop:      strslice.StrSlice{"ALL"},
 		// Re-add the minimal set of capabilities that standard images need.
-		// Without these, containers that chown files (e.g. postgres, mysql)
-		// or bind to ports <1024 (e.g. nginx) would fail to start.
-		CapAdd: strslice.StrSlice{"CHOWN", "SETUID", "SETGID", "NET_BIND_SERVICE"},
+		// CHOWN/FOWNER/DAC_OVERRIDE: postgres, mysql etc. chown/chmod data dirs
+		// owned by their service user during entrypoint init.
+		// SETUID/SETGID: gosu/su-exec to drop privileges after init.
+		// NET_BIND_SERVICE: nginx etc. binding to ports < 1024.
+		CapAdd: strslice.StrSlice{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"},
 	}
 
 	// Create network configuration for container
