@@ -15,6 +15,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.21
 	github.com/muesli/termenv v0.16.0
 	github.com/rivo/uniseg v0.4.7
+	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
@@ -67,6 +68,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260217215200-42d3e9bedb6d // indirect
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
+	howett.net/plist v1.0.0 // indirect
 )
 
 require (
