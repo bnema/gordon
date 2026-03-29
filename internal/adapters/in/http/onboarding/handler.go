@@ -10,19 +10,17 @@ import (
 
 // Handler serves CA onboarding endpoints on the HTTP port.
 type Handler struct {
-	rootPEM []byte
-	rootDER []byte
-	rootCN  string
-	cidrs   []*net.IPNet // Cloudflare CIDRs — if source IP matches, don't serve onboarding
+	rootPEM      []byte
+	mobileconfig []byte
+	cidrs        []*net.IPNet
 }
 
 // NewHandler creates an onboarding handler.
 func NewHandler(rootPEM, rootDER []byte, rootCN string, cloudflareCIDRs []*net.IPNet) *Handler {
 	return &Handler{
-		rootPEM: rootPEM,
-		rootDER: rootDER,
-		rootCN:  rootCN,
-		cidrs:   cloudflareCIDRs,
+		rootPEM:      rootPEM,
+		mobileconfig: pkiadapter.GenerateMobileconfig(rootDER, rootCN),
+		cidrs:        cloudflareCIDRs,
 	}
 }
 
@@ -35,10 +33,9 @@ func (h *Handler) ServeCACert(w http.ResponseWriter, _ *http.Request) {
 
 // ServeMobileconfig serves an iOS configuration profile with the root CA.
 func (h *Handler) ServeMobileconfig(w http.ResponseWriter, _ *http.Request) {
-	mc := pkiadapter.GenerateMobileconfig(h.rootDER, h.rootCN)
 	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
 	w.Header().Set("Content-Disposition", "attachment; filename=gordon-ca.mobileconfig")
-	_, _ = w.Write(mc)
+	_, _ = w.Write(h.mobileconfig)
 }
 
 // ServeOnboardingPage serves the CA trust onboarding HTML page.

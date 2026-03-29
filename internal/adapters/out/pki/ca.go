@@ -44,7 +44,6 @@ type CA struct {
 	rootCert *x509.Certificate
 	rootKey  crypto.Signer
 	rootPEM  []byte
-	rootDER  []byte
 
 	mu        sync.RWMutex
 	interCert *x509.Certificate
@@ -82,7 +81,7 @@ func NewCA(dataDir string, log zerowrap.Logger) (*CA, error) {
 func (ca *CA) RootCertificate() []byte { return ca.rootPEM }
 
 // RootCertificateDER returns the root CA certificate in DER format.
-func (ca *CA) RootCertificateDER() []byte { return ca.rootDER }
+func (ca *CA) RootCertificateDER() []byte { return ca.rootCert.Raw }
 
 // RootFingerprint returns the SHA-256 fingerprint of the root CA cert
 // formatted as colon-separated hex.
@@ -138,7 +137,6 @@ func (ca *CA) loadOrGenerateRoot() error {
 			ca.rootCert = cert
 			ca.rootKey = key
 			ca.rootPEM = certPEM
-			ca.rootDER = cert.Raw
 			ca.log.Info().Str("cn", cert.Subject.CommonName).Msg("loaded existing root CA")
 			return nil
 		}
@@ -197,7 +195,6 @@ func (ca *CA) loadOrGenerateRoot() error {
 	ca.rootCert = cert
 	ca.rootKey = key
 	ca.rootPEM = certPEM
-	ca.rootDER = certDER
 	ca.log.Info().Str("cn", cert.Subject.CommonName).Msg("generated new root CA")
 	return nil
 }
@@ -331,7 +328,6 @@ func (ca *CA) IssueCertificate(domain string) (*tls.Certificate, error) {
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 
-	// AIA extension: URL where clients can fetch the CA cert.
 	if ca.aiaURL != "" {
 		template.IssuingCertificateURL = []string{ca.aiaURL}
 	}

@@ -78,7 +78,6 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		return nil, fmt.Errorf("no SNI in ClientHello")
 	}
 
-	// Check cache
 	if entry, ok := s.cache.Load(domain); ok {
 		cached := entry.(*cachedCert)
 		if time.Now().Before(cached.expiresAt) {
@@ -87,12 +86,10 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		s.cache.Delete(domain)
 	}
 
-	// Check allowlist
 	if !s.isDomainAllowed(hello.Context(), domain) {
 		return nil, fmt.Errorf("domain %q not in route table", domain)
 	}
 
-	// Issue new cert
 	cert, err := s.ca.IssueCertificate(domain)
 	if err != nil {
 		s.log.Error().Err(err).Str("domain", domain).Msg("failed to issue leaf cert")
@@ -114,10 +111,8 @@ func (s *Service) isDomainAllowed(ctx context.Context, domain string) bool {
 			return true
 		}
 	}
-	for d := range s.routes.GetExternalRoutes() {
-		if d == domain {
-			return true
-		}
+	if _, ok := s.routes.GetExternalRoutes()[domain]; ok {
+		return true
 	}
 	return false
 }
