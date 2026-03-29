@@ -32,6 +32,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/adapters/out/httpprober"
 	"github.com/bnema/gordon/internal/adapters/out/logwriter"
+	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	"github.com/bnema/gordon/internal/adapters/out/ratelimit"
 	"github.com/bnema/gordon/internal/adapters/out/secrets"
 	"github.com/bnema/gordon/internal/adapters/out/telemetry"
@@ -45,6 +46,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/http/admin"
 	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	"github.com/bnema/gordon/internal/adapters/in/http/onboarding"
 	proxyadapter "github.com/bnema/gordon/internal/adapters/in/http/proxy"
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 
@@ -68,6 +70,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/health"
 	"github.com/bnema/gordon/internal/usecase/images"
 	"github.com/bnema/gordon/internal/usecase/logs"
+	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	"github.com/bnema/gordon/internal/usecase/proxy"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
@@ -197,6 +200,9 @@ type services struct {
 	previewService   *preview.Service
 	envDir           string
 	maxBlobChunkSize int64
+	caAdapter        *pkiadapter.CA
+	pkiSvc           *pkiusecase.Service
+	proxyAllowedNets []*net.IPNet // Cloudflare CIDRs for onboarding handler
 }
 
 // Run initializes and starts the Gordon application.
@@ -278,11 +284,8 @@ func Run(ctx context.Context, configPath string) error {
 	}
 	defer svc.eventBus.Stop()
 
-	// Create HTTP handlers
-	registryHandler, proxyHandler, proxyCIDRMiddleware := createHTTPHandlers(svc, cfg, log)
-
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
-	return runServers(ctx, v, cfg, registryHandler, proxyHandler, proxyCIDRMiddleware, svc, cleanupHandlers, log)
+	return runServers(ctx, v, cfg, svc, cleanupHandlers, log)
 }
 
 // initConfig loads configuration from file.
@@ -372,6 +375,14 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	if err := svc.configSvc.Load(ctx); err != nil {
 		return nil, log.WrapErr(err, "failed to load configuration")
 	}
+
+	// Create PKI (internal CA)
+	caAdapter, err := pkiadapter.NewCA(resolveDataDir(cfg.Server.DataDir), log)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to initialize internal CA")
+	}
+	svc.caAdapter = caAdapter
+	svc.pkiSvc = pkiusecase.NewService(ctx, caAdapter, svc.configSvc, log)
 
 	var backend domain.SecretsBackend
 	var passStore *domainsecrets.PassStore
@@ -1545,13 +1556,13 @@ func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 }
 
 // createHTTPHandlers creates HTTP handlers with middleware.
-// The returned proxyCIDRMiddleware is non-nil when proxy_allowed_ips is configured;
-// callers must also apply it to the HTTP-to-HTTPS redirect listener.
-func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler, func(http.Handler) http.Handler) {
+// Returns three handlers: registry, HTTP proxy (with CIDR + onboarding), and HTTPS proxy.
+func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler, http.Handler) {
 	// Parse trusted proxies once for all middleware chains.
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
 	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 
+	// Registry handler (unchanged)
 	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize)
 	registryWithMiddleware, cidrAllowlistMiddleware, rateLimitMiddleware := buildRegistryHandlerWithMiddleware(
 		svc,
@@ -1564,36 +1575,57 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	registryMux := http.NewServeMux()
 	registerAuthRoutes(registryMux, svc, trustedNets, cidrAllowlistMiddleware, rateLimitMiddleware, cfg, log)
 	registryMux.Handle("/v2/", wrapRegistryForLocalMode(registryWithMiddleware, cfg, log))
+	registerAdminRoutes(registryMux, svc, cfg, trustedNets, log)
 
-	// SECURITY: No CORS middleware on the proxy chain. Backend applications
-	// should control their own CORS policies. A blanket Access-Control-Allow-Origin: *
-	// would override backend CORS settings and allow any website to make
-	// cross-origin authenticated requests to proxied applications.
-	proxyMiddlewares := []func(http.Handler) http.Handler{
+	// Proxy handler
+	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, log)
+
+	// HTTP proxy handler chain: CIDR + onboarding routes + proxy
+	var proxyAllowedNets []*net.IPNet
+	var proxyCIDRMiddleware func(http.Handler) http.Handler
+	proxyAllowedNets, proxyCIDRMiddleware = buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
+	svc.proxyAllowedNets = proxyAllowedNets
+
+	httpProxyMiddlewares := []func(http.Handler) http.Handler{
+		middleware.PanicRecovery(log),
+		middleware.RequestLogger(log, trustedNets),
+	}
+	if proxyCIDRMiddleware != nil {
+		httpProxyMiddlewares = append(httpProxyMiddlewares, proxyCIDRMiddleware)
+	}
+
+	httpProxyWithMiddleware := otelhttp.NewHandler(
+		middleware.Chain(httpProxyMiddlewares...)(proxyHandler),
+		"gordon.proxy",
+	)
+
+	// Build proxyMux with onboarding routes before catch-all
+	proxyMux := http.NewServeMux()
+	if svc.caAdapter != nil {
+		onboardingHandler := onboarding.NewHandler(
+			svc.caAdapter.RootCertificate(),
+			svc.caAdapter.RootCertificateDER(),
+			svc.caAdapter.RootCommonName(),
+			svc.proxyAllowedNets,
+		)
+		proxyMux.HandleFunc("GET /ca", onboardingHandler.ServeOnboardingPage)
+		proxyMux.HandleFunc("GET /ca.crt", onboardingHandler.ServeCACert)
+		proxyMux.HandleFunc("GET /ca.mobileconfig", onboardingHandler.ServeMobileconfig)
+	}
+	proxyMux.Handle("/", httpProxyWithMiddleware)
+
+	// HTTPS proxy handler chain: security headers + proxy (no CIDR, no onboarding)
+	httpsProxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
 	}
-
-	// SECURITY: When proxy_allowed_ips is set, only connections from those CIDRs
-	// can reach the proxy. This prevents direct-to-origin attacks that bypass
-	// CDN protections (e.g. Cloudflare WAF, DDoS mitigation).
-	proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
-	if proxyCIDRMiddleware != nil {
-		proxyMiddlewares = append(proxyMiddlewares, proxyCIDRMiddleware)
-	}
-
-	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, log)
-	proxyWithMiddleware := otelhttp.NewHandler(
-		middleware.Chain(proxyMiddlewares...)(proxyHandler),
-		"gordon.proxy",
+	httpsHandler := otelhttp.NewHandler(
+		middleware.Chain(httpsProxyMiddlewares...)(proxyHandler),
+		"gordon.proxy.tls",
 	)
-	proxyMux := http.NewServeMux()
-	proxyMux.Handle("/", proxyWithMiddleware)
 
-	registerAdminRoutes(registryMux, svc, cfg, trustedNets, log)
-
-	return registryMux, proxyMux, proxyCIDRMiddleware
+	return registryMux, proxyMux, httpsHandler
 }
 
 func buildRegistryHandlerWithMiddleware(
@@ -1677,20 +1709,20 @@ func buildRegistryCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, 
 	return middleware.RegistryCIDRAllowlist(allowedNets, trustedNets, log)
 }
 
-func buildProxyCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+func buildProxyCIDRAllowlistMiddleware(cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) ([]*net.IPNet, func(http.Handler) http.Handler) {
 	allowedNets, allInvalid := parseCIDRAllowlist(cfg.Server.ProxyAllowedIPs, "proxy_allowed_ips", log)
 	if allInvalid {
-		return denyAllHandler("proxy_allowed_ips", trustedNets, log)
+		return nil, denyAllHandler("proxy_allowed_ips", trustedNets, log)
 	}
 	if allowedNets == nil {
-		return nil
+		return nil, nil
 	}
 
 	log.Info().
 		Strs("proxy_allowed_ips", cfg.Server.ProxyAllowedIPs).
 		Msg("proxy origin IP allowlist enabled")
 
-	return middleware.ProxyCIDRAllowlist(allowedNets, log)
+	return allowedNets, middleware.ProxyCIDRAllowlist(allowedNets, log)
 }
 
 func buildRegistryRateLimitMiddleware(cfg Config, log zerowrap.Logger) func(http.Handler) http.Handler {
@@ -1825,7 +1857,7 @@ func registerAdminRoutes(registryMux *http.ServeMux, svc *services, cfg Config, 
 // - SIGUSR2: Triggers manual deploy for a specific route
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler, proxyHandler http.Handler, proxyCIDRMiddleware func(http.Handler) http.Handler, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
+func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -1843,15 +1875,17 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	errChan := make(chan error, 3)
 
+	registryHandler, httpProxyHandler, httpsProxyHandler := createHTTPHandlers(svc, cfg, log)
+
 	registryAddr := net.JoinHostPort(cfg.Server.RegistryListenAddr, strconv.Itoa(cfg.Server.RegistryPort))
 	registrySrv, registryReady := startServer(registryAddr, registryHandler, "registry", nil, errChan, log)
 
-	proxySrv, proxyReady, _, _, err := startProxyServers(cfg, proxyHandler, proxyCIDRMiddleware, errChan, log)
+	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, errChan, log)
 	if err != nil {
 		return err
 	}
 
-	// Wait for all enabled servers to bind their ports before auto-starting containers.
+	// Wait for all servers to bind their ports before auto-starting containers.
 	// This prevents the race where auto-start pulls from the registry before it's listening.
 	if err := waitForServerReady(registryReady, errChan); err != nil {
 		return err
@@ -1859,9 +1893,13 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 	if err := waitForServerReady(proxyReady, errChan); err != nil {
 		return err
 	}
+	if err := waitForServerReady(tlsReady, errChan); err != nil {
+		return err
+	}
 
 	log.Info().
 		Int("proxy_port", cfg.Server.Port).
+		Int("tls_port", cfg.Server.TLSPort).
 		Int("registry_port", cfg.Server.RegistryPort).
 		Msg("Gordon is running")
 
@@ -1878,7 +1916,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, registryHandler
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, svc.eventBus, log)
 	cleanupHandlers() // Stop debounce timers before draining containers
-	gracefulShutdown(registrySrv, proxySrv, nil, svc.containerSvc, svc.proxySvc, log)
+	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, log)
 	return nil
 }
 
@@ -2080,7 +2118,7 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, log zerowrap.Logger) {
+func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -2094,6 +2132,11 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Warn().Err(err).Str("addr", srv.Addr).Msg("server shutdown error")
 		}
+	}
+
+	// Stop PKI maintenance goroutines
+	if pkiSvc != nil {
+		pkiSvc.Stop()
 	}
 
 	// Phase 2: Drain in-flight registry push sessions before stopping the backend
@@ -2121,14 +2164,38 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 	log.Info().Msg("Gordon stopped")
 }
 
-// startProxyServers sets up the proxy HTTP server.
-// Task 9 will add the TLS server back with PKI-based certificates.
-func startProxyServers(cfg Config, proxyHandler http.Handler, proxyCIDRMiddleware func(http.Handler) http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
-	var proxyProtos http.Protocols
-	proxyProtos.SetHTTP1(true)
-	proxyProtos.SetUnencryptedHTTP2(true)
-	srv, ready := startServer(fmt.Sprintf(":%d", cfg.Server.Port), proxyHandler, "proxy", &proxyProtos, errChan, log)
-	return srv, ready, nil, nil, nil
+// startProxyServers sets up the HTTP proxy server and the HTTPS proxy server
+// with on-demand TLS certificates from the internal CA.
+func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSvc *pkiusecase.Service, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+	// HTTP listener (Cloudflare proxy + onboarding for direct clients)
+	var httpProtos http.Protocols
+	httpProtos.SetHTTP1(true)
+	httpProtos.SetUnencryptedHTTP2(true)
+	httpSrv, httpReady := startServer(
+		fmt.Sprintf(":%d", cfg.Server.Port),
+		httpHandler,
+		"proxy-http",
+		&httpProtos,
+		errChan,
+		log,
+	)
+
+	// HTTPS listener (on-demand TLS via internal CA)
+	tlsConfig := &tls.Config{
+		MinVersion:     tls.VersionTLS12,
+		GetCertificate: pkiSvc.GetCertificate,
+		NextProtos:     []string{"h2", "http/1.1"},
+	}
+	tlsSrv, tlsReady := startTLSServerWithConfig(
+		fmt.Sprintf(":%d", cfg.Server.TLSPort),
+		httpsHandler,
+		"proxy-tls",
+		tlsConfig,
+		errChan,
+		log,
+	)
+
+	return httpSrv, httpReady, tlsSrv, tlsReady, nil
 }
 
 // startServer starts an HTTP server, returning the server instance and a channel
@@ -2168,44 +2235,37 @@ func startServer(addr string, handler http.Handler, name string, protocols *http
 	return server, ready
 }
 
-// startTLSServer starts an HTTPS server with the provided certificate and key.
-// It returns the server instance (for graceful shutdown) and a channel that closes once the port is bound.
-func startTLSServer(addr string, handler http.Handler, name, certFile, keyFile string, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
-	ready := make(chan struct{})
-
-	server := &http.Server{
+// startTLSServerWithConfig starts an HTTPS server using a pre-built tls.Config
+// (e.g. with GetCertificate for on-demand issuance via the internal CA).
+// Returns the server instance and a channel that closes once the port is bound.
+func startTLSServerWithConfig(addr string, handler http.Handler, name string, tlsCfg *tls.Config, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
+	srv := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
+		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       5 * time.Minute,
 		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
-		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		},
 	}
 
+	ready := make(chan struct{})
 	go func() {
-		log.Info().
-			Str("address", addr).
-			Str("cert_file", certFile).
-			Str("key_file", keyFile).
-			Msgf("%s server starting", name)
-
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			errChan <- fmt.Errorf("%s server error: %w", name, err)
+			errChan <- fmt.Errorf("%s listen: %w", name, err)
 			return
 		}
+		tlsLn := tls.NewListener(ln, tlsCfg)
+		log.Info().Str("addr", addr).Str("name", name).Msg("TLS server starting")
 		close(ready)
-
-		if err := server.ServeTLS(ln, certFile, keyFile); err != nil && err != http.ErrServerClosed {
-			errChan <- fmt.Errorf("%s server error: %w", name, err)
+		if err := srv.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
+			errChan <- fmt.Errorf("%s: %w", name, err)
 		}
 	}()
 
-	return server, ready
+	return srv, ready
 }
 
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.
