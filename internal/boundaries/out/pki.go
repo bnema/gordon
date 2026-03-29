@@ -1,9 +1,18 @@
 package out
 
 import (
+	"context"
 	"crypto/tls"
 	"time"
+
+	"github.com/bnema/gordon/internal/domain"
 )
+
+// RouteChecker provides route lookup for domain validation.
+type RouteChecker interface {
+	GetRoutes(ctx context.Context) []domain.Route
+	GetExternalRoutes() map[string]string
+}
 
 // CertificateAuthority provides internal PKI operations.
 // The adapter handles only cryptography — allowlist checks and caching
@@ -34,4 +43,10 @@ type CertificateAuthority interface {
 
 	// RootCommonName returns the CN of the root CA certificate.
 	RootCommonName() string
+
+	// LeafLifetime returns the configured leaf certificate lifetime.
+	LeafLifetime() time.Duration
+
+	// IntermediateLifetime returns the configured intermediate CA lifetime.
+	IntermediateLifetime() time.Duration
 }

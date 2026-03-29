@@ -10,7 +10,6 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
-	"github.com/bnema/gordon/internal/domain"
 )
 
 const (
@@ -23,18 +22,14 @@ type cachedCert struct {
 	expiresAt time.Time
 }
 
-// RouteChecker provides route lookup for domain validation.
-// Matches the subset of in.ConfigService needed here.
-type RouteChecker interface {
-	GetRoutes(ctx context.Context) []domain.Route
-	GetExternalRoutes() map[string]string
-}
-
 // Service provides on-demand TLS certificate issuance with caching
 // and automatic intermediate CA renewal.
+//
+// TODO: consider adding CRL/OCSP support for certificate revocation,
+// especially given the 10-year root CA lifetime.
 type Service struct {
 	ca     out.CertificateAuthority
-	routes RouteChecker
+	routes out.RouteChecker
 	log    zerowrap.Logger
 
 	cache  sync.Map // map[string]*cachedCert
@@ -43,7 +38,7 @@ type Service struct {
 }
 
 // NewService creates a PKI service and starts background maintenance goroutines.
-func NewService(ctx context.Context, ca out.CertificateAuthority, routes RouteChecker, log zerowrap.Logger) *Service {
+func NewService(ctx context.Context, ca out.CertificateAuthority, routes out.RouteChecker, log zerowrap.Logger) *Service {
 	ctx, cancel := context.WithCancel(ctx)
 	svc := &Service{
 		ca:     ca,
@@ -80,9 +75,10 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	}
 
 	if entry, ok := s.cache.Load(domain); ok {
-		cached := entry.(*cachedCert)
-		if time.Now().Before(cached.expiresAt) {
-			return cached.cert, nil
+		if cached, ok := entry.(*cachedCert); ok {
+			if time.Now().Before(cached.expiresAt) {
+				return cached.cert, nil
+			}
 		}
 		s.cache.Delete(domain)
 	}
@@ -119,12 +115,7 @@ func (s *Service) isDomainAllowed(ctx context.Context, domain string) bool {
 }
 
 func (s *Service) leafLifetime() time.Duration {
-	// Use the CA's leaf lifetime if it exposes it, otherwise default 12h.
-	type lifetimer interface{ LeafLifetime() time.Duration }
-	if lt, ok := s.ca.(lifetimer); ok {
-		return lt.LeafLifetime()
-	}
-	return 12 * time.Hour
+	return s.ca.LeafLifetime()
 }
 
 func (s *Service) maintenanceLoop(ctx context.Context) {
@@ -146,8 +137,7 @@ func (s *Service) maintenanceLoop(ctx context.Context) {
 func (s *Service) renewIntermediateIfNeeded() {
 	expiresAt := s.ca.IntermediateExpiresAt()
 	remaining := time.Until(expiresAt)
-	// Total lifetime ~ 7 days. Renewal window = 20% ~ 1.4 days.
-	lifetime := 7 * 24 * time.Hour
+	lifetime := s.ca.IntermediateLifetime()
 	window := time.Duration(float64(lifetime) * renewalWindowRatio)
 	if remaining < window {
 		s.log.Info().Time("expires", expiresAt).Msg("renewing intermediate CA")
@@ -159,16 +149,18 @@ func (s *Service) renewIntermediateIfNeeded() {
 
 func (s *Service) sweepExpiredCerts() {
 	now := time.Now()
+	ctx := context.Background()
 	swept := 0
 	s.cache.Range(func(key, value any) bool {
+		domain := key.(string)
 		cached := value.(*cachedCert)
-		if now.After(cached.expiresAt) {
+		if now.After(cached.expiresAt) || !s.isDomainAllowed(ctx, domain) {
 			s.cache.Delete(key)
 			swept++
 		}
 		return true
 	})
 	if swept > 0 {
-		s.log.Debug().Int("swept", swept).Msg("cleaned expired leaf certs from cache")
+		s.log.Debug().Int("swept", swept).Msg("cleaned expired/unauthorized leaf certs from cache")
 	}
 }

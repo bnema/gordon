@@ -10,11 +10,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
+	outboundary "github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 )
 
-// stubConfigService satisfies pkiusecase.RouteChecker
+// Compile-time check: stubConfigService implements the boundary interface.
+var _ outboundary.RouteChecker = (*stubConfigService)(nil)
+
+// stubConfigService satisfies out.RouteChecker
 type stubConfigService struct {
 	routes         []domain.Route
 	externalRoutes map[string]string

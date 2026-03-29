@@ -202,7 +202,6 @@ type services struct {
 	maxBlobChunkSize int64
 	caAdapter        *pkiadapter.CA
 	pkiSvc           *pkiusecase.Service
-	proxyAllowedNets []*net.IPNet // Cloudflare CIDRs for onboarding handler
 }
 
 // Run initializes and starts the Gordon application.
@@ -1581,14 +1580,12 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, log)
 
 	// HTTP proxy handler chain: CIDR + onboarding routes + proxy
-	var proxyAllowedNets []*net.IPNet
-	var proxyCIDRMiddleware func(http.Handler) http.Handler
-	proxyAllowedNets, proxyCIDRMiddleware = buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
-	svc.proxyAllowedNets = proxyAllowedNets
+	_, proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
 
 	httpProxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
+		middleware.SecurityHeaders,
 	}
 	if proxyCIDRMiddleware != nil {
 		httpProxyMiddlewares = append(httpProxyMiddlewares, proxyCIDRMiddleware)
@@ -1599,31 +1596,36 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		"gordon.proxy",
 	)
 
-	// Build proxyMux with onboarding routes before catch-all
+	// HTTP proxyMux: Cloudflare-proxied traffic only, no onboarding
 	proxyMux := http.NewServeMux()
-	if svc.caAdapter != nil {
-		onboardingHandler := onboarding.NewHandler(
-			svc.caAdapter.RootCertificate(),
-			svc.caAdapter.RootCertificateDER(),
-			svc.caAdapter.RootCommonName(),
-			svc.proxyAllowedNets,
-		)
-		proxyMux.HandleFunc("GET /ca", onboardingHandler.ServeOnboardingPage)
-		proxyMux.HandleFunc("GET /ca.crt", onboardingHandler.ServeCACert)
-		proxyMux.HandleFunc("GET /ca.mobileconfig", onboardingHandler.ServeMobileconfig)
-	}
 	proxyMux.Handle("/", httpProxyWithMiddleware)
 
-	// HTTPS proxy handler chain: security headers + proxy (no CIDR, no onboarding)
+	// HTTPS proxy handler chain: security headers + proxy + CA onboarding
+	// Onboarding routes live on the TLS port so Tailnet / direct clients
+	// can click through the initial cert warning, install the CA, and
+	// then trust all subsequent connections.
 	httpsProxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
 	}
-	httpsHandler := otelhttp.NewHandler(
-		middleware.Chain(httpsProxyMiddlewares...)(proxyHandler),
-		"gordon.proxy.tls",
-	)
+	httpsProxyWithMiddleware := middleware.Chain(httpsProxyMiddlewares...)(proxyHandler)
+
+	httpsMux := http.NewServeMux()
+	if svc.caAdapter != nil {
+		onboardingHandler := onboarding.NewHandler(
+			svc.caAdapter.RootCertificate(),
+			svc.caAdapter.RootCertificateDER(),
+			svc.caAdapter.RootCommonName(),
+			cfg.Server.TLSPort,
+		)
+		httpsMux.HandleFunc("GET /ca", onboardingHandler.ServeOnboardingPage)
+		httpsMux.HandleFunc("GET /ca.crt", onboardingHandler.ServeCACert)
+		httpsMux.HandleFunc("GET /ca.mobileconfig", onboardingHandler.ServeMobileconfig)
+	}
+	httpsMux.Handle("/", httpsProxyWithMiddleware)
+
+	httpsHandler := otelhttp.NewHandler(httpsMux, "gordon.proxy.tls")
 
 	return registryMux, proxyMux, httpsHandler
 }

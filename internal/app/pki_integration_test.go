@@ -9,12 +9,16 @@ import (
 	"time"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
+	outboundary "github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Compile-time check: stubRoutes implements the boundary interface.
+var _ outboundary.RouteChecker = (*stubRoutes)(nil)
 
 type stubRoutes struct {
 	routes []domain.Route

@@ -2,25 +2,27 @@ package onboarding
 
 import (
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 )
 
-// Handler serves CA onboarding endpoints on the HTTP port.
+// Handler serves CA onboarding endpoints on the TLS port for direct/Tailnet clients.
 type Handler struct {
 	rootPEM      []byte
 	mobileconfig []byte
-	cidrs        []*net.IPNet
+	tlsPort      int
 }
 
 // NewHandler creates an onboarding handler.
-func NewHandler(rootPEM, rootDER []byte, rootCN string, cloudflareCIDRs []*net.IPNet) *Handler {
+// tlsPort is the HTTPS port used to build redirect URLs on the onboarding page.
+func NewHandler(rootPEM, rootDER []byte, rootCN string, tlsPort int) *Handler {
 	return &Handler{
 		rootPEM:      rootPEM,
 		mobileconfig: pkiadapter.GenerateMobileconfig(rootDER, rootCN),
-		cidrs:        cloudflareCIDRs,
+		tlsPort:      tlsPort,
 	}
 }
 
@@ -38,13 +40,25 @@ func (h *Handler) ServeMobileconfig(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(h.mobileconfig)
 }
 
+// normalizeHTTPSURL builds an https:// URL from r.Host and the configured TLS port.
+// It strips any existing port, applies the configured TLS port (omitting :443), and
+// HTML-escapes the result to prevent XSS via a crafted Host header.
+func (h *Handler) normalizeHTTPSURL(r *http.Request) string {
+	hostname := r.Host
+	if host, _, err := net.SplitHostPort(hostname); err == nil {
+		hostname = host
+	}
+	if h.tlsPort != 0 && h.tlsPort != 443 {
+		hostname = fmt.Sprintf("%s:%d", hostname, h.tlsPort)
+	}
+	return html.EscapeString(fmt.Sprintf("https://%s/", hostname))
+}
+
 // ServeOnboardingPage serves the CA trust onboarding HTML page.
 func (h *Handler) ServeOnboardingPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	scheme := "https"
-	host := r.Host
-	redirectURL := fmt.Sprintf("%s://%s/", scheme, host)
+	redirectURL := h.normalizeHTTPSURL(r)
 
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html lang="en">
@@ -87,18 +101,8 @@ func (h *Handler) ServeOnboardingPage(w http.ResponseWriter, r *http.Request) {
 </div>
 
 <div class="skip">
-  <p>Already installed? <a href="%s" onclick="document.cookie='gordon-ca-installed=1;path=/;max-age=315360000;SameSite=Lax'">Go to site →</a></p>
+  <p>Already installed? <a href="%s" onclick="document.cookie='gordon-ca-installed=1;path=/;max-age=315360000;SameSite=Lax;Secure'">Go to site →</a></p>
 </div>
 </body>
 </html>`, redirectURL)
-}
-
-// IsCloudflareIP checks if the given IP is in Cloudflare's CIDR ranges.
-func (h *Handler) IsCloudflareIP(ip net.IP) bool {
-	for _, cidr := range h.cidrs {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-	return false
 }

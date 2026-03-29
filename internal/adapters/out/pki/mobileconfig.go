@@ -3,6 +3,7 @@ package pki
 import (
 	"encoding/base64"
 	"fmt"
+	"html"
 
 	"github.com/google/uuid"
 )
@@ -14,6 +15,7 @@ func GenerateMobileconfig(rootDER []byte, rootCN string) []byte {
 	profileUUID := uuid.New().String()
 	certUUID := uuid.New().String()
 
+	safeCN := html.EscapeString(rootCN)
 	profile := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -52,7 +54,7 @@ func GenerateMobileconfig(rootDER []byte, rootCN string) []byte {
 	<key>PayloadVersion</key>
 	<integer>1</integer>
 </dict>
-</plist>`, b64Cert, rootCN, certUUID, certUUID, profileUUID)
+</plist>`, b64Cert, safeCN, certUUID, certUUID, profileUUID)
 
 	return []byte(profile)
 }

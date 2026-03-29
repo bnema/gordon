@@ -11,8 +11,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +50,8 @@ type CA struct {
 	mu        sync.RWMutex
 	interCert *x509.Certificate
 	interKey  crypto.Signer
+
+	renewMu sync.Mutex // serialises intermediate renewal
 }
 
 // SetAIAURL sets the Authority Information Access URL embedded in leaf certs.
@@ -109,6 +113,9 @@ func (ca *CA) IntermediateExpiresAt() time.Time {
 // RenewIntermediate regenerates the intermediate CA certificate,
 // signed by the root CA. Existing leaf certs remain valid.
 func (ca *CA) RenewIntermediate() error {
+	ca.renewMu.Lock()
+	defer ca.renewMu.Unlock()
+
 	cert, key, err := ca.generateIntermediate()
 	if err != nil {
 		return err
@@ -131,18 +138,39 @@ func (ca *CA) loadOrGenerateRoot() error {
 	certPEM, certErr := os.ReadFile(certPath)
 	keyPEM, keyErr := os.ReadFile(keyPath)
 
-	if certErr == nil && keyErr == nil {
-		cert, key, err := parseCertAndKey(certPEM, keyPEM)
-		if err == nil {
-			ca.rootCert = cert
-			ca.rootKey = key
-			ca.rootPEM = certPEM
-			ca.log.Info().Str("cn", cert.Subject.CommonName).Msg("loaded existing root CA")
-			return nil
-		}
-		ca.log.Warn().Err(err).Msg("failed to parse existing root CA, regenerating")
-	}
+	certMissing := certErr != nil && errors.Is(certErr, os.ErrNotExist)
+	keyMissing := keyErr != nil && errors.Is(keyErr, os.ErrNotExist)
 
+	switch {
+	case certErr == nil && keyErr == nil:
+		cert, key, err := parseCertAndKey(certPEM, keyPEM)
+		if err != nil {
+			return fmt.Errorf("corrupt root CA files: %w", err)
+		}
+		if err := verifyKeyPair(cert, key); err != nil {
+			return fmt.Errorf("root CA cert/key mismatch: %w", err)
+		}
+		ca.rootCert = cert
+		ca.rootKey = key
+		ca.rootPEM = certPEM
+		ca.log.Info().Str("cn", cert.Subject.CommonName).Msg("loaded existing root CA")
+		return nil
+
+	case certMissing && keyMissing:
+		return ca.bootstrapRoot(certPath, keyPath)
+
+	case certMissing || keyMissing:
+		return fmt.Errorf("incomplete root CA: cert missing=%v, key missing=%v", certMissing, keyMissing)
+
+	default:
+		if certErr != nil {
+			return fmt.Errorf("read root cert: %w", certErr)
+		}
+		return fmt.Errorf("read root key: %w", keyErr)
+	}
+}
+
+func (ca *CA) bootstrapRoot(certPath, keyPath string) error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("generate root key: %w", err)
@@ -178,12 +206,12 @@ func (ca *CA) loadOrGenerateRoot() error {
 		return fmt.Errorf("parse root cert: %w", err)
 	}
 
-	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		return fmt.Errorf("marshal root key: %w", err)
 	}
-	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
 	if err := writeSecure(certPath, certPEM, 0644); err != nil {
 		return err
@@ -208,7 +236,13 @@ func (ca *CA) loadOrGenerateIntermediate() error {
 
 	if certErr == nil && keyErr == nil {
 		cert, key, err := parseCertAndKey(certPEM, keyPEM)
-		if err == nil && time.Now().Before(cert.NotAfter) {
+		if err != nil {
+			ca.log.Warn().Err(err).Msg("failed to parse intermediate CA, regenerating")
+		} else if err := verifyKeyPair(cert, key); err != nil {
+			ca.log.Warn().Err(err).Msg("intermediate CA cert/key mismatch, regenerating")
+		} else if err := cert.CheckSignatureFrom(ca.rootCert); err != nil {
+			ca.log.Warn().Err(err).Msg("intermediate CA not signed by current root, regenerating")
+		} else if time.Now().Before(cert.NotAfter) {
 			ca.interCert = cert
 			ca.interKey = key
 			ca.log.Info().
@@ -216,9 +250,6 @@ func (ca *CA) loadOrGenerateIntermediate() error {
 				Time("expires", cert.NotAfter).
 				Msg("loaded existing intermediate CA")
 			return nil
-		}
-		if err != nil {
-			ca.log.Warn().Err(err).Msg("failed to parse intermediate CA, regenerating")
 		} else {
 			ca.log.Warn().Msg("intermediate CA expired, regenerating")
 		}
@@ -300,6 +331,10 @@ func (ca *CA) storeIntermediate(cert *x509.Certificate, key *ecdsa.PrivateKey) e
 // IssueCertificate generates a leaf cert for the given domain,
 // signed by the current intermediate CA.
 func (ca *CA) IssueCertificate(domain string) (*tls.Certificate, error) {
+	if err := validateDomain(domain); err != nil {
+		return nil, fmt.Errorf("invalid domain: %w", err)
+	}
+
 	ca.mu.RLock()
 	interCert := ca.interCert
 	interKey := ca.interKey
@@ -348,6 +383,8 @@ func (ca *CA) IssueCertificate(domain string) (*tls.Certificate, error) {
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
 	tlsCert, err := tls.X509KeyPair(chainPEM, keyPEM)
+	clear(keyDER)
+	clear(keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("create TLS cert: %w", err)
 	}
@@ -358,6 +395,11 @@ func (ca *CA) IssueCertificate(domain string) (*tls.Certificate, error) {
 // LeafLifetime returns the configured leaf certificate lifetime.
 func (ca *CA) LeafLifetime() time.Duration {
 	return leafLifetime
+}
+
+// IntermediateLifetime returns the configured intermediate CA lifetime.
+func (ca *CA) IntermediateLifetime() time.Duration {
+	return intermediateLifetime
 }
 
 func randomSerial() (*big.Int, error) {
@@ -390,9 +432,71 @@ func parseCertAndKey(certPEM, keyPEM []byte) (*x509.Certificate, crypto.Signer, 
 	return cert, key, nil
 }
 
-func writeSecure(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+func writeSecure(path string, data []byte, perm os.FileMode) (retErr error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create dir for %s: %w", path, err)
 	}
-	return os.WriteFile(path, data, perm)
+	// Atomic write: temp file → chmod → rename to avoid TOCTOU on permissions.
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for %s: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if retErr != nil {
+			os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp file for %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file for %s: %w", path, err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return fmt.Errorf("chmod temp file for %s: %w", path, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename temp file to %s: %w", path, err)
+	}
+	return nil
+}
+
+// validateDomain performs defense-in-depth validation of a domain name
+// before issuing a certificate.
+func validateDomain(domain string) error {
+	if domain == "" {
+		return fmt.Errorf("empty domain")
+	}
+	if len(domain) > 253 {
+		return fmt.Errorf("domain too long (%d chars)", len(domain))
+	}
+	if strings.HasPrefix(domain, "*") {
+		return fmt.Errorf("wildcard domains not allowed")
+	}
+	if strings.ContainsAny(domain, "/\\") {
+		return fmt.Errorf("domain contains path separator")
+	}
+	if net.ParseIP(domain) != nil {
+		return fmt.Errorf("IP addresses not allowed, must be a hostname")
+	}
+	return nil
+}
+
+// verifyKeyPair checks that a certificate's public key matches the private key.
+func verifyKeyPair(cert *x509.Certificate, key crypto.Signer) error {
+	certPub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("certificate has non-ECDSA public key")
+	}
+	keyPub, ok := key.Public().(*ecdsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("signer has non-ECDSA public key")
+	}
+	if !certPub.Equal(keyPub) {
+		return fmt.Errorf("public keys do not match")
+	}
+	return nil
 }
