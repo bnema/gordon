@@ -87,9 +87,9 @@ func (ca *CA) RootCertificateDER() []byte { return ca.rootCert.Raw }
 // formatted as colon-separated hex.
 func (ca *CA) RootFingerprint() string {
 	sum := sha256.Sum256(ca.rootCert.Raw)
-	parts := make([]string, len(sum))
-	for i, b := range sum {
-		parts[i] = fmt.Sprintf("%02X", b)
+	parts := make([]string, 0, sha256.Size)
+	for _, b := range sum {
+		parts = append(parts, fmt.Sprintf("%02X", b))
 	}
 	return strings.Join(parts, ":")
 }
