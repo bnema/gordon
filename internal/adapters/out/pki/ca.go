@@ -432,6 +432,32 @@ func parseCertAndKey(certPEM, keyPEM []byte) (*x509.Certificate, crypto.Signer, 
 	return cert, key, nil
 }
 
+// validateDomain performs defense-in-depth validation of a domain name
+// before issuing a certificate.
+func validateDomain(domain string) error {
+	if domain == "" {
+		return fmt.Errorf("empty domain")
+	}
+	for _, r := range domain {
+		if r < 32 {
+			return fmt.Errorf("domain contains control characters")
+		}
+	}
+	if len(domain) > 253 {
+		return fmt.Errorf("domain too long (%d chars), limit is 253", len(domain))
+	}
+	if strings.HasPrefix(domain, "*") {
+		return fmt.Errorf("wildcard domains not allowed")
+	}
+	if strings.ContainsAny(domain, "/\\") {
+		return fmt.Errorf("domain contains path separators")
+	}
+	if net.ParseIP(domain) != nil {
+		return fmt.Errorf("IP addresses not allowed, must be a domain name")
+	}
+	return nil
+}
+
 func writeSecure(path string, data []byte, perm os.FileMode) (retErr error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -460,27 +486,6 @@ func writeSecure(path string, data []byte, perm os.FileMode) (retErr error) {
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("rename temp file to %s: %w", path, err)
-	}
-	return nil
-}
-
-// validateDomain performs defense-in-depth validation of a domain name
-// before issuing a certificate.
-func validateDomain(domain string) error {
-	if domain == "" {
-		return fmt.Errorf("empty domain")
-	}
-	if len(domain) > 253 {
-		return fmt.Errorf("domain too long (%d chars)", len(domain))
-	}
-	if strings.HasPrefix(domain, "*") {
-		return fmt.Errorf("wildcard domains not allowed")
-	}
-	if strings.ContainsAny(domain, "/\\") {
-		return fmt.Errorf("domain contains path separator")
-	}
-	if net.ParseIP(domain) != nil {
-		return fmt.Errorf("IP addresses not allowed, must be a hostname")
 	}
 	return nil
 }
