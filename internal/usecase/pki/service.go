@@ -74,11 +74,6 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		return nil, fmt.Errorf("no SNI in ClientHello")
 	}
 
-	if !s.isDomainAllowed(hello.Context(), domain) {
-		s.cache.Delete(domain)
-		return nil, fmt.Errorf("domain %q not in route table", domain)
-	}
-
 	if entry, ok := s.cache.Load(domain); ok {
 		if cached, ok := entry.(*cachedCert); ok {
 			if time.Now().Before(cached.expiresAt) {
@@ -86,6 +81,10 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 			}
 		}
 		s.cache.Delete(domain)
+	}
+
+	if !s.isDomainAllowed(hello.Context(), domain) {
+		return nil, fmt.Errorf("domain %q not in route table", domain)
 	}
 
 	cert, err := s.ca.IssueCertificate(domain)

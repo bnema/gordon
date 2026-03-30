@@ -375,7 +375,6 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, log.WrapErr(err, "failed to load configuration")
 	}
 
-	// Create PKI (internal CA) — disabled when tls_port is 0.
 	if cfg.Server.TLSPort != 0 {
 		caAdapter, err := pkiadapter.NewCA(resolveDataDir(cfg.Server.DataDir), log)
 		if err != nil {
@@ -1908,7 +1907,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	logEvent := log.Info().
 		Int("proxy_port", cfg.Server.Port).
 		Int("registry_port", cfg.Server.RegistryPort)
-	if cfg.Server.TLSPort != 0 {
+	if tlsSrv != nil {
 		logEvent = logEvent.Int("tls_port", cfg.Server.TLSPort)
 	}
 	logEvent.Msg("Gordon is running")

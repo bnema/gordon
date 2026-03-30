@@ -24,6 +24,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	out "github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 // Compile-time check: *CA satisfies the CertificateAuthority boundary.
@@ -435,22 +436,14 @@ func parseCertAndKey(certPEM, keyPEM []byte) (*x509.Certificate, crypto.Signer, 
 // validateDomain performs defense-in-depth validation of a domain name
 // before issuing a certificate.
 func validateDomain(domain string) error {
-	if domain == "" {
-		return fmt.Errorf("empty domain")
-	}
-	for _, r := range domain {
-		if r < 32 {
-			return fmt.Errorf("domain contains control characters")
-		}
+	if err := validation.ValidateDomainParam(domain); err != nil {
+		return err
 	}
 	if len(domain) > 253 {
 		return fmt.Errorf("domain too long (%d chars), limit is 253", len(domain))
 	}
 	if strings.HasPrefix(domain, "*") {
 		return fmt.Errorf("wildcard domains not allowed")
-	}
-	if strings.ContainsAny(domain, "/\\") {
-		return fmt.Errorf("domain contains path separators")
 	}
 	if net.ParseIP(domain) != nil {
 		return fmt.Errorf("IP addresses not allowed, must be a domain name")
