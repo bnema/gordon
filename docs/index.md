@@ -80,7 +80,7 @@ Gordon runs on your VPS and provides:
 - Domain pointing to your server
 - Cloudflare account for HTTPS (free tier works)
 
-> **Note:** Gordon can run behind Cloudflare/nginx, or terminate TLS directly when `server.tls_enabled = true`.
+> **Note:** Gordon can run behind Cloudflare/nginx, or terminate TLS directly via its internal CA (enabled by default on `server.tls_port`). Set `tls_port = 0` to disable.
 
 ## Related
 

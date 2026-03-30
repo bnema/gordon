@@ -341,10 +341,7 @@ Configure Gordon to use them:
 
 ```toml
 [server]
-tls_enabled = true
-tls_port = 443
-tls_cert_file = "/etc/gordon/tls/cert.pem"
-tls_key_file = "/etc/gordon/tls/key.pem"
+tls_port = 8443   # Gordon's internal CA handles certificates automatically
 ```
 
 `insecure_tls` only affects CLI -> Gordon admin HTTPS verification. It does not change runtime routing: Gordon reverse proxy and container routes can still serve wildcard app domains like `*.example.com`.

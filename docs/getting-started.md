@@ -6,7 +6,7 @@ Deploy your first app with Gordon in under 5 minutes.
 
 - A Linux VPS with Docker or Podman installed
 - A domain pointing to your VPS (DNS A record)
-- HTTPS setup: Cloudflare proxy **or** native TLS in Gordon (`server.tls_enabled = true`)
+- HTTPS setup: Cloudflare proxy, Tailscale, or Gordon's internal CA (`server.tls_port = 8443`)
 - [pass](https://www.passwordstore.org/) (password manager) with GPG key initialized
 
 ## 1. Install Gordon

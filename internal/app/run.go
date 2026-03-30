@@ -375,13 +375,17 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, log.WrapErr(err, "failed to load configuration")
 	}
 
-	// Create PKI (internal CA)
-	caAdapter, err := pkiadapter.NewCA(resolveDataDir(cfg.Server.DataDir), log)
-	if err != nil {
-		return nil, log.WrapErr(err, "failed to initialize internal CA")
+	// Create PKI (internal CA) — disabled when tls_port is 0.
+	if cfg.Server.TLSPort != 0 {
+		caAdapter, err := pkiadapter.NewCA(resolveDataDir(cfg.Server.DataDir), log)
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to initialize internal CA")
+		}
+		svc.caAdapter = caAdapter
+		svc.pkiSvc = pkiusecase.NewService(ctx, caAdapter, svc.configSvc, log)
+	} else {
+		log.Info().Msg("internal CA disabled (server.tls_port=0)")
 	}
-	svc.caAdapter = caAdapter
-	svc.pkiSvc = pkiusecase.NewService(ctx, caAdapter, svc.configSvc, log)
 
 	var backend domain.SecretsBackend
 	var passStore *domainsecrets.PassStore
@@ -1895,15 +1899,19 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	if err := waitForServerReady(proxyReady, errChan); err != nil {
 		return err
 	}
-	if err := waitForServerReady(tlsReady, errChan); err != nil {
-		return err
+	if tlsReady != nil {
+		if err := waitForServerReady(tlsReady, errChan); err != nil {
+			return err
+		}
 	}
 
-	log.Info().
+	logEvent := log.Info().
 		Int("proxy_port", cfg.Server.Port).
-		Int("tls_port", cfg.Server.TLSPort).
-		Int("registry_port", cfg.Server.RegistryPort).
-		Msg("Gordon is running")
+		Int("registry_port", cfg.Server.RegistryPort)
+	if cfg.Server.TLSPort != 0 {
+		logEvent = logEvent.Int("tls_port", cfg.Server.TLSPort)
+	}
+	logEvent.Msg("Gordon is running")
 
 	schedulerCleanup, err := startOptionalSchedulers(ctx, cfg, svc, log, v)
 	if err != nil {
@@ -2166,8 +2174,8 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 	log.Info().Msg("Gordon stopped")
 }
 
-// startProxyServers sets up the HTTP proxy server and the HTTPS proxy server
-// with on-demand TLS certificates from the internal CA.
+// startProxyServers sets up the HTTP proxy server and, when tls_port != 0,
+// an HTTPS proxy server with on-demand TLS certificates from the internal CA.
 func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSvc *pkiusecase.Service, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
 	// HTTP listener (Cloudflare proxy + onboarding for direct clients)
 	var httpProtos http.Protocols
@@ -2181,6 +2189,10 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 		errChan,
 		log,
 	)
+
+	if cfg.Server.TLSPort == 0 {
+		return httpSrv, httpReady, nil, nil, nil
+	}
 
 	// HTTPS listener (on-demand TLS via internal CA)
 	tlsConfig := &tls.Config{
@@ -2521,9 +2533,9 @@ func isProcessAlive(pid int) bool {
 
 // loadConfig loads configuration from file and sets defaults.
 func loadConfig(v *viper.Viper, configPath string) error {
-	v.SetDefault("server.port", 80)
+	v.SetDefault("server.port", 8088)
 	v.SetDefault("server.registry_port", 5000)
-	v.SetDefault("server.tls_port", 443)
+	v.SetDefault("server.tls_port", 8443)
 	v.SetDefault("server.data_dir", DefaultDataDir())
 	v.SetDefault("server.runtime", "auto")
 	v.SetDefault("logging.level", "info")

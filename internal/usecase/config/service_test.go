@@ -1412,8 +1412,8 @@ backend = ["app.example.com"]
 
 		v := viper.New()
 		v.SetConfigFile(configFile)
-		v.SetDefault("server.port", 80)
-		v.SetDefault("server.tls_port", 443)
+		v.SetDefault("server.port", 8088)
+		v.SetDefault("server.tls_port", 8443)
 		v.SetDefault("auth.secrets_backend", "")
 		v.SetDefault("auto_route.enabled", false)
 		v.SetDefault("network_isolation.enabled", false)

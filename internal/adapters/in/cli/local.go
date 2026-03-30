@@ -46,7 +46,7 @@ func (l *LocalServices) GetDataDir() string {
 func GetLocalServices(configPath string) (*LocalServices, error) {
 	// Set up viper with defaults
 	v := viper.New()
-	v.SetDefault("server.port", 80)
+	v.SetDefault("server.port", 8088)
 	v.SetDefault("server.registry_port", 5000)
 	v.SetDefault("server.data_dir", app.DefaultDataDir())
 
