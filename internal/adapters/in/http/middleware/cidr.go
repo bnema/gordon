@@ -80,6 +80,10 @@ func HTTPSRedirect(proxyNets []*net.IPNet, tlsPort int, forceAll bool, log zerow
 			return next
 		}
 		if !forceAll && len(proxyNets) == 0 {
+			log.Info().
+				Str(zerowrap.FieldLayer, "adapter").
+				Str(zerowrap.FieldAdapter, "http").
+				Msg("HTTP→HTTPS redirect disabled: proxy_allowed_ips is empty and force_https_redirect is false; set either to enable redirects")
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

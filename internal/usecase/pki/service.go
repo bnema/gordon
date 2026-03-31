@@ -39,6 +39,8 @@ type Service struct {
 }
 
 // NewService creates a PKI service and starts background maintenance goroutines.
+// It performs an initial intermediate renewal check synchronously so the first
+// TLS handshakes never use a nearly-expired intermediate.
 func NewService(ctx context.Context, ca out.CertificateAuthority, routes out.RouteChecker, log zerowrap.Logger) *Service {
 	ctx, cancel := context.WithCancel(ctx)
 	svc := &Service{
@@ -48,6 +50,7 @@ func NewService(ctx context.Context, ca out.CertificateAuthority, routes out.Rou
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}
+	svc.renewIntermediateIfNeeded()
 	go svc.maintenanceLoop(ctx)
 	return svc
 }
@@ -80,6 +83,10 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	if entry, ok := s.cache.Load(domain); ok {
 		if cached, ok := entry.(*cachedCert); ok {
 			if time.Now().Before(cached.expiresAt) {
+				if !s.isDomainAllowed(hello.Context(), domain) {
+					s.cache.Delete(domain)
+					return nil, nil
+				}
 				return cached.cert, nil
 			}
 		}
@@ -107,9 +114,13 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 			return nil, err
 		}
 
+		expiresAt := time.Now().Add(s.leafLifetime())
+		if cert.Leaf != nil {
+			expiresAt = cert.Leaf.NotAfter
+		}
 		s.cache.Store(domain, &cachedCert{
 			cert:      cert,
-			expiresAt: time.Now().Add(s.leafLifetime()),
+			expiresAt: expiresAt,
 		})
 
 		s.log.Debug().Str("domain", domain).Msg("issued new leaf certificate")

@@ -342,134 +342,179 @@ func initLogger(cfg Config) (zerowrap.Logger, func(), error) {
 	return log, cleanup, nil
 }
 
+// serviceInit holds the shared context for service initialization helpers.
+type serviceInit struct {
+	ctx context.Context
+	v   *viper.Viper
+	cfg Config
+	log zerowrap.Logger
+	svc *services
+}
+
 // createServices creates all the application services.
-func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (*services, error) {
-	svc := &services{}
+func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (_ *services, retErr error) {
+	si := &serviceInit{
+		ctx: ctx,
+		v:   v,
+		cfg: cfg,
+		log: log,
+		svc: &services{},
+	}
+	defer func() {
+		if retErr != nil && si.svc.pkiSvc != nil {
+			si.svc.pkiSvc.Stop()
+		}
+	}()
 	var err error
 
 	// Create output adapters
 	runtimeSocket := resolveRuntimeConfig(v.GetString("server.runtime"))
-	if svc.runtime, svc.eventBus, err = createOutputAdapters(ctx, log, runtimeSocket); err != nil {
+	if si.svc.runtime, si.svc.eventBus, err = createOutputAdapters(ctx, log, runtimeSocket); err != nil {
 		return nil, err
 	}
 
 	// Create storage
-	if svc.blobStorage, svc.manifestStorage, err = createStorage(cfg, log); err != nil {
+	if si.svc.blobStorage, si.svc.manifestStorage, err = createStorage(cfg, log); err != nil {
 		return nil, err
 	}
 
 	// Create log writer
-	if svc.logWriter, err = createLogWriter(cfg, log); err != nil {
+	if si.svc.logWriter, err = createLogWriter(cfg, log); err != nil {
 		return nil, err
 	}
 
 	// Create auth service (if enabled)
-	if svc.tokenStore, svc.authSvc, err = createAuthService(ctx, cfg, log); err != nil {
+	if si.svc.tokenStore, si.svc.authSvc, err = createAuthService(ctx, cfg, log); err != nil {
 		return nil, err
 	}
 
-	if err := setupInternalRegistryAuth(svc, log); err != nil {
+	if err := setupInternalRegistryAuth(si.svc, log); err != nil {
 		return nil, err
 	}
 
-	// Create use case services
-	svc.configSvc = config.NewService(v, svc.eventBus)
-	if err := svc.configSvc.Load(ctx); err != nil {
+	// Create config service
+	si.svc.configSvc = config.NewService(v, si.svc.eventBus)
+	if err := si.svc.configSvc.Load(ctx); err != nil {
 		return nil, log.WrapErr(err, "failed to load configuration")
 	}
 
-	if (cfg.Server.TLSCertFile == "") != (cfg.Server.TLSKeyFile == "") {
-		return nil, fmt.Errorf("both tls_cert_file and tls_key_file must be set, or neither")
+	if err := si.initPKI(); err != nil {
+		return nil, err
 	}
 
-	if cfg.Server.TLSPort != 0 {
-		caAdapter, err := pkiadapter.NewCA(resolveDataDir(cfg.Server.DataDir), log)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to initialize internal CA")
-		}
-		svc.caAdapter = caAdapter
-		svc.pkiSvc = pkiusecase.NewService(ctx, caAdapter, svc.configSvc, log)
-	} else {
-		log.Info().Msg("internal CA disabled (server.tls_port=0)")
+	if err := si.initSecrets(); err != nil {
+		return nil, err
 	}
 
-	var backend domain.SecretsBackend
-	var passStore *domainsecrets.PassStore
-	var domainSecretStore out.DomainSecretStore
+	if err := si.initRuntimeAndProxy(); err != nil {
+		return nil, err
+	}
 
-	svc.envDir, backend, passStore, domainSecretStore, err = createDomainSecretStore(cfg, log)
+	si.initHandlers()
+
+	return si.svc, nil
+}
+
+// initPKI initialises the internal CA and PKI service when TLS is enabled.
+func (si *serviceInit) initPKI() error {
+	if (si.cfg.Server.TLSCertFile == "") != (si.cfg.Server.TLSKeyFile == "") {
+		return fmt.Errorf("both tls_cert_file and tls_key_file must be set, or neither")
+	}
+
+	if si.cfg.Server.TLSPort == 0 {
+		si.log.Info().Msg("internal CA disabled (server.tls_port=0)")
+		return nil
+	}
+
+	caAdapter, err := pkiadapter.NewCA(resolveDataDir(si.cfg.Server.DataDir), si.log)
 	if err != nil {
-		return nil, err
+		return si.log.WrapErr(err, "failed to initialize internal CA")
 	}
+	si.svc.caAdapter = caAdapter
+	si.svc.pkiSvc = pkiusecase.NewService(si.ctx, caAdapter, si.svc.configSvc, si.log)
+	return nil
+}
 
-	if svc.envLoader, err = createEnvLoader(backend, svc.envDir, passStore, log); err != nil {
-		return nil, err
-	}
-
-	svc.secretSvc = secretsSvc.NewService(domainSecretStore, log, svc.eventBus)
-
-	if svc.containerSvc, err = createContainerService(ctx, v, cfg, svc, log); err != nil {
-		return nil, err
-	}
-
-	if svc.backupStorage, svc.backupSvc, err = createBackupService(cfg, svc, log); err != nil {
-		return nil, err
-	}
-
-	svc.registrySvc = registrySvc.NewService(svc.blobStorage, svc.manifestStorage, svc.eventBus)
-	svc.imageSvc = images.NewService(svc.runtime, svc.manifestStorage, svc.blobStorage, log)
-	svc.volumeSvc = volumesSvc.NewService(svc.runtime)
-
-	injectTelemetryMetrics(cfg, svc, log)
-
-	proxyCfg, err := buildProxyConfig(cfg, log)
+// initSecrets creates the domain secret store, env loader, and secret service.
+func (si *serviceInit) initSecrets() error {
+	envDir, backend, passStore, domainSecretStore, err := createDomainSecretStore(si.cfg, si.log)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
-	svc.proxySvc = proxy.NewService(svc.runtime, svc.containerSvc, svc.configSvc, proxyCfg.proxyConfig)
+	si.svc.envDir = envDir
+
+	if si.svc.envLoader, err = createEnvLoader(backend, envDir, passStore, si.log); err != nil {
+		return err
+	}
+
+	si.svc.secretSvc = secretsSvc.NewService(domainSecretStore, si.log, si.svc.eventBus)
+	return nil
+}
+
+// initRuntimeAndProxy creates container, backup, registry, image, volume, and proxy services.
+func (si *serviceInit) initRuntimeAndProxy() error {
+	var err error
+
+	if si.svc.containerSvc, err = createContainerService(si.ctx, si.v, si.cfg, si.svc, si.log); err != nil {
+		return err
+	}
+
+	if si.svc.backupStorage, si.svc.backupSvc, err = createBackupService(si.cfg, si.svc, si.log); err != nil {
+		return err
+	}
+
+	si.svc.registrySvc = registrySvc.NewService(si.svc.blobStorage, si.svc.manifestStorage, si.svc.eventBus)
+	si.svc.imageSvc = images.NewService(si.svc.runtime, si.svc.manifestStorage, si.svc.blobStorage, si.log)
+	si.svc.volumeSvc = volumesSvc.NewService(si.svc.runtime)
+
+	injectTelemetryMetrics(si.cfg, si.svc, si.log)
+
+	proxyCfg, err := buildProxyConfig(si.cfg, si.log)
+	if err != nil {
+		return err
+	}
+	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
+	si.svc.proxySvc = proxy.NewService(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
 	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
-	svc.containerSvc.SetProxyCacheInvalidator(svc.proxySvc)
-	svc.containerSvc.SetProxyDrainWaiter(svc.proxySvc)
+	si.svc.containerSvc.SetProxyCacheInvalidator(si.svc.proxySvc)
+	si.svc.containerSvc.SetProxyDrainWaiter(si.svc.proxySvc)
+	return nil
+}
 
-	// Create token handler for registry token endpoint
-	if svc.authSvc != nil {
+// initHandlers creates the auth, health, log, preview, and admin handlers.
+func (si *serviceInit) initHandlers() {
+	if si.svc.authSvc != nil {
 		internalAuth := authhandler.InternalAuth{
-			Username: svc.internalRegUser,
-			Password: svc.internalRegPass,
+			Username: si.svc.internalRegUser,
+			Password: si.svc.internalRegPass,
 		}
-		svc.authHandler = authhandler.NewHandler(svc.authSvc, internalAuth, log)
+		si.svc.authHandler = authhandler.NewHandler(si.svc.authSvc, internalAuth, si.log)
 	}
 
-	// Create health service for route health checking
 	prober := httpprober.New()
-	svc.healthSvc = health.NewService(svc.configSvc, svc.containerSvc, prober, log)
+	si.svc.healthSvc = health.NewService(si.svc.configSvc, si.svc.containerSvc, prober, si.log)
 
-	// Create log service for accessing logs via admin API
-	svc.logSvc = logs.NewService(resolveLogFilePath(cfg), cfg.Logging.File.Enabled, svc.containerSvc, svc.runtime, log)
+	si.svc.logSvc = logs.NewService(resolveLogFilePath(si.cfg), si.cfg.Logging.File.Enabled, si.svc.containerSvc, si.svc.runtime, si.log)
 
-	initPreviewService(ctx, cfg, svc, log)
+	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
 
-	// Create admin handler for admin API
-	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
-		ConfigSvc:    svc.configSvc,
-		AuthSvc:      svc.authSvc,
-		ContainerSvc: svc.containerSvc,
-		HealthSvc:    svc.healthSvc,
-		SecretSvc:    svc.secretSvc,
-		LogSvc:       svc.logSvc,
-		RegistrySvc:  svc.registrySvc,
-		EventBus:     svc.eventBus,
-		Log:          log,
-		BackupSvc:    svc.backupSvc,
-		PreviewSvc:   svc.previewService,
-		ImageSvc:     svc.imageSvc,
-		VolumeSvc:    svc.volumeSvc,
+	si.svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
+		ConfigSvc:    si.svc.configSvc,
+		AuthSvc:      si.svc.authSvc,
+		ContainerSvc: si.svc.containerSvc,
+		HealthSvc:    si.svc.healthSvc,
+		SecretSvc:    si.svc.secretSvc,
+		LogSvc:       si.svc.logSvc,
+		RegistrySvc:  si.svc.registrySvc,
+		EventBus:     si.svc.eventBus,
+		Log:          si.log,
+		BackupSvc:    si.svc.backupSvc,
+		PreviewSvc:   si.svc.previewService,
+		ImageSvc:     si.svc.imageSvc,
+		VolumeSvc:    si.svc.volumeSvc,
 	})
-
-	return svc, nil
 }
 
 // initPreviewService sets up the preview store, service, and TTL ticker.
@@ -1615,12 +1660,13 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	// Onboarding routes live on the TLS port so Tailnet / direct clients
 	// can click through the initial cert warning, install the CA, and
 	// then trust all subsequent connections.
+	// The middleware chain wraps the entire mux so onboarding routes also
+	// get PanicRecovery, RequestLogger, and SecurityHeaders.
 	httpsProxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
 	}
-	httpsProxyWithMiddleware := middleware.Chain(httpsProxyMiddlewares...)(proxyHandler)
 
 	httpsMux := http.NewServeMux()
 	if svc.caAdapter != nil {
@@ -1637,9 +1683,9 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		httpsMux.HandleFunc("GET /ca.crt", onboardingHandler.ServeCACert)
 		httpsMux.HandleFunc("GET /ca.mobileconfig", onboardingHandler.ServeMobileconfig)
 	}
-	httpsMux.Handle("/", httpsProxyWithMiddleware)
+	httpsMux.Handle("/", proxyHandler)
 
-	httpsHandler := otelhttp.NewHandler(httpsMux, "gordon.proxy.tls")
+	httpsHandler := otelhttp.NewHandler(middleware.Chain(httpsProxyMiddlewares...)(httpsMux), "gordon.proxy.tls")
 
 	return registryMux, proxyMux, httpsHandler
 }
@@ -1896,21 +1942,37 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	registryAddr := net.JoinHostPort(cfg.Server.RegistryListenAddr, strconv.Itoa(cfg.Server.RegistryPort))
 	registrySrv, registryReady := startServer(registryAddr, registryHandler, "registry", nil, errChan, log)
 
+	// closeStarted shuts down any servers that were started before an error occurred,
+	// preventing leaked listeners during partial startup failures.
+	closeStarted := func(servers ...*http.Server) {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		for _, srv := range servers {
+			if srv != nil {
+				srv.Shutdown(shutdownCtx)
+			}
+		}
+	}
+
 	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, errChan, log)
 	if err != nil {
+		closeStarted(registrySrv)
 		return err
 	}
 
 	// Wait for all servers to bind their ports before auto-starting containers.
 	// This prevents the race where auto-start pulls from the registry before it's listening.
 	if err := waitForServerReady(registryReady, errChan); err != nil {
+		closeStarted(registrySrv, proxySrv, tlsSrv)
 		return err
 	}
 	if err := waitForServerReady(proxyReady, errChan); err != nil {
+		closeStarted(registrySrv, proxySrv, tlsSrv)
 		return err
 	}
 	if tlsReady != nil {
 		if err := waitForServerReady(tlsReady, errChan); err != nil {
+			closeStarted(registrySrv, proxySrv, tlsSrv)
 			return err
 		}
 	}

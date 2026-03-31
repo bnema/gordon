@@ -94,5 +94,5 @@ func TestService_GetCertificate_Caching(t *testing.T) {
 	require.NoError(t, err)
 
 	// Same pointer = served from cache
-	assert.Equal(t, cert1, cert2, "second call should return cached cert")
+	assert.Same(t, cert1, cert2, "second call should return cached cert")
 }

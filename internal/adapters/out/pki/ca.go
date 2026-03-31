@@ -234,7 +234,11 @@ func (ca *CA) loadOrGenerateIntermediate() error {
 	certPEM, certErr := os.ReadFile(certPath)
 	keyPEM, keyErr := os.ReadFile(keyPath)
 
-	if certErr == nil && keyErr == nil {
+	certMissing := certErr != nil && errors.Is(certErr, os.ErrNotExist)
+	keyMissing := keyErr != nil && errors.Is(keyErr, os.ErrNotExist)
+
+	switch {
+	case certErr == nil && keyErr == nil:
 		cert, key, err := parseCertAndKey(certPEM, keyPEM)
 		if err != nil {
 			ca.log.Warn().Err(err).Msg("failed to parse intermediate CA, regenerating")
@@ -253,13 +257,22 @@ func (ca *CA) loadOrGenerateIntermediate() error {
 		} else {
 			ca.log.Warn().Msg("intermediate CA expired, regenerating")
 		}
-	}
 
-	if (certErr == nil) != (keyErr == nil) {
+	case certMissing && keyMissing:
+		// Both files absent — generate fresh intermediate below.
+
+	case certMissing || keyMissing:
 		ca.log.Warn().
-			Bool("cert_missing", certErr != nil).
-			Bool("key_missing", keyErr != nil).
+			Bool("cert_missing", certMissing).
+			Bool("key_missing", keyMissing).
 			Msg("intermediate CA files incomplete, regenerating")
+
+	default:
+		// At least one ReadFile returned a non-NotExist error (e.g. EPERM, EIO).
+		if certErr != nil {
+			return fmt.Errorf("read intermediate cert: %w", certErr)
+		}
+		return fmt.Errorf("read intermediate key: %w", keyErr)
 	}
 
 	cert, key, err := ca.generateIntermediate()

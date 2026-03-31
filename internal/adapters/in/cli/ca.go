@@ -99,6 +99,9 @@ func resolveCADataDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if local.GetTLSPort() == 0 {
+		return "", fmt.Errorf("internal TLS is disabled (server.tls_port=0); CA commands are not available — set server.tls_port to enable")
+	}
 	return local.GetDataDir(), nil
 }
 

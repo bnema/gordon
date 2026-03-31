@@ -24,6 +24,7 @@ type LocalServices struct {
 	configSvc in.ConfigService
 	secretSvc in.SecretService
 	dataDir   string
+	tlsPort   int
 }
 
 // GetConfigService returns the config service.
@@ -39,6 +40,11 @@ func (l *LocalServices) GetSecretService() in.SecretService {
 // GetDataDir returns the data directory.
 func (l *LocalServices) GetDataDir() string {
 	return l.dataDir
+}
+
+// GetTLSPort returns the configured TLS port (0 means internal TLS is disabled).
+func (l *LocalServices) GetTLSPort() int {
+	return l.tlsPort
 }
 
 // GetLocalServices creates local services for CLI operations.
@@ -96,6 +102,7 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 		configSvc: configSvc,
 		secretSvc: secretSvc,
 		dataDir:   dataDir,
+		tlsPort:   v.GetInt("server.tls_port"),
 	}, nil
 }
 
