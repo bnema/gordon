@@ -9,6 +9,9 @@ Core server settings for Gordon.
 port = 8088                              # HTTP proxy port
 registry_port = 5000                     # Container registry port
 tls_port = 8443                          # HTTPS listener port (0 = disabled)
+# tls_cert_file = ""                       # Optional: PEM certificate for static TLS
+# tls_key_file = ""                        # Optional: PEM key for static TLS
+# force_https_redirect = false             # Redirect all HTTP traffic to HTTPS
 gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 # data_dir = "~/.gordon"                 # Data storage directory (default)
 ```
@@ -20,6 +23,9 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 | `port` | int | `8088` | HTTP proxy port for routing traffic to containers |
 | `registry_port` | int | `5000` | Docker registry port for image push/pull |
 | `tls_port` | int | `8443` | HTTPS listener port with internal CA. Set to `0` to disable TLS entirely |
+| `tls_cert_file` | string | `""` | Path to PEM certificate file. When set (with `tls_key_file`), this cert is served for matching SNI domains; unmatched domains fall through to the internal CA |
+| `tls_key_file` | string | `""` | Path to PEM private key file. Must be set together with `tls_cert_file` |
+| `force_https_redirect` | bool | `false` | Redirect all HTTP requests to the HTTPS port. For direct-access setups without a TLS-terminating proxy |
 | `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
 | `registry_domain` | string | - | Deprecated alias for `gordon_domain` |
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
@@ -60,12 +66,35 @@ With TLS enabled:
 - Gordon runs an internal CA (root + intermediate) stored in `{data_dir}/pki/`
 - Leaf certificates are issued on-demand per domain (SNI-based) and cached in memory
 - The intermediate CA auto-renews before expiry
-- An onboarding page at `http://{host}/ca` lets clients download the root CA certificate
+- An onboarding page at `https://<gordon-host>:<tls_port>/ca` lets clients download the root CA certificate
 - The root CA is stable across restarts (generated once, persisted to disk)
+
+#### Custom certificates
+
+To use your own certificate (e.g. from Tailscale, Let's Encrypt, or a corporate CA) alongside the internal CA:
+
+```toml
+[server]
+tls_cert_file = "/etc/gordon/tls/cert.pem"
+tls_key_file = "/etc/gordon/tls/key.pem"
+```
+
+The static certificate is served for SNI-matching domains (including wildcards). All other domains get on-demand certs from the internal CA.
+
+#### HTTP to HTTPS redirect
+
+When clients connect directly (no Cloudflare or reverse proxy in front), enable `force_https_redirect` to redirect all HTTP traffic to the HTTPS port:
+
+```toml
+[server]
+force_https_redirect = true
+```
+
+When `proxy_allowed_ips` is configured, non-proxy clients are redirected automatically even without this flag — trusted proxy IPs pass through to serve Cloudflare-proxied traffic.
 
 #### Disabling TLS
 
-For setups where TLS is handled externally (Tailscale, Cloudflare, etc.):
+For setups where TLS is handled entirely by an external proxy (Cloudflare, nginx, etc.):
 
 ```toml
 [server]

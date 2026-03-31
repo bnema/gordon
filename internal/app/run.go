@@ -89,6 +89,9 @@ type Config struct {
 		GordonDomain         string   `mapstructure:"gordon_domain"`
 		RegistryDomain       string   `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
 		TLSPort              int      `mapstructure:"tls_port"`
+		TLSCertFile          string   `mapstructure:"tls_cert_file"`
+		TLSKeyFile           string   `mapstructure:"tls_key_file"`
+		ForceHTTPSRedirect   bool     `mapstructure:"force_https_redirect"`
 		DataDir              string   `mapstructure:"data_dir"`
 		MaxProxyBodySize     string   `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
 		MaxBlobChunkSize     string   `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
@@ -248,7 +251,7 @@ func Run(ctx context.Context, configPath string) error {
 	log.Info().Msg("Gordon starting")
 
 	// Deprecation warnings for removed TLS config fields
-	for _, key := range []string{"server.tls_enabled", "server.tls_cert_file", "server.tls_key_file", "server.force_hsts"} {
+	for _, key := range []string{"server.tls_enabled", "server.force_hsts"} {
 		if v.IsSet(key) {
 			log.Warn().Str("key", key).Msg("deprecated config key — Gordon now uses an internal CA with automatic TLS; remove this from your config")
 		}
@@ -373,6 +376,10 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 	svc.configSvc = config.NewService(v, svc.eventBus)
 	if err := svc.configSvc.Load(ctx); err != nil {
 		return nil, log.WrapErr(err, "failed to load configuration")
+	}
+
+	if (cfg.Server.TLSCertFile == "") != (cfg.Server.TLSKeyFile == "") {
+		return nil, fmt.Errorf("both tls_cert_file and tls_key_file must be set, or neither")
 	}
 
 	if cfg.Server.TLSPort != 0 {
@@ -1582,13 +1589,14 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	// Proxy handler
 	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, log)
 
-	// HTTP proxy handler chain: CIDR + onboarding routes + proxy
-	_, proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
+	// HTTP proxy handler chain: HTTPS redirect for non-proxy clients, then CIDR allowlist
+	proxyAllowedNets, proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
 
 	httpProxyMiddlewares := []func(http.Handler) http.Handler{
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
+		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log),
 	}
 	if proxyCIDRMiddleware != nil {
 		httpProxyMiddlewares = append(httpProxyMiddlewares, proxyCIDRMiddleware)
@@ -2193,11 +2201,23 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 		return httpSrv, httpReady, nil, nil, nil
 	}
 
-	// HTTPS listener (on-demand TLS via internal CA)
+	// HTTPS listener — static cert (if provided) takes priority by SNI match,
+	// unmatched domains fall through to on-demand internal CA certs.
 	tlsConfig := &tls.Config{
 		MinVersion:     tls.VersionTLS12,
 		GetCertificate: pkiSvc.GetCertificate,
 		NextProtos:     []string{"h2", "http/1.1"},
+	}
+	if cfg.Server.TLSCertFile != "" {
+		staticCert, err := tls.LoadX509KeyPair(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
+		if err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("load TLS keypair: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{staticCert}
+		log.Info().
+			Str("cert", cfg.Server.TLSCertFile).
+			Str("key", cfg.Server.TLSKeyFile).
+			Msg("loaded static TLS certificate (internal CA handles remaining domains)")
 	}
 	tlsSrv, tlsReady := startTLSServerWithConfig(
 		fmt.Sprintf(":%d", cfg.Server.TLSPort),
@@ -2535,6 +2555,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.port", 8088)
 	v.SetDefault("server.registry_port", 5000)
 	v.SetDefault("server.tls_port", 8443)
+	v.SetDefault("server.tls_cert_file", "")
+	v.SetDefault("server.tls_key_file", "")
+	v.SetDefault("server.force_https_redirect", false)
 	v.SetDefault("server.data_dir", DefaultDataDir())
 	v.SetDefault("server.runtime", "auto")
 	v.SetDefault("logging.level", "info")

@@ -12,6 +12,9 @@ Complete configuration reference with all options and their default values.
 port = 8088                                  # HTTP proxy port
 registry_port = 5000                         # Container registry port
 tls_port = 8443                              # HTTPS proxy port (0 = disabled, no internal CA)
+tls_cert_file = ""                           # PEM cert path (optional, for static TLS alongside internal CA)
+tls_key_file = ""                            # PEM key path (optional, must be set with tls_cert_file)
+force_https_redirect = false                 # Redirect all HTTP traffic to HTTPS (for direct-access setups)
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
 max_blob_chunk_size = "512MB"                # Max size per registry blob upload chunk
@@ -169,6 +172,9 @@ keep_last = 3                                # Keep N newest tags per repository
 | `server.port` | `8088` | HTTP proxy port |
 | `server.registry_port` | `5000` | Container registry port |
 | `server.tls_port` | `8443` | HTTPS listener port (0 = disabled) |
+| `server.tls_cert_file` | `""` | PEM cert path for static TLS (optional) |
+| `server.tls_key_file` | `""` | PEM key path for static TLS (optional) |
+| `server.force_https_redirect` | `false` | Redirect all HTTP to HTTPS (for direct-access setups) |
 | `server.gordon_domain` | `""` | **Required** - Gordon domain |
 | `server.data_dir` | `~/.gordon` | Data directory |
 | `server.max_blob_chunk_size` | `"512MB"` | Max size per registry blob upload chunk |

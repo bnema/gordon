@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 
@@ -55,6 +56,47 @@ func RegistryCIDRAllowlist(allowedNets, trustedNets []*net.IPNet, log zerowrap.L
 	return cidrAllowlist(allowedNets, func(r *http.Request) string {
 		return GetClientIP(r, trustedNets)
 	}, "registry", log)
+}
+
+// HTTPSRedirect redirects HTTP clients to the HTTPS port.
+//
+// When forceAll is true, all HTTP requests are redirected (for setups with no proxy).
+// Otherwise, only non-trusted clients are redirected — trusted proxy IPs and localhost
+// pass through since they deliver Cloudflare-proxied traffic.
+// When tlsPort is 0, this is always a no-op.
+func HTTPSRedirect(proxyNets []*net.IPNet, tlsPort int, forceAll bool, log zerowrap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if tlsPort == 0 {
+			return next
+		}
+		if !forceAll && len(proxyNets) == 0 {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !forceAll {
+				remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+				if err != nil {
+					remoteIP = r.RemoteAddr
+				}
+				if IsTrustedProxy(remoteIP, localhostNets) || IsTrustedProxy(remoteIP, proxyNets) {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			host := r.Host
+			if h, _, err := net.SplitHostPort(host); err == nil {
+				host = h
+			}
+			target := fmt.Sprintf("https://%s:%d%s", host, tlsPort, r.RequestURI)
+
+			log.Debug().
+				Str("target", target).
+				Msg("redirecting HTTP client to HTTPS")
+
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+		})
+	}
 }
 
 // ProxyCIDRAllowlist returns middleware that restricts proxy access to the given CIDR ranges.

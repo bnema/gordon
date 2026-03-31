@@ -323,10 +323,30 @@ func (ca *CA) storeIntermediate(cert *x509.Certificate, key *ecdsa.PrivateKey) e
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
-	if err := writeSecure(certPath, certPEM, 0644); err != nil {
+	// Write both files to temps first, then atomically rename together
+	// so a crash between writes cannot leave a dangling cert without its key.
+	certTmp := certPath + ".tmp"
+	keyTmp := keyPath + ".tmp"
+
+	if err := writeSecure(certTmp, certPEM, 0644); err != nil {
 		return err
 	}
-	return writeSecure(keyPath, keyPEM, 0600)
+	if err := writeSecure(keyTmp, keyPEM, 0600); err != nil {
+		os.Remove(certTmp)
+		return err
+	}
+
+	if err := os.Rename(certTmp, certPath); err != nil {
+		os.Remove(certTmp)
+		os.Remove(keyTmp)
+		return fmt.Errorf("rename intermediate cert: %w", err)
+	}
+	if err := os.Rename(keyTmp, keyPath); err != nil {
+		os.Remove(keyTmp)
+		return fmt.Errorf("rename intermediate key: %w", err)
+	}
+
+	return nil
 }
 
 // IssueCertificate generates a leaf cert for the given domain,
