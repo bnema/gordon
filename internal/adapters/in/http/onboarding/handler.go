@@ -5,8 +5,7 @@ import (
 	"html"
 	"net"
 	"net/http"
-
-	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
+	"strings"
 )
 
 // Handler serves CA onboarding endpoints on the TLS port for direct/Tailnet clients.
@@ -18,10 +17,10 @@ type Handler struct {
 
 // NewHandler creates an onboarding handler.
 // tlsPort is the HTTPS port used to build redirect URLs on the onboarding page.
-func NewHandler(rootPEM, rootDER []byte, rootCN string, tlsPort int) *Handler {
+func NewHandler(rootPEM, mobileconfig []byte, tlsPort int) *Handler {
 	return &Handler{
 		rootPEM:      rootPEM,
-		mobileconfig: pkiadapter.GenerateMobileconfig(rootDER, rootCN),
+		mobileconfig: mobileconfig,
 		tlsPort:      tlsPort,
 	}
 }
@@ -51,15 +50,22 @@ func (h *Handler) normalizeHTTPSURL(r *http.Request) string {
 	if h.tlsPort != 0 && h.tlsPort != 443 {
 		hostname = fmt.Sprintf("%s:%d", hostname, h.tlsPort)
 	}
-	return html.EscapeString(fmt.Sprintf("https://%s/", hostname))
+	u := fmt.Sprintf("https://%s/", hostname)
+	if !strings.HasPrefix(u, "https://") {
+		return "https://localhost/"
+	}
+	return html.EscapeString(u)
 }
 
 // ServeOnboardingPage serves the CA trust onboarding HTML page.
+// Static onboarding page -- kept inline for simplicity.
 func (h *Handler) ServeOnboardingPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	redirectURL := h.normalizeHTTPSURL(r)
 
+	// Cookie is set client-side on click (not on page load) to mark CA installation complete.
+	// HttpOnly cannot be applied to JS-set cookies -- acceptable since this is a UI hint, not a session token.
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html lang="en">
 <head>

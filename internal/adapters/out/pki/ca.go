@@ -42,22 +42,20 @@ const (
 type CA struct {
 	dataDir string
 	log     zerowrap.Logger
-	aiaURL  string // optional: URL for AIA extension in leaf certs
 
 	rootCert *x509.Certificate
 	rootKey  crypto.Signer
 	rootPEM  []byte
 
+	// mu guards interCert/interKey for concurrent reads during cert issuance.
+	// renewMu serialises intermediate CA renewal.
+	// Lock ordering: renewMu → mu (never acquire mu before renewMu).
 	mu        sync.RWMutex
 	interCert *x509.Certificate
 	interKey  crypto.Signer
 
-	renewMu sync.Mutex // serialises intermediate renewal
+	renewMu sync.Mutex
 }
-
-// SetAIAURL sets the Authority Information Access URL embedded in leaf certs.
-// Format: http://{gordon_domain}[:{port}]/ca.crt
-func (ca *CA) SetAIAURL(url string) { ca.aiaURL = url }
 
 // NewCA loads or generates the root and intermediate CA certificates.
 func NewCA(dataDir string, log zerowrap.Logger) (*CA, error) {
@@ -214,10 +212,11 @@ func (ca *CA) bootstrapRoot(certPath, keyPath string) error {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
-	if err := writeSecure(certPath, certPEM, 0644); err != nil {
+	// Write key first — orphaned key is harmless; missing cert triggers regeneration.
+	if err := writeSecure(keyPath, keyPEM, 0600); err != nil {
 		return err
 	}
-	if err := writeSecure(keyPath, keyPEM, 0600); err != nil {
+	if err := writeSecure(certPath, certPEM, 0644); err != nil {
 		return err
 	}
 
@@ -254,6 +253,13 @@ func (ca *CA) loadOrGenerateIntermediate() error {
 		} else {
 			ca.log.Warn().Msg("intermediate CA expired, regenerating")
 		}
+	}
+
+	if (certErr == nil) != (keyErr == nil) {
+		ca.log.Warn().
+			Bool("cert_missing", certErr != nil).
+			Bool("key_missing", keyErr != nil).
+			Msg("intermediate CA files incomplete, regenerating")
 	}
 
 	cert, key, err := ca.generateIntermediate()
@@ -323,30 +329,13 @@ func (ca *CA) storeIntermediate(cert *x509.Certificate, key *ecdsa.PrivateKey) e
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
-	// Write both files to temps first, then atomically rename together
-	// so a crash between writes cannot leave a dangling cert without its key.
-	certTmp := certPath + ".tmp"
-	keyTmp := keyPath + ".tmp"
-
-	if err := writeSecure(certTmp, certPEM, 0644); err != nil {
+	// Write key first — if cert write fails afterward, the orphaned key
+	// is harmless: loadOrGenerateIntermediate requires both files and
+	// regenerates when either is missing.
+	if err := writeSecure(keyPath, keyPEM, 0600); err != nil {
 		return err
 	}
-	if err := writeSecure(keyTmp, keyPEM, 0600); err != nil {
-		os.Remove(certTmp)
-		return err
-	}
-
-	if err := os.Rename(certTmp, certPath); err != nil {
-		os.Remove(certTmp)
-		os.Remove(keyTmp)
-		return fmt.Errorf("rename intermediate cert: %w", err)
-	}
-	if err := os.Rename(keyTmp, keyPath); err != nil {
-		os.Remove(keyTmp)
-		return fmt.Errorf("rename intermediate key: %w", err)
-	}
-
-	return nil
+	return writeSecure(certPath, certPEM, 0644)
 }
 
 // IssueCertificate generates a leaf cert for the given domain,
@@ -372,6 +361,11 @@ func (ca *CA) IssueCertificate(domain string) (*tls.Certificate, error) {
 	}
 
 	now := time.Now()
+	expiry := now.Add(leafLifetime)
+	if expiry.After(interCert.NotAfter) {
+		expiry = interCert.NotAfter.Add(-1 * time.Minute)
+	}
+
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
@@ -379,13 +373,9 @@ func (ca *CA) IssueCertificate(domain string) (*tls.Certificate, error) {
 		},
 		DNSNames:    []string{domain},
 		NotBefore:   now.Add(-5 * time.Minute),
-		NotAfter:    now.Add(leafLifetime),
+		NotAfter:    expiry,
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-
-	if ca.aiaURL != "" {
-		template.IssuingCertificateURL = []string{ca.aiaURL}
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, interCert, key.Public(), interKey)
@@ -447,7 +437,7 @@ func parseCertAndKey(certPEM, keyPEM []byte) (*x509.Certificate, crypto.Signer, 
 	}
 	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse key: %w", err)
+		return nil, nil, fmt.Errorf("parse private key (only ECDSA P-256 is supported): %w", err)
 	}
 
 	return cert, key, nil

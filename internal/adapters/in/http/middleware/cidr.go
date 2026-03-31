@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/bnema/zerowrap"
 
@@ -49,6 +50,15 @@ func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) str
 	}
 }
 
+// extractRemoteIP returns the IP portion of r.RemoteAddr, stripping the port.
+func extractRemoteIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
+}
+
 // RegistryCIDRAllowlist returns middleware that restricts access to the given CIDR ranges.
 // Localhost is always allowed so Gordon can pull from its own registry.
 // An empty allowedNets slice is a no-op (all traffic passes through).
@@ -74,10 +84,7 @@ func HTTPSRedirect(proxyNets []*net.IPNet, tlsPort int, forceAll bool, log zerow
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !forceAll {
-				remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-				if err != nil {
-					remoteIP = r.RemoteAddr
-				}
+				remoteIP := extractRemoteIP(r.RemoteAddr)
 				if IsTrustedProxy(remoteIP, localhostNets) || IsTrustedProxy(remoteIP, proxyNets) {
 					next.ServeHTTP(w, r)
 					return
@@ -88,13 +95,17 @@ func HTTPSRedirect(proxyNets []*net.IPNet, tlsPort int, forceAll bool, log zerow
 			if h, _, err := net.SplitHostPort(host); err == nil {
 				host = h
 			}
-			target := fmt.Sprintf("https://%s:%d%s", host, tlsPort, r.RequestURI)
+			path := r.RequestURI
+			if !strings.HasPrefix(path, "/") {
+				path = "/"
+			}
+			target := fmt.Sprintf("https://%s:%d%s", host, tlsPort, path)
 
 			log.Debug().
 				Str("target", target).
 				Msg("redirecting HTTP client to HTTPS")
 
-			http.Redirect(w, r, target, http.StatusMovedPermanently)
+			http.Redirect(w, r, target, http.StatusPermanentRedirect)
 		})
 	}
 }
@@ -105,10 +116,6 @@ func HTTPSRedirect(proxyNets []*net.IPNet, tlsPort int, forceAll bool, log zerow
 // An empty allowedNets slice is a no-op (all traffic passes through).
 func ProxyCIDRAllowlist(allowedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return cidrAllowlist(allowedNets, func(r *http.Request) string {
-		remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			return r.RemoteAddr
-		}
-		return remoteIP
+		return extractRemoteIP(r.RemoteAddr)
 	}, "proxy origin", log)
 }

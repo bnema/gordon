@@ -3,11 +3,11 @@ package pki
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 )
@@ -33,6 +33,7 @@ type Service struct {
 	log    zerowrap.Logger
 
 	cache  sync.Map // map[string]*cachedCert
+	flight singleflight.Group
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -68,10 +69,12 @@ func (s *Service) CachedCertCount() int {
 }
 
 // GetCertificate is the tls.Config.GetCertificate callback.
+// It returns (nil, nil) for unknown domains so Go's TLS stack
+// falls back to tls.Config.Certificates.
 func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	domain := hello.ServerName
 	if domain == "" {
-		return nil, fmt.Errorf("no SNI in ClientHello")
+		return nil, nil
 	}
 
 	if entry, ok := s.cache.Load(domain); ok {
@@ -84,22 +87,38 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	}
 
 	if !s.isDomainAllowed(hello.Context(), domain) {
-		return nil, fmt.Errorf("domain %q not in route table", domain)
+		return nil, nil
 	}
 
-	cert, err := s.ca.IssueCertificate(domain)
+	result, err, _ := s.flight.Do(domain, func() (any, error) {
+		// Re-check cache; another goroutine in the same flight may have populated it.
+		if entry, ok := s.cache.Load(domain); ok {
+			if cached, ok := entry.(*cachedCert); ok {
+				if time.Now().Before(cached.expiresAt) {
+					return cached.cert, nil
+				}
+			}
+			s.cache.Delete(domain)
+		}
+
+		cert, err := s.ca.IssueCertificate(domain)
+		if err != nil {
+			s.log.Error().Err(err).Str("domain", domain).Msg("failed to issue leaf cert")
+			return nil, err
+		}
+
+		s.cache.Store(domain, &cachedCert{
+			cert:      cert,
+			expiresAt: time.Now().Add(s.leafLifetime()),
+		})
+
+		s.log.Debug().Str("domain", domain).Msg("issued new leaf certificate")
+		return cert, nil
+	})
 	if err != nil {
-		s.log.Error().Err(err).Str("domain", domain).Msg("failed to issue leaf cert")
 		return nil, err
 	}
-
-	s.cache.Store(domain, &cachedCert{
-		cert:      cert,
-		expiresAt: time.Now().Add(s.leafLifetime()),
-	})
-
-	s.log.Debug().Str("domain", domain).Msg("issued new leaf certificate")
-	return cert, nil
+	return result.(*tls.Certificate), nil
 }
 
 func (s *Service) isDomainAllowed(ctx context.Context, domain string) bool {
@@ -129,7 +148,7 @@ func (s *Service) maintenanceLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.renewIntermediateIfNeeded()
-			s.sweepExpiredCerts()
+			s.sweepExpiredCerts(ctx)
 		}
 	}
 }
@@ -147,14 +166,27 @@ func (s *Service) renewIntermediateIfNeeded() {
 	}
 }
 
-func (s *Service) sweepExpiredCerts() {
+func (s *Service) sweepExpiredCerts(ctx context.Context) {
 	now := time.Now()
-	ctx := context.Background()
+
+	// Fetch routes once for all cache entries.
+	routes := s.routes.GetRoutes(ctx)
+	extRoutes := s.routes.GetExternalRoutes()
+
+	allowed := make(map[string]struct{}, len(routes)+len(extRoutes))
+	for _, r := range routes {
+		allowed[r.Domain] = struct{}{}
+	}
+	for d := range extRoutes {
+		allowed[d] = struct{}{}
+	}
+
 	swept := 0
 	s.cache.Range(func(key, value any) bool {
 		domain := key.(string)
 		cached := value.(*cachedCert)
-		if now.After(cached.expiresAt) || !s.isDomainAllowed(ctx, domain) {
+		_, ok := allowed[domain]
+		if now.After(cached.expiresAt) || !ok {
 			s.cache.Delete(key)
 			swept++
 		}

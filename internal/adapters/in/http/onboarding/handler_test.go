@@ -12,8 +12,8 @@ import (
 
 func TestHandler_CACert(t *testing.T) {
 	rootPEM := []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
-	rootDER := []byte("fakeDER")
-	h := onboarding.NewHandler(rootPEM, rootDER, "Gordon Test CA", 443)
+	mobileconfig := []byte("<plist>com.apple.security.root</plist>")
+	h := onboarding.NewHandler(rootPEM, mobileconfig, 443)
 
 	req := httptest.NewRequest("GET", "/ca.crt", nil)
 	w := httptest.NewRecorder()
@@ -26,8 +26,8 @@ func TestHandler_CACert(t *testing.T) {
 
 func TestHandler_Mobileconfig(t *testing.T) {
 	rootPEM := []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
-	rootDER := []byte("fakeDER")
-	h := onboarding.NewHandler(rootPEM, rootDER, "Gordon Test CA", 443)
+	mobileconfig := []byte("<plist>com.apple.security.root</plist>")
+	h := onboarding.NewHandler(rootPEM, mobileconfig, 443)
 
 	req := httptest.NewRequest("GET", "/ca.mobileconfig", nil)
 	w := httptest.NewRecorder()
@@ -40,8 +40,8 @@ func TestHandler_Mobileconfig(t *testing.T) {
 
 func TestHandler_OnboardingPage(t *testing.T) {
 	rootPEM := []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
-	rootDER := []byte("fakeDER")
-	h := onboarding.NewHandler(rootPEM, rootDER, "Gordon Test CA", 443)
+	mobileconfig := []byte("<plist>com.apple.security.root</plist>")
+	h := onboarding.NewHandler(rootPEM, mobileconfig, 443)
 
 	req := httptest.NewRequest("GET", "/ca", nil)
 	w := httptest.NewRecorder()

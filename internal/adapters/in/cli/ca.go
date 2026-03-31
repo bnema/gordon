@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/bnema/zerowrap"
 	"github.com/spf13/cobra"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
@@ -103,9 +102,11 @@ func resolveCADataDir() (string, error) {
 	return local.GetDataDir(), nil
 }
 
+// loadCAFromDataDir creates a CA adapter directly (bypassing the usecase layer).
+// This is intentional: CLI commands like 'ca export' and 'ca info' are standalone
+// admin utilities that run outside the server lifecycle and don't need business logic.
 func loadCAFromDataDir(dataDir string) (*pkiadapter.CA, error) {
-	log := zerowrap.Default()
-	ca, err := pkiadapter.NewCA(dataDir, log)
+	ca, err := pkiadapter.NewCA(dataDir, cliLogger())
 	if err != nil {
 		return nil, fmt.Errorf("failed to load CA from %s: %w", dataDir, err)
 	}

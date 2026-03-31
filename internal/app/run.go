@@ -1624,10 +1624,13 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 
 	httpsMux := http.NewServeMux()
 	if svc.caAdapter != nil {
-		onboardingHandler := onboarding.NewHandler(
-			svc.caAdapter.RootCertificate(),
+		mobileconfigBytes := pkiadapter.GenerateMobileconfig(
 			svc.caAdapter.RootCertificateDER(),
 			svc.caAdapter.RootCommonName(),
+		)
+		onboardingHandler := onboarding.NewHandler(
+			svc.caAdapter.RootCertificate(),
+			mobileconfigBytes,
 			cfg.Server.TLSPort,
 		)
 		httpsMux.HandleFunc("GET /ca", onboardingHandler.ServeOnboardingPage)

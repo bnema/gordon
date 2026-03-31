@@ -67,7 +67,7 @@ func TestService_GetCertificate_UnknownDomain(t *testing.T) {
 
 	hello := &tls.ClientHelloInfo{ServerName: "unknown.example.com"}
 	cert, err := svc.GetCertificate(hello)
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	assert.Nil(t, cert)
 }
 
