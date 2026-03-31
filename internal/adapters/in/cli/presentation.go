@@ -19,14 +19,16 @@ var cliWritef = func(w io.Writer, format string, args ...any) error {
 	return err
 }
 
-// cliLogger returns a quiet logger for CLI commands that run outside the
-// server lifecycle.  Level "warn" keeps normal output clean while still
-// surfacing actionable warnings from adapters.
+// cliLogConfig is the shared logger configuration for CLI commands that run
+// outside the server lifecycle. Level "warn" keeps normal output clean while
+// still surfacing actionable warnings from adapters.
+var cliLogConfig = zerowrap.Config{
+	Level:  "warn",
+	Format: "console",
+}
+
 func cliLogger() zerowrap.Logger {
-	return zerowrap.New(zerowrap.Config{
-		Level:  "warn",
-		Format: "console",
-	})
+	return zerowrap.New(cliLogConfig)
 }
 
 func cliRenderTitle(msg string) string {

@@ -129,6 +129,9 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	if err != nil {
 		return nil, err
 	}
+	if result == nil {
+		return nil, nil
+	}
 	return result.(*tls.Certificate), nil
 }
 

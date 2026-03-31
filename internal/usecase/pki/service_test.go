@@ -7,36 +7,34 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
-	outboundary "github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 )
 
-// Compile-time check: stubConfigService implements the boundary interface.
-var _ outboundary.RouteChecker = (*stubConfigService)(nil)
-
-// stubConfigService satisfies out.RouteChecker
-type stubConfigService struct {
-	routes         []domain.Route
-	externalRoutes map[string]string
-}
-
-func (s *stubConfigService) GetRoutes(_ context.Context) []domain.Route { return s.routes }
-func (s *stubConfigService) GetExternalRoutes() map[string]string       { return s.externalRoutes }
-
 func testLogger() zerowrap.Logger { return zerowrap.Default() }
+
+func newRouteCheckerMock(t *testing.T, domains ...string) *mocks.MockRouteChecker {
+	m := mocks.NewMockRouteChecker(t)
+	routes := make([]domain.Route, len(domains))
+	for i, d := range domains {
+		routes[i] = domain.Route{Domain: d}
+	}
+	m.EXPECT().GetRoutes(mock.Anything).Return(routes).Maybe()
+	m.EXPECT().GetExternalRoutes().Return(nil).Maybe()
+	return m
+}
 
 func TestService_GetCertificate_KnownDomain(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := pkiadapter.NewCA(dir, testLogger())
 	require.NoError(t, err)
 
-	cfg := &stubConfigService{
-		routes: []domain.Route{{Domain: "app.example.com"}},
-	}
+	cfg := newRouteCheckerMock(t, "app.example.com")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -55,9 +53,7 @@ func TestService_GetCertificate_UnknownDomain(t *testing.T) {
 	ca, err := pkiadapter.NewCA(dir, testLogger())
 	require.NoError(t, err)
 
-	cfg := &stubConfigService{
-		routes: []domain.Route{{Domain: "app.example.com"}},
-	}
+	cfg := newRouteCheckerMock(t, "app.example.com")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -76,9 +72,7 @@ func TestService_GetCertificate_Caching(t *testing.T) {
 	ca, err := pkiadapter.NewCA(dir, testLogger())
 	require.NoError(t, err)
 
-	cfg := &stubConfigService{
-		routes: []domain.Route{{Domain: "cached.example.com"}},
-	}
+	cfg := newRouteCheckerMock(t, "cached.example.com")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

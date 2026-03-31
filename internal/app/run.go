@@ -417,13 +417,13 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 
 // initPKI initialises the internal CA and PKI service when TLS is enabled.
 func (si *serviceInit) initPKI() error {
-	if (si.cfg.Server.TLSCertFile == "") != (si.cfg.Server.TLSKeyFile == "") {
-		return fmt.Errorf("both tls_cert_file and tls_key_file must be set, or neither")
-	}
-
 	if si.cfg.Server.TLSPort == 0 {
 		si.log.Info().Msg("internal CA disabled (server.tls_port=0)")
 		return nil
+	}
+
+	if (si.cfg.Server.TLSCertFile == "") != (si.cfg.Server.TLSKeyFile == "") {
+		return fmt.Errorf("both tls_cert_file and tls_key_file must be set, or neither")
 	}
 
 	caAdapter, err := pkiadapter.NewCA(resolveDataDir(si.cfg.Server.DataDir), si.log)

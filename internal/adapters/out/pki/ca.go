@@ -30,6 +30,10 @@ import (
 // Compile-time check: *CA satisfies the CertificateAuthority boundary.
 var _ out.CertificateAuthority = (*CA)(nil)
 
+// Certificate lifetimes balance security and operational convenience:
+//   - Root: long-lived to minimise key ceremony frequency; stored offline after bootstrap.
+//   - Intermediate: short-lived to limit blast radius if compromised; auto-renewed.
+//   - Leaf: very short-lived to reduce exposure; issued on-demand and cached in memory.
 const (
 	rootLifetime         = 10 * 365 * 24 * time.Hour // ~10 years
 	intermediateLifetime = 7 * 24 * time.Hour        // 7 days
@@ -377,6 +381,9 @@ func (ca *CA) IssueCertificate(domain string) (*tls.Certificate, error) {
 	expiry := now.Add(leafLifetime)
 	if expiry.After(interCert.NotAfter) {
 		expiry = interCert.NotAfter.Add(-1 * time.Minute)
+		if !expiry.After(now) {
+			return nil, fmt.Errorf("intermediate CA too close to expiry; renewal required")
+		}
 	}
 
 	template := &x509.Certificate{

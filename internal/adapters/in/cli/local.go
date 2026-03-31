@@ -67,11 +67,7 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 		// Config file not found is OK for some operations
 	}
 
-	// Create a minimal logger for CLI operations
-	log := zerowrap.New(zerowrap.Config{
-		Level:  "warn",
-		Format: "console",
-	})
+	log := zerowrap.New(cliLogConfig)
 
 	// Create config service (without event bus for CLI operations)
 	configSvc := config.NewService(v, nil)

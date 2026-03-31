@@ -5,7 +5,6 @@ import (
 	"html"
 	"net"
 	"net/http"
-	"strings"
 )
 
 // Handler serves CA onboarding endpoints on the TLS port for direct/Tailnet clients.
@@ -50,11 +49,7 @@ func (h *Handler) normalizeHTTPSURL(r *http.Request) string {
 	if h.tlsPort != 0 && h.tlsPort != 443 {
 		hostname = fmt.Sprintf("%s:%d", hostname, h.tlsPort)
 	}
-	u := fmt.Sprintf("https://%s/", hostname)
-	if !strings.HasPrefix(u, "https://") {
-		return "https://localhost/"
-	}
-	return html.EscapeString(u)
+	return html.EscapeString(fmt.Sprintf("https://%s/", hostname))
 }
 
 // ServeOnboardingPage serves the CA trust onboarding HTML page.

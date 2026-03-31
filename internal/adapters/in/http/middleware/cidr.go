@@ -103,7 +103,12 @@ func HTTPSRedirect(proxyNets []*net.IPNet, tlsPort int, forceAll bool, log zerow
 			if !strings.HasPrefix(path, "/") {
 				path = "/"
 			}
-			target := fmt.Sprintf("https://%s:%d%s", host, tlsPort, path)
+			var target string
+			if tlsPort == 443 {
+				target = fmt.Sprintf("https://%s%s", host, path)
+			} else {
+				target = fmt.Sprintf("https://%s:%d%s", host, tlsPort, path)
+			}
 
 			log.Debug().
 				Str("target", target).

@@ -9,23 +9,25 @@ import (
 	"time"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
-	outboundary "github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// Compile-time check: stubRoutes implements the boundary interface.
-var _ outboundary.RouteChecker = (*stubRoutes)(nil)
-
-type stubRoutes struct {
-	routes []domain.Route
+func newRoutesMock(t *testing.T, domains ...string) *mocks.MockRouteChecker {
+	m := mocks.NewMockRouteChecker(t)
+	routes := make([]domain.Route, len(domains))
+	for i, d := range domains {
+		routes[i] = domain.Route{Domain: d}
+	}
+	m.EXPECT().GetRoutes(mock.Anything).Return(routes).Maybe()
+	m.EXPECT().GetExternalRoutes().Return(nil).Maybe()
+	return m
 }
-
-func (s *stubRoutes) GetRoutes(_ context.Context) []domain.Route { return s.routes }
-func (s *stubRoutes) GetExternalRoutes() map[string]string       { return nil }
 
 func TestTLSHandshake_OnDemandCert(t *testing.T) {
 	dir := t.TempDir()
@@ -34,7 +36,7 @@ func TestTLSHandshake_OnDemandCert(t *testing.T) {
 	ca, err := pkiadapter.NewCA(dir, log)
 	require.NoError(t, err)
 
-	routes := &stubRoutes{routes: []domain.Route{{Domain: "test.local"}}}
+	routes := newRoutesMock(t, "test.local")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -87,7 +89,7 @@ func TestTLSHandshake_UnknownDomain_Rejected(t *testing.T) {
 	ca, err := pkiadapter.NewCA(dir, log)
 	require.NoError(t, err)
 
-	routes := &stubRoutes{routes: []domain.Route{{Domain: "allowed.local"}}}
+	routes := newRoutesMock(t, "allowed.local")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

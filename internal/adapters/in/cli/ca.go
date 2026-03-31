@@ -126,10 +126,10 @@ func runCAExport(_ context.Context, out io.Writer, dataDir, outPath string) erro
 
 	if outPath != "" {
 		if err := os.MkdirAll(filepath.Dir(outPath), 0750); err != nil {
-			return err
+			return fmt.Errorf("create directory for %s: %w", outPath, err)
 		}
 		if err := os.WriteFile(outPath, rootPEM, 0600); err != nil {
-			return err
+			return fmt.Errorf("write certificate to %s: %w", outPath, err)
 		}
 		return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Root CA certificate written to %s", outPath)))
 	}
