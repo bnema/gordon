@@ -88,9 +88,7 @@ func (h *Handler) ServeOnboardingPage(w http.ResponseWriter, r *http.Request) {
 	// On HTTPS, do not set the cookie at all — it is an HTTP-bootstrap-only UX hint.
 	cookieJS := ""
 	if r.TLS == nil {
-		cookieJS = fmt.Sprintf(
-			`onclick="document.cookie='gordon-ca-installed=1;path=/;max-age=315360000;SameSite=Lax'"`,
-		)
+		cookieJS = `onclick="document.cookie='gordon-ca-installed=1;path=/;max-age=315360000;SameSite=Lax'"`
 	}
 
 	siteLink := ""
