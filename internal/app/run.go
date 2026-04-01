@@ -1949,7 +1949,9 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 		defer shutdownCancel()
 		for _, srv := range servers {
 			if srv != nil {
-				srv.Shutdown(shutdownCtx)
+				if err := srv.Shutdown(shutdownCtx); err != nil {
+					log.Error().Err(err).Msg("failed to shut down server during startup cleanup")
+				}
 			}
 		}
 	}
