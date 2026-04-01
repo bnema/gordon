@@ -122,7 +122,7 @@ func HTTPSRedirect(proxyNets []*net.IPNet, httpPort, tlsPort int, forceAll bool,
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !forceAll {
 				remoteIP := ExtractRemoteIP(r.RemoteAddr)
-				if IsTrustedProxy(remoteIP, localhostNets) || IsTrustedProxy(remoteIP, proxyNets) {
+				if IsTrustedOrLocal(remoteIP, proxyNets) {
 					next.ServeHTTP(w, r)
 					return
 				}
