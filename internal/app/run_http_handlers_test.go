@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -246,6 +247,41 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_HEADRoutesRemainAvailable(t *testing
 		resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "HEAD %s should return 200", path)
+	}
+}
+
+func TestCreateHTTPHandlers_DirectHTTPOnboarding_HEADRoutesRemainAvailable(t *testing.T) {
+	t.Parallel()
+	ca := newTestCA(t)
+	cfg := newOnboardingConfig()
+	svc := &services{caAdapter: ca}
+
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = directAddr
+		r.Host = "o2.bnema.dev"
+		httpHandler.ServeHTTP(w, r)
+	}))
+	defer ts.Close()
+
+	for _, tc := range []struct {
+		path        string
+		contentType string
+	}{
+		{path: "/ca", contentType: "text/html"},
+		{path: "/ca.crt", contentType: "application/x-x509-ca-cert"},
+	} {
+		resp, err := ts.Client().Head(ts.URL + tc.path)
+		require.NoError(t, err)
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "HEAD %s should return 200", tc.path)
+		assert.Contains(t, resp.Header.Get("Content-Type"), tc.contentType)
+		assert.Empty(t, body, "HEAD %s should have empty body", tc.path)
 	}
 }
 
