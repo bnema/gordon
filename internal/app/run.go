@@ -1677,6 +1677,8 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		onboardingHandler := onboarding.NewHandler(
 			svc.caAdapter.RootCertificate(),
 			mobileconfigBytes,
+			svc.caAdapter.RootFingerprint(),
+			cfg.Server.Port,
 			cfg.Server.TLSPort,
 		)
 		httpsMux.HandleFunc("GET /ca", onboardingHandler.ServeOnboardingPage)

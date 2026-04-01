@@ -12,24 +12,56 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/http/onboarding"
 )
 
-func newTestServer(t *testing.T, tlsPort int) (*httptest.Server, []byte, []byte) {
-	t.Helper()
+const (
+	testFingerprint = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+	testHTTPPort    = 8088
+	testTLSPort     = 8443
+)
+
+func newTestHandler() (*onboarding.Handler, []byte, []byte) {
 	rootPEM := []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
 	mobileconfig := []byte("<plist>com.apple.security.root</plist>")
 
-	h := onboarding.NewHandler(rootPEM, mobileconfig, tlsPort)
+	h := onboarding.NewHandler(rootPEM, mobileconfig, testFingerprint, testHTTPPort, testTLSPort)
+	return h, rootPEM, mobileconfig
+}
+
+func newTestServer(t *testing.T) (*httptest.Server, []byte, []byte) {
+	t.Helper()
+	h, rootPEM, mobileconfig := newTestHandler()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ca", h.ServeOnboardingPage)
+	mux.HandleFunc("HEAD /ca", h.ServeOnboardingPage)
 	mux.HandleFunc("GET /ca.crt", h.ServeCACert)
+	mux.HandleFunc("HEAD /ca.crt", h.ServeCACert)
 	mux.HandleFunc("GET /ca.mobileconfig", h.ServeMobileconfig)
+	mux.HandleFunc("HEAD /ca.mobileconfig", h.ServeMobileconfig)
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, rootPEM, mobileconfig
 }
 
+// getOnboardingBody issues a GET /ca with a custom Host header and returns the body.
+func getOnboardingBody(t *testing.T, srv *httptest.Server, host string) string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/ca", nil)
+	require.NoError(t, err)
+	req.Host = host
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return string(body)
+}
+
 func TestHandler_CACert(t *testing.T) {
-	srv, rootPEM, _ := newTestServer(t, 443)
+	srv, rootPEM, _ := newTestServer(t)
 
 	resp, err := http.Get(srv.URL + "/ca.crt")
 	require.NoError(t, err)
@@ -44,7 +76,7 @@ func TestHandler_CACert(t *testing.T) {
 }
 
 func TestHandler_Mobileconfig(t *testing.T) {
-	srv, _, _ := newTestServer(t, 443)
+	srv, _, _ := newTestServer(t)
 
 	resp, err := http.Get(srv.URL + "/ca.mobileconfig")
 	require.NoError(t, err)
@@ -59,7 +91,7 @@ func TestHandler_Mobileconfig(t *testing.T) {
 }
 
 func TestHandler_OnboardingPage(t *testing.T) {
-	srv, _, _ := newTestServer(t, 443)
+	srv, _, _ := newTestServer(t)
 
 	resp, err := http.Get(srv.URL + "/ca")
 	require.NoError(t, err)
@@ -73,4 +105,114 @@ func TestHandler_OnboardingPage(t *testing.T) {
 	assert.Contains(t, string(body), "Gordon")
 	assert.Contains(t, string(body), "/ca.crt")
 	assert.Contains(t, string(body), "/ca.mobileconfig")
+}
+
+// --- New tests per plan Task 1 ---
+
+func TestHandler_OnboardingPage_DefaultHTTPSURLOmitsInternalTLSPort(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	body := getOnboardingBody(t, srv, "o2.bnema.dev")
+
+	assert.Contains(t, body, "https://o2.bnema.dev/")
+	assert.NotContains(t, body, ":8443")
+}
+
+func TestHandler_OnboardingPage_ExplicitHTTPPortMapsToTLSPort(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	body := getOnboardingBody(t, srv, "o2.bnema.dev:8088")
+
+	assert.Contains(t, body, "https://o2.bnema.dev:8443/")
+}
+
+func TestHandler_OnboardingPage_ExplicitNonHTTPPortIsPreserved(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	body := getOnboardingBody(t, srv, "o2.bnema.dev:9999")
+
+	assert.Contains(t, body, "https://o2.bnema.dev:9999/")
+}
+
+func TestHandler_OnboardingPage_IPHostHidesGoToSiteLink(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	body := getOnboardingBody(t, srv, "100.83.240.53")
+
+	assert.NotContains(t, body, "Go to site")
+}
+
+func TestHandler_OnboardingPage_IncludesFingerprintAndClientImportCopy(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	body := getOnboardingBody(t, srv, "o2.bnema.dev")
+
+	// Fingerprint must be visible
+	assert.Contains(t, body, testFingerprint)
+
+	// Client-import focused: Firefox/Zen guidance present
+	assert.Contains(t, body, "Firefox")
+	assert.Contains(t, body, "Zen")
+
+	// Should NOT suggest gordon ca install as the primary action
+	assert.NotContains(t, body, "sudo gordon ca install")
+}
+
+func TestHandler_OnboardingPage_HTTPVariantDoesNotUseSecureCookieHint(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	// Default httptest server is HTTP, so request is non-TLS.
+	body := getOnboardingBody(t, srv, "o2.bnema.dev")
+
+	// The cookie JS must NOT include "Secure" on the HTTP variant.
+	assert.NotContains(t, body, ";Secure")
+}
+
+func TestHandler_OnboardingPage_HEAD(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	req, err := http.NewRequest(http.MethodHead, srv.URL+"/ca", nil)
+	require.NoError(t, err)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Empty(t, body)
+}
+
+func TestHandler_CACert_HEAD(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	req, err := http.NewRequest(http.MethodHead, srv.URL+"/ca.crt", nil)
+	require.NoError(t, err)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "application/x-x509-ca-cert", resp.Header.Get("Content-Type"))
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Empty(t, body)
+}
+
+func TestHandler_Mobileconfig_HEAD(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	req, err := http.NewRequest(http.MethodHead, srv.URL+"/ca.mobileconfig", nil)
+	require.NoError(t, err)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "application/x-apple-aspen-config", resp.Header.Get("Content-Type"))
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Empty(t, body)
 }
