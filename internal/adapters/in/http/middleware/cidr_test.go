@@ -167,6 +167,25 @@ func TestHTTPSRedirect_UnknownExplicitPort_IsPreserved(t *testing.T) {
 	assert.Equal(t, "https://o2.bnema.dev:9999/", rr.Header().Get("Location"))
 }
 
+func TestHTTPSRedirect_InvalidExplicitPort_IsPreserved(t *testing.T) {
+	log := testLogger()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log)(ok)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.Host = "o2.bnema.dev:abcd"
+	req.RemoteAddr = "203.0.113.10:12345"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusPermanentRedirect, rr.Code)
+	assert.Equal(t, "https://o2.bnema.dev:abcd/", rr.Header().Get("Location"))
+}
+
 func TestProxyCIDRAllowlist(t *testing.T) {
 	log := testLogger()
 	redirect := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

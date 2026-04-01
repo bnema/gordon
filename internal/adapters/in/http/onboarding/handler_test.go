@@ -151,14 +151,14 @@ func TestHandler_OnboardingPage_IncludesFingerprintAndClientImportCopy(t *testin
 	assert.NotContains(t, body, "sudo gordon ca install")
 }
 
-func TestHandler_OnboardingPage_HTTPVariantDoesNotUseSecureCookieHint(t *testing.T) {
+func TestHandler_OnboardingPage_GoToSiteLinkIsPlainLink(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
-	// Default httptest server is HTTP, so request is non-TLS.
 	body := getOnboardingBody(t, srv, "o2.bnema.dev")
 
-	// The cookie JS must NOT include "Secure" on the HTTP variant.
-	assert.NotContains(t, body, ";Secure")
+	assert.Contains(t, body, `<a href="https://o2.bnema.dev/">Go to site &#x2192;</a>`)
+	assert.NotContains(t, body, "onclick=")
+	assert.NotContains(t, body, "document.cookie")
 }
 
 func TestHandler_OnboardingPage_HEAD(t *testing.T) {

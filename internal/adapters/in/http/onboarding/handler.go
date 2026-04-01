@@ -69,18 +69,11 @@ func (h *Handler) ServeOnboardingPage(w http.ResponseWriter, r *http.Request) {
 	redirectURL := h.publicHTTPSURL(r)
 	showSiteLink := !isRawIP(r.Host)
 
-	// On HTTP (r.TLS == nil), omit Secure from the cookie so browsers persist it.
-	// On HTTPS, do not set the cookie at all — it is an HTTP-bootstrap-only UX hint.
-	cookieJS := ""
-	if r.TLS == nil {
-		cookieJS = `onclick="document.cookie='gordon-ca-installed=1;path=/;max-age=315360000;SameSite=Lax'"`
-	}
-
 	siteLink := ""
 	if showSiteLink {
 		siteLink = fmt.Sprintf(
-			`<div class="skip"><p>Already installed? <a href="%s" %s>Go to site &#x2192;</a></p></div>`,
-			redirectURL, cookieJS,
+			`<div class="skip"><p>Already installed? <a href="%s">Go to site &#x2192;</a></p></div>`,
+			redirectURL,
 		)
 	}
 
