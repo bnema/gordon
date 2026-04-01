@@ -326,26 +326,14 @@ url = "https://gordon.example.com"
 token_env = "GORDON_TOKEN"
 ```
 
-If your admin/API path is private over Tailscale, you have two options:
+A common Tailscale setup is to point your domain's DNS at the machine's Tailscale IP (Cloudflare DNS-only / grey cloud). Since the server isn't publicly reachable, there is no external CA to issue a trusted certificate — Gordon's internal CA handles TLS automatically. Clients need to trust the internal CA:
 
-1. Use `insecure_tls = true` for that remote.
-2. Prefer a Tailscale-issued cert on the machine's `*.ts.net` name and keep verification enabled.
+- `insecure_tls = true` on the remote — skips certificate verification entirely
+- `sudo gordon ca install` — installs the root CA into system, Firefox, and Java trust stores
+- `gordon ca export --out gordon-ca.crt` — exports the root CA PEM for manual installation
+- Visit `https://<gordon-host>:<tls_port>/ca` in a browser — onboarding page with downloads for macOS, Linux, Windows, iOS, and Android
 
-Tailscale certificates are issued for tailnet MagicDNS names (for example `host-name.tailnet.ts.net`), not your custom domain. Enable HTTPS certificates in the Tailscale admin DNS settings, then generate files on the host:
-
-```bash
-sudo tailscale cert --cert-file /etc/gordon/tls/cert.pem --key-file /etc/gordon/tls/key.pem host-name.tailnet.ts.net
-```
-
-Configure Gordon to use them:
-
-```toml
-[server]
-tls_enabled = true
-tls_port = 443
-tls_cert_file = "/etc/gordon/tls/cert.pem"
-tls_key_file = "/etc/gordon/tls/key.pem"
-```
+If you have your own certificate for the domain (e.g. from a corporate CA), you can provide it via `tls_cert_file`/`tls_key_file` — see [Server Configuration](../config/server.md#custom-certificates). The static cert is served for SNI-matching domains; everything else falls through to the internal CA.
 
 `insecure_tls` only affects CLI -> Gordon admin HTTPS verification. It does not change runtime routing: Gordon reverse proxy and container routes can still serve wildcard app domains like `*.example.com`.
 

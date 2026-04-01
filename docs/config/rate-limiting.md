@@ -150,7 +150,7 @@ A burst of `100` with `per_ip_rps = 50` means a client can send 100 requests ins
 
 **Critical for correct IP detection in production.**
 
-Gordon is a reverse proxy that routes requests to your containers. In production you can either terminate TLS directly in Gordon (`server.tls_enabled = true`) or place it behind a TLS-terminating proxy like Cloudflare, nginx, or a load balancer.
+Gordon is a reverse proxy that routes requests to your containers. In production you can either terminate TLS directly in Gordon (via its internal CA on `server.tls_port`) or place it behind a TLS-terminating proxy like Cloudflare, nginx, or a load balancer.
 
 ```
 Internet → [Cloudflare/nginx] → Gordon → Containers

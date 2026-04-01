@@ -9,19 +9,18 @@ Complete configuration reference with all options and their default values.
 # SERVER
 # =============================================================================
 [server]
-port = 80                                    # HTTP proxy port
+port = 8088                                  # HTTP proxy port
 registry_port = 5000                         # Container registry port
-tls_enabled = false                          # Enable native HTTPS listener
-tls_port = 443                               # HTTPS proxy port when enabled
-tls_cert_file = ""                           # PEM cert path (auto-generated if empty and TLS enabled)
-tls_key_file = ""                            # PEM key path (auto-generated if empty and TLS enabled)
+tls_port = 8443                              # HTTPS proxy port (0 = disabled, no internal CA)
+tls_cert_file = ""                           # PEM cert path (optional, for static TLS alongside internal CA)
+tls_key_file = ""                            # PEM key path (optional, must be set with tls_cert_file)
+force_https_redirect = false                 # Redirect all HTTP traffic to HTTPS (for direct-access setups)
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
 max_blob_chunk_size = "512MB"                # Max size per registry blob upload chunk
 registry_allowed_ips = []                    # IPs or CIDR ranges allowed to access the registry (empty = allow all)
 proxy_allowed_ips = []                       # IPs or CIDR ranges allowed to reach the proxy (empty = allow all, e.g. Cloudflare IPs)
 registry_listen_address = ""                 # Bind address for registry (empty = all interfaces, "127.0.0.1" = loopback only)
-force_hsts = false                           # Always send HSTS header (enable when behind TLS-terminating proxy)
 
 # =============================================================================
 # AUTHENTICATION (required - Gordon won't start without credentials configured)
@@ -170,19 +169,18 @@ keep_last = 3                                # Keep N newest tags per repository
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `server.port` | `80` | HTTP proxy port |
+| `server.port` | `8088` | HTTP proxy port |
 | `server.registry_port` | `5000` | Container registry port |
-| `server.tls_enabled` | `false` | Enable native HTTPS listener |
-| `server.tls_port` | `443` | HTTPS listener port |
-| `server.tls_cert_file` | `""` | TLS cert path (auto-generated when empty) |
-| `server.tls_key_file` | `""` | TLS key path (auto-generated when empty) |
+| `server.tls_port` | `8443` | HTTPS listener port (0 = disabled) |
+| `server.tls_cert_file` | `""` | PEM cert path for static TLS (optional) |
+| `server.tls_key_file` | `""` | PEM key path for static TLS (optional) |
+| `server.force_https_redirect` | `false` | Redirect all HTTP to HTTPS (for direct-access setups) |
 | `server.gordon_domain` | `""` | **Required** - Gordon domain |
 | `server.data_dir` | `~/.gordon` | Data directory |
 | `server.max_blob_chunk_size` | `"512MB"` | Max size per registry blob upload chunk |
 | `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `server.proxy_allowed_ips` | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
 | `server.registry_listen_address` | `""` | Bind address for registry (empty = all interfaces) |
-| `server.force_hsts` | `false` | Always send HSTS header (for TLS-terminating proxy setups) |
 | `auth.enabled` | `true` | Enable authentication; when `false`, run local-only mode (loopback-only `/v2/*`, `/admin/*` disabled) |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |

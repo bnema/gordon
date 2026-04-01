@@ -6,12 +6,12 @@ Core server settings for Gordon.
 
 ```toml
 [server]
-port = 8080                              # HTTP proxy port
+port = 8088                              # HTTP proxy port
 registry_port = 5000                     # Container registry port
-tls_enabled = false                      # Enable native TLS listener
-tls_port = 443                           # HTTPS listener port
-tls_cert_file = ""                       # PEM certificate file (required when TLS enabled)
-tls_key_file = ""                        # PEM key file (required when TLS enabled)
+tls_port = 8443                          # HTTPS listener port (0 = disabled)
+# tls_cert_file = ""                       # Optional: PEM certificate for static TLS
+# tls_key_file = ""                        # Optional: PEM key for static TLS
+# force_https_redirect = false             # Redirect all HTTP traffic to HTTPS
 gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 # data_dir = "~/.gordon"                 # Data storage directory (default)
 ```
@@ -20,12 +20,12 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `port` | int | `80` | HTTP proxy port for routing traffic to containers |
+| `port` | int | `8088` | HTTP proxy port for routing traffic to containers |
 | `registry_port` | int | `5000` | Docker registry port for image push/pull |
-| `tls_enabled` | bool | `false` | Enable native HTTPS listener for proxy traffic |
-| `tls_port` | int | `443` | HTTPS listener port when `tls_enabled` is true |
-| `tls_cert_file` | string | `""` | Path to PEM certificate file |
-| `tls_key_file` | string | `""` | Path to PEM private key file |
+| `tls_port` | int | `8443` | HTTPS listener port with internal CA. Set to `0` to disable TLS entirely |
+| `tls_cert_file` | string | `""` | Path to PEM certificate file. When set (with `tls_key_file`), this cert is served for matching SNI domains; unmatched domains fall through to the internal CA |
+| `tls_key_file` | string | `""` | Path to PEM private key file. Must be set together with `tls_cert_file` |
+| `force_https_redirect` | bool | `false` | Redirect all HTTP requests to the HTTPS port. For direct-access setups without a TLS-terminating proxy |
 | `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
 | `registry_domain` | string | - | Deprecated alias for `gordon_domain` |
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
@@ -34,7 +34,6 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 | `registry_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `proxy_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
 | `registry_listen_address` | string | `""` | Bind address for registry (empty = all interfaces) |
-| `force_hsts` | bool | `false` | Always send HSTS header (for TLS-terminating proxy setups) |
 
 ## Port Configuration
 
@@ -54,30 +53,62 @@ For rootless containers, you'll typically use a high port and configure firewall
 sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8080
 ```
 
-### Native TLS Listener
+### Internal CA and TLS
 
-Enable native HTTPS directly in Gordon:
+Gordon includes an internal certificate authority that issues on-demand TLS certificates for proxied domains. The HTTPS listener is enabled by default on `tls_port` (8443).
 
 ```toml
 [server]
-tls_enabled = true
-tls_port = 443
-tls_cert_file = "/etc/gordon/certs/fullchain.pem"
-tls_key_file = "/etc/gordon/certs/privkey.pem"
+tls_port = 8443   # Default. Set to 0 to disable TLS entirely.
 ```
 
 With TLS enabled:
-- Gordon terminates HTTPS on `tls_port`
-- Host-based routing still works (apps, `/v2/*`, `/auth/*`, `/admin/*`)
-- `port` remains available for plain HTTP unless you restrict it externally
-- If `tls_cert_file`/`tls_key_file` are empty, Gordon auto-generates a self-signed pair in `{data_dir}/tls/`
+- Gordon runs an internal CA (root + intermediate) stored in `{data_dir}/pki/`
+- Leaf certificates are issued on-demand per domain (SNI-based) and cached in memory
+- The intermediate CA auto-renews before expiry
+- An onboarding page at `https://<gordon-host>:<tls_port>/ca` lets clients download the root CA certificate
+- The root CA is stable across restarts (generated once, persisted to disk)
 
-For rootless user services, do not bind directly to `443`. Use an unprivileged TLS port (for example `8443`) and forward `443` to it at the firewall or edge proxy.
+#### Custom certificates
+
+To use your own certificate (e.g. from Tailscale, Let's Encrypt, or a corporate CA) alongside the internal CA:
 
 ```toml
 [server]
-tls_enabled = true
-tls_port = 8443
+tls_cert_file = "/etc/gordon/tls/cert.pem"
+tls_key_file = "/etc/gordon/tls/key.pem"
+```
+
+The static certificate is served for SNI-matching domains (including wildcards). All other domains get on-demand certs from the internal CA.
+
+#### HTTP to HTTPS redirect
+
+When clients connect directly (no Cloudflare or reverse proxy in front), enable `force_https_redirect` to redirect all HTTP traffic to the HTTPS port:
+
+```toml
+[server]
+force_https_redirect = true
+```
+
+When `proxy_allowed_ips` is configured, non-proxy clients are redirected automatically even without this flag — trusted proxy IPs pass through to serve Cloudflare-proxied traffic.
+
+#### Disabling TLS
+
+For setups where TLS is handled entirely by an external proxy (Cloudflare, nginx, etc.):
+
+```toml
+[server]
+tls_port = 0   # No HTTPS listener, no internal CA generated
+```
+
+#### Firewall port forwarding
+
+For rootless user services, forward 443 to the high port at the firewall:
+
+```bash
+# Forward 443 -> 8443
+sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=8443
+sudo firewall-cmd --reload
 ```
 
 With firewalld and Tailscale:
@@ -291,14 +322,9 @@ The `registry_listen_address` controls which interface the registry server binds
 registry_listen_address = "127.0.0.1"  # Loopback only
 ```
 
-## Force HSTS
+## HSTS
 
-When Gordon runs behind a TLS-terminating proxy (e.g. Cloudflare), `r.TLS` is nil so the HSTS header is not sent by default. Enable `force_hsts` to always include the `Strict-Transport-Security` header.
-
-```toml
-[server]
-force_hsts = true
-```
+HSTS headers are sent automatically on the HTTPS listener (when `r.TLS != nil`). When Gordon runs behind a TLS-terminating proxy (Cloudflare, Tailscale) and only receives plain HTTP, HSTS is not sent — the edge proxy is expected to handle it.
 
 ## Examples
 

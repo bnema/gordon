@@ -24,6 +24,7 @@ type LocalServices struct {
 	configSvc in.ConfigService
 	secretSvc in.SecretService
 	dataDir   string
+	tlsPort   int
 }
 
 // GetConfigService returns the config service.
@@ -41,12 +42,17 @@ func (l *LocalServices) GetDataDir() string {
 	return l.dataDir
 }
 
+// GetTLSPort returns the configured TLS port (0 means internal TLS is disabled).
+func (l *LocalServices) GetTLSPort() int {
+	return l.tlsPort
+}
+
 // GetLocalServices creates local services for CLI operations.
 // It loads the config and initializes services without starting the server.
 func GetLocalServices(configPath string) (*LocalServices, error) {
 	// Set up viper with defaults
 	v := viper.New()
-	v.SetDefault("server.port", 80)
+	v.SetDefault("server.port", 8088)
 	v.SetDefault("server.registry_port", 5000)
 	v.SetDefault("server.data_dir", app.DefaultDataDir())
 
@@ -61,11 +67,7 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 		// Config file not found is OK for some operations
 	}
 
-	// Create a minimal logger for CLI operations
-	log := zerowrap.New(zerowrap.Config{
-		Level:  "warn",
-		Format: "console",
-	})
+	log := zerowrap.New(cliLogConfig)
 
 	// Create config service (without event bus for CLI operations)
 	configSvc := config.NewService(v, nil)
@@ -96,6 +98,7 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 		configSvc: configSvc,
 		secretSvc: secretSvc,
 		dataDir:   dataDir,
+		tlsPort:   v.GetInt("server.tls_port"),
 	}, nil
 }
 

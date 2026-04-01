@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 )
 
@@ -15,6 +17,18 @@ var cliWriteLine = func(w io.Writer, msg string) error {
 var cliWritef = func(w io.Writer, format string, args ...any) error {
 	_, err := fmt.Fprintf(w, format, args...)
 	return err
+}
+
+// cliLogConfig is the shared logger configuration for CLI commands that run
+// outside the server lifecycle. Level "warn" keeps normal output clean while
+// still surfacing actionable warnings from adapters.
+var cliLogConfig = zerowrap.Config{
+	Level:  "warn",
+	Format: "console",
+}
+
+func cliLogger() zerowrap.Logger {
+	return zerowrap.New(cliLogConfig)
 }
 
 func cliRenderTitle(msg string) string {

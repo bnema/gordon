@@ -24,6 +24,7 @@ packages:
       DomainSecretStore:
       RateLimiter:
       BackupStorage:
+      RouteChecker:
   github.com/bnema/gordon/internal/boundaries/in:
     interfaces:
       ContainerService:

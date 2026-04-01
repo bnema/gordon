@@ -30,7 +30,7 @@ For a complete list of all configuration options with their default values, see 
 ```toml
 # Server settings
 [server]
-port = 8080                              # HTTP proxy port (default: 80)
+port = 8088                              # HTTP proxy port (default: 8088)
 registry_port = 5000                     # Registry port (default: 5000)
 gordon_domain = "gordon.mydomain.com"    # Required: Gordon domain (registry + API)
 # data_dir = "~/.gordon"                 # Default for user installations
@@ -167,7 +167,7 @@ keep_last = 3
 
 | Setting | Default |
 |---------|---------|
-| `server.port` | `80` |
+| `server.port` | `8088` |
 | `server.registry_port` | `5000` |
 | `server.data_dir` | `~/.gordon` |
 | `auth.enabled` | `true` |

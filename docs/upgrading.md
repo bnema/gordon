@@ -2,6 +2,37 @@
 
 This guide covers breaking changes and migration steps between major versions.
 
+## v2.30.0 to v2.31.0
+
+### Breaking: Default Port Changes
+
+Gordon now defaults to unprivileged ports that work without root or firewall rules:
+
+| Setting | Old default | New default |
+|---------|-------------|-------------|
+| `server.port` | `80` | `8088` |
+| `server.registry_port` | `5000` | `5000` (unchanged) |
+| `server.tls_port` | *(n/a)* | `8443` |
+
+**If you relied on the old defaults** (no explicit `port` in your config), add the port explicitly:
+
+```toml
+[server]
+port = 80
+```
+
+Or set up firewall port forwarding to the new defaults:
+
+```bash
+sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
+sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=8443
+sudo firewall-cmd --reload
+```
+
+### New: Internal Certificate Authority
+
+Gordon now includes an internal CA for automatic on-demand TLS. Set `tls_port = 0` to disable. See [Server Configuration](./config/server.md#internal-ca-and-tls) for details.
+
 ## v2.16.0 to v2.30.0
 
 ### Breaking: Password Authentication Removed
