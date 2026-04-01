@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bnema/zerowrap"
@@ -74,7 +75,11 @@ func RegistryCIDRAllowlist(allowedNets, trustedNets []*net.IPNet, log zerowrap.L
 // Otherwise, only non-trusted clients are redirected — trusted proxy IPs and localhost
 // pass through since they deliver Cloudflare-proxied traffic.
 // When tlsPort is 0, this is always a no-op.
-func HTTPSRedirect(proxyNets []*net.IPNet, tlsPort int, forceAll bool, log zerowrap.Logger) func(http.Handler) http.Handler {
+//
+// httpPort is the configured HTTP listener port (cfg.Server.Port) so the redirect
+// helper can map it to tlsPort. Hosts with no explicit port omit the TLS port from
+// the public URL; hosts with an unknown explicit port preserve it as-is.
+func HTTPSRedirect(proxyNets []*net.IPNet, httpPort, tlsPort int, forceAll bool, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if tlsPort == 0 {
 			return next
@@ -95,20 +100,7 @@ func HTTPSRedirect(proxyNets []*net.IPNet, tlsPort int, forceAll bool, log zerow
 				}
 			}
 
-			host := r.Host
-			if h, _, err := net.SplitHostPort(host); err == nil {
-				host = h
-			}
-			path := r.RequestURI
-			if !strings.HasPrefix(path, "/") {
-				path = "/"
-			}
-			var target string
-			if tlsPort == 443 {
-				target = fmt.Sprintf("https://%s%s", host, path)
-			} else {
-				target = fmt.Sprintf("https://%s:%d%s", host, tlsPort, path)
-			}
+			target := httpsRedirectTarget(r.Host, r.RequestURI, httpPort, tlsPort)
 
 			log.Debug().
 				Str("target", target).
@@ -117,6 +109,32 @@ func HTTPSRedirect(proxyNets []*net.IPNet, tlsPort int, forceAll bool, log zerow
 			http.Redirect(w, r, target, http.StatusPermanentRedirect)
 		})
 	}
+}
+
+// httpsRedirectTarget derives the HTTPS redirect URL from the request Host.
+//
+//   - No port in Host → omit TLS port (public reverse-proxy assumed on :443).
+//   - Host port == httpPort → map to tlsPort.
+//   - Any other explicit port → preserve it.
+func httpsRedirectTarget(host, requestURI string, httpPort, tlsPort int) string {
+	path := requestURI
+	if !strings.HasPrefix(path, "/") {
+		path = "/"
+	}
+
+	hostname, portStr, err := net.SplitHostPort(host)
+	if err != nil {
+		// No port in Host header — omit TLS port from URL.
+		return fmt.Sprintf("https://%s%s", host, path)
+	}
+
+	port, _ := strconv.Atoi(portStr)
+	if port == httpPort {
+		return fmt.Sprintf("https://%s:%d%s", hostname, tlsPort, path)
+	}
+
+	// Unknown explicit port — preserve it.
+	return fmt.Sprintf("https://%s:%s%s", hostname, portStr, path)
 }
 
 // ProxyCIDRAllowlist returns middleware that restricts proxy access to the given CIDR ranges.

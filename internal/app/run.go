@@ -1641,7 +1641,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
-		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log),
+		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.Port, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log),
 	}
 	if proxyCIDRMiddleware != nil {
 		httpProxyMiddlewares = append(httpProxyMiddlewares, proxyCIDRMiddleware)
