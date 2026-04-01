@@ -60,6 +60,7 @@ func (h *Handler) publicHTTPSURL(r *http.Request) string {
 		return html.EscapeString("https://" + r.Host + "/")
 	}
 
+	// Ignore error: an invalid explicit port falls through to the preserve-as-is branch.
 	port, _ := strconv.Atoi(portStr)
 	if port == h.httpPort {
 		return html.EscapeString(fmt.Sprintf("https://%s:%d/", host, h.tlsPort))
