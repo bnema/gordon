@@ -16,6 +16,7 @@ Commands are organized by where they run:
 |---------|-------------|---------------|
 | `gordon serve` | Start the Gordon server | [serve](./serve.md) |
 | `gordon auth` | Manage Gordon server authentication | [auth](./auth.md) |
+| `gordon ca` | Manage the internal Certificate Authority | [ca](./ca.md) |
 
 ## Management Commands (local or remote)
 

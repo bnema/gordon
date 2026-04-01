@@ -81,9 +81,20 @@ tls_key_file = "/etc/gordon/tls/key.pem"
 
 The static certificate is served for SNI-matching domains (including wildcards). All other domains get on-demand certs from the internal CA.
 
+#### Direct HTTP Onboarding
+
+When `tls_port` is non-zero, direct HTTP clients (those not arriving through a trusted proxy) are restricted to CA onboarding paths only:
+
+- `/`, `/ca`, `/ca.crt`, `/ca.mobileconfig` — serve the onboarding page and CA certificate downloads
+- All other paths return `403 Forbidden`
+
+This lets new clients discover and trust the internal CA over plain HTTP without exposing the full application. Trusted proxy traffic (e.g. from Cloudflare) continues through the normal HTTP proxy path unaffected.
+
+The onboarding page is also available on HTTPS at `/ca`.
+
 #### HTTP to HTTPS redirect
 
-When clients connect directly (no Cloudflare or reverse proxy in front), enable `force_https_redirect` to redirect all HTTP traffic to the HTTPS port:
+When clients connect directly (no Cloudflare or reverse proxy in front), enable `force_https_redirect` to redirect all HTTP traffic to the HTTPS port. Direct HTTP onboarding paths are still served even with this flag enabled.
 
 ```toml
 [server]
