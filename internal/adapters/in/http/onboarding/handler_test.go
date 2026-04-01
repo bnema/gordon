@@ -107,8 +107,6 @@ func TestHandler_OnboardingPage(t *testing.T) {
 	assert.Contains(t, string(body), "/ca.mobileconfig")
 }
 
-// --- New tests per plan Task 1 ---
-
 func TestHandler_OnboardingPage_DefaultHTTPSURLOmitsInternalTLSPort(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	body := getOnboardingBody(t, srv, "o2.bnema.dev")

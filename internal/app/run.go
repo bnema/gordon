@@ -1732,8 +1732,8 @@ func directHTTPOnboardingGate(ob *onboarding.Handler, proxyNets []*net.IPNet, pr
 	)(onboardingMux)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		remoteIP := extractDirectIP(r.RemoteAddr)
-		if isTrustedOrLocal(remoteIP, proxyNets) {
+		remoteIP := middleware.ExtractRemoteIP(r.RemoteAddr)
+		if middleware.IsTrustedOrLocal(remoteIP, proxyNets) {
 			proxyChain.ServeHTTP(w, r)
 			return
 		}
@@ -1749,23 +1749,6 @@ func directHTTPForbidden(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodHead {
 		_, _ = w.Write([]byte("Only certificate onboarding is available over HTTP.\n"))
 	}
-}
-
-// extractDirectIP returns the IP portion of a RemoteAddr, stripping the port.
-func extractDirectIP(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return remoteAddr
-	}
-	return host
-}
-
-// isTrustedOrLocal checks whether an IP belongs to trusted proxy nets or localhost.
-func isTrustedOrLocal(ip string, proxyNets []*net.IPNet) bool {
-	if parsed := net.ParseIP(ip); parsed != nil && parsed.IsLoopback() {
-		return true
-	}
-	return middleware.IsTrustedProxy(ip, proxyNets)
 }
 
 func buildRegistryHandlerWithMiddleware(

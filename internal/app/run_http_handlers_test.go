@@ -71,8 +71,6 @@ func TestCreateHTTPHandlers_LocalMode_RestrictsRegistryToLoopback(t *testing.T) 
 	}
 }
 
-// --- Task 3: Direct HTTP onboarding gate integration tests ---
-
 // newTestCA creates a temporary CA adapter for integration tests.
 func newTestCA(t *testing.T) *pkiadapter.CA {
 	t.Helper()
@@ -322,8 +320,6 @@ func TestCreateHTTPHandlers_TLSConfiguredWithoutCA_FailsStartup(t *testing.T) {
 	err := si.initPKI()
 	assert.Error(t, err, "initPKI should fail when CA cannot be initialized")
 }
-
-// --- End Task 3 tests ---
 
 func TestBuildRegistryCIDRAllowlistMiddleware_InvalidEntries_DenyAll(t *testing.T) {
 	t.Parallel()

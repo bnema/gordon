@@ -5,7 +5,8 @@ import (
 	"html"
 	"net"
 	"net/http"
-	"strconv"
+
+	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 )
 
 // Handler serves CA onboarding endpoints for direct/Tailnet clients.
@@ -46,26 +47,10 @@ func (h *Handler) ServeMobileconfig(w http.ResponseWriter, _ *http.Request) {
 }
 
 // publicHTTPSURL derives the public HTTPS URL from the request Host header.
-//
-// Rules:
-//   - no port in Host => https://host/ (omit internal TLS port)
-//   - Host port == httpPort => https://host:tlsPort/
-//   - any other explicit port => preserve it
-//
 // The result is HTML-escaped to prevent XSS via a crafted Host header.
 func (h *Handler) publicHTTPSURL(r *http.Request) string {
-	host, portStr, err := net.SplitHostPort(r.Host)
-	if err != nil {
-		// No port in Host header — use bare hostname.
-		return html.EscapeString("https://" + r.Host + "/")
-	}
-
-	// Ignore error: an invalid explicit port falls through to the preserve-as-is branch.
-	port, _ := strconv.Atoi(portStr)
-	if port == h.httpPort {
-		return html.EscapeString(fmt.Sprintf("https://%s:%d/", host, h.tlsPort))
-	}
-	return html.EscapeString(fmt.Sprintf("https://%s:%s/", host, portStr))
+	authority := middleware.HTTPSAuthority(r.Host, h.httpPort, h.tlsPort)
+	return html.EscapeString("https://" + authority + "/")
 }
 
 // isRawIP reports whether the host (without port) is a raw IP literal.

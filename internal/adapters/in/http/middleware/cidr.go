@@ -51,13 +51,41 @@ func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) str
 	}
 }
 
-// extractRemoteIP returns the IP portion of r.RemoteAddr, stripping the port.
-func extractRemoteIP(remoteAddr string) string {
+// ExtractRemoteIP returns the IP portion of a RemoteAddr, stripping the port.
+func ExtractRemoteIP(remoteAddr string) string {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		return remoteAddr
 	}
 	return host
+}
+
+// IsTrustedOrLocal reports whether an IP belongs to localhost or trusted proxy nets.
+func IsTrustedOrLocal(ip string, proxyNets []*net.IPNet) bool {
+	return IsTrustedProxy(ip, localhostNets) || IsTrustedProxy(ip, proxyNets)
+}
+
+// HTTPSAuthority converts an incoming Host header plus httpPort/tlsPort into the
+// correct HTTPS authority (host or host:port).
+//
+// Rules:
+//   - No port in Host → omit TLS port (public reverse-proxy assumed on :443).
+//   - Host port == httpPort → map to tlsPort.
+//   - Any other explicit port → preserve it.
+func HTTPSAuthority(host string, httpPort, tlsPort int) string {
+	hostname, portStr, err := net.SplitHostPort(host)
+	if err != nil {
+		// No port in Host header — omit TLS port from URL.
+		return host
+	}
+
+	port, _ := strconv.Atoi(portStr)
+	if port == httpPort {
+		return net.JoinHostPort(hostname, strconv.Itoa(tlsPort))
+	}
+
+	// Unknown explicit port — preserve it.
+	return net.JoinHostPort(hostname, portStr)
 }
 
 // RegistryCIDRAllowlist returns middleware that restricts access to the given CIDR ranges.
@@ -93,7 +121,7 @@ func HTTPSRedirect(proxyNets []*net.IPNet, httpPort, tlsPort int, forceAll bool,
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !forceAll {
-				remoteIP := extractRemoteIP(r.RemoteAddr)
+				remoteIP := ExtractRemoteIP(r.RemoteAddr)
 				if IsTrustedProxy(remoteIP, localhostNets) || IsTrustedProxy(remoteIP, proxyNets) {
 					next.ServeHTTP(w, r)
 					return
@@ -112,29 +140,13 @@ func HTTPSRedirect(proxyNets []*net.IPNet, httpPort, tlsPort int, forceAll bool,
 }
 
 // httpsRedirectTarget derives the HTTPS redirect URL from the request Host.
-//
-//   - No port in Host → omit TLS port (public reverse-proxy assumed on :443).
-//   - Host port == httpPort → map to tlsPort.
-//   - Any other explicit port → preserve it.
 func httpsRedirectTarget(host, requestURI string, httpPort, tlsPort int) string {
 	path := requestURI
 	if !strings.HasPrefix(path, "/") {
 		path = "/"
 	}
 
-	hostname, portStr, err := net.SplitHostPort(host)
-	if err != nil {
-		// No port in Host header — omit TLS port from URL.
-		return fmt.Sprintf("https://%s%s", host, path)
-	}
-
-	port, _ := strconv.Atoi(portStr)
-	if port == httpPort {
-		return fmt.Sprintf("https://%s:%d%s", hostname, tlsPort, path)
-	}
-
-	// Unknown explicit port — preserve it.
-	return fmt.Sprintf("https://%s:%s%s", hostname, portStr, path)
+	return fmt.Sprintf("https://%s%s", HTTPSAuthority(host, httpPort, tlsPort), path)
 }
 
 // ProxyCIDRAllowlist returns middleware that restricts proxy access to the given CIDR ranges.
@@ -143,6 +155,6 @@ func httpsRedirectTarget(host, requestURI string, httpPort, tlsPort int) string 
 // An empty allowedNets slice is a no-op (all traffic passes through).
 func ProxyCIDRAllowlist(allowedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return cidrAllowlist(allowedNets, func(r *http.Request) string {
-		return extractRemoteIP(r.RemoteAddr)
+		return ExtractRemoteIP(r.RemoteAddr)
 	}, "proxy origin", log)
 }
