@@ -79,7 +79,7 @@ func HTTPSAuthority(host string, httpPort, tlsPort int) string {
 		return host
 	}
 
-	port, _ := strconv.Atoi(portStr)
+	port, _ := strconv.Atoi(portStr) // Ignore parse errors so invalid explicit ports fall through to the preserve-as-is branch.
 	if port == httpPort {
 		return net.JoinHostPort(hostname, strconv.Itoa(tlsPort))
 	}

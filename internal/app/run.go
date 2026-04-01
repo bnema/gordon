@@ -1727,7 +1727,7 @@ func directHTTPOnboardingGate(ob *onboarding.Handler, proxyNets []*net.IPNet, pr
 
 	onboardingWithMiddleware := middleware.Chain(
 		middleware.PanicRecovery(log),
-		middleware.RequestLogger(log), // no trusted proxy nets — log RemoteAddr only
+		middleware.RequestLogger(log), // Intentionally omit trusted proxy nets so direct onboarding logs use RemoteAddr only.
 		middleware.SecurityHeaders,
 	)(onboardingMux)
 
