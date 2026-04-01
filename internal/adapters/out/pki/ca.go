@@ -231,6 +231,31 @@ func (ca *CA) bootstrapRoot(certPath, keyPath string) error {
 	return nil
 }
 
+// validateLoadedIntermediate parses, verifies, and checks the expiry of a loaded
+// intermediate CA cert/key pair. Returns (cert, key, true) on success, or
+// (nil, nil, false) if the pair should be regenerated (parse error, key mismatch,
+// wrong signer, or expired). Logging is done inside this function.
+func (ca *CA) validateLoadedIntermediate(certPEM, keyPEM []byte) (*x509.Certificate, crypto.Signer, bool) {
+	cert, key, err := parseCertAndKey(certPEM, keyPEM)
+	if err != nil {
+		ca.log.Warn().Err(err).Msg("failed to parse intermediate CA, regenerating")
+		return nil, nil, false
+	}
+	if err := verifyKeyPair(cert, key); err != nil {
+		ca.log.Warn().Err(err).Msg("intermediate CA cert/key mismatch, regenerating")
+		return nil, nil, false
+	}
+	if err := cert.CheckSignatureFrom(ca.rootCert); err != nil {
+		ca.log.Warn().Err(err).Msg("intermediate CA not signed by current root, regenerating")
+		return nil, nil, false
+	}
+	if !time.Now().Before(cert.NotAfter) {
+		ca.log.Warn().Msg("intermediate CA expired, regenerating")
+		return nil, nil, false
+	}
+	return cert, key, true
+}
+
 func (ca *CA) loadOrGenerateIntermediate() error {
 	certPath := filepath.Join(ca.dataDir, pkiDir, "intermediate.crt")
 	keyPath := filepath.Join(ca.dataDir, pkiDir, "intermediate.key")
@@ -243,14 +268,7 @@ func (ca *CA) loadOrGenerateIntermediate() error {
 
 	switch {
 	case certErr == nil && keyErr == nil:
-		cert, key, err := parseCertAndKey(certPEM, keyPEM)
-		if err != nil {
-			ca.log.Warn().Err(err).Msg("failed to parse intermediate CA, regenerating")
-		} else if err := verifyKeyPair(cert, key); err != nil {
-			ca.log.Warn().Err(err).Msg("intermediate CA cert/key mismatch, regenerating")
-		} else if err := cert.CheckSignatureFrom(ca.rootCert); err != nil {
-			ca.log.Warn().Err(err).Msg("intermediate CA not signed by current root, regenerating")
-		} else if time.Now().Before(cert.NotAfter) {
+		if cert, key, ok := ca.validateLoadedIntermediate(certPEM, keyPEM); ok {
 			ca.interCert = cert
 			ca.interKey = key
 			ca.log.Info().
@@ -258,8 +276,6 @@ func (ca *CA) loadOrGenerateIntermediate() error {
 				Time("expires", cert.NotAfter).
 				Msg("loaded existing intermediate CA")
 			return nil
-		} else {
-			ca.log.Warn().Msg("intermediate CA expired, regenerating")
 		}
 
 	case certMissing && keyMissing:

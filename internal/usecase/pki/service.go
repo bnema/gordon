@@ -3,6 +3,7 @@ package pki
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"sync"
 	"time"
 
@@ -115,8 +116,10 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		}
 
 		expiresAt := time.Now().Add(s.leafLifetime())
-		if cert.Leaf != nil {
-			expiresAt = cert.Leaf.NotAfter
+		if len(cert.Certificate) > 0 {
+			if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
+				expiresAt = leaf.NotAfter
+			}
 		}
 		s.cache.Store(domain, &cachedCert{
 			cert:      cert,
