@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -108,6 +109,102 @@ func TestRegistryCIDRAllowlist(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHTTPSRedirect_NoPortHost_OmitsTLSPort(t *testing.T) {
+	log := testLogger()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log)(ok)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client := srv.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	req.Host = "o2.bnema.dev"
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
+	assert.Equal(t, "https://o2.bnema.dev/", resp.Header.Get("Location"))
+}
+
+func TestHTTPSRedirect_HTTPListenerPort_MapsToTLSPort(t *testing.T) {
+	log := testLogger()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log)(ok)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client := srv.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	req.Host = "o2.bnema.dev:8088"
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
+	assert.Equal(t, "https://o2.bnema.dev:8443/", resp.Header.Get("Location"))
+}
+
+func TestHTTPSRedirect_UnknownExplicitPort_IsPreserved(t *testing.T) {
+	log := testLogger()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log)(ok)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client := srv.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	req.Host = "o2.bnema.dev:9999"
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
+	assert.Equal(t, "https://o2.bnema.dev:9999/", resp.Header.Get("Location"))
+}
+
+func TestHTTPSRedirect_InvalidExplicitPort_IsPreserved(t *testing.T) {
+	log := testLogger()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log)(ok)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	// Use a raw TCP connection because Go's HTTP client rejects the
+	// invalid port in the Location header before CheckRedirect fires.
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, err = fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: o2.bnema.dev:abcd\r\nConnection: close\r\n\r\n")
+	require.NoError(t, err)
+
+	var buf [4096]byte
+	n, _ := conn.Read(buf[:])
+	raw := string(buf[:n])
+
+	assert.Contains(t, raw, "308")
+	assert.Contains(t, raw, "Location: https://o2.bnema.dev:abcd/")
 }
 
 func TestProxyCIDRAllowlist(t *testing.T) {

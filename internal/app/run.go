@@ -1641,7 +1641,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
-		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log),
+		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.Port, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log),
 	}
 	if proxyCIDRMiddleware != nil {
 		httpProxyMiddlewares = append(httpProxyMiddlewares, proxyCIDRMiddleware)
@@ -1652,9 +1652,34 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 		"gordon.proxy",
 	)
 
-	// HTTP proxyMux: Cloudflare-proxied traffic only, no onboarding
+	// Build the onboarding handler once if internal CA is available and TLS is enabled.
+	var obHandler *onboarding.Handler
+	if svc.caAdapter != nil && cfg.Server.TLSPort != 0 {
+		mobileconfigBytes := pkiadapter.GenerateMobileconfig(
+			svc.caAdapter.RootCertificateDER(),
+			svc.caAdapter.RootCommonName(),
+		)
+		obHandler = onboarding.NewHandler(
+			svc.caAdapter.RootCertificate(),
+			mobileconfigBytes,
+			svc.caAdapter.RootFingerprint(),
+			cfg.Server.Port,
+			cfg.Server.TLSPort,
+		)
+	}
+
+	// HTTP proxyMux: trusted proxy traffic flows through the normal proxy chain.
+	// Direct clients get an onboarding gate (when CA is available) placed BEFORE
+	// HTTPSRedirect so force_https_redirect cannot bypass onboarding.
 	proxyMux := http.NewServeMux()
-	proxyMux.Handle("/", httpProxyWithMiddleware)
+	if proxyCIDRMiddleware != nil && proxyAllowedNets == nil {
+		// Invalid proxy_allowed_ips: deny all traffic (fail-closed).
+		proxyMux.Handle("/", proxyCIDRMiddleware(httpProxyWithMiddleware))
+	} else if obHandler != nil {
+		proxyMux.Handle("/", directHTTPOnboardingGate(obHandler, proxyAllowedNets, httpProxyWithMiddleware, log))
+	} else {
+		proxyMux.Handle("/", httpProxyWithMiddleware)
+	}
 
 	// HTTPS proxy handler chain: security headers + proxy + CA onboarding
 	// Onboarding routes live on the TLS port so Tailnet / direct clients
@@ -1669,25 +1694,64 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	}
 
 	httpsMux := http.NewServeMux()
-	if svc.caAdapter != nil {
-		mobileconfigBytes := pkiadapter.GenerateMobileconfig(
-			svc.caAdapter.RootCertificateDER(),
-			svc.caAdapter.RootCommonName(),
-		)
-		onboardingHandler := onboarding.NewHandler(
-			svc.caAdapter.RootCertificate(),
-			mobileconfigBytes,
-			cfg.Server.TLSPort,
-		)
-		httpsMux.HandleFunc("GET /ca", onboardingHandler.ServeOnboardingPage)
-		httpsMux.HandleFunc("GET /ca.crt", onboardingHandler.ServeCACert)
-		httpsMux.HandleFunc("GET /ca.mobileconfig", onboardingHandler.ServeMobileconfig)
+	if obHandler != nil {
+		httpsMux.HandleFunc("GET /ca", obHandler.ServeOnboardingPage)
+		httpsMux.HandleFunc("GET /ca.crt", obHandler.ServeCACert)
+		httpsMux.HandleFunc("GET /ca.mobileconfig", obHandler.ServeMobileconfig)
 	}
 	httpsMux.Handle("/", proxyHandler)
 
 	httpsHandler := otelhttp.NewHandler(middleware.Chain(httpsProxyMiddlewares...)(httpsMux), "gordon.proxy.tls")
 
 	return registryMux, proxyMux, httpsHandler
+}
+
+// directHTTPOnboardingGate returns an http.Handler that splits HTTP traffic
+// by source IP. Trusted proxy IPs flow through to the normal proxy chain.
+// Direct clients are served the CA onboarding flow on allowed paths and
+// receive 403 on everything else. This gate runs BEFORE HTTPSRedirect so
+// force_https_redirect cannot bypass onboarding for direct clients.
+func directHTTPOnboardingGate(ob *onboarding.Handler, proxyNets []*net.IPNet, proxyChain http.Handler, log zerowrap.Logger) http.Handler {
+	// Build a small mux for direct-client onboarding paths.
+	onboardingMux := http.NewServeMux()
+	onboardingMux.HandleFunc("GET /{$}", ob.ServeOnboardingPage)
+	onboardingMux.HandleFunc("GET /ca", ob.ServeOnboardingPage)
+	onboardingMux.HandleFunc("GET /ca.crt", ob.ServeCACert)
+	onboardingMux.HandleFunc("GET /ca.mobileconfig", ob.ServeMobileconfig)
+
+	// Reserve ACME challenge path for future use.
+	onboardingMux.HandleFunc("/.well-known/acme-challenge/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+
+	// Catch-all: reject any other direct HTTP request.
+	// Uses a method-aware split: GET writes a body, HEAD gets an empty 403.
+	onboardingMux.HandleFunc("/", directHTTPForbidden)
+
+	onboardingWithMiddleware := middleware.Chain(
+		middleware.PanicRecovery(log),
+		middleware.RequestLogger(log), // Intentionally omit trusted proxy nets so direct onboarding logs use RemoteAddr only.
+		middleware.SecurityHeaders,
+	)(onboardingMux)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remoteIP := middleware.ExtractRemoteIP(r.RemoteAddr)
+		if middleware.IsTrustedOrLocal(remoteIP, proxyNets) {
+			proxyChain.ServeHTTP(w, r)
+			return
+		}
+		onboardingWithMiddleware.ServeHTTP(w, r)
+	})
+}
+
+// directHTTPForbidden responds with 403 for non-onboarding HTTP paths.
+// HEAD requests get an empty body per HTTP semantics.
+func directHTTPForbidden(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write([]byte("Only certificate onboarding is available over HTTP.\n"))
+	}
 }
 
 func buildRegistryHandlerWithMiddleware(
