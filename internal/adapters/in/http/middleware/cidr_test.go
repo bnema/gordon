@@ -175,7 +175,7 @@ func TestHTTPSRedirect_InvalidExplicitPort_IsPreserved(t *testing.T) {
 
 	handler := HTTPSRedirect(nil, 8088, 8443, true, log)(ok)
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://o2.bnema.dev/", nil)
 	req.Host = "o2.bnema.dev:abcd"
 	req.RemoteAddr = "203.0.113.10:12345"
 	rr := httptest.NewRecorder()

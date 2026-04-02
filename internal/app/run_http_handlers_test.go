@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -244,9 +246,13 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_HEADRoutesRemainAvailable(t *testing
 	for _, path := range []string{"/ca", "/ca.crt", "/ca.mobileconfig"} {
 		resp, err := ts.Client().Head(ts.URL + path)
 		require.NoError(t, err)
-		resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "HEAD %s should return 200", path)
+		assert.Empty(t, body, "HEAD %s should have empty body", path)
 	}
 }
 
@@ -350,8 +356,11 @@ func TestCreateHTTPHandlers_TLSConfiguredWithoutCA_FailsStartup(t *testing.T) {
 		svc: &services{},
 	}
 	si.cfg.Server.TLSPort = 8443
-	// Point data dir to a non-existent path under /proc to guarantee failure.
-	si.cfg.Server.DataDir = "/proc/nonexistent/path"
+	dataDir := t.TempDir()
+	blockingPath := filepath.Join(dataDir, "not-a-directory")
+	require.NoError(t, os.WriteFile(blockingPath, []byte("blocking file"), 0600))
+	// Point data dir to a file path so PKI directory creation fails portably.
+	si.cfg.Server.DataDir = blockingPath
 
 	err := si.initPKI()
 	assert.Error(t, err, "initPKI should fail when CA cannot be initialized")
