@@ -83,13 +83,13 @@ sudo gordon ca install --uninstall
 
 ## Client Trust Setup
 
-Clients that connect directly to Gordon's HTTPS port need the root CA certificate in their trust store. Gordon provides the certificate through a browser-accessible onboarding page at `https://<gordon-host>:<tls_port>/ca`, or over plain HTTP at `http://<gordon-host>:<port>/ca` for first-time setup.
+Clients that connect directly to Gordon's HTTPS port need the root CA certificate in their trust store. Gordon provides the certificate through a browser-accessible onboarding page at `https://<gordon-host>/ca`, or over plain HTTP at `http://<gordon-host>/ca` for first-time setup.
 
 ### Firefox / Zen (NSS certificate store)
 
 Firefox and Zen use their own certificate store, separate from the OS.
 
-1. Open `https://<gordon-host>:<tls_port>/ca.crt` — Firefox will prompt to import the certificate.
+1. Open `https://<gordon-host>/ca.crt` — Firefox will prompt to import the certificate.
 2. Check **Trust this CA to identify websites** and confirm.
 
 Alternatively, import manually: **Settings > Privacy & Security > Certificates > View Certificates > Import**.
@@ -98,7 +98,7 @@ Alternatively, import manually: **Settings > Privacy & Security > Certificates >
 
 ```bash
 # Download the certificate
-curl -k https://<gordon-host>:<tls_port>/ca.crt -o gordon-ca.pem
+curl -k https://<gordon-host>/ca.crt -o gordon-ca.pem
 
 # Debian / Ubuntu
 sudo cp gordon-ca.pem /usr/local/share/ca-certificates/gordon-ca.crt
@@ -111,7 +111,7 @@ sudo update-ca-trust
 
 ### Mobile Devices (iOS / Android)
 
-Visit `http://<gordon-host>:<port>/ca` from the device browser. The onboarding page offers:
+Visit `http://<gordon-host>/ca` from the device browser. The onboarding page offers:
 
 - **iOS:** Download the `.mobileconfig` profile, then install it in **Settings > General > VPN & Device Management**.
 - **Android:** Download `ca.crt`, then install it in **Settings > Security > Encryption & credentials > Install a certificate**.

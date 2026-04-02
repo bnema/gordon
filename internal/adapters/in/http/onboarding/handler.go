@@ -59,6 +59,9 @@ func isRawIP(hostHeader string) bool {
 	if err != nil {
 		host = hostHeader
 	}
+	if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
+		host = host[1 : len(host)-1]
+	}
 	return net.ParseIP(host) != nil
 }
 

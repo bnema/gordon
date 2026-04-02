@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	adminhttp "github.com/bnema/gordon/internal/adapters/in/http/admin"
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
-	"github.com/bnema/zerowrap"
 )
 
 func TestCreateAuthService_Disabled_ReturnsNilServices(t *testing.T) {
@@ -299,14 +299,22 @@ func TestCreateHTTPHandlers_DirectHTTPForbiddenHEAD_ReturnsForbidden(t *testing.
 
 	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
 
-	req := httptest.NewRequest(http.MethodHead, "/web", nil)
-	req.RemoteAddr = directAddr
-	req.Host = "o2.bnema.dev"
-	rec := httptest.NewRecorder()
-	httpHandler.ServeHTTP(rec, req)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = directAddr
+		r.Host = "o2.bnema.dev"
+		httpHandler.ServeHTTP(w, r)
+	}))
+	defer ts.Close()
 
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assert.Empty(t, rec.Body.String(), "HEAD 403 should have empty body")
+	resp, err := ts.Client().Head(ts.URL + "/web")
+	require.NoError(t, err)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Empty(t, body, "HEAD 403 should have empty body")
 }
 
 func TestCreateHTTPHandlers_DirectHTTPACMEChallenge_Returns404(t *testing.T) {

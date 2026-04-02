@@ -86,6 +86,7 @@ The static certificate is served for SNI-matching domains (including wildcards).
 When `tls_port` is non-zero, direct HTTP clients (those not arriving through a trusted proxy) are restricted to CA onboarding paths only:
 
 - `/`, `/ca`, `/ca.crt`, `/ca.mobileconfig` — serve the onboarding page and CA certificate downloads
+- `/.well-known/acme-challenge/*` — returns `404 Not Found` (reserved for future ACME support)
 - All other paths return `403 Forbidden`
 
 This lets new clients discover and trust the internal CA over plain HTTP without exposing the full application. Trusted proxy traffic (e.g. from Cloudflare) continues through the normal HTTP proxy path unaffected.

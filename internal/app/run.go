@@ -1672,7 +1672,10 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	// Direct clients get an onboarding gate (when CA is available) placed BEFORE
 	// HTTPSRedirect so force_https_redirect cannot bypass onboarding.
 	proxyMux := http.NewServeMux()
-	if obHandler != nil {
+	if proxyCIDRMiddleware != nil && proxyAllowedNets == nil {
+		// Invalid proxy_allowed_ips: deny all traffic (fail-closed).
+		proxyMux.Handle("/", proxyCIDRMiddleware(httpProxyWithMiddleware))
+	} else if obHandler != nil {
 		proxyMux.Handle("/", directHTTPOnboardingGate(obHandler, proxyAllowedNets, httpProxyWithMiddleware, log))
 	} else {
 		proxyMux.Handle("/", httpProxyWithMiddleware)
