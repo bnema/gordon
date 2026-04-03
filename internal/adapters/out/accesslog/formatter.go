@@ -110,13 +110,30 @@ func buildRequestTarget(path, query string) string {
 	return path + "?" + query
 }
 
-// escapeQuoted escapes backslashes, double-quotes, and newline characters inside
-// a value that will be enclosed in double-quotes in the log line. Newline
-// escaping prevents log-injection via user-controlled fields such as User-Agent.
+// escapeQuoted escapes backslashes, double-quotes, and control characters inside
+// a value that will be enclosed in double-quotes in the log line.
+// All ASCII control characters (0x00-0x1F) are escaped to prevent log-injection
+// via user-controlled fields such as User-Agent or Referer.
 func escapeQuoted(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "\n", `\n`)
-	s = strings.ReplaceAll(s, "\r", `\r`)
-	return s
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '"':
+			b.WriteString(`\"`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

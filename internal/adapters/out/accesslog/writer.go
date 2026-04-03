@@ -160,6 +160,8 @@ func newFileSink(cfg Config) (*fileSink, error) {
 		return nil, fmt.Errorf("accesslog: create log directory: %w", err)
 	}
 
+	// lumberjack defaults when zero: MaxSize=100MB, MaxBackups=keep all, MaxAge=no limit.
+	// Config defaults in run.go set these to sensible values; zero here is valid.
 	return &fileSink{
 		logger: &lumberjack.Logger{
 			Filename:   cfg.FilePath,
