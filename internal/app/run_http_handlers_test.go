@@ -42,7 +42,7 @@ func TestCreateHTTPHandlers_LocalMode_DisablesAdminRoutes(t *testing.T) {
 	cfg.Auth.Enabled = false
 
 	svc := &services{adminHandler: &adminhttp.Handler{}}
-	registryHandler, _, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	registryHandler, _, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
 	req.RemoteAddr = "192.0.2.10:12345"
@@ -61,7 +61,7 @@ func TestCreateHTTPHandlers_LocalMode_RestrictsRegistryToLoopback(t *testing.T) 
 	cfg := Config{}
 	cfg.Auth.Enabled = false
 
-	registryHandler, _, _ := createHTTPHandlers(&services{}, cfg, zerowrap.Default())
+	registryHandler, _, _ := createHTTPHandlers(&services{}, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/test/manifests/latest", nil)
 	req.RemoteAddr = "192.0.2.20:12345"
@@ -103,7 +103,7 @@ func TestCreateHTTPHandlers_DirectHTTPRoot_ServesOnboarding(t *testing.T) {
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = directAddr
@@ -122,7 +122,7 @@ func TestCreateHTTPHandlers_DirectHTTPCertPath_ServesCACert(t *testing.T) {
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ca.crt", nil)
 	req.RemoteAddr = directAddr
@@ -141,7 +141,7 @@ func TestCreateHTTPHandlers_DirectHTTPUnknownPath_ReturnsForbidden(t *testing.T)
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/web", nil)
 	req.RemoteAddr = directAddr
@@ -159,7 +159,7 @@ func TestCreateHTTPHandlers_TrustedProxyHTTP_DoesNotServeOnboarding(t *testing.T
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = trustedProxyAddr
@@ -179,7 +179,7 @@ func TestCreateHTTPHandlers_TrustedProxyCACertPath_DoesNotServeOnboardingResourc
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ca.crt", nil)
 	req.RemoteAddr = trustedProxyAddr
@@ -199,7 +199,7 @@ func TestCreateHTTPHandlers_ForceHTTPSRedirect_DoesNotBypassDirectOnboarding(t *
 	cfg.Server.ForceHTTPSRedirect = true
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = directAddr
@@ -218,7 +218,7 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_RemainsAvailable(t *testing.T) {
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ca", nil)
 	req.RemoteAddr = directAddr
@@ -236,7 +236,7 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_HEADRoutesRemainAvailable(t *testing
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	// Use httptest.NewServer so Go's net/http server strips the body for HEAD.
 	// httptest.NewRecorder does not apply server-level HEAD body stripping.
@@ -262,7 +262,7 @@ func TestCreateHTTPHandlers_DirectHTTPOnboarding_HEADRoutesRemainAvailable(t *te
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = directAddr
@@ -297,7 +297,7 @@ func TestCreateHTTPHandlers_DirectHTTPForbiddenHEAD_ReturnsForbidden(t *testing.
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = directAddr
@@ -323,7 +323,7 @@ func TestCreateHTTPHandlers_DirectHTTPACMEChallenge_Returns404(t *testing.T) {
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/acme-challenge/test-token", nil)
 	req.RemoteAddr = directAddr
@@ -341,7 +341,7 @@ func TestCreateHTTPHandlers_TLSDisabled_DoesNotServeHTTPOnboarding(t *testing.T)
 	cfg.Server.TLSPort = 0 // TLS disabled
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = directAddr

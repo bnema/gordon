@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/viper"
 
 	// Adapters - Output
+	"github.com/bnema/gordon/internal/adapters/out/accesslog"
 	"github.com/bnema/gordon/internal/adapters/out/docker"
 	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
 	"github.com/bnema/gordon/internal/adapters/out/envloader"
@@ -119,6 +120,17 @@ type Config struct {
 			MaxBackups int    `mapstructure:"max_backups"`
 			MaxAge     int    `mapstructure:"max_age"`
 		} `mapstructure:"container_logs"`
+		AccessLog struct {
+			Enabled             bool   `mapstructure:"enabled"`
+			Format              string `mapstructure:"format"`
+			Output              string `mapstructure:"output"`
+			FilePath            string `mapstructure:"file_path"`
+			MaxSize             int    `mapstructure:"max_size"`
+			MaxBackups          int    `mapstructure:"max_backups"`
+			MaxAge              int    `mapstructure:"max_age"`
+			ExcludeHealthChecks bool   `mapstructure:"exclude_health_checks"`
+			SyslogIdentifier    string `mapstructure:"syslog_identifier"`
+		} `mapstructure:"access_log"`
 	} `mapstructure:"logging"`
 
 	Env struct {
@@ -340,6 +352,43 @@ func initLogger(cfg Config) (zerowrap.Logger, func(), error) {
 		return zerowrap.Default(), nil, fmt.Errorf("failed to create logger with file: %w", err)
 	}
 	return log, cleanup, nil
+}
+
+// initAccessLog creates an access log writer when access logging is enabled.
+// Returns nil, nil when disabled — callers must treat nil writer as "disabled".
+func initAccessLog(cfg Config, log zerowrap.Logger) (*accesslog.Writer, error) {
+	if !cfg.Logging.AccessLog.Enabled {
+		return nil, nil
+	}
+
+	filePath := cfg.Logging.AccessLog.FilePath
+	if filePath == "" && cfg.Logging.AccessLog.Output == "file" {
+		dataDir := cfg.Server.DataDir
+		if dataDir == "" {
+			dataDir = DefaultDataDir()
+		}
+		filePath = filepath.Join(dataDir, "logs", "access.log")
+	}
+
+	writer, err := accesslog.New(accesslog.Config{
+		Format:           cfg.Logging.AccessLog.Format,
+		Output:           cfg.Logging.AccessLog.Output,
+		FilePath:         filePath,
+		MaxSize:          cfg.Logging.AccessLog.MaxSize,
+		MaxBackups:       cfg.Logging.AccessLog.MaxBackups,
+		MaxAge:           cfg.Logging.AccessLog.MaxAge,
+		SyslogIdentifier: cfg.Logging.AccessLog.SyslogIdentifier,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize access log: %w", err)
+	}
+
+	log.Info().
+		Str("format", cfg.Logging.AccessLog.Format).
+		Str("output", cfg.Logging.AccessLog.Output).
+		Msg("access log enabled")
+
+	return writer, nil
 }
 
 // serviceInit holds the shared context for service initialization helpers.
@@ -1611,7 +1660,7 @@ func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 
 // createHTTPHandlers creates HTTP handlers with middleware.
 // Returns three handlers: registry, HTTP proxy (with CIDR + onboarding), and HTTPS proxy.
-func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Handler, http.Handler, http.Handler) {
+func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWriter middleware.AccessLogWriter) (http.Handler, http.Handler, http.Handler) {
 	// Parse trusted proxies once for all middleware chains.
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
 	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
@@ -1703,7 +1752,18 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 
 	httpsHandler := otelhttp.NewHandler(middleware.Chain(httpsProxyMiddlewares...)(httpsMux), "gordon.proxy.tls")
 
-	return registryMux, proxyMux, httpsHandler
+	// Wrap top-level handlers with access logging outside all gates
+	// (loopbackOnly, denyAllHandler, CIDR allowlist) so every request —
+	// including rejected probes — produces exactly one access-log line.
+	var registryOut, proxyOut, httpsOut http.Handler = registryMux, proxyMux, httpsHandler
+	if accessWriter != nil {
+		excludeHC := cfg.Logging.AccessLog.ExcludeHealthChecks
+		registryOut = middleware.AccessLogger(accessWriter, excludeHC, log, trustedNets)(registryOut)
+		proxyOut = middleware.AccessLogger(accessWriter, excludeHC, log, trustedNets)(proxyOut)
+		httpsOut = middleware.AccessLogger(accessWriter, excludeHC, log, trustedNets)(httpsOut)
+	}
+
+	return registryOut, proxyOut, httpsOut
 }
 
 // directHTTPOnboardingGate returns an http.Handler that splits HTTP traffic
@@ -1984,6 +2044,21 @@ func registerAdminRoutes(registryMux *http.ServeMux, svc *services, cfg Config, 
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
 func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
+	// Initialize access log writer. Kept here (not in Run) to keep Run's cyclomatic
+	// complexity within the project limit of 15.
+	accessWriterConcrete, err := initAccessLog(cfg, log)
+	if err != nil {
+		return err
+	}
+	if accessWriterConcrete != nil {
+		defer accessWriterConcrete.Close()
+	}
+	// Convert to interface only when non-nil to avoid the Go nil-interface pitfall
+	// where a typed nil pointer becomes a non-nil interface value.
+	var accessWriter middleware.AccessLogWriter
+	if accessWriterConcrete != nil {
+		accessWriter = accessWriterConcrete
+	}
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -2001,7 +2076,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 	errChan := make(chan error, 3)
 
-	registryHandler, httpProxyHandler, httpsProxyHandler := createHTTPHandlers(svc, cfg, log)
+	registryHandler, httpProxyHandler, httpsProxyHandler := createHTTPHandlers(svc, cfg, log, accessWriter)
 
 	registryAddr := net.JoinHostPort(cfg.Server.RegistryListenAddr, strconv.Itoa(cfg.Server.RegistryPort))
 	registrySrv, registryReady := startServer(registryAddr, registryHandler, "registry", nil, errChan, log)
@@ -2702,6 +2777,15 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("logging.container_logs.max_size", 100)
 	v.SetDefault("logging.container_logs.max_backups", 3)
 	v.SetDefault("logging.container_logs.max_age", 28)
+	v.SetDefault("logging.access_log.enabled", false)
+	v.SetDefault("logging.access_log.format", "json")
+	v.SetDefault("logging.access_log.output", "stdout")
+	v.SetDefault("logging.access_log.file_path", "")
+	v.SetDefault("logging.access_log.max_size", 100)
+	v.SetDefault("logging.access_log.max_backups", 3)
+	v.SetDefault("logging.access_log.max_age", 28)
+	v.SetDefault("logging.access_log.exclude_health_checks", true)
+	v.SetDefault("logging.access_log.syslog_identifier", "gordon-access")
 	v.SetDefault("env.dir", "") // defaults to {data_dir}/env when empty
 	v.SetDefault("auth.enabled", true)
 	// Note: auth.type defaults to "token" (the only supported mode)
