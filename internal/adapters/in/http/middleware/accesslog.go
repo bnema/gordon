@@ -9,19 +9,8 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/out/accesslog"
+	"github.com/bnema/gordon/internal/domain"
 )
-
-// loopbackNets contains the loopback ranges used for health-check exclusion.
-var loopbackNets = func() []*net.IPNet {
-	_, ipv4Loopback, _ := net.ParseCIDR("127.0.0.0/8")
-	_, ipv6Loopback, _ := net.ParseCIDR("::1/128")
-	return []*net.IPNet{ipv4Loopback, ipv6Loopback}
-}()
-
-// isLoopback reports whether ip is a loopback address.
-func isLoopback(ip string) bool {
-	return IsTrustedProxy(ip, loopbackNets)
-}
 
 // AccessLogWriter is the interface the middleware needs from the output adapter.
 // *accesslog.Writer satisfies this interface.
@@ -33,7 +22,7 @@ type AccessLogWriter interface {
 // to the provided writer. It runs alongside (not instead of) RequestLogger.
 //
 // When excludeHealthChecks is true, requests from the Gordon health prober
-// (UA prefix "Gordon-HealthCheck/") or from loopback IPs are not logged.
+// (UA prefix domain.HealthCheckUserAgentPrefix) or from loopback IPs are not logged.
 //
 // Write failures are reported as warnings through the application logger and
 // never fail the HTTP response.
@@ -60,18 +49,25 @@ func AccessLogger(writer AccessLogWriter, excludeHealthChecks bool, log zerowrap
 
 			next.ServeHTTP(rw, r)
 
-			// Apply health-check exclusion after the response so we always allow
-			// the request to complete, we just don't log it.
+			// Apply health-check exclusion after the response so the request
+			// always completes — we just skip writing the log entry.
+			// UA check uses the shared domain constant so the prober and this
+			// filter can never drift. Loopback check reuses localhostNets from
+			// cidr.go (same package) — no separate loopback definition needed.
 			if excludeHealthChecks {
-				if strings.HasPrefix(r.UserAgent(), "Gordon-HealthCheck/") || isLoopback(clientIP) {
+				if strings.HasPrefix(r.UserAgent(), domain.HealthCheckUserAgentPrefix) ||
+					IsTrustedProxy(clientIP, localhostNets) {
 					return
 				}
 			}
 
-			durationMS := float64(time.Since(start).Microseconds()) / 1000.0
+			// Capture end time once; use it for both duration and entry timestamp
+			// so the two values are derived from the same instant.
+			end := time.Now()
+			durationMS := float64(end.Sub(start).Microseconds()) / 1000.0
 
 			entry := accesslog.Entry{
-				Time:       time.Now().UTC(),
+				Time:       end.UTC(),
 				ClientIP:   clientIP,
 				Method:     r.Method,
 				Host:       r.Host,
@@ -90,6 +86,11 @@ func AccessLogger(writer AccessLogWriter, excludeHealthChecks bool, log zerowrap
 				log.Warn().
 					Str(zerowrap.FieldLayer, "adapter").
 					Str(zerowrap.FieldAdapter, "http").
+					Str(zerowrap.FieldRequestID, requestID).
+					Str(zerowrap.FieldMethod, r.Method).
+					Str(zerowrap.FieldPath, r.URL.Path).
+					Int(zerowrap.FieldStatus, rw.StatusCode()).
+					Str(zerowrap.FieldClientIP, clientIP).
 					Err(err).
 					Msg("access log write failed")
 			}

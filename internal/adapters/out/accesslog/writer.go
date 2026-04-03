@@ -160,15 +160,10 @@ func newFileSink(cfg Config) (*fileSink, error) {
 		return nil, fmt.Errorf("accesslog: create log directory: %w", err)
 	}
 
-	maxSize := cfg.MaxSize
-	if maxSize <= 0 {
-		maxSize = 100
-	}
-
 	return &fileSink{
 		logger: &lumberjack.Logger{
 			Filename:   cfg.FilePath,
-			MaxSize:    maxSize,
+			MaxSize:    cfg.MaxSize,
 			MaxBackups: cfg.MaxBackups,
 			MaxAge:     cfg.MaxAge,
 			Compress:   true,
