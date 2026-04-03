@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -197,4 +199,98 @@ func TestForwardToTarget_ProxyHeaderSet(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+func TestNewReverseProxy_XForwardedProto(t *testing.T) {
+	trustedNets := middleware.ParseTrustedProxies([]string{"10.0.0.0/8"})
+
+	tests := []struct {
+		name          string
+		remoteAddr    string
+		incomingProto string // X-Forwarded-Proto on incoming request, empty = not set
+		wantProto     string // expected X-Forwarded-Proto at backend
+		nets          []*net.IPNet
+	}{
+		{
+			name:          "trusted proxy with https preserved",
+			remoteAddr:    "10.0.0.1:12345",
+			incomingProto: "https",
+			wantProto:     "https",
+			nets:          trustedNets,
+		},
+		{
+			name:          "untrusted source proto overwritten",
+			remoteAddr:    "1.2.3.4:12345",
+			incomingProto: "https",
+			wantProto:     "http",
+			nets:          trustedNets,
+		},
+		{
+			name:          "trusted proxy without proto set normally",
+			remoteAddr:    "10.0.0.1:12345",
+			incomingProto: "",
+			wantProto:     "http",
+			nets:          trustedNets,
+		},
+		{
+			name:          "no trusted nets proto not preserved",
+			remoteAddr:    "10.0.0.1:12345",
+			incomingProto: "https",
+			wantProto:     "http",
+			nets:          nil,
+		},
+		{
+			name:          "bare IPv4 no port trusted source preserves proto",
+			remoteAddr:    "10.0.0.1",
+			incomingProto: "https",
+			wantProto:     "https",
+			nets:          trustedNets,
+		},
+		{
+			name:          "bare IPv6 with brackets trusted source preserves proto",
+			remoteAddr:    "[::1]",
+			incomingProto: "https",
+			wantProto:     "https",
+			nets:          middleware.ParseTrustedProxies([]string{"::1/128"}),
+		},
+		{
+			name:          "bare IPv4 no port untrusted source strips proto",
+			remoteAddr:    "1.2.3.4",
+			incomingProto: "https",
+			wantProto:     "http",
+			nets:          trustedNets,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotProto string
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotProto = r.Header.Get("X-Forwarded-Proto")
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer backend.Close()
+
+			backendURL, err := url.Parse(backend.URL)
+			require.NoError(t, err)
+
+			// Build incoming request (http scheme, no TLS)
+			incomingReq := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+			incomingReq.RemoteAddr = tt.remoteAddr
+			if tt.incomingProto != "" {
+				incomingReq.Header.Set("X-Forwarded-Proto", tt.incomingProto)
+			}
+
+			proxy := newReverseProxy(backendURL, "", http.DefaultTransport, incomingReq, tt.nets,
+				func(w http.ResponseWriter, _ *http.Request, err error) {
+					http.Error(w, err.Error(), http.StatusBadGateway)
+				},
+				nil,
+			)
+
+			rec := httptest.NewRecorder()
+			proxy.ServeHTTP(rec, incomingReq)
+
+			assert.Equal(t, tt.wantProto, gotProto)
+		})
+	}
 }

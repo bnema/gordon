@@ -15,6 +15,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -95,7 +96,7 @@ func (h *Handler) forwardToTarget(w http.ResponseWriter, r *http.Request, target
 
 	transport := h.transportForTarget(target)
 
-	proxy := newReverseProxy(targetURL, originalHost, transport,
+	proxy := newReverseProxy(targetURL, originalHost, transport, r, h.trustedNets,
 		func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(proxyErr, &maxBytesErr) {
@@ -183,9 +184,13 @@ func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, regi
 // originalHost, when non-empty, overrides the Host header sent to the backend.
 // This is used for DNS-pinned targets where the proxy dials an IP but needs to
 // send the original hostname for virtual-hosted upstreams.
-func newReverseProxy(targetURL *url.URL, originalHost string, transport http.RoundTripper, errorHandler func(http.ResponseWriter, *http.Request, error), modifyResp func(*http.Response) error) *httputil.ReverseProxy {
+//
+// incomingReq and trustedNets are used to preserve X-Forwarded-Proto when the
+// request originates from a trusted upstream proxy.
+func newReverseProxy(targetURL *url.URL, originalHost string, transport http.RoundTripper, incomingReq *http.Request, trustedNets []*net.IPNet, errorHandler func(http.ResponseWriter, *http.Request, error), modifyResp func(*http.Response) error) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
+			existingProto := pr.In.Header.Get("X-Forwarded-Proto")
 			pr.SetURL(targetURL)
 			pr.SetXForwarded()
 			if originalHost != "" {
@@ -193,11 +198,32 @@ func newReverseProxy(targetURL *url.URL, originalHost string, transport http.Rou
 			} else {
 				pr.Out.Host = targetURL.Host
 			}
+			// Preserve X-Forwarded-Proto from trusted upstream proxies.
+			// SetXForwarded() unconditionally sets it based on the incoming scheme
+			// (HTTP between proxies), but when a trusted proxy already sent the
+			// real client proto, we must honor it.
+			if existingProto != "" && isTrustedSource(incomingReq, trustedNets) {
+				pr.Out.Header.Set("X-Forwarded-Proto", existingProto)
+			}
 		},
 		Transport:      transport,
 		ErrorHandler:   errorHandler,
 		ModifyResponse: modifyResp,
 	}
+}
+
+// isTrustedSource reports whether the request's remote address is in trustedNets.
+func isTrustedSource(r *http.Request, trustedNets []*net.IPNet) bool {
+	if len(trustedNets) == 0 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// RemoteAddr may be a bare IP without a port (e.g. from Unix sockets
+		// or certain proxy setups). Fall back to using it directly.
+		host = strings.TrimSuffix(strings.TrimPrefix(r.RemoteAddr, "["), "]")
+	}
+	return middleware.IsTrustedProxy(host, trustedNets)
 }
 
 // modifyResponse returns a function that adds proxy headers and enforces response size limits.
