@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 
@@ -54,7 +55,7 @@ type InternalRegistryAuth struct {
 
 // RegistryAuthV2 middleware provides enhanced Docker Registry authentication
 // supporting both password and token-based authentication.
-func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, log zerowrap.Logger) func(http.Handler) http.Handler {
+func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Allow localhost requests only with internal instance credentials.
@@ -64,7 +65,7 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 					Str(zerowrap.FieldAdapter, "http").
 					Str(zerowrap.FieldMethod, r.Method).
 					Str(zerowrap.FieldPath, r.URL.Path).
-					Str(zerowrap.FieldClientIP, r.RemoteAddr).
+					Str(zerowrap.FieldClientIP, GetClientIP(r, trustedNets)).
 					Msg("localhost request with internal auth - skipping auth")
 				next.ServeHTTP(w, r)
 				return
@@ -77,7 +78,7 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 					Str(zerowrap.FieldAdapter, "http").
 					Str(zerowrap.FieldMethod, r.Method).
 					Str(zerowrap.FieldPath, r.URL.Path).
-					Str(zerowrap.FieldClientIP, r.RemoteAddr).
+					Str(zerowrap.FieldClientIP, GetClientIP(r, trustedNets)).
 					Msg("registry auth over insecure HTTP connection")
 			}
 
@@ -96,9 +97,9 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 
 			if authErr != nil {
 				if errors.Is(authErr, domain.ErrLongLivedToken) {
-					sendUnauthorizedMsg(w, authSvc.GetAuthType(), r.Host, log, r, domain.ErrLongLivedToken.Error())
+					sendUnauthorizedMsg(w, authSvc.GetAuthType(), r.Host, log, trustedNets, r, domain.ErrLongLivedToken.Error())
 				} else {
-					sendUnauthorized(w, authSvc.GetAuthType(), r.Host, log, r)
+					sendUnauthorized(w, authSvc.GetAuthType(), r.Host, log, trustedNets, r)
 				}
 				return
 			}
@@ -106,7 +107,7 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, l
 			// SECURITY: Check scopes for token auth (per-repo access control)
 			if tokenClaims != nil {
 				if !checkScopeAccess(r, tokenClaims, log) {
-					sendForbidden(w, log, r)
+					sendForbidden(w, log, trustedNets, r)
 					return
 				}
 				// Store claims in context for downstream handlers that need access to token metadata
@@ -290,7 +291,7 @@ func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.
 }
 
 // sendForbidden sends an HTTP 403 response.
-func sendForbidden(w http.ResponseWriter, log zerowrap.Logger, r *http.Request) {
+func sendForbidden(w http.ResponseWriter, log zerowrap.Logger, trustedNets []*net.IPNet, r *http.Request) {
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
@@ -301,12 +302,12 @@ func sendForbidden(w http.ResponseWriter, log zerowrap.Logger, r *http.Request) 
 		Str(zerowrap.FieldAdapter, "http").
 		Str(zerowrap.FieldMethod, r.Method).
 		Str(zerowrap.FieldPath, r.URL.Path).
-		Str(zerowrap.FieldClientIP, r.RemoteAddr).
+		Str(zerowrap.FieldClientIP, GetClientIP(r, trustedNets)).
 		Msg("forbidden: insufficient scope for operation")
 }
 
 // sendUnauthorizedMsg sends an HTTP 401 response with a custom error message.
-func sendUnauthorizedMsg(w http.ResponseWriter, authType domain.AuthType, host string, log zerowrap.Logger, r *http.Request, msg string) {
+func sendUnauthorizedMsg(w http.ResponseWriter, authType domain.AuthType, host string, log zerowrap.Logger, trustedNets []*net.IPNet, r *http.Request, msg string) {
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 
 	switch authType {
@@ -332,12 +333,12 @@ func sendUnauthorizedMsg(w http.ResponseWriter, authType domain.AuthType, host s
 		Str(zerowrap.FieldAdapter, "http").
 		Str(zerowrap.FieldMethod, r.Method).
 		Str(zerowrap.FieldPath, r.URL.Path).
-		Str(zerowrap.FieldClientIP, r.RemoteAddr).
+		Str(zerowrap.FieldClientIP, GetClientIP(r, trustedNets)).
 		Msg("unauthorized registry access attempt")
 }
 
 // sendUnauthorized sends an HTTP 401 response with appropriate headers.
-func sendUnauthorized(w http.ResponseWriter, authType domain.AuthType, host string, log zerowrap.Logger, r *http.Request) {
+func sendUnauthorized(w http.ResponseWriter, authType domain.AuthType, host string, log zerowrap.Logger, trustedNets []*net.IPNet, r *http.Request) {
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 
 	switch authType {
@@ -375,6 +376,6 @@ func sendUnauthorized(w http.ResponseWriter, authType domain.AuthType, host stri
 		Str(zerowrap.FieldAdapter, "http").
 		Str(zerowrap.FieldMethod, r.Method).
 		Str(zerowrap.FieldPath, r.URL.Path).
-		Str(zerowrap.FieldClientIP, r.RemoteAddr).
+		Str(zerowrap.FieldClientIP, GetClientIP(r, trustedNets)).
 		Msg("unauthorized registry access attempt")
 }

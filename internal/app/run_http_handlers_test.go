@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/bnema/zerowrap"
@@ -15,7 +16,29 @@ import (
 
 	adminhttp "github.com/bnema/gordon/internal/adapters/in/http/admin"
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
+	out "github.com/bnema/gordon/internal/boundaries/out"
 )
+
+// testAccessLogWriter is a thread-safe mock AccessLogWriter for tests.
+type testAccessLogWriter struct {
+	mu      sync.Mutex
+	entries []out.AccessLogEntry
+}
+
+func (w *testAccessLogWriter) Write(entry out.AccessLogEntry) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.entries = append(w.entries, entry)
+	return nil
+}
+
+func (w *testAccessLogWriter) snapshot() []out.AccessLogEntry {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	result := make([]out.AccessLogEntry, len(w.entries))
+	copy(result, w.entries)
+	return result
+}
 
 func TestCreateAuthService_Disabled_ReturnsNilServices(t *testing.T) {
 	t.Parallel()
@@ -42,7 +65,7 @@ func TestCreateHTTPHandlers_LocalMode_DisablesAdminRoutes(t *testing.T) {
 	cfg.Auth.Enabled = false
 
 	svc := &services{adminHandler: &adminhttp.Handler{}}
-	registryHandler, _, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	registryHandler, _, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
 	req.RemoteAddr = "192.0.2.10:12345"
@@ -61,7 +84,7 @@ func TestCreateHTTPHandlers_LocalMode_RestrictsRegistryToLoopback(t *testing.T) 
 	cfg := Config{}
 	cfg.Auth.Enabled = false
 
-	registryHandler, _, _ := createHTTPHandlers(&services{}, cfg, zerowrap.Default())
+	registryHandler, _, _ := createHTTPHandlers(&services{}, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/test/manifests/latest", nil)
 	req.RemoteAddr = "192.0.2.20:12345"
@@ -103,7 +126,7 @@ func TestCreateHTTPHandlers_DirectHTTPRoot_ServesOnboarding(t *testing.T) {
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = directAddr
@@ -122,7 +145,7 @@ func TestCreateHTTPHandlers_DirectHTTPCertPath_ServesCACert(t *testing.T) {
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ca.crt", nil)
 	req.RemoteAddr = directAddr
@@ -141,7 +164,7 @@ func TestCreateHTTPHandlers_DirectHTTPUnknownPath_ReturnsForbidden(t *testing.T)
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/web", nil)
 	req.RemoteAddr = directAddr
@@ -159,7 +182,7 @@ func TestCreateHTTPHandlers_TrustedProxyHTTP_DoesNotServeOnboarding(t *testing.T
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = trustedProxyAddr
@@ -179,7 +202,7 @@ func TestCreateHTTPHandlers_TrustedProxyCACertPath_DoesNotServeOnboardingResourc
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ca.crt", nil)
 	req.RemoteAddr = trustedProxyAddr
@@ -199,7 +222,7 @@ func TestCreateHTTPHandlers_ForceHTTPSRedirect_DoesNotBypassDirectOnboarding(t *
 	cfg.Server.ForceHTTPSRedirect = true
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = directAddr
@@ -218,7 +241,7 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_RemainsAvailable(t *testing.T) {
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ca", nil)
 	req.RemoteAddr = directAddr
@@ -236,7 +259,7 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_HEADRoutesRemainAvailable(t *testing
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	// Use httptest.NewServer so Go's net/http server strips the body for HEAD.
 	// httptest.NewRecorder does not apply server-level HEAD body stripping.
@@ -262,7 +285,7 @@ func TestCreateHTTPHandlers_DirectHTTPOnboarding_HEADRoutesRemainAvailable(t *te
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = directAddr
@@ -297,7 +320,7 @@ func TestCreateHTTPHandlers_DirectHTTPForbiddenHEAD_ReturnsForbidden(t *testing.
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = directAddr
@@ -323,7 +346,7 @@ func TestCreateHTTPHandlers_DirectHTTPACMEChallenge_Returns404(t *testing.T) {
 	cfg := newOnboardingConfig()
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/acme-challenge/test-token", nil)
 	req.RemoteAddr = directAddr
@@ -341,7 +364,7 @@ func TestCreateHTTPHandlers_TLSDisabled_DoesNotServeHTTPOnboarding(t *testing.T)
 	cfg.Server.TLSPort = 0 // TLS disabled
 	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default())
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = directAddr
@@ -398,4 +421,85 @@ func TestBuildRegistryCIDRAllowlistMiddleware_InvalidEntries_DenyAll(t *testing.
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected status %d, got %d", http.StatusForbidden, rec.Code)
 	}
+}
+
+// TestAccessLog_AdminRejectedByLoopbackOnly_IsLogged verifies that requests
+// to /admin/ blocked by loopbackOnly() still produce an access-log entry.
+// This exercises the outer-deny path: AccessLogger wraps the top-level
+// handler so even gates that run before any inner middleware are logged.
+func TestAccessLog_AdminRejectedByLoopbackOnly_IsLogged(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{}
+	cfg.Auth.Enabled = true // required for admin routes to be registered
+
+	svc := &services{adminHandler: &adminhttp.Handler{}}
+	aw := &testAccessLogWriter{}
+	registryHandler, _, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), aw)
+
+	// Non-loopback IP — loopbackOnly() will reject this with 403 before any
+	// inner middleware runs.
+	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.RemoteAddr = "192.0.2.10:12345"
+
+	rec := httptest.NewRecorder()
+	registryHandler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	entries := aw.snapshot()
+	require.Len(t, entries, 1, "access log must capture the loopback-rejected admin request")
+	assert.Equal(t, http.StatusForbidden, entries[0].Status)
+	assert.Equal(t, "/admin/status", entries[0].Path)
+}
+
+// TestAccessLog_RegistryRejectedByLoopbackOnly_IsLogged verifies that requests
+// to /v2/ blocked by loopbackOnly() in local mode still produce an access-log entry.
+func TestAccessLog_RegistryRejectedByLoopbackOnly_IsLogged(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{}
+	cfg.Auth.Enabled = false // local mode: /v2/ is wrapped by loopbackOnly()
+
+	svc := &services{}
+	aw := &testAccessLogWriter{}
+	registryHandler, _, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), aw)
+
+	// Non-loopback IP — loopbackOnly() rejects with 403.
+	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+	req.RemoteAddr = "192.0.2.20:12345"
+
+	rec := httptest.NewRecorder()
+	registryHandler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	entries := aw.snapshot()
+	require.Len(t, entries, 1, "access log must capture the loopback-rejected registry request")
+	assert.Equal(t, http.StatusForbidden, entries[0].Status)
+}
+
+// TestAccessLog_DenyAllProxy_IsLogged verifies that requests rejected by the
+// fail-closed denyAllHandler (triggered by an all-invalid proxy_allowed_ips
+// config) still produce an access-log entry.
+func TestAccessLog_DenyAllProxy_IsLogged(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{}
+	// All-invalid entries cause buildProxyCIDRAllowlistMiddleware to return
+	// denyAllHandler, which wraps the proxy mux unconditionally with 403.
+	cfg.Server.ProxyAllowedIPs = []string{"not-a-valid-ip"}
+
+	svc := &services{}
+	aw := &testAccessLogWriter{}
+	_, httpProxyHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), aw)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.5:54321"
+
+	rec := httptest.NewRecorder()
+	httpProxyHandler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	entries := aw.snapshot()
+	require.Len(t, entries, 1, "access log must capture the fail-closed proxy denial")
+	assert.Equal(t, http.StatusForbidden, entries[0].Status)
 }
