@@ -67,6 +67,19 @@ func (rw *ResponseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
 
+// ensureRequestID returns the X-Request-ID from the request if present, or generates
+// a new one. It sets X-Request-ID on both the request and response headers and returns
+// the ID along with the (potentially updated) request.
+func ensureRequestID(w http.ResponseWriter, r *http.Request) (string, *http.Request) {
+	requestID := r.Header.Get("X-Request-ID")
+	if requestID == "" {
+		requestID = generateRequestID()
+		r.Header.Set("X-Request-ID", requestID)
+	}
+	w.Header().Set("X-Request-ID", requestID)
+	return requestID, r
+}
+
 // RequestLogger is a middleware that logs HTTP requests using zerowrap.
 // It also attaches the logger to the request context for downstream handlers.
 // The trustedNets parameter controls which proxy headers are trusted for IP extraction.
@@ -81,13 +94,7 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 			start := time.Now()
 
 			// Generate or reuse X-Request-ID for request tracing
-			requestID := r.Header.Get("X-Request-ID")
-			if requestID == "" {
-				requestID = generateRequestID()
-				// Set on the incoming request so downstream handlers can read it
-				r.Header.Set("X-Request-ID", requestID)
-			}
-			w.Header().Set("X-Request-ID", requestID)
+			requestID, r := ensureRequestID(w, r)
 
 			// Wrap the response writer to capture status and bytes
 			rw := NewResponseWriter(w)
