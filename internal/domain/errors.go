@@ -10,6 +10,7 @@ var (
 	ErrContainerExists     = errors.New("container already exists")
 	ErrContainerNotRunning = errors.New("container is not running")
 	ErrContainerRunning    = errors.New("container is already running")
+	ErrContainerExited     = errors.New("container exited")
 
 	// Image errors
 	ErrImageNotFound      = errors.New("image not found")
