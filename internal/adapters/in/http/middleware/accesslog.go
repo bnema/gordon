@@ -26,12 +26,7 @@ type AccessLogWriter interface {
 //
 // Write failures are reported as warnings through the application logger and
 // never fail the HTTP response.
-func AccessLogger(writer AccessLogWriter, excludeHealthChecks bool, log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.Handler) http.Handler {
-	var nets []*net.IPNet
-	if len(trustedNets) > 0 {
-		nets = trustedNets[0]
-	}
-
+func AccessLogger(writer AccessLogWriter, excludeHealthChecks bool, log zerowrap.Logger, trustedNets []*net.IPNet) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -45,7 +40,7 @@ func AccessLogger(writer AccessLogWriter, excludeHealthChecks bool, log zerowrap
 
 			// Resolve client IP before calling the inner handler so we see the
 			// original remote address before any mutation.
-			clientIP := GetClientIP(r, nets)
+			clientIP := GetClientIP(r, trustedNets)
 
 			next.ServeHTTP(rw, r)
 

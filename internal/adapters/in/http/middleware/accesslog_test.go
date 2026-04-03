@@ -27,7 +27,7 @@ func TestAccessLogger_EmitsEntryPerRequest(t *testing.T) {
 	mock := &mockAccessLogWriter{}
 	log := testLogger()
 
-	handler := AccessLogger(mock, false, log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLogger(mock, false, log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("hello"))
 	}))
@@ -62,7 +62,7 @@ func TestAccessLogger_RequestIDReused(t *testing.T) {
 	mock := &mockAccessLogWriter{}
 	log := testLogger()
 
-	handler := AccessLogger(mock, false, log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLogger(mock, false, log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -80,7 +80,7 @@ func TestAccessLogger_ExcludeHealthCheckUA(t *testing.T) {
 	mock := &mockAccessLogWriter{}
 	log := testLogger()
 
-	handler := AccessLogger(mock, true, log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLogger(mock, true, log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -97,7 +97,7 @@ func TestAccessLogger_ExcludeLoopbackIP(t *testing.T) {
 	mock := &mockAccessLogWriter{}
 	log := testLogger()
 
-	handler := AccessLogger(mock, true, log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLogger(mock, true, log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -114,7 +114,7 @@ func TestAccessLogger_NoExcludeWhenDisabled(t *testing.T) {
 	mock := &mockAccessLogWriter{}
 	log := testLogger()
 
-	handler := AccessLogger(mock, false, log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLogger(mock, false, log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -131,7 +131,7 @@ func TestAccessLogger_WriteFailureDoesNotAffectResponse(t *testing.T) {
 	mock := &mockAccessLogWriter{err: fmt.Errorf("disk full")}
 	log := testLogger()
 
-	handler := AccessLogger(mock, false, log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLogger(mock, false, log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -154,7 +154,7 @@ func TestAccessLogger_PanicRecoveryChain_Captures500(t *testing.T) {
 	panicHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("test panic")
 	})
-	chain := AccessLogger(mock, false, log)(PanicRecovery(log)(panicHandler))
+	chain := AccessLogger(mock, false, log, nil)(PanicRecovery(log)(panicHandler))
 
 	req := httptest.NewRequest(http.MethodGet, "/crash", nil)
 	rw := httptest.NewRecorder()
