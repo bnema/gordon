@@ -18,18 +18,9 @@ var loopbackNets = func() []*net.IPNet {
 	return []*net.IPNet{ipv4Loopback, ipv6Loopback}
 }()
 
-// isLoopback reports whether the given IP string is a loopback address.
+// isLoopback reports whether ip is a loopback address.
 func isLoopback(ip string) bool {
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
-		return false
-	}
-	for _, n := range loopbackNets {
-		if n.Contains(parsed) {
-			return true
-		}
-	}
-	return false
+	return IsTrustedProxy(ip, loopbackNets)
 }
 
 // AccessLogWriter is the interface the middleware needs from the output adapter.
