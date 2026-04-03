@@ -2848,6 +2848,10 @@ func (s *Service) pollContainerRunning(ctx context.Context, containerID string) 
 		if running {
 			return nil
 		}
+		// Check if the container has already exited (crash) rather than still starting up.
+		if info, inspectErr := s.runtime.InspectContainer(ctx, containerID); inspectErr == nil && info != nil && info.Status == string(domain.ContainerStatusExited) {
+			return fmt.Errorf("container exited immediately with code %d: %w", info.ExitCode, domain.ErrContainerExited)
+		}
 		if i == 29 {
 			return fmt.Errorf("container did not start within 30 seconds")
 		}

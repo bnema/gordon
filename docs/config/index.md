@@ -220,19 +220,31 @@ Gordon watches the configuration file and reloads automatically when changes are
 gordon reload
 ```
 
-The following settings require a restart to take effect:
+### Hot-reloaded (no restart needed)
 
-- `server.port`
-- `server.registry_port`
-- `server.data_dir`
-- `auth` settings
-- `deploy.pull_policy`
-- `deploy.readiness_mode`
-- `deploy.health_timeout`
-- `deploy.readiness_delay`
-- `deploy.drain_mode`
-- `deploy.drain_timeout`
-- `deploy.drain_delay`
+| Setting |
+|---------|
+| `server.gordon_domain` (registry domain) |
+| `server.registry_port` |
+| `server.max_proxy_body_size` |
+| `server.max_blob_chunk_size` |
+| `server.max_proxy_response_size` |
+| `server.max_concurrent_conns` |
+
+> **Note:** Routes are not hot-reloaded from the config file. Use the API or CLI (`gordon routes add/update/remove`) to manage routes at runtime.
+
+### Requires restart
+
+| Setting |
+|---------|
+| `server.port` |
+| `server.data_dir` |
+| `auth.*` |
+| `deploy.readiness_mode` |
+| `deploy.readiness_delay` |
+| `deploy.health_timeout` |
+| `deploy.drain_mode` |
+| `deploy.drain_timeout` |
 
 ## Environment Variable Override
 

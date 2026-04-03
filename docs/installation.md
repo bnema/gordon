@@ -104,11 +104,12 @@ sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
 # Enable Podman socket
 systemctl --user enable --now podman.socket
 
-# Configure insecure localhost registry
-mkdir -p ~/.config/containers
-cat > ~/.config/containers/registries.conf <<EOF
-[registries.insecure]
-registries = ['localhost:5000']
+# Configure insecure localhost registry (required — Podman blocks HTTP registries by default)
+mkdir -p ~/.config/containers/registries.conf.d
+cat > ~/.config/containers/registries.conf.d/gordon.conf <<EOF
+[[registry]]
+location = "localhost:5000"
+insecure = true
 EOF
 ```
 
@@ -128,7 +129,7 @@ sudo firewall-cmd --permanent --add-service=http
 sudo firewall-cmd --permanent --add-service=https
 
 # For rootless containers, redirect privileged ports
-sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8080
+sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
 sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=8443
 
 # Apply changes
@@ -164,7 +165,7 @@ Minimum required configuration:
 
 ```toml
 [server]
-port = 8080
+port = 8088
 registry_port = 5000
 gordon_domain = "gordon.yourdomain.com"
 
@@ -189,11 +190,16 @@ After=podman.socket
 Type=simple
 Restart=always
 RestartSec=5
+# Required for Podman rootless — tells Gordon where to find the Podman socket
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DOCKER_HOST=unix:///run/user/%U/podman/podman.sock
 ExecStart=/usr/local/bin/gordon serve
 
 [Install]
 WantedBy=default.target
 EOF
+
+> **Docker users:** Omit the two `Environment=` lines above — Docker's socket path is set automatically.
 
 # Enable and start
 systemctl --user daemon-reload
@@ -240,6 +246,19 @@ Point your domains to your server:
 | A | `registry` | `SERVER_IP` | Yes (Cloudflare) |
 
 > **Note:** Enable Cloudflare proxy (orange cloud) for automatic HTTPS. Gordon receives HTTP traffic from Cloudflare.
+
+## Cloudflare SSL Mode
+
+Gordon serves HTTP by default. Cloudflare must connect to your origin over HTTP unless you explicitly enable TLS.
+
+| Mode | How it works | Use when |
+|------|-------------|----------|
+| **Flexible** | Cloudflare terminates TLS; connects to Gordon on HTTP | Gordon has no TLS cert (default setup) |
+| **Full (Strict)** | Cloudflare connects to Gordon over HTTPS with a valid cert | Set `server.tls_port` (default 8443) and provide a Cloudflare Origin CA cert via `server.tls_cert_file` and `server.tls_key_file` |
+
+Wrong mode causes: **521** (Cloudflare can't connect) or **525** (TLS handshake failed).
+
+> **Rootless note:** Unprivileged users can't bind port 80. Forward port 80→8088 (or your configured port) via firewall — see the firewall section above.
 
 ## Verify Installation
 

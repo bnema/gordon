@@ -804,12 +804,29 @@ func resolveLogFilePath(cfg Config) string {
 }
 
 // resolveRuntimeConfig converts a server.runtime config value to a socket path.
-// "auto" or "" means auto-detect; any other value is treated as an explicit socket path.
-// URI schemes (unix://, tcp://) are stripped so callers receive a bare path.
+// "auto" or "" means auto-detect.
+// Named runtimes ("podman", "docker") are resolved to well-known socket paths.
+// URI schemes (unix://) are stripped so callers receive a bare path.
 func resolveRuntimeConfig(value string) string {
 	if value == "" || value == "auto" {
 		return ""
 	}
+	// Named runtimes: resolve to well-known socket paths.
+	switch value {
+	case "podman":
+		// Check XDG_RUNTIME_DIR first (rootless Podman).
+		if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
+			candidate := filepath.Join(xdg, "podman", "podman.sock")
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+		// Fallback to system-wide Podman socket.
+		return "/run/podman/podman.sock"
+	case "docker":
+		return "/var/run/docker.sock"
+	}
+	// Explicit socket path — strip URI scheme if present.
 	if strings.HasPrefix(value, "unix://") {
 		return strings.TrimPrefix(value, "unix://")
 	}
