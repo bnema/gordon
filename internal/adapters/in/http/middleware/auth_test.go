@@ -34,7 +34,7 @@ func TestRegistryAuthV2_LocalhostBypassRequiresInternalAuth(t *testing.T) {
 		Password: "secret",
 	}
 
-	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RegistryAuthV2(authSvc, internalAuth, nil, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -65,7 +65,7 @@ func TestRegistryAuthV2_LocalhostWrongInternalAuthFallsBack(t *testing.T) {
 		Password: "secret",
 	}
 
-	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RegistryAuthV2(authSvc, internalAuth, nil, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -97,7 +97,7 @@ func TestRegistryAuthV2_NonLocalhostIgnoresInternalAuth(t *testing.T) {
 		Password: "secret",
 	}
 
-	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RegistryAuthV2(authSvc, internalAuth, nil, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -359,7 +359,7 @@ func TestRegistryAuthV2_RejectsLongLivedToken(t *testing.T) {
 		Password: "secret",
 	}
 
-	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RegistryAuthV2(authSvc, internalAuth, nil, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -393,7 +393,7 @@ func TestRegistryAuthV2_AcceptsEphemeralToken(t *testing.T) {
 	}
 
 	handlerCalled := false
-	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RegistryAuthV2(authSvc, internalAuth, nil, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		handlerCalled = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -427,7 +427,7 @@ func TestRegistryAuthV2_RejectsLongLivedTokenAsPassword(t *testing.T) {
 		Password: "secret",
 	}
 
-	handler := RegistryAuthV2(authSvc, internalAuth, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RegistryAuthV2(authSvc, internalAuth, nil, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

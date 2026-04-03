@@ -58,7 +58,7 @@ func TestForwardToTarget_H2CEndToEnd(t *testing.T) {
 	}, nil)
 	proxySvc.EXPECT().TrackInFlight("grpc-1").Return(func() {})
 
-	handler := NewHandler(proxySvc, zerowrap.Default())
+	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "http://grpc.example.com/test", nil)
 	req.Host = "grpc.example.com"
@@ -90,7 +90,7 @@ func TestForwardToTarget_HTTP1StillWorks(t *testing.T) {
 	}, nil)
 	proxySvc.EXPECT().TrackInFlight("web-1").Return(func() {})
 
-	handler := NewHandler(proxySvc, zerowrap.Default())
+	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "http://web.example.com/", nil)
 	req.Host = "web.example.com"
@@ -103,7 +103,7 @@ func TestForwardToTarget_HTTP1StillWorks(t *testing.T) {
 }
 
 func TestTransportForTarget_SelectsCorrectTransport(t *testing.T) {
-	handler := NewHandler(inmocks.NewMockProxyService(t), zerowrap.Default())
+	handler := NewHandler(inmocks.NewMockProxyService(t), nil, zerowrap.Default())
 
 	h2cTarget := &domain.ProxyTarget{Protocol: "h2c"}
 	httpTarget := &domain.ProxyTarget{Protocol: ""}
@@ -135,7 +135,7 @@ func TestForwardToTarget_OriginalHostPreserved(t *testing.T) {
 	}, nil)
 	proxySvc.EXPECT().TrackInFlight("").Return(func() {})
 
-	handler := NewHandler(proxySvc, zerowrap.Default())
+	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "http://external.example.com/", nil)
 	req.Host = "external.example.com"
@@ -159,7 +159,7 @@ func TestForwardToTarget_BackendDown_Returns503(t *testing.T) {
 	}, nil)
 	proxySvc.EXPECT().TrackInFlight("c-down").Return(func() {})
 
-	handler := NewHandler(proxySvc, zerowrap.Default())
+	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "http://down.example.com/", nil)
 	req.Host = "down.example.com"
@@ -189,7 +189,7 @@ func TestForwardToTarget_ProxyHeaderSet(t *testing.T) {
 	}, nil)
 	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
 
-	handler := NewHandler(proxySvc, zerowrap.Default())
+	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
 	req.Host = "app.example.com"

@@ -1632,7 +1632,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger) (http.Ha
 	registerAdminRoutes(registryMux, svc, cfg, trustedNets, log)
 
 	// Proxy handler
-	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, log)
+	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, trustedNets, log)
 
 	// HTTP proxy handler chain: HTTPS redirect for non-proxy clients, then CIDR allowlist
 	proxyAllowedNets, proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
@@ -1775,7 +1775,7 @@ func buildRegistryHandlerWithMiddleware(
 	rateLimitMiddleware := buildRegistryRateLimitMiddleware(cfg, log)
 	registryMiddlewares = append(registryMiddlewares, rateLimitMiddleware)
 
-	appendRegistryAuthMiddleware(&registryMiddlewares, svc, cfg, log)
+	appendRegistryAuthMiddleware(&registryMiddlewares, svc, cfg, trustedNets, log)
 
 	registryWithOtel := otelhttp.NewHandler(
 		middleware.Chain(registryMiddlewares...)(registryHandler),
@@ -1866,13 +1866,13 @@ func buildRegistryRateLimitMiddleware(cfg Config, log zerowrap.Logger) func(http
 	return registry.RateLimitMiddleware(nil, nil, nil, log)
 }
 
-func appendRegistryAuthMiddleware(registryMiddlewares *[]func(http.Handler) http.Handler, svc *services, cfg Config, log zerowrap.Logger) {
+func appendRegistryAuthMiddleware(registryMiddlewares *[]func(http.Handler) http.Handler, svc *services, cfg Config, trustedNets []*net.IPNet, log zerowrap.Logger) {
 	if svc.authSvc != nil {
 		internalAuth := middleware.InternalRegistryAuth{
 			Username: svc.internalRegUser,
 			Password: svc.internalRegPass,
 		}
-		*registryMiddlewares = append(*registryMiddlewares, middleware.RegistryAuthV2(svc.authSvc, internalAuth, log))
+		*registryMiddlewares = append(*registryMiddlewares, middleware.RegistryAuthV2(svc.authSvc, internalAuth, trustedNets, log))
 		return
 	}
 

@@ -2,11 +2,13 @@
 package proxy
 
 import (
+	"net"
 	"net/http"
 	"sync/atomic"
 
 	"github.com/bnema/zerowrap"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/boundaries/in"
 )
 
@@ -17,6 +19,7 @@ import (
 type Handler struct {
 	proxySvc          in.ProxyService
 	log               zerowrap.Logger
+	trustedNets       []*net.IPNet
 	appTransport      http.RoundTripper
 	h2cTransport      http.RoundTripper
 	registryTransport http.RoundTripper
@@ -24,10 +27,11 @@ type Handler struct {
 }
 
 // NewHandler creates a new proxy HTTP handler.
-func NewHandler(proxySvc in.ProxyService, log zerowrap.Logger) *Handler {
+func NewHandler(proxySvc in.ProxyService, trustedNets []*net.IPNet, log zerowrap.Logger) *Handler {
 	return &Handler{
 		proxySvc:          proxySvc,
 		log:               log,
+		trustedNets:       trustedNets,
 		appTransport:      newAppTransport(),
 		h2cTransport:      newH2CTransport(),
 		registryTransport: newRegistryTransport(),
@@ -61,7 +65,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		zerowrap.FieldMethod:   r.Method,
 		zerowrap.FieldPath:     r.URL.Path,
 		zerowrap.FieldHost:     r.Host,
-		zerowrap.FieldClientIP: r.RemoteAddr,
+		zerowrap.FieldClientIP: middleware.GetClientIP(r, h.trustedNets),
 	})
 	r = r.WithContext(ctx)
 	log := zerowrap.FromCtx(ctx)

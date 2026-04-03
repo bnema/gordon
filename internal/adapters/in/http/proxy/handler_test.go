@@ -28,7 +28,7 @@ func TestHandler_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
 		MaxConcurrentConns: 1,
 	})
 
-	handler := NewHandler(proxySvc, testLogger())
+	handler := NewHandler(proxySvc, nil, testLogger())
 
 	// Simulate an in-flight connection.
 	handler.activeConns.Add(1)
@@ -51,7 +51,7 @@ func TestHandler_RoutesToRegistry(t *testing.T) {
 	proxySvc.EXPECT().TrackRegistryRequest().Return()
 	proxySvc.EXPECT().ReleaseRegistryRequest().Return()
 
-	handler := NewHandler(proxySvc, testLogger())
+	handler := NewHandler(proxySvc, nil, testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "http://registry.example.com/v2/", nil)
 	req.Host = "registry.example.com"
@@ -68,7 +68,7 @@ func TestHandler_Returns404WhenNoTarget(t *testing.T) {
 	proxySvc.EXPECT().IsRegistryDomain("unknown.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "unknown.example.com").Return(nil, domain.ErrNoTargetAvailable)
 
-	handler := NewHandler(proxySvc, testLogger())
+	handler := NewHandler(proxySvc, nil, testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "http://unknown.example.com/", nil)
 	req.Host = "unknown.example.com"
@@ -101,7 +101,7 @@ func TestHandler_ProxiesToTarget(t *testing.T) {
 	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(target, nil)
 	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
 
-	handler := NewHandler(proxySvc, testLogger())
+	handler := NewHandler(proxySvc, nil, testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
 	req.Host = "app.example.com"
@@ -135,7 +135,7 @@ func TestHandler_ReadsMaxBodySizeConfig(t *testing.T) {
 	}, nil)
 	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
 
-	handler := NewHandler(proxySvc, testLogger())
+	handler := NewHandler(proxySvc, nil, testLogger())
 
 	// Send a body larger than the 1024-byte limit.
 	largeBody := bytes.NewReader(make([]byte, 2048))
@@ -156,7 +156,7 @@ func TestHandler_UpdatedConfigReflected(t *testing.T) {
 	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false).Once()
 	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(nil, domain.ErrNoTargetAvailable).Once()
 
-	handler := NewHandler(proxySvc, testLogger())
+	handler := NewHandler(proxySvc, nil, testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
 	req.Host = "app.example.com"
@@ -199,7 +199,7 @@ func TestHandler_NoConcurrencyLimitWhenZero(t *testing.T) {
 	}, nil)
 	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
 
-	handler := NewHandler(proxySvc, testLogger())
+	handler := NewHandler(proxySvc, nil, testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
 	req.Host = "app.example.com"
