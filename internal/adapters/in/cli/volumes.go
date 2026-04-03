@@ -9,6 +9,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
+	"github.com/bnema/gordon/pkg/bytesize"
 )
 
 type volumesClient interface {
@@ -98,7 +99,7 @@ func runVolumesList(ctx context.Context, client volumesClient, out io.Writer, js
 		if len(v.Containers) > 0 {
 			containers = fmt.Sprintf("%v", v.Containers)
 		}
-		if err := cliWritef(out, "  %-30s %-10s %-10s %s\n", v.Name, status, formatImageSize(v.Size), containers); err != nil {
+		if err := cliWritef(out, "  %-30s %-10s %-10s %s\n", v.Name, status, bytesize.Format(v.Size), containers); err != nil {
 			return err
 		}
 	}
@@ -119,11 +120,11 @@ func renderPrunePreview(out io.Writer, resp *dto.VolumePruneResponse) error {
 		return err
 	}
 	for _, v := range resp.Volumes {
-		if err := cliWritef(out, "  %s (%s)\n", v.Name, formatImageSize(v.Size)); err != nil {
+		if err := cliWritef(out, "  %s (%s)\n", v.Name, bytesize.Format(v.Size)); err != nil {
 			return err
 		}
 	}
-	return cliWritef(out, "\n%d volumes, %s total\n", resp.VolumesRemoved, formatImageSize(resp.SpaceReclaimed))
+	return cliWritef(out, "\n%d volumes, %s total\n", resp.VolumesRemoved, bytesize.Format(resp.SpaceReclaimed))
 }
 
 func runVolumesPrune(ctx context.Context, client volumesClient, opts volumesPruneOptions, out io.Writer) error {
@@ -171,5 +172,5 @@ func runVolumesPrune(ctx context.Context, client volumesClient, opts volumesPrun
 		return writeJSON(out, result)
 	}
 
-	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Removed %d volumes, reclaimed %s", result.VolumesRemoved, formatImageSize(result.SpaceReclaimed))))
+	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Removed %d volumes, reclaimed %s", result.VolumesRemoved, bytesize.Format(result.SpaceReclaimed))))
 }

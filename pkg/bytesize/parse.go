@@ -1,4 +1,4 @@
-// Package bytesize provides human-friendly byte size parsing.
+// Package bytesize provides human-friendly byte size parsing and formatting.
 package bytesize
 
 import (
@@ -15,6 +15,33 @@ var unitMultipliers = map[string]int64{
 	"MB": 1 << 20, // 1048576
 	"GB": 1 << 30, // 1073741824
 	"TB": 1 << 40, // 1099511627776
+}
+
+// Format converts a byte count into a human-friendly string.
+//
+// Uses binary (1024-based) units: B, KB, MB, GB, TB.
+// Returns one decimal place for KB and above.
+//
+// Examples:
+//
+//	Format(512)        // "512 B"
+//	Format(1048576)    // "1.0 MB"
+//	Format(3609629152) // "3.4 GB"
+func Format(bytes int64) string {
+	if bytes <= 0 {
+		return "0 B"
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	size := float64(bytes)
+	unitIdx := 0
+	for size >= 1024 && unitIdx < len(units)-1 {
+		size /= 1024
+		unitIdx++
+	}
+	if unitIdx == 0 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	return fmt.Sprintf("%.1f %s", size, units[unitIdx])
 }
 
 // Parse parses a human-friendly byte size string.

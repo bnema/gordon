@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/pkg/bytesize"
 	"github.com/spf13/cobra"
 )
 
@@ -120,10 +121,10 @@ func newBackupRunCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tBACKUP_ID\tSIZE_BYTES"); err != nil {
+			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tBACKUP_ID\tSIZE"); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\n", result.Backup.Domain, result.Backup.DBName, result.Backup.Status, formatBackupTime(result.Backup.StartedAt), result.Backup.ID, result.Backup.SizeBytes); err != nil {
+			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", result.Backup.Domain, result.Backup.DBName, result.Backup.Status, formatBackupTime(result.Backup.StartedAt), result.Backup.ID, bytesize.Format(result.Backup.SizeBytes)); err != nil {
 				return err
 			}
 			if err := w.Flush(); err != nil {

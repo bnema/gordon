@@ -15,6 +15,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/bytesize"
 )
 
 type imagesClient interface {
@@ -301,7 +302,7 @@ func runImagesList(ctx context.Context, client imagesClient, out io.Writer, json
 		rows = append(rows, []string{
 			img.Repository,
 			img.Tag,
-			formatImageSize(img.Size),
+			bytesize.Format(img.Size),
 			formatImageCreatedAt(img.Created),
 			formatImageID(img.ID),
 			dangling,
@@ -361,7 +362,7 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 	}
 
 	if pruneDangling {
-		if err := cliWritef(out, "Runtime: deleted=%d space_reclaimed=%d\n", resp.Runtime.DeletedCount, resp.Runtime.SpaceReclaimed); err != nil {
+		if err := cliWritef(out, "Runtime: deleted=%d space_reclaimed=%s\n", resp.Runtime.DeletedCount, bytesize.Format(resp.Runtime.SpaceReclaimed)); err != nil {
 			return err
 		}
 	} else {
@@ -371,7 +372,7 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 	}
 
 	if pruneRegistry {
-		err = cliWritef(out, "Registry: tags_removed=%d blobs_removed=%d space_reclaimed=%d\n", resp.Registry.TagsRemoved, resp.Registry.BlobsRemoved, resp.Registry.SpaceReclaimed)
+		err = cliWritef(out, "Registry: tags_removed=%d blobs_removed=%d space_reclaimed=%s\n", resp.Registry.TagsRemoved, resp.Registry.BlobsRemoved, bytesize.Format(resp.Registry.SpaceReclaimed))
 		return err
 	}
 
@@ -567,23 +568,6 @@ func formatImageCreatedAt(t time.Time) string {
 		return "-"
 	}
 	return t.UTC().Format("2006-01-02T15:04:05Z")
-}
-
-func formatImageSize(size int64) string {
-	if size <= 0 {
-		return "-"
-	}
-
-	const unit = 1024
-	if size < unit {
-		return fmt.Sprintf("%d B", size)
-	}
-	div, exp := int64(unit), 0
-	for n := size / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(size)/float64(div), "KMGTPE"[exp])
 }
 
 func formatImageID(id string) string {

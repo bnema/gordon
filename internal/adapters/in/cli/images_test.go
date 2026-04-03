@@ -168,7 +168,7 @@ func TestRunImagesList_LongDigestLikeValuesAndEmptyFormattedFields(t *testing.T)
 	assert.True(t, strings.HasPrefix(longTag, strings.TrimSuffix(tagField, "...")))
 	assert.True(t, strings.HasPrefix(longImageID, strings.TrimSuffix(imageIDField, "...")))
 
-	assert.Equal(t, "-", sizeField)
+	assert.Equal(t, "0 B", sizeField)
 	assert.Equal(t, "-", createdField)
 	assert.Contains(t, text, "Total images: 1 (dangling: 1)")
 }
