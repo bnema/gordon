@@ -3,31 +3,34 @@ name: CI
 on:
   push:
     branches: [main]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.golangci.yml'
-      - 'Makefile'
-      - '.github/workflows/**'
-      - '!**.md'
-      - '!docs/**'
-      - '!LICENSE'
   pull_request:
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.golangci.yml'
-      - 'Makefile'
-      - '.github/workflows/**'
-      - '!**.md'
-      - '!docs/**'
-      - '!LICENSE'
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.golangci.yml'
+              - 'Makefile'
+              - '.github/workflows/**'
+
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -51,6 +54,8 @@ jobs:
 
   test:
     name: Test
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
