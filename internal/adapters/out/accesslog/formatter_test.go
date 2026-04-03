@@ -193,3 +193,22 @@ func TestEscapeQuoted(t *testing.T) {
 	assert.Equal(t, `back\\slash`, escapeQuoted(`back\slash`))
 	assert.Equal(t, `\"\\\"`, escapeQuoted(`"\"`))
 }
+
+func TestEscapeQuoted_ControlCharacters(t *testing.T) {
+	// Named control characters with dedicated escapes
+	assert.Equal(t, `line\nbreak`, escapeQuoted("line\nbreak"))
+	assert.Equal(t, `cr\rreturn`, escapeQuoted("cr\rreturn"))
+	assert.Equal(t, `a\ttab`, escapeQuoted("a\ttab"))
+
+	// NUL, BEL, ESC — hex-escaped
+	assert.Equal(t, `\x00`, escapeQuoted("\x00"))
+	assert.Equal(t, `\x07`, escapeQuoted("\x07"))
+	assert.Equal(t, `\x1b`, escapeQuoted("\x1b"))
+
+	// All control characters 0x00-0x1F should be escaped (none pass through raw)
+	for b := byte(0); b < 0x20; b++ {
+		result := escapeQuoted(string([]byte{b}))
+		assert.NotEqual(t, string([]byte{b}), result,
+			"control byte 0x%02x should be escaped", b)
+	}
+}

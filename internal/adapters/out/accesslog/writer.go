@@ -52,12 +52,12 @@ type Writer struct {
 func New(cfg Config) (*Writer, error) {
 	formatter, err := newFormatter(cfg.Format)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create formatter: %w", err)
 	}
 
 	s, err := newSink(cfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create sink: %w", err)
 	}
 
 	return &Writer{

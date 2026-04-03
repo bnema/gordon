@@ -15,7 +15,7 @@ import (
 // to the provided writer. It runs alongside (not instead of) RequestLogger.
 //
 // When excludeHealthChecks is true, requests from the Gordon health prober
-// (UA prefix domain.HealthCheckUserAgentPrefix) or from loopback IPs are not logged.
+// (UA prefix out.HealthCheckUserAgentPrefix) or from loopback IPs are not logged.
 //
 // Write failures are reported as warnings through the application logger and
 // never fail the HTTP response.
