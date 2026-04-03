@@ -8,9 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"gopkg.in/natefinch/lumberjack.v2"
+
+	out "github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // Config holds configuration for the access log writer.
@@ -32,23 +33,6 @@ type Config struct {
 	SyslogIdentifier string
 }
 
-// Entry holds the data for a single HTTP access log record.
-type Entry struct {
-	Time       time.Time
-	ClientIP   string
-	Method     string
-	Host       string
-	Path       string
-	Query      string
-	Status     int
-	BytesSent  int
-	DurationMS float64
-	UserAgent  string
-	Referer    string
-	RequestID  string
-	Proto      string
-}
-
 // sink is the internal interface for output backends.
 type sink interface {
 	WriteLine(line string) error
@@ -56,9 +40,9 @@ type sink interface {
 }
 
 // Writer serializes access log entries and writes them to a configured sink.
-// It is safe for concurrent use.
+// It is safe for concurrent use. It implements out.AccessLogWriter.
 type Writer struct {
-	formatter func(Entry) (string, error)
+	formatter func(out.AccessLogEntry) (string, error)
 	sink      sink
 	mu        sync.Mutex
 }
@@ -85,7 +69,7 @@ func New(cfg Config) (*Writer, error) {
 // Write serializes entry and writes it to the configured output. It is safe
 // for concurrent use. A write failure is returned as an error; callers should
 // log the error and continue — Write never panics.
-func (w *Writer) Write(entry Entry) error {
+func (w *Writer) Write(entry out.AccessLogEntry) error {
 	line, err := w.formatter(entry)
 	if err != nil {
 		return fmt.Errorf("accesslog: format entry: %w", err)
@@ -108,7 +92,7 @@ func (w *Writer) Close() error {
 }
 
 // newFormatter returns the format function for the given format name.
-func newFormatter(format string) (func(Entry) (string, error), error) {
+func newFormatter(format string) (func(out.AccessLogEntry) (string, error), error) {
 	switch format {
 	case "json":
 		return formatJSON, nil

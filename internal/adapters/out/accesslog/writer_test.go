@@ -13,9 +13,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	out "github.com/bnema/gordon/internal/boundaries/out"
 )
 
-var sampleEntry = Entry{
+var sampleEntry = out.AccessLogEntry{
 	Time:       time.Date(2026, 4, 3, 14, 20, 54, 167_000_000, time.UTC),
 	ClientIP:   "10.0.0.1",
 	Method:     "POST",

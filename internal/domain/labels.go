@@ -1,9 +1,5 @@
 package domain
 
-// HealthCheckUserAgentPrefix is the User-Agent prefix set by Gordon's internal
-// health-check prober. Shared so access-log filtering and the prober stay in sync.
-const HealthCheckUserAgentPrefix = "Gordon-HealthCheck/"
-
 // Label keys used by Gordon for container and image metadata.
 const (
 	// Container labels

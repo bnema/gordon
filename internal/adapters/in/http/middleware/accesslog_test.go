@@ -9,16 +9,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/bnema/gordon/internal/adapters/out/accesslog"
+	out "github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // mockAccessLogWriter records written entries and optionally returns an error.
 type mockAccessLogWriter struct {
-	entries []accesslog.Entry
+	entries []out.AccessLogEntry
 	err     error
 }
 
-func (m *mockAccessLogWriter) Write(entry accesslog.Entry) error {
+func (m *mockAccessLogWriter) Write(entry out.AccessLogEntry) error {
 	m.entries = append(m.entries, entry)
 	return m.err
 }

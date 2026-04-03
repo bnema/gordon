@@ -8,15 +8,8 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/adapters/out/accesslog"
-	"github.com/bnema/gordon/internal/domain"
+	out "github.com/bnema/gordon/internal/boundaries/out"
 )
-
-// AccessLogWriter is the interface the middleware needs from the output adapter.
-// *accesslog.Writer satisfies this interface.
-type AccessLogWriter interface {
-	Write(entry accesslog.Entry) error
-}
 
 // AccessLogger is a middleware that writes one access-log entry per HTTP request
 // to the provided writer. It runs alongside (not instead of) RequestLogger.
@@ -26,7 +19,7 @@ type AccessLogWriter interface {
 //
 // Write failures are reported as warnings through the application logger and
 // never fail the HTTP response.
-func AccessLogger(writer AccessLogWriter, excludeHealthChecks bool, log zerowrap.Logger, trustedNets []*net.IPNet) func(http.Handler) http.Handler {
+func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zerowrap.Logger, trustedNets []*net.IPNet) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -50,7 +43,7 @@ func AccessLogger(writer AccessLogWriter, excludeHealthChecks bool, log zerowrap
 			// filter can never drift. Loopback check reuses localhostNets from
 			// cidr.go (same package) — no separate loopback definition needed.
 			if excludeHealthChecks {
-				if strings.HasPrefix(r.UserAgent(), domain.HealthCheckUserAgentPrefix) ||
+				if strings.HasPrefix(r.UserAgent(), out.HealthCheckUserAgentPrefix) ||
 					IsTrustedProxy(clientIP, localhostNets) {
 					return
 				}
@@ -61,7 +54,7 @@ func AccessLogger(writer AccessLogWriter, excludeHealthChecks bool, log zerowrap
 			end := time.Now()
 			durationMS := float64(end.Sub(start).Microseconds()) / 1000.0
 
-			entry := accesslog.Entry{
+			entry := out.AccessLogEntry{
 				Time:       end.UTC(),
 				ClientIP:   clientIP,
 				Method:     r.Method,

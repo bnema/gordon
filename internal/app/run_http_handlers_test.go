@@ -15,29 +15,29 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adminhttp "github.com/bnema/gordon/internal/adapters/in/http/admin"
-	"github.com/bnema/gordon/internal/adapters/out/accesslog"
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
+	out "github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // testAccessLogWriter is a thread-safe mock AccessLogWriter for tests.
 type testAccessLogWriter struct {
 	mu      sync.Mutex
-	entries []accesslog.Entry
+	entries []out.AccessLogEntry
 }
 
-func (w *testAccessLogWriter) Write(entry accesslog.Entry) error {
+func (w *testAccessLogWriter) Write(entry out.AccessLogEntry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.entries = append(w.entries, entry)
 	return nil
 }
 
-func (w *testAccessLogWriter) snapshot() []accesslog.Entry {
+func (w *testAccessLogWriter) snapshot() []out.AccessLogEntry {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	out := make([]accesslog.Entry, len(w.entries))
-	copy(out, w.entries)
-	return out
+	result := make([]out.AccessLogEntry, len(w.entries))
+	copy(result, w.entries)
+	return result
 }
 
 func TestCreateAuthService_Disabled_ReturnsNilServices(t *testing.T) {

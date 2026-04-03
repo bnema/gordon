@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bnema/gordon/internal/domain"
+	out "github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // DefaultTimeout is the default timeout for HTTP probes.
@@ -79,7 +79,7 @@ func (p *Prober) Probe(ctx context.Context, url string) (int, int64, error) {
 	}
 
 	// Set a recognisable user agent so access-log filters can exclude probe traffic.
-	req.Header.Set("User-Agent", domain.HealthCheckUserAgentPrefix+"1.0")
+	req.Header.Set("User-Agent", out.HealthCheckUserAgentPrefix+"1.0")
 
 	resp, err := p.client.Do(req)
 	if err != nil {

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	out "github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // jsonEntry is the stable JSON schema for access log entries.
@@ -34,7 +36,7 @@ const jsonTimestamp = "2006-01-02T15:04:05.000Z07:00"
 // formatJSON serializes entry as a single-line JSON object.
 // Timestamps are RFC3339 with millisecond precision in UTC.
 // time.Time's default JSON marshaling is NOT used to ensure stable precision.
-func formatJSON(e Entry) (string, error) {
+func formatJSON(e out.AccessLogEntry) (string, error) {
 	je := jsonEntry{
 		Time:       e.Time.UTC().Format(jsonTimestamp),
 		ClientIP:   e.ClientIP,
@@ -60,7 +62,7 @@ func formatJSON(e Entry) (string, error) {
 // formatCLF serializes entry in Common Log Format (NCSA).
 //
 //	<ip> - - [timestamp] "METHOD target PROTO" status bytes
-func formatCLF(e Entry) (string, error) {
+func formatCLF(e out.AccessLogEntry) (string, error) {
 	ts := e.Time.UTC().Format(clfTimestamp)
 	target := buildRequestTarget(e.Path, e.Query)
 	return fmt.Sprintf(`%s - - [%s] "%s %s %s" %d %d`,
@@ -77,7 +79,7 @@ func formatCLF(e Entry) (string, error) {
 // formatCombined serializes entry in Combined Log Format (CLF + referer + UA).
 //
 //	<ip> - - [timestamp] "METHOD target PROTO" status bytes "referer" "ua"
-func formatCombined(e Entry) (string, error) {
+func formatCombined(e out.AccessLogEntry) (string, error) {
 	ts := e.Time.UTC().Format(clfTimestamp)
 	target := buildRequestTarget(e.Path, e.Query)
 	referer := e.Referer

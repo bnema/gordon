@@ -1660,7 +1660,7 @@ func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 
 // createHTTPHandlers creates HTTP handlers with middleware.
 // Returns three handlers: registry, HTTP proxy (with CIDR + onboarding), and HTTPS proxy.
-func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWriter middleware.AccessLogWriter) (http.Handler, http.Handler, http.Handler) {
+func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWriter out.AccessLogWriter) (http.Handler, http.Handler, http.Handler) {
 	// Parse trusted proxies once for all middleware chains.
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
 	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
@@ -2055,7 +2055,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	}
 	// Convert to interface only when non-nil to avoid the Go nil-interface pitfall
 	// where a typed nil pointer becomes a non-nil interface value.
-	var accessWriter middleware.AccessLogWriter
+	var accessWriter out.AccessLogWriter
 	if accessWriterConcrete != nil {
 		accessWriter = accessWriterConcrete
 	}

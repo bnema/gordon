@@ -8,11 +8,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	out "github.com/bnema/gordon/internal/boundaries/out"
 )
 
 var testTime = time.Date(2026, 4, 3, 14, 20, 54, 167_000_000, time.UTC)
 
-var baseEntry = Entry{
+var baseEntry = out.AccessLogEntry{
 	Time:       testTime,
 	ClientIP:   "135.181.213.219",
 	Method:     "GET",
