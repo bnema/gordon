@@ -238,6 +238,27 @@ func TestNewReverseProxy_XForwardedProto(t *testing.T) {
 			wantProto:     "http",
 			nets:          nil,
 		},
+		{
+			name:          "bare IPv4 no port trusted source preserves proto",
+			remoteAddr:    "10.0.0.1",
+			incomingProto: "https",
+			wantProto:     "https",
+			nets:          trustedNets,
+		},
+		{
+			name:          "bare IPv6 with brackets trusted source preserves proto",
+			remoteAddr:    "[::1]",
+			incomingProto: "https",
+			wantProto:     "https",
+			nets:          middleware.ParseTrustedProxies([]string{"::1/128"}),
+		},
+		{
+			name:          "bare IPv4 no port untrusted source strips proto",
+			remoteAddr:    "1.2.3.4",
+			incomingProto: "https",
+			wantProto:     "http",
+			nets:          trustedNets,
+		},
 	}
 
 	for _, tt := range tests {

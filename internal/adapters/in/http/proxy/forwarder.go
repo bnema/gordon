@@ -219,7 +219,9 @@ func isTrustedSource(r *http.Request, trustedNets []*net.IPNet) bool {
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return false
+		// RemoteAddr may be a bare IP without a port (e.g. from Unix sockets
+		// or certain proxy setups). Fall back to using it directly.
+		host = strings.TrimSuffix(strings.TrimPrefix(r.RemoteAddr, "["), "]")
 	}
 	return middleware.IsTrustedProxy(host, trustedNets)
 }
