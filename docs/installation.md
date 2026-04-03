@@ -258,7 +258,30 @@ Gordon serves HTTP by default. Cloudflare must connect to your origin over HTTP 
 
 Wrong mode causes: **521** (Cloudflare can't connect) or **525** (TLS handshake failed).
 
+> **Important:** You must also set `proxy_allowed_ips` with Cloudflare edge IPs — see [Proxy Origin Allowlist](#proxy-origin-allowlist) below.
+
 > **Rootless note:** Unprivileged users can't bind port 80. Forward port 80→8088 (or your configured port) via firewall — see the firewall section above.
+
+## Proxy Origin Allowlist
+
+When Gordon's internal CA is enabled (default: `tls_port = 8443`), HTTP requests from non-localhost IPs are restricted to certificate onboarding paths only. Cloudflare and other reverse proxies must be listed in `proxy_allowed_ips` to reach your applications.
+
+Add Cloudflare edge IPs to your `gordon.toml`:
+
+```toml
+[server]
+proxy_allowed_ips = [
+  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22",
+  "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+  "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22",
+  "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+  "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+]
+```
+
+Without this setting, Cloudflare traffic receives `403 Forbidden: Only certificate onboarding is available over HTTP`.
+
+> **Note:** This is separate from `[api.rate_limit] trusted_proxies`, which controls IP extraction from `X-Forwarded-For`. Both should list your proxy IPs. See [Proxy Origin IP Allowlist](./config/server.md#proxy-origin-ip-allowlist) for details.
 
 ## Verify Installation
 
