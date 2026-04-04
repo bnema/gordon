@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -13,18 +14,8 @@ import (
 
 // ClientConfig represents the client-mode configuration.
 type ClientConfig struct {
-	Client  ClientSettings         `toml:"client"`
 	Remotes map[string]RemoteEntry `toml:"remotes"`
 	Active  string                 `toml:"active"` // Active remote name
-}
-
-// ClientSettings represents the [client] section.
-type ClientSettings struct {
-	Mode        string `toml:"mode"`         // "local" (default) or "remote"
-	Remote      string `toml:"remote"`       // Remote Gordon URL
-	Token       string `toml:"token"`        // Auth token
-	TokenEnv    string `toml:"token_env"`    // Env var name for token
-	InsecureTLS bool   `toml:"insecure_tls"` // Skip TLS verification for remote admin API
 }
 
 // RemoteEntry represents a saved remote in [remotes.*].
@@ -33,15 +24,6 @@ type RemoteEntry struct {
 	Token       string `toml:"token,omitempty"`
 	TokenEnv    string `toml:"token_env,omitempty"`
 	InsecureTLS bool   `toml:"insecure_tls,omitempty"`
-}
-
-// DefaultClientConfigPath returns the default client config path.
-func DefaultClientConfigPath() string {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		configDir = os.Getenv("HOME")
-	}
-	return filepath.Join(configDir, "gordon", "gordon.toml")
 }
 
 // DefaultRemotesPath returns the default remotes config path.
@@ -53,38 +35,6 @@ func DefaultRemotesPath() string {
 	return filepath.Join(configDir, "gordon", "remotes.toml")
 }
 
-// LoadClientConfig loads the client configuration.
-func LoadClientConfig(path string) (*ClientConfig, error) {
-	if path == "" {
-		path = DefaultClientConfigPath()
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Return default config
-			return &ClientConfig{
-				Client: ClientSettings{
-					Mode: "local",
-				},
-				Remotes: make(map[string]RemoteEntry),
-			}, nil
-		}
-		return nil, fmt.Errorf("failed to read config: %w", err)
-	}
-
-	var config ClientConfig
-	if err := toml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-
-	if config.Remotes == nil {
-		config.Remotes = make(map[string]RemoteEntry)
-	}
-
-	return &config, nil
-}
-
 // LoadRemotes loads the remotes configuration.
 func LoadRemotes(path string) (*ClientConfig, error) {
 	if path == "" {
@@ -94,9 +44,11 @@ func LoadRemotes(path string) (*ClientConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &ClientConfig{
+			config := &ClientConfig{
 				Remotes: make(map[string]RemoteEntry),
-			}, nil
+			}
+			migrateClientConfig(config)
+			return config, nil
 		}
 		return nil, fmt.Errorf("failed to read remotes: %w", err)
 	}
@@ -110,7 +62,63 @@ func LoadRemotes(path string) (*ClientConfig, error) {
 		config.Remotes = make(map[string]RemoteEntry)
 	}
 
+	migrateClientConfig(&config)
+
 	return &config, nil
+}
+
+// migrateClientConfig reads the legacy gordon.toml [client] section and
+// creates a "default" remote entry if one doesn't already exist.
+func migrateClientConfig(config *ClientConfig) {
+	gordonPath := defaultGordonTomlPath()
+	data, err := os.ReadFile(gordonPath)
+	if err != nil {
+		return
+	}
+
+	var legacy struct {
+		Client struct {
+			Mode        string `toml:"mode"`
+			Remote      string `toml:"remote"`
+			Token       string `toml:"token"`
+			TokenEnv    string `toml:"token_env"`
+			InsecureTLS bool   `toml:"insecure_tls"`
+		} `toml:"client"`
+	}
+	if err := toml.Unmarshal(data, &legacy); err != nil {
+		return
+	}
+
+	if legacy.Client.Mode != "remote" || legacy.Client.Remote == "" {
+		return
+	}
+
+	if _, exists := config.Remotes["default"]; exists {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "Notice: migrated [client] config from gordon.toml to 'default' remote. The [client] section is deprecated; use 'gordon remotes' instead.\n")
+
+	config.Remotes["default"] = RemoteEntry{
+		URL:         legacy.Client.Remote,
+		Token:       legacy.Client.Token,
+		TokenEnv:    legacy.Client.TokenEnv,
+		InsecureTLS: legacy.Client.InsecureTLS,
+	}
+
+	if config.Active == "" {
+		config.Active = "default"
+	}
+
+	_ = SaveRemotes("", config)
+}
+
+func defaultGordonTomlPath() string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		configDir = os.Getenv("HOME")
+	}
+	return filepath.Join(configDir, "gordon", "gordon.toml")
 }
 
 // SaveRemotes saves the remotes configuration.
@@ -135,114 +143,6 @@ func SaveRemotes(path string, config *ClientConfig) error {
 	}
 
 	return nil
-}
-
-// ResolveRemote resolves the remote URL and token from configuration.
-// Precedence: flag > env > config > active remote
-func ResolveRemote(flagRemote, flagToken string, flagInsecure bool) (url, token string, insecureTLS, isRemote bool) {
-	url, token, insecureTLS, _, isRemote = ResolveRemoteFull(flagRemote, flagToken, flagInsecure)
-	return url, token, insecureTLS, isRemote
-}
-
-// ResolveRemoteFull resolves the remote URL, token, and named remote from configuration.
-// It also returns the remote name for use in token persistence callbacks.
-// Precedence: flag > env > config > active remote
-func ResolveRemoteFull(flagRemote, flagToken string, flagInsecure bool) (url, token string, insecureTLS bool, remoteName string, isRemote bool) {
-	config, _ := LoadClientConfig("")
-	remotes, _ := LoadRemotes("")
-
-	var name string
-	url, name, isRemote = resolveRemoteURL(flagRemote, config, remotes)
-	if isRemote {
-		// resolveToken looks up remotes.Active internally; name == remotes.Active here
-		// because resolveRemoteURL only sets name when it finds the active remote entry.
-		token = resolveToken(flagToken, config, remotes)
-		insecureTLS = resolveInsecureTLS(flagInsecure, config, remotes, name)
-		remoteName = name
-	}
-
-	return url, token, insecureTLS, remoteName, isRemote
-}
-
-// resolveRemoteURL resolves the remote URL from various sources.
-func resolveRemoteURL(flagRemote string, config *ClientConfig, remotes *ClientConfig) (url, remoteName string, isRemote bool) {
-	// 1. Check flag
-	if flagRemote != "" {
-		return flagRemote, "", true
-	}
-
-	// 2. Check environment variable
-	if envRemote := os.Getenv("GORDON_REMOTE"); envRemote != "" {
-		return envRemote, "", true
-	}
-
-	// 3. Check client config
-	if config != nil && config.Client.Mode == "remote" && config.Client.Remote != "" {
-		return config.Client.Remote, "", true
-	}
-
-	// 4. Check active remote
-	if remotes != nil && remotes.Active != "" {
-		if remote, ok := remotes.Remotes[remotes.Active]; ok {
-			return remote.URL, remotes.Active, true
-		}
-	}
-
-	return "", "", false
-}
-
-// resolveToken resolves the authentication token from various sources.
-func resolveToken(flagToken string, config *ClientConfig, remotes *ClientConfig) string {
-	activeRemote := activeRemoteEntry(remotes)
-
-	// 1. Flag token takes precedence
-	if flagToken != "" {
-		return flagToken
-	}
-
-	// 2. Environment variable
-	if envToken := os.Getenv("GORDON_TOKEN"); envToken != "" {
-		return envToken
-	}
-
-	// 3. Config token
-	if config != nil {
-		if config.Client.Token != "" {
-			return config.Client.Token
-		}
-		if config.Client.TokenEnv != "" {
-			if envToken := os.Getenv(config.Client.TokenEnv); envToken != "" {
-				return envToken
-			}
-		}
-	}
-
-	// 4. Try pass store for active remote
-	if remotes != nil && remotes.Active != "" && passAvailable() {
-		if token, err := passReadToken(remotes.Active); err == nil && token != "" {
-			return token
-		}
-	}
-
-	// 5. Active remote token
-	if token := resolveRemoteEntryToken(activeRemote); token != "" {
-		return token
-	}
-
-	return ""
-}
-
-func activeRemoteEntry(remotes *ClientConfig) *RemoteEntry {
-	if remotes == nil || remotes.Active == "" {
-		return nil
-	}
-
-	remote, ok := remotes.Remotes[remotes.Active]
-	if !ok {
-		return nil
-	}
-
-	return &remote
 }
 
 func resolveRemoteEntryToken(remote *RemoteEntry) string {
@@ -272,37 +172,113 @@ func ResolveTokenForRemote(name string, entry RemoteEntry) string {
 	return ""
 }
 
-// ResolveInsecureTLSForRemote resolves insecure TLS behavior for a named remote.
-// Precedence: flag > env > client config > specific remote config.
-func ResolveInsecureTLSForRemote(flagInsecure bool, remoteName string) bool {
-	config, _ := LoadClientConfig("")
-	remotes, _ := LoadRemotes("")
-	return resolveInsecureTLS(flagInsecure, config, remotes, remoteName)
+// ResolvedRemote holds the fully resolved remote target.
+// Name is empty for ad-hoc URLs passed directly via flag or env.
+type ResolvedRemote struct {
+	Name        string
+	URL         string
+	Token       string
+	InsecureTLS bool
 }
 
-func resolveInsecureTLS(flagInsecure bool, config *ClientConfig, remotes *ClientConfig, remoteName string) bool {
+// DisplayName returns the remote name, or the URL if unnamed (ad-hoc).
+func (r *ResolvedRemote) DisplayName() string {
+	if r.Name != "" {
+		return r.Name
+	}
+	return r.URL
+}
+
+// resolveTokenForTarget resolves the authentication token.
+// Precedence: flag > GORDON_TOKEN env > stored token for named remote.
+func resolveTokenForTarget(flagToken, name string, remotes *ClientConfig) string {
+	if flagToken != "" {
+		return flagToken
+	}
+	if envToken := os.Getenv("GORDON_TOKEN"); envToken != "" {
+		return envToken
+	}
+	if name != "" && remotes != nil {
+		if entry, ok := remotes.Remotes[name]; ok {
+			return ResolveTokenForRemote(name, entry)
+		}
+	}
+	return ""
+}
+
+// resolveInsecureForTarget resolves InsecureTLS setting.
+// Precedence: flag > GORDON_INSECURE env > remote entry field.
+func resolveInsecureForTarget(flagInsecure bool, name string, remotes *ClientConfig) bool {
 	if flagInsecure {
 		return true
 	}
-
 	if env := os.Getenv("GORDON_INSECURE"); env != "" {
-		if value, err := strconv.ParseBool(env); err == nil {
-			return value
-		}
-		fmt.Fprintf(os.Stderr, "WARNING: invalid GORDON_INSECURE value %q, ignoring\n", env)
-	}
-
-	if config != nil && config.Client.InsecureTLS {
-		return true
-	}
-
-	if remoteName != "" && remotes != nil {
-		if remote, ok := remotes.Remotes[remoteName]; ok && remote.InsecureTLS {
+		if v, err := strconv.ParseBool(env); err == nil && v {
 			return true
 		}
 	}
-
+	if name != "" && remotes != nil {
+		if entry, ok := remotes.Remotes[name]; ok {
+			return entry.InsecureTLS
+		}
+	}
 	return false
+}
+
+// Resolve resolves the remote target from flags, environment, and config.
+// Returns nil, false when no remote is configured (local mode).
+//
+// URL precedence: flag > GORDON_REMOTE env > active remote.
+// The flag and env values are treated as a saved remote name first;
+// if no match and the value starts with http:// or https://, used as ad-hoc URL.
+//
+// Token precedence: flag > GORDON_TOKEN env > named remote (pass > TOML token > token_env).
+// InsecureTLS precedence: flag > GORDON_INSECURE env > remote entry field.
+func Resolve(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, bool) {
+	remotes, _ := LoadRemotes("")
+
+	name, url, found := resolveTarget(flagRemote, remotes)
+	if !found && flagRemote != "" && !strings.HasPrefix(flagRemote, "http://") && !strings.HasPrefix(flagRemote, "https://") {
+		return nil, false
+	}
+	if !found {
+		if envRemote := os.Getenv("GORDON_REMOTE"); envRemote != "" {
+			name, url, found = resolveTarget(envRemote, remotes)
+		}
+	}
+	if !found && remotes != nil && remotes.Active != "" {
+		if entry, ok := remotes.Remotes[remotes.Active]; ok {
+			name = remotes.Active
+			url = entry.URL
+			found = true
+		}
+	}
+	if !found {
+		return nil, false
+	}
+
+	return &ResolvedRemote{
+		Name:        name,
+		URL:         url,
+		Token:       resolveTokenForTarget(flagToken, name, remotes),
+		InsecureTLS: resolveInsecureForTarget(flagInsecure, name, remotes),
+	}, true
+}
+
+// resolveTarget checks if value is a saved remote name or an ad-hoc URL.
+func resolveTarget(value string, remotes *ClientConfig) (name, url string, found bool) {
+	if value == "" {
+		return "", "", false
+	}
+	if remotes != nil {
+		if entry, ok := remotes.Remotes[value]; ok {
+			return value, entry.URL, true
+		}
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return "", value, true
+	}
+	return "", "", false
 }
 
 // AddRemote adds a new remote to the remotes configuration.

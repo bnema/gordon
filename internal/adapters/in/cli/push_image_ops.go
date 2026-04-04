@@ -54,18 +54,22 @@ func newDockerImageOps(insecureTLS bool, progress io.Writer) (*dockerImageOps, e
 
 // newImageOpsFromFlags resolves TLS settings from CLI flags/config and creates ops.
 func newImageOpsFromFlags() (pushImageOps, error) {
-	remoteURL, token, insecureTLS, _ := remote.ResolveRemote(remoteFlag, tokenFlag, insecureTLSFlag)
+	resolved, _ := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
+	insecureTLS := false
+	if resolved != nil {
+		insecureTLS = resolved.InsecureTLS
+	}
 	ops, err := newDockerImageOps(insecureTLS, os.Stderr)
 	if err != nil {
 		return nil, err
 	}
-	if remoteURL != "" && token != "" {
+	if resolved != nil && resolved.Token != "" {
 		var clientOpts []remote.ClientOption
-		clientOpts = append(clientOpts, remote.WithToken(token))
-		if insecureTLS {
+		clientOpts = append(clientOpts, remote.WithToken(resolved.Token))
+		if resolved.InsecureTLS {
 			clientOpts = append(clientOpts, remote.WithInsecureTLS(true))
 		}
-		ops.remoteClient = remote.NewClient(remoteURL, clientOpts...)
+		ops.remoteClient = remote.NewClient(resolved.URL, clientOpts...)
 	}
 	return ops, nil
 }

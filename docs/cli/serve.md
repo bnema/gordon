@@ -169,7 +169,7 @@ gordon deploy <domain> [options]
 
 | Option | Description |
 |--------|-------------|
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 Remote targeting uses client config or an active remote by default.
@@ -229,7 +229,7 @@ gordon logs [domain] [options]
 | `--config` | `-c` | Auto | Path to config file |
 | `--follow` | `-f` | false | Follow log output (like `tail -f`) |
 | `--lines` | `-n` | 50 | Number of lines to show |
-| `--remote` | | | Remote Gordon URL |
+| `--remote, -r` | | | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | | | Authentication token for remote |
 
 Remote targeting uses client config or an active remote by default.

@@ -85,7 +85,7 @@ gordon attachments list --json
 | Option | Description |
 |--------|-------------|
 | `--json` | Output attachments as JSON |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ---
@@ -111,7 +111,7 @@ gordon attachments add backend redis:7-alpine
 
 | Option | Description |
 |--------|-------------|
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Examples
@@ -152,7 +152,7 @@ gordon attachments push <image> [options]
 | `--platform` | Target platform for buildx (default: `linux/amd64`) |
 | `--build-arg` | Additional build args (repeatable, `KEY=VALUE`) |
 | `--tag` | Override version tag |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description
@@ -199,7 +199,7 @@ gordon attachments remove app.example.com postgres:18
 
 | Option | Description |
 |--------|-------------|
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Examples

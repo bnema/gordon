@@ -59,7 +59,7 @@ gordon autoroute allow add example.com --remote https://gordon.mydomain.com --to
 
 | Option | Description |
 |--------|-------------|
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description
@@ -103,7 +103,7 @@ gordon autoroute allow list --remote https://gordon.mydomain.com --token $TOKEN
 | Option | Description |
 |--------|-------------|
 | `--json` | Output allowed domains as JSON |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description
@@ -171,7 +171,7 @@ gordon autoroute allow remove example.com --remote https://gordon.mydomain.com -
 
 | Option | Description |
 |--------|-------------|
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description

@@ -40,7 +40,7 @@ gordon secrets list <domain>
 | Option | Description |
 |--------|-------------|
 | `--json` | Output secrets as JSON |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Examples
@@ -117,7 +117,7 @@ gordon secrets set myapp.local DATABASE_URL "postgres://..."
 | Option | Description |
 |--------|-------------|
 | `--attachment` / `-a` | Target an attachment service (e.g., postgres, redis) |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Examples
@@ -160,7 +160,7 @@ gordon secrets remove <domain> <key>
 | Option | Description |
 |--------|-------------|
 | `--attachment` / `-a` | Target an attachment service (e.g., postgres, redis) |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Examples

@@ -157,7 +157,7 @@ gordon autoroute allow remove example.com
 | Option | Description |
 |--------|-------------|
 | `-c, --config` | Path to configuration file |
-| `--remote` | Remote Gordon URL (e.g., `https://gordon.mydomain.com`) |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 | `--insecure` | Skip TLS certificate verification for remote HTTPS endpoints |
 
