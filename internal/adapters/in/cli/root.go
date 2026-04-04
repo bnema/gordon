@@ -59,7 +59,7 @@ Commands are organized by where they run:
 	)
 
 	// Add persistent flags for remote targeting
-	rootCmd.PersistentFlags().StringVar(&remoteFlag, "remote", "", "Remote Gordon URL (e.g., https://gordon.mydomain.com)")
+	rootCmd.PersistentFlags().StringVarP(&remoteFlag, "remote", "r", "", "Remote name or URL (e.g., prod, https://gordon.mydomain.com)")
 	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "Authentication token for remote")
 	rootCmd.PersistentFlags().BoolVar(&insecureTLSFlag, "insecure", false, "Skip TLS certificate verification for remote HTTPS endpoints")
 
@@ -172,13 +172,13 @@ Commands are organized by where they run:
 // GetRemoteClient returns a remote client if targeting a remote instance,
 // or nil if running locally.
 func GetRemoteClient() (*remote.Client, bool) {
-	url, token, insecureTLS, _, isRemote := remote.ResolveRemoteFull(remoteFlag, tokenFlag, insecureTLSFlag)
+	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
 	if !isRemote {
 		return nil, false
 	}
 
-	opts := remoteClientOptions(token, insecureTLS)
-	client := remote.NewClient(url, opts...)
+	opts := remoteClientOptions(resolved.Token, resolved.InsecureTLS)
+	client := remote.NewClient(resolved.URL, opts...)
 	return client, true
 }
 
@@ -195,7 +195,7 @@ func remoteClientOptions(token string, insecureTLS bool) []remote.ClientOption {
 
 // IsRemoteMode returns true if CLI is targeting a remote Gordon instance.
 func IsRemoteMode() bool {
-	_, _, _, isRemote := remote.ResolveRemote(remoteFlag, tokenFlag, insecureTLSFlag)
+	_, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
 	return isRemote
 }
 
