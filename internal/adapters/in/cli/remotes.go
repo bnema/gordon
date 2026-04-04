@@ -84,7 +84,7 @@ func runRemotesList(out io.Writer, jsonOut bool) error {
 		}
 
 		tokenStatus := styles.Theme.Muted.Render("none")
-		if r.Token != "" {
+		if token := remote.ResolveTokenForRemote(name, r); token != "" {
 			tokenStatus = styles.Theme.Success.Render("set")
 		} else if r.TokenEnv != "" {
 			tokenStatus = fmt.Sprintf("$%s", r.TokenEnv)
