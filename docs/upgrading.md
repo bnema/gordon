@@ -33,6 +33,23 @@ sudo firewall-cmd --reload
 
 Gordon now includes an internal CA for automatic on-demand TLS. Set `tls_port = 0` to disable. See [Server Configuration](./config/server.md#internal-ca-and-tls) for details.
 
+### Required for Cloudflare/Proxy Setups: `proxy_allowed_ips`
+
+The internal CA's HTTP onboarding gate rejects non-localhost HTTP requests by default. If Gordon sits behind Cloudflare or another reverse proxy, add the proxy's edge IPs to `proxy_allowed_ips`:
+
+```toml
+[server]
+proxy_allowed_ips = [
+  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22",
+  "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+  "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22",
+  "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+  "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+]
+```
+
+Without this, all proxied HTTP traffic returns `403 Forbidden`. Set `tls_port = 0` to disable the internal CA and skip this requirement.
+
 ## v2.16.0 to v2.30.0
 
 ### Breaking: Password Authentication Removed
