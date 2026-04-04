@@ -172,34 +172,6 @@ func ResolveTokenForRemote(name string, entry RemoteEntry) string {
 	return ""
 }
 
-// ResolveInsecureTLSForRemote resolves insecure TLS behavior for a named remote.
-// Precedence: flag > env > specific remote config.
-func ResolveInsecureTLSForRemote(flagInsecure bool, remoteName string) bool {
-	remotes, _ := LoadRemotes("")
-	return resolveInsecureTLS(flagInsecure, remotes, remoteName)
-}
-
-func resolveInsecureTLS(flagInsecure bool, remotes *ClientConfig, remoteName string) bool {
-	if flagInsecure {
-		return true
-	}
-
-	if env := os.Getenv("GORDON_INSECURE"); env != "" {
-		if value, err := strconv.ParseBool(env); err == nil {
-			return value
-		}
-		fmt.Fprintf(os.Stderr, "WARNING: invalid GORDON_INSECURE value %q, ignoring\n", env)
-	}
-
-	if remoteName != "" && remotes != nil {
-		if remote, ok := remotes.Remotes[remoteName]; ok && remote.InsecureTLS {
-			return true
-		}
-	}
-
-	return false
-}
-
 // ResolvedRemote holds the fully resolved remote target.
 // Name is empty for ad-hoc URLs passed directly via flag or env.
 type ResolvedRemote struct {
@@ -207,6 +179,14 @@ type ResolvedRemote struct {
 	URL         string
 	Token       string
 	InsecureTLS bool
+}
+
+// DisplayName returns the remote name, or the URL if unnamed (ad-hoc).
+func (r *ResolvedRemote) DisplayName() string {
+	if r.Name != "" {
+		return r.Name
+	}
+	return r.URL
 }
 
 // resolveTokenForTarget resolves the authentication token.
@@ -258,6 +238,9 @@ func Resolve(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, 
 	remotes, _ := LoadRemotes("")
 
 	name, url, found := resolveTarget(flagRemote, remotes)
+	if !found && flagRemote != "" && !strings.HasPrefix(flagRemote, "http://") && !strings.HasPrefix(flagRemote, "https://") {
+		return nil, false
+	}
 	if !found {
 		if envRemote := os.Getenv("GORDON_REMOTE"); envRemote != "" {
 			name, url, found = resolveTarget(envRemote, remotes)

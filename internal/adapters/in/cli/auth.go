@@ -276,11 +276,7 @@ func runAuthLoginVerify(ctx context.Context, out io.Writer) error {
 		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
 	}
 	if resolved.Token == "" {
-		name := resolved.Name
-		if name == "" {
-			name = resolved.URL
-		}
-		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token <token>", name)
+		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token <token>", resolved.DisplayName())
 	}
 
 	client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
@@ -288,19 +284,11 @@ func runAuthLoginVerify(ctx context.Context, out io.Writer) error {
 	defer cancel()
 
 	if _, err := client.GetStatus(verifyCtx); err != nil {
-		name := resolved.Name
-		if name == "" {
-			name = resolved.URL
-		}
-		_ = cliWriteLine(out, styles.RenderWarning(fmt.Sprintf("Token verification failed for '%s': %v", name, err)))
+		_ = cliWriteLine(out, styles.RenderWarning(fmt.Sprintf("Token verification failed for '%s': %v", resolved.DisplayName(), err)))
 		return fmt.Errorf("authentication failed")
 	}
 
-	name := resolved.Name
-	if name == "" {
-		name = resolved.URL
-	}
-	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Authenticated to '%s'", name)))
+	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Authenticated to '%s'", resolved.DisplayName())))
 	return nil
 }
 
@@ -334,11 +322,7 @@ func runAuthShowToken(out io.Writer) error {
 		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
 	}
 	if resolved.Token == "" {
-		name := resolved.Name
-		if name == "" {
-			name = resolved.URL
-		}
-		return fmt.Errorf("no token found for remote '%s'", name)
+		return fmt.Errorf("no token found for remote '%s'", resolved.DisplayName())
 	}
 
 	if f, ok := out.(*os.File); ok && isatty.IsTerminal(f.Fd()) {
@@ -708,28 +692,24 @@ Examples:
   gordon auth status              Check status of active remote
   gordon auth status --remote prod  Check specific remote`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthStatus()
+			return runAuthStatus(cmd.Context())
 		},
 	}
 	return cmd
 }
 
 // runAuthStatus checks authentication status for the active remote.
-func runAuthStatus() error {
+func runAuthStatus(ctx context.Context) error {
 	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
 	if !isRemote {
-		return fmt.Errorf("no active remote configured. Use 'gordon remotes use <name>' or --remote flag")
+		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
 	}
 
 	client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
 
-	name := resolved.Name
-	if name == "" {
-		name = resolved.URL
-	}
+	name := resolved.DisplayName()
 	fmt.Printf("Checking authentication status for '%s'...\n", name)
 
-	ctx := context.Background()
 	status, err := client.VerifyAuth(ctx)
 	if err != nil {
 		return handleAuthVerifyError(err, name, resolved.URL)
