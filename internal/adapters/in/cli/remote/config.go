@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -303,6 +304,99 @@ func resolveInsecureTLS(flagInsecure bool, config *ClientConfig, remotes *Client
 	}
 
 	return false
+}
+
+// ResolvedRemote holds the fully resolved remote target.
+// Name is empty for ad-hoc URLs passed directly via flag or env.
+type ResolvedRemote struct {
+	Name        string
+	URL         string
+	Token       string
+	InsecureTLS bool
+}
+
+// Resolve resolves the remote target from flags, environment, and config.
+// Returns nil, false when no remote is configured (local mode).
+//
+// URL precedence: flag > GORDON_REMOTE env > active remote.
+// The flag and env values are treated as a saved remote name first;
+// if no match and the value starts with http:// or https://, used as ad-hoc URL.
+//
+// Token precedence: flag > GORDON_TOKEN env > named remote (pass > TOML token > token_env).
+// InsecureTLS precedence: flag > GORDON_INSECURE env > remote entry field.
+func Resolve(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, bool) {
+	remotes, _ := LoadRemotes("")
+
+	name, url, found := resolveTarget(flagRemote, remotes)
+	if !found {
+		if envRemote := os.Getenv("GORDON_REMOTE"); envRemote != "" {
+			name, url, found = resolveTarget(envRemote, remotes)
+		}
+	}
+	if !found {
+		if remotes != nil && remotes.Active != "" {
+			if entry, ok := remotes.Remotes[remotes.Active]; ok {
+				name = remotes.Active
+				url = entry.URL
+				found = true
+			}
+		}
+	}
+	if !found {
+		return nil, false
+	}
+
+	r := &ResolvedRemote{
+		Name:        name,
+		URL:         url,
+		InsecureTLS: flagInsecure,
+	}
+
+	// Token: flag > env > stored
+	switch {
+	case flagToken != "":
+		r.Token = flagToken
+	case os.Getenv("GORDON_TOKEN") != "":
+		r.Token = os.Getenv("GORDON_TOKEN")
+	case name != "":
+		if remotes != nil {
+			if entry, ok := remotes.Remotes[name]; ok {
+				r.Token = ResolveTokenForRemote(name, entry)
+			}
+		}
+	}
+
+	// InsecureTLS: flag already set; check env then entry
+	if !r.InsecureTLS {
+		if env := os.Getenv("GORDON_INSECURE"); env != "" {
+			if v, err := strconv.ParseBool(env); err == nil {
+				r.InsecureTLS = v
+			}
+		}
+	}
+	if !r.InsecureTLS && name != "" && remotes != nil {
+		if entry, ok := remotes.Remotes[name]; ok {
+			r.InsecureTLS = entry.InsecureTLS
+		}
+	}
+
+	return r, true
+}
+
+// resolveTarget checks if value is a saved remote name or an ad-hoc URL.
+func resolveTarget(value string, remotes *ClientConfig) (name, url string, found bool) {
+	if value == "" {
+		return "", "", false
+	}
+	if remotes != nil {
+		if entry, ok := remotes.Remotes[value]; ok {
+			return value, entry.URL, true
+		}
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return "", value, true
+	}
+	return "", "", false
 }
 
 // AddRemote adds a new remote to the remotes configuration.
