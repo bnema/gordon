@@ -203,10 +203,7 @@ available while Gordon is running.`,
 
 // newAuthLoginCmd creates the login command for remote authentication.
 func newAuthLoginCmd() *cobra.Command {
-	var (
-		remoteName string
-		token      string
-	)
+	var token string
 
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -224,31 +221,30 @@ Examples:
 	gordon auth login                              Verify existing token`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if token != "" {
-				return runAuthLoginWithToken(cmd.Context(), remoteName, token, cmd.OutOrStdout())
+				return runAuthLoginWithToken(cmd.Context(), token, cmd.OutOrStdout())
 			}
-			return runAuthLoginVerify(cmd.Context(), remoteName, cmd.OutOrStdout())
+			return runAuthLoginVerify(cmd.Context(), cmd.OutOrStdout())
 		},
 	}
 
-	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to authenticate with (defaults to active remote)")
 	cmd.Flags().StringVarP(&token, "token", "t", "", "Authentication token to store for the remote")
 
 	return cmd
 }
 
-func runAuthLoginWithToken(ctx context.Context, remoteName, token string, out io.Writer) error {
+func runAuthLoginWithToken(ctx context.Context, token string, out io.Writer) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return fmt.Errorf("token cannot be empty")
 	}
 
-	resolvedName, remoteConfig, err := resolveRemoteEntry(remoteName)
-	if err != nil {
-		return err
+	// Resolve remote — but use the new token (not the stored one) for verification.
+	resolved, isRemote := remote.Resolve(remoteFlag, "", insecureTLSFlag)
+	if !isRemote {
+		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
 	}
 
-	insecureTLS := remote.ResolveInsecureTLSForRemote(insecureTLSFlag, resolvedName)
-	client := remote.NewClient(remoteConfig.URL, remoteClientOptions(token, insecureTLS)...)
+	client := remote.NewClient(resolved.URL, remoteClientOptions(token, resolved.InsecureTLS)...)
 	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	verified := true
@@ -257,47 +253,59 @@ func runAuthLoginWithToken(ctx context.Context, remoteName, token string, out io
 		verified = false
 	}
 
-	if err := remote.UpdateRemoteToken(resolvedName, token); err != nil {
+	// Store token — requires a named remote.
+	if resolved.Name == "" {
+		_ = cliWriteLine(out, styles.RenderWarning("Ad-hoc URL: token verified but cannot be stored. Use 'gordon remotes add' to save this remote."))
+		return nil
+	}
+	if err := remote.UpdateRemoteToken(resolved.Name, token); err != nil {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
 	_ = cliWriteLine(out, "")
-	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Token stored for remote '%s'", resolvedName)))
+	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Token stored for remote '%s'", resolved.Name)))
 	if verified {
 		_ = cliWriteLine(out, styles.RenderSuccess("Token verified with remote status endpoint"))
 	}
 	return nil
 }
 
-func runAuthLoginVerify(ctx context.Context, remoteName string, out io.Writer) error {
-	resolvedName, entry, err := resolveRemoteEntry(remoteName)
-	if err != nil {
-		return err
+func runAuthLoginVerify(ctx context.Context, out io.Writer) error {
+	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
+	if !isRemote {
+		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
+	}
+	if resolved.Token == "" {
+		name := resolved.Name
+		if name == "" {
+			name = resolved.URL
+		}
+		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token <token>", name)
 	}
 
-	token := remote.ResolveTokenForRemote(resolvedName, entry)
-	if token == "" {
-		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token <token>", resolvedName)
-	}
-
-	insecureTLS := remote.ResolveInsecureTLSForRemote(insecureTLSFlag, resolvedName)
-	client := remote.NewClient(entry.URL, remoteClientOptions(token, insecureTLS)...)
+	client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
 	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	if _, err := client.GetStatus(verifyCtx); err != nil {
-		_ = cliWriteLine(out, styles.RenderWarning(fmt.Sprintf("Token verification failed for '%s': %v", resolvedName, err)))
+		name := resolved.Name
+		if name == "" {
+			name = resolved.URL
+		}
+		_ = cliWriteLine(out, styles.RenderWarning(fmt.Sprintf("Token verification failed for '%s': %v", name, err)))
 		return fmt.Errorf("authentication failed")
 	}
 
-	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Authenticated to '%s'", resolvedName)))
+	name := resolved.Name
+	if name == "" {
+		name = resolved.URL
+	}
+	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Authenticated to '%s'", name)))
 	return nil
 }
 
 // newAuthShowTokenCmd creates the show-token command.
 func newAuthShowTokenCmd() *cobra.Command {
-	var remoteName string
-
 	cmd := &cobra.Command{
 		Use:   "show-token",
 		Short: "Print the stored token for a remote",
@@ -313,38 +321,36 @@ Examples:
   gordon auth show-token --remote prod       Show token for specific remote
   gordon auth show-token | pbcopy            Copy token to clipboard`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthShowToken(remoteName, cmd.OutOrStdout())
+			return runAuthShowToken(cmd.OutOrStdout())
 		},
 	}
-
-	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to show token for (defaults to active remote)")
 
 	return cmd
 }
 
-func runAuthShowToken(remoteName string, out io.Writer) error {
-	resolvedName, entry, err := resolveRemoteEntry(remoteName)
-	if err != nil {
-		return err
+func runAuthShowToken(out io.Writer) error {
+	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
+	if !isRemote {
+		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
 	}
-
-	token := remote.ResolveTokenForRemote(resolvedName, entry)
-	if token == "" {
-		return fmt.Errorf("no token found for remote '%s'", resolvedName)
+	if resolved.Token == "" {
+		name := resolved.Name
+		if name == "" {
+			name = resolved.URL
+		}
+		return fmt.Errorf("no token found for remote '%s'", name)
 	}
 
 	if f, ok := out.(*os.File); ok && isatty.IsTerminal(f.Fd()) {
 		_ = cliWriteLine(os.Stderr, styles.RenderWarning("Warning: token will be visible in terminal scrollback"))
 	}
 
-	_ = cliWriteLine(out, token)
+	_ = cliWriteLine(out, resolved.Token)
 	return nil
 }
 
 // newAuthLogoutCmd creates the logout command.
 func newAuthLogoutCmd() *cobra.Command {
-	var remoteName string
-
 	cmd := &cobra.Command{
 		Use:   "logout",
 		Short: "Remove stored authentication for a remote",
@@ -357,49 +363,31 @@ Examples:
   gordon auth logout                   Logout from active remote
   gordon auth logout --remote prod     Logout from specific remote`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthLogout(remoteName, cmd.OutOrStdout())
+			return runAuthLogout(cmd.OutOrStdout())
 		},
 	}
-
-	cmd.Flags().StringVarP(&remoteName, "remote", "r", "", "Remote to logout from (defaults to active remote)")
 
 	return cmd
 }
 
-func runAuthLogout(remoteName string, out io.Writer) error {
-	resolvedName, _, err := resolveRemoteEntry(remoteName)
-	if err != nil {
-		return err
+func runAuthLogout(out io.Writer) error {
+	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
+	if !isRemote {
+		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
+	}
+	if resolved.Name == "" {
+		return fmt.Errorf("cannot logout from ad-hoc URL. Use 'gordon remotes add' to save this remote first")
 	}
 
-	if err := remote.ClearRemoteToken(resolvedName); err != nil {
+	if err := remote.ClearRemoteToken(resolved.Name); err != nil {
 		return fmt.Errorf("failed to clear token: %w", err)
 	}
 
-	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Logged out from remote '%s'", resolvedName)))
+	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Logged out from remote '%s'", resolved.Name)))
 	return nil
 }
 
-func resolveRemoteEntry(remoteName string) (string, remote.RemoteEntry, error) {
-	config, err := remote.LoadRemotes("")
-	if err != nil {
-		return "", remote.RemoteEntry{}, fmt.Errorf("failed to load remotes: %w", err)
-	}
 
-	if remoteName == "" {
-		remoteName = config.Active
-	}
-	if remoteName == "" {
-		return "", remote.RemoteEntry{}, fmt.Errorf("no remote specified and no active remote set. Use --remote or 'gordon remote use <name>'")
-	}
-
-	remoteConfig, ok := config.Remotes[remoteName]
-	if !ok {
-		return "", remote.RemoteEntry{}, fmt.Errorf("remote '%s' not found", remoteName)
-	}
-
-	return remoteName, remoteConfig, nil
-}
 
 // runShowInternalAuth displays the internal registry credentials.
 func runShowInternalAuth() error {
@@ -711,7 +699,6 @@ func createAuthServiceForCLI(cfg *cliConfig, log zerowrap.Logger) (*auth.Service
 
 // newAuthStatusCmd creates the auth status command.
 func newAuthStatusCmd() *cobra.Command {
-	var remoteNameFlag string
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Check authentication session status",
@@ -723,54 +710,34 @@ Examples:
   gordon auth status              Check status of active remote
   gordon auth status --remote prod  Check specific remote`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthStatus(remoteNameFlag)
+			return runAuthStatus()
 		},
 	}
-	cmd.Flags().StringVarP(&remoteNameFlag, "remote", "r", "", "Check specific remote")
 	return cmd
 }
 
 // runAuthStatus checks authentication status for the active remote.
-func runAuthStatus(remoteNameArg string) error {
-	// Load remotes config
-	config, err := remote.LoadRemotes("")
-	if err != nil {
-		return fmt.Errorf("failed to load remotes: %w", err)
+func runAuthStatus() error {
+	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
+	if !isRemote {
+		return fmt.Errorf("no active remote configured. Use 'gordon remotes use <name>' or --remote flag")
 	}
 
-	// Determine remote name
-	remoteName := remoteNameArg
-	if remoteName == "" {
-		remoteName = config.Active
-	}
-	if remoteName == "" {
-		return fmt.Errorf("no active remote configured. Use 'gordon remote use <name>' or --remote flag")
-	}
+	client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
 
-	remoteConfig, ok := config.Remotes[remoteName]
-	if !ok {
-		if remoteNameArg != "" {
-			return fmt.Errorf("remote '%s' not found", remoteName)
-		}
-		return fmt.Errorf("active remote '%s' not found", remoteName)
+	name := resolved.Name
+	if name == "" {
+		name = resolved.URL
 	}
+	fmt.Printf("Checking authentication status for '%s'...\n", name)
 
-	// Create client
-	token := remote.ResolveTokenForRemote(remoteName, remoteConfig)
-	insecureTLS := remote.ResolveInsecureTLSForRemote(insecureTLSFlag, remoteName)
-	client := remote.NewClient(remoteConfig.URL, remoteClientOptions(token, insecureTLS)...)
-
-	// Verify auth
 	ctx := context.Background()
-	fmt.Printf("Checking authentication status for '%s'...\n", remoteName)
-
 	status, err := client.VerifyAuth(ctx)
 	if err != nil {
-		return handleAuthVerifyError(err, remoteName, remoteConfig.URL)
+		return handleAuthVerifyError(err, name, resolved.URL)
 	}
 
-	// Display status
-	displayAuthStatus(remoteName, remoteConfig.URL, status)
+	displayAuthStatus(name, resolved.URL, status)
 	return nil
 }
 
