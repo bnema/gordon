@@ -387,8 +387,6 @@ func runAuthLogout(out io.Writer) error {
 	return nil
 }
 
-
-
 // runShowInternalAuth displays the internal registry credentials.
 func runShowInternalAuth() error {
 	creds, err := app.GetInternalCredentials()

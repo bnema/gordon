@@ -209,6 +209,42 @@ type ResolvedRemote struct {
 	InsecureTLS bool
 }
 
+// resolveTokenForTarget resolves the authentication token.
+// Precedence: flag > GORDON_TOKEN env > stored token for named remote.
+func resolveTokenForTarget(flagToken, name string, remotes *ClientConfig) string {
+	if flagToken != "" {
+		return flagToken
+	}
+	if envToken := os.Getenv("GORDON_TOKEN"); envToken != "" {
+		return envToken
+	}
+	if name != "" && remotes != nil {
+		if entry, ok := remotes.Remotes[name]; ok {
+			return ResolveTokenForRemote(name, entry)
+		}
+	}
+	return ""
+}
+
+// resolveInsecureForTarget resolves InsecureTLS setting.
+// Precedence: flag > GORDON_INSECURE env > remote entry field.
+func resolveInsecureForTarget(flagInsecure bool, name string, remotes *ClientConfig) bool {
+	if flagInsecure {
+		return true
+	}
+	if env := os.Getenv("GORDON_INSECURE"); env != "" {
+		if v, err := strconv.ParseBool(env); err == nil && v {
+			return true
+		}
+	}
+	if name != "" && remotes != nil {
+		if entry, ok := remotes.Remotes[name]; ok {
+			return entry.InsecureTLS
+		}
+	}
+	return false
+}
+
 // Resolve resolves the remote target from flags, environment, and config.
 // Returns nil, false when no remote is configured (local mode).
 //
@@ -227,54 +263,23 @@ func Resolve(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, 
 			name, url, found = resolveTarget(envRemote, remotes)
 		}
 	}
-	if !found {
-		if remotes != nil && remotes.Active != "" {
-			if entry, ok := remotes.Remotes[remotes.Active]; ok {
-				name = remotes.Active
-				url = entry.URL
-				found = true
-			}
+	if !found && remotes != nil && remotes.Active != "" {
+		if entry, ok := remotes.Remotes[remotes.Active]; ok {
+			name = remotes.Active
+			url = entry.URL
+			found = true
 		}
 	}
 	if !found {
 		return nil, false
 	}
 
-	r := &ResolvedRemote{
+	return &ResolvedRemote{
 		Name:        name,
 		URL:         url,
-		InsecureTLS: flagInsecure,
-	}
-
-	// Token: flag > env > stored
-	switch {
-	case flagToken != "":
-		r.Token = flagToken
-	case os.Getenv("GORDON_TOKEN") != "":
-		r.Token = os.Getenv("GORDON_TOKEN")
-	case name != "":
-		if remotes != nil {
-			if entry, ok := remotes.Remotes[name]; ok {
-				r.Token = ResolveTokenForRemote(name, entry)
-			}
-		}
-	}
-
-	// InsecureTLS: flag already set; check env then entry
-	if !r.InsecureTLS {
-		if env := os.Getenv("GORDON_INSECURE"); env != "" {
-			if v, err := strconv.ParseBool(env); err == nil {
-				r.InsecureTLS = v
-			}
-		}
-	}
-	if !r.InsecureTLS && name != "" && remotes != nil {
-		if entry, ok := remotes.Remotes[name]; ok {
-			r.InsecureTLS = entry.InsecureTLS
-		}
-	}
-
-	return r, true
+		Token:       resolveTokenForTarget(flagToken, name, remotes),
+		InsecureTLS: resolveInsecureForTarget(flagInsecure, name, remotes),
+	}, true
 }
 
 // resolveTarget checks if value is a saved remote name or an ad-hoc URL.

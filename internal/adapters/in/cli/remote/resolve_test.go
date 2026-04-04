@@ -202,4 +202,3 @@ func TestResolve_UnknownNameReturnsNotFound(t *testing.T) {
 	assert.False(t, ok)
 	assert.Nil(t, resolved)
 }
-
