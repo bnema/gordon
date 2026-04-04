@@ -28,7 +28,7 @@ gordon push [image] [options]
 | `--no-confirm` | Skip deploy confirmation prompt |
 | `--no-deploy` | Push only; skip deployment prompt |
 | `--domain` | Explicit domain override (legacy mode) |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description

@@ -23,7 +23,7 @@ gordon bootstrap <domain> <image> [options]
 |--------|-------------|
 | `--attachment` | Add an attachment to the route (repeatable) |
 | `--env` | Set an environment variable for the route (repeatable, `KEY=VALUE`) |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description

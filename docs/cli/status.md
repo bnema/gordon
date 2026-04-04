@@ -62,14 +62,14 @@ The status command uses global flags for remote access:
 
 | Flag | Description |
 |------|-------------|
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token |
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `GORDON_REMOTE` | Remote Gordon URL |
+| `GORDON_REMOTE` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `GORDON_TOKEN` | Authentication token |
 
 ## Examples

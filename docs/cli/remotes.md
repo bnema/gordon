@@ -337,6 +337,12 @@ If you have your own certificate for the domain (e.g. from a corporate CA), you 
 
 `insecure_tls` only affects CLI -> Gordon admin HTTPS verification. It does not change runtime routing: Gordon reverse proxy and container routes can still serve wildcard app domains like `*.example.com`.
 
+## Migration from [client] Config
+
+The `[client]` section in `gordon.toml` is deprecated. On first run, Gordon
+auto-migrates it to a `default` remote entry in `remotes.toml` and sets it
+as active. No manual action needed.
+
 ## Related
 
 - [CLI Overview](./index.md)

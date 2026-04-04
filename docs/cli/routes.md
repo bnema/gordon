@@ -65,7 +65,7 @@ gordon routes list --json
 | Option | Description |
 |--------|-------------|
 | `--json` | Output routes as JSON |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ---
@@ -93,7 +93,7 @@ The image does not need to be pushed to the Gordon registry before you add the r
 
 | Option | Description |
 |--------|-------------|
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Examples
@@ -138,7 +138,7 @@ gordon routes show myapp.example.com --json
 | Option | Description |
 |--------|-------------|
 | `--json` | Output route details as JSON |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description
@@ -191,7 +191,7 @@ gordon routes remove myapp.example.com
 
 | Option | Description |
 |--------|-------------|
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Examples
@@ -225,7 +225,7 @@ gordon routes deploy myapp.example.com
 
 | Option | Description |
 |--------|-------------|
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description

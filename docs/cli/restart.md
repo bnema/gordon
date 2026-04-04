@@ -21,7 +21,7 @@ gordon restart <domain> [options]
 | Option | Description |
 |--------|-------------|
 | `--with-attachments` | Also restart attached services (databases, caches) |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description

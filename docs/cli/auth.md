@@ -32,7 +32,8 @@ gordon auth login --token <token> [options]
 | Option | Description |
 |--------|-------------|
 | `-t, --token` | **Required.** Authentication token to store |
-| `-r, --remote` | Remote to authenticate with (defaults to active remote) |
+
+Use the global `--remote, -r` flag to target a specific remote. See [CLI Overview](./index.md).
 
 ### Description
 
@@ -94,8 +95,9 @@ gordon auth logout [--remote <name>] [--revoke]
 
 | Option | Description |
 |--------|-------------|
-| `-r, --remote` | Remote to log out from (defaults to active remote) |
 | `--revoke` | Also revoke the token server-side (not yet implemented) |
+
+Use the global `--remote, -r` flag to target a specific remote. See [CLI Overview](./index.md).
 
 Deletes the token from pass and clears token fields in `remotes.toml`.
 

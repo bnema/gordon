@@ -22,7 +22,7 @@ gordon rollback list <domain>
 | Option | Description |
 |--------|-------------|
 | `--tag` | Target tag (skips interactive selection) |
-| `--remote` | Remote Gordon URL |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description
