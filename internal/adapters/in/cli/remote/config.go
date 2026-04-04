@@ -44,9 +44,11 @@ func LoadRemotes(path string) (*ClientConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &ClientConfig{
+			config := &ClientConfig{
 				Remotes: make(map[string]RemoteEntry),
-			}, nil
+			}
+			migrateClientConfig(config)
+			return config, nil
 		}
 		return nil, fmt.Errorf("failed to read remotes: %w", err)
 	}
@@ -60,7 +62,63 @@ func LoadRemotes(path string) (*ClientConfig, error) {
 		config.Remotes = make(map[string]RemoteEntry)
 	}
 
+	migrateClientConfig(&config)
+
 	return &config, nil
+}
+
+// migrateClientConfig reads the legacy gordon.toml [client] section and
+// creates a "default" remote entry if one doesn't already exist.
+func migrateClientConfig(config *ClientConfig) {
+	gordonPath := defaultGordonTomlPath()
+	data, err := os.ReadFile(gordonPath)
+	if err != nil {
+		return
+	}
+
+	var legacy struct {
+		Client struct {
+			Mode        string `toml:"mode"`
+			Remote      string `toml:"remote"`
+			Token       string `toml:"token"`
+			TokenEnv    string `toml:"token_env"`
+			InsecureTLS bool   `toml:"insecure_tls"`
+		} `toml:"client"`
+	}
+	if err := toml.Unmarshal(data, &legacy); err != nil {
+		return
+	}
+
+	if legacy.Client.Mode != "remote" || legacy.Client.Remote == "" {
+		return
+	}
+
+	if _, exists := config.Remotes["default"]; exists {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "Notice: migrated [client] config from gordon.toml to 'default' remote. The [client] section is deprecated; use 'gordon remotes' instead.\n")
+
+	config.Remotes["default"] = RemoteEntry{
+		URL:         legacy.Client.Remote,
+		Token:       legacy.Client.Token,
+		TokenEnv:    legacy.Client.TokenEnv,
+		InsecureTLS: legacy.Client.InsecureTLS,
+	}
+
+	if config.Active == "" {
+		config.Active = "default"
+	}
+
+	_ = SaveRemotes("", config)
+}
+
+func defaultGordonTomlPath() string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		configDir = os.Getenv("HOME")
+	}
+	return filepath.Join(configDir, "gordon", "gordon.toml")
 }
 
 // SaveRemotes saves the remotes configuration.
