@@ -12,7 +12,7 @@ import (
 )
 
 func TestFormatDeployFailure_RemoteStructuredError(t *testing.T) {
-	err := formatDeployFailure(&remote.HTTPError{
+	root := &remote.HTTPError{
 		StatusCode: 500,
 		Status:     "500 Internal Server Error",
 		Body:       "failed to deploy",
@@ -22,14 +22,16 @@ func TestFormatDeployFailure_RemoteStructuredError(t *testing.T) {
 			"booting app",
 			"connection refused",
 		},
-	})
+	}
+	err := formatDeployFailure(root)
 
 	require.Error(t, err)
-	assert.Equal(t, "failed to deploy\nCause: health check failed\nHint: check DATABASE_URL\n\nRecent container logs:\n  booting app\n  connection refused", err.Error())
+	assert.Contains(t, err.Error(), "failed to deploy\nCause: health check failed\nHint: check DATABASE_URL\n\nRecent container logs:\n  booting app\n  connection refused")
+	assert.ErrorIs(t, err, root)
 }
 
 func TestFormatDeployFailure_LocalTypedError(t *testing.T) {
-	err := formatDeployFailure(&domain.DeployFailureError{
+	root := &domain.DeployFailureError{
 		Summary: "failed to deploy",
 		Cause:   "health check failed",
 		Hint:    "check DATABASE_URL",
@@ -37,10 +39,12 @@ func TestFormatDeployFailure_LocalTypedError(t *testing.T) {
 			"booting app",
 			"connection refused",
 		},
-	})
+	}
+	err := formatDeployFailure(root)
 
 	require.Error(t, err)
-	assert.Equal(t, "failed to deploy\nCause: health check failed\nHint: check DATABASE_URL\n\nRecent container logs:\n  booting app\n  connection refused", err.Error())
+	assert.Contains(t, err.Error(), "failed to deploy\nCause: health check failed\nHint: check DATABASE_URL\n\nRecent container logs:\n  booting app\n  connection refused")
+	assert.ErrorIs(t, err, root)
 }
 
 func TestFormatDeployFailure_GenericFallback(t *testing.T) {
@@ -53,12 +57,15 @@ func TestFormatDeployFailure_GenericFallback(t *testing.T) {
 }
 
 func TestFormatDeployFailure_SkipsEmptySanitizedLogsSection(t *testing.T) {
-	err := formatDeployFailure(&domain.DeployFailureError{
+	root := &domain.DeployFailureError{
 		Summary: "failed to deploy",
 		Cause:   "health check failed",
 		Logs:    []string{"\x1b[31m\x1b[0m", "\n\r\t"},
-	})
+	}
+	err := formatDeployFailure(root)
 
 	require.Error(t, err)
-	assert.Equal(t, "failed to deploy\nCause: health check failed", err.Error())
+	assert.Contains(t, err.Error(), "failed to deploy\nCause: health check failed")
+	assert.NotContains(t, err.Error(), "Recent container logs:")
+	assert.ErrorIs(t, err, root)
 }

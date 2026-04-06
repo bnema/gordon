@@ -16,12 +16,12 @@ var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 func formatDeployFailure(err error) error {
 	var deployErr *domain.DeployFailureError
 	if errors.As(err, &deployErr) {
-		return errors.New(renderDeployFailure(deployErr.Summary, deployErr.Cause, deployErr.Hint, deployErr.Logs))
+		return fmt.Errorf("%s: %w", renderDeployFailure(deployErr.Summary, deployErr.Cause, deployErr.Hint, deployErr.Logs), deployErr)
 	}
 
 	var httpErr *remote.HTTPError
 	if errors.As(err, &httpErr) && (httpErr.Structured || httpErr.Cause != "" || httpErr.Hint != "" || len(httpErr.Logs) > 0) {
-		return errors.New(renderDeployFailure(httpErr.Body, httpErr.Cause, httpErr.Hint, httpErr.Logs))
+		return fmt.Errorf("%s: %w", renderDeployFailure(httpErr.Body, httpErr.Cause, httpErr.Hint, httpErr.Logs), httpErr)
 	}
 
 	return fmt.Errorf("failed to deploy: %w", err)

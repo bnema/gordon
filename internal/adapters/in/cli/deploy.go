@@ -15,6 +15,8 @@ type deployer interface {
 	Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error)
 }
 
+var sendDeploySignal = app.SendDeploySignal
+
 // newDeployCmd creates the deploy command.
 func newDeployCmd() *cobra.Command {
 	var jsonOut bool
@@ -50,8 +52,16 @@ func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDoma
 	result, err := deployer.Deploy(ctx, deployDomain)
 	if err != nil {
 		if isRemote && shouldFallbackToLocal(err) {
-			domain, localErr := app.SendDeploySignal(deployDomain)
+			domain, localErr := sendDeploySignal(deployDomain)
 			if localErr == nil {
+				warning := fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err)
+				if jsonOut {
+					return writeJSON(out, map[string]string{
+						"warning": warning,
+						"domain":  domain,
+						"status":  "success",
+					})
+				}
 				if writeErr := cliWriteLine(out, cliRenderWarning(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err))); writeErr != nil {
 					return writeErr
 				}
