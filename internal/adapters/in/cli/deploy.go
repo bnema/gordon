@@ -6,9 +6,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/internal/app"
 )
+
+type deployer interface {
+	Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error)
+}
 
 // newDeployCmd creates the deploy command.
 func newDeployCmd() *cobra.Command {
@@ -27,40 +32,37 @@ Examples:
   gordon deploy myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
-			deployDomain := args[0]
-
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				// Remote deployment via admin API
-				result, err := client.Deploy(ctx, deployDomain)
-				if err != nil {
-					if shouldFallbackToLocal(err) {
-						domain, localErr := app.SendDeploySignal(deployDomain)
-						if localErr == nil {
-							fmt.Println(styles.RenderWarning(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err)))
-							fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
-							return nil
-						}
-						return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %v", err, localErr)
-					}
-					return formatDeployFailure(err)
-				}
-				containerID := result.ContainerID
-				if len(containerID) > 12 {
-					containerID = containerID[:12]
-				}
-				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", deployDomain, containerID)))
-				return nil
-			}
-
-			// Local deployment via signal
-			domain, err := app.SendDeploySignal(deployDomain)
+			handle, err := resolveControlPlane(configPath)
 			if err != nil {
 				return err
 			}
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
-			return nil
+			defer handle.close()
+
+			return runDeploy(cmd.Context(), handle.plane, handle.isRemote, args[0])
 		},
 	}
+}
+
+func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDomain string) error {
+	result, err := deployer.Deploy(ctx, deployDomain)
+	if err != nil {
+		if isRemote && shouldFallbackToLocal(err) {
+			domain, localErr := app.SendDeploySignal(deployDomain)
+			if localErr == nil {
+				fmt.Println(styles.RenderWarning(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err)))
+				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
+				return nil
+			}
+			return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %v", err, localErr)
+		}
+
+		return formatDeployFailure(err)
+	}
+
+	containerID := result.ContainerID
+	if len(containerID) > 12 {
+		containerID = containerID[:12]
+	}
+	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", deployDomain, containerID)))
+	return nil
 }

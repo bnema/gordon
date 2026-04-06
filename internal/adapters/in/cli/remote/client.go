@@ -343,7 +343,7 @@ func parseErrorResponse(resp *http.Response, body []byte) error {
 		Logs  []string `json:"logs"`
 	}
 	if err := json.Unmarshal(body, &errResp); err == nil {
-		structured = errResp.Error != "" || errResp.Cause != "" || errResp.Hint != "" || len(errResp.Logs) > 0
+		structured = errResp.Cause != "" || errResp.Hint != "" || len(errResp.Logs) > 0
 		if errResp.Error != "" {
 			msg = errResp.Error
 		}
