@@ -2,9 +2,12 @@
 package container
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strconv"
@@ -69,6 +72,7 @@ const (
 	// negatives during short startup flaps.
 	readinessRecoveryWindow = 30 * time.Second
 	internalPullMaxAttempts = 3
+	deployFailureLogLimit   = 20
 )
 
 // Service implements the ContainerService interface.
@@ -315,6 +319,10 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 
 	resources, err := s.prepareDeployResources(ctx, route, existing)
 	if err != nil {
+		if deployErr := s.wrapPullDeployFailure(route, existing, err); deployErr != nil {
+			err = deployErr
+			return nil, err
+		}
 		return nil, err
 	}
 
@@ -630,8 +638,9 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 	}
 	if !domain.IsSkipReadiness(ctx) {
 		if err := s.waitForReady(ctx, newContainer.ID, containerConfig); err != nil {
+			deployErr := s.newDeployFailure(newContainer, "container failed readiness check", err, s.captureRecentContainerLogs(ctx, newContainer.ID))
 			s.cleanupFailedContainer(ctx, newContainer.ID)
-			return nil, log.WrapErr(err, "container failed readiness check")
+			return nil, deployErr
 		}
 	}
 
@@ -642,6 +651,194 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 	}
 
 	return inspected, nil
+}
+
+func (s *Service) newDeployFailure(container *domain.Container, cause string, err error, logs []string) error {
+	deployErr := &domain.DeployFailureError{
+		Summary: "failed to deploy",
+		Cause:   cause,
+		Hint:    inferDeployFailureHint(err),
+		Logs:    logs,
+		Err:     err,
+	}
+	if container != nil {
+		deployErr.ContainerName = container.Name
+		deployErr.ContainerID = container.ID
+	}
+
+	return deployErr
+}
+
+func (s *Service) wrapPullDeployFailure(route domain.Route, existing *domain.Container, err error) error {
+	if !isPullFailure(err) {
+		return nil
+	}
+
+	return s.newDeployFailure(&domain.Container{Name: s.deploymentContainerName(route.Domain, existing)}, "failed to pull image", err, nil)
+}
+
+func (s *Service) captureRecentContainerLogs(ctx context.Context, containerID string) []string {
+	if ctx.Err() != nil {
+		return nil
+	}
+
+	logStream, err := s.runtime.GetContainerLogs(ctx, containerID, false)
+	if err != nil {
+		return nil
+	}
+	defer func() {
+		_ = logStream.Close()
+	}()
+
+	logs, err := parseDockerLogLines(logStream, deployFailureLogLimit)
+	if err != nil {
+		return nil
+	}
+
+	return logs
+}
+
+func parseDockerLogLines(r io.Reader, maxLines int) ([]string, error) {
+	reader := bufio.NewReader(r)
+	collector := newLogLineCollector(maxLines)
+
+	header, err := reader.Peek(8)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
+		return nil, err
+	}
+
+	if len(header) >= 8 && looksLikeDockerLogStream(header) {
+		return parseDockerFramedLogLines(reader, collector)
+	}
+
+	return parsePlainLogLines(reader, collector)
+}
+
+func parseDockerFramedLogLines(reader *bufio.Reader, collector *logLineCollector) ([]string, error) {
+	for {
+		frameHeader := make([]byte, 8)
+		if _, err := io.ReadFull(reader, frameHeader); err != nil {
+			if isLogStreamEOF(err) {
+				collector.flush()
+				return collector.lines, nil
+			}
+			return nil, err
+		}
+
+		size := int(binary.BigEndian.Uint32(frameHeader[4:8]))
+		if size <= 0 {
+			continue
+		}
+
+		payload, err := readLogPayload(reader, size)
+		if err != nil {
+			collector.addChunk(string(payload))
+			collector.flush()
+			if isLogStreamEOF(err) {
+				return collector.lines, nil
+			}
+			return nil, err
+		}
+
+		collector.addChunk(string(payload))
+	}
+}
+
+func parsePlainLogLines(reader *bufio.Reader, collector *logLineCollector) ([]string, error) {
+
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		collector.addLine(scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	collector.flush()
+	return collector.lines, nil
+}
+
+func readLogPayload(reader *bufio.Reader, size int) ([]byte, error) {
+	payload := make([]byte, size)
+	_, err := io.ReadFull(reader, payload)
+	return payload, err
+}
+
+func isLogStreamEOF(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func looksLikeDockerLogStream(data []byte) bool {
+	return len(data) >= 8 && data[1] == 0 && data[2] == 0 && data[3] == 0
+}
+
+type logLineCollector struct {
+	lines    []string
+	pending  string
+	maxLines int
+}
+
+func newLogLineCollector(maxLines int) *logLineCollector {
+	return &logLineCollector{maxLines: maxLines}
+}
+
+func (c *logLineCollector) addChunk(chunk string) {
+	for _, part := range strings.SplitAfter(chunk, "\n") {
+		c.pending += part
+		if strings.HasSuffix(part, "\n") {
+			c.flush()
+		}
+	}
+}
+
+func (c *logLineCollector) addLine(line string) {
+	line = strings.TrimRight(line, "\r")
+	if line == "" {
+		return
+	}
+	c.lines = append(c.lines, line)
+	if c.maxLines > 0 && len(c.lines) > c.maxLines {
+		c.lines = c.lines[len(c.lines)-c.maxLines:]
+	}
+}
+
+func (c *logLineCollector) flush() {
+	if c.pending == "" {
+		return
+	}
+	c.addLine(strings.TrimRight(c.pending, "\r\n"))
+	c.pending = ""
+}
+
+func inferDeployFailureHint(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "healthcheck timeout"):
+		return "check startup logs and confirm the health endpoint becomes ready within the configured timeout"
+	case strings.Contains(msg, "unhealthy"):
+		return "inspect recent app logs and verify the healthcheck command reflects actual readiness"
+	case strings.Contains(msg, "no healthcheck detected"):
+		return "add a Docker healthcheck or switch readiness mode"
+	case isPullFailure(err), strings.Contains(msg, "access denied"), strings.Contains(msg, "unauthorized"):
+		return "verify registry auth and confirm the image exists at the requested tag"
+	default:
+		return ""
+	}
+}
+
+func isPullFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "failed to pull image") ||
+		strings.Contains(msg, "pull access denied") ||
+		strings.Contains(msg, "unauthorized")
 }
 
 func (s *Service) activateDeployedContainer(ctx context.Context, domainName string, container *domain.Container) bool {
@@ -2827,6 +3024,9 @@ func (s *Service) waitForHealthy(ctx context.Context, containerID string, timeou
 		}
 		if status == "healthy" {
 			return nil
+		}
+		if status == "unhealthy" {
+			return errors.New("container reported unhealthy")
 		}
 		lastStatus = status
 

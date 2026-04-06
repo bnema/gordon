@@ -1280,6 +1280,16 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 	container, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route)
 	if err != nil {
 		log.Error().Err(err).Str("domain", deployDomain).Msg("failed to deploy container")
+		var deployErr *domain.DeployFailureError
+		if errors.As(err, &deployErr) {
+			h.sendJSON(w, http.StatusInternalServerError, dto.DeployErrorResponse{
+				Error: deployErr.Error(),
+				Cause: deployErr.Cause,
+				Hint:  deployErr.Hint,
+				Logs:  deployErr.Logs,
+			})
+			return
+		}
 		h.sendError(w, http.StatusInternalServerError, "failed to deploy container")
 		return
 	}

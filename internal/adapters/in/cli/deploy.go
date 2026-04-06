@@ -3,16 +3,24 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
-	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/app"
 )
 
+type deployer interface {
+	Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error)
+}
+
+var sendDeploySignal = app.SendDeploySignal
+
 // newDeployCmd creates the deploy command.
 func newDeployCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "deploy <domain>",
 		Short: "Manually deploy or redeploy a route",
 		Long: `Triggers a deployment for the specified route domain.
@@ -27,40 +35,83 @@ Examples:
   gordon deploy myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
-			deployDomain := args[0]
-
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				// Remote deployment via admin API
-				result, err := client.Deploy(ctx, deployDomain)
-				if err != nil {
-					if shouldFallbackToLocal(err) {
-						domain, localErr := app.SendDeploySignal(deployDomain)
-						if localErr == nil {
-							fmt.Println(styles.RenderWarning(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err)))
-							fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
-							return nil
-						}
-						return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %v", err, localErr)
-					}
-					return fmt.Errorf("failed to deploy: %w", err)
-				}
-				containerID := result.ContainerID
-				if len(containerID) > 12 {
-					containerID = containerID[:12]
-				}
-				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", deployDomain, containerID)))
-				return nil
-			}
-
-			// Local deployment via signal
-			domain, err := app.SendDeploySignal(deployDomain)
+			handle, err := resolveControlPlane(configPath)
 			if err != nil {
 				return err
 			}
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
-			return nil
+			defer handle.close()
+
+			return runDeploy(cmd.Context(), handle.plane, handle.isRemote, args[0], cmd.OutOrStdout(), jsonOut)
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
+}
+
+func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDomain string, out io.Writer, jsonOut bool) error {
+	result, err := deployer.Deploy(ctx, deployDomain)
+	if err != nil {
+		if formatted, ok := structuredDeployFailure(err); ok {
+			return formatted
+		}
+
+		if isRemote && shouldFallbackToLocal(err) {
+			return handleLocalDeployFallback(err, deployDomain, out, jsonOut)
+		}
+
+		return formatDeployFailure(err)
+	}
+
+	if jsonOut {
+		return writeJSON(out, result)
+	}
+
+	messageDomain := deployDomain
+	if result.Domain != "" {
+		messageDomain = result.Domain
+	}
+
+	containerID := result.ContainerID
+	if containerID != "" && len(containerID) > 12 {
+		containerID = containerID[:12]
+	}
+
+	switch result.Status {
+	case "deployed":
+		msg := fmt.Sprintf("Deployed %s", messageDomain)
+		if containerID != "" {
+			msg += fmt.Sprintf(" (container: %s)", containerID)
+		}
+		return cliWriteLine(out, cliRenderSuccess(msg))
+	case "queued":
+		return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Deploy queued for domain: %s", messageDomain)))
+	default:
+		msg := fmt.Sprintf("Deploy status for %s: %s", messageDomain, result.Status)
+		if containerID != "" {
+			msg += fmt.Sprintf(" (container: %s)", containerID)
+		}
+		return cliWriteLine(out, cliRenderInfo(msg))
+	}
+}
+
+func handleLocalDeployFallback(err error, deployDomain string, out io.Writer, jsonOut bool) error {
+	domain, localErr := sendDeploySignal(deployDomain)
+	if localErr != nil {
+		return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %w", err, localErr)
+	}
+
+	warning := sanitizeDeployLogLine(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err))
+	if jsonOut {
+		return writeJSON(out, map[string]string{
+			"warning": warning,
+			"domain":  domain,
+			"status":  "success",
+		})
+	}
+
+	if writeErr := cliWriteLine(out, cliRenderWarning(warning)); writeErr != nil {
+		return writeErr
+	}
+
+	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
 }

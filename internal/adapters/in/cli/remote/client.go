@@ -323,6 +323,10 @@ type HTTPError struct {
 	StatusCode int
 	Status     string
 	Body       string
+	Cause      string
+	Hint       string
+	Logs       []string
+	Structured bool
 }
 
 func (e *HTTPError) Error() string {
@@ -331,16 +335,27 @@ func (e *HTTPError) Error() string {
 
 func parseErrorResponse(resp *http.Response, body []byte) error {
 	msg := string(body)
+	structured := false
 	var errResp struct {
-		Error string `json:"error"`
+		Error string   `json:"error"`
+		Cause string   `json:"cause"`
+		Hint  string   `json:"hint"`
+		Logs  []string `json:"logs"`
 	}
-	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
-		msg = errResp.Error
+	if err := json.Unmarshal(body, &errResp); err == nil {
+		structured = errResp.Cause != "" || errResp.Hint != "" || len(errResp.Logs) > 0
+		if errResp.Error != "" {
+			msg = errResp.Error
+		}
 	}
 	return &HTTPError{
 		StatusCode: resp.StatusCode,
 		Status:     resp.Status,
 		Body:       msg,
+		Cause:      errResp.Cause,
+		Hint:       errResp.Hint,
+		Logs:       errResp.Logs,
+		Structured: structured,
 	}
 }
 

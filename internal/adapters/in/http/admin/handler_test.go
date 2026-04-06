@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1344,6 +1345,85 @@ func TestHandler_Restart_InvalidDomain(t *testing.T) {
 			assert.Equal(t, tt.status, rec.Code)
 		})
 	}
+}
+
+func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	route := &domain.Route{Domain: "app.example.com", Image: "registry.local/myapp:latest"}
+	deployErr := &domain.DeployFailureError{
+		Summary: "failed to deploy",
+		Cause:   "image pull failed",
+		Hint:    "push the image before retrying",
+		Logs: []string{
+			"pulling manifest",
+			"manifest unknown",
+		},
+		Err: errors.New("manifest unknown: internal registry detail"),
+	}
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r.WithContext(ctxWithScopes("admin:config:write")))
+	}))
+	defer s.Close()
+
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(route, nil).Once()
+	containerSvc.EXPECT().Deploy(mock.Anything, *route).Return(nil, deployErr).Once()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, s.URL+"/admin/deploy/app.example.com", nil)
+	assert.NoError(t, err)
+	resp, err := s.Client().Do(req)
+	assert.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	assert.NoError(t, err)
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying","logs":["pulling manifest","manifest unknown"]}`, string(body))
+	assert.NotContains(t, string(body), "internal registry detail")
+}
+
+func TestHandler_Deploy_GenericErrorStillUsesLegacyBody(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	route := &domain.Route{Domain: "app.example.com", Image: "registry.local/myapp:latest"}
+	deployErr := errors.New("manifest unknown: internal registry detail")
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r.WithContext(ctxWithScopes("admin:config:write")))
+	}))
+	defer s.Close()
+
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(route, nil).Once()
+	containerSvc.EXPECT().Deploy(mock.Anything, *route).Return(nil, deployErr).Once()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, s.URL+"/admin/deploy/app.example.com", nil)
+	assert.NoError(t, err)
+	resp, err := s.Client().Do(req)
+	assert.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	assert.NoError(t, err)
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.JSONEq(t, `{"error":"failed to deploy container"}`, string(body))
+	assert.NotContains(t, string(body), "internal registry detail")
 }
 
 func TestHandler_Restart_ContainerNotFound(t *testing.T) {

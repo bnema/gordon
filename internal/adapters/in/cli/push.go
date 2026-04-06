@@ -679,7 +679,7 @@ func deployAfterPush(ctx context.Context, cp ControlPlane, pushDomain string, no
 		result, err = cp.Deploy(ctx, pushDomain)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to deploy: %w", err)
+		return formatDeployFailure(err)
 	}
 	containerID := result.ContainerID
 	if len(containerID) > 12 {
