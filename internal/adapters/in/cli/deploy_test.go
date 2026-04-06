@@ -86,3 +86,34 @@ func TestRunDeploy_RemoteFallbackUsesJSONWhenRequested(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"domain":"app.example.com","status":"success","warning":"Remote deploy failed (503 Service Unavailable: Registry Unavailable), used local signal fallback"}`, out.String())
 }
+
+func TestHandleLocalDeployFallback_WrapsRemoteAndLocalErrors(t *testing.T) {
+	originalSendDeploySignal := sendDeploySignal
+	localErr := errors.New("local signal failed")
+	sendDeploySignal = func(string) (string, error) {
+		return "", localErr
+	}
+	defer func() { sendDeploySignal = originalSendDeploySignal }()
+
+	remoteErr := errors.New("remote deploy failed")
+	err := handleLocalDeployFallback(remoteErr, "app.example.com", &bytes.Buffer{}, false)
+
+	require.Error(t, err)
+	assert.Equal(t, "failed to deploy: remote error: remote deploy failed; local fallback also failed: local signal failed", err.Error())
+	assert.ErrorIs(t, err, remoteErr)
+	assert.ErrorIs(t, err, localErr)
+}
+
+func TestRunDeploy_RemoteFallbackSanitizesWarning(t *testing.T) {
+	originalSendDeploySignal := sendDeploySignal
+	sendDeploySignal = func(string) (string, error) {
+		return "app.example.com", nil
+	}
+	defer func() { sendDeploySignal = originalSendDeploySignal }()
+
+	var out bytes.Buffer
+	err := runDeploy(context.Background(), &deployTestDeployer{err: errors.New("503 Service Unavailable:\n\x1b[31mRegistry Unavailable\x1b[0m")}, true, "app.example.com", &out, true)
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"domain":"app.example.com","status":"success","warning":"Remote deploy failed (503 Service Unavailable:Registry Unavailable), used local signal fallback"}`, out.String())
+}

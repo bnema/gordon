@@ -65,7 +65,6 @@ func TestFormatDeployFailure_SkipsEmptySanitizedLogsSection(t *testing.T) {
 	err := formatDeployFailure(root)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to deploy\nCause: health check failed")
-	assert.NotContains(t, err.Error(), "Recent container logs:")
+	assert.Equal(t, "failed to deploy\nCause: health check failed", err.Error())
 	assert.ErrorIs(t, err, root)
 }

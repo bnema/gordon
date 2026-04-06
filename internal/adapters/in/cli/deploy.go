@@ -97,10 +97,10 @@ func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDoma
 func handleLocalDeployFallback(err error, deployDomain string, out io.Writer, jsonOut bool) error {
 	domain, localErr := sendDeploySignal(deployDomain)
 	if localErr != nil {
-		return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %v", err, localErr)
+		return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %w", err, localErr)
 	}
 
-	warning := fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err)
+	warning := sanitizeDeployLogLine(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err))
 	if jsonOut {
 		return writeJSON(out, map[string]string{
 			"warning": warning,
