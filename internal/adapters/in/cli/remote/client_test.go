@@ -334,6 +334,23 @@ func TestParseErrorResponse_ReturnsHTTPError(t *testing.T) {
 	assert.Equal(t, "insufficient scope", httpErr.Body)
 }
 
+func TestParseErrorResponse_DeployFailureFields(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: 500,
+		Status:     "500 Internal Server Error",
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+	err := parseErrorResponse(resp, []byte(`{"error":"container exited during startup","cause":"health check failed","hint":"check DATABASE_URL","logs":["booting app","connection refused"]}`))
+
+	var httpErr *HTTPError
+	require.True(t, errors.As(err, &httpErr))
+	assert.Equal(t, 500, httpErr.StatusCode)
+	assert.Equal(t, "container exited during startup", httpErr.Body)
+	assert.Equal(t, "health check failed", httpErr.Cause)
+	assert.Equal(t, "check DATABASE_URL", httpErr.Hint)
+	assert.Equal(t, []string{"booting app", "connection refused"}, httpErr.Logs)
+}
+
 func TestParseErrorResponse_NonJSON(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: 500,

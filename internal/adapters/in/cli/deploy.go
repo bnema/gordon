@@ -44,7 +44,7 @@ Examples:
 						}
 						return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %v", err, localErr)
 					}
-					return fmt.Errorf("failed to deploy: %w", err)
+					return formatDeployFailure(err)
 				}
 				containerID := result.ContainerID
 				if len(containerID) > 12 {
