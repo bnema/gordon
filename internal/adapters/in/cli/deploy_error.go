@@ -3,11 +3,15 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 func formatDeployFailure(err error) error {
 	var deployErr *domain.DeployFailureError
@@ -44,13 +48,34 @@ func renderDeployFailure(summary, cause, hint string, logs []string) string {
 		b.WriteString("\nHint: ")
 		b.WriteString(hint)
 	}
-	if len(logs) > 0 {
+	cleanedLogs := make([]string, 0, len(logs))
+	for _, line := range logs {
+		if cleanedLine := sanitizeDeployLogLine(line); cleanedLine != "" {
+			cleanedLogs = append(cleanedLogs, cleanedLine)
+		}
+	}
+	if len(cleanedLogs) > 0 {
 		b.WriteString("\n\nRecent container logs:")
-		for _, line := range logs {
+		for _, cleanedLine := range cleanedLogs {
 			b.WriteString("\n  ")
-			b.WriteString(line)
+			b.WriteString(cleanedLine)
 		}
 	}
 
 	return b.String()
+}
+
+func sanitizeDeployLogLine(line string) string {
+	line = ansiEscapePattern.ReplaceAllString(line, "")
+	line = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t':
+			return r
+		case !unicode.IsPrint(r):
+			return -1
+		default:
+			return r
+		}
+	}, line)
+	return strings.TrimSpace(line)
 }

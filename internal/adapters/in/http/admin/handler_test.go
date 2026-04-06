@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1369,19 +1370,25 @@ func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
 		d.ContainerSvc = containerSvc
 		d.SecretSvc = secretSvc
 	})
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r.WithContext(ctxWithScopes("admin:config:write")))
+	}))
+	defer s.Close()
 
 	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(route, nil).Once()
 	containerSvc.EXPECT().Deploy(mock.Anything, *route).Return(nil, deployErr).Once()
 
-	req := httptest.NewRequest("POST", "/admin/deploy/app.example.com", nil)
-	req = req.WithContext(ctxWithScopes("admin:config:write"))
-	rec := httptest.NewRecorder()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, s.URL+"/admin/deploy/app.example.com", nil)
+	assert.NoError(t, err)
+	resp, err := s.Client().Do(req)
+	assert.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	assert.NoError(t, err)
 
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying","logs":["pulling manifest","manifest unknown"]}`, rec.Body.String())
-	assert.NotContains(t, rec.Body.String(), "internal registry detail")
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying","logs":["pulling manifest","manifest unknown"]}`, string(body))
+	assert.NotContains(t, string(body), "internal registry detail")
 }
 
 func TestHandler_Deploy_GenericErrorStillUsesLegacyBody(t *testing.T) {
@@ -1398,19 +1405,25 @@ func TestHandler_Deploy_GenericErrorStillUsesLegacyBody(t *testing.T) {
 		d.ContainerSvc = containerSvc
 		d.SecretSvc = secretSvc
 	})
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r.WithContext(ctxWithScopes("admin:config:write")))
+	}))
+	defer s.Close()
 
 	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(route, nil).Once()
 	containerSvc.EXPECT().Deploy(mock.Anything, *route).Return(nil, deployErr).Once()
 
-	req := httptest.NewRequest("POST", "/admin/deploy/app.example.com", nil)
-	req = req.WithContext(ctxWithScopes("admin:config:write"))
-	rec := httptest.NewRecorder()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, s.URL+"/admin/deploy/app.example.com", nil)
+	assert.NoError(t, err)
+	resp, err := s.Client().Do(req)
+	assert.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	assert.NoError(t, err)
 
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.JSONEq(t, `{"error":"failed to deploy container"}`, rec.Body.String())
-	assert.NotContains(t, rec.Body.String(), "internal registry detail")
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.JSONEq(t, `{"error":"failed to deploy container"}`, string(body))
+	assert.NotContains(t, string(body), "internal registry detail")
 }
 
 func TestHandler_Restart_ContainerNotFound(t *testing.T) {

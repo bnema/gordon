@@ -320,7 +320,8 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	resources, err := s.prepareDeployResources(ctx, route, existing)
 	if err != nil {
 		if deployErr := s.wrapPullDeployFailure(route, existing, err); deployErr != nil {
-			return nil, deployErr
+			err = deployErr
+			return nil, err
 		}
 		return nil, err
 	}

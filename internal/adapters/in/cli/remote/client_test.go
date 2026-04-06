@@ -346,6 +346,7 @@ func TestParseErrorResponse_DeployFailureFields(t *testing.T) {
 	require.True(t, errors.As(err, &httpErr))
 	assert.Equal(t, 500, httpErr.StatusCode)
 	assert.Equal(t, "container exited during startup", httpErr.Body)
+	assert.True(t, httpErr.Structured)
 	assert.Equal(t, "health check failed", httpErr.Cause)
 	assert.Equal(t, "check DATABASE_URL", httpErr.Hint)
 	assert.Equal(t, []string{"booting app", "connection refused"}, httpErr.Logs)

@@ -3,11 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
-	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/internal/app"
 )
 
@@ -17,7 +17,8 @@ type deployer interface {
 
 // newDeployCmd creates the deploy command.
 func newDeployCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "deploy <domain>",
 		Short: "Manually deploy or redeploy a route",
 		Long: `Triggers a deployment for the specified route domain.
@@ -38,20 +39,23 @@ Examples:
 			}
 			defer handle.close()
 
-			return runDeploy(cmd.Context(), handle.plane, handle.isRemote, args[0])
+			return runDeploy(cmd.Context(), handle.plane, handle.isRemote, args[0], cmd.OutOrStdout(), jsonOut)
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
 }
 
-func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDomain string) error {
+func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDomain string, out io.Writer, jsonOut bool) error {
 	result, err := deployer.Deploy(ctx, deployDomain)
 	if err != nil {
 		if isRemote && shouldFallbackToLocal(err) {
 			domain, localErr := app.SendDeploySignal(deployDomain)
 			if localErr == nil {
-				fmt.Println(styles.RenderWarning(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err)))
-				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
-				return nil
+				if writeErr := cliWriteLine(out, cliRenderWarning(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err))); writeErr != nil {
+					return writeErr
+				}
+				return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
 			}
 			return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %v", err, localErr)
 		}
@@ -59,10 +63,34 @@ func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDoma
 		return formatDeployFailure(err)
 	}
 
+	if jsonOut {
+		return writeJSON(out, result)
+	}
+
+	messageDomain := deployDomain
+	if result.Domain != "" {
+		messageDomain = result.Domain
+	}
+
 	containerID := result.ContainerID
-	if len(containerID) > 12 {
+	if containerID != "" && len(containerID) > 12 {
 		containerID = containerID[:12]
 	}
-	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", deployDomain, containerID)))
-	return nil
+
+	switch result.Status {
+	case "deployed":
+		msg := fmt.Sprintf("Deployed %s", messageDomain)
+		if containerID != "" {
+			msg += fmt.Sprintf(" (container: %s)", containerID)
+		}
+		return cliWriteLine(out, cliRenderSuccess(msg))
+	case "queued":
+		return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Deploy queued for domain: %s", messageDomain)))
+	default:
+		msg := fmt.Sprintf("Deploy status for %s: %s", messageDomain, result.Status)
+		if containerID != "" {
+			msg += fmt.Sprintf(" (container: %s)", containerID)
+		}
+		return cliWriteLine(out, cliRenderInfo(msg))
+	}
 }

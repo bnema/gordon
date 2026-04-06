@@ -51,3 +51,14 @@ func TestFormatDeployFailure_GenericFallback(t *testing.T) {
 	assert.Equal(t, "failed to deploy: boom", err.Error())
 	assert.ErrorIs(t, err, root)
 }
+
+func TestFormatDeployFailure_SkipsEmptySanitizedLogsSection(t *testing.T) {
+	err := formatDeployFailure(&domain.DeployFailureError{
+		Summary: "failed to deploy",
+		Cause:   "health check failed",
+		Logs:    []string{"\x1b[31m\x1b[0m", "\n\r\t"},
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, "failed to deploy\nCause: health check failed", err.Error())
+}
