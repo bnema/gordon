@@ -13,18 +13,45 @@ import (
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
+type renderedDeployFailureError struct {
+	message string
+	err     error
+}
+
+func (e *renderedDeployFailureError) Error() string {
+	return e.message
+}
+
+func (e *renderedDeployFailureError) Unwrap() error {
+	return e.err
+}
+
 func formatDeployFailure(err error) error {
+	if formatted, ok := structuredDeployFailure(err); ok {
+		return formatted
+	}
+
+	return fmt.Errorf("failed to deploy: %w", err)
+}
+
+func structuredDeployFailure(err error) (error, bool) {
 	var deployErr *domain.DeployFailureError
 	if errors.As(err, &deployErr) {
-		return fmt.Errorf("%s: %w", renderDeployFailure(deployErr.Summary, deployErr.Cause, deployErr.Hint, deployErr.Logs), deployErr)
+		return &renderedDeployFailureError{
+			message: renderDeployFailure(deployErr.Summary, deployErr.Cause, deployErr.Hint, deployErr.Logs),
+			err:     deployErr,
+		}, true
 	}
 
 	var httpErr *remote.HTTPError
 	if errors.As(err, &httpErr) && (httpErr.Structured || httpErr.Cause != "" || httpErr.Hint != "" || len(httpErr.Logs) > 0) {
-		return fmt.Errorf("%s: %w", renderDeployFailure(httpErr.Body, httpErr.Cause, httpErr.Hint, httpErr.Logs), httpErr)
+		return &renderedDeployFailureError{
+			message: renderDeployFailure(httpErr.Body, httpErr.Cause, httpErr.Hint, httpErr.Logs),
+			err:     httpErr,
+		}, true
 	}
 
-	return fmt.Errorf("failed to deploy: %w", err)
+	return nil, false
 }
 
 func renderDeployFailure(summary, cause, hint string, logs []string) string {

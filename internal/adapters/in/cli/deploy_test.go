@@ -36,6 +36,30 @@ func TestRunDeploy_LocalTypedErrorUsesDeployFormatter(t *testing.T) {
 	assert.ErrorIs(t, err, root)
 }
 
+func TestRunDeploy_StructuredRemoteNoFallbackReturnsFormattedError(t *testing.T) {
+	originalSendDeploySignal := sendDeploySignal
+	sendDeploySignal = func(string) (string, error) {
+		t.Fatalf("sendDeploySignal should not be called for structured deploy failures")
+		return "", nil
+	}
+	defer func() { sendDeploySignal = originalSendDeploySignal }()
+
+	root := &remote.HTTPError{
+		StatusCode: 503,
+		Status:     "503 Service Unavailable",
+		Body:       "failed to deploy",
+		Cause:      "health check failed",
+		Hint:       "check DATABASE_URL",
+		Logs:       []string{"booting app", "connection refused"},
+		Structured: true,
+	}
+	err := runDeploy(context.Background(), &deployTestDeployer{err: root}, true, "app.example.com", &bytes.Buffer{}, false)
+
+	require.Error(t, err)
+	assert.Equal(t, "failed to deploy\nCause: health check failed\nHint: check DATABASE_URL\n\nRecent container logs:\n  booting app\n  connection refused", err.Error())
+	assert.ErrorIs(t, err, root)
+}
+
 func TestRunDeploy_UsesResultDomainWhenPresent(t *testing.T) {
 	var out bytes.Buffer
 	err := runDeploy(context.Background(), &deployTestDeployer{result: &remote.DeployResult{

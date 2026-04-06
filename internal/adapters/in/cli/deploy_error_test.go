@@ -26,7 +26,7 @@ func TestFormatDeployFailure_RemoteStructuredError(t *testing.T) {
 	err := formatDeployFailure(root)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to deploy\nCause: health check failed\nHint: check DATABASE_URL\n\nRecent container logs:\n  booting app\n  connection refused")
+	assert.Equal(t, "failed to deploy\nCause: health check failed\nHint: check DATABASE_URL\n\nRecent container logs:\n  booting app\n  connection refused", err.Error())
 	assert.ErrorIs(t, err, root)
 }
 
@@ -43,7 +43,7 @@ func TestFormatDeployFailure_LocalTypedError(t *testing.T) {
 	err := formatDeployFailure(root)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to deploy\nCause: health check failed\nHint: check DATABASE_URL\n\nRecent container logs:\n  booting app\n  connection refused")
+	assert.Equal(t, "failed to deploy\nCause: health check failed\nHint: check DATABASE_URL\n\nRecent container logs:\n  booting app\n  connection refused", err.Error())
 	assert.ErrorIs(t, err, root)
 }
 

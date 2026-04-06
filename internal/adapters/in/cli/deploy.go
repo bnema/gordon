@@ -51,23 +51,12 @@ Examples:
 func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDomain string, out io.Writer, jsonOut bool) error {
 	result, err := deployer.Deploy(ctx, deployDomain)
 	if err != nil {
+		if formatted, ok := structuredDeployFailure(err); ok {
+			return formatted
+		}
+
 		if isRemote && shouldFallbackToLocal(err) {
-			domain, localErr := sendDeploySignal(deployDomain)
-			if localErr == nil {
-				warning := fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err)
-				if jsonOut {
-					return writeJSON(out, map[string]string{
-						"warning": warning,
-						"domain":  domain,
-						"status":  "success",
-					})
-				}
-				if writeErr := cliWriteLine(out, cliRenderWarning(fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err))); writeErr != nil {
-					return writeErr
-				}
-				return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
-			}
-			return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %v", err, localErr)
+			return handleLocalDeployFallback(err, deployDomain, out, jsonOut)
 		}
 
 		return formatDeployFailure(err)
@@ -103,4 +92,26 @@ func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDoma
 		}
 		return cliWriteLine(out, cliRenderInfo(msg))
 	}
+}
+
+func handleLocalDeployFallback(err error, deployDomain string, out io.Writer, jsonOut bool) error {
+	domain, localErr := sendDeploySignal(deployDomain)
+	if localErr != nil {
+		return fmt.Errorf("failed to deploy: remote error: %w; local fallback also failed: %v", err, localErr)
+	}
+
+	warning := fmt.Sprintf("Remote deploy failed (%v), used local signal fallback", err)
+	if jsonOut {
+		return writeJSON(out, map[string]string{
+			"warning": warning,
+			"domain":  domain,
+			"status":  "success",
+		})
+	}
+
+	if writeErr := cliWriteLine(out, cliRenderWarning(warning)); writeErr != nil {
+		return writeErr
+	}
+
+	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Deploy signal sent for domain: %s", domain)))
 }
