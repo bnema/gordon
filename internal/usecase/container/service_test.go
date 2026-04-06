@@ -1,10 +1,14 @@
 package container
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +29,20 @@ import (
 
 func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
+}
+
+func dockerLogFrames(stream byte, lines ...string) io.ReadCloser {
+	var buf bytes.Buffer
+	for _, line := range lines {
+		payload := []byte(line)
+		header := make([]byte, 8)
+		header[0] = stream
+		binary.BigEndian.PutUint32(header[4:], uint32(len(payload)))
+		_, _ = buf.Write(header)
+		_, _ = buf.Write(payload)
+	}
+
+	return io.NopCloser(bytes.NewReader(buf.Bytes()))
 }
 
 // testMinDelayConfig returns a Config with all timing delays set to 1ms,
@@ -474,7 +492,132 @@ func TestService_Deploy_ImagePullFailure(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "failed to pull image")
+	var deployErr *domain.DeployFailureError
+	require.ErrorAs(t, err, &deployErr)
+	assert.Equal(t, "failed to deploy", deployErr.Error())
+	assert.Equal(t, "failed to pull image", deployErr.Cause)
+	assert.Equal(t, "verify registry auth and confirm the image exists at the requested tag", deployErr.Hint)
+	assert.Equal(t, "gordon-test.example.com", deployErr.ContainerName)
+	assert.Empty(t, deployErr.ContainerID)
+	assert.ErrorContains(t, deployErr.Err, "failed to pull image")
+}
+
+func TestService_CaptureRecentContainerLogs_SkipsCanceledContext(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{}, nil)
+
+	ctx, cancel := context.WithCancel(testContext())
+	cancel()
+
+	logs := svc.captureRecentContainerLogs(ctx, "container-123")
+
+	assert.Nil(t, logs)
+}
+
+func TestService_Deploy_ReadinessFailureReturnsDeployFailureWithLogs(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessMode:        "docker-health",
+		HealthTimeout:        10 * time.Millisecond,
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
+	ctx := testContext()
+
+	route := domain.Route{Domain: "test.example.com", Image: "myapp:latest"}
+
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:latest").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "new-container").Return("starting", true, nil).Twice()
+
+	logLines := make([]string, 0, 25)
+	for i := 1; i <= 25; i++ {
+		logLines = append(logLines, fmt.Sprintf("line-%02d\n", i))
+	}
+	runtime.EXPECT().GetContainerLogs(mock.Anything, "new-container", false).Return(dockerLogFrames(1, logLines...), nil)
+	runtime.EXPECT().StopContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "new-container", true).Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.Nil(t, result)
+	var deployErr *domain.DeployFailureError
+	require.ErrorAs(t, err, &deployErr)
+	assert.Equal(t, "failed to deploy", deployErr.Summary)
+	assert.Equal(t, "container failed readiness check", deployErr.Cause)
+	assert.Equal(t, "check startup logs and confirm the health endpoint becomes ready within the configured timeout", deployErr.Hint)
+	assert.Equal(t, "gordon-test.example.com", deployErr.ContainerName)
+	assert.Equal(t, "new-container", deployErr.ContainerID)
+	require.Len(t, deployErr.Logs, 20)
+	assert.Equal(t, "line-06", deployErr.Logs[0])
+	assert.Equal(t, "line-25", deployErr.Logs[19])
+	assert.True(t, strings.Contains(err.Error(), "failed to deploy"))
+	assert.ErrorContains(t, deployErr.Err, "last status: starting")
+}
+
+func TestService_Deploy_StrictHealthModeWithoutHealthcheckReturnsHint(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		ReadinessMode:        "docker-health",
+		ReadinessDelay:       time.Millisecond,
+		DrainDelay:           time.Millisecond,
+		DrainDelayConfigured: true,
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
+	ctx := testContext()
+
+	route := domain.Route{Domain: "test.example.com", Image: "myapp:latest"}
+
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{}, nil)
+	runtime.EXPECT().PullImage(mock.Anything, "myapp:latest").Return(nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-test.example.com", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(newContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "new-container").Return("", false, nil).Once()
+	runtime.EXPECT().GetContainerLogs(mock.Anything, "new-container", false).Return(dockerLogFrames(1, "booting\n"), nil)
+	runtime.EXPECT().StopContainer(mock.Anything, "new-container").Return(nil)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "new-container", true).Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.Nil(t, result)
+	var deployErr *domain.DeployFailureError
+	require.ErrorAs(t, err, &deployErr)
+	assert.Equal(t, "container failed readiness check", deployErr.Cause)
+	assert.Equal(t, "add a Docker healthcheck or switch readiness mode", deployErr.Hint)
+	assert.Equal(t, []string{"booting"}, deployErr.Logs)
+	assert.Equal(t, "gordon-test.example.com", deployErr.ContainerName)
+	assert.Equal(t, "new-container", deployErr.ContainerID)
+	assert.ErrorContains(t, deployErr.Err, "no healthcheck detected")
 }
 
 func TestService_PullImage_UsesServiceTokenForExternalPull(t *testing.T) {
@@ -3601,6 +3744,7 @@ func TestService_Deploy_ZeroDowntime_ReadinessFailure_OldUntouched(t *testing.T)
 	// Recovery window poll: return error to fail fast instead of waiting 30s
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").
 		Return(false, errors.New("container exited")).Once()
+	runtime.EXPECT().GetContainerLogs(mock.Anything, "new-container", false).Return(dockerLogFrames(1, "crash line\n"), nil)
 
 	// cleanupFailedContainer: stop and remove the failed new container
 	runtime.EXPECT().StopContainer(mock.Anything, "new-container").Return(nil)
@@ -3615,7 +3759,14 @@ func TestService_Deploy_ZeroDowntime_ReadinessFailure_OldUntouched(t *testing.T)
 	// Deploy should return an error (readiness failure)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "readiness check")
+	var deployErr *domain.DeployFailureError
+	require.ErrorAs(t, err, &deployErr)
+	assert.Equal(t, "failed to deploy", deployErr.Error())
+	assert.Equal(t, "container failed readiness check", deployErr.Cause)
+	assert.Equal(t, []string{"crash line"}, deployErr.Logs)
+	assert.Equal(t, "gordon-test.example.com-new", deployErr.ContainerName)
+	assert.Equal(t, "new-container", deployErr.ContainerID)
+	assert.ErrorContains(t, deployErr.Err, "container exited")
 
 	// Old container must still be tracked — completely untouched
 	tracked, exists := svc.Get(ctx, "test.example.com")
