@@ -1,11 +1,11 @@
-package httputil_test
+package httphelper_test
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bnema/gordon/internal/adapters/in/http/httputil"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 )
 
 func TestIsLocalhostRequest(t *testing.T) {
@@ -25,7 +25,7 @@ func TestIsLocalhostRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = tt.remoteAddr
-			if got := httputil.IsLocalhostRequest(req); got != tt.want {
+			if got := httphelper.IsLocalhostRequest(req); got != tt.want {
 				t.Errorf("IsLocalhostRequest(%q) = %v, want %v", tt.remoteAddr, got, tt.want)
 			}
 		})

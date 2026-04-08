@@ -4,12 +4,14 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 )
 
 // cloudflareNets contains Cloudflare's published IPv4 and IPv6 ranges.
 // Cf-Connecting-Ip is only trusted when the immediate upstream matches these.
 // Source: https://www.cloudflare.com/ips/
-var cloudflareNets = ParseTrustedProxies([]string{
+var cloudflareNets = httphelper.ParseTrustedProxies([]string{
 	// IPv4
 	"173.245.48.0/20",
 	"103.21.244.0/22",
@@ -57,45 +59,20 @@ func normalizeIP(raw string) string {
 // ParseTrustedProxies converts a list of IP addresses and CIDR ranges to net.IPNet.
 // It accepts both single IPs (e.g., "10.0.0.1") and CIDR notation (e.g., "10.0.0.0/8").
 // Single IPs are converted to /32 (IPv4) or /128 (IPv6) CIDR blocks.
+//
+// Deprecated: use httphelper.ParseTrustedProxies directly. This wrapper preserves
+// the existing middleware API for callers that have not migrated yet.
 func ParseTrustedProxies(proxies []string) []*net.IPNet {
-	var nets []*net.IPNet
-	for _, proxy := range proxies {
-		// Try parsing as CIDR
-		_, ipNet, err := net.ParseCIDR(proxy)
-		if err == nil {
-			nets = append(nets, ipNet)
-			continue
-		}
-		// Try parsing as single IP
-		ip := net.ParseIP(proxy)
-		if ip != nil {
-			// Convert single IP to /32 or /128 CIDR
-			bits := 32
-			if ip.To4() == nil {
-				bits = 128
-			}
-			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
-		}
-	}
-	return nets
+	return httphelper.ParseTrustedProxies(proxies)
 }
 
 // IsTrustedProxy checks if the given IP address is from a trusted proxy.
 // Returns false if trustedNets is empty or the IP cannot be parsed.
+//
+// Deprecated: use httphelper.IsTrustedProxy directly. This wrapper preserves
+// the existing middleware API for callers that have not migrated yet.
 func IsTrustedProxy(ip string, trustedNets []*net.IPNet) bool {
-	if len(trustedNets) == 0 {
-		return false
-	}
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
-		return false
-	}
-	for _, ipNet := range trustedNets {
-		if ipNet.Contains(parsedIP) {
-			return true
-		}
-	}
-	return false
+	return httphelper.IsTrustedProxy(ip, trustedNets)
 }
 
 // GetClientIP extracts the client IP address from the request.

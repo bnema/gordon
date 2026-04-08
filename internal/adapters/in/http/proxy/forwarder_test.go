@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	gordonhttp "github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -201,7 +201,7 @@ func TestForwardToTarget_ProxyHeaderSet(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 func TestNewReverseProxy_XForwardedProto(t *testing.T) {
-	trustedNets := middleware.ParseTrustedProxies([]string{"10.0.0.0/8"})
+	trustedNets := gordonhttp.ParseTrustedProxies([]string{"10.0.0.0/8"})
 
 	tests := []struct {
 		name          string
@@ -250,7 +250,7 @@ func TestNewReverseProxy_XForwardedProto(t *testing.T) {
 			remoteAddr:    "[::1]",
 			incomingProto: "https",
 			wantProto:     "https",
-			nets:          middleware.ParseTrustedProxies([]string{"::1/128"}),
+			nets:          gordonhttp.ParseTrustedProxies([]string{"::1/128"}),
 		},
 		{
 			name:          "bare IPv4 no port untrusted source strips proto",

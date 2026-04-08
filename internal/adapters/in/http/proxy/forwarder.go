@@ -15,7 +15,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	gordonhttp "github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -214,16 +214,7 @@ func newReverseProxy(targetURL *url.URL, originalHost string, transport http.Rou
 
 // isTrustedSource reports whether the request's remote address is in trustedNets.
 func isTrustedSource(r *http.Request, trustedNets []*net.IPNet) bool {
-	if len(trustedNets) == 0 {
-		return false
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		// RemoteAddr may be a bare IP without a port (e.g. from Unix sockets
-		// or certain proxy setups). Fall back to using it directly.
-		host = strings.TrimSuffix(strings.TrimPrefix(r.RemoteAddr, "["), "]")
-	}
-	return middleware.IsTrustedProxy(host, trustedNets)
+	return gordonhttp.IsTrustedSource(r, trustedNets)
 }
 
 // modifyResponse returns a function that adds proxy headers and enforces response size limits.

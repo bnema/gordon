@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/bnema/gordon/internal/adapters/in/http/httputil"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -358,7 +358,7 @@ func TestIsLocalhostRequest(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/auth/token", nil)
 			req.RemoteAddr = tt.remoteAddr
 
-			result := httputil.IsLocalhostRequest(req)
+			result := httphelper.IsLocalhostRequest(req)
 
 			assert.Equal(t, tt.want, result)
 		})

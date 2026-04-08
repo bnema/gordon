@@ -3,6 +3,7 @@ package out
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"time"
 
 	"github.com/bnema/gordon/internal/domain"
@@ -49,4 +50,10 @@ type CertificateAuthority interface {
 
 	// IntermediateLifetime returns the configured intermediate CA lifetime.
 	IntermediateLifetime() time.Duration
+
+	// InstallRoot installs the root CA certificate into the system trust store.
+	InstallRoot(cert *x509.Certificate) error
+
+	// UninstallRoot removes the root CA certificate from the system trust store.
+	UninstallRoot(cert *x509.Certificate) error
 }

@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 )
 
 // localhostNets contains IPv4 and IPv6 loopback ranges that are always allowed.
-var localhostNets = ParseTrustedProxies([]string{"127.0.0.0/8", "::1"})
+var localhostNets = httphelper.ParseTrustedProxies([]string{"127.0.0.0/8", "::1"})
 
 // cidrAllowlist is the shared implementation for CIDR-based access control middleware.
 // ipExtractor determines how the client IP is obtained from the request.
@@ -52,40 +52,28 @@ func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) str
 }
 
 // ExtractRemoteIP returns the IP portion of a RemoteAddr, stripping the port.
+//
+// Deprecated: use httphelper.ExtractRemoteIP directly. This wrapper preserves
+// the existing middleware API for callers that have not migrated yet.
 func ExtractRemoteIP(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return remoteAddr
-	}
-	return host
+	return httphelper.ExtractRemoteIP(remoteAddr)
 }
 
 // IsTrustedOrLocal reports whether an IP belongs to localhost or trusted proxy nets.
+//
+// Deprecated: use httphelper.IsTrustedOrLocal directly. This wrapper preserves
+// the existing middleware API for callers that have not migrated yet.
 func IsTrustedOrLocal(ip string, proxyNets []*net.IPNet) bool {
-	return IsTrustedProxy(ip, localhostNets) || IsTrustedProxy(ip, proxyNets)
+	return httphelper.IsTrustedOrLocal(ip, proxyNets)
 }
 
 // HTTPSAuthority converts an incoming Host header plus httpPort/tlsPort into the
 // correct HTTPS authority (host or host:port).
 //
-// Rules:
-//   - No port in Host → omit TLS port (public reverse-proxy assumed on :443).
-//   - Host port == httpPort → map to tlsPort.
-//   - Any other explicit port → preserve it.
+// Deprecated: use httphelper.HTTPSAuthority directly. This wrapper preserves
+// the existing middleware API for callers that have not migrated yet.
 func HTTPSAuthority(host string, httpPort, tlsPort int) string {
-	hostname, portStr, err := net.SplitHostPort(host)
-	if err != nil {
-		// No port in Host header — omit TLS port from URL.
-		return host
-	}
-
-	port, err := strconv.Atoi(portStr)
-	if err == nil && port == httpPort {
-		return net.JoinHostPort(hostname, strconv.Itoa(tlsPort))
-	}
-
-	// Unknown explicit port — preserve it.
-	return net.JoinHostPort(hostname, portStr)
+	return httphelper.HTTPSAuthority(host, httpPort, tlsPort)
 }
 
 // RegistryCIDRAllowlist returns middleware that restricts access to the given CIDR ranges.

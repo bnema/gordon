@@ -449,6 +449,16 @@ func (ca *CA) IntermediateLifetime() time.Duration {
 	return intermediateLifetime
 }
 
+// InstallRoot installs the root CA certificate into the system trust store.
+func (ca *CA) InstallRoot(cert *x509.Certificate) error {
+	return InstallRoot(cert)
+}
+
+// UninstallRoot removes the root CA certificate from the system trust store.
+func (ca *CA) UninstallRoot(cert *x509.Certificate) error {
+	return UninstallRoot(cert)
+}
+
 func randomSerial() (*big.Int, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {

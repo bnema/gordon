@@ -12,7 +12,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
-	"github.com/bnema/gordon/internal/adapters/in/http/httputil"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -59,7 +59,7 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, t
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Allow localhost requests only with internal instance credentials.
-			if httputil.IsLocalhostRequest(r) && isInternalRegistryAuth(r, internalAuth) {
+			if httphelper.IsLocalhostRequest(r) && isInternalRegistryAuth(r, internalAuth) {
 				log.Debug().
 					Str(zerowrap.FieldLayer, "adapter").
 					Str(zerowrap.FieldAdapter, "http").
@@ -72,7 +72,7 @@ func RegistryAuthV2(authSvc in.AuthService, internalAuth InternalRegistryAuth, t
 			}
 
 			// Warn if not using TLS (skip for localhost — internal proxy traffic)
-			if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" && !httputil.IsLocalhostRequest(r) {
+			if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" && !httphelper.IsLocalhostRequest(r) {
 				log.Warn().
 					Str(zerowrap.FieldLayer, "adapter").
 					Str(zerowrap.FieldAdapter, "http").
