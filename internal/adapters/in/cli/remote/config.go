@@ -97,7 +97,9 @@ func migrateClientConfig(config *ClientConfig) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "Notice: migrated [client] config from gordon.toml to 'default' remote. The [client] section is deprecated; use 'gordon remotes' instead.\n")
+	if _, err := fmt.Fprintf(os.Stderr, "Notice: migrated [client] config from gordon.toml to 'default' remote. The [client] section is deprecated; use 'gordon remotes' instead.\n"); err != nil {
+		_, _ = os.Stderr.WriteString("Warning: failed to write remote migration notice\n")
+	}
 
 	config.Remotes["default"] = RemoteEntry{
 		URL:         legacy.Client.Remote,
@@ -111,7 +113,9 @@ func migrateClientConfig(config *ClientConfig) {
 	}
 
 	if err := SaveRemotes("", config); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to save migrated remotes: %v\n", err)
+		if _, writeErr := fmt.Fprintf(os.Stderr, "Warning: failed to save migrated remotes: %v\n", err); writeErr != nil {
+			_, _ = os.Stderr.WriteString("Warning: failed to write remote migration warning\n")
+		}
 	}
 }
 

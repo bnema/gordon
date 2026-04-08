@@ -202,7 +202,7 @@ func newReverseProxy(targetURL *url.URL, originalHost string, transport http.Rou
 			// SetXForwarded() unconditionally sets it based on the incoming scheme
 			// (HTTP between proxies), but when a trusted proxy already sent the
 			// real client proto, we must honor it.
-			if existingProto != "" && isTrustedSource(incomingReq, trustedNets) {
+			if existingProto != "" && gordonhttp.IsTrustedSource(incomingReq, trustedNets) {
 				pr.Out.Header.Set("X-Forwarded-Proto", existingProto)
 			}
 		},
@@ -210,11 +210,6 @@ func newReverseProxy(targetURL *url.URL, originalHost string, transport http.Rou
 		ErrorHandler:   errorHandler,
 		ModifyResponse: modifyResp,
 	}
-}
-
-// isTrustedSource reports whether the request's remote address is in trustedNets.
-func isTrustedSource(r *http.Request, trustedNets []*net.IPNet) bool {
-	return gordonhttp.IsTrustedSource(r, trustedNets)
 }
 
 // modifyResponse returns a function that adds proxy headers and enforces response size limits.

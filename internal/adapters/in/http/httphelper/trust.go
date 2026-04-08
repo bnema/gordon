@@ -16,6 +16,11 @@ var localhostNets = ParseTrustedProxies([]string{"127.0.0.0/8", "::1"})
 func ParseTrustedProxies(proxies []string) []*net.IPNet {
 	var nets []*net.IPNet
 	for _, proxy := range proxies {
+		proxy = strings.TrimSpace(proxy)
+		if proxy == "" {
+			continue
+		}
+
 		// Try parsing as CIDR
 		_, ipNet, err := net.ParseCIDR(proxy)
 		if err == nil {

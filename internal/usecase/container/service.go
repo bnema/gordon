@@ -835,10 +835,6 @@ func isPullFailure(err error) bool {
 		return false
 	}
 
-	if errors.Is(err, domain.ErrImagePullFailed) {
-		return true
-	}
-
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "failed to pull image") ||
 		strings.Contains(msg, "pull access denied")

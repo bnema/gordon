@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 )
 
@@ -25,9 +27,8 @@ func TestIsLocalhostRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = tt.remoteAddr
-			if got := httphelper.IsLocalhostRequest(req); got != tt.want {
-				t.Errorf("IsLocalhostRequest(%q) = %v, want %v", tt.remoteAddr, got, tt.want)
-			}
+			got := httphelper.IsLocalhostRequest(req)
+			assert.Equal(t, tt.want, got, "IsLocalhostRequest(%q)", tt.remoteAddr)
 		})
 	}
 }
