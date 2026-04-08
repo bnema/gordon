@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/adapters/out/ratelimit"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
@@ -221,7 +222,7 @@ func TestRateLimitMiddleware_Integration(t *testing.T) {
 
 func TestGetClientIP(t *testing.T) {
 	// Parse trusted proxies for tests
-	trustedNets := middleware.ParseTrustedProxies([]string{"127.0.0.1", "10.0.0.0/8"})
+	trustedNets := httphelper.ParseTrustedProxies([]string{"127.0.0.1", "10.0.0.0/8"})
 	noTrustedNets := []*net.IPNet{}
 
 	tests := []struct {
@@ -373,8 +374,8 @@ func TestParseTrustedProxies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			nets := middleware.ParseTrustedProxies(tt.proxies)
-			got := middleware.IsTrustedProxy(tt.testIP, nets)
+			nets := httphelper.ParseTrustedProxies(tt.proxies)
+			got := httphelper.IsTrustedProxy(tt.testIP, nets)
 			assert.Equal(t, tt.want, got)
 		})
 	}

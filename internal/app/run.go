@@ -46,6 +46,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/http/admin"
 	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/adapters/in/http/onboarding"
 	proxyadapter "github.com/bnema/gordon/internal/adapters/in/http/proxy"
@@ -1680,7 +1681,7 @@ func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWriter out.AccessLogWriter) (http.Handler, http.Handler, http.Handler) {
 	// Parse trusted proxies once for all middleware chains.
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
-	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
+	trustedNets := httphelper.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 
 	// Registry handler (unchanged)
 	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize)
@@ -1812,8 +1813,8 @@ func directHTTPOnboardingGate(ob *onboarding.Handler, proxyNets []*net.IPNet, pr
 	)(onboardingMux)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		remoteIP := middleware.ExtractRemoteIP(r.RemoteAddr)
-		if middleware.IsTrustedOrLocal(remoteIP, proxyNets) {
+		remoteIP := httphelper.ExtractRemoteIP(r.RemoteAddr)
+		if httphelper.IsTrustedOrLocal(remoteIP, proxyNets) {
 			proxyChain.ServeHTTP(w, r)
 			return
 		}
@@ -1868,10 +1869,10 @@ func parseCIDRAllowlist(ips []string, label string, log zerowrap.Logger) ([]*net
 		return nil, false
 	}
 
-	allowedNets := middleware.ParseTrustedProxies(ips)
+	allowedNets := httphelper.ParseTrustedProxies(ips)
 	if len(allowedNets) != len(ips) {
 		for _, entry := range ips {
-			if nets := middleware.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
+			if nets := httphelper.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
 				log.Warn().Str("entry", entry).Msgf("ignoring invalid %s entry", label)
 			}
 		}
