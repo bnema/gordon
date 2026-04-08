@@ -502,6 +502,34 @@ func TestService_Deploy_ImagePullFailure(t *testing.T) {
 	assert.ErrorContains(t, deployErr.Err, "failed to pull image")
 }
 
+func TestService_Deploy_DoesNotMisclassifyUnauthorizedEnvLoadFailure(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
+	ctx := testContext()
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "myapp:latest",
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return(nil, errors.New("unauthorized"))
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.Nil(t, result)
+	assert.ErrorContains(t, err, "failed to load environment variables: unauthorized")
+	var deployErr *domain.DeployFailureError
+	assert.False(t, errors.As(err, &deployErr))
+}
+
 func TestService_CaptureRecentContainerLogs_SkipsCanceledContext(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	svc := NewService(runtime, nil, nil, nil, Config{}, nil)

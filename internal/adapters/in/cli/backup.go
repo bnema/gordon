@@ -7,9 +7,10 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/pkg/bytesize"
-	"github.com/spf13/cobra"
 )
 
 // newBackupCmd creates the backup command group.

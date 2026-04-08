@@ -58,6 +58,23 @@ func TestAccessLogger_EmitsEntryPerRequest(t *testing.T) {
 	assert.Equal(t, "192.168.1.100", e.ClientIP)
 }
 
+func TestAccessLogger_RedactsSensitiveQueryParams(t *testing.T) {
+	mock := &mockAccessLogWriter{}
+	log := testLogger()
+
+	handler := AccessLogger(mock, false, log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=secret-code&state=ok&token=secret-token", nil)
+	rw := httptest.NewRecorder()
+
+	handler.ServeHTTP(rw, req)
+
+	require.Len(t, mock.entries, 1)
+	assert.Equal(t, "code=[REDACTED]&state=ok&token=[REDACTED]", mock.entries[0].Query)
+}
+
 func TestAccessLogger_RequestIDReused(t *testing.T) {
 	mock := &mockAccessLogWriter{}
 	log := testLogger()

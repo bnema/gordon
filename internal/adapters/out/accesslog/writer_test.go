@@ -72,7 +72,8 @@ func TestNew_FileOutput_CreatesDirectory(t *testing.T) {
 func TestWriter_Stdout_JSON(t *testing.T) {
 	// Replace stdout to capture output.
 	orig := os.Stdout
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	os.Stdout = w
 
 	writer, err := New(Config{Format: "json", Output: "stdout"})
@@ -97,7 +98,8 @@ func TestWriter_Stdout_JSON(t *testing.T) {
 
 func TestWriter_Stdout_CLF(t *testing.T) {
 	orig := os.Stdout
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	os.Stdout = w
 
 	writer, err := New(Config{Format: "clf", Output: "stdout"})
@@ -119,7 +121,8 @@ func TestWriter_Stdout_CLF(t *testing.T) {
 
 func TestWriter_Stdout_Combined(t *testing.T) {
 	orig := os.Stdout
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	os.Stdout = w
 
 	writer, err := New(Config{Format: "combined", Output: "stdout"})

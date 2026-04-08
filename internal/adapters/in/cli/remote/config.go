@@ -110,7 +110,9 @@ func migrateClientConfig(config *ClientConfig) {
 		config.Active = "default"
 	}
 
-	_ = SaveRemotes("", config)
+	if err := SaveRemotes("", config); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to save migrated remotes: %v\n", err)
+	}
 }
 
 func defaultGordonTomlPath() string {

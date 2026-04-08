@@ -3,6 +3,7 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -60,7 +61,7 @@ func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zero
 				Method:     r.Method,
 				Host:       r.Host,
 				Path:       r.URL.Path,
-				Query:      r.URL.RawQuery,
+				Query:      sanitizeLoggedQuery(r.URL.RawQuery),
 				Status:     rw.StatusCode(),
 				BytesSent:  rw.BytesWritten(),
 				DurationMS: durationMS,
@@ -83,5 +84,45 @@ func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zero
 					Msg("access log write failed")
 			}
 		})
+	}
+}
+
+func sanitizeLoggedQuery(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+
+	parts := strings.Split(rawQuery, "&")
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+
+		key, _, found := strings.Cut(part, "=")
+		decodedKey, err := url.QueryUnescape(key)
+		if err != nil {
+			decodedKey = key
+		}
+
+		if !isSensitiveQueryKey(decodedKey) {
+			continue
+		}
+
+		if found {
+			parts[i] = key + "=[REDACTED]"
+		} else {
+			parts[i] = key
+		}
+	}
+
+	return strings.Join(parts, "&")
+}
+
+func isSensitiveQueryKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "access_token", "auth", "code", "key", "password", "refresh_token", "reset", "secret", "sig", "signature", "token":
+		return true
+	default:
+		return false
 	}
 }
