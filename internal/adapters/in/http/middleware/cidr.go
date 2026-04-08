@@ -27,12 +27,12 @@ func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) str
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			clientIP := ipExtractor(r)
 
-			if IsTrustedProxy(clientIP, localhostNets) {
+			if httphelper.IsTrustedProxy(clientIP, localhostNets) {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			if IsTrustedProxy(clientIP, allowedNets) {
+			if httphelper.IsTrustedProxy(clientIP, allowedNets) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -49,31 +49,6 @@ func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) str
 			_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
 		})
 	}
-}
-
-// ExtractRemoteIP returns the IP portion of a RemoteAddr, stripping the port.
-//
-// Deprecated: use httphelper.ExtractRemoteIP directly. This wrapper preserves
-// the existing middleware API for callers that have not migrated yet.
-func ExtractRemoteIP(remoteAddr string) string {
-	return httphelper.ExtractRemoteIP(remoteAddr)
-}
-
-// IsTrustedOrLocal reports whether an IP belongs to localhost or trusted proxy nets.
-//
-// Deprecated: use httphelper.IsTrustedOrLocal directly. This wrapper preserves
-// the existing middleware API for callers that have not migrated yet.
-func IsTrustedOrLocal(ip string, proxyNets []*net.IPNet) bool {
-	return httphelper.IsTrustedOrLocal(ip, proxyNets)
-}
-
-// HTTPSAuthority converts an incoming Host header plus httpPort/tlsPort into the
-// correct HTTPS authority (host or host:port).
-//
-// Deprecated: use httphelper.HTTPSAuthority directly. This wrapper preserves
-// the existing middleware API for callers that have not migrated yet.
-func HTTPSAuthority(host string, httpPort, tlsPort int) string {
-	return httphelper.HTTPSAuthority(host, httpPort, tlsPort)
 }
 
 // RegistryCIDRAllowlist returns middleware that restricts access to the given CIDR ranges.
@@ -109,8 +84,8 @@ func HTTPSRedirect(proxyNets []*net.IPNet, httpPort, tlsPort int, forceAll bool,
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !forceAll {
-				remoteIP := ExtractRemoteIP(r.RemoteAddr)
-				if IsTrustedOrLocal(remoteIP, proxyNets) {
+				remoteIP := httphelper.ExtractRemoteIP(r.RemoteAddr)
+				if httphelper.IsTrustedOrLocal(remoteIP, proxyNets) {
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -134,7 +109,7 @@ func httpsRedirectTarget(host, requestURI string, httpPort, tlsPort int) string 
 		path = "/"
 	}
 
-	return fmt.Sprintf("https://%s%s", HTTPSAuthority(host, httpPort, tlsPort), path)
+	return fmt.Sprintf("https://%s%s", httphelper.HTTPSAuthority(host, httpPort, tlsPort), path)
 }
 
 // ProxyCIDRAllowlist returns middleware that restricts proxy access to the given CIDR ranges.
@@ -143,6 +118,6 @@ func httpsRedirectTarget(host, requestURI string, httpPort, tlsPort int) string 
 // An empty allowedNets slice is a no-op (all traffic passes through).
 func ProxyCIDRAllowlist(allowedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return cidrAllowlist(allowedNets, func(r *http.Request) string {
-		return ExtractRemoteIP(r.RemoteAddr)
+		return httphelper.ExtractRemoteIP(r.RemoteAddr)
 	}, "proxy origin", log)
 }

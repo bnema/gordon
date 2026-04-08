@@ -9,6 +9,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	out "github.com/bnema/gordon/internal/boundaries/out"
 )
 
@@ -45,7 +46,7 @@ func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zero
 			// cidr.go (same package) — no separate loopback definition needed.
 			if excludeHealthChecks {
 				if strings.HasPrefix(r.UserAgent(), out.HealthCheckUserAgentPrefix) ||
-					IsTrustedProxy(clientIP, localhostNets) {
+					httphelper.IsTrustedProxy(clientIP, localhostNets) {
 					return
 				}
 			}

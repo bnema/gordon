@@ -17,11 +17,6 @@ type uiAdoptionExpectation struct {
 
 var uiAdoptionExpectations = []uiAdoptionExpectation{
 	{
-		family:    "server",
-		file:      "serve.go",
-		functions: []string{"newStartCmd"},
-	},
-	{
 		family:    "root/server",
 		file:      "root.go",
 		functions: []string{"newVersionCmd", "runReloadRemote", "runLogsRemote", "streamLogsRemote", "showContainerLogsLocal"},

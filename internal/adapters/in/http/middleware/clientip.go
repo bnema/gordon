@@ -56,25 +56,6 @@ func normalizeIP(raw string) string {
 	return parsed.String()
 }
 
-// ParseTrustedProxies converts a list of IP addresses and CIDR ranges to net.IPNet.
-// It accepts both single IPs (e.g., "10.0.0.1") and CIDR notation (e.g., "10.0.0.0/8").
-// Single IPs are converted to /32 (IPv4) or /128 (IPv6) CIDR blocks.
-//
-// Deprecated: use httphelper.ParseTrustedProxies directly. This wrapper preserves
-// the existing middleware API for callers that have not migrated yet.
-func ParseTrustedProxies(proxies []string) []*net.IPNet {
-	return httphelper.ParseTrustedProxies(proxies)
-}
-
-// IsTrustedProxy checks if the given IP address is from a trusted proxy.
-// Returns false if trustedNets is empty or the IP cannot be parsed.
-//
-// Deprecated: use httphelper.IsTrustedProxy directly. This wrapper preserves
-// the existing middleware API for callers that have not migrated yet.
-func IsTrustedProxy(ip string, trustedNets []*net.IPNet) bool {
-	return httphelper.IsTrustedProxy(ip, trustedNets)
-}
-
 // GetClientIP extracts the client IP address from the request.
 // It only honors X-Forwarded-For and X-Real-IP headers when the request
 // originates from a trusted proxy. This prevents attackers from spoofing
@@ -90,12 +71,12 @@ func GetClientIP(r *http.Request, trustedNets []*net.IPNet) string {
 	}
 
 	// Only honor proxy headers if the request comes from a trusted proxy
-	if IsTrustedProxy(remoteIP, trustedNets) {
+	if httphelper.IsTrustedProxy(remoteIP, trustedNets) {
 		// Cf-Connecting-IP is set by Cloudflare to the true client IP.
 		// Only trust it when the immediate upstream is a known Cloudflare IP,
 		// not any generic trusted proxy (e.g. local LB/nginx), because a
 		// non-Cloudflare proxy would blindly forward a spoofed header.
-		if IsTrustedProxy(remoteIP, cloudflareNets) {
+		if httphelper.IsTrustedProxy(remoteIP, cloudflareNets) {
 			if cfIP := r.Header.Get("Cf-Connecting-Ip"); cfIP != "" {
 				if ip := normalizeIP(cfIP); ip != "" {
 					return ip
@@ -117,7 +98,7 @@ func GetClientIP(r *http.Request, trustedNets []*net.IPNet) string {
 			}
 
 			for i := len(validChain) - 1; i >= 0; i-- {
-				if !IsTrustedProxy(validChain[i], trustedNets) {
+				if !httphelper.IsTrustedProxy(validChain[i], trustedNets) {
 					return validChain[i]
 				}
 			}

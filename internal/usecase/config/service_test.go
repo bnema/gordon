@@ -469,24 +469,6 @@ func TestService_GetNetworkGroups(t *testing.T) {
 	assert.ElementsMatch(t, []string{"api.example.com", "db.example.com"}, groups["backend"])
 }
 
-func TestService_GetAttachments(t *testing.T) {
-	v := viper.New()
-	v.Set("attachments", map[string]interface{}{
-		"app.example.com": []interface{}{"redis:latest", "postgres:18"},
-	})
-
-	eventBus := mocks.NewMockEventPublisher(t)
-	svc := NewService(v, eventBus)
-	ctx := testContext()
-
-	_ = svc.Load(ctx)
-
-	attachments := svc.GetAttachments()
-
-	assert.Len(t, attachments, 1)
-	assert.ElementsMatch(t, []string{"redis:latest", "postgres:18"}, attachments["app.example.com"])
-}
-
 func TestService_GetAttachmentConfig(t *testing.T) {
 	v := viper.New()
 	v.Set("attachments", map[string]interface{}{

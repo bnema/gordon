@@ -20,9 +20,6 @@ type AttachmentConfigProvider interface {
 	// network groups, read under a single lock to prevent cross-field races.
 	GetAttachmentConfig() AttachmentConfigSnapshot
 
-	// GetAttachments returns a deep copy of the current attachment config: domain/group -> []image.
-	GetAttachments() map[string][]string
-
 	// GetNetworkGroups returns a deep copy of the current network group config: group -> []domain.
 	GetNetworkGroups() map[string][]string
 }

@@ -89,7 +89,6 @@ type Config struct {
 		Port                 int      `mapstructure:"port"`
 		RegistryPort         int      `mapstructure:"registry_port"`
 		GordonDomain         string   `mapstructure:"gordon_domain"`
-		RegistryDomain       string   `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
 		TLSPort              int      `mapstructure:"tls_port"`
 		TLSCertFile          string   `mapstructure:"tls_cert_file"`
 		TLSKeyFile           string   `mapstructure:"tls_key_file"`
@@ -313,11 +312,6 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, Config{}, fmt.Errorf("failed to unmarshal config: %w", err)
-	}
-
-	// Normalize domain config: prefer gordon_domain over registry_domain
-	if cfg.Server.GordonDomain != "" {
-		cfg.Server.RegistryDomain = cfg.Server.GordonDomain
 	}
 
 	return v, cfg, nil
@@ -1386,7 +1380,7 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 
 	return &proxyConfigResult{
 		proxyConfig: proxy.Config{
-			RegistryDomain:     cfg.Server.RegistryDomain,
+			RegistryDomain:     cfg.Server.GordonDomain,
 			RegistryPort:       cfg.Server.RegistryPort,
 			MaxBodySize:        maxProxyBodySize,
 			MaxResponseSize:    maxProxyResponseSize,
@@ -1421,9 +1415,11 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		defaultNanoCPUs = int64(cfg.Containers.CPULimit * 1e9)
 	}
 
+	attachmentConfig := svc.configSvc.GetAttachmentConfig()
+
 	containerConfig := container.Config{
 		RegistryAuthEnabled:        cfg.Auth.Enabled,
-		RegistryDomain:             cfg.Server.RegistryDomain,
+		RegistryDomain:             cfg.Server.GordonDomain,
 		RegistryPort:               cfg.Server.RegistryPort,
 		InternalRegistryUsername:   svc.internalRegUser,
 		InternalRegistryPassword:   svc.internalRegPass,
@@ -1433,8 +1429,8 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		VolumePreserve:             v.GetBool("volumes.preserve"),
 		NetworkIsolation:           v.GetBool("network_isolation.enabled"),
 		NetworkPrefix:              v.GetString("network_isolation.network_prefix"),
-		NetworkGroups:              svc.configSvc.GetNetworkGroups(),
-		Attachments:                svc.configSvc.GetAttachments(),
+		NetworkGroups:              attachmentConfig.NetworkGroups,
+		Attachments:                attachmentConfig.Attachments,
 		ReadinessDelay:             v.GetDuration("deploy.readiness_delay"),
 		ReadinessMode:              v.GetString("deploy.readiness_mode"),
 		HealthTimeout:              v.GetDuration("deploy.health_timeout"),
@@ -1547,7 +1543,7 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	}
 
 	// Auto-route handler for creating routes from image labels
-	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, cfg.Server.RegistryDomain).
+	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, cfg.Server.GordonDomain).
 		WithEnvExtractor(svc.runtime, svc.envDir)
 
 	// Preview handler for creating preview environments from tagged images
@@ -1616,9 +1612,6 @@ func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, lo
 		if err := v.Unmarshal(&reloadCfg); err != nil {
 			log.Error().Err(err).Msg("failed to unmarshal config on reload")
 			return
-		}
-		if reloadCfg.Server.GordonDomain != "" {
-			reloadCfg.Server.RegistryDomain = reloadCfg.Server.GordonDomain
 		}
 		reloadedProxy, err := buildProxyConfig(reloadCfg, log)
 		if err != nil {

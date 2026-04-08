@@ -68,10 +68,6 @@ Commands are organized by where they run:
 	serveCmd.GroupID = groupServer
 	rootCmd.AddCommand(serveCmd)
 
-	startCmd := newStartCmd() // Deprecated alias for serve
-	startCmd.GroupID = groupServer
-	rootCmd.AddCommand(startCmd)
-
 	authCmd := newAuthCmd()
 	authCmd.GroupID = groupServer
 	rootCmd.AddCommand(authCmd)

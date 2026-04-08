@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,46 +42,46 @@ func TestRegistryCIDRAllowlist(t *testing.T) {
 		},
 		{
 			name:        "allowed IP returns 200",
-			allowedNets: ParseTrustedProxies([]string{"100.64.0.0/10"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"100.64.0.0/10"}),
 			remoteAddr:  "100.100.1.1:1234",
 			wantStatus:  http.StatusOK,
 		},
 		{
 			name:        "denied IP returns 403",
-			allowedNets: ParseTrustedProxies([]string{"100.64.0.0/10"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"100.64.0.0/10"}),
 			remoteAddr:  "203.0.113.50:1234",
 			wantStatus:  http.StatusForbidden,
 		},
 		{
 			name:        "localhost always allowed even when not in allowlist",
-			allowedNets: ParseTrustedProxies([]string{"100.64.0.0/10"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"100.64.0.0/10"}),
 			remoteAddr:  "127.0.0.1:1234",
 			wantStatus:  http.StatusOK,
 		},
 		{
 			name:        "127.x.x.x always allowed",
-			allowedNets: ParseTrustedProxies([]string{"100.64.0.0/10"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"100.64.0.0/10"}),
 			remoteAddr:  "127.0.0.2:1234",
 			wantStatus:  http.StatusOK,
 		},
 		{
 			name:        "IPv6 localhost always allowed",
-			allowedNets: ParseTrustedProxies([]string{"100.64.0.0/10"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"100.64.0.0/10"}),
 			remoteAddr:  "[::1]:1234",
 			wantStatus:  http.StatusOK,
 		},
 		{
 			name:        "trusted proxy forwards allowed client IP",
-			allowedNets: ParseTrustedProxies([]string{"100.64.0.0/10"}),
-			trustedNets: ParseTrustedProxies([]string{"10.0.0.1"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"100.64.0.0/10"}),
+			trustedNets: httphelper.ParseTrustedProxies([]string{"10.0.0.1"}),
 			remoteAddr:  "10.0.0.1:1234",
 			xff:         "100.100.1.1",
 			wantStatus:  http.StatusOK,
 		},
 		{
 			name:        "trusted proxy forwards denied client IP",
-			allowedNets: ParseTrustedProxies([]string{"100.64.0.0/10"}),
-			trustedNets: ParseTrustedProxies([]string{"10.0.0.1"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"100.64.0.0/10"}),
+			trustedNets: httphelper.ParseTrustedProxies([]string{"10.0.0.1"}),
 			remoteAddr:  "10.0.0.1:1234",
 			xff:         "203.0.113.50",
 			wantStatus:  http.StatusForbidden,
@@ -227,25 +228,25 @@ func TestProxyCIDRAllowlist(t *testing.T) {
 		},
 		{
 			name:        "allowed IP gets redirect",
-			allowedNets: ParseTrustedProxies([]string{"173.245.48.0/20"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"173.245.48.0/20"}),
 			remoteAddr:  "173.245.48.1:1234",
 			wantStatus:  http.StatusPermanentRedirect,
 		},
 		{
 			name:        "blocked IP gets 403",
-			allowedNets: ParseTrustedProxies([]string{"173.245.48.0/20"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"173.245.48.0/20"}),
 			remoteAddr:  "203.0.113.50:1234",
 			wantStatus:  http.StatusForbidden,
 		},
 		{
 			name:        "localhost always allowed",
-			allowedNets: ParseTrustedProxies([]string{"173.245.48.0/20"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"173.245.48.0/20"}),
 			remoteAddr:  "127.0.0.1:1234",
 			wantStatus:  http.StatusPermanentRedirect,
 		},
 		{
 			name:        "ignores XFF (uses RemoteAddr only)",
-			allowedNets: ParseTrustedProxies([]string{"173.245.48.0/20"}),
+			allowedNets: httphelper.ParseTrustedProxies([]string{"173.245.48.0/20"}),
 			remoteAddr:  "203.0.113.50:1234",
 			wantStatus:  http.StatusForbidden,
 		},
