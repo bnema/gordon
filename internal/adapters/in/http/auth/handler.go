@@ -12,7 +12,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
-	"github.com/bnema/gordon/internal/adapters/in/http/httputil"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -166,7 +166,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) authenticateTokenCredentials(ctx context.Context, r *http.Request, username, password string, log zerowrap.Logger) (bool, *domain.TokenClaims) {
-	if httputil.IsLocalhostRequest(r) && h.isInternalAuth(username, password) {
+	if httphelper.IsLocalhostRequest(r) && h.isInternalAuth(username, password) {
 		log.Debug().Str("username", username).Msg("internal registry auth accepted")
 		return true, &domain.TokenClaims{
 			Subject: username,

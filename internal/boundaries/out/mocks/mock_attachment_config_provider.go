@@ -80,52 +80,6 @@ func (_c *MockAttachmentConfigProvider_GetAttachmentConfig_Call) RunAndReturn(ru
 	return _c
 }
 
-// GetAttachments provides a mock function for the type MockAttachmentConfigProvider
-func (_mock *MockAttachmentConfigProvider) GetAttachments() map[string][]string {
-	ret := _mock.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetAttachments")
-	}
-
-	var r0 map[string][]string
-	if returnFunc, ok := ret.Get(0).(func() map[string][]string); ok {
-		r0 = returnFunc()
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(map[string][]string)
-		}
-	}
-	return r0
-}
-
-// MockAttachmentConfigProvider_GetAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAttachments'
-type MockAttachmentConfigProvider_GetAttachments_Call struct {
-	*mock.Call
-}
-
-// GetAttachments is a helper method to define mock.On call
-func (_e *MockAttachmentConfigProvider_Expecter) GetAttachments() *MockAttachmentConfigProvider_GetAttachments_Call {
-	return &MockAttachmentConfigProvider_GetAttachments_Call{Call: _e.mock.On("GetAttachments")}
-}
-
-func (_c *MockAttachmentConfigProvider_GetAttachments_Call) Run(run func()) *MockAttachmentConfigProvider_GetAttachments_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *MockAttachmentConfigProvider_GetAttachments_Call) Return(stringToStrings map[string][]string) *MockAttachmentConfigProvider_GetAttachments_Call {
-	_c.Call.Return(stringToStrings)
-	return _c
-}
-
-func (_c *MockAttachmentConfigProvider_GetAttachments_Call) RunAndReturn(run func() map[string][]string) *MockAttachmentConfigProvider_GetAttachments_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetNetworkGroups provides a mock function for the type MockAttachmentConfigProvider
 func (_mock *MockAttachmentConfigProvider) GetNetworkGroups() map[string][]string {
 	ret := _mock.Called()

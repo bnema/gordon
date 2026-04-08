@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -56,6 +57,28 @@ func TestAccessLogger_EmitsEntryPerRequest(t *testing.T) {
 	assert.Equal(t, "HTTP/1.1", e.Proto)
 	assert.NotEmpty(t, e.RequestID)
 	assert.Equal(t, "192.168.1.100", e.ClientIP)
+}
+
+func TestAccessLogger_RedactsSensitiveQueryParams(t *testing.T) {
+	mock := &mockAccessLogWriter{}
+	log := testLogger()
+
+	handler := AccessLogger(mock, false, log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/oauth/callback?code=secret-code&state=ok&token=secret-token&api_key=top-secret&session_id=session-secret")
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, resp.Body.Close())
+	}()
+	_, err = io.Copy(io.Discard, resp.Body)
+	require.NoError(t, err)
+
+	require.Len(t, mock.entries, 1)
+	assert.Equal(t, "code=[REDACTED]&state=ok&token=[REDACTED]&api_key=[REDACTED]&session_id=[REDACTED]", mock.entries[0].Query)
 }
 
 func TestAccessLogger_RequestIDReused(t *testing.T) {

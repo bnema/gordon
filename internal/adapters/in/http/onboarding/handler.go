@@ -6,7 +6,7 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 )
 
 // Handler serves CA onboarding endpoints for direct/Tailnet clients.
@@ -49,7 +49,7 @@ func (h *Handler) ServeMobileconfig(w http.ResponseWriter, _ *http.Request) {
 // publicHTTPSURL derives the public HTTPS URL from the request Host header.
 // The result is HTML-escaped to prevent XSS via a crafted Host header.
 func (h *Handler) publicHTTPSURL(r *http.Request) string {
-	authority := middleware.HTTPSAuthority(r.Host, h.httpPort, h.tlsPort)
+	authority := httphelper.HTTPSAuthority(r.Host, h.httpPort, h.tlsPort)
 	return html.EscapeString("https://" + authority + "/")
 }
 

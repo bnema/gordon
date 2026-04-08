@@ -933,19 +933,6 @@ func (s *Service) GetAttachmentConfig() out.AttachmentConfigSnapshot {
 	}
 }
 
-// GetAttachments returns attachment configuration.
-// Deprecated: Use GetAllAttachments instead.
-func (s *Service) GetAttachments() map[string][]string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	result := make(map[string][]string)
-	for k, v := range s.config.Attachments {
-		result[k] = append([]string{}, v...)
-	}
-	return result
-}
-
 // GetAllAttachments returns all configured attachments.
 func (s *Service) GetAllAttachments(_ context.Context) map[string][]string {
 	s.mu.RLock()

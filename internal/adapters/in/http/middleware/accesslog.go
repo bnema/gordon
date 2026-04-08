@@ -3,11 +3,13 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/bnema/zerowrap"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	out "github.com/bnema/gordon/internal/boundaries/out"
 )
 
@@ -40,11 +42,10 @@ func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zero
 			// Apply health-check exclusion after the response so the request
 			// always completes — we just skip writing the log entry.
 			// UA check uses the shared domain constant so the prober and this
-			// filter can never drift. Loopback check reuses localhostNets from
-			// cidr.go (same package) — no separate loopback definition needed.
+			// filter can never drift. Loopback check uses the shared helper list.
 			if excludeHealthChecks {
 				if strings.HasPrefix(r.UserAgent(), out.HealthCheckUserAgentPrefix) ||
-					IsTrustedProxy(clientIP, localhostNets) {
+					httphelper.IsTrustedProxy(clientIP, httphelper.LocalhostNets) {
 					return
 				}
 			}
@@ -60,7 +61,7 @@ func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zero
 				Method:     r.Method,
 				Host:       r.Host,
 				Path:       r.URL.Path,
-				Query:      r.URL.RawQuery,
+				Query:      sanitizeLoggedQuery(r.URL.RawQuery),
 				Status:     rw.StatusCode(),
 				BytesSent:  rw.BytesWritten(),
 				DurationMS: durationMS,
@@ -83,5 +84,45 @@ func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zero
 					Msg("access log write failed")
 			}
 		})
+	}
+}
+
+func sanitizeLoggedQuery(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+
+	parts := strings.Split(rawQuery, "&")
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+
+		key, _, found := strings.Cut(part, "=")
+		decodedKey, err := url.QueryUnescape(key)
+		if err != nil {
+			decodedKey = key
+		}
+
+		if !isSensitiveQueryKey(decodedKey) {
+			continue
+		}
+
+		if found {
+			parts[i] = key + "=[REDACTED]"
+		} else {
+			parts[i] = key
+		}
+	}
+
+	return strings.Join(parts, "&")
+}
+
+func isSensitiveQueryKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "access_token", "api_key", "apikey", "auth", "bearer", "code", "credential", "credentials", "key", "password", "private_key", "refresh_token", "reset", "secret", "session", "session_id", "sig", "signature", "token":
+		return true
+	default:
+		return false
 	}
 }

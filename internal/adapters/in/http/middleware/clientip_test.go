@@ -6,15 +6,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGetClientIP(t *testing.T) {
 	// Parse trusted proxies for tests
-	trustedNets := ParseTrustedProxies([]string{"127.0.0.1", "10.0.0.0/8"})
+	trustedNets := httphelper.ParseTrustedProxies([]string{"127.0.0.1", "10.0.0.0/8"})
 	noTrustedNets := []*net.IPNet{}
 	// Include a Cloudflare IP in trusted proxies to test Cf-Connecting-Ip
-	trustedWithCF := ParseTrustedProxies([]string{"127.0.0.1", "10.0.0.0/8", "173.245.48.0/20"})
+	trustedWithCF := httphelper.ParseTrustedProxies([]string{"127.0.0.1", "10.0.0.0/8", "173.245.48.0/20"})
 
 	tests := []struct {
 		name        string
@@ -216,8 +217,8 @@ func TestParseTrustedProxies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			nets := ParseTrustedProxies(tt.proxies)
-			got := IsTrustedProxy(tt.testIP, nets)
+			nets := httphelper.ParseTrustedProxies(tt.proxies)
+			got := httphelper.IsTrustedProxy(tt.testIP, nets)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -245,20 +246,20 @@ func TestIsTrustedProxy(t *testing.T) {
 		{
 			name:        "invalid IP",
 			ip:          "not-an-ip",
-			trustedNets: ParseTrustedProxies([]string{"192.168.1.0/24"}),
+			trustedNets: httphelper.ParseTrustedProxies([]string{"192.168.1.0/24"}),
 			want:        false,
 		},
 		{
 			name:        "empty IP",
 			ip:          "",
-			trustedNets: ParseTrustedProxies([]string{"192.168.1.0/24"}),
+			trustedNets: httphelper.ParseTrustedProxies([]string{"192.168.1.0/24"}),
 			want:        false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := IsTrustedProxy(tt.ip, tt.trustedNets)
+			got := httphelper.IsTrustedProxy(tt.ip, tt.trustedNets)
 			assert.Equal(t, tt.want, got)
 		})
 	}

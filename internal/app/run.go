@@ -46,6 +46,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/http/admin"
 	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/adapters/in/http/onboarding"
 	proxyadapter "github.com/bnema/gordon/internal/adapters/in/http/proxy"
@@ -88,7 +89,6 @@ type Config struct {
 		Port                 int      `mapstructure:"port"`
 		RegistryPort         int      `mapstructure:"registry_port"`
 		GordonDomain         string   `mapstructure:"gordon_domain"`
-		RegistryDomain       string   `mapstructure:"registry_domain"` // Deprecated: use gordon_domain
 		TLSPort              int      `mapstructure:"tls_port"`
 		TLSCertFile          string   `mapstructure:"tls_cert_file"`
 		TLSKeyFile           string   `mapstructure:"tls_key_file"`
@@ -312,11 +312,6 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, Config{}, fmt.Errorf("failed to unmarshal config: %w", err)
-	}
-
-	// Normalize domain config: prefer gordon_domain over registry_domain
-	if cfg.Server.GordonDomain != "" {
-		cfg.Server.RegistryDomain = cfg.Server.GordonDomain
 	}
 
 	return v, cfg, nil
@@ -1385,7 +1380,7 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 
 	return &proxyConfigResult{
 		proxyConfig: proxy.Config{
-			RegistryDomain:     cfg.Server.RegistryDomain,
+			RegistryDomain:     cfg.Server.GordonDomain,
 			RegistryPort:       cfg.Server.RegistryPort,
 			MaxBodySize:        maxProxyBodySize,
 			MaxResponseSize:    maxProxyResponseSize,
@@ -1420,9 +1415,11 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		defaultNanoCPUs = int64(cfg.Containers.CPULimit * 1e9)
 	}
 
+	attachmentConfig := svc.configSvc.GetAttachmentConfig()
+
 	containerConfig := container.Config{
 		RegistryAuthEnabled:        cfg.Auth.Enabled,
-		RegistryDomain:             cfg.Server.RegistryDomain,
+		RegistryDomain:             cfg.Server.GordonDomain,
 		RegistryPort:               cfg.Server.RegistryPort,
 		InternalRegistryUsername:   svc.internalRegUser,
 		InternalRegistryPassword:   svc.internalRegPass,
@@ -1432,8 +1429,8 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		VolumePreserve:             v.GetBool("volumes.preserve"),
 		NetworkIsolation:           v.GetBool("network_isolation.enabled"),
 		NetworkPrefix:              v.GetString("network_isolation.network_prefix"),
-		NetworkGroups:              svc.configSvc.GetNetworkGroups(),
-		Attachments:                svc.configSvc.GetAttachments(),
+		NetworkGroups:              attachmentConfig.NetworkGroups,
+		Attachments:                attachmentConfig.Attachments,
 		ReadinessDelay:             v.GetDuration("deploy.readiness_delay"),
 		ReadinessMode:              v.GetString("deploy.readiness_mode"),
 		HealthTimeout:              v.GetDuration("deploy.health_timeout"),
@@ -1546,7 +1543,7 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	}
 
 	// Auto-route handler for creating routes from image labels
-	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, cfg.Server.RegistryDomain).
+	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, cfg.Server.GordonDomain).
 		WithEnvExtractor(svc.runtime, svc.envDir)
 
 	// Preview handler for creating preview environments from tagged images
@@ -1616,9 +1613,6 @@ func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, lo
 			log.Error().Err(err).Msg("failed to unmarshal config on reload")
 			return
 		}
-		if reloadCfg.Server.GordonDomain != "" {
-			reloadCfg.Server.RegistryDomain = reloadCfg.Server.GordonDomain
-		}
 		reloadedProxy, err := buildProxyConfig(reloadCfg, log)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to parse proxy config on reload")
@@ -1680,7 +1674,7 @@ func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWriter out.AccessLogWriter) (http.Handler, http.Handler, http.Handler) {
 	// Parse trusted proxies once for all middleware chains.
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
-	trustedNets := middleware.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
+	trustedNets := httphelper.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 
 	// Registry handler (unchanged)
 	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize)
@@ -1812,8 +1806,8 @@ func directHTTPOnboardingGate(ob *onboarding.Handler, proxyNets []*net.IPNet, pr
 	)(onboardingMux)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		remoteIP := middleware.ExtractRemoteIP(r.RemoteAddr)
-		if middleware.IsTrustedOrLocal(remoteIP, proxyNets) {
+		remoteIP := httphelper.ExtractRemoteIP(r.RemoteAddr)
+		if httphelper.IsTrustedOrLocal(remoteIP, proxyNets) {
 			proxyChain.ServeHTTP(w, r)
 			return
 		}
@@ -1868,10 +1862,10 @@ func parseCIDRAllowlist(ips []string, label string, log zerowrap.Logger) ([]*net
 		return nil, false
 	}
 
-	allowedNets := middleware.ParseTrustedProxies(ips)
+	allowedNets := httphelper.ParseTrustedProxies(ips)
 	if len(allowedNets) != len(ips) {
 		for _, entry := range ips {
-			if nets := middleware.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
+			if nets := httphelper.ParseTrustedProxies([]string{entry}); len(nets) == 0 {
 				log.Warn().Str("entry", entry).Msgf("ignoring invalid %s entry", label)
 			}
 		}

@@ -835,10 +835,13 @@ func isPullFailure(err error) bool {
 		return false
 	}
 
+	if errors.Is(err, domain.ErrImagePullFailed) {
+		return true
+	}
+
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "failed to pull image") ||
-		strings.Contains(msg, "pull access denied") ||
-		strings.Contains(msg, "unauthorized")
+		strings.Contains(msg, "pull access denied")
 }
 
 func (s *Service) activateDeployedContainer(ctx context.Context, domainName string, container *domain.Container) bool {
@@ -1911,24 +1914,24 @@ func (s *Service) pullImage(ctx context.Context, pullRef string, isInternal bool
 		if err := s.pullImageWithRetry(ctx, func(ctx context.Context) error {
 			return s.runtime.PullImageWithAuth(ctx, pullRef, cfg.InternalRegistryUsername, cfg.InternalRegistryPassword)
 		}, isInternal); err != nil {
-			return log.WrapErr(err, "failed to pull image with internal auth")
+			return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image with internal auth")
 		}
 	case isInternal:
 		if err := s.pullImageWithRetry(ctx, func(ctx context.Context) error {
 			return s.runtime.PullImage(ctx, pullRef)
 		}, isInternal); err != nil {
-			return log.WrapErr(err, "failed to pull image")
+			return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image")
 		}
 	case cfg.RegistryAuthEnabled:
 		if cfg.ServiceTokenUsername == "" || cfg.ServiceToken == "" {
 			return log.WrapErr(fmt.Errorf("registry service token not configured"), "failed to pull image for registry auth")
 		}
 		if err := s.runtime.PullImageWithAuth(ctx, pullRef, cfg.ServiceTokenUsername, cfg.ServiceToken); err != nil {
-			return log.WrapErr(err, "failed to pull image with auth")
+			return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image with auth")
 		}
 	default:
 		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
-			return log.WrapErr(err, "failed to pull image")
+			return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image")
 		}
 	}
 

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
+	boundaryout "github.com/bnema/gordon/internal/boundaries/out"
 )
 
 func newCACmd() *cobra.Command {
@@ -108,7 +109,7 @@ func resolveCADataDir() (string, error) {
 // loadCAFromDataDir creates a CA adapter directly (bypassing the usecase layer).
 // This is intentional: CLI commands like 'ca export' and 'ca info' are standalone
 // admin utilities that run outside the server lifecycle and don't need business logic.
-func loadCAFromDataDir(dataDir string) (*pkiadapter.CA, error) {
+func loadCAFromDataDir(dataDir string) (boundaryout.CertificateAuthority, error) {
 	ca, err := pkiadapter.NewCA(dataDir, cliLogger())
 	if err != nil {
 		return nil, fmt.Errorf("failed to load CA from %s: %w", dataDir, err)
@@ -155,7 +156,7 @@ func runCAInstall(_ context.Context, out io.Writer, dataDir string, uninstall, j
 	}
 
 	if uninstall {
-		if err := pkiadapter.UninstallRoot(cert); err != nil {
+		if err := ca.UninstallRoot(cert); err != nil {
 			return fmt.Errorf("failed to uninstall root CA: %w", err)
 		}
 		if jsonOut {
@@ -164,7 +165,7 @@ func runCAInstall(_ context.Context, out io.Writer, dataDir string, uninstall, j
 		return cliWriteLine(out, cliRenderSuccess("Root CA removed from system trust stores"))
 	}
 
-	if err := pkiadapter.InstallRoot(cert); err != nil {
+	if err := ca.InstallRoot(cert); err != nil {
 		return fmt.Errorf("failed to install root CA: %w", err)
 	}
 	if jsonOut {

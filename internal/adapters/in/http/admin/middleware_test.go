@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -78,7 +78,7 @@ func TestAuthMiddleware_TrustedProxy(t *testing.T) {
 	ipLimiter := outmocks.NewMockRateLimiter(t)
 
 	// Request from trusted proxy, should use X-Forwarded-For IP
-	trustedNets := middleware.ParseTrustedProxies([]string{"127.0.0.1"})
+	trustedNets := httphelper.ParseTrustedProxies([]string{"127.0.0.1"})
 
 	globalLimiter.EXPECT().Allow(context.Background(), "global").Return(true)
 	ipLimiter.EXPECT().Allow(context.Background(), "ip:203.0.113.50").Return(true)

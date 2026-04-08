@@ -232,6 +232,15 @@ Examples:
 	return cmd
 }
 
+func resolveRequiredRemote(flagToken string) (*remote.ResolvedRemote, error) {
+	resolved, isRemote := remote.Resolve(remoteFlag, flagToken, insecureTLSFlag)
+	if !isRemote {
+		return nil, fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
+	}
+
+	return resolved, nil
+}
+
 func runAuthLoginWithToken(ctx context.Context, token string, out io.Writer) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -239,9 +248,9 @@ func runAuthLoginWithToken(ctx context.Context, token string, out io.Writer) err
 	}
 
 	// Resolve remote — but use the new token (not the stored one) for verification.
-	resolved, isRemote := remote.Resolve(remoteFlag, "", insecureTLSFlag)
-	if !isRemote {
-		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
+	resolved, err := resolveRequiredRemote("")
+	if err != nil {
+		return err
 	}
 
 	client := remote.NewClient(resolved.URL, remoteClientOptions(token, resolved.InsecureTLS)...)
@@ -271,9 +280,9 @@ func runAuthLoginWithToken(ctx context.Context, token string, out io.Writer) err
 }
 
 func runAuthLoginVerify(ctx context.Context, out io.Writer) error {
-	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
-	if !isRemote {
-		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
+	resolved, err := resolveRequiredRemote(tokenFlag)
+	if err != nil {
+		return err
 	}
 	if resolved.Token == "" {
 		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token <token>", resolved.DisplayName())
@@ -317,9 +326,9 @@ Examples:
 }
 
 func runAuthShowToken(out io.Writer) error {
-	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
-	if !isRemote {
-		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
+	resolved, err := resolveRequiredRemote(tokenFlag)
+	if err != nil {
+		return err
 	}
 	if resolved.Token == "" {
 		return fmt.Errorf("no token found for remote '%s'", resolved.DisplayName())
@@ -355,9 +364,9 @@ Examples:
 }
 
 func runAuthLogout(out io.Writer) error {
-	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
-	if !isRemote {
-		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
+	resolved, err := resolveRequiredRemote(tokenFlag)
+	if err != nil {
+		return err
 	}
 	if resolved.Name == "" {
 		return fmt.Errorf("cannot logout from ad-hoc URL. Use 'gordon remotes add' to save this remote first")
@@ -700,9 +709,9 @@ Examples:
 
 // runAuthStatus checks authentication status for the active remote.
 func runAuthStatus(ctx context.Context) error {
-	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
-	if !isRemote {
-		return fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
+	resolved, err := resolveRequiredRemote(tokenFlag)
+	if err != nil {
+		return err
 	}
 
 	client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)

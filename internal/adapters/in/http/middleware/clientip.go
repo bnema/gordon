@@ -4,12 +4,14 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 )
 
 // cloudflareNets contains Cloudflare's published IPv4 and IPv6 ranges.
 // Cf-Connecting-Ip is only trusted when the immediate upstream matches these.
 // Source: https://www.cloudflare.com/ips/
-var cloudflareNets = ParseTrustedProxies([]string{
+var cloudflareNets = httphelper.ParseTrustedProxies([]string{
 	// IPv4
 	"173.245.48.0/20",
 	"103.21.244.0/22",
@@ -54,50 +56,6 @@ func normalizeIP(raw string) string {
 	return parsed.String()
 }
 
-// ParseTrustedProxies converts a list of IP addresses and CIDR ranges to net.IPNet.
-// It accepts both single IPs (e.g., "10.0.0.1") and CIDR notation (e.g., "10.0.0.0/8").
-// Single IPs are converted to /32 (IPv4) or /128 (IPv6) CIDR blocks.
-func ParseTrustedProxies(proxies []string) []*net.IPNet {
-	var nets []*net.IPNet
-	for _, proxy := range proxies {
-		// Try parsing as CIDR
-		_, ipNet, err := net.ParseCIDR(proxy)
-		if err == nil {
-			nets = append(nets, ipNet)
-			continue
-		}
-		// Try parsing as single IP
-		ip := net.ParseIP(proxy)
-		if ip != nil {
-			// Convert single IP to /32 or /128 CIDR
-			bits := 32
-			if ip.To4() == nil {
-				bits = 128
-			}
-			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
-		}
-	}
-	return nets
-}
-
-// IsTrustedProxy checks if the given IP address is from a trusted proxy.
-// Returns false if trustedNets is empty or the IP cannot be parsed.
-func IsTrustedProxy(ip string, trustedNets []*net.IPNet) bool {
-	if len(trustedNets) == 0 {
-		return false
-	}
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
-		return false
-	}
-	for _, ipNet := range trustedNets {
-		if ipNet.Contains(parsedIP) {
-			return true
-		}
-	}
-	return false
-}
-
 // GetClientIP extracts the client IP address from the request.
 // It only honors X-Forwarded-For and X-Real-IP headers when the request
 // originates from a trusted proxy. This prevents attackers from spoofing
@@ -113,12 +71,12 @@ func GetClientIP(r *http.Request, trustedNets []*net.IPNet) string {
 	}
 
 	// Only honor proxy headers if the request comes from a trusted proxy
-	if IsTrustedProxy(remoteIP, trustedNets) {
+	if httphelper.IsTrustedProxy(remoteIP, trustedNets) {
 		// Cf-Connecting-IP is set by Cloudflare to the true client IP.
 		// Only trust it when the immediate upstream is a known Cloudflare IP,
 		// not any generic trusted proxy (e.g. local LB/nginx), because a
 		// non-Cloudflare proxy would blindly forward a spoofed header.
-		if IsTrustedProxy(remoteIP, cloudflareNets) {
+		if httphelper.IsTrustedProxy(remoteIP, cloudflareNets) {
 			if cfIP := r.Header.Get("Cf-Connecting-Ip"); cfIP != "" {
 				if ip := normalizeIP(cfIP); ip != "" {
 					return ip
@@ -140,7 +98,7 @@ func GetClientIP(r *http.Request, trustedNets []*net.IPNet) string {
 			}
 
 			for i := len(validChain) - 1; i >= 0; i-- {
-				if !IsTrustedProxy(validChain[i], trustedNets) {
+				if !httphelper.IsTrustedProxy(validChain[i], trustedNets) {
 					return validChain[i]
 				}
 			}

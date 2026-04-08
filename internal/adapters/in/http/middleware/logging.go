@@ -130,7 +130,7 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 				Str("request_id", requestID).
 				Str(zerowrap.FieldMethod, r.Method).
 				Str(zerowrap.FieldPath, r.URL.Path).
-				Str("query", r.URL.RawQuery).
+				Str("query", sanitizeLoggedQuery(r.URL.RawQuery)).
 				Str(zerowrap.FieldHost, r.Host).
 				Str("user_agent", r.UserAgent()).
 				Str("referer", r.Referer()).

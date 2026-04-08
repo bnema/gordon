@@ -8,6 +8,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/boundaries/out"
 )
@@ -29,7 +30,7 @@ func RateLimitMiddleware(
 	}
 
 	// Parse trusted proxy CIDRs once at middleware creation
-	trustedNets := middleware.ParseTrustedProxies(trustedProxies)
+	trustedNets := httphelper.ParseTrustedProxies(trustedProxies)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

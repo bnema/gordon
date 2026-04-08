@@ -244,10 +244,7 @@ func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route
 		}
 		return fmt.Errorf("failed to deploy (route reverted): %w", err)
 	}
-	containerID := result.ContainerID
-	if len(containerID) > 12 {
-		containerID = containerID[:12]
-	}
+	containerID := shortContainerID(result.ContainerID)
 	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Rolled back %s to %s (container: %s)", rollbackDomain, selectedTag, containerID)))
 	return nil
 }
