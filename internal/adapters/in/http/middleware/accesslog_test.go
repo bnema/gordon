@@ -69,7 +69,7 @@ func TestAccessLogger_RedactsSensitiveQueryParams(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/oauth/callback?code=secret-code&state=ok&token=secret-token")
+	resp, err := http.Get(server.URL + "/oauth/callback?code=secret-code&state=ok&token=secret-token&api_key=top-secret&session_id=session-secret")
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, resp.Body.Close())
@@ -78,7 +78,7 @@ func TestAccessLogger_RedactsSensitiveQueryParams(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, mock.entries, 1)
-	assert.Equal(t, "code=[REDACTED]&state=ok&token=[REDACTED]", mock.entries[0].Query)
+	assert.Equal(t, "code=[REDACTED]&state=ok&token=[REDACTED]&api_key=[REDACTED]&session_id=[REDACTED]", mock.entries[0].Query)
 }
 
 func TestAccessLogger_RequestIDReused(t *testing.T) {

@@ -13,9 +13,6 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 )
 
-// localhostNets contains IPv4 and IPv6 loopback ranges that are always allowed.
-var localhostNets = httphelper.ParseTrustedProxies([]string{"127.0.0.0/8", "::1"})
-
 // cidrAllowlist is the shared implementation for CIDR-based access control middleware.
 // ipExtractor determines how the client IP is obtained from the request.
 // logLabel is used in the deny log message (e.g. "registry", "proxy origin").
@@ -27,7 +24,7 @@ func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) str
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			clientIP := ipExtractor(r)
 
-			if httphelper.IsTrustedProxy(clientIP, localhostNets) {
+			if httphelper.IsTrustedProxy(clientIP, httphelper.LocalhostNets) {
 				next.ServeHTTP(w, r)
 				return
 			}

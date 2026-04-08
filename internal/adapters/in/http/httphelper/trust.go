@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// localhostNets contains IPv4 and IPv6 loopback ranges.
-var localhostNets = ParseTrustedProxies([]string{"127.0.0.0/8", "::1"})
+// LocalhostNets contains IPv4 and IPv6 loopback ranges.
+var LocalhostNets = ParseTrustedProxies([]string{"127.0.0.0/8", "::1"})
 
 // ParseTrustedProxies converts a list of IP addresses and CIDR ranges to [net.IPNet].
 // It accepts both single IPs (e.g., "10.0.0.1") and CIDR notation (e.g., "10.0.0.0/8").
@@ -62,7 +62,7 @@ func IsTrustedProxy(ip string, trustedNets []*net.IPNet) bool {
 // IsTrustedOrLocal reports whether an IP belongs to localhost or the given
 // trusted proxy networks.
 func IsTrustedOrLocal(ip string, proxyNets []*net.IPNet) bool {
-	return IsTrustedProxy(ip, localhostNets) || IsTrustedProxy(ip, proxyNets)
+	return IsTrustedProxy(ip, LocalhostNets) || IsTrustedProxy(ip, proxyNets)
 }
 
 // ExtractRemoteIP returns the IP portion of an [http.Request.RemoteAddr],

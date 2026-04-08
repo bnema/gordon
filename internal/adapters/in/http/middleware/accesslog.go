@@ -42,11 +42,10 @@ func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zero
 			// Apply health-check exclusion after the response so the request
 			// always completes — we just skip writing the log entry.
 			// UA check uses the shared domain constant so the prober and this
-			// filter can never drift. Loopback check reuses localhostNets from
-			// cidr.go (same package) — no separate loopback definition needed.
+			// filter can never drift. Loopback check uses the shared helper list.
 			if excludeHealthChecks {
 				if strings.HasPrefix(r.UserAgent(), out.HealthCheckUserAgentPrefix) ||
-					httphelper.IsTrustedProxy(clientIP, localhostNets) {
+					httphelper.IsTrustedProxy(clientIP, httphelper.LocalhostNets) {
 					return
 				}
 			}
@@ -121,7 +120,7 @@ func sanitizeLoggedQuery(rawQuery string) string {
 
 func isSensitiveQueryKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "access_token", "auth", "code", "key", "password", "refresh_token", "reset", "secret", "sig", "signature", "token":
+	case "access_token", "api_key", "apikey", "auth", "bearer", "code", "credential", "credentials", "key", "password", "private_key", "refresh_token", "reset", "secret", "session", "session_id", "sig", "signature", "token":
 		return true
 	default:
 		return false
