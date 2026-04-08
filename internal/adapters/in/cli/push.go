@@ -681,10 +681,7 @@ func deployAfterPush(ctx context.Context, cp ControlPlane, pushDomain string, no
 	if err != nil {
 		return formatDeployFailure(err)
 	}
-	containerID := result.ContainerID
-	if len(containerID) > 12 {
-		containerID = containerID[:12]
-	}
+	containerID := shortContainerID(result.ContainerID)
 	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", pushDomain, containerID)))
 	return nil
 }

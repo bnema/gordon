@@ -56,14 +56,15 @@ func structuredDeployFailure(err error) (error, bool) {
 
 func renderDeployFailure(summary, cause, hint string, logs []string) string {
 	if summary == "" {
-		summary = "failed to deploy"
+		summary = domain.DefaultDeployFailureSummary
 	}
 
 	var b strings.Builder
-	if summary == "failed to deploy" {
+	if summary == domain.DefaultDeployFailureSummary {
 		b.WriteString(summary)
 	} else {
-		b.WriteString("failed to deploy: ")
+		b.WriteString(domain.DefaultDeployFailureSummary)
+		b.WriteString(": ")
 		b.WriteString(summary)
 	}
 

@@ -1,5 +1,7 @@
 package domain
 
+const DefaultDeployFailureSummary = "failed to deploy"
+
 // DeployFailureError describes a surfaced deployment failure.
 type DeployFailureError struct {
 	Summary       string
@@ -14,7 +16,7 @@ type DeployFailureError struct {
 // Error returns the deploy failure summary.
 func (e *DeployFailureError) Error() string {
 	if e == nil || e.Summary == "" {
-		return "failed to deploy"
+		return DefaultDeployFailureSummary
 	}
 
 	return e.Summary

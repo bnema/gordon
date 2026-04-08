@@ -71,10 +71,7 @@ func runDeploy(ctx context.Context, deployer deployer, isRemote bool, deployDoma
 		messageDomain = result.Domain
 	}
 
-	containerID := result.ContainerID
-	if containerID != "" && len(containerID) > 12 {
-		containerID = containerID[:12]
-	}
+	containerID := shortContainerID(result.ContainerID)
 
 	switch result.Status {
 	case "deployed":
