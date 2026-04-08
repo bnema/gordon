@@ -499,7 +499,14 @@ func TestService_Deploy_ImagePullFailure(t *testing.T) {
 	assert.Equal(t, "verify registry auth and confirm the image exists at the requested tag", deployErr.Hint)
 	assert.Equal(t, "gordon-test.example.com", deployErr.ContainerName)
 	assert.Empty(t, deployErr.ContainerID)
+	assert.ErrorIs(t, deployErr.Err, domain.ErrImagePullFailed)
 	assert.ErrorContains(t, deployErr.Err, "failed to pull image")
+}
+
+func TestIsPullFailure_ErrImagePullFailed(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", domain.ErrImagePullFailed)
+
+	assert.True(t, isPullFailure(err))
 }
 
 func TestService_Deploy_DoesNotMisclassifyUnauthorizedEnvLoadFailure(t *testing.T) {

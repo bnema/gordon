@@ -468,7 +468,7 @@ func (r *Runtime) PullImage(ctx context.Context, imageRef string) error {
 
 	reader, err := r.client.ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
-		return log.WrapErr(err, "failed to pull image")
+		return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image")
 	}
 	defer reader.Close()
 
@@ -528,7 +528,7 @@ func (r *Runtime) PullImageWithAuth(ctx context.Context, imageRef, username, pas
 		RegistryAuth: authStr,
 	})
 	if err != nil {
-		return log.WrapErr(err, "failed to pull image with auth")
+		return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image with auth")
 	}
 	defer reader.Close()
 
