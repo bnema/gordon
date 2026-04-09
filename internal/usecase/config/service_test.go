@@ -325,6 +325,66 @@ func TestService_AddRoute(t *testing.T) {
 		err := svc.AddRoute(ctx, route)
 		assert.ErrorIs(t, err, domain.ErrRouteImageEmpty)
 	})
+
+	t.Run("invalid domain - IP address", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "192.168.1.1",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - localhost", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "localhost",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - internal TLD", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "myapp.local",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - with port", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "example.com:8080",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
 }
 
 func TestService_UpdateRoute(t *testing.T) {
@@ -405,6 +465,46 @@ func TestService_UpdateRoute(t *testing.T) {
 
 		err := svc.UpdateRoute(ctx, route)
 		assert.ErrorIs(t, err, domain.ErrRouteImageEmpty)
+	})
+
+	t.Run("invalid domain - IP address", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]any{
+			"192.168.1.1": "myapp:v1",
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "192.168.1.1",
+			Image:  "myapp:v2",
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - localhost", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]any{
+			"localhost": "myapp:v1",
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "localhost",
+			Image:  "myapp:v2",
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
 	})
 }
 

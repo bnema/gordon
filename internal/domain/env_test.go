@@ -179,6 +179,37 @@ func TestValidateEnvKey(t *testing.T) {
 	}
 }
 
+func TestContainsSecretReference(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		expected bool
+	}{
+		{name: "simple pass reference", value: "${pass:myapp/db}", expected: true},
+		{name: "simple sops reference", value: "${sops:secrets.yaml#/key}", expected: true},
+		{name: "pass reference in text", value: "prefix-${pass:path}-suffix", expected: true},
+		{name: "sops reference in text", value: "${sops:file.yaml}", expected: true},
+		{name: "no reference - plain text", value: "hello world", expected: false},
+		{name: "no reference - dollar sign only", value: "$FOO", expected: false},
+		{name: "no reference - empty braces", value: "${}", expected: false},
+		{name: "no reference - missing colon", value: "${pass}", expected: false},
+		{name: "no reference - extra braces", value: "${{pass:path}}", expected: false},
+		{name: "normal env var", value: "${FOO}", expected: false},
+		{name: "value with equals and reference", value: "key=${pass:secret}", expected: true},
+		{name: "quoted reference", value: `"${pass:secret}"`, expected: true},
+		{name: "multiple references", value: "${pass:a}${sops:b}", expected: true},
+		{name: "case sensitive - uppercase", value: "${PASS:secret}", expected: false},
+		{name: "case sensitive - mixed", value: "${Pass:secret}", expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ContainsSecretReference(tt.value)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestValidateContainerName(t *testing.T) {
 	tests := []struct {
 		name        string

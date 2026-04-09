@@ -290,6 +290,15 @@ func (h *AutoRouteHandler) extractAndMergeEnvFile(ctx context.Context, imageRef,
 		return nil
 	}
 
+	// Security check: reject imported env files containing secret references
+	// to prevent attacker-controlled images from persisting ${provider:path}
+	// syntax that would later resolve against host secret providers.
+	for key, value := range imageEnv {
+		if domain.ContainsSecretReference(value) {
+			return fmt.Errorf("env key %q contains secret reference: %w", key, domain.ErrEnvContainsSecretRef)
+		}
+	}
+
 	// Load existing env file for this domain
 	envFileName, err := domainToEnvFileName(routeDomain)
 	if err != nil {

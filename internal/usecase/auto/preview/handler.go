@@ -53,33 +53,16 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 		return nil
 	}
 
-	// Extract labels from manifest
-	labels, err := auto.ExtractLabels(ctx, payload.Manifest, h.blobStorage)
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to extract labels, skipping preview handler")
-		return nil
-	}
-
 	previewConfig := h.config.GetPreviewConfig()
 	previewName := ExtractPreviewName(payload.Reference, previewConfig.TagPatterns)
 
-	// Resolve base route: labels first, then route config fallback.
-	// When falling back to routes, skip preview domains (they contain the separator)
-	// to avoid using a preview as the base for another preview.
-	domains := collectDomains(labels)
-	if len(domains) == 0 {
-		routes := h.config.FindRoutesByImage(ctx, payload.Name)
-		for _, r := range routes {
-			if !strings.Contains(r.Domain, previewConfig.Separator) {
-				domains = append(domains, r.Domain)
-			}
-		}
-	}
-	if len(domains) == 0 {
-		log.Debug().Str("image", payload.Name).Msg("no domain found from labels or routes, skipping preview")
+	// Use trusted routes only. See resolveBaseRoute.
+	routes := h.config.FindRoutesByImage(ctx, payload.Name)
+	baseRouteDomain := resolveBaseRoute(routes, previewConfig)
+	if baseRouteDomain == "" {
+		log.Debug().Str("image", payload.Name).Msg("no trusted route found for preview base, skipping")
 		return nil
 	}
-	baseRouteDomain := domains[0]
 
 	// Validate allowlist
 	allowedDomains := h.config.GetAllowedDomains()
@@ -112,11 +95,18 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 	return nil
 }
 
-func collectDomains(labels *domain.ImageLabels) []string {
-	var domains []string
-	if labels.Domain != "" {
-		domains = append(domains, labels.Domain)
+// resolveBaseRoute determines the base route for preview env/data inheritance.
+// Security: This MUST only use trusted route config, never untrusted image labels.
+// Labels are attacker-controlled and must not determine which route's env/data
+// is inherited by a preview.
+func resolveBaseRoute(routes []domain.Route, previewConfig domain.PreviewConfig) string {
+	// Always use trusted route config, ignoring labels entirely.
+	// Skip preview domains (they contain the separator) to avoid using
+	// a preview as the base for another preview.
+	for _, r := range routes {
+		if !strings.Contains(r.Domain, previewConfig.Separator) {
+			return r.Domain
+		}
 	}
-	domains = append(domains, labels.Domains...)
-	return domains
+	return ""
 }

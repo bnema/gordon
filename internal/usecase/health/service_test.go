@@ -182,3 +182,37 @@ func TestService_CheckAllRoutes_NoRoutes(t *testing.T) {
 
 	assert.Empty(t, results)
 }
+
+func TestService_CheckRoute_InvalidDomain_Blocked(t *testing.T) {
+	configSvc := mocks.NewMockConfigService(t)
+	containerSvc := mocks.NewMockContainerService(t)
+	prober := mocks.NewMockHTTPProber(t)
+
+	// No container lookup should happen for invalid domains
+	// No probe should happen either
+
+	svc := NewService(configSvc, containerSvc, prober, testLogger())
+
+	tests := []struct {
+		name   string
+		domain string
+	}{
+		{"IP address", "192.168.1.1"},
+		{"localhost", "localhost"},
+		{"local TLD", "myapp.local"},
+		{"internal TLD", "service.internal"},
+		{"with port", "example.com:8080"},
+		{"IPv6", "::1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			route := domain.Route{Domain: tt.domain, Image: "myapp:latest"}
+			health := svc.CheckRoute(context.Background(), route)
+
+			assert.Equal(t, tt.domain, health.Domain)
+			assert.False(t, health.Healthy)
+			assert.Equal(t, "invalid route domain for health probe", health.Error)
+		})
+	}
+}

@@ -52,6 +52,13 @@ func (s *Service) CheckRoute(ctx context.Context, route domain.Route) *domain.Ro
 		ContainerStatus: "unknown",
 	}
 
+	// Validate domain before probing - prevents SSRF via invalid route domains
+	if !domain.IsValidRouteDomain(route.Domain) {
+		health.Error = "invalid route domain for health probe"
+		log.Debug().Msg("health check blocked for invalid domain")
+		return health
+	}
+
 	// Check container status
 	container, exists := s.containerSvc.Get(ctx, route.Domain)
 	if !exists || container == nil {

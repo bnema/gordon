@@ -18,12 +18,13 @@ var (
 	ErrInvalidImageFormat = errors.New("invalid image format")
 
 	// Route errors
-	ErrRouteNotFound     = errors.New("route not found")
-	ErrRouteExists       = errors.New("route already exists")
-	ErrInvalidRoute      = errors.New("invalid route configuration")
-	ErrRouteDomainEmpty  = errors.New("route domain cannot be empty")
-	ErrRouteImageEmpty   = errors.New("route image cannot be empty")
-	ErrNoTargetAvailable = errors.New("no target available for route")
+	ErrRouteNotFound      = errors.New("route not found")
+	ErrRouteExists        = errors.New("route already exists")
+	ErrInvalidRoute       = errors.New("invalid route configuration")
+	ErrRouteDomainEmpty   = errors.New("route domain cannot be empty")
+	ErrRouteImageEmpty    = errors.New("route image cannot be empty")
+	ErrRouteDomainInvalid = errors.New("route domain is not a valid public hostname")
+	ErrNoTargetAvailable  = errors.New("no target available for route")
 
 	// Registry errors
 	ErrManifestNotFound = errors.New("manifest not found")
@@ -64,13 +65,14 @@ var (
 	ErrTokenNotFound      = errors.New("token not found")
 
 	// Security errors
-	ErrPathTraversal     = errors.New("path traversal not allowed")
-	ErrInvalidPath       = errors.New("invalid path format")
-	ErrInsufficientScope = errors.New("insufficient scope for operation")
-	ErrInvalidScope      = errors.New("invalid scope format")
-	ErrSSRFBlocked       = errors.New("request to internal/blocked network not allowed")
-	ErrInvalidEnvKey     = errors.New("invalid environment variable key")
-	ErrLongLivedToken    = errors.New("long-lived tokens must be exchanged via /auth/token")
+	ErrPathTraversal        = errors.New("path traversal not allowed")
+	ErrInvalidPath          = errors.New("invalid path format")
+	ErrInsufficientScope    = errors.New("insufficient scope for operation")
+	ErrInvalidScope         = errors.New("invalid scope format")
+	ErrSSRFBlocked          = errors.New("request to internal/blocked network not allowed")
+	ErrInvalidEnvKey        = errors.New("invalid environment variable key")
+	ErrEnvContainsSecretRef = errors.New("environment file contains secret reference")
+	ErrLongLivedToken       = errors.New("long-lived tokens must be exchanged via /auth/token")
 
 	// Remote errors
 	ErrEmptyRemoteName       = errors.New("remote name must not be empty")

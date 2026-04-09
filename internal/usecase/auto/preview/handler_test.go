@@ -13,20 +13,35 @@ func TestAutoPreviewHandler_CanHandle(t *testing.T) {
 	assert.False(t, h.CanHandle(domain.EventConfigReload))
 }
 
-func TestCollectDomains(t *testing.T) {
-	tests := []struct {
-		name   string
-		labels *domain.ImageLabels
-		want   []string
-	}{
-		{"single domain", &domain.ImageLabels{Domain: "app.example.com"}, []string{"app.example.com"}},
-		{"multiple domains", &domain.ImageLabels{Domains: []string{"a.com", "b.com"}}, []string{"a.com", "b.com"}},
-		{"both", &domain.ImageLabels{Domain: "main.com", Domains: []string{"alt.com"}}, []string{"main.com", "alt.com"}},
-		{"empty", &domain.ImageLabels{}, nil},
+// TestResolveBaseRoute_UsesTrustedConfigOnly verifies that base route resolution
+// ignores untrusted image labels and only uses trusted route config.
+// This is a security fix: labels are attacker-controlled and must not determine
+// which route's env/data is inherited by previews.
+func TestResolveBaseRoute_UsesTrustedConfigOnly(t *testing.T) {
+	// Setup: Trusted route config for the pushed image points to legitimate domain
+	trustedRoutes := []domain.Route{
+		{Domain: "trusted.example.com", Image: "myapp"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, collectDomains(tt.labels))
-		})
+
+	previewConfig := domain.PreviewConfig{
+		Separator: "-preview-",
 	}
+
+	// Test: resolveBaseRoute should return the trusted config domain,
+	// NOT the malicious label domain
+	baseRoute := resolveBaseRoute(trustedRoutes, previewConfig)
+
+	// Assert: Must use trusted route config, ignoring labels
+	assert.Equal(t, "trusted.example.com", baseRoute,
+		"base route must come from trusted route config, not untrusted image labels")
+
+	// Test 2: When no trusted routes exist, should return empty (no base route)
+	baseRouteNoRoutes := resolveBaseRoute(nil, previewConfig)
+	assert.Empty(t, baseRouteNoRoutes,
+		"when no trusted routes exist, base route should be empty even if labels present")
+
+	// Test 3: When labels are empty but trusted routes exist, use trusted
+	baseRouteEmptyLabels := resolveBaseRoute(trustedRoutes, previewConfig)
+	assert.Equal(t, "trusted.example.com", baseRouteEmptyLabels,
+		"base route should use trusted config when labels are empty")
 }

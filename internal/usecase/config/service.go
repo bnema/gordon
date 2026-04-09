@@ -399,6 +399,9 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	if route.Domain == "" {
 		return domain.ErrRouteDomainEmpty
 	}
+	if !domain.IsValidRouteDomain(route.Domain) {
+		return domain.ErrRouteDomainInvalid
+	}
 	if route.Image == "" {
 		return domain.ErrRouteImageEmpty
 	}
@@ -445,6 +448,9 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 	// Validate route
 	if route.Domain == "" {
 		return domain.ErrRouteDomainEmpty
+	}
+	if !domain.IsValidRouteDomain(route.Domain) {
+		return domain.ErrRouteDomainInvalid
 	}
 	if route.Image == "" {
 		return domain.ErrRouteImageEmpty
