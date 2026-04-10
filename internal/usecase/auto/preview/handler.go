@@ -100,27 +100,51 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 // Labels are attacker-controlled and must not determine which route's env/data
 // is inherited by a preview.
 func resolveBaseRoute(routes []domain.Route, previewConfig domain.PreviewConfig) string {
+	// Build a set of all route domains for context-aware preview detection.
+	domainSet := make(map[string]struct{}, len(routes))
+	for _, r := range routes {
+		domainSet[r.Domain] = struct{}{}
+	}
+
 	// Always use trusted route config, ignoring labels entirely.
 	// Skip preview domains to avoid using a preview as the base for another preview.
 	for _, r := range routes {
-		if !isPreviewDomain(r.Domain, previewConfig.Separator) {
+		if !isPreviewDomain(r.Domain, previewConfig.Separator, domainSet) {
 			return r.Domain
 		}
 	}
 	return ""
 }
 
-// isPreviewDomain checks if a domain looks like a preview domain by examining
-// only the first DNS label (before the first dot) for the separator.
+// isPreviewDomain checks if a domain is a preview domain by examining the first
+// DNS label for the separator AND verifying that the implied base domain exists
+// in the route set. This avoids false positives like "my--app.example.com" when
+// no route "my.example.com" exists — that domain just happens to contain the
+// separator in its name.
 // If separator is empty, no domain is treated as a preview domain.
-func isPreviewDomain(domain, separator string) bool {
+func isPreviewDomain(d, separator string, routeSet map[string]struct{}) bool {
 	if separator == "" {
 		return false
 	}
 	// Extract the first label (subdomain) before the first dot
-	firstLabel := domain
-	if idx := strings.Index(domain, "."); idx != -1 {
-		firstLabel = domain[:idx]
+	firstLabel := d
+	rest := ""
+	if idx := strings.Index(d, "."); idx != -1 {
+		firstLabel = d[:idx]
+		rest = d[idx:] // includes leading dot
 	}
-	return strings.Contains(firstLabel, separator)
+	// Check if the first label contains the separator
+	sepIdx := strings.Index(firstLabel, separator)
+	if sepIdx < 0 {
+		return false
+	}
+	// Reconstruct the potential base domain: everything before the separator + rest
+	baseLabel := firstLabel[:sepIdx]
+	if baseLabel == "" {
+		return false
+	}
+	baseDomain := baseLabel + rest
+	// Only treat as preview if the base domain actually exists in the route set
+	_, exists := routeSet[baseDomain]
+	return exists
 }

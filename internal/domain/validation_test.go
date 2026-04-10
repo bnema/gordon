@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,6 +70,14 @@ func TestIsValidRouteDomain(t *testing.T) {
 
 		// Invalid: label too long (>63 chars)
 		{"label too long", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com", false},
+
+		// Invalid: total hostname too long (>253 chars)
+		{"hostname too long", strings.Repeat("a", 55) + "." + strings.Repeat("b", 55) + "." + strings.Repeat("c", 55) + "." + strings.Repeat("d", 55) + "." + strings.Repeat("e", 30) + ".com", false},
+
+		// Invalid: .localhost suffix (DNS rebinding risk)
+		{"dot localhost suffix", "app.localhost", false},
+		{"deep localhost suffix", "sub.app.localhost", false},
+		{"mixed case localhost suffix", "app.Localhost", false},
 	}
 
 	for _, tt := range tests {

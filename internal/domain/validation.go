@@ -35,6 +35,11 @@ func IsValidRouteDomain(domain string) bool {
 		return false
 	}
 
+	// Reject total hostname length > 253 (RFC 1035)
+	if len(domain) > 253 {
+		return false
+	}
+
 	// Must have at least one dot (domain + TLD minimum)
 	// This also rejects single-label names like "localhost", "myapp"
 	if !strings.Contains(domain, ".") {
@@ -56,6 +61,9 @@ func IsValidRouteDomain(domain string) bool {
 
 	// Check for localhost variants
 	if strings.HasPrefix(lowerDomain, "localhost.") {
+		return false
+	}
+	if strings.HasSuffix(lowerDomain, ".localhost") {
 		return false
 	}
 

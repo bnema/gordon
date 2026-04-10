@@ -458,19 +458,28 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	previousImage, exists := s.config.Routes[route.Domain]
+	storageKey := route.Domain
+	previousImage, exists := s.config.Routes[storageKey]
+	if !exists {
+		// Fall back to http:// prefixed key for insecure routes
+		httpKey := "http://" + route.Domain
+		previousImage, exists = s.config.Routes[httpKey]
+		if exists {
+			storageKey = httpKey
+		}
+	}
 	if !exists {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-	s.config.Routes[route.Domain] = route.Image
+	s.config.Routes[storageKey] = route.Image
 	s.mu.Unlock()
 
 	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to persist route update to disk, rolling back")
 		s.mu.Lock()
-		s.config.Routes[route.Domain] = previousImage
+		s.config.Routes[storageKey] = previousImage
 		s.mu.Unlock()
 		return err
 	}
@@ -490,19 +499,28 @@ func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	previousImage, exists := s.config.Routes[domainName]
+	storageKey := domainName
+	previousImage, exists := s.config.Routes[storageKey]
+	if !exists {
+		// Fall back to http:// prefixed key for insecure routes
+		httpKey := "http://" + domainName
+		previousImage, exists = s.config.Routes[httpKey]
+		if exists {
+			storageKey = httpKey
+		}
+	}
 	if !exists {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-	delete(s.config.Routes, domainName)
+	delete(s.config.Routes, storageKey)
 	s.mu.Unlock()
 
 	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to persist route removal to disk, rolling back")
 		s.mu.Lock()
-		s.config.Routes[domainName] = previousImage
+		s.config.Routes[storageKey] = previousImage
 		s.mu.Unlock()
 		return err
 	}

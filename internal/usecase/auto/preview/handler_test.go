@@ -41,9 +41,14 @@ func TestResolveBaseRoute_UsesTrustedConfigOnly(t *testing.T) {
 		"when no trusted routes exist, base route should be empty even if labels present")
 }
 
-// TestResolveBaseRoute_AllPreviewDomains tests that when all candidate routes
-// look like preview domains, resolveBaseRoute returns empty.
+// TestResolveBaseRoute_AllPreviewDomains tests that when the only non-preview
+// route has already been removed (e.g. user deleted base), preview domains
+// without a matching base are NOT treated as previews — they're returned as-is.
+// This is correct: without a base route in the set, a domain containing the
+// separator is just a regular domain name.
 func TestResolveBaseRoute_AllPreviewDomains(t *testing.T) {
+	// Without the base route "app.example.com" in the set, these domains
+	// are not recognized as previews and the first one is returned.
 	previewRoutes := []domain.Route{
 		{Domain: "app-preview-abc.example.com", Image: "myapp"},
 		{Domain: "app-preview-def.example.com", Image: "myapp"},
@@ -54,7 +59,19 @@ func TestResolveBaseRoute_AllPreviewDomains(t *testing.T) {
 	}
 
 	baseRoute := resolveBaseRoute(previewRoutes, previewConfig)
-	assert.Empty(t, baseRoute, "when all routes look like preview domains, should return empty")
+	assert.Equal(t, "app-preview-abc.example.com", baseRoute,
+		"without base route in set, separator-containing domains are not treated as previews")
+
+	// When the base route IS in the set, preview domains are properly skipped
+	routesWithBase := []domain.Route{
+		{Domain: "app-preview-abc.example.com", Image: "myapp"},
+		{Domain: "app-preview-def.example.com", Image: "myapp"},
+		{Domain: "app.example.com", Image: "myapp"},
+	}
+
+	baseRoute = resolveBaseRoute(routesWithBase, previewConfig)
+	assert.Equal(t, "app.example.com", baseRoute,
+		"with base route in set, preview domains are skipped and base is returned")
 }
 
 // TestResolveBaseRoute_EmptySeparator tests that when separator is empty,
@@ -75,11 +92,12 @@ func TestResolveBaseRoute_EmptySeparator(t *testing.T) {
 }
 
 // TestResolveBaseRoute_SkipsPreviewDomains tests that when the first route
-// looks like a preview domain but later routes are normal, the first normal
-// route is returned.
+// is a preview domain (with its base present) but later routes are normal,
+// the first normal route is returned.
 func TestResolveBaseRoute_SkipsPreviewDomains(t *testing.T) {
 	routes := []domain.Route{
 		{Domain: "app-preview-abc.example.com", Image: "myapp"},
+		{Domain: "app.example.com", Image: "myapp"}, // base route must exist for preview detection
 		{Domain: "trusted.example.com", Image: "myapp"},
 		{Domain: "backup.example.com", Image: "myapp"},
 	}
@@ -89,6 +107,66 @@ func TestResolveBaseRoute_SkipsPreviewDomains(t *testing.T) {
 	}
 
 	baseRoute := resolveBaseRoute(routes, previewConfig)
-	assert.Equal(t, "trusted.example.com", baseRoute,
-		"should skip preview domains and return first normal route")
+	assert.Equal(t, "app.example.com", baseRoute,
+		"should skip preview domains and return first non-preview route")
+}
+
+// TestResolveBaseRoute_FalsePositiveAvoidance tests that a domain containing
+// the separator in its first label (e.g. "my--app.example.com") is NOT treated
+// as a preview domain when no base route "my.example.com" exists.
+func TestResolveBaseRoute_FalsePositiveAvoidance(t *testing.T) {
+	routes := []domain.Route{
+		{Domain: "my--app.example.com", Image: "myapp"},
+		{Domain: "other.example.com", Image: "myapp"},
+	}
+
+	previewConfig := domain.PreviewConfig{
+		Separator: "--",
+	}
+
+	baseRoute := resolveBaseRoute(routes, previewConfig)
+	assert.Equal(t, "my--app.example.com", baseRoute,
+		"my--app.example.com should NOT be treated as preview since no base route 'my.example.com' exists")
+}
+
+// TestResolveBaseRoute_ActualPreviewDetected tests that an actual generated
+// preview domain IS correctly detected when its base route exists in the set.
+func TestResolveBaseRoute_ActualPreviewDetected(t *testing.T) {
+	routes := []domain.Route{
+		{Domain: "myapp--login.example.com", Image: "myapp"}, // preview of myapp.example.com
+		{Domain: "myapp.example.com", Image: "myapp"},        // base route
+	}
+
+	previewConfig := domain.PreviewConfig{
+		Separator: "--",
+	}
+
+	baseRoute := resolveBaseRoute(routes, previewConfig)
+	assert.Equal(t, "myapp.example.com", baseRoute,
+		"should skip the preview domain and return the base route")
+}
+
+// TestResolveBaseRoute_DeterministicWithMultipleRoutes tests that base-route
+// selection is deterministic when multiple non-preview routes exist.
+func TestResolveBaseRoute_DeterministicWithMultipleRoutes(t *testing.T) {
+	// Multiple runs should always return the same route
+	routes := []domain.Route{
+		{Domain: "myapp--feat.example.com", Image: "myapp"},
+		{Domain: "myapp.example.com", Image: "myapp"},
+		{Domain: "alias.example.com", Image: "myapp"},
+	}
+
+	previewConfig := domain.PreviewConfig{
+		Separator: "--",
+	}
+
+	// Run multiple times to verify determinism
+	first := resolveBaseRoute(routes, previewConfig)
+	for i := 0; i < 10; i++ {
+		result := resolveBaseRoute(routes, previewConfig)
+		assert.Equal(t, first, result, "resolveBaseRoute should be deterministic")
+	}
+	// The preview route should be skipped, and one of the non-preview routes returned
+	assert.NotEqual(t, "myapp--feat.example.com", first,
+		"preview domain should be skipped")
 }
