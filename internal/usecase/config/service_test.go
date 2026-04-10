@@ -294,7 +294,7 @@ func TestService_AddRoute(t *testing.T) {
 		assert.True(t, routes[0].HTTPS, "zero-value route should be treated as HTTPS")
 	})
 
-	t.Run("insecure route stores with http prefix when HTTPS explicitly true", func(t *testing.T) {
+	t.Run("HTTPS explicitly true stores under plain domain key", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		configFile := filepath.Join(tmpDir, "gordon.toml")
 		err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)

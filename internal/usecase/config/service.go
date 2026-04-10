@@ -386,6 +386,20 @@ func NormalizeBootstrapImage(image, registryDomain string) (string, error) {
 	return image, nil
 }
 
+func resolveRouteStorageKey(routes map[string]string, domainName string) (string, string, bool) {
+	if image, ok := routes[domainName]; ok {
+		return domainName, image, true
+	}
+
+	httpKey := "http://" + domainName
+	image, ok := routes[httpKey]
+	if !ok {
+		return "", "", false
+	}
+
+	return httpKey, image, true
+}
+
 // AddRoute adds a new route to the configuration and persists it.
 func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -458,16 +472,7 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	storageKey := route.Domain
-	previousImage, exists := s.config.Routes[storageKey]
-	if !exists {
-		// Fall back to http:// prefixed key for insecure routes
-		httpKey := "http://" + route.Domain
-		previousImage, exists = s.config.Routes[httpKey]
-		if exists {
-			storageKey = httpKey
-		}
-	}
+	storageKey, previousImage, exists := resolveRouteStorageKey(s.config.Routes, route.Domain)
 	if !exists {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
@@ -499,16 +504,7 @@ func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	storageKey := domainName
-	previousImage, exists := s.config.Routes[storageKey]
-	if !exists {
-		// Fall back to http:// prefixed key for insecure routes
-		httpKey := "http://" + domainName
-		previousImage, exists = s.config.Routes[httpKey]
-		if exists {
-			storageKey = httpKey
-		}
-	}
+	storageKey, previousImage, exists := resolveRouteStorageKey(s.config.Routes, domainName)
 	if !exists {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound

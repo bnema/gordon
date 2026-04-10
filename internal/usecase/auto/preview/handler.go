@@ -7,7 +7,6 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/auto"
 )
@@ -16,20 +15,17 @@ import (
 type AutoPreviewHandler struct {
 	serviceCtx     context.Context
 	config         auto.AutoConfigProvider
-	blobStorage    out.BlobStorage
 	previewService *Service
 }
 
 func NewAutoPreviewHandler(
 	serviceCtx context.Context,
 	config auto.AutoConfigProvider,
-	blobStorage out.BlobStorage,
 	previewService *Service,
 ) *AutoPreviewHandler {
 	return &AutoPreviewHandler{
 		serviceCtx:     serviceCtx,
 		config:         config,
-		blobStorage:    blobStorage,
 		previewService: previewService,
 	}
 }
@@ -96,9 +92,6 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 }
 
 // resolveBaseRoute determines the base route for preview env/data inheritance.
-// Security: This MUST only use trusted route config, never untrusted image labels.
-// Labels are attacker-controlled and must not determine which route's env/data
-// is inherited by a preview.
 func resolveBaseRoute(routes []domain.Route, previewConfig domain.PreviewConfig) string {
 	// Build a set of all route domains for context-aware preview detection.
 	domainSet := make(map[string]struct{}, len(routes))

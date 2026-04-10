@@ -78,10 +78,8 @@ func IsValidRouteDomain(domain string) bool {
 	return true
 }
 
-// isValidLabel checks if a DNS label is valid per RFC 1123:
-// - 1-63 characters
-// - alphanumeric and hyphens only
-// - must not start or end with hyphen
+// isValidLabel checks the per-label RFC 1123 length and hyphen rules.
+// Character allowlisting is enforced earlier by hostnamePattern.
 func isValidLabel(label string) bool {
 	if label == "" {
 		return false
