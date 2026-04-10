@@ -1550,7 +1550,6 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	autoPreviewHandler := preview.NewAutoPreviewHandler(
 		ctx,
 		svc.configSvc,
-		svc.blobStorage,
 		svc.previewService,
 	)
 

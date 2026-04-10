@@ -261,6 +261,66 @@ func TestService_AddRoute(t *testing.T) {
 		assert.Equal(t, "newapp:latest", config.Routes["new.example.com"])
 	})
 
+	t.Run("zero-value route is HTTPS by default", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		// Zero-value HTTPS field (false) should store as plain domain (HTTPS default)
+		route := domain.Route{
+			Domain: "app.example.com",
+			Image:  "myapp:latest",
+		}
+		err = svc.AddRoute(ctx, route)
+		require.NoError(t, err)
+
+		config := svc.GetConfig()
+		assert.Equal(t, "myapp:latest", config.Routes["app.example.com"],
+			"zero-value route should store under plain domain key")
+		_, hasHTTPKey := config.Routes["http://app.example.com"]
+		assert.False(t, hasHTTPKey, "zero-value route should NOT get http:// prefix")
+
+		// Verify it round-trips as HTTPS=true via GetRoutes
+		routes := svc.GetRoutes(ctx)
+		require.Len(t, routes, 1)
+		assert.True(t, routes[0].HTTPS, "zero-value route should be treated as HTTPS")
+	})
+
+	t.Run("HTTPS explicitly true stores under plain domain key", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		// Explicitly set HTTPS: true — should store under plain domain key
+		route := domain.Route{
+			Domain: "secure.example.com",
+			Image:  "myapp:latest",
+			HTTPS:  true,
+		}
+		err = svc.AddRoute(ctx, route)
+		require.NoError(t, err)
+
+		config := svc.GetConfig()
+		assert.Equal(t, "myapp:latest", config.Routes["secure.example.com"],
+			"HTTPS=true route should store under plain domain key")
+	})
+
 	t.Run("idempotent same domain and image saves once", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		configFile := filepath.Join(tmpDir, "gordon.toml")
@@ -324,6 +384,66 @@ func TestService_AddRoute(t *testing.T) {
 
 		err := svc.AddRoute(ctx, route)
 		assert.ErrorIs(t, err, domain.ErrRouteImageEmpty)
+	})
+
+	t.Run("invalid domain - IP address", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "192.168.1.1",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - localhost", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "localhost",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - internal TLD", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "myapp.local",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - with port", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "example.com:8080",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
 	})
 }
 
@@ -406,6 +526,109 @@ func TestService_UpdateRoute(t *testing.T) {
 		err := svc.UpdateRoute(ctx, route)
 		assert.ErrorIs(t, err, domain.ErrRouteImageEmpty)
 	})
+
+	t.Run("invalid domain - IP address", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]any{
+			"192.168.1.1": "myapp:v1",
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "192.168.1.1",
+			Image:  "myapp:v2",
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - localhost", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]any{
+			"localhost": "myapp:v1",
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "localhost",
+			Image:  "myapp:v2",
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("insecure route found via http prefix fallback", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"http://insecure.example.com\" = \"myapp:v1\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("routes", map[string]any{
+			"http://insecure.example.com": "myapp:v1",
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		// Caller uses clean domain for update
+		route := domain.Route{
+			Domain: "insecure.example.com",
+			Image:  "myapp:v2",
+		}
+
+		err = svc.UpdateRoute(ctx, route)
+		assert.NoError(t, err, "UpdateRoute should find insecure route via http:// fallback")
+
+		config := svc.GetConfig()
+		assert.Equal(t, "myapp:v2", config.Routes["http://insecure.example.com"],
+			"insecure route update should preserve http:// prefixed key")
+	})
+
+	t.Run("reconciles coexisting legacy http key", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:v1\"\n\"http://app.example.com\" = \"myapp:old\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("routes", map[string]any{
+			"app.example.com":        "myapp:v1",
+			"http://app.example.com": "myapp:old",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "app.example.com",
+			Image:  "myapp:v2",
+		}
+
+		err = svc.UpdateRoute(ctx, route)
+		assert.NoError(t, err)
+
+		config := svc.GetConfig()
+		assert.Equal(t, "myapp:v2", config.Routes["app.example.com"],
+			"canonical route should be updated")
+		_, exists := config.Routes["http://app.example.com"]
+		assert.False(t, exists, "legacy http route key should be removed during reconciliation")
+	})
 }
 
 func TestService_RemoveRoute(t *testing.T) {
@@ -447,6 +670,62 @@ func TestService_RemoveRoute_NotFound(t *testing.T) {
 	err := svc.RemoveRoute(ctx, "nonexistent.example.com")
 
 	assert.ErrorIs(t, err, domain.ErrRouteNotFound)
+}
+
+func TestService_RemoveRoute_InsecureFallback(t *testing.T) {
+	// Setup: insecure route stored with http:// prefix
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte("[routes]\n\"http://insecure.example.com\" = \"myapp:latest\"\n"), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	v.Set("routes", map[string]interface{}{
+		"http://insecure.example.com": "myapp:latest",
+	})
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	_ = svc.Load(ctx)
+
+	// Caller passes plain domain (not the storage key)
+	err = svc.RemoveRoute(ctx, "insecure.example.com")
+	assert.NoError(t, err, "RemoveRoute should find insecure route via http:// fallback")
+
+	config := svc.GetConfig()
+	_, exists := config.Routes["http://insecure.example.com"]
+	assert.False(t, exists, "insecure route should be removed")
+}
+
+func TestService_RemoveRoute_ReconcilesCoexistingLegacyKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:latest\"\n\"http://app.example.com\" = \"myapp:old\"\n"), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	v.Set("routes", map[string]interface{}{
+		"app.example.com":        "myapp:latest",
+		"http://app.example.com": "myapp:old",
+	})
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+	_ = svc.Load(ctx)
+
+	err = svc.RemoveRoute(ctx, "app.example.com")
+	assert.NoError(t, err)
+
+	config := svc.GetConfig()
+	_, exists := config.Routes["app.example.com"]
+	assert.False(t, exists, "canonical route should be removed")
+	_, exists = config.Routes["http://app.example.com"]
+	assert.False(t, exists, "legacy http route key should be removed during reconciliation")
 }
 
 func TestService_GetNetworkGroups(t *testing.T) {

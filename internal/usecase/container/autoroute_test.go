@@ -861,16 +861,97 @@ type testEnvExtractor struct {
 	calls     int
 	lastImage string
 	lastPath  string
+	data      []byte
+	err       error
 }
 
 func (e *testEnvExtractor) ExtractEnvFileFromImage(_ context.Context, imageRef, envFilePath string) ([]byte, error) {
 	e.calls++
 	e.lastImage = imageRef
 	e.lastPath = envFilePath
+	if e.err != nil {
+		return nil, e.err
+	}
+	if e.data != nil {
+		return e.data, nil
+	}
 	return []byte("FOO=bar\n"), nil
 }
 
 // collectDomains tests
+
+func TestAutoRouteHandler_ExtractAndMergeEnvFile_RejectsSecretReferences(t *testing.T) {
+	tests := []struct {
+		name        string
+		envData     string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "pass reference in value",
+			envData:     "DB_PASSWORD=${pass:myapp/db}\n",
+			wantErr:     true,
+			errContains: "secret reference",
+		},
+		{
+			name:        "sops reference in value",
+			envData:     "API_KEY=${sops:secrets.yaml#/key}\n",
+			wantErr:     true,
+			errContains: "secret reference",
+		},
+		{
+			name:        "pass reference embedded in text",
+			envData:     "CONNECTION=prefix-${pass:secret}-suffix\n",
+			wantErr:     true,
+			errContains: "secret reference",
+		},
+		{
+			name:        "multiple secret references",
+			envData:     "A=${pass:a}\nB=${sops:b}\n",
+			wantErr:     true,
+			errContains: "secret reference",
+		},
+		{
+			name:    "normal env values are allowed",
+			envData: "FOO=bar\nBAZ=qux\n",
+			wantErr: false,
+		},
+		{
+			name:    "dollar sign without reference is allowed",
+			envData: "PRICE=$100\n",
+			wantErr: false,
+		},
+		{
+			name:    "empty braces are allowed",
+			envData: "EMPTY=${}\n",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+			configSvc := inmocks.NewMockConfigService(t)
+			containerSvc := inmocks.NewMockContainerService(t)
+			blobStorage := mocks.NewMockBlobStorage(t)
+			extractor := &testEnvExtractor{data: []byte(tt.envData)}
+
+			envDir := t.TempDir()
+			handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com").
+				WithEnvExtractor(extractor, envDir)
+
+			err := handler.extractAndMergeEnvFile(context.Background(), "myapp:latest", "app.example.com", ".env")
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			assert.NoError(t, err)
+		})
+	}
+}
 
 func TestAutoRouteHandler_CollectDomains(t *testing.T) {
 	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())

@@ -386,6 +386,22 @@ func NormalizeBootstrapImage(image, registryDomain string) (string, error) {
 	return image, nil
 }
 
+func resolveRouteStorageKey(routes map[string]string, domainName string) (string, string, bool, bool) {
+	httpKey := "http://" + domainName
+	image, ok := routes[domainName]
+	if ok {
+		_, hasLegacy := routes[httpKey]
+		return domainName, image, true, hasLegacy
+	}
+
+	image, ok = routes[httpKey]
+	if !ok {
+		return "", "", false, false
+	}
+
+	return httpKey, image, true, false
+}
+
 // AddRoute adds a new route to the configuration and persists it.
 func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -398,6 +414,9 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	// Validate route
 	if route.Domain == "" {
 		return domain.ErrRouteDomainEmpty
+	}
+	if !domain.IsValidRouteDomain(route.Domain) {
+		return domain.ErrRouteDomainInvalid
 	}
 	if route.Image == "" {
 		return domain.ErrRouteImageEmpty
@@ -446,25 +465,38 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 	if route.Domain == "" {
 		return domain.ErrRouteDomainEmpty
 	}
+	if !domain.IsValidRouteDomain(route.Domain) {
+		return domain.ErrRouteDomainInvalid
+	}
 	if route.Image == "" {
 		return domain.ErrRouteImageEmpty
 	}
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	previousImage, exists := s.config.Routes[route.Domain]
+	storageKey, previousImage, exists, hasLegacy := resolveRouteStorageKey(s.config.Routes, route.Domain)
 	if !exists {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-	s.config.Routes[route.Domain] = route.Image
+	legacyKey := ""
+	legacyImage := ""
+	if hasLegacy {
+		legacyKey = "http://" + route.Domain
+		legacyImage = s.config.Routes[legacyKey]
+		delete(s.config.Routes, legacyKey)
+	}
+	s.config.Routes[storageKey] = route.Image
 	s.mu.Unlock()
 
 	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to persist route update to disk, rolling back")
 		s.mu.Lock()
-		s.config.Routes[route.Domain] = previousImage
+		s.config.Routes[storageKey] = previousImage
+		if hasLegacy {
+			s.config.Routes[legacyKey] = legacyImage
+		}
 		s.mu.Unlock()
 		return err
 	}
@@ -484,19 +516,29 @@ func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	previousImage, exists := s.config.Routes[domainName]
+	storageKey, previousImage, exists, hasLegacy := resolveRouteStorageKey(s.config.Routes, domainName)
 	if !exists {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-	delete(s.config.Routes, domainName)
+	legacyKey := ""
+	legacyImage := ""
+	if hasLegacy {
+		legacyKey = "http://" + domainName
+		legacyImage = s.config.Routes[legacyKey]
+		delete(s.config.Routes, legacyKey)
+	}
+	delete(s.config.Routes, storageKey)
 	s.mu.Unlock()
 
 	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to persist route removal to disk, rolling back")
 		s.mu.Lock()
-		s.config.Routes[domainName] = previousImage
+		s.config.Routes[storageKey] = previousImage
+		if hasLegacy {
+			s.config.Routes[legacyKey] = legacyImage
+		}
 		s.mu.Unlock()
 		return err
 	}
