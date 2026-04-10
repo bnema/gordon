@@ -596,6 +596,39 @@ func TestService_UpdateRoute(t *testing.T) {
 		assert.Equal(t, "myapp:v2", config.Routes["http://insecure.example.com"],
 			"insecure route update should preserve http:// prefixed key")
 	})
+
+	t.Run("reconciles coexisting legacy http key", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:v1\"\n\"http://app.example.com\" = \"myapp:old\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("routes", map[string]any{
+			"app.example.com":        "myapp:v1",
+			"http://app.example.com": "myapp:old",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "app.example.com",
+			Image:  "myapp:v2",
+		}
+
+		err = svc.UpdateRoute(ctx, route)
+		assert.NoError(t, err)
+
+		config := svc.GetConfig()
+		assert.Equal(t, "myapp:v2", config.Routes["app.example.com"],
+			"canonical route should be updated")
+		_, exists := config.Routes["http://app.example.com"]
+		assert.False(t, exists, "legacy http route key should be removed during reconciliation")
+	})
 }
 
 func TestService_RemoveRoute(t *testing.T) {
@@ -665,6 +698,34 @@ func TestService_RemoveRoute_InsecureFallback(t *testing.T) {
 	config := svc.GetConfig()
 	_, exists := config.Routes["http://insecure.example.com"]
 	assert.False(t, exists, "insecure route should be removed")
+}
+
+func TestService_RemoveRoute_ReconcilesCoexistingLegacyKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:latest\"\n\"http://app.example.com\" = \"myapp:old\"\n"), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	v.Set("routes", map[string]interface{}{
+		"app.example.com":        "myapp:latest",
+		"http://app.example.com": "myapp:old",
+	})
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+	_ = svc.Load(ctx)
+
+	err = svc.RemoveRoute(ctx, "app.example.com")
+	assert.NoError(t, err)
+
+	config := svc.GetConfig()
+	_, exists := config.Routes["app.example.com"]
+	assert.False(t, exists, "canonical route should be removed")
+	_, exists = config.Routes["http://app.example.com"]
+	assert.False(t, exists, "legacy http route key should be removed during reconciliation")
 }
 
 func TestService_GetNetworkGroups(t *testing.T) {

@@ -3,8 +3,9 @@ package preview
 import (
 	"testing"
 
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestAutoPreviewHandler_CanHandle(t *testing.T) {
@@ -166,7 +167,9 @@ func TestResolveBaseRoute_DeterministicWithMultipleRoutes(t *testing.T) {
 		result := resolveBaseRoute(routes, previewConfig)
 		assert.Equal(t, first, result, "resolveBaseRoute should be deterministic")
 	}
-	// The preview route should be skipped, and one of the non-preview routes returned
+	assert.Equal(t, "myapp.example.com", first,
+		"resolveBaseRoute should return the first non-preview route in slice order")
+	// The preview route should be skipped.
 	assert.NotEqual(t, "myapp--feat.example.com", first,
 		"preview domain should be skipped")
 }
