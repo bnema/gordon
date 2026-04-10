@@ -2,6 +2,8 @@ package domain
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestIsValidRouteDomain(t *testing.T) {
@@ -52,19 +54,27 @@ func TestIsValidRouteDomain(t *testing.T) {
 		{"star anywhere", "exa*mple.com", false},
 
 		// Edge cases
-		{"single label", "localhost", false}, // also matches localhost
-		{"single label other", "myapp", false},
+		{"single label", "myapp", false},
+		{"single label numeric", "api", false},
 		{"trailing dot", "example.com.", false},
 		{"leading dot", ".example.com", false},
 		{"double dots", "exa..mple.com", false},
+
+		// Invalid: label starts or ends with hyphen
+		{"label starts with hyphen", "-app.example.com", false},
+		{"label ends with hyphen", "app-.example.com", false},
+		{"label starts and ends with hyphen", "-app-.example.com", false},
+		{"root label starts with hyphen", "-example.com", false},
+		{"root label ends with hyphen", "example-.com", false},
+
+		// Invalid: label too long (>63 chars)
+		{"label too long", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := IsValidRouteDomain(tt.domain)
-			if got != tt.want {
-				t.Errorf("IsValidRouteDomain(%q) = %v; want %v", tt.domain, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got, "IsValidRouteDomain(%q)", tt.domain)
 		})
 	}
 }

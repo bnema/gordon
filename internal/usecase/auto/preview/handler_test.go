@@ -39,9 +39,56 @@ func TestResolveBaseRoute_UsesTrustedConfigOnly(t *testing.T) {
 	baseRouteNoRoutes := resolveBaseRoute(nil, previewConfig)
 	assert.Empty(t, baseRouteNoRoutes,
 		"when no trusted routes exist, base route should be empty even if labels present")
+}
 
-	// Test 3: When labels are empty but trusted routes exist, use trusted
-	baseRouteEmptyLabels := resolveBaseRoute(trustedRoutes, previewConfig)
-	assert.Equal(t, "trusted.example.com", baseRouteEmptyLabels,
-		"base route should use trusted config when labels are empty")
+// TestResolveBaseRoute_AllPreviewDomains tests that when all candidate routes
+// look like preview domains, resolveBaseRoute returns empty.
+func TestResolveBaseRoute_AllPreviewDomains(t *testing.T) {
+	previewRoutes := []domain.Route{
+		{Domain: "app-preview-abc.example.com", Image: "myapp"},
+		{Domain: "app-preview-def.example.com", Image: "myapp"},
+	}
+
+	previewConfig := domain.PreviewConfig{
+		Separator: "-preview-",
+	}
+
+	baseRoute := resolveBaseRoute(previewRoutes, previewConfig)
+	assert.Empty(t, baseRoute, "when all routes look like preview domains, should return empty")
+}
+
+// TestResolveBaseRoute_EmptySeparator tests that when separator is empty,
+// no route is treated as a preview route and the first trusted route is returned.
+func TestResolveBaseRoute_EmptySeparator(t *testing.T) {
+	trustedRoutes := []domain.Route{
+		{Domain: "app-preview-abc.example.com", Image: "myapp"},
+		{Domain: "trusted.example.com", Image: "myapp"},
+	}
+
+	previewConfig := domain.PreviewConfig{
+		Separator: "",
+	}
+
+	baseRoute := resolveBaseRoute(trustedRoutes, previewConfig)
+	assert.Equal(t, "app-preview-abc.example.com", baseRoute,
+		"with empty separator, no route should be treated as preview domain")
+}
+
+// TestResolveBaseRoute_SkipsPreviewDomains tests that when the first route
+// looks like a preview domain but later routes are normal, the first normal
+// route is returned.
+func TestResolveBaseRoute_SkipsPreviewDomains(t *testing.T) {
+	routes := []domain.Route{
+		{Domain: "app-preview-abc.example.com", Image: "myapp"},
+		{Domain: "trusted.example.com", Image: "myapp"},
+		{Domain: "backup.example.com", Image: "myapp"},
+	}
+
+	previewConfig := domain.PreviewConfig{
+		Separator: "-preview-",
+	}
+
+	baseRoute := resolveBaseRoute(routes, previewConfig)
+	assert.Equal(t, "trusted.example.com", baseRoute,
+		"should skip preview domains and return first normal route")
 }

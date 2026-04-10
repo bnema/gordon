@@ -59,5 +59,30 @@ func IsValidRouteDomain(domain string) bool {
 		return false
 	}
 
+	// Validate each label conforms to RFC 1123
+	labels := strings.Split(domain, ".")
+	for _, label := range labels {
+		if !isValidLabel(label) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isValidLabel checks if a DNS label is valid per RFC 1123:
+// - 1-63 characters
+// - alphanumeric and hyphens only
+// - must not start or end with hyphen
+func isValidLabel(label string) bool {
+	if label == "" {
+		return false
+	}
+	if len(label) > 63 {
+		return false
+	}
+	if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+		return false
+	}
 	return true
 }

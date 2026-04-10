@@ -101,12 +101,26 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 // is inherited by a preview.
 func resolveBaseRoute(routes []domain.Route, previewConfig domain.PreviewConfig) string {
 	// Always use trusted route config, ignoring labels entirely.
-	// Skip preview domains (they contain the separator) to avoid using
-	// a preview as the base for another preview.
+	// Skip preview domains to avoid using a preview as the base for another preview.
 	for _, r := range routes {
-		if !strings.Contains(r.Domain, previewConfig.Separator) {
+		if !isPreviewDomain(r.Domain, previewConfig.Separator) {
 			return r.Domain
 		}
 	}
 	return ""
+}
+
+// isPreviewDomain checks if a domain looks like a preview domain by examining
+// only the first DNS label (before the first dot) for the separator.
+// If separator is empty, no domain is treated as a preview domain.
+func isPreviewDomain(domain, separator string) bool {
+	if separator == "" {
+		return false
+	}
+	// Extract the first label (subdomain) before the first dot
+	firstLabel := domain
+	if idx := strings.Index(domain, "."); idx != -1 {
+		firstLabel = domain[:idx]
+	}
+	return strings.Contains(firstLabel, separator)
 }
