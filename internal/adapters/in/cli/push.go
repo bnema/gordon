@@ -70,18 +70,19 @@ func newPushCmd() *cobra.Command {
 		Long: `Tags a local image for the Gordon registry and pushes it.
 Uses git tags for versioning. Optionally triggers deployment after push.
 
-The image argument is optional. Resolution order:
-  1. If --domain is provided, uses the legacy domain-based lookup
-  2. If an image name is provided as argument, resolves domain(s) from the backend
-  3. If no argument, auto-detects from Dockerfile labels or current directory name
+Image-first syntax is primary:
+  - Positional args are treated as images unless they look like legacy domains
+  - Tagged image refs resolve domains from the backend using the image name
+  - --domain is a deploy target override for legacy workflows
+  - No-arg mode still auto-detects from Dockerfile labels or current directory name
 
 With --build, builds the image first using docker buildx.
 
 Examples:
-  gordon push --build --remote ...
   gordon push myapp --build --remote ...
+  gordon push myapp:v1.2.3 --no-deploy --remote ...
+  gordon push registry.example.com/myapp:v1.2.3 --build --remote ...
   gordon push --domain myapp.example.com --build --remote ...
-  gordon push myapp --tag v1.2.0 --no-deploy --remote ...
   gordon push --build --build-arg CGO_ENABLED=0 --remote ...`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -128,6 +129,55 @@ func resolveImageRefs(registry, imageName, version string) (versionRef, latestRe
 	return versionRef, latestRef
 }
 
+type pushArgKind string
+
+const (
+	pushArgKindImage        pushArgKind = "image"
+	pushArgKindLegacyDomain pushArgKind = "legacy-domain"
+)
+
+type classifiedPushArg struct {
+	kind         pushArgKind
+	lookupImage  string
+	legacyDomain string
+}
+
+func classifyPushArgument(arg string) classifiedPushArg {
+	if looksLikeLegacyDomain(arg) {
+		return classifiedPushArg{kind: pushArgKindLegacyDomain, legacyDomain: arg}
+	}
+
+	classified := classifiedPushArg{kind: pushArgKindImage, lookupImage: arg}
+	if isTaggedImageRef(arg) {
+		classified.lookupImage = stripImageTag(arg)
+	}
+	return classified
+}
+
+func isTaggedImageRef(arg string) bool {
+	slash := strings.LastIndex(arg, "/")
+	colon := strings.LastIndex(arg, ":")
+	return colon > slash
+}
+
+func stripImageTag(arg string) string {
+	if !isTaggedImageRef(arg) {
+		return arg
+	}
+	return arg[:strings.LastIndex(arg, ":")]
+}
+
+func looksLikeLegacyDomain(arg string) bool {
+	if arg == "" || strings.Contains(arg, "/") {
+		return false
+	}
+	host := arg
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	return strings.Contains(host, ".")
+}
+
 // resolveRoute determines the registry, image name, and domain from the input mode.
 func resolveRoute(ctx context.Context, cp ControlPlane, imageArg, domainFlag, dockerfile string) (registry, imageName, pushDomain string, err error) {
 	if domainFlag != "" {
@@ -142,7 +192,12 @@ func resolveRoute(ctx context.Context, cp ControlPlane, imageArg, domainFlag, do
 		fmt.Printf("Detected image: %s\n", styles.Theme.Bold.Render(imageArg))
 	}
 
-	return resolveFromImage(ctx, cp, imageArg, dockerfile)
+	classified := classifyPushArgument(imageArg)
+	if classified.kind == pushArgKindLegacyDomain {
+		return resolveFromDomain(ctx, cp, classified.legacyDomain)
+	}
+
+	return resolveFromImage(ctx, cp, classified.lookupImage, dockerfile)
 }
 
 // resolveVersion determines and validates the version tag.

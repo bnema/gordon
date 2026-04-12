@@ -242,70 +242,21 @@ func TestParseImageRef(t *testing.T) {
 
 func TestClassifyPushArgument(t *testing.T) {
 	tests := []struct {
-		name       string
-		arg        string
-		wantKind   string
-		wantImage  string
-		wantQuery  string
-		wantDomain string
+		name string
+		arg  string
+		want classifiedPushArg
 	}{
-		{name: "tagged image latest", arg: "myapp:latest", wantKind: "image", wantImage: "myapp:latest", wantQuery: "myapp"},
-		{name: "tagged image semver", arg: "myapp:v1.2.3", wantKind: "image", wantImage: "myapp:v1.2.3", wantQuery: "myapp"},
-		{name: "registry qualified image", arg: "registry.example.com/myapp:v1.2.3", wantKind: "image", wantImage: "registry.example.com/myapp:v1.2.3", wantQuery: "registry.example.com/myapp"},
-		{name: "legacy domain", arg: "app.example.com", wantKind: "legacy-domain", wantDomain: "app.example.com"},
-		{name: "bare image name", arg: "myapp", wantKind: "image", wantImage: "myapp", wantQuery: "myapp"},
+		{name: "tagged image latest", arg: "myapp:latest", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "myapp"}},
+		{name: "tagged image semver", arg: "myapp:v1.2.3", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "myapp"}},
+		{name: "registry qualified image", arg: "registry.example.com/myapp:v1.2.3", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "registry.example.com/myapp"}},
+		{name: "legacy domain", arg: "app.example.com", want: classifiedPushArg{kind: pushArgKindLegacyDomain, legacyDomain: "app.example.com"}},
+		{name: "bare image name", arg: "myapp", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "myapp"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			module := []byte("module classifyprobe\n\ngo 1.25\n")
-			if err := os.WriteFile(filepath.Join(dir, "go.mod"), module, 0o644); err != nil {
-				t.Fatal(err)
-			}
-
-			source := fmt.Sprintf(`package cli
-
-import "testing"
-
-func TestProbe(t *testing.T) {
-	cases := []struct {
-		name       string
-		arg        string
-		wantKind   string
-		wantImage  string
-		wantQuery  string
-		wantDomain string
-	}{
-		{name: %q, arg: %q, wantKind: %q, wantImage: %q, wantQuery: %q, wantDomain: %q},
-	}
-
-	for _, tt := range cases {
-		var _ pushArgKind
-		got := classifyPushArgument(tt.arg)
-		_ = got
-		_ = pushArgKindImage
-		_ = pushArgKindLegacyDomain
-	}
-}
-`, tt.name, tt.arg, tt.wantKind, tt.wantImage, tt.wantQuery, tt.wantDomain)
-
-			if err := os.WriteFile(filepath.Join(dir, "probe_test.go"), []byte(source), 0o644); err != nil {
-				t.Fatal(err)
-			}
-
-			cmd := exec.Command("go", "test", "./...")
-			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), "GOWORK=off")
-			out, err := cmd.CombinedOutput()
-			if err == nil {
-				t.Fatal("expected classifier compile failure, got success")
-			}
-			output := string(out)
-			if !strings.Contains(output, "undefined: classifyPushArgument") && !strings.Contains(output, "undefined: pushArgKind") {
-				t.Fatalf("expected missing classifier symbols, got:\n%s", output)
-			}
-			t.Fatalf("classifier compile probe failed as expected:\n%s", output)
+			got := classifyPushArgument(tt.arg)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
