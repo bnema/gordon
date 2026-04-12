@@ -65,23 +65,25 @@ Routes map domains to container images:
 
 ```toml
 [routes]
-"app.mydomain.com" = "myapp:latest"
-"api.mydomain.com" = "myapi:v2.1.0"
+"app.example.com" = "myapp:latest"
+"api.example.com" = "myapi:v2.1.0"
 ```
 
-When a request comes in for `app.mydomain.com`, Gordon:
+Route domains must be plain hostnames such as `app.example.com`. Gordon rejects `http://` and `https://` prefixes, `.local` and `.internal` suffixes, localhost names, and IP literals.
+
+When a request comes in for `app.example.com`, Gordon:
 
 1. Looks up the route configuration
 2. Finds the running container for `myapp:latest`
 3. Proxies the request to that container
 
-### HTTP vs HTTPS Routes
+### Route Domains
 
-By default, routes expect HTTPS (terminated by Cloudflare). For HTTP-only routes:
+Routes use plain hostnames. By default, traffic is HTTPS (terminated by Cloudflare):
 
 ```toml
 [routes]
-"http://internal.local" = "internal-app:latest"
+"dev-app.example.com" = "internal-app:latest"
 ```
 
 ## Network Isolation
@@ -188,8 +190,10 @@ Gordon watches its config file and reloads automatically:
 
 1. Edit `~/.config/gordon/gordon.toml`
 2. Save the file
-3. Gordon reloads routes, attachments, and network groups
-4. Containers sync to match new configuration
+3. Gordon reloads hot-reloaded settings such as attachments, network groups, and routes
+4. Containers and proxy config sync to match the new configuration
+
+Route file edits now reload automatically again.
 
 You can also trigger a manual reload:
 

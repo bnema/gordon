@@ -87,8 +87,8 @@ gordon rollback myapp.example.com
 gordon logs                          # Gordon process logs
 gordon logs -f                       # Follow process logs
 gordon logs -n 100                   # Last 100 lines
-gordon logs myapp.local              # Container logs for myapp.local
-gordon logs myapp.local -f           # Follow container logs
+gordon logs myapp.example.com       # Container logs for myapp.example.com
+gordon logs myapp.example.com -f    # Follow container logs
 
 # Check version
 gordon version
@@ -126,9 +126,9 @@ gordon attachments add app.example.com postgres:18
 gordon attachments remove app.example.com postgres:18
 
 # Secrets
-gordon secrets list myapp.local
-gordon secrets set myapp.local DATABASE_URL "postgres://..."
-gordon secrets remove myapp.local DATABASE_URL
+gordon secrets list myapp.example.com
+gordon secrets set myapp.example.com DATABASE_URL "postgres://..."
+gordon secrets remove myapp.example.com DATABASE_URL
 
 # Remotes
 gordon remotes add prod https://gordon.mydomain.com --token $TOKEN

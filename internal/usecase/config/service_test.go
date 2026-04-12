@@ -247,6 +247,14 @@ func TestService_GetRoute(t *testing.T) {
 		assert.True(t, route.HTTPS)
 	})
 
+	t.Run("legacy http route found via fallback", func(t *testing.T) {
+		route, err := svc.GetRoute(ctx, "insecure.example")
+		require.NoError(t, err)
+		assert.Equal(t, "insecure.example", route.Domain)
+		assert.Equal(t, "insecureapp:latest", route.Image)
+		assert.False(t, route.HTTPS)
+	})
+
 	t.Run("non-existent route", func(t *testing.T) {
 		route, err := svc.GetRoute(ctx, "notfound.example.com")
 		assert.ErrorIs(t, err, domain.ErrRouteNotFound)
@@ -467,6 +475,24 @@ func TestService_AddRoute(t *testing.T) {
 
 		err := svc.AddRoute(ctx, route)
 		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("reconciles coexisting legacy http key", func(t *testing.T) {
+		svc, ctx := setupServiceWithCoexistingLegacyRoute(t, "myapp:v1", "myapp:old")
+
+		route := domain.Route{
+			Domain: "app.example.com",
+			Image:  "myapp:v2",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.NoError(t, err)
+
+		config := svc.GetConfig()
+		assert.Equal(t, "myapp:v2", config.Routes["app.example.com"],
+			"canonical route should be updated")
+		_, exists := config.Routes["http://app.example.com"]
+		assert.False(t, exists, "legacy http route key should be removed during reconciliation")
 	})
 }
 

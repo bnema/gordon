@@ -233,7 +233,7 @@ gordon reload
 | `server.max_proxy_response_size` |
 | `server.max_concurrent_conns` |
 
-> **Note:** Routes are not hot-reloaded from the config file. Use the API or CLI (`gordon routes add/update/remove`) to manage routes at runtime.
+> **Note:** Routes are hot-reloaded from the config file. You can still use the API or CLI (`gordon routes add/update/remove`) for live route changes.
 
 ### Requires restart
 

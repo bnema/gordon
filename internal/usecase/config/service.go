@@ -254,20 +254,20 @@ func (s *Service) GetRoute(_ context.Context, domainName string) (*domain.Route,
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	image, exists := s.config.Routes[domainName]
-	if !exists {
+	lookup := resolveRouteStorageKey(s.config.Routes, domainName)
+	if !lookup.found {
 		return nil, domain.ErrRouteNotFound
 	}
 
 	route := &domain.Route{
 		Domain: domainName,
-		Image:  image,
+		Image:  lookup.image,
 		HTTPS:  true,
 	}
 
 	// Check if domain has http:// prefix
-	if strings.HasPrefix(domainName, "http://") {
-		route.Domain = strings.TrimPrefix(domainName, "http://")
+	if strings.HasPrefix(lookup.storageKey, "http://") {
+		route.Domain = strings.TrimPrefix(lookup.storageKey, "http://")
 		route.HTTPS = false
 	}
 
@@ -462,25 +462,40 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	previousImage, existed := s.config.Routes[route.Domain]
 	if s.config.Routes == nil {
 		s.config.Routes = make(map[string]string)
 	}
-	if existed && previousImage == route.Image {
+	lookup := resolveRouteStorageKey(s.config.Routes, route.Domain)
+	previousCanonicalImage, canonicalExisted := s.config.Routes[route.Domain]
+	legacyKey := lookup.legacyKey
+	previousLegacyImage, legacyExisted := "", false
+	if legacyKey == "" {
+		legacyKey = legacyRouteStorageKey(route.Domain)
+	}
+	if legacyKey != route.Domain {
+		previousLegacyImage, legacyExisted = s.config.Routes[legacyKey]
+	}
+	if canonicalExisted && previousCanonicalImage == route.Image && !legacyExisted {
 		s.mu.Unlock()
 		return nil
 	}
 	s.config.Routes[route.Domain] = route.Image
+	if legacyExisted {
+		delete(s.config.Routes, legacyKey)
+	}
 	s.mu.Unlock()
 
 	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to persist route to disk, rolling back")
 		s.mu.Lock()
-		if existed {
-			s.config.Routes[route.Domain] = previousImage
+		if canonicalExisted {
+			s.config.Routes[route.Domain] = previousCanonicalImage
 		} else {
 			delete(s.config.Routes, route.Domain)
+		}
+		if legacyExisted {
+			s.config.Routes[legacyKey] = previousLegacyImage
 		}
 		s.mu.Unlock()
 		return err

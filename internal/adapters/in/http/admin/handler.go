@@ -382,7 +382,7 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		addStep("route", "configured")
-	case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+	case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
 		addStep("route", "failed")
 		h.sendError(w, http.StatusBadRequest, err.Error())
 		return
@@ -580,7 +580,7 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 	if err := h.configSvc.AddRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", route.Domain).Msg("failed to add route")
 		switch {
-		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
 			h.sendError(w, http.StatusBadRequest, err.Error())
 		default:
 			h.sendError(w, http.StatusInternalServerError, "failed to add route")
@@ -624,7 +624,7 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 		switch {
 		case errors.Is(err, domain.ErrRouteNotFound):
 			h.sendError(w, http.StatusNotFound, "route not found")
-		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
 			h.sendError(w, http.StatusBadRequest, err.Error())
 		default:
 			h.sendError(w, http.StatusInternalServerError, "failed to update route")

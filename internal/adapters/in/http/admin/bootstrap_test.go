@@ -277,6 +277,36 @@ func TestBootstrap_AddRouteValidationErrors(t *testing.T) {
 	}
 }
 
+func TestBootstrap_InvalidRouteDomain(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	payload := dto.BootstrapRequest{Domain: "invalid domain", Image: "myapp:latest"}
+	configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: payload.Domain, Image: "reg.bnema.dev/myapp"}).Return(domain.ErrRouteDomainInvalid).Once()
+
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/bootstrap", bytes.NewReader(body))
+	req = req.WithContext(ctxWithScopes("admin:routes:write", "admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error":"`+domain.ErrRouteDomainInvalid.Error()+`"}`+"\n", rec.Body.String())
+}
+
 func TestBootstrap_PartialFailure_AttachmentError(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)

@@ -21,7 +21,6 @@ import (
 
 	"github.com/bnema/zerowrap"
 	zerowrapotel "github.com/bnema/zerowrap/otel"
-	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 
 	// Adapters - Output
@@ -262,12 +261,7 @@ func Run(ctx context.Context, configPath string) error {
 
 	log.Info().Msg("Gordon starting")
 
-	// Deprecation warnings for removed TLS config fields
-	for _, key := range []string{"server.tls_enabled", "server.force_hsts"} {
-		if v.IsSet(key) {
-			log.Warn().Str("key", key).Msg("deprecated config key — Gordon now uses an internal CA with automatic TLS; remove this from your config")
-		}
-	}
+	warnDeprecatedConfigKeys(v, log)
 
 	// Create PID file
 	pidFile := createPidFile(log)
@@ -290,7 +284,9 @@ func Run(ctx context.Context, configPath string) error {
 	// timers before graceful shutdown, preventing deploys during drain.
 
 	// Set up config hot reload
-	setupConfigHotReload(ctx, v, svc, log)
+	if err := setupConfigHotReload(ctx, v, svc.configSvc, svc.proxySvc, log); err != nil {
+		return err
+	}
 
 	// Start event bus
 	if err := svc.eventBus.Start(); err != nil {
@@ -300,6 +296,14 @@ func Run(ctx context.Context, configPath string) error {
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
 	return runServers(ctx, v, cfg, svc, cleanupHandlers, log)
+}
+
+func warnDeprecatedConfigKeys(v *viper.Viper, log zerowrap.Logger) {
+	for _, key := range []string{"server.tls_enabled", "server.force_hsts"} {
+		if v.IsSet(key) {
+			log.Warn().Str("key", key).Msg("deprecated config key — Gordon now uses an internal CA with automatic TLS; remove this from your config")
+		}
+	}
 }
 
 // initConfig loads configuration from file.
@@ -1343,6 +1347,14 @@ type proxyConfigResult struct {
 	maxBlobChunkSize int64
 }
 
+type configWatcher interface {
+	Watch(ctx context.Context, onChange func()) error
+}
+
+type proxyConfigUpdater interface {
+	UpdateConfig(config proxy.Config)
+}
+
 // buildProxyConfig parses size-related config fields and builds the proxy config.
 func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, error) {
 	maxProxyBodySize := int64(512 << 20) // 512MB default
@@ -1592,41 +1604,28 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	return cleanup, nil
 }
 
-// setupConfigHotReload sets up Viper config hot reload.
-// NOTE: This does NOT reload routes into memory. Routes are managed via API
-// (AddRoute/UpdateRoute/RemoveRoute) and memory is the source of truth.
-// The file watcher only updates proxy config and refreshes targets.
-// Manual config file edits to routes require a server restart.
-func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, log zerowrap.Logger) {
-	v.OnConfigChange(func(e fsnotify.Event) {
-		log.Info().Str("file", e.Name).Msg("config file changed")
-
-		if err := v.ReadInConfig(); err != nil {
-			log.Error().Err(err).Msg("failed to reload config")
-			return
-		}
-
-		// Re-unmarshal config and rebuild proxy config to pick up all changes
+// setupConfigHotReload sets up config hot reload.
+func setupConfigHotReload(ctx context.Context, v *viper.Viper, configSvc configWatcher, proxySvc proxyConfigUpdater, log zerowrap.Logger) error {
+	if err := configSvc.Watch(ctx, func() {
 		var reloadCfg Config
 		if err := v.Unmarshal(&reloadCfg); err != nil {
 			log.Error().Err(err).Msg("failed to unmarshal config on reload")
 			return
 		}
+
 		reloadedProxy, err := buildProxyConfig(reloadCfg, log)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to parse proxy config on reload")
 			return
 		}
-		svc.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
 
-		// Clear proxy target cache to pick up external route changes
-		if err := svc.proxySvc.RefreshTargets(ctx); err != nil {
-			log.Warn().Err(err).Msg("failed to refresh proxy targets")
-		}
+		proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
+		log.Debug().Msg("config hot reload complete")
+	}); err != nil {
+		return fmt.Errorf("failed to watch config: %w", err)
+	}
 
-		log.Debug().Msg("config hot reload complete (routes unchanged, memory is source of truth)")
-	})
-	v.WatchConfig()
+	return nil
 }
 
 // syncAndAutoStart syncs existing containers and auto-starts if configured.

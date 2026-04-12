@@ -42,14 +42,9 @@ func TestResolveBaseRoute_UsesTrustedConfigOnly(t *testing.T) {
 		"when no trusted routes exist, base route should be empty even if labels present")
 }
 
-// TestResolveBaseRoute_AllPreviewDomains tests that when the only non-preview
-// route has already been removed (e.g. user deleted base), preview domains
-// without a matching base are NOT treated as previews — they're returned as-is.
-// This is correct: without a base route in the set, a domain containing the
-// separator is just a regular domain name.
+// TestResolveBaseRoute_AllPreviewDomains verifies that ambiguous route sets do
+// not select an arbitrary base route.
 func TestResolveBaseRoute_AllPreviewDomains(t *testing.T) {
-	// Without the base route "app.example.com" in the set, these domains
-	// are not recognized as previews and the first one is returned.
 	previewRoutes := []domain.Route{
 		{Domain: "app-preview-abc.example.com", Image: "myapp"},
 		{Domain: "app-preview-def.example.com", Image: "myapp"},
@@ -60,8 +55,8 @@ func TestResolveBaseRoute_AllPreviewDomains(t *testing.T) {
 	}
 
 	baseRoute := resolveBaseRoute(previewRoutes, previewConfig)
-	assert.Equal(t, "app-preview-abc.example.com", baseRoute,
-		"without base route in set, separator-containing domains are not treated as previews")
+	assert.Empty(t, baseRoute,
+		"ambiguous routes must not choose a base route")
 
 	// When the base route IS in the set, preview domains are properly skipped
 	routesWithBase := []domain.Route{
@@ -88,8 +83,8 @@ func TestResolveBaseRoute_EmptySeparator(t *testing.T) {
 	}
 
 	baseRoute := resolveBaseRoute(trustedRoutes, previewConfig)
-	assert.Equal(t, "app-preview-abc.example.com", baseRoute,
-		"with empty separator, no route should be treated as preview domain")
+	assert.Empty(t, baseRoute,
+		"with empty separator and multiple routes, base selection is ambiguous")
 }
 
 // TestResolveBaseRoute_SkipsPreviewDomains tests that when the first route
@@ -108,8 +103,8 @@ func TestResolveBaseRoute_SkipsPreviewDomains(t *testing.T) {
 	}
 
 	baseRoute := resolveBaseRoute(routes, previewConfig)
-	assert.Equal(t, "app.example.com", baseRoute,
-		"should skip preview domains and return first non-preview route")
+	assert.Empty(t, baseRoute,
+		"multiple non-preview routes must not resolve to an arbitrary base")
 }
 
 // TestResolveBaseRoute_FalsePositiveAvoidance tests that a domain containing
@@ -126,8 +121,8 @@ func TestResolveBaseRoute_FalsePositiveAvoidance(t *testing.T) {
 	}
 
 	baseRoute := resolveBaseRoute(routes, previewConfig)
-	assert.Equal(t, "my--app.example.com", baseRoute,
-		"my--app.example.com should NOT be treated as preview since no base route 'my.example.com' exists")
+	assert.Empty(t, baseRoute,
+		"ambiguous routes must not choose a base route")
 }
 
 // TestResolveBaseRoute_ActualPreviewDetected tests that an actual generated
@@ -147,10 +142,9 @@ func TestResolveBaseRoute_ActualPreviewDetected(t *testing.T) {
 		"should skip the preview domain and return the base route")
 }
 
-// TestResolveBaseRoute_DeterministicWithMultipleRoutes tests that base-route
-// selection is deterministic when multiple non-preview routes exist.
+// TestResolveBaseRoute_DeterministicWithMultipleRoutes tests that ambiguous
+// base-route selection is rejected consistently when multiple candidates exist.
 func TestResolveBaseRoute_DeterministicWithMultipleRoutes(t *testing.T) {
-	// Multiple runs should always return the same route
 	routes := []domain.Route{
 		{Domain: "myapp--feat.example.com", Image: "myapp"},
 		{Domain: "myapp.example.com", Image: "myapp"},
@@ -161,15 +155,30 @@ func TestResolveBaseRoute_DeterministicWithMultipleRoutes(t *testing.T) {
 		Separator: "--",
 	}
 
-	// Run multiple times to verify determinism
+	// Run multiple times to verify ambiguity is handled consistently.
 	first := resolveBaseRoute(routes, previewConfig)
 	for i := 0; i < 10; i++ {
 		result := resolveBaseRoute(routes, previewConfig)
 		assert.Equal(t, first, result, "resolveBaseRoute should be deterministic")
 	}
-	assert.Equal(t, "myapp.example.com", first,
-		"resolveBaseRoute should return the first non-preview route in slice order")
-	// The preview route should be skipped.
-	assert.NotEqual(t, "myapp--feat.example.com", first,
-		"preview domain should be skipped")
+	assert.Empty(t, first,
+		"ambiguous base routes must not select a route")
+}
+
+// TestResolveBaseRoute_RejectsAmbiguousBaseRoutes verifies that when multiple
+// non-preview routes share the same image, the handler does not choose one
+// arbitrarily for preview inheritance.
+func TestResolveBaseRoute_RejectsAmbiguousBaseRoutes(t *testing.T) {
+	routes := []domain.Route{
+		{Domain: "app-a.example.com", Image: "myapp"},
+		{Domain: "app-b.example.com", Image: "myapp"},
+		{Domain: "app-a-preview-feat.example.com", Image: "myapp"},
+	}
+
+	previewConfig := domain.PreviewConfig{
+		Separator: "-preview-",
+	}
+
+	baseRoute := resolveBaseRoute(routes, previewConfig)
+	assert.Empty(t, baseRoute, "ambiguous base routes must not select an arbitrary route")
 }

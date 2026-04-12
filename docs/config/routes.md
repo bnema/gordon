@@ -1,6 +1,6 @@
 # Routes Configuration
 
-Routes map domains to container images.
+Routes map hostnames to container images.
 
 ## Configuration
 
@@ -20,7 +20,7 @@ Routes map domains to container images.
 
 | Component | Description |
 |-----------|-------------|
-| `domain` | Fully qualified domain name |
+| `domain` | Public, fully qualified domain name |
 | `image` | Container image name (as pushed to Gordon's registry) |
 | `tag` | Image tag (version, `latest`, etc.) |
 
@@ -35,16 +35,16 @@ Standard routes expect HTTPS traffic (terminated by Cloudflare or similar):
 "app.mydomain.com" = "myapp:latest"
 ```
 
-### HTTP-Only Routes
+Route domains must be plain hostnames. Gordon rejects `http://` and `https://` prefixes, `.local` and `.internal` suffixes, localhost names, and IP literals.
 
-For internal or development routes without HTTPS:
+### Development Routes
+
+For local testing, use a hostname you can resolve yourself:
 
 ```toml
 [routes]
-"http://internal.local" = "internal-app:latest"
+"dev-app.example.com" = "internal-app:latest"
 ```
-
-The `http://` prefix tells Gordon not to expect HTTPS.
 
 ## Version Strategies
 
@@ -132,25 +132,20 @@ docker push registry.mydomain.com/myapp:latest
 4. Updates proxy to route traffic to new container
 5. Stops old container
 
-## Hot Reload
+## Route Changes
 
-Routes reload automatically when the config file changes:
+Route changes in the config file are hot-reloaded automatically:
 
-```bash
-# Edit config
-vim ~/.config/gordon/gordon.toml
+1. Edit `[routes]` in `gordon.toml`
+2. Save the file
+3. Gordon reloads the updated routes and proxy config
 
-# Add new route
-[routes]
-"newapp.mydomain.com" = "newapp:latest"
-
-# Save - Gordon reloads automatically
-```
-
-Or trigger manually:
+You can still manage routes with the API or CLI if you prefer live mutations:
 
 ```bash
-gordon reload
+gordon routes add newapp.mydomain.com newapp:latest
+gordon routes add app.mydomain.com myapp:v2.2.0
+gordon routes remove oldapp.mydomain.com
 ```
 
 ## Examples
@@ -159,13 +154,13 @@ gordon reload
 
 ```toml
 [routes]
-"app.local" = "myapp:latest"
-"api.local" = "myapi:latest"
+"dev-app.example.com" = "myapp:latest"
+"dev-api.example.com" = "myapi:latest"
 ```
 
 Add to `/etc/hosts`:
 ```
-127.0.0.1  app.local api.local registry.local
+127.0.0.1  dev-app.example.com dev-api.example.com registry.example.com
 ```
 
 ### Production Setup

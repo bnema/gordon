@@ -201,6 +201,31 @@ func TestHandler_RoutesPost_RequiresWriteScope(t *testing.T) {
 	}
 }
 
+func TestHandler_RoutesPost_InvalidRouteDomain(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:latest"}).Return(domain.ErrRouteDomainInvalid).Once()
+
+	req := httptest.NewRequest("POST", "/admin/routes", bytes.NewBufferString(`{"domain":"localhost","image":"myapp:latest"}`))
+	req = req.WithContext(ctxWithScopes("admin:routes:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error":"`+domain.ErrRouteDomainInvalid.Error()+`"}`+"\n", rec.Body.String())
+}
+
 func TestHandler_RoutesPut_RequiresWriteScope(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
@@ -248,6 +273,31 @@ func TestHandler_RoutesPut_RequiresWriteScope(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, rec.Code)
 		})
 	}
+}
+
+func TestHandler_RoutesPut_InvalidRouteDomain(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:v2"}).Return(domain.ErrRouteDomainInvalid).Once()
+
+	req := httptest.NewRequest("PUT", "/admin/routes/localhost", bytes.NewBufferString(`{"image":"myapp:v2"}`))
+	req = req.WithContext(ctxWithScopes("admin:routes:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error":"`+domain.ErrRouteDomainInvalid.Error()+`"}`+"\n", rec.Body.String())
 }
 
 func TestHandler_RoutesPost_AllowsRouteCreationWithoutRegistryManifest(t *testing.T) {

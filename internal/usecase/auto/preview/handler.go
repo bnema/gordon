@@ -101,12 +101,17 @@ func resolveBaseRoute(routes []domain.Route, previewConfig domain.PreviewConfig)
 
 	// Always use trusted route config, ignoring labels entirely.
 	// Skip preview domains to avoid using a preview as the base for another preview.
+	// If more than one non-preview route remains, the base is ambiguous and unsafe.
+	var baseRoute string
 	for _, r := range routes {
 		if !isPreviewDomain(r.Domain, previewConfig.Separator, domainSet) {
-			return r.Domain
+			if baseRoute != "" {
+				return ""
+			}
+			baseRoute = r.Domain
 		}
 	}
-	return ""
+	return baseRoute
 }
 
 // isPreviewDomain checks if a domain is a preview domain by examining the first

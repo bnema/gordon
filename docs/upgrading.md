@@ -2,6 +2,10 @@
 
 This guide covers breaking changes and migration steps between major versions.
 
+## Route-Domain Validation
+
+Route keys must be plain hostnames. Migrate any `.local`, `.internal`, `localhost`, IP literal, or `http://`/`https://` route entries to a public-hostname form such as `app.example.com`. Update `[routes]`, CLI commands, and automation that reference the old values.
+
 ## v2.30.0 to v2.31.0
 
 ### Breaking: Default Port Changes
