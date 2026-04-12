@@ -651,17 +651,7 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 	}
 
 	log.Info().Str("domain", route.Domain).Str("image", route.Image).Msg("route updated")
-	storedRoute, err := h.configSvc.GetRoute(ctx, route.Domain)
-	if err != nil || storedRoute == nil {
-		if err == nil {
-			err = errors.New("route not found")
-		}
-		log.Error().Err(err).Str("domain", route.Domain).Msg("failed to load updated route")
-		h.sendError(w, http.StatusInternalServerError, "failed to load updated route")
-		return
-	}
-
-	h.sendJSON(w, http.StatusOK, toRouteResponse(*storedRoute))
+	h.sendJSON(w, http.StatusOK, toRouteResponse(route))
 }
 
 func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, routeDomain string) {

@@ -6,23 +6,25 @@ Routes map hostnames to container images.
 
 ```toml
 [routes]
-"app.mydomain.com" = "myapp:latest"
-"api.mydomain.com" = "myapi:v2.1.0"
-"admin.mydomain.com" = "admin-panel:v1.0.0"
+"app.mydomain.com" = { image = "myapp:latest" }
+"api.mydomain.com" = { image = "myapi:v2.1.0" }
+"admin.mydomain.com" = { image = "admin-panel:v1.0.0" }
 ```
 
 ## Syntax
 
 ```toml
 [routes]
-"<domain>" = "<image>:<tag>"
+"<domain>" = { image = "<image>:<tag>" }
 ```
 
 | Component | Description |
 |-----------|-------------|
 | `domain` | Public, fully qualified domain name |
-| `image` | Container image name (as pushed to Gordon's registry) |
-| `tag` | Image tag (version, `latest`, etc.) |
+| `image` | Full container image reference, including tag |
+| `https` | Optional; add `false` for HTTP-only routes |
+
+Legacy `http://...` route keys are still read for backward compatibility and rewritten on the next save.
 
 ## Route Types
 
@@ -32,7 +34,7 @@ Standard routes expect HTTPS traffic (terminated by Cloudflare or similar):
 
 ```toml
 [routes]
-"app.mydomain.com" = "myapp:latest"
+"app.mydomain.com" = { image = "myapp:latest" }
 ```
 
 Route domains must be plain hostnames. Gordon rejects `http://` and `https://` prefixes, `.local` and `.internal` suffixes, localhost names, and IP literals.
@@ -43,7 +45,7 @@ For local testing, use a hostname you can resolve yourself:
 
 ```toml
 [routes]
-"dev-app.example.com" = "internal-app:latest"
+"dev-app.example.com" = { image = "internal-app:latest", https = false }
 ```
 
 ## Version Strategies
@@ -54,7 +56,7 @@ Always deploy the most recent push:
 
 ```toml
 [routes]
-"app.mydomain.com" = "myapp:latest"
+"app.mydomain.com" = { image = "myapp:latest" }
 ```
 
 ### Pinned Version
@@ -63,14 +65,14 @@ Deploy a specific version:
 
 ```toml
 [routes]
-"app.mydomain.com" = "myapp:v2.1.0"
+"app.mydomain.com" = { image = "myapp:v2.1.0" }
 ```
 
 Update the config to deploy a new version:
 
 ```toml
 [routes]
-"app.mydomain.com" = "myapp:v2.2.0"  # Changed
+"app.mydomain.com" = { image = "myapp:v2.2.0" }  # Changed
 ```
 
 ### Semantic Versioning
@@ -79,9 +81,9 @@ Use different routes for different versions:
 
 ```toml
 [routes]
-"app.mydomain.com" = "myapp:v2.1.0"        # Production
-"staging.mydomain.com" = "myapp:staging"    # Staging
-"canary.mydomain.com" = "myapp:canary"      # Canary
+"app.mydomain.com" = { image = "myapp:v2.1.0" }        # Production
+"staging.mydomain.com" = { image = "myapp:staging" }    # Staging
+"canary.mydomain.com" = { image = "myapp:canary" }      # Canary
 ```
 
 ## Multiple Routes
@@ -90,19 +92,19 @@ Use different routes for different versions:
 
 ```toml
 [routes]
-"app.mydomain.com" = "myapp:latest"
-"www.mydomain.com" = "myapp:latest"
-"mydomain.com" = "myapp:latest"
+"app.mydomain.com" = { image = "myapp:latest" }
+"www.mydomain.com" = { image = "myapp:latest" }
+"mydomain.com" = { image = "myapp:latest" }
 ```
 
 ### Multiple Services
 
 ```toml
 [routes]
-"app.mydomain.com" = "frontend:latest"
-"api.mydomain.com" = "backend:v2.1.0"
-"docs.mydomain.com" = "documentation:latest"
-"status.mydomain.com" = "status-page:v1.0.0"
+"app.mydomain.com" = { image = "frontend:latest" }
+"api.mydomain.com" = { image = "backend:v2.1.0" }
+"docs.mydomain.com" = { image = "documentation:latest" }
+"status.mydomain.com" = { image = "status-page:v1.0.0" }
 ```
 
 ## How Routing Works
@@ -140,6 +142,8 @@ Route changes in the config file are hot-reloaded automatically:
 2. Save the file
 3. Gordon reloads the updated routes and proxy config
 
+Legacy `http://...` route keys are still read here for backward compatibility and rewritten the next time Gordon saves the config.
+
 You can still manage routes with the API or CLI if you prefer live mutations:
 
 ```bash
@@ -154,8 +158,8 @@ gordon routes remove oldapp.mydomain.com
 
 ```toml
 [routes]
-"dev-app.example.com" = "myapp:latest"
-"dev-api.example.com" = "myapi:latest"
+"dev-app.example.com" = { image = "myapp:latest" }
+"dev-api.example.com" = { image = "myapi:latest" }
 ```
 
 Add to `/etc/hosts`:
@@ -167,10 +171,10 @@ Add to `/etc/hosts`:
 
 ```toml
 [routes]
-"app.company.com" = "company-app:v2.1.0"
-"api.company.com" = "company-api:v1.5.2"
-"admin.company.com" = "admin-panel:v1.0.1"
-"docs.company.com" = "company-docs:latest"
+"app.company.com" = { image = "company-app:v2.1.0" }
+"api.company.com" = { image = "company-api:v1.5.2" }
+"admin.company.com" = { image = "admin-panel:v1.0.1" }
+"docs.company.com" = { image = "company-docs:latest" }
 ```
 
 ### Multi-Tenant SaaS
@@ -178,15 +182,15 @@ Add to `/etc/hosts`:
 ```toml
 [routes]
 # Platform services
-"app.saas-platform.com" = "saas-frontend:v2.1.0"
-"api.saas-platform.com" = "saas-api:v3.2.1"
+"app.saas-platform.com" = { image = "saas-frontend:v2.1.0" }
+"api.saas-platform.com" = { image = "saas-api:v3.2.1" }
 
 # Customer subdomains
-"acme.saas-platform.com" = "saas-app:v2.1.0"
-"beta.saas-platform.com" = "saas-app:v2.1.0"
+"acme.saas-platform.com" = { image = "saas-app:v2.1.0" }
+"beta.saas-platform.com" = { image = "saas-app:v2.1.0" }
 
 # Customer custom domains
-"portal.acme-corp.com" = "saas-app:v2.1.0"
+"portal.acme-corp.com" = { image = "saas-app:v2.1.0" }
 ```
 
 ## External Services

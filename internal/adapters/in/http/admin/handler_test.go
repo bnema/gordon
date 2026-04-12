@@ -277,7 +277,6 @@ func TestHandler_RoutesPut_RequiresWriteScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
 				configSvc.EXPECT().UpdateRoute(mock.Anything, mock.AnythingOfType("domain.Route")).Return(nil).Maybe()
-				configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}, nil).Maybe()
 			}
 
 			req := httptest.NewRequest("PUT", "/admin/routes/app.example.com", bytes.NewBufferString(routeJSON))
@@ -387,7 +386,6 @@ func TestHandler_RoutesPut_AllowsRouteUpdateWithoutRegistryManifest(t *testing.T
 	})
 
 	configSvc.EXPECT().UpdateRoute(mock.Anything, route).Return(nil).Once()
-	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}, nil).Once()
 
 	req := httptest.NewRequest("PUT", "/admin/routes/app.example.com", bytes.NewBufferString(`{"image":"myapp:v2"}`))
 	req = req.WithContext(ctxWithScopes("admin:routes:write"))
@@ -414,7 +412,6 @@ func TestHandleRoutesPut_ReturnsStoredRouteAfterUpdate(t *testing.T) {
 	})
 
 	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}).Return(nil).Once()
-	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "stored:v2", HTTPS: false}, nil).Once()
 
 	req := httptest.NewRequest("PUT", "/admin/routes/app.example.com", bytes.NewBufferString(`{"image":"myapp:v2"}`))
 	req = req.WithContext(ctxWithScopes("admin:routes:write"))
@@ -423,7 +420,7 @@ func TestHandleRoutesPut_ReturnsStoredRouteAfterUpdate(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.JSONEq(t, `{"domain":"app.example.com","image":"stored:v2","https":false}`, rec.Body.String())
+	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:v2","https":true}`, rec.Body.String())
 }
 
 func TestHandler_AttachmentsByImageGet_OneTarget(t *testing.T) {

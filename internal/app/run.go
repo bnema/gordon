@@ -1399,7 +1399,6 @@ func (c *reloadCoordinator) Trigger(ctx context.Context) error {
 		c.log.Debug().Dur("since_last_reload", now.Sub(c.lastRun)).Msg("skipping config reload trigger due to debounce")
 		return nil
 	}
-	c.lastRun = now
 
 	if err := c.configSvc.Reload(ctx); err != nil {
 		c.log.Error().Err(err).Msg("failed to reload config")
@@ -1425,6 +1424,8 @@ func (c *reloadCoordinator) Trigger(ctx context.Context) error {
 			c.log.Error().Err(err).Msg("failed to publish config reload event")
 		}
 	}
+
+	c.lastRun = now
 
 	c.log.Debug().Msg("config hot reload complete")
 	return nil

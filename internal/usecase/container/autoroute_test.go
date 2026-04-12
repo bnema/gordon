@@ -62,7 +62,7 @@ func TestDomainToEnvFileName(t *testing.T) {
 	}
 }
 
-// parseEnvFile tests
+// ParseEnvData tests
 
 func TestParseEnvFile(t *testing.T) {
 	tests := []struct {
@@ -142,7 +142,7 @@ func TestParseEnvFile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseEnvFile([]byte(tt.input))
+			result, err := domain.ParseEnvData([]byte(tt.input))
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -507,12 +507,14 @@ func TestAutoRouteHandler_Handle_CreatesNewRoute(t *testing.T) {
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(nil)
 
 	// Expect deploy to be triggered
 	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(&domain.Container{ID: "container-1"}, nil)
 
 	event := domain.Event{
@@ -563,19 +565,21 @@ func TestAutoRouteHandler_Handle_UpdatesExistingRoute(t *testing.T) {
 
 	// Existing route with different image
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "app.example.com", Image: "myapp:v1"},
+		{Domain: "app.example.com", Image: "myapp:v1", HTTPS: true},
 	})
 
 	// Expect route to be updated
 	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:v2",
+		HTTPS:  true,
 	}).Return(nil)
 
 	// Expect deploy to be triggered
 	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:v2",
+		HTTPS:  true,
 	}).Return(&domain.Container{ID: "container-1"}, nil)
 
 	event := domain.Event{
@@ -732,14 +736,17 @@ func TestAutoRouteHandler_Handle_MultipleDomains(t *testing.T) {
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(nil)
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{
 		Domain: "api.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(nil)
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{
 		Domain: "www.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(nil)
 
 	// Expect deploy for all three
@@ -785,8 +792,8 @@ func TestAutoRouteHandler_NewDomain_Allowed(t *testing.T) {
 	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
 
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil)
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(&domain.Container{ID: "c1"}, nil)
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(&domain.Container{ID: "c1"}, nil)
 
 	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:latest", []string{"*.example.com"})
 	assert.True(t, created)
@@ -812,9 +819,9 @@ func TestAutoRouteHandler_ExistingDomain_SameRepo(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
 
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "myapp:v1"}})
-	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2"}).Return(nil)
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2"}).Return(&domain.Container{ID: "c1"}, nil)
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "myapp:v1", HTTPS: true}})
+	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}).Return(&domain.Container{ID: "c1"}, nil)
 
 	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:v2", []string{"*.example.com"})
 	assert.False(t, created)
@@ -844,8 +851,8 @@ func TestAutoRouteHandler_EnvExtractionOnlyOnCreate(t *testing.T) {
 
 	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"*.example.com"}, nil).Twice()
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{}).Once()
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil)
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(&domain.Container{ID: "c1"}, nil)
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(&domain.Container{ID: "c1"}, nil)
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "myapp:latest"}}).Once()
 
 	handler.processRoutes(context.Background(), []string{"app.example.com"}, "myapp:latest", &domain.ImageLabels{EnvFile: ".env"})

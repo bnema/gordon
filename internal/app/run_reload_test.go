@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -148,6 +149,33 @@ func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 		MaxResponseSize:    7 << 20,
 		MaxConcurrentConns: 99,
 	}, proxySvc.config)
+}
+
+func TestReloadCoordinator_RetriesImmediatelyAfterFailedReload(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "retry.example.com")
+	v.Set("server.registry_port", 5000)
+	v.Set("server.max_proxy_body_size", "2MB")
+	v.Set("server.max_blob_chunk_size", "3MB")
+	v.Set("server.max_proxy_response_size", "4MB")
+	v.Set("server.max_concurrent_connections", 11)
+
+	reloadErr := errors.New("reload failed")
+	reloadSvc := &reloadRecorder{err: reloadErr}
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, zerowrap.Default())
+
+	err := coord.Trigger(ctx)
+	require.ErrorIs(t, err, reloadErr)
+
+	reloadSvc.mu.Lock()
+	reloadSvc.err = nil
+	reloadSvc.mu.Unlock()
+
+	require.NoError(t, coord.Trigger(ctx))
+	require.Equal(t, 2, reloadSvc.Calls())
+	assert.Equal(t, 1, proxySvc.calls)
 }
 
 func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {

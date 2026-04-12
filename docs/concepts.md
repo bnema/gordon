@@ -65,11 +65,11 @@ Routes map domains to container images:
 
 ```toml
 [routes]
-"app.example.com" = "myapp:latest"
-"api.example.com" = "myapi:v2.1.0"
+"app.example.com" = { image = "myapp:latest" }
+"api.example.com" = { image = "myapi:v2.1.0" }
 ```
 
-Route domains must be plain hostnames such as `app.example.com`. Gordon rejects `http://` and `https://` prefixes, `.local` and `.internal` suffixes, localhost names, and IP literals.
+Route domains must be plain hostnames such as `app.example.com`. Gordon rejects `http://` and `https://` prefixes, `.local` and `.internal` suffixes, localhost names, and IP literals. Legacy `http://...` keys are still read for backward compatibility and rewritten on the next save.
 
 When a request comes in for `app.example.com`, Gordon:
 
@@ -83,7 +83,7 @@ Routes use plain hostnames. By default, traffic is HTTPS (terminated by Cloudfla
 
 ```toml
 [routes]
-"dev-app.example.com" = "internal-app:latest"
+"dev-app.example.com" = { image = "internal-app:latest", https = false }
 ```
 
 ## Network Isolation

@@ -41,7 +41,7 @@ type Config struct {
 	PreviewEnvCopy          bool
 	NetworkIsolation        bool
 	NetworkPrefix           string
-	Routes                  map[string]string
+	Routes                  map[string]routeConfig
 	ExternalRoutes          map[string]string // domain -> "host:port"
 	RegistryAuthEnabled     bool
 	RegistryAuthUsername    string
@@ -51,6 +51,11 @@ type Config struct {
 	VolumePreserve          bool
 	NetworkGroups           map[string][]string
 	Attachments             map[string][]string
+}
+
+type routeConfig struct {
+	Image string `toml:"image"`
+	HTTPS bool   `toml:"https"`
 }
 
 // Service implements the ConfigService interface.
@@ -83,14 +88,18 @@ func (s *Service) Load(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Load configuration from viper
-	s.config = s.loadConfigValues()
+	newConfig := s.loadConfigValues()
 
-	// Load complex nested structures
-	s.config.Routes = loadStringMap(s.viper.Get("routes"))
-	s.config.ExternalRoutes = loadStringMap(s.viper.Get("external_routes"))
-	s.config.NetworkGroups = loadStringArrayMap(s.viper.Get("network_groups"))
-	s.config.Attachments = loadStringArrayMap(s.viper.Get("attachments"))
+	routes, err := loadCanonicalRoutes(s.viper.Get("routes"))
+	if err != nil {
+		return log.WrapErr(err, "failed to load routes")
+	}
+	newConfig.Routes = routes
+	newConfig.ExternalRoutes = loadStringMap(s.viper.Get("external_routes"))
+	newConfig.NetworkGroups = loadStringArrayMap(s.viper.Get("network_groups"))
+	newConfig.Attachments = loadStringArrayMap(s.viper.Get("attachments"))
+
+	s.config = newConfig
 
 	log.Info().
 		Int("server_port", s.config.ServerPort).
@@ -174,7 +183,7 @@ func (s *Service) loadConfigValues() Config {
 		VolumeAutoCreate:        s.viper.GetBool("volumes.auto_create"),
 		VolumePrefix:            s.viper.GetString("volumes.prefix"),
 		VolumePreserve:          s.viper.GetBool("volumes.preserve"),
-		Routes:                  make(map[string]string),
+		Routes:                  make(map[string]routeConfig),
 		ExternalRoutes:          make(map[string]string),
 		NetworkGroups:           make(map[string][]string),
 		Attachments:             make(map[string][]string),
@@ -223,27 +232,112 @@ func loadStringArrayMap(raw any) map[string][]string {
 	return result
 }
 
+func loadCanonicalRoutes(raw any) (map[string]routeConfig, error) {
+	result := make(map[string]routeConfig)
+	if raw == nil {
+		return result, nil
+	}
+
+	routes, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("routes section must be a table, got %T", raw)
+	}
+
+	for key, value := range routes {
+		if strings.HasPrefix(key, "http://") {
+			continue
+		}
+
+		route, err := parseCanonicalRouteEntry(key, value)
+		if err != nil {
+			return nil, err
+		}
+		result[key] = route
+	}
+
+	for key, value := range routes {
+		if !strings.HasPrefix(key, "http://") {
+			continue
+		}
+
+		domainName := strings.TrimPrefix(key, "http://")
+		if _, exists := result[domainName]; exists {
+			continue
+		}
+
+		route, err := parseLegacyRouteEntry(domainName, value)
+		if err != nil {
+			return nil, err
+		}
+		result[domainName] = route
+	}
+
+	return result, nil
+}
+
+func parseCanonicalRouteEntry(domainName string, raw any) (routeConfig, error) {
+	if !domain.IsValidRouteDomain(domainName) {
+		return routeConfig{}, fmt.Errorf("invalid route key %q", domainName)
+	}
+
+	switch value := raw.(type) {
+	case string:
+		if value == "" {
+			return routeConfig{}, fmt.Errorf("route %q has empty image", domainName)
+		}
+		return routeConfig{Image: value, HTTPS: true}, nil
+	case map[string]any:
+		return parseRouteTable(domainName, value)
+	default:
+		return routeConfig{}, fmt.Errorf("route %q has unsupported value type %T", domainName, raw)
+	}
+}
+
+func parseLegacyRouteEntry(domainName string, raw any) (routeConfig, error) {
+	if !domain.IsValidRouteDomain(domainName) {
+		return routeConfig{}, fmt.Errorf("invalid route key %q", legacyRouteStorageKey(domainName))
+	}
+
+	value, ok := raw.(string)
+	if !ok {
+		return routeConfig{}, fmt.Errorf("legacy route %q must be a string", legacyRouteStorageKey(domainName))
+	}
+	if value == "" {
+		return routeConfig{}, fmt.Errorf("legacy route %q has empty image", legacyRouteStorageKey(domainName))
+	}
+
+	return routeConfig{Image: value, HTTPS: false}, nil
+}
+
+func parseRouteTable(domainName string, raw map[string]any) (routeConfig, error) {
+	imageValue, ok := raw["image"].(string)
+	if !ok || imageValue == "" {
+		return routeConfig{}, fmt.Errorf("route %q has invalid image field", domainName)
+	}
+
+	httpsValue, ok := raw["https"]
+	if !ok {
+		return routeConfig{Image: imageValue, HTTPS: true}, nil
+	}
+	https, ok := httpsValue.(bool)
+	if !ok {
+		return routeConfig{}, fmt.Errorf("route %q has invalid https field", domainName)
+	}
+
+	return routeConfig{Image: imageValue, HTTPS: https}, nil
+}
+
 // GetRoutes returns all configured routes.
 func (s *Service) GetRoutes(_ context.Context) []domain.Route {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var routes []domain.Route
-	for domainName, image := range s.config.Routes {
-		route := domain.Route{
-			Image: image,
-			HTTPS: true,
-		}
-
-		// Check if domain has http:// prefix
+	for domainName, route := range s.config.Routes {
 		if strings.HasPrefix(domainName, "http://") {
-			route.Domain = strings.TrimPrefix(domainName, "http://")
-			route.HTTPS = false
-		} else {
-			route.Domain = domainName
+			continue
 		}
-
-		routes = append(routes, route)
+		routes = append(routes, domain.Route{Domain: domainName, Image: route.Image, HTTPS: route.HTTPS})
 	}
 
 	return routes
@@ -254,22 +348,13 @@ func (s *Service) GetRoute(_ context.Context, domainName string) (*domain.Route,
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	lookup := resolveRouteStorageKey(s.config.Routes, domainName)
-	if !lookup.found {
+	routeCfg, ok := s.config.Routes[domainName]
+	if !ok {
 		return nil, domain.ErrRouteNotFound
 	}
 
-	route := &domain.Route{
-		Domain: domainName,
-		Image:  lookup.image,
-		HTTPS:  true,
-	}
-
-	// Check if domain has http:// prefix
-	if strings.HasPrefix(lookup.storageKey, "http://") {
-		route.Domain = strings.TrimPrefix(lookup.storageKey, "http://")
-		route.HTTPS = false
-	}
+	routeValue := domain.Route{Domain: domainName, Image: routeCfg.Image, HTTPS: routeCfg.HTTPS}
+	route := &routeValue
 
 	return route, nil
 }
@@ -282,19 +367,12 @@ func (s *Service) FindRoutesByImage(_ context.Context, imageName string) []domai
 	defer s.mu.RUnlock()
 
 	var routes []domain.Route
-	for domainName, image := range s.config.Routes {
-		if matchesImageName(imageName, image, s.config.RegistryDomain) {
-			route := domain.Route{
-				Image: image,
-				HTTPS: true,
-			}
-			if strings.HasPrefix(domainName, "http://") {
-				route.Domain = strings.TrimPrefix(domainName, "http://")
-				route.HTTPS = false
-			} else {
-				route.Domain = domainName
-			}
-			routes = append(routes, route)
+	for domainName, route := range s.config.Routes {
+		if strings.HasPrefix(domainName, "http://") {
+			continue
+		}
+		if matchesImageName(imageName, route.Image, s.config.RegistryDomain) {
+			routes = append(routes, domain.Route{Domain: domainName, Image: route.Image, HTTPS: route.HTTPS})
 		}
 	}
 
@@ -386,58 +464,8 @@ func NormalizeBootstrapImage(image, registryDomain string) (string, error) {
 	return image, nil
 }
 
-type routeStorageLookup struct {
-	storageKey  string
-	image       string
-	legacyKey   string
-	legacyImage string
-	found       bool
-}
-
 func legacyRouteStorageKey(domainName string) string {
 	return "http://" + domainName
-}
-
-func resolveRouteStorageKey(routes map[string]string, domainName string) routeStorageLookup {
-	httpKey := legacyRouteStorageKey(domainName)
-	image, ok := routes[domainName]
-	if ok {
-		lookup := routeStorageLookup{
-			storageKey: domainName,
-			image:      image,
-			found:      true,
-		}
-		if legacyImage, hasLegacy := routes[httpKey]; hasLegacy {
-			lookup.legacyKey = httpKey
-			lookup.legacyImage = legacyImage
-		}
-		return lookup
-	}
-
-	image, ok = routes[httpKey]
-	if !ok {
-		return routeStorageLookup{}
-	}
-
-	return routeStorageLookup{
-		storageKey: httpKey,
-		image:      image,
-		found:      true,
-	}
-}
-
-func deleteLegacyRouteKey(routes map[string]string, lookup routeStorageLookup) {
-	if lookup.legacyKey == "" {
-		return
-	}
-	delete(routes, lookup.legacyKey)
-}
-
-func restoreLegacyRouteKey(routes map[string]string, lookup routeStorageLookup) {
-	if lookup.legacyKey == "" {
-		return
-	}
-	routes[lookup.legacyKey] = lookup.legacyImage
 }
 
 // AddRoute adds a new route to the configuration and persists it.
@@ -463,23 +491,17 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	// Store previous value for rollback
 	s.mu.Lock()
 	if s.config.Routes == nil {
-		s.config.Routes = make(map[string]string)
+		s.config.Routes = make(map[string]routeConfig)
 	}
-	lookup := resolveRouteStorageKey(s.config.Routes, route.Domain)
-	previousCanonicalImage, canonicalExisted := s.config.Routes[route.Domain]
-	legacyKey := lookup.legacyKey
-	previousLegacyImage, legacyExisted := "", false
-	if legacyKey == "" {
-		legacyKey = legacyRouteStorageKey(route.Domain)
-	}
-	if legacyKey != route.Domain {
-		previousLegacyImage, legacyExisted = s.config.Routes[legacyKey]
-	}
-	if canonicalExisted && previousCanonicalImage == route.Image && !legacyExisted {
+	previousCanonicalRoute, canonicalExisted := s.config.Routes[route.Domain]
+	legacyKey := legacyRouteStorageKey(route.Domain)
+	previousLegacyRoute, legacyExisted := s.config.Routes[legacyKey]
+	newRoute := routeConfig{Image: route.Image, HTTPS: route.HTTPS}
+	if canonicalExisted && previousCanonicalRoute == newRoute && !legacyExisted {
 		s.mu.Unlock()
 		return nil
 	}
-	s.config.Routes[route.Domain] = route.Image
+	s.config.Routes[route.Domain] = newRoute
 	if legacyExisted {
 		delete(s.config.Routes, legacyKey)
 	}
@@ -490,12 +512,12 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 		log.Warn().Err(err).Msg("failed to persist route to disk, rolling back")
 		s.mu.Lock()
 		if canonicalExisted {
-			s.config.Routes[route.Domain] = previousCanonicalImage
+			s.config.Routes[route.Domain] = previousCanonicalRoute
 		} else {
 			delete(s.config.Routes, route.Domain)
 		}
 		if legacyExisted {
-			s.config.Routes[legacyKey] = previousLegacyImage
+			s.config.Routes[legacyKey] = previousLegacyRoute
 		}
 		s.mu.Unlock()
 		return err
@@ -527,21 +549,28 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	lookup := resolveRouteStorageKey(s.config.Routes, route.Domain)
-	if !lookup.found {
+	previousRoute, ok := s.config.Routes[route.Domain]
+	if !ok {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-	deleteLegacyRouteKey(s.config.Routes, lookup)
-	s.config.Routes[lookup.storageKey] = route.Image
+	updatedRoute := previousRoute
+	legacyKey := legacyRouteStorageKey(route.Domain)
+	previousLegacyRoute, legacyExisted := s.config.Routes[legacyKey]
+	delete(s.config.Routes, legacyKey)
+	updatedRoute.Image = route.Image
+	updatedRoute.HTTPS = route.HTTPS
+	s.config.Routes[route.Domain] = updatedRoute
 	s.mu.Unlock()
 
 	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to persist route update to disk, rolling back")
 		s.mu.Lock()
-		s.config.Routes[lookup.storageKey] = lookup.image
-		restoreLegacyRouteKey(s.config.Routes, lookup)
+		s.config.Routes[route.Domain] = previousRoute
+		if legacyExisted {
+			s.config.Routes[legacyKey] = previousLegacyRoute
+		}
 		s.mu.Unlock()
 		return err
 	}
@@ -559,23 +588,34 @@ func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	if domainName == "" {
+		return domain.ErrRouteDomainEmpty
+	}
+	if !domain.IsValidRouteDomain(domainName) {
+		return domain.ErrRouteDomainInvalid
+	}
+
 	// Store previous value for rollback
 	s.mu.Lock()
-	lookup := resolveRouteStorageKey(s.config.Routes, domainName)
-	if !lookup.found {
+	routeValue, ok := s.config.Routes[domainName]
+	if !ok {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-	deleteLegacyRouteKey(s.config.Routes, lookup)
-	delete(s.config.Routes, lookup.storageKey)
+	legacyKey := legacyRouteStorageKey(domainName)
+	previousLegacyRoute, legacyExisted := s.config.Routes[legacyKey]
+	delete(s.config.Routes, legacyKey)
+	delete(s.config.Routes, domainName)
 	s.mu.Unlock()
 
 	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to persist route removal to disk, rolling back")
 		s.mu.Lock()
-		s.config.Routes[lookup.storageKey] = lookup.image
-		restoreLegacyRouteKey(s.config.Routes, lookup)
+		s.config.Routes[domainName] = routeValue
+		if legacyExisted {
+			s.config.Routes[legacyKey] = previousLegacyRoute
+		}
 		s.mu.Unlock()
 		return err
 	}
@@ -679,46 +719,45 @@ func (s *Service) verifyCriticalFields(snap configSnapshot) error {
 
 func (s *Service) writeConfigSurgical(configFile string) error {
 	data, err := os.ReadFile(configFile)
+	var config map[string]any
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.viper.Set("routes", s.config.Routes)
-			s.viper.Set("external_routes", s.config.ExternalRoutes)
-			s.viper.Set("attachments", s.config.Attachments)
-			s.viper.Set("network_groups", s.config.NetworkGroups)
-			s.viper.Set("auto_route_allowed_domains", s.config.AutoRouteAllowedDomains)
-			s.viper.Set("auto.allowed_domains", s.config.AutoRouteAllowedDomains)
-			return s.viper.WriteConfigAs(configFile)
+			config = s.viper.AllSettings()
+		} else {
+			return fmt.Errorf("failed to read config file: %w", err)
 		}
-		return fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	var config map[string]any
+	if config == nil {
+		config = make(map[string]any)
+	}
 	if len(data) > 0 {
 		if err := toml.Unmarshal(data, &config); err != nil {
 			return fmt.Errorf("failed to parse config file: %w", err)
 		}
 	}
-	if config == nil {
-		config = make(map[string]any)
-	}
 
-	config["routes"] = s.config.Routes
+	delete(config, "routes")
 	config["external_routes"] = s.config.ExternalRoutes
 	config["attachments"] = s.config.Attachments
 	config["network_groups"] = s.config.NetworkGroups
-	// Write to both old and new keys for backward compat
-	config["auto_route_allowed_domains"] = s.config.AutoRouteAllowedDomains
-	if autoSection, ok := config["auto"].(map[string]any); ok {
-		autoSection["allowed_domains"] = s.config.AutoRouteAllowedDomains
-	} else {
-		config["auto"] = map[string]any{
-			"allowed_domains": s.config.AutoRouteAllowedDomains,
-		}
-	}
+	applyAutoAllowedDomains(config, s.config.AutoRouteAllowedDomains)
 
 	out, err := toml.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	routes, err := canonicalRoutesForSave(s.config.Routes)
+	if err != nil {
+		return err
+	}
+	routesOut := renderCanonicalRoutesSection(routes)
+	if routesOut != "" {
+		if len(out) > 0 {
+			out = append(out, '\n')
+		}
+		out = append(out, []byte(routesOut)...)
 	}
 
 	configDir := filepath.Dir(configFile)
@@ -748,6 +787,84 @@ func (s *Service) writeConfigSurgical(configFile string) error {
 	}
 
 	return nil
+}
+
+func applyAutoAllowedDomains(config map[string]any, allowedDomains []string) {
+	// Write to both old and new keys for backward compat
+	config["auto_route_allowed_domains"] = allowedDomains
+	if autoSection, ok := config["auto"].(map[string]any); ok {
+		autoSection["allowed_domains"] = allowedDomains
+		return
+	}
+
+	config["auto"] = map[string]any{
+		"allowed_domains": allowedDomains,
+	}
+}
+
+func canonicalRoutesForSave(routes map[string]routeConfig) (map[string]routeConfig, error) {
+	result := make(map[string]routeConfig)
+	if routes == nil {
+		return result, nil
+	}
+
+	for key, route := range routes {
+		if strings.HasPrefix(key, "http://") {
+			continue
+		}
+		if !domain.IsValidRouteDomain(key) {
+			return nil, fmt.Errorf("invalid route key %q", key)
+		}
+		result[key] = route
+	}
+
+	for key, route := range routes {
+		if !strings.HasPrefix(key, "http://") {
+			continue
+		}
+
+		domainName := strings.TrimPrefix(key, "http://")
+		if !domain.IsValidRouteDomain(domainName) {
+			return nil, fmt.Errorf("invalid route key %q", key)
+		}
+		if _, exists := result[domainName]; exists {
+			continue
+		}
+		route.HTTPS = false
+		result[domainName] = route
+	}
+
+	return result, nil
+}
+
+func renderCanonicalRoutesSection(routes map[string]routeConfig) string {
+	if len(routes) == 0 {
+		return ""
+	}
+
+	keys := make([]string, 0, len(routes))
+	for key := range routes {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	var b strings.Builder
+	b.WriteString("[routes]\n")
+	for _, key := range keys {
+		route := routes[key]
+		b.WriteString(strconv.Quote(key))
+		b.WriteString(" = { image = ")
+		b.WriteString(strconv.Quote(route.Image))
+		b.WriteString(", https = ")
+		if route.HTTPS {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+		b.WriteString(" }\n")
+	}
+
+	return b.String()
 }
 
 func backupConfigFile(configFile string) error {
@@ -894,7 +1011,6 @@ func (s *Service) Watch(ctx context.Context, onChange func()) error {
 			log.WrapErr(err, "failed to load updated config")
 			return
 		}
-
 
 		if onChange != nil {
 			onChange()

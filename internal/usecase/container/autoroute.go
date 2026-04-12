@@ -1,7 +1,6 @@
 package container
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -199,11 +198,13 @@ func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain,
 	route := domain.Route{
 		Domain: routeDomain,
 		Image:  imageName,
+		HTTPS:  true,
 	}
 
 	existingRoutes := h.configSvc.GetRoutes(ctx)
 	for _, existing := range existingRoutes {
 		if existing.Domain == routeDomain {
+			route.HTTPS = existing.HTTPS
 			if auto.ExtractRepoName(existing.Image, h.registryDomain) != auto.ExtractRepoName(imageName, h.registryDomain) {
 				log.Warn().Str("domain", routeDomain).Str("existing_image", existing.Image).Str("image", imageName).Msg("auto-route update rejected due to repository ownership mismatch")
 				return false
@@ -280,7 +281,7 @@ func (h *AutoRouteHandler) extractAndMergeEnvFile(ctx context.Context, imageRef,
 	}
 
 	// Parse the extracted env file
-	imageEnv, err := parseEnvFile(envData)
+	imageEnv, err := domain.ParseEnvData(envData)
 	if err != nil {
 		return fmt.Errorf("failed to parse env file: %w", err)
 	}
@@ -308,7 +309,7 @@ func (h *AutoRouteHandler) extractAndMergeEnvFile(ctx context.Context, imageRef,
 
 	existingEnv := make(map[string]string)
 	if data, err := os.ReadFile(envFileDst); err == nil {
-		existingEnv, _ = parseEnvFile(data)
+		existingEnv, _ = domain.ParseEnvData(data)
 	}
 
 	// Merge: image values are defaults, existing values win
@@ -359,48 +360,6 @@ func (h *AutoRouteHandler) extractLabels(ctx context.Context, manifestData []byt
 	}
 
 	return labels, nil
-}
-
-// parseEnvFile parses an env file into a map of key-value pairs.
-func parseEnvFile(data []byte) (map[string]string, error) {
-	env := make(map[string]string)
-
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		// Parse KEY=value
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		// Remove surrounding quotes if present
-		if len(value) >= 2 {
-			if (value[0] == '"' && value[len(value)-1] == '"') ||
-				(value[0] == '\'' && value[len(value)-1] == '\'') {
-				value = value[1 : len(value)-1]
-			}
-		}
-
-		if key != "" {
-			env[key] = value
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return env, nil
 }
 
 // domainToEnvFileName converts a domain to an env file name.
