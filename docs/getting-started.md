@@ -147,7 +147,7 @@ gordon remotes use prod
 gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
 
 # Then build, push, and deploy
-gordon push myapp:latest --domain app.example.com --build --no-confirm
+gordon push --domain app.example.com --build --no-confirm
 ```
 
 What this command does:
@@ -161,7 +161,7 @@ What this command does:
 If the route already exists and you only need to push a new image version, use:
 
 ```bash
-gordon push myapp:latest --build --no-confirm
+gordon push myapp --build --no-confirm
 ```
 
 `gordon push` still requires the route to already exist so it can resolve the
@@ -175,7 +175,7 @@ Push a new image to deploy with zero downtime:
 
 ```bash
 # Make changes, then build + push + deploy
-gordon push myapp:latest --build --no-confirm
+gordon push myapp --build --no-confirm
 ```
 
 Gordon automatically:

@@ -630,15 +630,61 @@ func TestResolveFromImage_NoRouteSuggestsBootstrap(t *testing.T) {
 	assert.Contains(t, err.Error(), "gordon bootstrap")
 }
 
-func TestResolveRoute_LegacyDomainArgumentUsesGetRoute(t *testing.T) {
+func TestResolveRoute_DottedBareImageUsesImageLookup(t *testing.T) {
 	cp := &resolveFromImageTestControlPlane{
+		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
+			assert.Equal(t, "my.app", imageName)
+			return []domain.Route{{Domain: "app.example.com", Image: "registry.example.com/my.app:latest"}}, nil
+		},
+		getRoute: func(context.Context, string) (*domain.Route, error) {
+			t.Fatalf("unexpected GetRoute call")
+			return nil, nil
+		},
+	}
+
+	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cp, "my.app", "", "Dockerfile")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "registry.example.com", registry)
+	assert.Equal(t, "my.app", imageName)
+	assert.Equal(t, "app.example.com", pushDomain)
+}
+
+func TestResolveRoute_DottedBareImageNoRoutesKeepsBootstrapError(t *testing.T) {
+	sawImageLookup := false
+	cp := &resolveFromImageTestControlPlane{
+		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
+			sawImageLookup = true
+			assert.Equal(t, "my.app", imageName)
+			return nil, nil
+		},
 		getRoute: func(_ context.Context, domainName string) (*domain.Route, error) {
+			assert.True(t, sawImageLookup, "expected image lookup before legacy domain lookup")
+			assert.Equal(t, "my.app", domainName)
+			return nil, domain.ErrRouteNotFound
+		},
+	}
+
+	_, _, _, err := resolveRoute(context.Background(), cp, "my.app", "", "Dockerfile")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), `no route configured for image "my.app"`)
+	assert.Contains(t, err.Error(), "gordon bootstrap")
+	assert.NotContains(t, err.Error(), "failed to get route for domain")
+}
+
+func TestResolveRoute_DottedBareDomainFallsBackToLegacyLookup(t *testing.T) {
+	sawImageLookup := false
+	cp := &resolveFromImageTestControlPlane{
+		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
+			sawImageLookup = true
+			assert.Equal(t, "app.example.com", imageName)
+			return nil, nil
+		},
+		getRoute: func(_ context.Context, domainName string) (*domain.Route, error) {
+			assert.True(t, sawImageLookup, "expected image lookup before legacy domain lookup")
 			assert.Equal(t, "app.example.com", domainName)
 			return &domain.Route{Domain: domainName, Image: "registry.example.com/myapp:latest"}, nil
-		},
-		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
-			t.Fatalf("unexpected FindRoutesByImage call for %q", imageName)
-			return nil, nil
 		},
 	}
 

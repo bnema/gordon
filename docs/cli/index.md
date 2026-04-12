@@ -72,13 +72,13 @@ gordon restart myapp.example.com
 gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
 
 # Then push and deploy
-gordon push myapp:latest --domain app.example.com --build --no-confirm
+gordon push --domain app.example.com --build --no-confirm
 
 # Push an image and deploy
-gordon push myapp:latest --domain app.example.com --build
+gordon push myapp --build
 
 # Push and deploy without confirmation
-gordon push myapp:latest --domain app.example.com --no-confirm
+gordon push myapp --no-confirm
 
 # Roll back to a previous tag
 gordon rollback myapp.example.com

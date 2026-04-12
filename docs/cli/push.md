@@ -24,7 +24,7 @@ gordon push [image] [options]
 | `-f, --file` | Path to Dockerfile (default: `./Dockerfile`, used with `--build`) |
 | `--platform` | Target platform for buildx (default: `linux/amd64`) |
 | `--build-arg` | Additional build args (repeatable, `KEY=VALUE`) |
-| `--tag` | Override version tag (default: tag ref from CI, then `git describe --tags --dirty`) |
+| `--tag` | Override pushed version tag (default: tag ref from CI, then `git describe --tags --dirty`) |
 | `--no-confirm` | Skip deploy confirmation prompt |
 | `--no-deploy` | Push only; skip deployment prompt |
 | `--domain` | Explicit deploy target override |
@@ -37,10 +37,12 @@ gordon push [image] [options]
 optionally deploys matching routes.
 
 Image resolution order:
-1. `--domain` is the explicit deploy target override
-2. Tagged image refs resolve domain(s) from the backend using the image name
-3. Domain-looking positional args use legacy domain-based lookup for compatibility
+1. `--domain` is the explicit deploy target override for legacy workflows
+2. Positional refs resolve routes by image name; tagged refs still use the image name for lookup
+3. Dotted positional refs probe image routes first, then fall back to legacy domain lookup
 4. No-arg mode auto-detects from the Dockerfile label or current directory
+
+The pushed version still comes from `--tag`, CI tag refs, or `git describe --tags --dirty`.
 
 To push attachment images (databases, caches, etc.), use `gordon attachments push`.
 
@@ -95,26 +97,29 @@ Gordon reads version tags from CI environment variables (in priority order):
 gordon push --build --remote https://gordon.example.com --no-confirm
 
 # Push an image and deploy it
-gordon push myapp:latest --remote https://gordon.example.com --no-confirm
+gordon push myapp --remote https://gordon.example.com --no-confirm
 
 # Push and deploy to an explicit domain
-gordon push myapp:latest --domain app.example.com --remote https://gordon.example.com --no-confirm
+gordon push --domain app.example.com --remote https://gordon.example.com --no-confirm
+
+# Tagged refs still resolve routes by image name
+gordon push myapp:v1.2.3 --tag v1.2.3 --no-deploy
 
 # Push existing local image, skip deploy
-gordon push myapp:latest --tag v1.2.0 --no-deploy
+gordon push myapp --tag v1.2.0 --no-deploy
 
 # Build for ARM and pass build args
-gordon push myapp:latest --build --platform linux/arm64 --build-arg CGO_ENABLED=0
+gordon push myapp --build --platform linux/arm64 --build-arg CGO_ENABLED=0
 
 # Build from a custom Dockerfile path
-gordon push myapp:latest --build -f docker/app/Dockerfile
+gordon push myapp --build -f docker/app/Dockerfile
 
 # Legacy compatibility: domain-looking positional target
 gordon push app.example.com --no-confirm
 
 # CI/CD usage (single env var, no docker login needed)
 export GORDON_TOKEN="your-token"
-gordon push myapp:latest --build --remote https://gordon.example.com --no-confirm
+gordon push myapp --build --remote https://gordon.example.com --no-confirm
 ```
 
 ### Notes

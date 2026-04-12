@@ -255,7 +255,7 @@ gordon bootstrap app.example.com myapp:latest --attachment pitlane-pgsql
 gordon attachments push pitlane-pgsql --build
 
 # Then push and deploy the route image
-gordon push myapp:latest --domain app.example.com --build --no-confirm
+gordon push --domain app.example.com --build --no-confirm
 ```
 
 ### CI/CD Integration
