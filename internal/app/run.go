@@ -1402,19 +1402,19 @@ func (c *reloadCoordinator) Trigger(ctx context.Context) error {
 
 	if err := c.configSvc.Reload(ctx); err != nil {
 		c.log.Error().Err(err).Msg("failed to reload config")
-		return err
+		return fmt.Errorf("failed to reload config: %w", err)
 	}
 
 	var reloadCfg Config
 	if err := c.v.Unmarshal(&reloadCfg); err != nil {
 		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
-		return err
+		return fmt.Errorf("failed to unmarshal config on reload: %w", err)
 	}
 
 	reloadedProxy, err := buildProxyConfig(reloadCfg, c.log)
 	if err != nil {
 		c.log.Error().Err(err).Msg("failed to parse proxy config on reload")
-		return err
+		return fmt.Errorf("failed to parse proxy config on reload: %w", err)
 	}
 
 	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
@@ -1422,6 +1422,7 @@ func (c *reloadCoordinator) Trigger(ctx context.Context) error {
 	if c.eventBus != nil {
 		if err := c.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
 			c.log.Error().Err(err).Msg("failed to publish config reload event")
+			return fmt.Errorf("failed to publish config reload event: %w", err)
 		}
 	}
 
@@ -1677,9 +1678,7 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 
 // setupConfigHotReload sets up config hot reload.
 func setupConfigHotReload(ctx context.Context, configSvc configWatcher, coordinator reloadTrigger) error {
-	if err := configSvc.Watch(ctx, func() {
-		_ = coordinator.Trigger(ctx)
-	}); err != nil {
+	if err := configSvc.Watch(ctx, func() {}); err != nil {
 		return fmt.Errorf("failed to watch config: %w", err)
 	}
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -861,6 +863,28 @@ func TestAutoRouteHandler_EnvExtractionOnlyOnCreate(t *testing.T) {
 	assert.Equal(t, 1, extractor.calls)
 	assert.Equal(t, "registry.example.com/myapp:latest", extractor.lastImage)
 	assert.Equal(t, ".env", extractor.lastPath)
+}
+
+func TestAutoRouteHandler_ExtractAndMergeEnvFile_ReturnsExistingParseError(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	extractor := &testEnvExtractor{data: []byte("FOO=bar\n")}
+
+	envDir := t.TempDir()
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com").WithEnvExtractor(extractor, envDir)
+
+	envFileName, err := domainToEnvFileName("app.example.com")
+	require.NoError(t, err)
+	envFileDst := filepath.Join(envDir, envFileName)
+	err = os.WriteFile(envFileDst, []byte("BIG="+strings.Repeat("a", (1<<20)+1)), 0600)
+	require.NoError(t, err)
+
+	err = handler.extractAndMergeEnvFile(context.Background(), "myapp:latest", "app.example.com", ".env")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), envFileDst)
+	assert.Contains(t, err.Error(), "failed to parse existing env file")
 }
 
 type testEnvExtractor struct {

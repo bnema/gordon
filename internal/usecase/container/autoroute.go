@@ -309,7 +309,11 @@ func (h *AutoRouteHandler) extractAndMergeEnvFile(ctx context.Context, imageRef,
 
 	existingEnv := make(map[string]string)
 	if data, err := os.ReadFile(envFileDst); err == nil {
-		existingEnv, _ = domain.ParseEnvData(data)
+		var parseErr error
+		existingEnv, parseErr = domain.ParseEnvData(data)
+		if parseErr != nil {
+			return fmt.Errorf("failed to parse existing env file %q: %w", envFileDst, parseErr)
+		}
 	}
 
 	// Merge: image values are defaults, existing values win

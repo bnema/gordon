@@ -17,6 +17,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
@@ -63,6 +64,17 @@ func testLogger() zerowrap.Logger {
 func ctxWithScopes(scopes ...string) context.Context {
 	ctx := context.Background()
 	return context.WithValue(ctx, domain.ContextKeyScopes, scopes)
+}
+
+func newScopedTestServer(t *testing.T, handler http.Handler, scopes ...string) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r.WithContext(ctxWithScopes(scopes...)))
+	}))
+	t.Cleanup(server.Close)
+
+	return server
 }
 
 func newTestHandler(t *testing.T, opts ...func(*HandlerDeps)) *Handler {
@@ -228,17 +240,21 @@ func TestHandler_RoutesPost_InvalidRouteDomain(t *testing.T) {
 		d.ContainerSvc = containerSvc
 		d.SecretSvc = secretSvc
 	})
+	server := newScopedTestServer(t, handler, "admin:routes:write")
 
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:latest", HTTPS: true}).Return(domain.ErrRouteDomainInvalid).Once()
 
-	req := httptest.NewRequest("POST", "/admin/routes", bytes.NewBufferString(`{"domain":"localhost","image":"myapp:latest"}`))
-	req = req.WithContext(ctxWithScopes("admin:routes:write"))
-	rec := httptest.NewRecorder()
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/admin/routes", bytes.NewBufferString(`{"domain":"localhost","image":"myapp:latest"}`))
+	require.NoError(t, err)
 
-	handler.ServeHTTP(rec, req)
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.JSONEq(t, `{"error":"`+domain.ErrRouteDomainInvalid.Error()+`"}`+"\n", rec.Body.String())
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"error":"`+domain.ErrRouteDomainInvalid.Error()+`"}`, string(body))
 }
 
 func TestHandler_RoutesPut_RequiresWriteScope(t *testing.T) {
@@ -302,17 +318,21 @@ func TestHandler_RoutesPut_InvalidRouteDomain(t *testing.T) {
 		d.ContainerSvc = containerSvc
 		d.SecretSvc = secretSvc
 	})
+	server := newScopedTestServer(t, handler, "admin:routes:write")
 
 	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:v2", HTTPS: true}).Return(domain.ErrRouteDomainInvalid).Once()
 
-	req := httptest.NewRequest("PUT", "/admin/routes/localhost", bytes.NewBufferString(`{"image":"myapp:v2"}`))
-	req = req.WithContext(ctxWithScopes("admin:routes:write"))
-	rec := httptest.NewRecorder()
+	req, err := http.NewRequest(http.MethodPut, server.URL+"/admin/routes/localhost", bytes.NewBufferString(`{"image":"myapp:v2"}`))
+	require.NoError(t, err)
 
-	handler.ServeHTTP(rec, req)
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.JSONEq(t, `{"error":"`+domain.ErrRouteDomainInvalid.Error()+`"}`+"\n", rec.Body.String())
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"error":"`+domain.ErrRouteDomainInvalid.Error()+`"}`, string(body))
 }
 
 func TestHandler_RoutesPost_AllowsRouteCreationWithoutRegistryManifest(t *testing.T) {

@@ -277,7 +277,7 @@ func loadCanonicalRoutes(raw any) (map[string]routeConfig, error) {
 
 func parseCanonicalRouteEntry(domainName string, raw any) (routeConfig, error) {
 	if !domain.IsValidRouteDomain(domainName) {
-		return routeConfig{}, fmt.Errorf("invalid route key %q", domainName)
+		return routeConfig{}, fmt.Errorf("invalid route key %q: %w", domainName, domain.ErrRouteDomainInvalid)
 	}
 
 	switch value := raw.(type) {
@@ -295,7 +295,7 @@ func parseCanonicalRouteEntry(domainName string, raw any) (routeConfig, error) {
 
 func parseLegacyRouteEntry(domainName string, raw any) (routeConfig, error) {
 	if !domain.IsValidRouteDomain(domainName) {
-		return routeConfig{}, fmt.Errorf("invalid route key %q", legacyRouteStorageKey(domainName))
+		return routeConfig{}, fmt.Errorf("invalid route key %q: %w", legacyRouteStorageKey(domainName), domain.ErrRouteDomainInvalid)
 	}
 
 	value, ok := raw.(string)

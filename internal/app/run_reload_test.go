@@ -89,6 +89,7 @@ type eventBusRecorder struct {
 	calls     int
 	eventType domain.EventType
 	payload   any
+	err       error
 }
 
 func (e *eventBusRecorder) Publish(eventType domain.EventType, payload any) error {
@@ -96,8 +97,9 @@ func (e *eventBusRecorder) Publish(eventType domain.EventType, payload any) erro
 	e.calls++
 	e.eventType = eventType
 	e.payload = payload
+	err := e.err
 	e.mu.Unlock()
-	return nil
+	return err
 }
 
 func (e *eventBusRecorder) Calls() int {
@@ -106,7 +108,7 @@ func (e *eventBusRecorder) Calls() int {
 	return e.calls
 }
 
-func TestSetupConfigHotReload_UsesSharedCoordinator(t *testing.T) {
+func TestSetupConfigHotReload_WatchCallbackDoesNotTriggerCoordinator(t *testing.T) {
 	ctx := context.Background()
 	configSvc := &watchRecorder{}
 	coordinator := &triggerRecorder{}
@@ -117,7 +119,7 @@ func TestSetupConfigHotReload_UsesSharedCoordinator(t *testing.T) {
 	require.NotNil(t, configSvc.onChange)
 
 	configSvc.onChange()
-	require.Equal(t, 1, coordinator.Calls())
+	require.Equal(t, 0, coordinator.Calls())
 }
 
 func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
@@ -176,6 +178,35 @@ func TestReloadCoordinator_RetriesImmediatelyAfterFailedReload(t *testing.T) {
 	require.NoError(t, coord.Trigger(ctx))
 	require.Equal(t, 2, reloadSvc.Calls())
 	assert.Equal(t, 1, proxySvc.calls)
+}
+
+func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "publish.example.com")
+	v.Set("server.registry_port", 5000)
+	v.Set("server.max_proxy_body_size", "5MB")
+	v.Set("server.max_blob_chunk_size", "6MB")
+	v.Set("server.max_proxy_response_size", "7MB")
+	v.Set("server.max_concurrent_connections", 99)
+
+	publishErr := errors.New("publish failed")
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	events := &eventBusRecorder{err: publishErr}
+
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, events, zerowrap.Default())
+
+	err := coord.Trigger(ctx)
+	require.ErrorIs(t, err, publishErr)
+
+	err = coord.Trigger(ctx)
+	require.ErrorIs(t, err, publishErr)
+
+	require.Equal(t, 2, reloadSvc.Calls())
+	require.Equal(t, 2, proxySvc.calls)
+	require.Equal(t, 2, events.Calls())
+	require.Equal(t, domain.EventConfigReload, events.eventType)
 }
 
 func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {

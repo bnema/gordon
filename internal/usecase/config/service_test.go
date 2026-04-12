@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/bnema/zerowrap"
@@ -271,7 +270,7 @@ func TestService_AddRoute_RewritesRoutesToCanonicalInlineTables(t *testing.T) {
 	assert.Contains(t, text, `"insecure.example.com" = { image = "insecure:v1", https = false }`)
 	assert.Contains(t, text, `"new.example.com" = { image = "new:v1", https = false }`)
 	assert.NotContains(t, text, "http://insecure.example.com")
-	assert.True(t, strings.Contains(text, "[routes]"))
+	assert.Contains(t, text, "[routes]")
 }
 
 func TestService_Reload(t *testing.T) {
@@ -740,7 +739,6 @@ func TestService_UpdateRoute(t *testing.T) {
 		assert.NoError(t, err)
 
 		config := svc.GetConfig()
-		requireRoute(t, config.Routes, "app.example.com")
 		routeCfg := requireRoute(t, config.Routes, "app.example.com")
 		assert.Equal(t, "myapp:v2", routeCfg.Image)
 		assert.True(t, routeCfg.HTTPS)

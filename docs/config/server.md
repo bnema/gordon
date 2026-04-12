@@ -173,7 +173,7 @@ This domain is used for:
 
 > **Warning:** If you are upgrading an older config, copy `server.registry_domain` to `server.gordon_domain` before restarting.
 
-Without this migration, public `/v2/*`, `/auth/*`, and `/admin/*` requests can return `404`, and remote CLI commands can fail during token exchange.
+Without this migration, a Host/remote-target mismatch can break routing or remote CLI token exchange.
 
 When requests arrive on the proxy port with this domain as the Host header, Gordon routes them to the backend services (registry and admin API).
 

@@ -62,10 +62,10 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 	allowedDomains := h.config.GetAllowedDomains()
 
 	imageName := payload.Name + ":" + payload.Reference
-	for _, baseRouteDomain := range baseRoutes {
-		previewDomain, err := GeneratePreviewDomain(baseRouteDomain, previewName, previewConfig.Separator)
+	for _, baseRoute := range baseRoutes {
+		previewDomain, err := GeneratePreviewDomain(baseRoute.Domain, previewName, previewConfig.Separator)
 		if err != nil {
-			log.Debug().Err(err).Str("base_domain", baseRouteDomain).Msg("failed to generate preview domain")
+			log.Debug().Err(err).Str("base_domain", baseRoute.Domain).Msg("failed to generate preview domain")
 			continue
 		}
 		if !auto.MatchesDomainAllowlist(previewDomain, allowedDomains) {
@@ -74,34 +74,39 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 		}
 
 		// Launch async — volume cloning may exceed event bus timeout
-		go func(baseRoute, previewDomain string) {
+		go func(baseRoute baseRouteInfo, previewDomain string) {
 			if err := h.previewService.CreatePreview(h.serviceCtx, CreatePreviewRequest{
 				Name:          previewName,
 				Domain:        previewDomain,
-				BaseRoute:     baseRoute,
+				BaseRoute:     baseRoute.Domain,
 				Image:         imageName,
-				HTTPS:         true,
+				HTTPS:         baseRoute.HTTPS,
 				PreviewConfig: previewConfig,
 			}); err != nil {
-				log.Error().Err(err).Str("preview", previewName).Str("base_route", baseRoute).Msg("failed to create preview")
+				log.Error().Err(err).Str("preview", previewName).Str("base_route", baseRoute.Domain).Msg("failed to create preview")
 			}
-		}(baseRouteDomain, previewDomain)
+		}(baseRoute, previewDomain)
 	}
 
 	return nil
 }
 
 // resolveBaseRoutes determines the eligible base routes for preview env/data inheritance.
-func resolveBaseRoutes(routes []domain.Route, previewConfig domain.PreviewConfig) []string {
+type baseRouteInfo struct {
+	Domain string
+	HTTPS  bool
+}
+
+func resolveBaseRoutes(routes []domain.Route, previewConfig domain.PreviewConfig) []baseRouteInfo {
 	domainSet := make(map[string]struct{}, len(routes))
 	for _, r := range routes {
 		domainSet[r.Domain] = struct{}{}
 	}
 
-	baseRoutes := make([]string, 0, len(routes))
+	baseRoutes := make([]baseRouteInfo, 0, len(routes))
 	for _, r := range routes {
 		if !isPreviewDomain(r.Domain, previewConfig.Separator, domainSet) {
-			baseRoutes = append(baseRoutes, r.Domain)
+			baseRoutes = append(baseRoutes, baseRouteInfo{Domain: r.Domain, HTTPS: r.HTTPS})
 		}
 	}
 	return baseRoutes

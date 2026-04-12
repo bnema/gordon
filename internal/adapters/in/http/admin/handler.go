@@ -671,9 +671,12 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 
 	if err := h.configSvc.RemoveRoute(ctx, routeDomain); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to remove route")
-		if errors.Is(err, domain.ErrRouteNotFound) {
+		switch {
+		case errors.Is(err, domain.ErrRouteNotFound):
 			h.sendError(w, http.StatusNotFound, "route not found")
-		} else {
+		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid):
+			h.sendError(w, http.StatusBadRequest, "invalid route domain")
+		default:
 			h.sendError(w, http.StatusInternalServerError, "failed to remove route")
 		}
 		return

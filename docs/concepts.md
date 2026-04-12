@@ -79,7 +79,7 @@ When a request comes in for `app.example.com`, Gordon:
 
 ### Route Domains
 
-Routes use plain hostnames. By default, traffic is HTTPS (terminated by Cloudflare):
+Routes use plain hostnames. HTTPS is enabled by default for routes; see the [routes example](./config/routes.md#development-setup) with `dev-app.example.com`. Cloudflare is one deployment option, but Gordon can also terminate TLS with its built-in listener and certificates issued by Gordon's internal CA, or with static certificates. Gordon does not provide ACME or Let's Encrypt challenge automation.
 
 ```toml
 [routes]

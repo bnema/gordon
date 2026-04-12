@@ -163,7 +163,8 @@ gordon routes remove oldapp.mydomain.com
 ```
 
 Add to `/etc/hosts`:
-```
+
+```text
 127.0.0.1  dev-app.example.com dev-api.example.com registry.example.com
 ```
 
