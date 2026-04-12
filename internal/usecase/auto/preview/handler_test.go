@@ -1,12 +1,75 @@
 package preview
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
+
+type captureStore struct {
+	mu       sync.Mutex
+	previews []domain.PreviewRoute
+	history  [][]domain.PreviewRoute
+}
+
+func (s *captureStore) Load(_ context.Context) ([]domain.PreviewRoute, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]domain.PreviewRoute, len(s.previews))
+	copy(cp, s.previews)
+	return cp, nil
+}
+
+func (s *captureStore) Save(_ context.Context, previews []domain.PreviewRoute) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.previews = make([]domain.PreviewRoute, len(previews))
+	copy(s.previews, previews)
+	snapshot := make([]domain.PreviewRoute, len(previews))
+	copy(snapshot, previews)
+	s.history = append(s.history, snapshot)
+	return nil
+}
+
+func (s *captureStore) snapshot() []domain.PreviewRoute {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]domain.PreviewRoute, len(s.previews))
+	copy(cp, s.previews)
+	return cp
+}
+
+func (s *captureStore) saves() [][]domain.PreviewRoute {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([][]domain.PreviewRoute, len(s.history))
+	for i := range s.history {
+		cp[i] = make([]domain.PreviewRoute, len(s.history[i]))
+		copy(cp[i], s.history[i])
+	}
+	return cp
+}
+
+type fakeAutoConfigProvider struct {
+	previewConfig  domain.PreviewConfig
+	routesByImage  map[string][]domain.Route
+	allowedDomains []string
+}
+
+func (f *fakeAutoConfigProvider) IsAutoEnabled() bool                    { return false }
+func (f *fakeAutoConfigProvider) IsPreviewEnabled() bool                 { return true }
+func (f *fakeAutoConfigProvider) GetPreviewTagPatterns() []string        { return f.previewConfig.TagPatterns }
+func (f *fakeAutoConfigProvider) GetPreviewConfig() domain.PreviewConfig { return f.previewConfig }
+func (f *fakeAutoConfigProvider) GetAllowedDomains() []string            { return f.allowedDomains }
+func (f *fakeAutoConfigProvider) FindRoutesByImage(_ context.Context, imageName string) []domain.Route {
+	return f.routesByImage[imageName]
+}
 
 func TestAutoPreviewHandler_CanHandle(t *testing.T) {
 	h := &AutoPreviewHandler{}
@@ -14,171 +77,67 @@ func TestAutoPreviewHandler_CanHandle(t *testing.T) {
 	assert.False(t, h.CanHandle(domain.EventConfigReload))
 }
 
-// TestResolveBaseRoute_UsesTrustedConfigOnly verifies that base route resolution
-// ignores untrusted image labels and only uses trusted route config.
-// This is a security fix: labels are attacker-controlled and must not determine
-// which route's env/data is inherited by previews.
-func TestResolveBaseRoute_UsesTrustedConfigOnly(t *testing.T) {
-	// Setup: Trusted route config for the pushed image points to legitimate domain
-	trustedRoutes := []domain.Route{
-		{Domain: "trusted.example.com", Image: "myapp"},
-	}
-
-	previewConfig := domain.PreviewConfig{
-		Separator: "-preview-",
-	}
-
-	// Test: resolveBaseRoute should return the trusted config domain,
-	// NOT the malicious label domain
-	baseRoute := resolveBaseRoute(trustedRoutes, previewConfig)
-
-	// Assert: Must use trusted route config, ignoring labels
-	assert.Equal(t, "trusted.example.com", baseRoute,
-		"base route must come from trusted route config, not untrusted image labels")
-
-	// Test 2: When no trusted routes exist, should return empty (no base route)
-	baseRouteNoRoutes := resolveBaseRoute(nil, previewConfig)
-	assert.Empty(t, baseRouteNoRoutes,
-		"when no trusted routes exist, base route should be empty even if labels present")
-}
-
-// TestResolveBaseRoute_AllPreviewDomains verifies that ambiguous route sets do
-// not select an arbitrary base route.
-func TestResolveBaseRoute_AllPreviewDomains(t *testing.T) {
-	previewRoutes := []domain.Route{
-		{Domain: "app-preview-abc.example.com", Image: "myapp"},
-		{Domain: "app-preview-def.example.com", Image: "myapp"},
-	}
-
-	previewConfig := domain.PreviewConfig{
-		Separator: "-preview-",
-	}
-
-	baseRoute := resolveBaseRoute(previewRoutes, previewConfig)
-	assert.Empty(t, baseRoute,
-		"ambiguous routes must not choose a base route")
-
-	// When the base route IS in the set, preview domains are properly skipped
-	routesWithBase := []domain.Route{
-		{Domain: "app-preview-abc.example.com", Image: "myapp"},
-		{Domain: "app-preview-def.example.com", Image: "myapp"},
-		{Domain: "app.example.com", Image: "myapp"},
-	}
-
-	baseRoute = resolveBaseRoute(routesWithBase, previewConfig)
-	assert.Equal(t, "app.example.com", baseRoute,
-		"with base route in set, preview domains are skipped and base is returned")
-}
-
-// TestResolveBaseRoute_EmptySeparator tests that when separator is empty,
-// no route is treated as a preview route and the first trusted route is returned.
-func TestResolveBaseRoute_EmptySeparator(t *testing.T) {
-	trustedRoutes := []domain.Route{
-		{Domain: "app-preview-abc.example.com", Image: "myapp"},
-		{Domain: "trusted.example.com", Image: "myapp"},
-	}
-
-	previewConfig := domain.PreviewConfig{
-		Separator: "",
-	}
-
-	baseRoute := resolveBaseRoute(trustedRoutes, previewConfig)
-	assert.Empty(t, baseRoute,
-		"with empty separator and multiple routes, base selection is ambiguous")
-}
-
-// TestResolveBaseRoute_SkipsPreviewDomains tests that when the first route
-// is a preview domain (with its base present) but later routes are normal,
-// the first normal route is returned.
-func TestResolveBaseRoute_SkipsPreviewDomains(t *testing.T) {
+func TestResolveBaseRoutes_ReturnsAllEligibleBases(t *testing.T) {
 	routes := []domain.Route{
-		{Domain: "app-preview-abc.example.com", Image: "myapp"},
-		{Domain: "app.example.com", Image: "myapp"}, // base route must exist for preview detection
-		{Domain: "trusted.example.com", Image: "myapp"},
-		{Domain: "backup.example.com", Image: "myapp"},
+		{Domain: "app-preview-old.example.com", Image: "myapp"},
+		{Domain: "app.example.com", Image: "myapp"},
+		{Domain: "alias.example.com", Image: "myapp"},
 	}
 
-	previewConfig := domain.PreviewConfig{
-		Separator: "-preview-",
-	}
-
-	baseRoute := resolveBaseRoute(routes, previewConfig)
-	assert.Empty(t, baseRoute,
-		"multiple non-preview routes must not resolve to an arbitrary base")
+	baseRoutes := resolveBaseRoutes(routes, domain.PreviewConfig{Separator: "-preview-"})
+	assert.ElementsMatch(t, []string{"app.example.com", "alias.example.com"}, baseRoutes)
 }
 
-// TestResolveBaseRoute_FalsePositiveAvoidance tests that a domain containing
-// the separator in its first label (e.g. "my--app.example.com") is NOT treated
-// as a preview domain when no base route "my.example.com" exists.
-func TestResolveBaseRoute_FalsePositiveAvoidance(t *testing.T) {
+func TestResolveBaseRoutes_TreatsSeparatorWithoutBaseAsEligible(t *testing.T) {
 	routes := []domain.Route{
 		{Domain: "my--app.example.com", Image: "myapp"},
 		{Domain: "other.example.com", Image: "myapp"},
 	}
 
-	previewConfig := domain.PreviewConfig{
-		Separator: "--",
-	}
-
-	baseRoute := resolveBaseRoute(routes, previewConfig)
-	assert.Empty(t, baseRoute,
-		"ambiguous routes must not choose a base route")
+	baseRoutes := resolveBaseRoutes(routes, domain.PreviewConfig{Separator: "--"})
+	assert.ElementsMatch(t, []string{"my--app.example.com", "other.example.com"}, baseRoutes)
 }
 
-// TestResolveBaseRoute_ActualPreviewDetected tests that an actual generated
-// preview domain IS correctly detected when its base route exists in the set.
-func TestResolveBaseRoute_ActualPreviewDetected(t *testing.T) {
-	routes := []domain.Route{
-		{Domain: "myapp--login.example.com", Image: "myapp"}, // preview of myapp.example.com
-		{Domain: "myapp.example.com", Image: "myapp"},        // base route
+func TestAutoPreviewHandler_Handle_CreatesPreviewPerBaseRoute(t *testing.T) {
+	store := &captureStore{}
+	svc := NewService(store, time.Hour)
+	h := NewAutoPreviewHandler(t.Context(), &fakeAutoConfigProvider{
+		previewConfig: domain.PreviewConfig{
+			Separator:   "--",
+			TagPatterns: []string{"preview-*"},
+			TTL:         time.Hour,
+		},
+		allowedDomains: []string{"*"},
+		routesByImage: map[string][]domain.Route{
+			"myapp": {
+				{Domain: "app.example.com", Image: "myapp"},
+				{Domain: "alias.example.com", Image: "myapp"},
+			},
+		},
+	}, svc)
+
+	err := h.Handle(t.Context(), domain.Event{
+		ID:   "evt-1",
+		Type: domain.EventImagePushed,
+		Data: domain.ImagePushedPayload{Name: "myapp", Reference: "preview-login"},
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return len(store.saves()) >= 4
+	}, time.Second, 10*time.Millisecond)
+
+	var domains []string
+	var baseRoutes []string
+	for _, save := range store.saves() {
+		for _, preview := range save {
+			domains = append(domains, preview.Domain)
+			baseRoutes = append(baseRoutes, preview.BaseRoute)
+		}
 	}
 
-	previewConfig := domain.PreviewConfig{
-		Separator: "--",
-	}
-
-	baseRoute := resolveBaseRoute(routes, previewConfig)
-	assert.Equal(t, "myapp.example.com", baseRoute,
-		"should skip the preview domain and return the base route")
-}
-
-// TestResolveBaseRoute_DeterministicWithMultipleRoutes tests that ambiguous
-// base-route selection is rejected consistently when multiple candidates exist.
-func TestResolveBaseRoute_DeterministicWithMultipleRoutes(t *testing.T) {
-	routes := []domain.Route{
-		{Domain: "myapp--feat.example.com", Image: "myapp"},
-		{Domain: "myapp.example.com", Image: "myapp"},
-		{Domain: "alias.example.com", Image: "myapp"},
-	}
-
-	previewConfig := domain.PreviewConfig{
-		Separator: "--",
-	}
-
-	// Run multiple times to verify ambiguity is handled consistently.
-	first := resolveBaseRoute(routes, previewConfig)
-	for i := 0; i < 10; i++ {
-		result := resolveBaseRoute(routes, previewConfig)
-		assert.Equal(t, first, result, "resolveBaseRoute should be deterministic")
-	}
-	assert.Empty(t, first,
-		"ambiguous base routes must not select a route")
-}
-
-// TestResolveBaseRoute_RejectsAmbiguousBaseRoutes verifies that when multiple
-// non-preview routes share the same image, the handler does not choose one
-// arbitrarily for preview inheritance.
-func TestResolveBaseRoute_RejectsAmbiguousBaseRoutes(t *testing.T) {
-	routes := []domain.Route{
-		{Domain: "app-a.example.com", Image: "myapp"},
-		{Domain: "app-b.example.com", Image: "myapp"},
-		{Domain: "app-a-preview-feat.example.com", Image: "myapp"},
-	}
-
-	previewConfig := domain.PreviewConfig{
-		Separator: "-preview-",
-	}
-
-	baseRoute := resolveBaseRoute(routes, previewConfig)
-	assert.Empty(t, baseRoute, "ambiguous base routes must not select an arbitrary route")
+	assert.Contains(t, domains, "app--login.example.com")
+	assert.Contains(t, domains, "alias--login.example.com")
+	assert.Contains(t, baseRoutes, "app.example.com")
+	assert.Contains(t, baseRoutes, "alias.example.com")
 }

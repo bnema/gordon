@@ -52,66 +52,59 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 	previewConfig := h.config.GetPreviewConfig()
 	previewName := ExtractPreviewName(payload.Reference, previewConfig.TagPatterns)
 
-	// Use trusted routes only. See resolveBaseRoute.
 	routes := h.config.FindRoutesByImage(ctx, payload.Name)
-	baseRouteDomain := resolveBaseRoute(routes, previewConfig)
-	if baseRouteDomain == "" {
+	baseRoutes := resolveBaseRoutes(routes, previewConfig)
+	if len(baseRoutes) == 0 {
 		log.Debug().Str("image", payload.Name).Msg("no trusted route found for preview base, skipping")
 		return nil
 	}
 
-	// Validate allowlist
 	allowedDomains := h.config.GetAllowedDomains()
-	previewDomain, err := GeneratePreviewDomain(baseRouteDomain, previewName, previewConfig.Separator)
-	if err != nil {
-		log.Debug().Err(err).Str("base_domain", baseRouteDomain).Msg("failed to generate preview domain")
-		return nil
-	}
-	if !auto.MatchesDomainAllowlist(previewDomain, allowedDomains) {
-		log.Debug().Str("domain", previewDomain).Strs("patterns", allowedDomains).Msg("preview domain not in allowlist, skipping")
-		return nil
-	}
 
 	imageName := payload.Name + ":" + payload.Reference
-
-	// Launch async — volume cloning may exceed event bus timeout
-	go func() {
-		if err := h.previewService.CreatePreview(h.serviceCtx, CreatePreviewRequest{
-			Name:          previewName,
-			Domain:        previewDomain,
-			BaseRoute:     baseRouteDomain,
-			Image:         imageName,
-			HTTPS:         true,
-			PreviewConfig: previewConfig,
-		}); err != nil {
-			log.Error().Err(err).Str("preview", previewName).Msg("failed to create preview")
+	for _, baseRouteDomain := range baseRoutes {
+		previewDomain, err := GeneratePreviewDomain(baseRouteDomain, previewName, previewConfig.Separator)
+		if err != nil {
+			log.Debug().Err(err).Str("base_domain", baseRouteDomain).Msg("failed to generate preview domain")
+			continue
 		}
-	}()
+		if !auto.MatchesDomainAllowlist(previewDomain, allowedDomains) {
+			log.Debug().Str("domain", previewDomain).Strs("patterns", allowedDomains).Msg("preview domain not in allowlist, skipping")
+			continue
+		}
+
+		// Launch async — volume cloning may exceed event bus timeout
+		go func(baseRoute, previewDomain string) {
+			if err := h.previewService.CreatePreview(h.serviceCtx, CreatePreviewRequest{
+				Name:          previewName,
+				Domain:        previewDomain,
+				BaseRoute:     baseRoute,
+				Image:         imageName,
+				HTTPS:         true,
+				PreviewConfig: previewConfig,
+			}); err != nil {
+				log.Error().Err(err).Str("preview", previewName).Str("base_route", baseRoute).Msg("failed to create preview")
+			}
+		}(baseRouteDomain, previewDomain)
+	}
 
 	return nil
 }
 
-// resolveBaseRoute determines the base route for preview env/data inheritance.
-func resolveBaseRoute(routes []domain.Route, previewConfig domain.PreviewConfig) string {
-	// Build a set of all route domains for context-aware preview detection.
+// resolveBaseRoutes determines the eligible base routes for preview env/data inheritance.
+func resolveBaseRoutes(routes []domain.Route, previewConfig domain.PreviewConfig) []string {
 	domainSet := make(map[string]struct{}, len(routes))
 	for _, r := range routes {
 		domainSet[r.Domain] = struct{}{}
 	}
 
-	// Always use trusted route config, ignoring labels entirely.
-	// Skip preview domains to avoid using a preview as the base for another preview.
-	// If more than one non-preview route remains, the base is ambiguous and unsafe.
-	var baseRoute string
+	baseRoutes := make([]string, 0, len(routes))
 	for _, r := range routes {
 		if !isPreviewDomain(r.Domain, previewConfig.Separator, domainSet) {
-			if baseRoute != "" {
-				return ""
-			}
-			baseRoute = r.Domain
+			baseRoutes = append(baseRoutes, r.Domain)
 		}
 	}
-	return baseRoute
+	return baseRoutes
 }
 
 // isPreviewDomain checks if a domain is a preview domain by examining the first
