@@ -30,14 +30,16 @@ type stubImageService struct {
 
 type noopReloadTrigger struct{}
 
-func (noopReloadTrigger) Trigger(context.Context) {}
+func (noopReloadTrigger) Trigger(context.Context) error { return nil }
 
 type reloadTriggerRecorder struct {
 	calls int
+	err   error
 }
 
-func (r *reloadTriggerRecorder) Trigger(context.Context) {
+func (r *reloadTriggerRecorder) Trigger(context.Context) error {
 	r.calls++
+	return r.err
 }
 
 func (s *stubImageService) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
@@ -1098,6 +1100,23 @@ func TestHandler_Reload_RequiresWriteScope(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandler_Reload_ReturnsServerErrorOnTriggerFailure(t *testing.T) {
+	reloadTrigger := &reloadTriggerRecorder{err: errors.New("reload failed")}
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ReloadTrigger = reloadTrigger
+	})
+
+	req := httptest.NewRequest("POST", "/admin/reload", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, 1, reloadTrigger.calls)
 }
 
 // Functional tests

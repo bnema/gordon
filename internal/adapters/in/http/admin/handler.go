@@ -35,7 +35,7 @@ type registryDeployService interface {
 }
 
 type reloadTrigger interface {
-	Trigger(ctx context.Context)
+	Trigger(ctx context.Context) error
 }
 
 // Handler implements the HTTP handler for the admin API.
@@ -1179,7 +1179,11 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.reloadTrigger.Trigger(ctx)
+	if err := h.reloadTrigger.Trigger(ctx); err != nil {
+		log.Error().Err(err).Msg("failed to reload config")
+		h.sendError(w, http.StatusInternalServerError, "failed to reload config")
+		return
+	}
 
 	log.Info().Msg("config reloaded via admin API")
 	h.sendJSON(w, http.StatusOK, dto.ReloadResponse{Status: "reloaded"})

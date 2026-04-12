@@ -29,12 +29,15 @@ func (w *watchRecorder) Watch(ctx context.Context, onChange func()) error {
 type triggerRecorder struct {
 	mu    sync.Mutex
 	calls int
+	err   error
 }
 
-func (t *triggerRecorder) Trigger(context.Context) {
+func (t *triggerRecorder) Trigger(context.Context) error {
 	t.mu.Lock()
 	t.calls++
+	err := t.err
 	t.mu.Unlock()
+	return err
 }
 
 func (t *triggerRecorder) Calls() int {
@@ -46,12 +49,14 @@ func (t *triggerRecorder) Calls() int {
 type reloadRecorder struct {
 	mu       sync.Mutex
 	calls    int
+	err      error
 	onReload func()
 }
 
 func (r *reloadRecorder) Reload(context.Context) error {
 	r.mu.Lock()
 	r.calls++
+	err := r.err
 	onReload := r.onReload
 	r.mu.Unlock()
 
@@ -59,7 +64,7 @@ func (r *reloadRecorder) Reload(context.Context) error {
 		onReload()
 	}
 
-	return nil
+	return err
 }
 
 func (r *reloadRecorder) Calls() int {
@@ -129,8 +134,8 @@ func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	events := &eventBusRecorder{}
 
 	coord := newReloadCoordinator(v, reloadSvc, proxySvc, events, zerowrap.Default())
-	coord.Trigger(ctx)
-	coord.Trigger(ctx)
+	require.NoError(t, coord.Trigger(ctx))
+	require.NoError(t, coord.Trigger(ctx))
 
 	require.Equal(t, 1, reloadSvc.Calls())
 	require.Equal(t, 1, proxySvc.calls)
@@ -167,7 +172,7 @@ func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	go func() {
-		coord.Trigger(ctx)
+		_ = coord.Trigger(ctx)
 		close(firstDone)
 	}()
 
@@ -179,7 +184,7 @@ func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
 
 	secondDone := make(chan struct{})
 	go func() {
-		coord.Trigger(ctx)
+		_ = coord.Trigger(ctx)
 		close(secondDone)
 	}()
 

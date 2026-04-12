@@ -1364,7 +1364,7 @@ type proxyConfigUpdater interface {
 }
 
 type reloadTrigger interface {
-	Trigger(ctx context.Context)
+	Trigger(ctx context.Context) error
 }
 
 type reloadCoordinator struct {
@@ -1390,32 +1390,32 @@ func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc pro
 	}
 }
 
-func (c *reloadCoordinator) Trigger(ctx context.Context) {
+func (c *reloadCoordinator) Trigger(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	now := time.Now()
 	if !c.lastRun.IsZero() && now.Sub(c.lastRun) < c.debounce {
 		c.log.Debug().Dur("since_last_reload", now.Sub(c.lastRun)).Msg("skipping config reload trigger due to debounce")
-		return
+		return nil
 	}
 	c.lastRun = now
 
 	if err := c.configSvc.Reload(ctx); err != nil {
 		c.log.Error().Err(err).Msg("failed to reload config")
-		return
+		return err
 	}
 
 	var reloadCfg Config
 	if err := c.v.Unmarshal(&reloadCfg); err != nil {
 		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
-		return
+		return err
 	}
 
 	reloadedProxy, err := buildProxyConfig(reloadCfg, c.log)
 	if err != nil {
 		c.log.Error().Err(err).Msg("failed to parse proxy config on reload")
-		return
+		return err
 	}
 
 	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
@@ -1427,6 +1427,7 @@ func (c *reloadCoordinator) Trigger(ctx context.Context) {
 	}
 
 	c.log.Debug().Msg("config hot reload complete")
+	return nil
 }
 
 // buildProxyConfig parses size-related config fields and builds the proxy config.
@@ -1676,7 +1677,7 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 // setupConfigHotReload sets up config hot reload.
 func setupConfigHotReload(ctx context.Context, configSvc configWatcher, coordinator reloadTrigger) error {
 	if err := configSvc.Watch(ctx, func() {
-		coordinator.Trigger(ctx)
+		_ = coordinator.Trigger(ctx)
 	}); err != nil {
 		return fmt.Errorf("failed to watch config: %w", err)
 	}
@@ -2383,7 +2384,7 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 			return
 		case <-reloadChan:
 			log.Info().Msg("reload signal received (SIGUSR1)")
-			reload.Trigger(ctx)
+			_ = reload.Trigger(ctx)
 		case <-deployChan:
 			log.Info().Msg("deploy signal received (SIGUSR2)")
 			domainName, err := readDeployRequest()
