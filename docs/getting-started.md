@@ -147,7 +147,7 @@ gordon remotes use prod
 gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
 
 # Then build, push, and deploy
-gordon push --domain app.example.com --build --no-confirm
+gordon push myapp:latest --domain app.example.com --build --no-confirm
 ```
 
 What this command does:
