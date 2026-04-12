@@ -27,7 +27,7 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 | `tls_key_file` | string | `""` | Path to PEM private key file. Must be set together with `tls_cert_file` |
 | `force_https_redirect` | bool | `false` | Redirect all HTTP requests to the HTTPS port. For direct-access setups without a TLS-terminating proxy |
 | `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
-| `registry_domain` | string | - | Deprecated alias for `gordon_domain` |
+| `registry_domain` | string | - | Deprecated migration key. Set `gordon_domain` instead. |
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
 | `max_proxy_body_size` | string | `"512MB"` | Maximum request body size for proxied requests |
 | `max_blob_chunk_size` | string | `"95MB"` | Maximum request body size for a single registry blob upload chunk |
@@ -171,13 +171,17 @@ This domain is used for:
 - CLI remote targeting (`gordon routes --remote https://gordon.mydomain.com`)
 - Authentication endpoints (`/auth/*`)
 
+> **Warning:** If you are upgrading an older config, copy `server.registry_domain` to `server.gordon_domain` before restarting.
+
+Without this migration, a Host/remote-target mismatch can break routing or remote CLI token exchange.
+
 When requests arrive on the proxy port with this domain as the Host header, Gordon routes them to the backend services (registry and admin API).
 
 Security note:
 - Direct access to `/admin/*` on `registry_port` is blocked for non-loopback clients.
 - Admin API traffic should go through the main proxy listener (`server.port`/`server.tls_port`).
 
-> **Note:** `registry_domain` is supported as a deprecated alias for backwards compatibility.
+> **Note:** `registry_domain` is a deprecated migration key; use `gordon_domain` for new and upgraded configs.
 
 ## Data Directory
 

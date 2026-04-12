@@ -17,6 +17,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
@@ -26,6 +27,24 @@ import (
 type stubImageService struct {
 	listImagesFunc func(context.Context) ([]domain.ImageInfo, error)
 	pruneFunc      func(context.Context, domain.ImagePruneOptions) (domain.ImagePruneReport, error)
+}
+
+type noopReloadTrigger struct{}
+
+func (noopReloadTrigger) Trigger(context.Context) error { return nil }
+
+type reloadTriggerRecorder struct {
+	calls        int
+	err          error
+	ctxErrAtCall error
+	hasDeadline  bool
+}
+
+func (r *reloadTriggerRecorder) Trigger(ctx context.Context) error {
+	r.calls++
+	r.ctxErrAtCall = ctx.Err()
+	_, r.hasDeadline = ctx.Deadline()
+	return r.err
 }
 
 func (s *stubImageService) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
@@ -51,15 +70,27 @@ func ctxWithScopes(scopes ...string) context.Context {
 	return context.WithValue(ctx, domain.ContextKeyScopes, scopes)
 }
 
+func newScopedTestServer(t *testing.T, handler http.Handler, scopes ...string) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r.WithContext(ctxWithScopes(scopes...)))
+	}))
+	t.Cleanup(server.Close)
+
+	return server
+}
+
 func newTestHandler(t *testing.T, opts ...func(*HandlerDeps)) *Handler {
 	t.Helper()
 	deps := HandlerDeps{
-		ConfigSvc:    inmocks.NewMockConfigService(t),
-		AuthSvc:      inmocks.NewMockAuthService(t),
-		ContainerSvc: inmocks.NewMockContainerService(t),
-		HealthSvc:    inmocks.NewMockHealthService(t),
-		SecretSvc:    inmocks.NewMockSecretService(t),
-		Log:          testLogger(),
+		ConfigSvc:     inmocks.NewMockConfigService(t),
+		AuthSvc:       inmocks.NewMockAuthService(t),
+		ContainerSvc:  inmocks.NewMockContainerService(t),
+		HealthSvc:     inmocks.NewMockHealthService(t),
+		SecretSvc:     inmocks.NewMockSecretService(t),
+		Log:           testLogger(),
+		ReloadTrigger: noopReloadTrigger{},
 	}
 	for _, opt := range opts {
 		opt(&deps)
@@ -201,6 +232,35 @@ func TestHandler_RoutesPost_RequiresWriteScope(t *testing.T) {
 	}
 }
 
+func TestHandler_RoutesPost_InvalidRouteDomain(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+	server := newScopedTestServer(t, handler, "admin:routes:write")
+
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:latest", HTTPS: true}).Return(domain.ErrRouteDomainInvalid).Once()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/admin/routes", bytes.NewBufferString(`{"domain":"localhost","image":"myapp:latest"}`))
+	require.NoError(t, err)
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"error":"`+domain.ErrRouteDomainInvalid.Error()+`"}`, string(body))
+}
+
 func TestHandler_RoutesPut_RequiresWriteScope(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
@@ -236,6 +296,7 @@ func TestHandler_RoutesPut_RequiresWriteScope(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
+				configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "myapp:v1", HTTPS: true}, nil).Maybe()
 				configSvc.EXPECT().UpdateRoute(mock.Anything, mock.AnythingOfType("domain.Route")).Return(nil).Maybe()
 			}
 
@@ -250,13 +311,43 @@ func TestHandler_RoutesPut_RequiresWriteScope(t *testing.T) {
 	}
 }
 
+func TestHandler_RoutesPut_InvalidRouteDomain(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+	server := newScopedTestServer(t, handler, "admin:routes:write")
+
+	configSvc.EXPECT().GetRoute(mock.Anything, "localhost").Return(&domain.Route{Domain: "localhost", Image: "myapp:v1", HTTPS: true}, nil).Once()
+	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:v2", HTTPS: true}).Return(domain.ErrRouteDomainInvalid).Once()
+
+	req, err := http.NewRequest(http.MethodPut, server.URL+"/admin/routes/localhost", bytes.NewBufferString(`{"image":"myapp:v2"}`))
+	require.NoError(t, err)
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"error":"`+domain.ErrRouteDomainInvalid.Error()+`"}`, string(body))
+}
+
 func TestHandler_RoutesPost_AllowsRouteCreationWithoutRegistryManifest(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 	registrySvc := inmocks.NewMockRegistryService(t)
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest"}
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -268,24 +359,57 @@ func TestHandler_RoutesPost_AllowsRouteCreationWithoutRegistryManifest(t *testin
 
 	configSvc.EXPECT().AddRoute(mock.Anything, route).Return(nil).Once()
 
-	req := httptest.NewRequest("POST", "/admin/routes", bytes.NewBufferString(`{"domain":"app.example.com","image":"myapp:latest"}`))
-	req = req.WithContext(ctxWithScopes("admin:routes:write"))
-	rec := httptest.NewRecorder()
+	server := newScopedTestServer(t, handler, "admin:routes:write")
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/admin/routes", bytes.NewBufferString(`{"domain":"app.example.com","image":"myapp:latest"}`))
+	require.NoError(t, err)
 
-	handler.ServeHTTP(rec, req)
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusCreated, rec.Code)
-	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:latest","https":false}`, rec.Body.String())
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:latest","https":true}`, string(body))
 	registrySvc.AssertNotCalled(t, "GetManifest", mock.Anything, mock.Anything, mock.Anything)
 }
 
-func TestHandler_RoutesPut_AllowsRouteUpdateWithoutRegistryManifest(t *testing.T) {
+func TestHandleRoutesPost_DefaultsHTTPSWhenOmitted(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(nil).Once()
+
+	server := newScopedTestServer(t, handler, "admin:routes:write")
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/admin/routes", bytes.NewBufferString(`{"domain":"app.example.com","image":"myapp:latest"}`))
+	require.NoError(t, err)
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:latest","https":true}`, string(body))
+}
+
+func TestHandleRoutesPut_PreservesStoredHTTPSWhenOmitted(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 	registrySvc := inmocks.NewMockRegistryService(t)
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:v2"}
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: false}
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -295,6 +419,7 @@ func TestHandler_RoutesPut_AllowsRouteUpdateWithoutRegistryManifest(t *testing.T
 		d.RegistrySvc = registrySvc
 	})
 
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: false}, nil).Once()
 	configSvc.EXPECT().UpdateRoute(mock.Anything, route).Return(nil).Once()
 
 	req := httptest.NewRequest("PUT", "/admin/routes/app.example.com", bytes.NewBufferString(`{"image":"myapp:v2"}`))
@@ -306,6 +431,32 @@ func TestHandler_RoutesPut_AllowsRouteUpdateWithoutRegistryManifest(t *testing.T
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:v2","https":false}`, rec.Body.String())
 	registrySvc.AssertNotCalled(t, "GetManifest", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestHandleRoutesPut_OverridesStoredHTTPSWhenProvided(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: false}, nil).Once()
+	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}).Return(nil).Once()
+
+	req := httptest.NewRequest("PUT", "/admin/routes/app.example.com", bytes.NewBufferString(`{"image":"myapp:v2","https":true}`))
+	req = req.WithContext(ctxWithScopes("admin:routes:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:v2","https":true}`, rec.Body.String())
 }
 
 func TestHandler_AttachmentsByImageGet_OneTarget(t *testing.T) {
@@ -769,7 +920,7 @@ func TestHandler_Bootstrap_HappyPath(t *testing.T) {
 	})
 
 	configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp", HTTPS: true}).Return(nil).Once()
 	configSvc.EXPECT().AddAttachment(mock.Anything, "app.example.com", "postgres:16").Return(nil).Once()
 	secretSvc.EXPECT().Set(mock.Anything, "app.example.com", map[string]string{"APP_ENV": "prod"}).Return(nil).Once()
 	secretSvc.EXPECT().SetAttachment(mock.Anything, "app.example.com", "postgres", map[string]string{"POSTGRES_PASSWORD": "secret"}).Return(nil).Once()
@@ -838,7 +989,7 @@ func TestHandler_Bootstrap_RequiresPermissions(t *testing.T) {
 				configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
 			}
 			if tt.wantStatus == http.StatusOK {
-				configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
+				configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp", HTTPS: true}).Return(nil).Once()
 			}
 
 			req := httptest.NewRequest("POST", "/admin/bootstrap", bytes.NewBufferString(tt.body))
@@ -980,12 +1131,14 @@ func TestHandler_Reload_RequiresWriteScope(t *testing.T) {
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
+	reloadTrigger := &reloadTriggerRecorder{}
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
 		d.SecretSvc = secretSvc
+		d.ReloadTrigger = reloadTrigger
 	})
 
 	tests := []struct {
@@ -1017,9 +1170,7 @@ func TestHandler_Reload_RequiresWriteScope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantStatus == http.StatusOK {
-				configSvc.EXPECT().Reload(mock.Anything).Return(nil).Maybe()
-			}
+			reloadTrigger.calls = 0
 
 			req := httptest.NewRequest("POST", "/admin/reload", nil)
 			req = req.WithContext(ctxWithScopes(tt.scopes...))
@@ -1028,8 +1179,52 @@ func TestHandler_Reload_RequiresWriteScope(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantStatus == http.StatusOK {
+				assert.Equal(t, 1, reloadTrigger.calls)
+			} else {
+				assert.Zero(t, reloadTrigger.calls)
+			}
 		})
 	}
+}
+
+func TestHandler_Reload_ReturnsServerErrorOnTriggerFailure(t *testing.T) {
+	reloadTrigger := &reloadTriggerRecorder{err: errors.New("reload failed")}
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ReloadTrigger = reloadTrigger
+	})
+
+	req := httptest.NewRequest("POST", "/admin/reload", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, 1, reloadTrigger.calls)
+}
+
+func TestHandler_Reload_UsesDetachedContextWithDeadline(t *testing.T) {
+	reloadTrigger := &reloadTriggerRecorder{}
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ReloadTrigger = reloadTrigger
+	})
+
+	reqCtx, cancel := context.WithCancel(ctxWithScopes("admin:config:write"))
+	cancel()
+
+	req := httptest.NewRequest("POST", "/admin/reload", nil)
+	req = req.WithContext(reqCtx)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 1, reloadTrigger.calls)
+	require.NoError(t, reloadTrigger.ctxErrAtCall)
+	assert.True(t, reloadTrigger.hasDeadline)
 }
 
 // Functional tests

@@ -7,7 +7,6 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/auto"
 )
@@ -16,20 +15,17 @@ import (
 type AutoPreviewHandler struct {
 	serviceCtx     context.Context
 	config         auto.AutoConfigProvider
-	blobStorage    out.BlobStorage
 	previewService *Service
 }
 
 func NewAutoPreviewHandler(
 	serviceCtx context.Context,
 	config auto.AutoConfigProvider,
-	blobStorage out.BlobStorage,
 	previewService *Service,
 ) *AutoPreviewHandler {
 	return &AutoPreviewHandler{
 		serviceCtx:     serviceCtx,
 		config:         config,
-		blobStorage:    blobStorage,
 		previewService: previewService,
 	}
 }
@@ -53,70 +49,98 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 		return nil
 	}
 
-	// Extract labels from manifest
-	labels, err := auto.ExtractLabels(ctx, payload.Manifest, h.blobStorage)
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to extract labels, skipping preview handler")
-		return nil
-	}
-
 	previewConfig := h.config.GetPreviewConfig()
 	previewName := ExtractPreviewName(payload.Reference, previewConfig.TagPatterns)
 
-	// Resolve base route: labels first, then route config fallback.
-	// When falling back to routes, skip preview domains (they contain the separator)
-	// to avoid using a preview as the base for another preview.
-	domains := collectDomains(labels)
-	if len(domains) == 0 {
-		routes := h.config.FindRoutesByImage(ctx, payload.Name)
-		for _, r := range routes {
-			if !strings.Contains(r.Domain, previewConfig.Separator) {
-				domains = append(domains, r.Domain)
-			}
-		}
-	}
-	if len(domains) == 0 {
-		log.Debug().Str("image", payload.Name).Msg("no domain found from labels or routes, skipping preview")
+	routes := h.config.FindRoutesByImage(ctx, payload.Name)
+	baseRoutes := resolveBaseRoutes(routes, previewConfig)
+	if len(baseRoutes) == 0 {
+		log.Debug().Str("image", payload.Name).Msg("no trusted route found for preview base, skipping")
 		return nil
 	}
-	baseRouteDomain := domains[0]
 
-	// Validate allowlist
 	allowedDomains := h.config.GetAllowedDomains()
-	previewDomain, err := GeneratePreviewDomain(baseRouteDomain, previewName, previewConfig.Separator)
-	if err != nil {
-		log.Debug().Err(err).Str("base_domain", baseRouteDomain).Msg("failed to generate preview domain")
-		return nil
-	}
-	if !auto.MatchesDomainAllowlist(previewDomain, allowedDomains) {
-		log.Debug().Str("domain", previewDomain).Strs("patterns", allowedDomains).Msg("preview domain not in allowlist, skipping")
-		return nil
-	}
 
 	imageName := payload.Name + ":" + payload.Reference
-
-	// Launch async — volume cloning may exceed event bus timeout
-	go func() {
-		if err := h.previewService.CreatePreview(h.serviceCtx, CreatePreviewRequest{
-			Name:          previewName,
-			Domain:        previewDomain,
-			BaseRoute:     baseRouteDomain,
-			Image:         imageName,
-			HTTPS:         true,
-			PreviewConfig: previewConfig,
-		}); err != nil {
-			log.Error().Err(err).Str("preview", previewName).Msg("failed to create preview")
+	for _, baseRoute := range baseRoutes {
+		previewDomain, err := GeneratePreviewDomain(baseRoute.Domain, previewName, previewConfig.Separator)
+		if err != nil {
+			log.Debug().Err(err).Str("base_domain", baseRoute.Domain).Msg("failed to generate preview domain")
+			continue
 		}
-	}()
+		if !auto.MatchesDomainAllowlist(previewDomain, allowedDomains) {
+			log.Debug().Str("domain", previewDomain).Strs("patterns", allowedDomains).Msg("preview domain not in allowlist, skipping")
+			continue
+		}
+
+		// Launch async — volume cloning may exceed event bus timeout
+		go func(baseRoute baseRouteInfo, previewDomain string) {
+			if err := h.previewService.CreatePreview(h.serviceCtx, CreatePreviewRequest{
+				Name:          previewName,
+				Domain:        previewDomain,
+				BaseRoute:     baseRoute.Domain,
+				Image:         imageName,
+				HTTPS:         baseRoute.HTTPS,
+				PreviewConfig: previewConfig,
+			}); err != nil {
+				log.Error().Err(err).Str("preview", previewName).Str("base_route", baseRoute.Domain).Msg("failed to create preview")
+			}
+		}(baseRoute, previewDomain)
+	}
 
 	return nil
 }
 
-func collectDomains(labels *domain.ImageLabels) []string {
-	var domains []string
-	if labels.Domain != "" {
-		domains = append(domains, labels.Domain)
+// resolveBaseRoutes determines the eligible base routes for preview env/data inheritance.
+type baseRouteInfo struct {
+	Domain string
+	HTTPS  bool
+}
+
+func resolveBaseRoutes(routes []domain.Route, previewConfig domain.PreviewConfig) []baseRouteInfo {
+	domainSet := make(map[string]struct{}, len(routes))
+	for _, r := range routes {
+		domainSet[r.Domain] = struct{}{}
 	}
-	domains = append(domains, labels.Domains...)
-	return domains
+
+	baseRoutes := make([]baseRouteInfo, 0, len(routes))
+	for _, r := range routes {
+		if !isPreviewDomain(r.Domain, previewConfig.Separator, domainSet) {
+			baseRoutes = append(baseRoutes, baseRouteInfo{Domain: r.Domain, HTTPS: r.HTTPS})
+		}
+	}
+	return baseRoutes
+}
+
+// isPreviewDomain checks if a domain is a preview domain by examining the first
+// DNS label for the separator AND verifying that the implied base domain exists
+// in the route set. This avoids false positives like "my--app.example.com" when
+// no route "my.example.com" exists — that domain just happens to contain the
+// separator in its name.
+// If separator is empty, no domain is treated as a preview domain.
+func isPreviewDomain(d, separator string, routeSet map[string]struct{}) bool {
+	if separator == "" {
+		return false
+	}
+	// Extract the first label (subdomain) before the first dot
+	firstLabel := d
+	rest := ""
+	if idx := strings.Index(d, "."); idx != -1 {
+		firstLabel = d[:idx]
+		rest = d[idx:] // includes leading dot
+	}
+	// Check if the first label contains the separator
+	sepIdx := strings.Index(firstLabel, separator)
+	if sepIdx < 0 {
+		return false
+	}
+	// Reconstruct the potential base domain: everything before the separator + rest
+	baseLabel := firstLabel[:sepIdx]
+	if baseLabel == "" {
+		return false
+	}
+	baseDomain := baseLabel + rest
+	// Only treat as preview if the base domain actually exists in the route set
+	_, exists := routeSet[baseDomain]
+	return exists
 }

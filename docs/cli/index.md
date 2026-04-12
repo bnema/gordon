@@ -87,8 +87,8 @@ gordon rollback myapp.example.com
 gordon logs                          # Gordon process logs
 gordon logs -f                       # Follow process logs
 gordon logs -n 100                   # Last 100 lines
-gordon logs myapp.local              # Container logs for myapp.local
-gordon logs myapp.local -f           # Follow container logs
+gordon logs myapp.example.com       # Container logs for myapp.example.com
+gordon logs myapp.example.com -f    # Follow container logs
 
 # Check version
 gordon version
@@ -126,9 +126,9 @@ gordon attachments add app.example.com postgres:18
 gordon attachments remove app.example.com postgres:18
 
 # Secrets
-gordon secrets list myapp.local
-gordon secrets set myapp.local DATABASE_URL "postgres://..."
-gordon secrets remove myapp.local DATABASE_URL
+gordon secrets list myapp.example.com
+gordon secrets set myapp.example.com DATABASE_URL "postgres://..."
+gordon secrets remove myapp.example.com DATABASE_URL
 
 # Remotes
 gordon remotes add prod https://gordon.mydomain.com --token $TOKEN
@@ -168,6 +168,7 @@ or `GORDON_REMOTE` environment variable. Use `--remote` and `--token` as global 
 when you want to bypass your saved configuration.
 
 **Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
+If remote CLI gets a `404` during `/auth/token` exchange, the server likely still sets only `server.registry_domain` and needs `server.gordon_domain` configured.
 
 Use `--insecure` when the remote endpoint uses a self-signed or otherwise untrusted TLS certificate.
 You can make this persistent with `insecure_tls = true` in `[client]` of `~/.config/gordon/gordon.toml`

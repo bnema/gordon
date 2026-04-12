@@ -52,6 +52,13 @@ func (s *Service) CheckRoute(ctx context.Context, route domain.Route) *domain.Ro
 		ContainerStatus: "unknown",
 	}
 
+	// Validate domain before probing - prevents SSRF via invalid route domains
+	if !domain.IsValidRouteDomain(route.Domain) {
+		health.Error = "invalid route domain for health probe"
+		log.Debug().Msg("health check blocked for invalid domain")
+		return health
+	}
+
 	// Check container status
 	container, exists := s.containerSvc.Get(ctx, route.Domain)
 	if !exists || container == nil {
@@ -71,7 +78,11 @@ func (s *Service) CheckRoute(ctx context.Context, route domain.Route) *domain.Ro
 	}
 
 	// Probe HTTP endpoint
-	url := fmt.Sprintf("https://%s/", route.Domain)
+	scheme := "http"
+	if route.HTTPS {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/", scheme, route.Domain)
 	statusCode, responseTime, err := s.prober.Probe(ctx, url)
 	if err != nil {
 		health.Error = err.Error()

@@ -65,23 +65,25 @@ Routes map domains to container images:
 
 ```toml
 [routes]
-"app.mydomain.com" = "myapp:latest"
-"api.mydomain.com" = "myapi:v2.1.0"
+"app.example.com" = { image = "myapp:latest" }
+"api.example.com" = { image = "myapi:v2.1.0" }
 ```
 
-When a request comes in for `app.mydomain.com`, Gordon:
+Route domains must be plain hostnames such as `app.example.com`. Gordon rejects `http://` and `https://` prefixes, `.local` and `.internal` suffixes, localhost names, and IP literals. Legacy `http://...` keys are still read for backward compatibility and rewritten on the next save.
+
+When a request comes in for `app.example.com`, Gordon:
 
 1. Looks up the route configuration
 2. Finds the running container for `myapp:latest`
 3. Proxies the request to that container
 
-### HTTP vs HTTPS Routes
+### Route Domains
 
-By default, routes expect HTTPS (terminated by Cloudflare). For HTTP-only routes:
+Routes use plain hostnames. HTTPS is enabled by default for routes; see the [routes example](./config/routes.md#development-setup) with `dev-app.example.com`. Cloudflare is one deployment option, but Gordon can also terminate TLS with its built-in listener and certificates issued by Gordon's internal CA, or with static certificates. Gordon does not provide ACME or Let's Encrypt challenge automation.
 
 ```toml
 [routes]
-"http://internal.local" = "internal-app:latest"
+"dev-app.example.com" = { image = "internal-app:latest", https = false }
 ```
 
 ## Network Isolation
@@ -188,16 +190,18 @@ Gordon watches its config file and reloads automatically:
 
 1. Edit `~/.config/gordon/gordon.toml`
 2. Save the file
-3. Gordon reloads routes, attachments, and network groups
-4. Containers sync to match new configuration
+3. Gordon reloads hot-reloaded settings such as attachments, network groups, and routes
+4. Containers and proxy config sync to match the new configuration
 
-You can also trigger a manual reload:
+Route file edits now reload automatically again.
+
+You can also trigger a reload:
 
 ```bash
 gordon reload
 ```
 
-This sends `SIGUSR1` to the running Gordon process.
+`gordon reload` sends `SIGUSR1` to the running Gordon process.
 
 ## Event System
 
@@ -206,8 +210,7 @@ Gordon uses an internal event system for coordination:
 | Event | Trigger | Action |
 |-------|---------|--------|
 | `image.pushed` | Image pushed to registry | Deploy container |
-| `config.reload` | Config file changed | Sync containers |
-| `manual.reload` | `gordon reload` command | Sync containers |
+| `config.reload` | Config file changed or `gordon reload` sends `SIGUSR1` | Reload config, sync containers, and refresh proxy state |
 | `manual.deploy` | `gordon deploy <domain>` command | Deploy specific route |
 | `container.deployed` | Container started | Update proxy cache |
 

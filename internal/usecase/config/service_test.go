@@ -20,6 +20,44 @@ func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
 }
 
+func requireRoute(t *testing.T, routes map[string]routeConfig, domainName string) routeConfig {
+	t.Helper()
+	route, ok := routes[domainName]
+	require.True(t, ok, "route %q not found", domainName)
+	return route
+}
+
+func setupServiceWithCoexistingLegacyRoute(t *testing.T, canonicalImage, legacyImage string) (*Service, context.Context) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte(fmt.Sprintf("[routes]\n\"app.example.com\" = %q\n\"http://app.example.com\" = %q\n", canonicalImage, legacyImage)), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	v.Set("routes", map[string]any{
+		"app.example.com":        canonicalImage,
+		"http://app.example.com": legacyImage,
+	})
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+	require.NoError(t, svc.Load(ctx))
+
+	svc.mu.Lock()
+	if svc.config.Routes == nil {
+		svc.config.Routes = make(map[string]routeConfig)
+	}
+	svc.config.Routes["app.example.com"] = routeConfig{Image: canonicalImage, HTTPS: true}
+	svc.config.Routes["http://app.example.com"] = routeConfig{Image: legacyImage, HTTPS: false}
+	svc.mu.Unlock()
+
+	return svc, ctx
+}
+
 func TestService_Load(t *testing.T) {
 	v := viper.New()
 	v.Set("server.port", 8080)
@@ -60,6 +98,181 @@ func TestService_Load(t *testing.T) {
 	assert.False(t, preserve)
 }
 
+func TestService_Load_CanonicalInlineRoute(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte(`[routes]
+"insecure.example.com" = { image = "myapp:latest", https = false }
+`), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	require.NoError(t, v.ReadInConfig())
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	err = svc.Load(ctx)
+	require.NoError(t, err)
+
+	route, err := svc.GetRoute(ctx, "insecure.example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "myapp:latest", route.Image)
+	assert.False(t, route.HTTPS)
+}
+
+func TestService_Load_CanonicalInlineRouteDefaultsHTTPS(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte(`[routes]
+"secure.example.com" = { image = "myapp:latest" }
+`), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	require.NoError(t, v.ReadInConfig())
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	err = svc.Load(ctx)
+	require.NoError(t, err)
+
+	route, err := svc.GetRoute(ctx, "secure.example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "myapp:latest", route.Image)
+	assert.True(t, route.HTTPS)
+}
+
+func TestService_Reload_InvalidRouteKeyPreservesPreviousState(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	initialConfig := `[routes]
+"app.example.com" = "myapp:v1"
+`
+	err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	require.NoError(t, v.ReadInConfig())
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	err = svc.Load(ctx)
+	require.NoError(t, err)
+
+	updatedConfig := `[routes]
+"localhost" = "myapp:v2"
+`
+	err = os.WriteFile(configFile, []byte(updatedConfig), 0600)
+	require.NoError(t, err)
+
+	err = svc.Reload(ctx)
+	require.Error(t, err)
+
+	route, getErr := svc.GetRoute(ctx, "app.example.com")
+	require.NoError(t, getErr)
+	assert.Equal(t, "myapp:v1", route.Image)
+	assert.True(t, route.HTTPS)
+}
+
+func TestService_GetRoutes_DeduplicatesCanonicalAndLegacyEntries(t *testing.T) {
+	svc, ctx := setupServiceWithCoexistingLegacyRoute(t, "canonical:v2", "legacy:v1")
+
+	routes := svc.GetRoutes(ctx)
+
+	require.Len(t, routes, 1)
+	assert.Equal(t, "app.example.com", routes[0].Domain)
+	assert.Equal(t, "canonical:v2", routes[0].Image)
+	assert.True(t, routes[0].HTTPS)
+}
+
+func TestService_FindRoutesByImage_DeduplicatesCanonicalAndLegacyEntries(t *testing.T) {
+	v := viper.New()
+	v.Set("server.registry_domain", "registry.example.com")
+	v.Set("routes", map[string]any{})
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	_ = svc.Load(ctx)
+	svc.mu.Lock()
+	svc.config.Routes = make(map[string]routeConfig)
+	svc.config.Routes["app.example.com"] = routeConfig{Image: "registry.example.com/myapp:v2", HTTPS: true}
+	svc.config.Routes["http://app.example.com"] = routeConfig{Image: "myapp:v1", HTTPS: false}
+	svc.mu.Unlock()
+
+	routes := svc.FindRoutesByImage(ctx, "myapp")
+
+	require.Len(t, routes, 1)
+	assert.Equal(t, "app.example.com", routes[0].Domain)
+	assert.Equal(t, "registry.example.com/myapp:v2", routes[0].Image)
+	assert.True(t, routes[0].HTTPS)
+}
+
+func TestService_AddRoute_StoresHTTPSFalseInCanonicalForm(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	_ = svc.Load(ctx)
+
+	err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest", HTTPS: false})
+	require.NoError(t, err)
+
+	routeCfg := requireRoute(t, svc.GetConfig().Routes, "new.example.com")
+	assert.Equal(t, "newapp:latest", routeCfg.Image)
+	assert.False(t, routeCfg.HTTPS)
+}
+
+func TestService_AddRoute_RewritesRoutesToCanonicalInlineTables(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	initialConfig := `[routes]
+"secure.example.com" = "secure:v1"
+"http://insecure.example.com" = "insecure:v1"
+`
+	err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	require.NoError(t, v.ReadInConfig())
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	err = svc.Load(ctx)
+	require.NoError(t, err)
+
+	err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "new:v1"})
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(configFile)
+	require.NoError(t, err)
+	text := string(content)
+	assert.Contains(t, text, `"secure.example.com" = { image = "secure:v1", https = true }`)
+	assert.Contains(t, text, `"insecure.example.com" = { image = "insecure:v1", https = false }`)
+	assert.Contains(t, text, `"new.example.com" = { image = "new:v1", https = false }`)
+	assert.NotContains(t, text, "http://insecure.example.com")
+	assert.Contains(t, text, "[routes]")
+}
+
 func TestService_Reload(t *testing.T) {
 	t.Run("success - picks up config file changes", func(t *testing.T) {
 		// Create temp config file
@@ -87,7 +300,9 @@ port = 8080
 		err = svc.Load(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, 8080, svc.GetServerPort())
-		assert.Equal(t, "myapp:v1", svc.GetConfig().Routes["app.example.com"])
+		route := requireRoute(t, svc.GetConfig().Routes, "app.example.com")
+		assert.Equal(t, "myapp:v1", route.Image)
+		assert.True(t, route.HTTPS)
 
 		// Modify config file on disk
 		updatedConfig := `[server]
@@ -105,8 +320,12 @@ port = 9090
 		require.NoError(t, err)
 
 		assert.Equal(t, 9090, svc.GetServerPort())
-		assert.Equal(t, "myapp:v2", svc.GetConfig().Routes["app.example.com"])
-		assert.Equal(t, "newapp:latest", svc.GetConfig().Routes["new.example.com"])
+		route = requireRoute(t, svc.GetConfig().Routes, "app.example.com")
+		assert.Equal(t, "myapp:v2", route.Image)
+		assert.True(t, route.HTTPS)
+		route = requireRoute(t, svc.GetConfig().Routes, "new.example.com")
+		assert.Equal(t, "newapp:latest", route.Image)
+		assert.True(t, route.HTTPS)
 	})
 
 	t.Run("error - config file not found", func(t *testing.T) {
@@ -224,6 +443,14 @@ func TestService_GetRoute(t *testing.T) {
 		assert.True(t, route.HTTPS)
 	})
 
+	t.Run("legacy http route found via fallback", func(t *testing.T) {
+		route, err := svc.GetRoute(ctx, "insecure.example")
+		require.NoError(t, err)
+		assert.Equal(t, "insecure.example", route.Domain)
+		assert.Equal(t, "insecureapp:latest", route.Image)
+		assert.False(t, route.HTTPS)
+	})
+
 	t.Run("non-existent route", func(t *testing.T) {
 		route, err := svc.GetRoute(ctx, "notfound.example.com")
 		assert.ErrorIs(t, err, domain.ErrRouteNotFound)
@@ -250,6 +477,7 @@ func TestService_AddRoute(t *testing.T) {
 		route := domain.Route{
 			Domain: "new.example.com",
 			Image:  "newapp:latest",
+			HTTPS:  true,
 		}
 
 		err = svc.AddRoute(ctx, route)
@@ -258,7 +486,73 @@ func TestService_AddRoute(t *testing.T) {
 
 		// Verify route was added
 		config := svc.GetConfig()
-		assert.Equal(t, "newapp:latest", config.Routes["new.example.com"])
+		routeCfg := requireRoute(t, config.Routes, "new.example.com")
+		assert.Equal(t, "newapp:latest", routeCfg.Image)
+		assert.True(t, routeCfg.HTTPS)
+	})
+
+	t.Run("zero-value route stores HTTPS false in canonical form", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		// Zero-value HTTPS field (false) should be preserved
+		route := domain.Route{
+			Domain: "app.example.com",
+			Image:  "myapp:latest",
+		}
+		err = svc.AddRoute(ctx, route)
+		require.NoError(t, err)
+
+		config := svc.GetConfig()
+		routeCfg := requireRoute(t, config.Routes, "app.example.com")
+		assert.Equal(t, "myapp:latest", routeCfg.Image,
+			"zero-value route should store under plain domain key")
+		assert.False(t, routeCfg.HTTPS)
+		_, hasHTTPKey := config.Routes["http://app.example.com"]
+		assert.False(t, hasHTTPKey, "zero-value route should NOT get http:// prefix")
+
+		// Verify it round-trips as HTTPS=false via GetRoutes
+		routes := svc.GetRoutes(ctx)
+		require.Len(t, routes, 1)
+		assert.False(t, routes[0].HTTPS, "zero-value route should be treated as HTTP")
+	})
+
+	t.Run("HTTPS explicitly true stores under plain domain key", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		// Explicitly set HTTPS: true — should store under plain domain key
+		route := domain.Route{
+			Domain: "secure.example.com",
+			Image:  "myapp:latest",
+			HTTPS:  true,
+		}
+		err = svc.AddRoute(ctx, route)
+		require.NoError(t, err)
+
+		config := svc.GetConfig()
+		routeCfg := requireRoute(t, config.Routes, "secure.example.com")
+		assert.Equal(t, "myapp:latest", routeCfg.Image,
+			"HTTPS=true route should store under plain domain key")
+		assert.True(t, routeCfg.HTTPS)
 	})
 
 	t.Run("idempotent same domain and image saves once", func(t *testing.T) {
@@ -278,6 +572,7 @@ func TestService_AddRoute(t *testing.T) {
 		route := domain.Route{
 			Domain: "new.example.com",
 			Image:  "newapp:latest",
+			HTTPS:  true,
 		}
 
 		err = svc.AddRoute(ctx, route)
@@ -293,7 +588,9 @@ func TestService_AddRoute(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, before.ModTime(), after.ModTime())
-		assert.Equal(t, "newapp:latest", svc.GetConfig().Routes["new.example.com"])
+		routeCfg := requireRoute(t, svc.GetConfig().Routes, "new.example.com")
+		assert.Equal(t, "newapp:latest", routeCfg.Image)
+		assert.True(t, routeCfg.HTTPS)
 	})
 
 	t.Run("empty domain", func(t *testing.T) {
@@ -325,6 +622,90 @@ func TestService_AddRoute(t *testing.T) {
 		err := svc.AddRoute(ctx, route)
 		assert.ErrorIs(t, err, domain.ErrRouteImageEmpty)
 	})
+
+	t.Run("invalid domain - IP address", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "192.168.1.1",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - localhost", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "localhost",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - internal TLD", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "myapp.local",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - with port", func(t *testing.T) {
+		v := viper.New()
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		route := domain.Route{
+			Domain: "example.com:8080",
+			Image:  "myapp:latest",
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("reconciles coexisting legacy http key", func(t *testing.T) {
+		svc, ctx := setupServiceWithCoexistingLegacyRoute(t, "myapp:v1", "myapp:old")
+		preConfig := svc.GetConfig()
+		requireRoute(t, preConfig.Routes, "app.example.com")
+		requireRoute(t, preConfig.Routes, "http://app.example.com")
+
+		route := domain.Route{
+			Domain: "app.example.com",
+			Image:  "myapp:v2",
+			HTTPS:  true,
+		}
+
+		err := svc.AddRoute(ctx, route)
+		assert.NoError(t, err)
+
+		config := svc.GetConfig()
+		routeCfg := requireRoute(t, config.Routes, "app.example.com")
+		assert.Equal(t, "myapp:v2", routeCfg.Image,
+			"canonical route should be updated")
+		assert.True(t, routeCfg.HTTPS)
+		_, exists := config.Routes["http://app.example.com"]
+		assert.False(t, exists, "legacy http route key should be removed during reconciliation")
+	})
 }
 
 func TestService_UpdateRoute(t *testing.T) {
@@ -350,6 +731,7 @@ func TestService_UpdateRoute(t *testing.T) {
 		route := domain.Route{
 			Domain: "app.example.com",
 			Image:  "myapp:v2",
+			HTTPS:  true,
 		}
 
 		err = svc.UpdateRoute(ctx, route)
@@ -357,7 +739,45 @@ func TestService_UpdateRoute(t *testing.T) {
 		assert.NoError(t, err)
 
 		config := svc.GetConfig()
-		assert.Equal(t, "myapp:v2", config.Routes["app.example.com"])
+		routeCfg := requireRoute(t, config.Routes, "app.example.com")
+		assert.Equal(t, "myapp:v2", routeCfg.Image)
+		assert.True(t, routeCfg.HTTPS)
+	})
+
+	t.Run("updates https setting", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:v1\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("routes", map[string]any{
+			"app.example.com": "myapp:v1",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "app.example.com",
+			Image:  "myapp:v2",
+			HTTPS:  false,
+		}
+
+		err = svc.UpdateRoute(ctx, route)
+		require.NoError(t, err)
+
+		routeCfg := requireRoute(t, svc.GetConfig().Routes, "app.example.com")
+		assert.Equal(t, "myapp:v2", routeCfg.Image)
+		assert.False(t, routeCfg.HTTPS)
+
+		content, err := os.ReadFile(configFile)
+		require.NoError(t, err)
+		assert.Contains(t, string(content), `"app.example.com" = { image = "myapp:v2", https = false }`)
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -406,6 +826,103 @@ func TestService_UpdateRoute(t *testing.T) {
 		err := svc.UpdateRoute(ctx, route)
 		assert.ErrorIs(t, err, domain.ErrRouteImageEmpty)
 	})
+
+	t.Run("invalid domain - IP address", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]any{
+			"192.168.1.1": "myapp:v1",
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "192.168.1.1",
+			Image:  "myapp:v2",
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("invalid domain - localhost", func(t *testing.T) {
+		v := viper.New()
+		v.Set("routes", map[string]any{
+			"localhost": "myapp:v1",
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+
+		_ = svc.Load(ctx)
+
+		route := domain.Route{
+			Domain: "localhost",
+			Image:  "myapp:v2",
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("insecure route found via http prefix fallback", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"http://insecure.example.com\" = \"myapp:v1\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		v.Set("routes", map[string]any{
+			"http://insecure.example.com": "myapp:v1",
+		})
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		// Caller uses clean domain for update
+		route := domain.Route{
+			Domain: "insecure.example.com",
+			Image:  "myapp:v2",
+			HTTPS:  false,
+		}
+
+		err = svc.UpdateRoute(ctx, route)
+		assert.NoError(t, err, "UpdateRoute should find insecure route via http:// fallback")
+
+		config := svc.GetConfig()
+		routeCfg := requireRoute(t, config.Routes, "insecure.example.com")
+		assert.Equal(t, "myapp:v2", routeCfg.Image,
+			"insecure route update should preserve the plain hostname key")
+		assert.False(t, routeCfg.HTTPS)
+	})
+
+	t.Run("reconciles coexisting legacy http key", func(t *testing.T) {
+		svc, ctx := setupServiceWithCoexistingLegacyRoute(t, "myapp:v1", "myapp:old")
+		preConfig := svc.GetConfig()
+		requireRoute(t, preConfig.Routes, "app.example.com")
+		requireRoute(t, preConfig.Routes, "http://app.example.com")
+
+		route := domain.Route{
+			Domain: "app.example.com",
+			Image:  "myapp:v2",
+			HTTPS:  true,
+		}
+
+		err := svc.UpdateRoute(ctx, route)
+		assert.NoError(t, err)
+
+		config := svc.GetConfig()
+		routeCfg := requireRoute(t, config.Routes, "app.example.com")
+		assert.Equal(t, "myapp:v2", routeCfg.Image,
+			"canonical route should be updated")
+		assert.True(t, routeCfg.HTTPS)
+		_, exists := config.Routes["http://app.example.com"]
+		assert.False(t, exists, "legacy http route key should be removed during reconciliation")
+	})
 }
 
 func TestService_RemoveRoute(t *testing.T) {
@@ -436,6 +953,16 @@ func TestService_RemoveRoute(t *testing.T) {
 	assert.False(t, exists)
 }
 
+func TestService_RemoveRoute_InvalidDomain(t *testing.T) {
+	v := viper.New()
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	err := svc.RemoveRoute(ctx, "localhost")
+	assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+}
+
 func TestService_RemoveRoute_NotFound(t *testing.T) {
 	v := viper.New()
 	eventBus := mocks.NewMockEventPublisher(t)
@@ -447,6 +974,95 @@ func TestService_RemoveRoute_NotFound(t *testing.T) {
 	err := svc.RemoveRoute(ctx, "nonexistent.example.com")
 
 	assert.ErrorIs(t, err, domain.ErrRouteNotFound)
+}
+
+func TestService_RemoveRoute_InsecureFallback(t *testing.T) {
+	// Setup: insecure route stored with http:// prefix
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte("[routes]\n\"http://insecure.example.com\" = \"myapp:latest\"\n"), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	v.Set("routes", map[string]interface{}{
+		"http://insecure.example.com": "myapp:latest",
+	})
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	_ = svc.Load(ctx)
+
+	// Caller passes plain domain (not the storage key)
+	err = svc.RemoveRoute(ctx, "insecure.example.com")
+	assert.NoError(t, err, "RemoveRoute should find insecure route via http:// fallback")
+
+	config := svc.GetConfig()
+	_, exists := config.Routes["insecure.example.com"]
+	assert.False(t, exists, "insecure route should be removed")
+}
+
+func TestService_RemoveRoute_ReconcilesCoexistingLegacyKey(t *testing.T) {
+	svc, ctx := setupServiceWithCoexistingLegacyRoute(t, "myapp:latest", "myapp:old")
+
+	err := svc.RemoveRoute(ctx, "app.example.com")
+	assert.NoError(t, err)
+
+	config := svc.GetConfig()
+	_, exists := config.Routes["app.example.com"]
+	assert.False(t, exists, "canonical route should be removed")
+	_, exists = config.Routes["http://app.example.com"]
+	assert.False(t, exists, "legacy http route key should be removed during reconciliation")
+}
+
+func TestService_Save_WrapsInvalidRouteDomainError(t *testing.T) {
+	t.Run("canonical key", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:latest\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		require.NoError(t, v.ReadInConfig())
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		require.NoError(t, svc.Load(ctx))
+
+		svc.mu.Lock()
+		svc.config.Routes["localhost"] = routeConfig{Image: "myapp:latest", HTTPS: true}
+		svc.mu.Unlock()
+
+		err = svc.Save(ctx)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("legacy key", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:latest\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		require.NoError(t, v.ReadInConfig())
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		require.NoError(t, svc.Load(ctx))
+
+		svc.mu.Lock()
+		svc.config.Routes["http://localhost"] = routeConfig{Image: "myapp:latest", HTTPS: false}
+		svc.mu.Unlock()
+
+		err = svc.Save(ctx)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
 }
 
 func TestService_GetNetworkGroups(t *testing.T) {
@@ -1434,9 +2050,14 @@ backend = ["app.example.com"]
 		assert.True(t, v2.GetBool("backups.enabled"))
 		assert.Equal(t, "~/.gordon/backups", v2.GetString("backups.storage_dir"))
 
-		savedRoutes := loadStringMap(v2.Get("routes"))
-		assert.Equal(t, "newapp:latest", savedRoutes["new.example.com"])
-		assert.Equal(t, "reg.example.com/myapp:latest", savedRoutes["app.example.com"])
+		savedRoutes, err := loadCanonicalRoutes(v2.Get("routes"))
+		require.NoError(t, err)
+		routeCfg := requireRoute(t, savedRoutes, "new.example.com")
+		assert.Equal(t, "newapp:latest", routeCfg.Image)
+		assert.False(t, routeCfg.HTTPS)
+		routeCfg = requireRoute(t, savedRoutes, "app.example.com")
+		assert.Equal(t, "reg.example.com/myapp:latest", routeCfg.Image)
+		assert.True(t, routeCfg.HTTPS)
 
 		matches, err := filepath.Glob(configFile + ".bak.*")
 		require.NoError(t, err)

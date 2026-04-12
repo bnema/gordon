@@ -245,13 +245,13 @@ gordon logs -n 100       # Last 100 lines
 gordon logs -f -n 200    # Follow, starting from last 200 lines
 
 # Container logs
-gordon logs myapp.local           # Last 50 lines from container
-gordon logs myapp.local -f        # Follow container logs
-gordon logs myapp.local -n 100    # Last 100 lines from container
+gordon logs myapp.example.com           # Last 50 lines from container
+gordon logs myapp.example.com -f        # Follow container logs
+gordon logs myapp.example.com -n 100    # Last 100 lines from container
 
 # Remote mode (override)
 gordon logs --remote https://gordon.mydomain.com --token $TOKEN
-gordon logs myapp.local --remote https://gordon.mydomain.com --token $TOKEN
+gordon logs myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ### Log Locations
@@ -267,8 +267,8 @@ tail -f ~/.gordon/logs/gordon.log
 journalctl --user -u gordon -f
 
 # Container logs via docker (local alternative)
-docker logs --tail 50 myapp.local
-docker logs -f myapp.local
+docker logs --tail 50 myapp.example.com
+docker logs -f myapp.example.com
 ```
 
 ---

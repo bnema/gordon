@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,7 +64,7 @@ func TestDomainToEnvFileName(t *testing.T) {
 	}
 }
 
-// parseEnvFile tests
+// ParseEnvData tests
 
 func TestParseEnvFile(t *testing.T) {
 	tests := []struct {
@@ -142,7 +144,7 @@ func TestParseEnvFile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseEnvFile([]byte(tt.input))
+			result, err := domain.ParseEnvData([]byte(tt.input))
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -395,7 +397,6 @@ func TestAutoRouteHandler_CanHandle(t *testing.T) {
 
 	assert.True(t, handler.CanHandle(domain.EventImagePushed))
 	assert.False(t, handler.CanHandle(domain.EventConfigReload))
-	assert.False(t, handler.CanHandle(domain.EventManualReload))
 }
 
 func TestAutoRouteHandler_Handle_DisabledAutoRoute(t *testing.T) {
@@ -508,12 +509,14 @@ func TestAutoRouteHandler_Handle_CreatesNewRoute(t *testing.T) {
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(nil)
 
 	// Expect deploy to be triggered
 	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(&domain.Container{ID: "container-1"}, nil)
 
 	event := domain.Event{
@@ -564,19 +567,21 @@ func TestAutoRouteHandler_Handle_UpdatesExistingRoute(t *testing.T) {
 
 	// Existing route with different image
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "app.example.com", Image: "myapp:v1"},
+		{Domain: "app.example.com", Image: "myapp:v1", HTTPS: true},
 	})
 
 	// Expect route to be updated
 	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:v2",
+		HTTPS:  true,
 	}).Return(nil)
 
 	// Expect deploy to be triggered
 	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:v2",
+		HTTPS:  true,
 	}).Return(&domain.Container{ID: "container-1"}, nil)
 
 	event := domain.Event{
@@ -733,14 +738,17 @@ func TestAutoRouteHandler_Handle_MultipleDomains(t *testing.T) {
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{
 		Domain: "app.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(nil)
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{
 		Domain: "api.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(nil)
 	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{
 		Domain: "www.example.com",
 		Image:  "myapp:latest",
+		HTTPS:  true,
 	}).Return(nil)
 
 	// Expect deploy for all three
@@ -786,8 +794,8 @@ func TestAutoRouteHandler_NewDomain_Allowed(t *testing.T) {
 	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
 
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil)
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(&domain.Container{ID: "c1"}, nil)
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(&domain.Container{ID: "c1"}, nil)
 
 	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:latest", []string{"*.example.com"})
 	assert.True(t, created)
@@ -813,9 +821,9 @@ func TestAutoRouteHandler_ExistingDomain_SameRepo(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com")
 
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "myapp:v1"}})
-	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2"}).Return(nil)
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2"}).Return(&domain.Container{ID: "c1"}, nil)
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "myapp:v1", HTTPS: true}})
+	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}).Return(&domain.Container{ID: "c1"}, nil)
 
 	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "myapp:v2", []string{"*.example.com"})
 	assert.False(t, created)
@@ -845,8 +853,8 @@ func TestAutoRouteHandler_EnvExtractionOnlyOnCreate(t *testing.T) {
 
 	configSvc.EXPECT().GetAutoRouteAllowedDomains(mock.Anything).Return([]string{"*.example.com"}, nil).Twice()
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{}).Once()
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(nil)
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest"}).Return(&domain.Container{ID: "c1"}, nil)
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(&domain.Container{ID: "c1"}, nil)
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "myapp:latest"}}).Once()
 
 	handler.processRoutes(context.Background(), []string{"app.example.com"}, "myapp:latest", &domain.ImageLabels{EnvFile: ".env"})
@@ -857,20 +865,163 @@ func TestAutoRouteHandler_EnvExtractionOnlyOnCreate(t *testing.T) {
 	assert.Equal(t, ".env", extractor.lastPath)
 }
 
+func TestAutoRouteHandler_ExtractAndMergeEnvFile_ReturnsExistingParseError(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	extractor := &testEnvExtractor{data: []byte("FOO=bar\n")}
+
+	envDir := t.TempDir()
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com").WithEnvExtractor(extractor, envDir)
+
+	envFileName, err := domainToEnvFileName("app.example.com")
+	require.NoError(t, err)
+	envFileDst := filepath.Join(envDir, envFileName)
+	err = os.WriteFile(envFileDst, []byte("BIG="+strings.Repeat("a", (1<<20)+1)), 0600)
+	require.NoError(t, err)
+
+	err = handler.extractAndMergeEnvFile(context.Background(), "myapp:latest", "app.example.com", ".env")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), envFileDst)
+	assert.Contains(t, err.Error(), "failed to parse existing env file")
+}
+
 type testEnvExtractor struct {
 	calls     int
 	lastImage string
 	lastPath  string
+	data      []byte
+	err       error
 }
 
 func (e *testEnvExtractor) ExtractEnvFileFromImage(_ context.Context, imageRef, envFilePath string) ([]byte, error) {
 	e.calls++
 	e.lastImage = imageRef
 	e.lastPath = envFilePath
+	if e.err != nil {
+		return nil, e.err
+	}
+	if e.data != nil {
+		return e.data, nil
+	}
 	return []byte("FOO=bar\n"), nil
 }
 
 // collectDomains tests
+
+func TestAutoRouteHandler_ExtractAndMergeEnvFile_RejectsSecretReferences(t *testing.T) {
+	tests := []struct {
+		name        string
+		envData     string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "pass reference in value",
+			envData:     "DB_PASSWORD=${pass:myapp/db}\n",
+			wantErr:     true,
+			errContains: "secret reference",
+		},
+		{
+			name:        "sops reference in value",
+			envData:     "API_KEY=${sops:secrets.yaml#/key}\n",
+			wantErr:     true,
+			errContains: "secret reference",
+		},
+		{
+			name:        "pass reference embedded in text",
+			envData:     "CONNECTION=prefix-${pass:secret}-suffix\n",
+			wantErr:     true,
+			errContains: "secret reference",
+		},
+		{
+			name:        "multiple secret references",
+			envData:     "A=${pass:a}\nB=${sops:b}\n",
+			wantErr:     true,
+			errContains: "secret reference",
+		},
+		{
+			name:    "normal env values are allowed",
+			envData: "FOO=bar\nBAZ=qux\n",
+			wantErr: false,
+		},
+		{
+			name:    "dollar sign without reference is allowed",
+			envData: "PRICE=$100\n",
+			wantErr: false,
+		},
+		{
+			name:    "empty braces are allowed",
+			envData: "EMPTY=${}\n",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+			configSvc := inmocks.NewMockConfigService(t)
+			containerSvc := inmocks.NewMockContainerService(t)
+			blobStorage := mocks.NewMockBlobStorage(t)
+			extractor := &testEnvExtractor{data: []byte(tt.envData)}
+
+			envDir := t.TempDir()
+			handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com").
+				WithEnvExtractor(extractor, envDir)
+
+			err := handler.extractAndMergeEnvFile(context.Background(), "myapp:latest", "app.example.com", ".env")
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestAutoRouteHandler_ExtractAndMergeEnvFile_DoesNotPersistSecretReferences(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	extractor := &testEnvExtractor{data: []byte("DB_PASSWORD=${pass:myapp/db}\n")}
+
+	envDir := t.TempDir()
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com").WithEnvExtractor(extractor, envDir)
+
+	envFileName, err := domainToEnvFileName("app.example.com")
+	require.NoError(t, err)
+	envFileDst := filepath.Join(envDir, envFileName)
+
+	err = handler.extractAndMergeEnvFile(context.Background(), "myapp:latest", "app.example.com", ".env")
+	require.ErrorIs(t, err, domain.ErrEnvContainsSecretRef)
+	assert.NoFileExists(t, envFileDst)
+}
+
+func TestAutoRouteHandler_ExtractAndMergeEnvFile_ReturnsReadErrorForExistingFileIssues(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	extractor := &testEnvExtractor{data: []byte("FOO=bar\n")}
+
+	envDir := t.TempDir()
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com").WithEnvExtractor(extractor, envDir)
+
+	envFileName, err := domainToEnvFileName("app.example.com")
+	require.NoError(t, err)
+	envFileDst := filepath.Join(envDir, envFileName)
+	require.NoError(t, os.Mkdir(envFileDst, 0700))
+
+	err = handler.extractAndMergeEnvFile(context.Background(), "myapp:latest", "app.example.com", ".env")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), envFileDst)
+	assert.Contains(t, err.Error(), "failed to read existing env file")
+}
 
 func TestAutoRouteHandler_CollectDomains(t *testing.T) {
 	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())

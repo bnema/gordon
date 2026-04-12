@@ -16,12 +16,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/bnema/zerowrap"
 	zerowrapotel "github.com/bnema/zerowrap/otel"
-	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 
 	// Adapters - Output
@@ -188,35 +188,36 @@ type Config struct {
 
 // services holds all the services used by the application.
 type services struct {
-	runtime          *docker.Runtime
-	eventBus         *eventbus.InMemory
-	blobStorage      *filesystem.BlobStorage
-	manifestStorage  *filesystem.ManifestStorage
-	backupStorage    *filesystem.BackupStorage
-	envLoader        out.EnvLoader
-	logWriter        *logwriter.LogWriter
-	tokenStore       out.TokenStore
-	configSvc        *config.Service
-	secretSvc        *secretsSvc.Service
-	containerSvc     *container.Service
-	backupSvc        *backup.Service
-	registrySvc      *registrySvc.Service
-	healthSvc        *health.Service
-	logSvc           *logs.Service
-	imageSvc         *images.Service
-	volumeSvc        *volumesSvc.Service
-	proxySvc         *proxy.Service
-	authSvc          *auth.Service
-	authHandler      *authhandler.Handler
-	adminHandler     *admin.Handler
-	internalRegUser  string
-	internalRegPass  string
-	previewStore     *filesystem.PreviewStore
-	previewService   *preview.Service
-	envDir           string
-	maxBlobChunkSize int64
-	caAdapter        *pkiadapter.CA
-	pkiSvc           *pkiusecase.Service
+	runtime           *docker.Runtime
+	eventBus          *eventbus.InMemory
+	blobStorage       *filesystem.BlobStorage
+	manifestStorage   *filesystem.ManifestStorage
+	backupStorage     *filesystem.BackupStorage
+	envLoader         out.EnvLoader
+	logWriter         *logwriter.LogWriter
+	tokenStore        out.TokenStore
+	configSvc         *config.Service
+	secretSvc         *secretsSvc.Service
+	containerSvc      *container.Service
+	backupSvc         *backup.Service
+	registrySvc       *registrySvc.Service
+	healthSvc         *health.Service
+	logSvc            *logs.Service
+	imageSvc          *images.Service
+	volumeSvc         *volumesSvc.Service
+	proxySvc          *proxy.Service
+	authSvc           *auth.Service
+	authHandler       *authhandler.Handler
+	adminHandler      *admin.Handler
+	internalRegUser   string
+	internalRegPass   string
+	previewStore      *filesystem.PreviewStore
+	previewService    *preview.Service
+	envDir            string
+	maxBlobChunkSize  int64
+	caAdapter         *pkiadapter.CA
+	pkiSvc            *pkiusecase.Service
+	reloadCoordinator *reloadCoordinator
 }
 
 // Run initializes and starts the Gordon application.
@@ -262,12 +263,7 @@ func Run(ctx context.Context, configPath string) error {
 
 	log.Info().Msg("Gordon starting")
 
-	// Deprecation warnings for removed TLS config fields
-	for _, key := range []string{"server.tls_enabled", "server.force_hsts"} {
-		if v.IsSet(key) {
-			log.Warn().Str("key", key).Msg("deprecated config key — Gordon now uses an internal CA with automatic TLS; remove this from your config")
-		}
-	}
+	warnDeprecatedConfigKeys(v, log)
 
 	// Create PID file
 	pidFile := createPidFile(log)
@@ -290,7 +286,9 @@ func Run(ctx context.Context, configPath string) error {
 	// timers before graceful shutdown, preventing deploys during drain.
 
 	// Set up config hot reload
-	setupConfigHotReload(ctx, v, svc, log)
+	if err := setupConfigHotReload(ctx, svc.configSvc, svc.reloadCoordinator); err != nil {
+		return err
+	}
 
 	// Start event bus
 	if err := svc.eventBus.Start(); err != nil {
@@ -299,7 +297,15 @@ func Run(ctx context.Context, configPath string) error {
 	defer svc.eventBus.Stop()
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
-	return runServers(ctx, v, cfg, svc, cleanupHandlers, log)
+	return runServers(ctx, v, cfg, svc, svc.reloadCoordinator, cleanupHandlers, log)
+}
+
+func warnDeprecatedConfigKeys(v *viper.Viper, log zerowrap.Logger) {
+	for _, key := range []string{"server.tls_enabled", "server.force_hsts"} {
+		if v.IsSet(key) {
+			log.Warn().Str("key", key).Msg("deprecated config key — Gordon now uses an internal CA with automatic TLS; remove this from your config")
+		}
+	}
 }
 
 // initConfig loads configuration from file.
@@ -454,6 +460,8 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
+	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, si.svc.eventBus, log)
+
 	si.initHandlers()
 
 	return si.svc, nil
@@ -545,19 +553,19 @@ func (si *serviceInit) initHandlers() {
 	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
 
 	si.svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
-		ConfigSvc:    si.svc.configSvc,
-		AuthSvc:      si.svc.authSvc,
-		ContainerSvc: si.svc.containerSvc,
-		HealthSvc:    si.svc.healthSvc,
-		SecretSvc:    si.svc.secretSvc,
-		LogSvc:       si.svc.logSvc,
-		RegistrySvc:  si.svc.registrySvc,
-		EventBus:     si.svc.eventBus,
-		Log:          si.log,
-		BackupSvc:    si.svc.backupSvc,
-		PreviewSvc:   si.svc.previewService,
-		ImageSvc:     si.svc.imageSvc,
-		VolumeSvc:    si.svc.volumeSvc,
+		ConfigSvc:     si.svc.configSvc,
+		AuthSvc:       si.svc.authSvc,
+		ContainerSvc:  si.svc.containerSvc,
+		HealthSvc:     si.svc.healthSvc,
+		SecretSvc:     si.svc.secretSvc,
+		LogSvc:        si.svc.logSvc,
+		RegistrySvc:   si.svc.registrySvc,
+		ReloadTrigger: si.svc.reloadCoordinator,
+		Log:           si.log,
+		BackupSvc:     si.svc.backupSvc,
+		PreviewSvc:    si.svc.previewService,
+		ImageSvc:      si.svc.imageSvc,
+		VolumeSvc:     si.svc.volumeSvc,
 	})
 }
 
@@ -1343,6 +1351,112 @@ type proxyConfigResult struct {
 	maxBlobChunkSize int64
 }
 
+type configWatcher interface {
+	Watch(ctx context.Context, onChange func()) error
+}
+
+type configReloader interface {
+	Reload(ctx context.Context) error
+}
+
+type proxyConfigUpdater interface {
+	UpdateConfig(config proxy.Config)
+}
+
+type reloadTrigger interface {
+	Trigger(ctx context.Context) error
+}
+
+type loadedConfigApplier interface {
+	ApplyLoadedConfig(ctx context.Context) error
+}
+
+type reloadCoordinator struct {
+	mu       sync.Mutex
+	lastRun  time.Time
+	debounce time.Duration
+
+	configSvc configReloader
+	v         *viper.Viper
+	proxySvc  proxyConfigUpdater
+	eventBus  out.EventPublisher
+	log       zerowrap.Logger
+}
+
+func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc proxyConfigUpdater, eventBus out.EventPublisher, log zerowrap.Logger) *reloadCoordinator {
+	return &reloadCoordinator{
+		debounce:  500 * time.Millisecond,
+		configSvc: configSvc,
+		v:         v,
+		proxySvc:  proxySvc,
+		eventBus:  eventBus,
+		log:       log,
+	}
+}
+
+func (c *reloadCoordinator) Trigger(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.reloadLocked(ctx, true)
+}
+
+func (c *reloadCoordinator) ApplyLoadedConfig(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.reloadLocked(ctx, false)
+}
+
+func (c *reloadCoordinator) reloadLocked(ctx context.Context, loadConfig bool) error {
+	now := time.Now()
+	if !c.lastRun.IsZero() && now.Sub(c.lastRun) < c.debounce {
+		c.log.Debug().Dur("since_last_reload", now.Sub(c.lastRun)).Msg("skipping config reload trigger due to debounce")
+		return nil
+	}
+
+	if loadConfig {
+		if err := c.configSvc.Reload(ctx); err != nil {
+			c.log.Error().Err(err).Msg("failed to reload config")
+			return fmt.Errorf("failed to reload config: %w", err)
+		}
+	}
+
+	if err := c.applyLoadedConfig(now); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *reloadCoordinator) applyLoadedConfig(now time.Time) error {
+	var reloadCfg Config
+	if err := c.v.Unmarshal(&reloadCfg); err != nil {
+		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
+		return fmt.Errorf("failed to unmarshal config on reload: %w", err)
+	}
+
+	reloadedProxy, err := buildProxyConfig(reloadCfg, c.log)
+	if err != nil {
+		c.log.Error().Err(err).Msg("failed to parse proxy config on reload")
+		return fmt.Errorf("failed to parse proxy config on reload: %w", err)
+	}
+
+	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
+
+	if c.eventBus != nil {
+		if err := c.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
+			c.log.Error().Err(err).Msg("failed to publish config reload event")
+			return fmt.Errorf("failed to publish config reload event: %w", err)
+		}
+	}
+
+	c.lastRun = now
+
+	c.log.Debug().Msg("config hot reload complete")
+	return nil
+}
+
 // buildProxyConfig parses size-related config fields and builds the proxy config.
 func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, error) {
 	maxProxyBodySize := int64(512 << 20) // 512MB default
@@ -1550,7 +1664,6 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	autoPreviewHandler := preview.NewAutoPreviewHandler(
 		ctx,
 		svc.configSvc,
-		svc.blobStorage,
 		svc.previewService,
 	)
 
@@ -1563,11 +1676,6 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	configReloadHandler := container.NewConfigReloadHandler(ctx, svc.containerSvc, svc.configSvc)
 	if err := svc.eventBus.Subscribe(configReloadHandler); err != nil {
 		return nil, fmt.Errorf("failed to subscribe config reload handler: %w", err)
-	}
-
-	manualReloadHandler := container.NewManualReloadHandler(ctx, svc.containerSvc, svc.configSvc)
-	if err := svc.eventBus.Subscribe(manualReloadHandler); err != nil {
-		return nil, fmt.Errorf("failed to subscribe manual reload handler: %w", err)
 	}
 
 	manualDeployHandler := container.NewManualDeployHandler(ctx, svc.containerSvc, svc.configSvc)
@@ -1593,41 +1701,15 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	return cleanup, nil
 }
 
-// setupConfigHotReload sets up Viper config hot reload.
-// NOTE: This does NOT reload routes into memory. Routes are managed via API
-// (AddRoute/UpdateRoute/RemoveRoute) and memory is the source of truth.
-// The file watcher only updates proxy config and refreshes targets.
-// Manual config file edits to routes require a server restart.
-func setupConfigHotReload(ctx context.Context, v *viper.Viper, svc *services, log zerowrap.Logger) {
-	v.OnConfigChange(func(e fsnotify.Event) {
-		log.Info().Str("file", e.Name).Msg("config file changed")
+// setupConfigHotReload sets up config hot reload.
+func setupConfigHotReload(ctx context.Context, configSvc configWatcher, coordinator loadedConfigApplier) error {
+	if err := configSvc.Watch(ctx, func() {
+		_ = coordinator.ApplyLoadedConfig(ctx)
+	}); err != nil {
+		return fmt.Errorf("failed to watch config: %w", err)
+	}
 
-		if err := v.ReadInConfig(); err != nil {
-			log.Error().Err(err).Msg("failed to reload config")
-			return
-		}
-
-		// Re-unmarshal config and rebuild proxy config to pick up all changes
-		var reloadCfg Config
-		if err := v.Unmarshal(&reloadCfg); err != nil {
-			log.Error().Err(err).Msg("failed to unmarshal config on reload")
-			return
-		}
-		reloadedProxy, err := buildProxyConfig(reloadCfg, log)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to parse proxy config on reload")
-			return
-		}
-		svc.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
-
-		// Clear proxy target cache to pick up external route changes
-		if err := svc.proxySvc.RefreshTargets(ctx); err != nil {
-			log.Warn().Err(err).Msg("failed to refresh proxy targets")
-		}
-
-		log.Debug().Msg("config hot reload complete (routes unchanged, memory is source of truth)")
-	})
-	v.WatchConfig()
+	return nil
 }
 
 // syncAndAutoStart syncs existing containers and auto-starts if configured.
@@ -2054,7 +2136,7 @@ func registerAdminRoutes(registryMux *http.ServeMux, svc *services, cfg Config, 
 // - SIGUSR2: Triggers manual deploy for a specific route
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
-func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, cleanupHandlers func(), log zerowrap.Logger) error {
+func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, reload reloadTrigger, cleanupHandlers func(), log zerowrap.Logger) error {
 	// Initialize access log writer. Kept here (not in Run) to keep Run's cyclomatic
 	// complexity within the project limit of 15.
 	accessWriterConcrete, err := initAccessLog(cfg, log)
@@ -2148,7 +2230,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	// Auto-start after servers are listening (registry port is now bound).
 	syncAndAutoStart(ctx, svc, log)
 
-	waitForShutdown(ctx, errChan, reloadChan, deployChan, svc.eventBus, log)
+	waitForShutdown(ctx, errChan, reloadChan, deployChan, reload, svc.eventBus, log)
 	cleanupHandlers() // Stop debounce timers before draining containers
 	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, log)
 	return nil
@@ -2321,7 +2403,7 @@ func resolveSchedulePreset(raw, name string, defaultVal domain.BackupSchedule) (
 
 // waitForShutdown blocks on the event loop, handling server errors and
 // Unix signals (reload, deploy, shutdown) until the context is cancelled.
-func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, deployChan <-chan os.Signal, eventBus out.EventBus, log zerowrap.Logger) {
+func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, deployChan <-chan os.Signal, reload reloadTrigger, eventBus out.EventBus, log zerowrap.Logger) {
 	for {
 		select {
 		case err := <-errChan:
@@ -2329,9 +2411,7 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 			return
 		case <-reloadChan:
 			log.Info().Msg("reload signal received (SIGUSR1)")
-			if err := eventBus.Publish(domain.EventManualReload, nil); err != nil {
-				log.Error().Err(err).Msg("failed to publish manual reload event")
-			}
+			_ = reload.Trigger(ctx)
 		case <-deployChan:
 			log.Info().Msg("deploy signal received (SIGUSR2)")
 			domainName, err := readDeployRequest()

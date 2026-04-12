@@ -21,6 +21,8 @@ gordon_domain = "gordon.mydomain.com"
 "app.mydomain.com" = "myapp:latest"
 ```
 
+> **Note:** `gordon_domain` is the canonical key. Migrate older `registry_domain` values before restarting.
+
 ## Full Configuration Reference
 
 For a complete list of all configuration options with their default values, see the [Configuration Reference](./reference.md).
@@ -231,7 +233,7 @@ gordon reload
 | `server.max_proxy_response_size` |
 | `server.max_concurrent_conns` |
 
-> **Note:** Routes are not hot-reloaded from the config file. Use the API or CLI (`gordon routes add/update/remove`) to manage routes at runtime.
+> **Note:** Routes are hot-reloaded from the config file. You can still use the API or CLI (`gordon routes add/update/remove`) for live route changes.
 
 ### Requires restart
 

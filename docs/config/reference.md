@@ -118,8 +118,9 @@ preserve = true                              # Keep volumes when containers are 
 # ROUTES
 # =============================================================================
 [routes]
-# "domain.com" = "image:tag"
-# "http://insecure.domain.com" = "image:tag"   # HTTP-only (no HTTPS redirect)
+# "domain.com" = { image = "image:tag" }
+# "insecure.domain.com" = { image = "image:tag", https = false }
+# Legacy "http://domain.com" keys are read for compatibility and rewritten on save.
 
 # =============================================================================
 # EXTERNAL ROUTES

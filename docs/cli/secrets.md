@@ -7,7 +7,8 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 Storage depends on the secrets backend:
 - `pass`: secrets are stored in pass under `gordon/env/<domain>/<KEY>`
-- `sops` or `unsafe`: secrets are stored in domain `.env` files
+- `sops`: secrets live in domain `.env` files and can reference SOPS-encrypted values
+- `unsafe`: secrets are stored in plain-text domain `.env` files
 
 ## gordon secrets
 
@@ -47,10 +48,10 @@ gordon secrets list <domain>
 
 ```bash
 # Local
-gordon secrets list myapp.local
+gordon secrets list myapp.example.com
 
 # Remote (override)
-gordon secrets list myapp.local --remote https://gordon.mydomain.com --token $TOKEN
+gordon secrets list myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ### Output
@@ -101,7 +102,7 @@ Set a secret value for a domain.
 
 ```bash
 gordon secrets set <domain> <KEY=value>...
-gordon secrets set myapp.local DATABASE_URL "postgres://..."
+gordon secrets set myapp.example.com DATABASE_URL="postgres://..."
 ```
 
 ### Arguments
@@ -109,8 +110,7 @@ gordon secrets set myapp.local DATABASE_URL "postgres://..."
 | Argument | Description |
 |----------|-------------|
 | `<domain>` | The domain name to set the secret for |
-| `<key>` | The secret key (environment variable name) |
-| `<value>` | The secret value |
+| `<KEY=value>...` | One or more secret key/value pairs |
 
 ### Options
 
@@ -124,11 +124,11 @@ gordon secrets set myapp.local DATABASE_URL "postgres://..."
 
 ```bash
 # Local
-gordon secrets set myapp.local DATABASE_URL "postgres://user:pass@postgres:5432/db"
-gordon secrets set myapp.local API_KEY "your-api-key"
+gordon secrets set myapp.example.com DATABASE_URL="postgres://user:pass@postgres:5432/db"
+gordon secrets set myapp.example.com API_KEY="your-api-key"
 
 # Remote (override)
-gordon secrets set myapp.local DATABASE_URL "postgres://..." --remote https://gordon.mydomain.com --token $TOKEN
+gordon secrets set myapp.example.com DATABASE_URL="$DATABASE_URL" --remote https://gordon.mydomain.com --token $TOKEN
 
 # Set attachment secrets
 gordon secrets set app.mydomain.com --attachment postgres POSTGRES_PASSWORD=secret
@@ -160,6 +160,7 @@ gordon secrets remove <domain> <key>
 | Option | Description |
 |--------|-------------|
 | `--attachment` / `-a` | Target an attachment service (e.g., postgres, redis) |
+| `--force` | Remove without confirmation |
 | `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
@@ -167,10 +168,10 @@ gordon secrets remove <domain> <key>
 
 ```bash
 # Local
-gordon secrets remove myapp.local DATABASE_URL
+gordon secrets remove myapp.example.com DATABASE_URL
 
 # Remote (override)
-gordon secrets remove myapp.local DATABASE_URL --remote https://gordon.mydomain.com --token $TOKEN
+gordon secrets remove myapp.example.com DATABASE_URL --remote https://gordon.mydomain.com --token $TOKEN
 
 # Remove attachment secret
 gordon secrets remove app.mydomain.com --attachment postgres POSTGRES_PASSWORD
@@ -184,17 +185,17 @@ gordon secrets remove app.mydomain.com --attachment postgres POSTGRES_PASSWORD
 
 ```bash
 # Database connection
-gordon secrets set myapp.local DATABASE_URL "postgres://user:pass@postgres:5432/mydb"
+gordon secrets set myapp.example.com DATABASE_URL="postgres://user:pass@postgres:5432/mydb"
 
 # API keys
-gordon secrets set myapp.local STRIPE_KEY "sk_live_..."
-gordon secrets set myapp.local SENDGRID_KEY "SG..."
+gordon secrets set myapp.example.com STRIPE_KEY="sk_live_..."
+gordon secrets set myapp.example.com SENDGRID_KEY="SG..."
 
 # JWT secret
-gordon secrets set myapp.local JWT_SECRET "your-jwt-secret-here"
+gordon secrets set myapp.example.com JWT_SECRET="your-jwt-secret-here"
 
 # Verify
-gordon secrets list myapp.local
+gordon secrets list myapp.example.com
 ```
 
 ### CI/CD Secret Management
@@ -205,8 +206,8 @@ export GORDON_REMOTE=https://gordon.mydomain.com
 export GORDON_TOKEN=$GORDON_TOKEN
 
 # Update secrets before deploy
-gordon secrets set myapp.example.com DATABASE_URL "$DATABASE_URL"
-gordon secrets set myapp.example.com API_KEY "$API_KEY"
+gordon secrets set myapp.example.com DATABASE_URL="$DATABASE_URL"
+gordon secrets set myapp.example.com API_KEY="$API_KEY"
 
 # Deploy
 gordon deploy myapp.example.com
@@ -219,10 +220,10 @@ gordon deploy myapp.example.com
 NEW_JWT_SECRET=$(openssl rand -base64 32)
 
 # Update the secret
-gordon secrets set myapp.local JWT_SECRET "$NEW_JWT_SECRET"
+gordon secrets set myapp.example.com JWT_SECRET="$NEW_JWT_SECRET"
 
 # Redeploy to pick up new secret
-gordon deploy myapp.local
+gordon deploy myapp.example.com
 ```
 
 ### Attachment Secrets

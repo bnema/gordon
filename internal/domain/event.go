@@ -12,7 +12,6 @@ const (
 	EventImagePushed          EventType = "image.pushed"
 	EventImageDeleted         EventType = "image.deleted"
 	EventConfigReload         EventType = "config.reload"
-	EventManualReload         EventType = "manual.reload"
 	EventManualDeploy         EventType = "manual.deploy"
 	EventContainerStop        EventType = "container.stop"
 	EventContainerStart       EventType = "container.start"

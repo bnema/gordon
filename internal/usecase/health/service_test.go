@@ -25,7 +25,7 @@ func TestService_CheckRoute_ContainerNotFound(t *testing.T) {
 	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(nil, false)
 
 	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest"}
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
 
 	health := svc.CheckRoute(context.Background(), route)
 
@@ -48,7 +48,7 @@ func TestService_CheckRoute_ContainerNotRunning(t *testing.T) {
 	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(container, true)
 
 	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest"}
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
 
 	health := svc.CheckRoute(context.Background(), route)
 
@@ -72,7 +72,32 @@ func TestService_CheckRoute_HTTPProbeSuccess(t *testing.T) {
 	prober.EXPECT().Probe(mock.Anything, "https://app.example.com/").Return(200, int64(45), nil)
 
 	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest"}
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
+
+	health := svc.CheckRoute(context.Background(), route)
+
+	assert.Equal(t, "app.example.com", health.Domain)
+	assert.Equal(t, "running", health.ContainerStatus)
+	assert.Equal(t, 200, health.HTTPStatus)
+	assert.Equal(t, int64(45), health.ResponseTimeMs)
+	assert.True(t, health.Healthy)
+	assert.Empty(t, health.Error)
+}
+
+func TestService_CheckRoute_HTTPOnlyRouteUsesHTTP(t *testing.T) {
+	configSvc := mocks.NewMockConfigService(t)
+	containerSvc := mocks.NewMockContainerService(t)
+	prober := mocks.NewMockHTTPProber(t)
+
+	container := &domain.Container{
+		ID:     "abc123",
+		Status: "running",
+	}
+	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(container, true)
+	prober.EXPECT().Probe(mock.Anything, "http://app.example.com/").Return(200, int64(45), nil)
+
+	svc := NewService(configSvc, containerSvc, prober, testLogger())
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: false}
 
 	health := svc.CheckRoute(context.Background(), route)
 
@@ -97,7 +122,7 @@ func TestService_CheckRoute_HTTPProbeFailure(t *testing.T) {
 	prober.EXPECT().Probe(mock.Anything, "https://app.example.com/").Return(0, int64(0), errors.New("connection refused"))
 
 	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest"}
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
 
 	health := svc.CheckRoute(context.Background(), route)
 
@@ -121,7 +146,7 @@ func TestService_CheckRoute_HTTPStatus5xx(t *testing.T) {
 	prober.EXPECT().Probe(mock.Anything, "https://app.example.com/").Return(502, int64(100), nil)
 
 	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest"}
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
 
 	health := svc.CheckRoute(context.Background(), route)
 
@@ -139,8 +164,8 @@ func TestService_CheckAllRoutes(t *testing.T) {
 	prober := mocks.NewMockHTTPProber(t)
 
 	routes := []domain.Route{
-		{Domain: "app1.example.com", Image: "app1:latest"},
-		{Domain: "app2.example.com", Image: "app2:latest"},
+		{Domain: "app1.example.com", Image: "app1:latest", HTTPS: true},
+		{Domain: "app2.example.com", Image: "app2:latest", HTTPS: true},
 	}
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return(routes)
 
@@ -181,4 +206,38 @@ func TestService_CheckAllRoutes_NoRoutes(t *testing.T) {
 	results := svc.CheckAllRoutes(context.Background())
 
 	assert.Empty(t, results)
+}
+
+func TestService_CheckRoute_InvalidDomain_Blocked(t *testing.T) {
+	configSvc := mocks.NewMockConfigService(t)
+	containerSvc := mocks.NewMockContainerService(t)
+	prober := mocks.NewMockHTTPProber(t)
+
+	// No container lookup should happen for invalid domains
+	// No probe should happen either
+
+	svc := NewService(configSvc, containerSvc, prober, testLogger())
+
+	tests := []struct {
+		name   string
+		domain string
+	}{
+		{"IP address", "192.168.1.1"},
+		{"localhost", "localhost"},
+		{"local TLD", "myapp.local"},
+		{"internal TLD", "service.internal"},
+		{"with port", "example.com:8080"},
+		{"IPv6", "::1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			route := domain.Route{Domain: tt.domain, Image: "myapp:latest"}
+			health := svc.CheckRoute(context.Background(), route)
+
+			assert.Equal(t, tt.domain, health.Domain)
+			assert.False(t, health.Healthy)
+			assert.Equal(t, "invalid route domain for health probe", health.Error)
+		})
+	}
 }

@@ -2,6 +2,10 @@
 
 This guide covers breaking changes and migration steps between major versions.
 
+## Route-Domain Validation
+
+Route keys must be plain hostnames. Use inline tables like `"app.example.com" = { image = "myapp:latest" }`. Gordon still reads legacy `http://...` route entries for backward compatibility and rewrites them on the next save. Update `[routes]`, CLI commands, and automation that reference the old values.
+
 ## v2.30.0 to v2.31.0
 
 ### Breaking: Default Port Changes
@@ -49,6 +53,26 @@ proxy_allowed_ips = [
 ```
 
 Without this, all proxied HTTP traffic returns `403 Forbidden`. Set `tls_port = 0` to disable the internal CA and skip this requirement.
+
+### Breaking: `server.gordon_domain` Replaces `server.registry_domain`
+
+Gordon now uses `server.gordon_domain` as the public registry and admin host. Migrate older configs that still set only `server.registry_domain` before restarting:
+
+**Before:**
+
+```toml
+[server]
+registry_domain = "gordon.example.com"
+```
+
+**After:**
+
+```toml
+[server]
+gordon_domain = "gordon.example.com"
+```
+
+If you do not migrate, `gordon status --remote ...` and `gordon routes list --remote ...` can fail with `/auth/token` `404`, and `reg-domain/v2/` or `/admin/status` can return `404`.
 
 ## v2.16.0 to v2.30.0
 

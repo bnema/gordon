@@ -7,8 +7,11 @@ import (
 	"strings"
 )
 
-var envKeyRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-var containerNameRegex = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+var (
+	envKeyRegex        = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	containerNameRegex = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+	secretRefRegex     = regexp.MustCompile(`\$\{(pass|sops):[^}]+\}`)
+)
 
 // SanitizeDomainForEnvFile validates and sanitizes a domain name for env file storage.
 // Returns the collision-resistant storage key used for filenames.
@@ -75,6 +78,14 @@ func ValidateEnvKey(key string) error {
 		return ErrInvalidEnvKey
 	}
 	return nil
+}
+
+// ContainsSecretReference detects if a string contains a secret provider reference
+// like ${pass:path} or ${sops:path}. This is used to prevent attacker-controlled
+// env files from persisting secret references that would later resolve against
+// host secret providers.
+func ContainsSecretReference(value string) bool {
+	return secretRefRegex.MatchString(value)
 }
 
 // ValidateContainerName validates a container name for attachment storage.

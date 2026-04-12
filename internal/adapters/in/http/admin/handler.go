@@ -17,7 +17,6 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/boundaries/in"
-	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/registry"
@@ -35,21 +34,25 @@ type registryDeployService interface {
 	in.DeployCoordinator
 }
 
+type reloadTrigger interface {
+	Trigger(ctx context.Context) error
+}
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
-	configSvc    in.ConfigService
-	authSvc      in.AuthService
-	containerSvc in.ContainerService
-	backupSvc    in.BackupService
-	imageSvc     in.ImageService
-	healthSvc    in.HealthService
-	secretSvc    in.SecretService
-	logSvc       in.LogService
-	volumeSvc    in.VolumeService
-	registrySvc  registryDeployService
-	previewSvc   previewService
-	eventBus     out.EventPublisher
-	log          zerowrap.Logger
+	configSvc     in.ConfigService
+	authSvc       in.AuthService
+	containerSvc  in.ContainerService
+	backupSvc     in.BackupService
+	imageSvc      in.ImageService
+	healthSvc     in.HealthService
+	secretSvc     in.SecretService
+	logSvc        in.LogService
+	volumeSvc     in.VolumeService
+	registrySvc   registryDeployService
+	previewSvc    previewService
+	reloadTrigger reloadTrigger
+	log           zerowrap.Logger
 }
 
 // Type aliases for API responses using shared DTO types.
@@ -133,37 +136,37 @@ func toDatabaseInfoResponse(db domain.DBInfo) dto.DatabaseInfo {
 
 // HandlerDeps contains all dependencies for the admin HTTP handler.
 type HandlerDeps struct {
-	ConfigSvc    in.ConfigService
-	AuthSvc      in.AuthService
-	ContainerSvc in.ContainerService
-	HealthSvc    in.HealthService
-	SecretSvc    in.SecretService
-	LogSvc       in.LogService
-	RegistrySvc  registryDeployService
-	EventBus     out.EventPublisher
-	Log          zerowrap.Logger
-	BackupSvc    in.BackupService
-	PreviewSvc   previewService
-	ImageSvc     in.ImageService
-	VolumeSvc    in.VolumeService
+	ConfigSvc     in.ConfigService
+	AuthSvc       in.AuthService
+	ContainerSvc  in.ContainerService
+	HealthSvc     in.HealthService
+	SecretSvc     in.SecretService
+	LogSvc        in.LogService
+	RegistrySvc   registryDeployService
+	Log           zerowrap.Logger
+	BackupSvc     in.BackupService
+	PreviewSvc    previewService
+	ImageSvc      in.ImageService
+	VolumeSvc     in.VolumeService
+	ReloadTrigger reloadTrigger
 }
 
 // NewHandler creates a new admin HTTP handler.
 func NewHandler(deps HandlerDeps) *Handler {
 	return &Handler{
-		configSvc:    deps.ConfigSvc,
-		authSvc:      deps.AuthSvc,
-		containerSvc: deps.ContainerSvc,
-		backupSvc:    deps.BackupSvc,
-		imageSvc:     deps.ImageSvc,
-		healthSvc:    deps.HealthSvc,
-		secretSvc:    deps.SecretSvc,
-		logSvc:       deps.LogSvc,
-		volumeSvc:    deps.VolumeSvc,
-		registrySvc:  deps.RegistrySvc,
-		previewSvc:   deps.PreviewSvc,
-		eventBus:     deps.EventBus,
-		log:          deps.Log,
+		configSvc:     deps.ConfigSvc,
+		authSvc:       deps.AuthSvc,
+		containerSvc:  deps.ContainerSvc,
+		backupSvc:     deps.BackupSvc,
+		imageSvc:      deps.ImageSvc,
+		healthSvc:     deps.HealthSvc,
+		secretSvc:     deps.SecretSvc,
+		logSvc:        deps.LogSvc,
+		volumeSvc:     deps.VolumeSvc,
+		registrySvc:   deps.RegistrySvc,
+		previewSvc:    deps.PreviewSvc,
+		reloadTrigger: deps.ReloadTrigger,
+		log:           deps.Log,
 	}
 }
 
@@ -378,11 +381,11 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		resp.Steps = append(resp.Steps, dto.BootstrapStep{Name: name, Status: status})
 	}
 
-	err = h.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: normalizedImage})
+	err = h.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: normalizedImage, HTTPS: true})
 	switch {
 	case err == nil:
 		addStep("route", "configured")
-	case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+	case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
 		addStep("route", "failed")
 		h.sendError(w, http.StatusBadRequest, err.Error())
 		return
@@ -570,17 +573,26 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 	// Limit request body size
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
 
-	var route domain.Route
-	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
+	var req struct {
+		Domain string `json:"domain"`
+		Image  string `json:"image"`
+		HTTPS  *bool  `json:"https"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Warn().Err(err).Msg("invalid route JSON")
 		h.sendError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
+	route := domain.Route{Domain: req.Domain, Image: req.Image, HTTPS: true}
+	if req.HTTPS != nil {
+		route.HTTPS = *req.HTTPS
+	}
+
 	if err := h.configSvc.AddRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", route.Domain).Msg("failed to add route")
 		switch {
-		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
 			h.sendError(w, http.StatusBadRequest, err.Error())
 		default:
 			h.sendError(w, http.StatusInternalServerError, "failed to add route")
@@ -610,21 +622,44 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 	// Limit request body size
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
 
-	var route domain.Route
-	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
+	var req struct {
+		Image string `json:"image"`
+		HTTPS *bool  `json:"https"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Warn().Err(err).Msg("invalid route JSON")
 		h.sendError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
+	storedRoute, err := h.configSvc.GetRoute(ctx, routeDomain)
+	if err != nil {
+		if errors.Is(err, domain.ErrRouteNotFound) {
+			h.sendError(w, http.StatusNotFound, "route not found")
+			return
+		}
+		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to load route")
+		h.sendError(w, http.StatusInternalServerError, "failed to update route")
+		return
+	}
+	if storedRoute == nil {
+		h.sendError(w, http.StatusNotFound, "route not found")
+		return
+	}
+
+	route := *storedRoute
 	route.Domain = routeDomain
+	route.Image = req.Image
+	if req.HTTPS != nil {
+		route.HTTPS = *req.HTTPS
+	}
 
 	if err := h.configSvc.UpdateRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to update route")
 		switch {
 		case errors.Is(err, domain.ErrRouteNotFound):
 			h.sendError(w, http.StatusNotFound, "route not found")
-		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteImageEmpty):
+		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
 			h.sendError(w, http.StatusBadRequest, err.Error())
 		default:
 			h.sendError(w, http.StatusInternalServerError, "failed to update route")
@@ -653,9 +688,12 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 
 	if err := h.configSvc.RemoveRoute(ctx, routeDomain); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to remove route")
-		if errors.Is(err, domain.ErrRouteNotFound) {
+		switch {
+		case errors.Is(err, domain.ErrRouteNotFound):
 			h.sendError(w, http.StatusNotFound, "route not found")
-		} else {
+		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid):
+			h.sendError(w, http.StatusBadRequest, "invalid route domain")
+		default:
 			h.sendError(w, http.StatusInternalServerError, "failed to remove route")
 		}
 		return
@@ -1170,20 +1208,19 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload configuration from file into memory
-	// Using Reload() instead of Load() to ensure we re-read the file from disk
-	if err := h.configSvc.Reload(ctx); err != nil {
-		log.Error().Err(err).Msg("failed to reload config")
-		h.sendError(w, http.StatusInternalServerError, "failed to reload config")
+	if h.reloadTrigger == nil {
+		log.Error().Msg("reload trigger unavailable")
+		h.sendError(w, http.StatusInternalServerError, "reload trigger unavailable")
 		return
 	}
 
-	// Publish manual reload event to sync containers
-	// ManualReloadHandler starts missing containers without restarting running ones
-	if h.eventBus != nil {
-		if err := h.eventBus.Publish(domain.EventManualReload, nil); err != nil {
-			log.Warn().Err(err).Msg("failed to publish manual reload event")
-		}
+	reloadCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := h.reloadTrigger.Trigger(reloadCtx); err != nil {
+		log.Error().Err(err).Msg("failed to reload config")
+		h.sendError(w, http.StatusInternalServerError, "failed to reload config")
+		return
 	}
 
 	log.Info().Msg("config reloaded via admin API")
