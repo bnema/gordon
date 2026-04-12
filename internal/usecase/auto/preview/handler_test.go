@@ -37,14 +37,6 @@ func (s *captureStore) Save(_ context.Context, previews []domain.PreviewRoute) e
 	return nil
 }
 
-func (s *captureStore) snapshot() []domain.PreviewRoute {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cp := make([]domain.PreviewRoute, len(s.previews))
-	copy(cp, s.previews)
-	return cp
-}
-
 func (s *captureStore) saves() [][]domain.PreviewRoute {
 	s.mu.Lock()
 	defer s.mu.Unlock()
