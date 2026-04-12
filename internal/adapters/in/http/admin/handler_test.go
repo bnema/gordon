@@ -229,7 +229,7 @@ func TestHandler_RoutesPost_InvalidRouteDomain(t *testing.T) {
 		d.SecretSvc = secretSvc
 	})
 
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:latest"}).Return(domain.ErrRouteDomainInvalid).Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:latest", HTTPS: true}).Return(domain.ErrRouteDomainInvalid).Once()
 
 	req := httptest.NewRequest("POST", "/admin/routes", bytes.NewBufferString(`{"domain":"localhost","image":"myapp:latest"}`))
 	req = req.WithContext(ctxWithScopes("admin:routes:write"))
@@ -303,7 +303,7 @@ func TestHandler_RoutesPut_InvalidRouteDomain(t *testing.T) {
 		d.SecretSvc = secretSvc
 	})
 
-	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:v2"}).Return(domain.ErrRouteDomainInvalid).Once()
+	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "localhost", Image: "myapp:v2", HTTPS: true}).Return(domain.ErrRouteDomainInvalid).Once()
 
 	req := httptest.NewRequest("PUT", "/admin/routes/localhost", bytes.NewBufferString(`{"image":"myapp:v2"}`))
 	req = req.WithContext(ctxWithScopes("admin:routes:write"))
@@ -321,7 +321,7 @@ func TestHandler_RoutesPost_AllowsRouteCreationWithoutRegistryManifest(t *testin
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 	registrySvc := inmocks.NewMockRegistryService(t)
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest"}
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -340,8 +340,33 @@ func TestHandler_RoutesPost_AllowsRouteCreationWithoutRegistryManifest(t *testin
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
-	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:latest","https":false}`, rec.Body.String())
+	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:latest","https":true}`, rec.Body.String())
 	registrySvc.AssertNotCalled(t, "GetManifest", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestHandleRoutesPost_DefaultsHTTPSWhenOmitted(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}).Return(nil).Once()
+
+	req := httptest.NewRequest("POST", "/admin/routes", bytes.NewBufferString(`{"domain":"app.example.com","image":"myapp:latest"}`))
+	req = req.WithContext(ctxWithScopes("admin:routes:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:latest","https":true}`, rec.Body.String())
 }
 
 func TestHandler_RoutesPut_AllowsRouteUpdateWithoutRegistryManifest(t *testing.T) {
@@ -350,7 +375,7 @@ func TestHandler_RoutesPut_AllowsRouteUpdateWithoutRegistryManifest(t *testing.T
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 	registrySvc := inmocks.NewMockRegistryService(t)
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:v2"}
+	route := domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -361,6 +386,7 @@ func TestHandler_RoutesPut_AllowsRouteUpdateWithoutRegistryManifest(t *testing.T
 	})
 
 	configSvc.EXPECT().UpdateRoute(mock.Anything, route).Return(nil).Once()
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}, nil).Once()
 
 	req := httptest.NewRequest("PUT", "/admin/routes/app.example.com", bytes.NewBufferString(`{"image":"myapp:v2"}`))
 	req = req.WithContext(ctxWithScopes("admin:routes:write"))
@@ -369,8 +395,34 @@ func TestHandler_RoutesPut_AllowsRouteUpdateWithoutRegistryManifest(t *testing.T
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:v2","https":false}`, rec.Body.String())
+	assert.JSONEq(t, `{"domain":"app.example.com","image":"myapp:v2","https":true}`, rec.Body.String())
 	registrySvc.AssertNotCalled(t, "GetManifest", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestHandleRoutesPut_ReturnsStoredRouteAfterUpdate(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}).Return(nil).Once()
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "stored:v2", HTTPS: false}, nil).Once()
+
+	req := httptest.NewRequest("PUT", "/admin/routes/app.example.com", bytes.NewBufferString(`{"image":"myapp:v2"}`))
+	req = req.WithContext(ctxWithScopes("admin:routes:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"domain":"app.example.com","image":"stored:v2","https":false}`, rec.Body.String())
 }
 
 func TestHandler_AttachmentsByImageGet_OneTarget(t *testing.T) {
@@ -834,7 +886,7 @@ func TestHandler_Bootstrap_HappyPath(t *testing.T) {
 	})
 
 	configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
-	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
+	configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp", HTTPS: true}).Return(nil).Once()
 	configSvc.EXPECT().AddAttachment(mock.Anything, "app.example.com", "postgres:16").Return(nil).Once()
 	secretSvc.EXPECT().Set(mock.Anything, "app.example.com", map[string]string{"APP_ENV": "prod"}).Return(nil).Once()
 	secretSvc.EXPECT().SetAttachment(mock.Anything, "app.example.com", "postgres", map[string]string{"POSTGRES_PASSWORD": "secret"}).Return(nil).Once()
@@ -903,7 +955,7 @@ func TestHandler_Bootstrap_RequiresPermissions(t *testing.T) {
 				configSvc.EXPECT().GetRegistryDomain().Return("reg.bnema.dev").Once()
 			}
 			if tt.wantStatus == http.StatusOK {
-				configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp"}).Return(nil).Once()
+				configSvc.EXPECT().AddRoute(mock.Anything, domain.Route{Domain: "app.example.com", Image: "reg.bnema.dev/myapp", HTTPS: true}).Return(nil).Once()
 			}
 
 			req := httptest.NewRequest("POST", "/admin/bootstrap", bytes.NewBufferString(tt.body))

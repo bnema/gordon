@@ -381,7 +381,7 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		resp.Steps = append(resp.Steps, dto.BootstrapStep{Name: name, Status: status})
 	}
 
-	err = h.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: normalizedImage})
+	err = h.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: normalizedImage, HTTPS: true})
 	switch {
 	case err == nil:
 		addStep("route", "configured")
@@ -573,11 +573,20 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 	// Limit request body size
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
 
-	var route domain.Route
-	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
+	var req struct {
+		Domain string `json:"domain"`
+		Image  string `json:"image"`
+		HTTPS  *bool  `json:"https"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Warn().Err(err).Msg("invalid route JSON")
 		h.sendError(w, http.StatusBadRequest, "invalid JSON")
 		return
+	}
+
+	route := domain.Route{Domain: req.Domain, Image: req.Image, HTTPS: true}
+	if req.HTTPS != nil {
+		route.HTTPS = *req.HTTPS
 	}
 
 	if err := h.configSvc.AddRoute(ctx, route); err != nil {
@@ -613,14 +622,20 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 	// Limit request body size
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
 
-	var route domain.Route
-	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
+	var req struct {
+		Image string `json:"image"`
+		HTTPS *bool  `json:"https"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Warn().Err(err).Msg("invalid route JSON")
 		h.sendError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
-	route.Domain = routeDomain
+	route := domain.Route{Domain: routeDomain, Image: req.Image, HTTPS: true}
+	if req.HTTPS != nil {
+		route.HTTPS = *req.HTTPS
+	}
 
 	if err := h.configSvc.UpdateRoute(ctx, route); err != nil {
 		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to update route")
@@ -636,7 +651,17 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 	}
 
 	log.Info().Str("domain", route.Domain).Str("image", route.Image).Msg("route updated")
-	h.sendJSON(w, http.StatusOK, toRouteResponse(route))
+	storedRoute, err := h.configSvc.GetRoute(ctx, route.Domain)
+	if err != nil || storedRoute == nil {
+		if err == nil {
+			err = errors.New("route not found")
+		}
+		log.Error().Err(err).Str("domain", route.Domain).Msg("failed to load updated route")
+		h.sendError(w, http.StatusInternalServerError, "failed to load updated route")
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, toRouteResponse(*storedRoute))
 }
 
 func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, routeDomain string) {
