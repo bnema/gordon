@@ -1178,11 +1178,10 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Publish manual reload event to sync containers
-	// ManualReloadHandler starts missing containers without restarting running ones
+	// Publish config reload event to sync containers
 	if h.eventBus != nil {
-		if err := h.eventBus.Publish(domain.EventManualReload, nil); err != nil {
-			log.Warn().Err(err).Msg("failed to publish manual reload event")
+		if err := h.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
+			log.Warn().Err(err).Msg("failed to publish config reload event")
 		}
 	}
 

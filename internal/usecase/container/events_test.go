@@ -27,7 +27,6 @@ func TestImagePushedHandler_CanHandle(t *testing.T) {
 
 	assert.True(t, handler.CanHandle(domain.EventImagePushed))
 	assert.False(t, handler.CanHandle(domain.EventConfigReload))
-	assert.False(t, handler.CanHandle(domain.EventManualReload))
 }
 
 func TestImagePushedHandler_Handle_DeploysMatchingRoutes(t *testing.T) {
@@ -197,7 +196,6 @@ func TestConfigReloadHandler_CanHandle(t *testing.T) {
 
 	assert.True(t, handler.CanHandle(domain.EventConfigReload))
 	assert.False(t, handler.CanHandle(domain.EventImagePushed))
-	assert.False(t, handler.CanHandle(domain.EventManualReload))
 }
 
 func TestConfigReloadHandler_Handle_DeploysNewRoutes(t *testing.T) {
@@ -360,154 +358,6 @@ func TestConfigReloadHandler_Handle_NoChanges(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// ManualReloadHandler tests
-
-func TestManualReloadHandler_CanHandle(t *testing.T) {
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	handler := NewManualReloadHandler(testCtx(), containerSvc, configSvc)
-
-	assert.True(t, handler.CanHandle(domain.EventManualReload))
-	assert.False(t, handler.CanHandle(domain.EventImagePushed))
-	assert.False(t, handler.CanHandle(domain.EventConfigReload))
-}
-
-func TestManualReloadHandler_Handle_StartsOnlyMissingContainers(t *testing.T) {
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	handler := NewManualReloadHandler(testCtx(), containerSvc, configSvc)
-
-	// SyncContainers is called first
-	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
-
-	// Routes in config
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "app1.example.com", Image: "app1:latest"},
-		{Domain: "app2.example.com", Image: "app2:latest"},
-	})
-
-	// app1 has a running container, app2 does not
-	containerSvc.EXPECT().Get(mock.Anything, "app1.example.com").Return(&domain.Container{ID: "container-1"}, true)
-	containerSvc.EXPECT().Get(mock.Anything, "app2.example.com").Return(nil, false)
-
-	// Only app2 should be deployed (app1 is already running - never restart healthy containers)
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
-		Domain: "app2.example.com",
-		Image:  "app2:latest",
-	}).Return(&domain.Container{ID: "container-2"}, nil)
-
-	event := domain.Event{
-		ID:   "event-123",
-		Type: domain.EventManualReload,
-	}
-
-	err := handler.Handle(context.Background(), event)
-
-	assert.NoError(t, err)
-}
-
-func TestManualReloadHandler_Handle_StartsMissingContainer(t *testing.T) {
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	handler := NewManualReloadHandler(testCtx(), containerSvc, configSvc)
-
-	// SyncContainers is called first
-	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "app.example.com", Image: "app:latest"},
-	})
-
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(nil, false)
-
-	// Deploy should be called to start the missing container
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
-		Domain: "app.example.com",
-		Image:  "app:latest",
-	}).Return(&domain.Container{ID: "container-1"}, nil)
-
-	event := domain.Event{
-		ID:   "event-123",
-		Type: domain.EventManualReload,
-	}
-
-	err := handler.Handle(context.Background(), event)
-
-	assert.NoError(t, err)
-}
-
-func TestManualReloadHandler_Handle_DeployErrors(t *testing.T) {
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	handler := NewManualReloadHandler(testCtx(), containerSvc, configSvc)
-
-	// SyncContainers is called first
-	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "app1.example.com", Image: "app1:latest"},
-		{Domain: "app2.example.com", Image: "app2:latest"},
-	})
-
-	// Both containers are missing
-	containerSvc.EXPECT().Get(mock.Anything, "app1.example.com").Return(nil, false)
-	containerSvc.EXPECT().Get(mock.Anything, "app2.example.com").Return(nil, false)
-
-	// app1 fails to deploy, app2 succeeds
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
-		Domain: "app1.example.com",
-		Image:  "app1:latest",
-	}).Return(nil, errors.New("deploy failed"))
-
-	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
-		Domain: "app2.example.com",
-		Image:  "app2:latest",
-	}).Return(&domain.Container{ID: "container-2"}, nil)
-
-	event := domain.Event{
-		ID:   "event-123",
-		Type: domain.EventManualReload,
-	}
-
-	err := handler.Handle(context.Background(), event)
-
-	// Should return error indicating some failures
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "1 errors")
-}
-
-func TestManualReloadHandler_Handle_DoesNotRestartRunningContainers(t *testing.T) {
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	handler := NewManualReloadHandler(testCtx(), containerSvc, configSvc)
-
-	// SyncContainers is called first
-	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
-
-	// Route with running container
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "app.example.com", Image: "app:latest"},
-	})
-
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(&domain.Container{ID: "container-1"}, true)
-
-	// NO Deploy call expected - container is already running, never restart healthy containers
-
-	event := domain.Event{
-		ID:   "event-123",
-		Type: domain.EventManualReload,
-	}
-
-	err := handler.Handle(context.Background(), event)
-
-	assert.NoError(t, err)
-}
-
 // ManualDeployHandler tests
 
 func TestConfigReloadHandlerUpdatesContainerConfig(t *testing.T) {
@@ -552,7 +402,6 @@ func TestManualDeployHandler_CanHandle(t *testing.T) {
 
 	assert.True(t, handler.CanHandle(domain.EventManualDeploy))
 	assert.False(t, handler.CanHandle(domain.EventImagePushed))
-	assert.False(t, handler.CanHandle(domain.EventManualReload))
 }
 
 func TestManualDeployHandler_Handle_DeploysSpecificRoute(t *testing.T) {

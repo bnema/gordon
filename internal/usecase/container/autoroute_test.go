@@ -395,7 +395,6 @@ func TestAutoRouteHandler_CanHandle(t *testing.T) {
 
 	assert.True(t, handler.CanHandle(domain.EventImagePushed))
 	assert.False(t, handler.CanHandle(domain.EventConfigReload))
-	assert.False(t, handler.CanHandle(domain.EventManualReload))
 }
 
 func TestAutoRouteHandler_Handle_DisabledAutoRoute(t *testing.T) {

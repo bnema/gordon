@@ -895,14 +895,6 @@ func (s *Service) Watch(ctx context.Context, onChange func()) error {
 			return
 		}
 
-		// Publish config reload event
-		if s.eventBus != nil {
-			if err := s.eventBus.Publish(domain.EventConfigReload, domain.ConfigReloadPayload{
-				Source: "file",
-			}); err != nil {
-				log.WrapErr(err, "failed to publish config reload event")
-			}
-		}
 
 		if onChange != nil {
 			onChange()
