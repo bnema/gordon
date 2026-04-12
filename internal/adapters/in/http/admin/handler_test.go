@@ -277,6 +277,7 @@ func TestHandler_RoutesPut_RequiresWriteScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
 				configSvc.EXPECT().UpdateRoute(mock.Anything, mock.AnythingOfType("domain.Route")).Return(nil).Maybe()
+				configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "myapp:v2", HTTPS: true}, nil).Maybe()
 			}
 
 			req := httptest.NewRequest("PUT", "/admin/routes/app.example.com", bytes.NewBufferString(routeJSON))
