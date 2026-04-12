@@ -21,6 +21,8 @@ gordon_domain = "gordon.mydomain.com"
 "app.mydomain.com" = "myapp:latest"
 ```
 
+> **Note:** `gordon_domain` is the canonical key. Migrate older `registry_domain` values before restarting.
+
 ## Full Configuration Reference
 
 For a complete list of all configuration options with their default values, see the [Configuration Reference](./reference.md).

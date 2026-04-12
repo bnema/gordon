@@ -168,6 +168,7 @@ or `GORDON_REMOTE` environment variable. Use `--remote` and `--token` as global 
 when you want to bypass your saved configuration.
 
 **Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
+If remote CLI gets a `404` during `/auth/token` exchange, the server likely still sets only `server.registry_domain` and needs `server.gordon_domain` configured.
 
 Use `--insecure` when the remote endpoint uses a self-signed or otherwise untrusted TLS certificate.
 You can make this persistent with `insecure_tls = true` in `[client]` of `~/.config/gordon/gordon.toml`

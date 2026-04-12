@@ -53,6 +53,8 @@ gordon remotes add <name> <url> [options]
 | `<name>` | Name for the remote (e.g., `prod`, `staging`) |
 | `<url>` | Gordon URL (the `gordon_domain` from remote config) |
 
+> **Note:** `<url>` must match the configured `gordon_domain`. Older servers that only set `registry_domain` may need a config migration before remote CLI works.
+
 ### Options
 
 | Option | Description |
