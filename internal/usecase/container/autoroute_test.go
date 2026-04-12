@@ -983,6 +983,46 @@ func TestAutoRouteHandler_ExtractAndMergeEnvFile_RejectsSecretReferences(t *test
 	}
 }
 
+func TestAutoRouteHandler_ExtractAndMergeEnvFile_DoesNotPersistSecretReferences(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	extractor := &testEnvExtractor{data: []byte("DB_PASSWORD=${pass:myapp/db}\n")}
+
+	envDir := t.TempDir()
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com").WithEnvExtractor(extractor, envDir)
+
+	envFileName, err := domainToEnvFileName("app.example.com")
+	require.NoError(t, err)
+	envFileDst := filepath.Join(envDir, envFileName)
+
+	err = handler.extractAndMergeEnvFile(context.Background(), "myapp:latest", "app.example.com", ".env")
+	require.ErrorIs(t, err, domain.ErrEnvContainsSecretRef)
+	assert.NoFileExists(t, envFileDst)
+}
+
+func TestAutoRouteHandler_ExtractAndMergeEnvFile_ReturnsReadErrorForExistingFileIssues(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	extractor := &testEnvExtractor{data: []byte("FOO=bar\n")}
+
+	envDir := t.TempDir()
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "registry.example.com").WithEnvExtractor(extractor, envDir)
+
+	envFileName, err := domainToEnvFileName("app.example.com")
+	require.NoError(t, err)
+	envFileDst := filepath.Join(envDir, envFileName)
+	require.NoError(t, os.Mkdir(envFileDst, 0700))
+
+	err = handler.extractAndMergeEnvFile(context.Background(), "myapp:latest", "app.example.com", ".env")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), envFileDst)
+	assert.Contains(t, err.Error(), "failed to read existing env file")
+}
+
 func TestAutoRouteHandler_CollectDomains(t *testing.T) {
 	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
 	configSvc := inmocks.NewMockConfigService(t)

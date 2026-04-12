@@ -632,7 +632,24 @@ func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeD
 		return
 	}
 
-	route := domain.Route{Domain: routeDomain, Image: req.Image, HTTPS: true}
+	storedRoute, err := h.configSvc.GetRoute(ctx, routeDomain)
+	if err != nil {
+		if errors.Is(err, domain.ErrRouteNotFound) {
+			h.sendError(w, http.StatusNotFound, "route not found")
+			return
+		}
+		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to load route")
+		h.sendError(w, http.StatusInternalServerError, "failed to update route")
+		return
+	}
+	if storedRoute == nil {
+		h.sendError(w, http.StatusNotFound, "route not found")
+		return
+	}
+
+	route := *storedRoute
+	route.Domain = routeDomain
+	route.Image = req.Image
 	if req.HTTPS != nil {
 		route.HTTPS = *req.HTTPS
 	}
@@ -1197,7 +1214,10 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.reloadTrigger.Trigger(ctx); err != nil {
+	reloadCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := h.reloadTrigger.Trigger(reloadCtx); err != nil {
 		log.Error().Err(err).Msg("failed to reload config")
 		h.sendError(w, http.StatusInternalServerError, "failed to reload config")
 		return

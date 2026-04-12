@@ -27,24 +27,39 @@ func (w *watchRecorder) Watch(ctx context.Context, onChange func()) error {
 	return nil
 }
 
-type triggerRecorder struct {
-	mu    sync.Mutex
-	calls int
-	err   error
+type coordinatorRecorder struct {
+	mu           sync.Mutex
+	triggerCalls int
+	applyCalls   int
+	err          error
 }
 
-func (t *triggerRecorder) Trigger(context.Context) error {
-	t.mu.Lock()
-	t.calls++
-	err := t.err
-	t.mu.Unlock()
+func (c *coordinatorRecorder) Trigger(context.Context) error {
+	c.mu.Lock()
+	c.triggerCalls++
+	err := c.err
+	c.mu.Unlock()
 	return err
 }
 
-func (t *triggerRecorder) Calls() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.calls
+func (c *coordinatorRecorder) ApplyLoadedConfig(context.Context) error {
+	c.mu.Lock()
+	c.applyCalls++
+	err := c.err
+	c.mu.Unlock()
+	return err
+}
+
+func (c *coordinatorRecorder) TriggerCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.triggerCalls
+}
+
+func (c *coordinatorRecorder) ApplyCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.applyCalls
 }
 
 type reloadRecorder struct {
@@ -108,10 +123,10 @@ func (e *eventBusRecorder) Calls() int {
 	return e.calls
 }
 
-func TestSetupConfigHotReload_WatchCallbackDoesNotTriggerCoordinator(t *testing.T) {
+func TestSetupConfigHotReload_WatchCallbackInvokesCoordinator(t *testing.T) {
 	ctx := context.Background()
 	configSvc := &watchRecorder{}
-	coordinator := &triggerRecorder{}
+	coordinator := &coordinatorRecorder{}
 
 	err := setupConfigHotReload(ctx, configSvc, coordinator)
 	require.NoError(t, err)
@@ -119,7 +134,38 @@ func TestSetupConfigHotReload_WatchCallbackDoesNotTriggerCoordinator(t *testing.
 	require.NotNil(t, configSvc.onChange)
 
 	configSvc.onChange()
-	require.Equal(t, 0, coordinator.Calls())
+	require.Equal(t, 1, coordinator.ApplyCalls())
+	require.Equal(t, 0, coordinator.TriggerCalls())
+}
+
+func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEvent(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "reload.example.com")
+	v.Set("server.registry_port", 5000)
+	v.Set("server.max_proxy_body_size", "5MB")
+	v.Set("server.max_blob_chunk_size", "6MB")
+	v.Set("server.max_proxy_response_size", "7MB")
+	v.Set("server.max_concurrent_connections", 99)
+
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	events := &eventBusRecorder{}
+
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, events, zerowrap.Default())
+	require.NoError(t, coord.ApplyLoadedConfig(ctx))
+
+	require.Equal(t, 0, reloadSvc.Calls())
+	require.Equal(t, 1, proxySvc.calls)
+	require.Equal(t, 1, events.Calls())
+	require.Equal(t, domain.EventConfigReload, events.eventType)
+	require.Equal(t, proxy.Config{
+		RegistryDomain:     "reload.example.com",
+		RegistryPort:       5000,
+		MaxBodySize:        5 << 20,
+		MaxResponseSize:    7 << 20,
+		MaxConcurrentConns: 99,
+	}, proxySvc.config)
 }
 
 func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {

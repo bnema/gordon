@@ -1017,6 +1017,54 @@ func TestService_RemoveRoute_ReconcilesCoexistingLegacyKey(t *testing.T) {
 	assert.False(t, exists, "legacy http route key should be removed during reconciliation")
 }
 
+func TestService_Save_WrapsInvalidRouteDomainError(t *testing.T) {
+	t.Run("canonical key", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:latest\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		require.NoError(t, v.ReadInConfig())
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		require.NoError(t, svc.Load(ctx))
+
+		svc.mu.Lock()
+		svc.config.Routes["localhost"] = routeConfig{Image: "myapp:latest", HTTPS: true}
+		svc.mu.Unlock()
+
+		err = svc.Save(ctx)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+
+	t.Run("legacy key", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:latest\"\n"), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		require.NoError(t, v.ReadInConfig())
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		require.NoError(t, svc.Load(ctx))
+
+		svc.mu.Lock()
+		svc.config.Routes["http://localhost"] = routeConfig{Image: "myapp:latest", HTTPS: false}
+		svc.mu.Unlock()
+
+		err = svc.Save(ctx)
+		assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	})
+}
+
 func TestService_GetNetworkGroups(t *testing.T) {
 	v := viper.New()
 	v.Set("network_groups", map[string]interface{}{

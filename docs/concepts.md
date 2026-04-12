@@ -195,13 +195,13 @@ Gordon watches its config file and reloads automatically:
 
 Route file edits now reload automatically again.
 
-You can also trigger a manual reload:
+You can also trigger a reload:
 
 ```bash
 gordon reload
 ```
 
-This sends `SIGUSR1` to the running Gordon process.
+`gordon reload` sends `SIGUSR1` to the running Gordon process.
 
 ## Event System
 
@@ -210,8 +210,7 @@ Gordon uses an internal event system for coordination:
 | Event | Trigger | Action |
 |-------|---------|--------|
 | `image.pushed` | Image pushed to registry | Deploy container |
-| `config.reload` | Config file changed | Sync containers |
-| `manual.reload` | `gordon reload` command | Sync containers |
+| `config.reload` | Config file changed or `gordon reload` sends `SIGUSR1` | Reload config, sync containers, and refresh proxy state |
 | `manual.deploy` | `gordon deploy <domain>` command | Deploy specific route |
 | `container.deployed` | Container started | Update proxy cache |
 

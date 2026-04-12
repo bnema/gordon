@@ -1367,6 +1367,10 @@ type reloadTrigger interface {
 	Trigger(ctx context.Context) error
 }
 
+type loadedConfigApplier interface {
+	ApplyLoadedConfig(ctx context.Context) error
+}
+
 type reloadCoordinator struct {
 	mu       sync.Mutex
 	lastRun  time.Time
@@ -1394,17 +1398,38 @@ func (c *reloadCoordinator) Trigger(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	return c.reloadLocked(ctx, true)
+}
+
+func (c *reloadCoordinator) ApplyLoadedConfig(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.reloadLocked(ctx, false)
+}
+
+func (c *reloadCoordinator) reloadLocked(ctx context.Context, loadConfig bool) error {
 	now := time.Now()
 	if !c.lastRun.IsZero() && now.Sub(c.lastRun) < c.debounce {
 		c.log.Debug().Dur("since_last_reload", now.Sub(c.lastRun)).Msg("skipping config reload trigger due to debounce")
 		return nil
 	}
 
-	if err := c.configSvc.Reload(ctx); err != nil {
-		c.log.Error().Err(err).Msg("failed to reload config")
-		return fmt.Errorf("failed to reload config: %w", err)
+	if loadConfig {
+		if err := c.configSvc.Reload(ctx); err != nil {
+			c.log.Error().Err(err).Msg("failed to reload config")
+			return fmt.Errorf("failed to reload config: %w", err)
+		}
 	}
 
+	if err := c.applyLoadedConfig(now); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *reloadCoordinator) applyLoadedConfig(now time.Time) error {
 	var reloadCfg Config
 	if err := c.v.Unmarshal(&reloadCfg); err != nil {
 		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
@@ -1677,8 +1702,10 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 }
 
 // setupConfigHotReload sets up config hot reload.
-func setupConfigHotReload(ctx context.Context, configSvc configWatcher, coordinator reloadTrigger) error {
-	if err := configSvc.Watch(ctx, func() {}); err != nil {
+func setupConfigHotReload(ctx context.Context, configSvc configWatcher, coordinator loadedConfigApplier) error {
+	if err := configSvc.Watch(ctx, func() {
+		_ = coordinator.ApplyLoadedConfig(ctx)
+	}); err != nil {
 		return fmt.Errorf("failed to watch config: %w", err)
 	}
 
