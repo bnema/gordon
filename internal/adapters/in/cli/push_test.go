@@ -17,6 +17,7 @@ import (
 )
 
 type resolveFromImageTestControlPlane struct {
+	getRoute          func(context.Context, string) (*domain.Route, error)
 	findRoutesByImage func(context.Context, string) ([]domain.Route, error)
 }
 
@@ -30,7 +31,10 @@ func (c *resolveFromImageTestControlPlane) GetHealth(context.Context) (map[strin
 	panic("unexpected call")
 }
 
-func (c *resolveFromImageTestControlPlane) GetRoute(context.Context, string) (*domain.Route, error) {
+func (c *resolveFromImageTestControlPlane) GetRoute(ctx context.Context, domainName string) (*domain.Route, error) {
+	if c.getRoute != nil {
+		return c.getRoute(ctx, domainName)
+	}
 	panic("unexpected call")
 }
 
@@ -232,6 +236,76 @@ func TestParseImageRef(t *testing.T) {
 			assert.Equal(t, tt.wantRegistry, registry)
 			assert.Equal(t, tt.wantName, name)
 			assert.Equal(t, tt.wantTag, tag)
+		})
+	}
+}
+
+func TestClassifyPushArgument(t *testing.T) {
+	tests := []struct {
+		name       string
+		arg        string
+		wantKind   string
+		wantImage  string
+		wantQuery  string
+		wantDomain string
+	}{
+		{name: "tagged image latest", arg: "myapp:latest", wantKind: "image", wantImage: "myapp:latest", wantQuery: "myapp"},
+		{name: "tagged image semver", arg: "myapp:v1.2.3", wantKind: "image", wantImage: "myapp:v1.2.3", wantQuery: "myapp"},
+		{name: "registry qualified image", arg: "registry.example.com/myapp:v1.2.3", wantKind: "image", wantImage: "registry.example.com/myapp:v1.2.3", wantQuery: "registry.example.com/myapp"},
+		{name: "legacy domain", arg: "app.example.com", wantKind: "legacy-domain", wantDomain: "app.example.com"},
+		{name: "bare image name", arg: "myapp", wantKind: "image", wantImage: "myapp", wantQuery: "myapp"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			module := []byte("module classifyprobe\n\ngo 1.25\n")
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), module, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			source := fmt.Sprintf(`package cli
+
+import "testing"
+
+func TestProbe(t *testing.T) {
+	cases := []struct {
+		name       string
+		arg        string
+		wantKind   string
+		wantImage  string
+		wantQuery  string
+		wantDomain string
+	}{
+		{name: %q, arg: %q, wantKind: %q, wantImage: %q, wantQuery: %q, wantDomain: %q},
+	}
+
+	for _, tt := range cases {
+		var _ pushArgKind
+		got := classifyPushArgument(tt.arg)
+		_ = got
+		_ = pushArgKindImage
+		_ = pushArgKindLegacyDomain
+	}
+}
+`, tt.name, tt.arg, tt.wantKind, tt.wantImage, tt.wantQuery, tt.wantDomain)
+
+			if err := os.WriteFile(filepath.Join(dir, "probe_test.go"), []byte(source), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			cmd := exec.Command("go", "test", "./...")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "GOWORK=off")
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatal("expected classifier compile failure, got success")
+			}
+			output := string(out)
+			if !strings.Contains(output, "undefined: classifyPushArgument") && !strings.Contains(output, "undefined: pushArgKind") {
+				t.Fatalf("expected missing classifier symbols, got:\n%s", output)
+			}
+			t.Fatalf("classifier compile probe failed as expected:\n%s", output)
 		})
 	}
 }
@@ -603,6 +677,55 @@ func TestResolveFromImage_NoRouteSuggestsBootstrap(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), `no route configured for image "myapp"`)
 	assert.Contains(t, err.Error(), "gordon bootstrap")
+}
+
+func TestResolveRoute_LegacyDomainArgumentUsesGetRoute(t *testing.T) {
+	cp := &resolveFromImageTestControlPlane{
+		getRoute: func(_ context.Context, domainName string) (*domain.Route, error) {
+			assert.Equal(t, "app.example.com", domainName)
+			return &domain.Route{Domain: domainName, Image: "registry.example.com/myapp:latest"}, nil
+		},
+		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
+			t.Fatalf("unexpected FindRoutesByImage call for %q", imageName)
+			return nil, nil
+		},
+	}
+
+	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cp, "app.example.com", "", "Dockerfile")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "registry.example.com", registry)
+	assert.Equal(t, "myapp", imageName)
+	assert.Equal(t, "app.example.com", pushDomain)
+}
+
+func TestResolveRoute_TaggedImageStripsTagBeforeLookup(t *testing.T) {
+	cp := &resolveFromImageTestControlPlane{
+		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
+			assert.Equal(t, "myapp", imageName)
+			return []domain.Route{{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}}, nil
+		},
+	}
+
+	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cp, "myapp:v1.2.3", "", "Dockerfile")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "registry.example.com", registry)
+	assert.Equal(t, "myapp", imageName)
+	assert.Equal(t, "app.example.com", pushDomain)
+}
+
+func TestResolveRoute_RegistryQualifiedTaggedImageUsesImageLookup(t *testing.T) {
+	cp := &resolveFromImageTestControlPlane{
+		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
+			assert.Equal(t, "registry.example.com/myapp", imageName)
+			return []domain.Route{{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}}, nil
+		},
+	}
+
+	_, _, _, err := resolveRoute(context.Background(), cp, "registry.example.com/myapp:v1.2.3", "", "Dockerfile")
+
+	assert.NoError(t, err)
 }
 
 func TestIsInsufficientScope(t *testing.T) {
