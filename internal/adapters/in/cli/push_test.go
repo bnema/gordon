@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -249,6 +250,7 @@ func TestClassifyPushArgument(t *testing.T) {
 		{name: "tagged image latest", arg: "myapp:latest", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "myapp"}},
 		{name: "tagged image semver", arg: "myapp:v1.2.3", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "myapp"}},
 		{name: "registry qualified image", arg: "registry.example.com/myapp:v1.2.3", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "registry.example.com/myapp"}},
+		{name: "registry qualified digest", arg: "registry.example.com/myapp@sha256:deadbeef", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "registry.example.com/myapp@sha256:deadbeef"}},
 		{name: "legacy domain", arg: "app.example.com", want: classifiedPushArg{kind: pushArgKindLegacyDomain, legacyDomain: "app.example.com"}},
 		{name: "bare image name", arg: "myapp", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "myapp"}},
 	}
@@ -668,9 +670,17 @@ func TestResolveRoute_DottedBareImageNoRoutesKeepsBootstrapError(t *testing.T) {
 	_, _, _, err := resolveRoute(context.Background(), cp, "my.app", "", "Dockerfile")
 
 	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrNoRouteForImage))
 	assert.Contains(t, err.Error(), `no route configured for image "my.app"`)
 	assert.Contains(t, err.Error(), "gordon bootstrap")
 	assert.NotContains(t, err.Error(), "failed to get route for domain")
+}
+
+func TestNoRouteForImageErrorWrapsSentinel(t *testing.T) {
+	err := noRouteForImageError("myapp")
+
+	assert.True(t, errors.Is(err, domain.ErrNoRouteForImage))
+	assert.Contains(t, err.Error(), `no route configured for image "myapp"`)
 }
 
 func TestResolveRoute_DottedBareDomainFallsBackToLegacyLookup(t *testing.T) {

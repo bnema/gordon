@@ -150,23 +150,10 @@ func classifyPushArgument(arg string) classifiedPushArg {
 	}
 
 	classified := classifiedPushArg{kind: pushArgKindImage, lookupImage: arg}
-	if isTaggedImageRef(arg) {
-		classified.lookupImage = stripImageTag(arg)
+	if parsedImage, ref := validation.ParseImageReference(arg); parsedImage != arg && !strings.HasPrefix(ref, "sha256:") {
+		classified.lookupImage = parsedImage
 	}
 	return classified
-}
-
-func isTaggedImageRef(arg string) bool {
-	slash := strings.LastIndex(arg, "/")
-	colon := strings.LastIndex(arg, ":")
-	return colon > slash
-}
-
-func stripImageTag(arg string) string {
-	if !isTaggedImageRef(arg) {
-		return arg
-	}
-	return arg[:strings.LastIndex(arg, ":")]
 }
 
 func looksLikeLegacyDomain(arg string) bool {
@@ -196,10 +183,13 @@ func resolveRoute(ctx context.Context, cp ControlPlane, imageArg, domainFlag, do
 
 	if looksLikeLegacyDomain(imageArg) {
 		lookupImage := imageArg
-		if isTaggedImageRef(imageArg) {
-			lookupImage = stripImageTag(imageArg)
+		domainLookupArg := imageArg
+		if parsedImage, ref := validation.ParseImageReference(imageArg); parsedImage != imageArg {
+			domainLookupArg = parsedImage
+			if !strings.HasPrefix(ref, "sha256:") {
+				lookupImage = parsedImage
+			}
 		}
-		domainLookupArg := stripImageTag(imageArg)
 
 		registry, imageName, pushDomain, err = resolveFromImage(ctx, cp, lookupImage, dockerfile)
 		if err == nil {
@@ -220,9 +210,6 @@ func resolveRoute(ctx context.Context, cp ControlPlane, imageArg, domainFlag, do
 	}
 
 	classified := classifyPushArgument(imageArg)
-	if classified.kind == pushArgKindLegacyDomain {
-		return resolveFromDomain(ctx, cp, classified.legacyDomain)
-	}
 
 	return resolveFromImage(ctx, cp, classified.lookupImage, dockerfile)
 }
@@ -393,18 +380,30 @@ func resolveFromImage(ctx context.Context, cp ControlPlane, imageArg, dockerfile
 }
 
 func isImageBootstrapError(err error) bool {
-	return err != nil && strings.HasPrefix(err.Error(), "no route configured for image ")
+	return errors.Is(err, domain.ErrNoRouteForImage)
 }
 
 func noRouteForImageError(imageArg string) error {
 	// bootstrap command is registered in bootstrap.go (see issue #98)
-	return fmt.Errorf(
+	return noRouteForImageBootstrapError{imageArg: imageArg}
+}
+
+type noRouteForImageBootstrapError struct {
+	imageArg string
+}
+
+func (e noRouteForImageBootstrapError) Error() string {
+	return fmt.Sprintf(
 		"no route configured for image %q\n\nFor a first deploy, use 'gordon bootstrap <domain> %s'\nOr configure the route directly with 'gordon routes add <domain> %s'\nIf this is an attachment image, use 'gordon attachments push %s'",
-		imageArg,
-		imageArg,
-		imageArg,
-		imageArg,
+		e.imageArg,
+		e.imageArg,
+		e.imageArg,
+		e.imageArg,
 	)
+}
+
+func (e noRouteForImageBootstrapError) Unwrap() error {
+	return domain.ErrNoRouteForImage
 }
 
 // selectDomain picks the target domain from multiple routes.

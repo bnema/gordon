@@ -21,6 +21,7 @@ var (
 	ErrRouteNotFound      = errors.New("route not found")
 	ErrRouteExists        = errors.New("route already exists")
 	ErrInvalidRoute       = errors.New("invalid route configuration")
+	ErrNoRouteForImage    = errors.New("no route configured for image")
 	ErrRouteDomainEmpty   = errors.New("route domain cannot be empty")
 	ErrRouteImageEmpty    = errors.New("route image cannot be empty")
 	ErrRouteDomainInvalid = errors.New("route domain is not a valid public hostname")
