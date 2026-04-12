@@ -72,7 +72,7 @@ gordon restart myapp.example.com
 gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
 
 # Then push and deploy
-gordon push --domain app.example.com --build --no-confirm
+gordon push myapp:latest --domain app.example.com --build --no-confirm
 
 # Push an image and deploy
 gordon push myapp --build

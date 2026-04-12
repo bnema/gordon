@@ -100,7 +100,7 @@ gordon push --build --remote https://gordon.example.com --no-confirm
 gordon push myapp --remote https://gordon.example.com --no-confirm
 
 # Push and deploy to an explicit domain
-gordon push --domain app.example.com --remote https://gordon.example.com --no-confirm
+gordon push myapp:latest --domain app.example.com --remote https://gordon.example.com --no-confirm
 
 # Tagged refs still resolve routes by image name
 gordon push myapp:v1.2.3 --tag v1.2.3 --no-deploy
