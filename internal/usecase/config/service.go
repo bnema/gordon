@@ -386,20 +386,58 @@ func NormalizeBootstrapImage(image, registryDomain string) (string, error) {
 	return image, nil
 }
 
-func resolveRouteStorageKey(routes map[string]string, domainName string) (string, string, bool, bool) {
-	httpKey := "http://" + domainName
+type routeStorageLookup struct {
+	storageKey  string
+	image       string
+	legacyKey   string
+	legacyImage string
+	found       bool
+}
+
+func legacyRouteStorageKey(domainName string) string {
+	return "http://" + domainName
+}
+
+func resolveRouteStorageKey(routes map[string]string, domainName string) routeStorageLookup {
+	httpKey := legacyRouteStorageKey(domainName)
 	image, ok := routes[domainName]
 	if ok {
-		_, hasLegacy := routes[httpKey]
-		return domainName, image, true, hasLegacy
+		lookup := routeStorageLookup{
+			storageKey: domainName,
+			image:      image,
+			found:      true,
+		}
+		if legacyImage, hasLegacy := routes[httpKey]; hasLegacy {
+			lookup.legacyKey = httpKey
+			lookup.legacyImage = legacyImage
+		}
+		return lookup
 	}
 
 	image, ok = routes[httpKey]
 	if !ok {
-		return "", "", false, false
+		return routeStorageLookup{}
 	}
 
-	return httpKey, image, true, false
+	return routeStorageLookup{
+		storageKey: httpKey,
+		image:      image,
+		found:      true,
+	}
+}
+
+func deleteLegacyRouteKey(routes map[string]string, lookup routeStorageLookup) {
+	if lookup.legacyKey == "" {
+		return
+	}
+	delete(routes, lookup.legacyKey)
+}
+
+func restoreLegacyRouteKey(routes map[string]string, lookup routeStorageLookup) {
+	if lookup.legacyKey == "" {
+		return
+	}
+	routes[lookup.legacyKey] = lookup.legacyImage
 }
 
 // AddRoute adds a new route to the configuration and persists it.
@@ -474,29 +512,21 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	storageKey, previousImage, exists, hasLegacy := resolveRouteStorageKey(s.config.Routes, route.Domain)
-	if !exists {
+	lookup := resolveRouteStorageKey(s.config.Routes, route.Domain)
+	if !lookup.found {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-	legacyKey := ""
-	legacyImage := ""
-	if hasLegacy {
-		legacyKey = "http://" + route.Domain
-		legacyImage = s.config.Routes[legacyKey]
-		delete(s.config.Routes, legacyKey)
-	}
-	s.config.Routes[storageKey] = route.Image
+	deleteLegacyRouteKey(s.config.Routes, lookup)
+	s.config.Routes[lookup.storageKey] = route.Image
 	s.mu.Unlock()
 
 	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to persist route update to disk, rolling back")
 		s.mu.Lock()
-		s.config.Routes[storageKey] = previousImage
-		if hasLegacy {
-			s.config.Routes[legacyKey] = legacyImage
-		}
+		s.config.Routes[lookup.storageKey] = lookup.image
+		restoreLegacyRouteKey(s.config.Routes, lookup)
 		s.mu.Unlock()
 		return err
 	}
@@ -516,29 +546,21 @@ func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 
 	// Store previous value for rollback
 	s.mu.Lock()
-	storageKey, previousImage, exists, hasLegacy := resolveRouteStorageKey(s.config.Routes, domainName)
-	if !exists {
+	lookup := resolveRouteStorageKey(s.config.Routes, domainName)
+	if !lookup.found {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
 	}
-	legacyKey := ""
-	legacyImage := ""
-	if hasLegacy {
-		legacyKey = "http://" + domainName
-		legacyImage = s.config.Routes[legacyKey]
-		delete(s.config.Routes, legacyKey)
-	}
-	delete(s.config.Routes, storageKey)
+	deleteLegacyRouteKey(s.config.Routes, lookup)
+	delete(s.config.Routes, lookup.storageKey)
 	s.mu.Unlock()
 
 	// Persist to disk - rollback on failure
 	if err := s.Save(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to persist route removal to disk, rolling back")
 		s.mu.Lock()
-		s.config.Routes[storageKey] = previousImage
-		if hasLegacy {
-			s.config.Routes[legacyKey] = legacyImage
-		}
+		s.config.Routes[lookup.storageKey] = lookup.image
+		restoreLegacyRouteKey(s.config.Routes, lookup)
 		s.mu.Unlock()
 		return err
 	}

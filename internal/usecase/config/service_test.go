@@ -20,6 +20,29 @@ func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
 }
 
+func setupServiceWithCoexistingLegacyRoute(t *testing.T, canonicalImage, legacyImage string) (*Service, context.Context) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(configFile, []byte(fmt.Sprintf("[routes]\n\"app.example.com\" = %q\n\"http://app.example.com\" = %q\n", canonicalImage, legacyImage)), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	v.Set("routes", map[string]any{
+		"app.example.com":        canonicalImage,
+		"http://app.example.com": legacyImage,
+	})
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+	_ = svc.Load(ctx)
+
+	return svc, ctx
+}
+
 func TestService_Load(t *testing.T) {
 	v := viper.New()
 	v.Set("server.port", 8080)
@@ -598,29 +621,14 @@ func TestService_UpdateRoute(t *testing.T) {
 	})
 
 	t.Run("reconciles coexisting legacy http key", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		configFile := filepath.Join(tmpDir, "gordon.toml")
-		err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:v1\"\n\"http://app.example.com\" = \"myapp:old\"\n"), 0600)
-		require.NoError(t, err)
-
-		v := viper.New()
-		v.SetConfigFile(configFile)
-		v.Set("routes", map[string]any{
-			"app.example.com":        "myapp:v1",
-			"http://app.example.com": "myapp:old",
-		})
-
-		eventBus := mocks.NewMockEventPublisher(t)
-		svc := NewService(v, eventBus)
-		ctx := testContext()
-		_ = svc.Load(ctx)
+		svc, ctx := setupServiceWithCoexistingLegacyRoute(t, "myapp:v1", "myapp:old")
 
 		route := domain.Route{
 			Domain: "app.example.com",
 			Image:  "myapp:v2",
 		}
 
-		err = svc.UpdateRoute(ctx, route)
+		err := svc.UpdateRoute(ctx, route)
 		assert.NoError(t, err)
 
 		config := svc.GetConfig()
@@ -701,24 +709,9 @@ func TestService_RemoveRoute_InsecureFallback(t *testing.T) {
 }
 
 func TestService_RemoveRoute_ReconcilesCoexistingLegacyKey(t *testing.T) {
-	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "gordon.toml")
-	err := os.WriteFile(configFile, []byte("[routes]\n\"app.example.com\" = \"myapp:latest\"\n\"http://app.example.com\" = \"myapp:old\"\n"), 0600)
-	require.NoError(t, err)
+	svc, ctx := setupServiceWithCoexistingLegacyRoute(t, "myapp:latest", "myapp:old")
 
-	v := viper.New()
-	v.SetConfigFile(configFile)
-	v.Set("routes", map[string]interface{}{
-		"app.example.com":        "myapp:latest",
-		"http://app.example.com": "myapp:old",
-	})
-
-	eventBus := mocks.NewMockEventPublisher(t)
-	svc := NewService(v, eventBus)
-	ctx := testContext()
-	_ = svc.Load(ctx)
-
-	err = svc.RemoveRoute(ctx, "app.example.com")
+	err := svc.RemoveRoute(ctx, "app.example.com")
 	assert.NoError(t, err)
 
 	config := svc.GetConfig()
