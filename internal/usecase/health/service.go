@@ -78,7 +78,11 @@ func (s *Service) CheckRoute(ctx context.Context, route domain.Route) *domain.Ro
 	}
 
 	// Probe HTTP endpoint
-	url := fmt.Sprintf("https://%s/", route.Domain)
+	scheme := "http"
+	if route.HTTPS {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/", scheme, route.Domain)
 	statusCode, responseTime, err := s.prober.Probe(ctx, url)
 	if err != nil {
 		health.Error = err.Error()
