@@ -70,18 +70,21 @@ func newPushCmd() *cobra.Command {
 		Long: `Tags a local image for the Gordon registry and pushes it.
 Uses git tags for versioning. Optionally triggers deployment after push.
 
-The image argument is optional. Resolution order:
-  1. If --domain is provided, uses the legacy domain-based lookup
-  2. If an image name is provided as argument, resolves domain(s) from the backend
-  3. If no argument, auto-detects from Dockerfile labels or current directory name
+Image-first syntax is primary:
+  - Positional args resolve routes by image name first
+  - Tagged positional refs still resolve routes by image name
+  - The pushed version comes from --tag, CI tag refs, or git describe
+  - Dotted positional refs fall back to legacy domain lookup if no image route exists
+  - --domain is a deploy target override for legacy workflows
+  - No-arg mode still auto-detects from Dockerfile labels or current directory name
 
 With --build, builds the image first using docker buildx.
 
 Examples:
-  gordon push --build --remote ...
   gordon push myapp --build --remote ...
+  gordon push myapp:v1.2.3 --tag v1.2.3 --no-deploy --remote ...
+  gordon push registry.example.com/myapp:v1.2.3 --build --remote ...
   gordon push --domain myapp.example.com --build --remote ...
-  gordon push myapp --tag v1.2.0 --no-deploy --remote ...
   gordon push --build --build-arg CGO_ENABLED=0 --remote ...`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -105,7 +108,7 @@ Examples:
 	cmd.Flags().BoolVar(&build, "build", false, "Build the image first using docker buildx")
 	cmd.Flags().StringVar(&platform, "platform", "linux/amd64", "Target platform (used with --build)")
 	cmd.Flags().StringVarP(&dockerfile, "file", "f", "", "Path to Dockerfile (default: ./Dockerfile, used with --build)")
-	cmd.Flags().StringVar(&tag, "tag", "", "Override version tag (default: CI tag ref or git describe)")
+	cmd.Flags().StringVar(&tag, "tag", "", "Override pushed version tag (default: CI tag ref or git describe)")
 	cmd.Flags().StringArrayVar(&buildArgs, "build-arg", nil, "Additional build args (used with --build)")
 	cmd.Flags().StringVar(&domainFlag, "domain", "", "Explicit domain override (legacy mode)")
 
@@ -128,6 +131,42 @@ func resolveImageRefs(registry, imageName, version string) (versionRef, latestRe
 	return versionRef, latestRef
 }
 
+type pushArgKind string
+
+const (
+	pushArgKindImage        pushArgKind = "image"
+	pushArgKindLegacyDomain pushArgKind = "legacy-domain"
+)
+
+type classifiedPushArg struct {
+	kind         pushArgKind
+	lookupImage  string
+	legacyDomain string
+}
+
+func classifyPushArgument(arg string) classifiedPushArg {
+	if looksLikeLegacyDomain(arg) {
+		return classifiedPushArg{kind: pushArgKindLegacyDomain, legacyDomain: arg}
+	}
+
+	classified := classifiedPushArg{kind: pushArgKindImage, lookupImage: arg}
+	if parsedImage, ref := validation.ParseImageReference(arg); parsedImage != arg && !strings.HasPrefix(ref, "sha256:") {
+		classified.lookupImage = parsedImage
+	}
+	return classified
+}
+
+func looksLikeLegacyDomain(arg string) bool {
+	if arg == "" || strings.Contains(arg, "/") {
+		return false
+	}
+	host := arg
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	return strings.Contains(host, ".")
+}
+
 // resolveRoute determines the registry, image name, and domain from the input mode.
 func resolveRoute(ctx context.Context, cp ControlPlane, imageArg, domainFlag, dockerfile string) (registry, imageName, pushDomain string, err error) {
 	if domainFlag != "" {
@@ -142,7 +181,37 @@ func resolveRoute(ctx context.Context, cp ControlPlane, imageArg, domainFlag, do
 		fmt.Printf("Detected image: %s\n", styles.Theme.Bold.Render(imageArg))
 	}
 
-	return resolveFromImage(ctx, cp, imageArg, dockerfile)
+	if looksLikeLegacyDomain(imageArg) {
+		lookupImage := imageArg
+		domainLookupArg := imageArg
+		if parsedImage, ref := validation.ParseImageReference(imageArg); parsedImage != imageArg {
+			domainLookupArg = parsedImage
+			if !strings.HasPrefix(ref, "sha256:") {
+				lookupImage = parsedImage
+			}
+		}
+
+		registry, imageName, pushDomain, err = resolveFromImage(ctx, cp, lookupImage, dockerfile)
+		if err == nil {
+			return registry, imageName, pushDomain, nil
+		}
+		if !isImageBootstrapError(err) {
+			return "", "", "", err
+		}
+
+		registry, imageName, pushDomain, err = resolveFromDomain(ctx, cp, domainLookupArg)
+		if err == nil {
+			return registry, imageName, pushDomain, nil
+		}
+		if errors.Is(err, domain.ErrRouteNotFound) {
+			return "", "", "", noRouteForImageError(domainLookupArg)
+		}
+		return "", "", "", err
+	}
+
+	classified := classifyPushArgument(imageArg)
+
+	return resolveFromImage(ctx, cp, classified.lookupImage, dockerfile)
 }
 
 // resolveVersion determines and validates the version tag.
@@ -287,14 +356,7 @@ func resolveFromImage(ctx context.Context, cp ControlPlane, imageArg, dockerfile
 	routes = filtered
 
 	if len(routes) == 0 {
-		// bootstrap command is registered in bootstrap.go (see issue #98)
-		return "", "", "", fmt.Errorf(
-			"no route configured for image %q\n\nFor a first deploy, use 'gordon bootstrap <domain> %s'\nOr configure the route directly with 'gordon routes add <domain> %s'\nIf this is an attachment image, use 'gordon attachments push %s'",
-			imageArg,
-			imageArg,
-			imageArg,
-			imageArg,
-		)
+		return "", "", "", noRouteForImageError(imageArg)
 	}
 
 	// Pick the target domain
@@ -315,6 +377,33 @@ func resolveFromImage(ctx context.Context, cp ControlPlane, imageArg, dockerfile
 	}
 
 	return registry, imageName, targetRoute.Domain, nil
+}
+
+func isImageBootstrapError(err error) bool {
+	return errors.Is(err, domain.ErrNoRouteForImage)
+}
+
+func noRouteForImageError(imageArg string) error {
+	// bootstrap command is registered in bootstrap.go (see issue #98)
+	return noRouteForImageBootstrapError{imageArg: imageArg}
+}
+
+type noRouteForImageBootstrapError struct {
+	imageArg string
+}
+
+func (e noRouteForImageBootstrapError) Error() string {
+	return fmt.Sprintf(
+		"no route configured for image %q\n\nFor a first deploy, use 'gordon bootstrap <domain> %s'\nOr configure the route directly with 'gordon routes add <domain> %s'\nIf this is an attachment image, use 'gordon attachments push %s'",
+		e.imageArg,
+		e.imageArg,
+		e.imageArg,
+		e.imageArg,
+	)
+}
+
+func (e noRouteForImageBootstrapError) Unwrap() error {
+	return domain.ErrNoRouteForImage
 }
 
 // selectDomain picks the target domain from multiple routes.

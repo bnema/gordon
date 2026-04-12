@@ -44,7 +44,7 @@ Unlike `gordon push`, `gordon bootstrap` does not require the route to exist fir
 gordon bootstrap app.example.com myapp:latest
 
 # Then push and deploy the image
-gordon push app.example.com --build --no-confirm
+gordon push --domain app.example.com --build --no-confirm
 
 # First-time route setup with a database attachment and environment variable
 gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
@@ -63,7 +63,7 @@ gordon bootstrap app.example.com myapp:latest --remote https://gordon.mydomain.c
 gordon attachments push pitlane-pgsql --build
 
 # Then push and deploy the route image
-gordon push app.example.com --build --no-confirm
+gordon push myapp --build --no-confirm
 ```
 
 ### Notes

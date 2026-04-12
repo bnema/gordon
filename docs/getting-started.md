@@ -147,7 +147,7 @@ gordon remotes use prod
 gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
 
 # Then build, push, and deploy
-gordon push app.example.com --build --no-confirm
+gordon push --domain app.example.com --build --no-confirm
 ```
 
 What this command does:
@@ -161,11 +161,11 @@ What this command does:
 If the route already exists and you only need to push a new image version, use:
 
 ```bash
-gordon push app.example.com --build --no-confirm
+gordon push myapp --build --no-confirm
 ```
 
 `gordon push` still requires the route to already exist so it can resolve the
-target image.
+deploy target.
 
 Your app is now live at `https://app.mydomain.com`!
 

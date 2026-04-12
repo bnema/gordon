@@ -32,8 +32,8 @@ Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started gu
 Build locally, push directly to your Gordon server:
 
 ```bash
-# Push an image and deploy it to a domain
-gordon push app.example.com --image myapp:latest
+# Push using an explicit domain override
+gordon push --domain app.example.com
 
 # Or add a route manually, then deploy
 gordon routes add app.example.com myapp:latest
@@ -90,7 +90,7 @@ See the [Deploy Action README](.github/actions/deploy/README.md) for multi-platf
 
 | Command | Description |
 |---------|-------------|
-| `gordon push <domain>` | Tag and push an image to deploy |
+| `gordon push [image]` | Tag, push, and optionally deploy an image |
 | `gordon routes list` | List all routes |
 | `gordon routes add <domain> <image>` | Create or update a route |
 | `gordon routes remove <domain>` | Remove a route |
