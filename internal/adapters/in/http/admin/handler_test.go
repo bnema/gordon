@@ -28,6 +28,18 @@ type stubImageService struct {
 	pruneFunc      func(context.Context, domain.ImagePruneOptions) (domain.ImagePruneReport, error)
 }
 
+type noopReloadTrigger struct{}
+
+func (noopReloadTrigger) Trigger(context.Context) {}
+
+type reloadTriggerRecorder struct {
+	calls int
+}
+
+func (r *reloadTriggerRecorder) Trigger(context.Context) {
+	r.calls++
+}
+
 func (s *stubImageService) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 	if s.listImagesFunc == nil {
 		return nil, nil
@@ -54,12 +66,13 @@ func ctxWithScopes(scopes ...string) context.Context {
 func newTestHandler(t *testing.T, opts ...func(*HandlerDeps)) *Handler {
 	t.Helper()
 	deps := HandlerDeps{
-		ConfigSvc:    inmocks.NewMockConfigService(t),
-		AuthSvc:      inmocks.NewMockAuthService(t),
-		ContainerSvc: inmocks.NewMockContainerService(t),
-		HealthSvc:    inmocks.NewMockHealthService(t),
-		SecretSvc:    inmocks.NewMockSecretService(t),
-		Log:          testLogger(),
+		ConfigSvc:     inmocks.NewMockConfigService(t),
+		AuthSvc:       inmocks.NewMockAuthService(t),
+		ContainerSvc:  inmocks.NewMockContainerService(t),
+		HealthSvc:     inmocks.NewMockHealthService(t),
+		SecretSvc:     inmocks.NewMockSecretService(t),
+		Log:           testLogger(),
+		ReloadTrigger: noopReloadTrigger{},
 	}
 	for _, opt := range opts {
 		opt(&deps)
@@ -1030,12 +1043,14 @@ func TestHandler_Reload_RequiresWriteScope(t *testing.T) {
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
+	reloadTrigger := &reloadTriggerRecorder{}
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
 		d.SecretSvc = secretSvc
+		d.ReloadTrigger = reloadTrigger
 	})
 
 	tests := []struct {
@@ -1067,9 +1082,7 @@ func TestHandler_Reload_RequiresWriteScope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantStatus == http.StatusOK {
-				configSvc.EXPECT().Reload(mock.Anything).Return(nil).Maybe()
-			}
+			reloadTrigger.calls = 0
 
 			req := httptest.NewRequest("POST", "/admin/reload", nil)
 			req = req.WithContext(ctxWithScopes(tt.scopes...))
@@ -1078,6 +1091,11 @@ func TestHandler_Reload_RequiresWriteScope(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantStatus == http.StatusOK {
+				assert.Equal(t, 1, reloadTrigger.calls)
+			} else {
+				assert.Zero(t, reloadTrigger.calls)
+			}
 		})
 	}
 }

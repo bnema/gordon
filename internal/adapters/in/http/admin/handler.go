@@ -17,7 +17,6 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/boundaries/in"
-	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/registry"
@@ -35,21 +34,25 @@ type registryDeployService interface {
 	in.DeployCoordinator
 }
 
+type reloadTrigger interface {
+	Trigger(ctx context.Context)
+}
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
-	configSvc    in.ConfigService
-	authSvc      in.AuthService
-	containerSvc in.ContainerService
-	backupSvc    in.BackupService
-	imageSvc     in.ImageService
-	healthSvc    in.HealthService
-	secretSvc    in.SecretService
-	logSvc       in.LogService
-	volumeSvc    in.VolumeService
-	registrySvc  registryDeployService
-	previewSvc   previewService
-	eventBus     out.EventPublisher
-	log          zerowrap.Logger
+	configSvc     in.ConfigService
+	authSvc       in.AuthService
+	containerSvc  in.ContainerService
+	backupSvc     in.BackupService
+	imageSvc      in.ImageService
+	healthSvc     in.HealthService
+	secretSvc     in.SecretService
+	logSvc        in.LogService
+	volumeSvc     in.VolumeService
+	registrySvc   registryDeployService
+	previewSvc    previewService
+	reloadTrigger reloadTrigger
+	log           zerowrap.Logger
 }
 
 // Type aliases for API responses using shared DTO types.
@@ -133,37 +136,37 @@ func toDatabaseInfoResponse(db domain.DBInfo) dto.DatabaseInfo {
 
 // HandlerDeps contains all dependencies for the admin HTTP handler.
 type HandlerDeps struct {
-	ConfigSvc    in.ConfigService
-	AuthSvc      in.AuthService
-	ContainerSvc in.ContainerService
-	HealthSvc    in.HealthService
-	SecretSvc    in.SecretService
-	LogSvc       in.LogService
-	RegistrySvc  registryDeployService
-	EventBus     out.EventPublisher
-	Log          zerowrap.Logger
-	BackupSvc    in.BackupService
-	PreviewSvc   previewService
-	ImageSvc     in.ImageService
-	VolumeSvc    in.VolumeService
+	ConfigSvc     in.ConfigService
+	AuthSvc       in.AuthService
+	ContainerSvc  in.ContainerService
+	HealthSvc     in.HealthService
+	SecretSvc     in.SecretService
+	LogSvc        in.LogService
+	RegistrySvc   registryDeployService
+	Log           zerowrap.Logger
+	BackupSvc     in.BackupService
+	PreviewSvc    previewService
+	ImageSvc      in.ImageService
+	VolumeSvc     in.VolumeService
+	ReloadTrigger reloadTrigger
 }
 
 // NewHandler creates a new admin HTTP handler.
 func NewHandler(deps HandlerDeps) *Handler {
 	return &Handler{
-		configSvc:    deps.ConfigSvc,
-		authSvc:      deps.AuthSvc,
-		containerSvc: deps.ContainerSvc,
-		backupSvc:    deps.BackupSvc,
-		imageSvc:     deps.ImageSvc,
-		healthSvc:    deps.HealthSvc,
-		secretSvc:    deps.SecretSvc,
-		logSvc:       deps.LogSvc,
-		volumeSvc:    deps.VolumeSvc,
-		registrySvc:  deps.RegistrySvc,
-		previewSvc:   deps.PreviewSvc,
-		eventBus:     deps.EventBus,
-		log:          deps.Log,
+		configSvc:     deps.ConfigSvc,
+		authSvc:       deps.AuthSvc,
+		containerSvc:  deps.ContainerSvc,
+		backupSvc:     deps.BackupSvc,
+		imageSvc:      deps.ImageSvc,
+		healthSvc:     deps.HealthSvc,
+		secretSvc:     deps.SecretSvc,
+		logSvc:        deps.LogSvc,
+		volumeSvc:     deps.VolumeSvc,
+		registrySvc:   deps.RegistrySvc,
+		previewSvc:    deps.PreviewSvc,
+		reloadTrigger: deps.ReloadTrigger,
+		log:           deps.Log,
 	}
 }
 
@@ -1170,20 +1173,13 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload configuration from file into memory
-	// Using Reload() instead of Load() to ensure we re-read the file from disk
-	if err := h.configSvc.Reload(ctx); err != nil {
-		log.Error().Err(err).Msg("failed to reload config")
-		h.sendError(w, http.StatusInternalServerError, "failed to reload config")
+	if h.reloadTrigger == nil {
+		log.Error().Msg("reload trigger unavailable")
+		h.sendError(w, http.StatusInternalServerError, "reload trigger unavailable")
 		return
 	}
 
-	// Publish config reload event to sync containers
-	if h.eventBus != nil {
-		if err := h.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
-			log.Warn().Err(err).Msg("failed to publish config reload event")
-		}
-	}
+	h.reloadTrigger.Trigger(ctx)
 
 	log.Info().Msg("config reloaded via admin API")
 	h.sendJSON(w, http.StatusOK, dto.ReloadResponse{Status: "reloaded"})

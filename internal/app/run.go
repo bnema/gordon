@@ -188,35 +188,36 @@ type Config struct {
 
 // services holds all the services used by the application.
 type services struct {
-	runtime          *docker.Runtime
-	eventBus         *eventbus.InMemory
-	blobStorage      *filesystem.BlobStorage
-	manifestStorage  *filesystem.ManifestStorage
-	backupStorage    *filesystem.BackupStorage
-	envLoader        out.EnvLoader
-	logWriter        *logwriter.LogWriter
-	tokenStore       out.TokenStore
-	configSvc        *config.Service
-	secretSvc        *secretsSvc.Service
-	containerSvc     *container.Service
-	backupSvc        *backup.Service
-	registrySvc      *registrySvc.Service
-	healthSvc        *health.Service
-	logSvc           *logs.Service
-	imageSvc         *images.Service
-	volumeSvc        *volumesSvc.Service
-	proxySvc         *proxy.Service
-	authSvc          *auth.Service
-	authHandler      *authhandler.Handler
-	adminHandler     *admin.Handler
-	internalRegUser  string
-	internalRegPass  string
-	previewStore     *filesystem.PreviewStore
-	previewService   *preview.Service
-	envDir           string
-	maxBlobChunkSize int64
-	caAdapter        *pkiadapter.CA
-	pkiSvc           *pkiusecase.Service
+	runtime           *docker.Runtime
+	eventBus          *eventbus.InMemory
+	blobStorage       *filesystem.BlobStorage
+	manifestStorage   *filesystem.ManifestStorage
+	backupStorage     *filesystem.BackupStorage
+	envLoader         out.EnvLoader
+	logWriter         *logwriter.LogWriter
+	tokenStore        out.TokenStore
+	configSvc         *config.Service
+	secretSvc         *secretsSvc.Service
+	containerSvc      *container.Service
+	backupSvc         *backup.Service
+	registrySvc       *registrySvc.Service
+	healthSvc         *health.Service
+	logSvc            *logs.Service
+	imageSvc          *images.Service
+	volumeSvc         *volumesSvc.Service
+	proxySvc          *proxy.Service
+	authSvc           *auth.Service
+	authHandler       *authhandler.Handler
+	adminHandler      *admin.Handler
+	internalRegUser   string
+	internalRegPass   string
+	previewStore      *filesystem.PreviewStore
+	previewService    *preview.Service
+	envDir            string
+	maxBlobChunkSize  int64
+	caAdapter         *pkiadapter.CA
+	pkiSvc            *pkiusecase.Service
+	reloadCoordinator *reloadCoordinator
 }
 
 // Run initializes and starts the Gordon application.
@@ -284,10 +285,8 @@ func Run(ctx context.Context, configPath string) error {
 	// cleanupHandlers is passed into runServers so it can stop debounce
 	// timers before graceful shutdown, preventing deploys during drain.
 
-	reloadCoordinator := newReloadCoordinator(v, svc.configSvc, svc.proxySvc, svc.eventBus, log)
-
 	// Set up config hot reload
-	if err := setupConfigHotReload(ctx, svc.configSvc, reloadCoordinator); err != nil {
+	if err := setupConfigHotReload(ctx, svc.configSvc, svc.reloadCoordinator); err != nil {
 		return err
 	}
 
@@ -298,7 +297,7 @@ func Run(ctx context.Context, configPath string) error {
 	defer svc.eventBus.Stop()
 
 	// Start servers, wait for listeners to bind, then sync/auto-start containers.
-	return runServers(ctx, v, cfg, svc, reloadCoordinator, cleanupHandlers, log)
+	return runServers(ctx, v, cfg, svc, svc.reloadCoordinator, cleanupHandlers, log)
 }
 
 func warnDeprecatedConfigKeys(v *viper.Viper, log zerowrap.Logger) {
@@ -461,6 +460,8 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
+	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, si.svc.eventBus, log)
+
 	si.initHandlers()
 
 	return si.svc, nil
@@ -552,19 +553,19 @@ func (si *serviceInit) initHandlers() {
 	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
 
 	si.svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
-		ConfigSvc:    si.svc.configSvc,
-		AuthSvc:      si.svc.authSvc,
-		ContainerSvc: si.svc.containerSvc,
-		HealthSvc:    si.svc.healthSvc,
-		SecretSvc:    si.svc.secretSvc,
-		LogSvc:       si.svc.logSvc,
-		RegistrySvc:  si.svc.registrySvc,
-		EventBus:     si.svc.eventBus,
-		Log:          si.log,
-		BackupSvc:    si.svc.backupSvc,
-		PreviewSvc:   si.svc.previewService,
-		ImageSvc:     si.svc.imageSvc,
-		VolumeSvc:    si.svc.volumeSvc,
+		ConfigSvc:     si.svc.configSvc,
+		AuthSvc:       si.svc.authSvc,
+		ContainerSvc:  si.svc.containerSvc,
+		HealthSvc:     si.svc.healthSvc,
+		SecretSvc:     si.svc.secretSvc,
+		LogSvc:        si.svc.logSvc,
+		RegistrySvc:   si.svc.registrySvc,
+		ReloadTrigger: si.svc.reloadCoordinator,
+		Log:           si.log,
+		BackupSvc:     si.svc.backupSvc,
+		PreviewSvc:    si.svc.previewService,
+		ImageSvc:      si.svc.imageSvc,
+		VolumeSvc:     si.svc.volumeSvc,
 	})
 }
 
