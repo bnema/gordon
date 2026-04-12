@@ -27,19 +27,20 @@ gordon push [image] [options]
 | `--tag` | Override version tag (default: tag ref from CI, then `git describe --tags --dirty`) |
 | `--no-confirm` | Skip deploy confirmation prompt |
 | `--no-deploy` | Push only; skip deployment prompt |
-| `--domain` | Explicit domain override (legacy mode) |
+| `--domain` | Explicit deploy target override |
 | `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
 ### Description
 
-`gordon push` resolves the target image from the backend, tags it for the
-Gordon registry, pushes it, and optionally deploys it.
+`gordon push` tags the selected image for the Gordon registry, pushes it, and
+optionally deploys matching routes.
 
 Image resolution order:
-1. If `--domain` is provided, uses domain-based route lookup
-2. If an image name is provided as argument, resolves domain(s) from the backend
-3. If no argument, auto-detects from Dockerfile `gordon.domain` label or current directory name
+1. `--domain` is the explicit deploy target override
+2. Tagged image refs resolve domain(s) from the backend using the image name
+3. Domain-looking positional args use legacy domain-based lookup for compatibility
+4. No-arg mode auto-detects from the Dockerfile label or current directory
 
 To push attachment images (databases, caches, etc.), use `gordon attachments push`.
 
@@ -93,30 +94,33 @@ Gordon reads version tags from CI environment variables (in priority order):
 # Build, push, and deploy (auto-detect image name)
 gordon push --build --remote https://gordon.example.com --no-confirm
 
-# Specify image name explicitly
-gordon push myapp --build --remote https://gordon.example.com --no-confirm
+# Push an image and deploy it
+gordon push myapp:latest --remote https://gordon.example.com --no-confirm
+
+# Push and deploy to an explicit domain
+gordon push myapp:latest --domain app.example.com --remote https://gordon.example.com --no-confirm
 
 # Push existing local image, skip deploy
-gordon push myapp --tag v1.2.0 --no-deploy
-
-# Push and deploy without confirmation
-gordon push myapp --no-confirm
+gordon push myapp:latest --tag v1.2.0 --no-deploy
 
 # Build for ARM and pass build args
-gordon push myapp --build --platform linux/arm64 --build-arg CGO_ENABLED=0
+gordon push myapp:latest --build --platform linux/arm64 --build-arg CGO_ENABLED=0
 
 # Build from a custom Dockerfile path
-gordon push myapp --build -f docker/app/Dockerfile
+gordon push myapp:latest --build -f docker/app/Dockerfile
+
+# Legacy compatibility: domain-looking positional target
+gordon push app.example.com --no-confirm
 
 # CI/CD usage (single env var, no docker login needed)
 export GORDON_TOKEN="your-token"
-gordon push --build --remote https://gordon.example.com --no-confirm
+gordon push myapp:latest --build --remote https://gordon.example.com --no-confirm
 ```
 
 ### Notes
 
 - Remote mode required. See [CLI Overview](./index.md) for targeting options.
-- `gordon push` requires the route to already exist so it can resolve the target image.
+- `gordon push` requires the target route to already exist so it can resolve the deploy target.
   Use `gordon bootstrap` for first deploys.
 - `--build` requires Docker with Buildx. Docker Desktop includes it; on Linux,
   install the `docker-buildx-plugin` package.
