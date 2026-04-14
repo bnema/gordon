@@ -266,6 +266,65 @@ func TestRoutesList_JSONShape_RoundTripsLocalPayload(t *testing.T) {
 	assert.Equal(t, payload[0], got[0])
 }
 
+func TestRoutesStatus_JSONFlag_Accepted(t *testing.T) {
+	cmd := newRoutesStatusCmd()
+	f := cmd.Flags().Lookup("json")
+	assert.NotNil(t, f)
+	if f != nil {
+		assert.Equal(t, "false", f.DefValue)
+	}
+}
+
+func TestRoutesList_JSONShape_RoundTripsSections(t *testing.T) {
+	payload := []routeListSection{{
+		Kind: "local",
+		Name: "local",
+		Routes: []routeListItem{{
+			Domain: "app.local",
+			Image:  "myapp:latest",
+		}},
+	}}
+
+	encoded, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	var got []routeListSection
+	require.NoError(t, json.Unmarshal(encoded, &got))
+	require.Len(t, got, 1)
+	assert.Equal(t, "local", got[0].Kind)
+	assert.Equal(t, "app.local", got[0].Routes[0].Domain)
+}
+
+func TestRoutesStatus_JSONShape_RoundTripsSections(t *testing.T) {
+	payload := []routeStatusSection{{
+		Kind: "remote",
+		Name: "igor",
+		URL:  "https://gordon.supri.xyz",
+		Routes: []routeStatusItem{{
+			Domain:          "grafana.supri.xyz",
+			Image:           "grafana",
+			ContainerStatus: "running",
+			HTTPStatus:      200,
+			Network:         "gordon-shared",
+			Attachments: []routeStatusAttachment{{
+				Name:   "prometheus",
+				Image:  "prometheus:v5",
+				Status: "running",
+			}},
+		}},
+	}}
+
+	encoded, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	var got []routeStatusSection
+	require.NoError(t, json.Unmarshal(encoded, &got))
+	require.Len(t, got, 1)
+	assert.Equal(t, "igor", got[0].Name)
+	assert.Equal(t, 200, got[0].Routes[0].HTTPStatus)
+	assert.Equal(t, "prometheus", got[0].Routes[0].Attachments[0].Name)
+}
+
 func TestWriteJSON_ProducesValidIndentedJSON(t *testing.T) {
 	var out bytes.Buffer
 	err := writeJSON(&out, map[string]any{"ok": true})

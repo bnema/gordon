@@ -116,6 +116,7 @@ gordon auth internal
 
 # Routes
 gordon routes list
+gordon routes status
 gordon routes add myapp.example.com myapp:latest
 gordon routes remove myapp.example.com
 gordon routes deploy myapp.example.com
@@ -166,6 +167,20 @@ gordon autoroute allow remove example.com
 The CLI can target remote Gordon instances using client config, an active remote, `--remote`,
 or `GORDON_REMOTE` environment variable. Use `--remote` and `--token` as global overrides
 when you want to bypass your saved configuration.
+
+`gordon routes list` and `gordon routes status` are the exceptions: when neither `--remote`
+nor `GORDON_REMOTE` is set, they show local routes first, then every saved remote. Set either
+one to force a single target.
+
+```bash
+# Aggregate routes views
+gordon routes list
+gordon routes status
+
+# Single-target override
+gordon routes list --remote prod
+GORDON_REMOTE=prod gordon routes status
+```
 
 **Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
 If remote CLI gets a `404` during `/auth/token` exchange, the server likely still sets only `server.registry_domain` and needs `server.gordon_domain` configured.

@@ -2,8 +2,10 @@
 
 Manage routes on local or remote Gordon instances.
 
-Remote targeting uses client config or an active remote by default.
-Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
+Most remote-capable commands use client config or an active remote by default.
+`gordon routes list` and `gordon routes status` are different: when neither
+`--remote` nor `GORDON_REMOTE` is set, they show local routes first, then each
+saved remote under its own heading. See [CLI Overview](./index.md).
 
 ## gordon routes
 
@@ -11,7 +13,8 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 | Subcommand | Description |
 |------------|-------------|
-| `list` | List all routes |
+| `list` | List routes by domain and image |
+| `status` | Show detailed route status |
 | `show` | Show details for a single route |
 | `add` | Create or update a route |
 | `remove` | Remove a route |
@@ -21,22 +24,34 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 ## gordon routes list
 
-List all configured routes.
+List routes by domain and image only.
+
+When no target is selected, Gordon shows local routes first, then each saved
+remote under its own heading. Use `--remote` or `GORDON_REMOTE` to show one
+target only.
 
 ```bash
 gordon routes list
 gordon routes list --json
 gordon routes list --remote https://gordon.mydomain.com --token $TOKEN
+GORDON_REMOTE=prod gordon routes list
 ```
 
 ### Output
 
-```
-Domain                    Image                     Status
---------------------------------------------------------------------------------
-app.example.com           myapp:latest              running
-api.example.com           myapi:v2.1.0              running
-admin.example.com         admin-panel:latest        stopped
+```text
+Routes
+
+Local
+  app.example.com           myapp:latest
+  api.example.com           myapi:v2.1.0
+
+Remote: hetzner-vps
+  gordon.example.com        gordon-webapp:latest
+
+Remote: igor
+  grafana.supri.xyz         grafana
+  test.supri.xyz            hello-test
 ```
 
 ### JSON Output
@@ -48,17 +63,105 @@ gordon routes list --json
 ```json
 [
   {
-    "domain": "app.example.com",
-    "image": "myapp:latest",
-    "status": "running"
+    "kind": "local",
+    "name": "local",
+    "routes": [
+      {
+        "domain": "app.example.com",
+        "image": "myapp:latest"
+      }
+    ]
   },
   {
-    "domain": "api.example.com",
-    "image": "myapi:v2.1.0",
-    "status": "running"
+    "kind": "remote",
+    "name": "igor",
+    "url": "https://gordon.supri.xyz",
+    "routes": [
+      {
+        "domain": "grafana.supri.xyz",
+        "image": "grafana"
+      }
+    ]
   }
 ]
 ```
+
+Single-target mode still returns a one-element array. Sections can also include
+an `error` field when a target is unavailable.
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output routes as JSON |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
+| `--token` | Authentication token for remote |
+
+---
+
+## gordon routes status
+
+Show detailed route status for each target.
+
+`routes status` uses the same target selection rules as `routes list`. When no
+target is selected, Gordon shows local status first, then each saved remote
+under its own heading.
+
+```bash
+gordon routes status
+gordon routes status --json
+gordon routes status --remote https://gordon.mydomain.com --token $TOKEN
+GORDON_REMOTE=prod gordon routes status
+```
+
+### Output
+
+```text
+Route Status
+
+Local
+  <rich tree for local routes>
+
+Remote: hetzner-vps
+  <rich tree for that remote>
+
+Remote: igor
+  <rich tree for that remote>
+```
+
+The rich view keeps network grouping, container status, HTTP probe status, and
+attachments within each target.
+
+### JSON Output
+
+```json
+[
+  {
+    "kind": "local",
+    "name": "local",
+    "routes": [
+      {
+        "domain": "app.example.com",
+        "image": "myapp:latest",
+        "container_id": "abcd1234",
+        "container_status": "running",
+        "http_status": 200,
+        "network": "gordon-shared",
+        "attachments": [
+          {
+            "name": "postgres",
+            "image": "postgres:18",
+            "status": "running"
+          }
+        ]
+      }
+    ]
+  }
+]
+```
+
+Single-target mode still returns a one-element array. Sections can also include
+an `error` field when a target is unavailable.
 
 ### Options
 

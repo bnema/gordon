@@ -13,6 +13,7 @@ func TestAllListCommands_AcceptJSONFlag(t *testing.T) {
 		builder func() *cobra.Command
 	}{
 		{"routes list", newRoutesListCmd},
+		{"routes status", newRoutesStatusCmd},
 		{"attachments list", newAttachmentsListCmd},
 		{"secrets list", newSecretsListCmd},
 		{"images list", newImagesListCmd},

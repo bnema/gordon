@@ -1,11 +1,18 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
+	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTruncateImage(t *testing.T) {
@@ -196,4 +203,212 @@ func TestStripNetworkPrefix(t *testing.T) {
 			assert.Equal(t, tt.expected, stripNetworkPrefix(tt.network))
 		})
 	}
+}
+
+func TestResolveRoutesExplicitRemote_AllowsAdHocURLWhenSavedRemotesConfigUnreadable(t *testing.T) {
+	originalRemoteFlag := remoteFlag
+	originalTokenFlag := tokenFlag
+	originalInsecureTLSFlag := insecureTLSFlag
+	t.Cleanup(func() {
+		remoteFlag = originalRemoteFlag
+		tokenFlag = originalTokenFlag
+		insecureTLSFlag = originalInsecureTLSFlag
+	})
+
+	remoteFlag = ""
+	tokenFlag = ""
+	insecureTLSFlag = false
+
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GORDON_REMOTE", "https://ad-hoc.example.com")
+
+	configPath := filepath.Join(configHome, "gordon", "remotes.toml")
+	require.NoError(t, os.MkdirAll(configPath, 0o755))
+
+	resolved, ok := resolveRoutesExplicitRemote()
+	require.True(t, ok)
+	require.NotNil(t, resolved)
+	assert.Equal(t, "https://ad-hoc.example.com", resolved.URL)
+	assert.Empty(t, resolved.Name)
+}
+
+func TestRouteStatusTitle_PreservesProbeFailureError(t *testing.T) {
+	item := routeStatusItem{
+		Domain:          "app.example.com",
+		Image:           "app:latest",
+		ContainerStatus: "running",
+		HTTPStatus:      0,
+		HealthError:     "connection refused",
+	}
+
+	expected := components.StatusIcon(styles.IconHTTPStatus, components.StatusError) + " " +
+		components.StatusIcon(styles.IconContainerStatus, components.ParseStatus("running")) +
+		" app.example.com"
+
+	assert.Equal(t, expected, routeStatusTitle(item))
+}
+
+func TestCollectRoutesListSections_DefaultModeIncludesLocalThenSortedRemotes(t *testing.T) {
+	testsDeps := routesListDeps{
+		explicitRemote: func() (*remote.ResolvedRemote, bool) {
+			return nil, false
+		},
+		loadLocal: func(context.Context, string) (routeListSection, error) {
+			return routeListSection{
+				Kind: "local",
+				Name: "local",
+				Routes: []routeListItem{{
+					Domain: "app.local",
+					Image:  "myapp:latest",
+				}},
+			}, nil
+		},
+		listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
+			return map[string]remote.RemoteEntry{
+				"igor":        {URL: "https://gordon.supri.xyz"},
+				"hetzner-vps": {URL: "https://reg.bnema.dev"},
+			}, "igor", nil
+		},
+		loadRemote: func(_ context.Context, name string, entry remote.RemoteEntry) (routeListSection, error) {
+			if name == "hetzner-vps" {
+				return routeListSection{
+					Kind:  "remote",
+					Name:  name,
+					URL:   entry.URL,
+					Error: "remote unavailable",
+				}, nil
+			}
+			return routeListSection{
+				Kind: "remote",
+				Name: name,
+				URL:  entry.URL,
+				Routes: []routeListItem{{
+					Domain: "grafana.supri.xyz",
+					Image:  "grafana",
+				}},
+			}, nil
+		},
+	}
+
+	sections, err := collectRoutesListSections(context.Background(), "", testsDeps)
+
+	require.NoError(t, err)
+	require.Len(t, sections, 3)
+	assert.Equal(t, "local", sections[0].Name)
+	assert.Equal(t, "hetzner-vps", sections[1].Name)
+	assert.Equal(t, "igor", sections[2].Name)
+	assert.Equal(t, "remote unavailable", sections[1].Error)
+	assert.Equal(t, "grafana.supri.xyz", sections[2].Routes[0].Domain)
+}
+
+func TestCollectRoutesListSections_ExplicitRemoteSkipsAggregate(t *testing.T) {
+	testsDeps := routesListDeps{
+		explicitRemote: func() (*remote.ResolvedRemote, bool) {
+			return &remote.ResolvedRemote{
+				Name: "igor",
+				URL:  "https://gordon.supri.xyz",
+			}, true
+		},
+		loadLocal: func(context.Context, string) (routeListSection, error) {
+			t.Fatal("loadLocal should not be called when an explicit remote is selected")
+			return routeListSection{}, nil
+		},
+		listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
+			t.Fatal("listRemotes should not be called when an explicit remote is selected")
+			return nil, "", nil
+		},
+		loadRemote: func(_ context.Context, name string, entry remote.RemoteEntry) (routeListSection, error) {
+			return routeListSection{
+				Kind: "remote",
+				Name: name,
+				URL:  entry.URL,
+				Routes: []routeListItem{{
+					Domain: "test.supri.xyz",
+					Image:  "hello-test",
+				}},
+			}, nil
+		},
+	}
+
+	sections, err := collectRoutesListSections(context.Background(), "", testsDeps)
+
+	require.NoError(t, err)
+	require.Len(t, sections, 1)
+	assert.Equal(t, "igor", sections[0].Name)
+	assert.Equal(t, "test.supri.xyz", sections[0].Routes[0].Domain)
+}
+
+func TestRenderRoutesStatusSections_IncludesSectionHeadingsAndErrors(t *testing.T) {
+	sections := []routeStatusSection{
+		{
+			Kind: "local",
+			Name: "local",
+			Routes: []routeStatusItem{{
+				Domain:          "app.local",
+				Image:           "myapp:latest",
+				ContainerStatus: "running",
+			}},
+		},
+		{
+			Kind:  "remote",
+			Name:  "igor",
+			URL:   "https://gordon.supri.xyz",
+			Error: "dial tcp timeout",
+		},
+	}
+
+	var out bytes.Buffer
+	err := renderRoutesStatusSections(&out, sections)
+
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	lines := strings.Split(rendered, "\n")
+
+	lineIndex := func(substr string) int {
+		for i, line := range lines {
+			if strings.Contains(line, substr) {
+				return i
+			}
+		}
+		return -1
+	}
+
+	titleIdx := lineIndex("Route Status")
+	require.NotEqual(t, -1, titleIdx)
+
+	localIdx := lineIndex("Local")
+	require.NotEqual(t, -1, localIdx)
+
+	routeIdx := lineIndex("app.local")
+	require.NotEqual(t, -1, routeIdx)
+
+	remoteIdx := lineIndex("Remote: igor")
+	require.NotEqual(t, -1, remoteIdx)
+
+	errorIdx := lineIndex("dial tcp timeout")
+	require.NotEqual(t, -1, errorIdx)
+
+	assert.Less(t, titleIdx, localIdx)
+	assert.Less(t, localIdx, routeIdx)
+	assert.Less(t, routeIdx, remoteIdx)
+	assert.Less(t, remoteIdx, errorIdx)
+}
+
+func TestBuildRouteStatusTree_DeterministicAcrossInputOrder(t *testing.T) {
+	routes := []routeStatusItem{
+		{Domain: "zulu.example", Image: "zulu:v1", Network: "gordon-zulu", ContainerStatus: "running"},
+		{Domain: "alpha.example", Image: "alpha:v1", Network: "gordon-alpha", ContainerStatus: "running"},
+		{Domain: "mike.example", Image: "solo:v1", ContainerStatus: "running"},
+	}
+
+	var outA bytes.Buffer
+	_, _ = outA.WriteString(stripANSI(buildRouteStatusTree(routes).Render()))
+
+	var outB bytes.Buffer
+	reordered := []routeStatusItem{routes[2], routes[0], routes[1]}
+	_, _ = outB.WriteString(stripANSI(buildRouteStatusTree(reordered).Render()))
+
+	assert.Equal(t, outA.String(), outB.String())
 }

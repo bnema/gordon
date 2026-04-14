@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -86,6 +89,58 @@ type networkGroup struct {
 	routes []remote.RouteInfo
 }
 
+type routeListItem struct {
+	Domain string `json:"domain"`
+	Image  string `json:"image"`
+}
+
+type routeListSection struct {
+	Kind   string          `json:"kind"`
+	Name   string          `json:"name"`
+	URL    string          `json:"url,omitempty"`
+	Error  string          `json:"error,omitempty"`
+	Routes []routeListItem `json:"routes,omitempty"`
+}
+
+type routeStatusAttachment struct {
+	Name   string `json:"name"`
+	Image  string `json:"image"`
+	Status string `json:"status"`
+}
+
+type routeStatusItem struct {
+	Domain          string                  `json:"domain"`
+	Image           string                  `json:"image"`
+	ContainerID     string                  `json:"container_id,omitempty"`
+	ContainerStatus string                  `json:"container_status"`
+	HTTPStatus      int                     `json:"http_status"`
+	HealthError     string                  `json:"health_error,omitempty"`
+	Network         string                  `json:"network"`
+	Attachments     []routeStatusAttachment `json:"attachments,omitempty"`
+}
+
+type routeStatusSection struct {
+	Kind   string            `json:"kind"`
+	Name   string            `json:"name"`
+	URL    string            `json:"url,omitempty"`
+	Error  string            `json:"error,omitempty"`
+	Routes []routeStatusItem `json:"routes,omitempty"`
+}
+
+type routesListDeps struct {
+	explicitRemote func() (*remote.ResolvedRemote, bool)
+	loadLocal      func(context.Context, string) (routeListSection, error)
+	listRemotes    func() (map[string]remote.RemoteEntry, string, error)
+	loadRemote     func(context.Context, string, remote.RemoteEntry) (routeListSection, error)
+}
+
+type routesStatusDeps struct {
+	explicitRemote func() (*remote.ResolvedRemote, bool)
+	loadLocal      func(context.Context, string) (routeStatusSection, error)
+	listRemotes    func() (map[string]remote.RemoteEntry, string, error)
+	loadRemote     func(context.Context, string, remote.RemoteEntry) (routeStatusSection, error)
+}
+
 // groupRoutesByNetwork separates routes into network groups (2+ routes sharing a network)
 // and solo routes. Both are sorted alphabetically by domain.
 func groupRoutesByNetwork(routes []remote.RouteInfo) ([]networkGroup, []remote.RouteInfo) {
@@ -136,12 +191,7 @@ the local Gordon configuration.`,
 	}
 
 	cmd.AddCommand(newRoutesListCmd())
-
-	// "status" is an alias for "list"
-	statusCmd := newRoutesListCmd()
-	statusCmd.Use = "status"
-	statusCmd.Short = "Show status of all routes (alias for list)"
-	cmd.AddCommand(statusCmd)
+	cmd.AddCommand(newRoutesStatusCmd())
 
 	cmd.AddCommand(newRoutesShowCmd())
 	cmd.AddCommand(newRoutesAddCmd())
@@ -158,19 +208,670 @@ func newRoutesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all routes",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				return runRoutesListRemote(ctx, client, jsonOut, cmd.OutOrStdout())
+			sections, err := collectRoutesListSections(cmd.Context(), configPath, routesListDeps{})
+			if err != nil {
+				return err
 			}
-			return runRoutesListLocal(ctx, configPath, jsonOut, cmd.OutOrStdout())
+
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), sections)
+			}
+
+			return renderRoutesListSections(cmd.OutOrStdout(), sections)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
+}
+
+func newRoutesStatusCmd() *cobra.Command {
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show detailed route status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sections, err := collectRoutesStatusSections(cmd.Context(), configPath, routesStatusDeps{})
+			if err != nil {
+				return err
+			}
+
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), sections)
+			}
+
+			return renderRoutesStatusSections(cmd.OutOrStdout(), sections)
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func collectRoutesListSections(ctx context.Context, cfgPath string, deps routesListDeps) ([]routeListSection, error) {
+	if deps.explicitRemote == nil {
+		deps.explicitRemote = resolveRoutesExplicitRemote
+	}
+	if deps.loadLocal == nil {
+		deps.loadLocal = loadRoutesListLocalSection
+	}
+	if deps.listRemotes == nil {
+		deps.listRemotes = remote.ListRemotes
+	}
+	if deps.loadRemote == nil {
+		deps.loadRemote = loadRoutesListRemoteSection
+	}
+
+	if resolved, ok := deps.explicitRemote(); ok {
+		section := loadRoutesListExplicitRemoteSection(ctx, deps, resolved)
+		return []routeListSection{section}, nil
+	}
+
+	return collectRoutesListAggregateSections(ctx, cfgPath, deps)
+}
+
+func loadRoutesListExplicitRemoteSection(ctx context.Context, deps routesListDeps, resolved *remote.ResolvedRemote) routeListSection {
+	section, _ := deps.loadRemote(ctx, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
+	return normalizeRouteListRemoteSection(section, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
+}
+
+func collectRoutesListAggregateSections(ctx context.Context, cfgPath string, deps routesListDeps) ([]routeListSection, error) {
+
+	type localResult struct {
+		section routeListSection
+	}
+	type remotesResult struct {
+		entries map[string]remote.RemoteEntry
+		err     error
+	}
+
+	localCh := make(chan localResult, 1)
+	remotesCh := make(chan remotesResult, 1)
+
+	go func() {
+		section, _ := deps.loadLocal(ctx, cfgPath)
+		localCh <- localResult{section: section}
+	}()
+	go func() {
+		entries, _, err := deps.listRemotes()
+		remotesCh <- remotesResult{entries: entries, err: err}
+	}()
+
+	local := (<-localCh).section
+	remotes := <-remotesCh
+
+	sections := make([]routeListSection, 0, 1)
+	sections = append(sections, normalizeRouteListLocalSection(local))
+
+	if remotes.err != nil {
+		sections = append(sections, routeListSection{Kind: "remote", Name: "remotes", Error: remotes.err.Error()})
+		return sections, nil
+	}
+
+	names := sortedRemoteNames(remotes.entries)
+	remoteSections := make([]routeListSection, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		i, name := i, name
+		entry := remotes.entries[name]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			section, _ := deps.loadRemote(ctx, name, entry)
+			remoteSections[i] = normalizeRouteListRemoteSection(section, name, entry)
+		}()
+	}
+	wg.Wait()
+
+	sections = append(sections, remoteSections...)
+	return sections, nil
+}
+
+func normalizeRouteListLocalSection(section routeListSection) routeListSection {
+	if section.Kind == "" {
+		section.Kind = "local"
+	}
+	if section.Name == "" {
+		section.Name = "local"
+	}
+	return section
+}
+
+func normalizeRouteListRemoteSection(section routeListSection, name string, entry remote.RemoteEntry) routeListSection {
+	if section.Kind == "" {
+		section.Kind = "remote"
+	}
+	if section.Name == "" {
+		section.Name = name
+	}
+	if section.URL == "" {
+		section.URL = entry.URL
+	}
+	return section
+}
+
+func collectRoutesStatusSections(ctx context.Context, cfgPath string, deps routesStatusDeps) ([]routeStatusSection, error) {
+	if deps.explicitRemote == nil {
+		deps.explicitRemote = resolveRoutesExplicitRemote
+	}
+	if deps.loadLocal == nil {
+		deps.loadLocal = loadRoutesStatusLocalSection
+	}
+	if deps.listRemotes == nil {
+		deps.listRemotes = remote.ListRemotes
+	}
+	if deps.loadRemote == nil {
+		deps.loadRemote = loadRoutesStatusRemoteSection
+	}
+
+	if resolved, ok := deps.explicitRemote(); ok {
+		section := loadRoutesStatusExplicitRemoteSection(ctx, deps, resolved)
+		return []routeStatusSection{section}, nil
+	}
+
+	return collectRoutesStatusAggregateSections(ctx, cfgPath, deps)
+}
+
+func loadRoutesStatusExplicitRemoteSection(ctx context.Context, deps routesStatusDeps, resolved *remote.ResolvedRemote) routeStatusSection {
+	section, _ := deps.loadRemote(ctx, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
+	return normalizeRouteStatusRemoteSection(section, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
+}
+
+func collectRoutesStatusAggregateSections(ctx context.Context, cfgPath string, deps routesStatusDeps) ([]routeStatusSection, error) {
+
+	type localResult struct {
+		section routeStatusSection
+	}
+	type remotesResult struct {
+		entries map[string]remote.RemoteEntry
+		err     error
+	}
+
+	localCh := make(chan localResult, 1)
+	remotesCh := make(chan remotesResult, 1)
+
+	go func() {
+		section, _ := deps.loadLocal(ctx, cfgPath)
+		localCh <- localResult{section: section}
+	}()
+	go func() {
+		entries, _, err := deps.listRemotes()
+		remotesCh <- remotesResult{entries: entries, err: err}
+	}()
+
+	local := (<-localCh).section
+	remotes := <-remotesCh
+
+	sections := make([]routeStatusSection, 0, 1)
+	sections = append(sections, normalizeRouteStatusLocalSection(local))
+
+	if remotes.err != nil {
+		sections = append(sections, routeStatusSection{Kind: "remote", Name: "remotes", Error: remotes.err.Error()})
+		return sections, nil
+	}
+
+	names := sortedRemoteNames(remotes.entries)
+	remoteSections := make([]routeStatusSection, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		i, name := i, name
+		entry := remotes.entries[name]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			section, _ := deps.loadRemote(ctx, name, entry)
+			remoteSections[i] = normalizeRouteStatusRemoteSection(section, name, entry)
+		}()
+	}
+	wg.Wait()
+
+	sections = append(sections, remoteSections...)
+	return sections, nil
+}
+
+func normalizeRouteStatusLocalSection(section routeStatusSection) routeStatusSection {
+	if section.Kind == "" {
+		section.Kind = "local"
+	}
+	if section.Name == "" {
+		section.Name = "local"
+	}
+	return section
+}
+
+func normalizeRouteStatusRemoteSection(section routeStatusSection, name string, entry remote.RemoteEntry) routeStatusSection {
+	if section.Kind == "" {
+		section.Kind = "remote"
+	}
+	if section.Name == "" {
+		section.Name = name
+	}
+	if section.URL == "" {
+		section.URL = entry.URL
+	}
+	return section
+}
+
+func renderRoutesListSections(out io.Writer, sections []routeListSection) error {
+	if err := cliWriteLine(out, cliRenderTitle("Routes")); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+
+	for i, section := range sections {
+		if i > 0 {
+			if err := cliWriteLine(out, ""); err != nil {
+				return err
+			}
+		}
+		if err := renderRoutesListSection(out, section); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func renderRoutesListSection(out io.Writer, section routeListSection) error {
+	if err := cliWriteLine(out, routeSectionHeading(section.Kind, section.Name)); err != nil {
+		return err
+	}
+
+	if len(section.Routes) > 0 {
+		const imageColWidth = 45
+		rows := make([][]string, 0, len(section.Routes))
+		for _, route := range section.Routes {
+			rows = append(rows, []string{route.Domain, truncateImage(route.Image, imageColWidth)})
+		}
+
+		table := components.NewTable(
+			components.WithColumns([]components.TableColumn{
+				{Title: "Domain", Width: 30},
+				{Title: "Image", Width: imageColWidth},
+			}),
+			components.WithRows(rows),
+		)
+
+		if err := cliWriteLine(out, table.View()); err != nil {
+			return err
+		}
+	}
+
+	if section.Error != "" {
+		return cliWriteLine(out, cliRenderWarning(section.Error))
+	}
+
+	if len(section.Routes) == 0 {
+		return cliWriteLine(out, cliRenderMuted("No routes configured"))
+	}
+
+	return nil
+}
+
+func renderRoutesStatusSections(out io.Writer, sections []routeStatusSection) error {
+	if err := cliWriteLine(out, cliRenderTitle("Route Status")); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+
+	for i, section := range sections {
+		if i > 0 {
+			if err := cliWriteLine(out, ""); err != nil {
+				return err
+			}
+		}
+		if err := renderRoutesStatusSection(out, section); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func renderRoutesStatusSection(out io.Writer, section routeStatusSection) error {
+	if err := cliWriteLine(out, routeSectionHeading(section.Kind, section.Name)); err != nil {
+		return err
+	}
+
+	if len(section.Routes) > 0 {
+		tree := buildRouteStatusTree(section.Routes)
+		if err := cliWriteLine(out, tree.Render()); err != nil {
+			return err
+		}
+	}
+
+	if section.Error != "" {
+		return cliWriteLine(out, cliRenderWarning(section.Error))
+	}
+
+	if len(section.Routes) == 0 {
+		return cliWriteLine(out, cliRenderMuted("No routes configured"))
+	}
+
+	return nil
+}
+
+func routeSectionHeading(kind, name string) string {
+	switch kind {
+	case "local":
+		return "Local"
+	case "remote":
+		if name != "" {
+			return "Remote: " + name
+		}
+		return "Remote"
+	default:
+		if name != "" {
+			return capitalizeKind(kind) + ": " + name
+		}
+		return capitalizeKind(kind)
+	}
+}
+
+func capitalizeKind(kind string) string {
+	if kind == "" {
+		return ""
+	}
+	if len(kind) == 1 {
+		return strings.ToUpper(kind)
+	}
+	return strings.ToUpper(kind[:1]) + kind[1:]
+}
+
+func resolveRoutesExplicitRemote() (*remote.ResolvedRemote, bool) {
+	target, ok := resolveRoutesExplicitTarget()
+	if !ok {
+		return nil, false
+	}
+
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		return &remote.ResolvedRemote{
+			URL:         target,
+			Token:       resolveRoutesTokenForTarget("", remote.RemoteEntry{}),
+			InsecureTLS: resolveRoutesInsecureForTarget("", remote.RemoteEntry{}),
+		}, true
+	}
+
+	remotes, err := remote.LoadRemotes("")
+	if err != nil {
+		return nil, false
+	}
+
+	if remotes != nil {
+		if entry, found := remotes.Remotes[target]; found {
+			return &remote.ResolvedRemote{
+				Name:        target,
+				URL:         entry.URL,
+				Token:       resolveRoutesTokenForTarget(target, entry),
+				InsecureTLS: resolveRoutesInsecureForTarget(target, entry),
+			}, true
+		}
+	}
+
+	return nil, false
+}
+
+func resolveRoutesExplicitTarget() (string, bool) {
+	if target := strings.TrimSpace(remoteFlag); target != "" {
+		return target, true
+	}
+	if target := strings.TrimSpace(os.Getenv("GORDON_REMOTE")); target != "" {
+		return target, true
+	}
+	return "", false
+}
+
+func resolveRoutesTokenForTarget(name string, entry remote.RemoteEntry) string {
+	if token := strings.TrimSpace(tokenFlag); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(os.Getenv("GORDON_TOKEN")); token != "" {
+		return token
+	}
+	if name != "" {
+		return remote.ResolveTokenForRemote(name, entry)
+	}
+	return ""
+}
+
+func resolveRoutesInsecureForTarget(name string, entry remote.RemoteEntry) bool {
+	if insecureTLSFlag {
+		return true
+	}
+	if env := strings.TrimSpace(os.Getenv("GORDON_INSECURE")); env != "" {
+		if value, err := strconv.ParseBool(env); err == nil {
+			return value
+		}
+	}
+	if name != "" {
+		return entry.InsecureTLS
+	}
+	return false
+}
+
+func newRoutesTargetClient(name string, entry remote.RemoteEntry) *remote.Client {
+	return remote.NewClient(entry.URL, remoteClientOptions(resolveRoutesTokenForTarget(name, entry), resolveRoutesInsecureForTarget(name, entry))...)
+}
+
+func loadRoutesListLocalSection(ctx context.Context, cfgPath string) (routeListSection, error) {
+	local, err := GetLocalServices(cfgPath)
+	if err != nil {
+		return routeListSection{Kind: "local", Name: "local", Error: err.Error()}, nil
+	}
+
+	routes := local.GetConfigService().GetRoutes(ctx)
+	section := routeListSection{Kind: "local", Name: "local", Routes: make([]routeListItem, 0, len(routes))}
+	for _, route := range routes {
+		section.Routes = append(section.Routes, routeListItem{Domain: route.Domain, Image: route.Image})
+	}
+
+	return section, nil
+}
+
+func loadRoutesListRemoteSection(ctx context.Context, name string, entry remote.RemoteEntry) (routeListSection, error) {
+	section := routeListSection{Kind: "remote", Name: name, URL: entry.URL}
+	client := newRoutesTargetClient(name, entry)
+	routes, err := client.ListRoutesWithDetails(ctx)
+	if err != nil {
+		section.Error = err.Error()
+		return section, nil
+	}
+
+	section.Routes = routeListItemsFromInfos(routes)
+	return section, nil
+}
+
+func loadRoutesStatusLocalSection(ctx context.Context, cfgPath string) (routeStatusSection, error) {
+	section := routeStatusSection{Kind: "local", Name: "local"}
+	handle, err := resolveLocalControlPlane(cfgPath)
+	if err != nil {
+		section.Error = err.Error()
+		return section, nil
+	}
+	defer handle.close()
+
+	routes, err := handle.plane.ListRoutesWithDetails(ctx)
+	if err != nil {
+		section.Error = err.Error()
+		return section, nil
+	}
+
+	health, err := handle.plane.GetHealth(ctx)
+	if err != nil {
+		section.Error = err.Error()
+		health = nil
+	}
+
+	section.Routes = routeStatusItemsFromInfos(routes, health)
+	return section, nil
+}
+
+func loadRoutesStatusRemoteSection(ctx context.Context, name string, entry remote.RemoteEntry) (routeStatusSection, error) {
+	section := routeStatusSection{Kind: "remote", Name: name, URL: entry.URL}
+	client := newRoutesTargetClient(name, entry)
+	cp := NewRemoteControlPlane(client)
+
+	routes, err := cp.ListRoutesWithDetails(ctx)
+	if err != nil {
+		section.Error = err.Error()
+		return section, nil
+	}
+
+	health, err := cp.GetHealth(ctx)
+	if err != nil {
+		section.Error = err.Error()
+		health = nil
+	}
+
+	section.Routes = routeStatusItemsFromInfos(routes, health)
+	return section, nil
+}
+
+func routeStatusItemsFromInfos(routes []remote.RouteInfo, health map[string]*remote.RouteHealth) []routeStatusItem {
+	items := make([]routeStatusItem, 0, len(routes))
+	for _, route := range routes {
+		item := routeStatusItem{
+			Domain:          route.Domain,
+			Image:           route.Image,
+			ContainerID:     route.ContainerID,
+			ContainerStatus: route.ContainerStatus,
+			Network:         route.Network,
+		}
+		if item.ContainerStatus == "" {
+			if routeHealth := health[route.Domain]; routeHealth != nil {
+				item.ContainerStatus = routeHealth.ContainerStatus
+				item.HTTPStatus = routeHealth.HTTPStatus
+				item.HealthError = routeHealth.Error
+			}
+		}
+		if item.ContainerStatus == "" {
+			item.ContainerStatus = "unknown"
+		}
+		if item.HTTPStatus == 0 {
+			if routeHealth := health[route.Domain]; routeHealth != nil {
+				item.HTTPStatus = routeHealth.HTTPStatus
+				item.HealthError = routeHealth.Error
+			}
+		}
+		if item.HealthError == "" {
+			if routeHealth := health[route.Domain]; routeHealth != nil {
+				item.HealthError = routeHealth.Error
+			}
+		}
+		item.Attachments = make([]routeStatusAttachment, 0, len(route.Attachments))
+		for _, attachment := range route.Attachments {
+			status := attachment.Status
+			if status == "" {
+				status = "unknown"
+			}
+			item.Attachments = append(item.Attachments, routeStatusAttachment{Name: attachment.Name, Image: attachment.Image, Status: status})
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func routeListItemsFromInfos(routes []remote.RouteInfo) []routeListItem {
+	items := make([]routeListItem, 0, len(routes))
+	for _, route := range routes {
+		items = append(items, routeListItem{Domain: route.Domain, Image: route.Image})
+	}
+	return items
+}
+
+func buildRouteStatusTree(routes []routeStatusItem) *components.Tree {
+	sortedRoutes := make([]routeStatusItem, len(routes))
+	copy(sortedRoutes, routes)
+	sort.SliceStable(sortedRoutes, func(i, j int) bool {
+		if sortedRoutes[i].Network != sortedRoutes[j].Network {
+			return sortedRoutes[i].Network < sortedRoutes[j].Network
+		}
+		if sortedRoutes[i].Domain != sortedRoutes[j].Domain {
+			return sortedRoutes[i].Domain < sortedRoutes[j].Domain
+		}
+		if sortedRoutes[i].Image != sortedRoutes[j].Image {
+			return sortedRoutes[i].Image < sortedRoutes[j].Image
+		}
+		if sortedRoutes[i].ContainerID != sortedRoutes[j].ContainerID {
+			return sortedRoutes[i].ContainerID < sortedRoutes[j].ContainerID
+		}
+		if sortedRoutes[i].ContainerStatus != sortedRoutes[j].ContainerStatus {
+			return sortedRoutes[i].ContainerStatus < sortedRoutes[j].ContainerStatus
+		}
+		return sortedRoutes[i].HTTPStatus < sortedRoutes[j].HTTPStatus
+	})
+
+	infos := make([]remote.RouteInfo, 0, len(routes))
+	itemsByDomain := make(map[string]routeStatusItem, len(routes))
+	for _, route := range sortedRoutes {
+		infos = append(infos, remote.RouteInfo{
+			Domain:          route.Domain,
+			Image:           route.Image,
+			ContainerID:     route.ContainerID,
+			ContainerStatus: route.ContainerStatus,
+			Network:         route.Network,
+			Attachments:     routeStatusAttachmentsToRemote(route.Attachments),
+		})
+		itemsByDomain[route.Domain] = route
+	}
+
+	groups, solo := groupRoutesByNetwork(infos)
+	tree := components.NewTree()
+
+	for _, group := range groups {
+		g := tree.AddGroup(group.name)
+		for _, route := range group.routes {
+			item := itemsByDomain[route.Domain]
+			node := g.AddNode(routeStatusTitle(item), item.Image)
+			addRouteStatusAttachmentChildren(node, item)
+		}
+	}
+
+	for _, route := range solo {
+		item := itemsByDomain[route.Domain]
+		node := tree.AddNode(routeStatusTitle(item), item.Image)
+		addRouteStatusAttachmentChildren(node, item)
+	}
+
+	return tree
+}
+
+func routeStatusTitle(route routeStatusItem) string {
+	containerStatus := route.ContainerStatus
+	if containerStatus == "" {
+		containerStatus = "unknown"
+	}
+
+	httpIcon := components.StatusIcon(styles.IconHTTPStatus, httpHealthToStatus(&remote.RouteHealth{HTTPStatus: route.HTTPStatus, Error: route.HealthError}))
+	containerIcon := components.StatusIcon(styles.IconContainerStatus, components.ParseStatus(containerStatus))
+
+	return httpIcon + " " + containerIcon + " " + route.Domain
+}
+
+func addRouteStatusAttachmentChildren(node *components.Node, route routeStatusItem) {
+	for _, att := range route.Attachments {
+		status := att.Status
+		if status == "" {
+			status = "unknown"
+		}
+		attIcon := components.StatusIcon(styles.IconContainerStatus, components.ParseStatus(status))
+		node.AddChild(attIcon+" "+att.Name, att.Image)
+	}
+}
+
+func routeStatusAttachmentsToRemote(attachments []routeStatusAttachment) []remote.Attachment {
+	result := make([]remote.Attachment, 0, len(attachments))
+	for _, att := range attachments {
+		result = append(result, remote.Attachment{Name: att.Name, Image: att.Image, Status: att.Status})
+	}
+	return result
 }
 
 func newRoutesShowCmd() *cobra.Command {
@@ -255,196 +956,6 @@ func runRoutesShow(ctx context.Context, cp ControlPlane, out io.Writer, routeDom
 			return err
 		}
 	}
-
-	return nil
-}
-
-// runRoutesListRemote lists routes from a remote Gordon instance.
-func runRoutesListRemote(ctx context.Context, client *remote.Client, jsonOut bool, out io.Writer) error {
-	routes, err := client.ListRoutesWithDetails(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list routes: %w", err)
-	}
-
-	health, _ := client.GetHealth(ctx)
-	if health == nil {
-		health = make(map[string]*remote.RouteHealth)
-	}
-
-	if jsonOut {
-		return routesListJSON(out, routes, health)
-	}
-
-	if len(routes) == 0 {
-		_, _ = fmt.Fprintln(out, styles.Theme.Muted.Render("No routes configured"))
-		return nil
-	}
-
-	groups, solo := groupRoutesByNetwork(routes)
-
-	type sortableItem struct {
-		sortKey string
-		group   *networkGroup
-		route   *remote.RouteInfo
-	}
-
-	var items []sortableItem
-	for i := range groups {
-		items = append(items, sortableItem{
-			sortKey: groups[i].routes[0].Domain,
-			group:   &groups[i],
-		})
-	}
-	for i := range solo {
-		items = append(items, sortableItem{
-			sortKey: solo[i].Domain,
-			route:   &solo[i],
-		})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].sortKey < items[j].sortKey
-	})
-
-	tree := components.NewTree()
-
-	for _, item := range items {
-		if item.group != nil {
-			g := tree.AddGroup(item.group.name)
-			for _, route := range item.group.routes {
-				title := routeTitle(route, health)
-				node := g.AddNode(title, route.Image)
-				addAttachmentChildren(node, route)
-			}
-		} else {
-			title := routeTitle(*item.route, health)
-			node := tree.AddNode(title, item.route.Image)
-			addAttachmentChildren(node, *item.route)
-		}
-	}
-
-	if err := cliWriteLine(out, cliRenderTitle("Routes")); err != nil {
-		return err
-	}
-	if err := cliWriteLine(out, ""); err != nil {
-		return err
-	}
-	return cliWriteLine(out, tree.Render())
-}
-
-// routeTitle builds the pre-styled title line for a route node.
-func routeTitle(route remote.RouteInfo, health map[string]*remote.RouteHealth) string {
-	containerStatus := route.ContainerStatus
-	if containerStatus == "" {
-		if h := health[route.Domain]; h != nil {
-			containerStatus = h.ContainerStatus
-		} else {
-			containerStatus = "unknown"
-		}
-	}
-
-	httpIcon := components.StatusIcon(styles.IconHTTPStatus, httpHealthToStatus(health[route.Domain]))
-	containerIcon := components.StatusIcon(styles.IconContainerStatus, components.ParseStatus(containerStatus))
-
-	return httpIcon + " " + containerIcon + " " + route.Domain
-}
-
-// addAttachmentChildren adds attachment nodes as children of a route node.
-func addAttachmentChildren(node *components.Node, route remote.RouteInfo) {
-	for _, att := range route.Attachments {
-		attStatus := att.Status
-		if attStatus == "" {
-			attStatus = "unknown"
-		}
-		attIcon := components.StatusIcon(styles.IconContainerStatus, components.ParseStatus(attStatus))
-		node.AddChild(attIcon+" "+att.Name, att.Image)
-	}
-}
-
-func routesListJSON(out io.Writer, routes []remote.RouteInfo, health map[string]*remote.RouteHealth) error {
-	payload := make([]map[string]any, 0, len(routes))
-	for _, route := range routes {
-		routeHealth := health[route.Domain]
-		containerStatus := route.ContainerStatus
-		if containerStatus == "" {
-			if routeHealth != nil {
-				containerStatus = routeHealth.ContainerStatus
-			} else {
-				containerStatus = "unknown"
-			}
-		}
-
-		httpStatus := 0
-		if routeHealth != nil {
-			httpStatus = routeHealth.HTTPStatus
-		}
-
-		attachments := make([]map[string]string, 0, len(route.Attachments))
-		for _, attachment := range route.Attachments {
-			attachments = append(attachments, map[string]string{
-				"name":   attachment.Name,
-				"image":  attachment.Image,
-				"status": attachment.Status,
-			})
-		}
-
-		payload = append(payload, map[string]any{
-			"domain":           route.Domain,
-			"image":            route.Image,
-			"container_status": containerStatus,
-			"network":          route.Network,
-			"http_status":      httpStatus,
-			"attachments":      attachments,
-		})
-	}
-
-	return writeJSON(out, payload)
-}
-
-// runRoutesListLocal lists routes from local configuration.
-func runRoutesListLocal(ctx context.Context, cfgPath string, jsonOut bool, out io.Writer) error {
-	local, err := GetLocalServices(cfgPath)
-	if err != nil {
-		return fmt.Errorf("failed to initialize local services: %w", err)
-	}
-
-	routes := local.GetConfigService().GetRoutes(ctx)
-
-	if jsonOut {
-		payload := make([]map[string]string, 0, len(routes))
-		for _, route := range routes {
-			payload = append(payload, map[string]string{
-				"domain": route.Domain,
-				"image":  route.Image,
-			})
-		}
-		return writeJSON(out, payload)
-	}
-
-	if len(routes) == 0 {
-		_, _ = fmt.Fprintln(out, styles.Theme.Muted.Render("No routes configured"))
-		return nil
-	}
-
-	// Build table rows (no health info in local mode)
-	const imageColWidth = 45
-	rows := make([][]string, len(routes))
-	for i, route := range routes {
-		displayImage := truncateImage(route.Image, imageColWidth)
-		rows[i] = []string{route.Domain, displayImage}
-	}
-
-	// Render table
-	table := components.NewTable(
-		components.WithColumns([]components.TableColumn{
-			{Title: "Domain", Width: 30},
-			{Title: "Image", Width: imageColWidth},
-		}),
-		components.WithRows(rows),
-	)
-
-	_, _ = fmt.Fprintln(out, styles.Theme.Title.Render("Routes (local)"))
-	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintln(out, table.View())
 
 	return nil
 }

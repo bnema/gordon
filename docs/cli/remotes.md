@@ -162,12 +162,14 @@ gordon remotes use <name>
 
 ### Description
 
-When a remote is active, it's used automatically for all remote-capable commands without needing to specify `--remote` and `--token`:
+When a remote is active, it's used automatically for most remote-capable commands without needing to specify `--remote` and `--token`.
+`gordon routes list` and `gordon routes status` are the exception: they aggregate local + saved remotes unless you set `--remote` or `GORDON_REMOTE`.
 
 ```bash
 gordon remotes use prod
-gordon routes list              # Uses prod remote automatically
 gordon secrets list app.com     # Uses prod remote automatically
+gordon routes list              # Aggregates local + saved remotes
+gordon routes status            # Aggregates local + saved remotes
 ```
 
 ### Example
@@ -242,6 +244,8 @@ token = "eyJ..."
 
 When multiple sources specify remote or token, the CLI uses this priority:
 
+For `routes list` and `routes status`, `--remote` and `GORDON_REMOTE` are the explicit single-target selectors. Without either one, those commands aggregate local + saved remotes even when an active remote exists.
+
 **Remote URL:**
 1. `--remote` flag
 2. `GORDON_REMOTE` environment variable
@@ -263,8 +267,13 @@ When multiple sources specify remote or token, the CLI uses this priority:
 This allows overriding specific values while keeping defaults:
 
 ```bash
-# Active remote is prod, but use different token
-gordon routes list --token $TEMPORARY_TOKEN
+# Aggregate routes views
+gordon routes list
+gordon routes status
+
+# Force one target
+GORDON_REMOTE=prod gordon routes list
+GORDON_REMOTE=prod gordon routes status
 ```
 
 ---
@@ -281,12 +290,12 @@ gordon remotes add dev https://gordon.dev.example.com --token-env DEV_TOKEN
 
 # Work with prod
 gordon remotes use prod
-gordon routes list
 gordon secrets list myapp.example.com
+gordon routes list --remote prod
 
 # Switch to staging
 gordon remotes use staging
-gordon routes list
+GORDON_REMOTE=staging gordon routes status
 ```
 
 ### CI/CD Pipeline
@@ -306,13 +315,17 @@ steps:
 ### Compare Environments
 
 ```bash
-# Compare routes across environments
-gordon routes list --remote https://gordon.example.com --token $PROD_TOKEN
-gordon routes list --remote https://gordon.staging.example.com --token $STAGING_TOKEN
+# Aggregate route inventory/status across local + saved remotes
+gordon routes list
+gordon routes status
 
-# Or switch between active remotes
-gordon remotes use prod && gordon routes list
-gordon remotes use staging && gordon routes list
+# Compare one target at a time
+gordon routes list --remote https://gordon.example.com --token $PROD_TOKEN
+GORDON_REMOTE=staging gordon routes status
+
+# Or switch between active remotes for other commands
+gordon remotes use prod && gordon secrets list myapp.example.com
+gordon remotes use staging && gordon secrets list myapp.example.com
 ```
 
 ### Private Admin + Wildcard App Domains
