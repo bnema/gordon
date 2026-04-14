@@ -269,6 +269,13 @@ func collectRoutesListSections(ctx context.Context, cfgPath string, deps routesL
 		section := loadRoutesListExplicitRemoteSection(ctx, deps, resolved)
 		return []routeListSection{section}, nil
 	}
+	if target, ok := resolveRoutesExplicitTarget(); ok {
+		return []routeListSection{{
+			Kind:  "remote",
+			Name:  target,
+			Error: unresolvedRoutesTargetError(target),
+		}}, nil
+	}
 
 	return collectRoutesListAggregateSections(ctx, cfgPath, deps)
 }
@@ -370,6 +377,13 @@ func collectRoutesStatusSections(ctx context.Context, cfgPath string, deps route
 	if resolved, ok := deps.explicitRemote(); ok {
 		section := loadRoutesStatusExplicitRemoteSection(ctx, deps, resolved)
 		return []routeStatusSection{section}, nil
+	}
+	if target, ok := resolveRoutesExplicitTarget(); ok {
+		return []routeStatusSection{{
+			Kind:  "remote",
+			Name:  target,
+			Error: unresolvedRoutesTargetError(target),
+		}}, nil
 	}
 
 	return collectRoutesStatusAggregateSections(ctx, cfgPath, deps)
@@ -583,6 +597,10 @@ func capitalizeKind(kind string) string {
 		return strings.ToUpper(kind)
 	}
 	return strings.ToUpper(kind[:1]) + kind[1:]
+}
+
+func unresolvedRoutesTargetError(target string) string {
+	return fmt.Sprintf("could not resolve remote target %q", target)
 }
 
 func resolveRoutesExplicitRemote() (*remote.ResolvedRemote, bool) {

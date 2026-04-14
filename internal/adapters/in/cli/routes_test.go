@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -338,6 +339,93 @@ func TestCollectRoutesListSections_ExplicitRemoteSkipsAggregate(t *testing.T) {
 	require.Len(t, sections, 1)
 	assert.Equal(t, "igor", sections[0].Name)
 	assert.Equal(t, "test.supri.xyz", sections[0].Routes[0].Domain)
+}
+
+func TestCollectRoutesSections_ExplicitUnknownNamedTargetReturnsErrorSection(t *testing.T) {
+	originalRemoteFlag := remoteFlag
+	originalTokenFlag := tokenFlag
+	originalInsecureTLSFlag := insecureTLSFlag
+	t.Cleanup(func() {
+		remoteFlag = originalRemoteFlag
+		tokenFlag = originalTokenFlag
+		insecureTLSFlag = originalInsecureTLSFlag
+	})
+
+	remoteFlag = "missing-remote"
+	tokenFlag = ""
+	insecureTLSFlag = false
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GORDON_REMOTE", "")
+
+	t.Run("list", func(t *testing.T) {
+		var loadLocalCalls atomic.Int32
+		var listRemotesCalls atomic.Int32
+		var loadRemoteCalls atomic.Int32
+
+		deps := routesListDeps{
+			explicitRemote: resolveRoutesExplicitRemote,
+			loadLocal: func(context.Context, string) (routeListSection, error) {
+				loadLocalCalls.Add(1)
+				return routeListSection{}, nil
+			},
+			listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
+				listRemotesCalls.Add(1)
+				return map[string]remote.RemoteEntry{}, "", nil
+			},
+			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeListSection, error) {
+				loadRemoteCalls.Add(1)
+				return routeListSection{}, nil
+			},
+		}
+
+		sections, err := collectRoutesListSections(context.Background(), "", deps)
+
+		require.NoError(t, err)
+		require.Len(t, sections, 1)
+		assert.Equal(t, "remote", sections[0].Kind)
+		assert.Equal(t, "missing-remote", sections[0].Name)
+		require.NotEmpty(t, sections[0].Error)
+		assert.Contains(t, sections[0].Error, "missing-remote")
+		assert.Zero(t, loadLocalCalls.Load())
+		assert.Zero(t, listRemotesCalls.Load())
+		assert.Zero(t, loadRemoteCalls.Load())
+	})
+
+	t.Run("status", func(t *testing.T) {
+		var loadLocalCalls atomic.Int32
+		var listRemotesCalls atomic.Int32
+		var loadRemoteCalls atomic.Int32
+
+		deps := routesStatusDeps{
+			explicitRemote: resolveRoutesExplicitRemote,
+			loadLocal: func(context.Context, string) (routeStatusSection, error) {
+				loadLocalCalls.Add(1)
+				return routeStatusSection{}, nil
+			},
+			listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
+				listRemotesCalls.Add(1)
+				return map[string]remote.RemoteEntry{}, "", nil
+			},
+			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeStatusSection, error) {
+				loadRemoteCalls.Add(1)
+				return routeStatusSection{}, nil
+			},
+		}
+
+		sections, err := collectRoutesStatusSections(context.Background(), "", deps)
+
+		require.NoError(t, err)
+		require.Len(t, sections, 1)
+		assert.Equal(t, "remote", sections[0].Kind)
+		assert.Equal(t, "missing-remote", sections[0].Name)
+		require.NotEmpty(t, sections[0].Error)
+		assert.Contains(t, sections[0].Error, "missing-remote")
+		assert.Zero(t, loadLocalCalls.Load())
+		assert.Zero(t, listRemotesCalls.Load())
+		assert.Zero(t, loadRemoteCalls.Load())
+	})
 }
 
 func TestRenderRoutesStatusSections_IncludesSectionHeadingsAndErrors(t *testing.T) {

@@ -32,7 +32,6 @@ func resolveControlPlane(configPath string) (*controlPlaneHandle, error) {
 }
 
 func resolveLocalControlPlane(configPath string) (*controlPlaneHandle, error) {
-
 	kernel, err := app.NewKernel(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize local control plane: %w", err)
