@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +14,28 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type routesShowTestControlPlane struct {
+	resolveFromImageTestControlPlane
+	getHealth func(context.Context) (map[string]*remote.RouteHealth, error)
+}
+
+var _ ControlPlane = (*routesShowTestControlPlane)(nil)
+
+func (c *routesShowTestControlPlane) ListRoutesWithDetails(context.Context) ([]remote.RouteInfo, error) {
+	panic("unexpected call")
+}
+
+func (c *routesShowTestControlPlane) GetHealth(ctx context.Context) (map[string]*remote.RouteHealth, error) {
+	if c.getHealth != nil {
+		return c.getHealth(ctx)
+	}
+	panic("unexpected call")
+}
 
 func TestTruncateImage(t *testing.T) {
 	tests := []struct {
@@ -249,6 +270,57 @@ func TestRouteStatusTitle_PreservesProbeFailureError(t *testing.T) {
 		" app.example.com"
 
 	assert.Equal(t, expected, routeStatusTitle(item))
+}
+
+func TestRunRoutesShow_JSONIncludesHealthError(t *testing.T) {
+	fake := &routesShowTestControlPlane{
+		resolveFromImageTestControlPlane: resolveFromImageTestControlPlane{
+			getRoute: func(context.Context, string) (*domain.Route, error) {
+				return &domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil
+			},
+		},
+		getHealth: func(context.Context) (map[string]*remote.RouteHealth, error) {
+			return nil, errors.New("probe failed")
+		},
+	}
+
+	var out bytes.Buffer
+	err := runRoutesShow(context.Background(), fake, &out, "app.example.com", true)
+
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
+	assert.Equal(t, "app.example.com", got["domain"])
+	assert.Equal(t, "app:latest", got["image"])
+	assert.Equal(t, "unknown", got["container_status"])
+	assert.Equal(t, float64(0), got["http_status"])
+	assert.Equal(t, "probe failed", got["health_error"])
+}
+
+func TestRunRoutesShow_TextIncludesHealthWarning(t *testing.T) {
+	fake := &routesShowTestControlPlane{
+		resolveFromImageTestControlPlane: resolveFromImageTestControlPlane{
+			getRoute: func(context.Context, string) (*domain.Route, error) {
+				return &domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil
+			},
+		},
+		getHealth: func(context.Context) (map[string]*remote.RouteHealth, error) {
+			return nil, errors.New("probe failed")
+		},
+	}
+
+	var out bytes.Buffer
+	err := runRoutesShow(context.Background(), fake, &out, "app.example.com", false)
+
+	require.NoError(t, err)
+
+	text := stripANSI(out.String())
+	assert.Contains(t, text, "Route: app.example.com")
+	assert.Contains(t, text, "Domain:")
+	assert.Contains(t, text, "Image:")
+	assert.Contains(t, text, "Container:")
+	assert.Contains(t, text, "probe failed")
 }
 
 func TestCollectRoutesListSections_DefaultModeIncludesLocalThenSortedRemotes(t *testing.T) {

@@ -931,7 +931,12 @@ func runRoutesShow(ctx context.Context, cp ControlPlane, out io.Writer, routeDom
 		return fmt.Errorf("failed to get route: %w", err)
 	}
 
-	health, _ := cp.GetHealth(ctx)
+	health, err := cp.GetHealth(ctx)
+	healthErr := ""
+	if err != nil {
+		healthErr = err.Error()
+		health = nil
+	}
 	var routeHealth *remote.RouteHealth
 	if health != nil {
 		routeHealth = health[routeDomain]
@@ -951,19 +956,26 @@ func runRoutesShow(ctx context.Context, cp ControlPlane, out io.Writer, routeDom
 			"container_status": containerStatus,
 			"http_status":      httpStatus,
 		}
+		if healthErr != "" {
+			payload["health_error"] = healthErr
+		}
 		return writeJSON(out, payload)
 	}
 
-	if err := cliWriteLine(out, cliRenderTitle("Route: "+route.Domain)); err != nil {
+	return writeRouteShowText(out, route.Domain, route.Image, containerStatus, httpStatus, healthErr)
+}
+
+func writeRouteShowText(out io.Writer, domainName, image, containerStatus string, httpStatus int, healthErr string) error {
+	if err := cliWriteLine(out, cliRenderTitle("Route: "+domainName)); err != nil {
 		return err
 	}
 	if err := cliWriteLine(out, ""); err != nil {
 		return err
 	}
-	if err := cliWriteLine(out, cliRenderMeta("Domain:", route.Domain)); err != nil {
+	if err := cliWriteLine(out, cliRenderMeta("Domain:", domainName)); err != nil {
 		return err
 	}
-	if err := cliWriteLine(out, cliRenderMeta("Image:", route.Image)); err != nil {
+	if err := cliWriteLine(out, cliRenderMeta("Image:", image)); err != nil {
 		return err
 	}
 	if err := cliWriteLine(out, cliRenderMeta("Container:", containerStatus)); err != nil {
@@ -971,6 +983,11 @@ func runRoutesShow(ctx context.Context, cp ControlPlane, out io.Writer, routeDom
 	}
 	if httpStatus > 0 {
 		if err := cliWriteLine(out, cliRenderMeta("HTTP Status:", fmt.Sprintf("%d", httpStatus))); err != nil {
+			return err
+		}
+	}
+	if healthErr != "" {
+		if err := cliWriteLine(out, cliRenderWarning(healthErr)); err != nil {
 			return err
 		}
 	}
