@@ -975,8 +975,13 @@ func runRoutesShow(ctx context.Context, cp ControlPlane, out io.Writer, routeDom
 	containerStatus := "unknown"
 	httpStatus := 0
 	if routeHealth != nil {
-		containerStatus = routeHealth.ContainerStatus
+		if routeHealth.ContainerStatus != "" {
+			containerStatus = routeHealth.ContainerStatus
+		}
 		httpStatus = routeHealth.HTTPStatus
+		if healthErr == "" && routeHealth.Error != "" {
+			healthErr = routeHealth.Error
+		}
 	}
 
 	if jsonOut {

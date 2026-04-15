@@ -353,6 +353,68 @@ func TestRunRoutesShow_TextIncludesHealthWarning(t *testing.T) {
 	assert.Contains(t, text, "probe failed")
 }
 
+func TestRunRoutesShow_JSONIncludesRouteProbeFailureAndUnknownContainerStatus(t *testing.T) {
+	fake := &routesShowTestControlPlane{
+		resolveFromImageTestControlPlane: resolveFromImageTestControlPlane{
+			getRoute: func(context.Context, string) (*domain.Route, error) {
+				return &domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil
+			},
+		},
+		getHealth: func(context.Context) (map[string]*remote.RouteHealth, error) {
+			return map[string]*remote.RouteHealth{
+				"app.example.com": {
+					HTTPStatus:      503,
+					ContainerStatus: "",
+					Error:           "probe failed",
+				},
+			}, nil
+		},
+	}
+
+	var out bytes.Buffer
+	err := runRoutesShow(context.Background(), fake, &out, "app.example.com", true)
+
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
+	assert.Equal(t, "app.example.com", got["domain"])
+	assert.Equal(t, "app:latest", got["image"])
+	assert.Equal(t, "unknown", got["container_status"])
+	assert.Equal(t, float64(503), got["http_status"])
+	assert.Equal(t, "probe failed", got["health_error"])
+}
+
+func TestRunRoutesShow_TextIncludesRouteProbeFailureAndUnknownContainerStatus(t *testing.T) {
+	fake := &routesShowTestControlPlane{
+		resolveFromImageTestControlPlane: resolveFromImageTestControlPlane{
+			getRoute: func(context.Context, string) (*domain.Route, error) {
+				return &domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil
+			},
+		},
+		getHealth: func(context.Context) (map[string]*remote.RouteHealth, error) {
+			return map[string]*remote.RouteHealth{
+				"app.example.com": {
+					HTTPStatus:      503,
+					ContainerStatus: "",
+					Error:           "probe failed",
+				},
+			}, nil
+		},
+	}
+
+	var out bytes.Buffer
+	err := runRoutesShow(context.Background(), fake, &out, "app.example.com", false)
+
+	require.NoError(t, err)
+
+	text := stripANSI(out.String())
+	assert.Contains(t, text, "Route: app.example.com")
+	assert.Contains(t, text, "Container:")
+	assert.Contains(t, text, "unknown")
+	assert.Contains(t, text, "probe failed")
+}
+
 func TestCollectRoutesListSections_DefaultModeIncludesLocalThenSortedRemotes(t *testing.T) {
 	testsDeps := routesListDeps{
 		explicitRemote: func() (*remote.ResolvedRemote, bool, error) {
