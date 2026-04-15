@@ -434,12 +434,12 @@ func TestCollectRoutesListSections_DefaultModeIncludesLocalThenSortedRemotes(t *
 		},
 		listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
 			return map[string]remote.RemoteEntry{
-				"igor":        {URL: "https://gordon.supri.xyz"},
-				"hetzner-vps": {URL: "https://reg.bnema.dev"},
-			}, "igor", nil
+				"remote-a": {URL: "https://remote-a.example.com"},
+				"remote-b": {URL: "https://remote-b.example.com"},
+			}, "remote-a", nil
 		},
 		loadRemote: func(_ context.Context, name string, entry remote.RemoteEntry) (routeListSection, error) {
-			if name == "hetzner-vps" {
+			if name == "remote-b" {
 				return routeListSection{
 					Kind:  "remote",
 					Name:  name,
@@ -452,8 +452,8 @@ func TestCollectRoutesListSections_DefaultModeIncludesLocalThenSortedRemotes(t *
 				Name: name,
 				URL:  entry.URL,
 				Routes: []routeListItem{{
-					Domain: "grafana.supri.xyz",
-					Image:  "grafana",
+					Domain: "dashboard.example.com",
+					Image:  "dashboard",
 				}},
 			}, nil
 		},
@@ -464,18 +464,18 @@ func TestCollectRoutesListSections_DefaultModeIncludesLocalThenSortedRemotes(t *
 	require.NoError(t, err)
 	require.Len(t, sections, 3)
 	assert.Equal(t, "local", sections[0].Name)
-	assert.Equal(t, "hetzner-vps", sections[1].Name)
-	assert.Equal(t, "igor", sections[2].Name)
-	assert.Equal(t, "remote unavailable", sections[1].Error)
-	assert.Equal(t, "grafana.supri.xyz", sections[2].Routes[0].Domain)
+	assert.Equal(t, "remote-a", sections[1].Name)
+	assert.Equal(t, "remote-b", sections[2].Name)
+	assert.Equal(t, "dashboard.example.com", sections[1].Routes[0].Domain)
+	assert.Equal(t, "remote unavailable", sections[2].Error)
 }
 
 func TestCollectRoutesListSections_ExplicitRemoteSkipsAggregate(t *testing.T) {
 	testsDeps := routesListDeps{
 		explicitRemote: func() (*remote.ResolvedRemote, bool, error) {
 			return &remote.ResolvedRemote{
-				Name: "igor",
-				URL:  "https://gordon.supri.xyz",
+				Name: "remote-a",
+				URL:  "https://remote-a.example.com",
 			}, true, nil
 		},
 		loadLocal: func(context.Context, string) (routeListSection, error) {
@@ -492,8 +492,8 @@ func TestCollectRoutesListSections_ExplicitRemoteSkipsAggregate(t *testing.T) {
 				Name: name,
 				URL:  entry.URL,
 				Routes: []routeListItem{{
-					Domain: "test.supri.xyz",
-					Image:  "hello-test",
+					Domain: "test.example.com",
+					Image:  "hello-app",
 				}},
 			}, nil
 		},
@@ -503,8 +503,8 @@ func TestCollectRoutesListSections_ExplicitRemoteSkipsAggregate(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, sections, 1)
-	assert.Equal(t, "igor", sections[0].Name)
-	assert.Equal(t, "test.supri.xyz", sections[0].Routes[0].Domain)
+	assert.Equal(t, "remote-a", sections[0].Name)
+	assert.Equal(t, "test.example.com", sections[0].Routes[0].Domain)
 }
 
 func TestCollectRoutesSections_ExplicitRemoteResolutionErrorReturnsError(t *testing.T) {
@@ -581,11 +581,11 @@ func TestLoadRoutesListExplicitRemoteSection_PropagatesLoaderError(t *testing.T)
 		loadRemote: func(context.Context, string, remote.RemoteEntry) (routeListSection, error) {
 			return routeListSection{}, errors.New("boom")
 		},
-	}, &remote.ResolvedRemote{Name: "igor", URL: "https://gordon.supri.xyz"})
+	}, &remote.ResolvedRemote{Name: "remote-a", URL: "https://remote-a.example.com"})
 
 	assert.Equal(t, "remote", section.Kind)
-	assert.Equal(t, "igor", section.Name)
-	assert.Equal(t, "https://gordon.supri.xyz", section.URL)
+	assert.Equal(t, "remote-a", section.Name)
+	assert.Equal(t, "https://remote-a.example.com", section.URL)
 	assert.Equal(t, "boom", section.Error)
 }
 
@@ -594,11 +594,11 @@ func TestLoadRoutesStatusExplicitRemoteSection_PropagatesLoaderError(t *testing.
 		loadRemote: func(context.Context, string, remote.RemoteEntry) (routeStatusSection, error) {
 			return routeStatusSection{}, errors.New("boom")
 		},
-	}, &remote.ResolvedRemote{Name: "igor", URL: "https://gordon.supri.xyz"})
+	}, &remote.ResolvedRemote{Name: "remote-a", URL: "https://remote-a.example.com"})
 
 	assert.Equal(t, "remote", section.Kind)
-	assert.Equal(t, "igor", section.Name)
-	assert.Equal(t, "https://gordon.supri.xyz", section.URL)
+	assert.Equal(t, "remote-a", section.Name)
+	assert.Equal(t, "https://remote-a.example.com", section.URL)
 	assert.Equal(t, "boom", section.Error)
 }
 
@@ -612,7 +612,7 @@ func TestCollectRoutesListAggregateSections_EncodesLoaderErrors(t *testing.T) {
 				return map[string]remote.RemoteEntry{}, "", nil
 			},
 			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeListSection, error) {
-				return routeListSection{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"}, nil
+				return routeListSection{Kind: "remote", Name: "remote-a", URL: "https://remote-a.example.com"}, nil
 			},
 		})
 
@@ -628,10 +628,10 @@ func TestCollectRoutesListAggregateSections_EncodesLoaderErrors(t *testing.T) {
 				return routeListSection{Kind: "local", Name: "local"}, nil
 			},
 			listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
-				return map[string]remote.RemoteEntry{"igor": {URL: "https://gordon.supri.xyz"}}, "", nil
+				return map[string]remote.RemoteEntry{"remote-a": {URL: "https://remote-a.example.com"}}, "", nil
 			},
 			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeListSection, error) {
-				return routeListSection{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"}, errors.New("remote failed")
+				return routeListSection{Kind: "remote", Name: "remote-a", URL: "https://remote-a.example.com"}, errors.New("remote failed")
 			},
 		})
 
@@ -653,7 +653,7 @@ func TestCollectRoutesStatusAggregateSections_EncodesLoaderErrors(t *testing.T) 
 				return map[string]remote.RemoteEntry{}, "", nil
 			},
 			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeStatusSection, error) {
-				return routeStatusSection{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"}, nil
+				return routeStatusSection{Kind: "remote", Name: "remote-a", URL: "https://remote-a.example.com"}, nil
 			},
 		})
 
@@ -669,10 +669,10 @@ func TestCollectRoutesStatusAggregateSections_EncodesLoaderErrors(t *testing.T) 
 				return routeStatusSection{Kind: "local", Name: "local"}, nil
 			},
 			listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
-				return map[string]remote.RemoteEntry{"igor": {URL: "https://gordon.supri.xyz"}}, "", nil
+				return map[string]remote.RemoteEntry{"remote-a": {URL: "https://remote-a.example.com"}}, "", nil
 			},
 			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeStatusSection, error) {
-				return routeStatusSection{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"}, errors.New("remote failed")
+				return routeStatusSection{Kind: "remote", Name: "remote-a", URL: "https://remote-a.example.com"}, errors.New("remote failed")
 			},
 		})
 
@@ -760,8 +760,8 @@ func TestRenderRoutesStatusSections_IncludesSectionHeadingsAndErrors(t *testing.
 		},
 		{
 			Kind:  "remote",
-			Name:  "igor",
-			URL:   "https://gordon.supri.xyz",
+			Name:  "remote-a",
+			URL:   "https://remote-a.example.com",
 			Error: "dial tcp timeout",
 		},
 	}
@@ -791,7 +791,7 @@ func TestRenderRoutesStatusSections_IncludesSectionHeadingsAndErrors(t *testing.
 	routeIdx := lineIndex("app.local")
 	require.NotEqual(t, -1, routeIdx)
 
-	remoteIdx := lineIndex("Remote: igor")
+	remoteIdx := lineIndex("Remote: remote-a")
 	require.NotEqual(t, -1, remoteIdx)
 
 	errorIdx := lineIndex("dial tcp timeout")
@@ -803,10 +803,41 @@ func TestRenderRoutesStatusSections_IncludesSectionHeadingsAndErrors(t *testing.
 	assert.Less(t, remoteIdx, errorIdx)
 }
 
+func TestRenderRoutesStatusSections_DoesNotAddExtraBlankLineBetweenSections(t *testing.T) {
+	sections := []routeStatusSection{
+		{
+			Kind: "remote",
+			Name: "remote-b",
+			Routes: []routeStatusItem{{
+				Domain:          "app.example.com",
+				Image:           "app:latest",
+				ContainerStatus: "running",
+			}},
+		},
+		{
+			Kind: "remote",
+			Name: "remote-a",
+			Routes: []routeStatusItem{{
+				Domain:          "dashboard.example.com",
+				Image:           "dashboard",
+				ContainerStatus: "running",
+			}},
+		},
+	}
+
+	var out bytes.Buffer
+	err := renderRoutesStatusSections(&out, sections)
+
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.NotContains(t, rendered, "app:latest\n\n\nRemote: remote-a")
+	assert.Contains(t, rendered, "app:latest\n\nRemote: remote-a")
+}
+
 func TestRenderRoutesListSections_HidesLocalErrorWhenRemoteIsUsable(t *testing.T) {
 	sections := []routeListSection{
 		{Kind: "local", Name: "local", Error: "failed to initialize local control plane"},
-		{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"},
+		{Kind: "remote", Name: "remote-a", URL: "https://remote-a.example.com"},
 	}
 
 	var out bytes.Buffer
@@ -816,14 +847,14 @@ func TestRenderRoutesListSections_HidesLocalErrorWhenRemoteIsUsable(t *testing.T
 	rendered := stripANSI(out.String())
 	assert.NotContains(t, rendered, "Local")
 	assert.NotContains(t, rendered, "failed to initialize local control plane")
-	assert.Contains(t, rendered, "Remote: igor")
+	assert.Contains(t, rendered, "Remote: remote-a")
 	assert.Contains(t, rendered, "No routes configured")
 }
 
 func TestRenderRoutesStatusSections_HidesLocalErrorWhenRemoteIsUsable(t *testing.T) {
 	sections := []routeStatusSection{
 		{Kind: "local", Name: "local", Error: "failed to initialize local control plane"},
-		{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"},
+		{Kind: "remote", Name: "remote-a", URL: "https://remote-a.example.com"},
 	}
 
 	var out bytes.Buffer
@@ -833,14 +864,14 @@ func TestRenderRoutesStatusSections_HidesLocalErrorWhenRemoteIsUsable(t *testing
 	rendered := stripANSI(out.String())
 	assert.NotContains(t, rendered, "Local")
 	assert.NotContains(t, rendered, "failed to initialize local control plane")
-	assert.Contains(t, rendered, "Remote: igor")
+	assert.Contains(t, rendered, "Remote: remote-a")
 	assert.Contains(t, rendered, "No routes configured")
 }
 
 func TestRenderRoutesStatusSections_KeepsLocalErrorWhenAllRemotesFail(t *testing.T) {
 	sections := []routeStatusSection{
 		{Kind: "local", Name: "local", Error: "failed to initialize local control plane"},
-		{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz", Error: "dial tcp timeout"},
+		{Kind: "remote", Name: "remote-a", URL: "https://remote-a.example.com", Error: "dial tcp timeout"},
 	}
 
 	var out bytes.Buffer
@@ -850,7 +881,7 @@ func TestRenderRoutesStatusSections_KeepsLocalErrorWhenAllRemotesFail(t *testing
 	rendered := stripANSI(out.String())
 	assert.Contains(t, rendered, "Local")
 	assert.Contains(t, rendered, "failed to initialize local control plane")
-	assert.Contains(t, rendered, "Remote: igor")
+	assert.Contains(t, rendered, "Remote: remote-a")
 	assert.Contains(t, rendered, "dial tcp timeout")
 }
 

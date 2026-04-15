@@ -636,7 +636,7 @@ func renderRoutesStatusSection(out io.Writer, section routeStatusSection) error 
 
 	if len(section.Routes) > 0 {
 		tree := buildRouteStatusTree(section.Routes)
-		if err := cliWriteLine(out, tree.Render()); err != nil {
+		if err := cliWriteLine(out, strings.TrimSuffix(tree.Render(), "\n")); err != nil {
 			return err
 		}
 	}
