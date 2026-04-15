@@ -249,11 +249,41 @@ func TestResolveRoutesExplicitRemote_AllowsAdHocURLWhenSavedRemotesConfigUnreada
 	configPath := filepath.Join(configHome, "gordon", "remotes.toml")
 	require.NoError(t, os.MkdirAll(configPath, 0o755))
 
-	resolved, ok := resolveRoutesExplicitRemote()
+	resolved, ok, err := resolveRoutesExplicitRemote()
 	require.True(t, ok)
+	require.NoError(t, err)
 	require.NotNil(t, resolved)
 	assert.Equal(t, "https://ad-hoc.example.com", resolved.URL)
 	assert.Empty(t, resolved.Name)
+}
+
+func TestResolveRoutesExplicitRemote_ReturnsErrorForUnreadableNamedRemoteConfig(t *testing.T) {
+	originalRemoteFlag := remoteFlag
+	originalTokenFlag := tokenFlag
+	originalInsecureTLSFlag := insecureTLSFlag
+	t.Cleanup(func() {
+		remoteFlag = originalRemoteFlag
+		tokenFlag = originalTokenFlag
+		insecureTLSFlag = originalInsecureTLSFlag
+	})
+
+	remoteFlag = "missing-remote"
+	tokenFlag = ""
+	insecureTLSFlag = false
+
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GORDON_REMOTE", "")
+
+	configPath := filepath.Join(configHome, "gordon", "remotes.toml")
+	require.NoError(t, os.MkdirAll(configPath, 0o755))
+
+	resolved, ok, err := resolveRoutesExplicitRemote()
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Nil(t, resolved)
+	assert.Contains(t, err.Error(), "failed to read remotes")
 }
 
 func TestRouteStatusTitle_PreservesProbeFailureError(t *testing.T) {
@@ -325,8 +355,8 @@ func TestRunRoutesShow_TextIncludesHealthWarning(t *testing.T) {
 
 func TestCollectRoutesListSections_DefaultModeIncludesLocalThenSortedRemotes(t *testing.T) {
 	testsDeps := routesListDeps{
-		explicitRemote: func() (*remote.ResolvedRemote, bool) {
-			return nil, false
+		explicitRemote: func() (*remote.ResolvedRemote, bool, error) {
+			return nil, false, nil
 		},
 		loadLocal: func(context.Context, string) (routeListSection, error) {
 			return routeListSection{
@@ -378,11 +408,11 @@ func TestCollectRoutesListSections_DefaultModeIncludesLocalThenSortedRemotes(t *
 
 func TestCollectRoutesListSections_ExplicitRemoteSkipsAggregate(t *testing.T) {
 	testsDeps := routesListDeps{
-		explicitRemote: func() (*remote.ResolvedRemote, bool) {
+		explicitRemote: func() (*remote.ResolvedRemote, bool, error) {
 			return &remote.ResolvedRemote{
 				Name: "igor",
 				URL:  "https://gordon.supri.xyz",
-			}, true
+			}, true, nil
 		},
 		loadLocal: func(context.Context, string) (routeListSection, error) {
 			t.Fatal("loadLocal should not be called when an explicit remote is selected")
@@ -413,23 +443,7 @@ func TestCollectRoutesListSections_ExplicitRemoteSkipsAggregate(t *testing.T) {
 	assert.Equal(t, "test.supri.xyz", sections[0].Routes[0].Domain)
 }
 
-func TestCollectRoutesSections_ExplicitUnknownNamedTargetReturnsErrorSection(t *testing.T) {
-	originalRemoteFlag := remoteFlag
-	originalTokenFlag := tokenFlag
-	originalInsecureTLSFlag := insecureTLSFlag
-	t.Cleanup(func() {
-		remoteFlag = originalRemoteFlag
-		tokenFlag = originalTokenFlag
-		insecureTLSFlag = originalInsecureTLSFlag
-	})
-
-	remoteFlag = "missing-remote"
-	tokenFlag = ""
-	insecureTLSFlag = false
-	configHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("GORDON_REMOTE", "")
+func TestCollectRoutesSections_ExplicitRemoteResolutionErrorReturnsError(t *testing.T) {
 
 	t.Run("list", func(t *testing.T) {
 		var loadLocalCalls atomic.Int32
@@ -437,7 +451,9 @@ func TestCollectRoutesSections_ExplicitUnknownNamedTargetReturnsErrorSection(t *
 		var loadRemoteCalls atomic.Int32
 
 		deps := routesListDeps{
-			explicitRemote: resolveRoutesExplicitRemote,
+			explicitRemote: func() (*remote.ResolvedRemote, bool, error) {
+				return nil, false, errors.New("failed to read remotes: boom")
+			},
 			loadLocal: func(context.Context, string) (routeListSection, error) {
 				loadLocalCalls.Add(1)
 				return routeListSection{}, nil
@@ -454,12 +470,9 @@ func TestCollectRoutesSections_ExplicitUnknownNamedTargetReturnsErrorSection(t *
 
 		sections, err := collectRoutesListSections(context.Background(), "", deps)
 
-		require.NoError(t, err)
-		require.Len(t, sections, 1)
-		assert.Equal(t, "remote", sections[0].Kind)
-		assert.Equal(t, "missing-remote", sections[0].Name)
-		require.NotEmpty(t, sections[0].Error)
-		assert.Contains(t, sections[0].Error, "missing-remote")
+		require.Error(t, err)
+		require.Nil(t, sections)
+		assert.Contains(t, err.Error(), "failed to read remotes")
 		assert.Zero(t, loadLocalCalls.Load())
 		assert.Zero(t, listRemotesCalls.Load())
 		assert.Zero(t, loadRemoteCalls.Load())
@@ -471,7 +484,9 @@ func TestCollectRoutesSections_ExplicitUnknownNamedTargetReturnsErrorSection(t *
 		var loadRemoteCalls atomic.Int32
 
 		deps := routesStatusDeps{
-			explicitRemote: resolveRoutesExplicitRemote,
+			explicitRemote: func() (*remote.ResolvedRemote, bool, error) {
+				return nil, false, errors.New("failed to read remotes: boom")
+			},
 			loadLocal: func(context.Context, string) (routeStatusSection, error) {
 				loadLocalCalls.Add(1)
 				return routeStatusSection{}, nil
@@ -488,15 +503,120 @@ func TestCollectRoutesSections_ExplicitUnknownNamedTargetReturnsErrorSection(t *
 
 		sections, err := collectRoutesStatusSections(context.Background(), "", deps)
 
-		require.NoError(t, err)
-		require.Len(t, sections, 1)
-		assert.Equal(t, "remote", sections[0].Kind)
-		assert.Equal(t, "missing-remote", sections[0].Name)
-		require.NotEmpty(t, sections[0].Error)
-		assert.Contains(t, sections[0].Error, "missing-remote")
+		require.Error(t, err)
+		require.Nil(t, sections)
+		assert.Contains(t, err.Error(), "failed to read remotes")
 		assert.Zero(t, loadLocalCalls.Load())
 		assert.Zero(t, listRemotesCalls.Load())
 		assert.Zero(t, loadRemoteCalls.Load())
+	})
+}
+
+func TestLoadRoutesListExplicitRemoteSection_PropagatesLoaderError(t *testing.T) {
+	section := loadRoutesListExplicitRemoteSection(context.Background(), routesListDeps{
+		loadRemote: func(context.Context, string, remote.RemoteEntry) (routeListSection, error) {
+			return routeListSection{}, errors.New("boom")
+		},
+	}, &remote.ResolvedRemote{Name: "igor", URL: "https://gordon.supri.xyz"})
+
+	assert.Equal(t, "remote", section.Kind)
+	assert.Equal(t, "igor", section.Name)
+	assert.Equal(t, "https://gordon.supri.xyz", section.URL)
+	assert.Equal(t, "boom", section.Error)
+}
+
+func TestLoadRoutesStatusExplicitRemoteSection_PropagatesLoaderError(t *testing.T) {
+	section := loadRoutesStatusExplicitRemoteSection(context.Background(), routesStatusDeps{
+		loadRemote: func(context.Context, string, remote.RemoteEntry) (routeStatusSection, error) {
+			return routeStatusSection{}, errors.New("boom")
+		},
+	}, &remote.ResolvedRemote{Name: "igor", URL: "https://gordon.supri.xyz"})
+
+	assert.Equal(t, "remote", section.Kind)
+	assert.Equal(t, "igor", section.Name)
+	assert.Equal(t, "https://gordon.supri.xyz", section.URL)
+	assert.Equal(t, "boom", section.Error)
+}
+
+func TestCollectRoutesListAggregateSections_EncodesLoaderErrors(t *testing.T) {
+	t.Run("local loader error", func(t *testing.T) {
+		sections, err := collectRoutesListAggregateSections(context.Background(), "config.toml", routesListDeps{
+			loadLocal: func(context.Context, string) (routeListSection, error) {
+				return routeListSection{Kind: "local", Name: "local"}, errors.New("local failed")
+			},
+			listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
+				return map[string]remote.RemoteEntry{}, "", nil
+			},
+			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeListSection, error) {
+				return routeListSection{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"}, nil
+			},
+		})
+
+		require.NoError(t, err)
+		require.Len(t, sections, 1)
+		assert.Equal(t, "local", sections[0].Kind)
+		assert.Equal(t, "local failed", sections[0].Error)
+	})
+
+	t.Run("remote loader error", func(t *testing.T) {
+		sections, err := collectRoutesListAggregateSections(context.Background(), "config.toml", routesListDeps{
+			loadLocal: func(context.Context, string) (routeListSection, error) {
+				return routeListSection{Kind: "local", Name: "local"}, nil
+			},
+			listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
+				return map[string]remote.RemoteEntry{"igor": {URL: "https://gordon.supri.xyz"}}, "", nil
+			},
+			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeListSection, error) {
+				return routeListSection{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"}, errors.New("remote failed")
+			},
+		})
+
+		require.NoError(t, err)
+		require.Len(t, sections, 2)
+		assert.Equal(t, "local", sections[0].Kind)
+		assert.Equal(t, "remote", sections[1].Kind)
+		assert.Equal(t, "remote failed", sections[1].Error)
+	})
+}
+
+func TestCollectRoutesStatusAggregateSections_EncodesLoaderErrors(t *testing.T) {
+	t.Run("local loader error", func(t *testing.T) {
+		sections, err := collectRoutesStatusAggregateSections(context.Background(), "config.toml", routesStatusDeps{
+			loadLocal: func(context.Context, string) (routeStatusSection, error) {
+				return routeStatusSection{Kind: "local", Name: "local"}, errors.New("local failed")
+			},
+			listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
+				return map[string]remote.RemoteEntry{}, "", nil
+			},
+			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeStatusSection, error) {
+				return routeStatusSection{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"}, nil
+			},
+		})
+
+		require.NoError(t, err)
+		require.Len(t, sections, 1)
+		assert.Equal(t, "local", sections[0].Kind)
+		assert.Equal(t, "local failed", sections[0].Error)
+	})
+
+	t.Run("remote loader error", func(t *testing.T) {
+		sections, err := collectRoutesStatusAggregateSections(context.Background(), "config.toml", routesStatusDeps{
+			loadLocal: func(context.Context, string) (routeStatusSection, error) {
+				return routeStatusSection{Kind: "local", Name: "local"}, nil
+			},
+			listRemotes: func() (map[string]remote.RemoteEntry, string, error) {
+				return map[string]remote.RemoteEntry{"igor": {URL: "https://gordon.supri.xyz"}}, "", nil
+			},
+			loadRemote: func(context.Context, string, remote.RemoteEntry) (routeStatusSection, error) {
+				return routeStatusSection{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"}, errors.New("remote failed")
+			},
+		})
+
+		require.NoError(t, err)
+		require.Len(t, sections, 2)
+		assert.Equal(t, "local", sections[0].Kind)
+		assert.Equal(t, "remote", sections[1].Kind)
+		assert.Equal(t, "remote failed", sections[1].Error)
 	})
 }
 

@@ -128,14 +128,14 @@ type routeStatusSection struct {
 }
 
 type routesListDeps struct {
-	explicitRemote func() (*remote.ResolvedRemote, bool)
+	explicitRemote func() (*remote.ResolvedRemote, bool, error)
 	loadLocal      func(context.Context, string) (routeListSection, error)
 	listRemotes    func() (map[string]remote.RemoteEntry, string, error)
 	loadRemote     func(context.Context, string, remote.RemoteEntry) (routeListSection, error)
 }
 
 type routesStatusDeps struct {
-	explicitRemote func() (*remote.ResolvedRemote, bool)
+	explicitRemote func() (*remote.ResolvedRemote, bool, error)
 	loadLocal      func(context.Context, string) (routeStatusSection, error)
 	listRemotes    func() (map[string]remote.RemoteEntry, string, error)
 	loadRemote     func(context.Context, string, remote.RemoteEntry) (routeStatusSection, error)
@@ -265,7 +265,9 @@ func collectRoutesListSections(ctx context.Context, cfgPath string, deps routesL
 		deps.loadRemote = loadRoutesListRemoteSection
 	}
 
-	if resolved, ok := deps.explicitRemote(); ok {
+	if resolved, ok, err := deps.explicitRemote(); err != nil {
+		return nil, err
+	} else if ok {
 		section := loadRoutesListExplicitRemoteSection(ctx, deps, resolved)
 		return []routeListSection{section}, nil
 	}
@@ -281,7 +283,10 @@ func collectRoutesListSections(ctx context.Context, cfgPath string, deps routesL
 }
 
 func loadRoutesListExplicitRemoteSection(ctx context.Context, deps routesListDeps, resolved *remote.ResolvedRemote) routeListSection {
-	section, _ := deps.loadRemote(ctx, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
+	section, err := deps.loadRemote(ctx, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
+	if err != nil && section.Error == "" {
+		section.Error = err.Error()
+	}
 	return normalizeRouteListRemoteSection(section, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
 }
 
@@ -289,6 +294,7 @@ func collectRoutesListAggregateSections(ctx context.Context, cfgPath string, dep
 
 	type localResult struct {
 		section routeListSection
+		err     error
 	}
 	type remotesResult struct {
 		entries map[string]remote.RemoteEntry
@@ -299,16 +305,22 @@ func collectRoutesListAggregateSections(ctx context.Context, cfgPath string, dep
 	remotesCh := make(chan remotesResult, 1)
 
 	go func() {
-		section, _ := deps.loadLocal(ctx, cfgPath)
-		localCh <- localResult{section: section}
+		section, err := deps.loadLocal(ctx, cfgPath)
+		localCh <- localResult{section: section, err: err}
 	}()
 	go func() {
 		entries, _, err := deps.listRemotes()
 		remotesCh <- remotesResult{entries: entries, err: err}
 	}()
 
-	local := (<-localCh).section
+	localRes := <-localCh
 	remotes := <-remotesCh
+	local := localRes.section
+	if err := localRes.err; err != nil {
+		if local.Error == "" {
+			local.Error = err.Error()
+		}
+	}
 
 	sections := make([]routeListSection, 0, 1)
 	sections = append(sections, normalizeRouteListLocalSection(local))
@@ -327,7 +339,10 @@ func collectRoutesListAggregateSections(ctx context.Context, cfgPath string, dep
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			section, _ := deps.loadRemote(ctx, name, entry)
+			section, err := deps.loadRemote(ctx, name, entry)
+			if err != nil && section.Error == "" {
+				section.Error = err.Error()
+			}
 			remoteSections[i] = normalizeRouteListRemoteSection(section, name, entry)
 		}()
 	}
@@ -374,7 +389,9 @@ func collectRoutesStatusSections(ctx context.Context, cfgPath string, deps route
 		deps.loadRemote = loadRoutesStatusRemoteSection
 	}
 
-	if resolved, ok := deps.explicitRemote(); ok {
+	if resolved, ok, err := deps.explicitRemote(); err != nil {
+		return nil, err
+	} else if ok {
 		section := loadRoutesStatusExplicitRemoteSection(ctx, deps, resolved)
 		return []routeStatusSection{section}, nil
 	}
@@ -390,7 +407,10 @@ func collectRoutesStatusSections(ctx context.Context, cfgPath string, deps route
 }
 
 func loadRoutesStatusExplicitRemoteSection(ctx context.Context, deps routesStatusDeps, resolved *remote.ResolvedRemote) routeStatusSection {
-	section, _ := deps.loadRemote(ctx, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
+	section, err := deps.loadRemote(ctx, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
+	if err != nil && section.Error == "" {
+		section.Error = err.Error()
+	}
 	return normalizeRouteStatusRemoteSection(section, resolved.DisplayName(), remote.RemoteEntry{URL: resolved.URL, Token: resolved.Token, InsecureTLS: resolved.InsecureTLS})
 }
 
@@ -398,6 +418,7 @@ func collectRoutesStatusAggregateSections(ctx context.Context, cfgPath string, d
 
 	type localResult struct {
 		section routeStatusSection
+		err     error
 	}
 	type remotesResult struct {
 		entries map[string]remote.RemoteEntry
@@ -408,16 +429,22 @@ func collectRoutesStatusAggregateSections(ctx context.Context, cfgPath string, d
 	remotesCh := make(chan remotesResult, 1)
 
 	go func() {
-		section, _ := deps.loadLocal(ctx, cfgPath)
-		localCh <- localResult{section: section}
+		section, err := deps.loadLocal(ctx, cfgPath)
+		localCh <- localResult{section: section, err: err}
 	}()
 	go func() {
 		entries, _, err := deps.listRemotes()
 		remotesCh <- remotesResult{entries: entries, err: err}
 	}()
 
-	local := (<-localCh).section
+	localRes := <-localCh
 	remotes := <-remotesCh
+	local := localRes.section
+	if err := localRes.err; err != nil {
+		if local.Error == "" {
+			local.Error = err.Error()
+		}
+	}
 
 	sections := make([]routeStatusSection, 0, 1)
 	sections = append(sections, normalizeRouteStatusLocalSection(local))
@@ -436,7 +463,10 @@ func collectRoutesStatusAggregateSections(ctx context.Context, cfgPath string, d
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			section, _ := deps.loadRemote(ctx, name, entry)
+			section, err := deps.loadRemote(ctx, name, entry)
+			if err != nil && section.Error == "" {
+				section.Error = err.Error()
+			}
 			remoteSections[i] = normalizeRouteStatusRemoteSection(section, name, entry)
 		}()
 	}
@@ -603,10 +633,10 @@ func unresolvedRoutesTargetError(target string) string {
 	return fmt.Sprintf("could not resolve remote target %q", target)
 }
 
-func resolveRoutesExplicitRemote() (*remote.ResolvedRemote, bool) {
+func resolveRoutesExplicitRemote() (*remote.ResolvedRemote, bool, error) {
 	target, ok := resolveRoutesExplicitTarget()
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 
 	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
@@ -614,12 +644,12 @@ func resolveRoutesExplicitRemote() (*remote.ResolvedRemote, bool) {
 			URL:         target,
 			Token:       resolveRoutesTokenForTarget("", remote.RemoteEntry{}),
 			InsecureTLS: resolveRoutesInsecureForTarget("", remote.RemoteEntry{}),
-		}, true
+		}, true, nil
 	}
 
 	remotes, err := remote.LoadRemotes("")
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 
 	if remotes != nil {
@@ -629,11 +659,11 @@ func resolveRoutesExplicitRemote() (*remote.ResolvedRemote, bool) {
 				URL:         entry.URL,
 				Token:       resolveRoutesTokenForTarget(target, entry),
 				InsecureTLS: resolveRoutesInsecureForTarget(target, entry),
-			}, true
+			}, true, nil
 		}
 	}
 
-	return nil, false
+	return nil, false, nil
 }
 
 func resolveRoutesExplicitTarget() (string, bool) {
