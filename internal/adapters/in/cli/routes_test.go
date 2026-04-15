@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -682,6 +684,69 @@ func TestCollectRoutesStatusAggregateSections_EncodesLoaderErrors(t *testing.T) 
 	})
 }
 
+func TestLoadRoutesStatusLocalSection_DoesNotLeakKernelInitLogs(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "gordon.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`[server]
+gordon_domain = "gordon.local"
+data_dir = `+strconv.Quote(filepath.Join(tmpDir, "data"))+`
+
+[auth]
+enabled = true
+`), 0o600))
+
+	stdout, stderr := captureOutput(t, func() {
+		section, err := loadRoutesStatusLocalSection(context.Background(), cfgPath)
+		require.NoError(t, err)
+		assert.Equal(t, "local", section.Kind)
+		assert.Equal(t, "local", section.Name)
+		assert.Contains(t, section.Error, "failed to initialize local control plane")
+		assert.Contains(t, section.Error, "auth.secrets_backend is required")
+	})
+
+	combined := stdout + stderr
+	assert.NotContains(t, combined, "failed to resolve secrets backend")
+	assert.NotContains(t, combined, "local kernel running in minimal mode")
+}
+
+func captureOutput(t *testing.T, fn func()) (string, string) {
+	t.Helper()
+
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	errR, errW, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = outW
+	os.Stderr = errW
+
+	stdoutCh := make(chan string, 1)
+	stderrCh := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, outR)
+		stdoutCh <- buf.String()
+	}()
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, errR)
+		stderrCh <- buf.String()
+	}()
+
+	defer func() {
+		os.Stdout = oldStdout
+		os.Stderr = oldStderr
+	}()
+
+	fn()
+
+	require.NoError(t, outW.Close())
+	require.NoError(t, errW.Close())
+
+	return <-stdoutCh, <-stderrCh
+}
+
 func TestRenderRoutesStatusSections_IncludesSectionHeadingsAndErrors(t *testing.T) {
 	sections := []routeStatusSection{
 		{
@@ -736,6 +801,57 @@ func TestRenderRoutesStatusSections_IncludesSectionHeadingsAndErrors(t *testing.
 	assert.Less(t, localIdx, routeIdx)
 	assert.Less(t, routeIdx, remoteIdx)
 	assert.Less(t, remoteIdx, errorIdx)
+}
+
+func TestRenderRoutesListSections_HidesLocalErrorWhenRemoteIsUsable(t *testing.T) {
+	sections := []routeListSection{
+		{Kind: "local", Name: "local", Error: "failed to initialize local control plane"},
+		{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"},
+	}
+
+	var out bytes.Buffer
+	err := renderRoutesListSections(&out, sections)
+
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.NotContains(t, rendered, "Local")
+	assert.NotContains(t, rendered, "failed to initialize local control plane")
+	assert.Contains(t, rendered, "Remote: igor")
+	assert.Contains(t, rendered, "No routes configured")
+}
+
+func TestRenderRoutesStatusSections_HidesLocalErrorWhenRemoteIsUsable(t *testing.T) {
+	sections := []routeStatusSection{
+		{Kind: "local", Name: "local", Error: "failed to initialize local control plane"},
+		{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz"},
+	}
+
+	var out bytes.Buffer
+	err := renderRoutesStatusSections(&out, sections)
+
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.NotContains(t, rendered, "Local")
+	assert.NotContains(t, rendered, "failed to initialize local control plane")
+	assert.Contains(t, rendered, "Remote: igor")
+	assert.Contains(t, rendered, "No routes configured")
+}
+
+func TestRenderRoutesStatusSections_KeepsLocalErrorWhenAllRemotesFail(t *testing.T) {
+	sections := []routeStatusSection{
+		{Kind: "local", Name: "local", Error: "failed to initialize local control plane"},
+		{Kind: "remote", Name: "igor", URL: "https://gordon.supri.xyz", Error: "dial tcp timeout"},
+	}
+
+	var out bytes.Buffer
+	err := renderRoutesStatusSections(&out, sections)
+
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.Contains(t, rendered, "Local")
+	assert.Contains(t, rendered, "failed to initialize local control plane")
+	assert.Contains(t, rendered, "Remote: igor")
+	assert.Contains(t, rendered, "dial tcp timeout")
 }
 
 func TestBuildRouteStatusTree_DeterministicAcrossInputOrder(t *testing.T) {

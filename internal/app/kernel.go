@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/bnema/zerowrap"
 
@@ -29,13 +30,24 @@ type Kernel struct {
 
 // NewKernel initializes local services without starting server listeners.
 func NewKernel(configPath string) (*Kernel, error) {
+	return newKernel(configPath, initLogger)
+}
+
+// NewKernelQuiet initializes local services without emitting console logs.
+func NewKernelQuiet(configPath string) (*Kernel, error) {
+	return newKernel(configPath, quietInitLogger)
+}
+
+type kernelLoggerInit func(cfg Config) (zerowrap.Logger, func(), error)
+
+func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 	ctx := context.Background()
 	v, cfg, err := initConfig(configPath)
 	if err != nil {
 		return nil, err
 	}
 
-	log, cleanup, err := initLogger(cfg)
+	log, cleanup, err := initLog(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +96,10 @@ func NewKernel(configPath string) (*Kernel, error) {
 		secretSvc:   secretSvc,
 		cleanup:     cleanup,
 	}, nil
+}
+
+func quietInitLogger(Config) (zerowrap.Logger, func(), error) {
+	return zerowrap.New(zerowrap.Config{Level: "disabled", Output: io.Discard}), func() {}, nil
 }
 
 func (k *Kernel) Close() error {

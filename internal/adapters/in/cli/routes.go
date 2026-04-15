@@ -500,6 +500,8 @@ func normalizeRouteStatusRemoteSection(section routeStatusSection, name string, 
 }
 
 func renderRoutesListSections(out io.Writer, sections []routeListSection) error {
+	sections = renderedRouteListSections(sections)
+
 	if err := cliWriteLine(out, cliRenderTitle("Routes")); err != nil {
 		return err
 	}
@@ -558,6 +560,8 @@ func renderRoutesListSection(out io.Writer, section routeListSection) error {
 }
 
 func renderRoutesStatusSections(out io.Writer, sections []routeStatusSection) error {
+	sections = renderedRouteStatusSections(sections)
+
 	if err := cliWriteLine(out, cliRenderTitle("Route Status")); err != nil {
 		return err
 	}
@@ -577,6 +581,52 @@ func renderRoutesStatusSections(out io.Writer, sections []routeStatusSection) er
 	}
 
 	return nil
+}
+
+func renderedRouteListSections(sections []routeListSection) []routeListSection {
+	if !shouldHideLocalRouteListSection(sections) {
+		return sections
+	}
+	return sections[1:]
+}
+
+func shouldHideLocalRouteListSection(sections []routeListSection) bool {
+	if len(sections) < 2 {
+		return false
+	}
+	local := sections[0]
+	if local.Kind != "local" || local.Error == "" {
+		return false
+	}
+	for _, section := range sections[1:] {
+		if section.Kind == "remote" && section.Error == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func renderedRouteStatusSections(sections []routeStatusSection) []routeStatusSection {
+	if !shouldHideLocalRouteStatusSection(sections) {
+		return sections
+	}
+	return sections[1:]
+}
+
+func shouldHideLocalRouteStatusSection(sections []routeStatusSection) bool {
+	if len(sections) < 2 {
+		return false
+	}
+	local := sections[0]
+	if local.Kind != "local" || local.Error == "" {
+		return false
+	}
+	for _, section := range sections[1:] {
+		if section.Kind == "remote" && section.Error == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func renderRoutesStatusSection(out io.Writer, section routeStatusSection) error {
