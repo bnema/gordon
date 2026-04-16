@@ -28,7 +28,11 @@ func resolveControlPlane(configPath string) (*controlPlaneHandle, error) {
 		return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}, nil
 	}
 
-	kernel, err := app.NewKernel(configPath)
+	return resolveLocalControlPlane(configPath)
+}
+
+func resolveLocalControlPlane(configPath string) (*controlPlaneHandle, error) {
+	kernel, err := app.NewKernelQuiet(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize local control plane: %w", err)
 	}
