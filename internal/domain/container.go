@@ -26,6 +26,13 @@ type NetworkInfo struct {
 	Labels     map[string]string
 }
 
+// NetworkConfig holds options for creating a container network.
+type NetworkConfig struct {
+	Driver   string
+	Internal bool
+	Labels   map[string]string
+}
+
 // Attachment represents an attached service container.
 type Attachment struct {
 	Name        string
@@ -64,6 +71,10 @@ type ContainerConfig struct {
 	MemoryLimit     int64             // Memory limit in bytes (0 = no limit)
 	NanoCPUs        int64             // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
 	PidsLimit       int64             // Max number of PIDs (0 = no limit)
+	ReadOnlyRootFS  bool              // Mount container root filesystem read-only
+	User            string            // User to run as
+	CapDrop         []string          // Linux capabilities to drop; nil uses runtime compat defaults
+	CapAdd          []string          // Linux capabilities to add; nil uses runtime compat defaults
 }
 
 // ContainerStatus represents the current state of a container.

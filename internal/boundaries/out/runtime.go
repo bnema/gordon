@@ -70,7 +70,7 @@ type ContainerRuntime interface {
 	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error)
 
 	// Network management
-	CreateNetwork(ctx context.Context, name string, options map[string]string) error
+	CreateNetwork(ctx context.Context, name string, config domain.NetworkConfig) error
 	RemoveNetwork(ctx context.Context, name string) error
 	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
 	NetworkExists(ctx context.Context, name string) (bool, error)

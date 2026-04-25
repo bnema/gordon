@@ -25,6 +25,13 @@ type NetworkInfo struct {
 	Labels     map[string]string
 }
 
+// NetworkConfig holds options for creating a network.
+type NetworkConfig struct {
+	Driver   string
+	Internal bool
+	Labels   map[string]string
+}
+
 // ContainerConfig holds configuration for creating a container
 type ContainerConfig struct {
 	Image       string
@@ -110,7 +117,7 @@ type Runtime interface {
 	InspectImageEnv(ctx context.Context, imageRef string) ([]string, error)
 
 	// Network management
-	CreateNetwork(ctx context.Context, name string, options map[string]string) error
+	CreateNetwork(ctx context.Context, name string, config NetworkConfig) error
 	RemoveNetwork(ctx context.Context, name string) error
 	ListNetworks(ctx context.Context) ([]*NetworkInfo, error)
 	NetworkExists(ctx context.Context, name string) (bool, error)

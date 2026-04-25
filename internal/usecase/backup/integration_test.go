@@ -47,7 +47,7 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 	require.NoError(t, runtime.PullImage(pullCtx, image))
 	netCtx, cancelNet := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancelNet()
-	require.NoError(t, runtime.CreateNetwork(netCtx, networkName, map[string]string{"driver": "bridge"}))
+	require.NoError(t, runtime.CreateNetwork(netCtx, networkName, domain.NetworkConfig{Driver: "bridge"}))
 	t.Cleanup(func() {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancelCleanup()
@@ -237,6 +237,9 @@ func (s *integrationContainerService) HealthCheck(context.Context) map[string]bo
 
 func (s *integrationContainerService) SyncContainers(context.Context) error {
 	return nil
+}
+
+func (s *integrationContainerService) UpdateAttachments(map[string][]string) {
 }
 
 func (s *integrationContainerService) AutoStart(context.Context, []domain.Route) error {

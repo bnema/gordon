@@ -172,7 +172,9 @@ type Config struct {
 	} `mapstructure:"backups"`
 
 	Images struct {
-		Prune struct {
+		AllowedRegistries []string `mapstructure:"allowed_registries"`
+		RequireDigest     bool     `mapstructure:"require_digest"`
+		Prune             struct {
 			Enabled  bool   `mapstructure:"enabled"`
 			Schedule string `mapstructure:"schedule"`
 			KeepLast int    `mapstructure:"keep_last"`
@@ -180,9 +182,10 @@ type Config struct {
 	} `mapstructure:"images"`
 
 	Containers struct {
-		MemoryLimit string  `mapstructure:"memory_limit"` // e.g., "512MB", "1GB"
-		CPULimit    float64 `mapstructure:"cpu_limit"`    // CPU cores, e.g., 1.0 = 1 core
-		PidsLimit   int64   `mapstructure:"pids_limit"`   // e.g., 512
+		MemoryLimit     string  `mapstructure:"memory_limit"`     // e.g., "512MB", "1GB"
+		CPULimit        float64 `mapstructure:"cpu_limit"`        // CPU cores, e.g., 1.0 = 1 core
+		PidsLimit       int64   `mapstructure:"pids_limit"`       // e.g., 512
+		SecurityProfile string  `mapstructure:"security_profile"` // compat or strict
 	} `mapstructure:"containers"`
 
 	Telemetry telemetry.Config `mapstructure:"telemetry"`
@@ -1612,7 +1615,11 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		NetworkIsolation:           v.GetBool("network_isolation.enabled"),
 		NetworkPrefix:              v.GetString("network_isolation.network_prefix"),
 		NetworkGroups:              attachmentConfig.NetworkGroups,
+		NetworkInternal:            v.GetBool("network_isolation.internal"),
 		Attachments:                attachmentConfig.Attachments,
+		AllowedRegistries:          cfg.Images.AllowedRegistries,
+		RequireImageDigest:         cfg.Images.RequireDigest,
+		SecurityProfile:            cfg.Containers.SecurityProfile,
 		ReadinessDelay:             v.GetDuration("deploy.readiness_delay"),
 		ReadinessMode:              v.GetString("deploy.readiness_mode"),
 		HealthTimeout:              v.GetDuration("deploy.health_timeout"),
@@ -2959,6 +2966,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("auto_route.enabled", false)
 	v.SetDefault("network_isolation.enabled", true)
 	v.SetDefault("network_isolation.network_prefix", "gordon")
+	v.SetDefault("network_isolation.internal", false)
 	v.SetDefault("volumes.auto_create", true)
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
@@ -2970,9 +2978,12 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("backups.retention.daily", 0)
 	v.SetDefault("backups.retention.weekly", 0)
 	v.SetDefault("backups.retention.monthly", 0)
+	v.SetDefault("images.allowed_registries", []string{})
+	v.SetDefault("images.require_digest", false)
 	v.SetDefault("images.prune.enabled", false)
 	v.SetDefault("images.prune.schedule", string(domain.ScheduleDaily))
 	v.SetDefault("images.prune.keep_last", domain.DefaultImagePruneKeepLast)
+	v.SetDefault("containers.security_profile", "compat")
 	v.SetDefault("telemetry.enabled", false)
 	v.SetDefault("telemetry.endpoint", "")
 	v.SetDefault("telemetry.auth_token", "")

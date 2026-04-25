@@ -94,6 +94,12 @@ drain_timeout = "30s"                        # Max wait for in-flight request dr
 drain_delay = "2s"                           # Wait after cache invalidation before old stop
 
 # =============================================================================
+# CONTAINERS
+# =============================================================================
+[containers]
+security_profile = "compat"                  # "compat" or "strict"
+
+# =============================================================================
 # AUTO-ROUTE
 # =============================================================================
 [auto_route]
@@ -105,6 +111,7 @@ enabled = false                              # Create routes from image labels a
 [network_isolation]
 enabled = true                               # Enable per-app Docker networks
 network_prefix = "gordon"                    # Prefix for created networks
+internal = false                             # Create Docker internal networks (blocks direct egress)
 
 # =============================================================================
 # VOLUMES
@@ -157,6 +164,10 @@ monthly = 0                                  # Keep N monthly backups per DB
 # =============================================================================
 # IMAGES
 # =============================================================================
+[images]
+allowed_registries = []
+require_digest = false
+
 [images.prune]
 enabled = false                              # Enable scheduled image cleanup
 schedule = "daily"                          # "hourly", "daily", "weekly", "monthly"
@@ -215,9 +226,11 @@ keep_last = 3                                # Keep N newest tags per repository
 | `deploy.drain_mode` | `"auto"` | Drain strategy (`auto`, `inflight`, `delay`) |
 | `deploy.drain_timeout` | `"30s"` | Max wait for in-flight request drain before old stop |
 | `deploy.drain_delay` | `"2s"` | Delay before stopping previous container after cache invalidation |
+| `containers.security_profile` | `"compat"` | Runtime hardening profile: `compat` preserves existing behavior, `strict` enables read-only rootfs and narrower capabilities |
 | `auto_route.enabled` | `false` | Auto-route disabled |
 | `network_isolation.enabled` | `true` | Network isolation enabled |
 | `network_isolation.network_prefix` | `"gordon"` | Network prefix |
+| `network_isolation.internal` | `false` | Create Docker internal networks without direct external egress |
 | `volumes.auto_create` | `true` | Auto-create volumes |
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
@@ -228,6 +241,8 @@ keep_last = 3                                # Keep N newest tags per repository
 | `backups.retention.daily` | `0` | Keep no daily backups by default (recommend `7`) |
 | `backups.retention.weekly` | `0` | Keep no weekly backups by default |
 | `backups.retention.monthly` | `0` | Keep no monthly backups by default |
+| `images.allowed_registries` | `[]` | Explicit external registry allowlist; empty rejects explicit external registries; dangerous local/private registries are always rejected |
+| `images.require_digest` | `false` | Require digest-pinned references for allowlisted external registries |
 | `images.prune.enabled` | `false` | Scheduled image cleanup disabled |
 | `images.prune.schedule` | `"daily"` | Cleanup schedule preset |
 | `images.prune.keep_last` | `3` | Number of recent tags kept per repository |

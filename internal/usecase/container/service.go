@@ -5,10 +5,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,7 +45,11 @@ type Config struct {
 	NetworkIsolation           bool
 	NetworkPrefix              string
 	NetworkGroups              map[string][]string
+	NetworkInternal            bool
 	Attachments                map[string][]string
+	AllowedRegistries          []string
+	RequireImageDigest         bool
+	SecurityProfile            string
 	ReadinessDelay             time.Duration // Delay after container starts before considering it ready
 	ReadinessMode              string        // Readiness strategy: auto, docker-health, delay
 	HealthTimeout              time.Duration // Max wait for health-based readiness
@@ -268,7 +274,7 @@ func (s *Service) buildContainerConfig(in containerConfigInput) *domain.Containe
 		}
 	}
 
-	return &domain.ContainerConfig{
+	containerConfig := &domain.ContainerConfig{
 		Image:       in.ImageRef,
 		Name:        containerName,
 		Ports:       ports,
@@ -282,6 +288,8 @@ func (s *Service) buildContainerConfig(in containerConfigInput) *domain.Containe
 		NanoCPUs:    cfg.DefaultNanoCPUs,
 		PidsLimit:   cfg.DefaultPidsLimit,
 	}
+	applySecurityProfile(containerConfig, cfg)
+	return containerConfig
 }
 
 // Deploy creates and starts a container for the given route.
@@ -561,7 +569,10 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 		log.WrapErr(err, "failed to cleanup orphaned containers")
 	}
 
-	imageRef := s.buildImageRef(route.Image)
+	imageRef, err := s.buildValidatedImageRef(route.Image)
+	if err != nil {
+		return nil, err
+	}
 	actualImageRef, err := s.ensureImage(ctx, imageRef)
 	if err != nil {
 		return nil, err
@@ -1668,6 +1679,14 @@ func (s *Service) startLogCollection(ctx context.Context, containerID, domainNam
 	}
 }
 
+func (s *Service) buildValidatedImageRef(image string) (string, error) {
+	imageRef := s.buildImageRef(image)
+	if err := s.validateImageRef(imageRef); err != nil {
+		return "", err
+	}
+	return imageRef, nil
+}
+
 func (s *Service) buildImageRef(image string) string {
 	s.mu.RLock()
 	cfg := s.config
@@ -1743,6 +1762,108 @@ func hasExplicitRegistry(image string) bool {
 	return false
 }
 
+func (s *Service) validateImageRef(imageRef string) error {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	if !hasExplicitRegistry(imageRef) {
+		if cfg.RequireImageDigest && !isValidSha256DigestRef(imageRef) {
+			return fmt.Errorf("image %q rejected: digest reference required", imageRef)
+		}
+		return nil
+	}
+
+	registry := imageRegistry(imageRef)
+	if registry == "" {
+		return nil
+	}
+
+	if sameRegistry(registry, cfg.RegistryDomain) {
+		return nil
+	}
+	if isDangerousRegistryHost(imageRegistryHost(registry)) {
+		return fmt.Errorf("image %q rejected: registry %q is not allowed", imageRef, registry)
+	}
+	if len(cfg.AllowedRegistries) == 0 {
+		return fmt.Errorf("image %q rejected: registry %q is not in images.allowed_registries", imageRef, registry)
+	}
+	for _, allowed := range cfg.AllowedRegistries {
+		if sameRegistry(registry, allowed) {
+			if cfg.RequireImageDigest && !isValidSha256DigestRef(imageRef) {
+				return fmt.Errorf("image %q rejected: digest reference required", imageRef)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("image %q rejected: registry %q is not in images.allowed_registries", imageRef, registry)
+}
+
+func imageRegistry(imageRef string) string {
+	slashIdx := strings.Index(imageRef, "/")
+	if slashIdx == -1 {
+		return ""
+	}
+	return normalizeRegistry(imageRef[:slashIdx])
+}
+
+func normalizeRegistry(registry string) string {
+	registry = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(registry), "."))
+	if strings.HasPrefix(registry, "[") {
+		if end := strings.Index(registry, "]"); end != -1 {
+			host := strings.Trim(registry[:end+1], "[]")
+			port := registry[end+1:]
+			return host + port
+		}
+	}
+	return registry
+}
+
+func imageRegistryHost(registry string) string {
+	if ip := net.ParseIP(registry); ip != nil {
+		return registry
+	}
+	if h, _, err := net.SplitHostPort(registry); err == nil {
+		return strings.Trim(h, "[]")
+	}
+	if strings.HasPrefix(registry, "[") && strings.Contains(registry, "]") {
+		return strings.TrimPrefix(strings.Split(registry, "]")[0], "[")
+	}
+	if colon := strings.LastIndex(registry, ":"); colon != -1 && isNumeric(registry[colon+1:]) {
+		return registry[:colon]
+	}
+	return registry
+}
+
+func sameRegistry(a, b string) bool {
+	return normalizeRegistry(a) == normalizeRegistry(b)
+}
+
+func isDangerousRegistryHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "localhost" || host == "metadata.google.internal" {
+		return true
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return true
+		}
+	}
+	return false
+}
+
+func applySecurityProfile(config *domain.ContainerConfig, cfg Config) {
+	if strings.EqualFold(cfg.SecurityProfile, "strict") {
+		config.ReadOnlyRootFS = true
+		config.CapDrop = []string{"ALL"}
+		config.CapAdd = []string{"NET_BIND_SERVICE"}
+	}
+}
+
 // isNumeric checks if a string contains only digits.
 func isNumeric(s string) bool {
 	for _, c := range s {
@@ -1767,7 +1888,16 @@ func normalizePullPolicy(policy string) string {
 }
 
 func isDigestRef(imageRef string) bool {
-	return strings.Contains(imageRef, "@sha256:")
+	return isValidSha256DigestRef(imageRef)
+}
+
+func isValidSha256DigestRef(imageRef string) bool {
+	_, digest, ok := strings.Cut(imageRef, "@sha256:")
+	if !ok || len(digest) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(digest)
+	return err == nil
 }
 
 func (s *Service) pullRefForDeploy(ctx context.Context, imageRef string) (string, bool) {
@@ -2101,7 +2231,10 @@ func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string)
 	}
 
 	if !exists {
-		if err := s.runtime.CreateNetwork(ctx, networkName, map[string]string{"driver": "bridge"}); err != nil {
+		s.mu.RLock()
+		internal := s.config.NetworkInternal
+		s.mu.RUnlock()
+		if err := s.runtime.CreateNetwork(ctx, networkName, domain.NetworkConfig{Driver: "bridge", Internal: internal}); err != nil {
 			return log.WrapErr(err, "failed to create network")
 		}
 		log.Info().Msg("created network for app isolation")
@@ -2415,32 +2548,18 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	log.Info().Str(zerowrap.FieldService, serviceImage).Msg("deploying attached service")
 
 	// Ensure image (canonical ref is returned; internal pulls may use the local registry).
-	imageRef := s.buildImageRef(serviceImage)
+	imageRef, err := s.buildValidatedImageRef(serviceImage)
+	if err != nil {
+		return err
+	}
 	actualImageRef, err := s.ensureImage(ctx, imageRef)
 	if err != nil {
 		return err
 	}
 
-	// Get image metadata
-	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, actualImageRef)
-	if err != nil {
-		log.WrapErr(err, "failed to get exposed ports for attachment, using defaults")
-		exposedPorts = []int{}
-	}
-
-	// Setup volumes (attachments need persistent data)
-	volumes, err := s.setupVolumes(ctx, containerName, actualImageRef)
-	if err != nil {
-		log.WrapErr(err, "failed to setup volumes for attachment")
-		volumes = make(map[string]string)
-	}
-
-	// Load environment (attachment-specific env file)
-	envVars, err := s.loadEnvironment(ctx, nil, containerName, actualImageRef)
-	if err != nil {
-		log.WrapErr(err, "failed to load environment for attachment")
-		envVars = []string{}
-	}
+	exposedPorts := s.attachmentExposedPorts(ctx, actualImageRef)
+	volumes := s.attachmentVolumes(ctx, containerName, actualImageRef)
+	envVars := s.attachmentEnv(ctx, containerName, actualImageRef)
 	envHash := hashEnvironment(envVars)
 
 	s.mu.RLock()
@@ -2468,6 +2587,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 		NanoCPUs:    cfg.DefaultNanoCPUs,
 		PidsLimit:   cfg.DefaultPidsLimit,
 	}
+	applySecurityProfile(config, cfg)
 
 	container, err := s.runtime.CreateContainer(ctx, config)
 	if err != nil {
@@ -2502,8 +2622,42 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	return nil
 }
 
+func (s *Service) attachmentExposedPorts(ctx context.Context, imageRef string) []int {
+	log := zerowrap.FromCtx(ctx)
+	exposedPorts, err := s.runtime.GetImageExposedPorts(ctx, imageRef)
+	if err != nil {
+		log.WrapErr(err, "failed to get exposed ports for attachment, using defaults")
+		return []int{}
+	}
+	return exposedPorts
+}
+
+func (s *Service) attachmentVolumes(ctx context.Context, containerName, imageRef string) map[string]string {
+	log := zerowrap.FromCtx(ctx)
+	volumes, err := s.setupVolumes(ctx, containerName, imageRef)
+	if err != nil {
+		log.WrapErr(err, "failed to setup volumes for attachment")
+		return make(map[string]string)
+	}
+	return volumes
+}
+
+func (s *Service) attachmentEnv(ctx context.Context, containerName, imageRef string) []string {
+	log := zerowrap.FromCtx(ctx)
+	envVars, err := s.loadEnvironment(ctx, nil, containerName, imageRef)
+	if err != nil {
+		log.WrapErr(err, "failed to load environment for attachment")
+		return []string{}
+	}
+	return envVars
+}
+
 func (s *Service) attachmentEnvDrifted(ctx context.Context, existing *domain.Container, containerName, serviceImage string) (bool, error) {
-	currentEnv, err := s.loadEnvironment(ctx, nil, containerName, s.buildImageRef(serviceImage))
+	imageRef, err := s.buildValidatedImageRef(serviceImage)
+	if err != nil {
+		return false, err
+	}
+	currentEnv, err := s.loadEnvironment(ctx, nil, containerName, imageRef)
 	if err != nil {
 		return false, err
 	}

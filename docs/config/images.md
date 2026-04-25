@@ -16,6 +16,10 @@ The CLI `gordon images prune` uses the same defaults as the scheduled job (keep 
 ## Configuration
 
 ```toml
+[images]
+allowed_registries = []
+require_digest = false
+
 [images.prune]
 enabled = false
 schedule = "daily"
@@ -26,6 +30,8 @@ keep_last = 3
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `images.allowed_registries` | array | `[]` | Allowlist for explicit external image registries. Empty means no explicit external registries are accepted. Gordon always allows its configured registry and rejects localhost/private/link-local registries. Include ports when needed, e.g. `"registry.example.com:5000"`. |
+| `images.require_digest` | bool | `false` | Require allowlisted external image references to use a valid `@sha256:<64 hex chars>` digest. Gordon registry images are exempt. |
 | `images.prune.enabled` | bool | `false` | Enables scheduled image cleanup |
 | `images.prune.schedule` | string | `"daily"` | Schedule preset: `hourly`, `daily`, `weekly`, `monthly` |
 | `images.prune.keep_last` | int | `3` | Number of newest non-`latest` tags kept per repository during registry cleanup (`latest` is always kept when present) |

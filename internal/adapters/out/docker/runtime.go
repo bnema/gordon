@@ -161,6 +161,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		WorkingDir:   config.WorkingDir,
 		Cmd:          config.Cmd,
 		Labels:       config.Labels,
+		User:         config.User,
 	}
 
 	resources := container.Resources{
@@ -173,20 +174,24 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	if config.PidsLimit > 0 {
 		resources.PidsLimit = &config.PidsLimit
 	}
+	capDrop := strslice.StrSlice{"ALL"}
+	capAdd := strslice.StrSlice{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+	if config.CapDrop != nil {
+		capDrop = strslice.StrSlice(config.CapDrop)
+	}
+	if config.CapAdd != nil {
+		capAdd = strslice.StrSlice(config.CapAdd)
+	}
 	hostConfig := &container.HostConfig{
-		PortBindings: portBindings,
-		AutoRemove:   config.AutoRemove,
-		Binds:        binds,
-		NetworkMode:  container.NetworkMode(config.NetworkMode),
-		Resources:    resources,
-		SecurityOpt:  []string{"no-new-privileges:true"},
-		CapDrop:      strslice.StrSlice{"ALL"},
-		// Re-add the minimal set of capabilities that standard images need.
-		// CHOWN/FOWNER/DAC_OVERRIDE: postgres, mysql etc. chown/chmod data dirs
-		// owned by their service user during entrypoint init.
-		// SETUID/SETGID: gosu/su-exec to drop privileges after init.
-		// NET_BIND_SERVICE: nginx etc. binding to ports < 1024.
-		CapAdd: strslice.StrSlice{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"},
+		PortBindings:   portBindings,
+		AutoRemove:     config.AutoRemove,
+		Binds:          binds,
+		NetworkMode:    container.NetworkMode(config.NetworkMode),
+		Resources:      resources,
+		SecurityOpt:    []string{"no-new-privileges:true"},
+		CapDrop:        capDrop,
+		CapAdd:         capAdd,
+		ReadonlyRootfs: config.ReadOnlyRootFS,
 	}
 
 	// Create network configuration for container
@@ -1251,7 +1256,7 @@ func (r *Runtime) GetImageID(ctx context.Context, imageRef string) (string, erro
 }
 
 // CreateNetwork creates a new Docker network.
-func (r *Runtime) CreateNetwork(ctx context.Context, name string, options map[string]string) error {
+func (r *Runtime) CreateNetwork(ctx context.Context, name string, config domain.NetworkConfig) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "adapter",
 		zerowrap.FieldAdapter: "docker",
@@ -1260,24 +1265,19 @@ func (r *Runtime) CreateNetwork(ctx context.Context, name string, options map[st
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Set default driver to bridge if not specified
-	driver := "bridge"
-	if driverOption, exists := options["driver"]; exists {
-		driver = driverOption
+	driver := config.Driver
+	if driver == "" {
+		driver = "bridge"
+	}
+	labels := map[string]string{domain.LabelManaged: "true"}
+	for key, value := range config.Labels {
+		labels[key] = value
 	}
 
 	createOptions := network.CreateOptions{
-		Driver: driver,
-		Labels: map[string]string{
-			domain.LabelManaged: "true",
-		},
-	}
-
-	// Add any additional options to labels
-	for key, value := range options {
-		if key != "driver" {
-			createOptions.Labels["gordon."+key] = value
-		}
+		Driver:   driver,
+		Internal: config.Internal,
+		Labels:   labels,
 	}
 
 	_, err := r.client.NetworkCreate(ctx, name, createOptions)

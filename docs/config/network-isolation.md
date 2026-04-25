@@ -8,6 +8,7 @@ Isolate applications in separate Docker networks for enhanced security.
 [network_isolation]
 enabled = true
 network_prefix = "gordon"
+internal = false
 ```
 
 ## Migration Note
@@ -26,6 +27,7 @@ enabled = false
 |--------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable per-app network isolation (changed from `false`) |
 | `network_prefix` | string | `"gordon"` | Prefix for created networks |
+| `internal` | bool | `false` | Create isolated Docker networks with Docker's `Internal` flag, blocking direct external egress from containers on those networks. Default remains `false` for compatibility. |
 
 ## How It Works
 

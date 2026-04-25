@@ -989,7 +989,7 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 
 	// Network isolation - should check and create network
 	runtime.EXPECT().NetworkExists(mock.Anything, "gordon-test-example-com").Return(false, nil)
-	runtime.EXPECT().CreateNetwork(mock.Anything, "gordon-test-example-com", map[string]string{"driver": "bridge"}).Return(nil)
+	runtime.EXPECT().CreateNetwork(mock.Anything, "gordon-test-example-com", domain.NetworkConfig{Driver: "bridge"}).Return(nil)
 
 	container := &domain.Container{ID: "container-123", Status: "created"}
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
@@ -4167,4 +4167,110 @@ func TestDeployAttachedService_SetsAliasOnContainerConfig(t *testing.T) {
 	svc.mu.RUnlock()
 	require.Len(t, attachIDs, 1)
 	assert.Equal(t, "pg-container-1", attachIDs[0])
+}
+
+func TestService_BuildValidatedImageRef_RegistryPolicy(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{
+		RegistryAuthEnabled: true,
+		RegistryDomain:      "registry.example.com",
+		AllowedRegistries:   []string{"docker.io"},
+	}, nil)
+
+	ref, err := svc.buildValidatedImageRef("myapp:latest")
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example.com/myapp:latest", ref)
+
+	ref, err = svc.buildValidatedImageRef("registry.example.com/myapp:latest")
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example.com/myapp:latest", ref)
+
+	ref, err = svc.buildValidatedImageRef("docker.io/library/nginx:latest")
+	require.NoError(t, err)
+	assert.Equal(t, "docker.io/library/nginx:latest", ref)
+
+	for _, image := range []string{
+		"ghcr.io/acme/app:latest",
+		"localhost:5000/app:latest",
+		"127.0.0.1:5000/app:latest",
+		"10.0.0.2:5000/app:latest",
+		"169.254.169.254/app:latest",
+	} {
+		t.Run(image, func(t *testing.T) {
+			_, err := svc.buildValidatedImageRef(image)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestService_BuildValidatedImageRef_RejectsExternalRegistryWhenAllowlistEmpty(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{}, nil)
+
+	_, err := svc.buildValidatedImageRef("ghcr.io/acme/app:latest")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "images.allowed_registries")
+}
+
+func TestService_BuildValidatedImageRef_RequireDigestOnlyForExternalAllowedRegistries(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{
+		RegistryAuthEnabled: true,
+		RegistryDomain:      "registry.example.com",
+		RequireImageDigest:  true,
+		AllowedRegistries:   []string{"docker.io"},
+	}, nil)
+
+	_, err := svc.buildValidatedImageRef("docker.io/library/nginx:latest")
+	require.Error(t, err)
+
+	_, err = svc.buildValidatedImageRef("docker.io/library/nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	require.NoError(t, err)
+
+	_, err = svc.buildValidatedImageRef("docker.io/library/nginx@sha256:not-a-digest")
+	require.Error(t, err)
+
+	ref, err := svc.buildValidatedImageRef("myapp:latest")
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example.com/myapp:latest", ref)
+
+	_, err = svc.buildValidatedImageRef("registry.example.com/myapp:latest")
+	require.NoError(t, err)
+}
+
+func TestService_BuildValidatedImageRef_AllowedRegistryMatchesPort(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{AllowedRegistries: []string{"registry.example.com:5000"}}, nil)
+
+	_, err := svc.buildValidatedImageRef("registry.example.com:5000/app:latest")
+	require.NoError(t, err)
+
+	_, err = svc.buildValidatedImageRef("registry.example.com:5001/app:latest")
+	require.Error(t, err)
+}
+
+func TestService_CreateNetworkIfNeeded_UsesInternalOptionWhenConfigured(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{NetworkInternal: true}, nil)
+
+	runtime.EXPECT().NetworkExists(mock.Anything, "gordon-app").Return(false, nil)
+	runtime.EXPECT().CreateNetwork(mock.Anything, "gordon-app", domain.NetworkConfig{Driver: "bridge", Internal: true}).Return(nil)
+
+	require.NoError(t, svc.createNetworkIfNeeded(testContext(), "gordon-app"))
+}
+
+func TestService_BuildContainerConfig_StrictSecurityProfile(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{SecurityProfile: "strict"}, nil)
+
+	cfg := svc.buildContainerConfig(containerConfigInput{Domain: "app.example.com", Image: "app:latest", ImageRef: "app:latest"})
+
+	assert.True(t, cfg.ReadOnlyRootFS)
+	assert.Equal(t, []string{"ALL"}, cfg.CapDrop)
+	assert.Equal(t, []string{"NET_BIND_SERVICE"}, cfg.CapAdd)
+}
+
+func TestService_BuildContainerConfig_CompatSecurityProfileDefault(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{}, nil)
+
+	cfg := svc.buildContainerConfig(containerConfigInput{Domain: "app.example.com", Image: "app:latest", ImageRef: "app:latest"})
+
+	assert.False(t, cfg.ReadOnlyRootFS)
+	assert.Nil(t, cfg.CapDrop)
+	assert.Nil(t, cfg.CapAdd)
 }
