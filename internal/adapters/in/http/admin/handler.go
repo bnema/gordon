@@ -389,6 +389,10 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		addStep("route", "failed")
 		h.sendError(w, http.StatusBadRequest, err.Error())
 		return
+	case errors.Is(err, domain.ErrRouteConflict):
+		addStep("route", "failed")
+		h.sendError(w, http.StatusConflict, err.Error())
+		return
 	default:
 		addStep("route", "failed")
 		log.Error().Err(err).Str("domain", req.Domain).Str("image", req.Image).Msg("failed to bootstrap route")
@@ -594,6 +598,8 @@ func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
 			h.sendError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, domain.ErrRouteConflict):
+			h.sendError(w, http.StatusConflict, err.Error())
 		default:
 			h.sendError(w, http.StatusInternalServerError, "failed to add route")
 		}

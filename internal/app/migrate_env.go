@@ -167,18 +167,16 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 	if err := passStore.SetAttachment(containerName, secrets); err != nil {
 		return fmt.Errorf("failed to migrate attachment secrets for %s: %w", containerName, err)
 	}
-	log.Info().
-		Int(zerowrap.FieldCount, len(secrets)).
-		Str("container", containerName).
-		Msg("migrated secrets for attachment container from plain text to pass")
 
 	if err := os.Remove(filePath); err != nil {
 		return fmt.Errorf("failed to remove migrated attachment env file %s: %w", filePath, err)
 	}
 
 	log.Info().
+		Int(zerowrap.FieldCount, len(secrets)).
+		Str("container", containerName).
 		Str("file", filePath).
-		Msg("removed original attachment env file after migration to pass")
+		Msg("migrated attachment secrets to pass and removed original env file")
 
 	return nil
 }

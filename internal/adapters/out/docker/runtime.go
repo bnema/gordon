@@ -1269,10 +1269,11 @@ func (r *Runtime) CreateNetwork(ctx context.Context, name string, config domain.
 	if driver == "" {
 		driver = "bridge"
 	}
-	labels := map[string]string{domain.LabelManaged: "true"}
+	labels := make(map[string]string, len(config.Labels)+1)
 	for key, value := range config.Labels {
 		labels[key] = value
 	}
+	labels[domain.LabelManaged] = "true"
 
 	createOptions := network.CreateOptions{
 		Driver:   driver,

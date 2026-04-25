@@ -83,7 +83,8 @@ runs:
         curl -fsSL -o "${dest}" "${url}"
 
         # Verify checksum before extraction
-        checksum_lines="$(grep -E "^[0-9a-fA-F]{64}[[:space:]]+\\*?${archive}$" "${checksums}" || true)"
+        archive_escaped="$(printf '%s\n' "${archive}" | sed 's/[.[\\*^$()+?{|]/\\\\&/g')"
+        checksum_lines="$(grep -E "^[0-9a-fA-F]{64}[[:space:]]+\\*?${archive_escaped}$" "${checksums}" || true)"
         if [ "$(printf '%s\n' "${checksum_lines}" | sed '/^$/d' | wc -l | tr -d ' ')" != "1" ]; then
           echo "Expected exactly one checksum for ${archive} in checksums.txt" >&2
           exit 1

@@ -52,6 +52,7 @@ var (
 	ErrInvalidConfig        = errors.New("invalid configuration")
 	ErrConfigLoadFailed     = errors.New("failed to load configuration")
 	ErrInvalidDomainPattern = errors.New("invalid domain pattern")
+	ErrRouteConflict        = errors.New("route conflicts with existing configuration")
 
 	// Environment errors
 	ErrEnvFileNotFound      = errors.New("environment file not found")

@@ -224,6 +224,9 @@ type services struct {
 	caAdapter         *pkiadapter.CA
 	pkiSvc            *pkiusecase.Service
 	reloadCoordinator *reloadCoordinator
+	registryHandler   interface {
+		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
+	}
 }
 
 // Run initializes and starts the Gordon application.
@@ -466,7 +469,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, si.svc.eventBus, log)
+	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, nil, si.svc.eventBus, log)
 
 	si.initHandlers()
 
@@ -1369,11 +1372,18 @@ func readFileBeneath(root, cleanedRelPath string) ([]byte, error) {
 		}
 		last := i == len(parts)-1
 		if last {
-			fd, err := unix.Openat(dirFD, part, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+			fd, err := unix.Openat(dirFD, part, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read secret file: %w", err)
 			}
 			defer unix.Close(fd)
+			var st unix.Stat_t
+			if err := unix.Fstat(fd, &st); err != nil {
+				return nil, fmt.Errorf("failed to stat secret file: %w", err)
+			}
+			if st.Mode&unix.S_IFMT != unix.S_IFREG {
+				return nil, fmt.Errorf("invalid secret path: secret must be a regular file")
+			}
 			return os.ReadFile(fmt.Sprintf("/proc/self/fd/%d", fd))
 		}
 
@@ -1437,22 +1447,36 @@ type reloadCoordinator struct {
 	lastRun  time.Time
 	debounce time.Duration
 
-	configSvc configReloader
-	v         *viper.Viper
-	proxySvc  proxyConfigUpdater
-	eventBus  out.EventPublisher
-	log       zerowrap.Logger
+	configSvc      configReloader
+	v              *viper.Viper
+	proxySvc       proxyConfigUpdater
+	registryLimits interface {
+		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
+	}
+	eventBus out.EventPublisher
+	log      zerowrap.Logger
 }
 
-func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc proxyConfigUpdater, eventBus out.EventPublisher, log zerowrap.Logger) *reloadCoordinator {
+func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc proxyConfigUpdater, registryLimits interface {
+	UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
+}, eventBus out.EventPublisher, log zerowrap.Logger) *reloadCoordinator {
 	return &reloadCoordinator{
-		debounce:  500 * time.Millisecond,
-		configSvc: configSvc,
-		v:         v,
-		proxySvc:  proxySvc,
-		eventBus:  eventBus,
-		log:       log,
+		debounce:       500 * time.Millisecond,
+		configSvc:      configSvc,
+		v:              v,
+		proxySvc:       proxySvc,
+		registryLimits: registryLimits,
+		eventBus:       eventBus,
+		log:            log,
 	}
+}
+
+func (c *reloadCoordinator) SetRegistryLimits(limits interface {
+	UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
+}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.registryLimits = limits
 }
 
 func (c *reloadCoordinator) Trigger(ctx context.Context) error {
@@ -1504,6 +1528,9 @@ func (c *reloadCoordinator) applyLoadedConfig(now time.Time) error {
 	}
 
 	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
+	if c.registryLimits != nil {
+		c.registryLimits.UpdateBlobLimits(reloadedProxy.maxBlobChunkSize, reloadedProxy.maxBlobSize)
+	}
 
 	if c.eventBus != nil {
 		if err := c.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
@@ -1835,6 +1862,10 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 
 	// Registry handler
 	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize, svc.maxBlobSize)
+	svc.registryHandler = registryHandler
+	if svc.reloadCoordinator != nil {
+		svc.reloadCoordinator.SetRegistryLimits(registryHandler)
+	}
 	registryWithMiddleware, cidrAllowlistMiddleware, rateLimitMiddleware := buildRegistryHandlerWithMiddleware(
 		svc,
 		cfg,

@@ -11,6 +11,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
@@ -80,13 +81,16 @@ func TestHandler_NormalizesRequestHostForLookup(t *testing.T) {
 			proxySvc.EXPECT().GetTarget(mock.Anything, tt.wantHost).Return(nil, domain.ErrNoTargetAvailable)
 
 			handler := NewHandler(proxySvc, nil, testLogger())
-			req := httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+			req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+			require.NoError(t, err)
 			req.Host = tt.host
-			w := httptest.NewRecorder()
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
 
-			handler.ServeHTTP(w, req)
-
-			assert.Equal(t, http.StatusNotFound, w.Code)
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 		})
 	}
 }
@@ -96,14 +100,17 @@ func TestHandler_RejectsInvalidRequestHost(t *testing.T) {
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
 
 	handler := NewHandler(proxySvc, nil, testLogger())
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
 	for _, host := range []string{"app.example.com:bad", "app.example.com:0", "app.example.com:99999"} {
-		req := httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+		require.NoError(t, err)
 		req.Host = host
-		w := httptest.NewRecorder()
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
 
-		handler.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	}
 }
 

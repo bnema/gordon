@@ -1763,26 +1763,33 @@ func hasExplicitRegistry(image string) bool {
 }
 
 func (s *Service) validateImageRef(imageRef string) error {
+	if !hasExplicitRegistry(imageRef) {
+		return nil
+	}
+	return s.validateExternalImageRef(imageRef, imageRegistry(imageRef))
+}
+
+func (s *Service) validateImagePullRef(imageRef string) error {
+	return s.validateExternalImageRef(imageRef, imageRegistryForPolicy(imageRef))
+}
+
+func (s *Service) validateExternalImageRef(imageRef, registry string) error {
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
 
-	if !hasExplicitRegistry(imageRef) {
-		if cfg.RequireImageDigest && !isValidSha256DigestRef(imageRef) {
-			return fmt.Errorf("image %q rejected: digest reference required", imageRef)
-		}
-		return nil
-	}
-
-	registry := imageRegistry(imageRef)
 	if registry == "" {
-		return nil
+		return fmt.Errorf("image %q rejected: invalid image reference", imageRef)
 	}
 
 	if sameRegistry(registry, cfg.RegistryDomain) {
 		return nil
 	}
-	if isDangerousRegistryHost(imageRegistryHost(registry)) {
+	dangerous, err := isDangerousRegistryHost(imageRegistryHost(registry))
+	if err != nil {
+		return fmt.Errorf("image %q rejected: registry %q could not be verified: %w", imageRef, registry, err)
+	}
+	if dangerous {
 		return fmt.Errorf("image %q rejected: registry %q is not allowed", imageRef, registry)
 	}
 	if len(cfg.AllowedRegistries) == 0 {
@@ -1805,6 +1812,13 @@ func imageRegistry(imageRef string) string {
 		return ""
 	}
 	return normalizeRegistry(imageRef[:slashIdx])
+}
+
+func imageRegistryForPolicy(imageRef string) string {
+	if hasExplicitRegistry(imageRef) {
+		return imageRegistry(imageRef)
+	}
+	return "docker.io"
 }
 
 func normalizeRegistry(registry string) string {
@@ -1839,21 +1853,28 @@ func sameRegistry(a, b string) bool {
 	return normalizeRegistry(a) == normalizeRegistry(b)
 }
 
-func isDangerousRegistryHost(host string) bool {
+func isDangerousRegistryHost(host string) (bool, error) {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	if host == "localhost" || host == "metadata.google.internal" {
-		return true
+		return true, nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return isDangerousRegistryIP(ip), nil
 	}
 	ips, err := net.LookupIP(host)
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-			return true
+		if isDangerousRegistryIP(ip) {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+func isDangerousRegistryIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 func applySecurityProfile(config *domain.ContainerConfig, cfg Config) {
@@ -1924,6 +1945,9 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 
 	// Determine if this is an internal deploy and what reference to use for pulls.
 	pullRef, isInternal := s.pullRefForDeploy(ctx, imageRef)
+	if err := s.validateImagePullRef(imageRef); err != nil {
+		return "", err
+	}
 	if pullRef != imageRef {
 		log.Info().
 			Str("original_ref", imageRef).

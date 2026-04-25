@@ -101,7 +101,8 @@ fi
 
 # Verify checksum
 echo "Verifying checksum..."
-CHECKSUM_LINES=$(grep -E "^[0-9a-fA-F]{64}[[:space:]]+\*?${TARBALL}\$" "$TMP_DIR/checksums.txt" || true)
+TARBALL_ESCAPED=$(printf '%s\n' "$TARBALL" | sed 's/[.[\*^$()+?{|]/\\&/g')
+CHECKSUM_LINES=$(grep -E "^[0-9a-fA-F]{64}[[:space:]]+\*?${TARBALL_ESCAPED}\$" "$TMP_DIR/checksums.txt" || true)
 CHECKSUM_COUNT=$(printf '%s\n' "$CHECKSUM_LINES" | sed '/^$/d' | wc -l | tr -d ' ')
 if [ "$CHECKSUM_COUNT" != "1" ]; then
     echo "Error: Expected exactly one checksum for ${TARBALL} in checksums.txt"

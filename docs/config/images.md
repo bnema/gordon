@@ -30,7 +30,7 @@ keep_last = 3
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `images.allowed_registries` | array | `[]` | Allowlist for explicit external image registries. Empty means no explicit external registries are accepted. Gordon always allows its configured registry and rejects localhost/private/link-local registries. Include ports when needed, e.g. `"registry.example.com:5000"`. |
+| `images.allowed_registries` | array | `[]` | Allowlist for external image registries. Empty means no external registries are accepted. Unqualified image names such as `nginx:latest` are treated as Docker Hub (`docker.io`) for policy checks. Gordon always allows its configured registry and rejects localhost/private/link-local registries. Include ports when needed, e.g. `"registry.example.com:5000"`. |
 | `images.require_digest` | bool | `false` | Require allowlisted external image references to use a valid `@sha256:<64 hex chars>` digest. Gordon registry images are exempt. |
 | `images.prune.enabled` | bool | `false` | Enables scheduled image cleanup |
 | `images.prune.schedule` | string | `"daily"` | Schedule preset: `hourly`, `daily`, `weekly`, `monthly` |

@@ -563,7 +563,7 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	}
 	if _, exists := currentConfig.ExternalRoutes[route.Domain]; exists {
 		s.mu.Unlock()
-		return fmt.Errorf("route %q conflicts with external route", route.Domain)
+		return fmt.Errorf("%w: route %q conflicts with external route", domain.ErrRouteConflict, route.Domain)
 	}
 	previousCanonicalRoute, canonicalExisted := currentConfig.Routes[route.Domain]
 	legacyKey := legacyRouteStorageKey(route.Domain)

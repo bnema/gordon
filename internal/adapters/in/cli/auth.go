@@ -84,7 +84,7 @@ Registry scopes (for Docker push/pull):
 Admin scopes (for remote CLI access):
   Format: admin:<resource>:<actions>
 
-  Resources: routes, secrets, config, status, logs, * (all)
+  Resources: routes, secrets, config, status, logs, volumes, * (all)
   Actions:   read, write, * (all)
 
   Examples:
@@ -92,6 +92,8 @@ Admin scopes (for remote CLI access):
     admin:routes:read      Read-only routes access
     admin:status:read      Read-only status access
     admin:logs:read        Read-only log access
+    admin:volumes:read     Read-only volume access
+    admin:volumes:write    Volume management access
 
 Repository scoping:
   --repo myapp           Scope to specific repository

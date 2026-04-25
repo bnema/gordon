@@ -187,15 +187,20 @@ func TestHTTPSRedirect_TrailingDotHostRedirectsToCanonicalHost(t *testing.T) {
 	})
 	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "o2.bnema.dev" })(ok)
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.test/path", nil)
-	req.RequestURI = "/path"
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	client := srv.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/path", nil)
+	require.NoError(t, err)
 	req.Host = "O2.Bnema.Dev.:8088"
-	rec := httptest.NewRecorder()
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusPermanentRedirect, rec.Code)
-	assert.Equal(t, "https://o2.bnema.dev:8443/path", rec.Header().Get("Location"))
+	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
+	assert.Equal(t, "https://o2.bnema.dev:8443/path", resp.Header.Get("Location"))
 }
 
 func TestHTTPSRedirect_RejectsInvalidHost(t *testing.T) {
@@ -218,14 +223,17 @@ func TestHTTPSRedirect_RejectsInvalidHost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+			req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+			require.NoError(t, err)
 			req.Host = tt.host
-			rec := httptest.NewRecorder()
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
 
-			handler.ServeHTTP(rec, req)
-
-			assert.Equal(t, http.StatusBadRequest, rec.Code)
-			assert.Empty(t, rec.Header().Get("Location"))
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			assert.Empty(t, resp.Header.Get("Location"))
 		})
 	}
 }

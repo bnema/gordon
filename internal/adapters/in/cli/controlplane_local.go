@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
@@ -377,6 +378,9 @@ func (l *localControlPlane) GetConfig(ctx context.Context) (*remote.Config, erro
 	for domainName := range externalRoutes {
 		externalResponses = append(externalResponses, remote.ExternalRoute{Domain: domainName})
 	}
+	sort.Slice(externalResponses, func(i, j int) bool {
+		return externalResponses[i].Domain < externalResponses[j].Domain
+	})
 	cfg := &remote.Config{
 		Routes:         l.configSvc.GetRoutes(ctx),
 		ExternalRoutes: externalResponses,

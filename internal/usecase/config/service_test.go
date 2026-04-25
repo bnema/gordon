@@ -518,6 +518,7 @@ func TestService_AddRoute_RejectsExternalRouteConflict(t *testing.T) {
 	err := svc.AddRoute(ctx, domain.Route{Domain: "App.Example.com", Image: "app:latest"})
 
 	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrRouteConflict)
 	assert.Contains(t, err.Error(), "conflicts with external route")
 }
 

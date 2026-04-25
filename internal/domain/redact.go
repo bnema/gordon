@@ -11,7 +11,7 @@ const secretKeyPattern = `[A-Z0-9_]*(?:PASSWORD|TOKEN|SECRET|API[_-]?KEY|DATABAS
 
 var secretValuePatterns = []secretRedactionPattern{
 	{
-		re:   regexp.MustCompile(`(?i)(\b` + secretKeyPattern + `\b\s*=\s*)([^\s]+)`),
+		re:   regexp.MustCompile(`(?i)(\b` + secretKeyPattern + `\b\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s]+)`),
 		repl: `${1}[REDACTED]`,
 	},
 	{
@@ -35,7 +35,7 @@ func RedactSecrets(line string) string {
 
 // RedactSecretLines redacts common secret values from log or diagnostic lines.
 func RedactSecretLines(lines []string) []string {
-	if len(lines) == 0 {
+	if lines == nil {
 		return nil
 	}
 	redacted := make([]string, len(lines))

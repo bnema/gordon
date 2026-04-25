@@ -111,6 +111,12 @@ func normalizeRequestHost(host string) string {
 			return ""
 		}
 		host = h
+	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		inner := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if ip := net.ParseIP(inner); ip == nil || ip.To4() != nil {
+			return ""
+		}
+		host = inner
 	} else if strings.Contains(host, ":") {
 		return ""
 	}

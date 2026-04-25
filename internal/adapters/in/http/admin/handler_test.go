@@ -118,11 +118,11 @@ func TestHandler_VolumesGet_RequiresVolumesReadScope(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
 				volumeSvc.EXPECT().ListVolumes(mock.Anything).Return([]*domain.VolumeInfo{}, nil).Once()
 			}
-			req := httptest.NewRequest(http.MethodGet, "/admin/volumes", nil)
-			req = req.WithContext(ctxWithScopes(tt.scopes...))
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			assert.Equal(t, tt.wantStatus, rec.Code)
+			server := newScopedTestServer(t, handler, tt.scopes...)
+			resp, err := http.Get(server.URL + "/admin/volumes")
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, tt.wantStatus, resp.StatusCode)
 		})
 	}
 }
@@ -147,11 +147,11 @@ func TestHandler_VolumesPrune_RequiresVolumesWriteScope(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
 				volumeSvc.EXPECT().PruneVolumes(mock.Anything, true).Return(&domain.VolumePruneReport{}, []*domain.VolumeInfo{}, nil).Once()
 			}
-			req := httptest.NewRequest(http.MethodPost, "/admin/volumes/prune", bytes.NewBufferString(`{"dry_run":true}`))
-			req = req.WithContext(ctxWithScopes(tt.scopes...))
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			assert.Equal(t, tt.wantStatus, rec.Code)
+			server := newScopedTestServer(t, handler, tt.scopes...)
+			resp, err := http.Post(server.URL+"/admin/volumes/prune", "application/json", bytes.NewBufferString(`{"dry_run":true}`))
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, tt.wantStatus, resp.StatusCode)
 		})
 	}
 }
@@ -1135,18 +1135,19 @@ func TestHandler_Config_HidesSensitiveInventoryByDefault(t *testing.T) {
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{}).Once()
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{"db.example.com": "http://10.0.0.5:5432"}).Once()
 
-	req := httptest.NewRequest("GET", "/admin/config", nil)
-	req = req.WithContext(ctxWithScopes("admin:config:read"))
-	rec := httptest.NewRecorder()
+	server := newScopedTestServer(t, handler, "admin:config:read")
+	resp, err := http.Get(server.URL + "/admin/config")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
 
-	handler.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	body := rec.Body.String()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body := string(bodyBytes)
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal([]byte(body), &raw))
-	server := raw["server"].(map[string]any)
-	assert.NotContains(t, server, "data_dir")
+	serverConfig := raw["server"].(map[string]any)
+	assert.NotContains(t, serverConfig, "data_dir")
 	assert.NotContains(t, body, "/var/lib/gordon")
 	assert.NotContains(t, body, "10.0.0.5")
 }
@@ -1650,16 +1651,18 @@ func TestHandler_Deploy_ConfigWriteOnlyOmitsDeployFailureLogs(t *testing.T) {
 	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(route, nil).Once()
 	containerSvc.EXPECT().Deploy(mock.Anything, *route).Return(nil, deployErr).Once()
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/deploy/app.example.com", nil)
-	req = req.WithContext(ctxWithScopes("admin:config:write"))
-	rec := httptest.NewRecorder()
+	server := newScopedTestServer(t, handler, "admin:config:write")
+	resp, err := http.Post(server.URL+"/admin/deploy/app.example.com", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	body := string(bodyBytes)
 
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying"}`, rec.Body.String())
-	assert.NotContains(t, rec.Body.String(), "hunter2")
-	assert.NotContains(t, rec.Body.String(), "abc123")
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying"}`, body)
+	assert.NotContains(t, body, "hunter2")
+	assert.NotContains(t, body, "abc123")
 }
 
 func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
@@ -2174,30 +2177,33 @@ func TestHandler_LogsRequireLogsReadAndRedact(t *testing.T) {
 	})
 
 	t.Run("status read denied", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/admin/logs", nil)
-		req = req.WithContext(ctxWithScopes("admin:status:read"))
-		rec := httptest.NewRecorder()
+		server := newScopedTestServer(t, handler, "admin:status:read")
+		resp, err := http.Get(server.URL + "/admin/logs")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		bodyBytes, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
 
-		handler.ServeHTTP(rec, req)
-
-		assert.Equal(t, http.StatusForbidden, rec.Code)
-		assert.Contains(t, rec.Body.String(), "insufficient permissions for logs:read")
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+		assert.Contains(t, string(bodyBytes), "insufficient permissions for logs:read")
 	})
 
 	t.Run("logs read allowed and redacted", func(t *testing.T) {
 		logSvc.EXPECT().GetProcessLogs(mock.Anything, 50).Return([]string{"PASSWORD=hunter2", `{"API_KEY":"abc123"}`}, nil).Once()
 
-		req := httptest.NewRequest(http.MethodGet, "/admin/logs", nil)
-		req = req.WithContext(ctxWithScopes("admin:logs:read"))
-		rec := httptest.NewRecorder()
+		server := newScopedTestServer(t, handler, "admin:logs:read")
+		resp, err := http.Get(server.URL + "/admin/logs")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		bodyBytes, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		body := string(bodyBytes)
 
-		handler.ServeHTTP(rec, req)
-
-		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Contains(t, rec.Body.String(), "PASSWORD=[REDACTED]")
-		assert.Contains(t, rec.Body.String(), `\"API_KEY\":\"[REDACTED]\"`)
-		assert.NotContains(t, rec.Body.String(), "hunter2")
-		assert.NotContains(t, rec.Body.String(), "abc123")
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Contains(t, body, "PASSWORD=[REDACTED]")
+		assert.Contains(t, body, `\"API_KEY\":\"[REDACTED]\"`)
+		assert.NotContains(t, body, "hunter2")
+		assert.NotContains(t, body, "abc123")
 	})
 }
 

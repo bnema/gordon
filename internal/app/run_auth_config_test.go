@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/bnema/gordon/internal/domain"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 func TestBuildAuthConfig_UsesConfigEnabledFlag(t *testing.T) {
@@ -118,6 +120,20 @@ func TestLoadSecretUnsafeRejectsIntermediateSymlinkEscape(t *testing.T) {
 	_, err := loadSecret(context.Background(), domain.SecretsBackendUnsafe, "linkdir/token", dataDir, zerowrap.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to open secret path component")
+}
+
+func TestLoadSecretUnsafeRejectsNonRegularFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix mkfifo is not available on windows")
+	}
+	dataDir := t.TempDir()
+	secretsDir := filepath.Join(dataDir, "secrets")
+	require.NoError(t, os.MkdirAll(secretsDir, 0700))
+	require.NoError(t, unix.Mkfifo(filepath.Join(secretsDir, "token"), 0600))
+
+	_, err := loadSecret(context.Background(), domain.SecretsBackendUnsafe, "token", dataDir, zerowrap.Default())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "secret must be a regular file")
 }
 
 func TestLoadSecretUnsafeRejectsSymlinkEscape(t *testing.T) {

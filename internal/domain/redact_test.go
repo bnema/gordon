@@ -17,6 +17,8 @@ func TestRedactSecrets(t *testing.T) {
 		{"secret env", "SECRET=shh", "SECRET=[REDACTED]"},
 		{"api key env", "API_KEY=key-value", "API_KEY=[REDACTED]"},
 		{"database url env", "DATABASE_URL=postgres://user:pass@db/app", "DATABASE_URL=[REDACTED]"},
+		{"quoted password env with spaces", `PASSWORD="hunter 2"`, "PASSWORD=[REDACTED]"},
+		{"single quoted token env with spaces", `TOKEN='abc 123'`, "TOKEN=[REDACTED]"},
 		{"json password field", `{"PASSWORD":"hunter2","ok":"value"}`, `{"PASSWORD":"[REDACTED]","ok":"value"}`},
 		{"json token field with spaces", `{"TOKEN": "abc123"}`, `{"TOKEN": "[REDACTED]"}`},
 		{"case insensitive", "database_url=postgres://user:pass@db/app", "database_url=[REDACTED]"},
@@ -34,4 +36,10 @@ func TestRedactSecrets(t *testing.T) {
 			assert.Equal(t, tt.want, RedactSecrets(tt.in))
 		})
 	}
+}
+
+func TestRedactSecretLinesPreservesEmptySlice(t *testing.T) {
+	assert.Nil(t, RedactSecretLines(nil))
+	assert.Empty(t, RedactSecretLines([]string{}))
+	assert.NotNil(t, RedactSecretLines([]string{}))
 }

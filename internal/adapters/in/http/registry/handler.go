@@ -2,6 +2,7 @@
 package registry
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/bnema/zerowrap"
 
@@ -34,8 +36,8 @@ const (
 type Handler struct {
 	registrySvc      in.RegistryService
 	log              zerowrap.Logger
-	maxBlobChunkSize int64
-	maxBlobSize      int64
+	maxBlobChunkSize atomic.Int64
+	maxBlobSize      atomic.Int64
 }
 
 // NewHandler creates a new registry HTTP handler.
@@ -53,12 +55,24 @@ func NewHandler(
 		blobSizeLimit = maxBlobSize[0]
 	}
 
-	return &Handler{
-		registrySvc:      registrySvc,
-		log:              log,
-		maxBlobChunkSize: maxBlobChunkSize,
-		maxBlobSize:      blobSizeLimit,
+	h := &Handler{
+		registrySvc: registrySvc,
+		log:         log,
 	}
+	h.UpdateBlobLimits(maxBlobChunkSize, blobSizeLimit)
+	return h
+}
+
+// UpdateBlobLimits updates request-size limits used by live upload handlers.
+func (h *Handler) UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64) {
+	if maxBlobChunkSize <= 0 {
+		maxBlobChunkSize = DefaultMaxBlobChunkSize
+	}
+	if maxBlobSize <= 0 {
+		maxBlobSize = DefaultMaxBlobSize
+	}
+	h.maxBlobChunkSize.Store(maxBlobChunkSize)
+	h.maxBlobSize.Store(maxBlobSize)
 }
 
 // RegisterRoutes registers the registry routes on the given mux.
@@ -416,24 +430,31 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	maxBlobChunkSize := h.maxBlobChunkSize.Load()
+	maxBlobSize := h.maxBlobSize.Load()
+
 	// Limit blob chunk size to prevent excessive uploads.
 	// MaxBytesReader wraps the body so the downstream io.Copy stops at the limit.
-	r.Body = http.MaxBytesReader(w, r.Body, h.maxBlobChunkSize)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBlobChunkSize)
 
 	// Stream the body directly to storage — memory usage is bounded to a small
 	// copy buffer (~32KB) regardless of chunk size.
-	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, r.Body, r.ContentLength, h.maxBlobSize)
+	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, r.Body, r.ContentLength, maxBlobSize)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			log.Warn().Int64("max_size", h.maxBlobChunkSize).Msg("blob chunk too large")
-			_ = h.registrySvc.CancelUpload(ctx, uuid)
+			log.Warn().Int64("max_size", maxBlobChunkSize).Msg("blob chunk too large")
+			if !h.cancelUploadAfterError(w, ctx, uuid, "failed to cancel oversized blob upload") {
+				return
+			}
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob chunk exceeds maximum size")
 			return
 		}
 		if errors.Is(err, domain.ErrBlobSizeExceeded) {
-			log.Warn().Int64("max_size", h.maxBlobSize).Msg("blob upload too large")
-			_ = h.registrySvc.CancelUpload(ctx, uuid)
+			log.Warn().Int64("max_size", maxBlobSize).Msg("blob upload too large")
+			if !h.cancelUploadAfterError(w, ctx, uuid, "failed to cancel oversized blob upload") {
+				return
+			}
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob exceeds maximum size")
 			return
 		}
@@ -446,7 +467,9 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "PUT" && digest != "" {
 		if err := h.registrySvc.FinishUpload(ctx, uuid, digest); err != nil {
 			log.Error().Err(err).Str("digest", digest).Msg("failed to finalize blob upload")
-			_ = h.registrySvc.CancelUpload(ctx, uuid)
+			if !h.cancelUploadAfterError(w, ctx, uuid, "failed to cancel invalid blob upload") {
+				return
+			}
 			h.sendRegistryError(w, http.StatusBadRequest, "DIGEST_INVALID", "digest mismatch")
 			return
 		}
@@ -464,6 +487,16 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Docker-Upload-UUID", uuid)
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) cancelUploadAfterError(w http.ResponseWriter, ctx context.Context, uuid, message string) bool {
+	if err := h.registrySvc.CancelUpload(ctx, uuid); err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Str("uuid", uuid).Msg(message)
+		h.sendRegistryError(w, http.StatusInternalServerError, "UNKNOWN", "failed to cancel upload")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
