@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // cidrAllowlist is the shared implementation for CIDR-based access control middleware.
@@ -67,7 +69,7 @@ func RegistryCIDRAllowlist(allowedNets, trustedNets []*net.IPNet, log zerowrap.L
 // httpPort is the configured HTTP listener port (cfg.Server.Port) so the redirect
 // helper can map it to tlsPort. Hosts with no explicit port omit the TLS port from
 // the public URL; hosts with an unknown explicit port preserve it as-is.
-func HTTPSRedirect(proxyNets []*net.IPNet, httpPort, tlsPort int, forceAll bool, log zerowrap.Logger) func(http.Handler) http.Handler {
+func HTTPSRedirect(proxyNets []*net.IPNet, httpPort, tlsPort int, forceAll bool, log zerowrap.Logger, isHostAllowed func(string) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if tlsPort == 0 {
 			return next
@@ -88,7 +90,11 @@ func HTTPSRedirect(proxyNets []*net.IPNet, httpPort, tlsPort int, forceAll bool,
 				}
 			}
 
-			target := httpsRedirectTarget(r.Host, r.RequestURI, httpPort, tlsPort)
+			target, ok := httpsRedirectTarget(r.Host, r.RequestURI, httpPort, tlsPort, isHostAllowed)
+			if !ok {
+				http.Error(w, "Bad Request", http.StatusBadRequest)
+				return
+			}
 
 			log.Debug().
 				Str("target", target).
@@ -99,14 +105,40 @@ func HTTPSRedirect(proxyNets []*net.IPNet, httpPort, tlsPort int, forceAll bool,
 	}
 }
 
-// httpsRedirectTarget derives the HTTPS redirect URL from the request Host.
-func httpsRedirectTarget(host, requestURI string, httpPort, tlsPort int) string {
+// httpsRedirectTarget derives the HTTPS redirect URL from a validated request Host.
+func httpsRedirectTarget(host, requestURI string, httpPort, tlsPort int, isHostAllowed func(string) bool) (string, bool) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return "", false
+	}
+	hostname, portStr, err := net.SplitHostPort(host)
+	if err != nil {
+		if strings.Contains(host, ":") {
+			return "", false
+		}
+		hostname = host
+	} else if port, err := strconv.Atoi(portStr); err != nil || port < 1 || port > 65535 {
+		return "", false
+	}
+	hostname = strings.TrimSuffix(hostname, ".")
+	canonicalHost, ok := domain.CanonicalRouteDomain(hostname)
+	if !ok {
+		return "", false
+	}
+	if isHostAllowed == nil || !isHostAllowed(canonicalHost) {
+		return "", false
+	}
+
 	path := requestURI
 	if !strings.HasPrefix(path, "/") {
 		path = "/"
 	}
 
-	return fmt.Sprintf("https://%s%s", httphelper.HTTPSAuthority(host, httpPort, tlsPort), path)
+	canonicalAuthority := canonicalHost
+	if portStr != "" {
+		canonicalAuthority = net.JoinHostPort(canonicalHost, portStr)
+	}
+	return fmt.Sprintf("https://%s%s", httphelper.HTTPSAuthority(canonicalAuthority, httpPort, tlsPort), path), true
 }
 
 // ProxyCIDRAllowlist returns middleware that restricts proxy access to the given CIDR ranges.

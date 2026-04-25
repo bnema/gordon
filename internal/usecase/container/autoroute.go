@@ -174,6 +174,13 @@ func (h *AutoRouteHandler) processRoutes(ctx context.Context, domains []string, 
 			continue
 		}
 
+		canonicalDomain, ok := domain.CanonicalRouteDomain(routeDomain)
+		if !ok {
+			log.Warn().Str("domain", routeDomain).Msg("auto-route rejected invalid domain")
+			continue
+		}
+		routeDomain = canonicalDomain
+
 		created := h.createOrUpdateRoute(ctx, routeDomain, imageName, allowedDomains)
 
 		if created && labels.EnvFile != "" && h.extractor != nil && h.envDir != "" {
@@ -259,6 +266,38 @@ func (h *AutoRouteHandler) triggerDeploy(ctx context.Context, route domain.Route
 	}
 }
 
+func allowedAbsoluteEnvFileRoots() []string {
+	return []string{"/app", "/workspace", "/usr/src/app"}
+}
+
+func validateAutoRouteEnvFilePath(envFilePath string) (string, error) {
+	envFilePath = strings.TrimSpace(envFilePath)
+	if envFilePath == "" {
+		return "", fmt.Errorf("env file path cannot be empty")
+	}
+	if strings.Contains(envFilePath, "\x00") {
+		return "", fmt.Errorf("env file path contains NUL byte")
+	}
+
+	cleaned := filepath.Clean(envFilePath)
+	if cleaned == "." || cleaned == string(filepath.Separator) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("unsafe env file path: %s", envFilePath)
+	}
+	if filepath.IsAbs(cleaned) && !pathHasAllowedRoot(cleaned, allowedAbsoluteEnvFileRoots()) {
+		return "", fmt.Errorf("unsafe env file path: %s", envFilePath)
+	}
+	return cleaned, nil
+}
+
+func pathHasAllowedRoot(path string, roots []string) bool {
+	for _, root := range roots {
+		if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 // extractAndMergeEnvFile extracts an env file from the image and merges it with existing secrets.
 func (h *AutoRouteHandler) extractAndMergeEnvFile(ctx context.Context, imageRef, routeDomain, envFilePath string) error {
 	log := zerowrap.FromCtx(ctx)
@@ -269,8 +308,13 @@ func (h *AutoRouteHandler) extractAndMergeEnvFile(ctx context.Context, imageRef,
 		Str("env_file", envFilePath).
 		Msg("extracting env file from image")
 
+	safeEnvFilePath, err := validateAutoRouteEnvFilePath(envFilePath)
+	if err != nil {
+		return err
+	}
+
 	// Extract env file from image
-	envData, err := h.extractor.ExtractEnvFileFromImage(ctx, imageRef, envFilePath)
+	envData, err := h.extractor.ExtractEnvFileFromImage(ctx, imageRef, safeEnvFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to extract env file: %w", err)
 	}
@@ -291,13 +335,8 @@ func (h *AutoRouteHandler) extractAndMergeEnvFile(ctx context.Context, imageRef,
 		return nil
 	}
 
-	// Security check: reject imported env files containing secret references
-	// to prevent attacker-controlled images from persisting ${provider:path}
-	// syntax that would later resolve against host secret providers.
-	for key, value := range imageEnv {
-		if domain.ContainsSecretReference(value) {
-			return fmt.Errorf("env key %q contains secret reference: %w", key, domain.ErrEnvContainsSecretRef)
-		}
+	if err := rejectSecretReferences(imageEnv); err != nil {
+		return err
 	}
 
 	// Load existing env file for this domain
@@ -377,6 +416,18 @@ func domainToEnvFileName(domainName string) (string, error) {
 	}
 
 	return storageKey.FileName(), nil
+}
+
+func rejectSecretReferences(env map[string]string) error {
+	// Security check: reject imported env files containing secret references
+	// to prevent attacker-controlled images from persisting ${provider:path}
+	// syntax that would later resolve against host secret providers.
+	for key, value := range env {
+		if domain.ContainsSecretReference(value) {
+			return fmt.Errorf("env key %q contains secret reference: %w", key, domain.ErrEnvContainsSecretRef)
+		}
+	}
+	return nil
 }
 
 // writeEnvFile writes environment variables to a file.

@@ -910,6 +910,53 @@ func (e *testEnvExtractor) ExtractEnvFileFromImage(_ context.Context, imageRef, 
 
 // collectDomains tests
 
+func TestValidateAutoRouteEnvFilePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		want    string
+		wantErr bool
+	}{
+		{name: "relative path", path: ".env", want: ".env"},
+		{name: "absolute app path", path: "/app/.env", want: "/app/.env"},
+		{name: "absolute workspace path", path: "/workspace/.env", want: "/workspace/.env"},
+		{name: "cleans safe path", path: "/app/config/../.env", want: "/app/.env"},
+		{name: "absolute traversal escapes app root", path: "/app/../../etc/passwd", wantErr: true},
+		{name: "absolute non app path", path: "/etc/passwd", wantErr: true},
+		{name: "empty", path: "", wantErr: true},
+		{name: "root", path: "/", wantErr: true},
+		{name: "traversal", path: "../.env", wantErr: true},
+		{name: "proc", path: "/proc/self/environ", wantErr: true},
+		{name: "sys", path: "/sys/kernel", wantErr: true},
+		{name: "dev", path: "/dev/null", wantErr: true},
+		{name: "run", path: "/run/secrets", wantErr: true},
+		{name: "var run", path: "/var/run/docker.sock", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := validateAutoRouteEnvFilePath(tt.path)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestAutoRouteHandler_ExtractAndMergeEnvFile_UsesCleanSafeEnvFilePath(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	extractor := &testEnvExtractor{data: []byte("FOO=bar\n")}
+	handler := NewAutoRouteHandler(ctx, inmocks.NewMockConfigService(t), inmocks.NewMockContainerService(t), mocks.NewMockBlobStorage(t), "registry.example.com").
+		WithEnvExtractor(extractor, t.TempDir())
+
+	err := handler.extractAndMergeEnvFile(ctx, "myapp:latest", "app.example.com", "/app/config/../.env")
+	require.NoError(t, err)
+	assert.Equal(t, "/app/.env", extractor.lastPath)
+}
+
 func TestAutoRouteHandler_ExtractAndMergeEnvFile_RejectsSecretReferences(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -24,6 +24,9 @@ type ProxyService interface {
 	// IsRegistryDomain returns true if the host matches the configured registry domain.
 	IsRegistryDomain(host string) bool
 
+	// IsKnownHost returns true if the host is configured as registry, route, or external route.
+	IsKnownHost(ctx context.Context, host string) bool
+
 	// TrackInFlight records an in-flight request for a container.
 	// Returns a release function that must be called when the request completes.
 	TrackInFlight(containerID string) func()

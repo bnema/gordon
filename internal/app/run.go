@@ -1797,7 +1797,9 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
-		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.Port, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log),
+		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.Port, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log, func(host string) bool {
+			return svc.proxySvc.IsKnownHost(context.Background(), host)
+		}),
 	}
 	if proxyCIDRMiddleware != nil {
 		httpProxyMiddlewares = append(httpProxyMiddlewares, proxyCIDRMiddleware)
