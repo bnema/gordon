@@ -92,6 +92,7 @@ Admin scopes (for remote CLI):
 | `admin:config:read` | Read-only config access |
 | `admin:config:write` | Config write access |
 | `admin:status:read` | Read-only status/health |
+| `admin:logs:read` | Read-only logs access |
 | `admin:secrets:read` | List secret keys |
 | `admin:secrets:write` | Set/delete secrets |
 

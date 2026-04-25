@@ -139,7 +139,7 @@ Standard Go durations also work: `24h`, `30m`, `1h30m`
 
 Registry scopes: `push`, `pull`, `push,pull`
 
-Admin scopes: `admin:*:*`, `admin:routes:read`, `admin:routes:write`, `admin:config:read`, `admin:config:write`, `admin:status:read`, `admin:secrets:read`, `admin:secrets:write`
+Admin scopes: `admin:*:*`, `admin:routes:read`, `admin:routes:write`, `admin:config:read`, `admin:config:write`, `admin:status:read`, `admin:logs:read`, `admin:secrets:read`, `admin:secrets:write`
 
 Combine scopes with commas:
 
@@ -280,6 +280,7 @@ Usage:
 | `admin:config:read` | Read-only config access |
 | `admin:config:write` | Config write access |
 | `admin:status:read` | Read-only status/health |
+| `admin:logs:read` | Read-only logs access |
 | `admin:secrets:read` | List secret keys |
 | `admin:secrets:write` | Set/delete secrets |
 

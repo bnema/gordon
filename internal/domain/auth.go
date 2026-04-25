@@ -79,6 +79,7 @@ const (
 	AdminResourceSecrets = "secrets"
 	AdminResourceConfig  = "config"
 	AdminResourceStatus  = "status"
+	AdminResourceLogs    = "logs"
 	AdminResourceAll     = "*"
 )
 
@@ -300,6 +301,11 @@ func AdminScopeConfig(actions ...string) string {
 // AdminScopeStatus creates an admin scope for status with the given actions.
 func AdminScopeStatus(actions ...string) string {
 	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceStatus, strings.Join(actions, ","))
+}
+
+// AdminScopeLogs creates an admin scope for logs with the given actions.
+func AdminScopeLogs(actions ...string) string {
+	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceLogs, strings.Join(actions, ","))
 }
 
 // AuthStatus represents status of an authentication session.

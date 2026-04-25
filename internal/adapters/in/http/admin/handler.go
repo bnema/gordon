@@ -1319,12 +1319,15 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 		log.Error().Err(err).Str("domain", deployDomain).Msg("failed to deploy container")
 		var deployErr *domain.DeployFailureError
 		if errors.As(err, &deployErr) {
-			h.sendJSON(w, http.StatusInternalServerError, dto.DeployErrorResponse{
+			response := dto.DeployErrorResponse{
 				Error: deployErr.Error(),
 				Cause: deployErr.Cause,
 				Hint:  deployErr.Hint,
-				Logs:  deployErr.Logs,
-			})
+			}
+			if HasAccess(ctx, domain.AdminResourceLogs, domain.AdminActionRead) {
+				response.Logs = domain.RedactSecretLines(deployErr.Logs)
+			}
+			h.sendJSON(w, http.StatusInternalServerError, response)
 			return
 		}
 		h.sendError(w, http.StatusInternalServerError, "failed to deploy container")
@@ -1455,8 +1458,8 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request, path string
 	log := zerowrap.FromCtx(ctx)
 
 	// Check read permission
-	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+	if !HasAccess(ctx, domain.AdminResourceLogs, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for logs:read")
 		return
 	}
 
@@ -1522,7 +1525,7 @@ func (h *Handler) handleProcessLogs(w http.ResponseWriter, r *http.Request, line
 		return
 	}
 
-	h.sendJSON(w, http.StatusOK, dto.ProcessLogsResponse{Lines: logLines})
+	h.sendJSON(w, http.StatusOK, dto.ProcessLogsResponse{Lines: domain.RedactSecretLines(logLines)})
 }
 
 // handleContainerLogs handles container logs for a specific domain.
@@ -1546,7 +1549,7 @@ func (h *Handler) handleContainerLogs(w http.ResponseWriter, r *http.Request, lo
 
 	h.sendJSON(w, http.StatusOK, dto.ContainerLogsResponse{
 		Domain: logDomain,
-		Lines:  logLines,
+		Lines:  domain.RedactSecretLines(logLines),
 	})
 }
 
@@ -1582,6 +1585,7 @@ func (h *Handler) streamProcessLogs(w http.ResponseWriter, r *http.Request, line
 			if !ok {
 				return
 			}
+			line = domain.RedactSecrets(line)
 			// SECURITY: Normalize line endings and escape newlines in log lines to prevent SSE event injection.
 			// First normalize CRLF (\r\n) and CR (\r) to LF (\n), then escape newlines.
 			// Per the SSE spec, multi-line data must use separate "data:" prefixes.
@@ -1628,6 +1632,7 @@ func (h *Handler) streamContainerLogs(w http.ResponseWriter, r *http.Request, lo
 			if !ok {
 				return
 			}
+			line = domain.RedactSecrets(line)
 			// SECURITY: Normalize line endings and escape newlines in log lines to prevent SSE event injection.
 			// First normalize CRLF (\r\n) and CR (\r) to LF (\n), then escape newlines.
 			// Per the SSE spec, multi-line data must use separate "data:" prefixes.

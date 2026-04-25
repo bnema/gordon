@@ -1542,6 +1542,39 @@ func TestHandler_Restart_InvalidDomain(t *testing.T) {
 	}
 }
 
+func TestHandler_Deploy_ConfigWriteOnlyOmitsDeployFailureLogs(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	route := &domain.Route{Domain: "app.example.com", Image: "registry.local/myapp:latest"}
+	deployErr := &domain.DeployFailureError{
+		Summary: "failed to deploy",
+		Cause:   "image pull failed",
+		Hint:    "push the image before retrying",
+		Logs:    []string{"PASSWORD=hunter2", "TOKEN=abc123"},
+	}
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(route, nil).Once()
+	containerSvc.EXPECT().Deploy(mock.Anything, *route).Return(nil, deployErr).Once()
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/deploy/app.example.com", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying"}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "hunter2")
+	assert.NotContains(t, rec.Body.String(), "abc123")
+}
+
 func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
@@ -1553,8 +1586,8 @@ func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
 		Cause:   "image pull failed",
 		Hint:    "push the image before retrying",
 		Logs: []string{
-			"pulling manifest",
-			"manifest unknown",
+			"pulling manifest PASSWORD=hunter2",
+			`{"TOKEN":"abc123"}`,
 		},
 		Err: errors.New("manifest unknown: internal registry detail"),
 	}
@@ -1566,7 +1599,7 @@ func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
 		d.SecretSvc = secretSvc
 	})
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler.ServeHTTP(w, r.WithContext(ctxWithScopes("admin:config:write")))
+		handler.ServeHTTP(w, r.WithContext(ctxWithScopes("admin:config:write", "admin:logs:read")))
 	}))
 	defer s.Close()
 
@@ -1582,8 +1615,10 @@ func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying","logs":["pulling manifest","manifest unknown"]}`, string(body))
+	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying","logs":["pulling manifest PASSWORD=[REDACTED]","{\"TOKEN\":\"[REDACTED]\"}"]}`, string(body))
 	assert.NotContains(t, string(body), "internal registry detail")
+	assert.NotContains(t, string(body), "hunter2")
+	assert.NotContains(t, string(body), "abc123")
 }
 
 func TestHandler_Deploy_GenericErrorStillUsesLegacyBody(t *testing.T) {
@@ -2043,6 +2078,40 @@ func TestHandler_BackupsRunDomain_ChunkedBodyIsDecoded(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "completed")
+}
+
+func TestHandler_LogsRequireLogsReadAndRedact(t *testing.T) {
+	logSvc := inmocks.NewMockLogService(t)
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.LogSvc = logSvc
+	})
+
+	t.Run("status read denied", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/admin/logs", nil)
+		req = req.WithContext(ctxWithScopes("admin:status:read"))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Contains(t, rec.Body.String(), "insufficient permissions for logs:read")
+	})
+
+	t.Run("logs read allowed and redacted", func(t *testing.T) {
+		logSvc.EXPECT().GetProcessLogs(mock.Anything, 50).Return([]string{"PASSWORD=hunter2", `{"API_KEY":"abc123"}`}, nil).Once()
+
+		req := httptest.NewRequest(http.MethodGet, "/admin/logs", nil)
+		req = req.WithContext(ctxWithScopes("admin:logs:read"))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "PASSWORD=[REDACTED]")
+		assert.Contains(t, rec.Body.String(), `\"API_KEY\":\"[REDACTED]\"`)
+		assert.NotContains(t, rec.Body.String(), "hunter2")
+		assert.NotContains(t, rec.Body.String(), "abc123")
+	})
 }
 
 func TestHandler_BackupsDetectDomain(t *testing.T) {
