@@ -513,6 +513,13 @@ func TestScopesGrantAdminAccess(t *testing.T) {
 			want:     true,
 		},
 		{
+			name:     "volumes read grants volumes resource",
+			granted:  []string{"admin:volumes:read"},
+			resource: AdminResourceVolumes,
+			action:   AdminActionRead,
+			want:     true,
+		},
+		{
 			name:     "repository scope is ignored for admin access",
 			granted:  []string{"repository:myrepo:push"},
 			resource: "routes",

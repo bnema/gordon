@@ -98,6 +98,64 @@ func newTestHandler(t *testing.T, opts ...func(*HandlerDeps)) *Handler {
 	return NewHandler(deps)
 }
 
+func TestHandler_VolumesGet_RequiresVolumesReadScope(t *testing.T) {
+	volumeSvc := inmocks.NewMockVolumeService(t)
+	handler := newTestHandler(t, func(d *HandlerDeps) { d.VolumeSvc = volumeSvc })
+
+	tests := []struct {
+		name       string
+		scopes     []string
+		wantStatus int
+	}{
+		{name: "volumes read access granted", scopes: []string{"admin:volumes:read"}, wantStatus: http.StatusOK},
+		{name: "all admin access granted", scopes: []string{"admin:*:*"}, wantStatus: http.StatusOK},
+		{name: "status read denied", scopes: []string{"admin:status:read"}, wantStatus: http.StatusForbidden},
+		{name: "volumes write denied", scopes: []string{"admin:volumes:write"}, wantStatus: http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantStatus == http.StatusOK {
+				volumeSvc.EXPECT().ListVolumes(mock.Anything).Return([]*domain.VolumeInfo{}, nil).Once()
+			}
+			req := httptest.NewRequest(http.MethodGet, "/admin/volumes", nil)
+			req = req.WithContext(ctxWithScopes(tt.scopes...))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			assert.Equal(t, tt.wantStatus, rec.Code)
+		})
+	}
+}
+
+func TestHandler_VolumesPrune_RequiresVolumesWriteScope(t *testing.T) {
+	volumeSvc := inmocks.NewMockVolumeService(t)
+	handler := newTestHandler(t, func(d *HandlerDeps) { d.VolumeSvc = volumeSvc })
+
+	tests := []struct {
+		name       string
+		scopes     []string
+		wantStatus int
+	}{
+		{name: "volumes write access granted", scopes: []string{"admin:volumes:write"}, wantStatus: http.StatusOK},
+		{name: "all admin access granted", scopes: []string{"admin:*:*"}, wantStatus: http.StatusOK},
+		{name: "config write denied", scopes: []string{"admin:config:write"}, wantStatus: http.StatusForbidden},
+		{name: "volumes read denied", scopes: []string{"admin:volumes:read"}, wantStatus: http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantStatus == http.StatusOK {
+				volumeSvc.EXPECT().PruneVolumes(mock.Anything, true).Return(&domain.VolumePruneReport{}, []*domain.VolumeInfo{}, nil).Once()
+			}
+			req := httptest.NewRequest(http.MethodPost, "/admin/volumes/prune", bytes.NewBufferString(`{"dry_run":true}`))
+			req = req.WithContext(ctxWithScopes(tt.scopes...))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			assert.Equal(t, tt.wantStatus, rec.Code)
+		})
+	}
+}
+
 // Routes endpoint tests
 
 func TestHandler_RoutesGet_RequiresReadScope(t *testing.T) {

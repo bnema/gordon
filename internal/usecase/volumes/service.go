@@ -54,7 +54,7 @@ func (s *Service) PruneVolumes(ctx context.Context, dryRun bool) (*domain.Volume
 	var removed []*domain.VolumeInfo
 
 	for _, vol := range vols {
-		if vol.InUse {
+		if !isGordonManagedVolume(vol) || vol.InUse {
 			continue
 		}
 
@@ -71,4 +71,11 @@ func (s *Service) PruneVolumes(ctx context.Context, dryRun bool) (*domain.Volume
 	}
 
 	return report, removed, nil
+}
+
+func isGordonManagedVolume(vol *domain.VolumeInfo) bool {
+	if vol == nil || vol.Labels == nil {
+		return false
+	}
+	return vol.Labels[domain.LabelManaged] == "true"
 }

@@ -31,6 +31,39 @@ func TestBackupStorage_StoreAndGet(t *testing.T) {
 	assert.Equal(t, payload, data)
 }
 
+func TestBackupStorage_StoreSameSecondBackupsUseDistinctFinalAndTempPaths(t *testing.T) {
+	rootDir := t.TempDir()
+	storage, err := NewBackupStorage(rootDir, testLogger())
+	require.NoError(t, err)
+
+	now := time.Date(2026, 2, 7, 11, 0, 0, 0, time.UTC)
+	firstPayload := []byte("first-backup")
+	secondPayload := []byte("second-backup")
+
+	firstPath, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, now, bytes.NewReader(firstPayload))
+	require.NoError(t, err)
+	secondPath, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, now, bytes.NewReader(secondPayload))
+	require.NoError(t, err)
+
+	assert.NotEqual(t, firstPath, secondPath)
+	assert.NoFileExists(t, firstPath+".tmp")
+	assert.NoFileExists(t, secondPath+".tmp")
+
+	firstRead, err := storage.Get(context.Background(), firstPath)
+	require.NoError(t, err)
+	defer firstRead.Close()
+	firstData, err := io.ReadAll(firstRead)
+	require.NoError(t, err)
+	assert.Equal(t, firstPayload, firstData)
+
+	secondRead, err := storage.Get(context.Background(), secondPath)
+	require.NoError(t, err)
+	defer secondRead.Close()
+	secondData, err := io.ReadAll(secondRead)
+	require.NoError(t, err)
+	assert.Equal(t, secondPayload, secondData)
+}
+
 func TestBackupStorage_ListWithScheduleFilter(t *testing.T) {
 	storage, err := NewBackupStorage(t.TempDir(), testLogger())
 	require.NoError(t, err)
@@ -71,7 +104,7 @@ func TestBackupStorage_ApplyRetention(t *testing.T) {
 	require.NoError(t, err)
 
 	base := time.Date(2026, 2, 7, 6, 0, 0, 0, time.UTC)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		_, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, base.Add(time.Duration(i)*time.Hour), bytes.NewReader([]byte("data")))
 		require.NoError(t, err)
 	}
