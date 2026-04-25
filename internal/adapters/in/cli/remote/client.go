@@ -826,7 +826,7 @@ type Config struct {
 		Port           int    `json:"port"`
 		RegistryPort   int    `json:"registry_port"`
 		RegistryDomain string `json:"registry_domain"`
-		DataDir        string `json:"data_dir"`
+		DataDir        string `json:"data_dir,omitempty"`
 	} `json:"server"`
 	AutoRoute struct {
 		Enabled bool `json:"enabled"`
@@ -835,8 +835,14 @@ type Config struct {
 		Enabled bool   `json:"enabled"`
 		Prefix  string `json:"prefix"`
 	} `json:"network_isolation"`
-	Routes         []domain.Route    `json:"routes"`
-	ExternalRoutes map[string]string `json:"external_routes"`
+	Routes         []domain.Route  `json:"routes"`
+	ExternalRoutes []ExternalRoute `json:"external_routes"`
+}
+
+// ExternalRoute represents a redacted external route config entry.
+type ExternalRoute struct {
+	Domain string `json:"domain"`
+	Target string `json:"target,omitempty"`
 }
 
 // GetConfig returns the Gordon configuration.

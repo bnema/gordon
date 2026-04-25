@@ -101,11 +101,14 @@ fi
 
 # Verify checksum
 echo "Verifying checksum..."
-EXPECTED_CHECKSUM=$(grep -E "[[:space:]]${TARBALL}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}')
-if [ -z "$EXPECTED_CHECKSUM" ]; then
-    echo "Error: Could not find checksum for ${TARBALL} in checksums.txt"
+TARBALL_ESCAPED=$(printf '%s\n' "$TARBALL" | sed 's/[.[\*^$()+?{|]/\\&/g')
+CHECKSUM_LINES=$(grep -E "^[0-9a-fA-F]{64}[[:space:]]+\*?${TARBALL_ESCAPED}\$" "$TMP_DIR/checksums.txt" || true)
+CHECKSUM_COUNT=$(printf '%s\n' "$CHECKSUM_LINES" | sed '/^$/d' | wc -l | tr -d ' ')
+if [ "$CHECKSUM_COUNT" != "1" ]; then
+    echo "Error: Expected exactly one checksum for ${TARBALL} in checksums.txt"
     exit 1
 fi
+EXPECTED_CHECKSUM=$(printf '%s\n' "$CHECKSUM_LINES" | awk '{print $1}')
 
 # Calculate actual checksum (works on both Linux and macOS)
 if command -v sha256sum >/dev/null 2>&1; then
@@ -132,15 +135,23 @@ if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
 fi
 echo "Checksum verified successfully."
 
-echo "Extracting..."
-tar -xzf "$TMP_DIR/$TARBALL" -C "$TMP_DIR"
+echo "Extracting Gordon binary..."
+EXTRACT_DIR="$TMP_DIR/extract"
+mkdir -p "$EXTRACT_DIR"
+tar -xzf "$TMP_DIR/$TARBALL" -C "$EXTRACT_DIR" gordon
+
+BINARY="$EXTRACT_DIR/gordon"
+if [ ! -f "$BINARY" ] || [ -L "$BINARY" ]; then
+    echo "Error: Archive did not contain a regular Gordon binary"
+    exit 1
+fi
 
 echo "Installing to ${INSTALL_DIR}..."
 if [ -w "$INSTALL_DIR" ]; then
-    mv "$TMP_DIR/gordon" "$INSTALL_DIR/gordon"
+    install -m 0755 "$BINARY" "$INSTALL_DIR/gordon"
 else
     echo "sudo required to install to ${INSTALL_DIR}"
-    sudo mv "$TMP_DIR/gordon" "$INSTALL_DIR/gordon"
+    sudo install -m 0755 "$BINARY" "$INSTALL_DIR/gordon"
 fi
 
 # Verify installation

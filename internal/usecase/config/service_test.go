@@ -458,6 +458,92 @@ func TestService_GetRoute(t *testing.T) {
 	})
 }
 
+func TestLoadCanonicalRoutes_RejectsDuplicateCanonicalRouteKeys(t *testing.T) {
+	_, err := loadCanonicalRoutes(map[string]any{
+		"App.Example.com": "app:v1",
+		"app.example.com": "app:v2",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate route key")
+}
+
+func TestService_Load_RejectsExternalRouteConflictingWithRoute(t *testing.T) {
+	v := viper.New()
+	v.Set("routes", map[string]any{
+		"App.Example.com": "app:latest",
+	})
+	v.Set("external_routes", map[string]any{
+		"app.example.com": "203.0.113.10:5000",
+	})
+
+	svc := NewService(v, mocks.NewMockEventPublisher(t))
+	err := svc.Load(testContext())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicts with configured route")
+}
+
+func TestLoadExternalRoutes_RejectsInvalidAndDuplicateKeys(t *testing.T) {
+	t.Run("invalid", func(t *testing.T) {
+		_, err := loadExternalRoutes(map[string]any{
+			"bad.example.com:8080": "203.0.113.10:5000",
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid external route key")
+	})
+
+	t.Run("duplicate canonical", func(t *testing.T) {
+		_, err := loadExternalRoutes(map[string]any{
+			"Reg.Example.com": "203.0.113.10:5000",
+			"reg.example.com": "203.0.113.11:5000",
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate external route key")
+	})
+}
+
+func TestService_AddRoute_RejectsExternalRouteConflict(t *testing.T) {
+	v := viper.New()
+	v.Set("external_routes", map[string]any{
+		"app.example.com": "203.0.113.10:5000",
+	})
+
+	svc := NewService(v, mocks.NewMockEventPublisher(t))
+	ctx := testContext()
+	require.NoError(t, svc.Load(ctx))
+
+	err := svc.AddRoute(ctx, domain.Route{Domain: "App.Example.com", Image: "app:latest"})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrRouteConflict)
+	assert.Contains(t, err.Error(), "conflicts with external route")
+}
+
+func TestService_AddRoute_CanonicalizesDomainCaseAndRejectsInvalidAuthority(t *testing.T) {
+	configFile := filepath.Join(t.TempDir(), "gordon.toml")
+	require.NoError(t, os.WriteFile(configFile, []byte("[routes]\n"), 0600))
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	svc := NewService(v, mocks.NewMockEventPublisher(t))
+	ctx := testContext()
+	require.NoError(t, svc.Load(ctx))
+
+	require.NoError(t, svc.AddRoute(ctx, domain.Route{Domain: "App.Example.com", Image: "app:latest", HTTPS: true}))
+	route, err := svc.GetRoute(ctx, "app.example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "app.example.com", route.Domain)
+	_, err = svc.GetRoute(ctx, "APP.EXAMPLE.COM")
+	require.NoError(t, err)
+
+	err = svc.AddRoute(ctx, domain.Route{Domain: "bad.example.com:8080", Image: "app:latest"})
+	assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+	err = svc.AddRoute(ctx, domain.Route{Domain: "bad.example.com.", Image: "app:latest"})
+	assert.ErrorIs(t, err, domain.ErrRouteDomainInvalid)
+}
+
 func TestService_AddRoute(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		// Create temp config file for Save() to work
@@ -1556,7 +1642,7 @@ func TestService_AutoRouteAllowedDomains(t *testing.T) {
 func TestService_GetExternalRoutes(t *testing.T) {
 	v := viper.New()
 	v.Set("external_routes", map[string]interface{}{
-		"reg.example.com":   "localhost:5000",
+		"Reg.Example.com":   "localhost:5000",
 		"cache.example.com": "127.0.0.1:6379",
 	})
 

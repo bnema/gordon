@@ -11,6 +11,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
@@ -59,6 +60,58 @@ func TestHandler_RoutesToRegistry(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.True(t, w.Code == http.StatusBadGateway || w.Code == http.StatusServiceUnavailable)
+}
+
+func TestHandler_NormalizesRequestHostForLookup(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		wantHost string
+	}{
+		{name: "mixed case", host: "App.Example.com", wantHost: "app.example.com"},
+		{name: "explicit port", host: "App.Example.com:8080", wantHost: "app.example.com"},
+		{name: "trailing dot", host: "App.Example.com.", wantHost: "app.example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxySvc := inmocks.NewMockProxyService(t)
+			proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+			proxySvc.EXPECT().IsRegistryDomain(tt.wantHost).Return(false)
+			proxySvc.EXPECT().GetTarget(mock.Anything, tt.wantHost).Return(nil, domain.ErrNoTargetAvailable)
+
+			handler := NewHandler(proxySvc, nil, testLogger())
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+			req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+			require.NoError(t, err)
+			req.Host = tt.host
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		})
+	}
+}
+
+func TestHandler_RejectsInvalidRequestHost(t *testing.T) {
+	proxySvc := inmocks.NewMockProxyService(t)
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+
+	handler := NewHandler(proxySvc, nil, testLogger())
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	for _, host := range []string{"app.example.com:bad", "app.example.com:0", "app.example.com:99999"} {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+		require.NoError(t, err)
+		req.Host = host
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	}
 }
 
 func TestHandler_Returns404WhenNoTarget(t *testing.T) {

@@ -19,8 +19,8 @@ func (h *Handler) handleListVolumes(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+	if !HasAccess(ctx, domain.AdminResourceVolumes, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for volumes:read")
 		return
 	}
 
@@ -63,8 +63,8 @@ func (h *Handler) handlePruneVolumes(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+	if !HasAccess(ctx, domain.AdminResourceVolumes, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for volumes:write")
 		return
 	}
 

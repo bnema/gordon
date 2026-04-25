@@ -47,6 +47,28 @@ func TestService_GetTarget_FromCache(t *testing.T) {
 	assert.Equal(t, cachedTarget, result)
 }
 
+func TestService_GetTarget_CanonicalizesHostForLookup(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	ctx := testContext()
+
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(nil, false)
+
+	result, err := svc.GetTarget(ctx, "App.Example.com")
+	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
+	assert.Nil(t, result)
+}
+
+func TestService_GetTarget_RejectsInvalidHostAuthority(t *testing.T) {
+	svc := NewService(outmocks.NewMockContainerRuntime(t), inmocks.NewMockContainerService(t), inmocks.NewMockConfigService(t), Config{})
+	result, err := svc.GetTarget(testContext(), "app.example.com:8080")
+	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
+	assert.Nil(t, result)
+}
+
 func TestService_GetTarget_ContainerNotFound(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	containerSvc := inmocks.NewMockContainerService(t)
@@ -169,22 +191,34 @@ func TestService_GetTarget_ExternalRoute_InvalidTarget(t *testing.T) {
 }
 
 func TestService_GetTarget_ExternalRoute_InvalidPort(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{name: "not a number", target: "localhost:abc"},
+		{name: "zero", target: "localhost:0"},
+		{name: "too high", target: "localhost:65536"},
+	}
 
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-	ctx := testContext()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := outmocks.NewMockContainerRuntime(t)
+			containerSvc := inmocks.NewMockContainerService(t)
+			configSvc := inmocks.NewMockConfigService(t)
 
-	// Mock external routes with invalid port
-	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
-		"invalid.example.com": "localhost:abc",
-	})
+			svc := NewService(runtime, containerSvc, configSvc, Config{})
+			ctx := testContext()
 
-	result, err := svc.GetTarget(ctx, "invalid.example.com")
+			configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
+				"invalid.example.com": tt.target,
+			})
 
-	assert.Error(t, err)
-	assert.Nil(t, result)
+			result, err := svc.GetTarget(ctx, "invalid.example.com")
+
+			assert.Error(t, err)
+			assert.Nil(t, result)
+		})
+	}
 }
 
 func TestService_RegisterTarget(t *testing.T) {
@@ -202,11 +236,11 @@ func TestService_RegisterTarget(t *testing.T) {
 		Scheme:      "http",
 	}
 
-	err := svc.RegisterTarget(ctx, "app.example.com", target)
+	err := svc.RegisterTarget(ctx, "App.Example.com", target)
 
 	assert.NoError(t, err)
 
-	// Verify target is cached
+	// Verify target is cached under the canonical domain.
 	svc.mu.RLock()
 	cached := svc.targets["app.example.com"]
 	svc.mu.RUnlock()
@@ -228,7 +262,7 @@ func TestService_UnregisterTarget(t *testing.T) {
 		Port: 8080,
 	}
 
-	err := svc.UnregisterTarget(ctx, "app.example.com")
+	err := svc.UnregisterTarget(ctx, "App.Example.com")
 
 	assert.NoError(t, err)
 
@@ -313,8 +347,8 @@ func TestService_InvalidateTarget(t *testing.T) {
 		ContainerID: "old-container",
 	}
 
-	// Invalidate the target
-	svc.InvalidateTarget(ctx, "app.example.com")
+	// Invalidate the target using mixed-case input.
+	svc.InvalidateTarget(ctx, "App.Example.com")
 
 	// Verify target is removed from cache
 	svc.mu.RLock()

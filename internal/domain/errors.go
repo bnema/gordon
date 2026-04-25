@@ -34,6 +34,7 @@ var (
 	ErrInvalidDigest    = errors.New("invalid digest")
 	ErrDigestMismatch   = errors.New("digest mismatch")
 	ErrUnauthorized     = errors.New("unauthorized")
+	ErrBlobSizeExceeded = errors.New("blob size exceeds maximum")
 
 	// Network errors
 	ErrNetworkNotFound = errors.New("network not found")
@@ -51,6 +52,7 @@ var (
 	ErrInvalidConfig        = errors.New("invalid configuration")
 	ErrConfigLoadFailed     = errors.New("failed to load configuration")
 	ErrInvalidDomainPattern = errors.New("invalid domain pattern")
+	ErrRouteConflict        = errors.New("route conflicts with existing configuration")
 
 	// Environment errors
 	ErrEnvFileNotFound      = errors.New("environment file not found")

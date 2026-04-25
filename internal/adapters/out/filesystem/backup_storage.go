@@ -2,6 +2,8 @@ package filesystem
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -62,11 +64,12 @@ func (s *BackupStorage) Store(_ context.Context, domainName, dbName string, sche
 		return "", fmt.Errorf("failed to create backup path: %w", err)
 	}
 
-	fileName := timestamp.UTC().Format(backupTimestampLayout) + ".bak"
+	fileName := timestamp.UTC().Format(time.RFC3339Nano) + "-" + randomBackupSuffix() + ".bak"
+	fileName = sanitizeBackupFileName(fileName)
 	finalPath := filepath.Join(backupDir, fileName)
 	tmpPath := finalPath + ".tmp"
 
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp backup file: %w", err)
 	}
@@ -118,7 +121,7 @@ func (s *BackupStorage) List(_ context.Context, domainName string, schedule *dom
 		if walkErr != nil {
 			return walkErr
 		}
-		if d.IsDir() {
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".bak") {
 			return nil
 		}
 
@@ -144,7 +147,7 @@ func (s *BackupStorage) List(_ context.Context, domainName string, schedule *dom
 
 		startedAt := info.ModTime().UTC()
 		base := filepath.Base(path)
-		if ts, err := time.Parse(backupTimestampLayout+".bak", base); err == nil {
+		if ts, ok := parseBackupStartedAt(base); ok {
 			startedAt = ts.UTC()
 		}
 
@@ -265,6 +268,35 @@ func retentionKeepCount(policy domain.RetentionPolicy, schedule domain.BackupSch
 	default:
 		return -1
 	}
+}
+
+func parseBackupStartedAt(base string) (time.Time, bool) {
+	if !strings.HasSuffix(base, ".bak") {
+		return time.Time{}, false
+	}
+	if ts, err := time.Parse(backupTimestampLayout+".bak", base); err == nil {
+		return ts, true
+	}
+	trimmed := strings.TrimSuffix(base, ".bak")
+	if idx := strings.LastIndex(trimmed, "-"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, strings.ReplaceAll(trimmed, "_", ":")); err == nil {
+		return ts, true
+	}
+	return time.Time{}, false
+}
+
+func randomBackupSuffix() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UTC().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+func sanitizeBackupFileName(input string) string {
+	return strings.NewReplacer(":", "_").Replace(input)
 }
 
 func sanitizeBackupPathComponent(input string) string {

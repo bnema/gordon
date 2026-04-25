@@ -161,6 +161,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		WorkingDir:   config.WorkingDir,
 		Cmd:          config.Cmd,
 		Labels:       config.Labels,
+		User:         config.User,
 	}
 
 	resources := container.Resources{
@@ -173,20 +174,24 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	if config.PidsLimit > 0 {
 		resources.PidsLimit = &config.PidsLimit
 	}
+	capDrop := strslice.StrSlice{"ALL"}
+	capAdd := strslice.StrSlice{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+	if config.CapDrop != nil {
+		capDrop = strslice.StrSlice(config.CapDrop)
+	}
+	if config.CapAdd != nil {
+		capAdd = strslice.StrSlice(config.CapAdd)
+	}
 	hostConfig := &container.HostConfig{
-		PortBindings: portBindings,
-		AutoRemove:   config.AutoRemove,
-		Binds:        binds,
-		NetworkMode:  container.NetworkMode(config.NetworkMode),
-		Resources:    resources,
-		SecurityOpt:  []string{"no-new-privileges:true"},
-		CapDrop:      strslice.StrSlice{"ALL"},
-		// Re-add the minimal set of capabilities that standard images need.
-		// CHOWN/FOWNER/DAC_OVERRIDE: postgres, mysql etc. chown/chmod data dirs
-		// owned by their service user during entrypoint init.
-		// SETUID/SETGID: gosu/su-exec to drop privileges after init.
-		// NET_BIND_SERVICE: nginx etc. binding to ports < 1024.
-		CapAdd: strslice.StrSlice{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"},
+		PortBindings:   portBindings,
+		AutoRemove:     config.AutoRemove,
+		Binds:          binds,
+		NetworkMode:    container.NetworkMode(config.NetworkMode),
+		Resources:      resources,
+		SecurityOpt:    []string{"no-new-privileges:true"},
+		CapDrop:        capDrop,
+		CapAdd:         capAdd,
+		ReadonlyRootfs: config.ReadOnlyRootFS,
 	}
 
 	// Create network configuration for container
@@ -1251,7 +1256,7 @@ func (r *Runtime) GetImageID(ctx context.Context, imageRef string) (string, erro
 }
 
 // CreateNetwork creates a new Docker network.
-func (r *Runtime) CreateNetwork(ctx context.Context, name string, options map[string]string) error {
+func (r *Runtime) CreateNetwork(ctx context.Context, name string, config domain.NetworkConfig) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "adapter",
 		zerowrap.FieldAdapter: "docker",
@@ -1260,24 +1265,20 @@ func (r *Runtime) CreateNetwork(ctx context.Context, name string, options map[st
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Set default driver to bridge if not specified
-	driver := "bridge"
-	if driverOption, exists := options["driver"]; exists {
-		driver = driverOption
+	driver := config.Driver
+	if driver == "" {
+		driver = "bridge"
 	}
+	labels := make(map[string]string, len(config.Labels)+1)
+	for key, value := range config.Labels {
+		labels[key] = value
+	}
+	labels[domain.LabelManaged] = "true"
 
 	createOptions := network.CreateOptions{
-		Driver: driver,
-		Labels: map[string]string{
-			domain.LabelManaged: "true",
-		},
-	}
-
-	// Add any additional options to labels
-	for key, value := range options {
-		if key != "driver" {
-			createOptions.Labels["gordon."+key] = value
-		}
+		Driver:   driver,
+		Internal: config.Internal,
+		Labels:   labels,
 	}
 
 	_, err := r.client.NetworkCreate(ctx, name, createOptions)
@@ -1503,10 +1504,7 @@ func (r *Runtime) CopyFromContainer(ctx context.Context, containerID, srcPath st
 // extractFileFromTar extracts a single file from a tar archive.
 func extractFileFromTar(reader io.ReadCloser, targetPath string) (io.ReadCloser, error) {
 	tr := tar.NewReader(reader)
-
-	// The path in the tar may be relative or absolute
-	// We need to match based on the filename
-	targetName := filepath.Base(targetPath)
+	targetName := normalizedTarPath(targetPath)
 
 	for {
 		header, err := tr.Next()
@@ -1517,28 +1515,43 @@ func extractFileFromTar(reader io.ReadCloser, targetPath string) (io.ReadCloser,
 			return nil, err
 		}
 
-		// Check if this is our target file
-		if header.Typeflag == tar.TypeReg {
-			headerName := filepath.Base(header.Name)
-			if headerName == targetName {
-				size := header.Size
-				pr, pw := io.Pipe()
-				go func() {
-					defer reader.Close()
-					_, copyErr := io.CopyN(pw, tr, size)
-					if copyErr != nil {
-						_ = pw.CloseWithError(copyErr)
-						return
-					}
-					_ = pw.Close()
-				}()
-				return &pipeReadCloser{pr: pr, pw: pw, original: reader}, nil
-			}
+		if header.Typeflag == tar.TypeReg && normalizedTarPath(header.Name) == targetName {
+			size := header.Size
+			pr, pw := io.Pipe()
+			go func() {
+				defer reader.Close()
+				_, copyErr := io.CopyN(pw, tr, size)
+				if copyErr != nil {
+					_ = pw.CloseWithError(copyErr)
+					return
+				}
+				_ = pw.Close()
+			}()
+			return &pipeReadCloser{pr: pr, pw: pw, original: reader}, nil
 		}
 	}
 
 	_ = reader.Close()
 	return nil, fmt.Errorf("file not found in container: %s", targetPath)
+}
+
+func normalizedTarPath(path string) string {
+	path = filepath.ToSlash(filepath.Clean(path))
+	return strings.TrimPrefix(path, "/")
+}
+
+const maxExtractedEnvFileSize = 1 << 20 // 1 MiB
+
+func readExtractedEnvFile(reader io.Reader) ([]byte, error) {
+	limited := io.LimitReader(reader, maxExtractedEnvFileSize+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxExtractedEnvFileSize {
+		return nil, fmt.Errorf("extracted env file exceeds %d bytes", maxExtractedEnvFileSize)
+	}
+	return data, nil
 }
 
 // ExtractEnvFileFromImage extracts an env file from an image.
@@ -1583,7 +1596,7 @@ func (r *Runtime) ExtractEnvFileFromImage(ctx context.Context, imageRef, envFile
 	}
 	defer reader.Close()
 
-	data, err := io.ReadAll(reader)
+	data, err := readExtractedEnvFile(reader)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to read extracted env file")
 	}

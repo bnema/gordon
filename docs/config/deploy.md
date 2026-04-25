@@ -98,6 +98,18 @@ container shutdown.
 
 Default: `"30s"`
 
+## Container security profile
+
+Runtime hardening is configured under `[containers]`:
+
+```toml
+[containers]
+security_profile = "compat" # "compat" or "strict"
+```
+
+- `compat` is the default and preserves existing image compatibility while keeping `no-new-privileges` and capability drop/add defaults.
+- `strict` enables a read-only root filesystem, drops all capabilities, and only adds `NET_BIND_SERVICE`. Images that write outside mounted volumes or need extra Linux capabilities may require changes before using this profile.
+
 ## Notes
 
 - Changes to `deploy.pull_policy` require a restart to take effect.

@@ -98,6 +98,64 @@ func newTestHandler(t *testing.T, opts ...func(*HandlerDeps)) *Handler {
 	return NewHandler(deps)
 }
 
+func TestHandler_VolumesGet_RequiresVolumesReadScope(t *testing.T) {
+	volumeSvc := inmocks.NewMockVolumeService(t)
+	handler := newTestHandler(t, func(d *HandlerDeps) { d.VolumeSvc = volumeSvc })
+
+	tests := []struct {
+		name       string
+		scopes     []string
+		wantStatus int
+	}{
+		{name: "volumes read access granted", scopes: []string{"admin:volumes:read"}, wantStatus: http.StatusOK},
+		{name: "all admin access granted", scopes: []string{"admin:*:*"}, wantStatus: http.StatusOK},
+		{name: "status read denied", scopes: []string{"admin:status:read"}, wantStatus: http.StatusForbidden},
+		{name: "volumes write denied", scopes: []string{"admin:volumes:write"}, wantStatus: http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantStatus == http.StatusOK {
+				volumeSvc.EXPECT().ListVolumes(mock.Anything).Return([]*domain.VolumeInfo{}, nil).Once()
+			}
+			server := newScopedTestServer(t, handler, tt.scopes...)
+			resp, err := http.Get(server.URL + "/admin/volumes")
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, tt.wantStatus, resp.StatusCode)
+		})
+	}
+}
+
+func TestHandler_VolumesPrune_RequiresVolumesWriteScope(t *testing.T) {
+	volumeSvc := inmocks.NewMockVolumeService(t)
+	handler := newTestHandler(t, func(d *HandlerDeps) { d.VolumeSvc = volumeSvc })
+
+	tests := []struct {
+		name       string
+		scopes     []string
+		wantStatus int
+	}{
+		{name: "volumes write access granted", scopes: []string{"admin:volumes:write"}, wantStatus: http.StatusOK},
+		{name: "all admin access granted", scopes: []string{"admin:*:*"}, wantStatus: http.StatusOK},
+		{name: "config write denied", scopes: []string{"admin:config:write"}, wantStatus: http.StatusForbidden},
+		{name: "volumes read denied", scopes: []string{"admin:volumes:read"}, wantStatus: http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantStatus == http.StatusOK {
+				volumeSvc.EXPECT().PruneVolumes(mock.Anything, true).Return(&domain.VolumePruneReport{}, []*domain.VolumeInfo{}, nil).Once()
+			}
+			server := newScopedTestServer(t, handler, tt.scopes...)
+			resp, err := http.Post(server.URL+"/admin/volumes/prune", "application/json", bytes.NewBufferString(`{"dry_run":true}`))
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, tt.wantStatus, resp.StatusCode)
+		})
+	}
+}
+
 // Routes endpoint tests
 
 func TestHandler_RoutesGet_RequiresReadScope(t *testing.T) {
@@ -1064,6 +1122,36 @@ func TestHandler_Status_RequiresReadScope(t *testing.T) {
 
 // Config endpoint tests
 
+func TestHandler_Config_HidesSensitiveInventoryByDefault(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	handler := newTestHandler(t, func(d *HandlerDeps) { d.ConfigSvc = configSvc })
+
+	configSvc.EXPECT().GetServerPort().Return(8080).Once()
+	configSvc.EXPECT().GetRegistryPort().Return(5000).Once()
+	configSvc.EXPECT().GetRegistryDomain().Return("registry.example.com").Once()
+	configSvc.EXPECT().IsAutoRouteEnabled().Return(true).Once()
+	configSvc.EXPECT().IsNetworkIsolationEnabled().Return(false).Once()
+	configSvc.EXPECT().GetNetworkPrefix().Return("gordon").Once()
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{}).Once()
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{"db.example.com": "http://10.0.0.5:5432"}).Once()
+
+	server := newScopedTestServer(t, handler, "admin:config:read")
+	resp, err := http.Get(server.URL + "/admin/config")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body := string(bodyBytes)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &raw))
+	serverConfig := raw["server"].(map[string]any)
+	assert.NotContains(t, serverConfig, "data_dir")
+	assert.NotContains(t, body, "/var/lib/gordon")
+	assert.NotContains(t, body, "10.0.0.5")
+}
+
 func TestHandler_Config_RequiresReadScope(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
@@ -1542,6 +1630,41 @@ func TestHandler_Restart_InvalidDomain(t *testing.T) {
 	}
 }
 
+func TestHandler_Deploy_ConfigWriteOnlyOmitsDeployFailureLogs(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	route := &domain.Route{Domain: "app.example.com", Image: "registry.local/myapp:latest"}
+	deployErr := &domain.DeployFailureError{
+		Summary: "failed to deploy",
+		Cause:   "image pull failed",
+		Hint:    "push the image before retrying",
+		Logs:    []string{"PASSWORD=hunter2", "TOKEN=abc123"},
+	}
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(route, nil).Once()
+	containerSvc.EXPECT().Deploy(mock.Anything, *route).Return(nil, deployErr).Once()
+
+	server := newScopedTestServer(t, handler, "admin:config:write")
+	resp, err := http.Post(server.URL+"/admin/deploy/app.example.com", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	body := string(bodyBytes)
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying"}`, body)
+	assert.NotContains(t, body, "hunter2")
+	assert.NotContains(t, body, "abc123")
+}
+
 func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
@@ -1553,8 +1676,8 @@ func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
 		Cause:   "image pull failed",
 		Hint:    "push the image before retrying",
 		Logs: []string{
-			"pulling manifest",
-			"manifest unknown",
+			"pulling manifest PASSWORD=hunter2",
+			`{"TOKEN":"abc123"}`,
 		},
 		Err: errors.New("manifest unknown: internal registry detail"),
 	}
@@ -1566,7 +1689,7 @@ func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
 		d.SecretSvc = secretSvc
 	})
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler.ServeHTTP(w, r.WithContext(ctxWithScopes("admin:config:write")))
+		handler.ServeHTTP(w, r.WithContext(ctxWithScopes("admin:config:write", "admin:logs:read")))
 	}))
 	defer s.Close()
 
@@ -1582,8 +1705,10 @@ func TestHandler_Deploy_StructuredDeployFailure(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying","logs":["pulling manifest","manifest unknown"]}`, string(body))
+	assert.JSONEq(t, `{"error":"failed to deploy","cause":"image pull failed","hint":"push the image before retrying","logs":["pulling manifest PASSWORD=[REDACTED]","{\"TOKEN\":\"[REDACTED]\"}"]}`, string(body))
 	assert.NotContains(t, string(body), "internal registry detail")
+	assert.NotContains(t, string(body), "hunter2")
+	assert.NotContains(t, string(body), "abc123")
 }
 
 func TestHandler_Deploy_GenericErrorStillUsesLegacyBody(t *testing.T) {
@@ -2043,6 +2168,43 @@ func TestHandler_BackupsRunDomain_ChunkedBodyIsDecoded(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "completed")
+}
+
+func TestHandler_LogsRequireLogsReadAndRedact(t *testing.T) {
+	logSvc := inmocks.NewMockLogService(t)
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.LogSvc = logSvc
+	})
+
+	t.Run("status read denied", func(t *testing.T) {
+		server := newScopedTestServer(t, handler, "admin:status:read")
+		resp, err := http.Get(server.URL + "/admin/logs")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		bodyBytes, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+		assert.Contains(t, string(bodyBytes), "insufficient permissions for logs:read")
+	})
+
+	t.Run("logs read allowed and redacted", func(t *testing.T) {
+		logSvc.EXPECT().GetProcessLogs(mock.Anything, 50).Return([]string{"PASSWORD=hunter2", `{"API_KEY":"abc123"}`}, nil).Once()
+
+		server := newScopedTestServer(t, handler, "admin:logs:read")
+		resp, err := http.Get(server.URL + "/admin/logs")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		bodyBytes, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		body := string(bodyBytes)
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Contains(t, body, "PASSWORD=[REDACTED]")
+		assert.Contains(t, body, `\"API_KEY\":\"[REDACTED]\"`)
+		assert.NotContains(t, body, "hunter2")
+		assert.NotContains(t, body, "abc123")
+	})
 }
 
 func TestHandler_BackupsDetectDomain(t *testing.T) {

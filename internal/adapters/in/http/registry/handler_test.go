@@ -293,7 +293,7 @@ func TestHandler_BlobUpload_PATCH(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("chunk content")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything, mock.Anything, mock.Anything).Return(int64(len(chunkData)), nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
@@ -310,7 +310,7 @@ func TestHandler_BlobUpload_PUT_Finalize(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("final chunk")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything, mock.Anything, mock.Anything).Return(int64(len(chunkData)), nil)
 	registrySvc.EXPECT().FinishUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
 
 	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000?digest=sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", bytes.NewReader(chunkData))
@@ -432,7 +432,7 @@ func TestHandler_BlobUpload_PATCH_ReturnsDockerUploadUUID(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("chunk content")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything, mock.Anything, mock.Anything).Return(int64(len(chunkData)), nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
@@ -453,12 +453,14 @@ func TestHandler_BlobUpload_PATCH_RespectsConfiguredMaxBlobChunkSize(t *testing.
 
 	// The handler wraps r.Body in MaxBytesReader and passes it to AppendBlobChunk.
 	// The mock must read the body to trigger MaxBytesError, which the handler detects.
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).
-		Run(func(_ context.Context, _ string, _ string, data io.Reader) {
-			// Drain the reader to trigger MaxBytesError
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, data io.Reader, _ int64, _ int64) {
+			// Drain the reader to trigger MaxBytesError after the storage layer may
+			// have written the limit-sized prefix.
 			_, _ = io.ReadAll(data)
 		}).
 		Return(int64(0), &http.MaxBytesError{Limit: 5})
+	registrySvc.EXPECT().CancelUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000").Return(nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader([]byte("chunk content")))
 	rec := httptest.NewRecorder()
@@ -473,7 +475,7 @@ func TestHandler_BlobUpload_PATCH_ReturnsRangeHeader(t *testing.T) {
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
 	chunkData := []byte("chunk content")
-	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything, mock.Anything, mock.Anything).Return(int64(len(chunkData)), nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
@@ -483,4 +485,78 @@ func TestHandler_BlobUpload_PATCH_ReturnsRangeHeader(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, rec.Code)
 	// OCI spec: Range header should reflect total received bytes
 	assert.Equal(t, "0-12", rec.Header().Get("Range"))
+}
+
+func TestDefaultMaxBlobSize_Is1GB(t *testing.T) {
+	assert.Equal(t, int64(1024*1024*1024), int64(DefaultMaxBlobSize))
+}
+
+func TestHandler_BlobUpload_PATCH_MaxBlobSizeExceededReturnsSizeInvalidAndCancels(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize, 10)
+
+	registrySvc.EXPECT().AppendBlobChunk(
+		mock.Anything,
+		"myapp",
+		"550e8400-e29b-41d4-a716-446655440000",
+		mock.Anything,
+		int64(6),
+		int64(10),
+	).Return(int64(0), domain.ErrBlobSizeExceeded)
+	registrySvc.EXPECT().CancelUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000").Return(nil)
+
+	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader([]byte("123456")))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Contains(t, rec.Body.String(), "SIZE_INVALID")
+}
+
+func TestHandler_BlobUpload_PATCH_ContentLengthTooLargeReturnsSizeInvalidAndCancels(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize, 10)
+
+	registrySvc.EXPECT().AppendBlobChunk(
+		mock.Anything,
+		"myapp",
+		"550e8400-e29b-41d4-a716-446655440000",
+		mock.Anything,
+		int64(11),
+		int64(10),
+	).Return(int64(0), domain.ErrBlobSizeExceeded)
+	registrySvc.EXPECT().CancelUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000").Return(nil)
+
+	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader([]byte("12345678901")))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Contains(t, rec.Body.String(), "SIZE_INVALID")
+}
+
+func TestHandler_BlobUpload_PUT_FinalizeUnderMaxBlobSize(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize, 10)
+
+	chunkData := []byte("1234567890")
+	registrySvc.EXPECT().AppendBlobChunk(
+		mock.Anything,
+		"myapp",
+		"550e8400-e29b-41d4-a716-446655440000",
+		mock.Anything,
+		int64(len(chunkData)),
+		int64(10),
+	).Return(int64(len(chunkData)), nil)
+	registrySvc.EXPECT().FinishUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
+
+	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000?digest=sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", bytes.NewReader(chunkData))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", rec.Header().Get("Docker-Content-Digest"))
 }

@@ -246,16 +246,16 @@ func (_c *MockContainerRuntime_CreateContainer_Call) RunAndReturn(run func(ctx c
 }
 
 // CreateNetwork provides a mock function for the type MockContainerRuntime
-func (_mock *MockContainerRuntime) CreateNetwork(ctx context.Context, name string, options map[string]string) error {
-	ret := _mock.Called(ctx, name, options)
+func (_mock *MockContainerRuntime) CreateNetwork(ctx context.Context, name string, config domain.NetworkConfig) error {
+	ret := _mock.Called(ctx, name, config)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateNetwork")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]string) error); ok {
-		r0 = returnFunc(ctx, name, options)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, domain.NetworkConfig) error); ok {
+		r0 = returnFunc(ctx, name, config)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -270,12 +270,12 @@ type MockContainerRuntime_CreateNetwork_Call struct {
 // CreateNetwork is a helper method to define mock.On call
 //   - ctx context.Context
 //   - name string
-//   - options map[string]string
-func (_e *MockContainerRuntime_Expecter) CreateNetwork(ctx interface{}, name interface{}, options interface{}) *MockContainerRuntime_CreateNetwork_Call {
-	return &MockContainerRuntime_CreateNetwork_Call{Call: _e.mock.On("CreateNetwork", ctx, name, options)}
+//   - config domain.NetworkConfig
+func (_e *MockContainerRuntime_Expecter) CreateNetwork(ctx interface{}, name interface{}, config interface{}) *MockContainerRuntime_CreateNetwork_Call {
+	return &MockContainerRuntime_CreateNetwork_Call{Call: _e.mock.On("CreateNetwork", ctx, name, config)}
 }
 
-func (_c *MockContainerRuntime_CreateNetwork_Call) Run(run func(ctx context.Context, name string, options map[string]string)) *MockContainerRuntime_CreateNetwork_Call {
+func (_c *MockContainerRuntime_CreateNetwork_Call) Run(run func(ctx context.Context, name string, config domain.NetworkConfig)) *MockContainerRuntime_CreateNetwork_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -285,9 +285,9 @@ func (_c *MockContainerRuntime_CreateNetwork_Call) Run(run func(ctx context.Cont
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 map[string]string
+		var arg2 domain.NetworkConfig
 		if args[2] != nil {
-			arg2 = args[2].(map[string]string)
+			arg2 = args[2].(domain.NetworkConfig)
 		}
 		run(
 			arg0,
@@ -303,7 +303,7 @@ func (_c *MockContainerRuntime_CreateNetwork_Call) Return(err error) *MockContai
 	return _c
 }
 
-func (_c *MockContainerRuntime_CreateNetwork_Call) RunAndReturn(run func(ctx context.Context, name string, options map[string]string) error) *MockContainerRuntime_CreateNetwork_Call {
+func (_c *MockContainerRuntime_CreateNetwork_Call) RunAndReturn(run func(ctx context.Context, name string, config domain.NetworkConfig) error) *MockContainerRuntime_CreateNetwork_Call {
 	_c.Call.Return(run)
 	return _c
 }

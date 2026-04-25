@@ -1,0 +1,11 @@
+.git
+.worktrees
+.gitignore
+.gitleaks.toml
+Dockerfile
+*.log
+/tmp
+coverage.out
+dist
+build
+node_modules

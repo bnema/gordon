@@ -26,6 +26,8 @@ runs:
     - name: Install Gordon
       id: install
       shell: bash
+      env:
+        GORDON_VERSION_INPUT: ${{ inputs.version }}
       run: |
         set -euo pipefail
 
@@ -43,7 +45,11 @@ runs:
           *)      echo "Unsupported architecture: ${RUNNER_ARCH}" >&2; exit 1 ;;
         esac
 
-        version="${{ inputs.version }}"
+        version="${GORDON_VERSION_INPUT}"
+        if ! [[ "${version}" =~ ^(latest|v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?)$ ]]; then
+          echo "Invalid Gordon version: ${version}" >&2
+          exit 1
+        fi
 
         # Resolve 'latest' to an actual tag via redirect URL
         if [ "${version}" = "latest" ]; then
@@ -53,24 +59,67 @@ runs:
             echo "Failed to resolve latest Gordon version" >&2
             exit 1
           fi
+          if ! [[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Resolved invalid Gordon version: ${version}" >&2
+            exit 1
+          fi
         fi
 
         archive="gordon_${os}_${arch}.tar.gz"
-        url="https://github.com/bnema/gordon/releases/download/${version}/${archive}"
-        dest="/tmp/${archive}"
+        base_url="https://github.com/bnema/gordon/releases/download/${version}"
+        url="${base_url}/${archive}"
+        checksums_url="${base_url}/checksums.txt"
+        work_dir="$(mktemp -d)"
+        dest="${work_dir}/${archive}"
+        checksums="${work_dir}/checksums.txt"
+        extract_dir="${work_dir}/extract"
         install_path="/usr/local/bin/gordon"
+        trap 'rm -rf "${work_dir}"' EXIT
 
         echo "Installing Gordon ${version} (${os}/${arch}) from ${url}"
 
-        # Download the release archive
+        # Download the release archive and checksums
+        curl -fsSL -o "${checksums}" "${checksums_url}"
         curl -fsSL -o "${dest}" "${url}"
 
-        # Extract just the gordon binary and clean up
-        tar -xzf "${dest}" -C /usr/local/bin/ gordon
-        rm -f "${dest}"
+        # Verify checksum before extraction
+        archive_escaped="$(printf '%s\n' "${archive}" | sed 's/[.[\\*^$()+?{|]/\\\\&/g')"
+        checksum_lines="$(grep -E "^[0-9a-fA-F]{64}[[:space:]]+\\*?${archive_escaped}$" "${checksums}" || true)"
+        if [ "$(printf '%s\n' "${checksum_lines}" | sed '/^$/d' | wc -l | tr -d ' ')" != "1" ]; then
+          echo "Expected exactly one checksum for ${archive} in checksums.txt" >&2
+          exit 1
+        fi
+        expected="$(printf '%s\n' "${checksum_lines}" | awk '{print $1}')"
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual="$(sha256sum "${dest}" | awk '{print $1}')"
+        elif command -v shasum >/dev/null 2>&1; then
+          actual="$(shasum -a 256 "${dest}" | awk '{print $1}')"
+        else
+          echo "Neither sha256sum nor shasum is available for checksum verification" >&2
+          exit 1
+        fi
+        if [ "${expected}" != "${actual}" ]; then
+          echo "Checksum verification failed for ${archive}" >&2
+          echo "Expected: ${expected}" >&2
+          echo "Actual:   ${actual}" >&2
+          exit 1
+        fi
 
-        # Make executable and verify
-        chmod +x "${install_path}"
+        # Extract just the gordon binary and reject symlinks/directories
+        mkdir -p "${extract_dir}"
+        tar -xzf "${dest}" -C "${extract_dir}" gordon
+        binary="${extract_dir}/gordon"
+        if [ ! -f "${binary}" ] || [ -L "${binary}" ]; then
+          echo "Archive did not contain a regular Gordon binary" >&2
+          exit 1
+        fi
+
+        # Install with explicit executable permissions and verify
+        if [ -w "$(dirname "${install_path}")" ]; then
+          install -m 0755 "${binary}" "${install_path}"
+        else
+          sudo install -m 0755 "${binary}" "${install_path}"
+        fi
         gordon version
 
         # Set outputs

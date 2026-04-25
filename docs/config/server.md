@@ -14,6 +14,8 @@ tls_port = 8443                          # HTTPS listener port (0 = disabled)
 # force_https_redirect = false             # Redirect all HTTP traffic to HTTPS
 gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 # data_dir = "~/.gordon"                 # Data storage directory (default)
+max_blob_chunk_size = "95MB"             # Max registry blob upload chunk
+max_blob_size = "1GB"                    # Max cumulative registry blob/layer upload
 ```
 
 ## Options
@@ -31,6 +33,7 @@ gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
 | `max_proxy_body_size` | string | `"512MB"` | Maximum request body size for proxied requests |
 | `max_blob_chunk_size` | string | `"95MB"` | Maximum request body size for a single registry blob upload chunk |
+| `max_blob_size` | string | `"1GB"` | Maximum cumulative size for one registry blob/layer upload |
 | `registry_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `proxy_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
 | `registry_listen_address` | string | `""` | Bind address for registry (empty = all interfaces) |
@@ -273,6 +276,22 @@ max_blob_chunk_size = "1GB"    # Allow larger layers
 - Gordon CLI uploads image layers in 50MB chunks by default, and this setting caps the maximum chunk accepted per request
 - Keep this below Cloudflare's 100MB per-request limit when operating behind Cloudflare; the default (`95MB`) is fine
 - Increase it only if you expect larger direct registry uploads from other clients
+
+## Maximum Registry Blob Size
+
+The `max_blob_size` setting limits the cumulative size of one blob/layer upload across all chunks:
+
+```toml
+[server]
+max_blob_size = "1GB"  # Default
+```
+
+**Purpose:** Prevents disk exhaustion from multi-chunk uploads where each individual chunk is below `max_blob_chunk_size` but the total blob grows without bound.
+
+**Behavior:**
+- Gordon tracks the current upload size and rejects appends that would exceed the limit.
+- Rejected uploads return an OCI-compatible `413` size error.
+- Failed uploads are cleaned up so temporary blob data does not accumulate indefinitely.
 
 ## Registry IP Allowlist
 

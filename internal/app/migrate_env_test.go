@@ -71,12 +71,11 @@ func TestMigrateEnvFile(t *testing.T) {
 	err = migrateEnvFile(tmpDir, envFileName, store, logger)
 	require.NoError(t, err)
 
-	migratedPath := envFilePath + ".migrated"
 	_, err = os.Stat(envFilePath)
 	assert.True(t, os.IsNotExist(err), "original .env file should be removed")
 
-	_, err = os.Stat(migratedPath)
-	assert.NoError(t, err, ".env.migrated file should exist")
+	_, err = os.Stat(envFilePath + ".migrated")
+	assert.True(t, os.IsNotExist(err), ".env.migrated plaintext should not be preserved by default")
 
 	passKeys, err := store.ListKeys(domainName)
 	require.NoError(t, err)
@@ -125,12 +124,11 @@ func TestMigrateAttachmentEnvFile(t *testing.T) {
 	err = migrateAttachmentEnvFile(tmpDir, envFileName, store, logger)
 	require.NoError(t, err)
 
-	migratedPath := envFilePath + ".migrated"
 	_, err = os.Stat(envFilePath)
 	assert.True(t, os.IsNotExist(err), "original .env file should be removed")
 
-	_, err = os.Stat(migratedPath)
-	assert.NoError(t, err, ".env.migrated file should exist")
+	_, err = os.Stat(envFilePath + ".migrated")
+	assert.True(t, os.IsNotExist(err), ".env.migrated plaintext should not be preserved by default")
 
 	values, err := store.GetAllAttachment(storedContainerName)
 	require.NoError(t, err)
