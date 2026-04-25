@@ -26,6 +26,8 @@ const (
 	// Kept at 95MB to stay within Cloudflare's 100MB per-request limit.
 	// Users who need larger chunks can configure it explicitly via max_blob_chunk_size.
 	DefaultMaxBlobChunkSize = 95 * 1024 * 1024
+	// DefaultMaxBlobSize is the default maximum cumulative size for a blob upload.
+	DefaultMaxBlobSize = 1024 * 1024 * 1024
 )
 
 // Handler implements the HTTP handler for Docker Registry API v2.
@@ -33,6 +35,7 @@ type Handler struct {
 	registrySvc      in.RegistryService
 	log              zerowrap.Logger
 	maxBlobChunkSize int64
+	maxBlobSize      int64
 }
 
 // NewHandler creates a new registry HTTP handler.
@@ -40,15 +43,21 @@ func NewHandler(
 	registrySvc in.RegistryService,
 	log zerowrap.Logger,
 	maxBlobChunkSize int64,
+	maxBlobSize ...int64,
 ) *Handler {
 	if maxBlobChunkSize <= 0 {
 		maxBlobChunkSize = DefaultMaxBlobChunkSize
+	}
+	blobSizeLimit := int64(DefaultMaxBlobSize)
+	if len(maxBlobSize) > 0 && maxBlobSize[0] > 0 {
+		blobSizeLimit = maxBlobSize[0]
 	}
 
 	return &Handler{
 		registrySvc:      registrySvc,
 		log:              log,
 		maxBlobChunkSize: maxBlobChunkSize,
+		maxBlobSize:      blobSizeLimit,
 	}
 }
 
@@ -413,12 +422,18 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Stream the body directly to storage — memory usage is bounded to a small
 	// copy buffer (~32KB) regardless of chunk size.
-	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, r.Body)
+	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, r.Body, r.ContentLength, h.maxBlobSize)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			log.Warn().Int64("max_size", h.maxBlobChunkSize).Msg("blob chunk too large")
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob chunk exceeds maximum size")
+			return
+		}
+		if errors.Is(err, domain.ErrBlobSizeExceeded) {
+			log.Warn().Int64("max_size", h.maxBlobSize).Msg("blob upload too large")
+			_ = h.registrySvc.CancelUpload(ctx, uuid)
+			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob exceeds maximum size")
 			return
 		}
 		log.Error().Err(err).Msg("failed to append blob chunk")

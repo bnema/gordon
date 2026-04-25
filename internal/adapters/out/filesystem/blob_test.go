@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 const (
@@ -24,6 +27,15 @@ const (
 
 func testLogger() zerowrap.Logger {
 	return zerowrap.Default()
+}
+
+type readFailer struct {
+	read bool
+}
+
+func (r *readFailer) Read(_ []byte) (int, error) {
+	r.read = true
+	return 0, io.ErrUnexpectedEOF
 }
 
 func TestNewBlobStorage(t *testing.T) {
@@ -280,13 +292,13 @@ func TestBlobStorage_AppendBlobChunk(t *testing.T) {
 
 	// Append first chunk
 	chunk1 := []byte("first chunk")
-	size1, err := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(chunk1))
+	size1, err := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(chunk1), -1, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(chunk1)), size1)
 
 	// Append second chunk
 	chunk2 := []byte(" second chunk")
-	size2, err := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(chunk2))
+	size2, err := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(chunk2), -1, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(chunk1)+len(chunk2)), size2)
 }
@@ -298,10 +310,81 @@ func TestBlobStorage_AppendBlobChunk_NotFound(t *testing.T) {
 	storage, err := NewBlobStorage(tmpDir, log)
 	require.NoError(t, err)
 
-	_, err = storage.AppendBlobChunk("myapp", "00000000-0000-4000-a000-000000000000", bytes.NewReader([]byte("data")))
+	_, err = storage.AppendBlobChunk("myapp", "00000000-0000-4000-a000-000000000000", bytes.NewReader([]byte("data")), -1, 100)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upload not found")
+}
+
+func TestBlobStorage_AppendBlobChunk_MaxBlobSize(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewBlobStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+
+	size, err := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("12345")), -1, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), size)
+
+	size, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("67890")), -1, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(10), size)
+
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("x")), -1, 10)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrBlobSizeExceeded))
+
+	uploadPath := filepath.Join(tmpDir, "uploads", uuid)
+	info, statErr := os.Stat(uploadPath)
+	require.NoError(t, statErr)
+	assert.Equal(t, int64(10), info.Size())
+}
+
+func TestBlobStorage_AppendBlobChunk_MaxBlobSizeContentLengthTooLargeDoesNotRead(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewBlobStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("12345")), 5, 10)
+	require.NoError(t, err)
+
+	reader := &readFailer{}
+	_, err = storage.AppendBlobChunk("myapp", uuid, reader, 6, 10)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrBlobSizeExceeded)
+	assert.False(t, reader.read)
+}
+
+func TestBlobStorage_AppendBlobChunk_MaxBlobSizeOverflowMidReadTruncates(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewBlobStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("12345")), -1, 10)
+	require.NoError(t, err)
+
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("6789012345")), -1, 10)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrBlobSizeExceeded))
+
+	uploadPath := filepath.Join(tmpDir, "uploads", uuid)
+	info, statErr := os.Stat(uploadPath)
+	require.NoError(t, statErr)
+	assert.Equal(t, int64(5), info.Size())
 }
 
 func TestBlobStorage_GetBlobUpload(t *testing.T) {
@@ -350,7 +433,7 @@ func TestBlobStorage_FinishBlobUpload(t *testing.T) {
 
 	// Append data - content that hashes to testDigest1
 	blobData := []byte("complete blob content")
-	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData))
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData), -1, 0)
 	require.NoError(t, err)
 
 	// Finish upload - use testDigest1 (validation will pass, but hash won't match)
@@ -477,7 +560,7 @@ func TestBlobStorage_CompleteUploadFlow(t *testing.T) {
 
 	var totalSize int64
 	for _, chunk := range chunks {
-		size, err := storage.AppendBlobChunk(repoName, uuid, bytes.NewReader(chunk))
+		size, err := storage.AppendBlobChunk(repoName, uuid, bytes.NewReader(chunk), -1, 0)
 		require.NoError(t, err)
 		totalSize = size
 	}
@@ -501,7 +584,7 @@ func TestBlobStorage_ConcurrentAppendAndFinalize(t *testing.T) {
 	require.NoError(t, err)
 
 	initialData := []byte("initial-")
-	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(initialData))
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(initialData), -1, 0)
 	require.NoError(t, err)
 
 	appendChunk := []byte("chunk")
@@ -516,7 +599,7 @@ func TestBlobStorage_ConcurrentAppendAndFinalize(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-appendReady
-			_, appendErr := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(appendChunk))
+			_, appendErr := storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(appendChunk), -1, 0)
 			appendErrs <- appendErr
 		}()
 	}
@@ -570,7 +653,7 @@ func TestBlobStorage_ConcurrentAppendAndFinalize(t *testing.T) {
 		assert.Equal(t, fullyAppended, blobData)
 	}
 
-	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("after")))
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("after")), -1, 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upload not found")
 }
@@ -586,13 +669,13 @@ func TestBlobStorage_AppendAfterFinalize(t *testing.T) {
 	require.NoError(t, err)
 
 	blobData := []byte("finalized content")
-	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData))
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData), -1, 0)
 	require.NoError(t, err)
 
 	err = storage.FinishBlobUpload(uuid, digestForData(blobData))
 	require.NoError(t, err)
 
-	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("more")))
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("more")), -1, 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upload not found")
 }
@@ -608,7 +691,7 @@ func TestBlobStorage_FailedFinalizeRetryable(t *testing.T) {
 	require.NoError(t, err)
 
 	blobData := []byte("retryable finalize")
-	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData))
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData), -1, 0)
 	require.NoError(t, err)
 
 	err = storage.FinishBlobUpload(uuid, testDigest1)
@@ -638,7 +721,7 @@ func TestBlobStorage_SequentialFlow(t *testing.T) {
 	var blobData []byte
 	for _, chunk := range chunks {
 		blobData = append(blobData, chunk...)
-		_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(chunk))
+		_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(chunk), -1, 0)
 		require.NoError(t, err)
 	}
 

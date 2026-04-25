@@ -96,6 +96,7 @@ type Config struct {
 		DataDir              string   `mapstructure:"data_dir"`
 		MaxProxyBodySize     string   `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
 		MaxBlobChunkSize     string   `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
+		MaxBlobSize          string   `mapstructure:"max_blob_size"`           // e.g., "1GB", "2GB"
 		MaxProxyResponseSize string   `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
 		MaxConcurrentConns   int      `mapstructure:"max_concurrent_connections"`
 		RegistryAllowedIPs   []string `mapstructure:"registry_allowed_ips"`
@@ -215,6 +216,7 @@ type services struct {
 	previewService    *preview.Service
 	envDir            string
 	maxBlobChunkSize  int64
+	maxBlobSize       int64
 	caAdapter         *pkiadapter.CA
 	pkiSvc            *pkiusecase.Service
 	reloadCoordinator *reloadCoordinator
@@ -526,6 +528,7 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 		return err
 	}
 	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
+	si.svc.maxBlobSize = proxyCfg.maxBlobSize
 	si.svc.proxySvc = proxy.NewService(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
@@ -1349,6 +1352,7 @@ func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDi
 type proxyConfigResult struct {
 	proxyConfig      proxy.Config
 	maxBlobChunkSize int64
+	maxBlobSize      int64
 }
 
 type configWatcher interface {
@@ -1477,6 +1481,15 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 		maxBlobChunkSize = parsedSize
 	}
 
+	maxBlobSize := int64(registry.DefaultMaxBlobSize)
+	if cfg.Server.MaxBlobSize != "" {
+		parsedSize, err := bytesize.Parse(cfg.Server.MaxBlobSize)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid server.max_blob_size configuration", map[string]any{"value": cfg.Server.MaxBlobSize})
+		}
+		maxBlobSize = parsedSize
+	}
+
 	maxProxyResponseSize := int64(1 << 30) // 1GB default
 	if cfg.Server.MaxProxyResponseSize != "" {
 		parsedSize, err := bytesize.Parse(cfg.Server.MaxProxyResponseSize)
@@ -1501,6 +1514,7 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 			MaxConcurrentConns: maxConcurrentConns,
 		},
 		maxBlobChunkSize: maxBlobChunkSize,
+		maxBlobSize:      maxBlobSize,
 	}, nil
 }
 
@@ -1758,8 +1772,8 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
 	trustedNets := httphelper.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 
-	// Registry handler (unchanged)
-	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize)
+	// Registry handler
+	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize, svc.maxBlobSize)
 	registryWithMiddleware, cidrAllowlistMiddleware, rateLimitMiddleware := buildRegistryHandlerWithMiddleware(
 		svc,
 		cfg,

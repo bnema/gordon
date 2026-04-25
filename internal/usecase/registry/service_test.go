@@ -306,6 +306,38 @@ func TestService_StartUpload_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to start blob upload")
 }
 
+func TestService_AppendBlobChunk_PassesMaxBlobSize(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(blobStorage, manifestStorage, eventBus)
+	ctx := testContext()
+
+	blobStorage.EXPECT().AppendBlobChunk("myapp", "upload-id", mock.Anything, int64(4), int64(10)).Return(int64(4), nil)
+
+	length, err := svc.AppendBlobChunk(ctx, "myapp", "upload-id", strings.NewReader("data"), 4, 10)
+
+	assert.NoError(t, err)
+	assert.Equal(t, int64(4), length)
+}
+
+func TestService_AppendBlobChunk_MaxBlobSizeExceeded(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(blobStorage, manifestStorage, eventBus)
+	ctx := testContext()
+
+	blobStorage.EXPECT().AppendBlobChunk("myapp", "upload-id", mock.Anything, int64(11), int64(10)).Return(int64(0), domain.ErrBlobSizeExceeded)
+
+	_, err := svc.AppendBlobChunk(ctx, "myapp", "upload-id", strings.NewReader("too large"), 11, 10)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrBlobSizeExceeded)
+}
+
 func TestService_FinishUpload_Success(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	manifestStorage := mocks.NewMockManifestStorage(t)

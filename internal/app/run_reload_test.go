@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/proxy"
 )
@@ -136,6 +137,24 @@ func TestSetupConfigHotReload_WatchCallbackInvokesCoordinator(t *testing.T) {
 	configSvc.onChange()
 	require.Equal(t, 1, coordinator.ApplyCalls())
 	require.Equal(t, 0, coordinator.TriggerCalls())
+}
+
+func TestBuildProxyConfig_ParsesMaxBlobSizeWithoutChangingChunkDefault(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.MaxBlobSize = "2GB"
+
+	result, err := buildProxyConfig(cfg, zerowrap.Default())
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(2<<30), result.maxBlobSize)
+	assert.Equal(t, int64(registry.DefaultMaxBlobChunkSize), result.maxBlobChunkSize)
+}
+
+func TestBuildProxyConfig_DefaultMaxBlobSize(t *testing.T) {
+	result, err := buildProxyConfig(Config{}, zerowrap.Default())
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(registry.DefaultMaxBlobSize), result.maxBlobSize)
 }
 
 func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEvent(t *testing.T) {

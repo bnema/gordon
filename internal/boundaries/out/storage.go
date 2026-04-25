@@ -30,7 +30,7 @@ type BlobStorage interface {
 	StartBlobUpload(name string) (string, error)
 
 	// AppendBlobChunk appends data to an in-progress upload.
-	AppendBlobChunk(name, uuid string, data io.Reader) (int64, error)
+	AppendBlobChunk(name, uuid string, data io.Reader, contentLength, maxBlobSize int64) (int64, error)
 
 	// GetBlobUpload returns a writer for the upload.
 	GetBlobUpload(uuid string) (io.WriteCloser, error)

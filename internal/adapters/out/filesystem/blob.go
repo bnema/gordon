@@ -17,6 +17,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/google/uuid"
 
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/pkg/validation"
 )
 
@@ -254,7 +255,7 @@ func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
 }
 
 // AppendBlobChunk appends data to an in-progress upload.
-func (s *BlobStorage) AppendBlobChunk(name, uuid string, data io.Reader) (int64, error) {
+func (s *BlobStorage) AppendBlobChunk(name, uuid string, data io.Reader, contentLength, maxBlobSize int64) (int64, error) {
 	uploadPath, err := s.getUploadPath(uuid)
 	if err != nil {
 		return 0, fmt.Errorf("invalid upload path: %w", err)
@@ -274,12 +275,33 @@ func (s *BlobStorage) AppendBlobChunk(name, uuid string, data io.Reader) (int64,
 	}
 	defer file.Close()
 
+	fi, err := file.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get file info: %w", err)
+	}
+	originalSize := fi.Size()
+
+	if maxBlobSize > 0 {
+		remaining := maxBlobSize - originalSize
+		if remaining < 0 || (contentLength >= 0 && contentLength > remaining) {
+			return 0, domain.ErrBlobSizeExceeded
+		}
+		data = io.LimitReader(data, remaining+1)
+	}
+
 	written, err := io.Copy(file, data)
 	if err != nil {
 		return 0, fmt.Errorf("failed to write chunk to upload file: %w", err)
 	}
 
-	fi, err := file.Stat()
+	if maxBlobSize > 0 && originalSize+written > maxBlobSize {
+		if err := file.Truncate(originalSize); err != nil {
+			return 0, fmt.Errorf("failed to truncate oversized upload: %w", err)
+		}
+		return 0, domain.ErrBlobSizeExceeded
+	}
+
+	fi, err = file.Stat()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get file info: %w", err)
 	}
