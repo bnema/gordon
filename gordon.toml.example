@@ -1,0 +1,94 @@
+# Gordon example configuration
+# Copy this file to ~/.config/gordon/gordon.toml and adjust for your domain.
+
+[server]
+port = 8088
+registry_port = 5000
+gordon_domain = "gordon.example.com"
+# data_dir = "~/.gordon"
+
+[auth]
+enabled = true
+# Use "pass" or "sops" in production. The unsafe backend reads a local file
+# under server.data_dir/secrets and is intended for development only.
+secrets_backend = "pass"
+token_secret = "gordon/auth/token_secret"
+token_expiry = "30d"
+access_token_ttl = "15m"
+
+[api.rate_limit]
+enabled = true
+global_rps = 500
+per_ip_rps = 50
+burst = 100
+trusted_proxies = []
+
+[deploy]
+pull_policy = "if-tag-changed"
+readiness_mode = "auto"
+health_timeout = "90s"
+readiness_delay = "5s"
+drain_mode = "auto"
+drain_timeout = "30s"
+drain_delay = "2s"
+
+[containers]
+# "compat" preserves broad image compatibility. "strict" enables a read-only
+# root filesystem and narrower Linux capabilities.
+security_profile = "compat"
+
+[network_isolation]
+enabled = true
+network_prefix = "gordon"
+# Set true to create Docker internal networks without direct external egress.
+internal = false
+
+[volumes]
+auto_create = true
+prefix = "gordon"
+preserve = true
+
+[images]
+# Explicit external registries must be listed here. Gordon's own registry is
+# always allowed; localhost/private/link-local registries are always rejected.
+allowed_registries = []
+# Require @sha256:<digest> for allowlisted external registries.
+require_digest = false
+
+[images.prune]
+enabled = false
+schedule = "daily"
+keep_last = 3
+
+[auto_route]
+enabled = false
+
+[logging]
+level = "info"
+format = "console"
+
+[logging.container_logs]
+enabled = true
+
+[backups]
+enabled = false
+schedule = "daily"
+storage_dir = ""
+
+[backups.retention]
+hourly = 0
+daily = 0
+weekly = 0
+monthly = 0
+
+[routes]
+# "app.example.com" = { image = "myapp:latest" }
+
+[external_routes]
+# "status.example.com" = "127.0.0.1:9000"
+
+[network_groups]
+# "backend" = ["app.example.com", "api.example.com"]
+
+[attachments]
+# "app.example.com" = ["postgres:18"]

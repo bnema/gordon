@@ -253,7 +253,7 @@ func (h *Handler) handleTagListRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) handleBase(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleBase(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 	w.WriteHeader(http.StatusOK)
 }
@@ -427,6 +427,7 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			log.Warn().Int64("max_size", h.maxBlobChunkSize).Msg("blob chunk too large")
+			_ = h.registrySvc.CancelUpload(ctx, uuid)
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob chunk exceeds maximum size")
 			return
 		}

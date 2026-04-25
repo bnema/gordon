@@ -72,9 +72,9 @@ func (mr *MockRuntimeMockRecorder) CreateContainer(ctx, config any) *gomock.Call
 }
 
 // CreateNetwork mocks base method.
-func (m *MockRuntime) CreateNetwork(ctx context.Context, name string, config runtime.NetworkConfig) error {
+func (m *MockRuntime) CreateNetwork(ctx context.Context, name string, options map[string]string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateNetwork", ctx, name, config)
+	ret := m.ctrl.Call(m, "CreateNetwork", ctx, name, options)
 	ret0, _ := ret[0].(error)
 	return ret0
 }

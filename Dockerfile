@@ -2,7 +2,7 @@
 # Multi-stage build for optimized container image
 
 # Build stage
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26.1-alpine3.22 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o gordon .
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.22
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -56,11 +56,10 @@ COPY --chown=gordon:gordon gordon.toml.example /app/gordon.toml.example
 USER gordon
 
 # Expose ports
-EXPOSE 8080 5000
+EXPOSE 8088 5000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1
+# Admin health is served on the registry/admin listener and is gated by auth in
+# normal deployments, so this image does not declare a Docker healthcheck.
 
 # Default command
 CMD ["./gordon", "serve"]

@@ -17,7 +17,8 @@ tls_key_file = ""                            # PEM key path (optional, must be s
 force_https_redirect = false                 # Redirect all HTTP traffic to HTTPS (for direct-access setups)
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
-max_blob_chunk_size = "512MB"                # Max size per registry blob upload chunk
+max_blob_chunk_size = "95MB"                 # Max size per registry blob upload chunk
+max_blob_size = "1GB"                        # Max cumulative size per registry blob/layer upload
 registry_allowed_ips = []                    # IPs or CIDR ranges allowed to access the registry (empty = allow all)
 proxy_allowed_ips = []                       # IPs or CIDR ranges allowed to reach the proxy (empty = allow all, e.g. Cloudflare IPs)
 registry_listen_address = ""                 # Bind address for registry (empty = all interfaces, "127.0.0.1" = loopback only)
@@ -189,7 +190,8 @@ keep_last = 3                                # Keep N newest tags per repository
 | `server.force_https_redirect` | `false` | Redirect all HTTP to HTTPS (for direct-access setups) |
 | `server.gordon_domain` | `""` | **Required** - Gordon domain |
 | `server.data_dir` | `~/.gordon` | Data directory |
-| `server.max_blob_chunk_size` | `"512MB"` | Max size per registry blob upload chunk |
+| `server.max_blob_chunk_size` | `"95MB"` | Max size per registry blob upload chunk |
+| `server.max_blob_size` | `"1GB"` | Max cumulative size per registry blob/layer upload |
 | `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `server.proxy_allowed_ips` | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
 | `server.registry_listen_address` | `""` | Bind address for registry (empty = all interfaces) |

@@ -455,10 +455,12 @@ func TestHandler_BlobUpload_PATCH_RespectsConfiguredMaxBlobChunkSize(t *testing.
 	// The mock must read the body to trigger MaxBytesError, which the handler detects.
 	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything, mock.Anything, mock.Anything).
 		Run(func(_ context.Context, _ string, _ string, data io.Reader, _ int64, _ int64) {
-			// Drain the reader to trigger MaxBytesError
+			// Drain the reader to trigger MaxBytesError after the storage layer may
+			// have written the limit-sized prefix.
 			_, _ = io.ReadAll(data)
 		}).
 		Return(int64(0), &http.MaxBytesError{Limit: 5})
+	registrySvc.EXPECT().CancelUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000").Return(nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader([]byte("chunk content")))
 	rec := httptest.NewRecorder()

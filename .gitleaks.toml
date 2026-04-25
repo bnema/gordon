@@ -1,0 +1,32 @@
+title = "Gordon gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Allow documented placeholder credentials in Markdown examples"
+condition = "AND"
+paths = [
+  '''docs/config/env\.md$''',
+  '''docs/cli/auth\.md$''',
+  '''docs/config/telemetry\.md$''',
+  '''wiki/guides/remote-cli\.md$''',
+]
+regexes = [
+  '''sk-1234567890''',
+  '''8f3a2b1c4d5e6f7a8b9c0d1e2f3a4b5c\.\.\.''',
+  '''YWRtaW5AZXhhbXBsZS5jb206c2VjcmV0''',
+  '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.\.\.''',
+]
+
+[[allowlists]]
+description = "Allow deterministic non-secret test fixtures"
+condition = "AND"
+paths = [
+  '''internal/adapters/in/cli/remote/client_test\.go$''',
+  '''internal/adapters/out/envloader/file_test\.go$''',
+]
+regexes = [
+  '''short-lived-123''',
+  '''YXBpLnN1Yi5leGFtcGxlLmNvbQ\.env''',
+]
