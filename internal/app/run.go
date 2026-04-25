@@ -23,6 +23,7 @@ import (
 	"github.com/bnema/zerowrap"
 	zerowrapotel "github.com/bnema/zerowrap/otel"
 	"github.com/spf13/viper"
+	"golang.org/x/sys/unix"
 
 	// Adapters - Output
 	"github.com/bnema/gordon/internal/adapters/out/accesslog"
@@ -1336,16 +1337,69 @@ func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDi
 		provider := secrets.NewSopsProvider(log)
 		return provider.GetSecret(ctx, path)
 	case domain.SecretsBackendUnsafe:
-		// For unsafe backend, path is relative to dataDir/secrets/
-		secretFile := filepath.Join(dataDir, "secrets", path)
-		data, err := os.ReadFile(secretFile)
-		if err != nil {
-			return "", fmt.Errorf("failed to read secret file: %w", err)
-		}
-		return string(data), nil
+		// For unsafe backend, path is relative to dataDir/secrets/.
+		return readUnsafeSecret(dataDir, path)
 	default:
 		return "", fmt.Errorf("unknown secrets backend: %s", backend)
 	}
+}
+
+func readFileBeneath(root, cleanedRelPath string) ([]byte, error) {
+	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open secrets root: %w", err)
+	}
+	defer unix.Close(rootFD)
+
+	parts := strings.Split(filepath.ToSlash(cleanedRelPath), "/")
+	dirFD := rootFD
+	var closeDirFDs []int
+	defer func() {
+		for i := len(closeDirFDs) - 1; i >= 0; i-- {
+			_ = unix.Close(closeDirFDs[i])
+		}
+	}()
+
+	for i, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return nil, fmt.Errorf("invalid secret path: path must stay under dataDir/secrets")
+		}
+		last := i == len(parts)-1
+		if last {
+			fd, err := unix.Openat(dirFD, part, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read secret file: %w", err)
+			}
+			defer unix.Close(fd)
+			return os.ReadFile(fmt.Sprintf("/proc/self/fd/%d", fd))
+		}
+
+		nextFD, err := unix.Openat(dirFD, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open secret path component: %w", err)
+		}
+		closeDirFDs = append(closeDirFDs, nextFD)
+		dirFD = nextFD
+	}
+
+	return nil, fmt.Errorf("invalid secret path: empty path")
+}
+
+func readUnsafeSecret(dataDir, secretPath string) (string, error) {
+	if filepath.IsAbs(secretPath) {
+		return "", fmt.Errorf("invalid secret path: absolute paths are not allowed")
+	}
+	cleaned := filepath.Clean(secretPath)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid secret path: path must stay under dataDir/secrets")
+	}
+
+	root := filepath.Clean(filepath.Join(dataDir, "secrets"))
+	data, err := readFileBeneath(root, cleaned)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // proxyConfigResult holds parsed proxy and blob chunk size config.

@@ -1122,6 +1122,35 @@ func TestHandler_Status_RequiresReadScope(t *testing.T) {
 
 // Config endpoint tests
 
+func TestHandler_Config_HidesSensitiveInventoryByDefault(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	handler := newTestHandler(t, func(d *HandlerDeps) { d.ConfigSvc = configSvc })
+
+	configSvc.EXPECT().GetServerPort().Return(8080).Once()
+	configSvc.EXPECT().GetRegistryPort().Return(5000).Once()
+	configSvc.EXPECT().GetRegistryDomain().Return("registry.example.com").Once()
+	configSvc.EXPECT().IsAutoRouteEnabled().Return(true).Once()
+	configSvc.EXPECT().IsNetworkIsolationEnabled().Return(false).Once()
+	configSvc.EXPECT().GetNetworkPrefix().Return("gordon").Once()
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{}).Once()
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{"db.example.com": "http://10.0.0.5:5432"}).Once()
+
+	req := httptest.NewRequest("GET", "/admin/config", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &raw))
+	server := raw["server"].(map[string]any)
+	assert.NotContains(t, server, "data_dir")
+	assert.NotContains(t, body, "/var/lib/gordon")
+	assert.NotContains(t, body, "10.0.0.5")
+}
+
 func TestHandler_Config_RequiresReadScope(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)

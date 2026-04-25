@@ -94,8 +94,10 @@ func renderConfigSummary(out io.Writer, config *remote.Config) error {
 	if err := cliWriteLine(out, cliRenderMeta("Registry Domain:", config.Server.RegistryDomain)); err != nil {
 		return err
 	}
-	if err := cliWriteLine(out, cliRenderMeta("Data Directory:", config.Server.DataDir)); err != nil {
-		return err
+	if config.Server.DataDir != "" {
+		if err := cliWriteLine(out, cliRenderMeta("Data Directory:", config.Server.DataDir)); err != nil {
+			return err
+		}
 	}
 	if err := cliWriteLine(out, cliRenderMeta("Auto-Route:", fmt.Sprintf("%v", config.AutoRoute.Enabled))); err != nil {
 		return err
@@ -155,15 +157,16 @@ func renderConfigExternalRoutes(out io.Writer, config *remote.Config) error {
 	if err := cliWriteLine(out, cliRenderTitle("External Routes")); err != nil {
 		return err
 	}
-	domains := make([]string, 0, len(config.ExternalRoutes))
-	for d := range config.ExternalRoutes {
-		domains = append(domains, d)
-	}
-	sort.Strings(domains)
+	routes := append([]remote.ExternalRoute(nil), config.ExternalRoutes...)
+	sort.Slice(routes, func(i, j int) bool { return routes[i].Domain < routes[j].Domain })
 
-	rows := make([][]string, 0, len(domains))
-	for _, d := range domains {
-		rows = append(rows, []string{d, config.ExternalRoutes[d]})
+	rows := make([][]string, 0, len(routes))
+	for _, route := range routes {
+		target := route.Target
+		if target == "" {
+			target = "[redacted]"
+		}
+		rows = append(rows, []string{route.Domain, target})
 	}
 	table := components.NewTable(
 		components.WithColumns([]components.TableColumn{

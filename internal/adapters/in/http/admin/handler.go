@@ -1250,10 +1250,9 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	externalRoutes := h.configSvc.GetExternalRoutes()
 	externalResponses := make([]dto.ExternalRoute, 0, len(externalRoutes))
-	for domain, target := range externalRoutes {
+	for domain := range externalRoutes {
 		externalResponses = append(externalResponses, dto.ExternalRoute{
 			Domain: domain,
-			Target: target,
 		})
 	}
 
@@ -1262,7 +1261,6 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 			Port:           h.configSvc.GetServerPort(),
 			RegistryPort:   h.configSvc.GetRegistryPort(),
 			RegistryDomain: h.configSvc.GetRegistryDomain(),
-			DataDir:        h.configSvc.GetDataDir(),
 		},
 		AutoRoute: dto.AutoRouteConfig{
 			Enabled: h.configSvc.IsAutoRouteEnabled(),

@@ -84,52 +84,23 @@ func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log
 		return fmt.Errorf("failed to read pass keys for %s: %w", domainName, err)
 	}
 
-	missing := missingSecrets(existingKeys, secrets)
-	if len(missing) > 0 {
-		if err := passStore.Set(domainName, missing); err != nil {
-			return fmt.Errorf("failed to migrate secrets for %s: %w", domainName, err)
-		}
+	if len(existingKeys) > 0 {
+		return fmt.Errorf("pass secrets already exist for %s; refusing to delete plaintext env file automatically", domainName)
+	}
+	if err := passStore.Set(domainName, secrets); err != nil {
+		return fmt.Errorf("failed to migrate secrets for %s: %w", domainName, err)
 	}
 
-	migratedPath := filePath + ".migrated"
-	if err := os.Rename(filePath, migratedPath); err != nil {
-		return fmt.Errorf("failed to rename env file %s: %w", filePath, err)
+	if err := os.Remove(filePath); err != nil {
+		return fmt.Errorf("failed to remove migrated env file %s: %w", filePath, err)
 	}
 
 	log.Info().
-		Int(zerowrap.FieldCount, len(missing)).
+		Int(zerowrap.FieldCount, len(secrets)).
 		Str("domain", domainName).
-		Msg("migrated secrets for domain from plain text to pass")
-	log.Info().
-		Str("file", migratedPath).
-		Msg("original file renamed to .env.migrated - you can safely remove it")
+		Msg("migrated secrets for domain from plain text to pass and removed original env file")
 
 	return nil
-}
-
-func missingSecrets(existingKeys []string, secrets map[string]string) map[string]string {
-	if len(secrets) == 0 {
-		return nil
-	}
-
-	existingSet := make(map[string]struct{}, len(existingKeys))
-	for _, key := range existingKeys {
-		existingSet[key] = struct{}{}
-	}
-
-	missing := make(map[string]string)
-	for key, value := range secrets {
-		if _, exists := existingSet[key]; exists {
-			continue
-		}
-		missing[key] = value
-	}
-
-	if len(missing) == 0 {
-		return nil
-	}
-
-	return missing
 }
 
 func migrateAttachmentEnvFilesToPass(envDir string, passStore *domainsecrets.PassStore, log zerowrap.Logger) error {
@@ -190,29 +161,24 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 		existingKeys = append(existingKeys, key)
 	}
 
-	missing := missingSecrets(existingKeys, secrets)
-	if len(missing) > 0 {
-		if err := passStore.SetAttachment(containerName, missing); err != nil {
-			return fmt.Errorf("failed to migrate attachment secrets for %s: %w", containerName, err)
-		}
-		log.Info().
-			Int(zerowrap.FieldCount, len(missing)).
-			Str("container", containerName).
-			Msg("migrated secrets for attachment container from plain text to pass")
-	} else {
-		log.Info().
-			Str("container", containerName).
-			Msg("all attachment secrets already exist in pass; no migration needed")
+	if len(existingKeys) > 0 {
+		return fmt.Errorf("pass secrets already exist for attachment %s; refusing to delete plaintext env file automatically", containerName)
 	}
+	if err := passStore.SetAttachment(containerName, secrets); err != nil {
+		return fmt.Errorf("failed to migrate attachment secrets for %s: %w", containerName, err)
+	}
+	log.Info().
+		Int(zerowrap.FieldCount, len(secrets)).
+		Str("container", containerName).
+		Msg("migrated secrets for attachment container from plain text to pass")
 
-	migratedPath := filePath + ".migrated"
-	if err := os.Rename(filePath, migratedPath); err != nil {
-		return fmt.Errorf("failed to rename attachment env file %s: %w", filePath, err)
+	if err := os.Remove(filePath); err != nil {
+		return fmt.Errorf("failed to remove migrated attachment env file %s: %w", filePath, err)
 	}
 
 	log.Info().
-		Str("file", migratedPath).
-		Msg("original attachment file renamed to .env.migrated - you can safely remove it")
+		Str("file", filePath).
+		Msg("removed original attachment env file after migration to pass")
 
 	return nil
 }

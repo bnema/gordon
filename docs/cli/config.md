@@ -17,8 +17,8 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 ## gordon config show
 
-Display the full Gordon server configuration including server settings,
-auto-route, network isolation, routes, and external routes.
+Display the Gordon server configuration including server settings,
+auto-route, network isolation, routes, and external route domains. Sensitive filesystem paths and upstream external route targets are redacted by default.
 
 ```bash
 gordon config show
@@ -39,8 +39,7 @@ gordon config show --remote https://gordon.mydomain.com --token $TOKEN
   "server": {
     "port": 1111,
     "registry_port": 5000,
-    "registry_domain": "reg.example.com",
-    "data_dir": "/var/lib/gordon"
+    "registry_domain": "reg.example.com"
   },
   "auto_route": {
     "enabled": true,
@@ -53,11 +52,13 @@ gordon config show --remote https://gordon.mydomain.com --token $TOKEN
   "routes": [
     {"domain": "app.example.com", "image": "myapp:latest"}
   ],
-  "external_routes": {
-    "reg.example.com": "localhost:5000"
-  }
+  "external_routes": [
+    {"domain": "reg.example.com"}
+  ]
 }
 ```
+
+External route targets and `server.data_dir` are intentionally omitted from the default admin config response because they reveal internal network and filesystem layout.
 
 ### Auto-Route Allowed Domains
 

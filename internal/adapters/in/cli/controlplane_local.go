@@ -372,14 +372,18 @@ func (l *localControlPlane) GetConfig(ctx context.Context) (*remote.Config, erro
 	if l.configSvc == nil {
 		return nil, fmt.Errorf("config service unavailable")
 	}
+	externalRoutes := l.configSvc.GetExternalRoutes()
+	externalResponses := make([]remote.ExternalRoute, 0, len(externalRoutes))
+	for domainName := range externalRoutes {
+		externalResponses = append(externalResponses, remote.ExternalRoute{Domain: domainName})
+	}
 	cfg := &remote.Config{
 		Routes:         l.configSvc.GetRoutes(ctx),
-		ExternalRoutes: l.configSvc.GetExternalRoutes(),
+		ExternalRoutes: externalResponses,
 	}
 	cfg.Server.Port = l.configSvc.GetServerPort()
 	cfg.Server.RegistryPort = l.configSvc.GetRegistryPort()
 	cfg.Server.RegistryDomain = l.configSvc.GetRegistryDomain()
-	cfg.Server.DataDir = l.configSvc.GetDataDir()
 	cfg.AutoRoute.Enabled = l.configSvc.IsAutoRouteEnabled()
 	cfg.NetworkIsolation.Enabled = l.configSvc.IsNetworkIsolationEnabled()
 	cfg.NetworkIsolation.Prefix = l.configSvc.GetNetworkPrefix()
