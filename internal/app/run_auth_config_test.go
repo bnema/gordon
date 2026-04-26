@@ -7,12 +7,13 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/zerowrap"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestBuildAuthConfig_UsesConfigEnabledFlag(t *testing.T) {

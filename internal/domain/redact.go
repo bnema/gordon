@@ -11,11 +11,11 @@ const secretKeyPattern = `[A-Z0-9_]*(?:PASSWORD|TOKEN|SECRET|API[_-]?KEY|DATABAS
 
 var secretValuePatterns = []secretRedactionPattern{
 	{
-		re:   regexp.MustCompile(`(?i)(\b` + secretKeyPattern + `\b\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s]+)`),
+		re:   regexp.MustCompile(`(?i)(\b` + secretKeyPattern + `\b\s*=\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)`),
 		repl: `${1}[REDACTED]`,
 	},
 	{
-		re:   regexp.MustCompile(`(?i)("` + secretKeyPattern + `"\s*:\s*")([^"]*)(")`),
+		re:   regexp.MustCompile(`(?i)("` + secretKeyPattern + `"\s*:\s*")((?:\\.|[^"])*)(")`),
 		repl: `${1}[REDACTED]${3}`,
 	},
 	{

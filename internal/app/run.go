@@ -1384,7 +1384,11 @@ func readFileBeneath(root, cleanedRelPath string) ([]byte, error) {
 			if st.Mode&unix.S_IFMT != unix.S_IFREG {
 				return nil, fmt.Errorf("invalid secret path: secret must be a regular file")
 			}
-			return os.ReadFile(fmt.Sprintf("/proc/self/fd/%d", fd))
+			data, err := os.ReadFile(fmt.Sprintf("/proc/self/fd/%d", fd))
+			if err != nil {
+				return nil, fmt.Errorf("failed to read secret file: %w", err)
+			}
+			return data, nil
 		}
 
 		nextFD, err := unix.Openat(dirFD, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)

@@ -32,12 +32,17 @@ const (
 	DefaultMaxBlobSize = 1024 * 1024 * 1024
 )
 
+// blobLimits holds consistent blob size limits.
+type blobLimits struct {
+	MaxChunkSize int64
+	MaxBlobSize  int64
+}
+
 // Handler implements the HTTP handler for Docker Registry API v2.
 type Handler struct {
-	registrySvc      in.RegistryService
-	log              zerowrap.Logger
-	maxBlobChunkSize atomic.Int64
-	maxBlobSize      atomic.Int64
+	registrySvc in.RegistryService
+	log         zerowrap.Logger
+	blobLimits  atomic.Value // stores *blobLimits
 }
 
 // NewHandler creates a new registry HTTP handler.
@@ -59,7 +64,10 @@ func NewHandler(
 		registrySvc: registrySvc,
 		log:         log,
 	}
-	h.UpdateBlobLimits(maxBlobChunkSize, blobSizeLimit)
+	h.blobLimits.Store(&blobLimits{
+		MaxChunkSize: maxBlobChunkSize,
+		MaxBlobSize:  blobSizeLimit,
+	})
 	return h
 }
 
@@ -71,8 +79,10 @@ func (h *Handler) UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64) {
 	if maxBlobSize <= 0 {
 		maxBlobSize = DefaultMaxBlobSize
 	}
-	h.maxBlobChunkSize.Store(maxBlobChunkSize)
-	h.maxBlobSize.Store(maxBlobSize)
+	h.blobLimits.Store(&blobLimits{
+		MaxChunkSize: maxBlobChunkSize,
+		MaxBlobSize:  maxBlobSize,
+	})
 }
 
 // RegisterRoutes registers the registry routes on the given mux.
@@ -430,8 +440,10 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	maxBlobChunkSize := h.maxBlobChunkSize.Load()
-	maxBlobSize := h.maxBlobSize.Load()
+	// Load a consistent snapshot of both blob limits atomically
+	limits := h.blobLimits.Load().(*blobLimits)
+	maxBlobChunkSize := limits.MaxChunkSize
+	maxBlobSize := limits.MaxBlobSize
 
 	// Limit blob chunk size to prevent excessive uploads.
 	// MaxBytesReader wraps the body so the downstream io.Copy stops at the limit.

@@ -4235,7 +4235,7 @@ func TestService_BuildValidatedImageRef_RejectsExternalRegistryWhenAllowlistEmpt
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "images.allowed_registries")
 
-	err = svc.validateImagePullRef("nginx:latest")
+	err = svc.validateImagePullRef(context.Background(), "nginx:latest")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "docker.io")
 }
@@ -4251,7 +4251,7 @@ func TestService_BuildValidatedImageRef_RequireDigestOnlyForExternalAllowedRegis
 	_, err := svc.buildValidatedImageRef("docker.io/library/nginx:latest")
 	require.Error(t, err)
 
-	err = svc.validateImagePullRef("nginx:latest")
+	err = svc.validateImagePullRef(context.Background(), "nginx:latest")
 	require.Error(t, err)
 
 	_, err = svc.buildValidatedImageRef("docker.io/library/nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

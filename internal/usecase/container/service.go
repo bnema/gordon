@@ -1766,14 +1766,14 @@ func (s *Service) validateImageRef(imageRef string) error {
 	if !hasExplicitRegistry(imageRef) {
 		return nil
 	}
-	return s.validateExternalImageRef(imageRef, imageRegistry(imageRef))
+	return s.validateExternalImageRef(context.Background(), imageRef, imageRegistry(imageRef))
 }
 
-func (s *Service) validateImagePullRef(imageRef string) error {
-	return s.validateExternalImageRef(imageRef, imageRegistryForPolicy(imageRef))
+func (s *Service) validateImagePullRef(ctx context.Context, imageRef string) error {
+	return s.validateExternalImageRef(ctx, imageRef, imageRegistryForPolicy(imageRef))
 }
 
-func (s *Service) validateExternalImageRef(imageRef, registry string) error {
+func (s *Service) validateExternalImageRef(ctx context.Context, imageRef, registry string) error {
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
@@ -1785,7 +1785,7 @@ func (s *Service) validateExternalImageRef(imageRef, registry string) error {
 	if sameRegistry(registry, cfg.RegistryDomain) {
 		return nil
 	}
-	dangerous, err := isDangerousRegistryHost(imageRegistryHost(registry))
+	dangerous, err := isDangerousRegistryHost(ctx, imageRegistryHost(registry))
 	if err != nil {
 		return fmt.Errorf("image %q rejected: registry %q could not be verified: %w", imageRef, registry, err)
 	}
@@ -1853,7 +1853,7 @@ func sameRegistry(a, b string) bool {
 	return normalizeRegistry(a) == normalizeRegistry(b)
 }
 
-func isDangerousRegistryHost(host string) (bool, error) {
+func isDangerousRegistryHost(ctx context.Context, host string) (bool, error) {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	if host == "localhost" || host == "metadata.google.internal" {
 		return true, nil
@@ -1861,12 +1861,12 @@ func isDangerousRegistryHost(host string) (bool, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return isDangerousRegistryIP(ip), nil
 	}
-	ips, err := net.LookupIP(host)
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return false, err
 	}
-	for _, ip := range ips {
-		if isDangerousRegistryIP(ip) {
+	for _, addr := range addrs {
+		if isDangerousRegistryIP(addr.IP) {
 			return true, nil
 		}
 	}
@@ -1945,7 +1945,7 @@ func (s *Service) ensureImage(ctx context.Context, imageRef string) (string, err
 
 	// Determine if this is an internal deploy and what reference to use for pulls.
 	pullRef, isInternal := s.pullRefForDeploy(ctx, imageRef)
-	if err := s.validateImagePullRef(imageRef); err != nil {
+	if err := s.validateImagePullRef(ctx, imageRef); err != nil {
 		return "", err
 	}
 	if pullRef != imageRef {
@@ -2582,8 +2582,14 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	}
 
 	exposedPorts := s.attachmentExposedPorts(ctx, actualImageRef)
-	volumes := s.attachmentVolumes(ctx, containerName, actualImageRef)
-	envVars := s.attachmentEnv(ctx, containerName, actualImageRef)
+	volumes, err := s.attachmentVolumes(ctx, containerName, actualImageRef)
+	if err != nil {
+		return err
+	}
+	envVars, err := s.attachmentEnv(ctx, containerName, actualImageRef)
+	if err != nil {
+		return err
+	}
 	envHash := hashEnvironment(envVars)
 
 	s.mu.RLock()
@@ -2656,24 +2662,20 @@ func (s *Service) attachmentExposedPorts(ctx context.Context, imageRef string) [
 	return exposedPorts
 }
 
-func (s *Service) attachmentVolumes(ctx context.Context, containerName, imageRef string) map[string]string {
-	log := zerowrap.FromCtx(ctx)
+func (s *Service) attachmentVolumes(ctx context.Context, containerName, imageRef string) (map[string]string, error) {
 	volumes, err := s.setupVolumes(ctx, containerName, imageRef)
 	if err != nil {
-		log.WrapErr(err, "failed to setup volumes for attachment")
-		return make(map[string]string)
+		return nil, fmt.Errorf("failed to setup volumes for attachment %s with image %s: %w", containerName, imageRef, err)
 	}
-	return volumes
+	return volumes, nil
 }
 
-func (s *Service) attachmentEnv(ctx context.Context, containerName, imageRef string) []string {
-	log := zerowrap.FromCtx(ctx)
+func (s *Service) attachmentEnv(ctx context.Context, containerName, imageRef string) ([]string, error) {
 	envVars, err := s.loadEnvironment(ctx, nil, containerName, imageRef)
 	if err != nil {
-		log.WrapErr(err, "failed to load environment for attachment")
-		return []string{}
+		return nil, fmt.Errorf("failed to load environment for attachment %s with image %s: %w", containerName, imageRef, err)
 	}
-	return envVars
+	return envVars, nil
 }
 
 func (s *Service) attachmentEnvDrifted(ctx context.Context, existing *domain.Container, containerName, serviceImage string) (bool, error) {

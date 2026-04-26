@@ -10,6 +10,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
 	"github.com/bnema/gordon/internal/domain"
+	domainerrors "github.com/bnema/gordon/internal/domain"
 )
 
 func migrateEnvFilesToPass(envDir string, passStore *domainsecrets.PassStore, log zerowrap.Logger) error {
@@ -85,13 +86,30 @@ func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log
 	}
 
 	if len(existingKeys) > 0 {
-		return fmt.Errorf("pass secrets already exist for %s; refusing to delete plaintext env file automatically", domainName)
+		return fmt.Errorf("%w: pass secrets already exist for %s (found %d keys); refusing to delete plaintext env file automatically", domainerrors.ErrSecretNotFound, domainName, len(existingKeys))
 	}
 	if err := passStore.Set(domainName, secrets); err != nil {
 		return fmt.Errorf("failed to migrate secrets for %s: %w", domainName, err)
 	}
 
 	if err := os.Remove(filePath); err != nil {
+		// Check if the stored secrets match what we just wrote
+		storedSecrets, getErr := passStore.Get(domainName)
+		if getErr == nil && secretsMatch(storedSecrets, secrets) {
+			// Migration was successful, removal failed but secrets are stored
+			log.Warn().
+				Str("file", filePath).
+				Str("domain", domainName).
+				Msg("secrets migrated successfully but failed to remove original file; treating as success")
+			return nil
+		}
+		// Attempt rollback: remove the pass entry we just wrote
+		if delErr := passStore.Delete(domainName); delErr != nil {
+			log.Error().
+				Err(delErr).
+				Str("domain", domainName).
+				Msg("failed to rollback pass entry after file removal failure")
+		}
 		return fmt.Errorf("failed to remove migrated env file %s: %w", filePath, err)
 	}
 
@@ -162,13 +180,30 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 	}
 
 	if len(existingKeys) > 0 {
-		return fmt.Errorf("pass secrets already exist for attachment %s; refusing to delete plaintext env file automatically", containerName)
+		return fmt.Errorf("%w: pass secrets already exist for attachment %s (found %d keys); refusing to delete plaintext env file automatically", domainerrors.ErrSecretNotFound, containerName, len(existingKeys))
 	}
 	if err := passStore.SetAttachment(containerName, secrets); err != nil {
 		return fmt.Errorf("failed to migrate attachment secrets for %s: %w", containerName, err)
 	}
 
 	if err := os.Remove(filePath); err != nil {
+		// Check if the stored secrets match what we just wrote
+		storedSecrets, getErr := passStore.GetAllAttachment(containerName)
+		if getErr == nil && secretsMatch(storedSecrets, secrets) {
+			// Migration was successful, removal failed but secrets are stored
+			log.Warn().
+				Str("file", filePath).
+				Str("container", containerName).
+				Msg("attachment secrets migrated successfully but failed to remove original file; treating as success")
+			return nil
+		}
+		// Attempt rollback: remove the pass entry we just wrote
+		if delErr := passStore.DeleteAttachment(containerName); delErr != nil {
+			log.Error().
+				Err(delErr).
+				Str("container", containerName).
+				Msg("failed to rollback pass entry after file removal failure")
+		}
 		return fmt.Errorf("failed to remove migrated attachment env file %s: %w", filePath, err)
 	}
 
@@ -184,4 +219,16 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 func extractContainerNameFromAttachmentFile(filename string) string {
 	name := strings.TrimSuffix(filename, ".env")
 	return name
+}
+
+func secretsMatch(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
