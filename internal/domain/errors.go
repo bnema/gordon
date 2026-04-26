@@ -57,6 +57,7 @@ var (
 	// Environment errors
 	ErrEnvFileNotFound      = errors.New("environment file not found")
 	ErrSecretNotFound       = errors.New("secret not found")
+	ErrSecretsAlreadyExist  = errors.New("secrets already exist")
 	ErrProviderNotFound     = errors.New("secret provider not found")
 	ErrInvalidContainerName = errors.New("invalid container name")
 

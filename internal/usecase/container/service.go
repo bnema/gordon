@@ -569,7 +569,7 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 		log.WrapErr(err, "failed to cleanup orphaned containers")
 	}
 
-	imageRef, err := s.buildValidatedImageRef(route.Image)
+	imageRef, err := s.buildValidatedImageRef(ctx, route.Image)
 	if err != nil {
 		return nil, err
 	}
@@ -1679,9 +1679,9 @@ func (s *Service) startLogCollection(ctx context.Context, containerID, domainNam
 	}
 }
 
-func (s *Service) buildValidatedImageRef(image string) (string, error) {
+func (s *Service) buildValidatedImageRef(ctx context.Context, image string) (string, error) {
 	imageRef := s.buildImageRef(image)
-	if err := s.validateImageRef(imageRef); err != nil {
+	if err := s.validateImageRef(ctx, imageRef); err != nil {
 		return "", err
 	}
 	return imageRef, nil
@@ -1762,11 +1762,11 @@ func hasExplicitRegistry(image string) bool {
 	return false
 }
 
-func (s *Service) validateImageRef(imageRef string) error {
+func (s *Service) validateImageRef(ctx context.Context, imageRef string) error {
 	if !hasExplicitRegistry(imageRef) {
 		return nil
 	}
-	return s.validateExternalImageRef(context.Background(), imageRef, imageRegistry(imageRef))
+	return s.validateExternalImageRef(ctx, imageRef, imageRegistry(imageRef))
 }
 
 func (s *Service) validateImagePullRef(ctx context.Context, imageRef string) error {
@@ -1821,6 +1821,11 @@ func imageRegistryForPolicy(imageRef string) string {
 	return "docker.io"
 }
 
+// normalizeRegistry normalizes a registry string for comparison purposes only.
+// This function is used by sameRegistry to determine if two registry strings
+// refer to the same registry. The output intentionally strips IPv6 brackets
+// (e.g., "[fd00::1]:5000" -> "fd00::1:5000") which is acceptable for equality
+// checks but the result MUST NOT be used to construct or emit valid registry URLs.
 func normalizeRegistry(registry string) string {
 	registry = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(registry), "."))
 	registry = strings.TrimSuffix(registry, "/")
@@ -2573,7 +2578,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	log.Info().Str(zerowrap.FieldService, serviceImage).Msg("deploying attached service")
 
 	// Ensure image (canonical ref is returned; internal pulls may use the local registry).
-	imageRef, err := s.buildValidatedImageRef(serviceImage)
+	imageRef, err := s.buildValidatedImageRef(ctx, serviceImage)
 	if err != nil {
 		return err
 	}
@@ -2680,7 +2685,7 @@ func (s *Service) attachmentEnv(ctx context.Context, containerName, imageRef str
 }
 
 func (s *Service) attachmentEnvDrifted(ctx context.Context, existing *domain.Container, containerName, serviceImage string) (bool, error) {
-	imageRef, err := s.buildValidatedImageRef(serviceImage)
+	imageRef, err := s.buildValidatedImageRef(ctx, serviceImage)
 	if err != nil {
 		return false, err
 	}

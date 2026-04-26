@@ -10,7 +10,6 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
 	"github.com/bnema/gordon/internal/domain"
-	domainerrors "github.com/bnema/gordon/internal/domain"
 )
 
 func migrateEnvFilesToPass(envDir string, passStore *domainsecrets.PassStore, log zerowrap.Logger) error {
@@ -86,7 +85,7 @@ func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log
 	}
 
 	if len(existingKeys) > 0 {
-		return fmt.Errorf("%w: pass secrets already exist for %s (found %d keys); refusing to delete plaintext env file automatically", domainerrors.ErrSecretNotFound, domainName, len(existingKeys))
+		return fmt.Errorf("%w: pass secrets already exist for %s (found %d keys); refusing to delete plaintext env file automatically", domain.ErrSecretsAlreadyExist, domainName, len(existingKeys))
 	}
 	if err := passStore.Set(domainName, secrets); err != nil {
 		return fmt.Errorf("failed to migrate secrets for %s: %w", domainName, err)
@@ -186,7 +185,7 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 	}
 
 	if len(existingKeys) > 0 {
-		return fmt.Errorf("%w: pass secrets already exist for attachment %s (found %d keys); refusing to delete plaintext env file automatically", domainerrors.ErrSecretNotFound, containerName, len(existingKeys))
+		return fmt.Errorf("%w: pass secrets already exist for attachment %s (found %d keys); refusing to delete plaintext env file automatically", domain.ErrSecretsAlreadyExist, containerName, len(existingKeys))
 	}
 	if err := passStore.SetAttachment(containerName, secrets); err != nil {
 		return fmt.Errorf("failed to migrate attachment secrets for %s: %w", containerName, err)

@@ -4202,15 +4202,15 @@ func TestService_BuildValidatedImageRef_RegistryPolicy(t *testing.T) {
 		AllowedRegistries:   []string{"docker.io"},
 	}, nil)
 
-	ref, err := svc.buildValidatedImageRef("myapp:latest")
+	ref, err := svc.buildValidatedImageRef(context.Background(), "myapp:latest")
 	require.NoError(t, err)
 	assert.Equal(t, "registry.example.com/myapp:latest", ref)
 
-	ref, err = svc.buildValidatedImageRef("registry.example.com/myapp:latest")
+	ref, err = svc.buildValidatedImageRef(context.Background(), "registry.example.com/myapp:latest")
 	require.NoError(t, err)
 	assert.Equal(t, "registry.example.com/myapp:latest", ref)
 
-	ref, err = svc.buildValidatedImageRef("docker.io/library/nginx:latest")
+	ref, err = svc.buildValidatedImageRef(context.Background(), "docker.io/library/nginx:latest")
 	require.NoError(t, err)
 	assert.Equal(t, "docker.io/library/nginx:latest", ref)
 
@@ -4222,7 +4222,7 @@ func TestService_BuildValidatedImageRef_RegistryPolicy(t *testing.T) {
 		"169.254.169.254/app:latest",
 	} {
 		t.Run(image, func(t *testing.T) {
-			_, err := svc.buildValidatedImageRef(image)
+			_, err := svc.buildValidatedImageRef(context.Background(), image)
 			require.Error(t, err)
 		})
 	}
@@ -4231,7 +4231,7 @@ func TestService_BuildValidatedImageRef_RegistryPolicy(t *testing.T) {
 func TestService_BuildValidatedImageRef_RejectsExternalRegistryWhenAllowlistEmpty(t *testing.T) {
 	svc := NewService(nil, nil, nil, nil, Config{}, nil)
 
-	_, err := svc.buildValidatedImageRef("ghcr.io/acme/app:latest")
+	_, err := svc.buildValidatedImageRef(context.Background(), "ghcr.io/acme/app:latest")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "images.allowed_registries")
 
@@ -4248,33 +4248,33 @@ func TestService_BuildValidatedImageRef_RequireDigestOnlyForExternalAllowedRegis
 		AllowedRegistries:   []string{"docker.io"},
 	}, nil)
 
-	_, err := svc.buildValidatedImageRef("docker.io/library/nginx:latest")
+	_, err := svc.buildValidatedImageRef(context.Background(), "docker.io/library/nginx:latest")
 	require.Error(t, err)
 
 	err = svc.validateImagePullRef(context.Background(), "nginx:latest")
 	require.Error(t, err)
 
-	_, err = svc.buildValidatedImageRef("docker.io/library/nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	_, err = svc.buildValidatedImageRef(context.Background(), "docker.io/library/nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	require.NoError(t, err)
 
-	_, err = svc.buildValidatedImageRef("docker.io/library/nginx@sha256:not-a-digest")
+	_, err = svc.buildValidatedImageRef(context.Background(), "docker.io/library/nginx@sha256:not-a-digest")
 	require.Error(t, err)
 
-	ref, err := svc.buildValidatedImageRef("myapp:latest")
+	ref, err := svc.buildValidatedImageRef(context.Background(), "myapp:latest")
 	require.NoError(t, err)
 	assert.Equal(t, "registry.example.com/myapp:latest", ref)
 
-	_, err = svc.buildValidatedImageRef("registry.example.com/myapp:latest")
+	_, err = svc.buildValidatedImageRef(context.Background(), "registry.example.com/myapp:latest")
 	require.NoError(t, err)
 }
 
 func TestService_BuildValidatedImageRef_AllowedRegistryMatchesPort(t *testing.T) {
 	svc := NewService(nil, nil, nil, nil, Config{AllowedRegistries: []string{"docker.io:5000"}}, nil)
 
-	_, err := svc.buildValidatedImageRef("docker.io:5000/app:latest")
+	_, err := svc.buildValidatedImageRef(context.Background(), "docker.io:5000/app:latest")
 	require.NoError(t, err)
 
-	_, err = svc.buildValidatedImageRef("docker.io:5001/app:latest")
+	_, err = svc.buildValidatedImageRef(context.Background(), "docker.io:5001/app:latest")
 	require.Error(t, err)
 }
 
