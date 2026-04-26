@@ -1675,6 +1675,16 @@ func TestNormalizeImageRef(t *testing.T) {
 			input:    "registry.example.com:5000/image:v1.0",
 			expected: "registry.example.com:5000/image",
 		},
+		{
+			name:     "digest ref preserves digest",
+			input:    "registry.example.com/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			expected: "registry.example.com/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		{
+			name:     "docker hub digest ref preserves digest",
+			input:    "nginx@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			expected: "nginx@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
 	}
 
 	for _, tt := range tests {

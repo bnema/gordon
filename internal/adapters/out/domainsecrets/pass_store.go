@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -27,6 +28,7 @@ const (
 
 // PassStore implements the DomainSecretStore interface using the pass password manager.
 type PassStore struct {
+	mu      sync.Mutex
 	timeout time.Duration
 	log     zerowrap.Logger
 }
@@ -136,6 +138,26 @@ func (s *PassStore) GetAll(domainName string) (map[string]string, error) {
 	}
 
 	return secretsMap, nil
+}
+
+// SetIfEmpty sets multiple secrets for a domain only when no keys already exist.
+// It performs the precondition check inside the store adapter so migration
+// callers cannot accidentally split the check and write into separate steps.
+func (s *PassStore) SetIfEmpty(domainName string, secretsMap map[string]string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existingKeys, err := s.ListKeys(domainName)
+	if err != nil {
+		return nil, err
+	}
+	if len(existingKeys) > 0 {
+		return nil, fmt.Errorf("%w: pass secrets already exist for %s (found %d keys)", domain.ErrSecretsAlreadyExist, domainName, len(existingKeys))
+	}
+	if err := s.Set(domainName, secretsMap); err != nil {
+		return nil, err
+	}
+	return sortedMapKeys(secretsMap), nil
 }
 
 // Set sets or updates multiple secrets for a domain.
@@ -251,6 +273,26 @@ func (s *PassStore) Delete(domainName, key string) error {
 	}
 
 	return nil
+}
+
+// SetAttachmentIfEmpty sets attachment secrets only when no keys already exist.
+// It performs the precondition check inside the store adapter so migration
+// callers cannot accidentally split the check and write into separate steps.
+func (s *PassStore) SetAttachmentIfEmpty(containerName string, secretsMap map[string]string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existingKeys, err := s.listAttachmentKeysRecover(containerName)
+	if err != nil {
+		return nil, err
+	}
+	if len(existingKeys) > 0 {
+		return nil, fmt.Errorf("%w: pass secrets already exist for attachment %s (found %d keys)", domain.ErrSecretsAlreadyExist, containerName, len(existingKeys))
+	}
+	if err := s.SetAttachment(containerName, secretsMap); err != nil {
+		return nil, err
+	}
+	return sortedMapKeys(secretsMap), nil
 }
 
 // SetAttachment sets or updates multiple secrets for an attachment container.
@@ -613,6 +655,66 @@ func (s *PassStore) listAttachmentKeys(containerName string) ([]string, error) {
 		keys = append(keys, key)
 	}
 
+	sort.Strings(keys)
+	return keys, nil
+}
+
+func (s *PassStore) listAttachmentKeysRecover(containerName string) ([]string, error) {
+	keys, err := s.listAttachmentKeys(containerName)
+	if err != nil {
+		return nil, err
+	}
+	discovered, err := s.discoverAttachmentKeys(containerName)
+	if err != nil {
+		return nil, err
+	}
+	merged, changed := mergeUniqueKeys(keys, discovered)
+	if changed {
+		manifestPath, err := s.attachmentManifestPath(containerName)
+		if err != nil {
+			return nil, err
+		}
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), s.timeout)
+		writeErr := s.passInsert(writeCtx, manifestPath, strings.Join(merged, "\n"))
+		writeCancel()
+		if writeErr != nil {
+			s.log.Warn().
+				Str(zerowrap.FieldLayer, "adapter").
+				Str(zerowrap.FieldAdapter, "domainsecrets").
+				Str("container", containerName).
+				Err(writeErr).
+				Msg("failed to self-heal attachment pass manifest, continuing with recovered keys")
+		}
+	}
+	return merged, nil
+}
+
+func (s *PassStore) discoverAttachmentKeys(containerName string) ([]string, error) {
+	basePath, err := s.attachmentPath(containerName)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+
+	entries, err := s.listTopLevelEntries(ctx, basePath)
+	if err != nil {
+		return nil, err
+	}
+
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry == ".keys" {
+			continue
+		}
+		if err := domain.ValidateEnvKey(entry); err != nil {
+			continue
+		}
+		keys = append(keys, entry)
+	}
+
+	sort.Strings(keys)
 	return keys, nil
 }
 
@@ -776,6 +878,15 @@ func passEntryMissing(output string) bool {
 	lower := strings.ToLower(clean)
 	return strings.Contains(lower, "not in the password store") ||
 		strings.Contains(lower, "password store is empty")
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func mergeUniqueKeys(primary, secondary []string) ([]string, bool) {

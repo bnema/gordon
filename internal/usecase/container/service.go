@@ -2784,6 +2784,10 @@ func (s *Service) resolveExistingAttachment(ctx context.Context, ownerDomain, se
 // Utility functions
 
 func normalizeImageRef(image string) string {
+	if isDigestRef(image) {
+		return image
+	}
+
 	// Extract repository from image reference, handling port numbers correctly.
 	// Examples:
 	//   nginx:latest -> docker.io/library/nginx

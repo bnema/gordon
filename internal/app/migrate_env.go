@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,15 +80,11 @@ func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log
 		return nil
 	}
 
-	existingKeys, err := passStore.ListKeys(domainName)
+	writtenKeys, err := passStore.SetIfEmpty(domainName, secrets)
 	if err != nil {
-		return fmt.Errorf("failed to read pass keys for %s: %w", domainName, err)
-	}
-
-	if len(existingKeys) > 0 {
-		return fmt.Errorf("%w: pass secrets already exist for %s (found %d keys); refusing to delete plaintext env file automatically", domain.ErrSecretsAlreadyExist, domainName, len(existingKeys))
-	}
-	if err := passStore.Set(domainName, secrets); err != nil {
+		if errors.Is(err, domain.ErrSecretsAlreadyExist) {
+			return fmt.Errorf("%w; refusing to delete plaintext env file automatically", err)
+		}
 		return fmt.Errorf("failed to migrate secrets for %s: %w", domainName, err)
 	}
 
@@ -102,17 +99,14 @@ func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log
 				Msg("secrets migrated successfully but failed to remove original file; treating as success")
 			return nil
 		}
-		// Attempt rollback: remove the pass entry we just wrote
-		rollbackKeys, listErr := passStore.ListKeys(domainName)
-		if listErr == nil {
-			for _, key := range rollbackKeys {
-				if delErr := passStore.Delete(domainName, key); delErr != nil {
-					log.Error().
-						Err(delErr).
-						Str("domain", domainName).
-						Str("key", key).
-						Msg("failed to rollback pass entry after file removal failure")
-				}
+		// Attempt rollback: remove only the pass entries this migration wrote.
+		for _, key := range writtenKeys {
+			if delErr := passStore.Delete(domainName, key); delErr != nil {
+				log.Error().
+					Err(delErr).
+					Str("domain", domainName).
+					Str("key", key).
+					Msg("failed to rollback pass entry after file removal failure")
 			}
 		}
 		return fmt.Errorf("failed to remove migrated env file %s: %w", filePath, err)
@@ -174,20 +168,11 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 		return nil
 	}
 
-	existingSecrets, err := passStore.GetAllAttachment(containerName)
+	writtenKeys, err := passStore.SetAttachmentIfEmpty(containerName, secrets)
 	if err != nil {
-		return fmt.Errorf("failed to read pass secrets for attachment %s: %w", containerName, err)
-	}
-
-	existingKeys := make([]string, 0, len(existingSecrets))
-	for key := range existingSecrets {
-		existingKeys = append(existingKeys, key)
-	}
-
-	if len(existingKeys) > 0 {
-		return fmt.Errorf("%w: pass secrets already exist for attachment %s (found %d keys); refusing to delete plaintext env file automatically", domain.ErrSecretsAlreadyExist, containerName, len(existingKeys))
-	}
-	if err := passStore.SetAttachment(containerName, secrets); err != nil {
+		if errors.Is(err, domain.ErrSecretsAlreadyExist) {
+			return fmt.Errorf("%w; refusing to delete plaintext env file automatically", err)
+		}
 		return fmt.Errorf("failed to migrate attachment secrets for %s: %w", containerName, err)
 	}
 
@@ -202,17 +187,14 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 				Msg("attachment secrets migrated successfully but failed to remove original file; treating as success")
 			return nil
 		}
-		// Attempt rollback: remove the pass entry we just wrote
-		rollbackSecrets, listErr := passStore.GetAllAttachment(containerName)
-		if listErr == nil {
-			for key := range rollbackSecrets {
-				if delErr := passStore.DeleteAttachment(containerName, key); delErr != nil {
-					log.Error().
-						Err(delErr).
-						Str("container", containerName).
-						Str("key", key).
-						Msg("failed to rollback pass entry after file removal failure")
-				}
+		// Attempt rollback: remove only the pass entries this migration wrote.
+		for _, key := range writtenKeys {
+			if delErr := passStore.DeleteAttachment(containerName, key); delErr != nil {
+				log.Error().
+					Err(delErr).
+					Str("container", containerName).
+					Str("key", key).
+					Msg("failed to rollback pass entry after file removal failure")
 			}
 		}
 		return fmt.Errorf("failed to remove migrated attachment env file %s: %w", filePath, err)
@@ -237,7 +219,8 @@ func secretsMatch(a, b map[string]string) bool {
 		return false
 	}
 	for k, v := range a {
-		if b[k] != v {
+		bv, ok := b[k]
+		if !ok || bv != v {
 			return false
 		}
 	}
