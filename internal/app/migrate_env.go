@@ -94,7 +94,7 @@ func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log
 
 	if err := os.Remove(filePath); err != nil {
 		// Check if the stored secrets match what we just wrote
-		storedSecrets, getErr := passStore.Get(domainName)
+		storedSecrets, getErr := passStore.GetAll(domainName)
 		if getErr == nil && secretsMatch(storedSecrets, secrets) {
 			// Migration was successful, removal failed but secrets are stored
 			log.Warn().
@@ -104,11 +104,17 @@ func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log
 			return nil
 		}
 		// Attempt rollback: remove the pass entry we just wrote
-		if delErr := passStore.Delete(domainName); delErr != nil {
-			log.Error().
-				Err(delErr).
-				Str("domain", domainName).
-				Msg("failed to rollback pass entry after file removal failure")
+		rollbackKeys, listErr := passStore.ListKeys(domainName)
+		if listErr == nil {
+			for _, key := range rollbackKeys {
+				if delErr := passStore.Delete(domainName, key); delErr != nil {
+					log.Error().
+						Err(delErr).
+						Str("domain", domainName).
+						Str("key", key).
+						Msg("failed to rollback pass entry after file removal failure")
+				}
+			}
 		}
 		return fmt.Errorf("failed to remove migrated env file %s: %w", filePath, err)
 	}
@@ -198,11 +204,17 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 			return nil
 		}
 		// Attempt rollback: remove the pass entry we just wrote
-		if delErr := passStore.DeleteAttachment(containerName); delErr != nil {
-			log.Error().
-				Err(delErr).
-				Str("container", containerName).
-				Msg("failed to rollback pass entry after file removal failure")
+		rollbackSecrets, listErr := passStore.GetAllAttachment(containerName)
+		if listErr == nil {
+			for key := range rollbackSecrets {
+				if delErr := passStore.DeleteAttachment(containerName, key); delErr != nil {
+					log.Error().
+						Err(delErr).
+						Str("container", containerName).
+						Str("key", key).
+						Msg("failed to rollback pass entry after file removal failure")
+				}
+			}
 		}
 		return fmt.Errorf("failed to remove migrated attachment env file %s: %w", filePath, err)
 	}

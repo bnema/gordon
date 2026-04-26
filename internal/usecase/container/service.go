@@ -1823,6 +1823,7 @@ func imageRegistryForPolicy(imageRef string) string {
 
 func normalizeRegistry(registry string) string {
 	registry = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(registry), "."))
+	registry = strings.TrimSuffix(registry, "/")
 	if strings.HasPrefix(registry, "[") {
 		if end := strings.Index(registry, "]"); end != -1 {
 			host := strings.Trim(registry[:end+1], "[]")
