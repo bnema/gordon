@@ -4,6 +4,8 @@ package proxy
 import (
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/bnema/zerowrap"
@@ -70,16 +72,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 	log := zerowrap.FromCtx(ctx)
 
+	host := normalizeRequestHost(r.Host)
+	if host == "" {
+		proxyError(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
 	// Check if this is the registry domain
-	if h.proxySvc.IsRegistryDomain(r.Host) {
+	if h.proxySvc.IsRegistryDomain(host) {
 		log.Debug().Msg("routing request to registry")
 		h.forwardToRegistry(w, r, cfg.RegistryPort)
 		return
 	}
 
 	// Get target for this domain
-	log.Debug().Str("resolving_target_for", r.Host).Msg("looking up proxy target")
-	target, err := h.proxySvc.GetTarget(ctx, r.Host)
+	log.Debug().Str("resolving_target_for", host).Msg("looking up proxy target")
+	target, err := h.proxySvc.GetTarget(ctx, host)
 	if err != nil {
 		log.Warn().Err(err).Msg("no route found for domain")
 		proxyError(w, "404 page not found", http.StatusNotFound)
@@ -93,4 +101,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Msg("resolved proxy target")
 
 	h.forwardToTarget(w, r, target, cfg.MaxResponseSize)
+}
+
+func normalizeRequestHost(host string) string {
+	host = strings.TrimSpace(host)
+	if h, port, err := net.SplitHostPort(host); err == nil {
+		portNum, err := strconv.Atoi(port)
+		if err != nil || portNum < 1 || portNum > 65535 {
+			return ""
+		}
+		host = h
+	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		inner := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if ip := net.ParseIP(inner); ip == nil || ip.To4() != nil {
+			return ""
+		}
+		host = inner
+	} else if strings.Contains(host, ":") {
+		return ""
+	}
+	host = strings.ToLower(host)
+	host = strings.TrimSuffix(host, ".")
+	return host
 }

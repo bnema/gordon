@@ -14,7 +14,7 @@ type ServerConfig struct {
 	Port           int    `json:"port"`
 	RegistryPort   int    `json:"registry_port"`
 	RegistryDomain string `json:"registry_domain"`
-	DataDir        string `json:"data_dir"`
+	DataDir        string `json:"data_dir,omitempty"`
 }
 
 // AutoRouteConfig represents auto-route config details.
@@ -31,5 +31,5 @@ type NetworkIsolationConfig struct {
 // ExternalRoute represents an external route config entry.
 type ExternalRoute struct {
 	Domain string `json:"domain"`
-	Target string `json:"target"`
+	Target string `json:"target,omitempty"`
 }

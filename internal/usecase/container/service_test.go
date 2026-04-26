@@ -49,6 +49,7 @@ func dockerLogFrames(stream byte, lines ...string) io.ReadCloser {
 // suitable for unit tests that don't want to wait for real timeouts.
 func testMinDelayConfig() Config {
 	return Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -326,6 +327,7 @@ func TestService_Deploy_Success(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		NetworkIsolation:     false,
 		VolumeAutoCreate:     false,
 		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
@@ -408,6 +410,7 @@ func TestService_Deploy_ReadinessRecoveryWindow_AllowsTransientFlap(t *testing.T
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		NetworkIsolation:     false,
 		VolumeAutoCreate:     false,
 		ReadinessDelay:       time.Millisecond,
@@ -472,7 +475,7 @@ func TestService_Deploy_ImagePullFailure(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	config := Config{}
+	config := Config{AllowedRegistries: []string{"docker.io"}}
 	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
@@ -514,7 +517,7 @@ func TestService_Deploy_DoesNotMisclassifyUnauthorizedEnvLoadFailure(t *testing.
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{AllowedRegistries: []string{"docker.io"}}, nil)
 	ctx := testContext()
 
 	route := domain.Route{
@@ -555,6 +558,7 @@ func TestService_Deploy_ReadinessFailureReturnsDeployFailureWithLogs(t *testing.
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessMode:        "docker-health",
 		HealthTimeout:        10 * time.Millisecond,
 		ReadinessDelay:       time.Millisecond,
@@ -613,6 +617,7 @@ func TestService_Deploy_StrictHealthModeWithoutHealthcheckReturnsHint(t *testing
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessMode:        "docker-health",
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
@@ -659,6 +664,7 @@ func TestService_PullImage_UsesServiceTokenForExternalPull(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		RegistryAuthEnabled:  true,
 		ServiceTokenUsername: "gordon-service",
 		ServiceToken:         "service-token",
@@ -678,6 +684,7 @@ func TestService_PullImage_RequiresServiceTokenForExternalPull(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 
 	config := Config{
+		AllowedRegistries:   []string{"docker.io"},
 		RegistryAuthEnabled: true,
 	}
 
@@ -694,6 +701,7 @@ func TestService_PullImage_InternalRetriesOnConnectionRefused(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 
 	config := Config{
+		AllowedRegistries:        []string{"docker.io"},
 		RegistryAuthEnabled:      true,
 		InternalRegistryUsername: "internal",
 		InternalRegistryPassword: "secret",
@@ -721,6 +729,7 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -963,6 +972,7 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		NetworkIsolation:     true,
 		NetworkPrefix:        "gordon",
 		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
@@ -989,7 +999,7 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 
 	// Network isolation - should check and create network
 	runtime.EXPECT().NetworkExists(mock.Anything, "gordon-test-example-com").Return(false, nil)
-	runtime.EXPECT().CreateNetwork(mock.Anything, "gordon-test-example-com", map[string]string{"driver": "bridge"}).Return(nil)
+	runtime.EXPECT().CreateNetwork(mock.Anything, "gordon-test-example-com", domain.NetworkConfig{Driver: "bridge"}).Return(nil)
 
 	container := &domain.Container{ID: "container-123", Status: "created"}
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
@@ -1020,6 +1030,7 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		VolumeAutoCreate:     true,
 		VolumePrefix:         "gordon",
 		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
@@ -1135,8 +1146,9 @@ func TestService_Remove_WithNetworkCleanup(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
-		NetworkIsolation: true,
-		NetworkPrefix:    "gordon",
+		AllowedRegistries: []string{"docker.io"},
+		NetworkIsolation:  true,
+		NetworkPrefix:     "gordon",
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
@@ -1663,6 +1675,16 @@ func TestNormalizeImageRef(t *testing.T) {
 			input:    "registry.example.com:5000/image:v1.0",
 			expected: "registry.example.com:5000/image",
 		},
+		{
+			name:     "digest ref preserves digest",
+			input:    "registry.example.com/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			expected: "registry.example.com/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		{
+			name:     "docker hub digest ref preserves digest",
+			input:    "nginx@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			expected: "nginx@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1932,6 +1954,7 @@ func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:        []string{"docker.io"},
 		RegistryAuthEnabled:      true,
 		RegistryDomain:           "registry.example.com",
 		RegistryPort:             5000,
@@ -2011,6 +2034,7 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -2059,6 +2083,7 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -2106,7 +2131,7 @@ func TestService_AutoStart_HandlesDeployErrors(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
-	config := Config{}
+	config := Config{AllowedRegistries: []string{"docker.io"}}
 	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	ctx := testContext()
 
@@ -2188,6 +2213,7 @@ func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -2282,6 +2308,7 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond, // Minimal delay for tests
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -2732,6 +2759,7 @@ func TestService_Deploy_ContextCancellation(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -2890,6 +2918,7 @@ func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -2949,6 +2978,7 @@ func TestService_Deploy_SkipsRedundantDeploy_WhenTrackedImageIDMissing(t *testin
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -3455,6 +3485,7 @@ func TestService_Deploy_RollbackOnPostSwitchCrash(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -3548,6 +3579,7 @@ func TestService_Deploy_StabilizationSuccess(t *testing.T) {
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -3635,6 +3667,7 @@ func TestService_Deploy_ZeroDowntime_OldNeverStoppedBeforeNewReady(t *testing.T)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -3729,6 +3762,7 @@ func TestService_Deploy_ZeroDowntime_ReadinessFailure_OldUntouched(t *testing.T)
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -3818,6 +3852,7 @@ func TestService_Deploy_ZeroDowntime_NoExisting_FirstDeploy(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
@@ -3893,6 +3928,7 @@ func TestService_Deploy_PropagatesImageLabelsToContainerConfig(t *testing.T) {
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	config := Config{
+		AllowedRegistries:    []string{"docker.io"},
 		NetworkIsolation:     false,
 		VolumeAutoCreate:     false,
 		ReadinessDelay:       time.Millisecond,
@@ -4167,4 +4203,117 @@ func TestDeployAttachedService_SetsAliasOnContainerConfig(t *testing.T) {
 	svc.mu.RUnlock()
 	require.Len(t, attachIDs, 1)
 	assert.Equal(t, "pg-container-1", attachIDs[0])
+}
+
+func TestService_BuildValidatedImageRef_RegistryPolicy(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{
+		RegistryAuthEnabled: true,
+		RegistryDomain:      "registry.example.com",
+		AllowedRegistries:   []string{"docker.io"},
+	}, nil)
+
+	ref, err := svc.buildValidatedImageRef(context.Background(), "myapp:latest")
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example.com/myapp:latest", ref)
+
+	ref, err = svc.buildValidatedImageRef(context.Background(), "registry.example.com/myapp:latest")
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example.com/myapp:latest", ref)
+
+	ref, err = svc.buildValidatedImageRef(context.Background(), "docker.io/library/nginx:latest")
+	require.NoError(t, err)
+	assert.Equal(t, "docker.io/library/nginx:latest", ref)
+
+	for _, image := range []string{
+		"ghcr.io/acme/app:latest",
+		"localhost:5000/app:latest",
+		"127.0.0.1:5000/app:latest",
+		"10.0.0.2:5000/app:latest",
+		"169.254.169.254/app:latest",
+	} {
+		t.Run(image, func(t *testing.T) {
+			_, err := svc.buildValidatedImageRef(context.Background(), image)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestService_BuildValidatedImageRef_RejectsExternalRegistryWhenAllowlistEmpty(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{}, nil)
+
+	_, err := svc.buildValidatedImageRef(context.Background(), "ghcr.io/acme/app:latest")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "images.allowed_registries")
+
+	err = svc.validateImagePullRef(context.Background(), "nginx:latest")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "docker.io")
+}
+
+func TestService_BuildValidatedImageRef_RequireDigestOnlyForExternalAllowedRegistries(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{
+		RegistryAuthEnabled: true,
+		RegistryDomain:      "registry.example.com",
+		RequireImageDigest:  true,
+		AllowedRegistries:   []string{"docker.io"},
+	}, nil)
+
+	_, err := svc.buildValidatedImageRef(context.Background(), "docker.io/library/nginx:latest")
+	require.Error(t, err)
+
+	err = svc.validateImagePullRef(context.Background(), "nginx:latest")
+	require.Error(t, err)
+
+	_, err = svc.buildValidatedImageRef(context.Background(), "docker.io/library/nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	require.NoError(t, err)
+
+	_, err = svc.buildValidatedImageRef(context.Background(), "docker.io/library/nginx@sha256:not-a-digest")
+	require.Error(t, err)
+
+	ref, err := svc.buildValidatedImageRef(context.Background(), "myapp:latest")
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example.com/myapp:latest", ref)
+
+	_, err = svc.buildValidatedImageRef(context.Background(), "registry.example.com/myapp:latest")
+	require.NoError(t, err)
+}
+
+func TestService_BuildValidatedImageRef_AllowedRegistryMatchesPort(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{AllowedRegistries: []string{"docker.io:5000"}}, nil)
+
+	_, err := svc.buildValidatedImageRef(context.Background(), "docker.io:5000/app:latest")
+	require.NoError(t, err)
+
+	_, err = svc.buildValidatedImageRef(context.Background(), "docker.io:5001/app:latest")
+	require.Error(t, err)
+}
+
+func TestService_CreateNetworkIfNeeded_UsesInternalOptionWhenConfigured(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{NetworkInternal: true}, nil)
+
+	runtime.EXPECT().NetworkExists(mock.Anything, "gordon-app").Return(false, nil)
+	runtime.EXPECT().CreateNetwork(mock.Anything, "gordon-app", domain.NetworkConfig{Driver: "bridge", Internal: true}).Return(nil)
+
+	require.NoError(t, svc.createNetworkIfNeeded(testContext(), "gordon-app"))
+}
+
+func TestService_BuildContainerConfig_StrictSecurityProfile(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{SecurityProfile: "strict"}, nil)
+
+	cfg := svc.buildContainerConfig(containerConfigInput{Domain: "app.example.com", Image: "app:latest", ImageRef: "app:latest"})
+
+	assert.True(t, cfg.ReadOnlyRootFS)
+	assert.Equal(t, []string{"ALL"}, cfg.CapDrop)
+	assert.Equal(t, []string{"NET_BIND_SERVICE"}, cfg.CapAdd)
+}
+
+func TestService_BuildContainerConfig_CompatSecurityProfileDefault(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{}, nil)
+
+	cfg := svc.buildContainerConfig(containerConfigInput{Domain: "app.example.com", Image: "app:latest", ImageRef: "app:latest"})
+
+	assert.False(t, cfg.ReadOnlyRootFS)
+	assert.Nil(t, cfg.CapDrop)
+	assert.Nil(t, cfg.CapAdd)
 }

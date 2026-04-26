@@ -40,8 +40,8 @@ func (_m *MockRegistryService) EXPECT() *MockRegistryService_Expecter {
 }
 
 // AppendBlobChunk provides a mock function for the type MockRegistryService
-func (_mock *MockRegistryService) AppendBlobChunk(ctx context.Context, name string, uuid string, data io.Reader) (int64, error) {
-	ret := _mock.Called(ctx, name, uuid, data)
+func (_mock *MockRegistryService) AppendBlobChunk(ctx context.Context, name string, uuid string, data io.Reader, contentLength int64, maxBlobSize int64) (int64, error) {
+	ret := _mock.Called(ctx, name, uuid, data, contentLength, maxBlobSize)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AppendBlobChunk")
@@ -49,16 +49,16 @@ func (_mock *MockRegistryService) AppendBlobChunk(ctx context.Context, name stri
 
 	var r0 int64
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, io.Reader) (int64, error)); ok {
-		return returnFunc(ctx, name, uuid, data)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, int64) (int64, error)); ok {
+		return returnFunc(ctx, name, uuid, data, contentLength, maxBlobSize)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, io.Reader) int64); ok {
-		r0 = returnFunc(ctx, name, uuid, data)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, int64) int64); ok {
+		r0 = returnFunc(ctx, name, uuid, data, contentLength, maxBlobSize)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, io.Reader) error); ok {
-		r1 = returnFunc(ctx, name, uuid, data)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, io.Reader, int64, int64) error); ok {
+		r1 = returnFunc(ctx, name, uuid, data, contentLength, maxBlobSize)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -75,11 +75,13 @@ type MockRegistryService_AppendBlobChunk_Call struct {
 //   - name string
 //   - uuid string
 //   - data io.Reader
-func (_e *MockRegistryService_Expecter) AppendBlobChunk(ctx interface{}, name interface{}, uuid interface{}, data interface{}) *MockRegistryService_AppendBlobChunk_Call {
-	return &MockRegistryService_AppendBlobChunk_Call{Call: _e.mock.On("AppendBlobChunk", ctx, name, uuid, data)}
+//   - contentLength int64
+//   - maxBlobSize int64
+func (_e *MockRegistryService_Expecter) AppendBlobChunk(ctx interface{}, name interface{}, uuid interface{}, data interface{}, contentLength interface{}, maxBlobSize interface{}) *MockRegistryService_AppendBlobChunk_Call {
+	return &MockRegistryService_AppendBlobChunk_Call{Call: _e.mock.On("AppendBlobChunk", ctx, name, uuid, data, contentLength, maxBlobSize)}
 }
 
-func (_c *MockRegistryService_AppendBlobChunk_Call) Run(run func(ctx context.Context, name string, uuid string, data io.Reader)) *MockRegistryService_AppendBlobChunk_Call {
+func (_c *MockRegistryService_AppendBlobChunk_Call) Run(run func(ctx context.Context, name string, uuid string, data io.Reader, contentLength int64, maxBlobSize int64)) *MockRegistryService_AppendBlobChunk_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -97,11 +99,21 @@ func (_c *MockRegistryService_AppendBlobChunk_Call) Run(run func(ctx context.Con
 		if args[3] != nil {
 			arg3 = args[3].(io.Reader)
 		}
+		var arg4 int64
+		if args[4] != nil {
+			arg4 = args[4].(int64)
+		}
+		var arg5 int64
+		if args[5] != nil {
+			arg5 = args[5].(int64)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
 			arg3,
+			arg4,
+			arg5,
 		)
 	})
 	return _c
@@ -112,7 +124,7 @@ func (_c *MockRegistryService_AppendBlobChunk_Call) Return(n int64, err error) *
 	return _c
 }
 
-func (_c *MockRegistryService_AppendBlobChunk_Call) RunAndReturn(run func(ctx context.Context, name string, uuid string, data io.Reader) (int64, error)) *MockRegistryService_AppendBlobChunk_Call {
+func (_c *MockRegistryService_AppendBlobChunk_Call) RunAndReturn(run func(ctx context.Context, name string, uuid string, data io.Reader, contentLength int64, maxBlobSize int64) (int64, error)) *MockRegistryService_AppendBlobChunk_Call {
 	_c.Call.Return(run)
 	return _c
 }

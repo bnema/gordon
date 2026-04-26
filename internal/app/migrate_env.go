@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,57 +80,44 @@ func migrateEnvFile(envDir, name string, passStore *domainsecrets.PassStore, log
 		return nil
 	}
 
-	existingKeys, err := passStore.ListKeys(domainName)
+	writtenKeys, err := passStore.SetIfEmpty(domainName, secrets)
 	if err != nil {
-		return fmt.Errorf("failed to read pass keys for %s: %w", domainName, err)
-	}
-
-	missing := missingSecrets(existingKeys, secrets)
-	if len(missing) > 0 {
-		if err := passStore.Set(domainName, missing); err != nil {
-			return fmt.Errorf("failed to migrate secrets for %s: %w", domainName, err)
+		if errors.Is(err, domain.ErrSecretsAlreadyExist) {
+			return fmt.Errorf("%w; refusing to delete plaintext env file automatically", err)
 		}
+		return fmt.Errorf("failed to migrate secrets for %s: %w", domainName, err)
 	}
 
-	migratedPath := filePath + ".migrated"
-	if err := os.Rename(filePath, migratedPath); err != nil {
-		return fmt.Errorf("failed to rename env file %s: %w", filePath, err)
+	if err := os.Remove(filePath); err != nil {
+		// Check if the stored secrets match what we just wrote
+		storedSecrets, getErr := passStore.GetAll(domainName)
+		if getErr == nil && secretsMatch(storedSecrets, secrets) {
+			// Migration was successful, removal failed but secrets are stored
+			log.Warn().
+				Str("file", filePath).
+				Str("domain", domainName).
+				Msg("secrets migrated successfully but failed to remove original file; treating as success")
+			return nil
+		}
+		// Attempt rollback: remove only the pass entries this migration wrote.
+		for _, key := range writtenKeys {
+			if delErr := passStore.Delete(domainName, key); delErr != nil {
+				log.Error().
+					Err(delErr).
+					Str("domain", domainName).
+					Str("key", key).
+					Msg("failed to rollback pass entry after file removal failure")
+			}
+		}
+		return fmt.Errorf("failed to remove migrated env file %s: %w", filePath, err)
 	}
 
 	log.Info().
-		Int(zerowrap.FieldCount, len(missing)).
+		Int(zerowrap.FieldCount, len(secrets)).
 		Str("domain", domainName).
-		Msg("migrated secrets for domain from plain text to pass")
-	log.Info().
-		Str("file", migratedPath).
-		Msg("original file renamed to .env.migrated - you can safely remove it")
+		Msg("migrated secrets for domain from plain text to pass and removed original env file")
 
 	return nil
-}
-
-func missingSecrets(existingKeys []string, secrets map[string]string) map[string]string {
-	if len(secrets) == 0 {
-		return nil
-	}
-
-	existingSet := make(map[string]struct{}, len(existingKeys))
-	for _, key := range existingKeys {
-		existingSet[key] = struct{}{}
-	}
-
-	missing := make(map[string]string)
-	for key, value := range secrets {
-		if _, exists := existingSet[key]; exists {
-			continue
-		}
-		missing[key] = value
-	}
-
-	if len(missing) == 0 {
-		return nil
-	}
-
-	return missing
 }
 
 func migrateAttachmentEnvFilesToPass(envDir string, passStore *domainsecrets.PassStore, log zerowrap.Logger) error {
@@ -180,39 +168,43 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 		return nil
 	}
 
-	existingSecrets, err := passStore.GetAllAttachment(containerName)
+	writtenKeys, err := passStore.SetAttachmentIfEmpty(containerName, secrets)
 	if err != nil {
-		return fmt.Errorf("failed to read pass secrets for attachment %s: %w", containerName, err)
-	}
-
-	existingKeys := make([]string, 0, len(existingSecrets))
-	for key := range existingSecrets {
-		existingKeys = append(existingKeys, key)
-	}
-
-	missing := missingSecrets(existingKeys, secrets)
-	if len(missing) > 0 {
-		if err := passStore.SetAttachment(containerName, missing); err != nil {
-			return fmt.Errorf("failed to migrate attachment secrets for %s: %w", containerName, err)
+		if errors.Is(err, domain.ErrSecretsAlreadyExist) {
+			return fmt.Errorf("%w; refusing to delete plaintext env file automatically", err)
 		}
-		log.Info().
-			Int(zerowrap.FieldCount, len(missing)).
-			Str("container", containerName).
-			Msg("migrated secrets for attachment container from plain text to pass")
-	} else {
-		log.Info().
-			Str("container", containerName).
-			Msg("all attachment secrets already exist in pass; no migration needed")
+		return fmt.Errorf("failed to migrate attachment secrets for %s: %w", containerName, err)
 	}
 
-	migratedPath := filePath + ".migrated"
-	if err := os.Rename(filePath, migratedPath); err != nil {
-		return fmt.Errorf("failed to rename attachment env file %s: %w", filePath, err)
+	if err := os.Remove(filePath); err != nil {
+		// Check if the stored secrets match what we just wrote
+		storedSecrets, getErr := passStore.GetAllAttachment(containerName)
+		if getErr == nil && secretsMatch(storedSecrets, secrets) {
+			// Migration was successful, removal failed but secrets are stored
+			log.Warn().
+				Str("file", filePath).
+				Str("container", containerName).
+				Msg("attachment secrets migrated successfully but failed to remove original file; treating as success")
+			return nil
+		}
+		// Attempt rollback: remove only the pass entries this migration wrote.
+		for _, key := range writtenKeys {
+			if delErr := passStore.DeleteAttachment(containerName, key); delErr != nil {
+				log.Error().
+					Err(delErr).
+					Str("container", containerName).
+					Str("key", key).
+					Msg("failed to rollback pass entry after file removal failure")
+			}
+		}
+		return fmt.Errorf("failed to remove migrated attachment env file %s: %w", filePath, err)
 	}
 
 	log.Info().
-		Str("file", migratedPath).
-		Msg("original attachment file renamed to .env.migrated - you can safely remove it")
+		Int(zerowrap.FieldCount, len(secrets)).
+		Str("container", containerName).
+		Str("file", filePath).
+		Msg("migrated attachment secrets to pass and removed original env file")
 
 	return nil
 }
@@ -220,4 +212,17 @@ func migrateAttachmentEnvFile(envDir, name string, passStore *domainsecrets.Pass
 func extractContainerNameFromAttachmentFile(filename string) string {
 	name := strings.TrimSuffix(filename, ".env")
 	return name
+}
+
+func secretsMatch(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		bv, ok := b[k]
+		if !ok || bv != v {
+			return false
+		}
+	}
+	return true
 }

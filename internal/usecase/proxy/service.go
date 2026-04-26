@@ -3,6 +3,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"strconv"
@@ -65,6 +66,12 @@ func NewService(
 
 // GetTarget returns the proxy target for a given domain.
 func (s *Service) GetTarget(ctx context.Context, domainName string) (target *domain.ProxyTarget, retErr error) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
+		return nil, domain.ErrNoTargetAvailable
+	}
+	domainName = canonicalDomain
+
 	ctx, span := proxyTracer.Start(ctx, "proxy.get_target",
 		trace.WithAttributes(attribute.String("domain", domainName)))
 	defer func() {
@@ -181,6 +188,9 @@ func (s *Service) resolveExternalRoute(_ context.Context, domainName, targetAddr
 	if err != nil {
 		return nil, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
 	}
+	if port < 1 || port > 65535 {
+		return nil, fmt.Errorf("invalid port in external route %q: port must be between 1 and 65535", targetAddr)
+	}
 
 	// SECURITY: Resolve DNS and validate that the target is not an internal/blocked
 	// network. We use the resolved IP as the proxy target to prevent DNS rebinding
@@ -225,29 +235,44 @@ func (s *Service) resolveExternalRoute(_ context.Context, domainName, targetAddr
 
 // RegisterTarget registers a new proxy target for a domain.
 func (s *Service) RegisterTarget(_ context.Context, domainName string, target *domain.ProxyTarget) error {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
+		return domain.ErrRouteDomainInvalid
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.targets[domainName] = target
+	s.targets[canonicalDomain] = target
 	return nil
 }
 
 // UnregisterTarget removes a proxy target for a domain.
 func (s *Service) UnregisterTarget(_ context.Context, domainName string) error {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
+		return domain.ErrRouteDomainInvalid
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.targets, domainName)
+	delete(s.targets, canonicalDomain)
 	return nil
 }
 
 // InvalidateTarget removes a cached proxy target, forcing re-lookup on next request.
 // This is used during zero-downtime deployments to switch traffic to a new container.
 func (s *Service) InvalidateTarget(_ context.Context, domainName string) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.targets, domainName)
+	delete(s.targets, canonicalDomain)
 }
 
 // WaitForNoInFlight waits until no requests are currently proxied to the
@@ -303,9 +328,31 @@ func (s *Service) UpdateConfig(config Config) {
 
 // IsRegistryDomain returns true if the host matches the configured registry domain.
 func (s *Service) IsRegistryDomain(host string) bool {
+	canonicalHost, ok := domain.CanonicalRouteDomain(host)
+	if !ok {
+		return false
+	}
+
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config.RegistryDomain != "" && host == s.config.RegistryDomain
+	registryDomain, ok := domain.CanonicalRouteDomain(s.config.RegistryDomain)
+	s.mu.RUnlock()
+	return ok && canonicalHost == registryDomain
+}
+
+// IsKnownHost returns true if host is configured as registry, route, or external route.
+func (s *Service) IsKnownHost(ctx context.Context, host string) bool {
+	canonicalHost, ok := domain.CanonicalRouteDomain(host)
+	if !ok {
+		return false
+	}
+	if s.IsRegistryDomain(canonicalHost) {
+		return true
+	}
+	if _, err := s.configSvc.GetRoute(ctx, canonicalHost); err == nil {
+		return true
+	}
+	_, ok = s.configSvc.GetExternalRoutes()[canonicalHost]
+	return ok
 }
 
 // TrackInFlight records an in-flight request for a container.

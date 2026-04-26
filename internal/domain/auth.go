@@ -79,6 +79,8 @@ const (
 	AdminResourceSecrets = "secrets"
 	AdminResourceConfig  = "config"
 	AdminResourceStatus  = "status"
+	AdminResourceLogs    = "logs"
+	AdminResourceVolumes = "volumes"
 	AdminResourceAll     = "*"
 )
 
@@ -166,7 +168,7 @@ func (s *Scope) IsRepositoryScope() bool {
 // AdminScope represents an admin API scope (admin:resource:actions).
 // Format: admin:routes:read,write or admin:*:* for full access.
 type AdminScope struct {
-	Resource string   // routes, secrets, config, status, or *
+	Resource string   // routes, secrets, config, status, logs, volumes, or *
 	Actions  []string // read, write, or *
 }
 
@@ -300,6 +302,16 @@ func AdminScopeConfig(actions ...string) string {
 // AdminScopeStatus creates an admin scope for status with the given actions.
 func AdminScopeStatus(actions ...string) string {
 	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceStatus, strings.Join(actions, ","))
+}
+
+// AdminScopeLogs creates an admin scope for logs with the given actions.
+func AdminScopeLogs(actions ...string) string {
+	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceLogs, strings.Join(actions, ","))
+}
+
+// AdminScopeVolumes creates an admin scope for volumes with the given actions.
+func AdminScopeVolumes(actions ...string) string {
+	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceVolumes, strings.Join(actions, ","))
 }
 
 // AuthStatus represents status of an authentication session.

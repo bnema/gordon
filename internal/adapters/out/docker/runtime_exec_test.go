@@ -1,9 +1,12 @@
 package docker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,4 +49,31 @@ func frameDockerStream(streamID byte, payload []byte) []byte {
 	binary.BigEndian.PutUint32(frame[4:8], uint32(len(payload)))
 	copy(frame[8:], payload)
 	return frame
+}
+
+func TestExtractFileFromTarMatchesFullCleanPath(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "other/.env", Typeflag: tar.TypeReg, Size: int64(len("wrong"))}))
+	_, err := tw.Write([]byte("wrong"))
+	require.NoError(t, err)
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "app/.env", Typeflag: tar.TypeReg, Size: int64(len("right"))}))
+	_, err = tw.Write([]byte("right"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	rc, err := extractFileFromTar(io.NopCloser(bytes.NewReader(buf.Bytes())), "/app/.env")
+	require.NoError(t, err)
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	assert.Equal(t, "right", string(data))
+}
+
+func TestReadExtractedEnvFileRejectsOversizedContent(t *testing.T) {
+	data, err := readExtractedEnvFile(io.NopCloser(strings.NewReader(strings.Repeat("a", maxExtractedEnvFileSize+1))))
+	require.Error(t, err)
+	assert.Nil(t, data)
+	assert.Contains(t, err.Error(), "exceeds")
 }

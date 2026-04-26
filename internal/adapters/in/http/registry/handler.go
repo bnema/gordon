@@ -2,6 +2,7 @@
 package registry
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/bnema/zerowrap"
 
@@ -26,13 +28,21 @@ const (
 	// Kept at 95MB to stay within Cloudflare's 100MB per-request limit.
 	// Users who need larger chunks can configure it explicitly via max_blob_chunk_size.
 	DefaultMaxBlobChunkSize = 95 * 1024 * 1024
+	// DefaultMaxBlobSize is the default maximum cumulative size for a blob upload.
+	DefaultMaxBlobSize = 1024 * 1024 * 1024
 )
+
+// blobLimits holds consistent blob size limits.
+type blobLimits struct {
+	MaxChunkSize int64
+	MaxBlobSize  int64
+}
 
 // Handler implements the HTTP handler for Docker Registry API v2.
 type Handler struct {
-	registrySvc      in.RegistryService
-	log              zerowrap.Logger
-	maxBlobChunkSize int64
+	registrySvc in.RegistryService
+	log         zerowrap.Logger
+	blobLimits  atomic.Value // stores *blobLimits
 }
 
 // NewHandler creates a new registry HTTP handler.
@@ -40,16 +50,39 @@ func NewHandler(
 	registrySvc in.RegistryService,
 	log zerowrap.Logger,
 	maxBlobChunkSize int64,
+	maxBlobSize ...int64,
 ) *Handler {
 	if maxBlobChunkSize <= 0 {
 		maxBlobChunkSize = DefaultMaxBlobChunkSize
 	}
-
-	return &Handler{
-		registrySvc:      registrySvc,
-		log:              log,
-		maxBlobChunkSize: maxBlobChunkSize,
+	blobSizeLimit := int64(DefaultMaxBlobSize)
+	if len(maxBlobSize) > 0 && maxBlobSize[0] > 0 {
+		blobSizeLimit = maxBlobSize[0]
 	}
+
+	h := &Handler{
+		registrySvc: registrySvc,
+		log:         log,
+	}
+	h.blobLimits.Store(&blobLimits{
+		MaxChunkSize: maxBlobChunkSize,
+		MaxBlobSize:  blobSizeLimit,
+	})
+	return h
+}
+
+// UpdateBlobLimits updates request-size limits used by live upload handlers.
+func (h *Handler) UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64) {
+	if maxBlobChunkSize <= 0 {
+		maxBlobChunkSize = DefaultMaxBlobChunkSize
+	}
+	if maxBlobSize <= 0 {
+		maxBlobSize = DefaultMaxBlobSize
+	}
+	h.blobLimits.Store(&blobLimits{
+		MaxChunkSize: maxBlobChunkSize,
+		MaxBlobSize:  maxBlobSize,
+	})
 }
 
 // RegisterRoutes registers the registry routes on the given mux.
@@ -244,7 +277,7 @@ func (h *Handler) handleTagListRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) handleBase(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleBase(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 	w.WriteHeader(http.StatusOK)
 }
@@ -407,18 +440,34 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Load a consistent snapshot of both blob limits atomically
+	limits := h.blobLimits.Load().(*blobLimits)
+	maxBlobChunkSize := limits.MaxChunkSize
+	maxBlobSize := limits.MaxBlobSize
+
 	// Limit blob chunk size to prevent excessive uploads.
 	// MaxBytesReader wraps the body so the downstream io.Copy stops at the limit.
-	r.Body = http.MaxBytesReader(w, r.Body, h.maxBlobChunkSize)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBlobChunkSize)
 
 	// Stream the body directly to storage — memory usage is bounded to a small
 	// copy buffer (~32KB) regardless of chunk size.
-	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, r.Body)
+	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, r.Body, r.ContentLength, maxBlobSize)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			log.Warn().Int64("max_size", h.maxBlobChunkSize).Msg("blob chunk too large")
+			log.Warn().Int64("max_size", maxBlobChunkSize).Msg("blob chunk too large")
+			if !h.cancelUploadAfterError(w, ctx, uuid, "failed to cancel oversized blob upload") {
+				return
+			}
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob chunk exceeds maximum size")
+			return
+		}
+		if errors.Is(err, domain.ErrBlobSizeExceeded) {
+			log.Warn().Int64("max_size", maxBlobSize).Msg("blob upload too large")
+			if !h.cancelUploadAfterError(w, ctx, uuid, "failed to cancel oversized blob upload") {
+				return
+			}
+			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob exceeds maximum size")
 			return
 		}
 		log.Error().Err(err).Msg("failed to append blob chunk")
@@ -430,7 +479,9 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "PUT" && digest != "" {
 		if err := h.registrySvc.FinishUpload(ctx, uuid, digest); err != nil {
 			log.Error().Err(err).Str("digest", digest).Msg("failed to finalize blob upload")
-			_ = h.registrySvc.CancelUpload(ctx, uuid)
+			if !h.cancelUploadAfterError(w, ctx, uuid, "failed to cancel invalid blob upload") {
+				return
+			}
 			h.sendRegistryError(w, http.StatusBadRequest, "DIGEST_INVALID", "digest mismatch")
 			return
 		}
@@ -448,6 +499,16 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Docker-Upload-UUID", uuid)
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) cancelUploadAfterError(w http.ResponseWriter, ctx context.Context, uuid, message string) bool {
+	if err := h.registrySvc.CancelUpload(ctx, uuid); err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Str("uuid", uuid).Msg(message)
+		h.sendRegistryError(w, http.StatusInternalServerError, "UNKNOWN", "failed to cancel upload")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {

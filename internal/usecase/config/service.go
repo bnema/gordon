@@ -95,7 +95,16 @@ func (s *Service) Load(ctx context.Context) error {
 		return log.WrapErr(err, "failed to load routes")
 	}
 	newConfig.Routes = routes
-	newConfig.ExternalRoutes = loadStringMap(s.viper.Get("external_routes"))
+	externalRoutes, err := loadExternalRoutes(s.viper.Get("external_routes"))
+	if err != nil {
+		return log.WrapErr(err, "failed to load external routes")
+	}
+	for domainName := range externalRoutes {
+		if _, exists := routes[domainName]; exists {
+			return fmt.Errorf("external route %q conflicts with configured route", domainName)
+		}
+	}
+	newConfig.ExternalRoutes = externalRoutes
 	newConfig.NetworkGroups = loadStringArrayMap(s.viper.Get("network_groups"))
 	newConfig.Attachments = loadStringArrayMap(s.viper.Get("attachments"))
 
@@ -208,6 +217,33 @@ func loadStringMap(raw any) map[string]string {
 	return result
 }
 
+// loadExternalRoutes loads and canonicalizes external route mappings.
+func loadExternalRoutes(raw any) (map[string]string, error) {
+	result := make(map[string]string)
+	if raw == nil {
+		return result, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return result, nil
+	}
+	for k, v := range m {
+		vs, ok := v.(string)
+		if !ok {
+			continue
+		}
+		canonicalKey, ok := domain.CanonicalRouteDomain(k)
+		if !ok {
+			return nil, fmt.Errorf("invalid external route key %q: %w", k, domain.ErrRouteDomainInvalid)
+		}
+		if _, exists := result[canonicalKey]; exists {
+			return nil, fmt.Errorf("duplicate external route key %q canonicalizes to %q", k, canonicalKey)
+		}
+		result[canonicalKey] = vs
+	}
+	return result, nil
+}
+
 // loadStringArrayMap loads a map[string][]string from a viper value.
 func loadStringArrayMap(raw any) map[string][]string {
 	result := make(map[string][]string)
@@ -252,7 +288,11 @@ func loadCanonicalRoutes(raw any) (map[string]routeConfig, error) {
 		if err != nil {
 			return nil, err
 		}
-		result[key] = route
+		canonicalKey, _ := domain.CanonicalRouteDomain(key)
+		if _, exists := result[canonicalKey]; exists {
+			return nil, fmt.Errorf("duplicate route key %q canonicalizes to %q", key, canonicalKey)
+		}
+		result[canonicalKey] = route
 	}
 
 	for key, value := range routes {
@@ -261,7 +301,11 @@ func loadCanonicalRoutes(raw any) (map[string]routeConfig, error) {
 		}
 
 		domainName := strings.TrimPrefix(key, "http://")
-		if _, exists := result[domainName]; exists {
+		canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+		if !ok {
+			return nil, fmt.Errorf("invalid route key %q: %w", legacyRouteStorageKey(domainName), domain.ErrRouteDomainInvalid)
+		}
+		if _, exists := result[canonicalDomain]; exists {
 			continue
 		}
 
@@ -269,16 +313,18 @@ func loadCanonicalRoutes(raw any) (map[string]routeConfig, error) {
 		if err != nil {
 			return nil, err
 		}
-		result[domainName] = route
+		result[canonicalDomain] = route
 	}
 
 	return result, nil
 }
 
 func parseCanonicalRouteEntry(domainName string, raw any) (routeConfig, error) {
-	if !domain.IsValidRouteDomain(domainName) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
 		return routeConfig{}, fmt.Errorf("invalid route key %q: %w", domainName, domain.ErrRouteDomainInvalid)
 	}
+	domainName = canonicalDomain
 
 	switch value := raw.(type) {
 	case string:
@@ -294,9 +340,11 @@ func parseCanonicalRouteEntry(domainName string, raw any) (routeConfig, error) {
 }
 
 func parseLegacyRouteEntry(domainName string, raw any) (routeConfig, error) {
-	if !domain.IsValidRouteDomain(domainName) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
 		return routeConfig{}, fmt.Errorf("invalid route key %q: %w", legacyRouteStorageKey(domainName), domain.ErrRouteDomainInvalid)
 	}
+	domainName = canonicalDomain
 
 	value, ok := raw.(string)
 	if !ok {
@@ -348,6 +396,10 @@ func (s *Service) GetRoute(_ context.Context, domainName string) (*domain.Route,
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	domainName, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
+		return nil, domain.ErrRouteNotFound
+	}
 	routeCfg, ok := s.config.Routes[domainName]
 	if !ok {
 		return nil, domain.ErrRouteNotFound
@@ -494,9 +546,11 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	if route.Domain == "" {
 		return domain.ErrRouteDomainEmpty
 	}
-	if !domain.IsValidRouteDomain(route.Domain) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(route.Domain)
+	if !ok {
 		return domain.ErrRouteDomainInvalid
 	}
+	route.Domain = canonicalDomain
 	if route.Image == "" {
 		return domain.ErrRouteImageEmpty
 	}
@@ -506,6 +560,10 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	currentConfig := s.config
 	if currentConfig.Routes == nil {
 		currentConfig.Routes = make(map[string]routeConfig)
+	}
+	if _, exists := currentConfig.ExternalRoutes[route.Domain]; exists {
+		s.mu.Unlock()
+		return fmt.Errorf("%w: route %q conflicts with external route", domain.ErrRouteConflict, route.Domain)
 	}
 	previousCanonicalRoute, canonicalExisted := currentConfig.Routes[route.Domain]
 	legacyKey := legacyRouteStorageKey(route.Domain)
@@ -550,9 +608,11 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 	if route.Domain == "" {
 		return domain.ErrRouteDomainEmpty
 	}
-	if !domain.IsValidRouteDomain(route.Domain) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(route.Domain)
+	if !ok {
 		return domain.ErrRouteDomainInvalid
 	}
+	route.Domain = canonicalDomain
 	if route.Image == "" {
 		return domain.ErrRouteImageEmpty
 	}
@@ -601,14 +661,16 @@ func (s *Service) RemoveRoute(ctx context.Context, domainName string) error {
 	if domainName == "" {
 		return domain.ErrRouteDomainEmpty
 	}
-	if !domain.IsValidRouteDomain(domainName) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
 		return domain.ErrRouteDomainInvalid
 	}
+	domainName = canonicalDomain
 
 	// Store previous value for rollback
 	s.mu.Lock()
 	currentConfig := s.config
-	_, ok := currentConfig.Routes[domainName]
+	_, ok = currentConfig.Routes[domainName]
 	if !ok {
 		s.mu.Unlock()
 		return domain.ErrRouteNotFound
@@ -1455,7 +1517,7 @@ func (s *Service) GetExternalRoutes() map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make(map[string]string)
+	result := make(map[string]string, len(s.config.ExternalRoutes))
 	for k, v := range s.config.ExternalRoutes {
 		result[k] = v
 	}

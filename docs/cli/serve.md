@@ -235,6 +235,8 @@ gordon logs [domain] [options]
 Remote targeting uses client config or an active remote by default.
 Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
+Remote log access requires an admin token with `admin:logs:read` (or `admin:*:*`). `admin:status:read` is not sufficient for logs.
+
 ### Examples
 
 ```bash

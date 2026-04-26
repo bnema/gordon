@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/proxy"
 )
@@ -99,6 +100,18 @@ func (p *proxyRecorder) UpdateConfig(config proxy.Config) {
 	p.config = config
 }
 
+type registryLimitsRecorder struct {
+	calls            int
+	maxBlobChunkSize int64
+	maxBlobSize      int64
+}
+
+func (r *registryLimitsRecorder) UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64) {
+	r.calls++
+	r.maxBlobChunkSize = maxBlobChunkSize
+	r.maxBlobSize = maxBlobSize
+}
+
 type eventBusRecorder struct {
 	mu        sync.Mutex
 	calls     int
@@ -138,6 +151,24 @@ func TestSetupConfigHotReload_WatchCallbackInvokesCoordinator(t *testing.T) {
 	require.Equal(t, 0, coordinator.TriggerCalls())
 }
 
+func TestBuildProxyConfig_ParsesMaxBlobSizeWithoutChangingChunkDefault(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.MaxBlobSize = "2GB"
+
+	result, err := buildProxyConfig(cfg, zerowrap.Default())
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(2<<30), result.maxBlobSize)
+	assert.Equal(t, int64(registry.DefaultMaxBlobChunkSize), result.maxBlobChunkSize)
+}
+
+func TestBuildProxyConfig_DefaultMaxBlobSize(t *testing.T) {
+	result, err := buildProxyConfig(Config{}, zerowrap.Default())
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(registry.DefaultMaxBlobSize), result.maxBlobSize)
+}
+
 func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEvent(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()
@@ -145,6 +176,7 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 	v.Set("server.registry_port", 5000)
 	v.Set("server.max_proxy_body_size", "5MB")
 	v.Set("server.max_blob_chunk_size", "6MB")
+	v.Set("server.max_blob_size", "8MB")
 	v.Set("server.max_proxy_response_size", "7MB")
 	v.Set("server.max_concurrent_connections", 99)
 
@@ -152,12 +184,16 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 	proxySvc := &proxyRecorder{}
 	events := &eventBusRecorder{}
 
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, events, zerowrap.Default())
+	registryLimits := &registryLimitsRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, zerowrap.Default())
 	require.NoError(t, coord.ApplyLoadedConfig(ctx))
 
 	require.Equal(t, 0, reloadSvc.Calls())
 	require.Equal(t, 1, proxySvc.calls)
 	require.Equal(t, 1, events.Calls())
+	require.Equal(t, 1, registryLimits.calls)
+	require.Equal(t, int64(6<<20), registryLimits.maxBlobChunkSize)
+	require.Equal(t, int64(8<<20), registryLimits.maxBlobSize)
 	require.Equal(t, domain.EventConfigReload, events.eventType)
 	require.Equal(t, proxy.Config{
 		RegistryDomain:     "reload.example.com",
@@ -175,6 +211,7 @@ func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	v.Set("server.registry_port", 5000)
 	v.Set("server.max_proxy_body_size", "5MB")
 	v.Set("server.max_blob_chunk_size", "6MB")
+	v.Set("server.max_blob_size", "8MB")
 	v.Set("server.max_proxy_response_size", "7MB")
 	v.Set("server.max_concurrent_connections", 99)
 
@@ -182,13 +219,17 @@ func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	proxySvc := &proxyRecorder{}
 	events := &eventBusRecorder{}
 
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, events, zerowrap.Default())
+	registryLimits := &registryLimitsRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, zerowrap.Default())
 	require.NoError(t, coord.Trigger(ctx))
 	require.NoError(t, coord.Trigger(ctx))
 
 	require.Equal(t, 1, reloadSvc.Calls())
 	require.Equal(t, 1, proxySvc.calls)
 	require.Equal(t, 1, events.Calls())
+	require.Equal(t, 1, registryLimits.calls)
+	require.Equal(t, int64(6<<20), registryLimits.maxBlobChunkSize)
+	require.Equal(t, int64(8<<20), registryLimits.maxBlobSize)
 	require.Equal(t, domain.EventConfigReload, events.eventType)
 	require.Equal(t, proxy.Config{
 		RegistryDomain:     "new.example.com",
@@ -212,7 +253,7 @@ func TestReloadCoordinator_RetriesImmediatelyAfterFailedReload(t *testing.T) {
 	reloadErr := errors.New("reload failed")
 	reloadSvc := &reloadRecorder{err: reloadErr}
 	proxySvc := &proxyRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, zerowrap.Default())
 
 	err := coord.Trigger(ctx)
 	require.ErrorIs(t, err, reloadErr)
@@ -241,7 +282,7 @@ func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T)
 	proxySvc := &proxyRecorder{}
 	events := &eventBusRecorder{err: publishErr}
 
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, events, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, events, zerowrap.Default())
 
 	err := coord.Trigger(ctx)
 	require.ErrorIs(t, err, publishErr)
@@ -273,7 +314,7 @@ func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
 		<-release
 	}}
 	proxySvc := &proxyRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, zerowrap.Default())
 
 	firstDone := make(chan struct{})
 	go func() {

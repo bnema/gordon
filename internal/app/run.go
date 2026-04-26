@@ -23,6 +23,7 @@ import (
 	"github.com/bnema/zerowrap"
 	zerowrapotel "github.com/bnema/zerowrap/otel"
 	"github.com/spf13/viper"
+	"golang.org/x/sys/unix"
 
 	// Adapters - Output
 	"github.com/bnema/gordon/internal/adapters/out/accesslog"
@@ -96,6 +97,7 @@ type Config struct {
 		DataDir              string   `mapstructure:"data_dir"`
 		MaxProxyBodySize     string   `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
 		MaxBlobChunkSize     string   `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
+		MaxBlobSize          string   `mapstructure:"max_blob_size"`           // e.g., "1GB", "2GB"
 		MaxProxyResponseSize string   `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
 		MaxConcurrentConns   int      `mapstructure:"max_concurrent_connections"`
 		RegistryAllowedIPs   []string `mapstructure:"registry_allowed_ips"`
@@ -170,7 +172,9 @@ type Config struct {
 	} `mapstructure:"backups"`
 
 	Images struct {
-		Prune struct {
+		AllowedRegistries []string `mapstructure:"allowed_registries"`
+		RequireDigest     bool     `mapstructure:"require_digest"`
+		Prune             struct {
 			Enabled  bool   `mapstructure:"enabled"`
 			Schedule string `mapstructure:"schedule"`
 			KeepLast int    `mapstructure:"keep_last"`
@@ -178,9 +182,10 @@ type Config struct {
 	} `mapstructure:"images"`
 
 	Containers struct {
-		MemoryLimit string  `mapstructure:"memory_limit"` // e.g., "512MB", "1GB"
-		CPULimit    float64 `mapstructure:"cpu_limit"`    // CPU cores, e.g., 1.0 = 1 core
-		PidsLimit   int64   `mapstructure:"pids_limit"`   // e.g., 512
+		MemoryLimit     string  `mapstructure:"memory_limit"`     // e.g., "512MB", "1GB"
+		CPULimit        float64 `mapstructure:"cpu_limit"`        // CPU cores, e.g., 1.0 = 1 core
+		PidsLimit       int64   `mapstructure:"pids_limit"`       // e.g., 512
+		SecurityProfile string  `mapstructure:"security_profile"` // compat or strict
 	} `mapstructure:"containers"`
 
 	Telemetry telemetry.Config `mapstructure:"telemetry"`
@@ -215,9 +220,13 @@ type services struct {
 	previewService    *preview.Service
 	envDir            string
 	maxBlobChunkSize  int64
+	maxBlobSize       int64
 	caAdapter         *pkiadapter.CA
 	pkiSvc            *pkiusecase.Service
 	reloadCoordinator *reloadCoordinator
+	registryHandler   interface {
+		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
+	}
 }
 
 // Run initializes and starts the Gordon application.
@@ -460,7 +469,7 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
-	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, si.svc.eventBus, log)
+	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, nil, si.svc.eventBus, log)
 
 	si.initHandlers()
 
@@ -526,6 +535,7 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 		return err
 	}
 	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
+	si.svc.maxBlobSize = proxyCfg.maxBlobSize
 	si.svc.proxySvc = proxy.NewService(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
@@ -1333,22 +1343,87 @@ func loadSecret(ctx context.Context, backend domain.SecretsBackend, path, dataDi
 		provider := secrets.NewSopsProvider(log)
 		return provider.GetSecret(ctx, path)
 	case domain.SecretsBackendUnsafe:
-		// For unsafe backend, path is relative to dataDir/secrets/
-		secretFile := filepath.Join(dataDir, "secrets", path)
-		data, err := os.ReadFile(secretFile)
-		if err != nil {
-			return "", fmt.Errorf("failed to read secret file: %w", err)
-		}
-		return string(data), nil
+		// For unsafe backend, path is relative to dataDir/secrets/.
+		return readUnsafeSecret(dataDir, path)
 	default:
 		return "", fmt.Errorf("unknown secrets backend: %s", backend)
 	}
+}
+
+func readFileBeneath(root, cleanedRelPath string) ([]byte, error) {
+	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open secrets root: %w", err)
+	}
+	defer unix.Close(rootFD)
+
+	parts := strings.Split(filepath.ToSlash(cleanedRelPath), "/")
+	dirFD := rootFD
+	var closeDirFDs []int
+	defer func() {
+		for i := len(closeDirFDs) - 1; i >= 0; i-- {
+			_ = unix.Close(closeDirFDs[i])
+		}
+	}()
+
+	for i, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return nil, fmt.Errorf("invalid secret path: path must stay under dataDir/secrets")
+		}
+		last := i == len(parts)-1
+		if last {
+			fd, err := unix.Openat(dirFD, part, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read secret file: %w", err)
+			}
+			defer unix.Close(fd)
+			var st unix.Stat_t
+			if err := unix.Fstat(fd, &st); err != nil {
+				return nil, fmt.Errorf("failed to stat secret file: %w", err)
+			}
+			if st.Mode&unix.S_IFMT != unix.S_IFREG {
+				return nil, fmt.Errorf("invalid secret path: secret must be a regular file")
+			}
+			data, err := os.ReadFile(fmt.Sprintf("/proc/self/fd/%d", fd))
+			if err != nil {
+				return nil, fmt.Errorf("failed to read secret file: %w", err)
+			}
+			return data, nil
+		}
+
+		nextFD, err := unix.Openat(dirFD, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open secret path component: %w", err)
+		}
+		closeDirFDs = append(closeDirFDs, nextFD)
+		dirFD = nextFD
+	}
+
+	return nil, fmt.Errorf("invalid secret path: empty path")
+}
+
+func readUnsafeSecret(dataDir, secretPath string) (string, error) {
+	if filepath.IsAbs(secretPath) {
+		return "", fmt.Errorf("invalid secret path: absolute paths are not allowed")
+	}
+	cleaned := filepath.Clean(secretPath)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid secret path: path must stay under dataDir/secrets")
+	}
+
+	root := filepath.Clean(filepath.Join(dataDir, "secrets"))
+	data, err := readFileBeneath(root, cleaned)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // proxyConfigResult holds parsed proxy and blob chunk size config.
 type proxyConfigResult struct {
 	proxyConfig      proxy.Config
 	maxBlobChunkSize int64
+	maxBlobSize      int64
 }
 
 type configWatcher interface {
@@ -1376,22 +1451,36 @@ type reloadCoordinator struct {
 	lastRun  time.Time
 	debounce time.Duration
 
-	configSvc configReloader
-	v         *viper.Viper
-	proxySvc  proxyConfigUpdater
-	eventBus  out.EventPublisher
-	log       zerowrap.Logger
+	configSvc      configReloader
+	v              *viper.Viper
+	proxySvc       proxyConfigUpdater
+	registryLimits interface {
+		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
+	}
+	eventBus out.EventPublisher
+	log      zerowrap.Logger
 }
 
-func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc proxyConfigUpdater, eventBus out.EventPublisher, log zerowrap.Logger) *reloadCoordinator {
+func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc proxyConfigUpdater, registryLimits interface {
+	UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
+}, eventBus out.EventPublisher, log zerowrap.Logger) *reloadCoordinator {
 	return &reloadCoordinator{
-		debounce:  500 * time.Millisecond,
-		configSvc: configSvc,
-		v:         v,
-		proxySvc:  proxySvc,
-		eventBus:  eventBus,
-		log:       log,
+		debounce:       500 * time.Millisecond,
+		configSvc:      configSvc,
+		v:              v,
+		proxySvc:       proxySvc,
+		registryLimits: registryLimits,
+		eventBus:       eventBus,
+		log:            log,
 	}
+}
+
+func (c *reloadCoordinator) SetRegistryLimits(limits interface {
+	UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
+}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.registryLimits = limits
 }
 
 func (c *reloadCoordinator) Trigger(ctx context.Context) error {
@@ -1443,6 +1532,9 @@ func (c *reloadCoordinator) applyLoadedConfig(now time.Time) error {
 	}
 
 	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
+	if c.registryLimits != nil {
+		c.registryLimits.UpdateBlobLimits(reloadedProxy.maxBlobChunkSize, reloadedProxy.maxBlobSize)
+	}
 
 	if c.eventBus != nil {
 		if err := c.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
@@ -1477,6 +1569,15 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 		maxBlobChunkSize = parsedSize
 	}
 
+	maxBlobSize := int64(registry.DefaultMaxBlobSize)
+	if cfg.Server.MaxBlobSize != "" {
+		parsedSize, err := bytesize.Parse(cfg.Server.MaxBlobSize)
+		if err != nil {
+			return nil, log.WrapErrWithFields(err, "invalid server.max_blob_size configuration", map[string]any{"value": cfg.Server.MaxBlobSize})
+		}
+		maxBlobSize = parsedSize
+	}
+
 	maxProxyResponseSize := int64(1 << 30) // 1GB default
 	if cfg.Server.MaxProxyResponseSize != "" {
 		parsedSize, err := bytesize.Parse(cfg.Server.MaxProxyResponseSize)
@@ -1501,6 +1602,7 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 			MaxConcurrentConns: maxConcurrentConns,
 		},
 		maxBlobChunkSize: maxBlobChunkSize,
+		maxBlobSize:      maxBlobSize,
 	}, nil
 }
 
@@ -1544,7 +1646,11 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		NetworkIsolation:           v.GetBool("network_isolation.enabled"),
 		NetworkPrefix:              v.GetString("network_isolation.network_prefix"),
 		NetworkGroups:              attachmentConfig.NetworkGroups,
+		NetworkInternal:            v.GetBool("network_isolation.internal"),
 		Attachments:                attachmentConfig.Attachments,
+		AllowedRegistries:          cfg.Images.AllowedRegistries,
+		RequireImageDigest:         cfg.Images.RequireDigest,
+		SecurityProfile:            cfg.Containers.SecurityProfile,
 		ReadinessDelay:             v.GetDuration("deploy.readiness_delay"),
 		ReadinessMode:              v.GetString("deploy.readiness_mode"),
 		HealthTimeout:              v.GetDuration("deploy.health_timeout"),
@@ -1758,8 +1864,12 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 	// This ensures consistent IP extraction across logging, rate limiting, and auth.
 	trustedNets := httphelper.ParseTrustedProxies(cfg.API.RateLimit.TrustedProxies)
 
-	// Registry handler (unchanged)
-	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize)
+	// Registry handler
+	registryHandler := registry.NewHandler(svc.registrySvc, log, svc.maxBlobChunkSize, svc.maxBlobSize)
+	svc.registryHandler = registryHandler
+	if svc.reloadCoordinator != nil {
+		svc.reloadCoordinator.SetRegistryLimits(registryHandler)
+	}
 	registryWithMiddleware, cidrAllowlistMiddleware, rateLimitMiddleware := buildRegistryHandlerWithMiddleware(
 		svc,
 		cfg,
@@ -1783,7 +1893,9 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
-		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.Port, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log),
+		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.Port, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log, func(host string) bool {
+			return svc.proxySvc.IsKnownHost(context.Background(), host)
+		}),
 	}
 	if proxyCIDRMiddleware != nil {
 		httpProxyMiddlewares = append(httpProxyMiddlewares, proxyCIDRMiddleware)
@@ -2889,6 +3001,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("auto_route.enabled", false)
 	v.SetDefault("network_isolation.enabled", true)
 	v.SetDefault("network_isolation.network_prefix", "gordon")
+	v.SetDefault("network_isolation.internal", false)
 	v.SetDefault("volumes.auto_create", true)
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
@@ -2900,9 +3013,12 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("backups.retention.daily", 0)
 	v.SetDefault("backups.retention.weekly", 0)
 	v.SetDefault("backups.retention.monthly", 0)
+	v.SetDefault("images.allowed_registries", []string{})
+	v.SetDefault("images.require_digest", false)
 	v.SetDefault("images.prune.enabled", false)
 	v.SetDefault("images.prune.schedule", string(domain.ScheduleDaily))
 	v.SetDefault("images.prune.keep_last", domain.DefaultImagePruneKeepLast)
+	v.SetDefault("containers.security_profile", "compat")
 	v.SetDefault("telemetry.enabled", false)
 	v.SetDefault("telemetry.endpoint", "")
 	v.SetDefault("telemetry.auth_token", "")

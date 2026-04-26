@@ -63,6 +63,10 @@ drain_mode = "auto"                      # auto, inflight, delay
 drain_timeout = "30s"                    # Max wait for in-flight drain
 drain_delay = "2s"                       # Wait after proxy invalidation before stopping the old container
 
+# Container runtime profile
+[containers]
+security_profile = "compat"              # compat or strict
+
 # Logging
 [logging]
 level = "info"                           # trace, debug, info, warn, error
@@ -106,6 +110,7 @@ preserve = true                          # Keep volumes on container removal
 [network_isolation]
 enabled = true                           # Per-app isolated networks
 network_prefix = "gordon"                # Network name prefix
+internal = false                          # Set true to block direct egress from isolated networks
 
 # Auto-route
 [auto_route]
@@ -138,6 +143,10 @@ weekly = 4
 monthly = 12
 
 # Images
+[images]
+allowed_registries = []                   # Explicit external registries allowed for deploy/attachments
+require_digest = false                    # Require digests for allowlisted external registries
+
 [images.prune]
 enabled = false
 schedule = "daily"
@@ -164,6 +173,7 @@ keep_last = 3
 | `[attachments]` | Service dependencies | [Attachments](./attachments.md) |
 | `[backups]` | Database backups | [Backups](./backups.md) |
 | `[images.prune]` | Scheduled image cleanup | [Images](./images.md) |
+| Security hardening | Security controls and recommended knobs | [Security Hardening](./security-hardening.md) |
 
 ## Default Values
 
@@ -172,6 +182,8 @@ keep_last = 3
 | `server.port` | `8088` |
 | `server.registry_port` | `5000` |
 | `server.data_dir` | `~/.gordon` |
+| `server.max_blob_chunk_size` | `"95MB"` |
+| `server.max_blob_size` | `"1GB"` |
 | `auth.enabled` | `true` |
 | `auth.secrets_backend` | `"unsafe"` |
 | `auth.token_expiry` | `"30d"` |
@@ -187,6 +199,7 @@ keep_last = 3
 | `deploy.drain_mode` | `"auto"` |
 | `deploy.drain_timeout` | `"30s"` |
 | `deploy.drain_delay` | `"2s"` |
+| `containers.security_profile` | `"compat"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |
 | `logging.file.enabled` | `false` |
@@ -198,9 +211,12 @@ keep_last = 3
 | `volumes.prefix` | `"gordon"` |
 | `volumes.preserve` | `true` |
 | `network_isolation.enabled` | `true` |
+| `network_isolation.internal` | `false` |
 | `auto_route.enabled` | `false` |
 | `backups.enabled` | `false` |
 | `backups.schedule` | `"daily"` (`"hourly"`, `"daily"`, `"weekly"`, `"monthly"`) |
+| `images.allowed_registries` | `[]` |
+| `images.require_digest` | `false` |
 | `images.prune.enabled` | `false` |
 | `images.prune.schedule` | `"daily"` |
 | `images.prune.keep_last` | `3` |
@@ -229,7 +245,6 @@ gordon reload
 | `server.gordon_domain` (registry domain) |
 | `server.registry_port` |
 | `server.max_proxy_body_size` |
-| `server.max_blob_chunk_size` |
 | `server.max_proxy_response_size` |
 | `server.max_concurrent_conns` |
 
@@ -241,6 +256,8 @@ gordon reload
 |---------|
 | `server.port` |
 | `server.data_dir` |
+| `server.max_blob_chunk_size` |
+| `server.max_blob_size` |
 | `auth.*` |
 | `deploy.readiness_mode` |
 | `deploy.readiness_delay` |

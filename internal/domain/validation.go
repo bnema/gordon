@@ -17,6 +17,14 @@ var hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
 //
 // Valid: app.example.com, api.site.org, my-app.co.uk
 // Invalid: 192.168.1.1, localhost, myapp.local, example.com:8080
+func CanonicalRouteDomain(domainName string) (string, bool) {
+	canonical := strings.ToLower(strings.TrimSpace(domainName))
+	if !IsValidRouteDomain(canonical) {
+		return "", false
+	}
+	return canonical, true
+}
+
 func IsValidRouteDomain(domain string) bool {
 	// Reject empty
 	if domain == "" {
