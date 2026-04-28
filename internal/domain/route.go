@@ -15,7 +15,8 @@ type ProxyTarget struct {
 	ContainerID  string
 	Scheme       string // "http" or "https"
 	Protocol     string // "" (default HTTP/1.1) or "h2c" (cleartext HTTP/2)
-	OriginalHost string // Original hostname before DNS resolution (for Host header)
+	OriginalHost string // Original hostname before DNS resolution (for external-route Host header)
+	RouteHost    string // Canonical matched route domain for managed-route Host header
 }
 
 // RouteMatch represents the result of matching a request to a route.
