@@ -38,7 +38,7 @@ Management commands run locally through in-process services by default. Add `--r
 | `gordon attachments push` | Build/push attachment images to registry | [attachments](./attachments.md) |
 | `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
 | `gordon restart` | Restart a running container | [restart](./restart.md) |
-| `gordon rollback` | Roll back to a previous image version | [rollback](./rollback.md) |
+| `gordon pin` | Pin a route to a specific image tag | [pin](./pin.md) |
 | `gordon routes` | Manage routes | [routes](./routes.md) |
 | `gordon secrets` | Manage secrets | [secrets](./secrets.md) |
 | `gordon status` | Show Gordon server status | [status](./status.md) |
@@ -80,8 +80,8 @@ gordon push myapp --build
 # Push and deploy without confirmation
 gordon push myapp --no-confirm
 
-# Roll back to a previous tag
-gordon rollback myapp.example.com
+# Pin to a specific tag
+gordon pin myapp.example.com
 
 # View logs
 gordon logs                          # Gordon process logs

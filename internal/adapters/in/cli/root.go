@@ -101,9 +101,9 @@ Commands are organized by where they run:
 	pushCmd.GroupID = groupManage
 	rootCmd.AddCommand(pushCmd)
 
-	rollbackCmd := newRollbackCmd()
-	rollbackCmd.GroupID = groupManage
-	rootCmd.AddCommand(rollbackCmd)
+	pinCmd := newPinCmd()
+	pinCmd.GroupID = groupManage
+	rootCmd.AddCommand(pinCmd)
 
 	reloadCmd := newReloadCmd()
 	reloadCmd.GroupID = groupManage
