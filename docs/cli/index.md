@@ -80,7 +80,7 @@ gordon push myapp --build
 # Push and deploy without confirmation
 gordon push myapp --no-confirm
 
-# Roll back to a previous tag
+# Pin to a specific tag
 gordon pin myapp.example.com
 
 # View logs

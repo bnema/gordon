@@ -24,6 +24,7 @@ gordon pin list <domain>
 | `--tag` | Target tag (skips interactive selection) |
 | `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
+| `--json` | Output as JSON (for `pin list`) |
 
 ### Description
 
@@ -53,6 +54,9 @@ gordon pin myapp.example.com --tag v1.2.0
 
 # List available tags for a domain
 gordon pin list myapp.example.com
+
+# List available tags as JSON
+gordon pin list myapp.example.com --json
 ```
 
 ### Notes
