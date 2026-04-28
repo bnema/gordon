@@ -61,7 +61,7 @@ gordon pin list myapp.example.com --json
 
 ### Notes
 
-- Remote mode required. See [CLI Overview](./index.md) for targeting options.
+- Local by default; remote mode optional. See [CLI Overview](./index.md) for targeting options.
 - Tags are read from the Gordon registry configured on the server.
 
 ## Related
