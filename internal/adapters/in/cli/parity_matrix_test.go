@@ -40,6 +40,7 @@ func TestLocalParityMatrix(t *testing.T) {
 		command    string
 	}{
 		{file: "push.go", legacyText: "push requires remote mode", command: "gordon push"},
+		// Guards against reintroducing the old rollback-only remote-mode error text during the command rename.
 		{file: "pin.go", legacyText: "rollback requires remote mode", command: "gordon pin"},
 		{file: "backup.go", legacyText: "backup commands require a configured remote target", command: "gordon backups"},
 		{file: "routes.go", legacyText: "status command requires --remote flag or GORDON_REMOTE env var", command: "gordon status"},
@@ -59,7 +60,6 @@ func TestLocalParityMatrix(t *testing.T) {
 
 func TestUIAdoptionMatrixCoverage(t *testing.T) {
 	for _, expect := range uiAdoptionExpectations {
-		expect := expect
 		t.Run(expect.family, func(t *testing.T) {
 			if len(expect.functions) == 0 {
 				t.Fatalf("ui adoption matrix for %s is empty", expect.family)

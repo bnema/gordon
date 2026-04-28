@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -215,12 +216,7 @@ func selectTag(targetTag string, tags []string, currentTag, pinDomain string) (s
 }
 
 func validateTagExists(targetTag string, tags []string) bool {
-	for _, t := range tags {
-		if t == targetTag {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(tags, targetTag)
 }
 
 func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route, pinDomain, imageName, selectedTag string) error {

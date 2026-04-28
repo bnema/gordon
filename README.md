@@ -46,7 +46,7 @@ gordon status
 Roll back, restart, or manage secrets — all from the command line:
 
 ```bash
-gordon rollback app.example.com    # Revert to a previous image tag
+gordon pin app.example.com         # Pin to a specific image tag
 gordon restart app.example.com     # Restart the container
 gordon secrets set app.example.com DB_HOST=db.internal API_KEY=secret123
 ```
@@ -95,7 +95,7 @@ See the [Deploy Action README](.github/actions/deploy/README.md) for multi-platf
 | `gordon routes add <domain> <image>` | Create or update a route |
 | `gordon routes remove <domain>` | Remove a route |
 | `gordon routes deploy <domain>` | Redeploy a route |
-| `gordon rollback <domain>` | Roll back to a previous image |
+| `gordon pin <domain>` | Pin a route to a specific image tag |
 | `gordon restart <domain>` | Restart a route container |
 
 ### Images & Registry
