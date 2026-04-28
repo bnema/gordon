@@ -16,40 +16,40 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-func newRollbackCmd() *cobra.Command {
+func newPinCmd() *cobra.Command {
 	var targetTag string
 
 	cmd := &cobra.Command{
-		Use:   "rollback <domain>",
-		Short: "Roll back to a previous image version",
+		Use:   "pin <domain>",
+		Short: "Pin a route to a specific image tag",
 		Long: `Lists available image tags for a domain and deploys the selected version.
 Tags are read from the Gordon registry.
 
 Examples:
-  gordon rollback myapp.example.com --remote ...
-  gordon rollback myapp.example.com --tag v1.0.0 --remote ...
-  gordon rollback list myapp.example.com --remote ...`,
+  gordon pin myapp.example.com --remote ...
+  gordon pin myapp.example.com --tag v1.0.0 --remote ...
+  gordon pin list myapp.example.com --remote ...`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRollback(cmd.Context(), args[0], targetTag)
+			return runPin(cmd.Context(), args[0], targetTag)
 		},
 	}
 
 	cmd.Flags().StringVar(&targetTag, "tag", "", "Target tag (skips interactive selection)")
-	cmd.AddCommand(newRollbackListCmd())
+	cmd.AddCommand(newPinListCmd())
 
 	return cmd
 }
 
-func newRollbackListCmd() *cobra.Command {
+func newPinListCmd() *cobra.Command {
 	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "list <domain>",
-		Short: "List available rollback tags",
+		Short: "List available tags",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRollbackList(cmd.Context(), cmd.OutOrStdout(), args[0], jsonOut)
+			return runPinList(cmd.Context(), cmd.OutOrStdout(), args[0], jsonOut)
 		},
 	}
 
@@ -58,14 +58,14 @@ func newRollbackListCmd() *cobra.Command {
 	return cmd
 }
 
-func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
+func runPin(ctx context.Context, pinDomain, targetTag string) error {
 	handle, err := resolveControlPlane(configPath)
 	if err != nil {
 		return err
 	}
 	defer handle.close()
 
-	route, err := handle.plane.GetRoute(ctx, rollbackDomain)
+	route, err := handle.plane.GetRoute(ctx, pinDomain)
 	if err != nil {
 		return fmt.Errorf("failed to get route: %w", err)
 	}
@@ -80,7 +80,7 @@ func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
 		return err
 	}
 
-	selectedTag, err := selectTag(targetTag, tags, currentTag, rollbackDomain)
+	selectedTag, err := selectTag(targetTag, tags, currentTag, pinDomain)
 	if err != nil || selectedTag == "" {
 		return err
 	}
@@ -90,17 +90,17 @@ func runRollback(ctx context.Context, rollbackDomain, targetTag string) error {
 		return nil
 	}
 
-	return deploySelectedTag(ctx, handle.plane, route, rollbackDomain, imageName, selectedTag)
+	return deploySelectedTag(ctx, handle.plane, route, pinDomain, imageName, selectedTag)
 }
 
-func runRollbackList(ctx context.Context, w io.Writer, rollbackDomain string, jsonOut bool) error {
+func runPinList(ctx context.Context, w io.Writer, pinDomain string, jsonOut bool) error {
 	handle, err := resolveControlPlane(configPath)
 	if err != nil {
 		return err
 	}
 	defer handle.close()
 
-	route, err := handle.plane.GetRoute(ctx, rollbackDomain)
+	route, err := handle.plane.GetRoute(ctx, pinDomain)
 	if err != nil {
 		return fmt.Errorf("failed to get route: %w", err)
 	}
@@ -115,19 +115,19 @@ func runRollbackList(ctx context.Context, w io.Writer, rollbackDomain string, js
 		return err
 	}
 
-	return printRollbackTags(w, rollbackDomain, currentTag, tags, jsonOut)
+	return printPinTags(w, pinDomain, currentTag, tags, jsonOut)
 }
 
-func printRollbackTags(w io.Writer, rollbackDomain, currentTag string, tags []string, jsonOut bool) error {
+func printPinTags(w io.Writer, pinDomain, currentTag string, tags []string, jsonOut bool) error {
 	if jsonOut {
 		return writeJSON(w, map[string]any{
-			"domain":      rollbackDomain,
+			"domain":      pinDomain,
 			"current_tag": currentTag,
 			"tags":        tags,
 		})
 	}
 
-	if _, err := fmt.Fprintf(w, "Available tags for %s:\n", styles.Theme.Bold.Render(rollbackDomain)); err != nil {
+	if _, err := fmt.Fprintf(w, "Available tags for %s:\n", styles.Theme.Bold.Render(pinDomain)); err != nil {
 		return err
 	}
 	for _, tag := range tags {
@@ -223,18 +223,18 @@ func validateTagExists(targetTag string, tags []string) bool {
 	return false
 }
 
-func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route, rollbackDomain, imageName, selectedTag string) error {
+func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route, pinDomain, imageName, selectedTag string) error {
 	registry, _, _ := parseImageRef(route.Image)
 	oldImage := route.Image
 	route.Image = fmt.Sprintf("%s/%s:%s", registry, imageName, selectedTag)
 
-	fmt.Printf("Rolling back to %s...\n", styles.Theme.Bold.Render(selectedTag))
+	fmt.Printf("Pinning to %s...\n", styles.Theme.Bold.Render(selectedTag))
 
 	if err := cp.UpdateRoute(ctx, *route); err != nil {
 		return fmt.Errorf("failed to update route: %w", err)
 	}
 
-	result, err := cp.Deploy(ctx, rollbackDomain)
+	result, err := cp.Deploy(ctx, pinDomain)
 	if err != nil {
 		// Attempt to revert route to previous image
 		route.Image = oldImage
@@ -245,6 +245,6 @@ func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route
 		return fmt.Errorf("failed to deploy (route reverted): %w", err)
 	}
 	containerID := shortContainerID(result.ContainerID)
-	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Rolled back %s to %s (container: %s)", rollbackDomain, selectedTag, containerID)))
+	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Pinned %s to %s (container: %s)", pinDomain, selectedTag, containerID)))
 	return nil
 }
