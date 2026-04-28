@@ -77,8 +77,8 @@ func TestRemotesList_JSONFlag_Accepted(t *testing.T) {
 	}
 }
 
-func TestRollbackList_JSONFlag_Accepted(t *testing.T) {
-	cmd := newRollbackListCmd()
+func TestPinList_JSONFlag_Accepted(t *testing.T) {
+	cmd := newPinListCmd()
 	f := cmd.Flags().Lookup("json")
 	assert.NotNil(t, f)
 	if f != nil {
@@ -101,7 +101,7 @@ func TestImagesList_JSONShape_RoundTripsDTO(t *testing.T) {
 	assert.Equal(t, images[0].ID, got[0].ID)
 }
 
-func TestRollbackList_JSONShape_RoundTripsTags(t *testing.T) {
+func TestPinList_JSONShape_RoundTripsTags(t *testing.T) {
 	tags := []string{"v1.2.0", "v1.1.0"}
 	payload, err := json.Marshal(tags)
 	require.NoError(t, err)

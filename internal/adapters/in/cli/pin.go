@@ -192,7 +192,7 @@ func sortSemverTags(tags []string) []string {
 	return append(semverTags, otherTags...)
 }
 
-func selectTag(targetTag string, tags []string, currentTag, rollbackDomain string) (string, error) {
+func selectTag(targetTag string, tags []string, currentTag, pinDomain string) (string, error) {
 	if targetTag != "" {
 		if !validateTagExists(targetTag, tags) {
 			return "", fmt.Errorf("tag %s not found. Available: %s", targetTag, strings.Join(tags, ", "))
@@ -201,7 +201,7 @@ func selectTag(targetTag string, tags []string, currentTag, rollbackDomain strin
 	}
 
 	selectedTag, err := components.RunSelector(
-		fmt.Sprintf("Select version for %s:", rollbackDomain),
+		fmt.Sprintf("Select version for %s:", pinDomain),
 		tags,
 		currentTag,
 	)
