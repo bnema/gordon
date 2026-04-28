@@ -90,14 +90,19 @@ func (h *Handler) forwardToTarget(w http.ResponseWriter, r *http.Request, target
 		return
 	}
 
-	originalHost := target.OriginalHost
 	releaseInFlight := h.proxySvc.TrackInFlight(target.ContainerID)
 	defer releaseInFlight()
 
 	transport := h.transportForTarget(target)
 
-	proxy := newReverseProxy(targetURL, originalHost, transport, r, h.trustedNets,
-		func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
+	proxy := newReverseProxy(reverseProxyOptions{
+		targetURL:     targetURL,
+		hostHeader:    targetHostHeader(target, targetURL),
+		forwardedHost: target.RouteHost,
+		transport:     transport,
+		incomingReq:   r,
+		trustedNets:   h.trustedNets,
+		errorHandler: func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(proxyErr, &maxBytesErr) {
 				log.Warn().Err(proxyErr).Str("target", targetURL.String()).Msg("proxy error: request body too large")
@@ -107,8 +112,8 @@ func (h *Handler) forwardToTarget(w http.ResponseWriter, r *http.Request, target
 			log.Error().Err(proxyErr).Str("target", targetURL.String()).Msg("proxy error: connection failed")
 			proxyError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		},
-		modifyResponse(maxResponseSize),
-	)
+		modifyResponse: modifyResponse(maxResponseSize),
+	})
 
 	if target.Protocol == "h2c" {
 		log.Debug().
@@ -176,39 +181,57 @@ func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, regi
 	proxy.ServeHTTP(w, r)
 }
 
+type reverseProxyOptions struct {
+	targetURL      *url.URL
+	hostHeader     string
+	forwardedHost  string
+	transport      http.RoundTripper
+	incomingReq    *http.Request
+	trustedNets    []*net.IPNet
+	errorHandler   func(http.ResponseWriter, *http.Request, error)
+	modifyResponse func(*http.Response) error
+}
+
+func targetHostHeader(target *domain.ProxyTarget, targetURL *url.URL) string {
+	if target.RouteHost != "" {
+		return target.RouteHost
+	}
+	if target.OriginalHost != "" {
+		return net.JoinHostPort(target.OriginalHost, targetURL.Port())
+	}
+	return targetURL.Host
+}
+
 // newReverseProxy creates a reverse proxy using Rewrite instead of Director to prevent
 // hop-by-hop header attacks. A malicious client could send "Connection: Authorization"
 // to strip the Authorization header when using the default Director. Rewrite processes
 // headers after hop-by-hop removal, ensuring headers like Authorization are preserved.
 //
-// originalHost, when non-empty, overrides the Host header sent to the backend.
-// This is used for DNS-pinned targets where the proxy dials an IP but needs to
-// send the original hostname for virtual-hosted upstreams.
-//
 // incomingReq and trustedNets are used to preserve X-Forwarded-Proto when the
 // request originates from a trusted upstream proxy.
-func newReverseProxy(targetURL *url.URL, originalHost string, transport http.RoundTripper, incomingReq *http.Request, trustedNets []*net.IPNet, errorHandler func(http.ResponseWriter, *http.Request, error), modifyResp func(*http.Response) error) *httputil.ReverseProxy {
+func newReverseProxy(opts reverseProxyOptions) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			existingProto := pr.In.Header.Get("X-Forwarded-Proto")
-			pr.SetURL(targetURL)
+			pr.SetURL(opts.targetURL)
 			pr.SetXForwarded()
-			if originalHost != "" {
-				pr.Out.Host = net.JoinHostPort(originalHost, targetURL.Port())
-			} else {
-				pr.Out.Host = targetURL.Host
+			if opts.hostHeader != "" {
+				pr.Out.Host = opts.hostHeader
+			}
+			if opts.forwardedHost != "" {
+				pr.Out.Header.Set("X-Forwarded-Host", opts.forwardedHost)
 			}
 			// Preserve X-Forwarded-Proto from trusted upstream proxies.
 			// SetXForwarded() unconditionally sets it based on the incoming scheme
 			// (HTTP between proxies), but when a trusted proxy already sent the
 			// real client proto, we must honor it.
-			if existingProto != "" && gordonhttp.IsTrustedSource(incomingReq, trustedNets) {
+			if existingProto != "" && gordonhttp.IsTrustedSource(opts.incomingReq, opts.trustedNets) {
 				pr.Out.Header.Set("X-Forwarded-Proto", existingProto)
 			}
 		},
-		Transport:      transport,
-		ErrorHandler:   errorHandler,
-		ModifyResponse: modifyResp,
+		Transport:      opts.transport,
+		ErrorHandler:   opts.errorHandler,
+		ModifyResponse: opts.modifyResponse,
 	}
 }
 

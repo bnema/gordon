@@ -644,6 +644,7 @@ func TestService_GetTarget_HostMode_UsesProxyPortLabel(t *testing.T) {
 	assert.Equal(t, "localhost", result.Host)
 	assert.Equal(t, 32000, result.Port)
 	assert.Equal(t, "c-gitea", result.ContainerID)
+	assert.Equal(t, "git.example.com", result.RouteHost)
 }
 
 func TestService_GetTarget_HostMode_UsesDeprecatedPortLabel(t *testing.T) {

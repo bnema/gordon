@@ -134,6 +134,7 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 			ContainerID: container.ID,
 			Scheme:      "http",
 			Protocol:    meta.Protocol,
+			RouteHost:   domainName,
 		}
 	} else {
 		// Gordon is on the host - use host port mapping
@@ -166,6 +167,7 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 			ContainerID: container.ID,
 			Scheme:      "http",
 			Protocol:    meta.Protocol,
+			RouteHost:   domainName,
 		}
 	}
 

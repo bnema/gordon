@@ -145,7 +145,44 @@ func TestForwardToTarget_OriginalHostPreserved(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, receivedHost, "upstream.example.com")
+	assert.Equal(t, net.JoinHostPort("upstream.example.com", strconv.Itoa(backendPort)), receivedHost)
+}
+
+func TestForwardToTarget_RouteHostPreservedForManagedTarget(t *testing.T) {
+	var receivedHost string
+	var receivedForwardedHost string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHost = r.Host
+		receivedForwardedHost = r.Header.Get("X-Forwarded-Host")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	backendPort := backend.Listener.Addr().(*net.TCPAddr).Port
+
+	proxySvc := inmocks.NewMockProxyService(t)
+
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
+	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+		Host:        "127.0.0.1",
+		Port:        backendPort,
+		ContainerID: "c-1",
+		Scheme:      "http",
+		RouteHost:   "app.example.com",
+	}, nil)
+	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+
+	handler := NewHandler(proxySvc, nil, zerowrap.Default())
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+	req.Host = "App.Example.com:443"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "app.example.com", receivedHost)
+	assert.Equal(t, "app.example.com", receivedForwardedHost)
 }
 
 func TestForwardToTarget_BackendDown_Returns503(t *testing.T) {
@@ -280,12 +317,15 @@ func TestNewReverseProxy_XForwardedProto(t *testing.T) {
 				incomingReq.Header.Set("X-Forwarded-Proto", tt.incomingProto)
 			}
 
-			proxy := newReverseProxy(backendURL, "", http.DefaultTransport, incomingReq, tt.nets,
-				func(w http.ResponseWriter, _ *http.Request, err error) {
+			proxy := newReverseProxy(reverseProxyOptions{
+				targetURL:   backendURL,
+				transport:   http.DefaultTransport,
+				incomingReq: incomingReq,
+				trustedNets: tt.nets,
+				errorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 					http.Error(w, err.Error(), http.StatusBadGateway)
 				},
-				nil,
-			)
+			})
 
 			rec := httptest.NewRecorder()
 			proxy.ServeHTTP(rec, incomingReq)
