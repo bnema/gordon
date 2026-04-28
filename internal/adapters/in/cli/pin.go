@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -32,7 +31,7 @@ Examples:
   gordon pin list myapp.example.com --remote ...`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPin(cmd.Context(), args[0], targetTag)
+			return runPin(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), args[0], targetTag)
 		},
 	}
 
@@ -59,10 +58,10 @@ func newPinListCmd() *cobra.Command {
 	return cmd
 }
 
-func runPin(ctx context.Context, pinDomain, targetTag string) error {
+func runPin(ctx context.Context, out, ew io.Writer, pinDomain, targetTag string) error {
 	handle, err := resolveControlPlane(configPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to resolve control plane: %w", err)
 	}
 	defer handle.close()
 
@@ -78,26 +77,28 @@ func runPin(ctx context.Context, pinDomain, targetTag string) error {
 
 	tags, err := fetchAndSortTags(ctx, handle.plane, imageName)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to fetch tags: %w", err)
 	}
 
-	selectedTag, err := selectTag(targetTag, tags, currentTag, pinDomain)
-	if err != nil || selectedTag == "" {
-		return err
+	selectedTag, err := selectTag(targetTag, tags, currentTag, pinDomain, out)
+	if err != nil {
+		return fmt.Errorf("failed to select tag: %w", err)
 	}
-
-	if selectedTag == currentTag {
-		fmt.Println(styles.RenderWarning(fmt.Sprintf("Already running %s", selectedTag)))
+	if selectedTag == "" {
 		return nil
 	}
 
-	return deploySelectedTag(ctx, handle.plane, route, pinDomain, imageName, selectedTag)
+	if selectedTag == currentTag {
+		return cliWriteLine(out, styles.RenderWarning(fmt.Sprintf("Already running %s", selectedTag)))
+	}
+
+	return deploySelectedTag(ctx, handle.plane, route, out, ew, pinDomain, imageName, selectedTag)
 }
 
 func runPinList(ctx context.Context, w io.Writer, pinDomain string, jsonOut bool) error {
 	handle, err := resolveControlPlane(configPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to resolve control plane: %w", err)
 	}
 	defer handle.close()
 
@@ -113,7 +114,7 @@ func runPinList(ctx context.Context, w io.Writer, pinDomain string, jsonOut bool
 
 	tags, err := fetchAndSortTags(ctx, handle.plane, imageName)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to fetch tags: %w", err)
 	}
 
 	return printPinTags(w, pinDomain, currentTag, tags, jsonOut)
@@ -193,7 +194,7 @@ func sortSemverTags(tags []string) []string {
 	return append(semverTags, otherTags...)
 }
 
-func selectTag(targetTag string, tags []string, currentTag, pinDomain string) (string, error) {
+func selectTag(targetTag string, tags []string, currentTag, pinDomain string, out io.Writer) (string, error) {
 	if targetTag != "" {
 		if !validateTagExists(targetTag, tags) {
 			return "", fmt.Errorf("tag %s not found. Available: %s", targetTag, strings.Join(tags, ", "))
@@ -210,7 +211,7 @@ func selectTag(targetTag string, tags []string, currentTag, pinDomain string) (s
 		return "", err
 	}
 	if selectedTag == "" {
-		fmt.Println("Cancelled.")
+		_ = cliWriteLine(out, "Cancelled.")
 	}
 	return selectedTag, nil
 }
@@ -219,12 +220,14 @@ func validateTagExists(targetTag string, tags []string) bool {
 	return slices.Contains(tags, targetTag)
 }
 
-func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route, pinDomain, imageName, selectedTag string) error {
+func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route, out, ew io.Writer, pinDomain, imageName, selectedTag string) error {
 	registry, _, _ := parseImageRef(route.Image)
 	oldImage := route.Image
 	route.Image = fmt.Sprintf("%s/%s:%s", registry, imageName, selectedTag)
 
-	fmt.Printf("Pinning to %s...\n", styles.Theme.Bold.Render(selectedTag))
+	if err := cliWritef(out, "Pinning to %s...\n", styles.Theme.Bold.Render(selectedTag)); err != nil {
+		return err
+	}
 
 	if err := cp.UpdateRoute(ctx, *route); err != nil {
 		return fmt.Errorf("failed to update route: %w", err)
@@ -235,12 +238,11 @@ func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route
 		// Attempt to revert route to previous image
 		route.Image = oldImage
 		if revertErr := cp.UpdateRoute(ctx, *route); revertErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: deploy failed and could not revert route: %v\n", revertErr)
+			_ = cliWritef(ew, "WARNING: deploy failed and could not revert route: %v\n", revertErr)
 			return fmt.Errorf("failed to deploy; revert failed: %v; deploy error: %w", revertErr, err)
 		}
 		return fmt.Errorf("failed to deploy (route reverted): %w", err)
 	}
 	containerID := shortContainerID(result.ContainerID)
-	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Pinned %s to %s (container: %s)", pinDomain, selectedTag, containerID)))
-	return nil
+	return cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Pinned %s to %s (container: %s)", pinDomain, selectedTag, containerID)))
 }
