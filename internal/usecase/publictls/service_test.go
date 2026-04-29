@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"maps"
 	"math/big"
 	"sync"
 	"testing"
@@ -48,9 +49,7 @@ func (f *fakeRoutes) GetExternalRoutes() map[string]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make(map[string]string, len(f.external))
-	for k, v := range f.external {
-		out[k] = v
-	}
+	maps.Copy(out, f.external)
 	return out
 }
 
