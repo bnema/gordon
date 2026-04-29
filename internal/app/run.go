@@ -43,9 +43,6 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 
-	// Boundaries
-	"github.com/bnema/gordon/internal/boundaries/in"
-
 	// OTel
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
@@ -61,6 +58,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 
 	// Boundaries
+	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 
 	// Domain
@@ -1681,10 +1679,10 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	c.lastRun = now
 
 	// Reconcile public TLS certificates after config reload.
+	// Log and continue on failure — a transient ACME issue should not abort the entire reload.
 	if c.publicTLS != nil {
 		if err := c.publicTLS.Reconcile(ctx); err != nil {
-			c.log.Error().Err(err).Msg("failed to reconcile public TLS certificates after reload")
-			return fmt.Errorf("reconcile public TLS: %w", err)
+			c.log.Warn().Err(err).Msg("failed to reconcile public TLS certificates after reload, continuing")
 		}
 	}
 

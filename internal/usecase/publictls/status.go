@@ -2,8 +2,8 @@ package publictls
 
 import (
 	"context"
+	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/bnema/gordon/internal/domain"
@@ -130,74 +130,22 @@ func (s *Service) findCoverageLocked(routeDomain string, managedCerts []domain.M
 	return false, ""
 }
 
+// keyEqValuePattern matches key=value patterns for known sensitive keys
+// in a case-insensitive manner.
+var keyEqValuePattern = regexp.MustCompile(`(?i)(token|secret|key|password|pass|api_key|apikey|auth)=[^\s]+`)
+
 // sanitizeError removes obvious sensitive strings from error messages.
-// At minimum it ensures that the literal "secret" and patterns like
-// "token=secret" are not present in the output.
+// It redacts key=value patterns for known sensitive keys while preserving
+// safe context. It does not blanket-redact messages just because they
+// contain the word "secret" or similar.
 func sanitizeError(err string) string {
 	if err == "" {
 		return ""
 	}
 
-	result := err
-
-	// Remove key=value patterns for well-known sensitive keys.
-	result = sanitizeKeyEqValue(result, "token")
-	result = sanitizeKeyEqValue(result, "secret")
-	result = sanitizeKeyEqValue(result, "key")
-	result = sanitizeKeyEqValue(result, "password")
-	result = sanitizeKeyEqValue(result, "pass")
-	result = sanitizeKeyEqValue(result, "api_key")
-	result = sanitizeKeyEqValue(result, "apikey")
-	result = sanitizeKeyEqValue(result, "auth")
-
-	// Replace any remaining occurrences of "secret" (case-insensitive).
-	lower := strings.ToLower(result)
-	if strings.Contains(lower, "secret") {
-		result = "redacted"
-		return result
-	}
-
+	result := keyEqValuePattern.ReplaceAllString(err, "$1=redacted")
 	if result == "" {
 		return "certificate error"
-	}
-	return result
-}
-
-// sanitizeKeyEqValue removes patterns like "key=value" from the string.
-// It replaces the value portion with "redacted".
-func sanitizeKeyEqValue(s, key string) string {
-	prefix := key + "="
-	lowerPrefix := strings.ToLower(prefix)
-	result := s
-	pos := 0
-
-	for {
-		lowerResult := strings.ToLower(result)
-		if pos >= len(lowerResult) {
-			break
-		}
-		idx := strings.Index(lowerResult[pos:], lowerPrefix)
-		if idx == -1 {
-			break
-		}
-		idx += pos // make absolute
-
-		// Find end of value (space, newline, or end of string).
-		valStart := idx + len(prefix)
-		rest := result[valStart:]
-		end := strings.IndexAny(rest, " \n")
-
-		replacement := key + "=redacted"
-		var after string
-		if end == -1 {
-			after = ""
-		} else {
-			after = rest[end:]
-		}
-		result = result[:idx] + replacement + after
-
-		// Advance search position past the replacement to avoid re-matching.
-		pos = idx + len(replacement)
 	}
 	return result
 }

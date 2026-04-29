@@ -44,9 +44,68 @@ func TestManagedCertificateCovers(t *testing.T) {
 }
 
 func TestManagedCertificateHealth(t *testing.T) {
-	valid := ManagedCertificate{NotAfter: time.Now().Add(60 * 24 * time.Hour)}
-	expired := ManagedCertificate{NotAfter: time.Now().Add(-time.Hour)}
+	// Fixed reference time for deterministic tests.
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
 
-	assert.Equal(t, TLSCertificateStatusValid, valid.Health(time.Now()))
-	assert.Equal(t, TLSCertificateStatusExpired, expired.Health(time.Now()))
+	tests := []struct {
+		name string
+		cert ManagedCertificate
+		want TLSCertificateStatus
+	}{
+		{
+			name: "valid certificate far from expiry",
+			cert: ManagedCertificate{NotAfter: now.Add(60 * 24 * time.Hour)},
+			want: TLSCertificateStatusValid,
+		},
+		{
+			name: "expired certificate",
+			cert: ManagedCertificate{NotAfter: now.Add(-time.Hour)},
+			want: TLSCertificateStatusExpired,
+		},
+		{
+			name: "warning when less than 30 days remain",
+			cert: ManagedCertificate{NotAfter: now.Add(15 * 24 * time.Hour)},
+			want: TLSCertificateStatusWarning,
+		},
+		{
+			name: "warning exactly at 30 day boundary in the past",
+			cert: ManagedCertificate{NotAfter: now.Add(29 * 24 * time.Hour)},
+			want: TLSCertificateStatusWarning,
+		},
+		{
+			name: "missing when NotAfter is zero",
+			cert: ManagedCertificate{},
+			want: TLSCertificateStatusMissing,
+		},
+		{
+			name: "error when LastError is set",
+			cert: ManagedCertificate{
+				NotAfter:  now.Add(60 * 24 * time.Hour),
+				LastError: "issuer unavailable",
+			},
+			want: TLSCertificateStatusError,
+		},
+		{
+			name: "error takes priority over expired",
+			cert: ManagedCertificate{
+				NotAfter:  now.Add(-time.Hour),
+				LastError: "something went wrong",
+			},
+			want: TLSCertificateStatusError,
+		},
+		{
+			name: "error takes priority over zero NotAfter",
+			cert: ManagedCertificate{
+				LastError: "something went wrong",
+			},
+			want: TLSCertificateStatusError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cert.Health(now)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

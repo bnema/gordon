@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bnema/zerowrap"
 
@@ -14,6 +15,10 @@ import (
 )
 
 const defaultCloudflareTokenPassName = "gordon/cloudflare/api-token"
+
+// Package-level disabled logger and pass provider reused across calls.
+var disabledLogger = zerowrap.New(zerowrap.Config{Level: "disabled"})
+var defaultPassProvider = NewPassProvider(disabledLogger)
 
 // PublicTLSResolverConfig holds optional overrides for PublicTLSResolver.
 type PublicTLSResolverConfig struct {
@@ -62,7 +67,7 @@ func (r *PublicTLSResolver) ResolveCloudflareToken(ctx context.Context) (out.Sec
 
 	// 2. Try token file env
 	if filePath := r.envLookup("GORDON_CLOUDFLARE_API_TOKEN_FILE"); filePath != "" {
-		if data, err := os.ReadFile(filePath); err == nil {
+		if data, err := readFileWithTimeout(ctx, filePath, 5*time.Second); err == nil {
 			if trimmed := strings.TrimSpace(string(data)); trimmed != "" {
 				return out.SecretValue{Value: trimmed, Source: domain.ACMETokenSourceFile}, nil
 			}
@@ -96,5 +101,35 @@ func defaultPassLookup(ctx context.Context, name string) (string, error) {
 		return "", fmt.Errorf("pass lookup: disallowed name %q", name)
 	}
 
-	return NewPassProvider(zerowrap.New(zerowrap.Config{Level: "disabled"})).GetSecret(ctx, name)
+	return defaultPassProvider.GetSecret(ctx, name)
+}
+
+// readFileWithTimeout reads a file with a context-aware deadline.
+// It runs os.ReadFile in a goroutine and selects on context expiry.
+// If the context has a deadline, it is used; otherwise a timeout is applied.
+func readFileWithTimeout(ctx context.Context, path string, timeout time.Duration) ([]byte, error) {
+	readCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		readCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	type result struct {
+		data []byte
+		err  error
+	}
+
+	ch := make(chan result, 1)
+	go func() {
+		data, err := os.ReadFile(path)
+		ch <- result{data: data, err: err}
+	}()
+
+	select {
+	case <-readCtx.Done():
+		return nil, readCtx.Err()
+	case r := <-ch:
+		return r.data, r.err
+	}
 }

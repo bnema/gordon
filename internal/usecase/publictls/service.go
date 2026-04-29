@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/zerowrap"
 )
 
 // RouteSource provides routes from which certificate targets are derived.
@@ -27,13 +29,15 @@ type ServiceDeps struct {
 	ZoneResolver zoneResolver
 	Challenges   *HTTP01Challenges
 	Effective    EffectiveChallenge
+	Log          zerowrap.Logger
 }
 
 // Service manages public TLS certificates via ACME.
 type Service struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	cfg      Config
 	deps     ServiceDeps
+	log      zerowrap.Logger
 	certs    map[string]*out.StoredCertificate // indexed by cert ID
 	lastErr  map[string]string                 // indexed by cert ID
 	routeErr map[string]string                 // indexed by host
@@ -52,9 +56,13 @@ func NewService(cfg Config, deps ServiceDeps) *Service {
 	if deps.Challenges == nil {
 		deps.Challenges = NewHTTP01Challenges()
 	}
+	if reflect.ValueOf(deps.Log).IsZero() {
+		deps.Log = zerowrap.Default()
+	}
 	return &Service{
 		cfg:           cfg,
 		deps:          deps,
+		log:           deps.Log,
 		certs:         make(map[string]*out.StoredCertificate),
 		lastErr:       make(map[string]string),
 		routeErr:      make(map[string]string),
@@ -99,13 +107,19 @@ func (s *Service) Load(ctx context.Context) error {
 // If ACME is disabled, it is a no-op.
 func (s *Service) Reconcile(ctx context.Context) error {
 	if !s.cfg.Enabled {
+		s.log.Debug().Msg("acme disabled, skipping reconcile")
 		return nil
 	}
 
+	log := s.log.With().Str("component", "Reconcile").Logger()
+	log.Debug().Msg("starting certificate reconciliation")
+
 	if s.deps.Store == nil {
+		log.Warn().Msg("certificate store is nil, cannot reconcile")
 		return fmt.Errorf("certificate store is nil")
 	}
 	if s.deps.Issuer == nil {
+		log.Warn().Msg("certificate issuer is nil, cannot reconcile")
 		return fmt.Errorf("certificate issuer is nil")
 	}
 
@@ -187,6 +201,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// are not blocked during network I/O (Obtain) or storage writes (Save).
 	s.reconcileMissingTargets(ctx, missing)
 
+	log.Debug().Int("missing_count", len(missing)).Msg("reconciled missing targets")
 	return nil
 }
 
@@ -203,14 +218,14 @@ func (s *Service) reconcileMissingTargets(ctx context.Context, missing []Certifi
 		stored, err := s.deps.Issuer.Obtain(ctx, order)
 		if err != nil {
 			s.mu.Lock()
-			s.lastErr[target.ID] = err.Error()
+			s.lastErr[target.ID] = "obtain certificate failed"
 			s.mu.Unlock()
 			continue
 		}
 
 		if err := s.deps.Store.Save(ctx, *stored); err != nil {
 			s.mu.Lock()
-			s.lastErr[target.ID] = fmt.Sprintf("save certificate: %v", err)
+			s.lastErr[target.ID] = "save certificate failed"
 			s.mu.Unlock()
 			continue
 		}
@@ -270,8 +285,8 @@ func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		return nil, nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	// Check if this host requires ACME coverage.
 	if !s.isRequiredHostLocked(host) {
@@ -311,6 +326,19 @@ func (s *Service) isRequiredHostLocked(host string) bool {
 // GetHTTP01Challenge delegates to the HTTP-01 challenge store.
 func (s *Service) GetHTTP01Challenge(ctx context.Context, token string) (string, bool) {
 	return s.deps.Challenges.Get(ctx, token)
+}
+
+// GetStoredCertificate returns a copy of the stored certificate for the given
+// ID, or nil if not found. Exposed for testing.
+func (s *Service) GetStoredCertificate(id string) *out.StoredCertificate {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cert := s.certs[id]
+	if cert == nil {
+		return nil
+	}
+	cpy := *cert
+	return &cpy
 }
 
 // Stop gracefully stops the service. If a renewal loop is running, it is

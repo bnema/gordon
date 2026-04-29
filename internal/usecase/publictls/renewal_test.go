@@ -164,12 +164,12 @@ func TestRenewDueCertificatesSavesAndUpdatesCache(t *testing.T) {
 	err = svc.Load(ctx)
 	require.NoError(t, err)
 
-	// Verify cert is in cache with original NotAfter.
-	svc.mu.Lock()
-	cached, ok := svc.certs[certID]
-	svc.mu.Unlock()
-	require.True(t, ok, "cert should be in cache after Load")
-	assert.True(t, cached.NotAfter.Equal(notAfterSoon), "cache should have original NotAfter")
+	// Verify cert is in cache with original NotAfter via Status.
+	status := svc.Status(ctx)
+	require.Len(t, status.Certificates, 1, "expected 1 managed certificate after Load")
+	assert.True(t, status.Certificates[0].NotAfter.Equal(notAfterSoon),
+		"cache should have original NotAfter (got %v, want %v)",
+		status.Certificates[0].NotAfter, notAfterSoon)
 
 	// Run renewDueCertificates.
 	err = svc.renewDueCertificates(ctx, now)
@@ -181,16 +181,14 @@ func TestRenewDueCertificatesSavesAndUpdatesCache(t *testing.T) {
 	require.Len(t, all, 1)
 	assert.True(t, all[0].NotAfter.Equal(notAfterRenewed), "store should have renewed NotAfter")
 
-	// Verify the cache has the updated certificate.
-	svc.mu.Lock()
-	cached, ok = svc.certs[certID]
-	svc.mu.Unlock()
-	require.True(t, ok, "cert should still be in cache after renewal")
-	assert.True(t, cached.NotAfter.Equal(notAfterRenewed), "cache should have renewed NotAfter")
+	// Verify the cache has the updated certificate via Status.
+	status = svc.Status(ctx)
+	require.Len(t, status.Certificates, 1, "expected 1 managed certificate after renewal")
+	assert.True(t, status.Certificates[0].NotAfter.Equal(notAfterRenewed),
+		"cache should have renewed NotAfter (got %v, want %v)",
+		status.Certificates[0].NotAfter, notAfterRenewed)
 
-	// Verify lastErr is cleared for the renewed certificate.
-	svc.mu.Lock()
-	_, hasErr := svc.lastErr[certID]
-	svc.mu.Unlock()
-	assert.False(t, hasErr, "lastErr should be cleared for renewed cert")
+	// Verify lastErr is empty for the renewed certificate.
+	assert.Empty(t, status.Certificates[0].LastError,
+		"LastError should be empty for renewed cert")
 }

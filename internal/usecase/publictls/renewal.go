@@ -35,11 +35,13 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 	// Derive a cancellable context so Stop can terminate the loop.
 	loopCtx, cancel := context.WithCancel(ctx)
 
-	// Cancel any previous loop and wait for it to fully exit before
-	// overwriting s.done, preventing overlapping loop goroutines.
+	// Atomically swap loop state under lock before cancelling the old loop,
+	// preventing overlapping loop goroutines and race conditions.
 	s.mu.Lock()
 	oldCancel := s.cancel
 	oldDone := s.done
+	s.cancel = cancel
+	s.done = done
 	s.mu.Unlock()
 
 	if oldCancel != nil {
@@ -48,11 +50,6 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 	if oldDone != nil {
 		<-oldDone
 	}
-
-	s.mu.Lock()
-	s.cancel = cancel
-	s.done = done
-	s.mu.Unlock()
 
 	go func() {
 		defer close(done)

@@ -272,6 +272,15 @@ func TestTLSStatus_JSONOutput(t *testing.T) {
 				ConfiguredMode: "acme",
 				EffectiveMode:  "acme-staging",
 				TokenSource:    "env",
+				Certificates: []dto.TLSCertificateEntry{
+					{
+						ID:        "cert-abc123",
+						Names:     []string{"example.com", "www.example.com"},
+						Status:    "valid",
+						NotAfter:  notAfter,
+						LastError: "",
+					},
+				},
 			}, nil
 		},
 	}
@@ -288,6 +297,9 @@ func TestTLSStatus_JSONOutput(t *testing.T) {
 	assert.Equal(t, "acme", result.ConfiguredMode)
 	assert.Equal(t, "acme-staging", result.EffectiveMode)
 	assert.Equal(t, "env", result.TokenSource)
-
-	_ = notAfter
+	require.Len(t, result.Certificates, 1)
+	assert.Equal(t, "cert-abc123", result.Certificates[0].ID)
+	assert.Equal(t, []string{"example.com", "www.example.com"}, result.Certificates[0].Names)
+	assert.Equal(t, "valid", result.Certificates[0].Status)
+	assert.Equal(t, notAfter.Format(time.RFC3339), result.Certificates[0].NotAfter.Format(time.RFC3339))
 }

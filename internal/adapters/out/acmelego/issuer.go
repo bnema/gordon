@@ -67,6 +67,9 @@ func NewIssuer(cfg Config) (*Issuer, error) {
 	if cfg.Challenge == "" {
 		cfg.Challenge = domain.ACMEChallengeHTTP01
 	}
+	if cfg.Challenge == domain.ACMEChallengeHTTP01 && cfg.HTTPChallengeSink == nil {
+		return nil, errors.New("acmelego: HTTP-01 challenge requires a non-nil HTTPChallengeSink")
+	}
 	if cfg.Challenge == domain.ACMEChallengeCloudflareDNS01 && cfg.Token == "" {
 		return nil, fmt.Errorf("acmelego: %w", domain.ErrCloudflareTokenMissing)
 	}
@@ -92,7 +95,7 @@ func (i *Issuer) Obtain(ctx context.Context, order out.CertificateOrder) (*out.S
 		return nil, fmt.Errorf("obtain certificate: %w", err)
 	}
 
-	return resourceToStored(order, resource), nil
+	return resourceToStored(order, resource)
 }
 
 // Renew renews an existing certificate. The ACME client is initialized lazily
@@ -133,7 +136,7 @@ func (i *Issuer) Renew(ctx context.Context, cert out.StoredCertificate) (*out.St
 		Challenge: cert.Challenge,
 	}
 
-	return resourceToStored(order, renewed), nil
+	return resourceToStored(order, renewed)
 }
 
 // ensureClient initializes the lego client and ACME account if not yet done.
@@ -152,18 +155,7 @@ func (i *Issuer) ensureClient(ctx context.Context) error {
 	}
 	i.user = user
 
-	// Build lego config
-	legoCfg := lego.NewConfig(user)
-	legoCfg.Certificate.KeyType = certcrypto.EC256 // ECDSA P-256
-
-	if i.cfg.CADirectoryURL != "" {
-		legoCfg.CADirURL = i.cfg.CADirectoryURL
-	}
-	if i.cfg.HTTPClient != nil {
-		legoCfg.HTTPClient = i.cfg.HTTPClient
-	}
-
-	client, err := lego.NewClient(legoCfg)
+	client, err := lego.NewClient(i.newLegoConfig(user))
 	if err != nil {
 		return fmt.Errorf("create lego client: %w", err)
 	}
@@ -213,16 +205,7 @@ func (i *Issuer) loadOrCreateAccount(ctx context.Context) (*AccountUser, error) 
 	user := NewAccountUser(i.cfg.Email, privateKey, nil)
 
 	// We need a temporary client to register the account
-	legoCfg := lego.NewConfig(user)
-	legoCfg.Certificate.KeyType = certcrypto.EC256
-	if i.cfg.CADirectoryURL != "" {
-		legoCfg.CADirURL = i.cfg.CADirectoryURL
-	}
-	if i.cfg.HTTPClient != nil {
-		legoCfg.HTTPClient = i.cfg.HTTPClient
-	}
-
-	tmpClient, err := lego.NewClient(legoCfg)
+	tmpClient, err := lego.NewClient(i.newLegoConfig(user))
 	if err != nil {
 		return nil, fmt.Errorf("create temporary lego client: %w", err)
 	}
@@ -278,8 +261,21 @@ func restoreAccount(stored *out.ACMEAccount) (*AccountUser, error) {
 	return NewAccountUser(stored.Email, privateKey, reg), nil
 }
 
+// newLegoConfig creates a lego.Config with common settings from the Issuer config.
+func (i *Issuer) newLegoConfig(user *AccountUser) *lego.Config {
+	legoCfg := lego.NewConfig(user)
+	legoCfg.Certificate.KeyType = certcrypto.EC256 // ECDSA P-256
+	if i.cfg.CADirectoryURL != "" {
+		legoCfg.CADirURL = i.cfg.CADirectoryURL
+	}
+	if i.cfg.HTTPClient != nil {
+		legoCfg.HTTPClient = i.cfg.HTTPClient
+	}
+	return legoCfg
+}
+
 // resourceToStored converts a lego certificate.Resource to out.StoredCertificate.
-func resourceToStored(order out.CertificateOrder, res *certificate.Resource) *out.StoredCertificate {
+func resourceToStored(order out.CertificateOrder, res *certificate.Resource) (*out.StoredCertificate, error) {
 	var fullchainPEM []byte
 	if len(res.IssuerCertificate) > 0 {
 		fullchainPEM = append(append([]byte{}, res.Certificate...), res.IssuerCertificate...)
@@ -290,11 +286,17 @@ func resourceToStored(order out.CertificateOrder, res *certificate.Resource) *ou
 	// Parse the certificate to extract NotAfter and populate tls.Certificate.
 	var tlsCert tls.Certificate
 	notAfter := time.Time{}
-	if parsedTLSCert, err := tls.X509KeyPair(fullchainPEM, res.PrivateKey); err == nil && len(parsedTLSCert.Certificate) > 0 {
-		tlsCert = parsedTLSCert
-		if parsed, parseErr := x509.ParseCertificate(parsedTLSCert.Certificate[0]); parseErr == nil {
-			notAfter = parsed.NotAfter
+	parsedTLSCert, tlsErr := tls.X509KeyPair(fullchainPEM, res.PrivateKey)
+	if tlsErr != nil {
+		return nil, fmt.Errorf("parse tls certificate: %w", tlsErr)
+	}
+	tlsCert = parsedTLSCert
+	if len(parsedTLSCert.Certificate) > 0 {
+		parsed, parseErr := x509.ParseCertificate(parsedTLSCert.Certificate[0])
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse x509 certificate: %w", parseErr)
 		}
+		notAfter = parsed.NotAfter
 	}
 
 	names := order.Names
@@ -312,5 +314,5 @@ func resourceToStored(order out.CertificateOrder, res *certificate.Resource) *ou
 		FullchainPEM:  fullchainPEM,
 		PrivateKeyPEM: res.PrivateKey,
 		NotAfter:      notAfter,
-	}
+	}, nil
 }

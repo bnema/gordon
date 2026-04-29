@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // challengeSvc is a simple map-backed implementation of ChallengeService for testing.
@@ -27,22 +29,10 @@ func TestHandlerServesGETChallenge(t *testing.T) {
 	resp := rec.Result()
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected status 200, got %d", resp.StatusCode)
-	}
-
-	if ct := resp.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
-		t.Errorf("expected Content-Type text/plain; charset=utf-8, got %q", ct)
-	}
-
-	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
-		t.Errorf("expected Cache-Control no-store, got %q", cc)
-	}
-
-	body := rec.Body.String()
-	if body != "key-auth" {
-		t.Errorf("expected body %q, got %q", "key-auth", body)
-	}
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "text/plain; charset=utf-8", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+	assert.Equal(t, "key-auth", rec.Body.String())
 }
 
 func TestHandlerServesHEADChallenge(t *testing.T) {
@@ -57,22 +47,10 @@ func TestHandlerServesHEADChallenge(t *testing.T) {
 	resp := rec.Result()
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected status 200, got %d", resp.StatusCode)
-	}
-
-	if ct := resp.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
-		t.Errorf("expected Content-Type text/plain; charset=utf-8, got %q", ct)
-	}
-
-	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
-		t.Errorf("expected Cache-Control no-store, got %q", cc)
-	}
-
-	body := rec.Body.String()
-	if body != "" {
-		t.Errorf("expected empty body for HEAD, got %q", body)
-	}
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "text/plain; charset=utf-8", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+	assert.Empty(t, rec.Body.String())
 }
 
 func TestHandlerRejectsUnsafeToken(t *testing.T) {
@@ -95,12 +73,7 @@ func TestHandlerRejectsUnsafeToken(t *testing.T) {
 
 			h.ServeHTTP(rec, req)
 
-			resp := rec.Result()
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusNotFound {
-				t.Errorf("expected status 404, got %d for path %q", resp.StatusCode, tt.path)
-			}
+			assert.Equal(t, http.StatusNotFound, rec.Code, "path: %s", tt.path)
 		})
 	}
 }
@@ -114,12 +87,7 @@ func TestHandlerRejectsPOST(t *testing.T) {
 
 	h.ServeHTTP(rec, req)
 
-	resp := rec.Result()
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("expected status 405, got %d", resp.StatusCode)
-	}
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
 func TestHandlerRejectsMissingPrefix(t *testing.T) {
@@ -130,12 +98,7 @@ func TestHandlerRejectsMissingPrefix(t *testing.T) {
 
 	h.ServeHTTP(rec, req)
 
-	resp := rec.Result()
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("expected status 404 for non-matching prefix, got %d", resp.StatusCode)
-	}
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestHandlerRejectsUnknownToken(t *testing.T) {
@@ -146,12 +109,7 @@ func TestHandlerRejectsUnknownToken(t *testing.T) {
 
 	h.ServeHTTP(rec, req)
 
-	resp := rec.Result()
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("expected status 404 for unknown token, got %d", resp.StatusCode)
-	}
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestHandlerRejectsNilService(t *testing.T) {
@@ -162,10 +120,5 @@ func TestHandlerRejectsNilService(t *testing.T) {
 
 	h.ServeHTTP(rec, req)
 
-	resp := rec.Result()
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("expected status 404 for nil service, got %d", resp.StatusCode)
-	}
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }

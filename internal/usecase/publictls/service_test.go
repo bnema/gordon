@@ -25,7 +25,11 @@ import (
 // Fakes
 // ---------------------------------------------------------------------------
 
-// fakeRoutes implements RouteSource for testing.
+// fakeRoutes models a stateful RouteSource using an internal mutex and
+// copy-on-read semantics. Generated mocks cannot easily replicate this
+// pattern because the interface methods return slices/maps by value and
+// callers may modify the returned data; a hand-rolled fake ensures each
+// GetRoutes/GetExternalRoutes call returns a defensive copy.
 type fakeRoutes struct {
 	mu       sync.Mutex
 	routes   []domain.Route
@@ -50,7 +54,11 @@ func (f *fakeRoutes) GetExternalRoutes() map[string]string {
 	return out
 }
 
-// fakeIssuer implements out.PublicCertificateIssuer for testing.
+// fakeIssuer is a hand-rolled implementation of out.PublicCertificateIssuer
+// that records issued orders and delegates to pluggable obtain/renew
+// functions. Generated mocks are less convenient here because the test needs
+// to inspect captured orders after the call completes — a real slice on the
+// fake avoids mock expectation boilerplate.
 type fakeIssuer struct {
 	mu      sync.Mutex
 	orders  []out.CertificateOrder // recorded orders
@@ -98,7 +106,10 @@ func defaultStoredCert(order out.CertificateOrder) (*out.StoredCertificate, erro
 	}, nil
 }
 
-// fakeStore implements out.CertificateStore for testing.
+// fakeStore is a hand-rolled implementation of out.CertificateStore that
+// manages certificates in memory with copy-on-read semantics and a separate
+// lock for Lock() to avoid deadlock with the data mutex. Generated mocks
+// cannot easily replicate the Lock/unlock lifecycle used in Reconcile.
 type fakeStore struct {
 	mu       sync.Mutex
 	lockMu   sync.Mutex // separate lock for Lock()/unlock to avoid deadlock with mu
@@ -493,14 +504,9 @@ func TestServiceLoadParsesPEMIntoTLSCertificate(t *testing.T) {
 	err = svc.Load(ctx)
 	require.NoError(t, err)
 
-	// Check that the cached cert has a valid tls.Certificate.
-	//nolint:unused // accessing the cert through the map is sufficient
-	svc.mu.Lock()
-	cached, ok := svc.certs["http01-test.example.com"]
-	svc.mu.Unlock()
-
-	require.True(t, ok, "cert should be cached")
-	require.NotNil(t, cached)
+	// Verify the cached cert has a valid tls.Certificate via the accessor.
+	cached := svc.GetStoredCertificate("http01-test.example.com")
+	require.NotNil(t, cached, "cert should be cached")
 	assert.NotEmpty(t, cached.Certificate.Certificate, "tls.Certificate should be populated")
 	assert.NotNil(t, cached.Certificate.PrivateKey, "private key should be populated")
 

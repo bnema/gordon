@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -49,13 +50,20 @@ func TestNewIssuerValidatesCloudflareToken(t *testing.T) {
 
 func TestNewIssuerValidWithDefaults(t *testing.T) {
 	issuer, err := NewIssuer(Config{
-		Email: "test@example.com",
-		Store: &mockStore{},
+		Email:             "test@example.com",
+		Store:             &mockStore{},
+		HTTPChallengeSink: &mockHTTPChallengeSink{},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, issuer)
 	assert.Equal(t, domain.ACMEChallengeHTTP01, issuer.cfg.Challenge)
 }
+
+// mockHTTPChallengeSink implements HTTPChallengeSink for testing.
+type mockHTTPChallengeSink struct{}
+
+func (m *mockHTTPChallengeSink) Present(token, keyAuth string) {}
+func (m *mockHTTPChallengeSink) CleanUp(token string)          {}
 
 // mockStore implements out.CertificateStore for testing.
 type mockStore struct {
@@ -151,7 +159,8 @@ func TestResourceConversionToStoredCertificate(t *testing.T) {
 		Challenge: domain.ACMEChallengeHTTP01,
 	}
 
-	stored := resourceToStored(order, resource)
+	stored, err := resourceToStored(order, resource)
+	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "test-cert", stored.ID)
 	assert.Equal(t, []string{"example.com"}, stored.Names)
@@ -187,7 +196,8 @@ func TestResourceConversionNoIssuer(t *testing.T) {
 		Names: []string{"example.com"},
 	}
 
-	stored := resourceToStored(order, resource)
+	stored, err := resourceToStored(order, resource)
+	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, certPEM, stored.FullchainPEM, "fullchain should equal cert when no issuer")
 	assert.Empty(t, stored.ChainPEM)
@@ -248,7 +258,7 @@ func generateSelfSignedCert(domain string) (certPEM, keyPEM []byte, err error) {
 
 	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	if certPEM == nil {
-		return nil, nil, err
+		return nil, nil, errors.New("pem encode certificate returned nil")
 	}
 
 	keyDER, err := x509.MarshalECPrivateKey(privateKey)
@@ -258,7 +268,7 @@ func generateSelfSignedCert(domain string) (certPEM, keyPEM []byte, err error) {
 
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 	if keyPEM == nil {
-		return nil, nil, err
+		return nil, nil, errors.New("pem encode private key returned nil")
 	}
 
 	return certPEM, keyPEM, nil
@@ -280,7 +290,8 @@ func TestParsedCertificateNotAfter(t *testing.T) {
 		Names: []string{"test.example.com"},
 	}
 
-	stored := resourceToStored(order, resource)
+	stored, err := resourceToStored(order, resource)
+	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.False(t, stored.NotAfter.IsZero())
 	assert.True(t, stored.NotAfter.After(time.Now()))

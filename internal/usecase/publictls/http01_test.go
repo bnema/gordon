@@ -2,6 +2,8 @@ package publictls
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,20 +29,71 @@ func TestHTTP01Challenges(t *testing.T) {
 		assert.False(t, ok)
 	})
 
-	t.Run("concurrent access does not panic", func(t *testing.T) {
+	t.Run("concurrent access is correct", func(t *testing.T) {
 		ch := NewHTTP01Challenges()
-		done := make(chan struct{})
-		go func() {
-			ch.Present("t1", "ka1")
-			done <- struct{}{}
-		}()
-		go func() {
-			ch.Get(ctx, "t1")
-			done <- struct{}{}
-		}()
-		<-done
-		<-done
-		// If we reach here without a race, the test passes.
+
+		// Pre-populate some tokens.
+		ch.Present("existing-token", "existing-keyauth")
+
+		const numGoroutines = 20
+		var wg sync.WaitGroup
+		errCh := make(chan error, numGoroutines)
+
+		// Spawn concurrent readers and writers.
+		for i := range numGoroutines {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				token := fmt.Sprintf("token-%d", id)
+				keyAuth := fmt.Sprintf("ka-%d", id)
+
+				// Every goroutine presents its own token.
+				ch.Present(token, keyAuth)
+
+				// Every goroutine reads back its own token.
+				got, ok := ch.Get(ctx, token)
+				if !ok {
+					errCh <- fmt.Errorf("token %q not found after Present", token)
+					return
+				}
+				if got != keyAuth {
+					errCh <- fmt.Errorf("token %q: got %q, want %q", token, got, keyAuth)
+					return
+				}
+
+				// Every goroutine reads the pre-populated existing token.
+				existing, ok := ch.Get(ctx, "existing-token")
+				if !ok {
+					errCh <- fmt.Errorf("existing-token not found by goroutine %d", id)
+					return
+				}
+				if existing != "existing-keyauth" {
+					errCh <- fmt.Errorf("existing-token: got %q, want existing-keyauth", existing)
+					return
+				}
+
+				// Every goroutine cleans up its own token.
+				ch.CleanUp(token)
+				_, ok = ch.Get(ctx, token)
+				if ok {
+					errCh <- fmt.Errorf("token %q should be gone after CleanUp", token)
+					return
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		close(errCh)
+
+		// Collect any errors from goroutines.
+		for err := range errCh {
+			t.Error(err)
+		}
+
+		// Verify that pre-populated token is still present after all concurrent access.
+		existing, ok := ch.Get(ctx, "existing-token")
+		require.True(t, ok, "existing-token should survive concurrent access")
+		assert.Equal(t, "existing-keyauth", existing)
 	})
 }
 

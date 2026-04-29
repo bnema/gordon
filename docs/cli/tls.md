@@ -34,7 +34,7 @@ gordon tls status --remote https://gordon.mydomain.com --token $TOKEN
 
 ### Human Output
 
-```
+```text
 Public TLS / ACME Status
 
 ACME: enabled

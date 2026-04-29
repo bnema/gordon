@@ -3,12 +3,14 @@ package acmelego
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 )
@@ -45,9 +47,16 @@ type CloudflareZoneResolver struct {
 }
 
 type zoneCacheEntry struct {
-	zone out.CloudflareZone
-	err  error
+	zone      out.CloudflareZone
+	err       error
+	createdAt time.Time
 }
+
+const (
+	defaultCacheTTL        = 10 * time.Minute
+	defaultCacheMaxSize    = 100
+	defaultMaxResponseSize = 1 << 20 // 1 MB
+)
 
 // CloudflareZoneResolverOption configures a CloudflareZoneResolver.
 type CloudflareZoneResolverOption func(*CloudflareZoneResolver)
@@ -112,24 +121,27 @@ func (r *CloudflareZoneResolver) FindZone(ctx context.Context, domainName string
 		candidates = append(candidates, candidate)
 	}
 
+	var candidateErrs []error
 	for _, candidate := range candidates {
 		if cached, ok := r.cached(candidate); ok {
 			if cached.err == nil {
 				r.storeCache(domainName, cached.zone, nil)
 				return cached.zone, nil
 			}
+			candidateErrs = append(candidateErrs, fmt.Errorf("%s: %w", candidate, cached.err))
 			continue
 		}
 		zone, err := r.findZoneByName(ctx, candidate)
 		r.storeCache(candidate, zone, err)
 		if err != nil {
+			candidateErrs = append(candidateErrs, fmt.Errorf("%s: %w", candidate, err))
 			continue
 		}
 		r.storeCache(domainName, zone, nil)
 		return zone, nil
 	}
 
-	err := fmt.Errorf("cloudflare zone resolver: no active zone found for %q", domainName)
+	err := fmt.Errorf("cloudflare zone resolver: no active zone found for %q: %w", domainName, errors.Join(candidateErrs...))
 	r.storeCache(domainName, out.CloudflareZone{}, err)
 	return out.CloudflareZone{}, err
 }
@@ -138,13 +150,31 @@ func (r *CloudflareZoneResolver) cached(name string) (zoneCacheEntry, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	entry, ok := r.cache[name]
-	return entry, ok
+	if !ok {
+		return entry, false
+	}
+	if time.Since(entry.createdAt) > defaultCacheTTL {
+		return zoneCacheEntry{}, false
+	}
+	return entry, true
 }
 
 func (r *CloudflareZoneResolver) storeCache(name string, zone out.CloudflareZone, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.cache[name] = zoneCacheEntry{zone: zone, err: err}
+	if len(r.cache) >= defaultCacheMaxSize {
+		// Evict oldest entry
+		var oldestKey string
+		var oldestTime time.Time
+		for k, v := range r.cache {
+			if oldestKey == "" || v.createdAt.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = v.createdAt
+			}
+		}
+		delete(r.cache, oldestKey)
+	}
+	r.cache[name] = zoneCacheEntry{zone: zone, err: err, createdAt: time.Now()}
 }
 
 // findZoneByName queries the Cloudflare API for an active zone with the exact given name.
@@ -172,9 +202,13 @@ func (r *CloudflareZoneResolver) findZoneByName(ctx context.Context, name string
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	lr := io.LimitReader(resp.Body, defaultMaxResponseSize+1)
+	body, err := io.ReadAll(lr)
 	if err != nil {
 		return out.CloudflareZone{}, fmt.Errorf("read response: %w", err)
+	}
+	if len(body) > defaultMaxResponseSize {
+		return out.CloudflareZone{}, fmt.Errorf("cloudflare api: response body too large (%d bytes)", len(body))
 	}
 
 	if resp.StatusCode != http.StatusOK {

@@ -100,13 +100,13 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 		routeMap[r.Domain] = r
 	}
 
-	for _, domain := range []string{"app.example.com", "api.prod.example.com", "example.com"} {
-		rc, ok := routeMap[domain]
-		require.True(t, ok, "route %s should be present in status", domain)
-		assert.True(t, rc.Covered, "route %s should be covered", domain)
+	for _, routeDomain := range []string{"app.example.com", "api.prod.example.com", "example.com"} {
+		rc, ok := routeMap[routeDomain]
+		require.True(t, ok, "route %s should be present in status", routeDomain)
+		assert.True(t, rc.Covered, "route %s should be covered", routeDomain)
 		assert.True(t, rc.RequiredACME)
-		assert.NotEmpty(t, rc.CoveredBy, "route %s should have CoveredBy set", domain)
-		assert.Empty(t, rc.Error, "route %s should have no error", domain)
+		assert.NotEmpty(t, rc.CoveredBy, "route %s should have CoveredBy set", routeDomain)
+		assert.Empty(t, rc.Error, "route %s should have no error", routeDomain)
 	}
 
 	// app.example.com should be covered by the wildcard cert (dns01-example.com).

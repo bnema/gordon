@@ -71,7 +71,7 @@ func (c ManagedCertificate) Covers(host string) bool {
 
 // SafePathComponent reports whether value is a single safe path component.
 func SafePathComponent(value string) bool {
-	return value != "" && !strings.Contains(value, "/") && !strings.Contains(value, "\\") && !strings.Contains(value, "..")
+	return value != "" && !strings.Contains(value, "/") && !strings.Contains(value, "\\") && !strings.Contains(value, "..") && !strings.Contains(value, "\x00")
 }
 
 // CertificateNamesCoverHost reports whether any certificate name covers host.
