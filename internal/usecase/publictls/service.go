@@ -9,9 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
-	"github.com/bnema/zerowrap"
 )
 
 // RouteSource provides routes from which certificate targets are derived.
@@ -182,7 +183,11 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("acquire store lock: %w", err)
 	}
-	defer func() { _ = unlock() }()
+	defer func() {
+		if err := unlock(); err != nil {
+			log.Warn().Err(err).Msg("failed to release store lock")
+		}
+	}()
 
 	// Under mu: update requiredHosts (with target names) and compute missing targets.
 	s.mu.Lock()

@@ -117,6 +117,9 @@ func deriveDNS01Targets(ctx context.Context, hosts []string, resolver out.Cloudf
 }
 
 // wildcardBase determines the wildcard base for a host within a zone.
+// This is used by deriveDNS01Targets to group hosts under a common
+// wildcard certificate (e.g. example.com + *.example.com). Hosts that
+// share the same wildcard base are combined into a single DNS-01 target.
 //
 // If host == zone, returns zone.
 // If host is a direct child of zone, returns zone.

@@ -31,8 +31,12 @@ func (c *HTTP01Challenges) Present(token, keyAuth string) {
 	c.data[token] = keyAuth
 }
 
-// CleanUp removes the stored key authorization for the given token.
+// CleanUp removes the stored key authorization for the given token. It silently
+// ignores unsafe tokens (see safeHTTP01Token).
 func (c *HTTP01Challenges) CleanUp(token string) {
+	if !safeHTTP01Token(token) {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.data, token)

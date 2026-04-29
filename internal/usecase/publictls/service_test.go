@@ -42,17 +42,17 @@ type fakeRoutes struct {
 func (f *fakeRoutes) GetRoutes(_ context.Context) []domain.Route {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]domain.Route, len(f.routes))
-	copy(out, f.routes)
-	return out
+	routesCopy := make([]domain.Route, len(f.routes))
+	copy(routesCopy, f.routes)
+	return routesCopy
 }
 
 func (f *fakeRoutes) GetExternalRoutes() map[string]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make(map[string]string, len(f.external))
-	maps.Copy(out, f.external)
-	return out
+	externalCopy := make(map[string]string, len(f.external))
+	maps.Copy(externalCopy, f.external)
+	return externalCopy
 }
 
 type mockIssuerRecorder struct {
@@ -426,13 +426,6 @@ func TestServiceGetCertificateReturnsErrTLSRouteNotCovered(t *testing.T) {
 	assert.Contains(t, err.Error(), "app.example.com")
 }
 
-// brokenZoneResolver always returns an error.
-type brokenZoneResolver struct{}
-
-func (brokenZoneResolver) FindZone(_ context.Context, host string) (out.CloudflareZone, error) {
-	return out.CloudflareZone{}, fmt.Errorf("zone resolver unavailable for %s", host)
-}
-
 func TestServiceReconcileDNS01BrokenResolverReturnsErrTLSRouteNotCovered(t *testing.T) {
 	ctx := context.Background()
 
@@ -443,6 +436,12 @@ func TestServiceReconcileDNS01BrokenResolverReturnsErrTLSRouteNotCovered(t *test
 	}
 	issuer, _ := newMockPublicCertificateIssuer(t, nil, nil)
 	store, _ := newMockCertificateStore(t)
+
+	// Use generated mock that always returns an error.
+	zoneResolver := outmocks.NewMockCloudflareZoneResolver(t)
+	zoneResolver.EXPECT().FindZone(mock.Anything, "app.example.com").Return(
+		out.CloudflareZone{}, fmt.Errorf("zone resolver unavailable for app.example.com"),
+	)
 
 	cfg := Config{
 		Enabled:   true,
@@ -457,7 +456,7 @@ func TestServiceReconcileDNS01BrokenResolverReturnsErrTLSRouteNotCovered(t *test
 		Routes:       routes,
 		Issuer:       issuer,
 		Store:        store,
-		ZoneResolver: brokenZoneResolver{}, // broken: always fails
+		ZoneResolver: zoneResolver, // generated mock that always fails
 		Challenges:   NewHTTP01Challenges(),
 		Effective: EffectiveChallenge{
 			ConfiguredMode: domain.ACMEChallengeCloudflareDNS01,

@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,16 +12,6 @@ const (
 	ACMEChallengeAuto            ACMEChallengeMode = "auto"
 	ACMEChallengeHTTP01          ACMEChallengeMode = "http-01"
 	ACMEChallengeCloudflareDNS01 ACMEChallengeMode = "cloudflare-dns-01"
-)
-
-var (
-	ErrACMEDisabled              = errors.New("acme disabled")
-	ErrACMEEmailRequired         = errors.New("acme email required")
-	ErrACMEChallengeInvalid      = errors.New("acme challenge invalid")
-	ErrCloudflareTokenMissing    = errors.New("cloudflare api token missing")
-	ErrCertificateStoreRequired  = errors.New("certificate store required")
-	ErrHTTPChallengeSinkRequired = errors.New("http challenge sink required")
-	ErrTLSRouteNotCovered        = errors.New("tls route not covered by public certificate")
 )
 
 func ParseACMEChallengeMode(value string) (ACMEChallengeMode, error) {

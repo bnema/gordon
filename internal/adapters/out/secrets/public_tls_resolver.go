@@ -122,8 +122,15 @@ func readFileWithTimeout(ctx context.Context, path string, timeout time.Duration
 
 	ch := make(chan result, 1)
 	go func() {
+		// os.ReadFile is not context-cancellable. The buffered channel ensures
+		// this goroutine can finish without blocking if readCtx expires first;
+		// for local config files this trade-off is acceptable, though reads on
+		// slow NFS/FUSE mounts may continue after cancellation.
 		data, err := os.ReadFile(path)
-		ch <- result{data: data, err: err}
+		select {
+		case ch <- result{data: data, err: err}:
+		case <-readCtx.Done():
+		}
 	}()
 
 	select {

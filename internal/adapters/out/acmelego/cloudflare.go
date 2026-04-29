@@ -42,7 +42,9 @@ type CloudflareZoneResolver struct {
 	baseURL string
 	client  *http.Client
 
-	mu    sync.RWMutex
+	mu sync.RWMutex
+	// cache uses a small fixed maximum size; eviction scans the map to keep the
+	// resolver simple because defaultCacheMaxSize is intentionally low.
 	cache map[string]zoneCacheEntry
 }
 
@@ -50,10 +52,12 @@ type zoneCacheEntry struct {
 	zone      out.CloudflareZone
 	err       error
 	createdAt time.Time
+	ttl       time.Duration
 }
 
 const (
 	defaultCacheTTL          = 10 * time.Minute
+	defaultErrorCacheTTL     = time.Minute
 	defaultCloudflareTimeout = 10 * time.Second
 	defaultCacheMaxSize      = 100
 	defaultMaxResponseSize   = 1 << 20 // 1 MB
@@ -149,14 +153,21 @@ func (r *CloudflareZoneResolver) FindZone(ctx context.Context, domainName string
 
 func (r *CloudflareZoneResolver) cached(name string) (zoneCacheEntry, bool) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	entry, ok := r.cache[name]
 	if !ok {
+		r.mu.RUnlock()
 		return entry, false
 	}
-	if time.Since(entry.createdAt) > defaultCacheTTL {
+	if time.Since(entry.createdAt) > entry.ttl {
+		r.mu.RUnlock()
+		r.mu.Lock()
+		if current, ok := r.cache[name]; ok && current.createdAt.Equal(entry.createdAt) {
+			delete(r.cache, name)
+		}
+		r.mu.Unlock()
 		return zoneCacheEntry{}, false
 	}
+	r.mu.RUnlock()
 	return entry, true
 }
 
@@ -164,7 +175,8 @@ func (r *CloudflareZoneResolver) storeCache(name string, zone out.CloudflareZone
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.cache) >= defaultCacheMaxSize {
-		// Evict oldest entry
+		// Evict oldest entry with an O(n) scan. The cache is deliberately small
+		// (defaultCacheMaxSize), so this stays simple without an LRU list.
 		var oldestKey string
 		var oldestTime time.Time
 		for k, v := range r.cache {
@@ -175,7 +187,11 @@ func (r *CloudflareZoneResolver) storeCache(name string, zone out.CloudflareZone
 		}
 		delete(r.cache, oldestKey)
 	}
-	r.cache[name] = zoneCacheEntry{zone: zone, err: err, createdAt: time.Now()}
+	ttl := defaultCacheTTL
+	if err != nil {
+		ttl = defaultErrorCacheTTL
+	}
+	r.cache[name] = zoneCacheEntry{zone: zone, err: err, createdAt: time.Now(), ttl: ttl}
 }
 
 // findZoneByName queries the Cloudflare API for an active zone with the exact given name.

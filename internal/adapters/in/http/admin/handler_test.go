@@ -2591,14 +2591,16 @@ func TestHandler_TLSStatus_RequiresStatusReadScope(t *testing.T) {
 		d.PublicTLSSvc = inmocks.NewMockPublicTLSService(t)
 	})
 
-	req := httptest.NewRequest("GET", "/admin/tls/status", nil)
-	req = req.WithContext(ctxWithScopes("admin:config:write"))
-	rec := httptest.NewRecorder()
+	server := newScopedTestServer(t, handler, "admin:config:write")
+	resp, err := http.Get(server.URL + "/admin/tls/status")
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	handler.ServeHTTP(rec, req)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assert.Contains(t, rec.Body.String(), "insufficient permissions for status:read")
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, string(body), "insufficient permissions for status:read")
 }
 
 func TestHandler_TLSStatus_GETReturnsJSON(t *testing.T) {

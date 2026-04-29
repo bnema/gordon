@@ -32,7 +32,7 @@ func requirePass(t *testing.T) {
 	}
 }
 
-func cleanupPassDomain(_ *testing.T, domainName string, keys []string) {
+func cleanupPassDomain(domainName string, keys []string) {
 	safeDomain, err := domain.SanitizeDomainForEnvFile(domainName)
 	if err != nil {
 		return
@@ -60,7 +60,7 @@ func TestMigrateEnvFile(t *testing.T) {
 
 	domainName := fmt.Sprintf("test.%d.example.com", time.Now().UnixNano())
 	keys := []string{"API_KEY", "DB_PASSWORD"}
-	defer cleanupPassDomain(t, domainName, keys)
+	defer cleanupPassDomain(domainName, keys)
 
 	envContent := "API_KEY=secret123\nDB_PASSWORD=pass456\n"
 	envFileName := domainName + ".env"

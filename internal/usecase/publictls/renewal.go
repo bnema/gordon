@@ -100,18 +100,19 @@ func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error
 	}
 	defer func() { _ = unlock() }()
 
-	// Collect due certs under lock, then release before making external calls.
+	// Collect due certs under lock, copying values before releasing the lock so
+	// renewal uses a stable snapshot even if the cache changes concurrently.
 	s.mu.Lock()
-	due := make([]*out.StoredCertificate, 0)
+	due := make([]out.StoredCertificate, 0)
 	for _, cert := range s.certs {
 		if ShouldRenew(*cert, now) {
-			due = append(due, cert)
+			due = append(due, *cert)
 		}
 	}
 	s.mu.Unlock()
 
 	for _, cert := range due {
-		renewed, err := s.deps.Issuer.Renew(ctx, *cert)
+		renewed, err := s.deps.Issuer.Renew(ctx, cert)
 		if err != nil {
 			s.mu.Lock()
 			s.lastErr[cert.ID] = fmt.Sprintf("renew: %v", err)

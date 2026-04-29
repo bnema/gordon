@@ -3,7 +3,6 @@ package publictls
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -117,11 +116,10 @@ func resolveOptionalToken(ctx context.Context, resolver out.SecretResolver) (str
 	if err != nil {
 		return "", domain.ACMETokenSourceNone
 	}
-	token := strings.TrimSpace(sv.Value)
-	if token == "" {
+	if sv.Value == "" {
 		return "", domain.ACMETokenSourceNone
 	}
-	return token, sv.Source
+	return sv.Value, sv.Source
 }
 
 // resolveToken resolves the Cloudflare token via the resolver, propagating errors.
@@ -134,9 +132,8 @@ func resolveToken(ctx context.Context, resolver out.SecretResolver) (string, dom
 	if err != nil {
 		return "", domain.ACMETokenSourceNone, err
 	}
-	token := strings.TrimSpace(sv.Value)
-	if token == "" {
+	if sv.Value == "" {
 		return "", domain.ACMETokenSourceNone, nil
 	}
-	return token, sv.Source, nil
+	return sv.Value, sv.Source, nil
 }

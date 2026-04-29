@@ -128,14 +128,18 @@ func TestStoreRejectsUnsafeID(t *testing.T) {
 	store, err := New(root)
 	require.NoError(t, err)
 
-	cert := out.StoredCertificate{
-		ID:            "../escape",
-		PrivateKeyPEM: []byte("key"),
-	}
+	for _, id := range []string{"../escape", ".", ".hidden"} {
+		t.Run(id, func(t *testing.T) {
+			cert := out.StoredCertificate{
+				ID:            id,
+				PrivateKeyPEM: []byte("key"),
+			}
 
-	err = store.Save(ctx, cert)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsafe certificate id")
+			err = store.Save(ctx, cert)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "unsafe certificate id")
+		})
+	}
 }
 
 func TestStoreSaveLoadAccount(t *testing.T) {

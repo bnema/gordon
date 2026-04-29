@@ -69,6 +69,28 @@ func TestNewIssuerValidatesCloudflareToken(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrCloudflareTokenMissing)
 }
 
+func TestNewIssuerRejectsNonHTTPSURL(t *testing.T) {
+	_, err := NewIssuer(Config{
+		Email:             "test@example.com",
+		Challenge:         domain.ACMEChallengeHTTP01,
+		Store:             outmocks.NewMockCertificateStore(t),
+		HTTPChallengeSink: outmocks.NewMockHTTPChallengeSink(t),
+		CADirectoryURL:    "http://acme.test/directory",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must use HTTPS")
+
+	// HTTPS should be accepted
+	_, err = NewIssuer(Config{
+		Email:             "test@example.com",
+		Challenge:         domain.ACMEChallengeHTTP01,
+		Store:             outmocks.NewMockCertificateStore(t),
+		HTTPChallengeSink: outmocks.NewMockHTTPChallengeSink(t),
+		CADirectoryURL:    "https://acme.test/directory",
+	})
+	require.NoError(t, err)
+}
+
 func TestNewIssuerValidWithDefaults(t *testing.T) {
 	issuer, err := NewIssuer(Config{
 		Email:             "test@example.com",

@@ -38,8 +38,8 @@ gordon tls status --remote https://gordon.mydomain.com --token $TOKEN
 Public TLS / ACME Status
 
 ACME: enabled
-Configured Mode: acme
-Effective Mode: acme-staging
+Configured Mode: auto
+Effective Mode: http-01
 Reason: configured
 Token Source: env
 
@@ -62,8 +62,8 @@ Errors
 ```json
 {
   "acme_enabled": true,
-  "configured_mode": "acme",
-  "effective_mode": "acme-staging",
+  "configured_mode": "auto",
+  "effective_mode": "http-01",
   "selection_reason": "configured",
   "token_source": "env",
   "certificates": [

@@ -3,6 +3,7 @@ package acmelego
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -134,6 +135,16 @@ func TestCloudflareZoneResolverNoZoneFound(t *testing.T) {
 	_, err := resolver.FindZone(context.Background(), "missing.example.com")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no active zone found")
+}
+
+func TestCloudflareZoneResolverCachesErrorsWithShortTTL(t *testing.T) {
+	resolver := NewCloudflareZoneResolver("token")
+	resolver.storeCache("example.com", out.CloudflareZone{}, errors.New("temporary failure"))
+
+	entry, ok := resolver.cached("example.com")
+	require.True(t, ok)
+	assert.Error(t, entry.err)
+	assert.Equal(t, defaultErrorCacheTTL, entry.ttl)
 }
 
 func TestCloudflareZoneResolverUnsuccessfulAPI(t *testing.T) {

@@ -263,9 +263,10 @@ func writeCertificateFiles(dir string, cert out.StoredCertificate) error {
 }
 
 // Lock acquires an exclusive lock using a lock file at <root>/.lock.
-// The lock is released by calling the returned unlock function.
-// If the lock file already exists, Lock returns an error.
-// Context cancellation is respected before attempting the lock.
+// It is fail-fast and non-blocking: if the lock file already exists, Lock
+// returns an error immediately without waiting. Context cancellation is
+// respected before attempting the lock acquisition. The returned unlock
+// function removes the lock file to clean up.
 func (s *Store) Lock(ctx context.Context) (func() error, error) {
 	select {
 	case <-ctx.Done():
@@ -296,7 +297,7 @@ func (s *Store) Lock(ctx context.Context) (func() error, error) {
 
 // safeID rejects IDs that could cause path traversal.
 func safeID(id string) bool {
-	return id != "" && !strings.Contains(id, "/") && !strings.Contains(id, "\\") && !strings.Contains(id, "..") && !strings.Contains(id, "\x00")
+	return id != "" && !strings.HasPrefix(id, ".") && !strings.Contains(id, "/") && !strings.Contains(id, "\\") && !strings.Contains(id, "..") && !strings.Contains(id, "\x00")
 }
 
 // writeAtomic writes data to path atomically by writing to a temporary file

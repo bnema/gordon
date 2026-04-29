@@ -1924,7 +1924,10 @@ func (h *Handler) handleTLSStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.publicTLSSvc == nil {
-		h.sendJSON(w, http.StatusOK, dto.TLSStatusResponse{})
+		h.sendJSON(w, http.StatusOK, dto.TLSStatusResponse{
+			ACMEEnabled:     false,
+			SelectionReason: "public TLS service not configured",
+		})
 		return
 	}
 

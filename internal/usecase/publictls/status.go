@@ -119,7 +119,8 @@ func (s *Service) findCoverageLocked(routeDomain string, managedCerts []domain.M
 		case domain.TLSCertificateStatusExpired, domain.TLSCertificateStatusMissing, domain.TLSCertificateStatusError:
 			continue
 		}
-		// Double-check expiry from the raw stored cert.
+		// Double-check the raw stored cert expiry to guard against stale
+		// ManagedCertificate.Status values that may not reflect real expiry.
 		if sc, ok := s.certs[mc.ID]; ok {
 			if !sc.NotAfter.IsZero() && !now.Before(sc.NotAfter) {
 				continue
@@ -130,12 +131,26 @@ func (s *Service) findCoverageLocked(routeDomain string, managedCerts []domain.M
 	return false, ""
 }
 
-// keyEqValuePattern matches key=value patterns for known sensitive keys
-// in a case-insensitive manner.
-var keyEqValuePattern = regexp.MustCompile(`(?i)(token|secret|key|password|pass|api_key|apikey|auth)=[^\s]+`)
+// Sensitive key names that may appear in error messages.
+var sensitiveKeys = `(token|secret|key|password|pass|api_key|apikey|auth)`
+
+// Patterns for redacting sensitive values in common formats.
+var (
+	// key=value (unquoted, case-insensitive)
+	keyEqValueRe = regexp.MustCompile(`(?i)` + sensitiveKeys + `=[^\s"']+`)
+	// key="value" (double-quoted)
+	keyEqQuotedRe = regexp.MustCompile(`(?i)` + sensitiveKeys + `="[^"]*"`)
+	// key='value' (single-quoted)
+	keyEqSingleQuotedRe = regexp.MustCompile(`(?i)` + sensitiveKeys + `='[^']*'`)
+	// JSON "key": "value"
+	jsonKeyValueRe = regexp.MustCompile(`(?i)"` + sensitiveKeys + `"\s*:\s*"[^"]*"`)
+	// YAML key: value (start of line or after indent)
+	yamlKeyValueRe = regexp.MustCompile(`(?i)(?m)^\s*` + sensitiveKeys + `\s*:\s+\S+`)
+)
 
 // sanitizeError removes obvious sensitive strings from error messages.
-// It redacts key=value patterns for known sensitive keys while preserving
+// It redacts key=value, key="value", key='value', JSON "key": "value",
+// and YAML key: value patterns for known sensitive keys while preserving
 // safe context. It does not blanket-redact messages just because they
 // contain the word "secret" or similar.
 func sanitizeError(err string) string {
@@ -143,9 +158,10 @@ func sanitizeError(err string) string {
 		return ""
 	}
 
-	result := keyEqValuePattern.ReplaceAllString(err, "$1=redacted")
-	if result == "" {
-		return "certificate error"
-	}
+	result := keyEqValueRe.ReplaceAllString(err, "$1=redacted")
+	result = keyEqQuotedRe.ReplaceAllString(result, `$1="redacted"`)
+	result = keyEqSingleQuotedRe.ReplaceAllString(result, "$1='redacted'")
+	result = jsonKeyValueRe.ReplaceAllString(result, `"$1":"redacted"`)
+	result = yamlKeyValueRe.ReplaceAllString(result, "$1: redacted")
 	return result
 }

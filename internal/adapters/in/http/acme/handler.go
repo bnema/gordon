@@ -36,8 +36,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !strings.HasPrefix(r.URL.Path, Prefix) {
+		http.NotFound(w, r)
+		return
+	}
 	token := strings.TrimPrefix(r.URL.Path, Prefix)
-	if !strings.HasPrefix(r.URL.Path, Prefix) || !safeToken(token) {
+	if !safeToken(token) {
 		http.NotFound(w, r)
 		return
 	}

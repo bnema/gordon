@@ -91,4 +91,13 @@ var (
 	ErrAttachmentImageEmpty  = errors.New("attachment image cannot be empty")
 	ErrAttachmentTargetEmpty = errors.New("attachment target (domain or group) cannot be empty")
 	ErrAttachmentNotDeployed = errors.New("configured attachment is not deployed; run gordon deploy to create it")
+
+	// TLS / ACME errors
+	ErrACMEDisabled              = errors.New("acme disabled")
+	ErrACMEEmailRequired         = errors.New("acme email required")
+	ErrACMEChallengeInvalid      = errors.New("acme challenge invalid")
+	ErrCloudflareTokenMissing    = errors.New("cloudflare api token missing")
+	ErrCertificateStoreRequired  = errors.New("certificate store required")
+	ErrHTTPChallengeSinkRequired = errors.New("http challenge sink required")
+	ErrTLSRouteNotCovered        = errors.New("tls route not covered by public certificate")
 )

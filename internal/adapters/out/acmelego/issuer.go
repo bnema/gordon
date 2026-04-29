@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,6 +64,9 @@ func NewIssuer(cfg Config) (*Issuer, error) {
 	if cfg.Store == nil {
 		return nil, fmt.Errorf("acmelego: %w", domain.ErrCertificateStoreRequired)
 	}
+	if cfg.CADirectoryURL != "" && !strings.HasPrefix(cfg.CADirectoryURL, "https://") {
+		return nil, fmt.Errorf("acmelego: CADirectoryURL must use HTTPS, got %q", cfg.CADirectoryURL)
+	}
 	if cfg.Challenge == "" {
 		cfg.Challenge = domain.ACMEChallengeHTTP01
 	}
@@ -110,13 +114,13 @@ func (i *Issuer) Renew(ctx context.Context, cert out.StoredCertificate) (*out.St
 		return nil, err
 	}
 
-	domain := ""
+	domainName := ""
 	if len(cert.Names) > 0 {
-		domain = cert.Names[0]
+		domainName = cert.Names[0]
 	}
 
 	legoCert := certificate.Resource{
-		Domain:            domain,
+		Domain:            domainName,
 		PrivateKey:        cert.PrivateKeyPEM,
 		Certificate:       cert.CertPEM,
 		IssuerCertificate: cert.ChainPEM,
@@ -168,10 +172,8 @@ func (i *Issuer) ensureClient(ctx context.Context) error {
 	// Set up challenge providers
 	switch i.cfg.Challenge {
 	case domain.ACMEChallengeHTTP01:
-		if i.cfg.HTTPChallengeSink != nil {
-			if err := client.Challenge.SetHTTP01Provider(NewHTTPProvider(i.cfg.HTTPChallengeSink)); err != nil {
-				return fmt.Errorf("set http-01 provider: %w", err)
-			}
+		if err := client.Challenge.SetHTTP01Provider(NewHTTPProvider(i.cfg.HTTPChallengeSink)); err != nil {
+			return fmt.Errorf("set http-01 provider: %w", err)
 		}
 	case domain.ACMEChallengeCloudflareDNS01:
 		cfCfg := cloudflare.NewDefaultConfig()
