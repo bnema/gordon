@@ -82,7 +82,7 @@ func TestCertificateSelector_StaticCertWins(t *testing.T) {
 	publicCert := generateTestCert(t, "static.example.com")
 
 	selector := &certificateSelector{
-		staticCerts: []tls.Certificate{staticCert},
+		staticCerts: prepareStaticTLSCertificates([]tls.Certificate{staticCert}),
 		publicTLS: &stubPublicTLS{
 			getCertFunc: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 				return &publicCert, nil

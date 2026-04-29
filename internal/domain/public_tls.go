@@ -66,22 +66,29 @@ type ManagedCertificate struct {
 }
 
 func (c ManagedCertificate) Covers(host string) bool {
+	return CertificateNamesCoverHost(c.Names, host)
+}
+
+// SafePathComponent reports whether value is a single safe path component.
+func SafePathComponent(value string) bool {
+	return value != "" && !strings.Contains(value, "/") && !strings.Contains(value, "\\") && !strings.Contains(value, "..")
+}
+
+// CertificateNamesCoverHost reports whether any certificate name covers host.
+func CertificateNamesCoverHost(names []string, host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if host == "" {
 		return false
 	}
-	for _, name := range c.Names {
+	for _, name := range names {
 		name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
 		if name == host {
 			return true
 		}
-		if strings.HasPrefix(name, "*.") {
-			suffix := strings.TrimPrefix(name, "*.")
-			if strings.HasSuffix(host, "."+suffix) {
-				left := strings.TrimSuffix(host, "."+suffix)
-				if left != "" && !strings.Contains(left, ".") {
-					return true
-				}
+		if suffix, ok := strings.CutPrefix(name, "*."); ok && strings.HasSuffix(host, "."+suffix) {
+			left := strings.TrimSuffix(host, "."+suffix)
+			if left != "" && !strings.Contains(left, ".") {
+				return true
 			}
 		}
 	}

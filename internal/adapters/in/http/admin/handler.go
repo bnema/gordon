@@ -545,8 +545,7 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		return
 	}
 
-	if strings.HasSuffix(routeDomain, "/attachments") {
-		parentDomain := strings.TrimSuffix(routeDomain, "/attachments")
+	if parentDomain, ok := strings.CutSuffix(routeDomain, "/attachments"); ok {
 		if parentDomain == "" {
 			h.sendError(w, http.StatusBadRequest, "domain required in path")
 			return
@@ -1325,8 +1324,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 	container, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route)
 	if err != nil {
 		log.Error().Err(err).Str("domain", deployDomain).Msg("failed to deploy container")
-		var deployErr *domain.DeployFailureError
-		if errors.As(err, &deployErr) {
+		if deployErr, ok := errors.AsType[*domain.DeployFailureError](err); ok {
 			response := dto.DeployErrorResponse{
 				Error: deployErr.Error(),
 				Cause: deployErr.Cause,
@@ -1931,43 +1929,5 @@ func (h *Handler) handleTLSStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := h.publicTLSSvc.Status(ctx)
-	h.sendJSON(w, http.StatusOK, toTLSStatusResponse(status))
-}
-
-// toTLSStatusResponse converts a domain.PublicTLSStatus to a dto.TLSStatusResponse.
-func toTLSStatusResponse(s domain.PublicTLSStatus) dto.TLSStatusResponse {
-	certs := make([]dto.TLSCertificateEntry, 0, len(s.Certificates))
-	for _, c := range s.Certificates {
-		certs = append(certs, dto.TLSCertificateEntry{
-			ID:             c.ID,
-			Names:          c.Names,
-			Challenge:      string(c.Challenge),
-			Status:         string(c.Status),
-			NotAfter:       c.NotAfter,
-			LastError:      c.LastError,
-			RenewalPending: c.RenewalPending,
-		})
-	}
-
-	routes := make([]dto.TLSRouteCoverage, 0, len(s.Routes))
-	for _, r := range s.Routes {
-		routes = append(routes, dto.TLSRouteCoverage{
-			Domain:       r.Domain,
-			Covered:      r.Covered,
-			CoveredBy:    r.CoveredBy,
-			RequiredACME: r.RequiredACME,
-			Error:        r.Error,
-		})
-	}
-
-	return dto.TLSStatusResponse{
-		ACMEEnabled:     s.ACMEEnabled,
-		ConfiguredMode:  string(s.ConfiguredMode),
-		EffectiveMode:   string(s.EffectiveMode),
-		SelectionReason: s.SelectionReason,
-		TokenSource:     string(s.TokenSource),
-		Certificates:    certs,
-		Routes:          routes,
-		Errors:          s.Errors,
-	}
+	h.sendJSON(w, http.StatusOK, dto.TLSStatusFromDomain(status))
 }

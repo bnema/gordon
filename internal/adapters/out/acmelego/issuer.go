@@ -278,15 +278,6 @@ func restoreAccount(stored *out.ACMEAccount) (*AccountUser, error) {
 	return NewAccountUser(stored.Email, privateKey, reg), nil
 }
 
-// acmeAccount mirrors acme.Account for JSON round-trip without importing acme
-// in the test file.
-type acmeAccount struct {
-	Status               string   `json:"status,omitempty"`
-	Contact              []string `json:"contact,omitempty"`
-	TermsOfServiceAgreed bool     `json:"termsOfServiceAgreed,omitempty"`
-	Orders               string   `json:"orders,omitempty"`
-}
-
 // resourceToStored converts a lego certificate.Resource to out.StoredCertificate.
 func resourceToStored(order out.CertificateOrder, res *certificate.Resource) *out.StoredCertificate {
 	var fullchainPEM []byte

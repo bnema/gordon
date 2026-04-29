@@ -1,6 +1,10 @@
 package dto
 
-import "time"
+import (
+	"time"
+
+	"github.com/bnema/gordon/internal/domain"
+)
 
 // TLSStatusResponse represents the public TLS/ACME status for the admin API.
 type TLSStatusResponse struct {
@@ -32,4 +36,42 @@ type TLSRouteCoverage struct {
 	CoveredBy    string `json:"covered_by,omitempty"`
 	RequiredACME bool   `json:"required_acme"`
 	Error        string `json:"error,omitempty"`
+}
+
+// TLSStatusFromDomain converts a public TLS domain status to its transport DTO.
+func TLSStatusFromDomain(s domain.PublicTLSStatus) TLSStatusResponse {
+	certs := make([]TLSCertificateEntry, 0, len(s.Certificates))
+	for _, c := range s.Certificates {
+		certs = append(certs, TLSCertificateEntry{
+			ID:             c.ID,
+			Names:          c.Names,
+			Challenge:      string(c.Challenge),
+			Status:         string(c.Status),
+			NotAfter:       c.NotAfter,
+			LastError:      c.LastError,
+			RenewalPending: c.RenewalPending,
+		})
+	}
+
+	routes := make([]TLSRouteCoverage, 0, len(s.Routes))
+	for _, r := range s.Routes {
+		routes = append(routes, TLSRouteCoverage{
+			Domain:       r.Domain,
+			Covered:      r.Covered,
+			CoveredBy:    r.CoveredBy,
+			RequiredACME: r.RequiredACME,
+			Error:        r.Error,
+		})
+	}
+
+	return TLSStatusResponse{
+		ACMEEnabled:     s.ACMEEnabled,
+		ConfiguredMode:  string(s.ConfiguredMode),
+		EffectiveMode:   string(s.EffectiveMode),
+		SelectionReason: s.SelectionReason,
+		TokenSource:     string(s.TokenSource),
+		Certificates:    certs,
+		Routes:          routes,
+		Errors:          s.Errors,
+	}
 }

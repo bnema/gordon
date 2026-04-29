@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-acme/lego/v4/acme"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/stretchr/testify/assert"
@@ -194,7 +195,7 @@ func TestResourceConversionNoIssuer(t *testing.T) {
 
 func TestAccountJSONRoundTrip(t *testing.T) {
 	// Simulate an ACME account with BodyJSON containing the serialized acme.Account
-	body := acmeAccount{
+	body := acme.Account{
 		Status:               "valid",
 		Contact:              []string{"mailto:test@example.com"},
 		TermsOfServiceAgreed: true,
@@ -204,7 +205,7 @@ func TestAccountJSONRoundTrip(t *testing.T) {
 	bodyJSON, err := json.Marshal(body)
 	require.NoError(t, err)
 
-	var restored acmeAccount
+	var restored acme.Account
 	err = json.Unmarshal(bodyJSON, &restored)
 	require.NoError(t, err)
 	assert.Equal(t, body.Status, restored.Status)

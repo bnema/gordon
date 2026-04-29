@@ -255,26 +255,7 @@ func namesCover(names, required []string) bool {
 // hostMatchesCert checks if any name in the given list matches host,
 // including wildcard matching.
 func hostMatchesCert(names []string, host string) bool {
-	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-	if host == "" {
-		return false
-	}
-	for _, name := range names {
-		name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
-		if name == host {
-			return true
-		}
-		if strings.HasPrefix(name, "*.") {
-			suffix := strings.TrimPrefix(name, "*.")
-			if strings.HasSuffix(host, "."+suffix) {
-				left := strings.TrimSuffix(host, "."+suffix)
-				if left != "" && !strings.Contains(left, ".") {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	return domain.CertificateNamesCoverHost(names, host)
 }
 
 // GetCertificate returns a TLS certificate for the given ClientHello.

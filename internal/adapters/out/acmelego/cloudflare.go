@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 )
@@ -38,6 +39,14 @@ type CloudflareZoneResolver struct {
 	token   string
 	baseURL string
 	client  *http.Client
+
+	mu    sync.RWMutex
+	cache map[string]zoneCacheEntry
+}
+
+type zoneCacheEntry struct {
+	zone out.CloudflareZone
+	err  error
 }
 
 // CloudflareZoneResolverOption configures a CloudflareZoneResolver.
@@ -63,6 +72,7 @@ func NewCloudflareZoneResolver(token string, opts ...CloudflareZoneResolverOptio
 		token:   token,
 		baseURL: defaultCloudflareBaseURL,
 		client:  http.DefaultClient,
+		cache:   make(map[string]zoneCacheEntry),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -83,6 +93,10 @@ func (r *CloudflareZoneResolver) FindZone(ctx context.Context, domainName string
 		return out.CloudflareZone{}, fmt.Errorf("cloudflare zone resolver: empty domain")
 	}
 
+	if cached, ok := r.cached(domainName); ok {
+		return cached.zone, cached.err
+	}
+
 	parts := strings.Split(domainName, ".")
 
 	// candidateCount is the total possible candidates (full domain down to TLD).
@@ -99,14 +113,38 @@ func (r *CloudflareZoneResolver) FindZone(ctx context.Context, domainName string
 	}
 
 	for _, candidate := range candidates {
+		if cached, ok := r.cached(candidate); ok {
+			if cached.err == nil {
+				r.storeCache(domainName, cached.zone, nil)
+				return cached.zone, nil
+			}
+			continue
+		}
 		zone, err := r.findZoneByName(ctx, candidate)
+		r.storeCache(candidate, zone, err)
 		if err != nil {
 			continue
 		}
+		r.storeCache(domainName, zone, nil)
 		return zone, nil
 	}
 
-	return out.CloudflareZone{}, fmt.Errorf("cloudflare zone resolver: no active zone found for %q", domainName)
+	err := fmt.Errorf("cloudflare zone resolver: no active zone found for %q", domainName)
+	r.storeCache(domainName, out.CloudflareZone{}, err)
+	return out.CloudflareZone{}, err
+}
+
+func (r *CloudflareZoneResolver) cached(name string) (zoneCacheEntry, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.cache[name]
+	return entry, ok
+}
+
+func (r *CloudflareZoneResolver) storeCache(name string, zone out.CloudflareZone, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cache[name] = zoneCacheEntry{zone: zone, err: err}
 }
 
 // findZoneByName queries the Cloudflare API for an active zone with the exact given name.

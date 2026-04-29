@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
-	"time"
+
+	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -96,18 +96,5 @@ func defaultPassLookup(ctx context.Context, name string) (string, error) {
 		return "", fmt.Errorf("pass lookup: disallowed name %q", name)
 	}
 
-	passCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	// #nosec G204 — name is validated above as the allowlisted constant
-	// defaultCloudflareTokenPassName; no shell is used.
-	cmd := exec.CommandContext(passCtx, "pass", "show", name)
-	output, err := cmd.Output()
-	if err != nil {
-		if passCtx.Err() == context.DeadlineExceeded {
-			return "", context.DeadlineExceeded
-		}
-		return "", err
-	}
-	return string(output), nil
+	return NewPassProvider(zerowrap.New(zerowrap.Config{Level: "disabled"})).GetSecret(ctx, name)
 }

@@ -2754,9 +2754,14 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 // certificateSelector implements a multi-source TLS certificate lookup.
 // Priority: static certs → public ACME TLS → local PKI (internal CA).
 type certificateSelector struct {
-	staticCerts []tls.Certificate
+	staticCerts []staticTLSCertificate
 	publicTLS   in.PublicTLSService
 	localPKI    *pkiusecase.Service
+}
+
+type staticTLSCertificate struct {
+	cert tls.Certificate
+	leaf *x509.Certificate
 }
 
 // GetCertificate selects a TLS certificate based on the ClientHello SNI.
@@ -2768,7 +2773,7 @@ type certificateSelector struct {
 //  4. nil, nil — if no source can serve the host
 func (s *certificateSelector) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	// 1. Static certs — exact match via leaf VerifyHostname.
-	if cert := matchingStaticCert(s.staticCerts, hello.ServerName); cert != nil {
+	if cert := matchingPreparedStaticCert(s.staticCerts, hello.ServerName); cert != nil {
 		return cert, nil
 	}
 
@@ -2793,26 +2798,39 @@ func (s *certificateSelector) GetCertificate(hello *tls.ClientHelloInfo) (*tls.C
 	return nil, nil
 }
 
-// matchingStaticCert returns a pointer to the first static certificate whose
-// leaf verifies the given serverName. Returns nil if no match is found.
-func matchingStaticCert(certs []tls.Certificate, serverName string) *tls.Certificate {
+func prepareStaticTLSCertificates(certs []tls.Certificate) []staticTLSCertificate {
+	prepared := make([]staticTLSCertificate, 0, len(certs))
+	for _, cert := range certs {
+		if cert.Leaf == nil && len(cert.Certificate) > 0 {
+			leaf, err := x509.ParseCertificate(cert.Certificate[0])
+			if err == nil {
+				cert.Leaf = leaf
+			}
+		}
+		prepared = append(prepared, staticTLSCertificate{cert: cert, leaf: cert.Leaf})
+	}
+	return prepared
+}
+
+func matchingPreparedStaticCert(certs []staticTLSCertificate, serverName string) *tls.Certificate {
 	if serverName == "" {
 		return nil
 	}
 	for i := range certs {
-		cert := &certs[i]
-		if len(cert.Certificate) == 0 {
+		if certs[i].leaf == nil {
 			continue
 		}
-		leaf, err := x509.ParseCertificate(cert.Certificate[0])
-		if err != nil {
-			continue
-		}
-		if err := leaf.VerifyHostname(serverName); err == nil {
-			return cert
+		if err := certs[i].leaf.VerifyHostname(serverName); err == nil {
+			return &certs[i].cert
 		}
 	}
 	return nil
+}
+
+// matchingStaticCert returns a pointer to the first static certificate whose
+// leaf verifies the given serverName. Returns nil if no match is found.
+func matchingStaticCert(certs []tls.Certificate, serverName string) *tls.Certificate {
+	return matchingPreparedStaticCert(prepareStaticTLSCertificates(certs), serverName)
 }
 
 func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
@@ -2849,7 +2867,7 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 	}
 
 	selector := &certificateSelector{
-		staticCerts: staticCerts,
+		staticCerts: prepareStaticTLSCertificates(staticCerts),
 		publicTLS:   publicTLS,
 		localPKI:    pkiSvc,
 	}

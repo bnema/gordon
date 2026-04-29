@@ -61,8 +61,8 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
-		// Run once immediately on start.
-		_ = s.Reconcile(loopCtx)
+		// Startup and reload paths reconcile routes; the periodic loop only renews
+		// due certificates to avoid repeated zone lookups and ACME ordering work.
 		_ = s.renewDueCertificates(loopCtx, time.Now())
 
 		for {
@@ -70,7 +70,6 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
-				_ = s.Reconcile(loopCtx)
 				_ = s.renewDueCertificates(loopCtx, time.Now())
 			}
 		}

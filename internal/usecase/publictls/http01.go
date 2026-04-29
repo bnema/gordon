@@ -2,8 +2,9 @@ package publictls
 
 import (
 	"context"
-	"strings"
 	"sync"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // HTTP01Challenges stores ACME HTTP-01 challenge tokens and their key
@@ -55,17 +56,5 @@ func (c *HTTP01Challenges) Get(_ context.Context, token string) (string, bool) {
 // It rejects empty tokens, tokens containing "/" or "\", and tokens
 // equal to "..", which could allow path traversal.
 func safeHTTP01Token(token string) bool {
-	if token == "" {
-		return false
-	}
-	if strings.Contains(token, "/") {
-		return false
-	}
-	if strings.Contains(token, "\\") {
-		return false
-	}
-	if token == ".." {
-		return false
-	}
-	return true
+	return domain.SafePathComponent(token)
 }

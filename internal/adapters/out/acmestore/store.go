@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -20,7 +19,7 @@ type certMetadata struct {
 	ID        string    `json:"id"`
 	Names     []string  `json:"names"`
 	Challenge string    `json:"challenge"`
-	NotAfter  time.Time `json:"not_after,omitempty"`
+	NotAfter  time.Time `json:"not_after"`
 	LastError string    `json:"last_error,omitempty"`
 }
 
@@ -256,13 +255,7 @@ func (s *Store) Lock(ctx context.Context) (func() error, error) {
 
 // safeID rejects IDs that could cause path traversal.
 func safeID(id string) bool {
-	if id == "" {
-		return false
-	}
-	if strings.Contains(id, "/") || strings.Contains(id, "\\") || strings.Contains(id, "..") {
-		return false
-	}
-	return true
+	return domain.SafePathComponent(id)
 }
 
 // writeAtomic writes data to path atomically by writing to a temporary file
