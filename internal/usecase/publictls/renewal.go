@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -35,6 +37,10 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 
 	// Derive a cancellable context so Stop can terminate the loop.
 	loopCtx, cancel := context.WithCancel(ctx)
+	loopCtx = zerowrap.CtxWithFields(loopCtx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "RenewDueCertificates",
+	})
 
 	// Atomically swap loop state under lock before cancelling the old loop,
 	// preventing overlapping loop goroutines and race conditions.
@@ -59,10 +65,12 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
+		log := zerowrap.FromCtx(loopCtx)
+
 		// Startup and reload paths reconcile routes; the periodic loop only renews
 		// due certificates to avoid repeated zone lookups and ACME ordering work.
 		if err := s.renewDueCertificates(loopCtx, time.Now()); err != nil {
-			s.log.Warn().Err(err).Msg("failed to renew due public TLS certificates")
+			log.Warn().Err(err).Msg("failed to renew due public TLS certificates")
 		}
 
 		for {
@@ -71,7 +79,7 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 				return
 			case <-ticker.C:
 				if err := s.renewDueCertificates(loopCtx, time.Now()); err != nil {
-					s.log.Warn().Err(err).Msg("failed to renew due public TLS certificates")
+					log.Warn().Err(err).Msg("failed to renew due public TLS certificates")
 				}
 			}
 		}
@@ -86,6 +94,7 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 // Per-certificate errors are recorded in lastErr and do not halt the loop.
 // Returns nil unless the store or issuer is nil (systemic error).
 func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error {
+	log := zerowrap.FromCtx(ctx)
 	if !s.cfg.Enabled {
 		return nil
 	}
@@ -121,6 +130,13 @@ func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error
 			s.mu.Unlock()
 			continue
 		}
+		if err := populateStoredCertificate(renewed); err != nil {
+			s.mu.Lock()
+			s.lastErr[cert.ID] = err.Error()
+			s.mu.Unlock()
+			continue
+		}
+		renewed.LastError = ""
 
 		// Acquire store lock only around Save to avoid holding it across
 		// the potentially long-running Issuer.Renew call.
@@ -134,7 +150,7 @@ func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error
 
 		saveErr := s.deps.Store.Save(ctx, *renewed)
 		if unlockErr := unlock(); unlockErr != nil {
-			s.log.Warn().Err(unlockErr).Msg("failed to release store lock")
+			log.Warn().Err(unlockErr).Msg("failed to release store lock")
 		}
 
 		if saveErr != nil {

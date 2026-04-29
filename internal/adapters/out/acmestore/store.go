@@ -312,7 +312,7 @@ func (s *Store) Lock(ctx context.Context) (func() error, error) {
 	}
 
 	return func() error {
-		return releaseLockFile(path, f, fd)
+		return releaseLockFile(f, fd)
 	}, nil
 }
 
@@ -330,16 +330,13 @@ func writeLockMetadata(f *os.File) error {
 	return nil
 }
 
-func releaseLockFile(path string, f *os.File, fd int) error {
+func releaseLockFile(f *os.File, fd int) error {
 	var errs []error
 	if err := syscall.Flock(fd, syscall.LOCK_UN); err != nil {
 		errs = append(errs, fmt.Errorf("unlock: %w", err))
 	}
 	if err := f.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close: %w", err))
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		errs = append(errs, fmt.Errorf("remove: %w", err))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("acmestore: release lock: %w", err)

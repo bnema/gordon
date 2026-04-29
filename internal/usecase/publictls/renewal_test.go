@@ -145,6 +145,8 @@ func TestRenewDueCertificatesSavesAndUpdatesCache(t *testing.T) {
 
 	issuer, _ := newMockPublicCertificateIssuer(t, nil, func(_ context.Context, cert out.StoredCertificate) (*out.StoredCertificate, error) {
 		renewed := cert
+		renewed.Certificate = tls.Certificate{}
+		renewed.LastError = "previous renewal error"
 		renewed.NotAfter = notAfterRenewed
 		return &renewed, nil
 	})
@@ -190,6 +192,8 @@ func TestRenewDueCertificatesSavesAndUpdatesCache(t *testing.T) {
 	all := storeState.All()
 	require.Len(t, all, 1)
 	assert.True(t, all[0].NotAfter.Equal(notAfterRenewed), "store should have renewed NotAfter")
+	assert.NotEmpty(t, all[0].Certificate.Certificate, "store should have normalized tls.Certificate")
+	assert.Empty(t, all[0].LastError, "store should not persist stale LastError")
 
 	// Verify the cache has the updated certificate via Status.
 	status = svc.Status(ctx)

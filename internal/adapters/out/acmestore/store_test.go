@@ -159,7 +159,7 @@ func TestStoreLockAcquireRelease(t *testing.T) {
 	assert.Contains(t, err.Error(), "lock already held")
 
 	require.NoError(t, unlock())
-	assert.NoFileExists(t, filepath.Join(root, lockFile))
+	assert.FileExists(t, filepath.Join(root, lockFile))
 
 	unlock, err = store.Lock(ctx)
 	require.NoError(t, err)
