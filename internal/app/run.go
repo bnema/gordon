@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,8 @@ import (
 
 	// Adapters - Output
 	"github.com/bnema/gordon/internal/adapters/out/accesslog"
+	acmelego "github.com/bnema/gordon/internal/adapters/out/acmelego"
+	acmestore "github.com/bnema/gordon/internal/adapters/out/acmestore"
 	"github.com/bnema/gordon/internal/adapters/out/docker"
 	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
 	"github.com/bnema/gordon/internal/adapters/out/envloader"
@@ -40,11 +43,15 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 
+	// Boundaries
+	"github.com/bnema/gordon/internal/boundaries/in"
+
 	// OTel
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	// Adapters - Input
 	"github.com/bnema/gordon/internal/adapters/dto"
+	acmehttp "github.com/bnema/gordon/internal/adapters/in/http/acme"
 	"github.com/bnema/gordon/internal/adapters/in/http/admin"
 	authhandler "github.com/bnema/gordon/internal/adapters/in/http/auth"
 	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
@@ -75,6 +82,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/logs"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	"github.com/bnema/gordon/internal/usecase/proxy"
+	"github.com/bnema/gordon/internal/usecase/publictls"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
@@ -189,6 +197,14 @@ type Config struct {
 	} `mapstructure:"containers"`
 
 	Telemetry telemetry.Config `mapstructure:"telemetry"`
+
+	TLS struct {
+		ACME struct {
+			Enabled   bool   `mapstructure:"enabled"`
+			Email     string `mapstructure:"email"`
+			Challenge string `mapstructure:"challenge"`
+		} `mapstructure:"acme"`
+	} `mapstructure:"tls"`
 }
 
 // services holds all the services used by the application.
@@ -224,6 +240,7 @@ type services struct {
 	caAdapter         *pkiadapter.CA
 	pkiSvc            *pkiusecase.Service
 	reloadCoordinator *reloadCoordinator
+	publicTLSSvc      in.PublicTLSService
 	registryHandler   interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
@@ -401,27 +418,53 @@ func initAccessLog(cfg Config, log zerowrap.Logger) (*accesslog.Writer, error) {
 	return writer, nil
 }
 
-// serviceInit holds the shared context for service initialization helpers.
-type serviceInit struct {
-	ctx context.Context
-	v   *viper.Viper
-	cfg Config
-	log zerowrap.Logger
-	svc *services
+// serviceOptions controls optional behavior for createServicesWithOptions.
+type serviceOptions struct {
+	// StartPublicTLS controls whether ACME Reconcile and renewal loop are started.
+	// Server runtime sets true; Kernel/local CLI sets false (read-only status).
+	StartPublicTLS bool
 }
 
-// createServices creates all the application services.
+// serviceInit holds the shared context for service initialization helpers.
+type serviceInit struct {
+	ctx            context.Context
+	v              *viper.Viper
+	cfg            Config
+	log            zerowrap.Logger
+	svc            *services
+	startPublicTLS bool
+}
+
+// createServices creates all the application services for server runtime.
+// It calls createServicesWithOptions with StartPublicTLS: true.
 func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (_ *services, retErr error) {
+	return createServicesWithOptions(ctx, v, cfg, log, serviceOptions{StartPublicTLS: true})
+}
+
+// createServicesWithOptions creates all the application services with the given options.
+// When StartPublicTLS is false, ACME Reconcile and renewal loop are skipped so that
+// read-only CLI commands (e.g. gordon tls status) do not perform ACME side effects.
+func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger, opts serviceOptions) (_ *services, retErr error) {
 	si := &serviceInit{
-		ctx: ctx,
-		v:   v,
-		cfg: cfg,
-		log: log,
-		svc: &services{},
+		ctx:            ctx,
+		v:              v,
+		cfg:            cfg,
+		log:            log,
+		svc:            &services{},
+		startPublicTLS: opts.StartPublicTLS,
 	}
 	defer func() {
-		if retErr != nil && si.svc.pkiSvc != nil {
-			si.svc.pkiSvc.Stop()
+		if retErr != nil {
+			if si.svc.pkiSvc != nil {
+				si.svc.pkiSvc.Stop()
+			}
+			if si.svc.publicTLSSvc != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := si.svc.publicTLSSvc.Stop(ctx); err != nil {
+					si.log.Warn().Err(err).Msg("failed to stop public TLS service during createServices cleanup")
+				}
+			}
 		}
 	}()
 	var err error
@@ -465,11 +508,15 @@ func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowra
 		return nil, err
 	}
 
+	if err := si.initPublicTLS(); err != nil {
+		return nil, err
+	}
+
 	if err := si.initRuntimeAndProxy(); err != nil {
 		return nil, err
 	}
 
-	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, nil, si.svc.eventBus, log)
+	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, nil, si.svc.eventBus, si.svc.publicTLSSvc, log)
 
 	si.initHandlers()
 
@@ -493,6 +540,92 @@ func (si *serviceInit) initPKI() error {
 	}
 	si.svc.caAdapter = caAdapter
 	si.svc.pkiSvc = pkiusecase.NewService(si.ctx, caAdapter, si.svc.configSvc, si.log)
+	return nil
+}
+
+// initPublicTLS initializes the public ACME TLS service if enabled.
+func (si *serviceInit) initPublicTLS() error {
+	if !si.cfg.TLS.ACME.Enabled {
+		return nil
+	}
+
+	if si.cfg.Server.TLSPort == 0 {
+		return nil
+	}
+
+	ctx := si.ctx
+	log := si.log
+
+	publicTLSCfg := publictls.Config{
+		Enabled:   si.cfg.TLS.ACME.Enabled,
+		Email:     si.cfg.TLS.ACME.Email,
+		Challenge: si.cfg.TLS.ACME.Challenge,
+		HTTPPort:  si.cfg.Server.Port,
+		TLSPort:   si.cfg.Server.TLSPort,
+		DataDir:   resolveDataDir(si.cfg.Server.DataDir),
+	}
+
+	tokenResolver := secrets.NewPublicTLSResolver(secrets.PublicTLSResolverConfig{})
+
+	effective, err := publictls.ResolveEffectiveChallenge(ctx, publicTLSCfg, tokenResolver)
+	if err != nil {
+		return log.WrapErr(err, "resolve ACME challenge")
+	}
+
+	store, err := acmestore.New(filepath.Join(resolveDataDir(si.cfg.Server.DataDir), "acme"))
+	if err != nil {
+		return log.WrapErr(err, "create ACME store")
+	}
+
+	challenges := publictls.NewHTTP01Challenges()
+
+	var zoneResolver *acmelego.CloudflareZoneResolver
+	if effective.Mode == domain.ACMEChallengeCloudflareDNS01 {
+		zoneResolver = acmelego.NewCloudflareZoneResolver(effective.Token)
+	}
+
+	issuer, err := acmelego.NewIssuer(acmelego.Config{
+		Email:             si.cfg.TLS.ACME.Email,
+		Challenge:         effective.Mode,
+		Token:             effective.Token,
+		Store:             store,
+		HTTPChallengeSink: challenges,
+	})
+	if err != nil {
+		return log.WrapErr(err, "create ACME issuer")
+	}
+
+	svc := publictls.NewService(publicTLSCfg, publictls.ServiceDeps{
+		Routes:       si.svc.configSvc,
+		Issuer:       issuer,
+		Store:        store,
+		ZoneResolver: zoneResolver,
+		Challenges:   challenges,
+		Effective:    effective,
+	})
+
+	if err := svc.Load(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to load ACME certificates, continuing")
+	}
+
+	if si.startPublicTLS {
+		if err := svc.Reconcile(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to reconcile ACME certificates, continuing")
+		}
+		svc.StartRenewalLoop(ctx, time.Hour)
+		log.Info().
+			Str("email", si.cfg.TLS.ACME.Email).
+			Str("challenge", string(effective.Mode)).
+			Str("reason", effective.Reason).
+			Msg("public ACME TLS initialized")
+	} else {
+		log.Info().
+			Str("email", si.cfg.TLS.ACME.Email).
+			Str("challenge", string(effective.Mode)).
+			Msg("public ACME TLS initialized (read-only, no renewal loop)")
+	}
+
+	si.svc.publicTLSSvc = svc
 	return nil
 }
 
@@ -576,6 +709,7 @@ func (si *serviceInit) initHandlers() {
 		PreviewSvc:    si.svc.previewService,
 		ImageSvc:      si.svc.imageSvc,
 		VolumeSvc:     si.svc.volumeSvc,
+		PublicTLSSvc:  si.svc.publicTLSSvc,
 	})
 }
 
@@ -595,13 +729,7 @@ func initPreviewService(ctx context.Context, cfg Config, svc *services, log zero
 	}
 
 	// Derive sweep interval from TTL: half the TTL, capped at 1 hour, minimum 1 minute.
-	sweepInterval := previewConfig.TTL / 2
-	if sweepInterval > 1*time.Hour {
-		sweepInterval = 1 * time.Hour
-	}
-	if sweepInterval < 1*time.Minute {
-		sweepInterval = 1 * time.Minute
-	}
+	sweepInterval := max(min(previewConfig.TTL/2, time.Hour), time.Minute)
 
 	svc.previewService.StartTicker(ctx, sweepInterval, func(ctx context.Context, p domain.PreviewRoute) {
 		teardownTrackedPreview(ctx, svc, p)
@@ -840,8 +968,8 @@ func resolveRuntimeConfig(value string) string {
 		return "/var/run/docker.sock"
 	}
 	// Explicit socket path — strip URI scheme if present.
-	if strings.HasPrefix(value, "unix://") {
-		return strings.TrimPrefix(value, "unix://")
+	if socketPath, ok := strings.CutPrefix(value, "unix://"); ok {
+		return socketPath
 	}
 	return value
 }
@@ -1430,6 +1558,11 @@ type configWatcher interface {
 	Watch(ctx context.Context, onChange func()) error
 }
 
+// publicTLSReconciler is the interface for reconciling public TLS certificates.
+type publicTLSReconciler interface {
+	Reconcile(context.Context) error
+}
+
 type configReloader interface {
 	Reload(ctx context.Context) error
 }
@@ -1457,13 +1590,14 @@ type reloadCoordinator struct {
 	registryLimits interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
-	eventBus out.EventPublisher
-	log      zerowrap.Logger
+	eventBus  out.EventPublisher
+	publicTLS publicTLSReconciler
+	log       zerowrap.Logger
 }
 
 func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc proxyConfigUpdater, registryLimits interface {
 	UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
-}, eventBus out.EventPublisher, log zerowrap.Logger) *reloadCoordinator {
+}, eventBus out.EventPublisher, publicTLS publicTLSReconciler, log zerowrap.Logger) *reloadCoordinator {
 	return &reloadCoordinator{
 		debounce:       500 * time.Millisecond,
 		configSvc:      configSvc,
@@ -1471,6 +1605,7 @@ func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc pro
 		proxySvc:       proxySvc,
 		registryLimits: registryLimits,
 		eventBus:       eventBus,
+		publicTLS:      publicTLS,
 		log:            log,
 	}
 }
@@ -1511,14 +1646,14 @@ func (c *reloadCoordinator) reloadLocked(ctx context.Context, loadConfig bool) e
 		}
 	}
 
-	if err := c.applyLoadedConfig(now); err != nil {
+	if err := c.applyLoadedConfig(ctx, now); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (c *reloadCoordinator) applyLoadedConfig(now time.Time) error {
+func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time) error {
 	var reloadCfg Config
 	if err := c.v.Unmarshal(&reloadCfg); err != nil {
 		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
@@ -1544,6 +1679,14 @@ func (c *reloadCoordinator) applyLoadedConfig(now time.Time) error {
 	}
 
 	c.lastRun = now
+
+	// Reconcile public TLS certificates after config reload.
+	if c.publicTLS != nil {
+		if err := c.publicTLS.Reconcile(ctx); err != nil {
+			c.log.Error().Err(err).Msg("failed to reconcile public TLS certificates after reload")
+			return fmt.Errorf("reconcile public TLS: %w", err)
+		}
+	}
 
 	c.log.Debug().Msg("config hot reload complete")
 	return nil
@@ -1925,7 +2068,16 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 	// HTTP proxyMux: trusted proxy traffic flows through the normal proxy chain.
 	// Direct clients get an onboarding gate (when CA is available) placed BEFORE
 	// HTTPSRedirect so force_https_redirect cannot bypass onboarding.
+	// ACME HTTP-01 challenge handler is registered before the catch-all "/" so
+	// it gets first chance regardless of source IP.
 	proxyMux := http.NewServeMux()
+
+	// Register ACME HTTP-01 challenge handler before all other routes so
+	// Let's Encrypt validation always succeeds, even for onboarding clients.
+	if svc.publicTLSSvc != nil {
+		proxyMux.Handle(acmehttp.Prefix, acmehttp.NewHandler(svc.publicTLSSvc))
+	}
+
 	if proxyCIDRMiddleware != nil && proxyAllowedNets == nil {
 		// Invalid proxy_allowed_ips: deny all traffic (fail-closed).
 		proxyMux.Handle("/", proxyCIDRMiddleware(httpProxyWithMiddleware))
@@ -2300,7 +2452,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 		}
 	}
 
-	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, errChan, log)
+	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, svc.publicTLSSvc, errChan, log)
 	if err != nil {
 		closeStarted(registrySrv)
 		return err
@@ -2344,7 +2496,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, reload, svc.eventBus, log)
 	cleanupHandlers() // Stop debounce timers before draining containers
-	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, log)
+	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, log)
 	return nil
 }
 
@@ -2544,7 +2696,7 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, log zerowrap.Logger) {
+func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -2563,6 +2715,13 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 	// Stop PKI maintenance goroutines
 	if pkiSvc != nil {
 		pkiSvc.Stop()
+	}
+
+	// Stop public ACME TLS renewal loop
+	if publicTLS != nil {
+		if err := publicTLS.Stop(shutdownCtx); err != nil {
+			log.Warn().Err(err).Msg("public TLS stop error")
+		}
 	}
 
 	// Phase 2: Drain in-flight registry push sessions before stopping the backend
@@ -2592,7 +2751,71 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 
 // startProxyServers sets up the HTTP proxy server and, when tls_port != 0,
 // an HTTPS proxy server with on-demand TLS certificates from the internal CA.
-func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSvc *pkiusecase.Service, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+// certificateSelector implements a multi-source TLS certificate lookup.
+// Priority: static certs → public ACME TLS → local PKI (internal CA).
+type certificateSelector struct {
+	staticCerts []tls.Certificate
+	publicTLS   in.PublicTLSService
+	localPKI    *pkiusecase.Service
+}
+
+// GetCertificate selects a TLS certificate based on the ClientHello SNI.
+//
+// Priority:
+//  1. Static certs — exact SNI match (leaf VerifyHostname)
+//  2. Public ACME TLS — if the host requires ACME coverage
+//  3. Local PKI (internal CA) — fallback for all other hosts
+//  4. nil, nil — if no source can serve the host
+func (s *certificateSelector) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	// 1. Static certs — exact match via leaf VerifyHostname.
+	if cert := matchingStaticCert(s.staticCerts, hello.ServerName); cert != nil {
+		return cert, nil
+	}
+
+	// 2. Public ACME TLS.
+	if s.publicTLS != nil {
+		cert, err := s.publicTLS.GetCertificate(hello)
+		if err != nil {
+			return nil, err
+		}
+		if cert != nil {
+			return cert, nil
+		}
+		// nil, nil means this host is not an ACME-required route.
+		// Fall through to local PKI.
+	}
+
+	// 3. Local PKI (internal CA).
+	if s.localPKI != nil {
+		return s.localPKI.GetCertificate(hello)
+	}
+
+	return nil, nil
+}
+
+// matchingStaticCert returns a pointer to the first static certificate whose
+// leaf verifies the given serverName. Returns nil if no match is found.
+func matchingStaticCert(certs []tls.Certificate, serverName string) *tls.Certificate {
+	if serverName == "" {
+		return nil
+	}
+	for i := range certs {
+		cert := &certs[i]
+		if len(cert.Certificate) == 0 {
+			continue
+		}
+		leaf, err := x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			continue
+		}
+		if err := leaf.VerifyHostname(serverName); err == nil {
+			return cert
+		}
+	}
+	return nil
+}
+
+func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
 	// HTTP listener (Cloudflare proxy + onboarding for direct clients)
 	var httpProtos http.Protocols
 	httpProtos.SetHTTP1(true)
@@ -2610,23 +2833,33 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 		return httpSrv, httpReady, nil, nil, nil
 	}
 
-	// HTTPS listener — static cert (if provided) takes priority by SNI match,
-	// unmatched domains fall through to on-demand internal CA certs.
-	tlsConfig := &tls.Config{
-		MinVersion:     tls.VersionTLS12,
-		GetCertificate: pkiSvc.GetCertificate,
-		NextProtos:     []string{"h2", "http/1.1"},
-	}
+	// Load static cert into a local slice (not tls.Config.Certificates) so the
+	// certificate selector has full control over priority ordering.
+	var staticCerts []tls.Certificate
 	if cfg.Server.TLSCertFile != "" {
 		staticCert, err := tls.LoadX509KeyPair(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 		if err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("load TLS keypair: %w", err)
 		}
-		tlsConfig.Certificates = []tls.Certificate{staticCert}
+		staticCerts = []tls.Certificate{staticCert}
 		log.Info().
 			Str("cert", cfg.Server.TLSCertFile).
 			Str("key", cfg.Server.TLSKeyFile).
-			Msg("loaded static TLS certificate (internal CA handles remaining domains)")
+			Msg("loaded static TLS certificate (public ACME and internal CA handle remaining domains)")
+	}
+
+	selector := &certificateSelector{
+		staticCerts: staticCerts,
+		publicTLS:   publicTLS,
+		localPKI:    pkiSvc,
+	}
+
+	// HTTPS listener — static cert (if provided) takes priority by SNI match via
+	// certificateSelector, then public ACME TLS, then on-demand internal CA certs.
+	tlsConfig := &tls.Config{
+		MinVersion:     tls.VersionTLS12,
+		GetCertificate: selector.GetCertificate,
+		NextProtos:     []string{"h2", "http/1.1"},
 	}
 	tlsSrv, tlsReady := startTLSServerWithConfig(
 		fmt.Sprintf(":%d", cfg.Server.TLSPort),
@@ -2831,7 +3064,7 @@ func createPidFile(log zerowrap.Logger) string {
 		if err := os.MkdirAll(filepath.Dir(location), 0700); err != nil {
 			continue
 		}
-		if err := os.WriteFile(location, []byte(fmt.Sprintf("%d", pid)), 0600); err == nil {
+		if err := os.WriteFile(location, fmt.Appendf(nil, "%d", pid), 0600); err == nil {
 			log.Debug().Str("pid_file", location).Int("pid", pid).Msg("created PID file")
 			return location
 		}
@@ -2966,6 +3199,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.tls_port", 8443)
 	v.SetDefault("server.tls_cert_file", "")
 	v.SetDefault("server.tls_key_file", "")
+	v.SetDefault("tls.acme.enabled", false)
+	v.SetDefault("tls.acme.email", "")
+	v.SetDefault("tls.acme.challenge", "auto")
 	v.SetDefault("server.force_https_redirect", false)
 	v.SetDefault("server.data_dir", DefaultDataDir())
 	v.SetDefault("server.runtime", "auto")

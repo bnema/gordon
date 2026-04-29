@@ -149,6 +149,10 @@ Commands are organized by where they run:
 	previewCmd.GroupID = groupManage
 	rootCmd.AddCommand(previewCmd)
 
+	tlsCmd := newTLSCmd()
+	tlsCmd.GroupID = groupManage
+	rootCmd.AddCommand(tlsCmd)
+
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
 	remotesCmd.GroupID = groupClient

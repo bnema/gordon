@@ -52,6 +52,7 @@ type Handler struct {
 	registrySvc   registryDeployService
 	previewSvc    previewService
 	reloadTrigger reloadTrigger
+	publicTLSSvc  in.PublicTLSService
 	log           zerowrap.Logger
 }
 
@@ -149,6 +150,7 @@ type HandlerDeps struct {
 	ImageSvc      in.ImageService
 	VolumeSvc     in.VolumeService
 	ReloadTrigger reloadTrigger
+	PublicTLSSvc  in.PublicTLSService
 }
 
 // NewHandler creates a new admin HTTP handler.
@@ -166,6 +168,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		registrySvc:   deps.RegistrySvc,
 		previewSvc:    deps.PreviewSvc,
 		reloadTrigger: deps.ReloadTrigger,
+		publicTLSSvc:  deps.PublicTLSSvc,
 		log:           deps.Log,
 	}
 }
@@ -216,6 +219,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		"/auth/verify":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
 		"/volumes":       func(w http.ResponseWriter, r *http.Request, _ string) { h.handleListVolumes(w, r) },
 		"/volumes/prune": func(w http.ResponseWriter, r *http.Request, _ string) { h.handlePruneVolumes(w, r) },
+		"/tls/status":    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTLSStatus(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true
@@ -1905,4 +1909,65 @@ func (h *Handler) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.sendJSON(w, http.StatusOK, response)
+}
+
+// handleTLSStatus handles GET /admin/tls/status.
+func (h *Handler) handleTLSStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := r.Context()
+
+	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+
+	if h.publicTLSSvc == nil {
+		h.sendJSON(w, http.StatusOK, dto.TLSStatusResponse{})
+		return
+	}
+
+	status := h.publicTLSSvc.Status(ctx)
+	h.sendJSON(w, http.StatusOK, toTLSStatusResponse(status))
+}
+
+// toTLSStatusResponse converts a domain.PublicTLSStatus to a dto.TLSStatusResponse.
+func toTLSStatusResponse(s domain.PublicTLSStatus) dto.TLSStatusResponse {
+	certs := make([]dto.TLSCertificateEntry, 0, len(s.Certificates))
+	for _, c := range s.Certificates {
+		certs = append(certs, dto.TLSCertificateEntry{
+			ID:             c.ID,
+			Names:          c.Names,
+			Challenge:      string(c.Challenge),
+			Status:         string(c.Status),
+			NotAfter:       c.NotAfter,
+			LastError:      c.LastError,
+			RenewalPending: c.RenewalPending,
+		})
+	}
+
+	routes := make([]dto.TLSRouteCoverage, 0, len(s.Routes))
+	for _, r := range s.Routes {
+		routes = append(routes, dto.TLSRouteCoverage{
+			Domain:       r.Domain,
+			Covered:      r.Covered,
+			CoveredBy:    r.CoveredBy,
+			RequiredACME: r.RequiredACME,
+			Error:        r.Error,
+		})
+	}
+
+	return dto.TLSStatusResponse{
+		ACMEEnabled:     s.ACMEEnabled,
+		ConfiguredMode:  string(s.ConfiguredMode),
+		EffectiveMode:   string(s.EffectiveMode),
+		SelectionReason: s.SelectionReason,
+		TokenSource:     string(s.TokenSource),
+		Certificates:    certs,
+		Routes:          routes,
+		Errors:          s.Errors,
+	}
 }

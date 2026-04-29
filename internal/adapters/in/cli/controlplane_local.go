@@ -25,6 +25,7 @@ type localControlPlane struct {
 	healthSvc    in.HealthService
 	logSvc       in.LogService
 	volumeSvc    in.VolumeService
+	publicTLSSvc in.PublicTLSService
 }
 
 func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
@@ -50,6 +51,7 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 		healthSvc:    kernel.Health(),
 		logSvc:       kernel.Logs(),
 		volumeSvc:    kernel.Volumes(),
+		publicTLSSvc: kernel.PublicTLS(),
 	}
 }
 
@@ -329,6 +331,16 @@ func (l *localControlPlane) RemoveAutoRouteAllowedDomain(ctx context.Context, pa
 		return fmt.Errorf("local config service unavailable")
 	}
 	return l.configSvc.RemoveAutoRouteAllowedDomain(ctx, pattern)
+}
+
+func (l *localControlPlane) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error) {
+	if l.publicTLSSvc == nil {
+		return &dto.TLSStatusResponse{}, nil
+	}
+
+	status := l.publicTLSSvc.Status(ctx)
+	result := toLocalTLSStatusResponse(status)
+	return &result, nil
 }
 
 func (l *localControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {
@@ -623,6 +635,44 @@ func toDTOBackupJobs(jobs []domain.BackupJob) []dto.BackupJob {
 		out = append(out, toDTOBackupJob(job))
 	}
 	return out
+}
+
+// toLocalTLSStatusResponse converts a domain.PublicTLSStatus to a dto.TLSStatusResponse.
+func toLocalTLSStatusResponse(s domain.PublicTLSStatus) dto.TLSStatusResponse {
+	certs := make([]dto.TLSCertificateEntry, 0, len(s.Certificates))
+	for _, c := range s.Certificates {
+		certs = append(certs, dto.TLSCertificateEntry{
+			ID:             c.ID,
+			Names:          c.Names,
+			Challenge:      string(c.Challenge),
+			Status:         string(c.Status),
+			NotAfter:       c.NotAfter,
+			LastError:      c.LastError,
+			RenewalPending: c.RenewalPending,
+		})
+	}
+
+	routes := make([]dto.TLSRouteCoverage, 0, len(s.Routes))
+	for _, r := range s.Routes {
+		routes = append(routes, dto.TLSRouteCoverage{
+			Domain:       r.Domain,
+			Covered:      r.Covered,
+			CoveredBy:    r.CoveredBy,
+			RequiredACME: r.RequiredACME,
+			Error:        r.Error,
+		})
+	}
+
+	return dto.TLSStatusResponse{
+		ACMEEnabled:     s.ACMEEnabled,
+		ConfiguredMode:  string(s.ConfiguredMode),
+		EffectiveMode:   string(s.EffectiveMode),
+		SelectionReason: s.SelectionReason,
+		TokenSource:     string(s.TokenSource),
+		Certificates:    certs,
+		Routes:          routes,
+		Errors:          s.Errors,
+	}
 }
 
 func toDTOBackupJob(job domain.BackupJob) dto.BackupJob {

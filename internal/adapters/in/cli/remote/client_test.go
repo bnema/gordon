@@ -116,6 +116,23 @@ func TestClientWithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestClientGetTLSStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/tls/status", r.URL.Path)
+		require.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"acme_enabled":true,"effective_mode":"http-01"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	status, err := client.GetTLSStatus(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.True(t, status.ACMEEnabled)
+	assert.Equal(t, "http-01", status.EffectiveMode)
+}
+
 func TestClientListImages(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/admin/images", r.URL.Path)

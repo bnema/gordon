@@ -104,6 +104,10 @@ func (r *remoteControlPlane) GetStatus(ctx context.Context) (*remote.Status, err
 	return r.client.GetStatus(ctx)
 }
 
+func (r *remoteControlPlane) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error) {
+	return r.client.GetTLSStatus(ctx)
+}
+
 func (r *remoteControlPlane) Reload(ctx context.Context) error {
 	return r.client.Reload(ctx)
 }

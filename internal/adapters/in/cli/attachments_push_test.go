@@ -108,6 +108,10 @@ func (c *attachmentPushTestControlPlane) RemoveAutoRouteAllowedDomain(context.Co
 	panic("unexpected call")
 }
 
+func (c *attachmentPushTestControlPlane) GetTLSStatus(context.Context) (*dto.TLSStatusResponse, error) {
+	return &dto.TLSStatusResponse{}, nil
+}
+
 func (c *attachmentPushTestControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {
 	if c.getStatus != nil {
 		return c.getStatus(ctx)

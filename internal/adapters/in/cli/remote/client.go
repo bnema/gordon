@@ -657,6 +657,21 @@ type Status struct {
 	ContainerStatus  map[string]string `json:"container_status"`
 }
 
+// GetTLSStatus returns the public TLS/ACME status.
+func (c *Client) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/tls/status", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var status dto.TLSStatusResponse
+	if err := parseResponse(resp, &status); err != nil {
+		return nil, err
+	}
+
+	return &status, nil
+}
+
 // GetStatus returns the Gordon server status.
 func (c *Client) GetStatus(ctx context.Context) (*Status, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/status", nil)

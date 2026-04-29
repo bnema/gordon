@@ -32,7 +32,7 @@ func requirePass(t *testing.T) {
 	}
 }
 
-func cleanupPassDomain(t *testing.T, domainName string, keys []string) {
+func cleanupPassDomain(_ *testing.T, domainName string, keys []string) {
 	safeDomain, err := domain.SanitizeDomainForEnvFile(domainName)
 	if err != nil {
 		return
@@ -87,7 +87,7 @@ func TestMigrateEnvFile(t *testing.T) {
 	assert.Equal(t, "pass456", values["DB_PASSWORD"])
 }
 
-func cleanupPassAttachment(t *testing.T, containerName string, keys []string) {
+func cleanupPassAttachment(_ *testing.T, containerName string, keys []string) {
 	for _, key := range keys {
 		path := fmt.Sprintf("%s/%s/%s", domainsecrets.PassAttachmentPath, containerName, key)
 		_ = passCmd("rm", "-f", path)
