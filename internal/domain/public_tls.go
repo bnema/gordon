@@ -14,6 +14,10 @@ const (
 	ACMEChallengeCloudflareDNS01 ACMEChallengeMode = "cloudflare-dns-01"
 )
 
+func IsValidHTTP01Token(token string) bool {
+	return token != "" && !strings.Contains(token, "/") && !strings.Contains(token, "\\") && !strings.Contains(token, "..") && !strings.Contains(token, "\x00")
+}
+
 func ParseACMEChallengeMode(value string) (ACMEChallengeMode, error) {
 	switch strings.TrimSpace(value) {
 	case "", string(ACMEChallengeAuto):

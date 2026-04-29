@@ -8,6 +8,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsValidHTTP01Token(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+		want  bool
+	}{
+		{name: "valid", token: "abc123_-token", want: true},
+		{name: "empty", token: "", want: false},
+		{name: "slash", token: "abc/def", want: false},
+		{name: "backslash", token: `abc\def`, want: false},
+		{name: "dot dot", token: "abc..def", want: false},
+		{name: "nul", token: "abc\x00def", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsValidHTTP01Token(tt.token))
+		})
+	}
+}
+
 func TestACMEChallengeModeParse(t *testing.T) {
 	tests := []struct {
 		input string

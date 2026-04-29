@@ -6,6 +6,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // Prefix is the path prefix for ACME HTTP-01 challenge requests.
@@ -41,7 +43,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.TrimPrefix(r.URL.Path, Prefix)
-	if !safeToken(token) {
+	if !domain.IsValidHTTP01Token(token) {
 		http.NotFound(w, r)
 		return
 	}
@@ -66,10 +68,4 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _ = w.Write([]byte(keyAuth))
-}
-
-// safeToken validates that the token does not contain path traversal or special
-// characters that could be used to access files outside the challenge directory.
-func safeToken(token string) bool {
-	return token != "" && !strings.Contains(token, "/") && !strings.Contains(token, "\\") && !strings.Contains(token, "..") && !strings.Contains(token, "\x00")
 }

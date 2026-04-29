@@ -2,8 +2,9 @@ package publictls
 
 import (
 	"context"
-	"strings"
 	"sync"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // HTTP01Challenges stores ACME HTTP-01 challenge tokens and their key
@@ -21,9 +22,9 @@ func NewHTTP01Challenges() *HTTP01Challenges {
 }
 
 // Present stores the key authorization for the given token. It silently
-// ignores unsafe tokens (see safeHTTP01Token) and empty keyAuth values.
+// ignores unsafe tokens and empty keyAuth values.
 func (c *HTTP01Challenges) Present(token, keyAuth string) {
-	if !safeHTTP01Token(token) || keyAuth == "" {
+	if !domain.IsValidHTTP01Token(token) || keyAuth == "" {
 		return
 	}
 	c.mu.Lock()
@@ -32,9 +33,9 @@ func (c *HTTP01Challenges) Present(token, keyAuth string) {
 }
 
 // CleanUp removes the stored key authorization for the given token. It silently
-// ignores unsafe tokens (see safeHTTP01Token).
+// ignores unsafe tokens.
 func (c *HTTP01Challenges) CleanUp(token string) {
-	if !safeHTTP01Token(token) {
+	if !domain.IsValidHTTP01Token(token) {
 		return
 	}
 	c.mu.Lock()
@@ -43,21 +44,13 @@ func (c *HTTP01Challenges) CleanUp(token string) {
 }
 
 // Get returns the key authorization for the given token, and a boolean
-// indicating whether it was found. It returns false for unsafe tokens
-// (see safeHTTP01Token).
+// indicating whether it was found. It returns false for unsafe tokens.
 func (c *HTTP01Challenges) Get(_ context.Context, token string) (string, bool) {
-	if !safeHTTP01Token(token) {
+	if !domain.IsValidHTTP01Token(token) {
 		return "", false
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	keyAuth, ok := c.data[token]
 	return keyAuth, ok
-}
-
-// safeHTTP01Token validates an ACME HTTP-01 challenge token.
-// It rejects empty tokens, tokens containing "/", "\", "..", or NUL,
-// which could allow path traversal or invalid challenge paths.
-func safeHTTP01Token(token string) bool {
-	return token != "" && !strings.Contains(token, "/") && !strings.Contains(token, "\\") && !strings.Contains(token, "..") && !strings.Contains(token, "\x00")
 }
