@@ -13,13 +13,6 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-func newZoneResolverMock(t *testing.T, zone string) *outmocks.MockCloudflareZoneResolver {
-	t.Helper()
-	resolver := outmocks.NewMockCloudflareZoneResolver(t)
-	resolver.EXPECT().FindZone(mock.Anything, mock.Anything).Return(out.CloudflareZone{Name: zone}, nil).Maybe()
-	return resolver
-}
-
 func TestDeriveTargets_HTTP01PerRoute(t *testing.T) {
 	routes := []domain.Route{{Domain: "app.example.com"}, {Domain: "registry.example.com"}}
 	targets, err := DeriveCertificateTargets(context.Background(), domain.ACMEChallengeHTTP01, routes, nil, nil)
@@ -36,7 +29,8 @@ func TestDeriveTargets_HTTP01PerRoute(t *testing.T) {
 
 func TestDeriveTargets_DNS01WildcardBases(t *testing.T) {
 	routes := []domain.Route{{Domain: "app.example.com"}, {Domain: "api.prod.example.com"}, {Domain: "example.com"}}
-	resolver := newZoneResolverMock(t, "example.com")
+	resolver := outmocks.NewMockCloudflareZoneResolver(t)
+	resolver.EXPECT().FindZone(mock.Anything, mock.Anything).Return(out.CloudflareZone{Name: "example.com"}, nil).Times(3)
 	targets, err := DeriveCertificateTargets(context.Background(), domain.ACMEChallengeCloudflareDNS01, routes, nil, resolver)
 	require.NoError(t, err)
 	require.Len(t, targets, 2)
@@ -70,7 +64,8 @@ func TestDeriveTargets_DNS01NilResolver_ReturnsError(t *testing.T) {
 
 func TestDeriveTargets_DNS01MismatchedZone_ReturnsError(t *testing.T) {
 	routes := []domain.Route{{Domain: "app.example.com"}}
-	resolver := newZoneResolverMock(t, "other.test")
+	resolver := outmocks.NewMockCloudflareZoneResolver(t)
+	resolver.EXPECT().FindZone(mock.Anything, mock.Anything).Return(out.CloudflareZone{Name: "other.test"}, nil).Once()
 	_, err := DeriveCertificateTargets(context.Background(), domain.ACMEChallengeCloudflareDNS01, routes, nil, resolver)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match host")

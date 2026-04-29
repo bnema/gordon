@@ -215,10 +215,10 @@ func TestStoreLoadAllInvalidChallenge(t *testing.T) {
 	err = os.WriteFile(filepath.Join(certDirPath, metaFile), metaData, metaMode)
 	require.NoError(t, err)
 
-	// LoadAll should return an error
+	// LoadAll should return an error wrapping domain.ErrACMEChallengeInvalid
 	_, err = store.LoadAll(ctx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "acme challenge invalid")
+	assert.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
 }
 
 func TestStoreLoadAllCorruptPrivkey(t *testing.T) {
@@ -282,6 +282,44 @@ func TestStoreLoadAllCorruptFullchain(t *testing.T) {
 	_, err = store.LoadAll(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fullchain.pem")
+}
+
+func TestStoreLoadAllSkipsTempAndBackupDirs(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	store, err := New(root)
+	require.NoError(t, err)
+
+	fullchainPEM, privKeyPEM := generateTestCertPEM(t)
+
+	// Save a valid certificate first.
+	cert := out.StoredCertificate{
+		ID:            "valid.example.com",
+		Names:         []string{"valid.example.com"},
+		Challenge:     domain.ACMEChallengeHTTP01,
+		CertPEM:       fullchainPEM,
+		FullchainPEM:  fullchainPEM,
+		PrivateKeyPEM: privKeyPEM,
+	}
+	err = store.Save(ctx, cert)
+	require.NoError(t, err)
+
+	// Create a tmp-* directory that Save would have left behind.
+	tmpDir := filepath.Join(root, certDir, "orphan.tmp-abc123")
+	err = os.MkdirAll(tmpDir, dirMode)
+	require.NoError(t, err)
+
+	// Create a .old directory that Save would have left behind.
+	oldDir := filepath.Join(root, certDir, "old-cert.example.com.old")
+	err = os.MkdirAll(oldDir, dirMode)
+	require.NoError(t, err)
+
+	// LoadAll should return only the valid cert, skipping both temp and backup dirs.
+	certs, err := store.LoadAll(ctx)
+	require.NoError(t, err)
+	require.Len(t, certs, 1, "should skip tmp-* and *.old directories")
+	assert.Equal(t, "valid.example.com", certs[0].ID)
 }
 
 func TestStoreLoadAllInvalidPEM(t *testing.T) {

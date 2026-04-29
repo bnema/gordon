@@ -121,20 +121,24 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return nil
 	}
 
-	log := s.log.With().Str("component", "Reconcile").Logger()
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "Reconcile",
+	})
+	log := zerowrap.FromCtx(ctx)
 	log.Debug().Msg("starting certificate reconciliation")
 
 	if s.deps.Store == nil {
 		log.Warn().Msg("certificate store is nil, cannot reconcile")
-		return fmt.Errorf("certificate store is nil")
+		return fmt.Errorf("%w: certificate store is nil", domain.ErrCertificateStoreRequired)
 	}
 	if s.deps.Issuer == nil {
 		log.Warn().Msg("certificate issuer is nil, cannot reconcile")
-		return fmt.Errorf("certificate issuer is nil")
+		return fmt.Errorf("%w: certificate issuer is nil", domain.ErrCertificateIssuerRequired)
 	}
 	if s.deps.Routes == nil {
 		log.Warn().Msg("route source is nil, cannot reconcile")
-		return fmt.Errorf("route source is nil")
+		return fmt.Errorf("%w: route source is nil", domain.ErrRouteSourceRequired)
 	}
 
 	// Determine effective challenge mode.

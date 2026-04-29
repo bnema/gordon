@@ -113,6 +113,10 @@ func (s *Store) LoadAll(_ context.Context) ([]out.StoredCertificate, error) {
 		if !safeID(id) {
 			continue
 		}
+		// Skip temporary and backup directories created by Save.
+		if strings.Contains(id, ".tmp-") || strings.HasSuffix(id, ".old") {
+			continue
+		}
 
 		cert, err := s.loadOne(id)
 		if err != nil {

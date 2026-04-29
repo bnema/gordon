@@ -70,7 +70,7 @@ Errors
     {
       "id": "cert-abc123",
       "names": ["example.com", "www.example.com"],
-      "challenge": "",
+      "challenge": "http-01",
       "status": "valid",
       "not_after": "2026-05-29T12:00:00Z",
       "renewal_pending": false

@@ -98,6 +98,8 @@ var (
 	ErrACMEChallengeInvalid      = errors.New("acme challenge invalid")
 	ErrCloudflareTokenMissing    = errors.New("cloudflare api token missing")
 	ErrCertificateStoreRequired  = errors.New("certificate store required")
+	ErrCertificateIssuerRequired = errors.New("certificate issuer required")
+	ErrRouteSourceRequired       = errors.New("route source required")
 	ErrHTTPChallengeSinkRequired = errors.New("http challenge sink required")
 	ErrTLSRouteNotCovered        = errors.New("tls route not covered by public certificate")
 )

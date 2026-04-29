@@ -181,4 +181,81 @@ func TestCloudflareZoneResolverImplementsInterface(t *testing.T) {
 
 	// Check defaults
 	assert.Equal(t, "https://api.cloudflare.com/client/v4", r.baseURL)
+	assert.NotNil(t, r.client)
+	assert.Equal(t, defaultCloudflareTimeout, r.client.Timeout)
+}
+
+func TestWithCloudflareHTTPClientNilLeavesDefault(t *testing.T) {
+	// Passing nil must not replace the default HTTP client.
+	r := NewCloudflareZoneResolver("token", WithCloudflareHTTPClient(nil))
+	require.NotNil(t, r.client)
+	assert.Equal(t, defaultCloudflareTimeout, r.client.Timeout,
+		"default timeout should be preserved when nil is passed")
+}
+
+func TestCloudflareZoneResolverFindZoneLowercasesInput(t *testing.T) {
+	// The server expects lowercase names; uppercase input must be normalized.
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		name := r.URL.Query().Get("name")
+		assert.Equal(t, "example.com", name, "should receive lowercased domain, got %q", name)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(zoneAPIResponse{
+			Success: true,
+			Result: []zoneAPIResult{
+				{ID: "zone-1", Name: "example.com", Status: "active"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	resolver := NewCloudflareZoneResolver("test-token",
+		WithCloudflareBaseURL(server.URL))
+
+	// Uppercase input — should lowercase to EXAMPLE.COM -> example.com
+	zone, err := resolver.FindZone(context.Background(), "EXAMPLE.COM")
+	require.NoError(t, err)
+	assert.Equal(t, "zone-1", zone.ID)
+	assert.Equal(t, 1, callCount)
+}
+
+func TestCloudflareZoneResolverFindZoneMixedCaseWithTrailingDot(t *testing.T) {
+	// Mixed case with trailing dot should be lowercased and dot-stripped.
+	// The search chain tries "mixed.example.com" (empty), then "example.com" (found).
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		name := r.URL.Query().Get("name")
+		switch name {
+		case "mixed.example.com":
+			// No zone found for subdomain
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(zoneAPIResponse{
+				Success: true,
+				Result:  []zoneAPIResult{},
+			})
+		case "example.com":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(zoneAPIResponse{
+				Success: true,
+				Result: []zoneAPIResult{
+					{ID: "zone-1", Name: "example.com", Status: "active"},
+				},
+			})
+		default:
+			t.Errorf("unexpected zone name query: %s", name)
+		}
+	}))
+	defer server.Close()
+
+	resolver := NewCloudflareZoneResolver("test-token",
+		WithCloudflareBaseURL(server.URL))
+
+	zone, err := resolver.FindZone(context.Background(), "Mixed.EXAMPLE.Com.")
+	require.NoError(t, err)
+	assert.Equal(t, "zone-1", zone.ID)
+	// First call: mixed.example.com (empty), second: example.com (found)
+	assert.Equal(t, 2, callCount, "should try mixed.example.com then find example.com")
 }

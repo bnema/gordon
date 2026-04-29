@@ -76,7 +76,9 @@ func WithCloudflareBaseURL(baseURL string) CloudflareZoneResolverOption {
 // WithCloudflareHTTPClient sets the HTTP client for the resolver.
 func WithCloudflareHTTPClient(client *http.Client) CloudflareZoneResolverOption {
 	return func(r *CloudflareZoneResolver) {
-		r.client = client
+		if client != nil {
+			r.client = client
+		}
 	}
 }
 
@@ -103,6 +105,7 @@ var _ out.CloudflareZoneResolver = (*CloudflareZoneResolver)(nil)
 // example.com, com) and returns the first active zone found.
 func (r *CloudflareZoneResolver) FindZone(ctx context.Context, domainName string) (out.CloudflareZone, error) {
 	domainName = strings.TrimSuffix(strings.TrimSpace(domainName), ".")
+	domainName = strings.ToLower(domainName)
 	if domainName == "" {
 		return out.CloudflareZone{}, fmt.Errorf("cloudflare zone resolver: empty domain")
 	}

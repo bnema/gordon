@@ -32,6 +32,35 @@ func TestResolveEffectiveChallenge(t *testing.T) {
 		assert.Equal(t, "ACME disabled", ec.Reason)
 	})
 
+	t.Run("disabled preserves configured challenge in ConfiguredMode", func(t *testing.T) {
+		cfg := Config{Enabled: false, Challenge: "http-01"}
+		ec, err := ResolveEffectiveChallenge(context.Background(), cfg, nil)
+		require.NoError(t, err)
+		assert.Equal(t, domain.ACMEChallengeHTTP01, ec.ConfiguredMode, "should preserve http-01")
+		assert.Equal(t, domain.ACMEChallengeAuto, ec.Mode, "Mode should remain auto")
+		assert.Equal(t, domain.ACMETokenSourceNone, ec.TokenSource)
+		assert.Equal(t, "ACME disabled", ec.Reason)
+	})
+
+	t.Run("disabled preserves cloudflare-dns-01 in ConfiguredMode", func(t *testing.T) {
+		cfg := Config{Enabled: false, Challenge: "cloudflare-dns-01"}
+		ec, err := ResolveEffectiveChallenge(context.Background(), cfg, nil)
+		require.NoError(t, err)
+		assert.Equal(t, domain.ACMEChallengeCloudflareDNS01, ec.ConfiguredMode, "should preserve cloudflare-dns-01")
+		assert.Equal(t, domain.ACMEChallengeAuto, ec.Mode, "Mode should remain auto")
+		assert.Equal(t, domain.ACMETokenSourceNone, ec.TokenSource)
+		assert.Equal(t, "ACME disabled", ec.Reason)
+	})
+
+	t.Run("disabled with unparseable challenge defaults ConfiguredMode to auto", func(t *testing.T) {
+		cfg := Config{Enabled: false, Challenge: "unknown-challenge"}
+		ec, err := ResolveEffectiveChallenge(context.Background(), cfg, nil)
+		require.NoError(t, err)
+		assert.Equal(t, domain.ACMEChallengeAuto, ec.ConfiguredMode, "unparseable defaults to auto")
+		assert.Equal(t, domain.ACMEChallengeAuto, ec.Mode)
+		assert.Equal(t, "ACME disabled", ec.Reason)
+	})
+
 	t.Run("enabled requires non-empty email", func(t *testing.T) {
 		cfg := Config{Enabled: true, Email: "", TLSPort: 8443}
 		_, err := ResolveEffectiveChallenge(context.Background(), cfg, nil)
@@ -39,12 +68,18 @@ func TestResolveEffectiveChallenge(t *testing.T) {
 		assert.ErrorIs(t, err, domain.ErrACMEEmailRequired)
 	})
 
-	t.Run("enabled requires non-zero tls port", func(t *testing.T) {
+	t.Run("enabled requires valid tls port in 1..65535", func(t *testing.T) {
 		cfg := Config{Enabled: true, Email: "admin@example.com", TLSPort: 0}
 		_, err := ResolveEffectiveChallenge(context.Background(), cfg, nil)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
 		assert.Contains(t, err.Error(), "tls_port")
+
+		cfg2 := Config{Enabled: true, Email: "admin@example.com", TLSPort: 65536}
+		_, err2 := ResolveEffectiveChallenge(context.Background(), cfg2, nil)
+		require.Error(t, err2)
+		assert.ErrorIs(t, err2, domain.ErrACMEChallengeInvalid)
+		assert.Contains(t, err2.Error(), "tls_port")
 	})
 
 	t.Run("auto with cloudflare token returns dns-01", func(t *testing.T) {
@@ -76,11 +111,18 @@ func TestResolveEffectiveChallenge(t *testing.T) {
 		assert.ErrorIs(t, err, domain.ErrCloudflareTokenMissing)
 	})
 
-	t.Run("http-01 requires http port", func(t *testing.T) {
+	t.Run("http-01 requires valid http port in 1..65535", func(t *testing.T) {
 		cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "http-01", TLSPort: 8443, HTTPPort: 0}
 		_, err := ResolveEffectiveChallenge(context.Background(), cfg, nil)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
+		assert.Contains(t, err.Error(), "http_port")
+
+		cfg2 := Config{Enabled: true, Email: "admin@example.com", Challenge: "http-01", TLSPort: 8443, HTTPPort: 65536}
+		_, err2 := ResolveEffectiveChallenge(context.Background(), cfg2, nil)
+		require.Error(t, err2)
+		assert.ErrorIs(t, err2, domain.ErrACMEChallengeInvalid)
+		assert.Contains(t, err2.Error(), "http_port")
 	})
 
 	t.Run("cloudflare-dns-01 preserves resolver errors", func(t *testing.T) {

@@ -27,12 +27,21 @@ type EffectiveChallenge struct {
 	Reason         string
 }
 
+// validPort checks that port is in the valid TCP port range 1..65535.
+func validPort(p int) bool {
+	return p >= 1 && p <= 65535
+}
+
 // ResolveEffectiveChallenge resolves the effective ACME challenge configuration
 // from the given Config and optional token resolver.
 func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver out.SecretResolver) (EffectiveChallenge, error) {
 	if !cfg.Enabled {
+		configuredMode := domain.ACMEChallengeAuto
+		if parsed, err := domain.ParseACMEChallengeMode(cfg.Challenge); err == nil {
+			configuredMode = parsed
+		}
 		return EffectiveChallenge{
-			ConfiguredMode: domain.ACMEChallengeAuto,
+			ConfiguredMode: configuredMode,
 			Mode:           domain.ACMEChallengeAuto,
 			TokenSource:    domain.ACMETokenSourceNone,
 			Reason:         "ACME disabled",
@@ -43,8 +52,8 @@ func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver out.Sec
 		return EffectiveChallenge{}, domain.ErrACMEEmailRequired
 	}
 
-	if cfg.TLSPort == 0 {
-		return EffectiveChallenge{}, fmt.Errorf("%w: tls_port must be set", domain.ErrACMEChallengeInvalid)
+	if !validPort(cfg.TLSPort) {
+		return EffectiveChallenge{}, fmt.Errorf("%w: tls_port must be in range 1..65535", domain.ErrACMEChallengeInvalid)
 	}
 
 	parsedMode, err := domain.ParseACMEChallengeMode(cfg.Challenge)
@@ -54,8 +63,8 @@ func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver out.Sec
 
 	switch parsedMode {
 	case domain.ACMEChallengeHTTP01:
-		if cfg.HTTPPort == 0 {
-			return EffectiveChallenge{}, fmt.Errorf("%w: http_port must be set for http-01 challenge", domain.ErrACMEChallengeInvalid)
+		if !validPort(cfg.HTTPPort) {
+			return EffectiveChallenge{}, fmt.Errorf("%w: http_port must be in range 1..65535 for http-01 challenge", domain.ErrACMEChallengeInvalid)
 		}
 		return EffectiveChallenge{
 			ConfiguredMode: domain.ACMEChallengeHTTP01,
@@ -91,8 +100,8 @@ func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver out.Sec
 				Reason:         "auto selected cloudflare dns-01 (token available)",
 			}, nil
 		}
-		if cfg.HTTPPort == 0 {
-			return EffectiveChallenge{}, fmt.Errorf("%w: http_port must be set for http-01 fallback in auto mode", domain.ErrACMEChallengeInvalid)
+		if !validPort(cfg.HTTPPort) {
+			return EffectiveChallenge{}, fmt.Errorf("%w: http_port must be in range 1..65535 for http-01 fallback in auto mode", domain.ErrACMEChallengeInvalid)
 		}
 		return EffectiveChallenge{
 			ConfiguredMode: domain.ACMEChallengeAuto,

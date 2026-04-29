@@ -94,16 +94,10 @@ func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error
 	if s.deps.Issuer == nil {
 		return fmt.Errorf("certificate issuer is nil")
 	}
-	unlock, err := s.deps.Store.Lock(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire store lock: %w", err)
-	}
-	defer func() { _ = unlock() }()
 
-	// Collect due certs under lock, copying values before releasing the lock so
-	// renewal uses a stable snapshot even if the cache changes concurrently.
+	// Collect due certs from in-memory cache under s.mu (no store lock needed).
 	s.mu.Lock()
-	due := make([]out.StoredCertificate, 0)
+	due := make([]out.StoredCertificate, 0, len(s.certs))
 	for _, cert := range s.certs {
 		if ShouldRenew(*cert, now) {
 			due = append(due, *cert)
@@ -127,9 +121,24 @@ func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error
 			continue
 		}
 
-		if err := s.deps.Store.Save(ctx, *renewed); err != nil {
+		// Acquire store lock only around Save to avoid holding it across
+		// the potentially long-running Issuer.Renew call.
+		unlock, err := s.deps.Store.Lock(ctx)
+		if err != nil {
 			s.mu.Lock()
-			s.lastErr[cert.ID] = fmt.Sprintf("save renewed certificate: %v", err)
+			s.lastErr[cert.ID] = fmt.Sprintf("acquire store lock: %v", err)
+			s.mu.Unlock()
+			continue
+		}
+
+		saveErr := s.deps.Store.Save(ctx, *renewed)
+		if unlockErr := unlock(); unlockErr != nil {
+			s.log.Warn().Err(unlockErr).Msg("failed to release store lock")
+		}
+
+		if saveErr != nil {
+			s.mu.Lock()
+			s.lastErr[cert.ID] = fmt.Sprintf("save renewed certificate: %v", saveErr)
 			s.mu.Unlock()
 			continue
 		}

@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -27,8 +29,9 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 		},
 	}
 
-	// Mock zone resolver returns "example.com" zone.
-	zoneResolver := newZoneResolverMock(t, "example.com")
+	// Mock zone resolver returns "example.com" zone for 3 routes.
+	zoneResolver := outmocks.NewMockCloudflareZoneResolver(t)
+	zoneResolver.EXPECT().FindZone(mock.Anything, mock.Anything).Return(out.CloudflareZone{Name: "example.com"}, nil).Times(3)
 
 	// Mock issuer: returns valid stored cert for any order.
 	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
