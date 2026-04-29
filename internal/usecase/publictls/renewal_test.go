@@ -56,6 +56,20 @@ func TestShouldRenew(t *testing.T) {
 	}
 }
 
+func TestRenewDueCertificatesRequiresDependencies(t *testing.T) {
+	cfg := Config{Enabled: true}
+	svc := NewService(cfg, ServiceDeps{})
+
+	err := svc.renewDueCertificates(context.Background(), time.Now())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrCertificateStoreRequired)
+
+	svc.deps.Store, _ = newMockCertificateStore(t)
+	err = svc.renewDueCertificates(context.Background(), time.Now())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrCertificateIssuerRequired)
+}
+
 // ---------------------------------------------------------------------------
 // RenewalLoopStops
 // ---------------------------------------------------------------------------

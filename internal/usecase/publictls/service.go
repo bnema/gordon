@@ -91,17 +91,8 @@ func (s *Service) Load(ctx context.Context) error {
 
 	for i := range stored {
 		cert := &stored[i]
-		// If the tls.Certificate is empty but PEM data is available, parse it.
-		if len(cert.Certificate.Certificate) == 0 && len(cert.FullchainPEM) > 0 && len(cert.PrivateKeyPEM) > 0 {
-			parsed, parseErr := tls.X509KeyPair(cert.FullchainPEM, cert.PrivateKeyPEM)
-			if parseErr != nil {
-				s.lastErr[cert.ID] = fmt.Sprintf("parse stored certificate: %v", parseErr)
-				continue
-			}
-			cert.Certificate = parsed
-		}
-		if len(cert.Certificate.Certificate) == 0 {
-			s.lastErr[cert.ID] = "stored certificate is empty"
+		if parseErr := populateStoredCertificate(cert); parseErr != nil {
+			s.lastErr[cert.ID] = parseErr.Error()
 			continue
 		}
 		s.certs[cert.ID] = cert
@@ -116,16 +107,16 @@ func (s *Service) Load(ctx context.Context) error {
 // Reconcile ensures all desired certificates are obtained and cached.
 // If ACME is disabled, it is a no-op.
 func (s *Service) Reconcile(ctx context.Context) error {
-	if !s.cfg.Enabled {
-		s.log.Debug().Msg("acme disabled, skipping reconcile")
-		return nil
-	}
-
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "Reconcile",
 	})
 	log := zerowrap.FromCtx(ctx)
+
+	if !s.cfg.Enabled {
+		log.Debug().Msg("acme disabled, skipping reconcile")
+		return nil
+	}
 	log.Debug().Msg("starting certificate reconciliation")
 
 	if s.deps.Store == nil {
@@ -144,12 +135,11 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// Determine effective challenge mode.
 	effective := s.deps.Effective
 	if effective.Mode == "" {
-		// Derive conservatively from config.
-		mode, err := domain.ParseACMEChallengeMode(s.cfg.Challenge)
+		resolved, err := ResolveEffectiveChallenge(ctx, s.cfg, nil)
 		if err != nil {
-			mode = domain.ACMEChallengeHTTP01
+			return fmt.Errorf("resolve effective challenge: %w", err)
 		}
-		effective.Mode = mode
+		effective = resolved
 	}
 
 	// Get route hosts early to build required hosts set before target derivation.
@@ -214,6 +204,23 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+func populateStoredCertificate(cert *out.StoredCertificate) error {
+	if cert == nil {
+		return fmt.Errorf("stored certificate is nil")
+	}
+	if len(cert.Certificate.Certificate) == 0 && len(cert.FullchainPEM) > 0 && len(cert.PrivateKeyPEM) > 0 {
+		parsed, err := tls.X509KeyPair(cert.FullchainPEM, cert.PrivateKeyPEM)
+		if err != nil {
+			return fmt.Errorf("parse stored certificate: %w", err)
+		}
+		cert.Certificate = parsed
+	}
+	if len(cert.Certificate.Certificate) == 0 {
+		return fmt.Errorf("stored certificate is empty")
+	}
+	return nil
+}
+
 func canonicalHostSet(hosts []string) map[string]struct{} {
 	required := make(map[string]struct{}, len(hosts))
 	for _, host := range hosts {
@@ -256,6 +263,12 @@ func (s *Service) reconcileMissingTargets(ctx context.Context, missing []Certifi
 		if stored == nil {
 			s.mu.Lock()
 			s.lastErr[target.ID] = "obtain certificate returned nil"
+			s.mu.Unlock()
+			continue
+		}
+		if err := populateStoredCertificate(stored); err != nil {
+			s.mu.Lock()
+			s.lastErr[target.ID] = err.Error()
 			s.mu.Unlock()
 			continue
 		}

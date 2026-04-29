@@ -138,8 +138,78 @@ func TestStoreRejectsUnsafeID(t *testing.T) {
 			err = store.Save(ctx, cert)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "unsafe certificate id")
+			assert.ErrorIs(t, err, domain.ErrPathTraversal)
 		})
 	}
+}
+
+func TestStoreLockAcquireRelease(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	store, err := New(root)
+	require.NoError(t, err)
+
+	unlock, err := store.Lock(ctx)
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(root, lockFile))
+
+	_, err = store.Lock(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "lock already held")
+
+	require.NoError(t, unlock())
+	assert.NoFileExists(t, filepath.Join(root, lockFile))
+
+	unlock, err = store.Lock(ctx)
+	require.NoError(t, err)
+	require.NoError(t, unlock())
+}
+
+func TestStoreLockContextCanceled(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = store.Lock(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NoFileExists(t, filepath.Join(root, lockFile))
+}
+
+func TestStoreNewRestoresBackupDir(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	store, err := New(root)
+	require.NoError(t, err)
+
+	fullchainPEM, privKeyPEM := generateTestCertPEM(t)
+	cert := out.StoredCertificate{
+		ID:            "restore.example.com",
+		Names:         []string{"restore.example.com"},
+		Challenge:     domain.ACMEChallengeHTTP01,
+		CertPEM:       fullchainPEM,
+		FullchainPEM:  fullchainPEM,
+		PrivateKeyPEM: privKeyPEM,
+	}
+	require.NoError(t, store.Save(ctx, cert))
+
+	certPath := filepath.Join(root, certDir, cert.ID)
+	backupPath := certPath + ".old"
+	require.NoError(t, os.Rename(certPath, backupPath))
+	require.NoDirExists(t, certPath)
+
+	store, err = New(root)
+	require.NoError(t, err)
+	assert.DirExists(t, certPath)
+
+	certs, err := store.LoadAll(ctx)
+	require.NoError(t, err)
+	require.Len(t, certs, 1)
+	assert.Equal(t, cert.ID, certs[0].ID)
 }
 
 func TestStoreSaveLoadAccount(t *testing.T) {

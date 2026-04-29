@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -28,6 +29,8 @@ const (
 	lockFile      = ".lock"
 	accountFile   = "account.json"
 	certDir       = "certs"
+	backupSuffix  = ".old"
+	tempInfix     = ".tmp-"
 	certFile      = "cert.pem"
 	chainFile     = "chain.pem"
 	fullchainFile = "fullchain.pem"
@@ -41,6 +44,8 @@ const (
 	lockMode    os.FileMode = 0600
 	pemMode     os.FileMode = 0644
 )
+
+var ErrLockHeld = errors.New("acmestore: lock already held")
 
 // Store implements out.CertificateStore using the local filesystem.
 type Store struct {
@@ -56,8 +61,8 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, dirMode); err != nil {
 		return nil, fmt.Errorf("acmestore: mkdir root: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, certDir), dirMode); err != nil {
-		return nil, fmt.Errorf("acmestore: mkdir certs: %w", err)
+	if _, err := ensureCertsDir(root); err != nil {
+		return nil, err
 	}
 	return &Store{root: root}, nil
 }
@@ -114,7 +119,7 @@ func (s *Store) LoadAll(_ context.Context) ([]out.StoredCertificate, error) {
 			continue
 		}
 		// Skip temporary and backup directories created by Save.
-		if strings.Contains(id, ".tmp-") || strings.HasSuffix(id, ".old") {
+		if isStoreInternalCertDir(id) {
 			continue
 		}
 
@@ -186,12 +191,15 @@ func (s *Store) loadOne(id string) (*out.StoredCertificate, error) {
 // All PEM files and metadata are written atomically.
 func (s *Store) Save(_ context.Context, cert out.StoredCertificate) error {
 	if !safeID(cert.ID) {
-		return fmt.Errorf("acmestore: unsafe certificate id %q", cert.ID)
+		return fmt.Errorf("acmestore: unsafe certificate id %q: %w", cert.ID, domain.ErrPathTraversal)
 	}
 
-	parent := filepath.Join(s.root, certDir)
-	if err := os.MkdirAll(parent, dirMode); err != nil {
-		return fmt.Errorf("acmestore: mkdir certs: %w", err)
+	parent, err := ensureCertsDir(s.root)
+	if err != nil {
+		return err
+	}
+	if err := recoverCertificateDir(parent, cert.ID); err != nil {
+		return fmt.Errorf("acmestore: recover cert %s: %w", cert.ID, err)
 	}
 
 	dir := filepath.Join(parent, cert.ID)
@@ -210,7 +218,7 @@ func (s *Store) Save(_ context.Context, cert out.StoredCertificate) error {
 		return err
 	}
 
-	backupDir := dir + ".old"
+	backupDir := dir + backupSuffix
 	_ = os.RemoveAll(backupDir)
 	hadExisting := false
 	if err := os.Rename(dir, backupDir); err != nil {
@@ -266,11 +274,11 @@ func writeCertificateFiles(dir string, cert out.StoredCertificate) error {
 	return nil
 }
 
-// Lock acquires an exclusive lock using a lock file at <root>/.lock.
-// It is fail-fast and non-blocking: if the lock file already exists, Lock
-// returns an error immediately without waiting. Context cancellation is
-// respected before attempting the lock acquisition. The returned unlock
-// function removes the lock file to clean up.
+// Lock acquires an exclusive advisory lock using a lock file at <root>/.lock.
+// It is fail-fast and non-blocking: if another live process holds the lock,
+// Lock returns an error immediately without waiting. Context cancellation is
+// respected before attempting acquisition. The returned unlock function releases
+// the OS advisory lock, closes the file descriptor, and removes the lock file.
 func (s *Store) Lock(ctx context.Context) (func() error, error) {
 	select {
 	case <-ctx.Done():
@@ -279,24 +287,150 @@ func (s *Store) Lock(ctx context.Context) (func() error, error) {
 	}
 
 	path := filepath.Join(s.root, lockFile)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, lockMode)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, lockMode)
 	if err != nil {
-		if os.IsExist(err) {
-			return nil, fmt.Errorf("acmestore: lock already held")
+		return nil, fmt.Errorf("acmestore: open lock file: %w", err)
+	}
+
+	fd, err := fileDescriptor(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, ErrLockHeld
 		}
 		return nil, fmt.Errorf("acmestore: acquire lock: %w", err)
 	}
-	if err := f.Close(); err != nil {
-		os.Remove(path)
-		return nil, fmt.Errorf("acmestore: close lock file: %w", err)
+
+	if err := writeLockMetadata(f); err != nil {
+		_ = syscall.Flock(fd, syscall.LOCK_UN)
+		_ = f.Close()
+		return nil, err
 	}
 
 	return func() error {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("acmestore: release lock: %w", err)
-		}
-		return nil
+		return releaseLockFile(path, f, fd)
 	}, nil
+}
+
+func writeLockMetadata(f *os.File) error {
+	if err := f.Truncate(0); err != nil {
+		return fmt.Errorf("acmestore: truncate lock file: %w", err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return fmt.Errorf("acmestore: seek lock file: %w", err)
+	}
+	metadata := fmt.Sprintf("pid=%d\nhost=%s\ncreated_at=%s\n", os.Getpid(), hostname(), time.Now().UTC().Format(time.RFC3339Nano))
+	if _, err := f.WriteString(metadata); err != nil {
+		return fmt.Errorf("acmestore: write lock metadata: %w", err)
+	}
+	return nil
+}
+
+func releaseLockFile(path string, f *os.File, fd int) error {
+	var errs []error
+	if err := syscall.Flock(fd, syscall.LOCK_UN); err != nil {
+		errs = append(errs, fmt.Errorf("unlock: %w", err))
+	}
+	if err := f.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close: %w", err))
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, fmt.Errorf("remove: %w", err))
+	}
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("acmestore: release lock: %w", err)
+	}
+	return nil
+}
+
+func fileDescriptor(f *os.File) (int, error) {
+	fd := f.Fd()
+	if fd > uintptr(^uint(0)>>1) {
+		return 0, fmt.Errorf("acmestore: lock file descriptor overflows int")
+	}
+	return int(fd), nil
+}
+
+func hostname() string {
+	host, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return host
+}
+
+func ensureCertsDir(root string) (string, error) {
+	certsPath := filepath.Join(root, certDir)
+	if err := os.MkdirAll(certsPath, dirMode); err != nil {
+		return "", fmt.Errorf("acmestore: mkdir certs: %w", err)
+	}
+	if err := recoverCertificateDirs(certsPath); err != nil {
+		return "", fmt.Errorf("acmestore: recover certs: %w", err)
+	}
+	return certsPath, nil
+}
+
+func isStoreInternalTempDir(id string) bool {
+	return strings.Contains(id, tempInfix)
+}
+
+func isStoreInternalCertDir(id string) bool {
+	return isStoreInternalTempDir(id) || strings.HasSuffix(id, backupSuffix)
+}
+
+func recoverCertificateDir(certsPath, id string) error {
+	if !safeID(id) {
+		return nil
+	}
+	backupDir := filepath.Join(certsPath, id+backupSuffix)
+	dir := filepath.Join(certsPath, id)
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := os.Stat(backupDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.Rename(backupDir, dir); err != nil {
+		return fmt.Errorf("restore backup %s: %w", filepath.Base(backupDir), err)
+	}
+	return nil
+}
+
+func recoverCertificateDirs(certsPath string) error {
+	entries, err := os.ReadDir(certsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if isStoreInternalTempDir(name) {
+			if err := os.RemoveAll(filepath.Join(certsPath, name)); err != nil {
+				return fmt.Errorf("remove temp %s: %w", name, err)
+			}
+			continue
+		}
+		if base, ok := strings.CutSuffix(name, backupSuffix); ok {
+			if err := recoverCertificateDir(certsPath, base); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // safeID rejects IDs that could cause path traversal.

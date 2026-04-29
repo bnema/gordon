@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // renewalWindow is the window before certificate expiry when renewal should begin.
@@ -89,10 +90,10 @@ func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error
 		return nil
 	}
 	if s.deps.Store == nil {
-		return fmt.Errorf("certificate store is nil")
+		return fmt.Errorf("%w: certificate store is nil", domain.ErrCertificateStoreRequired)
 	}
 	if s.deps.Issuer == nil {
-		return fmt.Errorf("certificate issuer is nil")
+		return fmt.Errorf("%w: certificate issuer is nil", domain.ErrCertificateIssuerRequired)
 	}
 
 	// Collect due certs from in-memory cache under s.mu (no store lock needed).

@@ -309,6 +309,32 @@ func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 	assert.NotEmpty(t, stored[0].Certificate.Certificate)
 }
 
+func TestServiceReconcileResolvesMissingEffectiveChallenge(t *testing.T) {
+	ctx := context.Background()
+	routes := &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}}
+	issuer, _ := newMockPublicCertificateIssuer(t, nil, nil)
+	store, _ := newMockCertificateStore(t)
+	cfg := Config{
+		Enabled:   true,
+		Email:     "admin@example.com",
+		Challenge: "http-01",
+		HTTPPort:  8088,
+		// Missing TLSPort should be caught by ResolveEffectiveChallenge rather
+		// than silently defaulting an effective mode.
+	}
+
+	svc := NewService(cfg, ServiceDeps{
+		Config: cfg,
+		Routes: routes,
+		Issuer: issuer,
+		Store:  store,
+	})
+
+	err := svc.Reconcile(ctx)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
+}
+
 func TestServiceStatusReportsCoverage(t *testing.T) {
 	ctx := context.Background()
 
