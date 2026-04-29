@@ -548,7 +548,7 @@ func (si *serviceInit) initPublicTLS() error {
 	}
 
 	if si.cfg.Server.TLSPort == 0 {
-		return nil
+		return fmt.Errorf("%w: tls.acme.enabled requires server.tls_port > 0", domain.ErrACMEChallengeInvalid)
 	}
 
 	ctx := si.ctx
@@ -2777,7 +2777,7 @@ func (s *certificateSelector) GetCertificate(hello *tls.ClientHelloInfo) (*tls.C
 
 	// 2. Public ACME TLS.
 	if s.publicTLS != nil {
-		cert, err := s.publicTLS.GetCertificate(hello)
+		cert, err := s.publicTLS.GetCertificateForHost(hello.ServerName)
 		if err != nil {
 			return nil, err
 		}
@@ -2812,7 +2812,10 @@ func prepareStaticTLSCertificates(certs []tls.Certificate) []staticTLSCertificat
 
 func matchingPreparedStaticCert(certs []staticTLSCertificate, serverName string) *tls.Certificate {
 	if serverName == "" {
-		return nil
+		if len(certs) == 0 {
+			return nil
+		}
+		return &certs[0].cert
 	}
 	for i := range certs {
 		if certs[i].leaf == nil {

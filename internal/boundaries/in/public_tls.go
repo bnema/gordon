@@ -12,8 +12,8 @@ import (
 
 // PublicTLSService defines the contract for public TLS / ACME certificate management.
 type PublicTLSService interface {
-	// GetCertificate returns a TLS certificate for the given ClientHello.
-	GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error)
+	// GetCertificateForHost returns a TLS certificate for the given SNI host.
+	GetCertificateForHost(host string) (*tls.Certificate, error)
 
 	// GetHTTP01Challenge returns the key authorization for an HTTP-01 challenge token.
 	GetHTTP01Challenge(ctx context.Context, token string) (keyAuth string, ok bool)

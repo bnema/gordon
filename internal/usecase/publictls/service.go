@@ -26,7 +26,7 @@ type ServiceDeps struct {
 	Routes       RouteSource
 	Issuer       out.PublicCertificateIssuer
 	Store        out.CertificateStore
-	ZoneResolver zoneResolver
+	ZoneResolver out.CloudflareZoneResolver
 	Challenges   *HTTP01Challenges
 	Effective    EffectiveChallenge
 	Log          zerowrap.Logger
@@ -85,14 +85,23 @@ func (s *Service) Load(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.certs = make(map[string]*out.StoredCertificate, len(stored))
+	s.lastErr = make(map[string]string)
+
 	for i := range stored {
 		cert := &stored[i]
 		// If the tls.Certificate is empty but PEM data is available, parse it.
 		if len(cert.Certificate.Certificate) == 0 && len(cert.FullchainPEM) > 0 && len(cert.PrivateKeyPEM) > 0 {
 			parsed, parseErr := tls.X509KeyPair(cert.FullchainPEM, cert.PrivateKeyPEM)
-			if parseErr == nil {
-				cert.Certificate = parsed
+			if parseErr != nil {
+				s.lastErr[cert.ID] = fmt.Sprintf("parse stored certificate: %v", parseErr)
+				continue
 			}
+			cert.Certificate = parsed
+		}
+		if len(cert.Certificate.Certificate) == 0 {
+			s.lastErr[cert.ID] = "stored certificate is empty"
+			continue
 		}
 		s.certs[cert.ID] = cert
 		if cert.LastError != "" {
@@ -122,6 +131,10 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		log.Warn().Msg("certificate issuer is nil, cannot reconcile")
 		return fmt.Errorf("certificate issuer is nil")
 	}
+	if s.deps.Routes == nil {
+		log.Warn().Msg("route source is nil, cannot reconcile")
+		return fmt.Errorf("route source is nil")
+	}
 
 	// Determine effective challenge mode.
 	effective := s.deps.Effective
@@ -142,13 +155,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	hosts := routeHosts(routes, external)
 
 	// Build required hosts set from route hosts (before target derivation).
-	required := make(map[string]struct{})
-	for _, host := range hosts {
-		host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-		if host != "" {
-			required[host] = struct{}{}
-		}
-	}
+	required := canonicalHostSet(hosts)
 
 	// Set requiredHosts before DeriveCertificateTargets so GetCertificate
 	// returns ErrTLSRouteNotCovered if target derivation/issuer fails.
@@ -168,14 +175,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// Merge target names into required hosts set.
 	// For DNS-01 wildcard targets, this adds wildcard entries as well;
 	// the exact route hosts already present suffice for isRequiredHostLocked.
-	for _, t := range targets {
-		for _, name := range t.Names {
-			name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
-			if name != "" {
-				required[name] = struct{}{}
-			}
-		}
-	}
+	addTargetNames(required, targets)
 
 	// Acquire store lock to serialise certificate operations.
 	unlock, err := s.deps.Store.Lock(ctx)
@@ -205,6 +205,28 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+func canonicalHostSet(hosts []string) map[string]struct{} {
+	required := make(map[string]struct{}, len(hosts))
+	for _, host := range hosts {
+		host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+		if host != "" {
+			required[host] = struct{}{}
+		}
+	}
+	return required
+}
+
+func addTargetNames(required map[string]struct{}, targets []CertificateTarget) {
+	for _, t := range targets {
+		for _, name := range t.Names {
+			name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
+			if name != "" {
+				required[name] = struct{}{}
+			}
+		}
+	}
+}
+
 // reconcileMissingTargets obtains and saves certificates for each missing
 // target. Called without s.mu held so network I/O does not block readers.
 func (s *Service) reconcileMissingTargets(ctx context.Context, missing []CertificateTarget) {
@@ -218,14 +240,20 @@ func (s *Service) reconcileMissingTargets(ctx context.Context, missing []Certifi
 		stored, err := s.deps.Issuer.Obtain(ctx, order)
 		if err != nil {
 			s.mu.Lock()
-			s.lastErr[target.ID] = "obtain certificate failed"
+			s.lastErr[target.ID] = fmt.Sprintf("obtain certificate: %v", err)
+			s.mu.Unlock()
+			continue
+		}
+		if stored == nil {
+			s.mu.Lock()
+			s.lastErr[target.ID] = "obtain certificate returned nil"
 			s.mu.Unlock()
 			continue
 		}
 
 		if err := s.deps.Store.Save(ctx, *stored); err != nil {
 			s.mu.Lock()
-			s.lastErr[target.ID] = "save certificate failed"
+			s.lastErr[target.ID] = fmt.Sprintf("save certificate: %v", err)
 			s.mu.Unlock()
 			continue
 		}
@@ -273,14 +301,14 @@ func hostMatchesCert(names []string, host string) bool {
 	return domain.CertificateNamesCoverHost(names, host)
 }
 
-// GetCertificate returns a TLS certificate for the given ClientHello.
+// GetCertificateForHost returns a TLS certificate for the given SNI host.
 //
 // If the SNI host does not require ACME coverage, returns nil, nil.
 // If ACME is required but no cert covers the host, returns
 // ErrTLSRouteNotCovered.
 // If a valid cert is found, returns a pointer to it.
-func (s *Service) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hello.ServerName)), ".")
+func (s *Service) GetCertificateForHost(host string) (*tls.Certificate, error) {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if host == "" {
 		return nil, nil
 	}

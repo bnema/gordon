@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -53,34 +55,56 @@ func (f *fakeRoutes) GetExternalRoutes() map[string]string {
 	return out
 }
 
-// fakeIssuer is a hand-rolled implementation of out.PublicCertificateIssuer
-// that records issued orders and delegates to pluggable obtain/renew
-// functions. Generated mocks are less convenient here because the test needs
-// to inspect captured orders after the call completes — a real slice on the
-// fake avoids mock expectation boilerplate.
-type fakeIssuer struct {
-	mu      sync.Mutex
-	orders  []out.CertificateOrder // recorded orders
-	obtain  func(ctx context.Context, order out.CertificateOrder) (*out.StoredCertificate, error)
-	renewFn func(ctx context.Context, cert out.StoredCertificate) (*out.StoredCertificate, error)
+type mockIssuerRecorder struct {
+	mu     sync.Mutex
+	orders []out.CertificateOrder
 }
 
-func (f *fakeIssuer) Obtain(ctx context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
-	f.mu.Lock()
-	f.orders = append(f.orders, order)
-	f.mu.Unlock()
-	if f.obtain != nil {
-		return f.obtain(ctx, order)
-	}
-	// Default: return a valid certificate.
-	return defaultStoredCert(order)
+func (r *mockIssuerRecorder) record(order out.CertificateOrder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.orders = append(r.orders, order)
 }
 
-func (f *fakeIssuer) Renew(ctx context.Context, cert out.StoredCertificate) (*out.StoredCertificate, error) {
-	if f.renewFn != nil {
-		return f.renewFn(ctx, cert)
-	}
-	return &cert, nil
+func (r *mockIssuerRecorder) Orders() []out.CertificateOrder {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	orders := make([]out.CertificateOrder, len(r.orders))
+	copy(orders, r.orders)
+	return orders
+}
+
+func newMockPublicCertificateIssuer(
+	t *testing.T,
+	obtain func(context.Context, out.CertificateOrder) (*out.StoredCertificate, error),
+	renew func(context.Context, out.StoredCertificate) (*out.StoredCertificate, error),
+) (*outmocks.MockPublicCertificateIssuer, *mockIssuerRecorder) {
+	t.Helper()
+	recorder := &mockIssuerRecorder{}
+	issuer := outmocks.NewMockPublicCertificateIssuer(t)
+
+	obtainCall := issuer.EXPECT().Obtain(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
+			recorder.record(order)
+			if obtain != nil {
+				return obtain(ctx, order)
+			}
+			return defaultStoredCert(order)
+		},
+	)
+	obtainCall.Maybe()
+
+	renewCall := issuer.EXPECT().Renew(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, cert out.StoredCertificate) (*out.StoredCertificate, error) {
+			if renew != nil {
+				return renew(ctx, cert)
+			}
+			return &cert, nil
+		},
+	)
+	renewCall.Maybe()
+
+	return issuer, recorder
 }
 
 // defaultStoredCert creates a StoredCertificate with a self-signed TLS cert
@@ -105,65 +129,68 @@ func defaultStoredCert(order out.CertificateOrder) (*out.StoredCertificate, erro
 	}, nil
 }
 
-// fakeStore is a hand-rolled implementation of out.CertificateStore that
-// manages certificates in memory with copy-on-read semantics and a separate
-// lock for Lock() to avoid deadlock with the data mutex. Generated mocks
-// cannot easily replicate the Lock/unlock lifecycle used in Reconcile.
-type fakeStore struct {
-	mu       sync.Mutex
-	lockMu   sync.Mutex // separate lock for Lock()/unlock to avoid deadlock with mu
-	account  *out.ACMEAccount
-	certs    []out.StoredCertificate
-	lockHold bool
+type mockCertificateStoreState struct {
+	mu      sync.Mutex
+	account *out.ACMEAccount
+	certs   []out.StoredCertificate
 }
 
-func (f *fakeStore) LoadAccount(_ context.Context) (*out.ACMEAccount, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.account == nil {
-		return nil, nil
-	}
-	acct := *f.account
-	return &acct, nil
+func (s *mockCertificateStoreState) All() []out.StoredCertificate {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	certs := make([]out.StoredCertificate, len(s.certs))
+	copy(certs, s.certs)
+	return certs
 }
 
-func (f *fakeStore) SaveAccount(_ context.Context, account out.ACMEAccount) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	acct := account
-	f.account = &acct
-	return nil
-}
+func newMockCertificateStore(t *testing.T, initial ...out.StoredCertificate) (*outmocks.MockCertificateStore, *mockCertificateStoreState) {
+	t.Helper()
+	state := &mockCertificateStoreState{certs: append([]out.StoredCertificate(nil), initial...)}
+	store := outmocks.NewMockCertificateStore(t)
 
-func (f *fakeStore) LoadAll(_ context.Context) ([]out.StoredCertificate, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]out.StoredCertificate, len(f.certs))
-	copy(out, f.certs)
-	return out, nil
-}
-
-func (f *fakeStore) Save(_ context.Context, cert out.StoredCertificate) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for i, c := range f.certs {
-		if c.ID == cert.ID {
-			f.certs[i] = cert
-			return nil
+	loadAccountCall := store.EXPECT().LoadAccount(mock.Anything).RunAndReturn(func(context.Context) (*out.ACMEAccount, error) {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.account == nil {
+			return nil, nil
 		}
-	}
-	f.certs = append(f.certs, cert)
-	return nil
-}
+		account := *state.account
+		return &account, nil
+	})
+	loadAccountCall.Maybe()
 
-func (f *fakeStore) Lock(_ context.Context) (func() error, error) {
-	f.lockMu.Lock()
-	f.lockHold = true
-	return func() error {
-		f.lockHold = false
-		f.lockMu.Unlock()
+	saveAccountCall := store.EXPECT().SaveAccount(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, account out.ACMEAccount) error {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		accountCopy := account
+		state.account = &accountCopy
 		return nil
-	}, nil
+	})
+	saveAccountCall.Maybe()
+
+	loadAllCall := store.EXPECT().LoadAll(mock.Anything).RunAndReturn(func(context.Context) ([]out.StoredCertificate, error) {
+		return state.All(), nil
+	})
+	loadAllCall.Maybe()
+
+	saveCall := store.EXPECT().Save(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, cert out.StoredCertificate) error {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		for i, existing := range state.certs {
+			if existing.ID == cert.ID {
+				state.certs[i] = cert
+				return nil
+			}
+		}
+		state.certs = append(state.certs, cert)
+		return nil
+	})
+	saveCall.Maybe()
+
+	lockCall := store.EXPECT().Lock(mock.Anything).Return(func() error { return nil }, nil)
+	lockCall.Maybe()
+
+	return store, state
 }
 
 // ---------------------------------------------------------------------------
@@ -232,8 +259,8 @@ func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 			{Domain: "app.example.com"},
 		},
 	}
-	issuer := &fakeIssuer{}
-	store := &fakeStore{}
+	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
+	store, storeState := newMockCertificateStore(t)
 
 	cfg := Config{
 		Enabled:   true,
@@ -266,10 +293,7 @@ func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the issuer received exactly one order.
-	issuer.mu.Lock()
-	orders := make([]out.CertificateOrder, len(issuer.orders))
-	copy(orders, issuer.orders)
-	issuer.mu.Unlock()
+	orders := recorder.Orders()
 
 	require.Len(t, orders, 1, "expected one order to be placed")
 	assert.Equal(t, "http01-app.example.com", orders[0].ID)
@@ -277,8 +301,7 @@ func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 	assert.Equal(t, domain.ACMEChallengeHTTP01, orders[0].Challenge)
 
 	// Verify the store has the saved certificate.
-	stored, err := store.LoadAll(ctx)
-	require.NoError(t, err)
+	stored := storeState.All()
 	require.Len(t, stored, 1)
 	assert.Equal(t, "http01-app.example.com", stored[0].ID)
 	assert.Equal(t, []string{"app.example.com"}, stored[0].Names)
@@ -295,19 +318,15 @@ func TestServiceStatusReportsCoverage(t *testing.T) {
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err)
 
-	store := &fakeStore{
-		certs: []out.StoredCertificate{
-			{
-				ID:            "http01-app.example.com",
-				Names:         []string{"app.example.com"},
-				Challenge:     domain.ACMEChallengeHTTP01,
-				Certificate:   tlsCert,
-				FullchainPEM:  certPEM,
-				PrivateKeyPEM: keyPEM,
-				NotAfter:      time.Now().Add(90 * 24 * time.Hour),
-			},
-		},
-	}
+	store, _ := newMockCertificateStore(t, out.StoredCertificate{
+		ID:            "http01-app.example.com",
+		Names:         []string{"app.example.com"},
+		Challenge:     domain.ACMEChallengeHTTP01,
+		Certificate:   tlsCert,
+		FullchainPEM:  certPEM,
+		PrivateKeyPEM: keyPEM,
+		NotAfter:      time.Now().Add(90 * 24 * time.Hour),
+	})
 
 	routes := &fakeRoutes{
 		routes: []domain.Route{
@@ -364,13 +383,11 @@ func TestServiceGetCertificateReturnsErrTLSRouteNotCovered(t *testing.T) {
 			{Domain: "app.example.com"},
 		},
 	}
-	issuer := &fakeIssuer{
-		// Make Obtain fail so no cert is cached.
-		obtain: func(_ context.Context, _ out.CertificateOrder) (*out.StoredCertificate, error) {
-			return nil, fmt.Errorf("acme provider unavailable")
-		},
-	}
-	store := &fakeStore{}
+	// Make Obtain fail so no cert is cached.
+	issuer, _ := newMockPublicCertificateIssuer(t, func(_ context.Context, _ out.CertificateOrder) (*out.StoredCertificate, error) {
+		return nil, fmt.Errorf("acme provider unavailable")
+	}, nil)
+	store, _ := newMockCertificateStore(t)
 
 	cfg := Config{
 		Enabled:   true,
@@ -402,8 +419,8 @@ func TestServiceGetCertificateReturnsErrTLSRouteNotCovered(t *testing.T) {
 	err = svc.Reconcile(ctx)
 	require.NoError(t, err) // Reconcile swallows per-target obtain errors
 
-	// GetCertificate for app.example.com should return ErrTLSRouteNotCovered.
-	_, err = svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "app.example.com"})
+	// GetCertificateForHost for app.example.com should return ErrTLSRouteNotCovered.
+	_, err = svc.GetCertificateForHost("app.example.com")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrTLSRouteNotCovered)
 	assert.Contains(t, err.Error(), "app.example.com")
@@ -424,8 +441,8 @@ func TestServiceReconcileDNS01BrokenResolverReturnsErrTLSRouteNotCovered(t *test
 			{Domain: "app.example.com"},
 		},
 	}
-	issuer := &fakeIssuer{}
-	store := &fakeStore{}
+	issuer, _ := newMockPublicCertificateIssuer(t, nil, nil)
+	store, _ := newMockCertificateStore(t)
 
 	cfg := Config{
 		Enabled:   true,
@@ -459,10 +476,10 @@ func TestServiceReconcileDNS01BrokenResolverReturnsErrTLSRouteNotCovered(t *test
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "derive certificate targets")
 
-	// GetCertificate for the configured route should return ErrTLSRouteNotCovered,
+	// GetCertificateForHost for the configured route should return ErrTLSRouteNotCovered,
 	// not nil,nil, because requiredHosts was set from route hosts before
 	// the failed DeriveCertificateTargets call.
-	_, err = svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "app.example.com"})
+	_, err = svc.GetCertificateForHost("app.example.com")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrTLSRouteNotCovered)
 	assert.Contains(t, err.Error(), "app.example.com")
@@ -476,19 +493,15 @@ func TestServiceLoadParsesPEMIntoTLSCertificate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Store a cert with PEM data but empty tls.Certificate.
-	store := &fakeStore{
-		certs: []out.StoredCertificate{
-			{
-				ID:            "http01-test.example.com",
-				Names:         []string{"test.example.com"},
-				Challenge:     domain.ACMEChallengeHTTP01,
-				FullchainPEM:  certPEM,
-				PrivateKeyPEM: keyPEM,
-				NotAfter:      time.Now().Add(90 * 24 * time.Hour),
-				// Certificate field is zero — will be populated by Load.
-			},
-		},
-	}
+	store, _ := newMockCertificateStore(t, out.StoredCertificate{
+		ID:            "http01-test.example.com",
+		Names:         []string{"test.example.com"},
+		Challenge:     domain.ACMEChallengeHTTP01,
+		FullchainPEM:  certPEM,
+		PrivateKeyPEM: keyPEM,
+		NotAfter:      time.Now().Add(90 * 24 * time.Hour),
+		// Certificate field is zero — will be populated by Load.
+	})
 
 	routes := &fakeRoutes{}
 	cfg := Config{Enabled: true}
@@ -525,20 +538,16 @@ func TestServiceStatusRedactsSensitiveStrings(t *testing.T) {
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err)
 
-	store := &fakeStore{
-		certs: []out.StoredCertificate{
-			{
-				ID:            "http01-app.example.com",
-				Names:         []string{"app.example.com"},
-				Challenge:     domain.ACMEChallengeHTTP01,
-				Certificate:   tlsCert,
-				FullchainPEM:  certPEM,
-				PrivateKeyPEM: keyPEM,
-				NotAfter:      time.Now().Add(90 * 24 * time.Hour),
-				LastError:     "failed to obtain: token=sk-secret-goes-here provider said invalid",
-			},
-		},
-	}
+	store, _ := newMockCertificateStore(t, out.StoredCertificate{
+		ID:            "http01-app.example.com",
+		Names:         []string{"app.example.com"},
+		Challenge:     domain.ACMEChallengeHTTP01,
+		Certificate:   tlsCert,
+		FullchainPEM:  certPEM,
+		PrivateKeyPEM: keyPEM,
+		NotAfter:      time.Now().Add(90 * 24 * time.Hour),
+		LastError:     "failed to obtain: token=sk-secret-goes-here provider said invalid",
+	})
 
 	routes := &fakeRoutes{
 		routes: []domain.Route{

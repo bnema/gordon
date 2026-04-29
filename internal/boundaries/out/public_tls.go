@@ -51,6 +51,16 @@ type CloudflareZone struct {
 	Name string
 }
 
+// HTTPChallengeSink defines the contract for storing HTTP-01 challenge tokens
+// while an ACME issuer completes domain validation.
+type HTTPChallengeSink interface {
+	// Present stores the key authorization for a challenge token.
+	Present(token, keyAuth string)
+
+	// CleanUp removes the key authorization for a challenge token.
+	CleanUp(token string)
+}
+
 // PublicCertificateIssuer defines the contract for obtaining and renewing
 // TLS certificates via ACME.
 type PublicCertificateIssuer interface {

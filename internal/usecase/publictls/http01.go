@@ -2,10 +2,8 @@ package publictls
 
 import (
 	"context"
-	"log/slog"
+	"strings"
 	"sync"
-
-	"github.com/bnema/gordon/internal/domain"
 )
 
 // HTTP01Challenges stores ACME HTTP-01 challenge tokens and their key
@@ -26,7 +24,6 @@ func NewHTTP01Challenges() *HTTP01Challenges {
 // ignores unsafe tokens (see safeHTTP01Token) and empty keyAuth values.
 func (c *HTTP01Challenges) Present(token, keyAuth string) {
 	if !safeHTTP01Token(token) || keyAuth == "" {
-		slog.Debug("http01: rejected Present for unsafe token or empty keyAuth")
 		return
 	}
 	c.mu.Lock()
@@ -55,8 +52,8 @@ func (c *HTTP01Challenges) Get(_ context.Context, token string) (string, bool) {
 }
 
 // safeHTTP01Token validates an ACME HTTP-01 challenge token.
-// It rejects empty tokens, tokens containing "/" or "\", and tokens
-// equal to "..", which could allow path traversal.
+// It rejects empty tokens, tokens containing "/", "\", "..", or NUL,
+// which could allow path traversal or invalid challenge paths.
 func safeHTTP01Token(token string) bool {
-	return domain.SafePathComponent(token)
+	return token != "" && !strings.Contains(token, "/") && !strings.Contains(token, "\\") && !strings.Contains(token, "..") && !strings.Contains(token, "\x00")
 }

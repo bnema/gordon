@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -184,11 +185,52 @@ func (s *Store) Save(_ context.Context, cert out.StoredCertificate) error {
 		return fmt.Errorf("acmestore: unsafe certificate id %q", cert.ID)
 	}
 
-	dir := filepath.Join(s.root, certDir, cert.ID)
-	if err := os.MkdirAll(dir, dirMode); err != nil {
-		return fmt.Errorf("acmestore: mkdir %s: %w", cert.ID, err)
+	parent := filepath.Join(s.root, certDir)
+	if err := os.MkdirAll(parent, dirMode); err != nil {
+		return fmt.Errorf("acmestore: mkdir certs: %w", err)
 	}
 
+	dir := filepath.Join(parent, cert.ID)
+	tmpDir, err := os.MkdirTemp(parent, cert.ID+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("acmestore: create temp dir: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			os.RemoveAll(tmpDir)
+		}
+	}()
+
+	if err := writeCertificateFiles(tmpDir, cert); err != nil {
+		return err
+	}
+
+	backupDir := dir + ".old"
+	_ = os.RemoveAll(backupDir)
+	hadExisting := false
+	if err := os.Rename(dir, backupDir); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("acmestore: backup existing cert dir: %w", err)
+		}
+	} else {
+		hadExisting = true
+	}
+
+	if err := os.Rename(tmpDir, dir); err != nil {
+		if hadExisting {
+			_ = os.Rename(backupDir, dir)
+		}
+		return fmt.Errorf("acmestore: commit cert dir: %w", err)
+	}
+	committed = true
+	if hadExisting {
+		_ = os.RemoveAll(backupDir)
+	}
+	return nil
+}
+
+func writeCertificateFiles(dir string, cert out.StoredCertificate) error {
 	meta := certMetadata{
 		ID:        cert.ID,
 		Names:     cert.Names,
@@ -217,7 +259,6 @@ func (s *Store) Save(_ context.Context, cert out.StoredCertificate) error {
 	if err := writeAtomic(filepath.Join(dir, metaFile), metaData, metaMode); err != nil {
 		return fmt.Errorf("acmestore: write metadata: %w", err)
 	}
-
 	return nil
 }
 
@@ -255,7 +296,7 @@ func (s *Store) Lock(ctx context.Context) (func() error, error) {
 
 // safeID rejects IDs that could cause path traversal.
 func safeID(id string) bool {
-	return domain.SafePathComponent(id)
+	return id != "" && !strings.Contains(id, "/") && !strings.Contains(id, "\\") && !strings.Contains(id, "..") && !strings.Contains(id, "\x00")
 }
 
 // writeAtomic writes data to path atomically by writing to a temporary file

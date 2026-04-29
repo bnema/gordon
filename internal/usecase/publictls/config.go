@@ -19,11 +19,6 @@ type Config struct {
 	DataDir   string
 }
 
-// tokenResolver resolves Cloudflare API tokens.
-type tokenResolver interface {
-	ResolveCloudflareToken(ctx context.Context) (out.SecretValue, error)
-}
-
 // EffectiveChallenge represents the resolved ACME challenge configuration.
 type EffectiveChallenge struct {
 	ConfiguredMode domain.ACMEChallengeMode
@@ -35,7 +30,7 @@ type EffectiveChallenge struct {
 
 // ResolveEffectiveChallenge resolves the effective ACME challenge configuration
 // from the given Config and optional token resolver.
-func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver tokenResolver) (EffectiveChallenge, error) {
+func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver out.SecretResolver) (EffectiveChallenge, error) {
 	if !cfg.Enabled {
 		return EffectiveChallenge{
 			ConfiguredMode: domain.ACMEChallengeAuto,
@@ -114,7 +109,7 @@ func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver tokenRe
 
 // resolveOptionalToken resolves the Cloudflare token, ignoring resolver errors.
 // If the resolver is nil or returns an empty token, the result is empty with source none.
-func resolveOptionalToken(ctx context.Context, resolver tokenResolver) (string, domain.ACMETokenSource) {
+func resolveOptionalToken(ctx context.Context, resolver out.SecretResolver) (string, domain.ACMETokenSource) {
 	if resolver == nil {
 		return "", domain.ACMETokenSourceNone
 	}
@@ -131,7 +126,7 @@ func resolveOptionalToken(ctx context.Context, resolver tokenResolver) (string, 
 
 // resolveToken resolves the Cloudflare token via the resolver, propagating errors.
 // Returns empty token and none source if resolver is nil.
-func resolveToken(ctx context.Context, resolver tokenResolver) (string, domain.ACMETokenSource, error) {
+func resolveToken(ctx context.Context, resolver out.SecretResolver) (string, domain.ACMETokenSource, error) {
 	if resolver == nil {
 		return "", domain.ACMETokenSourceNone, nil
 	}

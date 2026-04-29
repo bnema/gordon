@@ -3,7 +3,6 @@ package admin
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2587,37 +2586,9 @@ func TestHandler_Images_Authorization(t *testing.T) {
 	})
 }
 
-// fakeTLSService is a minimal in.PublicTLSService implementation for testing.
-type fakeTLSService struct {
-	statusFunc func(ctx context.Context) domain.PublicTLSStatus
-}
-
-func (f *fakeTLSService) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	return nil, nil
-}
-
-func (f *fakeTLSService) GetHTTP01Challenge(ctx context.Context, token string) (string, bool) {
-	return "", false
-}
-
-func (f *fakeTLSService) Status(ctx context.Context) domain.PublicTLSStatus {
-	if f.statusFunc != nil {
-		return f.statusFunc(ctx)
-	}
-	return domain.PublicTLSStatus{}
-}
-
-func (f *fakeTLSService) Reconcile(ctx context.Context) error {
-	return nil
-}
-
-func (f *fakeTLSService) Stop(ctx context.Context) error {
-	return nil
-}
-
 func TestHandler_TLSStatus_RequiresStatusReadScope(t *testing.T) {
 	handler := newTestHandler(t, func(d *HandlerDeps) {
-		d.PublicTLSSvc = &fakeTLSService{}
+		d.PublicTLSSvc = inmocks.NewMockPublicTLSService(t)
 	})
 
 	req := httptest.NewRequest("GET", "/admin/tls/status", nil)
@@ -2632,36 +2603,34 @@ func TestHandler_TLSStatus_RequiresStatusReadScope(t *testing.T) {
 
 func TestHandler_TLSStatus_GETReturnsJSON(t *testing.T) {
 	now := time.Now()
-	fakeSvc := &fakeTLSService{
-		statusFunc: func(ctx context.Context) domain.PublicTLSStatus {
-			return domain.PublicTLSStatus{
-				ACMEEnabled:     true,
-				ConfiguredMode:  domain.ACMEChallengeAuto,
-				EffectiveMode:   domain.ACMEChallengeHTTP01,
-				SelectionReason: "auto-selected",
-				TokenSource:     domain.ACMETokenSourcePass,
-				Certificates: []domain.ManagedCertificate{
-					{
-						ID:        "cert-1",
-						Names:     []string{"example.com"},
-						Challenge: domain.ACMEChallengeHTTP01,
-						Status:    domain.TLSCertificateStatusValid,
-						NotAfter:  now.Add(60 * 24 * time.Hour),
-					},
-				},
-				Routes: []domain.TLSRouteCoverage{
-					{
-						Domain:       "example.com",
-						Covered:      true,
-						CoveredBy:    "cert-1",
-						RequiredACME: true,
-					},
-				},
-			}
+	tlsStatus := domain.PublicTLSStatus{
+		ACMEEnabled:     true,
+		ConfiguredMode:  domain.ACMEChallengeAuto,
+		EffectiveMode:   domain.ACMEChallengeHTTP01,
+		SelectionReason: "auto-selected",
+		TokenSource:     domain.ACMETokenSourcePass,
+		Certificates: []domain.ManagedCertificate{
+			{
+				ID:        "cert-1",
+				Names:     []string{"example.com"},
+				Challenge: domain.ACMEChallengeHTTP01,
+				Status:    domain.TLSCertificateStatusValid,
+				NotAfter:  now.Add(60 * 24 * time.Hour),
+			},
+		},
+		Routes: []domain.TLSRouteCoverage{
+			{
+				Domain:       "example.com",
+				Covered:      true,
+				CoveredBy:    "cert-1",
+				RequiredACME: true,
+			},
 		},
 	}
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
+		fakeSvc := inmocks.NewMockPublicTLSService(t)
+		fakeSvc.EXPECT().Status(mock.Anything).Return(tlsStatus)
 		d.PublicTLSSvc = fakeSvc
 	})
 
@@ -2692,7 +2661,7 @@ func TestHandler_TLSStatus_GETReturnsJSON(t *testing.T) {
 
 func TestHandler_TLSStatus_POSTReturns405(t *testing.T) {
 	handler := newTestHandler(t, func(d *HandlerDeps) {
-		d.PublicTLSSvc = &fakeTLSService{}
+		d.PublicTLSSvc = inmocks.NewMockPublicTLSService(t)
 	})
 
 	server := newScopedTestServer(t, handler, "admin:status:read", "admin:status:write")

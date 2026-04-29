@@ -2,7 +2,6 @@ package publictls
 
 import (
 	"context"
-	"crypto/tls"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,16 +27,14 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 		},
 	}
 
-	// Fake zone resolver returns "example.com" zone.
-	zoneResolver := fixedZoneResolver{zone: "example.com"}
+	// Mock zone resolver returns "example.com" zone.
+	zoneResolver := newZoneResolverMock(t, "example.com")
 
-	// Fake issuer: returns valid stored cert for any order.
-	issuer := &fakeIssuer{
-		obtain: func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
-			return defaultStoredCert(order)
-		},
-	}
-	store := &fakeStore{}
+	// Mock issuer: returns valid stored cert for any order.
+	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
+		return defaultStoredCert(order)
+	}, nil)
+	store, _ := newMockCertificateStore(t)
 
 	cfg := Config{
 		Enabled:   true,
@@ -71,10 +68,7 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 	require.NoError(t, err)
 
 	// Verify issuer received exactly 2 orders.
-	issuer.mu.Lock()
-	orders := make([]out.CertificateOrder, len(issuer.orders))
-	copy(orders, issuer.orders)
-	issuer.mu.Unlock()
+	orders := recorder.Orders()
 
 	require.Len(t, orders, 2, "expected 2 DNS-01 orders")
 
@@ -123,21 +117,21 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 
 	// --- GetCertificate returns non-nil certs ---
 	t.Run("GetCertificate_returns_cert_for_app_example_com", func(t *testing.T) {
-		cert, err := svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "app.example.com"})
+		cert, err := svc.GetCertificateForHost("app.example.com")
 		require.NoError(t, err)
 		require.NotNil(t, cert)
 		require.NotEmpty(t, cert.Certificate)
 	})
 
 	t.Run("GetCertificate_returns_cert_for_api_prod_example_com", func(t *testing.T) {
-		cert, err := svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.prod.example.com"})
+		cert, err := svc.GetCertificateForHost("api.prod.example.com")
 		require.NoError(t, err)
 		require.NotNil(t, cert)
 		require.NotEmpty(t, cert.Certificate)
 	})
 
 	t.Run("GetCertificate_returns_cert_for_example_com", func(t *testing.T) {
-		cert, err := svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "example.com"})
+		cert, err := svc.GetCertificateForHost("example.com")
 		require.NoError(t, err)
 		require.NotNil(t, cert)
 		require.NotEmpty(t, cert.Certificate)
@@ -146,7 +140,7 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 	// Also verify that a host not in the routes returns nil (no required ACME).
 	// "unrelated.com" is not covered by any wildcard base in requiredHosts.
 	t.Run("GetCertificate_returns_nil_for_unrelated_host", func(t *testing.T) {
-		cert, err := svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "unrelated.com"})
+		cert, err := svc.GetCertificateForHost("unrelated.com")
 		require.NoError(t, err)
 		assert.Nil(t, cert, "unrelated host should not require ACME coverage")
 	})
@@ -161,8 +155,8 @@ func TestPublicTLSIntegration_HTTP01PerRouteChallengeFlow(t *testing.T) {
 		},
 	}
 
-	issuer := &fakeIssuer{}
-	store := &fakeStore{}
+	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
+	store, _ := newMockCertificateStore(t)
 	challenges := NewHTTP01Challenges()
 
 	cfg := Config{
@@ -206,10 +200,7 @@ func TestPublicTLSIntegration_HTTP01PerRouteChallengeFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the issuer received exactly 1 order.
-	issuer.mu.Lock()
-	orders := make([]out.CertificateOrder, len(issuer.orders))
-	copy(orders, issuer.orders)
-	issuer.mu.Unlock()
+	orders := recorder.Orders()
 
 	require.Len(t, orders, 1, "expected 1 HTTP-01 order")
 	assert.Equal(t, "http01-app.example.com", orders[0].ID)
@@ -225,14 +216,14 @@ func TestPublicTLSIntegration_HTTP01PerRouteChallengeFlow(t *testing.T) {
 	assert.Equal(t, "http01-app.example.com", status.Routes[0].CoveredBy)
 	assert.Empty(t, status.Routes[0].Error)
 
-	// GetCertificate returns non-nil cert for app.example.com.
-	cert, err := svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "app.example.com"})
+	// GetCertificateForHost returns non-nil cert for app.example.com.
+	cert, err := svc.GetCertificateForHost("app.example.com")
 	require.NoError(t, err)
 	require.NotNil(t, cert)
 	require.NotEmpty(t, cert.Certificate)
 
-	// GetCertificate returns nil for unrelated host.
-	cert, err = svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "other.example.com"})
+	// GetCertificateForHost returns nil for unrelated host.
+	cert, err = svc.GetCertificateForHost("other.example.com")
 	require.NoError(t, err)
 	assert.Nil(t, cert)
 }
@@ -247,12 +238,10 @@ func TestPublicTLSIntegration_MissingRequiredCertReportsCoverageError(t *testing
 	}
 
 	// Issuer returns error so no cert is obtained.
-	issuer := &fakeIssuer{
-		obtain: func(_ context.Context, _ out.CertificateOrder) (*out.StoredCertificate, error) {
-			return nil, assert.AnError
-		},
-	}
-	store := &fakeStore{}
+	issuer, _ := newMockPublicCertificateIssuer(t, func(_ context.Context, _ out.CertificateOrder) (*out.StoredCertificate, error) {
+		return nil, assert.AnError
+	}, nil)
+	store, _ := newMockCertificateStore(t)
 
 	cfg := Config{
 		Enabled:   true,
@@ -284,8 +273,8 @@ func TestPublicTLSIntegration_MissingRequiredCertReportsCoverageError(t *testing
 	err = svc.Reconcile(ctx)
 	require.NoError(t, err) // Reconcile swallows per-target obtain errors
 
-	// GetCertificate for missing.example.com should return ErrTLSRouteNotCovered.
-	_, err = svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "missing.example.com"})
+	// GetCertificateForHost for missing.example.com should return ErrTLSRouteNotCovered.
+	_, err = svc.GetCertificateForHost("missing.example.com")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrTLSRouteNotCovered)
 	// The error message should contain the hostname.

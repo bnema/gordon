@@ -25,6 +25,11 @@ packages:
       RateLimiter:
       BackupStorage:
       RouteChecker:
+      HTTPChallengeSink:
+      PublicCertificateIssuer:
+      CertificateStore:
+      SecretResolver:
+      CloudflareZoneResolver:
   github.com/bnema/gordon/internal/boundaries/in:
     interfaces:
       ContainerService:
@@ -38,6 +43,7 @@ packages:
       SecretService:
       LogService:
       VolumeService:
+      PublicTLSService:
   # Exception: pushImageOps is a CLI-local interface, not a boundary port.
   # Mocked here because it abstracts Docker SDK calls that require a running
   # daemon, making unit/integration tests impractical without a test double.

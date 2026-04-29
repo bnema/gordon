@@ -6,20 +6,19 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// stubResolver is a simple implementation of tokenResolver for testing.
-type stubResolver struct {
-	value out.SecretValue
-	err   error
-}
-
-func (s stubResolver) ResolveCloudflareToken(_ context.Context) (out.SecretValue, error) {
-	return s.value, s.err
+func newSecretResolverMock(t *testing.T, value out.SecretValue, err error) *outmocks.MockSecretResolver {
+	t.Helper()
+	resolver := outmocks.NewMockSecretResolver(t)
+	resolver.EXPECT().ResolveCloudflareToken(mock.Anything).Return(value, err)
+	return resolver
 }
 
 func TestResolveEffectiveChallenge(t *testing.T) {
@@ -49,16 +48,8 @@ func TestResolveEffectiveChallenge(t *testing.T) {
 	})
 
 	t.Run("auto with cloudflare token returns dns-01", func(t *testing.T) {
-		cfg := Config{
-			Enabled:   true,
-			Email:     "admin@example.com",
-			Challenge: "auto",
-			TLSPort:   8443,
-			HTTPPort:  8088,
-		}
-		resolver := stubResolver{
-			value: out.SecretValue{Value: "token", Source: domain.ACMETokenSourcePass},
-		}
+		cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "auto", TLSPort: 8443, HTTPPort: 8088}
+		resolver := newSecretResolverMock(t, out.SecretValue{Value: "token", Source: domain.ACMETokenSourcePass}, nil)
 		ec, err := ResolveEffectiveChallenge(context.Background(), cfg, resolver)
 		require.NoError(t, err)
 		assert.Equal(t, domain.ACMEChallengeCloudflareDNS01, ec.Mode)
@@ -68,16 +59,8 @@ func TestResolveEffectiveChallenge(t *testing.T) {
 	})
 
 	t.Run("auto without token returns http-01", func(t *testing.T) {
-		cfg := Config{
-			Enabled:   true,
-			Email:     "admin@example.com",
-			Challenge: "auto",
-			TLSPort:   8443,
-			HTTPPort:  8088,
-		}
-		resolver := stubResolver{
-			value: out.SecretValue{Value: "", Source: domain.ACMETokenSourceNone},
-		}
+		cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "auto", TLSPort: 8443, HTTPPort: 8088}
+		resolver := newSecretResolverMock(t, out.SecretValue{Value: "", Source: domain.ACMETokenSourceNone}, nil)
 		ec, err := ResolveEffectiveChallenge(context.Background(), cfg, resolver)
 		require.NoError(t, err)
 		assert.Equal(t, domain.ACMEChallengeHTTP01, ec.Mode)
@@ -86,44 +69,23 @@ func TestResolveEffectiveChallenge(t *testing.T) {
 	})
 
 	t.Run("forced cloudflare-dns-01 requires token", func(t *testing.T) {
-		cfg := Config{
-			Enabled:   true,
-			Email:     "admin@example.com",
-			Challenge: "cloudflare-dns-01",
-			TLSPort:   8443,
-			HTTPPort:  8088,
-		}
-		resolver := stubResolver{
-			value: out.SecretValue{Value: "", Source: domain.ACMETokenSourceNone},
-		}
+		cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "cloudflare-dns-01", TLSPort: 8443, HTTPPort: 8088}
+		resolver := newSecretResolverMock(t, out.SecretValue{Value: "", Source: domain.ACMETokenSourceNone}, nil)
 		_, err := ResolveEffectiveChallenge(context.Background(), cfg, resolver)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, domain.ErrCloudflareTokenMissing)
 	})
 
 	t.Run("http-01 requires http port", func(t *testing.T) {
-		cfg := Config{
-			Enabled:   true,
-			Email:     "admin@example.com",
-			Challenge: "http-01",
-			TLSPort:   8443,
-			HTTPPort:  0,
-		}
+		cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "http-01", TLSPort: 8443, HTTPPort: 0}
 		_, err := ResolveEffectiveChallenge(context.Background(), cfg, nil)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
 	})
 
 	t.Run("cloudflare-dns-01 preserves resolver errors", func(t *testing.T) {
-		cfg := Config{
-			Enabled:   true,
-			Email:     "admin@example.com",
-			Challenge: "cloudflare-dns-01",
-			TLSPort:   8443,
-		}
-		resolver := stubResolver{
-			err: errors.New("pass failed"),
-		}
+		cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "cloudflare-dns-01", TLSPort: 8443}
+		resolver := newSecretResolverMock(t, out.SecretValue{}, errors.New("pass failed"))
 		_, err := ResolveEffectiveChallenge(context.Background(), cfg, resolver)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "resolve Cloudflare token")
@@ -131,13 +93,7 @@ func TestResolveEffectiveChallenge(t *testing.T) {
 	})
 
 	t.Run("nil resolver in auto mode returns http-01", func(t *testing.T) {
-		cfg := Config{
-			Enabled:   true,
-			Email:     "admin@example.com",
-			Challenge: "auto",
-			TLSPort:   8443,
-			HTTPPort:  8088,
-		}
+		cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "auto", TLSPort: 8443, HTTPPort: 8088}
 		ec, err := ResolveEffectiveChallenge(context.Background(), cfg, nil)
 		require.NoError(t, err)
 		assert.Equal(t, domain.ACMEChallengeHTTP01, ec.Mode)
@@ -145,12 +101,7 @@ func TestResolveEffectiveChallenge(t *testing.T) {
 	})
 
 	t.Run("forced cloudflare-dns-01 with nil resolver returns missing token", func(t *testing.T) {
-		cfg := Config{
-			Enabled:   true,
-			Email:     "admin@example.com",
-			Challenge: "cloudflare-dns-01",
-			TLSPort:   8443,
-		}
+		cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "cloudflare-dns-01", TLSPort: 8443}
 		_, err := ResolveEffectiveChallenge(context.Background(), cfg, nil)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, domain.ErrCloudflareTokenMissing)

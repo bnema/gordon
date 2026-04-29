@@ -1,7 +1,6 @@
 package acmelego
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -23,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -35,14 +35,35 @@ func TestNewIssuerValidatesEmail(t *testing.T) {
 func TestNewIssuerValidatesStore(t *testing.T) {
 	_, err := NewIssuer(Config{Email: "test@example.com"})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "certificate store is required")
+	assert.ErrorIs(t, err, domain.ErrCertificateStoreRequired)
+}
+
+func TestNewIssuerValidatesHTTPChallengeSink(t *testing.T) {
+	_, err := NewIssuer(Config{
+		Email:     "test@example.com",
+		Challenge: domain.ACMEChallengeHTTP01,
+		Store:     outmocks.NewMockCertificateStore(t),
+	})
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrHTTPChallengeSinkRequired)
+}
+
+func TestNewIssuerValidatesChallengeMode(t *testing.T) {
+	_, err := NewIssuer(Config{
+		Email:             "test@example.com",
+		Challenge:         domain.ACMEChallengeMode("tls-alpn-01"),
+		Store:             outmocks.NewMockCertificateStore(t),
+		HTTPChallengeSink: outmocks.NewMockHTTPChallengeSink(t),
+	})
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
 }
 
 func TestNewIssuerValidatesCloudflareToken(t *testing.T) {
 	_, err := NewIssuer(Config{
 		Email:     "test@example.com",
 		Challenge: domain.ACMEChallengeCloudflareDNS01,
-		Store:     &mockStore{},
+		Store:     outmocks.NewMockCertificateStore(t),
 	})
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrCloudflareTokenMissing)
@@ -51,45 +72,12 @@ func TestNewIssuerValidatesCloudflareToken(t *testing.T) {
 func TestNewIssuerValidWithDefaults(t *testing.T) {
 	issuer, err := NewIssuer(Config{
 		Email:             "test@example.com",
-		Store:             &mockStore{},
-		HTTPChallengeSink: &mockHTTPChallengeSink{},
+		Store:             outmocks.NewMockCertificateStore(t),
+		HTTPChallengeSink: outmocks.NewMockHTTPChallengeSink(t),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, issuer)
 	assert.Equal(t, domain.ACMEChallengeHTTP01, issuer.cfg.Challenge)
-}
-
-// mockHTTPChallengeSink implements HTTPChallengeSink for testing.
-type mockHTTPChallengeSink struct{}
-
-func (m *mockHTTPChallengeSink) Present(token, keyAuth string) {}
-func (m *mockHTTPChallengeSink) CleanUp(token string)          {}
-
-// mockStore implements out.CertificateStore for testing.
-type mockStore struct {
-	account *out.ACMEAccount
-	certs   []out.StoredCertificate
-}
-
-func (m *mockStore) LoadAccount(ctx context.Context) (*out.ACMEAccount, error) {
-	return m.account, nil
-}
-
-func (m *mockStore) SaveAccount(ctx context.Context, account out.ACMEAccount) error {
-	m.account = &account
-	return nil
-}
-
-func (m *mockStore) LoadAll(ctx context.Context) ([]out.StoredCertificate, error) {
-	return m.certs, nil
-}
-
-func (m *mockStore) Save(ctx context.Context, cert out.StoredCertificate) error {
-	return nil
-}
-
-func (m *mockStore) Lock(ctx context.Context) (func() error, error) {
-	return func() error { return nil }, nil
 }
 
 func TestPrivateKeyRoundTrip(t *testing.T) {

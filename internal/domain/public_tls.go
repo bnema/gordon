@@ -16,11 +16,13 @@ const (
 )
 
 var (
-	ErrACMEDisabled           = errors.New("acme disabled")
-	ErrACMEEmailRequired      = errors.New("acme email required")
-	ErrACMEChallengeInvalid   = errors.New("acme challenge invalid")
-	ErrCloudflareTokenMissing = errors.New("cloudflare api token missing")
-	ErrTLSRouteNotCovered     = errors.New("tls route not covered by public certificate")
+	ErrACMEDisabled              = errors.New("acme disabled")
+	ErrACMEEmailRequired         = errors.New("acme email required")
+	ErrACMEChallengeInvalid      = errors.New("acme challenge invalid")
+	ErrCloudflareTokenMissing    = errors.New("cloudflare api token missing")
+	ErrCertificateStoreRequired  = errors.New("certificate store required")
+	ErrHTTPChallengeSinkRequired = errors.New("http challenge sink required")
+	ErrTLSRouteNotCovered        = errors.New("tls route not covered by public certificate")
 )
 
 func ParseACMEChallengeMode(value string) (ACMEChallengeMode, error) {
@@ -56,22 +58,17 @@ const (
 )
 
 type ManagedCertificate struct {
-	ID             string               `json:"id"`
-	Names          []string             `json:"names"`
-	Challenge      ACMEChallengeMode    `json:"challenge"`
-	Status         TLSCertificateStatus `json:"status"`
-	NotAfter       time.Time            `json:"not_after"`
-	LastError      string               `json:"last_error,omitempty"`
-	RenewalPending bool                 `json:"renewal_pending"`
+	ID             string
+	Names          []string
+	Challenge      ACMEChallengeMode
+	Status         TLSCertificateStatus
+	NotAfter       time.Time
+	LastError      string
+	RenewalPending bool
 }
 
 func (c ManagedCertificate) Covers(host string) bool {
 	return CertificateNamesCoverHost(c.Names, host)
-}
-
-// SafePathComponent reports whether value is a single safe path component.
-func SafePathComponent(value string) bool {
-	return value != "" && !strings.Contains(value, "/") && !strings.Contains(value, "\\") && !strings.Contains(value, "..") && !strings.Contains(value, "\x00")
 }
 
 // CertificateNamesCoverHost reports whether any certificate name covers host.
@@ -105,27 +102,27 @@ func (c ManagedCertificate) Health(now time.Time) TLSCertificateStatus {
 	if !now.Before(c.NotAfter) {
 		return TLSCertificateStatusExpired
 	}
-	if now.Add(30 * 24 * time.Hour).After(c.NotAfter) {
+	if !now.Add(30 * 24 * time.Hour).Before(c.NotAfter) {
 		return TLSCertificateStatusWarning
 	}
 	return TLSCertificateStatusValid
 }
 
 type TLSRouteCoverage struct {
-	Domain       string `json:"domain"`
-	Covered      bool   `json:"covered"`
-	CoveredBy    string `json:"covered_by,omitempty"`
-	RequiredACME bool   `json:"required_acme"`
-	Error        string `json:"error,omitempty"`
+	Domain       string
+	Covered      bool
+	CoveredBy    string
+	RequiredACME bool
+	Error        string
 }
 
 type PublicTLSStatus struct {
-	ACMEEnabled     bool                 `json:"acme_enabled"`
-	ConfiguredMode  ACMEChallengeMode    `json:"configured_mode"`
-	EffectiveMode   ACMEChallengeMode    `json:"effective_mode"`
-	SelectionReason string               `json:"selection_reason"`
-	TokenSource     ACMETokenSource      `json:"token_source"`
-	Certificates    []ManagedCertificate `json:"certificates"`
-	Routes          []TLSRouteCoverage   `json:"routes"`
-	Errors          []string             `json:"errors,omitempty"`
+	ACMEEnabled     bool
+	ConfiguredMode  ACMEChallengeMode
+	EffectiveMode   ACMEChallengeMode
+	SelectionReason string
+	TokenSource     ACMETokenSource
+	Certificates    []ManagedCertificate
+	Routes          []TLSRouteCoverage
+	Errors          []string
 }

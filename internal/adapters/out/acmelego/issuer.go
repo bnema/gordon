@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -38,7 +37,7 @@ type Config struct {
 	Store out.CertificateStore
 
 	// HTTPChallengeSink is used for HTTP-01 challenge token storage.
-	HTTPChallengeSink HTTPChallengeSink
+	HTTPChallengeSink out.HTTPChallengeSink
 
 	// CADirectoryURL is the ACME directory URL. If empty, letsencrypt production is used.
 	CADirectoryURL string
@@ -62,16 +61,22 @@ func NewIssuer(cfg Config) (*Issuer, error) {
 		return nil, fmt.Errorf("acmelego: %w", domain.ErrACMEEmailRequired)
 	}
 	if cfg.Store == nil {
-		return nil, errors.New("acmelego: certificate store is required")
+		return nil, fmt.Errorf("acmelego: %w", domain.ErrCertificateStoreRequired)
 	}
 	if cfg.Challenge == "" {
 		cfg.Challenge = domain.ACMEChallengeHTTP01
 	}
-	if cfg.Challenge == domain.ACMEChallengeHTTP01 && cfg.HTTPChallengeSink == nil {
-		return nil, errors.New("acmelego: HTTP-01 challenge requires a non-nil HTTPChallengeSink")
-	}
-	if cfg.Challenge == domain.ACMEChallengeCloudflareDNS01 && cfg.Token == "" {
-		return nil, fmt.Errorf("acmelego: %w", domain.ErrCloudflareTokenMissing)
+	switch cfg.Challenge {
+	case domain.ACMEChallengeHTTP01:
+		if cfg.HTTPChallengeSink == nil {
+			return nil, fmt.Errorf("acmelego: %w", domain.ErrHTTPChallengeSinkRequired)
+		}
+	case domain.ACMEChallengeCloudflareDNS01:
+		if cfg.Token == "" {
+			return nil, fmt.Errorf("acmelego: %w", domain.ErrCloudflareTokenMissing)
+		}
+	default:
+		return nil, fmt.Errorf("acmelego: %w: %s", domain.ErrACMEChallengeInvalid, cfg.Challenge)
 	}
 
 	return &Issuer{cfg: cfg}, nil

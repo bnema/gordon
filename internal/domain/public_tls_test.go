@@ -28,6 +28,7 @@ func TestACMEChallengeModeParse(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		} else {
 			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrACMEChallengeInvalid)
 		}
 	}
 }
@@ -68,8 +69,8 @@ func TestManagedCertificateHealth(t *testing.T) {
 			want: TLSCertificateStatusWarning,
 		},
 		{
-			name: "warning exactly at 30 day boundary in the past",
-			cert: ManagedCertificate{NotAfter: now.Add(29 * 24 * time.Hour)},
+			name: "warning exactly at 30 day boundary",
+			cert: ManagedCertificate{NotAfter: now.Add(30 * 24 * time.Hour)},
 			want: TLSCertificateStatusWarning,
 		},
 		{

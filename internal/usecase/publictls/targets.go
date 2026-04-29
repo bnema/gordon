@@ -17,11 +17,6 @@ type CertificateTarget struct {
 	Challenge domain.ACMEChallengeMode
 }
 
-// zoneResolver resolves a hostname to its Cloudflare DNS zone.
-type zoneResolver interface {
-	FindZone(ctx context.Context, host string) (out.CloudflareZone, error)
-}
-
 // DeriveCertificateTargets derives certificate targets from routes and external
 // routes based on the given ACME challenge mode.
 func DeriveCertificateTargets(
@@ -29,7 +24,7 @@ func DeriveCertificateTargets(
 	mode domain.ACMEChallengeMode,
 	routes []domain.Route,
 	external map[string]string,
-	resolver zoneResolver,
+	resolver out.CloudflareZoneResolver,
 ) ([]CertificateTarget, error) {
 	hosts := routeHosts(routes, external)
 
@@ -86,7 +81,7 @@ func deriveHTTP01Targets(hosts []string) []CertificateTarget {
 }
 
 // deriveDNS01Targets creates targets grouped by wildcard base for DNS-01 challenge.
-func deriveDNS01Targets(ctx context.Context, hosts []string, resolver zoneResolver) ([]CertificateTarget, error) {
+func deriveDNS01Targets(ctx context.Context, hosts []string, resolver out.CloudflareZoneResolver) ([]CertificateTarget, error) {
 	if resolver == nil {
 		return nil, fmt.Errorf("dns-01 resolver is nil: cannot resolve DNS zones")
 	}
@@ -98,7 +93,10 @@ func deriveDNS01Targets(ctx context.Context, hosts []string, resolver zoneResolv
 		if err != nil {
 			return nil, fmt.Errorf("find zone for %s: %w", host, err)
 		}
-		base := wildcardBase(host, zone.Name)
+		base, err := wildcardBase(host, zone.Name)
+		if err != nil {
+			return nil, fmt.Errorf("find wildcard base for %s: %w", host, err)
+		}
 		if _, exists := baseSeen[base]; !exists {
 			baseSeen[base] = struct{}{}
 			bases = append(bases, base)
@@ -124,9 +122,17 @@ func deriveDNS01Targets(ctx context.Context, hosts []string, resolver zoneResolv
 // If host is a direct child of zone, returns zone.
 // If host is deeper (e.g. api.prod.example.com within example.com),
 // returns the parent label under the zone (prod.example.com).
-func wildcardBase(host, zone string) string {
+func wildcardBase(host, zone string) (string, error) {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	zone = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(zone)), ".")
+	if host == "" || zone == "" {
+		return "", fmt.Errorf("host and zone must be non-empty")
+	}
 	if host == zone {
-		return zone
+		return zone, nil
+	}
+	if !strings.HasSuffix(host, "."+zone) {
+		return "", fmt.Errorf("zone %q does not match host %q", zone, host)
 	}
 
 	// Remove the zone suffix (prefixed by a dot) to isolate subdomain parts.
@@ -134,11 +140,11 @@ func wildcardBase(host, zone string) string {
 
 	if !strings.Contains(trimmed, ".") {
 		// Direct child of the zone (e.g. app.example.com).
-		return zone
+		return zone, nil
 	}
 
 	// Deeper than direct child: extract the parent under the zone.
 	// e.g. "api.prod.example.com" -> trimmed "api.prod" -> parent "prod"
 	_, parent, _ := strings.Cut(trimmed, ".")
-	return parent + "." + zone
+	return parent + "." + zone, nil
 }

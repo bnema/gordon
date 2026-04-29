@@ -53,9 +53,10 @@ type zoneCacheEntry struct {
 }
 
 const (
-	defaultCacheTTL        = 10 * time.Minute
-	defaultCacheMaxSize    = 100
-	defaultMaxResponseSize = 1 << 20 // 1 MB
+	defaultCacheTTL          = 10 * time.Minute
+	defaultCloudflareTimeout = 10 * time.Second
+	defaultCacheMaxSize      = 100
+	defaultMaxResponseSize   = 1 << 20 // 1 MB
 )
 
 // CloudflareZoneResolverOption configures a CloudflareZoneResolver.
@@ -80,7 +81,7 @@ func NewCloudflareZoneResolver(token string, opts ...CloudflareZoneResolverOptio
 	r := &CloudflareZoneResolver{
 		token:   token,
 		baseURL: defaultCloudflareBaseURL,
-		client:  http.DefaultClient,
+		client:  &http.Client{Timeout: defaultCloudflareTimeout},
 		cache:   make(map[string]zoneCacheEntry),
 	}
 	for _, opt := range opts {

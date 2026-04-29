@@ -1,22 +1,16 @@
 // Package acmelego implements ACME certificate operations using the lego library.
 package acmelego
 
-// HTTPChallengeSink defines the storage interface for HTTP-01 challenge
-// tokens. The usecase layer implements this to serve challenge responses
-// via the proxy.
-type HTTPChallengeSink interface {
-	Present(token, keyAuth string)
-	CleanUp(token string)
-}
+import "github.com/bnema/gordon/internal/boundaries/out"
 
-// HTTPProvider adapts an HTTPChallengeSink to the lego challenge.Provider
+// HTTPProvider adapts an out.HTTPChallengeSink to the lego challenge.Provider
 // interface for HTTP-01 challenge solving.
 type HTTPProvider struct {
-	sink HTTPChallengeSink
+	sink out.HTTPChallengeSink
 }
 
 // NewHTTPProvider creates a new HTTPProvider.
-func NewHTTPProvider(sink HTTPChallengeSink) *HTTPProvider {
+func NewHTTPProvider(sink out.HTTPChallengeSink) *HTTPProvider {
 	return &HTTPProvider{sink: sink}
 }
 

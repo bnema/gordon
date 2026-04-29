@@ -71,11 +71,14 @@ func TestRenewalLoopStops(t *testing.T) {
 		TLSPort:   8443,
 	}
 
+	issuer, _ := newMockPublicCertificateIssuer(t, nil, nil)
+	store, _ := newMockCertificateStore(t)
+
 	svc := NewService(cfg, ServiceDeps{
 		Config:     cfg,
 		Routes:     &fakeRoutes{},
-		Issuer:     &fakeIssuer{},
-		Store:      &fakeStore{},
+		Issuer:     issuer,
+		Store:      store,
 		Challenges: NewHTTP01Challenges(),
 		Effective: EffectiveChallenge{
 			ConfiguredMode: domain.ACMEChallengeHTTP01,
@@ -116,27 +119,21 @@ func TestRenewDueCertificatesSavesAndUpdatesCache(t *testing.T) {
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err)
 
-	store := &fakeStore{
-		certs: []out.StoredCertificate{
-			{
-				ID:            certID,
-				Names:         []string{"app.example.com"},
-				Challenge:     domain.ACMEChallengeHTTP01,
-				Certificate:   tlsCert,
-				FullchainPEM:  certPEM,
-				PrivateKeyPEM: keyPEM,
-				NotAfter:      notAfterSoon,
-			},
-		},
-	}
+	store, storeState := newMockCertificateStore(t, out.StoredCertificate{
+		ID:            certID,
+		Names:         []string{"app.example.com"},
+		Challenge:     domain.ACMEChallengeHTTP01,
+		Certificate:   tlsCert,
+		FullchainPEM:  certPEM,
+		PrivateKeyPEM: keyPEM,
+		NotAfter:      notAfterSoon,
+	})
 
-	issuer := &fakeIssuer{
-		renewFn: func(_ context.Context, cert out.StoredCertificate) (*out.StoredCertificate, error) {
-			renewed := cert
-			renewed.NotAfter = notAfterRenewed
-			return &renewed, nil
-		},
-	}
+	issuer, _ := newMockPublicCertificateIssuer(t, nil, func(_ context.Context, cert out.StoredCertificate) (*out.StoredCertificate, error) {
+		renewed := cert
+		renewed.NotAfter = notAfterRenewed
+		return &renewed, nil
+	})
 
 	cfg := Config{
 		Enabled:   true,
@@ -176,8 +173,7 @@ func TestRenewDueCertificatesSavesAndUpdatesCache(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the store has the updated certificate.
-	all, err := store.LoadAll(ctx)
-	require.NoError(t, err)
+	all := storeState.All()
 	require.Len(t, all, 1)
 	assert.True(t, all[0].NotAfter.Equal(notAfterRenewed), "store should have renewed NotAfter")
 

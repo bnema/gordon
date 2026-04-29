@@ -52,6 +52,9 @@ func runTLSStatusCmd(ctx context.Context, cp ControlPlane, out io.Writer, jsonOu
 	if err != nil {
 		return fmt.Errorf("failed to get TLS status: %w", err)
 	}
+	if status == nil {
+		return fmt.Errorf("failed to get TLS status: empty response")
+	}
 
 	if jsonOut {
 		return writeJSON(out, status)

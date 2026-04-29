@@ -60,14 +60,18 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 
 		// Startup and reload paths reconcile routes; the periodic loop only renews
 		// due certificates to avoid repeated zone lookups and ACME ordering work.
-		_ = s.renewDueCertificates(loopCtx, time.Now())
+		if err := s.renewDueCertificates(loopCtx, time.Now()); err != nil {
+			s.log.Warn().Err(err).Msg("failed to renew due public TLS certificates")
+		}
 
 		for {
 			select {
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
-				_ = s.renewDueCertificates(loopCtx, time.Now())
+				if err := s.renewDueCertificates(loopCtx, time.Now()); err != nil {
+					s.log.Warn().Err(err).Msg("failed to renew due public TLS certificates")
+				}
 			}
 		}
 	}()
@@ -90,6 +94,11 @@ func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error
 	if s.deps.Issuer == nil {
 		return fmt.Errorf("certificate issuer is nil")
 	}
+	unlock, err := s.deps.Store.Lock(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire store lock: %w", err)
+	}
+	defer func() { _ = unlock() }()
 
 	// Collect due certs under lock, then release before making external calls.
 	s.mu.Lock()
@@ -106,6 +115,13 @@ func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error
 		if err != nil {
 			s.mu.Lock()
 			s.lastErr[cert.ID] = fmt.Sprintf("renew: %v", err)
+			s.mu.Unlock()
+			continue
+		}
+
+		if renewed == nil {
+			s.mu.Lock()
+			s.lastErr[cert.ID] = "renew returned nil certificate"
 			s.mu.Unlock()
 			continue
 		}

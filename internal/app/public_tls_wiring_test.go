@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -14,36 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
-
-// stubPublicTLS implements in.PublicTLSService for testing the certificate selector.
-type stubPublicTLS struct {
-	getCertFunc func(hello *tls.ClientHelloInfo) (*tls.Certificate, error)
-}
-
-func (s *stubPublicTLS) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	if s.getCertFunc != nil {
-		return s.getCertFunc(hello)
-	}
-	return nil, nil
-}
-
-func (s *stubPublicTLS) GetHTTP01Challenge(ctx context.Context, token string) (string, bool) {
-	return "", false
-}
-
-func (s *stubPublicTLS) Status(ctx context.Context) domain.PublicTLSStatus {
-	return domain.PublicTLSStatus{}
-}
-
-func (s *stubPublicTLS) Reconcile(ctx context.Context) error {
-	return nil
-}
-
-func (s *stubPublicTLS) Stop(ctx context.Context) error {
-	return nil
-}
 
 // generateTestCert creates a self-signed certificate for the given hostnames.
 func generateTestCert(t *testing.T, hosts ...string) tls.Certificate {
@@ -79,15 +51,9 @@ func generateTestCert(t *testing.T, hosts ...string) tls.Certificate {
 // the server name is returned before public TLS.
 func TestCertificateSelector_StaticCertWins(t *testing.T) {
 	staticCert := generateTestCert(t, "static.example.com")
-	publicCert := generateTestCert(t, "static.example.com")
-
 	selector := &certificateSelector{
 		staticCerts: prepareStaticTLSCertificates([]tls.Certificate{staticCert}),
-		publicTLS: &stubPublicTLS{
-			getCertFunc: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				return &publicCert, nil
-			},
-		},
+		publicTLS:   inmocks.NewMockPublicTLSService(t),
 	}
 
 	got, err := selector.GetCertificate(&tls.ClientHelloInfo{ServerName: "static.example.com"})
@@ -100,13 +66,9 @@ func TestCertificateSelector_StaticCertWins(t *testing.T) {
 // TestCertificateSelector_PublicTLSErrorPropagates tests that if public TLS
 // returns an error (e.g. ErrTLSRouteNotCovered), the error propagates.
 func TestCertificateSelector_PublicTLSErrorPropagates(t *testing.T) {
-	selector := &certificateSelector{
-		publicTLS: &stubPublicTLS{
-			getCertFunc: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				return nil, domain.ErrTLSRouteNotCovered
-			},
-		},
-	}
+	publicTLS := inmocks.NewMockPublicTLSService(t)
+	publicTLS.EXPECT().GetCertificateForHost("acme-required.example.com").Return(nil, domain.ErrTLSRouteNotCovered)
+	selector := &certificateSelector{publicTLS: publicTLS}
 
 	got, err := selector.GetCertificate(&tls.ClientHelloInfo{ServerName: "acme-required.example.com"})
 	assert.ErrorIs(t, err, domain.ErrTLSRouteNotCovered,
@@ -117,13 +79,9 @@ func TestCertificateSelector_PublicTLSErrorPropagates(t *testing.T) {
 // TestCertificateSelector_PublicTLSNilNil tests that when public TLS returns
 // nil,nil and no local PKI, the selector returns nil,nil.
 func TestCertificateSelector_PublicTLSNilNil(t *testing.T) {
-	selector := &certificateSelector{
-		publicTLS: &stubPublicTLS{
-			getCertFunc: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				return nil, nil
-			},
-		},
-	}
+	publicTLS := inmocks.NewMockPublicTLSService(t)
+	publicTLS.EXPECT().GetCertificateForHost("non-acme.example.com").Return(nil, nil)
+	selector := &certificateSelector{publicTLS: publicTLS}
 
 	got, err := selector.GetCertificate(&tls.ClientHelloInfo{ServerName: "non-acme.example.com"})
 	require.NoError(t, err)
@@ -161,9 +119,10 @@ func TestMatchingStaticCert(t *testing.T) {
 	got = matchingStaticCert(certs, "other.example.com")
 	assert.Nil(t, got)
 
-	// Empty server name
+	// Empty server name returns the first configured static certificate.
 	got = matchingStaticCert(certs, "")
-	assert.Nil(t, got)
+	require.NotNil(t, got)
+	assert.Equal(t, certA.Certificate[0], got.Certificate[0])
 
 	// Empty cert list
 	got = matchingStaticCert(nil, "app.example.com")
