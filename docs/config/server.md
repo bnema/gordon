@@ -108,6 +108,8 @@ HTTP-01 requires public access to port 80 for each hostname being validated. If 
 
 Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile run (default `1`) so enabling ACME on an existing multi-route server does not burst through every route and hit Let's Encrypt rate limits. Later reloads, restarts, or renewal-loop reconciles continue issuing remaining certificates.
 
+If the initial ACME reconcile fails (e.g. due to a transient network error or misconfiguration), Gordon logs the failure and does not start the renewal loop. Operators should fix the underlying error and restart/reload Gordon to trigger a new reconcile attempt.
+
 For Cloudflare Full/Strict, Cloudflare terminates browser TLS at the edge and connects to Gordon over HTTPS. A public ACME certificate served by Gordon is the preferred origin certificate because Cloudflare Strict can validate it without custom origin trust. Cloudflare Flexible mode (HTTPS at the edge, HTTP to Gordon) remains a legacy/compatibility option, but it is not end-to-end HTTPS.
 
 Static certificates have priority, then public ACME certificates, then Gordon's internal CA fallback. Gordon uses the `go-acme/lego` ACME client, including its DNS-provider support for Cloudflare DNS-01.
@@ -123,7 +125,7 @@ When `tls_port` is non-zero, direct HTTP clients (those not arriving through a t
 
 This lets new clients discover and trust the internal CA over plain HTTP without exposing the full application. Trusted proxy traffic (e.g. from Cloudflare) continues through the normal HTTP proxy path unaffected.
 
-On HTTPS, onboarding paths are served only on `server.gordon_domain`; app hosts can use `/ca` for their own routes without Gordon intercepting it.
+On HTTPS, onboarding paths are served only on `server.gordon_domain`; app hosts can use `/ca` for their own routes without Gordon intercepting it. If `gordon_domain` is empty, HTTPS onboarding paths are not served at all to avoid intercepting app hosts.
 
 #### HTTP to HTTPS redirect
 

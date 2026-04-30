@@ -418,40 +418,31 @@ func initAccessLog(cfg Config, log zerowrap.Logger) (*accesslog.Writer, error) {
 	return writer, nil
 }
 
-// serviceOptions controls optional behavior for createServicesWithOptions.
-type serviceOptions struct {
-	// StartPublicTLS controls whether ACME Reconcile and renewal loop are started.
-	// Runtime starts public TLS after listeners bind; local CLI uses false for read-only operations.
-	StartPublicTLS bool
-}
-
 // serviceInit holds the shared context for service initialization helpers.
 type serviceInit struct {
-	ctx            context.Context
-	v              *viper.Viper
-	cfg            Config
-	log            zerowrap.Logger
-	svc            *services
-	startPublicTLS bool
+	ctx context.Context
+	v   *viper.Viper
+	cfg Config
+	log zerowrap.Logger
+	svc *services
 }
 
 // createServices creates all the application services for server runtime.
 // Public ACME reconciliation is started later, after the HTTP listener is bound.
 func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (_ *services, retErr error) {
-	return createServicesWithOptions(ctx, v, cfg, log, serviceOptions{StartPublicTLS: false})
+	return createServicesWithOptions(ctx, v, cfg, log)
 }
 
-// createServicesWithOptions creates all the application services with the given options.
-// When StartPublicTLS is false, ACME Reconcile and renewal loop are skipped so that
-// read-only CLI commands (e.g. gordon tls status) do not perform ACME side effects.
-func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger, opts serviceOptions) (_ *services, retErr error) {
+// createServicesWithOptions creates all the application services.
+// ACME Reconcile and renewal loop are started later from runServers,
+// after HTTP listeners are bound.
+func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (_ *services, retErr error) {
 	si := &serviceInit{
-		ctx:            ctx,
-		v:              v,
-		cfg:            cfg,
-		log:            log,
-		svc:            &services{},
-		startPublicTLS: opts.StartPublicTLS,
+		ctx: ctx,
+		v:   v,
+		cfg: cfg,
+		log: log,
+		svc: &services{},
 	}
 	defer func() {
 		if retErr != nil {
@@ -609,21 +600,10 @@ func (si *serviceInit) initPublicTLS() error {
 		log.Warn().Err(err).Msg("failed to load ACME certificates, continuing")
 	}
 
-	if si.startPublicTLS {
-		if err := startPublicTLSRuntime(ctx, svc, log); err != nil {
-			log.Warn().Err(err).Msg("failed to start public ACME TLS runtime, continuing")
-		}
-		log.Info().
-			Str("email", si.cfg.TLS.ACME.Email).
-			Str("challenge", string(effective.Mode)).
-			Str("reason", effective.Reason).
-			Msg("public ACME TLS initialized")
-	} else {
-		log.Info().
-			Str("email", si.cfg.TLS.ACME.Email).
-			Str("challenge", string(effective.Mode)).
-			Msg("public ACME TLS initialized (runtime start deferred)")
-	}
+	log.Info().
+		Str("email", si.cfg.TLS.ACME.Email).
+		Str("challenge", string(effective.Mode)).
+		Msg("public ACME TLS initialized (runtime start deferred)")
 
 	si.svc.publicTLSSvc = svc
 	si.svc.publicTLSRuntime = svc
