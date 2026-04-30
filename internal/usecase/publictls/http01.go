@@ -23,24 +23,26 @@ func NewHTTP01Challenges() *HTTP01Challenges {
 
 // Present stores the key authorization for the given token. It silently
 // ignores unsafe tokens and empty keyAuth values.
-func (c *HTTP01Challenges) Present(token, keyAuth string) {
+func (c *HTTP01Challenges) Present(token, keyAuth string) error {
 	if !domain.IsValidHTTP01Token(token) || keyAuth == "" {
-		return
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.data[token] = keyAuth
+	return nil
 }
 
 // CleanUp removes the stored key authorization for the given token. It silently
 // ignores unsafe tokens.
-func (c *HTTP01Challenges) CleanUp(token string) {
+func (c *HTTP01Challenges) CleanUp(token string) error {
 	if !domain.IsValidHTTP01Token(token) {
-		return
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.data, token)
+	return nil
 }
 
 // Get returns the key authorization for the given token, and a boolean

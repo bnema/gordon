@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -11,10 +12,15 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
+	"github.com/bnema/zerowrap"
 )
 
 // generateTestCert creates a self-signed certificate for the given hostnames.
@@ -63,21 +69,36 @@ func TestCertificateSelector_StaticCertWins(t *testing.T) {
 		"static cert should be returned, not public TLS")
 }
 
-// TestCertificateSelector_PublicTLSErrorPropagates tests that if public TLS
-// returns an error (e.g. ErrTLSRouteNotCovered), the error propagates.
-func TestCertificateSelector_PublicTLSErrorPropagates(t *testing.T) {
+func TestCertificateSelector_PublicTLSErrorFallsThroughWithoutLocalPKI(t *testing.T) {
 	publicTLS := inmocks.NewMockPublicTLSService(t)
 	publicTLS.EXPECT().GetCertificateForHost("acme-required.example.com").Return(nil, domain.ErrTLSRouteNotCovered)
 	selector := &certificateSelector{publicTLS: publicTLS}
 
 	got, err := selector.GetCertificate(&tls.ClientHelloInfo{ServerName: "acme-required.example.com"})
-	assert.ErrorIs(t, err, domain.ErrTLSRouteNotCovered,
-		"public TLS error should propagate")
-	assert.Nil(t, got, "no certificate should be returned on error")
+	require.NoError(t, err)
+	assert.Nil(t, got, "public TLS error with no local PKI returns nil,nil")
 }
 
 // TestCertificateSelector_PublicTLSNilNil tests that when public TLS returns
 // nil,nil and no local PKI, the selector returns nil,nil.
+func TestCertificateSelector_PublicTLSErrorFallsThroughToLocalPKI(t *testing.T) {
+	publicTLS := inmocks.NewMockPublicTLSService(t)
+	publicTLS.EXPECT().GetCertificateForHost("acme-required.example.com").Return(nil, domain.ErrTLSRouteNotCovered)
+
+	routes := outmocks.NewMockRouteChecker(t)
+	routes.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "acme-required.example.com"}}).Maybe()
+	routes.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	ca, err := pkiadapter.NewCA(t.TempDir(), zerowrap.Default())
+	require.NoError(t, err)
+	pkiSvc := pkiusecase.NewService(context.Background(), ca, routes, zerowrap.Default())
+	defer pkiSvc.Stop()
+
+	selector := &certificateSelector{publicTLS: publicTLS, localPKI: pkiSvc}
+	got, err := selector.GetCertificate(&tls.ClientHelloInfo{ServerName: "acme-required.example.com"})
+	require.NoError(t, err)
+	require.NotNil(t, got, "public TLS error should fall through to local PKI")
+}
+
 func TestCertificateSelector_PublicTLSNilNil(t *testing.T) {
 	publicTLS := inmocks.NewMockPublicTLSService(t)
 	publicTLS.EXPECT().GetCertificateForHost("non-acme.example.com").Return(nil, nil)

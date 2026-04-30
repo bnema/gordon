@@ -335,7 +335,10 @@ func (l *localControlPlane) RemoveAutoRouteAllowedDomain(ctx context.Context, pa
 
 func (l *localControlPlane) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error) {
 	if l.publicTLSSvc == nil {
-		return &dto.TLSStatusResponse{}, nil
+		return &dto.TLSStatusResponse{
+			ACMEEnabled:     false,
+			SelectionReason: "public TLS service not configured",
+		}, nil
 	}
 
 	status := l.publicTLSSvc.Status(ctx)

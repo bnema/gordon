@@ -2778,14 +2778,12 @@ func (s *certificateSelector) GetCertificate(hello *tls.ClientHelloInfo) (*tls.C
 	// 2. Public ACME TLS.
 	if s.publicTLS != nil {
 		cert, err := s.publicTLS.GetCertificateForHost(hello.ServerName)
-		if err != nil {
-			return nil, err
-		}
-		if cert != nil {
+		if err == nil && cert != nil {
 			return cert, nil
 		}
-		// nil, nil means this host is not an ACME-required route.
-		// Fall through to local PKI.
+		// nil, nil means this host is not an ACME-required route. Errors mean
+		// public ACME cannot currently serve this host. In both cases, fall
+		// through to local PKI instead of aborting the TLS handshake.
 	}
 
 	// 3. Local PKI (internal CA).

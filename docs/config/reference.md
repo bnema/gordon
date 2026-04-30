@@ -34,6 +34,14 @@ token_expiry = "720h"                        # Token expiry duration (720h = 30 
 access_token_ttl = "15m"                     # Ephemeral access token lifetime (default: 15m)
 
 # =============================================================================
+# PUBLIC TLS / ACME
+# =============================================================================
+[tls.acme]
+enabled = false                              # Enable public ACME certificates (requires server.tls_port > 0)
+email = ""                                   # ACME account email when enabled
+challenge = "auto"                           # "auto", "http-01", or "cloudflare-dns-01"
+
+# =============================================================================
 # API (applies to both Registry and Admin endpoints)
 # =============================================================================
 [api.rate_limit]
@@ -195,6 +203,9 @@ keep_last = 3                                # Keep N newest tags per repository
 | `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `server.proxy_allowed_ips` | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
 | `server.registry_listen_address` | `""` | Bind address for registry (empty = all interfaces) |
+| `tls.acme.enabled` | `false` | Enable public ACME certificates (requires `server.tls_port > 0`) |
+| `tls.acme.email` | `""` | ACME account email when enabled |
+| `tls.acme.challenge` | `"auto"` | ACME challenge mode: `auto`, `http-01`, or `cloudflare-dns-01` |
 | `auth.enabled` | `true` | Enable authentication; when `false`, run local-only mode (loopback-only `/v2/*`, `/admin/*` disabled) |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |

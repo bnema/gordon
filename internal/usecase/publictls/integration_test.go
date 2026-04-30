@@ -292,7 +292,5 @@ func TestPublicTLSIntegration_MissingRequiredCertReportsCoverageError(t *testing
 	assert.False(t, rc.Covered, "route should NOT be covered")
 	assert.True(t, rc.RequiredACME)
 
-	// The route error may be empty since not all code paths populate routeErr;
-	// at minimum the covered flag must be false.
-	t.Logf("Route error (may be empty): %q", rc.Error)
+	assert.Contains(t, rc.Error, "obtain certificate")
 }

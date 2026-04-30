@@ -74,7 +74,7 @@ func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver out.Sec
 		}, nil
 
 	case domain.ACMEChallengeCloudflareDNS01:
-		token, source, err := resolveToken(ctx, resolver)
+		token, source, err := resolveToken(ctx, resolver, true)
 		if err != nil {
 			return EffectiveChallenge{}, fmt.Errorf("resolve Cloudflare token: %w", err)
 		}
@@ -90,7 +90,7 @@ func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver out.Sec
 		}, nil
 
 	case domain.ACMEChallengeAuto:
-		token, source := resolveOptionalToken(ctx, resolver)
+		token, source, _ := resolveToken(ctx, resolver, false)
 		if token != "" {
 			return EffectiveChallenge{
 				ConfiguredMode: domain.ACMEChallengeAuto,
@@ -115,31 +115,18 @@ func ResolveEffectiveChallenge(ctx context.Context, cfg Config, resolver out.Sec
 	}
 }
 
-// resolveOptionalToken resolves the Cloudflare token, ignoring resolver errors.
-// If the resolver is nil or returns an empty token, the result is empty with source none.
-func resolveOptionalToken(ctx context.Context, resolver out.SecretResolver) (string, domain.ACMETokenSource) {
-	if resolver == nil {
-		return "", domain.ACMETokenSourceNone
-	}
-	sv, err := resolver.ResolveCloudflareToken(ctx)
-	if err != nil {
-		return "", domain.ACMETokenSourceNone
-	}
-	if sv.Value == "" {
-		return "", domain.ACMETokenSourceNone
-	}
-	return sv.Value, sv.Source
-}
-
-// resolveToken resolves the Cloudflare token via the resolver, propagating errors.
-// Returns empty token and none source if resolver is nil.
-func resolveToken(ctx context.Context, resolver out.SecretResolver) (string, domain.ACMETokenSource, error) {
+// resolveToken resolves the Cloudflare token via the resolver. When strict is
+// false, resolver errors are ignored so auto mode can fall back to HTTP-01.
+func resolveToken(ctx context.Context, resolver out.SecretResolver, strict bool) (string, domain.ACMETokenSource, error) {
 	if resolver == nil {
 		return "", domain.ACMETokenSourceNone, nil
 	}
 	sv, err := resolver.ResolveCloudflareToken(ctx)
 	if err != nil {
-		return "", domain.ACMETokenSourceNone, err
+		if strict {
+			return "", domain.ACMETokenSourceNone, err
+		}
+		return "", domain.ACMETokenSourceNone, nil
 	}
 	if sv.Value == "" {
 		return "", domain.ACMETokenSourceNone, nil

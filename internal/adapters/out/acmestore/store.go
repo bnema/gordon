@@ -194,9 +194,9 @@ func (s *Store) Save(_ context.Context, cert out.StoredCertificate) error {
 		return fmt.Errorf("acmestore: unsafe certificate id %q: %w", cert.ID, domain.ErrPathTraversal)
 	}
 
-	parent, err := ensureCertsDir(s.root)
-	if err != nil {
-		return err
+	parent := filepath.Join(s.root, certDir)
+	if err := os.MkdirAll(parent, dirMode); err != nil {
+		return fmt.Errorf("acmestore: mkdir certs: %w", err)
 	}
 	if err := recoverCertificateDir(parent, cert.ID); err != nil {
 		return fmt.Errorf("acmestore: recover cert %s: %w", cert.ID, err)
@@ -430,9 +430,9 @@ func recoverCertificateDirs(certsPath string) error {
 	return nil
 }
 
-// safeID rejects IDs that could cause path traversal.
+// safeID rejects IDs that could cause path traversal or collide with store-internal artifacts.
 func safeID(id string) bool {
-	return id != "" && !strings.HasPrefix(id, ".") && !strings.Contains(id, "/") && !strings.Contains(id, "\\") && !strings.Contains(id, "..") && !strings.Contains(id, "\x00")
+	return id != "" && !strings.HasPrefix(id, ".") && !isStoreInternalCertDir(id) && !strings.Contains(id, "/") && !strings.Contains(id, "\\") && !strings.Contains(id, "..") && !strings.Contains(id, "\x00")
 }
 
 // writeAtomic writes data to path atomically by writing to a temporary file

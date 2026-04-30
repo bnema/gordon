@@ -55,10 +55,10 @@ type CloudflareZone struct {
 // while an ACME issuer completes domain validation.
 type HTTPChallengeSink interface {
 	// Present stores the key authorization for a challenge token.
-	Present(token, keyAuth string)
+	Present(token, keyAuth string) error
 
 	// CleanUp removes the key authorization for a challenge token.
-	CleanUp(token string)
+	CleanUp(token string) error
 }
 
 // PublicCertificateIssuer defines the contract for obtaining and renewing

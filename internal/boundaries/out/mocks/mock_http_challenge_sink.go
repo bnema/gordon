@@ -36,9 +36,20 @@ func (_m *MockHTTPChallengeSink) EXPECT() *MockHTTPChallengeSink_Expecter {
 }
 
 // CleanUp provides a mock function for the type MockHTTPChallengeSink
-func (_mock *MockHTTPChallengeSink) CleanUp(token string) {
-	_mock.Called(token)
-	return
+func (_mock *MockHTTPChallengeSink) CleanUp(token string) error {
+	ret := _mock.Called(token)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CleanUp")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(token)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
 }
 
 // MockHTTPChallengeSink_CleanUp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CleanUp'
@@ -65,20 +76,31 @@ func (_c *MockHTTPChallengeSink_CleanUp_Call) Run(run func(token string)) *MockH
 	return _c
 }
 
-func (_c *MockHTTPChallengeSink_CleanUp_Call) Return() *MockHTTPChallengeSink_CleanUp_Call {
-	_c.Call.Return()
+func (_c *MockHTTPChallengeSink_CleanUp_Call) Return(err error) *MockHTTPChallengeSink_CleanUp_Call {
+	_c.Call.Return(err)
 	return _c
 }
 
-func (_c *MockHTTPChallengeSink_CleanUp_Call) RunAndReturn(run func(token string)) *MockHTTPChallengeSink_CleanUp_Call {
-	_c.Run(run)
+func (_c *MockHTTPChallengeSink_CleanUp_Call) RunAndReturn(run func(token string) error) *MockHTTPChallengeSink_CleanUp_Call {
+	_c.Call.Return(run)
 	return _c
 }
 
 // Present provides a mock function for the type MockHTTPChallengeSink
-func (_mock *MockHTTPChallengeSink) Present(token string, keyAuth string) {
-	_mock.Called(token, keyAuth)
-	return
+func (_mock *MockHTTPChallengeSink) Present(token string, keyAuth string) error {
+	ret := _mock.Called(token, keyAuth)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Present")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) error); ok {
+		r0 = returnFunc(token, keyAuth)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
 }
 
 // MockHTTPChallengeSink_Present_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Present'
@@ -111,12 +133,12 @@ func (_c *MockHTTPChallengeSink_Present_Call) Run(run func(token string, keyAuth
 	return _c
 }
 
-func (_c *MockHTTPChallengeSink_Present_Call) Return() *MockHTTPChallengeSink_Present_Call {
-	_c.Call.Return()
+func (_c *MockHTTPChallengeSink_Present_Call) Return(err error) *MockHTTPChallengeSink_Present_Call {
+	_c.Call.Return(err)
 	return _c
 }
 
-func (_c *MockHTTPChallengeSink_Present_Call) RunAndReturn(run func(token string, keyAuth string)) *MockHTTPChallengeSink_Present_Call {
-	_c.Run(run)
+func (_c *MockHTTPChallengeSink_Present_Call) RunAndReturn(run func(token string, keyAuth string) error) *MockHTTPChallengeSink_Present_Call {
+	_c.Call.Return(run)
 	return _c
 }

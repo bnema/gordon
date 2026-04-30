@@ -11,16 +11,13 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// renewalWindow is the window before certificate expiry when renewal should begin.
-const renewalWindow = 30 * 24 * time.Hour
-
 // ShouldRenew reports whether a certificate should be renewed at the given time.
 // A certificate with a zero NotAfter is always considered due for renewal.
 func ShouldRenew(cert out.StoredCertificate, now time.Time) bool {
 	if cert.NotAfter.IsZero() {
 		return true
 	}
-	return !now.Before(cert.NotAfter.Add(-renewalWindow))
+	return !now.Before(cert.NotAfter.Add(-domain.TLSRenewalWindow))
 }
 
 // StartRenewalLoop starts a background goroutine that periodically reconciles
@@ -55,7 +52,11 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 		oldCancel()
 	}
 	if oldDone != nil {
-		<-oldDone
+		select {
+		case <-oldDone:
+		case <-ctx.Done():
+		case <-time.After(30 * time.Second):
+		}
 	}
 
 	go func() {
@@ -116,6 +117,9 @@ func (s *Service) renewDueCertificates(ctx context.Context, now time.Time) error
 	s.mu.Unlock()
 
 	for _, cert := range due {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		renewed, err := s.deps.Issuer.Renew(ctx, cert)
 		if err != nil {
 			s.mu.Lock()

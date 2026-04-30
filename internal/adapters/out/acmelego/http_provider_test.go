@@ -10,8 +10,8 @@ import (
 
 func TestHTTPProviderStoresAndCleansChallenge(t *testing.T) {
 	mockSink := outmocks.NewMockHTTPChallengeSink(t)
-	mockSink.EXPECT().Present("token", "key-auth").Return()
-	mockSink.EXPECT().CleanUp("token").Return()
+	mockSink.EXPECT().Present("token", "key-auth").Return(nil)
+	mockSink.EXPECT().CleanUp("token").Return(nil)
 
 	provider := NewHTTPProvider(mockSink)
 

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ func TestIsValidHTTP01Token(t *testing.T) {
 		{name: "backslash", token: `abc\def`, want: false},
 		{name: "dot dot", token: "abc..def", want: false},
 		{name: "nul", token: "abc\x00def", want: false},
+		{name: "too long", token: strings.Repeat("a", MaxHTTP01TokenLength+1), want: false},
 	}
 
 	for _, tt := range tests {

@@ -23,7 +23,9 @@ func (p *HTTPProvider) Present(_domain, token, keyAuth string) error {
 	if p.sink == nil {
 		return fmt.Errorf("http-01 sink is nil: cannot Present")
 	}
-	p.sink.Present(token, keyAuth)
+	if err := p.sink.Present(token, keyAuth); err != nil {
+		return fmt.Errorf("present http-01 challenge: %w", err)
+	}
 	return nil
 }
 
@@ -32,6 +34,8 @@ func (p *HTTPProvider) CleanUp(_domain, token, _keyAuth string) error {
 	if p.sink == nil {
 		return fmt.Errorf("http-01 sink is nil: cannot CleanUp")
 	}
-	p.sink.CleanUp(token)
+	if err := p.sink.CleanUp(token); err != nil {
+		return fmt.Errorf("cleanup http-01 challenge: %w", err)
+	}
 	return nil
 }

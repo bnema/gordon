@@ -88,6 +88,7 @@ func (s *Service) Load(ctx context.Context) error {
 
 	s.certs = make(map[string]*out.StoredCertificate, len(stored))
 	s.lastErr = make(map[string]string)
+	s.requiredHosts = make(map[string]struct{})
 
 	for i := range stored {
 		cert := &stored[i]
@@ -96,6 +97,7 @@ func (s *Service) Load(ctx context.Context) error {
 			continue
 		}
 		s.certs[cert.ID] = cert
+		addNamesToRequiredHosts(s.requiredHosts, cert.Names)
 		if cert.LastError != "" {
 			s.lastErr[cert.ID] = cert.LastError
 		}
@@ -156,6 +158,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// returns ErrTLSRouteNotCovered if target derivation/issuer fails.
 	s.mu.Lock()
 	s.requiredHosts = required
+	clearRouteErrorsLocked(s.routeErr, required)
 	s.mu.Unlock()
 
 	// Derive desired targets.
@@ -164,6 +167,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		s.deps.ZoneResolver,
 	)
 	if err != nil {
+		s.mu.Lock()
+		setRouteErrorsLocked(s.routeErr, required, fmt.Sprintf("derive certificate targets: %v", err))
+		s.mu.Unlock()
 		return fmt.Errorf("derive certificate targets: %w", err)
 	}
 
@@ -171,17 +177,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// For DNS-01 wildcard targets, this adds wildcard entries as well;
 	// the exact route hosts already present suffice for isRequiredHostLocked.
 	addTargetNames(required, targets)
-
-	// Acquire store lock to serialise certificate operations.
-	unlock, err := s.deps.Store.Lock(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire store lock: %w", err)
-	}
-	defer func() {
-		if err := unlock(); err != nil {
-			log.Warn().Err(err).Msg("failed to release store lock")
-		}
-	}()
 
 	// Under mu: update requiredHosts (with target names) and compute missing targets.
 	s.mu.Lock()
@@ -196,9 +191,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	}
 	s.mu.Unlock()
 
-	// Process missing targets without holding s.mu so GetCertificate/Status
-	// are not blocked during network I/O (Obtain) or storage writes (Save).
-	s.reconcileMissingTargets(ctx, missing)
+	// Process missing targets without holding s.mu or the store lock so
+	// GetCertificate/Status are not blocked during network I/O (Obtain).
+	s.reconcileMissingTargets(ctx, missing, required)
 
 	log.Debug().Int("missing_count", len(missing)).Msg("reconciled missing targets")
 	return nil
@@ -232,20 +227,53 @@ func canonicalHostSet(hosts []string) map[string]struct{} {
 	return required
 }
 
+func addNamesToRequiredHosts(required map[string]struct{}, names []string) {
+	for _, name := range names {
+		name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
+		if name != "" {
+			required[name] = struct{}{}
+		}
+	}
+}
+
 func addTargetNames(required map[string]struct{}, targets []CertificateTarget) {
 	for _, t := range targets {
-		for _, name := range t.Names {
-			name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
-			if name != "" {
-				required[name] = struct{}{}
-			}
+		addNamesToRequiredHosts(required, t.Names)
+	}
+}
+
+func clearRouteErrorsLocked(routeErr map[string]string, hosts map[string]struct{}) {
+	for host := range hosts {
+		delete(routeErr, host)
+	}
+}
+
+func setRouteErrorsLocked(routeErr map[string]string, hosts map[string]struct{}, message string) {
+	for host := range hosts {
+		routeErr[host] = message
+	}
+}
+
+func setTargetRouteErrorLocked(routeErr map[string]string, required map[string]struct{}, target CertificateTarget, message string) {
+	for host := range required {
+		if hostMatchesCert(target.Names, host) {
+			routeErr[host] = message
+		}
+	}
+}
+
+func clearTargetRouteErrorLocked(routeErr map[string]string, required map[string]struct{}, target CertificateTarget) {
+	for host := range required {
+		if hostMatchesCert(target.Names, host) {
+			delete(routeErr, host)
 		}
 	}
 }
 
 // reconcileMissingTargets obtains and saves certificates for each missing
 // target. Called without s.mu held so network I/O does not block readers.
-func (s *Service) reconcileMissingTargets(ctx context.Context, missing []CertificateTarget) {
+func (s *Service) reconcileMissingTargets(ctx context.Context, missing []CertificateTarget, required map[string]struct{}) {
+	log := zerowrap.FromCtx(ctx)
 	for _, target := range missing {
 		order := out.CertificateOrder{
 			ID:        target.ID,
@@ -255,27 +283,48 @@ func (s *Service) reconcileMissingTargets(ctx context.Context, missing []Certifi
 
 		stored, err := s.deps.Issuer.Obtain(ctx, order)
 		if err != nil {
+			errorMessage := fmt.Sprintf("obtain certificate: %v", err)
 			s.mu.Lock()
-			s.lastErr[target.ID] = fmt.Sprintf("obtain certificate: %v", err)
+			s.lastErr[target.ID] = errorMessage
+			setTargetRouteErrorLocked(s.routeErr, required, target, errorMessage)
 			s.mu.Unlock()
 			continue
 		}
 		if stored == nil {
+			errorMessage := "obtain certificate returned nil"
 			s.mu.Lock()
-			s.lastErr[target.ID] = "obtain certificate returned nil"
+			s.lastErr[target.ID] = errorMessage
+			setTargetRouteErrorLocked(s.routeErr, required, target, errorMessage)
 			s.mu.Unlock()
 			continue
 		}
 		if err := populateStoredCertificate(stored); err != nil {
+			errorMessage := err.Error()
 			s.mu.Lock()
-			s.lastErr[target.ID] = err.Error()
+			s.lastErr[target.ID] = errorMessage
+			setTargetRouteErrorLocked(s.routeErr, required, target, errorMessage)
 			s.mu.Unlock()
 			continue
 		}
 
-		if err := s.deps.Store.Save(ctx, *stored); err != nil {
+		unlock, err := s.deps.Store.Lock(ctx)
+		if err != nil {
+			errorMessage := fmt.Sprintf("acquire store lock: %v", err)
 			s.mu.Lock()
-			s.lastErr[target.ID] = fmt.Sprintf("save certificate: %v", err)
+			s.lastErr[target.ID] = errorMessage
+			setTargetRouteErrorLocked(s.routeErr, required, target, errorMessage)
+			s.mu.Unlock()
+			continue
+		}
+		saveErr := s.deps.Store.Save(ctx, *stored)
+		if unlockErr := unlock(); unlockErr != nil {
+			log.Warn().Err(unlockErr).Msg("failed to release store lock")
+		}
+		if saveErr != nil {
+			errorMessage := fmt.Sprintf("save certificate: %v", saveErr)
+			s.mu.Lock()
+			s.lastErr[target.ID] = errorMessage
+			setTargetRouteErrorLocked(s.routeErr, required, target, errorMessage)
 			s.mu.Unlock()
 			continue
 		}
@@ -283,6 +332,7 @@ func (s *Service) reconcileMissingTargets(ctx context.Context, missing []Certifi
 		s.mu.Lock()
 		s.certs[stored.ID] = stored
 		delete(s.lastErr, stored.ID)
+		clearTargetRouteErrorLocked(s.routeErr, required, target)
 		s.mu.Unlock()
 	}
 }
@@ -295,15 +345,15 @@ func (s *Service) certificateExistsLocked(target CertificateTarget) bool {
 		if cert.NotAfter.IsZero() || now.After(cert.NotAfter) {
 			continue // expired or no expiry
 		}
-		if namesCover(cert.Names, target.Names) {
+		if exactNamesCoverAll(cert.Names, target.Names) {
 			return true
 		}
 	}
 	return false
 }
 
-// namesCover reports whether names covers all required names (exact match, case-insensitive).
-func namesCover(names, required []string) bool {
+// exactNamesCoverAll reports whether names contains every required name exactly, case-insensitively.
+func exactNamesCoverAll(names, required []string) bool {
 	covered := make(map[string]bool)
 	for _, n := range names {
 		covered[strings.ToLower(strings.TrimSuffix(n, "."))] = true
@@ -378,9 +428,9 @@ func (s *Service) GetHTTP01Challenge(ctx context.Context, token string) (string,
 	return s.deps.Challenges.Get(ctx, token)
 }
 
-// GetStoredCertificate returns a copy of the stored certificate for the given
-// ID, or nil if not found. Exposed for testing.
-func (s *Service) GetStoredCertificate(id string) *out.StoredCertificate {
+// getStoredCertificate returns a copy of the stored certificate for the given
+// ID, or nil if not found.
+func (s *Service) getStoredCertificate(id string) *out.StoredCertificate {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	cert := s.certs[id]

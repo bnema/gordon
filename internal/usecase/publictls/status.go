@@ -31,6 +31,7 @@ func (s *Service) Status(ctx context.Context) domain.PublicTLSStatus {
 
 	status.Certificates = s.buildManagedCertificatesLocked()
 	status.Routes = s.buildRouteCoverageLocked(routeDomains, status.Certificates)
+	status.Errors = buildStatusErrors(status.Certificates, status.Routes)
 	return status
 }
 
@@ -58,6 +59,29 @@ func (s *Service) buildManagedCertificatesLocked() []domain.ManagedCertificate {
 		return certs[i].ID < certs[j].ID
 	})
 	return certs
+}
+
+func buildStatusErrors(certs []domain.ManagedCertificate, routes []domain.TLSRouteCoverage) []string {
+	seen := make(map[string]struct{})
+	var errorsList []string
+	add := func(message string) {
+		message = sanitizeError(message)
+		if message == "" {
+			return
+		}
+		if _, ok := seen[message]; ok {
+			return
+		}
+		seen[message] = struct{}{}
+		errorsList = append(errorsList, message)
+	}
+	for _, cert := range certs {
+		add(cert.LastError)
+	}
+	for _, route := range routes {
+		add(route.Error)
+	}
+	return errorsList
 }
 
 // buildRouteCoverageLocked returns route coverage for the given domains.
@@ -116,7 +140,7 @@ func (s *Service) findCoverageLocked(routeDomain string, managedCerts []domain.M
 			continue
 		}
 		switch mc.Status {
-		case domain.TLSCertificateStatusExpired, domain.TLSCertificateStatusMissing, domain.TLSCertificateStatusError:
+		case domain.TLSCertificateStatusExpired, domain.TLSCertificateStatusMissing:
 			continue
 		}
 		// Double-check the raw stored cert expiry to guard against stale

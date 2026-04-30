@@ -542,7 +542,7 @@ func TestServiceLoadParsesPEMIntoTLSCertificate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the cached cert has a valid tls.Certificate via the accessor.
-	cached := svc.GetStoredCertificate("http01-test.example.com")
+	cached := svc.getStoredCertificate("http01-test.example.com")
 	require.NotNil(t, cached, "cert should be cached")
 	assert.NotEmpty(t, cached.Certificate.Certificate, "tls.Certificate should be populated")
 	assert.NotNil(t, cached.Certificate.PrivateKey, "private key should be populated")
@@ -551,6 +551,74 @@ func TestServiceLoadParsesPEMIntoTLSCertificate(t *testing.T) {
 	leaf, err := x509.ParseCertificate(cached.Certificate.Certificate[0])
 	require.NoError(t, err)
 	assert.Contains(t, leaf.DNSNames, "test.example.com")
+
+	served, err := svc.GetCertificateForHost("test.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, served, "loaded certificates should seed required hosts")
+}
+
+func TestServiceStatusReportsRouteErrorAfterObtainFailure(t *testing.T) {
+	ctx := context.Background()
+	routes := &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}}
+	issuer, _ := newMockPublicCertificateIssuer(t, func(_ context.Context, _ out.CertificateOrder) (*out.StoredCertificate, error) {
+		return nil, fmt.Errorf("acme unavailable token=sk-secret")
+	}, nil)
+	store, _ := newMockCertificateStore(t)
+	cfg := Config{
+		Enabled:   true,
+		Email:     "admin@example.com",
+		Challenge: "http-01",
+		HTTPPort:  8088,
+		TLSPort:   8443,
+	}
+	svc := NewService(cfg, ServiceDeps{
+		Config: cfg,
+		Routes: routes,
+		Issuer: issuer,
+		Store:  store,
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+		},
+	})
+
+	require.NoError(t, svc.Reconcile(ctx))
+	status := svc.Status(ctx)
+	require.Len(t, status.Routes, 1)
+	assert.False(t, status.Routes[0].Covered)
+	assert.Contains(t, status.Routes[0].Error, "token=redacted")
+	assert.NotContains(t, status.Routes[0].Error, "sk-secret")
+}
+
+func TestServiceStatusCoverageUsesServingCertDespiteTransientError(t *testing.T) {
+	ctx := context.Background()
+	certPEM, keyPEM, err := generateTestCertPEM([]string{"app.example.com"})
+	require.NoError(t, err)
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	require.NoError(t, err)
+	store, _ := newMockCertificateStore(t, out.StoredCertificate{
+		ID:            "http01-app.example.com",
+		Names:         []string{"app.example.com"},
+		Challenge:     domain.ACMEChallengeHTTP01,
+		Certificate:   tlsCert,
+		FullchainPEM:  certPEM,
+		PrivateKeyPEM: keyPEM,
+		NotAfter:      time.Now().Add(90 * 24 * time.Hour),
+		LastError:     "transient renewal error",
+	})
+	cfg := Config{Enabled: true}
+	svc := NewService(cfg, ServiceDeps{
+		Config: cfg,
+		Routes: &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}},
+		Store:  store,
+	})
+	require.NoError(t, svc.Load(ctx))
+
+	status := svc.Status(ctx)
+	require.Len(t, status.Routes, 1)
+	assert.True(t, status.Routes[0].Covered)
+	assert.Equal(t, "http01-app.example.com", status.Routes[0].CoveredBy)
 }
 
 func TestServiceStatusRedactsSensitiveStrings(t *testing.T) {

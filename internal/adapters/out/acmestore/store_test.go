@@ -128,7 +128,7 @@ func TestStoreRejectsUnsafeID(t *testing.T) {
 	store, err := New(root)
 	require.NoError(t, err)
 
-	for _, id := range []string{"../escape", ".", ".hidden"} {
+	for _, id := range []string{"../escape", ".", ".hidden", "tenant.old", "tenant.tmp-123"} {
 		t.Run(id, func(t *testing.T) {
 			cert := out.StoredCertificate{
 				ID:            id,

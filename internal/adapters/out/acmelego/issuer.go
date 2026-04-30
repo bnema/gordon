@@ -49,10 +49,12 @@ type Config struct {
 
 // Issuer implements out.PublicCertificateIssuer using the lego ACME client.
 type Issuer struct {
-	cfg    Config
-	mu     sync.Mutex
-	client *lego.Client
-	user   *AccountUser
+	cfg          Config
+	mu           sync.Mutex
+	client       *lego.Client
+	user         *AccountUser
+	initializing bool
+	initDone     chan struct{}
 }
 
 // NewIssuer creates a new Issuer. Config is validated; the ACME account is
@@ -150,45 +152,74 @@ func (i *Issuer) Renew(ctx context.Context, cert out.StoredCertificate) (*out.St
 
 // ensureClient initializes the lego client and ACME account if not yet done.
 func (i *Issuer) ensureClient(ctx context.Context) error {
-	i.mu.Lock()
-	defer i.mu.Unlock()
+	for {
+		i.mu.Lock()
+		if i.client != nil {
+			i.mu.Unlock()
+			return nil
+		}
+		if i.initializing {
+			done := i.initDone
+			i.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		i.initializing = true
+		i.initDone = make(chan struct{})
+		done := i.initDone
+		i.mu.Unlock()
 
-	if i.client != nil {
-		return nil
+		user, client, err := i.buildClient(ctx)
+
+		i.mu.Lock()
+		if err == nil {
+			i.user = user
+			i.client = client
+		}
+		i.initializing = false
+		close(done)
+		i.initDone = nil
+		i.mu.Unlock()
+
+		return err
 	}
+}
 
+func (i *Issuer) buildClient(ctx context.Context) (*AccountUser, *lego.Client, error) {
 	// Load or create ACME account
 	user, err := i.loadOrCreateAccount(ctx)
 	if err != nil {
-		return fmt.Errorf("acme account: %w", err)
+		return nil, nil, fmt.Errorf("acme account: %w", err)
 	}
-	i.user = user
 
 	client, err := lego.NewClient(i.newLegoConfig(user))
 	if err != nil {
-		return fmt.Errorf("create lego client: %w", err)
+		return nil, nil, fmt.Errorf("create lego client: %w", err)
 	}
 
 	// Set up challenge providers
 	switch i.cfg.Challenge {
 	case domain.ACMEChallengeHTTP01:
 		if err := client.Challenge.SetHTTP01Provider(NewHTTPProvider(i.cfg.HTTPChallengeSink)); err != nil {
-			return fmt.Errorf("set http-01 provider: %w", err)
+			return nil, nil, fmt.Errorf("set http-01 provider: %w", err)
 		}
 	case domain.ACMEChallengeCloudflareDNS01:
 		cfCfg := cloudflare.NewDefaultConfig()
 		cfCfg.AuthToken = i.cfg.Token
 		cfProvider, err := cloudflare.NewDNSProviderConfig(cfCfg)
 		if err != nil {
-			return fmt.Errorf("create cloudflare dns provider: %w", err)
+			return nil, nil, fmt.Errorf("create cloudflare dns provider: %w", err)
 		}
 		if err := client.Challenge.SetDNS01Provider(cfProvider); err != nil {
-			return fmt.Errorf("set dns-01 provider: %w", err)
+			return nil, nil, fmt.Errorf("set dns-01 provider: %w", err)
 		}
 	}
 
-	i.client = client
-	return nil
+	return user, client, nil
 }
 
 // loadOrCreateAccount loads an existing ACME account from the store or creates

@@ -12,10 +12,13 @@ const (
 	ACMEChallengeAuto            ACMEChallengeMode = "auto"
 	ACMEChallengeHTTP01          ACMEChallengeMode = "http-01"
 	ACMEChallengeCloudflareDNS01 ACMEChallengeMode = "cloudflare-dns-01"
+
+	MaxHTTP01TokenLength = 256
+	TLSRenewalWindow     = 30 * 24 * time.Hour
 )
 
 func IsValidHTTP01Token(token string) bool {
-	return token != "" && !strings.Contains(token, "/") && !strings.Contains(token, "\\") && !strings.Contains(token, "..") && !strings.Contains(token, "\x00")
+	return token != "" && len(token) <= MaxHTTP01TokenLength && !strings.Contains(token, "/") && !strings.Contains(token, "\\") && !strings.Contains(token, "..") && !strings.Contains(token, "\x00")
 }
 
 func ParseACMEChallengeMode(value string) (ACMEChallengeMode, error) {
@@ -95,7 +98,7 @@ func (c ManagedCertificate) Health(now time.Time) TLSCertificateStatus {
 	if !now.Before(c.NotAfter) {
 		return TLSCertificateStatusExpired
 	}
-	if !now.Add(30 * 24 * time.Hour).Before(c.NotAfter) {
+	if !now.Add(TLSRenewalWindow).Before(c.NotAfter) {
 		return TLSCertificateStatusWarning
 	}
 	return TLSCertificateStatusValid

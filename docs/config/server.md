@@ -84,12 +84,33 @@ tls_key_file = "/etc/gordon/tls/key.pem"
 
 The static certificate is served for SNI-matching domains (including wildcards). All other domains get on-demand certs from the internal CA.
 
+#### Public ACME certificates
+
+Gordon can obtain public certificates through Let's Encrypt-compatible ACME when `[tls.acme]` is enabled. The HTTPS listener must also be enabled (`server.tls_port > 0`).
+
+```toml
+[server]
+tls_port = 8443
+
+[tls.acme]
+enabled = true
+email = "admin@example.com"
+challenge = "auto" # auto, http-01, or cloudflare-dns-01
+```
+
+Challenge behavior:
+- `http-01` serves `/.well-known/acme-challenge/<token>` on the HTTP proxy port.
+- `cloudflare-dns-01` uses a Cloudflare API token from `pass`, `GORDON_CLOUDFLARE_API_TOKEN_FILE`, or `GORDON_CLOUDFLARE_API_TOKEN`.
+- `auto` selects Cloudflare DNS-01 when a token is available, otherwise falls back to HTTP-01.
+
+Static certificates have priority, then public ACME certificates, then Gordon's internal CA fallback. Gordon uses the `go-acme/lego` ACME client, including its DNS-provider support for Cloudflare DNS-01.
+
 #### Direct HTTP Onboarding
 
 When `tls_port` is non-zero, direct HTTP clients (those not arriving through a trusted proxy) are restricted to CA onboarding paths only:
 
 - `/`, `/ca`, `/ca.crt`, `/ca.mobileconfig` — serve the onboarding page and CA certificate downloads
-- `/.well-known/acme-challenge/*` — returns `404 Not Found` (reserved for future ACME support)
+- `/.well-known/acme-challenge/*` — serves ACME HTTP-01 challenges when public ACME HTTP-01 is enabled, otherwise returns `404 Not Found`
 - All other paths return `403 Forbidden`
 
 This lets new clients discover and trust the internal CA over plain HTTP without exposing the full application. Trusted proxy traffic (e.g. from Cloudflare) continues through the normal HTTP proxy path unaffected.
