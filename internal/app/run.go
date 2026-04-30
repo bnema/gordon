@@ -198,9 +198,10 @@ type Config struct {
 
 	TLS struct {
 		ACME struct {
-			Enabled   bool   `mapstructure:"enabled"`
-			Email     string `mapstructure:"email"`
-			Challenge string `mapstructure:"challenge"`
+			Enabled         bool   `mapstructure:"enabled"`
+			Email           string `mapstructure:"email"`
+			Challenge       string `mapstructure:"challenge"`
+			ObtainBatchSize int    `mapstructure:"obtain_batch_size"`
 		} `mapstructure:"acme"`
 	} `mapstructure:"tls"`
 }
@@ -239,6 +240,7 @@ type services struct {
 	pkiSvc            *pkiusecase.Service
 	reloadCoordinator *reloadCoordinator
 	publicTLSSvc      in.PublicTLSService
+	publicTLSRuntime  publicTLSRuntime
 	registryHandler   interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
@@ -419,7 +421,7 @@ func initAccessLog(cfg Config, log zerowrap.Logger) (*accesslog.Writer, error) {
 // serviceOptions controls optional behavior for createServicesWithOptions.
 type serviceOptions struct {
 	// StartPublicTLS controls whether ACME Reconcile and renewal loop are started.
-	// Server runtime sets true; Kernel/local CLI sets false (read-only status).
+	// Runtime starts public TLS after listeners bind; local CLI uses false for read-only operations.
 	StartPublicTLS bool
 }
 
@@ -434,9 +436,9 @@ type serviceInit struct {
 }
 
 // createServices creates all the application services for server runtime.
-// It calls createServicesWithOptions with StartPublicTLS: true.
+// Public ACME reconciliation is started later, after the HTTP listener is bound.
 func createServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (_ *services, retErr error) {
-	return createServicesWithOptions(ctx, v, cfg, log, serviceOptions{StartPublicTLS: true})
+	return createServicesWithOptions(ctx, v, cfg, log, serviceOptions{StartPublicTLS: false})
 }
 
 // createServicesWithOptions creates all the application services with the given options.
@@ -555,12 +557,13 @@ func (si *serviceInit) initPublicTLS() error {
 	log := si.log
 
 	publicTLSCfg := publictls.Config{
-		Enabled:   si.cfg.TLS.ACME.Enabled,
-		Email:     si.cfg.TLS.ACME.Email,
-		Challenge: si.cfg.TLS.ACME.Challenge,
-		HTTPPort:  si.cfg.Server.Port,
-		TLSPort:   si.cfg.Server.TLSPort,
-		DataDir:   resolveDataDir(si.cfg.Server.DataDir),
+		Enabled:         si.cfg.TLS.ACME.Enabled,
+		Email:           si.cfg.TLS.ACME.Email,
+		Challenge:       si.cfg.TLS.ACME.Challenge,
+		HTTPPort:        si.cfg.Server.Port,
+		TLSPort:         si.cfg.Server.TLSPort,
+		DataDir:         resolveDataDir(si.cfg.Server.DataDir),
+		ObtainBatchSize: si.cfg.TLS.ACME.ObtainBatchSize,
 	}
 
 	tokenResolver := secrets.NewPublicTLSResolver(secrets.PublicTLSResolverConfig{})
@@ -607,10 +610,9 @@ func (si *serviceInit) initPublicTLS() error {
 	}
 
 	if si.startPublicTLS {
-		if err := svc.Reconcile(ctx); err != nil {
-			log.Warn().Err(err).Msg("failed to reconcile ACME certificates, continuing")
+		if err := startPublicTLSRuntime(ctx, svc, log); err != nil {
+			log.Warn().Err(err).Msg("failed to start public ACME TLS runtime, continuing")
 		}
-		svc.StartRenewalLoop(ctx, time.Hour)
 		log.Info().
 			Str("email", si.cfg.TLS.ACME.Email).
 			Str("challenge", string(effective.Mode)).
@@ -624,6 +626,24 @@ func (si *serviceInit) initPublicTLS() error {
 	}
 
 	si.svc.publicTLSSvc = svc
+	si.svc.publicTLSRuntime = svc
+	return nil
+}
+
+type publicTLSRuntime interface {
+	Reconcile(context.Context) error
+	StartRenewalLoop(context.Context, time.Duration) <-chan struct{}
+}
+
+func startPublicTLSRuntime(ctx context.Context, svc publicTLSRuntime, log zerowrap.Logger) error {
+	if svc == nil {
+		return nil
+	}
+	if err := svc.Reconcile(ctx); err != nil {
+		return err
+	}
+	svc.StartRenewalLoop(ctx, time.Hour)
+	log.Info().Msg("public ACME TLS runtime started")
 	return nil
 }
 
@@ -2099,11 +2119,10 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 
 	httpsMux := http.NewServeMux()
 	if obHandler != nil {
-		httpsMux.HandleFunc("GET /ca", obHandler.ServeOnboardingPage)
-		httpsMux.HandleFunc("GET /ca.crt", obHandler.ServeCACert)
-		httpsMux.HandleFunc("GET /ca.mobileconfig", obHandler.ServeMobileconfig)
+		httpsMux.Handle("/", gordonDomainOnboardingGate(cfg.Server.GordonDomain, obHandler, proxyHandler))
+	} else {
+		httpsMux.Handle("/", proxyHandler)
 	}
-	httpsMux.Handle("/", proxyHandler)
 
 	httpsHandler := otelhttp.NewHandler(middleware.Chain(httpsProxyMiddlewares...)(httpsMux), "gordon.proxy.tls")
 
@@ -2130,6 +2149,10 @@ func directHTTPOnboardingGate(ob *onboarding.Handler, proxyNets []*net.IPNet, pr
 	// Build a small mux for direct-client onboarding paths.
 	onboardingMux := http.NewServeMux()
 	onboardingMux.HandleFunc("GET /{$}", ob.ServeOnboardingPage)
+	onboardingMux.HandleFunc("GET /.well-known/gordon/", ob.ServeOnboardingPage)
+	onboardingMux.HandleFunc("GET /.well-known/gordon/ca", ob.ServeOnboardingPage)
+	onboardingMux.HandleFunc("GET /.well-known/gordon/ca.crt", ob.ServeCACert)
+	onboardingMux.HandleFunc("GET /.well-known/gordon/ca.mobileconfig", ob.ServeMobileconfig)
 	onboardingMux.HandleFunc("GET /ca", ob.ServeOnboardingPage)
 	onboardingMux.HandleFunc("GET /ca.crt", ob.ServeCACert)
 	onboardingMux.HandleFunc("GET /ca.mobileconfig", ob.ServeMobileconfig)
@@ -2156,6 +2179,35 @@ func directHTTPOnboardingGate(ob *onboarding.Handler, proxyNets []*net.IPNet, pr
 			return
 		}
 		onboardingWithMiddleware.ServeHTTP(w, r)
+	})
+}
+
+func requestHostMatches(host, expected string) bool {
+	host = strings.TrimSpace(host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	expected = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(expected)), ".")
+	return host == expected
+}
+
+func gordonDomainOnboardingGate(gordonDomain string, ob *onboarding.Handler, proxyHandler http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /ca", ob.ServeOnboardingPage)
+	mux.HandleFunc("GET /ca.crt", ob.ServeCACert)
+	mux.HandleFunc("GET /ca.mobileconfig", ob.ServeMobileconfig)
+	mux.HandleFunc("GET /.well-known/gordon/", ob.ServeOnboardingPage)
+	mux.HandleFunc("GET /.well-known/gordon/ca", ob.ServeOnboardingPage)
+	mux.HandleFunc("GET /.well-known/gordon/ca.crt", ob.ServeCACert)
+	mux.HandleFunc("GET /.well-known/gordon/ca.mobileconfig", ob.ServeMobileconfig)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if gordonDomain != "" && requestHostMatches(r.Host, gordonDomain) {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		proxyHandler.ServeHTTP(w, r)
 	})
 }
 
@@ -2481,6 +2533,8 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	}
 	logEvent.Msg("Gordon is running")
 
+	startPublicTLSRuntimeWithWarning(ctx, svc.publicTLSRuntime, log)
+
 	schedulerCleanup, err := startOptionalSchedulers(ctx, cfg, svc, log, v)
 	if err != nil {
 		return err
@@ -2496,6 +2550,12 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	cleanupHandlers() // Stop debounce timers before draining containers
 	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, log)
 	return nil
+}
+
+func startPublicTLSRuntimeWithWarning(ctx context.Context, svc publicTLSRuntime, log zerowrap.Logger) {
+	if err := startPublicTLSRuntime(ctx, svc, log); err != nil {
+		log.Warn().Err(err).Msg("failed to start public ACME TLS runtime, continuing")
+	}
 }
 
 func waitForServerReady(ready <-chan struct{}, errChan <-chan error) error {
@@ -3219,6 +3279,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("tls.acme.enabled", false)
 	v.SetDefault("tls.acme.email", "")
 	v.SetDefault("tls.acme.challenge", "auto")
+	v.SetDefault("tls.acme.obtain_batch_size", 1)
 	v.SetDefault("server.force_https_redirect", false)
 	v.SetDefault("server.data_dir", DefaultDataDir())
 	v.SetDefault("server.runtime", "auto")

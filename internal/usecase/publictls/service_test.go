@@ -251,6 +251,55 @@ func generateTestCertPEM(names []string) (certPEM []byte, keyPEM []byte, err err
 // Tests
 // ---------------------------------------------------------------------------
 
+func TestServiceReconcileLimitsMissingObtainsPerRun(t *testing.T) {
+	ctx := context.Background()
+
+	routes := &fakeRoutes{
+		routes: []domain.Route{
+			{Domain: "one.example.com"},
+			{Domain: "two.example.com"},
+			{Domain: "three.example.com"},
+		},
+	}
+	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
+	store, storeState := newMockCertificateStore(t)
+
+	cfg := Config{
+		Enabled:         true,
+		Email:           "admin@example.com",
+		Challenge:       "http-01",
+		HTTPPort:        8088,
+		TLSPort:         8443,
+		ObtainBatchSize: 2,
+	}
+
+	svc := NewService(cfg, ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 2, "first reconcile should respect configured obtain batch size")
+	assert.Len(t, storeState.All(), 2)
+
+	require.NoError(t, svc.Reconcile(ctx))
+	orders = recorder.Orders()
+	require.Len(t, orders, 3, "second reconcile should continue remaining missing targets")
+	assert.Len(t, storeState.All(), 3)
+}
+
 func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 	ctx := context.Background()
 

@@ -95,7 +95,8 @@ tls_port = 8443
 [tls.acme]
 enabled = true
 email = "admin@example.com"
-challenge = "auto" # auto, http-01, or cloudflare-dns-01
+challenge = "auto"       # auto, http-01, or cloudflare-dns-01
+obtain_batch_size = 1    # maximum new certificate orders per reconcile run
 ```
 
 Challenge behavior:
@@ -103,19 +104,26 @@ Challenge behavior:
 - `cloudflare-dns-01` uses a Cloudflare API token from `pass`, `GORDON_CLOUDFLARE_API_TOKEN_FILE`, or `GORDON_CLOUDFLARE_API_TOKEN`.
 - `auto` selects Cloudflare DNS-01 when a token is available, otherwise falls back to HTTP-01.
 
+HTTP-01 requires public access to port 80 for each hostname being validated. If you use Cloudflare in DNS-only/gray-cloud mode, your firewall/NAT must allow direct public traffic to Gordon's HTTP proxy port. A firewall rule that only allows Cloudflare source IPs on port 80 is compatible with orange-cloud proxying, but it blocks gray-cloud HTTP-01 validation; use DNS-01 or temporarily open port 80 for direct validation.
+
+Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile run (default `1`) so enabling ACME on an existing multi-route server does not burst through every route and hit Let's Encrypt rate limits. Later reloads, restarts, or renewal-loop reconciles continue issuing remaining certificates.
+
+For Cloudflare Full/Strict, Cloudflare terminates browser TLS at the edge and connects to Gordon over HTTPS. A public ACME certificate served by Gordon is the preferred origin certificate because Cloudflare Strict can validate it without custom origin trust. Cloudflare Flexible mode (HTTPS at the edge, HTTP to Gordon) remains a legacy/compatibility option, but it is not end-to-end HTTPS.
+
 Static certificates have priority, then public ACME certificates, then Gordon's internal CA fallback. Gordon uses the `go-acme/lego` ACME client, including its DNS-provider support for Cloudflare DNS-01.
 
 #### Direct HTTP Onboarding
 
 When `tls_port` is non-zero, direct HTTP clients (those not arriving through a trusted proxy) are restricted to CA onboarding paths only:
 
-- `/`, `/ca`, `/ca.crt`, `/ca.mobileconfig` — serve the onboarding page and CA certificate downloads
+- `/.well-known/gordon/`, `/.well-known/gordon/ca`, `/.well-known/gordon/ca.crt`, `/.well-known/gordon/ca.mobileconfig` — serve the onboarding page and CA certificate downloads
+- `/`, `/ca`, `/ca.crt`, `/ca.mobileconfig` — legacy compatibility aliases for direct HTTP onboarding
 - `/.well-known/acme-challenge/*` — serves ACME HTTP-01 challenges when public ACME HTTP-01 is enabled, otherwise returns `404 Not Found`
 - All other paths return `403 Forbidden`
 
 This lets new clients discover and trust the internal CA over plain HTTP without exposing the full application. Trusted proxy traffic (e.g. from Cloudflare) continues through the normal HTTP proxy path unaffected.
 
-The onboarding page is also available on HTTPS at `/ca`.
+On HTTPS, onboarding paths are served only on `server.gordon_domain`; app hosts can use `/ca` for their own routes without Gordon intercepting it.
 
 #### HTTP to HTTPS redirect
 

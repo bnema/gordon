@@ -14,4 +14,5 @@ func TestLoadConfig_ACMEDefaults(t *testing.T) {
 	assert.False(t, v.GetBool("tls.acme.enabled"))
 	assert.Equal(t, "", v.GetString("tls.acme.email"))
 	assert.Equal(t, "auto", v.GetString("tls.acme.challenge"))
+	assert.Equal(t, 1, v.GetInt("tls.acme.obtain_batch_size"))
 }

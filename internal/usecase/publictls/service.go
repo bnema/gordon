@@ -33,6 +33,8 @@ type ServiceDeps struct {
 	Log          zerowrap.Logger
 }
 
+const defaultObtainBatchSize = 1
+
 // Service manages public TLS certificates via ACME.
 type Service struct {
 	mu       sync.RWMutex
@@ -193,10 +195,28 @@ func (s *Service) Reconcile(ctx context.Context) error {
 
 	// Process missing targets without holding s.mu or the store lock so
 	// GetCertificate/Status are not blocked during network I/O (Obtain).
+	pendingCount := len(missing)
+	missing = limitMissingTargets(missing, s.cfg.ObtainBatchSize)
+	if remaining := pendingCount - len(missing); remaining > 0 {
+		log.Info().
+			Int("obtain_batch_size", len(missing)).
+			Int("remaining_count", remaining).
+			Msg("ACME obtain batch limit reached; remaining certificates will be reconciled later")
+	}
 	s.reconcileMissingTargets(ctx, missing, required)
 
-	log.Debug().Int("missing_count", len(missing)).Msg("reconciled missing targets")
+	log.Debug().Int("missing_count", len(missing)).Int("pending_count", pendingCount).Msg("reconciled missing targets")
 	return nil
+}
+
+func limitMissingTargets(targets []CertificateTarget, batchSize int) []CertificateTarget {
+	if batchSize <= 0 {
+		batchSize = defaultObtainBatchSize
+	}
+	if len(targets) <= batchSize {
+		return targets
+	}
+	return targets[:batchSize]
 }
 
 func populateStoredCertificate(cert *out.StoredCertificate) error {
