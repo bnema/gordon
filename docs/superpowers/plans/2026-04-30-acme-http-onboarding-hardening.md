@@ -10,7 +10,7 @@
 
 ---
 
-### Phase 1: Failing behavior tests
+## Phase 1: Failing behavior tests
 
 **Goal:** Codify desired HTTP/onboarding routing and ACME startup timing before production edits.
 
@@ -45,7 +45,7 @@
 
 ---
 
-### Phase 2: Implementation
+## Phase 2: Implementation
 
 **Goal:** Pass tests with minimal production changes.
 
@@ -81,7 +81,7 @@
 
 ---
 
-### Phase 3: Docs and verification
+## Phase 3: Docs and verification
 
 **Goal:** Document the operational model and validate the branch.
 
