@@ -149,6 +149,10 @@ Commands are organized by where they run:
 	previewCmd.GroupID = groupManage
 	rootCmd.AddCommand(previewCmd)
 
+	tlsCmd := newTLSCmd()
+	tlsCmd.GroupID = groupManage
+	rootCmd.AddCommand(tlsCmd)
+
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
 	remotesCmd.GroupID = groupClient
@@ -383,7 +387,7 @@ func runLogsLocal(logsConfigPath, logDomain string, follow bool, lines int) erro
 }
 
 // showContainerLogsLocal shows container logs using local Docker access.
-func showContainerLogsLocal(logsConfigPath, logDomain string, follow bool, lines int) error {
+func showContainerLogsLocal(_ string, logDomain string, follow bool, lines int) error {
 	// For local container logs, we need Docker access which requires
 	// the runtime to be initialized. For now, suggest using remote mode
 	// or direct docker logs command.

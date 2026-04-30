@@ -114,6 +114,10 @@ func (c *resolveFromImageTestControlPlane) RemoveAutoRouteAllowedDomain(context.
 	panic("unexpected call")
 }
 
+func (c *resolveFromImageTestControlPlane) GetTLSStatus(context.Context) (*dto.TLSStatusResponse, error) {
+	return &dto.TLSStatusResponse{}, nil
+}
+
 func (c *resolveFromImageTestControlPlane) GetStatus(context.Context) (*remote.Status, error) {
 	panic("unexpected call")
 }

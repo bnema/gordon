@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/bnema/zerowrap"
 
@@ -25,6 +26,7 @@ type Kernel struct {
 	healthSvc    in.HealthService
 	logSvc       in.LogService
 	volumeSvc    in.VolumeService
+	publicTLSSvc in.PublicTLSService
 	cleanup      func()
 }
 
@@ -59,7 +61,22 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 
 	// Prefer full service wiring so local CLI can execute the same operations
 	// as remote mode without going through HTTP admin endpoints.
-	if svc, fullErr := createServices(ctx, v, cfg, log); fullErr == nil {
+	// Use StartPublicTLS: false to prevent ACME Reconcile and renewal loop
+	// side effects during read-only CLI commands (e.g. gordon tls status).
+	if svc, fullErr := createServicesWithOptions(ctx, v, cfg, log, serviceOptions{StartPublicTLS: false}); fullErr == nil {
+		// Wrap cleanup to stop public TLS service (with its renewal loop)
+		// before the logger is cleaned up.
+		wrappedCleanup := func() {
+			if svc.publicTLSSvc != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := svc.publicTLSSvc.Stop(ctx); err != nil {
+					log.Warn().Err(err).Msg("failed to stop public TLS service")
+				}
+			}
+			cleanup()
+		}
+
 		return &Kernel{
 			authEnabled:  cfg.Auth.Enabled,
 			configSvc:    svc.configSvc,
@@ -70,7 +87,8 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			healthSvc:    svc.healthSvc,
 			logSvc:       svc.logSvc,
 			volumeSvc:    svc.volumeSvc,
-			cleanup:      cleanup,
+			publicTLSSvc: svc.publicTLSSvc,
+			cleanup:      wrappedCleanup,
 		}, nil
 	} else {
 		log.Warn().Err(fullErr).Msg("local kernel running in minimal mode")
@@ -125,5 +143,7 @@ func (k *Kernel) Health() in.HealthService { return k.healthSvc }
 func (k *Kernel) Logs() in.LogService { return k.logSvc }
 
 func (k *Kernel) Volumes() in.VolumeService { return k.volumeSvc }
+
+func (k *Kernel) PublicTLS() in.PublicTLSService { return k.publicTLSSvc }
 
 func (k *Kernel) AuthEnabled() bool { return k != nil && k.authEnabled }

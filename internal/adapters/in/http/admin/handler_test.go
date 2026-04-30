@@ -2585,3 +2585,91 @@ func TestHandler_Images_Authorization(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "insufficient permissions for config:write")
 	})
 }
+
+func TestHandler_TLSStatus_RequiresStatusReadScope(t *testing.T) {
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.PublicTLSSvc = inmocks.NewMockPublicTLSService(t)
+	})
+
+	server := newScopedTestServer(t, handler, "admin:config:write")
+	resp, err := http.Get(server.URL + "/admin/tls/status")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, string(body), "insufficient permissions for status:read")
+}
+
+func TestHandler_TLSStatus_GETReturnsJSON(t *testing.T) {
+	now := time.Now()
+	tlsStatus := domain.PublicTLSStatus{
+		ACMEEnabled:     true,
+		ConfiguredMode:  domain.ACMEChallengeAuto,
+		EffectiveMode:   domain.ACMEChallengeHTTP01,
+		SelectionReason: "auto-selected",
+		TokenSource:     domain.ACMETokenSourcePass,
+		Certificates: []domain.ManagedCertificate{
+			{
+				ID:        "cert-1",
+				Names:     []string{"example.com"},
+				Challenge: domain.ACMEChallengeHTTP01,
+				Status:    domain.TLSCertificateStatusValid,
+				NotAfter:  now.Add(60 * 24 * time.Hour),
+			},
+		},
+		Routes: []domain.TLSRouteCoverage{
+			{
+				Domain:       "example.com",
+				Covered:      true,
+				CoveredBy:    "cert-1",
+				RequiredACME: true,
+			},
+		},
+	}
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		fakeSvc := inmocks.NewMockPublicTLSService(t)
+		fakeSvc.EXPECT().Status(mock.Anything).Return(tlsStatus)
+		d.PublicTLSSvc = fakeSvc
+	})
+
+	server := newScopedTestServer(t, handler, "admin:status:read")
+	resp, err := http.Get(server.URL + "/admin/tls/status")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body dto.TLSStatusResponse
+	err = json.NewDecoder(resp.Body).Decode(&body)
+	require.NoError(t, err)
+
+	assert.True(t, body.ACMEEnabled)
+	assert.Equal(t, "auto", body.ConfiguredMode)
+	assert.Equal(t, "http-01", body.EffectiveMode)
+	assert.Equal(t, "auto-selected", body.SelectionReason)
+	assert.Equal(t, "pass", body.TokenSource)
+	require.Len(t, body.Certificates, 1)
+	assert.Equal(t, "cert-1", body.Certificates[0].ID)
+	assert.Equal(t, "valid", body.Certificates[0].Status)
+	assert.Equal(t, "http-01", body.Certificates[0].Challenge)
+	require.Len(t, body.Routes, 1)
+	assert.Equal(t, "example.com", body.Routes[0].Domain)
+	assert.True(t, body.Routes[0].Covered)
+}
+
+func TestHandler_TLSStatus_POSTReturns405(t *testing.T) {
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.PublicTLSSvc = inmocks.NewMockPublicTLSService(t)
+	})
+
+	server := newScopedTestServer(t, handler, "admin:status:read", "admin:status:write")
+	resp, err := http.Post(server.URL+"/admin/tls/status", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}

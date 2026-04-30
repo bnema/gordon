@@ -25,6 +25,7 @@ type localControlPlane struct {
 	healthSvc    in.HealthService
 	logSvc       in.LogService
 	volumeSvc    in.VolumeService
+	publicTLSSvc in.PublicTLSService
 }
 
 func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
@@ -50,6 +51,7 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 		healthSvc:    kernel.Health(),
 		logSvc:       kernel.Logs(),
 		volumeSvc:    kernel.Volumes(),
+		publicTLSSvc: kernel.PublicTLS(),
 	}
 }
 
@@ -329,6 +331,19 @@ func (l *localControlPlane) RemoveAutoRouteAllowedDomain(ctx context.Context, pa
 		return fmt.Errorf("local config service unavailable")
 	}
 	return l.configSvc.RemoveAutoRouteAllowedDomain(ctx, pattern)
+}
+
+func (l *localControlPlane) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error) {
+	if l.publicTLSSvc == nil {
+		return &dto.TLSStatusResponse{
+			ACMEEnabled:     false,
+			SelectionReason: "public TLS service not configured",
+		}, nil
+	}
+
+	status := l.publicTLSSvc.Status(ctx)
+	result := dto.TLSStatusFromDomain(status)
+	return &result, nil
 }
 
 func (l *localControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {

@@ -52,6 +52,7 @@ type Handler struct {
 	registrySvc   registryDeployService
 	previewSvc    previewService
 	reloadTrigger reloadTrigger
+	publicTLSSvc  in.PublicTLSService
 	log           zerowrap.Logger
 }
 
@@ -149,6 +150,7 @@ type HandlerDeps struct {
 	ImageSvc      in.ImageService
 	VolumeSvc     in.VolumeService
 	ReloadTrigger reloadTrigger
+	PublicTLSSvc  in.PublicTLSService
 }
 
 // NewHandler creates a new admin HTTP handler.
@@ -166,6 +168,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		registrySvc:   deps.RegistrySvc,
 		previewSvc:    deps.PreviewSvc,
 		reloadTrigger: deps.ReloadTrigger,
+		publicTLSSvc:  deps.PublicTLSSvc,
 		log:           deps.Log,
 	}
 }
@@ -216,6 +219,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		"/auth/verify":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
 		"/volumes":       func(w http.ResponseWriter, r *http.Request, _ string) { h.handleListVolumes(w, r) },
 		"/volumes/prune": func(w http.ResponseWriter, r *http.Request, _ string) { h.handlePruneVolumes(w, r) },
+		"/tls/status":    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTLSStatus(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true
@@ -541,8 +545,7 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		return
 	}
 
-	if strings.HasSuffix(routeDomain, "/attachments") {
-		parentDomain := strings.TrimSuffix(routeDomain, "/attachments")
+	if parentDomain, ok := strings.CutSuffix(routeDomain, "/attachments"); ok {
 		if parentDomain == "" {
 			h.sendError(w, http.StatusBadRequest, "domain required in path")
 			return
@@ -1321,8 +1324,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 	container, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route)
 	if err != nil {
 		log.Error().Err(err).Str("domain", deployDomain).Msg("failed to deploy container")
-		var deployErr *domain.DeployFailureError
-		if errors.As(err, &deployErr) {
+		if deployErr, ok := errors.AsType[*domain.DeployFailureError](err); ok {
 			response := dto.DeployErrorResponse{
 				Error: deployErr.Error(),
 				Cause: deployErr.Cause,
@@ -1905,4 +1907,30 @@ func (h *Handler) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.sendJSON(w, http.StatusOK, response)
+}
+
+// handleTLSStatus handles GET /admin/tls/status.
+func (h *Handler) handleTLSStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := r.Context()
+
+	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+
+	if h.publicTLSSvc == nil {
+		h.sendJSON(w, http.StatusOK, dto.TLSStatusResponse{
+			ACMEEnabled:     false,
+			SelectionReason: "public TLS service not configured",
+		})
+		return
+	}
+
+	status := h.publicTLSSvc.Status(ctx)
+	h.sendJSON(w, http.StatusOK, dto.TLSStatusFromDomain(status))
 }

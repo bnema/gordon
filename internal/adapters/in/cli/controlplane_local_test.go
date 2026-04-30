@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/mock"
@@ -93,6 +94,18 @@ func TestLocalControlPlane_RestartWithAttachments(t *testing.T) {
 	result, err := cp.Restart(context.Background(), "app.local", true)
 	require.NoError(t, err)
 	require.Equal(t, "app.local", result.Domain)
+}
+
+func TestLocalControlPlane_GetTLSStatusWithoutService(t *testing.T) {
+	t.Parallel()
+
+	cp := &localControlPlane{}
+	status, err := cp.GetTLSStatus(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, &dto.TLSStatusResponse{
+		ACMEEnabled:     false,
+		SelectionReason: "public TLS service not configured",
+	}, status)
 }
 
 func TestLocalControlPlane_GetContainerLogs(t *testing.T) {

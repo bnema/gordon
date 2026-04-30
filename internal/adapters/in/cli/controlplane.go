@@ -38,6 +38,7 @@ type ControlPlane interface {
 	RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error
 
 	GetStatus(ctx context.Context) (*remote.Status, error)
+	GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error)
 	Reload(ctx context.Context) error
 	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
 	GetConfig(ctx context.Context) (*remote.Config, error)

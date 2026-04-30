@@ -185,7 +185,7 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 	events := &eventBusRecorder{}
 
 	registryLimits := &registryLimitsRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, nil, zerowrap.Default())
 	require.NoError(t, coord.ApplyLoadedConfig(ctx))
 
 	require.Equal(t, 0, reloadSvc.Calls())
@@ -220,7 +220,7 @@ func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	events := &eventBusRecorder{}
 
 	registryLimits := &registryLimitsRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, nil, zerowrap.Default())
 	require.NoError(t, coord.Trigger(ctx))
 	require.NoError(t, coord.Trigger(ctx))
 
@@ -253,7 +253,7 @@ func TestReloadCoordinator_RetriesImmediatelyAfterFailedReload(t *testing.T) {
 	reloadErr := errors.New("reload failed")
 	reloadSvc := &reloadRecorder{err: reloadErr}
 	proxySvc := &proxyRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, zerowrap.Default())
 
 	err := coord.Trigger(ctx)
 	require.ErrorIs(t, err, reloadErr)
@@ -282,7 +282,7 @@ func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T)
 	proxySvc := &proxyRecorder{}
 	events := &eventBusRecorder{err: publishErr}
 
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, events, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, events, nil, zerowrap.Default())
 
 	err := coord.Trigger(ctx)
 	require.ErrorIs(t, err, publishErr)
@@ -314,7 +314,7 @@ func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
 		<-release
 	}}
 	proxySvc := &proxyRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, zerowrap.Default())
 
 	firstDone := make(chan struct{})
 	go func() {
