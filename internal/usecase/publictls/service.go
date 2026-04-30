@@ -184,19 +184,26 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	s.mu.Lock()
 	s.requiredHosts = required
 
-	missing := make([]CertificateTarget, 0)
+	batchSize := s.cfg.ObtainBatchSize
+	if batchSize <= 0 {
+		batchSize = defaultObtainBatchSize
+	}
+
+	var missing []CertificateTarget
+	pendingCount := 0
 	for _, target := range targets {
 		if s.certificateExistsLocked(target) {
 			continue
 		}
-		missing = append(missing, target)
+		pendingCount++
+		if len(missing) < batchSize {
+			missing = append(missing, target)
+		}
 	}
 	s.mu.Unlock()
 
 	// Process missing targets without holding s.mu or the store lock so
 	// GetCertificate/Status are not blocked during network I/O (Obtain).
-	pendingCount := len(missing)
-	missing = limitMissingTargets(missing, s.cfg.ObtainBatchSize)
 	if remaining := pendingCount - len(missing); remaining > 0 {
 		log.Info().
 			Int("obtain_batch_size", len(missing)).
@@ -207,16 +214,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 
 	log.Debug().Int("missing_count", len(missing)).Int("pending_count", pendingCount).Msg("reconciled missing targets")
 	return nil
-}
-
-func limitMissingTargets(targets []CertificateTarget, batchSize int) []CertificateTarget {
-	if batchSize <= 0 {
-		batchSize = defaultObtainBatchSize
-	}
-	if len(targets) <= batchSize {
-		return targets
-	}
-	return targets[:batchSize]
 }
 
 func populateStoredCertificate(cert *out.StoredCertificate) error {

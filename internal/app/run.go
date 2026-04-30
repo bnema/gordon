@@ -622,7 +622,7 @@ func (si *serviceInit) initPublicTLS() error {
 		log.Info().
 			Str("email", si.cfg.TLS.ACME.Email).
 			Str("challenge", string(effective.Mode)).
-			Msg("public ACME TLS initialized (read-only, no renewal loop)")
+			Msg("public ACME TLS initialized (runtime start deferred)")
 	}
 
 	si.svc.publicTLSSvc = svc
@@ -630,6 +630,9 @@ func (si *serviceInit) initPublicTLS() error {
 	return nil
 }
 
+// publicTLSRuntime is the subset of in.PublicTLSService needed at server runtime
+// after the HTTP listener is bound: reconcile missing certs and start the renewal
+// loop. It is nil when ACME is disabled.
 type publicTLSRuntime interface {
 	Reconcile(context.Context) error
 	StartRenewalLoop(context.Context, time.Duration) <-chan struct{}
@@ -2118,8 +2121,20 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 	}
 
 	httpsMux := http.NewServeMux()
-	if obHandler != nil {
-		httpsMux.Handle("/", gordonDomainOnboardingGate(cfg.Server.GordonDomain, obHandler, proxyHandler))
+	if obHandler != nil && cfg.Server.GordonDomain != "" {
+		gordonDomain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(cfg.Server.GordonDomain)), ".")
+		onboardingMux := http.NewServeMux()
+		registerOnboardingRoutes(onboardingMux, obHandler)
+		// Register onboarding paths host-gated so normal traffic hits
+		// proxyHandler directly through the catch-all / pattern.
+		httpsMux.Handle("GET /ca", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
+		httpsMux.Handle("GET /ca.crt", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
+		httpsMux.Handle("GET /ca.mobileconfig", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
+		httpsMux.Handle("GET /.well-known/gordon/", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
+		httpsMux.Handle("GET /.well-known/gordon/ca", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
+		httpsMux.Handle("GET /.well-known/gordon/ca.crt", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
+		httpsMux.Handle("GET /.well-known/gordon/ca.mobileconfig", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
+		httpsMux.Handle("/", proxyHandler)
 	} else {
 		httpsMux.Handle("/", proxyHandler)
 	}
@@ -2140,6 +2155,19 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 	return registryOut, proxyOut, httpsOut
 }
 
+// registerOnboardingRoutes registers all CA onboarding HTTP routes on the
+// given mux. Both direct-HTTP and Gordon-domain HTTPS onboarding use this.
+func registerOnboardingRoutes(mux *http.ServeMux, ob *onboarding.Handler) {
+	mux.HandleFunc("GET /{$}", ob.ServeOnboardingPage)
+	mux.HandleFunc("GET /.well-known/gordon/", ob.ServeOnboardingPage)
+	mux.HandleFunc("GET /.well-known/gordon/ca", ob.ServeOnboardingPage)
+	mux.HandleFunc("GET /.well-known/gordon/ca.crt", ob.ServeCACert)
+	mux.HandleFunc("GET /.well-known/gordon/ca.mobileconfig", ob.ServeMobileconfig)
+	mux.HandleFunc("GET /ca", ob.ServeOnboardingPage)
+	mux.HandleFunc("GET /ca.crt", ob.ServeCACert)
+	mux.HandleFunc("GET /ca.mobileconfig", ob.ServeMobileconfig)
+}
+
 // directHTTPOnboardingGate returns an http.Handler that splits HTTP traffic
 // by source IP. Trusted proxy IPs flow through to the normal proxy chain.
 // Direct clients are served the CA onboarding flow on allowed paths and
@@ -2148,14 +2176,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 func directHTTPOnboardingGate(ob *onboarding.Handler, proxyNets []*net.IPNet, proxyChain http.Handler, log zerowrap.Logger) http.Handler {
 	// Build a small mux for direct-client onboarding paths.
 	onboardingMux := http.NewServeMux()
-	onboardingMux.HandleFunc("GET /{$}", ob.ServeOnboardingPage)
-	onboardingMux.HandleFunc("GET /.well-known/gordon/", ob.ServeOnboardingPage)
-	onboardingMux.HandleFunc("GET /.well-known/gordon/ca", ob.ServeOnboardingPage)
-	onboardingMux.HandleFunc("GET /.well-known/gordon/ca.crt", ob.ServeCACert)
-	onboardingMux.HandleFunc("GET /.well-known/gordon/ca.mobileconfig", ob.ServeMobileconfig)
-	onboardingMux.HandleFunc("GET /ca", ob.ServeOnboardingPage)
-	onboardingMux.HandleFunc("GET /ca.crt", ob.ServeCACert)
-	onboardingMux.HandleFunc("GET /ca.mobileconfig", ob.ServeMobileconfig)
+	registerOnboardingRoutes(onboardingMux, ob)
 
 	// Reserve ACME challenge path for future use.
 	onboardingMux.HandleFunc("/.well-known/acme-challenge/", func(w http.ResponseWriter, _ *http.Request) {
@@ -2182,7 +2203,9 @@ func directHTTPOnboardingGate(ob *onboarding.Handler, proxyNets []*net.IPNet, pr
 	})
 }
 
-func requestHostMatches(host, expected string) bool {
+// canonicalHostsEqual compares two hosts after normalising both: stripping
+// port, trimming spaces, lowercasing, and removing trailing dot.
+func canonicalHostsEqual(host, expected string) bool {
 	host = strings.TrimSpace(host)
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
@@ -2192,19 +2215,14 @@ func requestHostMatches(host, expected string) bool {
 	return host == expected
 }
 
-func gordonDomainOnboardingGate(gordonDomain string, ob *onboarding.Handler, proxyHandler http.Handler) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /ca", ob.ServeOnboardingPage)
-	mux.HandleFunc("GET /ca.crt", ob.ServeCACert)
-	mux.HandleFunc("GET /ca.mobileconfig", ob.ServeMobileconfig)
-	mux.HandleFunc("GET /.well-known/gordon/", ob.ServeOnboardingPage)
-	mux.HandleFunc("GET /.well-known/gordon/ca", ob.ServeOnboardingPage)
-	mux.HandleFunc("GET /.well-known/gordon/ca.crt", ob.ServeCACert)
-	mux.HandleFunc("GET /.well-known/gordon/ca.mobileconfig", ob.ServeMobileconfig)
-
+// gordonDomainOnboardingGate returns a handler that serves onboarding routes
+// only when the request host matches gordonDomain. For mismatched hosts it
+// delegates to proxyHandler. gordonDomain must already be canonicalised
+// (trimmed, lowered, trailing dot removed).
+func gordonDomainOnboardingGate(gordonDomain string, onboardingMux, proxyHandler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if gordonDomain != "" && requestHostMatches(r.Host, gordonDomain) {
-			mux.ServeHTTP(w, r)
+		if gordonDomain != "" && canonicalHostsEqual(r.Host, gordonDomain) {
+			onboardingMux.ServeHTTP(w, r)
 			return
 		}
 		proxyHandler.ServeHTTP(w, r)
