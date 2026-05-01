@@ -553,6 +553,11 @@ func (si *serviceInit) initPublicTLS() error {
 	ctx := si.ctx
 	log := si.log
 
+	dnsCfg, err := buildDNSConfig(si.cfg)
+	if err != nil {
+		return log.WrapErr(err, "invalid DNS configuration")
+	}
+
 	publicTLSCfg := publictls.Config{
 		Enabled:         si.cfg.TLS.ACME.Enabled,
 		Email:           si.cfg.TLS.ACME.Email,
@@ -561,6 +566,7 @@ func (si *serviceInit) initPublicTLS() error {
 		TLSPort:         si.cfg.Server.TLSPort,
 		DataDir:         resolveDataDir(si.cfg.Server.DataDir),
 		ObtainBatchSize: si.cfg.TLS.ACME.ObtainBatchSize,
+		DNS:             dnsCfg,
 	}
 
 	tokenResolver := secrets.NewPublicTLSResolver(secrets.PublicTLSResolverConfig{})
@@ -583,11 +589,14 @@ func (si *serviceInit) initPublicTLS() error {
 	}
 
 	issuer, err := acmelego.NewIssuer(acmelego.Config{
-		Email:             si.cfg.TLS.ACME.Email,
-		Challenge:         effective.Mode,
-		Token:             effective.Token,
-		Store:             store,
-		HTTPChallengeSink: challenges,
+		Email:                 si.cfg.TLS.ACME.Email,
+		Challenge:             effective.Mode,
+		Token:                 effective.Token,
+		Store:                 store,
+		HTTPChallengeSink:     challenges,
+		DNSResolvers:          publicTLSCfg.DNS.Resolvers,
+		DNSPropagationTimeout: publicTLSCfg.DNS.PropagationTimeout,
+		DNSPollingInterval:    publicTLSCfg.DNS.PollingInterval,
 	})
 	if err != nil {
 		return log.WrapErr(err, "create ACME issuer")

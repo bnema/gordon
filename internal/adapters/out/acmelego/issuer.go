@@ -15,6 +15,7 @@ import (
 	"github.com/go-acme/lego/v4/acme"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
@@ -33,6 +34,15 @@ type Config struct {
 
 	// Token is the Cloudflare API token (required for DNS-01 challenge).
 	Token string
+
+	// DNSResolvers are recursive resolvers used for DNS-01 propagation checks.
+	DNSResolvers []string
+
+	// DNSPropagationTimeout is the maximum wait for DNS-01 TXT propagation.
+	DNSPropagationTimeout time.Duration
+
+	// DNSPollingInterval is the interval between DNS-01 propagation checks.
+	DNSPollingInterval time.Duration
 
 	// Store persists ACME accounts and certificates.
 	Store out.CertificateStore
@@ -80,6 +90,15 @@ func NewIssuer(cfg Config) (*Issuer, error) {
 	case domain.ACMEChallengeCloudflareDNS01:
 		if cfg.Token == "" {
 			return nil, fmt.Errorf("acmelego: %w", domain.ErrCloudflareTokenMissing)
+		}
+		if len(cfg.DNSResolvers) == 0 {
+			return nil, fmt.Errorf("acmelego: DNSResolvers must contain at least one resolver")
+		}
+		if cfg.DNSPropagationTimeout <= 0 {
+			return nil, fmt.Errorf("acmelego: DNSPropagationTimeout must be positive")
+		}
+		if cfg.DNSPollingInterval <= 0 {
+			return nil, fmt.Errorf("acmelego: DNSPollingInterval must be positive")
 		}
 	default:
 		return nil, fmt.Errorf("acmelego: %w: %s", domain.ErrACMEChallengeInvalid, cfg.Challenge)
@@ -208,13 +227,11 @@ func (i *Issuer) buildClient(ctx context.Context) (*AccountUser, *lego.Client, e
 			return nil, nil, fmt.Errorf("set http-01 provider: %w", err)
 		}
 	case domain.ACMEChallengeCloudflareDNS01:
-		cfCfg := cloudflare.NewDefaultConfig()
-		cfCfg.AuthToken = i.cfg.Token
-		cfProvider, err := cloudflare.NewDNSProviderConfig(cfCfg)
+		cfProvider, err := cloudflare.NewDNSProviderConfig(newCloudflareDNSProviderConfig(i.cfg))
 		if err != nil {
 			return nil, nil, fmt.Errorf("create cloudflare dns provider: %w", err)
 		}
-		if err := client.Challenge.SetDNS01Provider(cfProvider); err != nil {
+		if err := client.Challenge.SetDNS01Provider(cfProvider, dns01.AddRecursiveNameservers(i.cfg.DNSResolvers)); err != nil {
 			return nil, nil, fmt.Errorf("set dns-01 provider: %w", err)
 		}
 	}
@@ -310,6 +327,15 @@ func (i *Issuer) newLegoConfig(user *AccountUser) *lego.Config {
 		legoCfg.HTTPClient = i.cfg.HTTPClient
 	}
 	return legoCfg
+}
+
+// newCloudflareDNSProviderConfig creates a cloudflare DNS provider config from the issuer config.
+func newCloudflareDNSProviderConfig(cfg Config) *cloudflare.Config {
+	cfCfg := cloudflare.NewDefaultConfig()
+	cfCfg.AuthToken = cfg.Token
+	cfCfg.PropagationTimeout = cfg.DNSPropagationTimeout
+	cfCfg.PollingInterval = cfg.DNSPollingInterval
+	return cfCfg
 }
 
 // resourceToStored converts a lego certificate.Resource to out.StoredCertificate.

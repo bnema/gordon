@@ -69,6 +69,31 @@ func TestNewIssuerValidatesCloudflareToken(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrCloudflareTokenMissing)
 }
 
+func TestNewIssuerValidatesCloudflareDNSConfig(t *testing.T) {
+	_, err := NewIssuer(Config{
+		Email:                 "test@example.com",
+		Challenge:             domain.ACMEChallengeCloudflareDNS01,
+		Token:                 "token",
+		Store:                 outmocks.NewMockCertificateStore(t),
+		DNSResolvers:          nil,
+		DNSPropagationTimeout: 5 * time.Minute,
+		DNSPollingInterval:    5 * time.Second,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DNSResolvers")
+
+	_, err = NewIssuer(Config{
+		Email:                 "test@example.com",
+		Challenge:             domain.ACMEChallengeCloudflareDNS01,
+		Token:                 "token",
+		Store:                 outmocks.NewMockCertificateStore(t),
+		DNSResolvers:          []string{"1.1.1.1:53"},
+		DNSPropagationTimeout: 5 * time.Minute,
+		DNSPollingInterval:    5 * time.Second,
+	})
+	require.NoError(t, err)
+}
+
 func TestNewIssuerRejectsNonHTTPSURL(t *testing.T) {
 	_, err := NewIssuer(Config{
 		Email:             "test@example.com",
@@ -100,6 +125,20 @@ func TestNewIssuerValidWithDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, issuer)
 	assert.Equal(t, domain.ACMEChallengeHTTP01, issuer.cfg.Challenge)
+}
+
+func TestCloudflareDNSProviderConfigUsesDNSSettings(t *testing.T) {
+	cfg := Config{
+		Token:                 "token",
+		DNSPropagationTimeout: 7 * time.Minute,
+		DNSPollingInterval:    11 * time.Second,
+	}
+
+	cfCfg := newCloudflareDNSProviderConfig(cfg)
+
+	assert.Equal(t, "token", cfCfg.AuthToken)
+	assert.Equal(t, 7*time.Minute, cfCfg.PropagationTimeout)
+	assert.Equal(t, 11*time.Second, cfCfg.PollingInterval)
 }
 
 func TestPrivateKeyRoundTrip(t *testing.T) {
