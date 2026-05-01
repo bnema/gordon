@@ -95,6 +95,8 @@ func TestNewIssuerValidatesCloudflareDNSConfig(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrDNSConfigInvalid)
 	assert.Contains(t, err.Error(), "invalid DNSResolvers entry")
+	assert.Contains(t, err.Error(), "index 0")
+	assert.Contains(t, err.Error(), "1.1.1.1:abc")
 
 	_, err = NewIssuer(Config{
 		Email:                 "test@example.com",
@@ -120,6 +122,30 @@ func TestNewIssuerValidatesCloudflareDNSConfig(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"1.1.1.1:53", "8.8.8.8:53"}, issuer.cfg.DNSResolvers)
+}
+
+func TestNormalizeDNSResolversErrorsIncludeEntryContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolver string
+		want     string
+	}{
+		{name: "empty after trimming", resolver: " \t ", want: "value \"\""},
+		{name: "missing port", resolver: "1.1.1.1", want: "value \"1.1.1.1\""},
+		{name: "empty host", resolver: ":53", want: "value \":53\""},
+		{name: "invalid port", resolver: "1.1.1.1:abc", want: "value \"1.1.1.1:abc\""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := normalizeDNSResolvers([]string{"8.8.8.8:53", tt.resolver})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, domain.ErrDNSConfigInvalid)
+			assert.Contains(t, err.Error(), "invalid DNSResolvers entry")
+			assert.Contains(t, err.Error(), "index 1")
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func TestNewIssuerRejectsNonHTTPSURL(t *testing.T) {

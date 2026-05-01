@@ -123,18 +123,18 @@ func normalizeDNSResolvers(resolvers []string) ([]string, error) {
 	for i, resolver := range resolvers {
 		trimmed := strings.TrimSpace(resolver)
 		if trimmed == "" {
-			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry", domain.ErrDNSConfigInvalid)
+			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry at index %d value %q", domain.ErrDNSConfigInvalid, i, trimmed)
 		}
 		host, port, err := net.SplitHostPort(trimmed)
 		if err != nil {
-			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry", domain.ErrDNSConfigInvalid)
+			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry at index %d value %q: %v", domain.ErrDNSConfigInvalid, i, trimmed, err)
 		}
 		if host == "" {
-			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry", domain.ErrDNSConfigInvalid)
+			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry at index %d value %q: host must not be empty", domain.ErrDNSConfigInvalid, i, trimmed)
 		}
 		portNumber, err := strconv.Atoi(port)
 		if err != nil || portNumber < 1 || portNumber > 65535 {
-			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry", domain.ErrDNSConfigInvalid)
+			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry at index %d value %q: port must be a number between 1 and 65535", domain.ErrDNSConfigInvalid, i, trimmed)
 		}
 		normalized[i] = trimmed
 	}
