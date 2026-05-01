@@ -16,6 +16,17 @@ func TestDefaultDNSConfig(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.PollingInterval)
 }
 
+func TestDNSConfigValidateNormalizesResolvers(t *testing.T) {
+	cfg := DNSConfig{
+		Resolvers:          []string{" 1.1.1.1:53 ", "\t8.8.8.8:53\n"},
+		PropagationTimeout: 5 * time.Minute,
+		PollingInterval:    5 * time.Second,
+	}
+
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, []string{"1.1.1.1:53", "8.8.8.8:53"}, cfg.Resolvers)
+}
+
 func TestDNSConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -43,6 +54,24 @@ func TestDNSConfigValidate(t *testing.T) {
 			name: "resolver missing port",
 			cfg: DNSConfig{
 				Resolvers:          []string{"1.1.1.1"},
+				PropagationTimeout: 5 * time.Minute,
+				PollingInterval:    5 * time.Second,
+			},
+			wantErr: "invalid dns.resolvers[0]",
+		},
+		{
+			name: "whitespace-only resolver",
+			cfg: DNSConfig{
+				Resolvers:          []string{"   "},
+				PropagationTimeout: 5 * time.Minute,
+				PollingInterval:    5 * time.Second,
+			},
+			wantErr: "invalid dns.resolvers[0]",
+		},
+		{
+			name: "malformed resolver port",
+			cfg: DNSConfig{
+				Resolvers:          []string{"1.1.1.1:abc"},
 				PropagationTimeout: 5 * time.Minute,
 				PollingInterval:    5 * time.Second,
 			},

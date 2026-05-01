@@ -96,6 +96,7 @@ var (
 	ErrACMEDisabled              = errors.New("acme disabled")
 	ErrACMEEmailRequired         = errors.New("acme email required")
 	ErrACMEChallengeInvalid      = errors.New("acme challenge invalid")
+	ErrDNSConfigInvalid          = errors.New("dns configuration invalid")
 	ErrCloudflareTokenMissing    = errors.New("cloudflare api token missing")
 	ErrCertificateStoreRequired  = errors.New("certificate store required")
 	ErrCertificateIssuerRequired = errors.New("certificate issuer required")

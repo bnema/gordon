@@ -92,13 +92,16 @@ func NewIssuer(cfg Config) (*Issuer, error) {
 			return nil, fmt.Errorf("acmelego: %w", domain.ErrCloudflareTokenMissing)
 		}
 		if len(cfg.DNSResolvers) == 0 {
-			return nil, fmt.Errorf("acmelego: DNSResolvers must contain at least one resolver")
+			return nil, fmt.Errorf("acmelego: %w: DNSResolvers must contain at least one resolver", domain.ErrDNSConfigInvalid)
 		}
 		if cfg.DNSPropagationTimeout <= 0 {
-			return nil, fmt.Errorf("acmelego: DNSPropagationTimeout must be positive")
+			return nil, fmt.Errorf("acmelego: %w: DNSPropagationTimeout must be positive", domain.ErrDNSConfigInvalid)
 		}
 		if cfg.DNSPollingInterval <= 0 {
-			return nil, fmt.Errorf("acmelego: DNSPollingInterval must be positive")
+			return nil, fmt.Errorf("acmelego: %w: DNSPollingInterval must be positive", domain.ErrDNSConfigInvalid)
+		}
+		if cfg.DNSPollingInterval >= cfg.DNSPropagationTimeout {
+			return nil, fmt.Errorf("acmelego: %w: DNSPollingInterval must be less than DNSPropagationTimeout", domain.ErrDNSConfigInvalid)
 		}
 	default:
 		return nil, fmt.Errorf("acmelego: %w: %s", domain.ErrACMEChallengeInvalid, cfg.Challenge)

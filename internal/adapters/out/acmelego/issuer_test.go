@@ -80,7 +80,21 @@ func TestNewIssuerValidatesCloudflareDNSConfig(t *testing.T) {
 		DNSPollingInterval:    5 * time.Second,
 	})
 	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrDNSConfigInvalid)
 	assert.Contains(t, err.Error(), "DNSResolvers")
+
+	_, err = NewIssuer(Config{
+		Email:                 "test@example.com",
+		Challenge:             domain.ACMEChallengeCloudflareDNS01,
+		Token:                 "token",
+		Store:                 outmocks.NewMockCertificateStore(t),
+		DNSResolvers:          []string{"1.1.1.1:53"},
+		DNSPropagationTimeout: 5 * time.Second,
+		DNSPollingInterval:    5 * time.Second,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrDNSConfigInvalid)
+	assert.Contains(t, err.Error(), "DNSPollingInterval")
 
 	_, err = NewIssuer(Config{
 		Email:                 "test@example.com",
