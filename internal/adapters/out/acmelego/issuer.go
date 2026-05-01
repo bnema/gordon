@@ -7,7 +7,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -91,9 +93,11 @@ func NewIssuer(cfg Config) (*Issuer, error) {
 		if cfg.Token == "" {
 			return nil, fmt.Errorf("acmelego: %w", domain.ErrCloudflareTokenMissing)
 		}
-		if len(cfg.DNSResolvers) == 0 {
-			return nil, fmt.Errorf("acmelego: %w: DNSResolvers must contain at least one resolver", domain.ErrDNSConfigInvalid)
+		resolvers, err := normalizeDNSResolvers(cfg.DNSResolvers)
+		if err != nil {
+			return nil, err
 		}
+		cfg.DNSResolvers = resolvers
 		if cfg.DNSPropagationTimeout <= 0 {
 			return nil, fmt.Errorf("acmelego: %w: DNSPropagationTimeout must be positive", domain.ErrDNSConfigInvalid)
 		}
@@ -108,6 +112,34 @@ func NewIssuer(cfg Config) (*Issuer, error) {
 	}
 
 	return &Issuer{cfg: cfg}, nil
+}
+
+func normalizeDNSResolvers(resolvers []string) ([]string, error) {
+	if len(resolvers) == 0 {
+		return nil, fmt.Errorf("acmelego: %w: DNSResolvers must contain at least one resolver", domain.ErrDNSConfigInvalid)
+	}
+
+	normalized := make([]string, len(resolvers))
+	for i, resolver := range resolvers {
+		trimmed := strings.TrimSpace(resolver)
+		if trimmed == "" {
+			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry", domain.ErrDNSConfigInvalid)
+		}
+		host, port, err := net.SplitHostPort(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry", domain.ErrDNSConfigInvalid)
+		}
+		if host == "" {
+			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry", domain.ErrDNSConfigInvalid)
+		}
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return nil, fmt.Errorf("acmelego: %w: invalid DNSResolvers entry", domain.ErrDNSConfigInvalid)
+		}
+		normalized[i] = trimmed
+	}
+
+	return normalized, nil
 }
 
 // compile-time interface check

@@ -88,6 +88,19 @@ func TestNewIssuerValidatesCloudflareDNSConfig(t *testing.T) {
 		Challenge:             domain.ACMEChallengeCloudflareDNS01,
 		Token:                 "token",
 		Store:                 outmocks.NewMockCertificateStore(t),
+		DNSResolvers:          []string{"1.1.1.1:abc"},
+		DNSPropagationTimeout: 5 * time.Minute,
+		DNSPollingInterval:    5 * time.Second,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrDNSConfigInvalid)
+	assert.Contains(t, err.Error(), "invalid DNSResolvers entry")
+
+	_, err = NewIssuer(Config{
+		Email:                 "test@example.com",
+		Challenge:             domain.ACMEChallengeCloudflareDNS01,
+		Token:                 "token",
+		Store:                 outmocks.NewMockCertificateStore(t),
 		DNSResolvers:          []string{"1.1.1.1:53"},
 		DNSPropagationTimeout: 5 * time.Second,
 		DNSPollingInterval:    5 * time.Second,
@@ -96,16 +109,17 @@ func TestNewIssuerValidatesCloudflareDNSConfig(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrDNSConfigInvalid)
 	assert.Contains(t, err.Error(), "DNSPollingInterval")
 
-	_, err = NewIssuer(Config{
+	issuer, err := NewIssuer(Config{
 		Email:                 "test@example.com",
 		Challenge:             domain.ACMEChallengeCloudflareDNS01,
 		Token:                 "token",
 		Store:                 outmocks.NewMockCertificateStore(t),
-		DNSResolvers:          []string{"1.1.1.1:53"},
+		DNSResolvers:          []string{" 1.1.1.1:53 ", "\t8.8.8.8:53\n"},
 		DNSPropagationTimeout: 5 * time.Minute,
 		DNSPollingInterval:    5 * time.Second,
 	})
 	require.NoError(t, err)
+	assert.Equal(t, []string{"1.1.1.1:53", "8.8.8.8:53"}, issuer.cfg.DNSResolvers)
 }
 
 func TestNewIssuerRejectsNonHTTPSURL(t *testing.T) {

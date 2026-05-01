@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 const (
@@ -36,34 +38,34 @@ func DefaultDNSConfig() DNSConfig {
 // Validate checks DNSConfig for ACME DNS-01 usage and normalizes resolver whitespace.
 func (c *DNSConfig) Validate() error {
 	if len(c.Resolvers) == 0 {
-		return fmt.Errorf("dns.resolvers must contain at least one resolver")
+		return fmt.Errorf("%w: dns.resolvers must contain at least one resolver", domain.ErrDNSConfigInvalid)
 	}
 	for i, resolver := range c.Resolvers {
 		trimmed := strings.TrimSpace(resolver)
 		if trimmed == "" {
-			return fmt.Errorf("invalid dns.resolvers[%d]: empty resolver", i)
+			return fmt.Errorf("%w: invalid dns.resolvers[%d]: empty resolver", domain.ErrDNSConfigInvalid, i)
 		}
 		host, port, err := net.SplitHostPort(trimmed)
 		if err != nil {
-			return fmt.Errorf("invalid dns.resolvers[%d]: %q: expected host:port: %w", i, trimmed, err)
+			return fmt.Errorf("%w: invalid dns.resolvers[%d]: %q: expected host:port: %v", domain.ErrDNSConfigInvalid, i, trimmed, err)
 		}
 		if host == "" {
-			return fmt.Errorf("invalid dns.resolvers[%d]: %q: host must not be empty", i, trimmed)
+			return fmt.Errorf("%w: invalid dns.resolvers[%d]: %q: host must not be empty", domain.ErrDNSConfigInvalid, i, trimmed)
 		}
 		portNumber, err := strconv.Atoi(port)
 		if err != nil || portNumber < 1 || portNumber > 65535 {
-			return fmt.Errorf("invalid dns.resolvers[%d]: %q: port must be a number between 1 and 65535", i, trimmed)
+			return fmt.Errorf("%w: invalid dns.resolvers[%d]: %q: port must be a number between 1 and 65535", domain.ErrDNSConfigInvalid, i, trimmed)
 		}
 		c.Resolvers[i] = trimmed
 	}
 	if c.PropagationTimeout <= 0 {
-		return fmt.Errorf("dns.propagation_timeout must be positive")
+		return fmt.Errorf("%w: dns.propagation_timeout must be positive", domain.ErrDNSConfigInvalid)
 	}
 	if c.PollingInterval <= 0 {
-		return fmt.Errorf("dns.polling_interval must be positive")
+		return fmt.Errorf("%w: dns.polling_interval must be positive", domain.ErrDNSConfigInvalid)
 	}
 	if c.PollingInterval >= c.PropagationTimeout {
-		return fmt.Errorf("dns.polling_interval must be less than dns.propagation_timeout")
+		return fmt.Errorf("%w: dns.polling_interval must be less than dns.propagation_timeout", domain.ErrDNSConfigInvalid)
 	}
 	return nil
 }

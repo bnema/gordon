@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestDefaultDNSConfig(t *testing.T) {
@@ -114,6 +116,7 @@ func TestDNSConfigValidate(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
+			assert.ErrorIs(t, err, domain.ErrDNSConfigInvalid)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
