@@ -134,6 +134,7 @@ type mockCertificateStoreState struct {
 	account      *out.ACMEAccount
 	certs        []out.StoredCertificate
 	state        out.CertificateStoreState
+	loadStateErr error
 	saveStateErr error
 }
 
@@ -155,6 +156,12 @@ func (s *mockCertificateStoreState) SetState(state out.CertificateStoreState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state = state
+}
+
+func (s *mockCertificateStoreState) SetLoadStateError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadStateErr = err
 }
 
 func (s *mockCertificateStoreState) SetSaveStateError(err error) {
@@ -194,7 +201,12 @@ func newMockCertificateStore(t *testing.T, initial ...out.StoredCertificate) (*o
 	loadAllCall.Maybe()
 
 	loadStateCall := store.EXPECT().LoadState(mock.Anything).RunAndReturn(func(context.Context) (out.CertificateStoreState, error) {
-		return state.State(), nil
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.loadStateErr != nil {
+			return out.CertificateStoreState{}, state.loadStateErr
+		}
+		return state.state, nil
 	})
 	loadStateCall.Maybe()
 
@@ -390,7 +402,7 @@ func TestServiceReconcileRotatesBatchAfterFailedObtain(t *testing.T) {
 	assert.Equal(t, "http01-b.example.com", stored[0].ID)
 }
 
-func TestServiceReconcileDoesNotAdvanceInMemoryCursorWhenPersistFails(t *testing.T) {
+func TestServiceLoadUsesZeroCursorWhenLoadStateFails(t *testing.T) {
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
@@ -400,6 +412,55 @@ func TestServiceReconcileDoesNotAdvanceInMemoryCursorWhenPersistFails(t *testing
 		},
 	}
 	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
+	store, storeState := newMockCertificateStore(t)
+	storeState.SetState(out.CertificateStoreState{ObtainCursor: 1})
+	storeState.SetLoadStateError(fmt.Errorf("state unreadable"))
+
+	cfg := Config{
+		Enabled:         true,
+		Email:           "admin@example.com",
+		Challenge:       "http-01",
+		HTTPPort:        8088,
+		TLSPort:         8443,
+		ObtainBatchSize: 1,
+	}
+	svc := NewService(cfg, ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 1)
+	assert.Equal(t, "http01-a.example.com", orders[0].ID, "LoadState failure should fall back to the zero cursor")
+}
+
+func TestServiceReconcileUsesInMemoryCursorWhenPersistFails(t *testing.T) {
+	ctx := context.Background()
+
+	routes := &fakeRoutes{
+		routes: []domain.Route{
+			{Domain: "b.example.com"},
+			{Domain: "a.example.com"},
+		},
+	}
+	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
+		if order.ID == "http01-a.example.com" {
+			return nil, fmt.Errorf("acme validation failed")
+		}
+		return defaultStoredCert(order)
+	}, nil)
 	store, storeState := newMockCertificateStore(t)
 
 	cfg := Config{
@@ -426,18 +487,18 @@ func TestServiceReconcileDoesNotAdvanceInMemoryCursorWhenPersistFails(t *testing
 
 	storeState.SetSaveStateError(fmt.Errorf("disk full"))
 	require.NoError(t, svc.Load(ctx))
-	err := svc.Reconcile(ctx)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "save certificate store state")
-	assert.Empty(t, recorder.Orders(), "obtain should not run when cursor persistence fails")
-	assert.Equal(t, out.CertificateStoreState{}, storeState.State())
-
-	storeState.SetSaveStateError(nil)
 	require.NoError(t, svc.Reconcile(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+	assert.Equal(t, out.CertificateStoreState{}, storeState.State(), "failed SaveState should leave persisted state unchanged")
 
 	orders := recorder.Orders()
-	require.Len(t, orders, 1)
-	assert.Equal(t, "http01-a.example.com", orders[0].ID, "failed cursor persistence should not skip the first target in memory")
+	require.Len(t, orders, 2)
+	assert.Equal(t, "http01-a.example.com", orders[0].ID)
+	assert.Equal(t, "http01-b.example.com", orders[1].ID, "SaveState failure should still advance the in-memory cursor")
+
+	stored := storeState.All()
+	require.Len(t, stored, 1)
+	assert.Equal(t, "http01-b.example.com", stored[0].ID)
 }
 
 func TestServiceReconcilePersistsBatchCursorAcrossRestart(t *testing.T) {

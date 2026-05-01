@@ -87,7 +87,8 @@ func (s *Service) Load(ctx context.Context) error {
 	}
 	state, err := s.deps.Store.LoadState(ctx)
 	if err != nil {
-		return fmt.Errorf("load certificate store state: %w", err)
+		s.log.Warn().Err(err).Msg("failed to load certificate store state; using in-memory ACME obtain cursor")
+		state = out.CertificateStoreState{}
 	}
 	if state.ObtainCursor < 0 {
 		state.ObtainCursor = 0
@@ -204,7 +205,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 
 	if cursorChanged {
 		if err := s.persistObtainCursor(ctx, nextCursor); err != nil {
-			return err
+			log.Warn().Err(err).Int("obtain_cursor", nextCursor).Msg("failed to persist ACME obtain cursor; continuing with in-memory cursor")
 		}
 		s.mu.Lock()
 		if s.obtainCursor == previousCursor {

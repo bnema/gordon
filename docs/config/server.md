@@ -69,7 +69,7 @@ With TLS enabled:
 - Gordon runs an internal CA (root + intermediate) stored in `{data_dir}/pki/`
 - Leaf certificates are issued on-demand per domain (SNI-based) and cached in memory
 - The intermediate CA auto-renews before expiry
-- An onboarding page at `https://<gordon-host>:<tls_port>/ca` lets clients download the root CA certificate
+- An onboarding page at `https://<gordon-host>:<tls_port>/.well-known/gordon/` lets clients download the root CA certificate
 - The root CA is stable across restarts (generated once, persisted to disk)
 
 #### Custom certificates

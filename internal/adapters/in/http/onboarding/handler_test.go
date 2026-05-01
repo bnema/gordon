@@ -31,6 +31,8 @@ func newTestServer(t *testing.T) (*httptest.Server, []byte, []byte) {
 	h, rootPEM, mobileconfig := newTestHandler()
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /.well-known/gordon/{$}", h.ServeOnboardingPage)
+	mux.HandleFunc("HEAD /.well-known/gordon/{$}", h.ServeOnboardingPage)
 	mux.HandleFunc("GET /.well-known/gordon/ca", h.ServeOnboardingPage)
 	mux.HandleFunc("HEAD /.well-known/gordon/ca", h.ServeOnboardingPage)
 	mux.HandleFunc("GET /.well-known/gordon/ca.crt", h.ServeCACert)
@@ -93,7 +95,7 @@ func TestHandler_Mobileconfig(t *testing.T) {
 func TestHandler_OnboardingPage(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
-	resp, err := http.Get(srv.URL + "/.well-known/gordon/ca")
+	resp, err := http.Get(srv.URL + "/.well-known/gordon/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
