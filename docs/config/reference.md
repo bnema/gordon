@@ -40,6 +40,7 @@ access_token_ttl = "15m"                     # Ephemeral access token lifetime (
 enabled = false                              # Enable public ACME certificates (requires server.tls_port > 0)
 email = ""                                   # ACME account email when enabled
 challenge = "auto"                           # "auto", "http-01", or "cloudflare-dns-01"
+obtain_batch_size = 1                         # New certificate orders per reconcile run
 
 # =============================================================================
 # API (applies to both Registry and Admin endpoints)
@@ -206,6 +207,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `tls.acme.enabled` | `false` | Enable public ACME certificates (requires `server.tls_port > 0`) |
 | `tls.acme.email` | `""` | ACME account email when enabled |
 | `tls.acme.challenge` | `"auto"` | ACME challenge mode: `auto`, `http-01`, or `cloudflare-dns-01` |
+| `tls.acme.obtain_batch_size` | `1` | Maximum new ACME certificate orders per reconcile run |
 | `auth.enabled` | `true` | Enable authentication; when `false`, run local-only mode (loopback-only `/v2/*`, `/admin/*` disabled) |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"720h"` | 30 days |

@@ -10,12 +10,13 @@ import (
 
 // Config holds the resolved configuration for public ACME TLS.
 type Config struct {
-	Enabled   bool
-	Email     string
-	Challenge string
-	HTTPPort  int
-	TLSPort   int
-	DataDir   string
+	Enabled         bool
+	Email           string
+	Challenge       string
+	HTTPPort        int
+	TLSPort         int
+	DataDir         string
+	ObtainBatchSize int
 }
 
 // EffectiveChallenge represents the resolved ACME challenge configuration.

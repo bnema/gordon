@@ -40,10 +40,11 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 	store, _ := newMockCertificateStore(t)
 
 	cfg := Config{
-		Enabled:   true,
-		Email:     "admin@example.com",
-		Challenge: "cloudflare-dns-01",
-		TLSPort:   8443,
+		Enabled:         true,
+		Email:           "admin@example.com",
+		Challenge:       "cloudflare-dns-01",
+		TLSPort:         8443,
+		ObtainBatchSize: 10,
 	}
 
 	svc := NewService(cfg, ServiceDeps{

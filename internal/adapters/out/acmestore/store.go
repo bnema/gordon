@@ -25,9 +25,15 @@ type certMetadata struct {
 	LastError string    `json:"last_error,omitempty"`
 }
 
+// storeState is the JSON structure persisted for ACME reconciliation state.
+type storeState struct {
+	ObtainCursor int `json:"obtain_cursor"`
+}
+
 const (
 	lockFile      = ".lock"
 	accountFile   = "account.json"
+	stateFile     = "state.json"
 	certDir       = "certs"
 	backupSuffix  = ".old"
 	tempInfix     = ".tmp-"
@@ -93,6 +99,42 @@ func (s *Store) SaveAccount(_ context.Context, account out.ACMEAccount) error {
 	}
 	if err := writeAtomic(filepath.Join(s.root, accountFile), data, accountMode); err != nil {
 		return fmt.Errorf("acmestore: save account: %w", err)
+	}
+	return nil
+}
+
+// LoadState reads ACME reconciliation state from <root>/state.json.
+// It returns zero state when the file does not exist.
+func (s *Store) LoadState(_ context.Context) (out.CertificateStoreState, error) {
+	path := filepath.Join(s.root, stateFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out.CertificateStoreState{}, nil
+		}
+		return out.CertificateStoreState{}, fmt.Errorf("acmestore: read state: %w", err)
+	}
+	var state storeState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return out.CertificateStoreState{}, fmt.Errorf("acmestore: unmarshal state: %w", err)
+	}
+	if state.ObtainCursor < 0 {
+		state.ObtainCursor = 0
+	}
+	return out.CertificateStoreState{ObtainCursor: state.ObtainCursor}, nil
+}
+
+// SaveState writes ACME reconciliation state to <root>/state.json atomically.
+func (s *Store) SaveState(_ context.Context, state out.CertificateStoreState) error {
+	if state.ObtainCursor < 0 {
+		state.ObtainCursor = 0
+	}
+	data, err := json.MarshalIndent(storeState{ObtainCursor: state.ObtainCursor}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("acmestore: marshal state: %w", err)
+	}
+	if err := writeAtomic(filepath.Join(s.root, stateFile), data, metaMode); err != nil {
+		return fmt.Errorf("acmestore: save state: %w", err)
 	}
 	return nil
 }

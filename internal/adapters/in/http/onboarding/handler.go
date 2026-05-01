@@ -113,25 +113,25 @@ func (h *Handler) ServeOnboardingPage(w http.ResponseWriter, r *http.Request) {
 
 <div class="platform" id="ios">
   <h2>iOS / iPadOS</h2>
-  <p><a class="btn" href="/ca.mobileconfig">Download Profile</a></p>
+  <p><a class="btn" href="/.well-known/gordon/ca.mobileconfig">Download Profile</a></p>
   <p>After downloading, go to <strong>Settings → General → VPN &amp; Device Management</strong> to install, then <strong>Settings → General → About → Certificate Trust Settings</strong> to enable full trust.</p>
 </div>
 
 <div class="platform" id="android">
   <h2>Android</h2>
-  <p><a class="btn" href="/ca.crt">Download Certificate</a></p>
+  <p><a class="btn" href="/.well-known/gordon/ca.crt">Download Certificate</a></p>
   <p>Go to <strong>Settings → Security → Install a certificate → CA certificate</strong> and select the downloaded file.</p>
 </div>
 
 <div class="platform" id="desktop">
   <h2>macOS / Linux / Windows</h2>
-  <p><a class="btn" href="/ca.crt">Download Certificate</a></p>
+  <p><a class="btn" href="/.well-known/gordon/ca.crt">Download Certificate</a></p>
   <p>Double-click the downloaded file and add it to your system trust store, or import it via your OS certificate manager.</p>
 </div>
 
 <div class="platform" id="firefox">
   <h2>Firefox / Zen</h2>
-  <p><a class="btn" href="/ca.crt">Download Certificate</a></p>
+  <p><a class="btn" href="/.well-known/gordon/ca.crt">Download Certificate</a></p>
   <p>Firefox and Zen use their own certificate store (NSS). Go to <strong>Settings → Privacy &amp; Security → Certificates → View Certificates → Authorities → Import</strong> and select the downloaded file. Check <strong>Trust this CA to identify websites</strong>.</p>
 </div>
 

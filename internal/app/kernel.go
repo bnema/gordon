@@ -61,9 +61,9 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 
 	// Prefer full service wiring so local CLI can execute the same operations
 	// as remote mode without going through HTTP admin endpoints.
-	// Use StartPublicTLS: false to prevent ACME Reconcile and renewal loop
-	// side effects during read-only CLI commands (e.g. gordon tls status).
-	if svc, fullErr := createServicesWithOptions(ctx, v, cfg, log, serviceOptions{StartPublicTLS: false}); fullErr == nil {
+	// ACME Reconcile and renewal loop are only started from runServers,
+	// so there are no side effects for read-only CLI commands.
+	if svc, fullErr := createServicesWithOptions(ctx, v, cfg, log); fullErr == nil {
 		// Wrap cleanup to stop public TLS service (with its renewal loop)
 		// before the logger is cleaned up.
 		wrappedCleanup := func() {

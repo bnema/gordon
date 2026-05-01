@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,15 +10,29 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	adminhttp "github.com/bnema/gordon/internal/adapters/in/http/admin"
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	out "github.com/bnema/gordon/internal/boundaries/out"
+	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
 )
+
+func newNotFoundProxyService(t *testing.T) *proxyusecase.Service {
+	t.Helper()
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return(nil).Maybe()
+	containerSvc := inmocks.NewMockContainerService(t)
+	containerSvc.EXPECT().Get(mock.Anything, mock.Anything).Return(nil, false).Maybe()
+	return proxyusecase.NewService(nil, containerSvc, configSvc, proxyusecase.Config{})
+}
 
 // testAccessLogWriter is a thread-safe mock AccessLogWriter for tests.
 type testAccessLogWriter struct {
@@ -120,60 +135,50 @@ const directAddr = "203.0.113.10:12345"
 // trustedProxyAddr is an IP inside the 173.245.48.0/20 range.
 const trustedProxyAddr = "173.245.48.5:12345"
 
-func TestCreateHTTPHandlers_DirectHTTPRoot_ServesOnboarding(t *testing.T) {
+func TestCreateHTTPHandlers_DirectHTTPOnboarding_AllPaths(t *testing.T) {
 	t.Parallel()
-	ca := newTestCA(t)
-	cfg := newOnboardingConfig()
-	svc := &services{caAdapter: ca}
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
+	tests := []struct {
+		name        string
+		path        string
+		wantCode    int
+		wantContent string // substring check
+		wantType    string // Content-Type substring
+	}{
+		{name: ".well-known/gordon/ serves onboarding", path: "/.well-known/gordon/", wantCode: http.StatusOK, wantContent: "Trust CA Certificate", wantType: "text/html"},
+		{name: ".well-known/gordon/ca serves onboarding", path: "/.well-known/gordon/ca", wantCode: http.StatusOK, wantContent: "Trust CA Certificate", wantType: "text/html"},
+		{name: ".well-known/gordon/ca.crt serves CA cert", path: "/.well-known/gordon/ca.crt", wantCode: http.StatusOK, wantContent: "BEGIN CERTIFICATE", wantType: "application/x-x509-ca-cert"},
+		{name: ".well-known/gordon/ca.mobileconfig serves mobileconfig", path: "/.well-known/gordon/ca.mobileconfig", wantCode: http.StatusOK, wantContent: "<?xml", wantType: "application/x-apple-aspen-config"},
+		{name: "root returns forbidden", path: "/", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
+		{name: "former /ca alias returns forbidden", path: "/ca", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
+		{name: "former /ca.crt alias returns forbidden", path: "/ca.crt", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
+		{name: "former /ca.mobileconfig alias returns forbidden", path: "/ca.mobileconfig", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
+		{name: "unknown path returns forbidden", path: "/web", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = directAddr
-	req.Host = "o2.bnema.dev"
-	rec := httptest.NewRecorder()
-	httpHandler.ServeHTTP(rec, req)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := newTestCA(t)
+			cfg := newOnboardingConfig()
+			svc := &services{caAdapter: ca}
 
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Header().Get("Content-Type"), "text/html")
-	assert.Contains(t, rec.Body.String(), "Trust CA Certificate")
-}
+			_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
-func TestCreateHTTPHandlers_DirectHTTPCertPath_ServesCACert(t *testing.T) {
-	t.Parallel()
-	ca := newTestCA(t)
-	cfg := newOnboardingConfig()
-	svc := &services{caAdapter: ca}
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			req.RemoteAddr = directAddr
+			req.Host = "o2.bnema.dev"
+			rec := httptest.NewRecorder()
+			httpHandler.ServeHTTP(rec, req)
 
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/ca.crt", nil)
-	req.RemoteAddr = directAddr
-	req.Host = "o2.bnema.dev"
-	rec := httptest.NewRecorder()
-	httpHandler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Header().Get("Content-Type"), "application/x-x509-ca-cert")
-	assert.Contains(t, rec.Body.String(), "BEGIN CERTIFICATE")
-}
-
-func TestCreateHTTPHandlers_DirectHTTPUnknownPath_ReturnsForbidden(t *testing.T) {
-	t.Parallel()
-	ca := newTestCA(t)
-	cfg := newOnboardingConfig()
-	svc := &services{caAdapter: ca}
-
-	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/web", nil)
-	req.RemoteAddr = directAddr
-	req.Host = "o2.bnema.dev"
-	rec := httptest.NewRecorder()
-	httpHandler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
+			assert.Equal(t, tc.wantCode, rec.Code, "%s: status code", tc.name)
+			if tc.wantType != "" {
+				assert.Contains(t, rec.Header().Get("Content-Type"), tc.wantType, "%s: content type", tc.name)
+			}
+			if tc.wantContent != "" {
+				assert.Contains(t, rec.Body.String(), tc.wantContent, "%s: body content", tc.name)
+			}
+		})
+	}
 }
 
 func TestCreateHTTPHandlers_TrustedProxyHTTP_DoesNotServeOnboarding(t *testing.T) {
@@ -196,7 +201,7 @@ func TestCreateHTTPHandlers_TrustedProxyHTTP_DoesNotServeOnboarding(t *testing.T
 	assert.NotContains(t, rec.Body.String(), "Trust CA Certificate")
 }
 
-func TestCreateHTTPHandlers_TrustedProxyCACertPath_DoesNotServeOnboardingResource(t *testing.T) {
+func TestCreateHTTPHandlers_TrustedProxyWellKnownCACertPath_DoesNotServeOnboardingResource(t *testing.T) {
 	t.Parallel()
 	ca := newTestCA(t)
 	cfg := newOnboardingConfig()
@@ -204,7 +209,7 @@ func TestCreateHTTPHandlers_TrustedProxyCACertPath_DoesNotServeOnboardingResourc
 
 	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/ca.crt", nil)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/ca.crt", nil)
 	req.RemoteAddr = trustedProxyAddr
 	req.Host = "app.example.com"
 	rec := httptest.NewRecorder()
@@ -224,7 +229,7 @@ func TestCreateHTTPHandlers_ForceHTTPSRedirect_DoesNotBypassDirectOnboarding(t *
 
 	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/", nil)
 	req.RemoteAddr = directAddr
 	req.Host = "o2.bnema.dev"
 	rec := httptest.NewRecorder()
@@ -235,29 +240,61 @@ func TestCreateHTTPHandlers_ForceHTTPSRedirect_DoesNotBypassDirectOnboarding(t *
 	assert.Contains(t, rec.Body.String(), "Trust CA Certificate")
 }
 
-func TestCreateHTTPHandlers_HTTPSOnboarding_RemainsAvailable(t *testing.T) {
+func TestCreateHTTPHandlers_HTTPSOnboarding_RemainsAvailableOnGordonDomain(t *testing.T) {
 	t.Parallel()
 	ca := newTestCA(t)
 	cfg := newOnboardingConfig()
-	svc := &services{caAdapter: ca}
+	cfg.Server.GordonDomain = "gordon.example.com"
+	svc := &services{caAdapter: ca, proxySvc: newNotFoundProxyService(t)}
 
 	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/ca", nil)
+	for _, host := range []string{"gordon.example.com", "Gordon.Example.Com.:8443"} {
+		req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/ca", nil)
+		req.RemoteAddr = directAddr
+		req.Host = host
+		rec := httptest.NewRecorder()
+		httpsHandler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code, "host %s", host)
+		assert.Contains(t, rec.Body.String(), "Trust CA Certificate", "host %s", host)
+	}
+}
+
+func TestCreateHTTPHandlers_HTTPSOnboarding_DoesNotPreemptAppHostCAPath(t *testing.T) {
+	t.Parallel()
+	ca := newTestCA(t)
+	cfg := newOnboardingConfig()
+	cfg.Server.GordonDomain = "gordon.example.com"
+	svc := &services{caAdapter: ca, proxySvc: newNotFoundProxyService(t)}
+
+	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/ca", nil)
 	req.RemoteAddr = directAddr
-	req.Host = "o2.bnema.dev"
+	req.Host = "app.example.com"
 	rec := httptest.NewRecorder()
 	httpsHandler.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "Trust CA Certificate")
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "Trust CA Certificate")
+
+	normalizedReq := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/ca", nil)
+	normalizedReq.RemoteAddr = directAddr
+	normalizedReq.Host = "Gordon.Example.Com.:8443"
+	normalizedRec := httptest.NewRecorder()
+	httpsHandler.ServeHTTP(normalizedRec, normalizedReq)
+
+	assert.Equal(t, http.StatusOK, normalizedRec.Code)
+	assert.Contains(t, normalizedRec.Body.String(), "Trust CA Certificate")
 }
 
 func TestCreateHTTPHandlers_HTTPSOnboarding_HEADRoutesRemainAvailable(t *testing.T) {
 	t.Parallel()
 	ca := newTestCA(t)
 	cfg := newOnboardingConfig()
-	svc := &services{caAdapter: ca}
+	cfg.Server.GordonDomain = "gordon.example.com"
+	svc := &services{caAdapter: ca, proxySvc: newNotFoundProxyService(t)}
 
 	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
@@ -266,8 +303,11 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_HEADRoutesRemainAvailable(t *testing
 	ts := httptest.NewServer(httpsHandler)
 	defer ts.Close()
 
-	for _, path := range []string{"/ca", "/ca.crt", "/ca.mobileconfig"} {
-		resp, err := ts.Client().Head(ts.URL + path)
+	for _, path := range []string{"/.well-known/gordon/ca", "/.well-known/gordon/ca.crt", "/.well-known/gordon/ca.mobileconfig"} {
+		req, err := http.NewRequest(http.MethodHead, ts.URL+path, nil)
+		require.NoError(t, err)
+		req.Host = "Gordon.Example.Com.:8443"
+		resp, err := ts.Client().Do(req)
 		require.NoError(t, err)
 
 		body, err := io.ReadAll(resp.Body)
@@ -298,8 +338,8 @@ func TestCreateHTTPHandlers_DirectHTTPOnboarding_HEADRoutesRemainAvailable(t *te
 		path        string
 		contentType string
 	}{
-		{path: "/ca", contentType: "text/html"},
-		{path: "/ca.crt", contentType: "application/x-x509-ca-cert"},
+		{path: "/.well-known/gordon/ca", contentType: "text/html"},
+		{path: "/.well-known/gordon/ca.crt", contentType: "application/x-x509-ca-cert"},
 	} {
 		resp, err := ts.Client().Head(ts.URL + tc.path)
 		require.NoError(t, err)
@@ -374,6 +414,53 @@ func TestCreateHTTPHandlers_TLSDisabled_DoesNotServeHTTPOnboarding(t *testing.T)
 
 	// With TLS disabled, onboarding should NOT be served.
 	assert.NotContains(t, rec.Body.String(), "Trust CA Certificate")
+}
+
+type recordingPublicTLSRuntime struct {
+	reconcileCalls int
+	loopCalls      int
+	reconcileErr   error
+}
+
+func (r *recordingPublicTLSRuntime) Reconcile(context.Context) error {
+	r.reconcileCalls++
+	return r.reconcileErr
+}
+
+func (r *recordingPublicTLSRuntime) StartRenewalLoop(context.Context, time.Duration) <-chan struct{} {
+	r.loopCalls++
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
+func TestStartPublicTLSRuntime_ReconcilesAndStartsRenewalLoop(t *testing.T) {
+	t.Parallel()
+
+	runtime := &recordingPublicTLSRuntime{}
+	err := startPublicTLSRuntime(context.Background(), runtime, zerowrap.Default())
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, runtime.reconcileCalls)
+	assert.Equal(t, 1, runtime.loopCalls)
+}
+
+func TestStartPublicTLSRuntime_NilSvc(t *testing.T) {
+	t.Parallel()
+
+	err := startPublicTLSRuntime(context.Background(), nil, zerowrap.Default())
+	require.NoError(t, err)
+}
+
+func TestStartPublicTLSRuntime_StartsRenewalLoopWhenReconcileFails(t *testing.T) {
+	t.Parallel()
+
+	runtime := &recordingPublicTLSRuntime{reconcileErr: errors.New("boom")}
+	err := startPublicTLSRuntime(context.Background(), runtime, zerowrap.Default())
+
+	require.Error(t, err)
+	assert.Equal(t, 1, runtime.reconcileCalls)
+	assert.Equal(t, 1, runtime.loopCalls)
 }
 
 func TestCreateHTTPHandlers_TLSConfiguredWithoutCA_FailsStartup(t *testing.T) {

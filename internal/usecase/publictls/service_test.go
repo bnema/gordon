@@ -130,9 +130,12 @@ func defaultStoredCert(order out.CertificateOrder) (*out.StoredCertificate, erro
 }
 
 type mockCertificateStoreState struct {
-	mu      sync.Mutex
-	account *out.ACMEAccount
-	certs   []out.StoredCertificate
+	mu           sync.Mutex
+	account      *out.ACMEAccount
+	certs        []out.StoredCertificate
+	state        out.CertificateStoreState
+	loadStateErr error
+	saveStateErr error
 }
 
 func (s *mockCertificateStoreState) All() []out.StoredCertificate {
@@ -141,6 +144,30 @@ func (s *mockCertificateStoreState) All() []out.StoredCertificate {
 	certs := make([]out.StoredCertificate, len(s.certs))
 	copy(certs, s.certs)
 	return certs
+}
+
+func (s *mockCertificateStoreState) State() out.CertificateStoreState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state
+}
+
+func (s *mockCertificateStoreState) SetState(state out.CertificateStoreState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state = state
+}
+
+func (s *mockCertificateStoreState) SetLoadStateError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadStateErr = err
+}
+
+func (s *mockCertificateStoreState) SetSaveStateError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saveStateErr = err
 }
 
 func newMockCertificateStore(t *testing.T, initial ...out.StoredCertificate) (*outmocks.MockCertificateStore, *mockCertificateStoreState) {
@@ -172,6 +199,27 @@ func newMockCertificateStore(t *testing.T, initial ...out.StoredCertificate) (*o
 		return state.All(), nil
 	})
 	loadAllCall.Maybe()
+
+	loadStateCall := store.EXPECT().LoadState(mock.Anything).RunAndReturn(func(context.Context) (out.CertificateStoreState, error) {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.loadStateErr != nil {
+			return out.CertificateStoreState{}, state.loadStateErr
+		}
+		return state.state, nil
+	})
+	loadStateCall.Maybe()
+
+	saveStateCall := store.EXPECT().SaveState(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, storeState out.CertificateStoreState) error {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.saveStateErr != nil {
+			return state.saveStateErr
+		}
+		state.state = storeState
+		return nil
+	})
+	saveStateCall.Maybe()
 
 	saveCall := store.EXPECT().Save(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, cert out.StoredCertificate) error {
 		state.mu.Lock()
@@ -250,6 +298,266 @@ func generateTestCertPEM(names []string) (certPEM []byte, keyPEM []byte, err err
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+func TestServiceReconcileLimitsMissingObtainsPerRun(t *testing.T) {
+	ctx := context.Background()
+
+	routes := &fakeRoutes{
+		routes: []domain.Route{
+			{Domain: "one.example.com"},
+			{Domain: "two.example.com"},
+			{Domain: "three.example.com"},
+		},
+	}
+	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
+	store, storeState := newMockCertificateStore(t)
+
+	cfg := Config{
+		Enabled:         true,
+		Email:           "admin@example.com",
+		Challenge:       "http-01",
+		HTTPPort:        8088,
+		TLSPort:         8443,
+		ObtainBatchSize: 2,
+	}
+
+	svc := NewService(cfg, ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 2, "first reconcile should respect configured obtain batch size")
+	assert.Len(t, storeState.All(), 2)
+
+	require.NoError(t, svc.Reconcile(ctx))
+	orders = recorder.Orders()
+	require.Len(t, orders, 3, "second reconcile should continue remaining missing targets")
+	assert.Len(t, storeState.All(), 3)
+}
+
+func TestServiceReconcileRotatesBatchAfterFailedObtain(t *testing.T) {
+	ctx := context.Background()
+
+	routes := &fakeRoutes{
+		routes: []domain.Route{
+			{Domain: "b.example.com"},
+			{Domain: "a.example.com"},
+		},
+	}
+	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
+		if order.ID == "http01-a.example.com" {
+			return nil, fmt.Errorf("acme validation failed")
+		}
+		return defaultStoredCert(order)
+	}, nil)
+	store, storeState := newMockCertificateStore(t)
+
+	cfg := Config{
+		Enabled:         true,
+		Email:           "admin@example.com",
+		Challenge:       "http-01",
+		HTTPPort:        8088,
+		TLSPort:         8443,
+		ObtainBatchSize: 1,
+	}
+
+	svc := NewService(cfg, ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 2)
+	assert.Equal(t, "http01-a.example.com", orders[0].ID)
+	assert.Equal(t, "http01-b.example.com", orders[1].ID, "second reconcile should rotate past the failed first target")
+
+	stored := storeState.All()
+	require.Len(t, stored, 1)
+	assert.Equal(t, "http01-b.example.com", stored[0].ID)
+}
+
+func TestServiceLoadUsesZeroCursorWhenLoadStateFails(t *testing.T) {
+	ctx := context.Background()
+
+	routes := &fakeRoutes{
+		routes: []domain.Route{
+			{Domain: "b.example.com"},
+			{Domain: "a.example.com"},
+		},
+	}
+	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
+	store, storeState := newMockCertificateStore(t)
+	storeState.SetState(out.CertificateStoreState{ObtainCursor: 1})
+	storeState.SetLoadStateError(fmt.Errorf("state unreadable"))
+
+	cfg := Config{
+		Enabled:         true,
+		Email:           "admin@example.com",
+		Challenge:       "http-01",
+		HTTPPort:        8088,
+		TLSPort:         8443,
+		ObtainBatchSize: 1,
+	}
+	svc := NewService(cfg, ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 1)
+	assert.Equal(t, "http01-a.example.com", orders[0].ID, "LoadState failure should fall back to the zero cursor")
+}
+
+func TestServiceReconcileUsesInMemoryCursorWhenPersistFails(t *testing.T) {
+	ctx := context.Background()
+
+	routes := &fakeRoutes{
+		routes: []domain.Route{
+			{Domain: "b.example.com"},
+			{Domain: "a.example.com"},
+		},
+	}
+	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
+		if order.ID == "http01-a.example.com" {
+			return nil, fmt.Errorf("acme validation failed")
+		}
+		return defaultStoredCert(order)
+	}, nil)
+	store, storeState := newMockCertificateStore(t)
+
+	cfg := Config{
+		Enabled:         true,
+		Email:           "admin@example.com",
+		Challenge:       "http-01",
+		HTTPPort:        8088,
+		TLSPort:         8443,
+		ObtainBatchSize: 1,
+	}
+	svc := NewService(cfg, ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	})
+
+	storeState.SetSaveStateError(fmt.Errorf("disk full"))
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+	assert.Equal(t, out.CertificateStoreState{}, storeState.State(), "failed SaveState should leave persisted state unchanged")
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 2)
+	assert.Equal(t, "http01-a.example.com", orders[0].ID)
+	assert.Equal(t, "http01-b.example.com", orders[1].ID, "SaveState failure should still advance the in-memory cursor")
+
+	stored := storeState.All()
+	require.Len(t, stored, 1)
+	assert.Equal(t, "http01-b.example.com", stored[0].ID)
+}
+
+func TestServiceReconcilePersistsBatchCursorAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+
+	routes := &fakeRoutes{
+		routes: []domain.Route{
+			{Domain: "b.example.com"},
+			{Domain: "a.example.com"},
+		},
+	}
+	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
+		if order.ID == "http01-a.example.com" {
+			return nil, fmt.Errorf("acme validation failed")
+		}
+		return defaultStoredCert(order)
+	}, nil)
+	store, storeState := newMockCertificateStore(t)
+
+	cfg := Config{
+		Enabled:         true,
+		Email:           "admin@example.com",
+		Challenge:       "http-01",
+		HTTPPort:        8088,
+		TLSPort:         8443,
+		ObtainBatchSize: 1,
+	}
+	deps := ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	}
+
+	firstSvc := NewService(cfg, deps)
+	require.NoError(t, firstSvc.Load(ctx))
+	require.NoError(t, firstSvc.Reconcile(ctx))
+	assert.Equal(t, out.CertificateStoreState{ObtainCursor: 1}, storeState.State())
+
+	secondSvc := NewService(cfg, deps)
+	require.NoError(t, secondSvc.Load(ctx))
+	require.NoError(t, secondSvc.Reconcile(ctx))
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 2)
+	assert.Equal(t, "http01-a.example.com", orders[0].ID)
+	assert.Equal(t, "http01-b.example.com", orders[1].ID, "restart should resume from the persisted obtain cursor")
+
+	stored := storeState.All()
+	require.Len(t, stored, 1)
+	assert.Equal(t, "http01-b.example.com", stored[0].ID)
+}
 
 func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 	ctx := context.Background()
