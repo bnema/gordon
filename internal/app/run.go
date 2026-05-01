@@ -204,6 +204,12 @@ type Config struct {
 			ObtainBatchSize int    `mapstructure:"obtain_batch_size"`
 		} `mapstructure:"acme"`
 	} `mapstructure:"tls"`
+
+	DNS struct {
+		Resolvers          []string `mapstructure:"resolvers"`
+		PropagationTimeout string   `mapstructure:"propagation_timeout"`
+		PollingInterval    string   `mapstructure:"polling_interval"`
+	} `mapstructure:"dns"`
 }
 
 // services holds all the services used by the application.
@@ -1748,6 +1754,44 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 	}, nil
 }
 
+// buildDNSConfig parses the raw dns config section into a publictls.DNSConfig.
+func buildDNSConfig(cfg Config) (publictls.DNSConfig, error) {
+	defaults := publictls.DefaultDNSConfig()
+
+	resolvers := cfg.DNS.Resolvers
+	if len(resolvers) == 0 {
+		resolvers = defaults.Resolvers
+	}
+
+	propagationTimeout := defaults.PropagationTimeout
+	if cfg.DNS.PropagationTimeout != "" {
+		parsed, err := time.ParseDuration(cfg.DNS.PropagationTimeout)
+		if err != nil {
+			return publictls.DNSConfig{}, fmt.Errorf("invalid dns.propagation_timeout: %w", err)
+		}
+		propagationTimeout = parsed
+	}
+
+	pollingInterval := defaults.PollingInterval
+	if cfg.DNS.PollingInterval != "" {
+		parsed, err := time.ParseDuration(cfg.DNS.PollingInterval)
+		if err != nil {
+			return publictls.DNSConfig{}, fmt.Errorf("invalid dns.polling_interval: %w", err)
+		}
+		pollingInterval = parsed
+	}
+
+	dnsCfg := publictls.DNSConfig{
+		Resolvers:          append([]string(nil), resolvers...),
+		PropagationTimeout: propagationTimeout,
+		PollingInterval:    pollingInterval,
+	}
+	if err := dnsCfg.Validate(); err != nil {
+		return publictls.DNSConfig{}, err
+	}
+	return dnsCfg, nil
+}
+
 // createContainerService creates the container service with configuration.
 func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (*container.Service, error) {
 	// Parse and validate container resource limits from config
@@ -3269,6 +3313,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("tls.acme.email", "")
 	v.SetDefault("tls.acme.challenge", "auto")
 	v.SetDefault("tls.acme.obtain_batch_size", 1)
+	v.SetDefault("dns.resolvers", publictls.DefaultDNSResolvers)
+	v.SetDefault("dns.propagation_timeout", "5m")
+	v.SetDefault("dns.polling_interval", "5s")
 	v.SetDefault("server.force_https_redirect", false)
 	v.SetDefault("server.data_dir", DefaultDataDir())
 	v.SetDefault("server.runtime", "auto")
