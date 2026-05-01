@@ -17,6 +17,7 @@ type Config struct {
 	TLSPort         int
 	DataDir         string
 	ObtainBatchSize int
+	DNS             DNSConfig
 }
 
 // EffectiveChallenge represents the resolved ACME challenge configuration.

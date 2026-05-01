@@ -204,6 +204,12 @@ type Config struct {
 			ObtainBatchSize int    `mapstructure:"obtain_batch_size"`
 		} `mapstructure:"acme"`
 	} `mapstructure:"tls"`
+
+	DNS struct {
+		Resolvers          []string `mapstructure:"resolvers"`
+		PropagationTimeout string   `mapstructure:"propagation_timeout"`
+		PollingInterval    string   `mapstructure:"polling_interval"`
+	} `mapstructure:"dns"`
 }
 
 // services holds all the services used by the application.
@@ -547,6 +553,11 @@ func (si *serviceInit) initPublicTLS() error {
 	ctx := si.ctx
 	log := si.log
 
+	dnsCfg, err := buildDNSConfig(si.cfg)
+	if err != nil {
+		return log.WrapErr(err, "invalid DNS configuration")
+	}
+
 	publicTLSCfg := publictls.Config{
 		Enabled:         si.cfg.TLS.ACME.Enabled,
 		Email:           si.cfg.TLS.ACME.Email,
@@ -555,6 +566,7 @@ func (si *serviceInit) initPublicTLS() error {
 		TLSPort:         si.cfg.Server.TLSPort,
 		DataDir:         resolveDataDir(si.cfg.Server.DataDir),
 		ObtainBatchSize: si.cfg.TLS.ACME.ObtainBatchSize,
+		DNS:             dnsCfg,
 	}
 
 	tokenResolver := secrets.NewPublicTLSResolver(secrets.PublicTLSResolverConfig{})
@@ -577,11 +589,14 @@ func (si *serviceInit) initPublicTLS() error {
 	}
 
 	issuer, err := acmelego.NewIssuer(acmelego.Config{
-		Email:             si.cfg.TLS.ACME.Email,
-		Challenge:         effective.Mode,
-		Token:             effective.Token,
-		Store:             store,
-		HTTPChallengeSink: challenges,
+		Email:                 si.cfg.TLS.ACME.Email,
+		Challenge:             effective.Mode,
+		Token:                 effective.Token,
+		Store:                 store,
+		HTTPChallengeSink:     challenges,
+		DNSResolvers:          publicTLSCfg.DNS.Resolvers,
+		DNSPropagationTimeout: publicTLSCfg.DNS.PropagationTimeout,
+		DNSPollingInterval:    publicTLSCfg.DNS.PollingInterval,
 	})
 	if err != nil {
 		return log.WrapErr(err, "create ACME issuer")
@@ -1746,6 +1761,44 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 		maxBlobChunkSize: maxBlobChunkSize,
 		maxBlobSize:      maxBlobSize,
 	}, nil
+}
+
+// buildDNSConfig parses the raw dns config section into a publictls.DNSConfig.
+func buildDNSConfig(cfg Config) (publictls.DNSConfig, error) {
+	defaults := publictls.DefaultDNSConfig()
+
+	resolvers := cfg.DNS.Resolvers
+	if len(resolvers) == 0 {
+		resolvers = defaults.Resolvers
+	}
+
+	propagationTimeout := defaults.PropagationTimeout
+	if cfg.DNS.PropagationTimeout != "" {
+		parsed, err := time.ParseDuration(cfg.DNS.PropagationTimeout)
+		if err != nil {
+			return publictls.DNSConfig{}, fmt.Errorf("invalid dns.propagation_timeout: %w", err)
+		}
+		propagationTimeout = parsed
+	}
+
+	pollingInterval := defaults.PollingInterval
+	if cfg.DNS.PollingInterval != "" {
+		parsed, err := time.ParseDuration(cfg.DNS.PollingInterval)
+		if err != nil {
+			return publictls.DNSConfig{}, fmt.Errorf("invalid dns.polling_interval: %w", err)
+		}
+		pollingInterval = parsed
+	}
+
+	dnsCfg := publictls.DNSConfig{
+		Resolvers:          append([]string(nil), resolvers...),
+		PropagationTimeout: propagationTimeout,
+		PollingInterval:    pollingInterval,
+	}
+	if err := dnsCfg.Validate(); err != nil {
+		return publictls.DNSConfig{}, err
+	}
+	return dnsCfg, nil
 }
 
 // createContainerService creates the container service with configuration.
@@ -3269,6 +3322,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("tls.acme.email", "")
 	v.SetDefault("tls.acme.challenge", "auto")
 	v.SetDefault("tls.acme.obtain_batch_size", 1)
+	v.SetDefault("dns.resolvers", publictls.DefaultDNSResolvers)
+	v.SetDefault("dns.propagation_timeout", "5m")
+	v.SetDefault("dns.polling_interval", "5s")
 	v.SetDefault("server.force_https_redirect", false)
 	v.SetDefault("server.data_dir", DefaultDataDir())
 	v.SetDefault("server.runtime", "auto")

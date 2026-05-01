@@ -92,6 +92,11 @@ Gordon can obtain public certificates through Let's Encrypt-compatible ACME when
 [server]
 tls_port = 8443
 
+[dns]
+resolvers = ["1.1.1.1:53", "8.8.8.8:53"]
+propagation_timeout = "5m"
+polling_interval = "5s"
+
 [tls.acme]
 enabled = true
 email = "admin@example.com"
@@ -113,6 +118,12 @@ If the initial ACME reconcile fails (e.g. due to a transient network error or mi
 For Cloudflare Full/Strict, Cloudflare terminates browser TLS at the edge and connects to Gordon over HTTPS. A public ACME certificate served by Gordon is the preferred origin certificate because Cloudflare Strict can validate it without custom origin trust. Cloudflare Flexible mode (HTTPS at the edge, HTTP to Gordon) is not end-to-end HTTPS.
 
 Static certificates have priority, then public ACME certificates, then Gordon's internal CA fallback. Gordon uses the `go-acme/lego` ACME client, including its DNS-provider support for Cloudflare DNS-01.
+
+DNS-01 uses the Cloudflare API to create TXT records, then checks public DNS visibility through `[dns].resolvers`. These resolvers are recursive resolvers (for example Cloudflare DNS or Google DNS), not the authoritative DNS provider. A domain can be hosted at Cloudflare while Gordon verifies propagation through Google DNS.
+
+The defaults avoid relying on host-local DNS. This matters on hosts using Tailscale MagicDNS, split-horizon corporate DNS, or Pi-hole, where `/etc/resolv.conf` may not reflect public DNS visibility as Let's Encrypt sees it.
+
+Because Gordon's ACME challenge mode is global, `cloudflare-dns-01` requires a Cloudflare token that can read zones and edit DNS records for every zone used by configured HTTPS routes. If that is not desirable, use `http-01` until Gordon supports per-route or per-zone challenge policy.
 
 #### Direct HTTP Onboarding
 

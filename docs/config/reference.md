@@ -24,6 +24,14 @@ proxy_allowed_ips = []                       # IPs or CIDR ranges allowed to rea
 registry_listen_address = ""                 # Bind address for registry (empty = all interfaces, "127.0.0.1" = loopback only)
 
 # =============================================================================
+# DNS
+# =============================================================================
+[dns]
+resolvers = ["1.1.1.1:53", "8.8.8.8:53"] # Recursive resolvers for public DNS visibility checks
+propagation_timeout = "5m"                 # Max wait for DNS-01 TXT propagation
+polling_interval = "5s"                    # Interval between DNS-01 propagation checks
+
+# =============================================================================
 # AUTHENTICATION (required - Gordon won't start without credentials configured)
 # =============================================================================
 [auth]
@@ -204,6 +212,9 @@ keep_last = 3                                # Keep N newest tags per repository
 | `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `server.proxy_allowed_ips` | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
 | `server.registry_listen_address` | `""` | Bind address for registry (empty = all interfaces) |
+| `dns.resolvers` | `["1.1.1.1:53", "8.8.8.8:53"]` | Recursive resolvers used for public DNS visibility checks, including ACME DNS-01 propagation |
+| `dns.propagation_timeout` | `"5m"` | Maximum time to wait for DNS-01 TXT records to become visible through configured recursive resolvers |
+| `dns.polling_interval` | `"5s"` | Interval between DNS-01 propagation checks |
 | `tls.acme.enabled` | `false` | Enable public ACME certificates (requires `server.tls_port > 0`) |
 | `tls.acme.email` | `""` | ACME account email when enabled |
 | `tls.acme.challenge` | `"auto"` | ACME challenge mode: `auto`, `http-01`, or `cloudflare-dns-01` |
