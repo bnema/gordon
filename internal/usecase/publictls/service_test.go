@@ -300,6 +300,60 @@ func TestServiceReconcileLimitsMissingObtainsPerRun(t *testing.T) {
 	assert.Len(t, storeState.All(), 3)
 }
 
+func TestServiceReconcileRotatesBatchAfterFailedObtain(t *testing.T) {
+	ctx := context.Background()
+
+	routes := &fakeRoutes{
+		routes: []domain.Route{
+			{Domain: "b.example.com"},
+			{Domain: "a.example.com"},
+		},
+	}
+	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
+		if order.ID == "http01-a.example.com" {
+			return nil, fmt.Errorf("acme validation failed")
+		}
+		return defaultStoredCert(order)
+	}, nil)
+	store, storeState := newMockCertificateStore(t)
+
+	cfg := Config{
+		Enabled:         true,
+		Email:           "admin@example.com",
+		Challenge:       "http-01",
+		HTTPPort:        8088,
+		TLSPort:         8443,
+		ObtainBatchSize: 1,
+	}
+
+	svc := NewService(cfg, ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 2)
+	assert.Equal(t, "http01-a.example.com", orders[0].ID)
+	assert.Equal(t, "http01-b.example.com", orders[1].ID, "second reconcile should rotate past the failed first target")
+
+	stored := storeState.All()
+	require.Len(t, stored, 1)
+	assert.Equal(t, "http01-b.example.com", stored[0].ID)
+}
+
 func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 	ctx := context.Background()
 

@@ -106,9 +106,9 @@ Challenge behavior:
 
 HTTP-01 requires public access to port 80 for each hostname being validated. If you use Cloudflare in DNS-only/gray-cloud mode, your firewall/NAT must allow direct public traffic to Gordon's HTTP proxy port. A firewall rule that only allows Cloudflare source IPs on port 80 is compatible with orange-cloud proxying, but it blocks gray-cloud HTTP-01 validation; use DNS-01 or temporarily open port 80 for direct validation.
 
-Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile run (default `1`) so enabling ACME on an existing multi-route server does not burst through every route and hit Let's Encrypt rate limits. Later reloads, restarts, or renewal-loop reconciles continue issuing remaining certificates.
+Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile run (default `1`) so enabling ACME on an existing multi-route server does not burst through every route and hit Let's Encrypt rate limits. Later reloads, restarts, or other explicit reconcile runs continue issuing remaining certificates.
 
-If the initial ACME reconcile fails (e.g. due to a transient network error or misconfiguration), Gordon logs the failure and does not start the renewal loop. Operators should fix the underlying error and restart/reload Gordon to trigger a new reconcile attempt.
+If the initial ACME reconcile fails (e.g. due to a transient network error or misconfiguration), Gordon logs the failure but still starts the renewal loop for already cached certificates. Operators should fix the underlying error and restart/reload Gordon to trigger a new obtain attempt for missing certificates.
 
 For Cloudflare Full/Strict, Cloudflare terminates browser TLS at the edge and connects to Gordon over HTTPS. A public ACME certificate served by Gordon is the preferred origin certificate because Cloudflare Strict can validate it without custom origin trust. Cloudflare Flexible mode (HTTPS at the edge, HTTP to Gordon) remains a legacy/compatibility option, but it is not end-to-end HTTPS.
 

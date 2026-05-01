@@ -37,13 +37,14 @@ const defaultObtainBatchSize = 1
 
 // Service manages public TLS certificates via ACME.
 type Service struct {
-	mu       sync.RWMutex
-	cfg      Config
-	deps     ServiceDeps
-	log      zerowrap.Logger
-	certs    map[string]*out.StoredCertificate // indexed by cert ID
-	lastErr  map[string]string                 // indexed by cert ID
-	routeErr map[string]string                 // indexed by host
+	mu           sync.RWMutex
+	cfg          Config
+	deps         ServiceDeps
+	log          zerowrap.Logger
+	certs        map[string]*out.StoredCertificate // indexed by cert ID
+	lastErr      map[string]string                 // indexed by cert ID
+	routeErr     map[string]string                 // indexed by host
+	obtainCursor int                               // next missing target index for batched obtains
 
 	// requiredHosts is the set of hosts that must be covered by ACME certs.
 	requiredHosts map[string]struct{}
@@ -91,6 +92,7 @@ func (s *Service) Load(ctx context.Context) error {
 	s.certs = make(map[string]*out.StoredCertificate, len(stored))
 	s.lastErr = make(map[string]string)
 	s.requiredHosts = make(map[string]struct{})
+	s.obtainCursor = 0
 
 	for i := range stored {
 		cert := &stored[i]
@@ -189,17 +191,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		batchSize = defaultObtainBatchSize
 	}
 
-	var missing []CertificateTarget
-	pendingCount := 0
-	for _, target := range targets {
-		if s.certificateExistsLocked(target) {
-			continue
-		}
-		pendingCount++
-		if len(missing) < batchSize {
-			missing = append(missing, target)
-		}
-	}
+	missing, pendingCount := s.selectMissingTargetsLocked(targets, batchSize)
 	s.mu.Unlock()
 
 	// Process missing targets without holding s.mu or the store lock so
@@ -214,6 +206,41 @@ func (s *Service) Reconcile(ctx context.Context) error {
 
 	log.Debug().Int("missing_count", len(missing)).Int("pending_count", pendingCount).Msg("reconciled missing targets")
 	return nil
+}
+
+// selectMissingTargetsLocked returns up to batchSize missing certificate targets.
+// It rotates the starting point across reconcile runs so one repeatedly failing
+// target cannot indefinitely block later targets when batching is enabled.
+// Must be called with s.mu held.
+func (s *Service) selectMissingTargetsLocked(targets []CertificateTarget, batchSize int) ([]CertificateTarget, int) {
+	if batchSize <= 0 {
+		batchSize = defaultObtainBatchSize
+	}
+
+	allMissing := make([]CertificateTarget, 0, len(targets))
+	for _, target := range targets {
+		if !s.certificateExistsLocked(target) {
+			allMissing = append(allMissing, target)
+		}
+	}
+
+	pendingCount := len(allMissing)
+	if pendingCount == 0 {
+		s.obtainCursor = 0
+		return nil, 0
+	}
+	if batchSize >= pendingCount {
+		s.obtainCursor = 0
+		return allMissing, pendingCount
+	}
+
+	start := s.obtainCursor % pendingCount
+	missing := make([]CertificateTarget, 0, batchSize)
+	for i := range batchSize {
+		missing = append(missing, allMissing[(start+i)%pendingCount])
+	}
+	s.obtainCursor = (start + batchSize) % pendingCount
+	return missing, pendingCount
 }
 
 func populateStoredCertificate(cert *out.StoredCertificate) error {

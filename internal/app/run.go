@@ -622,12 +622,10 @@ func startPublicTLSRuntime(ctx context.Context, svc publicTLSRuntime, log zerowr
 	if svc == nil {
 		return nil
 	}
-	if err := svc.Reconcile(ctx); err != nil {
-		return err
-	}
+	reconcileErr := svc.Reconcile(ctx)
 	svc.StartRenewalLoop(ctx, time.Hour)
 	log.Info().Msg("public ACME TLS runtime started")
-	return nil
+	return reconcileErr
 }
 
 // initSecrets creates the domain secret store, env loader, and secret service.
@@ -2552,7 +2550,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 func startPublicTLSRuntimeWithWarning(ctx context.Context, svc publicTLSRuntime, log zerowrap.Logger) {
 	if err := startPublicTLSRuntime(ctx, svc, log); err != nil {
-		log.Warn().Err(err).Msg("failed to start public ACME TLS runtime, continuing")
+		log.Warn().Err(err).Msg("initial public ACME reconcile failed, continuing with renewal loop")
 	}
 }
 

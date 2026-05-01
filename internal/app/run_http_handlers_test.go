@@ -441,7 +441,7 @@ func TestStartPublicTLSRuntime_NilSvc(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestStartPublicTLSRuntime_DoesNotStartRenewalLoopWhenReconcileFails(t *testing.T) {
+func TestStartPublicTLSRuntime_StartsRenewalLoopWhenReconcileFails(t *testing.T) {
 	t.Parallel()
 
 	runtime := &recordingPublicTLSRuntime{reconcileErr: errors.New("boom")}
@@ -449,7 +449,7 @@ func TestStartPublicTLSRuntime_DoesNotStartRenewalLoopWhenReconcileFails(t *test
 
 	require.Error(t, err)
 	assert.Equal(t, 1, runtime.reconcileCalls)
-	assert.Equal(t, 0, runtime.loopCalls)
+	assert.Equal(t, 1, runtime.loopCalls)
 }
 
 func TestCreateHTTPHandlers_TLSConfiguredWithoutCA_FailsStartup(t *testing.T) {
