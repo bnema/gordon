@@ -263,6 +263,29 @@ func TestStoreAccountFileMode(t *testing.T) {
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 }
 
+func TestStoreSaveLoadState(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	store, err := New(root)
+	require.NoError(t, err)
+
+	state, err := store.LoadState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, state.ObtainCursor)
+
+	err = store.SaveState(ctx, out.CertificateStoreState{ObtainCursor: 3})
+	require.NoError(t, err)
+
+	state, err = store.LoadState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, state.ObtainCursor)
+
+	info, err := os.Stat(filepath.Join(root, stateFile))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}
+
 func TestStoreLoadAllInvalidChallenge(t *testing.T) {
 	root := t.TempDir()
 	ctx := context.Background()

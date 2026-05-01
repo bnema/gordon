@@ -2105,9 +2105,6 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 		registerOnboardingRoutes(onboardingMux, obHandler)
 		// Register onboarding paths host-gated so normal traffic hits
 		// proxyHandler directly through the catch-all / pattern.
-		httpsMux.Handle("GET /ca", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
-		httpsMux.Handle("GET /ca.crt", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
-		httpsMux.Handle("GET /ca.mobileconfig", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
 		httpsMux.Handle("GET /.well-known/gordon/", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
 		httpsMux.Handle("GET /.well-known/gordon/ca", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
 		httpsMux.Handle("GET /.well-known/gordon/ca.crt", gordonDomainOnboardingGate(gordonDomain, onboardingMux, proxyHandler))
@@ -2133,17 +2130,13 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 	return registryOut, proxyOut, httpsOut
 }
 
-// registerOnboardingRoutes registers all CA onboarding HTTP routes on the
-// given mux. Both direct-HTTP and Gordon-domain HTTPS onboarding use this.
+// registerOnboardingRoutes registers CA onboarding well-known HTTP routes on
+// the given mux. Both direct-HTTP and Gordon-domain HTTPS onboarding use this.
 func registerOnboardingRoutes(mux *http.ServeMux, ob *onboarding.Handler) {
-	mux.HandleFunc("GET /{$}", ob.ServeOnboardingPage)
 	mux.HandleFunc("GET /.well-known/gordon/", ob.ServeOnboardingPage)
 	mux.HandleFunc("GET /.well-known/gordon/ca", ob.ServeOnboardingPage)
 	mux.HandleFunc("GET /.well-known/gordon/ca.crt", ob.ServeCACert)
 	mux.HandleFunc("GET /.well-known/gordon/ca.mobileconfig", ob.ServeMobileconfig)
-	mux.HandleFunc("GET /ca", ob.ServeOnboardingPage)
-	mux.HandleFunc("GET /ca.crt", ob.ServeCACert)
-	mux.HandleFunc("GET /ca.mobileconfig", ob.ServeMobileconfig)
 }
 
 // directHTTPOnboardingGate returns an http.Handler that splits HTTP traffic

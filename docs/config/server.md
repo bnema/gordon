@@ -110,7 +110,7 @@ Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile r
 
 If the initial ACME reconcile fails (e.g. due to a transient network error or misconfiguration), Gordon logs the failure but still starts the renewal loop for already cached certificates. Operators should fix the underlying error and restart/reload Gordon to trigger a new obtain attempt for missing certificates.
 
-For Cloudflare Full/Strict, Cloudflare terminates browser TLS at the edge and connects to Gordon over HTTPS. A public ACME certificate served by Gordon is the preferred origin certificate because Cloudflare Strict can validate it without custom origin trust. Cloudflare Flexible mode (HTTPS at the edge, HTTP to Gordon) remains a legacy/compatibility option, but it is not end-to-end HTTPS.
+For Cloudflare Full/Strict, Cloudflare terminates browser TLS at the edge and connects to Gordon over HTTPS. A public ACME certificate served by Gordon is the preferred origin certificate because Cloudflare Strict can validate it without custom origin trust. Cloudflare Flexible mode (HTTPS at the edge, HTTP to Gordon) is not end-to-end HTTPS.
 
 Static certificates have priority, then public ACME certificates, then Gordon's internal CA fallback. Gordon uses the `go-acme/lego` ACME client, including its DNS-provider support for Cloudflare DNS-01.
 
@@ -119,13 +119,12 @@ Static certificates have priority, then public ACME certificates, then Gordon's 
 When `tls_port` is non-zero, direct HTTP clients (those not arriving through a trusted proxy) are restricted to CA onboarding paths only:
 
 - `/.well-known/gordon/`, `/.well-known/gordon/ca`, `/.well-known/gordon/ca.crt`, `/.well-known/gordon/ca.mobileconfig` — serve the onboarding page and CA certificate downloads
-- `/`, `/ca`, `/ca.crt`, `/ca.mobileconfig` — legacy compatibility aliases for direct HTTP onboarding
 - `/.well-known/acme-challenge/*` — serves ACME HTTP-01 challenges when public ACME HTTP-01 is enabled, otherwise returns `404 Not Found`
 - All other paths return `403 Forbidden`
 
 This lets new clients discover and trust the internal CA over plain HTTP without exposing the full application. Trusted proxy traffic (e.g. from Cloudflare) continues through the normal HTTP proxy path unaffected.
 
-On HTTPS, onboarding paths are served only on `server.gordon_domain`; app hosts can use `/ca` for their own routes without Gordon intercepting it. If `gordon_domain` is empty, HTTPS onboarding paths are not served at all to avoid intercepting app hosts.
+On HTTPS, onboarding paths are served only on `server.gordon_domain`; app hosts can use their own routes without Gordon intercepting them. If `gordon_domain` is empty, HTTPS onboarding paths are not served at all to avoid intercepting app hosts.
 
 #### HTTP to HTTPS redirect
 

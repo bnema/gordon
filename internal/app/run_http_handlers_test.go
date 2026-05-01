@@ -145,15 +145,15 @@ func TestCreateHTTPHandlers_DirectHTTPOnboarding_AllPaths(t *testing.T) {
 		wantContent string // substring check
 		wantType    string // Content-Type substring
 	}{
-		{name: "root serves onboarding", path: "/", wantCode: http.StatusOK, wantContent: "Trust CA Certificate", wantType: "text/html"},
 		{name: ".well-known/gordon/ serves onboarding", path: "/.well-known/gordon/", wantCode: http.StatusOK, wantContent: "Trust CA Certificate", wantType: "text/html"},
-		{name: ".well-known/gordon/ca.crt serves CA cert", path: "/.well-known/gordon/ca.crt", wantCode: http.StatusOK, wantContent: "BEGIN CERTIFICATE", wantType: "application/x-x509-ca-cert"},
-		{name: "/ca.crt serves CA cert", path: "/ca.crt", wantCode: http.StatusOK, wantContent: "BEGIN CERTIFICATE", wantType: "application/x-x509-ca-cert"},
-		{name: "unknown path returns forbidden", path: "/web", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
 		{name: ".well-known/gordon/ca serves onboarding", path: "/.well-known/gordon/ca", wantCode: http.StatusOK, wantContent: "Trust CA Certificate", wantType: "text/html"},
-		{name: "/ca serves onboarding", path: "/ca", wantCode: http.StatusOK, wantContent: "Trust CA Certificate", wantType: "text/html"},
-		{name: "/ca.mobileconfig serves mobileconfig", path: "/ca.mobileconfig", wantCode: http.StatusOK, wantContent: "<?xml", wantType: "application/x-apple-aspen-config"},
+		{name: ".well-known/gordon/ca.crt serves CA cert", path: "/.well-known/gordon/ca.crt", wantCode: http.StatusOK, wantContent: "BEGIN CERTIFICATE", wantType: "application/x-x509-ca-cert"},
 		{name: ".well-known/gordon/ca.mobileconfig serves mobileconfig", path: "/.well-known/gordon/ca.mobileconfig", wantCode: http.StatusOK, wantContent: "<?xml", wantType: "application/x-apple-aspen-config"},
+		{name: "root returns forbidden", path: "/", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
+		{name: "former /ca alias returns forbidden", path: "/ca", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
+		{name: "former /ca.crt alias returns forbidden", path: "/ca.crt", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
+		{name: "former /ca.mobileconfig alias returns forbidden", path: "/ca.mobileconfig", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
+		{name: "unknown path returns forbidden", path: "/web", wantCode: http.StatusForbidden, wantContent: "Only certificate onboarding is available", wantType: "text/plain"},
 	}
 
 	for _, tc := range tests {
@@ -201,7 +201,7 @@ func TestCreateHTTPHandlers_TrustedProxyHTTP_DoesNotServeOnboarding(t *testing.T
 	assert.NotContains(t, rec.Body.String(), "Trust CA Certificate")
 }
 
-func TestCreateHTTPHandlers_TrustedProxyCACertPath_DoesNotServeOnboardingResource(t *testing.T) {
+func TestCreateHTTPHandlers_TrustedProxyWellKnownCACertPath_DoesNotServeOnboardingResource(t *testing.T) {
 	t.Parallel()
 	ca := newTestCA(t)
 	cfg := newOnboardingConfig()
@@ -209,7 +209,7 @@ func TestCreateHTTPHandlers_TrustedProxyCACertPath_DoesNotServeOnboardingResourc
 
 	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/ca.crt", nil)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/ca.crt", nil)
 	req.RemoteAddr = trustedProxyAddr
 	req.Host = "app.example.com"
 	rec := httptest.NewRecorder()
@@ -229,7 +229,7 @@ func TestCreateHTTPHandlers_ForceHTTPSRedirect_DoesNotBypassDirectOnboarding(t *
 
 	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/", nil)
 	req.RemoteAddr = directAddr
 	req.Host = "o2.bnema.dev"
 	rec := httptest.NewRecorder()
@@ -249,14 +249,16 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_RemainsAvailableOnGordonDomain(t *te
 
 	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/ca", nil)
-	req.RemoteAddr = directAddr
-	req.Host = "gordon.example.com"
-	rec := httptest.NewRecorder()
-	httpsHandler.ServeHTTP(rec, req)
+	for _, host := range []string{"gordon.example.com", "Gordon.Example.Com.:8443"} {
+		req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/ca", nil)
+		req.RemoteAddr = directAddr
+		req.Host = host
+		rec := httptest.NewRecorder()
+		httpsHandler.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "Trust CA Certificate")
+		assert.Equal(t, http.StatusOK, rec.Code, "host %s", host)
+		assert.Contains(t, rec.Body.String(), "Trust CA Certificate", "host %s", host)
+	}
 }
 
 func TestCreateHTTPHandlers_HTTPSOnboarding_DoesNotPreemptAppHostCAPath(t *testing.T) {
@@ -268,7 +270,7 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_DoesNotPreemptAppHostCAPath(t *testi
 
 	_, _, httpsHandler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/ca", nil)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/ca", nil)
 	req.RemoteAddr = directAddr
 	req.Host = "app.example.com"
 	rec := httptest.NewRecorder()
@@ -276,6 +278,15 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_DoesNotPreemptAppHostCAPath(t *testi
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "Trust CA Certificate")
+
+	normalizedReq := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/ca", nil)
+	normalizedReq.RemoteAddr = directAddr
+	normalizedReq.Host = "Gordon.Example.Com.:8443"
+	normalizedRec := httptest.NewRecorder()
+	httpsHandler.ServeHTTP(normalizedRec, normalizedReq)
+
+	assert.Equal(t, http.StatusOK, normalizedRec.Code)
+	assert.Contains(t, normalizedRec.Body.String(), "Trust CA Certificate")
 }
 
 func TestCreateHTTPHandlers_HTTPSOnboarding_HEADRoutesRemainAvailable(t *testing.T) {
@@ -292,10 +303,10 @@ func TestCreateHTTPHandlers_HTTPSOnboarding_HEADRoutesRemainAvailable(t *testing
 	ts := httptest.NewServer(httpsHandler)
 	defer ts.Close()
 
-	for _, path := range []string{"/ca", "/ca.crt", "/ca.mobileconfig"} {
+	for _, path := range []string{"/.well-known/gordon/ca", "/.well-known/gordon/ca.crt", "/.well-known/gordon/ca.mobileconfig"} {
 		req, err := http.NewRequest(http.MethodHead, ts.URL+path, nil)
 		require.NoError(t, err)
-		req.Host = "gordon.example.com"
+		req.Host = "Gordon.Example.Com.:8443"
 		resp, err := ts.Client().Do(req)
 		require.NoError(t, err)
 
@@ -327,8 +338,8 @@ func TestCreateHTTPHandlers_DirectHTTPOnboarding_HEADRoutesRemainAvailable(t *te
 		path        string
 		contentType string
 	}{
-		{path: "/ca", contentType: "text/html"},
-		{path: "/ca.crt", contentType: "application/x-x509-ca-cert"},
+		{path: "/.well-known/gordon/ca", contentType: "text/html"},
+		{path: "/.well-known/gordon/ca.crt", contentType: "application/x-x509-ca-cert"},
 	} {
 		resp, err := ts.Client().Head(ts.URL + tc.path)
 		require.NoError(t, err)

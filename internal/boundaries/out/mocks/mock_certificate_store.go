@@ -73,7 +73,7 @@ type MockCertificateStore_LoadAccount_Call struct {
 
 // LoadAccount is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockCertificateStore_Expecter) LoadAccount(ctx any) *MockCertificateStore_LoadAccount_Call {
+func (_e *MockCertificateStore_Expecter) LoadAccount(ctx interface{}) *MockCertificateStore_LoadAccount_Call {
 	return &MockCertificateStore_LoadAccount_Call{Call: _e.mock.On("LoadAccount", ctx)}
 }
 
@@ -135,7 +135,7 @@ type MockCertificateStore_LoadAll_Call struct {
 
 // LoadAll is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockCertificateStore_Expecter) LoadAll(ctx any) *MockCertificateStore_LoadAll_Call {
+func (_e *MockCertificateStore_Expecter) LoadAll(ctx interface{}) *MockCertificateStore_LoadAll_Call {
 	return &MockCertificateStore_LoadAll_Call{Call: _e.mock.On("LoadAll", ctx)}
 }
 
@@ -158,6 +158,66 @@ func (_c *MockCertificateStore_LoadAll_Call) Return(storedCertificates []out.Sto
 }
 
 func (_c *MockCertificateStore_LoadAll_Call) RunAndReturn(run func(ctx context.Context) ([]out.StoredCertificate, error)) *MockCertificateStore_LoadAll_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// LoadState provides a mock function for the type MockCertificateStore
+func (_mock *MockCertificateStore) LoadState(ctx context.Context) (out.CertificateStoreState, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LoadState")
+	}
+
+	var r0 out.CertificateStoreState
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) (out.CertificateStoreState, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) out.CertificateStoreState); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		r0 = ret.Get(0).(out.CertificateStoreState)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockCertificateStore_LoadState_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LoadState'
+type MockCertificateStore_LoadState_Call struct {
+	*mock.Call
+}
+
+// LoadState is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockCertificateStore_Expecter) LoadState(ctx interface{}) *MockCertificateStore_LoadState_Call {
+	return &MockCertificateStore_LoadState_Call{Call: _e.mock.On("LoadState", ctx)}
+}
+
+func (_c *MockCertificateStore_LoadState_Call) Run(run func(ctx context.Context)) *MockCertificateStore_LoadState_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockCertificateStore_LoadState_Call) Return(certificateStoreState out.CertificateStoreState, err error) *MockCertificateStore_LoadState_Call {
+	_c.Call.Return(certificateStoreState, err)
+	return _c
+}
+
+func (_c *MockCertificateStore_LoadState_Call) RunAndReturn(run func(ctx context.Context) (out.CertificateStoreState, error)) *MockCertificateStore_LoadState_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -197,7 +257,7 @@ type MockCertificateStore_Lock_Call struct {
 
 // Lock is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockCertificateStore_Expecter) Lock(ctx any) *MockCertificateStore_Lock_Call {
+func (_e *MockCertificateStore_Expecter) Lock(ctx interface{}) *MockCertificateStore_Lock_Call {
 	return &MockCertificateStore_Lock_Call{Call: _e.mock.On("Lock", ctx)}
 }
 
@@ -249,7 +309,7 @@ type MockCertificateStore_Save_Call struct {
 // Save is a helper method to define mock.On call
 //   - ctx context.Context
 //   - cert out.StoredCertificate
-func (_e *MockCertificateStore_Expecter) Save(ctx any, cert any) *MockCertificateStore_Save_Call {
+func (_e *MockCertificateStore_Expecter) Save(ctx interface{}, cert interface{}) *MockCertificateStore_Save_Call {
 	return &MockCertificateStore_Save_Call{Call: _e.mock.On("Save", ctx, cert)}
 }
 
@@ -306,7 +366,7 @@ type MockCertificateStore_SaveAccount_Call struct {
 // SaveAccount is a helper method to define mock.On call
 //   - ctx context.Context
 //   - account out.ACMEAccount
-func (_e *MockCertificateStore_Expecter) SaveAccount(ctx any, account any) *MockCertificateStore_SaveAccount_Call {
+func (_e *MockCertificateStore_Expecter) SaveAccount(ctx interface{}, account interface{}) *MockCertificateStore_SaveAccount_Call {
 	return &MockCertificateStore_SaveAccount_Call{Call: _e.mock.On("SaveAccount", ctx, account)}
 }
 
@@ -334,6 +394,63 @@ func (_c *MockCertificateStore_SaveAccount_Call) Return(err error) *MockCertific
 }
 
 func (_c *MockCertificateStore_SaveAccount_Call) RunAndReturn(run func(ctx context.Context, account out.ACMEAccount) error) *MockCertificateStore_SaveAccount_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SaveState provides a mock function for the type MockCertificateStore
+func (_mock *MockCertificateStore) SaveState(ctx context.Context, state out.CertificateStoreState) error {
+	ret := _mock.Called(ctx, state)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SaveState")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, out.CertificateStoreState) error); ok {
+		r0 = returnFunc(ctx, state)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockCertificateStore_SaveState_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveState'
+type MockCertificateStore_SaveState_Call struct {
+	*mock.Call
+}
+
+// SaveState is a helper method to define mock.On call
+//   - ctx context.Context
+//   - state out.CertificateStoreState
+func (_e *MockCertificateStore_Expecter) SaveState(ctx interface{}, state interface{}) *MockCertificateStore_SaveState_Call {
+	return &MockCertificateStore_SaveState_Call{Call: _e.mock.On("SaveState", ctx, state)}
+}
+
+func (_c *MockCertificateStore_SaveState_Call) Run(run func(ctx context.Context, state out.CertificateStoreState)) *MockCertificateStore_SaveState_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 out.CertificateStoreState
+		if args[1] != nil {
+			arg1 = args[1].(out.CertificateStoreState)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockCertificateStore_SaveState_Call) Return(err error) *MockCertificateStore_SaveState_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockCertificateStore_SaveState_Call) RunAndReturn(run func(ctx context.Context, state out.CertificateStoreState) error) *MockCertificateStore_SaveState_Call {
 	_c.Call.Return(run)
 	return _c
 }

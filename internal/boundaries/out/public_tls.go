@@ -39,6 +39,11 @@ type ACMEAccount struct {
 	BodyJSON        []byte
 }
 
+// CertificateStoreState represents persisted ACME reconciliation state.
+type CertificateStoreState struct {
+	ObtainCursor int
+}
+
 // SecretValue holds a resolved secret value and its source.
 type SecretValue struct {
 	Value  string
@@ -84,6 +89,12 @@ type CertificateStore interface {
 
 	// Save persists a certificate.
 	Save(ctx context.Context, cert StoredCertificate) error
+
+	// LoadState returns persisted reconciliation state.
+	LoadState(ctx context.Context) (CertificateStoreState, error)
+
+	// SaveState persists reconciliation state.
+	SaveState(ctx context.Context, state CertificateStoreState) error
 
 	// Lock acquires a lock to prevent concurrent certificate operations.
 	Lock(ctx context.Context) (unlock func() error, err error)

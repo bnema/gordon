@@ -31,22 +31,22 @@ func newTestServer(t *testing.T) (*httptest.Server, []byte, []byte) {
 	h, rootPEM, mobileconfig := newTestHandler()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /ca", h.ServeOnboardingPage)
-	mux.HandleFunc("HEAD /ca", h.ServeOnboardingPage)
-	mux.HandleFunc("GET /ca.crt", h.ServeCACert)
-	mux.HandleFunc("HEAD /ca.crt", h.ServeCACert)
-	mux.HandleFunc("GET /ca.mobileconfig", h.ServeMobileconfig)
-	mux.HandleFunc("HEAD /ca.mobileconfig", h.ServeMobileconfig)
+	mux.HandleFunc("GET /.well-known/gordon/ca", h.ServeOnboardingPage)
+	mux.HandleFunc("HEAD /.well-known/gordon/ca", h.ServeOnboardingPage)
+	mux.HandleFunc("GET /.well-known/gordon/ca.crt", h.ServeCACert)
+	mux.HandleFunc("HEAD /.well-known/gordon/ca.crt", h.ServeCACert)
+	mux.HandleFunc("GET /.well-known/gordon/ca.mobileconfig", h.ServeMobileconfig)
+	mux.HandleFunc("HEAD /.well-known/gordon/ca.mobileconfig", h.ServeMobileconfig)
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, rootPEM, mobileconfig
 }
 
-// getOnboardingBody issues a GET /ca with a custom Host header and returns the body.
+// getOnboardingBody issues a GET /.well-known/gordon/ca with a custom Host header and returns the body.
 func getOnboardingBody(t *testing.T, srv *httptest.Server, host string) string {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/ca", nil)
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/.well-known/gordon/ca", nil)
 	require.NoError(t, err)
 	req.Host = host
 
@@ -63,7 +63,7 @@ func getOnboardingBody(t *testing.T, srv *httptest.Server, host string) string {
 func TestHandler_CACert(t *testing.T) {
 	srv, rootPEM, _ := newTestServer(t)
 
-	resp, err := http.Get(srv.URL + "/ca.crt")
+	resp, err := http.Get(srv.URL + "/.well-known/gordon/ca.crt")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -78,7 +78,7 @@ func TestHandler_CACert(t *testing.T) {
 func TestHandler_Mobileconfig(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
-	resp, err := http.Get(srv.URL + "/ca.mobileconfig")
+	resp, err := http.Get(srv.URL + "/.well-known/gordon/ca.mobileconfig")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -93,7 +93,7 @@ func TestHandler_Mobileconfig(t *testing.T) {
 func TestHandler_OnboardingPage(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
-	resp, err := http.Get(srv.URL + "/ca")
+	resp, err := http.Get(srv.URL + "/.well-known/gordon/ca")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -103,8 +103,8 @@ func TestHandler_OnboardingPage(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
 	assert.Contains(t, string(body), "Gordon")
-	assert.Contains(t, string(body), "/ca.crt")
-	assert.Contains(t, string(body), "/ca.mobileconfig")
+	assert.Contains(t, string(body), "/.well-known/gordon/ca.crt")
+	assert.Contains(t, string(body), "/.well-known/gordon/ca.mobileconfig")
 }
 
 func TestHandler_OnboardingPage_DefaultHTTPSURLOmitsInternalTLSPort(t *testing.T) {
@@ -164,7 +164,7 @@ func TestHandler_OnboardingPage_GoToSiteLinkIsPlainLink(t *testing.T) {
 func TestHandler_OnboardingPage_HEAD(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
-	req, err := http.NewRequest(http.MethodHead, srv.URL+"/ca", nil)
+	req, err := http.NewRequest(http.MethodHead, srv.URL+"/.well-known/gordon/ca", nil)
 	require.NoError(t, err)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -182,7 +182,7 @@ func TestHandler_OnboardingPage_HEAD(t *testing.T) {
 func TestHandler_CACert_HEAD(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
-	req, err := http.NewRequest(http.MethodHead, srv.URL+"/ca.crt", nil)
+	req, err := http.NewRequest(http.MethodHead, srv.URL+"/.well-known/gordon/ca.crt", nil)
 	require.NoError(t, err)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -200,7 +200,7 @@ func TestHandler_CACert_HEAD(t *testing.T) {
 func TestHandler_Mobileconfig_HEAD(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
-	req, err := http.NewRequest(http.MethodHead, srv.URL+"/ca.mobileconfig", nil)
+	req, err := http.NewRequest(http.MethodHead, srv.URL+"/.well-known/gordon/ca.mobileconfig", nil)
 	require.NoError(t, err)
 
 	resp, err := http.DefaultClient.Do(req)

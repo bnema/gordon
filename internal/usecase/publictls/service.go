@@ -85,6 +85,13 @@ func (s *Service) Load(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load stored certificates: %w", err)
 	}
+	state, err := s.deps.Store.LoadState(ctx)
+	if err != nil {
+		return fmt.Errorf("load certificate store state: %w", err)
+	}
+	if state.ObtainCursor < 0 {
+		state.ObtainCursor = 0
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,7 +99,7 @@ func (s *Service) Load(ctx context.Context) error {
 	s.certs = make(map[string]*out.StoredCertificate, len(stored))
 	s.lastErr = make(map[string]string)
 	s.requiredHosts = make(map[string]struct{})
-	s.obtainCursor = 0
+	s.obtainCursor = state.ObtainCursor
 
 	for i := range stored {
 		cert := &stored[i]
@@ -191,8 +198,20 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		batchSize = defaultObtainBatchSize
 	}
 
-	missing, pendingCount := s.selectMissingTargetsLocked(targets, batchSize)
+	previousCursor := s.obtainCursor
+	missing, pendingCount, nextCursor, cursorChanged := s.selectMissingTargetsLocked(targets, batchSize)
 	s.mu.Unlock()
+
+	if cursorChanged {
+		if err := s.persistObtainCursor(ctx, nextCursor); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		if s.obtainCursor == previousCursor {
+			s.obtainCursor = nextCursor
+		}
+		s.mu.Unlock()
+	}
 
 	// Process missing targets without holding s.mu or the store lock so
 	// GetCertificate/Status are not blocked during network I/O (Obtain).
@@ -212,10 +231,11 @@ func (s *Service) Reconcile(ctx context.Context) error {
 // It rotates the starting point across reconcile runs so one repeatedly failing
 // target cannot indefinitely block later targets when batching is enabled.
 // Must be called with s.mu held.
-func (s *Service) selectMissingTargetsLocked(targets []CertificateTarget, batchSize int) ([]CertificateTarget, int) {
+func (s *Service) selectMissingTargetsLocked(targets []CertificateTarget, batchSize int) ([]CertificateTarget, int, int, bool) {
 	if batchSize <= 0 {
 		batchSize = defaultObtainBatchSize
 	}
+	previousCursor := s.obtainCursor
 
 	allMissing := make([]CertificateTarget, 0, len(targets))
 	for _, target := range targets {
@@ -226,12 +246,12 @@ func (s *Service) selectMissingTargetsLocked(targets []CertificateTarget, batchS
 
 	pendingCount := len(allMissing)
 	if pendingCount == 0 {
-		s.obtainCursor = 0
-		return nil, 0
+		nextCursor := 0
+		return nil, 0, nextCursor, nextCursor != previousCursor
 	}
 	if batchSize >= pendingCount {
-		s.obtainCursor = 0
-		return allMissing, pendingCount
+		nextCursor := 0
+		return allMissing, pendingCount, nextCursor, nextCursor != previousCursor
 	}
 
 	start := s.obtainCursor % pendingCount
@@ -239,8 +259,24 @@ func (s *Service) selectMissingTargetsLocked(targets []CertificateTarget, batchS
 	for i := range batchSize {
 		missing = append(missing, allMissing[(start+i)%pendingCount])
 	}
-	s.obtainCursor = (start + batchSize) % pendingCount
-	return missing, pendingCount
+	nextCursor := (start + batchSize) % pendingCount
+	return missing, pendingCount, nextCursor, nextCursor != previousCursor
+}
+
+func (s *Service) persistObtainCursor(ctx context.Context, obtainCursor int) error {
+	unlock, err := s.deps.Store.Lock(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire store lock: %w", err)
+	}
+	saveErr := s.deps.Store.SaveState(ctx, out.CertificateStoreState{ObtainCursor: obtainCursor})
+	if unlockErr := unlock(); unlockErr != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Warn().Err(unlockErr).Msg("failed to release store lock")
+	}
+	if saveErr != nil {
+		return fmt.Errorf("save certificate store state: %w", saveErr)
+	}
+	return nil
 }
 
 func populateStoredCertificate(cert *out.StoredCertificate) error {
