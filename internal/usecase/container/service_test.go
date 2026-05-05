@@ -57,11 +57,6 @@ func testMinDelayConfig() Config {
 	}
 }
 
-func allowRestartPolicyEnsure(t *testing.T, runtime *mocks.MockContainerRuntime) {
-	t.Helper()
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
-}
-
 func setupMetricsTest(t *testing.T) (*telemetry.Metrics, *sdkmetric.ManualReader) {
 	t.Helper()
 
@@ -382,8 +377,6 @@ func TestService_Deploy_Success(t *testing.T) {
 	// Wait for ready: IsContainerRunning (first check returns true) + verify after delay
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-123").Return(true, nil).Times(2)
 
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "container-123", domain.RestartPolicyAlways).Return(nil).Once()
-
 	// Re-inspect after start
 	runningContainer := &domain.Container{
 		ID:     "container-123",
@@ -412,7 +405,6 @@ func TestService_Deploy_Success(t *testing.T) {
 
 func TestService_Deploy_ReadinessRecoveryWindow_AllowsTransientFlap(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -479,7 +471,6 @@ func TestService_Deploy_ReadinessRecoveryWindow_AllowsTransientFlap(t *testing.T
 
 func TestService_Deploy_ImagePullFailure(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -522,7 +513,6 @@ func TestIsPullFailure_ErrImagePullFailed(t *testing.T) {
 
 func TestService_Deploy_DoesNotMisclassifyUnauthorizedEnvLoadFailure(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -563,7 +553,6 @@ func TestService_CaptureRecentContainerLogs_SkipsCanceledContext(t *testing.T) {
 
 func TestService_Deploy_ReadinessFailureReturnsDeployFailureWithLogs(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -623,7 +612,6 @@ func TestService_Deploy_ReadinessFailureReturnsDeployFailureWithLogs(t *testing.
 
 func TestService_Deploy_StrictHealthModeWithoutHealthcheckReturnsHint(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -735,7 +723,6 @@ func TestService_PullImage_InternalRetriesOnConnectionRefused(t *testing.T) {
 
 func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -819,7 +806,6 @@ func TestService_Deploy_ReplacesExistingContainer(t *testing.T) {
 // from killing the real active container after a Gordon restart.
 func TestService_Deploy_ResolvesExistingFromRuntime_WhenMemoryStale(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -919,7 +905,6 @@ func TestService_Deploy_ResolvesExistingFromRuntime_WhenMemoryStale(t *testing.T
 
 func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -982,7 +967,6 @@ func TestService_Deploy_SkipRedundantDeploy_GetImageIDError(t *testing.T) {
 
 func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -1041,7 +1025,6 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 
 func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -2055,7 +2038,6 @@ func TestRewriteToLocalRegistry(t *testing.T) {
 
 func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -2136,7 +2118,6 @@ func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 
 func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -2186,7 +2167,6 @@ func TestService_AutoStart_StartsNewContainers(t *testing.T) {
 
 func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -2236,7 +2216,6 @@ func TestService_AutoStart_SkipsExistingContainers(t *testing.T) {
 
 func TestService_AutoStart_HandlesDeployErrors(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -2265,7 +2244,6 @@ func TestService_AutoStart_HandlesDeployErrors(t *testing.T) {
 
 func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -2318,7 +2296,6 @@ func TestService_AutoStart_UsesInternalDeployContext(t *testing.T) {
 // until the new container is ready and traffic is switched.
 func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -2415,7 +2392,6 @@ func TestService_Deploy_OrphanCleanupSkipsTrackedContainer(t *testing.T) {
 // Running canonical containers are preserved (see NeverKillsRunningCanonical test).
 func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -2496,7 +2472,6 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 
 func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -2569,7 +2544,6 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 
 func TestService_Deploy_TrackedTempContainerUsesAlternateTempName(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -2759,7 +2733,6 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 	// Verify that concurrent Deploy calls for the same domain are serialized
 	// and both succeed without container name conflicts.
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -2870,7 +2843,6 @@ func TestService_Deploy_ConcurrentSameDomain(t *testing.T) {
 func TestService_Deploy_ContextCancellation(t *testing.T) {
 	// Verify that deploy lock acquisition respects context cancellation.
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -2901,7 +2873,6 @@ func TestService_Deploy_ContextCancellation(t *testing.T) {
 // BEFORE the old container is stopped, preventing 503 errors during deployment.
 func TestService_Deploy_CacheInvalidationBeforeOldContainerStop(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -2982,7 +2953,6 @@ func TestService_Deploy_CacheInvalidationBeforeOldContainerStop(t *testing.T) {
 // when no cache invalidator is set (e.g., in tests or minimal configurations).
 func TestService_Deploy_NilCacheInvalidator(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -3032,7 +3002,6 @@ func TestService_Deploy_NilCacheInvalidator(t *testing.T) {
 
 func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -3093,7 +3062,6 @@ func TestService_Deploy_SkipsRedundantDeploy(t *testing.T) {
 
 func TestService_Deploy_SkipsRedundantDeploy_WhenTrackedImageIDMissing(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -3155,7 +3123,6 @@ func TestService_Deploy_SkipsRedundantDeploy_WhenTrackedImageIDMissing(t *testin
 
 func TestService_Deploy_DoesNotSkipWhenImageIDDiffers(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -3258,7 +3225,6 @@ func TestSyncContainersRebuildsAttachmentMap(t *testing.T) {
 
 func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -3322,7 +3288,6 @@ func TestService_Deploy_SkipRedundantDeploy_ContainerNotRunning(t *testing.T) {
 
 func TestService_Deploy_DoesNotSkip_WhenEnvHashDiffers(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -3381,7 +3346,6 @@ func TestService_Deploy_DoesNotSkip_WhenEnvHashDiffers(t *testing.T) {
 
 func TestService_Deploy_DoesNotSkip_WhenEnvHashMissing(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -3508,7 +3472,6 @@ func TestService_attachmentEnvDrifted_ReturnsTrueWhenHashMissing(t *testing.T) {
 // disallows creating a container with the same name as an existing running container.
 func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -3605,7 +3568,6 @@ func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 // and the failed new container is cleaned up.
 func TestService_Deploy_RollbackOnPostSwitchCrash(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -3700,7 +3662,6 @@ func TestService_Deploy_RollbackOnPostSwitchCrash(t *testing.T) {
 // container is finalized (stopped and removed).
 func TestService_Deploy_StabilizationSuccess(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -3789,7 +3750,6 @@ func TestService_Deploy_StabilizationSuccess(t *testing.T) {
 // Uses testify's NotBefore() to enforce mock call ordering.
 func TestService_Deploy_ZeroDowntime_OldNeverStoppedBeforeNewReady(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
@@ -3886,7 +3846,6 @@ func TestService_Deploy_ZeroDowntime_OldNeverStoppedBeforeNewReady(t *testing.T)
 // the old container remains as the tracked container.
 func TestService_Deploy_ZeroDowntime_ReadinessFailure_OldUntouched(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -3977,7 +3936,6 @@ func TestService_Deploy_ZeroDowntime_ReadinessFailure_OldUntouched(t *testing.T)
 // finalize/drain logic being triggered.
 func TestService_Deploy_ZeroDowntime_NoExisting_FirstDeploy(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -4054,7 +4012,6 @@ func TestService_Deploy_ZeroDowntime_NoExisting_FirstDeploy(t *testing.T) {
 
 func TestService_Deploy_PropagatesImageLabelsToContainerConfig(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	allowRestartPolicyEnsure(t, runtime)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
@@ -4312,7 +4269,7 @@ func TestDeployAttachedService_SetsAliasOnContainerConfig(t *testing.T) {
 			assert.Equal(t, []string{"postgres"}, cfg.Aliases, "attachment container must have network aliases for DNS resolution")
 			assert.Equal(t, "postgres", cfg.Hostname)
 			assert.Equal(t, networkName, cfg.NetworkMode)
-			assert.Empty(t, cfg.RestartPolicy)
+			assert.Equal(t, domain.RestartPolicyAlways, cfg.RestartPolicy)
 		}).
 		Return(&domain.Container{ID: "pg-container-1", Name: containerName}, nil)
 
@@ -4325,7 +4282,6 @@ func TestDeployAttachedService_SetsAliasOnContainerConfig(t *testing.T) {
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "pg-container-1").Return("", false, nil)
 	// TCP probe: resolve endpoint fails -> falls back to delay
 	runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, "pg-container-1").Return("", 0, errors.New("no network"))
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "pg-container-1", domain.RestartPolicyAlways).Return(nil).Once()
 
 	err := svc.deployAttachedService(ctx, ownerDomain, serviceImage, networkName)
 	require.NoError(t, err)
@@ -4451,10 +4407,10 @@ func TestService_BuildContainerConfig_CompatSecurityProfileDefault(t *testing.T)
 	assert.Nil(t, cfg.CapAdd)
 }
 
-func TestService_BuildContainerConfig_OmitsRestartPolicyBeforeReadiness(t *testing.T) {
+func TestService_BuildContainerConfig_SetsRestartPolicyAlways(t *testing.T) {
 	svc := NewService(nil, nil, nil, nil, Config{}, nil)
 
 	cfg := svc.buildContainerConfig(containerConfigInput{Domain: "app.example.com", Image: "app:latest", ImageRef: "app:latest"})
 
-	assert.Empty(t, cfg.RestartPolicy)
+	assert.Equal(t, domain.RestartPolicyAlways, cfg.RestartPolicy)
 }
