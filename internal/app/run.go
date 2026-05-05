@@ -2015,6 +2015,10 @@ func setupConfigHotReload(ctx context.Context, configSvc configWatcher, coordina
 
 // syncAndAutoStart syncs existing containers and auto-starts if configured.
 func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
+	if err := svc.containerSvc.EnsureManagedContainerRestartPolicies(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to migrate managed container restart policies")
+	}
+
 	if err := svc.containerSvc.SyncContainers(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to sync existing containers")
 	}

@@ -654,6 +654,10 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 			return nil, deployErr
 		}
 	}
+	if err := s.runtime.EnsureContainerRestartPolicy(ctx, newContainer.ID, domain.RestartPolicyAlways); err != nil {
+		s.cleanupFailedContainer(ctx, newContainer.ID)
+		return nil, log.WrapErr(err, "failed to set container restart policy")
+	}
 
 	inspected, err := s.runtime.InspectContainer(ctx, newContainer.ID)
 	if err != nil {
@@ -1404,6 +1408,41 @@ func (s *Service) HealthCheck(ctx context.Context) map[string]bool {
 	return health
 }
 
+// EnsureManagedContainerRestartPolicies updates restart policy for all managed containers.
+func (s *Service) EnsureManagedContainerRestartPolicies(ctx context.Context) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "EnsureManagedContainerRestartPolicies",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	allContainers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return log.WrapErr(err, "failed to list containers for restart policy migration")
+	}
+
+	return s.ensureManagedContainerRestartPolicies(ctx, allContainers)
+}
+
+func (s *Service) ensureManagedContainerRestartPolicies(ctx context.Context, allContainers []*domain.Container) error {
+	log := zerowrap.FromCtx(ctx)
+
+	var errs []error
+	for _, c := range allContainers {
+		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
+			continue
+		}
+		if err := s.runtime.EnsureContainerRestartPolicy(ctx, c.ID, domain.RestartPolicyAlways); err != nil {
+			log.Warn().Err(err).
+				Str(zerowrap.FieldEntityID, c.ID).
+				Str("container_name", c.Name).
+				Msg("failed to ensure managed container restart policy")
+			errs = append(errs, fmt.Errorf("container %s: %w", c.ID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // SyncContainers synchronizes containers with runtime state.
 func (s *Service) SyncContainers(ctx context.Context) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -1412,8 +1451,10 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// List containers without holding lock to avoid blocking during Docker API call
-	allContainers, err := s.runtime.ListContainers(ctx, false)
+	// List containers without holding lock to avoid blocking during Docker API call.
+	// Use all=true so the same runtime snapshot can migrate stopped containers and
+	// rebuild the running-container maps without a second Docker list call.
+	allContainers, err := s.runtime.ListContainers(ctx, true)
 	if err != nil {
 		return log.WrapErr(err, "failed to list containers")
 	}
@@ -1421,6 +1462,9 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	managed := make(map[string]*domain.Container)
 	attachments := make(map[string][]string)
 	for _, c := range allContainers {
+		if c.Status != "" && c.Status != string(domain.ContainerStatusRunning) {
+			continue
+		}
 		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
 			continue
 		}
@@ -2577,53 +2621,10 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 
 	log.Info().Str(zerowrap.FieldService, serviceImage).Msg("deploying attached service")
 
-	// Ensure image (canonical ref is returned; internal pulls may use the local registry).
-	imageRef, err := s.buildValidatedImageRef(ctx, serviceImage)
+	config, err := s.buildAttachmentContainerConfig(ctx, ownerDomain, serviceName, serviceImage, containerName, networkName)
 	if err != nil {
 		return err
 	}
-	actualImageRef, err := s.ensureImage(ctx, imageRef)
-	if err != nil {
-		return err
-	}
-
-	exposedPorts := s.attachmentExposedPorts(ctx, actualImageRef)
-	volumes, err := s.attachmentVolumes(ctx, containerName, actualImageRef)
-	if err != nil {
-		return err
-	}
-	envVars, err := s.attachmentEnv(ctx, containerName, actualImageRef)
-	if err != nil {
-		return err
-	}
-	envHash := hashEnvironment(envVars)
-
-	s.mu.RLock()
-	cfg := s.config
-	s.mu.RUnlock()
-
-	// Create container with attachment labels (use actual ref, track original in labels)
-	config := &domain.ContainerConfig{
-		Image:       actualImageRef,
-		Name:        containerName,
-		Hostname:    serviceName, // Internal DNS: postgres, redis, etc.
-		Aliases:     []string{serviceName},
-		Ports:       exposedPorts,
-		Env:         envVars,
-		Volumes:     volumes,
-		NetworkMode: networkName, // Same network as main app
-		Labels: map[string]string{
-			domain.LabelManaged:    "true",
-			domain.LabelAttachment: "true",
-			domain.LabelAttachedTo: ownerDomain,
-			domain.LabelEnvHash:    envHash,
-			domain.LabelImage:      serviceImage,
-		},
-		MemoryLimit: cfg.DefaultMemoryLimit,
-		NanoCPUs:    cfg.DefaultNanoCPUs,
-		PidsLimit:   cfg.DefaultPidsLimit,
-	}
-	applySecurityProfile(config, cfg)
 
 	container, err := s.runtime.CreateContainer(ctx, config)
 	if err != nil {
@@ -2645,6 +2646,9 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 		s.runtime.RemoveContainer(ctx, container.ID, true)
 		return fmt.Errorf("attachment %q not ready: %w", serviceName, err)
 	}
+	if err := s.ensureAttachmentRestartPolicy(ctx, container.ID); err != nil {
+		return err
+	}
 
 	// Track attachment
 	s.mu.Lock()
@@ -2655,6 +2659,66 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	s.startLogCollection(ctx, container.ID, containerName)
 
 	log.Info().Str(zerowrap.FieldEntityID, container.ID).Msg("attachment deployed successfully")
+	return nil
+}
+
+func (s *Service) buildAttachmentContainerConfig(ctx context.Context, ownerDomain, serviceName, serviceImage, containerName, networkName string) (*domain.ContainerConfig, error) {
+	imageRef, err := s.buildValidatedImageRef(ctx, serviceImage)
+	if err != nil {
+		return nil, err
+	}
+	actualImageRef, err := s.ensureImage(ctx, imageRef)
+	if err != nil {
+		return nil, err
+	}
+
+	exposedPorts := s.attachmentExposedPorts(ctx, actualImageRef)
+	volumes, err := s.attachmentVolumes(ctx, containerName, actualImageRef)
+	if err != nil {
+		return nil, err
+	}
+	envVars, err := s.attachmentEnv(ctx, containerName, actualImageRef)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	config := &domain.ContainerConfig{
+		Image:       actualImageRef,
+		Name:        containerName,
+		Hostname:    serviceName,
+		Aliases:     []string{serviceName},
+		Ports:       exposedPorts,
+		Env:         envVars,
+		Volumes:     volumes,
+		NetworkMode: networkName,
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: ownerDomain,
+			domain.LabelEnvHash:    hashEnvironment(envVars),
+			domain.LabelImage:      serviceImage,
+		},
+		MemoryLimit: cfg.DefaultMemoryLimit,
+		NanoCPUs:    cfg.DefaultNanoCPUs,
+		PidsLimit:   cfg.DefaultPidsLimit,
+	}
+	applySecurityProfile(config, cfg)
+	return config, nil
+}
+
+func (s *Service) ensureAttachmentRestartPolicy(ctx context.Context, containerID string) error {
+	log := zerowrap.FromCtx(ctx)
+	if err := s.runtime.EnsureContainerRestartPolicy(ctx, containerID, domain.RestartPolicyAlways); err != nil {
+		if stopErr := s.runtime.StopContainer(ctx, containerID); stopErr != nil {
+			log.Warn().Err(stopErr).Str(zerowrap.FieldEntityID, containerID).Msg("failed to stop attachment after restart policy update failure")
+		}
+		s.runtime.RemoveContainer(ctx, containerID, true)
+		return log.WrapErr(err, "failed to set attachment restart policy")
+	}
 	return nil
 }
 

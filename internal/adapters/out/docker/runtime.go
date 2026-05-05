@@ -43,6 +43,8 @@ type Runtime struct {
 	client *client.Client
 }
 
+var _ out.ContainerRuntime = (*Runtime)(nil)
+
 type pipeReadCloser struct {
 	pr       *io.PipeReader
 	pw       *io.PipeWriter
@@ -208,6 +210,9 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		CapAdd:         capAdd,
 		ReadonlyRootfs: config.ReadOnlyRootFS,
 	}
+	if config.RestartPolicy != "" {
+		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(config.RestartPolicy)}
+	}
 
 	// Create network configuration for container
 	var networkConfig *network.NetworkingConfig
@@ -355,6 +360,42 @@ func (r *Runtime) RenameContainer(ctx context.Context, containerID, newName stri
 	}
 
 	log.Info().Msg("container renamed")
+	return nil
+}
+
+// EnsureContainerRestartPolicy updates a container restart policy when it does not match.
+func (r *Runtime) EnsureContainerRestartPolicy(ctx context.Context, containerID, policy string) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "docker",
+		zerowrap.FieldAction:   "EnsureContainerRestartPolicy",
+		zerowrap.FieldEntityID: containerID,
+		"restart_policy":       policy,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	inspect, err := r.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return log.WrapErr(err, "failed to inspect container")
+	}
+	if inspect.HostConfig == nil {
+		return fmt.Errorf("container inspect response missing host config: %s", containerID)
+	}
+	if string(inspect.HostConfig.RestartPolicy.Name) == policy {
+		return nil
+	}
+
+	updateConfig := container.UpdateConfig{
+		Resources:     inspect.HostConfig.Resources,
+		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(policy)},
+	}
+	resp, err := r.client.ContainerUpdate(ctx, containerID, updateConfig)
+	if err != nil {
+		return log.WrapErr(err, "failed to update container restart policy")
+	}
+	for _, warning := range resp.Warnings {
+		log.Warn().Str("warning", warning).Msg("container restart policy update warning")
+	}
 	return nil
 }
 

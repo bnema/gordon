@@ -63,6 +63,7 @@ type ContainerConfig struct {
 	WorkingDir      string
 	Cmd             []string
 	AutoRemove      bool
+	RestartPolicy   string
 	Volumes         map[string]string // map[containerPath]volumeName
 	ReadOnlyVolumes map[string]string // containerPath -> volumeName (mounted read-only)
 	NetworkMode     string            // Network to join
@@ -87,4 +88,8 @@ const (
 	ContainerStatusExited  ContainerStatus = "exited"
 	ContainerStatusPaused  ContainerStatus = "paused"
 	ContainerStatusUnknown ContainerStatus = "unknown"
+)
+
+const (
+	RestartPolicyAlways = "always"
 )
