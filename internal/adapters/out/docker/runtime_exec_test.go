@@ -54,12 +54,8 @@ func frameDockerStream(streamID byte, payload []byte) []byte {
 func TestExtractFileFromTarMatchesFullCleanPath(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "other/.env", Typeflag: tar.TypeReg, Size: int64(len("wrong"))}))
-	_, err := tw.Write([]byte("wrong"))
-	require.NoError(t, err)
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "app/.env", Typeflag: tar.TypeReg, Size: int64(len("right"))}))
-	_, err = tw.Write([]byte("right"))
-	require.NoError(t, err)
+	require.NoError(t, writeTarFile(tw, "other/.env", "wrong"))
+	require.NoError(t, writeTarFile(tw, "app/.env", "right"))
 	require.NoError(t, tw.Close())
 
 	rc, err := extractFileFromTar(io.NopCloser(bytes.NewReader(buf.Bytes())), "/app/.env")
@@ -69,6 +65,70 @@ func TestExtractFileFromTarMatchesFullCleanPath(t *testing.T) {
 	data, err := io.ReadAll(rc)
 	require.NoError(t, err)
 	assert.Equal(t, "right", string(data))
+}
+
+func TestExtractFileFromTarMatchesBasenameForCopiedFile(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, writeTarFile(tw, "gordon-backup-test.bak", "backup data"))
+	require.NoError(t, tw.Close())
+
+	rc, err := extractFileFromTar(io.NopCloser(bytes.NewReader(buf.Bytes())), "/tmp/gordon-backup-test.bak")
+	require.NoError(t, err)
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	assert.Equal(t, "backup data", string(data))
+}
+
+func TestExtractFileFromTarPrefersExactPathOverBasename(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, writeTarFile(tw, "gordon-backup-test.bak", "wrong"))
+	require.NoError(t, writeTarFile(tw, "tmp/gordon-backup-test.bak", "right"))
+	require.NoError(t, tw.Close())
+
+	rc, err := extractFileFromTar(io.NopCloser(bytes.NewReader(buf.Bytes())), "/tmp/gordon-backup-test.bak")
+	require.NoError(t, err)
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	assert.Equal(t, "right", string(data))
+}
+
+func TestExtractFileFromTarRejectsAmbiguousBasenameFallback(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, writeTarFile(tw, "gordon-backup-test.bak", "first"))
+	require.NoError(t, writeTarFile(tw, "gordon-backup-test.bak", "second"))
+	require.NoError(t, tw.Close())
+
+	rc, err := extractFileFromTar(io.NopCloser(bytes.NewReader(buf.Bytes())), "/tmp/gordon-backup-test.bak")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous")
+	assert.Nil(t, rc)
+}
+
+func TestExtractFileFromTarDoesNotMatchBasenameInNestedDirectory(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, writeTarFile(tw, "other/gordon-backup-test.bak", "wrong"))
+	require.NoError(t, tw.Close())
+
+	rc, err := extractFileFromTar(io.NopCloser(bytes.NewReader(buf.Bytes())), "/tmp/gordon-backup-test.bak")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "file not found")
+	assert.Nil(t, rc)
+}
+
+func writeTarFile(tw *tar.Writer, name, content string) error {
+	if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: int64(len(content))}); err != nil {
+		return err
+	}
+	_, err := tw.Write([]byte(content))
+	return err
 }
 
 func TestReadExtractedEnvFileRejectsOversizedContent(t *testing.T) {
