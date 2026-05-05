@@ -1405,13 +1405,8 @@ func (s *Service) HealthCheck(ctx context.Context) map[string]bool {
 	return health
 }
 
-func (s *Service) ensureManagedContainerRestartPolicies(ctx context.Context) {
+func (s *Service) ensureManagedContainerRestartPolicies(ctx context.Context, allContainers []*domain.Container) {
 	log := zerowrap.FromCtx(ctx)
-	allContainers, err := s.runtime.ListContainers(ctx, true)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to list containers for restart policy migration")
-		return
-	}
 
 	for _, c := range allContainers {
 		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
@@ -1434,17 +1429,22 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	s.ensureManagedContainerRestartPolicies(ctx)
-
-	// List containers without holding lock to avoid blocking during Docker API call
-	allContainers, err := s.runtime.ListContainers(ctx, false)
+	// List containers without holding lock to avoid blocking during Docker API call.
+	// Use all=true so the same runtime snapshot can migrate stopped containers and
+	// rebuild the running-container maps without a second Docker list call.
+	allContainers, err := s.runtime.ListContainers(ctx, true)
 	if err != nil {
 		return log.WrapErr(err, "failed to list containers")
 	}
 
+	s.ensureManagedContainerRestartPolicies(ctx, allContainers)
+
 	managed := make(map[string]*domain.Container)
 	attachments := make(map[string][]string)
 	for _, c := range allContainers {
+		if c.Status != "" && c.Status != string(domain.ContainerStatusRunning) {
+			continue
+		}
 		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
 			continue
 		}
