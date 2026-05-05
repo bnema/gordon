@@ -275,18 +275,19 @@ func (s *Service) buildContainerConfig(in containerConfigInput) *domain.Containe
 	}
 
 	containerConfig := &domain.ContainerConfig{
-		Image:       in.ImageRef,
-		Name:        containerName,
-		Ports:       ports,
-		Env:         in.EnvVars,
-		Volumes:     in.Volumes,
-		NetworkMode: in.NetworkName,
-		Hostname:    in.Domain,
-		Labels:      labels,
-		AutoRemove:  false,
-		MemoryLimit: cfg.DefaultMemoryLimit,
-		NanoCPUs:    cfg.DefaultNanoCPUs,
-		PidsLimit:   cfg.DefaultPidsLimit,
+		Image:         in.ImageRef,
+		Name:          containerName,
+		Ports:         ports,
+		Env:           in.EnvVars,
+		Volumes:       in.Volumes,
+		NetworkMode:   in.NetworkName,
+		Hostname:      in.Domain,
+		Labels:        labels,
+		AutoRemove:    false,
+		RestartPolicy: domain.RestartPolicyAlways,
+		MemoryLimit:   cfg.DefaultMemoryLimit,
+		NanoCPUs:      cfg.DefaultNanoCPUs,
+		PidsLimit:     cfg.DefaultPidsLimit,
 	}
 	applySecurityProfile(containerConfig, cfg)
 	return containerConfig
@@ -2619,9 +2620,10 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 			domain.LabelEnvHash:    envHash,
 			domain.LabelImage:      serviceImage,
 		},
-		MemoryLimit: cfg.DefaultMemoryLimit,
-		NanoCPUs:    cfg.DefaultNanoCPUs,
-		PidsLimit:   cfg.DefaultPidsLimit,
+		MemoryLimit:   cfg.DefaultMemoryLimit,
+		NanoCPUs:      cfg.DefaultNanoCPUs,
+		PidsLimit:     cfg.DefaultPidsLimit,
+		RestartPolicy: domain.RestartPolicyAlways,
 	}
 	applySecurityProfile(config, cfg)
 

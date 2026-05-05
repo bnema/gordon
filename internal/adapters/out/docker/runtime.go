@@ -193,6 +193,9 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		CapAdd:         capAdd,
 		ReadonlyRootfs: config.ReadOnlyRootFS,
 	}
+	if config.RestartPolicy != "" {
+		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(config.RestartPolicy)}
+	}
 
 	// Create network configuration for container
 	var networkConfig *network.NetworkingConfig

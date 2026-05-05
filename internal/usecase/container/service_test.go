@@ -4181,6 +4181,7 @@ func TestDeployAttachedService_SetsAliasOnContainerConfig(t *testing.T) {
 			assert.Equal(t, []string{"postgres"}, cfg.Aliases, "attachment container must have network aliases for DNS resolution")
 			assert.Equal(t, "postgres", cfg.Hostname)
 			assert.Equal(t, networkName, cfg.NetworkMode)
+			assert.Equal(t, domain.RestartPolicyAlways, cfg.RestartPolicy)
 		}).
 		Return(&domain.Container{ID: "pg-container-1", Name: containerName}, nil)
 
@@ -4316,4 +4317,12 @@ func TestService_BuildContainerConfig_CompatSecurityProfileDefault(t *testing.T)
 	assert.False(t, cfg.ReadOnlyRootFS)
 	assert.Nil(t, cfg.CapDrop)
 	assert.Nil(t, cfg.CapAdd)
+}
+
+func TestService_BuildContainerConfig_SetsRestartPolicyAlways(t *testing.T) {
+	svc := NewService(nil, nil, nil, nil, Config{}, nil)
+
+	cfg := svc.buildContainerConfig(containerConfigInput{Domain: "app.example.com", Image: "app:latest", ImageRef: "app:latest"})
+
+	assert.Equal(t, domain.RestartPolicyAlways, cfg.RestartPolicy)
 }
