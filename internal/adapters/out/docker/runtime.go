@@ -1505,6 +1505,7 @@ func (r *Runtime) CopyFromContainer(ctx context.Context, containerID, srcPath st
 func extractFileFromTar(reader io.ReadCloser, targetPath string) (io.ReadCloser, error) {
 	tr := tar.NewReader(reader)
 	targetName := normalizedTarPath(targetPath)
+	targetBase := filepath.Base(targetName)
 
 	for {
 		header, err := tr.Next()
@@ -1515,7 +1516,7 @@ func extractFileFromTar(reader io.ReadCloser, targetPath string) (io.ReadCloser,
 			return nil, err
 		}
 
-		if header.Typeflag == tar.TypeReg && normalizedTarPath(header.Name) == targetName {
+		if header.Typeflag == tar.TypeReg && tarHeaderMatchesTarget(header.Name, targetName, targetBase) {
 			size := header.Size
 			pr, pw := io.Pipe()
 			go func() {
@@ -1533,6 +1534,11 @@ func extractFileFromTar(reader io.ReadCloser, targetPath string) (io.ReadCloser,
 
 	_ = reader.Close()
 	return nil, fmt.Errorf("file not found in container: %s", targetPath)
+}
+
+func tarHeaderMatchesTarget(headerName, targetName, targetBase string) bool {
+	headerName = normalizedTarPath(headerName)
+	return headerName == targetName || headerName == targetBase
 }
 
 func normalizedTarPath(path string) string {
