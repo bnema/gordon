@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -49,6 +50,11 @@ type pipeReadCloser struct {
 	once     sync.Once
 }
 
+type removeOnCloseFile struct {
+	*os.File
+	path string
+}
+
 func (p *pipeReadCloser) Read(b []byte) (int, error) {
 	return p.pr.Read(b)
 }
@@ -69,6 +75,15 @@ func (p *pipeReadCloser) Close() error {
 		}
 	})
 	return closeErr
+}
+
+func (f *removeOnCloseFile) Close() error {
+	closeErr := f.File.Close()
+	removeErr := os.Remove(f.path)
+	if closeErr != nil {
+		return closeErr
+	}
+	return removeErr
 }
 
 // NewRuntime creates a new Docker runtime instance.
@@ -1505,6 +1520,9 @@ func (r *Runtime) CopyFromContainer(ctx context.Context, containerID, srcPath st
 func extractFileFromTar(reader io.ReadCloser, targetPath string) (io.ReadCloser, error) {
 	tr := tar.NewReader(reader)
 	targetName := normalizedTarPath(targetPath)
+	targetBase := filepath.Base(targetName)
+	var fallback *removeOnCloseFile
+	fallbackMatches := 0
 
 	for {
 		header, err := tr.Next()
@@ -1512,27 +1530,77 @@ func extractFileFromTar(reader io.ReadCloser, targetPath string) (io.ReadCloser,
 			break
 		}
 		if err != nil {
+			cleanupFallback(fallback)
+			_ = reader.Close()
 			return nil, err
 		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
 
-		if header.Typeflag == tar.TypeReg && normalizedTarPath(header.Name) == targetName {
-			size := header.Size
-			pr, pw := io.Pipe()
-			go func() {
-				defer reader.Close()
-				_, copyErr := io.CopyN(pw, tr, size)
-				if copyErr != nil {
-					_ = pw.CloseWithError(copyErr)
-					return
+		headerName := normalizedTarPath(header.Name)
+		if headerName == targetName {
+			cleanupFallback(fallback)
+			return streamCurrentTarFile(reader, tr, header.Size), nil
+		}
+		if headerName == targetBase {
+			fallbackMatches++
+			if fallbackMatches == 1 {
+				fallback, err = bufferCurrentTarFile(tr, header.Size)
+				if err != nil {
+					_ = reader.Close()
+					return nil, err
 				}
-				_ = pw.Close()
-			}()
-			return &pipeReadCloser{pr: pr, pw: pw, original: reader}, nil
+			}
 		}
 	}
 
 	_ = reader.Close()
+	if fallbackMatches == 1 {
+		if _, err := fallback.Seek(0, io.SeekStart); err != nil {
+			cleanupFallback(fallback)
+			return nil, err
+		}
+		return fallback, nil
+	}
+	cleanupFallback(fallback)
+	if fallbackMatches > 1 {
+		return nil, fmt.Errorf("ambiguous basename matches in container archive for: %s", targetPath)
+	}
 	return nil, fmt.Errorf("file not found in container: %s", targetPath)
+}
+
+func streamCurrentTarFile(reader io.ReadCloser, tr *tar.Reader, size int64) io.ReadCloser {
+	pr, pw := io.Pipe()
+	go func() {
+		defer reader.Close()
+		_, copyErr := io.CopyN(pw, tr, size)
+		if copyErr != nil {
+			_ = pw.CloseWithError(copyErr)
+			return
+		}
+		_ = pw.Close()
+	}()
+	return &pipeReadCloser{pr: pr, pw: pw, original: reader}
+}
+
+func bufferCurrentTarFile(tr *tar.Reader, size int64) (*removeOnCloseFile, error) {
+	file, err := os.CreateTemp("", "gordon-copy-from-container-*")
+	if err != nil {
+		return nil, err
+	}
+	fallback := &removeOnCloseFile{File: file, path: file.Name()}
+	if _, err := io.CopyN(fallback, tr, size); err != nil {
+		cleanupFallback(fallback)
+		return nil, err
+	}
+	return fallback, nil
+}
+
+func cleanupFallback(fallback *removeOnCloseFile) {
+	if fallback != nil {
+		_ = fallback.Close()
+	}
 }
 
 func normalizedTarPath(path string) string {
