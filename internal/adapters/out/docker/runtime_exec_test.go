@@ -82,6 +82,35 @@ func TestExtractFileFromTarMatchesBasenameForCopiedFile(t *testing.T) {
 	assert.Equal(t, "backup data", string(data))
 }
 
+func TestExtractFileFromTarPrefersExactPathOverBasename(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, writeTarFile(tw, "gordon-backup-test.bak", "wrong"))
+	require.NoError(t, writeTarFile(tw, "tmp/gordon-backup-test.bak", "right"))
+	require.NoError(t, tw.Close())
+
+	rc, err := extractFileFromTar(io.NopCloser(bytes.NewReader(buf.Bytes())), "/tmp/gordon-backup-test.bak")
+	require.NoError(t, err)
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	assert.Equal(t, "right", string(data))
+}
+
+func TestExtractFileFromTarRejectsAmbiguousBasenameFallback(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, writeTarFile(tw, "gordon-backup-test.bak", "first"))
+	require.NoError(t, writeTarFile(tw, "gordon-backup-test.bak", "second"))
+	require.NoError(t, tw.Close())
+
+	rc, err := extractFileFromTar(io.NopCloser(bytes.NewReader(buf.Bytes())), "/tmp/gordon-backup-test.bak")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous")
+	assert.Nil(t, rc)
+}
+
 func TestExtractFileFromTarDoesNotMatchBasenameInNestedDirectory(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
