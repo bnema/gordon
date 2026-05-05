@@ -1405,6 +1405,23 @@ func (s *Service) HealthCheck(ctx context.Context) map[string]bool {
 	return health
 }
 
+// EnsureManagedContainerRestartPolicies updates restart policy for all managed containers.
+func (s *Service) EnsureManagedContainerRestartPolicies(ctx context.Context) error {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "EnsureManagedContainerRestartPolicies",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	allContainers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return log.WrapErr(err, "failed to list containers for restart policy migration")
+	}
+
+	s.ensureManagedContainerRestartPolicies(ctx, allContainers)
+	return nil
+}
+
 func (s *Service) ensureManagedContainerRestartPolicies(ctx context.Context, allContainers []*domain.Container) {
 	log := zerowrap.FromCtx(ctx)
 
@@ -1436,8 +1453,6 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	if err != nil {
 		return log.WrapErr(err, "failed to list containers")
 	}
-
-	s.ensureManagedContainerRestartPolicies(ctx, allContainers)
 
 	managed := make(map[string]*domain.Container)
 	attachments := make(map[string][]string)

@@ -1239,7 +1239,7 @@ func TestService_HealthCheck(t *testing.T) {
 	assert.False(t, result["unhealthy.example.com"])
 }
 
-func TestService_SyncContainers_EnsuresRestartPolicyForManagedRoutesAndAttachments(t *testing.T) {
+func TestService_EnsureManagedContainerRestartPolicies_EnsuresRoutesAttachmentsAndStoppedContainers(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
@@ -1289,23 +1289,13 @@ func TestService_SyncContainers_EnsuresRestartPolicyForManagedRoutesAndAttachmen
 	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "route-1", domain.RestartPolicyAlways).Return(nil).Once()
 	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "attachment-1", domain.RestartPolicyAlways).Return(nil).Once()
 	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "stopped-1", domain.RestartPolicyAlways).Return(nil).Once()
-	err := svc.SyncContainers(ctx)
+	err := svc.EnsureManagedContainerRestartPolicies(ctx)
 
 	require.NoError(t, err)
-	tracked, exists := svc.Get(ctx, "app.example.com")
-	require.True(t, exists)
-	assert.Equal(t, "route-1", tracked.ID)
-
-	svc.mu.RLock()
-	attachmentIDs := append([]string{}, svc.attachments["app.example.com"]...)
-	svc.mu.RUnlock()
-	assert.Equal(t, []string{"attachment-1"}, attachmentIDs)
-	assert.NotContains(t, svc.containers, "other-1")
-	assert.NotContains(t, svc.containers, "stopped.example.com")
 	runtime.AssertNumberOfCalls(t, "EnsureContainerRestartPolicy", 3)
 }
 
-func TestService_SyncContainers_RestartPolicyMigrationErrorIsNonFatal(t *testing.T) {
+func TestService_EnsureManagedContainerRestartPolicies_ErrorIsNonFatal(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
@@ -1324,12 +1314,9 @@ func TestService_SyncContainers_RestartPolicyMigrationErrorIsNonFatal(t *testing
 
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{routeContainer}, nil).Once()
 	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "route-1", domain.RestartPolicyAlways).Return(errors.New("update failed")).Once()
-	err := svc.SyncContainers(ctx)
+	err := svc.EnsureManagedContainerRestartPolicies(ctx)
 
 	require.NoError(t, err)
-	tracked, exists := svc.Get(ctx, "app.example.com")
-	require.True(t, exists)
-	assert.Equal(t, "route-1", tracked.ID)
 }
 
 func TestService_SyncContainers(t *testing.T) {
@@ -1477,7 +1464,6 @@ func TestService_Restart_ReconcilesStaleContainerID(t *testing.T) {
 			},
 		},
 	}, nil).Once()
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "fresh-container-id", domain.RestartPolicyAlways).Return(nil).Once()
 	runtime.EXPECT().RestartContainer(mock.Anything, "fresh-container-id").Return(nil).Once()
 
 	err := svc.Restart(ctx, "test.example.com", false)
@@ -3218,8 +3204,6 @@ func TestSyncContainersRebuildsAttachmentMap(t *testing.T) {
 			},
 		},
 	}, nil).Once()
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "main-container-1", domain.RestartPolicyAlways).Return(nil).Once()
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "attachment-container-1", domain.RestartPolicyAlways).Return(nil).Once()
 
 	require.NoError(t, svc.SyncContainers(ctx))
 
