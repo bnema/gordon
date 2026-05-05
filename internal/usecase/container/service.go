@@ -1405,6 +1405,27 @@ func (s *Service) HealthCheck(ctx context.Context) map[string]bool {
 	return health
 }
 
+func (s *Service) ensureManagedContainerRestartPolicies(ctx context.Context) {
+	log := zerowrap.FromCtx(ctx)
+	allContainers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list containers for restart policy migration")
+		return
+	}
+
+	for _, c := range allContainers {
+		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
+			continue
+		}
+		if err := s.runtime.EnsureContainerRestartPolicy(ctx, c.ID, domain.RestartPolicyAlways); err != nil {
+			log.Warn().Err(err).
+				Str(zerowrap.FieldEntityID, c.ID).
+				Str("container_name", c.Name).
+				Msg("failed to ensure managed container restart policy")
+		}
+	}
+}
+
 // SyncContainers synchronizes containers with runtime state.
 func (s *Service) SyncContainers(ctx context.Context) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -1412,6 +1433,8 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 		zerowrap.FieldUseCase: "SyncContainers",
 	})
 	log := zerowrap.FromCtx(ctx)
+
+	s.ensureManagedContainerRestartPolicies(ctx)
 
 	// List containers without holding lock to avoid blocking during Docker API call
 	allContainers, err := s.runtime.ListContainers(ctx, false)

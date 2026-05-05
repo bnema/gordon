@@ -256,6 +256,7 @@ func TestService_SyncContainers_ManagedContainersMetricTracksDelta(t *testing.T)
 	metrics, reader := setupMetricsTest(t)
 	svc.SetMetrics(metrics)
 
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
 		{
 			ID: "container-1",
@@ -280,6 +281,7 @@ func TestService_SyncContainers_ManagedContainersMetricTracksDelta(t *testing.T)
 	assert.Equal(t, 0, points[0].Attributes.Len())
 
 	// No runtime change: metric should remain stable.
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
 		{
 			ID: "container-1",
@@ -304,6 +306,7 @@ func TestService_SyncContainers_ManagedContainersMetricTracksDelta(t *testing.T)
 	assert.Equal(t, 0, points[0].Attributes.Len())
 
 	// One container removed in runtime: metric should decrement by one.
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
 		{
 			ID: "container-1",
@@ -1238,6 +1241,92 @@ func TestService_HealthCheck(t *testing.T) {
 	assert.False(t, result["unhealthy.example.com"])
 }
 
+func TestService_SyncContainers_EnsuresRestartPolicyForManagedRoutesAndAttachments(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
+	ctx := testContext()
+
+	routeContainer := &domain.Container{
+		ID:   "route-1",
+		Name: "gordon-app.example.com",
+		Labels: map[string]string{
+			domain.LabelManaged: "true",
+			domain.LabelDomain:  "app.example.com",
+		},
+	}
+	attachmentContainer := &domain.Container{
+		ID:   "attachment-1",
+		Name: "gordon-app-example-com-postgres",
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+		},
+	}
+	unmanagedContainer := &domain.Container{
+		ID:     "other-1",
+		Labels: map[string]string{},
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		routeContainer,
+		attachmentContainer,
+		unmanagedContainer,
+	}, nil).Once()
+	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "route-1", domain.RestartPolicyAlways).Return(nil).Once()
+	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "attachment-1", domain.RestartPolicyAlways).Return(nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
+		routeContainer,
+		attachmentContainer,
+	}, nil).Once()
+
+	err := svc.SyncContainers(ctx)
+
+	require.NoError(t, err)
+	tracked, exists := svc.Get(ctx, "app.example.com")
+	require.True(t, exists)
+	assert.Equal(t, "route-1", tracked.ID)
+
+	svc.mu.RLock()
+	attachmentIDs := append([]string{}, svc.attachments["app.example.com"]...)
+	svc.mu.RUnlock()
+	assert.Equal(t, []string{"attachment-1"}, attachmentIDs)
+	assert.NotContains(t, svc.containers, "other-1")
+	runtime.AssertNumberOfCalls(t, "EnsureContainerRestartPolicy", 2)
+}
+
+func TestService_SyncContainers_RestartPolicyMigrationErrorIsNonFatal(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
+	ctx := testContext()
+
+	routeContainer := &domain.Container{
+		ID:   "route-1",
+		Name: "gordon-app.example.com",
+		Labels: map[string]string{
+			domain.LabelManaged: "true",
+			domain.LabelDomain:  "app.example.com",
+		},
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{routeContainer}, nil).Once()
+	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "route-1", domain.RestartPolicyAlways).Return(errors.New("update failed")).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{routeContainer}, nil).Once()
+
+	err := svc.SyncContainers(ctx)
+
+	require.NoError(t, err)
+	tracked, exists := svc.Get(ctx, "app.example.com")
+	require.True(t, exists)
+	assert.Equal(t, "route-1", tracked.ID)
+}
+
 func TestService_SyncContainers(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
@@ -1246,6 +1335,7 @@ func TestService_SyncContainers(t *testing.T) {
 	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
 		{
 			ID:   "container-1",
@@ -1372,6 +1462,7 @@ func TestService_Restart_ReconcilesStaleContainerID(t *testing.T) {
 	runtime.EXPECT().RestartContainer(mock.Anything, "stale-container-id").
 		Return(errors.New("no container with name or ID \"stale-container-id\" found")).
 		Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
 		{
 			ID:   "fresh-container-id",
@@ -1406,6 +1497,7 @@ func TestService_Restart_ReconcilesStaleContainerID_NotFoundAfterSync(t *testing
 	runtime.EXPECT().RestartContainer(mock.Anything, "stale-container-id").
 		Return(errors.New("no such container")).
 		Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Once()
 
 	err := svc.Restart(ctx, "test.example.com", false)
@@ -1428,6 +1520,7 @@ func TestService_Restart_WithAttachments(t *testing.T) {
 		Status: "running",
 	}
 	svc.attachments["test.example.com"] = []string{"container-attach-1", "container-attach-2"}
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Maybe()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
 		{
 			ID: "container-123",
@@ -1482,6 +1575,7 @@ func TestService_Restart_WithAttachments_ErrorsWhenConfiguredButNotDeployed(t *t
 		Status: "running",
 	}
 	// No attachment containers tracked — s.attachments is empty
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Maybe()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Maybe()
 
 	err := svc.Restart(testContext(), "test.example.com", true)
@@ -1512,6 +1606,7 @@ func TestService_Restart_WithAttachments_ErrorsWhenPartiallyDeployed(t *testing.
 	}
 	// Only 1 of 2 attachments deployed
 	svc.attachments["test.example.com"] = []string{"attach-postgres"}
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Maybe()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
 		{
 			ID: "container-123",
@@ -1558,6 +1653,7 @@ func TestService_Restart_WithAttachments_SucceedsWhenAllDeployed(t *testing.T) {
 		Status: "running",
 	}
 	svc.attachments["test.example.com"] = []string{"attach-456"}
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Maybe()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
 		{
 			ID: "container-123",
@@ -1626,6 +1722,7 @@ func TestService_Restart_WithAttachments_NoConfiguredNoDeployed_Succeeds(t *test
 		Name:   "gordon-test.example.com",
 		Status: "running",
 	}
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Maybe()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Maybe()
 
 	runtime.EXPECT().RestartContainer(mock.Anything, "container-123").Return(nil)
@@ -3101,6 +3198,7 @@ func TestSyncContainersRebuildsAttachmentMap(t *testing.T) {
 	ctx := testContext()
 
 	// ListContainers returns one main container and one attachment container
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{
 		{
 			ID: "main-container-1",
