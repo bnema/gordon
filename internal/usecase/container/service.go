@@ -275,18 +275,19 @@ func (s *Service) buildContainerConfig(in containerConfigInput) *domain.Containe
 	}
 
 	containerConfig := &domain.ContainerConfig{
-		Image:       in.ImageRef,
-		Name:        containerName,
-		Ports:       ports,
-		Env:         in.EnvVars,
-		Volumes:     in.Volumes,
-		NetworkMode: in.NetworkName,
-		Hostname:    in.Domain,
-		Labels:      labels,
-		AutoRemove:  false,
-		MemoryLimit: cfg.DefaultMemoryLimit,
-		NanoCPUs:    cfg.DefaultNanoCPUs,
-		PidsLimit:   cfg.DefaultPidsLimit,
+		Image:         in.ImageRef,
+		Name:          containerName,
+		Ports:         ports,
+		Env:           in.EnvVars,
+		Volumes:       in.Volumes,
+		NetworkMode:   in.NetworkName,
+		Hostname:      in.Domain,
+		Labels:        labels,
+		AutoRemove:    false,
+		RestartPolicy: domain.RestartPolicyAlways,
+		MemoryLimit:   cfg.DefaultMemoryLimit,
+		NanoCPUs:      cfg.DefaultNanoCPUs,
+		PidsLimit:     cfg.DefaultPidsLimit,
 	}
 	applySecurityProfile(containerConfig, cfg)
 	return containerConfig
@@ -653,10 +654,6 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 			s.cleanupFailedContainer(ctx, newContainer.ID)
 			return nil, deployErr
 		}
-	}
-	if err := s.runtime.EnsureContainerRestartPolicy(ctx, newContainer.ID, domain.RestartPolicyAlways); err != nil {
-		s.cleanupFailedContainer(ctx, newContainer.ID)
-		return nil, log.WrapErr(err, "failed to set container restart policy")
 	}
 
 	inspected, err := s.runtime.InspectContainer(ctx, newContainer.ID)
@@ -2646,10 +2643,6 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 		s.runtime.RemoveContainer(ctx, container.ID, true)
 		return fmt.Errorf("attachment %q not ready: %w", serviceName, err)
 	}
-	if err := s.ensureAttachmentRestartPolicy(ctx, container.ID); err != nil {
-		return err
-	}
-
 	// Track attachment
 	s.mu.Lock()
 	s.attachments[ownerDomain] = append(s.attachments[ownerDomain], container.ID)
@@ -2702,24 +2695,13 @@ func (s *Service) buildAttachmentContainerConfig(ctx context.Context, ownerDomai
 			domain.LabelEnvHash:    hashEnvironment(envVars),
 			domain.LabelImage:      serviceImage,
 		},
-		MemoryLimit: cfg.DefaultMemoryLimit,
-		NanoCPUs:    cfg.DefaultNanoCPUs,
-		PidsLimit:   cfg.DefaultPidsLimit,
+		MemoryLimit:   cfg.DefaultMemoryLimit,
+		NanoCPUs:      cfg.DefaultNanoCPUs,
+		PidsLimit:     cfg.DefaultPidsLimit,
+		RestartPolicy: domain.RestartPolicyAlways,
 	}
 	applySecurityProfile(config, cfg)
 	return config, nil
-}
-
-func (s *Service) ensureAttachmentRestartPolicy(ctx context.Context, containerID string) error {
-	log := zerowrap.FromCtx(ctx)
-	if err := s.runtime.EnsureContainerRestartPolicy(ctx, containerID, domain.RestartPolicyAlways); err != nil {
-		if stopErr := s.runtime.StopContainer(ctx, containerID); stopErr != nil {
-			log.Warn().Err(stopErr).Str(zerowrap.FieldEntityID, containerID).Msg("failed to stop attachment after restart policy update failure")
-		}
-		s.runtime.RemoveContainer(ctx, containerID, true)
-		return log.WrapErr(err, "failed to set attachment restart policy")
-	}
-	return nil
 }
 
 func (s *Service) attachmentExposedPorts(ctx context.Context, imageRef string) []int {
