@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/zerowrap"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // startupConfigService defines the route configuration needed during startup
-// recovery.
+// recovery. It intentionally excludes auto-route settings because reboot
+// recovery always works from configured routes.
 type startupConfigService interface {
 	GetRoutes(ctx context.Context) []domain.Route
 }

@@ -1,8 +1,9 @@
 package domain_test
 
 import (
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -22,9 +23,7 @@ func TestRegistryImageKnownGordonRegistryDomains(t *testing.T) {
 		"old-registry.example.com:5000",
 	}
 
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("KnownGordonRegistryDomains() = %v, want %v", got, want)
-	}
+	assert.Equal(t, want, got)
 }
 
 func TestRegistryImageStripKnownGordonRegistry(t *testing.T) {
@@ -48,9 +47,7 @@ func TestRegistryImageStripKnownGordonRegistry(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := domain.StripKnownGordonRegistry(tt.imageRef, current, legacy)
-			if got != tt.want {
-				t.Fatalf("StripKnownGordonRegistry(%q) = %q, want %q", tt.imageRef, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -75,9 +72,7 @@ func TestRegistryImageExtractGordonRepoName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := domain.ExtractGordonRepoName(tt.imageRef, current, legacy)
-			if got != tt.want {
-				t.Fatalf("ExtractGordonRepoName(%q) = %q, want %q", tt.imageRef, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -101,9 +96,7 @@ func TestRegistryImageCanonicalizeGordonImageRef(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := domain.CanonicalizeGordonImageRef(tt.imageRef, tt.current, legacy)
-			if got != tt.want {
-				t.Fatalf("CanonicalizeGordonImageRef(%q) = %q, want %q", tt.imageRef, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -128,9 +121,7 @@ func TestRegistryImageIsGordonRegistryImageRef(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := domain.IsGordonRegistryImageRef(tt.imageRef, current, legacy)
-			if got != tt.want {
-				t.Fatalf("IsGordonRegistryImageRef(%q) = %t, want %t", tt.imageRef, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

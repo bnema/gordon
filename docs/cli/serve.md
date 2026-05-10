@@ -114,12 +114,14 @@ sudo loginctl enable-linger $USER
 After Gordon starts, including after a host reboot, it runs a best-effort recovery pass once the listeners are bound. Errors are logged, but Gordon keeps starting.
 
 1. **Sync existing containers** - Gordon reconciles runtime state with configured routes.
-2. **Recover configured routes** - Gordon starts any configured route that has no running container.
+2. **Recover configured routes** - Gordon runs `AutoStart` for any configured route that has no running container.
 3. **Start the background monitor** - Ongoing crash recovery resumes after the startup pass.
 
 This recovery runs even when `[auto_route].enabled = false`. `auto_route` only controls whether new image pushes create routes automatically; it does not disable restart recovery for routes already in the config.
 
-Recovery stays inside Gordon's own control flow instead of relying on Docker or Podman restart policies. That keeps the behavior consistent across both runtimes and applies Gordon's normal deploy checks, including fresh image pulls, readiness checks, and drain behavior when needed.
+Recovery stays inside Gordon's own control flow instead of relying on Docker or Podman restart policies. That keeps the behavior consistent across both runtimes.
+
+Startup recovery is intentionally narrower than a manual deploy. It only starts routes that are missing a running container, skips readiness checks during boot, and does not perform drain/replacement logic for routes that are already running.
 
 ### Shutdown Sequence
 
@@ -189,11 +191,11 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 ### Description
 
-**Local mode:** On the Gordon host, writes a deploy request and sends `SIGUSR2` to the local Gordon process. Gordon then runs the deploy inside the server through the same internal path it uses during startup recovery.
+**Local mode:** On the Gordon host, Gordon uses the explicit deploy path for the selected route. When the CLI cannot execute that path directly, it falls back to queueing the request with `SIGUSR2` for the running server. This is different from startup recovery: startup recovery uses `AutoStart`, while a manual deploy performs an explicit redeploy for the selected route.
 
 **Remote mode:** Calls the remote Gordon Admin API to trigger deployment. The remote Gordon instance still performs the actual deploy internally; the CLI only submits the request.
 
-Both modes use Gordon's internal deploy path:
+Both local and remote manual deploys use Gordon's explicit deploy path:
 
 - Fresh image content is pulled for the route
 - The specified route is redeployed
