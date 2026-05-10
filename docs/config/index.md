@@ -22,6 +22,8 @@ gordon_domain = "gordon.mydomain.com"
 ```
 
 > **Note:** `gordon_domain` is the canonical key. Migrate older `registry_domain` values before restarting.
+>
+> For a staged registry host rename, set the new `server.gordon_domain` and keep old Gordon registry hosts in `server.legacy_registry_domains` until clients move. See [Server](./server.md#gordon-domain) and [Upgrading](../upgrading.md#staged-registry-host-rename).
 
 ## Full Configuration Reference
 

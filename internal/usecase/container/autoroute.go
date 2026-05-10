@@ -24,13 +24,14 @@ type EnvFileExtractor interface {
 
 // AutoRouteHandler handles image.pushed events for auto-route from labels.
 type AutoRouteHandler struct {
-	configSvc      in.ConfigService
-	containerSvc   in.ContainerService
-	blobStorage    out.BlobStorage
-	extractor      EnvFileExtractor
-	registryDomain string
-	envDir         string
-	ctx            context.Context
+	configSvc             in.ConfigService
+	containerSvc          in.ContainerService
+	blobStorage           out.BlobStorage
+	extractor             EnvFileExtractor
+	registryDomain        string
+	legacyRegistryDomains []string
+	envDir                string
+	ctx                   context.Context
 }
 
 // NewAutoRouteHandler creates a new AutoRouteHandler.
@@ -40,13 +41,15 @@ func NewAutoRouteHandler(
 	containerSvc in.ContainerService,
 	blobStorage out.BlobStorage,
 	registryDomain string,
+	legacyRegistryDomains ...string,
 ) *AutoRouteHandler {
 	return &AutoRouteHandler{
-		configSvc:      configSvc,
-		containerSvc:   containerSvc,
-		blobStorage:    blobStorage,
-		registryDomain: registryDomain,
-		ctx:            ctx,
+		configSvc:             configSvc,
+		containerSvc:          containerSvc,
+		blobStorage:           blobStorage,
+		registryDomain:        registryDomain,
+		legacyRegistryDomains: append([]string(nil), legacyRegistryDomains...),
+		ctx:                   ctx,
 	}
 }
 
@@ -212,7 +215,7 @@ func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain,
 	for _, existing := range existingRoutes {
 		if existing.Domain == routeDomain {
 			route.HTTPS = existing.HTTPS
-			if auto.ExtractRepoName(existing.Image, h.registryDomain) != auto.ExtractRepoName(imageName, h.registryDomain) {
+			if auto.ExtractRepoName(existing.Image, h.registryDomain, h.legacyRegistryDomains...) != auto.ExtractRepoName(imageName, h.registryDomain, h.legacyRegistryDomains...) {
 				log.Warn().Str("domain", routeDomain).Str("existing_image", existing.Image).Str("image", imageName).Msg("auto-route update rejected due to repository ownership mismatch")
 				return false
 			}

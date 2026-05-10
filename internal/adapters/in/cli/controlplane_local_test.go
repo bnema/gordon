@@ -37,6 +37,33 @@ func TestLocalControlPlane_GetStatus(t *testing.T) {
 	require.Equal(t, "running", status.ContainerStatus["app.local"])
 }
 
+func TestLocalControlPlane_DeployUsesInternalDeployContext(t *testing.T) {
+	t.Parallel()
+
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+
+	ctx := context.Background()
+	route := &domain.Route{Domain: "app.local", Image: "repo/app:latest"}
+
+	require.False(t, domain.IsInternalDeploy(ctx))
+
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.local").Return(route, nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, *route).RunAndReturn(func(deployCtx context.Context, deployedRoute domain.Route) (*domain.Container, error) {
+		require.True(t, domain.IsInternalDeploy(deployCtx))
+		require.Equal(t, *route, deployedRoute)
+		return &domain.Container{ID: "container-1"}, nil
+	})
+
+	cp := &localControlPlane{configSvc: configSvc, containerSvc: containerSvc}
+	result, err := cp.Deploy(ctx, "app.local")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "deployed", result.Status)
+	require.Equal(t, "app.local", result.Domain)
+	require.Equal(t, "container-1", result.ContainerID)
+}
+
 func TestLocalControlPlane_Backups(t *testing.T) {
 	t.Parallel()
 

@@ -217,6 +217,28 @@ func TestService_FindRoutesByImage_DeduplicatesCanonicalAndLegacyEntries(t *test
 	assert.True(t, routes[0].HTTPS)
 }
 
+func TestCanonicalRoutesForSave(t *testing.T) {
+	routes := map[string]routeConfig{
+		"legacy.example.com":             {Image: "old-registry.example.com/app:latest", HTTPS: true},
+		"current.example.com":            {Image: "registry.example.com/current:v1", HTTPS: true},
+		"bare.example.com":               {Image: "worker:v2", HTTPS: true},
+		"external.example.com":           {Image: "docker.io/library/nginx:latest", HTTPS: true},
+		"http://legacy-http.example.com": {Image: "old-registry.example.com:5000/http:v3", HTTPS: true},
+	}
+
+	savedRoutes, err := canonicalRoutesForSave(routes, "registry.example.com", []string{"old-registry.example.com", "old-registry.example.com:5000"})
+	require.NoError(t, err)
+
+	assert.Equal(t, routeConfig{Image: "registry.example.com/app:latest", HTTPS: true}, requireRoute(t, savedRoutes, "legacy.example.com"))
+	assert.Equal(t, routeConfig{Image: "registry.example.com/current:v1", HTTPS: true}, requireRoute(t, savedRoutes, "current.example.com"))
+	assert.Equal(t, routeConfig{Image: "worker:v2", HTTPS: true}, requireRoute(t, savedRoutes, "bare.example.com"))
+	assert.Equal(t, routeConfig{Image: "docker.io/library/nginx:latest", HTTPS: true}, requireRoute(t, savedRoutes, "external.example.com"))
+	assert.Equal(t, routeConfig{Image: "registry.example.com/http:v3", HTTPS: false}, requireRoute(t, savedRoutes, "legacy-http.example.com"))
+
+	assert.Equal(t, "old-registry.example.com/app:latest", routes["legacy.example.com"].Image)
+	assert.Equal(t, "old-registry.example.com:5000/http:v3", routes["http://legacy-http.example.com"].Image)
+}
+
 func TestService_AddRoute_StoresHTTPSFalseInCanonicalForm(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "gordon.toml")
@@ -242,9 +264,13 @@ func TestService_AddRoute_StoresHTTPSFalseInCanonicalForm(t *testing.T) {
 func TestService_AddRoute_RewritesRoutesToCanonicalInlineTables(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "gordon.toml")
-	initialConfig := `[routes]
-"secure.example.com" = "secure:v1"
-"http://insecure.example.com" = "insecure:v1"
+	initialConfig := `[server]
+gordon_domain = "registry.example.com"
+legacy_registry_domains = ["old-registry.example.com"]
+
+[routes]
+"secure.example.com" = "old-registry.example.com/secure:v1"
+"http://insecure.example.com" = "old-registry.example.com/insecure:v1"
 `
 	err := os.WriteFile(configFile, []byte(initialConfig), 0600)
 	require.NoError(t, err)
@@ -266,11 +292,116 @@ func TestService_AddRoute_RewritesRoutesToCanonicalInlineTables(t *testing.T) {
 	content, err := os.ReadFile(configFile)
 	require.NoError(t, err)
 	text := string(content)
-	assert.Contains(t, text, `"secure.example.com" = { image = "secure:v1", https = true }`)
-	assert.Contains(t, text, `"insecure.example.com" = { image = "insecure:v1", https = false }`)
+	assert.Contains(t, text, `"secure.example.com" = { image = "registry.example.com/secure:v1", https = true }`)
+	assert.Contains(t, text, `"insecure.example.com" = { image = "registry.example.com/insecure:v1", https = false }`)
 	assert.Contains(t, text, `"new.example.com" = { image = "new:v1", https = false }`)
 	assert.NotContains(t, text, "http://insecure.example.com")
 	assert.Contains(t, text, "[routes]")
+}
+
+func TestService_SaveCanonicalizesRouteImages(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	initialConfig := `[server]
+gordon_domain = "registry.example.com"
+legacy_registry_domains = ["old-registry.example.com", "old-registry.example.com:5000"]
+
+[routes]
+"legacy.example.com" = "old-registry.example.com/app:latest"
+"legacy-port.example.com" = "old-registry.example.com:5000/api:v2"
+"current.example.com" = "registry.example.com/web:v3"
+"bare.example.com" = "worker:v4"
+"external.example.com" = "docker.io/library/nginx:latest"
+`
+	err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	require.NoError(t, v.ReadInConfig())
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	require.NoError(t, svc.Load(ctx))
+	assert.Equal(t, "old-registry.example.com/app:latest", requireRoute(t, svc.GetConfig().Routes, "legacy.example.com").Image)
+
+	require.NoError(t, svc.Save(ctx))
+
+	content, err := os.ReadFile(configFile)
+	require.NoError(t, err)
+	text := string(content)
+	assert.Contains(t, text, `"legacy.example.com" = { image = "registry.example.com/app:latest", https = true }`)
+	assert.Contains(t, text, `"legacy-port.example.com" = { image = "registry.example.com/api:v2", https = true }`)
+	assert.Contains(t, text, `"current.example.com" = { image = "registry.example.com/web:v3", https = true }`)
+	assert.Contains(t, text, `"bare.example.com" = { image = "worker:v4", https = true }`)
+	assert.Contains(t, text, `"external.example.com" = { image = "docker.io/library/nginx:latest", https = true }`)
+}
+
+func TestService_SaveCanonicalizesAttachmentImages(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	initialConfig := `[server]
+	gordon_domain = "registry.example.com"
+	legacy_registry_domains = ["old-registry.example.com"]
+
+	[attachments]
+	"app.example.com" = [
+	  "old-registry.example.com/postgres:18",
+	  "registry.example.com/redis:7",
+	  "rabbitmq:3",
+	  "docker.io/library/nginx:latest",
+	]
+	`
+	err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	require.NoError(t, v.ReadInConfig())
+
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(v, eventBus)
+	ctx := testContext()
+
+	require.NoError(t, svc.Load(ctx))
+	require.Equal(t, []string{
+		"old-registry.example.com/postgres:18",
+		"registry.example.com/redis:7",
+		"rabbitmq:3",
+		"docker.io/library/nginx:latest",
+	}, svc.GetConfig().Attachments["app.example.com"], "load path should preserve legacy attachment refs")
+
+	require.NoError(t, svc.Save(ctx))
+	require.Equal(t, []string{
+		"old-registry.example.com/postgres:18",
+		"registry.example.com/redis:7",
+		"rabbitmq:3",
+		"docker.io/library/nginx:latest",
+	}, svc.GetConfig().Attachments["app.example.com"], "save path should not rewrite in-memory attachment refs")
+
+	saved := viper.New()
+	saved.SetConfigFile(configFile)
+	require.NoError(t, saved.ReadInConfig())
+
+	var attachments map[string][]string
+	require.NoError(t, saved.UnmarshalKey("attachments", &attachments))
+	assert.Equal(t, []string{
+		"registry.example.com/postgres:18",
+		"registry.example.com/redis:7",
+		"rabbitmq:3",
+		"docker.io/library/nginx:latest",
+	}, attachments["app.example.com"])
+
+	content, err := os.ReadFile(configFile)
+	require.NoError(t, err)
+	text := string(content)
+	assert.Contains(t, text, `registry.example.com/postgres:18`)
+	assert.Contains(t, text, `registry.example.com/redis:7`)
+	assert.Contains(t, text, `rabbitmq:3`)
+	assert.Contains(t, text, `docker.io/library/nginx:latest`)
+	assert.NotContains(t, text, `old-registry.example.com/postgres:18`)
 }
 
 func TestService_Reload(t *testing.T) {
@@ -1382,6 +1513,47 @@ func TestService_AddAttachment(t *testing.T) {
 		assert.ElementsMatch(t, []string{"redis:latest", "postgres:18"}, config.Attachments["app.example.com"])
 	})
 
+	t.Run("legacy Gordon ref is canonicalized on disk only", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `[server]
+	gordon_domain = "registry.example.com"
+	legacy_registry_domains = ["old-registry.example.com"]
+
+	[attachments]
+	`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		require.NoError(t, v.ReadInConfig())
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		require.NoError(t, svc.Load(ctx))
+
+		err = svc.AddAttachment(ctx, "app.example.com", "old-registry.example.com/postgres:18")
+		require.NoError(t, err)
+
+		require.Equal(t, []string{"old-registry.example.com/postgres:18"}, svc.GetConfig().Attachments["app.example.com"])
+
+		saved := viper.New()
+		saved.SetConfigFile(configFile)
+		require.NoError(t, saved.ReadInConfig())
+
+		var attachments map[string][]string
+		require.NoError(t, saved.UnmarshalKey("attachments", &attachments))
+		assert.Equal(t, []string{"registry.example.com/postgres:18"}, attachments["app.example.com"])
+
+		content, err := os.ReadFile(configFile)
+		require.NoError(t, err)
+		text := string(content)
+		assert.Contains(t, text, `registry.example.com/postgres:18`)
+		assert.NotContains(t, text, `old-registry.example.com/postgres:18`)
+	})
+
 	t.Run("duplicate attachment", func(t *testing.T) {
 		v := viper.New()
 		v.Set("attachments", map[string]interface{}{
@@ -1700,23 +1872,25 @@ func TestSplitImageNameTag(t *testing.T) {
 
 func TestNormalizeRegistryImage(t *testing.T) {
 	tests := []struct {
-		name           string
-		imageName      string
-		registryDomain string
-		expected       string
+		name                  string
+		imageName             string
+		registryDomain        string
+		legacyRegistryDomains []string
+		expected              string
 	}{
-		{"strips registry prefix", "reg.example.com/myapp:latest", "reg.example.com", "myapp:latest"},
-		{"no prefix to strip", "myapp:latest", "reg.example.com", "myapp:latest"},
-		{"empty registry domain", "myapp:latest", "", "myapp:latest"},
-		{"registry with trailing slash", "reg.example.com/myapp:latest", "reg.example.com/", "myapp:latest"},
-		{"partial match is not stripped", "reg.example.com.evil/myapp:latest", "reg.example.com", "reg.example.com.evil/myapp:latest"},
-		{"bare name no registry", "myapp", "reg.example.com", "myapp"},
-		{"exact registry without image", "reg.example.com/", "reg.example.com", ""},
+		{"strips current registry prefix", "reg.example.com/myapp:latest", "reg.example.com", nil, "myapp:latest"},
+		{"strips legacy registry prefix", "old-reg.example.com/myapp:latest", "new-reg.example.com", []string{"old-reg.example.com"}, "myapp:latest"},
+		{"strips legacy registry prefix with explicit port and digest", "old-reg.example.com:5000/myapp@sha256:deadbeef", "new-reg.example.com", []string{"old-reg.example.com:5000"}, "myapp@sha256:deadbeef"},
+		{"no prefix to strip", "myapp:latest", "reg.example.com", nil, "myapp:latest"},
+		{"empty registry domain", "myapp:latest", "", nil, "myapp:latest"},
+		{"registry with trailing slash", "reg.example.com/myapp:latest", "reg.example.com/", nil, "myapp:latest"},
+		{"hostile lookalike is not stripped", "old-reg.example.com.evil/myapp:latest", "new-reg.example.com", []string{"old-reg.example.com"}, "old-reg.example.com.evil/myapp:latest"},
+		{"bare name no registry", "myapp", "reg.example.com", nil, "myapp"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := NormalizeRegistryImage(tt.imageName, tt.registryDomain)
+			result := NormalizeRegistryImage(tt.imageName, tt.registryDomain, tt.legacyRegistryDomains)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1869,6 +2043,24 @@ func TestService_FindRoutesByImage(t *testing.T) {
 		assert.Equal(t, "app.example.com", routes[0].Domain)
 	})
 
+	t.Run("matches current image when route stores legacy registry host", func(t *testing.T) {
+		v := viper.New()
+		v.Set("server.gordon_domain", "new-registry.example.com")
+		v.Set("server.legacy_registry_domains", []string{"old-registry.example.com"})
+		v.Set("routes", map[string]interface{}{
+			"app.example.com": "old-registry.example.com/myapp:latest",
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		routes := svc.FindRoutesByImage(ctx, "new-registry.example.com/myapp:latest")
+		assert.Len(t, routes, 1)
+		assert.Equal(t, "app.example.com", routes[0].Domain)
+	})
+
 	t.Run("multiple routes for same image", func(t *testing.T) {
 		v := viper.New()
 		v.Set("routes", map[string]interface{}{
@@ -1977,6 +2169,23 @@ func TestService_FindAttachmentTargetsByImage(t *testing.T) {
 		_ = svc.Load(ctx)
 
 		targets := svc.FindAttachmentTargetsByImage(ctx, "reg.example.com/postgres:18")
+		assert.Equal(t, []string{"backend"}, targets)
+	})
+
+	t.Run("matches current image when attachment stores legacy registry host", func(t *testing.T) {
+		v := viper.New()
+		v.Set("server.gordon_domain", "new-registry.example.com")
+		v.Set("server.legacy_registry_domains", []string{"old-registry.example.com"})
+		v.Set("attachments", map[string]interface{}{
+			"backend": []interface{}{"old-registry.example.com/postgres:18"},
+		})
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		_ = svc.Load(ctx)
+
+		targets := svc.FindAttachmentTargetsByImage(ctx, "new-registry.example.com/postgres:18")
 		assert.Equal(t, []string{"backend"}, targets)
 	})
 

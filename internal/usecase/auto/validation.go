@@ -1,6 +1,10 @@
 package auto
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/bnema/gordon/internal/domain"
+)
 
 // MatchesDomainAllowlist reports whether domain matches any of the given patterns.
 // Patterns may be exact domains, wildcard subdomains (*.example.com), or "*" to
@@ -36,23 +40,9 @@ func MatchesDomainAllowlist(domain string, patterns []string) bool {
 	return false
 }
 
-// ExtractRepoName strips the registry domain, tag, and digest from an image
-// reference and returns the bare repository name (e.g. "org/myapp").
-func ExtractRepoName(imageRef, registryDomain string) string {
-	imageRef = strings.ToLower(imageRef)
-	if idx := strings.Index(imageRef, "@"); idx != -1 {
-		imageRef = imageRef[:idx]
-	}
-	if idx := strings.LastIndex(imageRef, ":"); idx != -1 {
-		slashIdx := strings.LastIndex(imageRef, "/")
-		if idx > slashIdx {
-			imageRef = imageRef[:idx]
-		}
-	}
-	registryPrefix := strings.ToLower(strings.TrimSuffix(registryDomain, "/"))
-	if registryPrefix != "" {
-		prefix := registryPrefix + "/"
-		imageRef = strings.TrimPrefix(imageRef, prefix)
-	}
-	return imageRef
+// ExtractRepoName strips the current or legacy Gordon registry domain, tag,
+// and digest from an image reference and returns the bare repository name
+// (e.g. "org/myapp").
+func ExtractRepoName(imageRef, registryDomain string, legacyRegistryDomains ...string) string {
+	return strings.ToLower(domain.ExtractGordonRepoName(imageRef, registryDomain, legacyRegistryDomains))
 }

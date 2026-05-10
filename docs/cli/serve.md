@@ -70,7 +70,7 @@ Gordon responds to these signals:
 | `SIGTERM` | Graceful shutdown |
 | `SIGINT` | Graceful shutdown (Ctrl+C) |
 | `SIGUSR1` | Reload configuration |
-| `SIGUSR2` | Manual deploy (used by `gordon deploy`) |
+| `SIGUSR2` | Manual deploy request (used by local `gordon deploy`) |
 
 ### Running with systemd
 
@@ -106,8 +106,20 @@ sudo loginctl enable-linger $USER
 6. Initialize services (registry, proxy, auth)
 7. Register event handlers
 8. Start config file watcher
-9. Sync existing containers
-10. Start HTTP servers
+9. Start HTTP servers
+10. Run best-effort startup recovery (sync existing containers, then recover configured routes)
+
+### Startup Recovery
+
+After Gordon starts, including after a host reboot, it runs a best-effort recovery pass once the listeners are bound. Errors are logged, but Gordon keeps starting.
+
+1. **Sync existing containers** - Gordon reconciles runtime state with configured routes.
+2. **Recover configured routes** - Gordon starts any configured route that has no running container.
+3. **Start the background monitor** - Ongoing crash recovery resumes after the startup pass.
+
+This recovery runs even when `[auto_route].enabled = false`. `auto_route` only controls whether new image pushes create routes automatically; it does not disable restart recovery for routes already in the config.
+
+Recovery stays inside Gordon's own control flow instead of relying on Docker or Podman restart policies. That keeps the behavior consistent across both runtimes and applies Gordon's normal deploy checks, including fresh image pulls, readiness checks, and drain behavior when needed.
 
 ### Shutdown Sequence
 
@@ -177,14 +189,15 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 ### Description
 
-**Local mode:** Sends `SIGUSR2` to the Gordon process with the specified domain.
+**Local mode:** On the Gordon host, writes a deploy request and sends `SIGUSR2` to the local Gordon process. Gordon then runs the deploy inside the server through the same internal path it uses during startup recovery.
 
-**Remote mode:** Calls the remote Gordon Admin API to trigger deployment.
+**Remote mode:** Calls the remote Gordon Admin API to trigger deployment. The remote Gordon instance still performs the actual deploy internally; the CLI only submits the request.
 
-Both modes trigger:
+Both modes use Gordon's internal deploy path:
 
-- Fresh image pull (always pulls latest, ignoring cache)
-- Container redeployment for the specified route
+- Fresh image content is pulled for the route
+- The specified route is redeployed
+- Configured readiness checks and drain behavior apply when needed
 
 ### Examples
 

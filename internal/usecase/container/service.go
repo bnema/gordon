@@ -33,6 +33,7 @@ import (
 type Config struct {
 	RegistryAuthEnabled        bool
 	RegistryDomain             string
+	LegacyRegistryDomains      []string
 	RegistryPort               int
 	ServiceTokenUsername       string
 	ServiceToken               string
@@ -1340,14 +1341,7 @@ func (s *Service) stripRegistryPrefix(image string) string {
 	cfg := s.config
 	s.mu.RUnlock()
 
-	if cfg.RegistryDomain == "" {
-		return image
-	}
-	prefix := strings.TrimSuffix(cfg.RegistryDomain, "/") + "/"
-	if strings.HasPrefix(image, prefix) {
-		return strings.TrimPrefix(image, prefix)
-	}
-	return image
+	return domain.StripKnownGordonRegistry(image, cfg.RegistryDomain, cfg.LegacyRegistryDomains)
 }
 
 // ListAttachments returns attachments for a domain.
@@ -1823,7 +1817,7 @@ func (s *Service) validateExternalImageRef(ctx context.Context, imageRef, regist
 		return fmt.Errorf("image %q rejected: invalid image reference", imageRef)
 	}
 
-	if sameRegistry(registry, cfg.RegistryDomain) {
+	if domain.IsGordonRegistryImageRef(imageRef, cfg.RegistryDomain, cfg.LegacyRegistryDomains) || sameRegistry(registry, cfg.RegistryDomain) {
 		return nil
 	}
 	dangerous, err := isDangerousRegistryHost(ctx, imageRegistryHost(registry))
@@ -1975,7 +1969,7 @@ func (s *Service) pullRefForDeploy(ctx context.Context, imageRef string) (string
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
-	return rewriteToLocalRegistry(imageRef, cfg.RegistryDomain, cfg.RegistryPort), true
+	return rewriteToLocalRegistry(imageRef, cfg.RegistryDomain, cfg.LegacyRegistryDomains, cfg.RegistryPort), true
 }
 
 // ensureImage ensures the image is available locally, pulling if needed.
@@ -3360,21 +3354,26 @@ func rewriteToRegistryDomain(imageRef, registryDomain string) string {
 	return prefix + imageRef
 }
 
-// rewriteToLocalRegistry rewrites an image reference to use the local registry address.
-// e.g., "registry.example.com/myapp:latest" -> "localhost:5000/myapp:latest"
-func rewriteToLocalRegistry(imageRef, registryDomain string, registryPort int) string {
+// rewriteToLocalRegistry rewrites Gordon-managed image references to use the
+// local registry address. Current and legacy Gordon registry domains are
+// stripped before prefixing localhost:<registryPort>/. Bare refs are prefixed.
+// External registries are preserved unchanged.
+func rewriteToLocalRegistry(imageRef, registryDomain string, legacyRegistryDomains []string, registryPort int) string {
 	if imageRef == "" {
 		return imageRef
 	}
 
 	localRegistry := fmt.Sprintf("localhost:%d", registryPort)
 	localPrefix := localRegistry + "/"
-	imageRef = strings.TrimPrefix(imageRef, localPrefix)
+	if remainder, ok := strings.CutPrefix(imageRef, localPrefix); ok {
+		return localPrefix + remainder
+	}
 
-	registryDomain = strings.TrimSuffix(registryDomain, "/")
-	if registryDomain != "" {
-		prefix := registryDomain + "/"
-		imageRef = strings.TrimPrefix(imageRef, prefix)
+	if domain.IsGordonRegistryImageRef(imageRef, registryDomain, legacyRegistryDomains) {
+		return localPrefix + domain.StripKnownGordonRegistry(imageRef, registryDomain, legacyRegistryDomains)
+	}
+	if hasExplicitRegistry(imageRef) {
+		return imageRef
 	}
 
 	return localPrefix + imageRef

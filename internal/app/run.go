@@ -93,22 +93,24 @@ import (
 // Config holds the application configuration.
 type Config struct {
 	Server struct {
-		Port                 int      `mapstructure:"port"`
-		RegistryPort         int      `mapstructure:"registry_port"`
-		GordonDomain         string   `mapstructure:"gordon_domain"`
-		TLSPort              int      `mapstructure:"tls_port"`
-		TLSCertFile          string   `mapstructure:"tls_cert_file"`
-		TLSKeyFile           string   `mapstructure:"tls_key_file"`
-		ForceHTTPSRedirect   bool     `mapstructure:"force_https_redirect"`
-		DataDir              string   `mapstructure:"data_dir"`
-		MaxProxyBodySize     string   `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
-		MaxBlobChunkSize     string   `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
-		MaxBlobSize          string   `mapstructure:"max_blob_size"`           // e.g., "1GB", "2GB"
-		MaxProxyResponseSize string   `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
-		MaxConcurrentConns   int      `mapstructure:"max_concurrent_connections"`
-		RegistryAllowedIPs   []string `mapstructure:"registry_allowed_ips"`
-		ProxyAllowedIPs      []string `mapstructure:"proxy_allowed_ips"`
-		RegistryListenAddr   string   `mapstructure:"registry_listen_address"`
+		Port                  int      `mapstructure:"port"`
+		RegistryPort          int      `mapstructure:"registry_port"`
+		GordonDomain          string   `mapstructure:"gordon_domain"`
+		RegistryDomain        string   `mapstructure:"registry_domain"`
+		LegacyRegistryDomains []string `mapstructure:"legacy_registry_domains"`
+		TLSPort               int      `mapstructure:"tls_port"`
+		TLSCertFile           string   `mapstructure:"tls_cert_file"`
+		TLSKeyFile            string   `mapstructure:"tls_key_file"`
+		ForceHTTPSRedirect    bool     `mapstructure:"force_https_redirect"`
+		DataDir               string   `mapstructure:"data_dir"`
+		MaxProxyBodySize      string   `mapstructure:"max_proxy_body_size"`     // e.g., "512MB", "1GB"
+		MaxBlobChunkSize      string   `mapstructure:"max_blob_chunk_size"`     // e.g., "512MB", "1GB"
+		MaxBlobSize           string   `mapstructure:"max_blob_size"`           // e.g., "1GB", "2GB"
+		MaxProxyResponseSize  string   `mapstructure:"max_proxy_response_size"` // e.g., "1GB", "0" for no limit
+		MaxConcurrentConns    int      `mapstructure:"max_concurrent_connections"`
+		RegistryAllowedIPs    []string `mapstructure:"registry_allowed_ips"`
+		ProxyAllowedIPs       []string `mapstructure:"proxy_allowed_ips"`
+		RegistryListenAddr    string   `mapstructure:"registry_listen_address"`
 	} `mapstructure:"server"`
 
 	Logging struct {
@@ -1356,6 +1358,14 @@ func resolveEnvDir(cfg Config) string {
 	return envDir
 }
 
+func resolveRegistryDomains(cfg Config) (string, []string) {
+	registryDomain := cfg.Server.GordonDomain
+	if registryDomain == "" {
+		registryDomain = cfg.Server.RegistryDomain
+	}
+	return registryDomain, append([]string{}, cfg.Server.LegacyRegistryDomains...)
+}
+
 func createTokenStore(backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) (out.TokenStore, error) {
 	// Token store is always created since tokens work in both auth modes
 	store, err := tokenstore.NewStore(backend, dataDir, log)
@@ -1750,9 +1760,11 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 	}
 	// 0 means no limit (as documented in proxy.Config)
 
+	registryDomain, _ := resolveRegistryDomains(cfg)
+
 	return &proxyConfigResult{
 		proxyConfig: proxy.Config{
-			RegistryDomain:     cfg.Server.GordonDomain,
+			RegistryDomain:     registryDomain,
 			RegistryPort:       cfg.Server.RegistryPort,
 			MaxBodySize:        maxProxyBodySize,
 			MaxResponseSize:    maxProxyResponseSize,
@@ -1827,10 +1839,12 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 	}
 
 	attachmentConfig := svc.configSvc.GetAttachmentConfig()
+	registryDomain, legacyRegistryDomains := resolveRegistryDomains(cfg)
 
 	containerConfig := container.Config{
 		RegistryAuthEnabled:        cfg.Auth.Enabled,
-		RegistryDomain:             cfg.Server.GordonDomain,
+		RegistryDomain:             registryDomain,
+		LegacyRegistryDomains:      legacyRegistryDomains,
 		RegistryPort:               cfg.Server.RegistryPort,
 		InternalRegistryUsername:   svc.internalRegUser,
 		InternalRegistryPassword:   svc.internalRegPass,
@@ -1958,7 +1972,8 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	}
 
 	// Auto-route handler for creating routes from image labels
-	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, cfg.Server.GordonDomain).
+	registryDomain, legacyRegistryDomains := resolveRegistryDomains(cfg)
+	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, registryDomain, legacyRegistryDomains...).
 		WithEnvExtractor(svc.runtime, svc.envDir)
 
 	// Preview handler for creating preview environments from tagged images
@@ -2013,26 +2028,6 @@ func setupConfigHotReload(ctx context.Context, configSvc configWatcher, coordina
 	return nil
 }
 
-// syncAndAutoStart syncs existing containers and auto-starts if configured.
-func syncAndAutoStart(ctx context.Context, svc *services, log zerowrap.Logger) {
-	if err := svc.containerSvc.EnsureManagedContainerRestartPolicies(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to migrate managed container restart policies")
-	}
-
-	if err := svc.containerSvc.SyncContainers(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to sync existing containers")
-	}
-
-	if svc.configSvc.IsAutoRouteEnabled() {
-		routes := svc.configSvc.GetRoutes(ctx)
-		if err := svc.containerSvc.AutoStart(domain.WithInternalDeploy(ctx), routes); err != nil {
-			log.Warn().Err(err).Msg("failed to auto-start containers")
-		}
-	}
-
-	// Start background monitor to restart crashed containers.
-	svc.containerSvc.StartMonitor(ctx)
-}
 func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -2589,8 +2584,8 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 		defer schedulerCleanup()
 	}
 
-	// Auto-start after servers are listening (registry port is now bound).
-	syncAndAutoStart(ctx, svc, log)
+	// Recover configured routes after servers are listening (registry port is now bound).
+	syncAndRecoverConfiguredRoutes(ctx, svc.configSvc, svc.containerSvc, log)
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, reload, svc.eventBus, log)
 	cleanupHandlers() // Stop debounce timers before draining containers
@@ -3319,6 +3314,7 @@ func isProcessAlive(pid int) bool {
 func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.port", 8088)
 	v.SetDefault("server.registry_port", 5000)
+	v.SetDefault("server.legacy_registry_domains", []string{})
 	v.SetDefault("server.tls_port", 8443)
 	v.SetDefault("server.tls_cert_file", "")
 	v.SetDefault("server.tls_key_file", "")

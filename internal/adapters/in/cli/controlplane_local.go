@@ -422,7 +422,7 @@ func (l *localControlPlane) Deploy(ctx context.Context, deployDomain string) (*r
 		if err != nil {
 			return nil, err
 		}
-		container, err := l.containerSvc.Deploy(ctx, *route)
+		container, err := l.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route)
 		if err != nil {
 			return nil, err
 		}
