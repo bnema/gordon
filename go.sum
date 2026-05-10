@@ -8,8 +8,8 @@ github.com/aymanbagabas/go-osc52/v2 v2.0.1 h1:HwpRHbFMcZLEVr42D4p7XBqjyuxQH5SMiE
 github.com/aymanbagabas/go-osc52/v2 v2.0.1/go.mod h1:uYgXzlJ7ZpABp8OJ+exZzJJhRNQ2ASbcXHWsFqH8hp8=
 github.com/aymanbagabas/go-udiff v0.3.1 h1:LV+qyBQ2pqe0u42ZsUEtPiCaUoqgA9gYRDs3vj1nolY=
 github.com/aymanbagabas/go-udiff v0.3.1/go.mod h1:G0fsKmG+P6ylD0r6N/KgQD/nWzgfnl8ZBcNLgcbrw8E=
-github.com/bnema/zerowrap v1.3.0 h1:NHrO6d34rbFOmbLSO3n1TbqA/g5djgVfTGmCoVMOlDU=
-github.com/bnema/zerowrap v1.3.0/go.mod h1:30FCqzwS7FNTNH1GC+ScGC99GITOzOaCYW266L4QF5s=
+github.com/bnema/zerowrap v1.4.0 h1:QYb+/dLS4PPNc4HN0q6C0pIWO5lmqAjdauAWwaeX2LM=
+github.com/bnema/zerowrap v1.4.0/go.mod h1:30FCqzwS7FNTNH1GC+ScGC99GITOzOaCYW266L4QF5s=
 github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1xcsSM=
 github.com/cenkalti/backoff/v5 v5.0.3/go.mod h1:rkhZdG3JZukswDf7f0cwqPNk4K0sa+F97BxZthm/crw=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=

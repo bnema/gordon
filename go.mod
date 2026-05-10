@@ -3,7 +3,7 @@ module github.com/bnema/gordon
 go 1.26.1
 
 require (
-	github.com/bnema/zerowrap v1.3.0
+	github.com/bnema/zerowrap v1.4.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
