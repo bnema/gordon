@@ -2140,7 +2140,7 @@ func TestService_FindRoutesByImage(t *testing.T) {
 		eventBus := mocks.NewMockEventPublisher(t)
 		svc := NewService(v, eventBus)
 		ctx := testContext()
-		_ = svc.Load(ctx)
+		require.NoError(t, svc.Load(ctx))
 
 		routes := svc.FindRoutesByImage(ctx, "new-registry.example.com/myapp:latest")
 		assert.Len(t, routes, 1)
@@ -2269,7 +2269,7 @@ func TestService_FindAttachmentTargetsByImage(t *testing.T) {
 		eventBus := mocks.NewMockEventPublisher(t)
 		svc := NewService(v, eventBus)
 		ctx := testContext()
-		_ = svc.Load(ctx)
+		require.NoError(t, svc.Load(ctx))
 
 		targets := svc.FindAttachmentTargetsByImage(ctx, "new-registry.example.com/postgres:18")
 		assert.Equal(t, []string{"backend"}, targets)
