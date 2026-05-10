@@ -22,6 +22,11 @@ type EnvFileExtractor interface {
 	ExtractEnvFileFromImage(ctx context.Context, imageRef, envFilePath string) ([]byte, error)
 }
 
+type registryDomainsProvider interface {
+	GetRegistryDomain() string
+	GetLegacyRegistryDomains() []string
+}
+
 // AutoRouteHandler handles image.pushed events for auto-route from labels.
 type AutoRouteHandler struct {
 	configSvc             in.ConfigService
@@ -133,15 +138,24 @@ func (h *AutoRouteHandler) buildImageName(name, reference string) string {
 	return fmt.Sprintf("%s:%s", name, reference)
 }
 
+func (h *AutoRouteHandler) registryDomains() (string, []string) {
+	provider, ok := h.configSvc.(registryDomainsProvider)
+	if !ok {
+		return h.registryDomain, append([]string(nil), h.legacyRegistryDomains...)
+	}
+	return provider.GetRegistryDomain(), provider.GetLegacyRegistryDomains()
+}
+
 // buildFullImageRef constructs a fully qualified image reference with registry domain.
 // This is needed for Docker operations since images are stored with the registry prefix.
 func (h *AutoRouteHandler) buildFullImageRef(imageName string) string {
-	if h.registryDomain == "" {
+	registryDomain, _ := h.registryDomains()
+	if registryDomain == "" {
 		return imageName
 	}
 
 	// Don't prefix if already has registry domain
-	if strings.HasPrefix(imageName, h.registryDomain+"/") {
+	if strings.HasPrefix(imageName, registryDomain+"/") {
 		return imageName
 	}
 
@@ -154,7 +168,7 @@ func (h *AutoRouteHandler) buildFullImageRef(imageName string) string {
 		return imageName
 	}
 
-	return fmt.Sprintf("%s/%s", h.registryDomain, imageName)
+	return fmt.Sprintf("%s/%s", registryDomain, imageName)
 }
 
 // processRoutes processes each domain and creates/updates routes.
@@ -211,11 +225,12 @@ func (h *AutoRouteHandler) createOrUpdateRoute(ctx context.Context, routeDomain,
 		HTTPS:  true,
 	}
 
+	registryDomain, legacyRegistryDomains := h.registryDomains()
 	existingRoutes := h.configSvc.GetRoutes(ctx)
 	for _, existing := range existingRoutes {
 		if existing.Domain == routeDomain {
 			route.HTTPS = existing.HTTPS
-			if auto.ExtractRepoName(existing.Image, h.registryDomain, h.legacyRegistryDomains...) != auto.ExtractRepoName(imageName, h.registryDomain, h.legacyRegistryDomains...) {
+			if auto.ExtractRepoName(existing.Image, registryDomain, legacyRegistryDomains...) != auto.ExtractRepoName(imageName, registryDomain, legacyRegistryDomains...) {
 				log.Warn().Str("domain", routeDomain).Str("existing_image", existing.Image).Str("image", imageName).Msg("auto-route update rejected due to repository ownership mismatch")
 				return false
 			}

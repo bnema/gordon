@@ -1334,8 +1334,10 @@ func (s *Service) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo 
 	return results
 }
 
-// stripRegistryPrefix removes the configured registry domain prefix from an image reference.
-// For example, "reg.example.com/myapp:latest" becomes "myapp:latest" if registry domain is "reg.example.com".
+// stripRegistryPrefix removes the configured current or legacy Gordon registry
+// domain prefix from an image reference. For example,
+// "reg.example.com/myapp:latest" becomes "myapp:latest" when
+// "reg.example.com" is a current or legacy Gordon registry domain.
 func (s *Service) stripRegistryPrefix(image string) string {
 	s.mu.RLock()
 	cfg := s.config
@@ -3365,8 +3367,8 @@ func rewriteToLocalRegistry(imageRef, registryDomain string, legacyRegistryDomai
 
 	localRegistry := fmt.Sprintf("localhost:%d", registryPort)
 	localPrefix := localRegistry + "/"
-	if remainder, ok := strings.CutPrefix(imageRef, localPrefix); ok {
-		return localPrefix + remainder
+	if strings.HasPrefix(imageRef, localPrefix) {
+		return imageRef
 	}
 
 	if domain.IsGordonRegistryImageRef(imageRef, registryDomain, legacyRegistryDomains) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bnema/zerowrap"
@@ -339,6 +340,31 @@ legacy_registry_domains = ["old-registry.example.com", "old-registry.example.com
 	assert.Contains(t, text, `"external.example.com" = { image = "docker.io/library/nginx:latest", https = true }`)
 }
 
+func TestCanonicalAttachmentsForSave(t *testing.T) {
+	attachments := map[string][]string{
+		"app.example.com": {
+			"old-registry.example.com/postgres:18",
+			"registry.example.com/postgres:18",
+			"rabbitmq:3",
+			"docker.io/library/nginx:latest",
+		},
+	}
+
+	saved := canonicalAttachmentsForSave(attachments, "registry.example.com", []string{"old-registry.example.com"})
+
+	assert.Equal(t, []string{
+		"registry.example.com/postgres:18",
+		"rabbitmq:3",
+		"docker.io/library/nginx:latest",
+	}, saved["app.example.com"])
+	assert.Equal(t, []string{
+		"old-registry.example.com/postgres:18",
+		"registry.example.com/postgres:18",
+		"rabbitmq:3",
+		"docker.io/library/nginx:latest",
+	}, attachments["app.example.com"])
+}
+
 func TestService_SaveCanonicalizesAttachmentImages(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "gordon.toml")
@@ -349,6 +375,7 @@ func TestService_SaveCanonicalizesAttachmentImages(t *testing.T) {
 	[attachments]
 	"app.example.com" = [
 	  "old-registry.example.com/postgres:18",
+	  "registry.example.com/postgres:18",
 	  "registry.example.com/redis:7",
 	  "rabbitmq:3",
 	  "docker.io/library/nginx:latest",
@@ -368,6 +395,7 @@ func TestService_SaveCanonicalizesAttachmentImages(t *testing.T) {
 	require.NoError(t, svc.Load(ctx))
 	require.Equal(t, []string{
 		"old-registry.example.com/postgres:18",
+		"registry.example.com/postgres:18",
 		"registry.example.com/redis:7",
 		"rabbitmq:3",
 		"docker.io/library/nginx:latest",
@@ -376,6 +404,7 @@ func TestService_SaveCanonicalizesAttachmentImages(t *testing.T) {
 	require.NoError(t, svc.Save(ctx))
 	require.Equal(t, []string{
 		"old-registry.example.com/postgres:18",
+		"registry.example.com/postgres:18",
 		"registry.example.com/redis:7",
 		"rabbitmq:3",
 		"docker.io/library/nginx:latest",
@@ -398,6 +427,7 @@ func TestService_SaveCanonicalizesAttachmentImages(t *testing.T) {
 	require.NoError(t, err)
 	text := string(content)
 	assert.Contains(t, text, `registry.example.com/postgres:18`)
+	assert.Equal(t, 1, strings.Count(text, `registry.example.com/postgres:18`))
 	assert.Contains(t, text, `registry.example.com/redis:7`)
 	assert.Contains(t, text, `rabbitmq:3`)
 	assert.Contains(t, text, `docker.io/library/nginx:latest`)
@@ -1552,6 +1582,62 @@ func TestService_AddAttachment(t *testing.T) {
 		text := string(content)
 		assert.Contains(t, text, `registry.example.com/postgres:18`)
 		assert.NotContains(t, text, `old-registry.example.com/postgres:18`)
+	})
+
+	t.Run("rejects canonical duplicate when existing legacy ref matches current ref", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `[server]
+	gordon_domain = "registry.example.com"
+	legacy_registry_domains = ["old-registry.example.com"]
+
+	[attachments]
+	"app.example.com" = ["old-registry.example.com/postgres:18"]
+	`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		require.NoError(t, v.ReadInConfig())
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		require.NoError(t, svc.Load(ctx))
+
+		err = svc.AddAttachment(ctx, "app.example.com", "registry.example.com/postgres:18")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentExists)
+		assert.Equal(t, []string{"old-registry.example.com/postgres:18"}, svc.GetConfig().Attachments["app.example.com"])
+	})
+
+	t.Run("rejects canonical duplicate when existing current ref matches legacy ref", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "gordon.toml")
+		initialConfig := `[server]
+	gordon_domain = "registry.example.com"
+	legacy_registry_domains = ["old-registry.example.com"]
+
+	[attachments]
+	"app.example.com" = ["registry.example.com/postgres:18"]
+	`
+		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
+		require.NoError(t, err)
+
+		v := viper.New()
+		v.SetConfigFile(configFile)
+		require.NoError(t, v.ReadInConfig())
+
+		eventBus := mocks.NewMockEventPublisher(t)
+		svc := NewService(v, eventBus)
+		ctx := testContext()
+		require.NoError(t, svc.Load(ctx))
+
+		err = svc.AddAttachment(ctx, "app.example.com", "old-registry.example.com/postgres:18")
+
+		assert.ErrorIs(t, err, domain.ErrAttachmentExists)
+		assert.Equal(t, []string{"registry.example.com/postgres:18"}, svc.GetConfig().Attachments["app.example.com"])
 	})
 
 	t.Run("duplicate attachment", func(t *testing.T) {

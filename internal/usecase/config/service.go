@@ -886,9 +886,15 @@ func canonicalAttachmentsForSave(attachments map[string][]string, registryDomain
 			continue
 		}
 
-		canonicalImages := make([]string, len(images))
-		for i, image := range images {
-			canonicalImages[i] = domain.CanonicalizeGordonImageRef(image, registryDomain, legacyRegistryDomains)
+		canonicalImages := make([]string, 0, len(images))
+		seen := make(map[string]struct{}, len(images))
+		for _, image := range images {
+			canonicalImage := domain.CanonicalizeGordonImageRef(image, registryDomain, legacyRegistryDomains)
+			if _, ok := seen[canonicalImage]; ok {
+				continue
+			}
+			seen[canonicalImage] = struct{}{}
+			canonicalImages = append(canonicalImages, canonicalImage)
 		}
 		result[target] = canonicalImages
 	}
@@ -1143,6 +1149,13 @@ func (s *Service) GetRegistryDomain() string {
 	return s.config.RegistryDomain
 }
 
+// GetLegacyRegistryDomains returns the configured legacy registry domains.
+func (s *Service) GetLegacyRegistryDomains() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string{}, s.config.LegacyRegistryDomains...)
+}
+
 // GetDataDir returns the configured data directory.
 func (s *Service) GetDataDir() string {
 	s.mu.RLock()
@@ -1271,8 +1284,9 @@ func (s *Service) AddAttachment(ctx context.Context, domainOrGroup, image string
 
 	// Check if already exists
 	existing := s.config.Attachments[domainOrGroup]
+	canonicalImage := domain.CanonicalizeGordonImageRef(image, s.config.RegistryDomain, s.config.LegacyRegistryDomains)
 	for _, img := range existing {
-		if img == image {
+		if img == image || domain.CanonicalizeGordonImageRef(img, s.config.RegistryDomain, s.config.LegacyRegistryDomains) == canonicalImage {
 			s.mu.Unlock()
 			return domain.ErrAttachmentExists
 		}
