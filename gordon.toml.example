@@ -5,6 +5,7 @@
 port = 8088
 registry_port = 5000
 gordon_domain = "gordon.example.com"
+# legacy_registry_domains = ["registry.example.com:5000"]
 # data_dir = "~/.gordon"
 
 [auth]

@@ -33,6 +33,7 @@ import (
 type Config struct {
 	RegistryAuthEnabled        bool
 	RegistryDomain             string
+	LegacyRegistryDomains      []string
 	RegistryPort               int
 	ServiceTokenUsername       string
 	ServiceToken               string
@@ -1333,21 +1334,16 @@ func (s *Service) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo 
 	return results
 }
 
-// stripRegistryPrefix removes the configured registry domain prefix from an image reference.
-// For example, "reg.example.com/myapp:latest" becomes "myapp:latest" if registry domain is "reg.example.com".
+// stripRegistryPrefix removes the configured current or legacy Gordon registry
+// domain prefix from an image reference. For example,
+// "reg.example.com/myapp:latest" becomes "myapp:latest" when
+// "reg.example.com" is a current or legacy Gordon registry domain.
 func (s *Service) stripRegistryPrefix(image string) string {
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
 
-	if cfg.RegistryDomain == "" {
-		return image
-	}
-	prefix := strings.TrimSuffix(cfg.RegistryDomain, "/") + "/"
-	if strings.HasPrefix(image, prefix) {
-		return strings.TrimPrefix(image, prefix)
-	}
-	return image
+	return domain.StripKnownGordonRegistry(image, cfg.RegistryDomain, cfg.LegacyRegistryDomains)
 }
 
 // ListAttachments returns attachments for a domain.
@@ -1405,41 +1401,6 @@ func (s *Service) HealthCheck(ctx context.Context) map[string]bool {
 	return health
 }
 
-// EnsureManagedContainerRestartPolicies updates restart policy for all managed containers.
-func (s *Service) EnsureManagedContainerRestartPolicies(ctx context.Context) error {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "EnsureManagedContainerRestartPolicies",
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	allContainers, err := s.runtime.ListContainers(ctx, true)
-	if err != nil {
-		return log.WrapErr(err, "failed to list containers for restart policy migration")
-	}
-
-	return s.ensureManagedContainerRestartPolicies(ctx, allContainers)
-}
-
-func (s *Service) ensureManagedContainerRestartPolicies(ctx context.Context, allContainers []*domain.Container) error {
-	log := zerowrap.FromCtx(ctx)
-
-	var errs []error
-	for _, c := range allContainers {
-		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
-			continue
-		}
-		if err := s.runtime.EnsureContainerRestartPolicy(ctx, c.ID, domain.RestartPolicyAlways); err != nil {
-			log.Warn().Err(err).
-				Str(zerowrap.FieldEntityID, c.ID).
-				Str("container_name", c.Name).
-				Msg("failed to ensure managed container restart policy")
-			errs = append(errs, fmt.Errorf("container %s: %w", c.ID, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
 // SyncContainers synchronizes containers with runtime state.
 func (s *Service) SyncContainers(ctx context.Context) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -1448,9 +1409,9 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// List containers without holding lock to avoid blocking during Docker API call.
-	// Use all=true so the same runtime snapshot can migrate stopped containers and
-	// rebuild the running-container maps without a second Docker list call.
+	// List containers without holding lock to avoid blocking during the runtime call.
+	// Use all=true so we can rebuild the running-container maps from a single
+	// snapshot without a second list call.
 	allContainers, err := s.runtime.ListContainers(ctx, true)
 	if err != nil {
 		return log.WrapErr(err, "failed to list containers")
@@ -1823,7 +1784,7 @@ func (s *Service) validateExternalImageRef(ctx context.Context, imageRef, regist
 		return fmt.Errorf("image %q rejected: invalid image reference", imageRef)
 	}
 
-	if sameRegistry(registry, cfg.RegistryDomain) {
+	if domain.IsGordonRegistryImageRef(imageRef, cfg.RegistryDomain, cfg.LegacyRegistryDomains) || sameRegistry(registry, cfg.RegistryDomain) {
 		return nil
 	}
 	dangerous, err := isDangerousRegistryHost(ctx, imageRegistryHost(registry))
@@ -1975,7 +1936,7 @@ func (s *Service) pullRefForDeploy(ctx context.Context, imageRef string) (string
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
-	return rewriteToLocalRegistry(imageRef, cfg.RegistryDomain, cfg.RegistryPort), true
+	return rewriteToLocalRegistry(imageRef, cfg.RegistryDomain, cfg.LegacyRegistryDomains, cfg.RegistryPort), true
 }
 
 // ensureImage ensures the image is available locally, pulling if needed.
@@ -3360,21 +3321,26 @@ func rewriteToRegistryDomain(imageRef, registryDomain string) string {
 	return prefix + imageRef
 }
 
-// rewriteToLocalRegistry rewrites an image reference to use the local registry address.
-// e.g., "registry.example.com/myapp:latest" -> "localhost:5000/myapp:latest"
-func rewriteToLocalRegistry(imageRef, registryDomain string, registryPort int) string {
+// rewriteToLocalRegistry rewrites Gordon-managed image references to use the
+// local registry address. Current and legacy Gordon registry domains are
+// stripped before prefixing localhost:<registryPort>/. Bare refs are prefixed.
+// External registries are preserved unchanged.
+func rewriteToLocalRegistry(imageRef, registryDomain string, legacyRegistryDomains []string, registryPort int) string {
 	if imageRef == "" {
 		return imageRef
 	}
 
 	localRegistry := fmt.Sprintf("localhost:%d", registryPort)
 	localPrefix := localRegistry + "/"
-	imageRef = strings.TrimPrefix(imageRef, localPrefix)
+	if strings.HasPrefix(imageRef, localPrefix) {
+		return imageRef
+	}
 
-	registryDomain = strings.TrimSuffix(registryDomain, "/")
-	if registryDomain != "" {
-		prefix := registryDomain + "/"
-		imageRef = strings.TrimPrefix(imageRef, prefix)
+	if domain.IsGordonRegistryImageRef(imageRef, registryDomain, legacyRegistryDomains) {
+		return localPrefix + domain.StripKnownGordonRegistry(imageRef, registryDomain, legacyRegistryDomains)
+	}
+	if hasExplicitRegistry(imageRef) {
+		return imageRef
 	}
 
 	return localPrefix + imageRef

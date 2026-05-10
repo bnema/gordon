@@ -20,7 +20,6 @@ type ContainerRuntime interface {
 	RestartContainer(ctx context.Context, containerID string) error
 	RemoveContainer(ctx context.Context, containerID string, force bool) error
 	RenameContainer(ctx context.Context, containerID, newName string) error
-	EnsureContainerRestartPolicy(ctx context.Context, containerID, policy string) error
 
 	// Container inspection
 	ListContainers(ctx context.Context, all bool) ([]*domain.Container, error)

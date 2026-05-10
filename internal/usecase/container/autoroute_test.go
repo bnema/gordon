@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bnema/zerowrap"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,7 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/auto"
+	configusecase "github.com/bnema/gordon/internal/usecase/config"
 )
 
 // domainToEnvFileName tests
@@ -829,6 +831,77 @@ func TestAutoRouteHandler_ExistingDomain_SameRepo(t *testing.T) {
 	assert.False(t, created)
 }
 
+func TestAutoRouteHandler_ExistingDomain_SameRepoAcrossLegacyAndCurrentRegistryHosts_UpdatesRoute(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "new-registry.example.com", "old-registry.example.com")
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{
+		Domain: "app.example.com",
+		Image:  "old-registry.example.com/app:v1",
+		HTTPS:  true,
+	}})
+	configSvc.EXPECT().UpdateRoute(mock.Anything, domain.Route{
+		Domain: "app.example.com",
+		Image:  "new-registry.example.com/app:v2",
+		HTTPS:  true,
+	}).Return(nil)
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
+		Domain: "app.example.com",
+		Image:  "new-registry.example.com/app:v2",
+		HTTPS:  true,
+	}).Return(&domain.Container{ID: "c1"}, nil)
+
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "new-registry.example.com/app:v2", []string{"*.example.com"})
+	assert.False(t, created)
+}
+
+func TestAutoRouteHandler_UsesRefreshedRegistryDomainsAfterReload(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "gordon.toml")
+	require.NoError(t, os.WriteFile(configFile, []byte(`[server]
+	gordon_domain = "old-registry.example.com"
+
+	[routes]
+	"app.example.com" = "old-registry.example.com/app:v1"
+	`), 0600))
+
+	v := viper.New()
+	v.SetConfigFile(configFile)
+	require.NoError(t, v.ReadInConfig())
+
+	configSvc := configusecase.NewService(v, mocks.NewMockEventPublisher(t))
+	require.NoError(t, configSvc.Load(ctx))
+
+	containerSvc := inmocks.NewMockContainerService(t)
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, mocks.NewMockBlobStorage(t), "old-registry.example.com")
+
+	require.NoError(t, os.WriteFile(configFile, []byte(`[server]
+	gordon_domain = "new-registry.example.com"
+	legacy_registry_domains = ["old-registry.example.com"]
+
+	[routes]
+	"app.example.com" = "old-registry.example.com/app:v1"
+	`), 0600))
+	require.NoError(t, configSvc.Reload(ctx))
+
+	containerSvc.EXPECT().Deploy(mock.Anything, domain.Route{
+		Domain: "app.example.com",
+		Image:  "new-registry.example.com/app:v2",
+		HTTPS:  true,
+	}).Return(&domain.Container{ID: "c1"}, nil)
+
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "new-registry.example.com/app:v2", []string{"*.example.com"})
+	assert.False(t, created)
+
+	route, err := configSvc.GetRoute(ctx, "app.example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "new-registry.example.com/app:v2", route.Image)
+}
+
 func TestAutoRouteHandler_ExistingDomain_DifferentRepo(t *testing.T) {
 	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
 	configSvc := inmocks.NewMockConfigService(t)
@@ -839,6 +912,23 @@ func TestAutoRouteHandler_ExistingDomain_DifferentRepo(t *testing.T) {
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "oldapp:v1"}})
 
 	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "newapp:v2", []string{"*.example.com"})
+	assert.False(t, created)
+}
+
+func TestAutoRouteHandler_ExistingDomain_DifferentRepoAcrossLegacyAndCurrentRegistryHosts_RejectsRoute(t *testing.T) {
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.Default())
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	blobStorage := mocks.NewMockBlobStorage(t)
+	handler := NewAutoRouteHandler(ctx, configSvc, containerSvc, blobStorage, "new-registry.example.com", "old-registry.example.com")
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{
+		Domain: "app.example.com",
+		Image:  "old-registry.example.com/oldapp:v1",
+		HTTPS:  true,
+	}})
+
+	created := handler.createOrUpdateRoute(context.Background(), "app.example.com", "new-registry.example.com/newapp:v2", []string{"*.example.com"})
 	assert.False(t, created)
 }
 

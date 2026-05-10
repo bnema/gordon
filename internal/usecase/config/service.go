@@ -30,6 +30,7 @@ type Config struct {
 	ServerPort              int
 	RegistryPort            int
 	RegistryDomain          string
+	LegacyRegistryDomains   []string
 	DataDir                 string
 	AutoRouteEnabled        bool
 	AutoRouteAllowedDomains []string `mapstructure:"auto_route_allowed_domains" json:"auto_route_allowed_domains,omitempty"`
@@ -171,10 +172,13 @@ func (s *Service) loadConfigValues() Config {
 		previewSep = "--"
 	}
 
+	legacyRegistryDomains := append([]string{}, s.viper.GetStringSlice("server.legacy_registry_domains")...)
+
 	return Config{
 		ServerPort:              s.viper.GetInt("server.port"),
 		RegistryPort:            s.viper.GetInt("server.registry_port"),
 		RegistryDomain:          registryDomain,
+		LegacyRegistryDomains:   legacyRegistryDomains,
 		DataDir:                 s.viper.GetString("server.data_dir"),
 		AutoRouteEnabled:        autoEnabled,
 		AutoRouteAllowedDomains: append([]string{}, allowedDomains...),
@@ -423,7 +427,7 @@ func (s *Service) FindRoutesByImage(_ context.Context, imageName string) []domai
 		if strings.HasPrefix(domainName, "http://") {
 			continue
 		}
-		if matchesImageName(imageName, route.Image, s.config.RegistryDomain) {
+		if matchesImageName(imageName, route.Image, s.config.RegistryDomain, s.config.LegacyRegistryDomains) {
 			routes = append(routes, domain.Route{Domain: domainName, Image: route.Image, HTTPS: route.HTTPS})
 		}
 	}
@@ -439,7 +443,7 @@ func (s *Service) FindAttachmentTargetsByImage(_ context.Context, imageName stri
 	var targets []string
 	for target, images := range s.config.Attachments {
 		for _, image := range images {
-			if matchesImageName(imageName, image, s.config.RegistryDomain) {
+			if matchesImageName(imageName, image, s.config.RegistryDomain, s.config.LegacyRegistryDomains) {
 				targets = append(targets, target)
 				break
 			}
@@ -449,10 +453,10 @@ func (s *Service) FindAttachmentTargetsByImage(_ context.Context, imageName stri
 	return targets
 }
 
-func matchesImageName(inputImage, candidateImage, registryDomain string) bool {
-	normalizedInput := NormalizeRegistryImage(inputImage, registryDomain)
+func matchesImageName(inputImage, candidateImage, registryDomain string, legacyRegistryDomains []string) bool {
+	normalizedInput := NormalizeRegistryImage(inputImage, registryDomain, legacyRegistryDomains)
 	inputName, inputHasTag := splitImageNameTag(normalizedInput)
-	normalizedCandidate := NormalizeRegistryImage(candidateImage, registryDomain)
+	normalizedCandidate := NormalizeRegistryImage(candidateImage, registryDomain, legacyRegistryDomains)
 
 	if inputHasTag {
 		return strings.EqualFold(normalizedCandidate, normalizedInput)
@@ -470,19 +474,10 @@ func splitImageNameTag(image string) (name string, hasTag bool) {
 	return image, false
 }
 
-// NormalizeRegistryImage strips the registry domain prefix from an image name for comparison.
-func NormalizeRegistryImage(imageName, registryDomain string) string {
-	registryDomain = strings.TrimSuffix(registryDomain, "/")
-	if registryDomain == "" {
-		return imageName
-	}
-
-	prefix := registryDomain + "/"
-	if strings.HasPrefix(imageName, prefix) {
-		return strings.TrimPrefix(imageName, prefix)
-	}
-
-	return imageName
+// NormalizeRegistryImage strips the current or legacy Gordon registry domain
+// prefix from an image name for comparison.
+func NormalizeRegistryImage(imageName, registryDomain string, legacyRegistryDomains []string) string {
+	return domain.StripKnownGordonRegistry(imageName, registryDomain, legacyRegistryDomains)
 }
 
 // NormalizeBootstrapImage converts a user-supplied image argument into
@@ -816,7 +811,7 @@ func (s *Service) writeConfigSurgical(configFile string, snapshotConfig Config) 
 
 	delete(configMap, "routes")
 	configMap["external_routes"] = snapshotConfig.ExternalRoutes
-	configMap["attachments"] = snapshotConfig.Attachments
+	configMap["attachments"] = canonicalAttachmentsForSave(snapshotConfig.Attachments, snapshotConfig.RegistryDomain, snapshotConfig.LegacyRegistryDomains)
 	configMap["network_groups"] = snapshotConfig.NetworkGroups
 	applyAutoAllowedDomains(configMap, snapshotConfig.AutoRouteAllowedDomains)
 
@@ -825,7 +820,7 @@ func (s *Service) writeConfigSurgical(configFile string, snapshotConfig Config) 
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	routes, err := canonicalRoutesForSave(snapshotConfig.Routes)
+	routes, err := canonicalRoutesForSave(snapshotConfig.Routes, snapshotConfig.RegistryDomain, snapshotConfig.LegacyRegistryDomains)
 	if err != nil {
 		return err
 	}
@@ -879,10 +874,43 @@ func applyAutoAllowedDomains(config map[string]any, allowedDomains []string) {
 	}
 }
 
-func canonicalRoutesForSave(routes map[string]routeConfig) (map[string]routeConfig, error) {
+func canonicalAttachmentsForSave(attachments map[string][]string, registryDomain string, legacyRegistryDomains []string) map[string][]string {
+	if attachments == nil {
+		return nil
+	}
+
+	result := make(map[string][]string, len(attachments))
+	for target, images := range attachments {
+		if images == nil {
+			result[target] = nil
+			continue
+		}
+
+		canonicalImages := make([]string, 0, len(images))
+		seen := make(map[string]struct{}, len(images))
+		for _, image := range images {
+			canonicalImage := domain.CanonicalizeGordonImageRef(image, registryDomain, legacyRegistryDomains)
+			if _, ok := seen[canonicalImage]; ok {
+				continue
+			}
+			seen[canonicalImage] = struct{}{}
+			canonicalImages = append(canonicalImages, canonicalImage)
+		}
+		result[target] = canonicalImages
+	}
+
+	return result
+}
+
+func canonicalRoutesForSave(routes map[string]routeConfig, registryDomain string, legacyRegistryDomains []string) (map[string]routeConfig, error) {
 	result := make(map[string]routeConfig)
 	if routes == nil {
 		return result, nil
+	}
+
+	canonicalizeRoute := func(route routeConfig) routeConfig {
+		route.Image = domain.CanonicalizeGordonImageRef(route.Image, registryDomain, legacyRegistryDomains)
+		return route
 	}
 
 	for key, route := range routes {
@@ -892,7 +920,7 @@ func canonicalRoutesForSave(routes map[string]routeConfig) (map[string]routeConf
 		if !domain.IsValidRouteDomain(key) {
 			return nil, fmt.Errorf("invalid route key %q: %w", key, domain.ErrRouteDomainInvalid)
 		}
-		result[key] = route
+		result[key] = canonicalizeRoute(route)
 	}
 
 	for key, route := range routes {
@@ -908,7 +936,7 @@ func canonicalRoutesForSave(routes map[string]routeConfig) (map[string]routeConf
 			continue
 		}
 		route.HTTPS = false
-		result[domainName] = route
+		result[domainName] = canonicalizeRoute(route)
 	}
 
 	return result, nil
@@ -1121,6 +1149,13 @@ func (s *Service) GetRegistryDomain() string {
 	return s.config.RegistryDomain
 }
 
+// GetLegacyRegistryDomains returns the configured legacy registry domains.
+func (s *Service) GetLegacyRegistryDomains() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string{}, s.config.LegacyRegistryDomains...)
+}
+
 // GetDataDir returns the configured data directory.
 func (s *Service) GetDataDir() string {
 	s.mu.RLock()
@@ -1249,8 +1284,9 @@ func (s *Service) AddAttachment(ctx context.Context, domainOrGroup, image string
 
 	// Check if already exists
 	existing := s.config.Attachments[domainOrGroup]
+	canonicalImage := domain.CanonicalizeGordonImageRef(image, s.config.RegistryDomain, s.config.LegacyRegistryDomains)
 	for _, img := range existing {
-		if img == image {
+		if img == image || domain.CanonicalizeGordonImageRef(img, s.config.RegistryDomain, s.config.LegacyRegistryDomains) == canonicalImage {
 			s.mu.Unlock()
 			return domain.ErrAttachmentExists
 		}

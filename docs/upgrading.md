@@ -74,6 +74,29 @@ gordon_domain = "gordon.example.com"
 
 If you do not migrate, `gordon status --remote ...` and `gordon routes list --remote ...` can fail with `/auth/token` `404`, and `reg-domain/v2/` or `/admin/status` can return `404`.
 
+### Staged Registry Host Rename
+
+If you cannot rename the Gordon registry host in one step, keep the new host in `server.gordon_domain` and list the old Gordon registry hosts in `server.legacy_registry_domains` during the cutover:
+
+```toml
+[server]
+gordon_domain = "gordon.example.com"
+legacy_registry_domains = [
+  "registry.example.com",
+  "registry.example.com:5000",
+]
+```
+
+Recommended rollout:
+
+1. Set `gordon_domain` to the new host.
+2. Add every old Gordon registry host that clients still use to `legacy_registry_domains`.
+3. Restart Gordon.
+4. Move Docker/Podman logins, pushes, pulls, and image references to the new host.
+5. Remove `legacy_registry_domains` after every client has moved.
+
+During the transition, Gordon treats both the current and legacy hosts as its own registry for image matching and internal pulls, then saves canonical refs back to `gordon_domain`. Remote CLI and admin API traffic should use the new `gordon_domain`.
+
 ## v2.16.0 to v2.30.0
 
 ### Breaking: Password Authentication Removed

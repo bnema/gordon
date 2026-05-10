@@ -1237,97 +1237,6 @@ func TestService_HealthCheck(t *testing.T) {
 	assert.False(t, result["unhealthy.example.com"])
 }
 
-func TestService_EnsureManagedContainerRestartPolicies_EnsuresRoutesAttachmentsAndStoppedContainers(t *testing.T) {
-	runtime := mocks.NewMockContainerRuntime(t)
-	envLoader := mocks.NewMockEnvLoader(t)
-	eventBus := mocks.NewMockEventPublisher(t)
-
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
-	ctx := testContext()
-
-	routeContainer := &domain.Container{
-		ID:     "route-1",
-		Name:   "gordon-app.example.com",
-		Status: string(domain.ContainerStatusRunning),
-		Labels: map[string]string{
-			domain.LabelManaged: "true",
-			domain.LabelDomain:  "app.example.com",
-		},
-	}
-	attachmentContainer := &domain.Container{
-		ID:     "attachment-1",
-		Name:   "gordon-app-example-com-postgres",
-		Status: string(domain.ContainerStatusRunning),
-		Labels: map[string]string{
-			domain.LabelManaged:    "true",
-			domain.LabelAttachment: "true",
-			domain.LabelAttachedTo: "app.example.com",
-		},
-	}
-	stoppedContainer := &domain.Container{
-		ID:     "stopped-1",
-		Name:   "gordon-stopped.example.com",
-		Status: string(domain.ContainerStatusExited),
-		Labels: map[string]string{
-			domain.LabelManaged: "true",
-			domain.LabelDomain:  "stopped.example.com",
-		},
-	}
-	unmanagedContainer := &domain.Container{
-		ID:     "other-1",
-		Labels: map[string]string{},
-	}
-
-	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
-		routeContainer,
-		attachmentContainer,
-		stoppedContainer,
-		unmanagedContainer,
-	}, nil).Once()
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "route-1", domain.RestartPolicyAlways).Return(nil).Once()
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "attachment-1", domain.RestartPolicyAlways).Return(nil).Once()
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "stopped-1", domain.RestartPolicyAlways).Return(nil).Once()
-	err := svc.EnsureManagedContainerRestartPolicies(ctx)
-
-	require.NoError(t, err)
-	runtime.AssertNumberOfCalls(t, "EnsureContainerRestartPolicy", 3)
-}
-
-func TestService_EnsureManagedContainerRestartPolicies_ContinuesAndReturnsError(t *testing.T) {
-	runtime := mocks.NewMockContainerRuntime(t)
-	envLoader := mocks.NewMockEnvLoader(t)
-	eventBus := mocks.NewMockEventPublisher(t)
-
-	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
-	ctx := testContext()
-
-	routeContainer := &domain.Container{
-		ID:   "route-1",
-		Name: "gordon-app.example.com",
-		Labels: map[string]string{
-			domain.LabelManaged: "true",
-			domain.LabelDomain:  "app.example.com",
-		},
-	}
-	routeContainer2 := &domain.Container{
-		ID:   "route-2",
-		Name: "gordon-api.example.com",
-		Labels: map[string]string{
-			domain.LabelManaged: "true",
-			domain.LabelDomain:  "api.example.com",
-		},
-	}
-
-	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{routeContainer, routeContainer2}, nil).Once()
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "route-1", domain.RestartPolicyAlways).Return(errors.New("update failed")).Once()
-	runtime.EXPECT().EnsureContainerRestartPolicy(mock.Anything, "route-2", domain.RestartPolicyAlways).Return(nil).Once()
-	err := svc.EnsureManagedContainerRestartPolicies(ctx)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "route-1")
-	assert.Contains(t, err.Error(), "update failed")
-}
-
 func TestService_SyncContainers(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
@@ -1992,11 +1901,12 @@ func TestRewriteToRegistryDomain(t *testing.T) {
 
 func TestRewriteToLocalRegistry(t *testing.T) {
 	tests := []struct {
-		name           string
-		imageRef       string
-		registryDomain string
-		registryPort   int
-		wantRef        string
+		name                  string
+		imageRef              string
+		registryDomain        string
+		legacyRegistryDomains []string
+		registryPort          int
+		wantRef               string
 	}{
 		{
 			name:           "rewrites registry domain prefix",
@@ -2020,17 +1930,42 @@ func TestRewriteToLocalRegistry(t *testing.T) {
 			wantRef:        "localhost:5000/myapp:latest",
 		},
 		{
-			name:           "prefixes external image path",
-			imageRef:       "docker.io/library/nginx:latest",
-			registryDomain: "registry.example.com",
-			registryPort:   5000,
-			wantRef:        "localhost:5000/docker.io/library/nginx:latest",
+			name:                  "rewrites legacy registry domain prefix",
+			imageRef:              "old-registry.example.com/myapp:latest",
+			registryDomain:        "new-registry.example.com",
+			legacyRegistryDomains: []string{"old-registry.example.com"},
+			registryPort:          5000,
+			wantRef:               "localhost:5000/myapp:latest",
+		},
+		{
+			name:                  "rewrites legacy registry domain prefix with explicit port and digest",
+			imageRef:              "old-registry.example.com:5001/myapp@sha256:deadbeef",
+			registryDomain:        "new-registry.example.com",
+			legacyRegistryDomains: []string{"old-registry.example.com:5001"},
+			registryPort:          5000,
+			wantRef:               "localhost:5000/myapp@sha256:deadbeef",
+		},
+		{
+			name:                  "external image remains external",
+			imageRef:              "docker.io/library/nginx:latest",
+			registryDomain:        "new-registry.example.com",
+			legacyRegistryDomains: []string{"old-registry.example.com"},
+			registryPort:          5000,
+			wantRef:               "docker.io/library/nginx:latest",
+		},
+		{
+			name:                  "hostile lookalike remains external",
+			imageRef:              "old-registry.example.com.evil/myapp:latest",
+			registryDomain:        "new-registry.example.com",
+			legacyRegistryDomains: []string{"old-registry.example.com"},
+			registryPort:          5000,
+			wantRef:               "old-registry.example.com.evil/myapp:latest",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotRef := rewriteToLocalRegistry(tt.imageRef, tt.registryDomain, tt.registryPort)
+			gotRef := rewriteToLocalRegistry(tt.imageRef, tt.registryDomain, tt.legacyRegistryDomains, tt.registryPort)
 			assert.Equal(t, tt.wantRef, gotRef, "unexpected rewritten reference")
 		})
 	}
@@ -2114,6 +2049,66 @@ func TestService_Deploy_InternalDeployForcesPull(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "container-123", result.ID)
+}
+
+func TestService_Deploy_InternalDeployForcesPull_LegacyRegistryHost(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := Config{
+		AllowedRegistries:        []string{"docker.io"},
+		RegistryAuthEnabled:      true,
+		RegistryDomain:           "new-registry.example.com",
+		LegacyRegistryDomains:    []string{"old-registry.example.com"},
+		RegistryPort:             5000,
+		InternalRegistryUsername: "internal",
+		InternalRegistryPassword: "secret",
+		ReadinessDelay:           time.Millisecond,
+		DrainDelay:               time.Millisecond,
+		DrainDelayConfigured:     true,
+	}
+
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
+	ctx := domain.WithInternalDeploy(testContext())
+
+	route := domain.Route{
+		Domain: "test.example.com",
+		Image:  "old-registry.example.com/myapp:latest",
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().PullImageWithAuth(mock.Anything, "localhost:5000/myapp:latest", "internal", "secret").Return(nil)
+	runtime.EXPECT().TagImage(mock.Anything, "localhost:5000/myapp:latest", "old-registry.example.com/myapp:latest").Return(nil)
+	runtime.EXPECT().UntagImage(mock.Anything, "localhost:5000/myapp:latest").Return(nil)
+
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "old-registry.example.com/myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "old-registry.example.com/myapp:latest").Return(nil, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "old-registry.example.com/myapp:latest").Return([]string{}, nil)
+
+	createdContainer := &domain.Container{
+		ID:     "container-legacy",
+		Name:   "gordon-test.example.com",
+		Status: "created",
+	}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(createdContainer, nil)
+	runtime.EXPECT().StartContainer(mock.Anything, "container-legacy").Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "container-legacy").Return(true, nil).Times(2)
+	runtime.EXPECT().InspectContainer(mock.Anything, "container-legacy").Return(&domain.Container{
+		ID:     "container-legacy",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+		Ports:  []int{8080},
+	}, nil)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "container-legacy", result.ID)
 }
 
 func TestService_AutoStart_StartsNewContainers(t *testing.T) {
@@ -2609,10 +2604,11 @@ func TestService_Deploy_TrackedTempContainerUsesAlternateTempName(t *testing.T) 
 
 func TestService_StripRegistryPrefix(t *testing.T) {
 	tests := []struct {
-		name           string
-		registryDomain string
-		image          string
-		expected       string
+		name                  string
+		registryDomain        string
+		legacyRegistryDomains []string
+		image                 string
+		expected              string
 	}{
 		{
 			name:           "strips registry prefix",
@@ -2625,6 +2621,13 @@ func TestService_StripRegistryPrefix(t *testing.T) {
 			registryDomain: "reg.example.com/",
 			image:          "reg.example.com/myapp:v1.0",
 			expected:       "myapp:v1.0",
+		},
+		{
+			name:                  "strips legacy registry prefix",
+			registryDomain:        "new-reg.example.com",
+			legacyRegistryDomains: []string{"old-reg.example.com"},
+			image:                 "old-reg.example.com/myapp:latest",
+			expected:              "myapp:latest",
 		},
 		{
 			name:           "preserves image without registry prefix",
@@ -2659,7 +2662,8 @@ func TestService_StripRegistryPrefix(t *testing.T) {
 			eventBus := mocks.NewMockEventPublisher(t)
 
 			config := Config{
-				RegistryDomain: tt.registryDomain,
+				RegistryDomain:        tt.registryDomain,
+				LegacyRegistryDomains: tt.legacyRegistryDomains,
 			}
 			svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 

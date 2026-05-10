@@ -57,3 +57,19 @@ func TestExtractRepoName(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractRepoName_TreatsLegacyAndCurrentGordonRegistryHostsAsSameRepo(t *testing.T) {
+	current := "new-registry.example.com"
+	legacy := []string{"old-registry.example.com"}
+
+	oldRepo := ExtractRepoName("old-registry.example.com/app:latest", current, legacy...)
+	newRepo := ExtractRepoName("new-registry.example.com/app:latest", current, legacy...)
+
+	assert.Equal(t, "app", oldRepo)
+	assert.Equal(t, oldRepo, newRepo)
+}
+
+func TestExtractRepoName_HandlesPortsAndDigests(t *testing.T) {
+	assert.Equal(t, "org/app", ExtractRepoName("new-registry.example.com:5000/org/app:latest", "new-registry.example.com:5000"))
+	assert.Equal(t, "org/app", ExtractRepoName("old-registry.example.com:5001/org/app@sha256:deadbeef", "new-registry.example.com:5000", "old-registry.example.com:5001"))
+}
