@@ -1401,41 +1401,6 @@ func (s *Service) HealthCheck(ctx context.Context) map[string]bool {
 	return health
 }
 
-// EnsureManagedContainerRestartPolicies updates restart policy for all managed containers.
-func (s *Service) EnsureManagedContainerRestartPolicies(ctx context.Context) error {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "EnsureManagedContainerRestartPolicies",
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	allContainers, err := s.runtime.ListContainers(ctx, true)
-	if err != nil {
-		return log.WrapErr(err, "failed to list containers for restart policy migration")
-	}
-
-	return s.ensureManagedContainerRestartPolicies(ctx, allContainers)
-}
-
-func (s *Service) ensureManagedContainerRestartPolicies(ctx context.Context, allContainers []*domain.Container) error {
-	log := zerowrap.FromCtx(ctx)
-
-	var errs []error
-	for _, c := range allContainers {
-		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
-			continue
-		}
-		if err := s.runtime.EnsureContainerRestartPolicy(ctx, c.ID, domain.RestartPolicyAlways); err != nil {
-			log.Warn().Err(err).
-				Str(zerowrap.FieldEntityID, c.ID).
-				Str("container_name", c.Name).
-				Msg("failed to ensure managed container restart policy")
-			errs = append(errs, fmt.Errorf("container %s: %w", c.ID, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
 // SyncContainers synchronizes containers with runtime state.
 func (s *Service) SyncContainers(ctx context.Context) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -1444,9 +1409,9 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// List containers without holding lock to avoid blocking during Docker API call.
-	// Use all=true so the same runtime snapshot can migrate stopped containers and
-	// rebuild the running-container maps without a second Docker list call.
+	// List containers without holding lock to avoid blocking during the runtime call.
+	// Use all=true so we can rebuild the running-container maps from a single
+	// snapshot without a second list call.
 	allContainers, err := s.runtime.ListContainers(ctx, true)
 	if err != nil {
 		return log.WrapErr(err, "failed to list containers")

@@ -363,42 +363,6 @@ func (r *Runtime) RenameContainer(ctx context.Context, containerID, newName stri
 	return nil
 }
 
-// EnsureContainerRestartPolicy updates a container restart policy when it does not match.
-func (r *Runtime) EnsureContainerRestartPolicy(ctx context.Context, containerID, policy string) error {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:    "adapter",
-		zerowrap.FieldAdapter:  "docker",
-		zerowrap.FieldAction:   "EnsureContainerRestartPolicy",
-		zerowrap.FieldEntityID: containerID,
-		"restart_policy":       policy,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	inspect, err := r.client.ContainerInspect(ctx, containerID)
-	if err != nil {
-		return log.WrapErr(err, "failed to inspect container")
-	}
-	if inspect.HostConfig == nil {
-		return fmt.Errorf("container inspect response missing host config: %s", containerID)
-	}
-	if string(inspect.HostConfig.RestartPolicy.Name) == policy {
-		return nil
-	}
-
-	updateConfig := container.UpdateConfig{
-		Resources:     inspect.HostConfig.Resources,
-		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(policy)},
-	}
-	resp, err := r.client.ContainerUpdate(ctx, containerID, updateConfig)
-	if err != nil {
-		return log.WrapErr(err, "failed to update container restart policy")
-	}
-	for _, warning := range resp.Warnings {
-		log.Warn().Str("warning", warning).Msg("container restart policy update warning")
-	}
-	return nil
-}
-
 // ListContainers lists containers.
 func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Container, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
