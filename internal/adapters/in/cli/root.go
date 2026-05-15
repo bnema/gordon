@@ -5,6 +5,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -298,7 +299,7 @@ Remote mode:
 			if len(args) > 0 {
 				logDomain = args[0]
 			}
-			return runLogs(logsConfigPath, logDomain, follow, lines)
+			return runLogs(cmd.Context(), logsConfigPath, logDomain, follow, lines, cmd.OutOrStdout())
 		},
 	}
 
@@ -310,21 +311,30 @@ Remote mode:
 }
 
 // runLogs handles the logs command logic.
-func runLogs(logsConfigPath, logDomain string, follow bool, lines int) error {
+func runLogs(ctx context.Context, logsConfigPath, logDomain string, follow bool, lines int, out io.Writer) error {
+	if logDomain != "" {
+		handle, err := resolveControlPlaneForRouteDomain(ctx, logDomain)
+		if err != nil {
+			return err
+		}
+		defer handle.close()
+		return runContainerLogs(ctx, handle.plane, logDomain, follow, lines, out)
+	}
+
 	client, isRemote := GetRemoteClient()
 	if isRemote {
-		return runLogsRemote(client, logDomain, follow, lines)
+		return runLogsRemote(ctx, client, logDomain, follow, lines, out)
 	}
-	return runLogsLocal(logsConfigPath, logDomain, follow, lines)
+	return runLogsLocal(logsConfigPath, logDomain, follow, lines, out)
 }
 
 // runLogsRemote fetches logs from a remote Gordon instance.
-func runLogsRemote(client *remote.Client, logDomain string, follow bool, lines int) error {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+func runLogsRemote(ctx context.Context, client *remote.Client, logDomain string, follow bool, lines int, out io.Writer) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if follow {
-		return streamLogsRemote(ctx, client, logDomain, lines)
+		return streamLogsRemote(ctx, client, logDomain, lines, out)
 	}
 
 	if logDomain == "" {
@@ -334,7 +344,7 @@ func runLogsRemote(client *remote.Client, logDomain string, follow bool, lines i
 			return fmt.Errorf("failed to get process logs: %w", err)
 		}
 		for _, line := range logLines {
-			if err := cliWriteLine(os.Stdout, line); err != nil {
+			if err := cliWriteLine(out, line); err != nil {
 				return err
 			}
 		}
@@ -345,7 +355,7 @@ func runLogsRemote(client *remote.Client, logDomain string, follow bool, lines i
 			return fmt.Errorf("failed to get container logs: %w", err)
 		}
 		for _, line := range logLines {
-			if err := cliWriteLine(os.Stdout, line); err != nil {
+			if err := cliWriteLine(out, line); err != nil {
 				return err
 			}
 		}
@@ -354,7 +364,7 @@ func runLogsRemote(client *remote.Client, logDomain string, follow bool, lines i
 }
 
 // streamLogsRemote streams logs from a remote Gordon instance.
-func streamLogsRemote(ctx context.Context, client *remote.Client, logDomain string, lines int) error {
+func streamLogsRemote(ctx context.Context, client *remote.Client, logDomain string, lines int, out io.Writer) error {
 	var ch <-chan string
 	var err error
 
@@ -368,7 +378,7 @@ func streamLogsRemote(ctx context.Context, client *remote.Client, logDomain stri
 	}
 
 	for line := range ch {
-		if err := cliWriteLine(os.Stdout, line); err != nil {
+		if err := cliWriteLine(out, line); err != nil {
 			return err
 		}
 	}
@@ -376,39 +386,64 @@ func streamLogsRemote(ctx context.Context, client *remote.Client, logDomain stri
 }
 
 // runLogsLocal shows logs from a local Gordon instance.
-func runLogsLocal(logsConfigPath, logDomain string, follow bool, lines int) error {
+func runLogsLocal(logsConfigPath, logDomain string, follow bool, lines int, out io.Writer) error {
 	if logDomain == "" {
 		// Process logs - use existing app.ShowLogs
 		return app.ShowLogs(logsConfigPath, follow, lines)
 	}
 
-	// Container logs - use local services
-	return showContainerLogsLocal(logsConfigPath, logDomain, follow, lines)
+	return showContainerLogsLocal(out, logsConfigPath, logDomain, follow, lines)
 }
 
-// showContainerLogsLocal shows container logs using local Docker access.
-func showContainerLogsLocal(_ string, logDomain string, follow bool, lines int) error {
-	// For local container logs, we need Docker access which requires
-	// the runtime to be initialized. For now, suggest using remote mode
-	// or direct docker logs command.
-	if err := cliWriteLine(os.Stdout, cliRenderTitle(fmt.Sprintf("Container logs for %s", logDomain))); err != nil {
-		return err
-	}
-	if err := cliWriteLine(os.Stdout, cliRenderInfo("To view container logs locally, use:")); err != nil {
-		return err
-	}
-	if err := cliWritef(os.Stdout, "  docker logs --tail %d %s\n", lines, logDomain); err != nil {
-		return err
-	}
+func runContainerLogs(ctx context.Context, cp ControlPlane, logDomain string, follow bool, lines int, out io.Writer) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	if follow {
-		if err := cliWritef(os.Stdout, "  docker logs -f --tail %d %s\n", lines, logDomain); err != nil {
+		ch, err := cp.StreamContainerLogs(ctx, logDomain, lines)
+		if err != nil {
+			return fmt.Errorf("failed to stream container logs: %w", err)
+		}
+		for line := range ch {
+			if err := cliWriteLine(out, line); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	logLines, err := cp.GetContainerLogs(ctx, logDomain, lines)
+	if err != nil {
+		return fmt.Errorf("failed to get container logs: %w", err)
+	}
+	for _, line := range logLines {
+		if err := cliWriteLine(out, line); err != nil {
 			return err
 		}
 	}
-	if err := cliWriteLine(os.Stdout, ""); err != nil {
+	return nil
+}
+
+// showContainerLogsLocal is retained for UI adoption coverage and fallback messaging.
+func showContainerLogsLocal(out io.Writer, _ string, logDomain string, follow bool, lines int) error {
+	if err := cliWriteLine(out, cliRenderTitle(fmt.Sprintf("Container logs for %s", logDomain))); err != nil {
 		return err
 	}
-	if err := cliWriteLine(os.Stdout, cliRenderMuted("Or use remote mode to access logs via the admin API.")); err != nil {
+	if err := cliWriteLine(out, cliRenderInfo("To view container logs locally, use:")); err != nil {
+		return err
+	}
+	if err := cliWritef(out, "  docker logs --tail %d %s\n", lines, logDomain); err != nil {
+		return err
+	}
+	if follow {
+		if err := cliWritef(out, "  docker logs -f --tail %d %s\n", lines, logDomain); err != nil {
+			return err
+		}
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, cliRenderMuted("Or use remote mode to access logs via the admin API.")); err != nil {
 		return err
 	}
 	return nil

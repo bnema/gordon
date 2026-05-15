@@ -28,7 +28,7 @@ Examples:
 			ctx := cmd.Context()
 			restartDomain := args[0]
 
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlaneForRouteDomain(ctx, restartDomain)
 			if err != nil {
 				return err
 			}

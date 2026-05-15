@@ -148,7 +148,7 @@ Examples:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlaneForRepository(ctx, args[0])
 			if err != nil {
 				return err
 			}

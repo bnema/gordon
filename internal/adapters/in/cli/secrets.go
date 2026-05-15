@@ -61,10 +61,16 @@ Examples:
 
 // runSecretsListCmd executes the secrets list command.
 func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 	secretDomain := args[0]
 
-	keys, attachments, isRemote, err := fetchSecretsWithAttachments(ctx, secretDomain)
+	handle, err := resolveControlPlaneForRouteDomain(ctx, secretDomain)
+	if err != nil {
+		return err
+	}
+	defer handle.close()
+
+	keys, attachments, err := fetchSecretsWithAttachments(ctx, handle.plane, secretDomain)
 	if err != nil {
 		return err
 	}
@@ -98,7 +104,7 @@ func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
 	}
 
 	title := fmt.Sprintf("Secrets for %s", secretDomain)
-	if !isRemote {
+	if !handle.isRemote {
 		title = fmt.Sprintf("Secrets for %s (local)", secretDomain)
 	}
 	fmt.Println(styles.Theme.Title.Render(title))
@@ -118,37 +124,13 @@ func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
 	return nil
 }
 
-// fetchSecretsWithAttachments retrieves secrets from remote or local source.
-func fetchSecretsWithAttachments(ctx context.Context, secretDomain string) ([]string, []remote.AttachmentSecrets, bool, error) {
-	client, isRemote := GetRemoteClient()
-	if isRemote {
-		result, err := client.ListSecretsWithAttachments(ctx, secretDomain)
-		if err != nil {
-			return nil, nil, isRemote, fmt.Errorf("failed to list secrets: %w", err)
-		}
-		return result.Keys, result.Attachments, isRemote, nil
-	}
-
-	local, err := GetLocalServices(configPath)
+// fetchSecretsWithAttachments retrieves secrets from the selected control plane.
+func fetchSecretsWithAttachments(ctx context.Context, cp ControlPlane, secretDomain string) ([]string, []remote.AttachmentSecrets, error) {
+	result, err := cp.ListSecretsWithAttachments(ctx, secretDomain)
 	if err != nil {
-		return nil, nil, isRemote, fmt.Errorf("failed to initialize local services: %w", err)
+		return nil, nil, fmt.Errorf("failed to list secrets: %w", err)
 	}
-
-	keys, domainAttachments, err := local.GetSecretService().ListKeysWithAttachments(ctx, secretDomain)
-	if err != nil {
-		return nil, nil, isRemote, fmt.Errorf("failed to list secrets: %w", err)
-	}
-
-	// Convert to remote.AttachmentSecrets format
-	var attachments []remote.AttachmentSecrets
-	for _, att := range domainAttachments {
-		attachments = append(attachments, remote.AttachmentSecrets{
-			Service: att.Service,
-			Keys:    att.Keys,
-		})
-	}
-
-	return keys, attachments, isRemote, nil
+	return result.Keys, result.Attachments, nil
 }
 
 // buildSecretsTableRows builds table rows with tree structure for attachments.
@@ -259,7 +241,7 @@ Examples:
   gordon secrets set app.mydomain.com --attachment redis REDIS_PASSWORD=secret`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			secretDomain := args[0]
 			pairs := args[1:]
 
@@ -273,30 +255,18 @@ Examples:
 				secrets[parts[0]] = parts[1]
 			}
 
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				if attachment != "" {
-					if err := client.SetAttachmentSecrets(ctx, secretDomain, attachment, secrets); err != nil {
-						return fmt.Errorf("failed to set secrets: %w", err)
-					}
-				} else {
-					if err := client.SetSecrets(ctx, secretDomain, secrets); err != nil {
-						return fmt.Errorf("failed to set secrets: %w", err)
-					}
+			handle, err := resolveControlPlaneForRouteDomain(ctx, secretDomain)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			if attachment != "" {
+				if err := handle.plane.SetAttachmentSecrets(ctx, secretDomain, attachment, secrets); err != nil {
+					return fmt.Errorf("failed to set secrets: %w", err)
 				}
 			} else {
-				local, err := GetLocalServices(configPath)
-				if err != nil {
-					return fmt.Errorf("failed to initialize local services: %w", err)
-				}
-				if attachment != "" {
-					if err := local.GetSecretService().SetAttachment(ctx, secretDomain, attachment, secrets); err != nil {
-						return fmt.Errorf("failed to set secrets: %w", err)
-					}
-				} else {
-					if err := local.GetSecretService().Set(ctx, secretDomain, secrets); err != nil {
-						return fmt.Errorf("failed to set secrets: %w", err)
-					}
+				if err := handle.plane.SetSecrets(ctx, secretDomain, secrets); err != nil {
+					return fmt.Errorf("failed to set secrets: %w", err)
 				}
 			}
 
@@ -343,7 +313,7 @@ Examples:
   gordon secrets remove app.mydomain.com --attachment postgres POSTGRES_PASSWORD`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			secretDomain := args[0]
 			key := args[1]
 
@@ -366,30 +336,18 @@ Examples:
 				}
 			}
 
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				if attachment != "" {
-					if err := client.DeleteAttachmentSecret(ctx, secretDomain, attachment, key); err != nil {
-						return fmt.Errorf("failed to remove secret: %w", err)
-					}
-				} else {
-					if err := client.DeleteSecret(ctx, secretDomain, key); err != nil {
-						return fmt.Errorf("failed to remove secret: %w", err)
-					}
+			handle, err := resolveControlPlaneForRouteDomain(ctx, secretDomain)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			if attachment != "" {
+				if err := handle.plane.DeleteAttachmentSecret(ctx, secretDomain, attachment, key); err != nil {
+					return fmt.Errorf("failed to remove secret: %w", err)
 				}
 			} else {
-				local, err := GetLocalServices(configPath)
-				if err != nil {
-					return fmt.Errorf("failed to initialize local services: %w", err)
-				}
-				if attachment != "" {
-					if err := local.GetSecretService().DeleteAttachment(ctx, secretDomain, attachment, key); err != nil {
-						return fmt.Errorf("failed to remove secret: %w", err)
-					}
-				} else {
-					if err := local.GetSecretService().Delete(ctx, secretDomain, key); err != nil {
-						return fmt.Errorf("failed to remove secret: %w", err)
-					}
+				if err := handle.plane.DeleteSecret(ctx, secretDomain, key); err != nil {
+					return fmt.Errorf("failed to remove secret: %w", err)
 				}
 			}
 

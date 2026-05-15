@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -92,7 +93,7 @@ Examples:
 			if len(args) > 0 {
 				imageArg = args[0]
 			}
-			return runPush(cmd.Context(), pushRequest{
+			return runPush(cmd.Context(), cmd.OutOrStdout(), pushRequest{
 				ImageArg:  imageArg,
 				Domain:    domainFlag,
 				Tag:       tag,
@@ -225,17 +226,12 @@ func resolveVersion(ctx context.Context, tag string) (string, error) {
 	return version, nil
 }
 
-func runPush(ctx context.Context, req pushRequest) error {
-	handle, err := resolveControlPlane(configPath)
+func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
+	dockerfile, inferredRemote, handle, err := resolvePushTarget(ctx, out, req)
 	if err != nil {
 		return err
 	}
 	defer handle.close()
-
-	dockerfile, err := resolveDockerfile(req.Build.Dockerfile, req.Build.Enabled)
-	if err != nil {
-		return err
-	}
 
 	registry, imageName, pushDomain, err := resolveRoute(ctx, handle.plane, req.ImageArg, req.Domain, dockerfile)
 	if err != nil {
@@ -246,57 +242,89 @@ func runPush(ctx context.Context, req pushRequest) error {
 	if err != nil {
 		return err
 	}
-
-	for _, ba := range req.Build.BuildArgs {
-		if err := validateBuildArg(ba); err != nil {
-			return err
-		}
+	if err := validateBuildArgsList(req.Build.BuildArgs); err != nil {
+		return err
 	}
 
-	img := imagePush{
-		Registry:  registry,
-		ImageName: imageName,
-		Version:   version,
-	}
+	img := imagePush{Registry: registry, ImageName: imageName, Version: version}
 	img.VersionRef, img.LatestRef = resolveImageRefs(registry, imageName, version)
 
-	imageOps, err := newImageOpsFn()
+	imageOps, err := newPushImageOps(inferredRemote)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Image:  %s\n", styles.Theme.Bold.Render(img.VersionRef))
-	if version != "latest" {
-		fmt.Printf("Also:   %s\n", styles.Theme.Bold.Render(img.LatestRef))
+	if err := cliWritef(out, "Image:  %s\n", styles.Theme.Bold.Render(img.VersionRef)); err != nil {
+		return err
 	}
-	fmt.Printf("Domain: %s\n", styles.Theme.Bold.Render(pushDomain))
+	if version != "latest" {
+		if err := cliWritef(out, "Also:   %s\n", styles.Theme.Bold.Render(img.LatestRef)); err != nil {
+			return err
+		}
+	}
+	if err := cliWritef(out, "Domain: %s\n", styles.Theme.Bold.Render(pushDomain)); err != nil {
+		return err
+	}
 
 	skipExplicitDeploy := shouldSkipDeploy(ctx, handle.plane, imageName, req.NoDeploy)
-
-	build := buildConfig{
-		Enabled:    req.Build.Enabled,
-		Platform:   req.Build.Platform,
-		Dockerfile: dockerfile,
-		BuildArgs:  req.Build.BuildArgs,
+	build := buildConfig{Enabled: req.Build.Enabled, Platform: req.Build.Platform, Dockerfile: dockerfile, BuildArgs: req.Build.BuildArgs}
+	if err := pushResolvedImage(ctx, imageOps, build, img); err != nil {
+		return err
 	}
 
-	if build.Enabled {
-		if err := buildAndPush(ctx, imageOps, build, img); err != nil {
-			return err
-		}
-	} else {
-		if err := tagAndPush(ctx, imageOps, img); err != nil {
-			return err
-		}
+	if err := cliWriteLine(out, styles.RenderSuccess("Push complete")); err != nil {
+		return err
 	}
-
-	fmt.Println(styles.RenderSuccess("Push complete"))
-
 	if !skipExplicitDeploy {
 		return deployAfterPush(ctx, handle.plane, pushDomain, req.NoConfirm)
 	}
-
 	return nil
+}
+
+func resolvePushTarget(ctx context.Context, out io.Writer, req pushRequest) (dockerfile string, inferredRemote *remote.ResolvedRemote, handle *controlPlaneHandle, err error) {
+	dockerfile, err = resolveDockerfile(req.Build.Dockerfile, req.Build.Enabled)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	inferredRemote, err = inferPushRemote(ctx, req.ImageArg, req.Domain, dockerfile)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if inferredRemote != nil {
+		handle = newRemoteControlPlaneHandle(inferredRemote)
+		if err := cliWritef(out, "Remote: %s %s\n", styles.Theme.Bold.Render(inferredRemote.DisplayName()), styles.Theme.Muted.Render("(auto-detected)")); err != nil {
+			return "", nil, nil, err
+		}
+		return dockerfile, inferredRemote, handle, nil
+	}
+	handle, err = resolveControlPlane(configPath)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return dockerfile, nil, handle, nil
+}
+
+func validateBuildArgsList(buildArgs []string) error {
+	for _, ba := range buildArgs {
+		if err := validateBuildArg(ba); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newPushImageOps(inferredRemote *remote.ResolvedRemote) (pushImageOps, error) {
+	if inferredRemote != nil {
+		return newImageOpsForResolvedRemote(inferredRemote)
+	}
+	return newImageOpsFn()
+}
+
+func pushResolvedImage(ctx context.Context, imageOps pushImageOps, build buildConfig, img imagePush) error {
+	if build.Enabled {
+		return buildAndPush(ctx, imageOps, build, img)
+	}
+	return tagAndPush(ctx, imageOps, img)
 }
 
 // shouldSkipDeploy signals deploy intent and returns whether the explicit deploy
@@ -345,15 +373,7 @@ func resolveFromImage(ctx context.Context, cp ControlPlane, imageArg, dockerfile
 		return "", "", "", fmt.Errorf("failed to find routes for image %q: %w", imageArg, err)
 	}
 
-	// Filter out preview routes (domains containing "--") so they don't
-	// pollute the selection when pushing the base image.
-	filtered := routes[:0]
-	for _, r := range routes {
-		if !strings.Contains(r.Domain, domain.DefaultPreviewSeparator) {
-			filtered = append(filtered, r)
-		}
-	}
-	routes = filtered
+	routes = filterPreviewRoutes(routes)
 
 	if len(routes) == 0 {
 		return "", "", "", noRouteForImageError(imageArg)
@@ -420,7 +440,7 @@ func selectDomain(routes []domain.Route, dockerfile string) (domain.Route, error
 		labelDomainList = append(labelDomainList, labelDomain)
 	}
 	if labelDomains != "" {
-		for _, d := range strings.Split(labelDomains, ",") {
+		for d := range strings.SplitSeq(labelDomains, ",") {
 			d = strings.TrimSpace(d)
 			if d != "" {
 				labelDomainList = append(labelDomainList, d)
@@ -574,12 +594,10 @@ func splitLabelPairs(content string) []string {
 
 // parseLabelPair parses a single "key=value" or "key=\"value\"" pair.
 func parseLabelPair(pair string) (key, value string, ok bool) {
-	idx := strings.Index(pair, "=")
-	if idx == -1 {
+	key, value, ok = strings.Cut(pair, "=")
+	if !ok {
 		return "", "", false
 	}
-	key = pair[:idx]
-	value = pair[idx+1:]
 	// Strip surrounding quotes
 	value = strings.Trim(value, "\"'")
 	return key, value, true

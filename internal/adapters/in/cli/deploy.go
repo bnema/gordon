@@ -35,7 +35,7 @@ Examples:
   gordon deploy myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlaneForRouteDomain(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}

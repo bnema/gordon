@@ -3,6 +3,9 @@
 Manage attachments on local or remote Gordon instances.
 
 Remote targeting uses client config or an active remote by default.
+When you provide a concrete target (for example `attachments list app.example.com`
+or `attachments remove app.example.com postgres:18`) and no remote is selected,
+Gordon can also auto-infer a saved remote when exactly one match is found.
 Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 ## Requirements

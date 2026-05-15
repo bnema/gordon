@@ -52,10 +52,19 @@ Examples:
   gordon attachments list backend            # List attachments for network group`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			target := ""
 			if len(args) > 0 {
 				target = args[0]
+			}
+
+			if target != "" {
+				handle, err := resolveControlPlaneForAttachmentTarget(ctx, target)
+				if err != nil {
+					return err
+				}
+				defer handle.close()
+				return runAttachmentsList(ctx, handle.plane, target, jsonOut, cmd.OutOrStdout())
 			}
 
 			client, isRemote := GetRemoteClient()
@@ -69,6 +78,77 @@ Examples:
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
+}
+
+func runAttachmentsList(ctx context.Context, cp ControlPlane, target string, jsonOut bool, out io.Writer) error {
+	if target != "" {
+		images, err := cp.GetAttachmentsConfig(ctx, target)
+		if err != nil {
+			return fmt.Errorf("failed to get attachments: %w", err)
+		}
+		if len(images) == 0 {
+			_, err := fmt.Fprintf(out, "No attachments configured for '%s'\n", target)
+			return err
+		}
+		if jsonOut {
+			return writeJSON(out, map[string]any{"target": target, "images": images})
+		}
+		return renderAttachmentTargetList(out, fmt.Sprintf("Attachments for %s", target), images)
+	}
+
+	attachments, err := cp.GetAllAttachmentsConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list attachments: %w", err)
+	}
+	if len(attachments) == 0 {
+		return cliWriteLine(out, styles.Theme.Muted.Render("No attachments configured"))
+	}
+	if jsonOut {
+		return writeJSON(out, map[string]any{"attachments": attachments})
+	}
+	return renderAllAttachmentsList(out, "Attachments", attachments)
+}
+
+func renderAttachmentTargetList(out io.Writer, title string, images []string) error {
+	if err := cliWriteLine(out, cliRenderTitle(title)); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	for _, img := range images {
+		if err := cliWritef(out, "  %s\n", img); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderAllAttachmentsList(out io.Writer, title string, attachments map[string][]string) error {
+	targets := make([]string, 0, len(attachments))
+	for t := range attachments {
+		targets = append(targets, t)
+	}
+	sort.Strings(targets)
+
+	if err := cliWriteLine(out, cliRenderTitle(title)); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	for _, t := range targets {
+		images := attachments[t]
+		if err := cliWritef(out, "%s\n", styles.Theme.Bold.Render(t)); err != nil {
+			return err
+		}
+		for _, img := range images {
+			if err := cliWritef(out, "  %s\n", img); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // runAttachmentsListRemote lists attachments from a remote Gordon instance.
@@ -215,16 +295,17 @@ Examples:
   gordon --remote https://gordon.mydomain.com attachments add api.mydomain.com memcached:latest`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			target := args[0]
 			image := args[1]
 
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				if err := client.AddAttachment(ctx, target, image); err != nil {
-					return fmt.Errorf("failed to add attachment: %w", err)
-				}
-			} else {
+			handle, err := resolveControlPlaneForAttachmentTarget(ctx, target)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+
+			if !handle.isRemote {
 				local, err := GetLocalServices(configPath)
 				if err != nil {
 					return fmt.Errorf("failed to initialize local services: %w", err)
@@ -238,10 +319,10 @@ Examples:
 					fmt.Println(styles.Theme.Muted.Render("  Enable with: [network_isolation] enabled = true"))
 					fmt.Println()
 				}
+			}
 
-				if err := local.GetConfigService().AddAttachment(ctx, target, image); err != nil {
-					return fmt.Errorf("failed to add attachment: %w", err)
-				}
+			if err := handle.plane.AddAttachment(ctx, target, image); err != nil {
+				return fmt.Errorf("failed to add attachment: %w", err)
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Attachment added: %s -> %s", target, image)))
@@ -266,7 +347,7 @@ Examples:
   gordon attachments remove backend redis:7-alpine --force`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			target := args[0]
 			image := args[1]
 
@@ -285,19 +366,13 @@ Examples:
 				}
 			}
 
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				if err := client.RemoveAttachment(ctx, target, image); err != nil {
-					return fmt.Errorf("failed to remove attachment: %w", err)
-				}
-			} else {
-				local, err := GetLocalServices(configPath)
-				if err != nil {
-					return fmt.Errorf("failed to initialize local services: %w", err)
-				}
-				if err := local.GetConfigService().RemoveAttachment(ctx, target, image); err != nil {
-					return fmt.Errorf("failed to remove attachment: %w", err)
-				}
+			handle, err := resolveControlPlaneForAttachmentTarget(ctx, target)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			if err := handle.plane.RemoveAttachment(ctx, target, image); err != nil {
+				return fmt.Errorf("failed to remove attachment: %w", err)
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Attachment removed: %s -> %s", target, image)))

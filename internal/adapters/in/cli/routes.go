@@ -988,7 +988,7 @@ Examples:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlaneForRouteDomain(ctx, args[0])
 			if err != nil {
 				return err
 			}
@@ -1162,7 +1162,7 @@ Examples:
   gordon routes remove app.mydomain.com --force`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			routeDomain := args[0]
 
 			// Confirm unless --force
@@ -1180,19 +1180,13 @@ Examples:
 				}
 			}
 
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				if err := client.RemoveRoute(ctx, routeDomain); err != nil {
-					return fmt.Errorf("failed to remove route: %w", err)
-				}
-			} else {
-				local, err := GetLocalServices(configPath)
-				if err != nil {
-					return fmt.Errorf("failed to initialize local services: %w", err)
-				}
-				if err := local.GetConfigService().RemoveRoute(ctx, routeDomain); err != nil {
-					return fmt.Errorf("failed to remove route: %w", err)
-				}
+			handle, err := resolveControlPlaneForRouteDomain(ctx, routeDomain)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			if err := handle.plane.RemoveRoute(ctx, routeDomain); err != nil {
+				return fmt.Errorf("failed to remove route: %w", err)
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route removed: %s", routeDomain)))
