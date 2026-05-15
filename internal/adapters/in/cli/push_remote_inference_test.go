@@ -11,9 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestInferPushRemote_UsesUniqueMatchingSavedRemote(t *testing.T) {
@@ -305,21 +306,27 @@ func newFindRoutesByImageTestServer(t *testing.T, handler func(image string) ([]
 		}
 
 		image, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/admin/routes/by-image/"))
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		routes, status := handler(image)
 		if status >= http.StatusBadRequest {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"}))
+			if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"})) {
+				return
+			}
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+		if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 			"image":  image,
 			"routes": routes,
-		}))
+		})) {
+			return
+		}
 	}))
 	t.Cleanup(server.Close)
 	return server
@@ -375,20 +382,28 @@ func handleGetRouteProbe(t *testing.T, w http.ResponseWriter, r *http.Request, h
 		return
 	}
 	domainName, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/admin/routes/"))
-	require.NoError(t, err)
+	if !assert.NoError(t, err) {
+		return
+	}
 	route, status := handler(domainName)
 	if status >= http.StatusBadRequest {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		if status == http.StatusNotFound {
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": domain.ErrRouteNotFound.Error()}))
+			if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": domain.ErrRouteNotFound.Error()})) {
+				return
+			}
 			return
 		}
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"}))
+		if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"})) {
+			return
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	require.NoError(t, json.NewEncoder(w).Encode(route))
+	if !assert.NoError(t, json.NewEncoder(w).Encode(route)) {
+		return
+	}
 }
 
 func handleAttachmentTargetsByImageProbe(t *testing.T, w http.ResponseWriter, r *http.Request, handler func(image string) ([]string, int)) {
@@ -398,16 +413,22 @@ func handleAttachmentTargetsByImageProbe(t *testing.T, w http.ResponseWriter, r 
 		return
 	}
 	image, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/admin/attachments/by-image/"))
-	require.NoError(t, err)
+	if !assert.NoError(t, err) {
+		return
+	}
 	targets, status := handler(image)
 	if status >= http.StatusBadRequest {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"}))
+		if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"})) {
+			return
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"image": image, "targets": targets}))
+	if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"image": image, "targets": targets})) {
+		return
+	}
 }
 
 func handleGetAttachmentsConfigProbe(t *testing.T, w http.ResponseWriter, r *http.Request, handler func(target string) ([]string, int)) {
@@ -417,20 +438,28 @@ func handleGetAttachmentsConfigProbe(t *testing.T, w http.ResponseWriter, r *htt
 		return
 	}
 	target, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/admin/attachments/"))
-	require.NoError(t, err)
+	if !assert.NoError(t, err) {
+		return
+	}
 	images, status := handler(target)
 	if status >= http.StatusBadRequest {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		if status == http.StatusNotFound {
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "no attachments found for target"}))
+			if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "no attachments found for target"})) {
+				return
+			}
 			return
 		}
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"}))
+		if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"})) {
+			return
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"target": target, "images": images}))
+	if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"target": target, "images": images})) {
+		return
+	}
 }
 
 func handleListTagsProbe(t *testing.T, w http.ResponseWriter, r *http.Request, handler func(repository string) ([]string, int)) {
@@ -440,18 +469,26 @@ func handleListTagsProbe(t *testing.T, w http.ResponseWriter, r *http.Request, h
 		return
 	}
 	repository, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/admin/tags/"))
-	require.NoError(t, err)
+	if !assert.NoError(t, err) {
+		return
+	}
 	tags, status := handler(repository)
 	if status >= http.StatusBadRequest {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		if status == http.StatusNotFound {
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "repository not found"}))
+			if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "repository not found"})) {
+				return
+			}
 			return
 		}
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"}))
+		if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"})) {
+			return
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"repository": repository, "tags": tags}))
+	if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"repository": repository, "tags": tags})) {
+		return
+	}
 }

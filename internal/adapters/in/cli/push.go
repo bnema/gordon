@@ -227,7 +227,7 @@ func resolveVersion(ctx context.Context, tag string) (string, error) {
 }
 
 func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
-	dockerfile, inferredRemote, handle, err := resolvePushTarget(ctx, req)
+	dockerfile, inferredRemote, handle, err := resolvePushTarget(ctx, out, req)
 	if err != nil {
 		return err
 	}
@@ -254,11 +254,17 @@ func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
 		return err
 	}
 
-	fmt.Printf("Image:  %s\n", styles.Theme.Bold.Render(img.VersionRef))
-	if version != "latest" {
-		fmt.Printf("Also:   %s\n", styles.Theme.Bold.Render(img.LatestRef))
+	if err := cliWritef(out, "Image:  %s\n", styles.Theme.Bold.Render(img.VersionRef)); err != nil {
+		return err
 	}
-	fmt.Printf("Domain: %s\n", styles.Theme.Bold.Render(pushDomain))
+	if version != "latest" {
+		if err := cliWritef(out, "Also:   %s\n", styles.Theme.Bold.Render(img.LatestRef)); err != nil {
+			return err
+		}
+	}
+	if err := cliWritef(out, "Domain: %s\n", styles.Theme.Bold.Render(pushDomain)); err != nil {
+		return err
+	}
 
 	skipExplicitDeploy := shouldSkipDeploy(ctx, handle.plane, imageName, req.NoDeploy)
 	build := buildConfig{Enabled: req.Build.Enabled, Platform: req.Build.Platform, Dockerfile: dockerfile, BuildArgs: req.Build.BuildArgs}
@@ -275,7 +281,7 @@ func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
 	return nil
 }
 
-func resolvePushTarget(ctx context.Context, req pushRequest) (dockerfile string, inferredRemote *remote.ResolvedRemote, handle *controlPlaneHandle, err error) {
+func resolvePushTarget(ctx context.Context, out io.Writer, req pushRequest) (dockerfile string, inferredRemote *remote.ResolvedRemote, handle *controlPlaneHandle, err error) {
 	dockerfile, err = resolveDockerfile(req.Build.Dockerfile, req.Build.Enabled)
 	if err != nil {
 		return "", nil, nil, err
@@ -286,7 +292,9 @@ func resolvePushTarget(ctx context.Context, req pushRequest) (dockerfile string,
 	}
 	if inferredRemote != nil {
 		handle = newRemoteControlPlaneHandle(inferredRemote)
-		fmt.Printf("Remote: %s %s\n", styles.Theme.Bold.Render(inferredRemote.DisplayName()), styles.Theme.Muted.Render("(auto-detected)"))
+		if err := cliWritef(out, "Remote: %s %s\n", styles.Theme.Bold.Render(inferredRemote.DisplayName()), styles.Theme.Muted.Render("(auto-detected)")); err != nil {
+			return "", nil, nil, err
+		}
 		return dockerfile, inferredRemote, handle, nil
 	}
 	handle, err = resolveControlPlane(configPath)

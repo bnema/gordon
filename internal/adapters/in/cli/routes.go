@@ -1162,7 +1162,7 @@ Examples:
   gordon routes remove app.mydomain.com --force`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			routeDomain := args[0]
 
 			// Confirm unless --force

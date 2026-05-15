@@ -52,7 +52,7 @@ Examples:
   gordon attachments list backend            # List attachments for network group`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			target := ""
 			if len(args) > 0 {
 				target = args[0]
@@ -110,14 +110,14 @@ func runAttachmentsList(ctx context.Context, cp ControlPlane, target string, jso
 }
 
 func renderAttachmentTargetList(out io.Writer, title string, images []string) error {
-	if _, err := fmt.Fprintln(out, styles.Theme.Title.Render(title)); err != nil {
+	if err := cliWriteLine(out, cliRenderTitle(title)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(out); err != nil {
+	if err := cliWriteLine(out, ""); err != nil {
 		return err
 	}
 	for _, img := range images {
-		if _, err := fmt.Fprintf(out, "  %s\n", img); err != nil {
+		if err := cliWritef(out, "  %s\n", img); err != nil {
 			return err
 		}
 	}
@@ -131,19 +131,19 @@ func renderAllAttachmentsList(out io.Writer, title string, attachments map[strin
 	}
 	sort.Strings(targets)
 
-	if _, err := fmt.Fprintln(out, styles.Theme.Title.Render(title)); err != nil {
+	if err := cliWriteLine(out, cliRenderTitle(title)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(out); err != nil {
+	if err := cliWriteLine(out, ""); err != nil {
 		return err
 	}
 	for _, t := range targets {
 		images := attachments[t]
-		if _, err := fmt.Fprintf(out, "%s\n", styles.Theme.Bold.Render(t)); err != nil {
+		if err := cliWritef(out, "%s\n", styles.Theme.Bold.Render(t)); err != nil {
 			return err
 		}
 		for _, img := range images {
-			if _, err := fmt.Fprintf(out, "  %s\n", img); err != nil {
+			if err := cliWritef(out, "  %s\n", img); err != nil {
 				return err
 			}
 		}
@@ -295,7 +295,7 @@ Examples:
   gordon --remote https://gordon.mydomain.com attachments add api.mydomain.com memcached:latest`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			target := args[0]
 			image := args[1]
 
@@ -347,7 +347,7 @@ Examples:
   gordon attachments remove backend redis:7-alpine --force`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			target := args[0]
 			image := args[1]
 
