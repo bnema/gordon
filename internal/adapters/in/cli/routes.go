@@ -835,45 +835,43 @@ func loadRoutesStatusRemoteSection(ctx context.Context, name string, entry remot
 func routeStatusItemsFromInfos(routes []remote.RouteInfo, health map[string]*remote.RouteHealth) []routeStatusItem {
 	items := make([]routeStatusItem, 0, len(routes))
 	for _, route := range routes {
-		item := routeStatusItem{
-			Domain:          route.Domain,
-			Image:           route.Image,
-			ContainerID:     route.ContainerID,
-			ContainerStatus: route.ContainerStatus,
-			Network:         route.Network,
-		}
-		if item.ContainerStatus == "" {
-			if routeHealth := health[route.Domain]; routeHealth != nil {
-				item.ContainerStatus = routeHealth.ContainerStatus
-				item.HTTPStatus = routeHealth.HTTPStatus
-				item.HealthError = routeHealth.Error
-			}
-		}
-		if item.ContainerStatus == "" {
-			item.ContainerStatus = "unknown"
-		}
-		if item.HTTPStatus == 0 {
-			if routeHealth := health[route.Domain]; routeHealth != nil {
-				item.HTTPStatus = routeHealth.HTTPStatus
-				item.HealthError = routeHealth.Error
-			}
-		}
-		if item.HealthError == "" {
-			if routeHealth := health[route.Domain]; routeHealth != nil {
-				item.HealthError = routeHealth.Error
-			}
-		}
-		item.Attachments = make([]routeStatusAttachment, 0, len(route.Attachments))
-		for _, attachment := range route.Attachments {
-			status := attachment.Status
-			if status == "" {
-				status = "unknown"
-			}
-			item.Attachments = append(item.Attachments, routeStatusAttachment{Name: attachment.Name, Image: attachment.Image, Status: status})
-		}
-		items = append(items, item)
+		items = append(items, routeStatusItemFromInfo(route, health[route.Domain]))
 	}
 	return items
+}
+
+func routeStatusItemFromInfo(route remote.RouteInfo, routeHealth *remote.RouteHealth) routeStatusItem {
+	item := routeStatusItem{
+		Domain:          route.Domain,
+		Image:           route.Image,
+		ContainerID:     route.ContainerID,
+		ContainerStatus: route.ContainerStatus,
+		Network:         route.Network,
+	}
+	if item.ContainerStatus == "" && routeHealth != nil {
+		item.ContainerStatus = routeHealth.ContainerStatus
+		item.HTTPStatus = routeHealth.HTTPStatus
+		item.HealthError = routeHealth.Error
+	}
+	if item.ContainerStatus == "" {
+		item.ContainerStatus = "unknown"
+	}
+	if item.HTTPStatus == 0 && routeHealth != nil {
+		item.HTTPStatus = routeHealth.HTTPStatus
+		item.HealthError = routeHealth.Error
+	}
+	if item.HealthError == "" && routeHealth != nil {
+		item.HealthError = routeHealth.Error
+	}
+	item.Attachments = make([]routeStatusAttachment, 0, len(route.Attachments))
+	for _, attachment := range route.Attachments {
+		status := attachment.Status
+		if status == "" {
+			status = "unknown"
+		}
+		item.Attachments = append(item.Attachments, routeStatusAttachment{Name: attachment.Name, Image: attachment.Image, Status: status})
+	}
+	return item
 }
 
 func routeListItemsFromInfos(routes []remote.RouteInfo) []routeListItem {

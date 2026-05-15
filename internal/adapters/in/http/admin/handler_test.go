@@ -1357,6 +1357,45 @@ func TestHandler_RoutesGet_ReturnsRoutes(t *testing.T) {
 	assert.Len(t, response.Routes, 2)
 }
 
+func TestHandler_RoutesGet_DetailedSyncsAndIncludesConfiguredRouteWithoutContainer(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{
+		Domain: "app.example.com",
+		Image:  "app:latest",
+	}}).Once()
+	syncCall := containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil).Once()
+	listCall := containerSvc.EXPECT().ListRoutesWithDetails(mock.Anything).Return(nil).Once()
+	mock.InOrder(syncCall, listCall)
+
+	req := httptest.NewRequest("GET", "/admin/routes?detailed=true", nil)
+	req = req.WithContext(ctxWithScopes("admin:routes:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response dto.RoutesDetailResponse
+	err := json.NewDecoder(rec.Body).Decode(&response)
+	require.NoError(t, err)
+	require.Len(t, response.Routes, 1)
+	assert.Equal(t, "app.example.com", response.Routes[0].Domain)
+	assert.Equal(t, "app:latest", response.Routes[0].Image)
+	assert.Empty(t, response.Routes[0].ContainerID)
+	assert.Empty(t, response.Routes[0].ContainerStatus)
+}
+
 func TestHandler_RoutesGet_SingleRoute(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)

@@ -97,6 +97,25 @@ func toRouteResponse(r domain.Route) dto.Route {
 	}
 }
 
+func mergeConfiguredRouteDetails(configured []domain.Route, detailed []domain.RouteInfo) []domain.RouteInfo {
+	detailedByDomain := make(map[string]domain.RouteInfo, len(detailed))
+	for _, info := range detailed {
+		detailedByDomain[info.Domain] = info
+	}
+
+	merged := make([]domain.RouteInfo, 0, len(configured))
+	for _, route := range configured {
+		info, ok := detailedByDomain[route.Domain]
+		if !ok {
+			info = domain.RouteInfo{Domain: route.Domain, Image: route.Image}
+		} else if info.Image == "" {
+			info.Image = route.Image
+		}
+		merged = append(merged, info)
+	}
+	return merged
+}
+
 func toBackupJobResponse(job domain.BackupJob) dto.BackupJob {
 	var startedAt *time.Time
 	if !job.StartedAt.IsZero() {
@@ -527,7 +546,13 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 
 	if routeDomain == "" {
 		if r.URL.Query().Get("detailed") == "true" {
-			routes := h.containerSvc.ListRoutesWithDetails(ctx)
+			if err := h.containerSvc.SyncContainers(ctx); err != nil {
+				h.log.Error().Err(err).Msg("failed to sync containers before detailed route listing")
+				h.sendError(w, http.StatusInternalServerError, "failed to list routes")
+				return
+			}
+			configured := h.configSvc.GetRoutes(ctx)
+			routes := mergeConfiguredRouteDetails(configured, h.containerSvc.ListRoutesWithDetails(ctx))
 			response := make([]routeInfoResponse, 0, len(routes))
 			for _, route := range routes {
 				response = append(response, toRouteInfoResponse(route))
