@@ -186,8 +186,7 @@ func resolvedRemoteFromEntry(name string, entry remote.RemoteEntry) *remote.Reso
 }
 
 func isRemoteNotFoundError(err error) bool {
-	var httpErr *remote.HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*remote.HTTPError](err); ok {
 		return httpErr.StatusCode == http.StatusNotFound
 	}
 	return errors.Is(err, domain.ErrRouteNotFound)
