@@ -42,16 +42,24 @@ func newBackupListCmd() *cobra.Command {
 		Long:  cliRenderMuted("List backups for all domains or a specific domain."),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := resolveControlPlane(configPath)
-			if err != nil {
-				return err
-			}
-			defer handle.close()
-
 			domainName := ""
 			if len(args) == 1 {
 				domainName = args[0]
 			}
+
+			var (
+				handle *controlPlaneHandle
+				err    error
+			)
+			if domainName != "" {
+				handle, err = resolveControlPlaneForRouteDomain(cmd.Context(), domainName)
+			} else {
+				handle, err = resolveControlPlane(configPath)
+			}
+			if err != nil {
+				return err
+			}
+			defer handle.close()
 
 			jobs, err := handle.plane.ListBackups(cmd.Context(), domainName)
 			if err != nil {
@@ -103,7 +111,7 @@ func newBackupRunCmd() *cobra.Command {
 		Short: "Run backup now",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlaneForRouteDomain(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -145,7 +153,7 @@ func newBackupDetectCmd() *cobra.Command {
 		Short: "Detect databases for domain",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlaneForRouteDomain(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}

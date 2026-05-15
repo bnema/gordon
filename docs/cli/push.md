@@ -36,6 +36,12 @@ gordon push [image] [options]
 `gordon push` tags the selected image for the Gordon registry, pushes it, and
 optionally deploys matching routes.
 
+If you do not pass `--remote` and no active remote is configured, Gordon tries to
+infer the correct saved remote by probing your saved remotes for a matching route.
+It auto-selects only when exactly one remote matches. If multiple remotes match,
+or a saved remote cannot be probed safely, the command stops and asks you to use
+`--remote` explicitly.
+
 Image resolution order:
 1. `--domain` is the explicit deploy target override for legacy workflows
 2. Positional refs resolve routes by image name; tagged refs still use the image name for lookup

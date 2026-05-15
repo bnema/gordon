@@ -248,6 +248,8 @@ gordon logs [domain] [options]
 | `--token` | | | Authentication token for remote |
 
 Remote targeting uses client config or an active remote by default.
+When you provide a concrete domain and no remote is selected, Gordon can also
+auto-infer a saved remote when exactly one match is found.
 Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 Remote log access requires an admin token with `admin:logs:read` (or `admin:*:*`). `admin:status:read` is not sufficient for logs.

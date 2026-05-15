@@ -58,6 +58,15 @@ Examples:
 				target = args[0]
 			}
 
+			if target != "" {
+				handle, err := resolveControlPlaneForAttachmentTarget(ctx, target)
+				if err != nil {
+					return err
+				}
+				defer handle.close()
+				return runAttachmentsList(ctx, handle.plane, target, jsonOut, cmd.OutOrStdout())
+			}
+
 			client, isRemote := GetRemoteClient()
 			if isRemote {
 				return runAttachmentsListRemote(ctx, client, target, jsonOut, cmd.OutOrStdout())
@@ -69,6 +78,61 @@ Examples:
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
+}
+
+func runAttachmentsList(ctx context.Context, cp ControlPlane, target string, jsonOut bool, out io.Writer) error {
+	if target != "" {
+		images, err := cp.GetAttachmentsConfig(ctx, target)
+		if err != nil {
+			return fmt.Errorf("failed to get attachments: %w", err)
+		}
+
+		if len(images) == 0 {
+			fmt.Printf("No attachments configured for '%s'\n", target)
+			return nil
+		}
+
+		if jsonOut {
+			return writeJSON(out, map[string]any{"target": target, "images": images})
+		}
+
+		fmt.Println(styles.Theme.Title.Render(fmt.Sprintf("Attachments for %s", target)))
+		fmt.Println()
+		for _, img := range images {
+			fmt.Printf("  %s\n", img)
+		}
+		return nil
+	}
+
+	attachments, err := cp.GetAllAttachmentsConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list attachments: %w", err)
+	}
+	if len(attachments) == 0 {
+		fmt.Println(styles.Theme.Muted.Render("No attachments configured"))
+		return nil
+	}
+	if jsonOut {
+		return writeJSON(out, map[string]any{"attachments": attachments})
+	}
+
+	targets := make([]string, 0, len(attachments))
+	for t := range attachments {
+		targets = append(targets, t)
+	}
+	sort.Strings(targets)
+
+	fmt.Println(styles.Theme.Title.Render("Attachments"))
+	fmt.Println()
+	for _, t := range targets {
+		images := attachments[t]
+		fmt.Printf("%s\n", styles.Theme.Bold.Render(t))
+		for _, img := range images {
+			fmt.Printf("  %s\n", img)
+		}
+	}
+
+	return nil
 }
 
 // runAttachmentsListRemote lists attachments from a remote Gordon instance.
@@ -219,12 +283,13 @@ Examples:
 			target := args[0]
 			image := args[1]
 
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				if err := client.AddAttachment(ctx, target, image); err != nil {
-					return fmt.Errorf("failed to add attachment: %w", err)
-				}
-			} else {
+			handle, err := resolveControlPlaneForAttachmentTarget(ctx, target)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+
+			if !handle.isRemote {
 				local, err := GetLocalServices(configPath)
 				if err != nil {
 					return fmt.Errorf("failed to initialize local services: %w", err)
@@ -238,10 +303,10 @@ Examples:
 					fmt.Println(styles.Theme.Muted.Render("  Enable with: [network_isolation] enabled = true"))
 					fmt.Println()
 				}
+			}
 
-				if err := local.GetConfigService().AddAttachment(ctx, target, image); err != nil {
-					return fmt.Errorf("failed to add attachment: %w", err)
-				}
+			if err := handle.plane.AddAttachment(ctx, target, image); err != nil {
+				return fmt.Errorf("failed to add attachment: %w", err)
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Attachment added: %s -> %s", target, image)))
@@ -285,19 +350,13 @@ Examples:
 				}
 			}
 
-			client, isRemote := GetRemoteClient()
-			if isRemote {
-				if err := client.RemoveAttachment(ctx, target, image); err != nil {
-					return fmt.Errorf("failed to remove attachment: %w", err)
-				}
-			} else {
-				local, err := GetLocalServices(configPath)
-				if err != nil {
-					return fmt.Errorf("failed to initialize local services: %w", err)
-				}
-				if err := local.GetConfigService().RemoveAttachment(ctx, target, image); err != nil {
-					return fmt.Errorf("failed to remove attachment: %w", err)
-				}
+			handle, err := resolveControlPlaneForAttachmentTarget(ctx, target)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			if err := handle.plane.RemoveAttachment(ctx, target, image); err != nil {
+				return fmt.Errorf("failed to remove attachment: %w", err)
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Attachment removed: %s -> %s", target, image)))

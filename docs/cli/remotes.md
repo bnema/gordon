@@ -165,6 +165,8 @@ gordon remotes use <name>
 When a remote is active, it's used automatically for most remote-capable commands without needing to specify `--remote` and `--token`.
 `gordon routes list` and `gordon routes status` are the exception: they aggregate local + saved remotes unless you set `--remote` or `GORDON_REMOTE`.
 
+If no remote is active and you do not pass `--remote`, Gordon can also auto-infer a saved remote for commands with a concrete target (for example `gordon push myapp`, `gordon deploy app.example.com`, or `gordon images tags myapp`). It only auto-selects when exactly one saved remote matches. Ambiguous matches and probe failures require an explicit `--remote`.
+
 ```bash
 gordon remotes use prod
 gordon secrets list app.com     # Uses prod remote automatically
@@ -245,11 +247,13 @@ token = "eyJ..."
 When multiple sources specify remote or token, the CLI uses this priority:
 
 For `routes list` and `routes status`, `--remote` and `GORDON_REMOTE` are the explicit single-target selectors. Without either one, those commands aggregate local + saved remotes even when an active remote exists.
+Auto-inference is not used for those aggregate views.
 
-**Remote URL:**
+**Remote target selection:**
 1. `--remote` flag
 2. `GORDON_REMOTE` environment variable
 3. Active remote from `remotes.toml`
+4. Auto-inferred saved remote for supported target-based commands
 
 **Token:**
 1. `--token` flag

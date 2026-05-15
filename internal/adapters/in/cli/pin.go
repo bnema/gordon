@@ -59,7 +59,7 @@ func newPinListCmd() *cobra.Command {
 }
 
 func runPin(ctx context.Context, out, ew io.Writer, pinDomain, targetTag string) error {
-	handle, err := resolveControlPlane(configPath)
+	handle, err := resolveControlPlaneForRouteDomain(ctx, pinDomain)
 	if err != nil {
 		return fmt.Errorf("failed to resolve control plane: %w", err)
 	}
@@ -96,7 +96,7 @@ func runPin(ctx context.Context, out, ew io.Writer, pinDomain, targetTag string)
 }
 
 func runPinList(ctx context.Context, w io.Writer, pinDomain string, jsonOut bool) error {
-	handle, err := resolveControlPlane(configPath)
+	handle, err := resolveControlPlaneForRouteDomain(ctx, pinDomain)
 	if err != nil {
 		return fmt.Errorf("failed to resolve control plane: %w", err)
 	}

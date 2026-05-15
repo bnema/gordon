@@ -57,16 +57,29 @@ func newAttachmentsPushCmd() *cobra.Command {
 }
 
 func runAttachmentsPush(ctx context.Context, req attachmentPushRequest, out io.Writer) error {
-	handle, err := resolveControlPlaneFn(configPath)
-	if err != nil {
-		return err
-	}
-	defer handle.close()
-
 	dockerfile, err := resolveDockerfile(req.Build.Dockerfile, req.Build.Enabled)
 	if err != nil {
 		return err
 	}
+
+	inferredRemote, err := inferRemoteForAttachmentImage(ctx, req.ImageArg)
+	if err != nil {
+		return err
+	}
+
+	var handle *controlPlaneHandle
+	if inferredRemote != nil {
+		handle = newRemoteControlPlaneHandle(inferredRemote)
+		if err := cliWritef(out, "Remote:           %s %s\n", styles.Theme.Bold.Render(inferredRemote.DisplayName()), styles.Theme.Muted.Render("(auto-detected)")); err != nil {
+			return err
+		}
+	} else {
+		handle, err = resolveControlPlaneFn(configPath)
+		if err != nil {
+			return err
+		}
+	}
+	defer handle.close()
 
 	for _, ba := range req.Build.BuildArgs {
 		if err := validateBuildArg(ba); err != nil {
@@ -91,7 +104,12 @@ func runAttachmentsPush(ctx context.Context, req attachmentPushRequest, out io.W
 	}
 	img.VersionRef, img.LatestRef = resolveImageRefs(registry, imageName, version)
 
-	imageOps, err := newImageOpsFn()
+	var imageOps pushImageOps
+	if inferredRemote != nil {
+		imageOps, err = newImageOpsForResolvedRemote(inferredRemote)
+	} else {
+		imageOps, err = newImageOpsFn()
+	}
 	if err != nil {
 		return err
 	}
