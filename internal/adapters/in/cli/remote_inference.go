@@ -194,7 +194,7 @@ func isRemoteNotFoundError(err error) bool {
 }
 
 func filterPreviewRoutes(routes []domain.Route) []domain.Route {
-	filtered := routes[:0]
+	filtered := make([]domain.Route, 0, len(routes))
 	for _, route := range routes {
 		if !strings.Contains(route.Domain, domain.DefaultPreviewSeparator) {
 			filtered = append(filtered, route)

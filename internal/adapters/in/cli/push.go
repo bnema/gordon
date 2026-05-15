@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -92,7 +93,7 @@ Examples:
 			if len(args) > 0 {
 				imageArg = args[0]
 			}
-			return runPush(cmd.Context(), pushRequest{
+			return runPush(cmd.Context(), cmd.OutOrStdout(), pushRequest{
 				ImageArg:  imageArg,
 				Domain:    domainFlag,
 				Tag:       tag,
@@ -225,7 +226,7 @@ func resolveVersion(ctx context.Context, tag string) (string, error) {
 	return version, nil
 }
 
-func runPush(ctx context.Context, req pushRequest) error {
+func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
 	dockerfile, inferredRemote, handle, err := resolvePushTarget(ctx, req)
 	if err != nil {
 		return err
@@ -265,7 +266,9 @@ func runPush(ctx context.Context, req pushRequest) error {
 		return err
 	}
 
-	fmt.Println(styles.RenderSuccess("Push complete"))
+	if err := cliWriteLine(out, styles.RenderSuccess("Push complete")); err != nil {
+		return err
+	}
 	if !skipExplicitDeploy {
 		return deployAfterPush(ctx, handle.plane, pushDomain, req.NoConfirm)
 	}
@@ -429,7 +432,7 @@ func selectDomain(routes []domain.Route, dockerfile string) (domain.Route, error
 		labelDomainList = append(labelDomainList, labelDomain)
 	}
 	if labelDomains != "" {
-		for _, d := range strings.Split(labelDomains, ",") {
+		for d := range strings.SplitSeq(labelDomains, ",") {
 			d = strings.TrimSpace(d)
 			if d != "" {
 				labelDomainList = append(labelDomainList, d)
@@ -583,12 +586,10 @@ func splitLabelPairs(content string) []string {
 
 // parseLabelPair parses a single "key=value" or "key=\"value\"" pair.
 func parseLabelPair(pair string) (key, value string, ok bool) {
-	idx := strings.Index(pair, "=")
-	if idx == -1 {
+	key, value, ok = strings.Cut(pair, "=")
+	if !ok {
 		return "", "", false
 	}
-	key = pair[:idx]
-	value = pair[idx+1:]
 	// Strip surrounding quotes
 	value = strings.Trim(value, "\"'")
 	return key, value, true

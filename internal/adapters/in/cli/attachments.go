@@ -86,22 +86,14 @@ func runAttachmentsList(ctx context.Context, cp ControlPlane, target string, jso
 		if err != nil {
 			return fmt.Errorf("failed to get attachments: %w", err)
 		}
-
 		if len(images) == 0 {
-			fmt.Printf("No attachments configured for '%s'\n", target)
-			return nil
+			_, err := fmt.Fprintf(out, "No attachments configured for '%s'\n", target)
+			return err
 		}
-
 		if jsonOut {
 			return writeJSON(out, map[string]any{"target": target, "images": images})
 		}
-
-		fmt.Println(styles.Theme.Title.Render(fmt.Sprintf("Attachments for %s", target)))
-		fmt.Println()
-		for _, img := range images {
-			fmt.Printf("  %s\n", img)
-		}
-		return nil
+		return renderAttachmentTargetList(out, fmt.Sprintf("Attachments for %s", target), images)
 	}
 
 	attachments, err := cp.GetAllAttachmentsConfig(ctx)
@@ -109,29 +101,53 @@ func runAttachmentsList(ctx context.Context, cp ControlPlane, target string, jso
 		return fmt.Errorf("failed to list attachments: %w", err)
 	}
 	if len(attachments) == 0 {
-		fmt.Println(styles.Theme.Muted.Render("No attachments configured"))
-		return nil
+		return cliWriteLine(out, styles.Theme.Muted.Render("No attachments configured"))
 	}
 	if jsonOut {
 		return writeJSON(out, map[string]any{"attachments": attachments})
 	}
+	return renderAllAttachmentsList(out, "Attachments", attachments)
+}
 
+func renderAttachmentTargetList(out io.Writer, title string, images []string) error {
+	if _, err := fmt.Fprintln(out, styles.Theme.Title.Render(title)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out); err != nil {
+		return err
+	}
+	for _, img := range images {
+		if _, err := fmt.Fprintf(out, "  %s\n", img); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderAllAttachmentsList(out io.Writer, title string, attachments map[string][]string) error {
 	targets := make([]string, 0, len(attachments))
 	for t := range attachments {
 		targets = append(targets, t)
 	}
 	sort.Strings(targets)
 
-	fmt.Println(styles.Theme.Title.Render("Attachments"))
-	fmt.Println()
+	if _, err := fmt.Fprintln(out, styles.Theme.Title.Render(title)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out); err != nil {
+		return err
+	}
 	for _, t := range targets {
 		images := attachments[t]
-		fmt.Printf("%s\n", styles.Theme.Bold.Render(t))
+		if _, err := fmt.Fprintf(out, "%s\n", styles.Theme.Bold.Render(t)); err != nil {
+			return err
+		}
 		for _, img := range images {
-			fmt.Printf("  %s\n", img)
+			if _, err := fmt.Fprintf(out, "  %s\n", img); err != nil {
+				return err
+			}
 		}
 	}
-
 	return nil
 }
 
