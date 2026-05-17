@@ -57,7 +57,14 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 
 func (l *localControlPlane) ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error) {
 	if l.containerSvc != nil {
-		return toRemoteRouteInfos(l.containerSvc.ListRoutesWithDetails(ctx)), nil
+		if err := l.containerSvc.SyncContainers(ctx); err != nil {
+			return nil, err
+		}
+		detailed := l.containerSvc.ListRoutesWithDetails(ctx)
+		if l.configSvc == nil {
+			return toRemoteRouteInfos(detailed), nil
+		}
+		return mergeConfiguredRemoteRouteInfos(l.configSvc.GetRoutes(ctx), detailed), nil
 	}
 
 	if l.configSvc == nil {
@@ -604,6 +611,26 @@ func (l *localControlPlane) PruneVolumes(ctx context.Context, req dto.VolumePrun
 		SpaceReclaimed: report.SpaceReclaimed,
 		Volumes:        vols,
 	}, nil
+}
+
+func mergeConfiguredRemoteRouteInfos(configured []domain.Route, detailed []domain.RouteInfo) []remote.RouteInfo {
+	detailedByDomain := make(map[string]domain.RouteInfo, len(detailed))
+	for _, info := range detailed {
+		detailedByDomain[info.Domain] = info
+	}
+
+	merged := make([]domain.RouteInfo, 0, len(configured))
+	for _, route := range configured {
+		info, ok := detailedByDomain[route.Domain]
+		if !ok {
+			info = domain.RouteInfo{Domain: route.Domain, Image: route.Image}
+		} else if info.Image == "" {
+			info.Image = route.Image
+		}
+		merged = append(merged, info)
+	}
+
+	return toRemoteRouteInfos(merged)
 }
 
 func toRemoteRouteInfos(routes []domain.RouteInfo) []remote.RouteInfo {

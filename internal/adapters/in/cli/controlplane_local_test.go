@@ -123,6 +123,52 @@ func TestLocalControlPlane_RestartWithAttachments(t *testing.T) {
 	require.Equal(t, "app.local", result.Domain)
 }
 
+func TestLocalControlPlane_ListRoutesWithDetailsSyncsBeforeListing(t *testing.T) {
+	t.Parallel()
+
+	containerSvc := inmocks.NewMockContainerService(t)
+	syncCall := containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil).Once()
+	listCall := containerSvc.EXPECT().ListRoutesWithDetails(mock.Anything).Return([]domain.RouteInfo{{
+		Domain:          "app.local",
+		Image:           "repo/app:latest",
+		ContainerID:     "container-1",
+		ContainerStatus: "running",
+	}}).Once()
+	mock.InOrder(syncCall, listCall)
+
+	cp := &localControlPlane{containerSvc: containerSvc}
+	routes, err := cp.ListRoutesWithDetails(context.Background())
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	require.Equal(t, "app.local", routes[0].Domain)
+	require.Equal(t, "repo/app:latest", routes[0].Image)
+	require.Equal(t, "container-1", routes[0].ContainerID)
+	require.Equal(t, "running", routes[0].ContainerStatus)
+}
+
+func TestLocalControlPlane_ListRoutesWithDetails_IncludesConfiguredRouteWithoutRuntimeDetail(t *testing.T) {
+	t.Parallel()
+
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{
+		Domain: "app.local",
+		Image:  "repo/app:latest",
+	}}).Once()
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil).Once()
+	containerSvc.EXPECT().ListRoutesWithDetails(mock.Anything).Return(nil).Once()
+
+	cp := &localControlPlane{configSvc: configSvc, containerSvc: containerSvc}
+	routes, err := cp.ListRoutesWithDetails(context.Background())
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	require.Equal(t, "app.local", routes[0].Domain)
+	require.Equal(t, "repo/app:latest", routes[0].Image)
+	require.Empty(t, routes[0].ContainerID)
+	require.Empty(t, routes[0].ContainerStatus)
+}
+
 func TestLocalControlPlane_GetTLSStatusWithoutService(t *testing.T) {
 	t.Parallel()
 
