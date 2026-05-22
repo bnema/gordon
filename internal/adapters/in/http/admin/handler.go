@@ -793,7 +793,7 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 		}
 	}
 
-	var cleanup *domain.CleanupReport
+	var cleanup *dto.CleanupReport
 	if h.containerSvc != nil {
 		report, err := h.containerSvc.ReconcileRemovedRoute(ctx, routeDomain)
 		if err != nil {
@@ -801,7 +801,7 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 			h.sendError(w, http.StatusInternalServerError, "route removed but runtime cleanup failed")
 			return
 		}
-		cleanup = report
+		cleanup = dto.CleanupReportFromDomain(report)
 	}
 
 	log.Info().Str("domain", routeDomain).Msg("route removed")

@@ -556,11 +556,11 @@ func (c *Client) RemoveRoute(ctx context.Context, routeDomain string) error {
 func (c *Client) RemoveRouteWithCleanup(ctx context.Context, routeDomain string) (*dto.RouteDeleteResponse, error) {
 	resp, err := c.request(ctx, http.MethodDelete, "/routes/"+url.PathEscape(routeDomain), nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("delete route %s failed: %w", routeDomain, err)
 	}
 	var result dto.RouteDeleteResponse
 	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse delete route %s response: %w", routeDomain, err)
 	}
 	return &result, nil
 }
@@ -1065,11 +1065,11 @@ func (c *Client) CleanupOrphanedAttachments(ctx context.Context, owner string, s
 	}
 	resp, err := c.request(ctx, http.MethodPost, path, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cleanup orphaned attachments failed: %w", err)
 	}
 	var result domain.CleanupReport
 	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse orphaned attachment cleanup response: %w", err)
 	}
 	return &result, nil
 }

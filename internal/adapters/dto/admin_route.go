@@ -1,8 +1,6 @@
 // Package dto provides shared data transfer objects for API responses.
 package dto
 
-import "github.com/bnema/gordon/internal/domain"
-
 // Route represents route configuration in API responses.
 type Route struct {
 	Domain string `json:"domain"`
@@ -52,6 +50,6 @@ type RoutesByImageResponse struct {
 
 // RouteDeleteResponse represents a route removal response.
 type RouteDeleteResponse struct {
-	Status  string                `json:"status"`
-	Cleanup *domain.CleanupReport `json:"cleanup,omitempty"`
+	Status  string         `json:"status"`
+	Cleanup *CleanupReport `json:"cleanup,omitempty"`
 }

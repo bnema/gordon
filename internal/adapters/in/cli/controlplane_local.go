@@ -149,7 +149,7 @@ func (l *localControlPlane) RemoveRouteWithCleanup(ctx context.Context, routeDom
 	if err != nil {
 		return nil, fmt.Errorf("failed to cleanup removed route runtime state: %w", err)
 	}
-	resp.Cleanup = report
+	resp.Cleanup = dto.CleanupReportFromDomain(report)
 	return resp, nil
 }
 

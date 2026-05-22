@@ -720,8 +720,8 @@ func TestHandler_RoutesDelete_RequiresWriteScope(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
-				configSvc.EXPECT().RemoveRoute(mock.Anything, "app.example.com").Return(nil).Maybe()
-				containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.example.com").Return(&domain.CleanupReport{Domain: "app.example.com"}, nil).Maybe()
+				configSvc.EXPECT().RemoveRoute(mock.Anything, "app.example.com").Return(nil).Once()
+				containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.example.com").Return(&domain.CleanupReport{Domain: "app.example.com"}, nil).Once()
 			}
 
 			req := httptest.NewRequest("DELETE", "/admin/routes/app.example.com", nil)
@@ -751,16 +751,17 @@ func TestHandler_RoutesDelete_ReconcilesRuntimeWhenRouteAlreadyMissing(t *testin
 		d.ContainerSvc = containerSvc
 		d.SecretSvc = secretSvc
 	})
+	server := newScopedTestServer(t, handler, "admin:routes:write")
 
-	req := httptest.NewRequest("DELETE", "/admin/routes/app.example.com", nil)
-	req = req.WithContext(ctxWithScopes("admin:routes:write"))
-	rec := httptest.NewRecorder()
+	req, err := http.NewRequest(http.MethodDelete, server.URL+"/admin/routes/app.example.com", nil)
+	require.NoError(t, err)
+	respHTTP, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer respHTTP.Body.Close()
 
-	handler.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusOK, respHTTP.StatusCode)
 	var resp dto.RouteDeleteResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.NoError(t, json.NewDecoder(respHTTP.Body).Decode(&resp))
 	require.NotNil(t, resp.Cleanup)
 	assert.Equal(t, "app.example.com", resp.Cleanup.Domain)
 }
@@ -780,15 +781,18 @@ func TestHandler_RoutesDelete_ReturnsServerErrorWhenRuntimeCleanupFails(t *testi
 		d.ContainerSvc = containerSvc
 		d.SecretSvc = secretSvc
 	})
+	server := newScopedTestServer(t, handler, "admin:routes:write")
 
-	req := httptest.NewRequest("DELETE", "/admin/routes/app.example.com", nil)
-	req = req.WithContext(ctxWithScopes("admin:routes:write"))
-	rec := httptest.NewRecorder()
+	req, err := http.NewRequest(http.MethodDelete, server.URL+"/admin/routes/app.example.com", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
 
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Contains(t, rec.Body.String(), "route removed but runtime cleanup failed")
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Contains(t, string(body), "route removed but runtime cleanup failed")
 }
 
 func TestHandler_RoutesDelete_ReconcilesRuntimeAndReturnsCleanupReport(t *testing.T) {
@@ -820,16 +824,17 @@ func TestHandler_RoutesDelete_ReconcilesRuntimeAndReturnsCleanupReport(t *testin
 		d.ContainerSvc = containerSvc
 		d.SecretSvc = secretSvc
 	})
+	server := newScopedTestServer(t, handler, "admin:routes:write")
 
-	req := httptest.NewRequest("DELETE", "/admin/routes/app.example.com", nil)
-	req = req.WithContext(ctxWithScopes("admin:routes:write"))
-	rec := httptest.NewRecorder()
+	req, err := http.NewRequest(http.MethodDelete, server.URL+"/admin/routes/app.example.com", nil)
+	require.NoError(t, err)
+	respHTTP, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer respHTTP.Body.Close()
 
-	handler.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusOK, respHTTP.StatusCode)
 	var resp dto.RouteDeleteResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.NoError(t, json.NewDecoder(respHTTP.Body).Decode(&resp))
 	assert.Equal(t, "removed", resp.Status)
 	require.NotNil(t, resp.Cleanup)
 	assert.Equal(t, "app.example.com", resp.Cleanup.Domain)

@@ -229,5 +229,5 @@ func TestLocalControlPlane_RemoveRouteReconcilesRuntimeWhenRouteAlreadyMissing(t
 	resp, err := cp.RemoveRouteWithCleanup(ctx, "app.local")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.Equal(t, report, resp.Cleanup)
+	assert.Equal(t, dto.CleanupReportFromDomain(report), resp.Cleanup)
 }

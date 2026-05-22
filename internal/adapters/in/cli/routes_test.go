@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
 	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
@@ -911,7 +912,7 @@ func TestWriteRouteRemoveTextShowsCleanupReport(t *testing.T) {
 		Hints:    []string{"run diagnose"},
 	}
 
-	err := writeRouteRemoveText(&out, "app.example.com", report)
+	err := writeRouteRemoveText(&out, "app.example.com", dto.CleanupReportFromDomain(report))
 	require.NoError(t, err)
 	rendered := stripANSI(out.String())
 	assert.Contains(t, rendered, "Route removed: app.example.com")
