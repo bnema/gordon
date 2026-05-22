@@ -261,13 +261,40 @@ func TestConfigReloadHandler_Handle_StopsRemovedRoutes(t *testing.T) {
 	// Empty routes - the route was removed
 	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
 
-	containerSvc.EXPECT().Stop(mock.Anything, "container-old").Return(nil)
-	containerSvc.EXPECT().Remove(mock.Anything, "container-old", true).Return(nil)
+	containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "removed.example.com").Return(&domain.CleanupReport{Domain: "removed.example.com"}, nil)
 
 	event := domain.Event{
 		ID:   "event-123",
 		Type: domain.EventConfigReload,
 	}
+
+	err := handler.Handle(context.Background(), event)
+
+	assert.NoError(t, err)
+}
+
+func TestConfigReloadHandler_Handle_ReconcilesRemovedRouteWithLegacyDomainLabel(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+
+	handler := NewConfigReloadHandler(testCtx(), containerSvc, configSvc)
+
+	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
+	configSvc.EXPECT().GetAllAttachments(mock.Anything).Return(map[string][]string{})
+	containerSvc.EXPECT().UpdateAttachments(map[string][]string{}).Return()
+	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
+		"legacy.example.com": {
+			ID: "container-legacy",
+			Labels: map[string]string{
+				domain.LabelDomain: "legacy.example.com",
+				domain.LabelImage:  "legacy:latest",
+			},
+		},
+	})
+	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
+	containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "legacy.example.com").Return(&domain.CleanupReport{Domain: "legacy.example.com"}, nil)
+
+	event := domain.Event{ID: "event-legacy", Type: domain.EventConfigReload}
 
 	err := handler.Handle(context.Background(), event)
 

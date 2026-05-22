@@ -130,10 +130,27 @@ func (l *localControlPlane) UpdateRoute(ctx context.Context, route domain.Route)
 }
 
 func (l *localControlPlane) RemoveRoute(ctx context.Context, routeDomain string) error {
+	_, err := l.RemoveRouteWithCleanup(ctx, routeDomain)
+	return err
+}
+
+func (l *localControlPlane) RemoveRouteWithCleanup(ctx context.Context, routeDomain string) (*dto.RouteDeleteResponse, error) {
 	if l.configSvc == nil {
-		return fmt.Errorf("local config service unavailable")
+		return nil, fmt.Errorf("local config service unavailable")
 	}
-	return l.configSvc.RemoveRoute(ctx, routeDomain)
+	if err := l.configSvc.RemoveRoute(ctx, routeDomain); err != nil && !errors.Is(err, domain.ErrRouteNotFound) {
+		return nil, fmt.Errorf("remove route: %w", err)
+	}
+	resp := &dto.RouteDeleteResponse{Status: "removed"}
+	if l.containerSvc == nil {
+		return resp, nil
+	}
+	report, err := l.containerSvc.ReconcileRemovedRoute(ctx, routeDomain)
+	if err != nil {
+		return nil, fmt.Errorf("failed to cleanup removed route runtime state: %w", err)
+	}
+	resp.Cleanup = dto.CleanupReportFromDomain(report)
+	return resp, nil
 }
 
 func (l *localControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
@@ -239,7 +256,7 @@ func (l *localControlPlane) ListSecretsWithAttachments(ctx context.Context, secr
 
 	keys, attachments, err := l.secretSvc.ListKeysWithAttachments(ctx, secretDomain)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list secret keys with attachments: %w", err)
 	}
 
 	result := &remote.SecretsListResult{
@@ -282,6 +299,28 @@ func (l *localControlPlane) DeleteAttachmentSecret(ctx context.Context, domainNa
 		return fmt.Errorf("local secret service unavailable")
 	}
 	return l.secretSvc.DeleteAttachment(ctx, domainName, service, key)
+}
+
+func (l *localControlPlane) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
+	if l.containerSvc == nil {
+		return nil, fmt.Errorf("local container service unavailable")
+	}
+	attachments, err := l.containerSvc.ListOrphanedAttachments(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list orphaned attachments: %w", err)
+	}
+	return attachments, nil
+}
+
+func (l *localControlPlane) CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
+	if l.containerSvc == nil {
+		return nil, fmt.Errorf("local container service unavailable")
+	}
+	report, err := l.containerSvc.CleanupOrphanedAttachments(ctx, owner, stop)
+	if err != nil {
+		return nil, fmt.Errorf("cleanup orphaned attachments: %w", err)
+	}
+	return report, nil
 }
 
 func (l *localControlPlane) GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error) {

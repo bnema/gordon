@@ -50,5 +50,6 @@ type RoutesByImageResponse struct {
 
 // RouteDeleteResponse represents a route removal response.
 type RouteDeleteResponse struct {
-	Status string `json:"status"`
+	Status  string         `json:"status"`
+	Cleanup *CleanupReport `json:"cleanup,omitempty"`
 }

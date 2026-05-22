@@ -20,6 +20,10 @@ type ContainerService interface {
 	// Remove removes a container, optionally forcing removal.
 	Remove(ctx context.Context, containerID string, force bool) error
 
+	// ReconcileRemovedRoute removes active route runtime containers after the
+	// route has been removed from configuration, preserving stateful resources.
+	ReconcileRemovedRoute(ctx context.Context, domain string) (*domain.CleanupReport, error)
+
 	// Get retrieves a container by domain name.
 	Get(ctx context.Context, domain string) (*domain.Container, bool)
 
@@ -35,6 +39,13 @@ type ContainerService interface {
 
 	// ListAttachments returns attachments for a domain.
 	ListAttachments(ctx context.Context, domain string) []domain.Attachment
+
+	// ListOrphanedAttachments returns running attachment containers no longer configured.
+	ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error)
+
+	// CleanupOrphanedAttachments optionally stops/removes orphaned attachment containers.
+	// When owner is non-empty, cleanup is scoped to that attachment owner.
+	CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error)
 
 	// ListNetworks returns Gordon-managed networks.
 	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)

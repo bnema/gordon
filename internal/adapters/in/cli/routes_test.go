@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
@@ -36,6 +38,14 @@ func (c *routesShowTestControlPlane) GetHealth(ctx context.Context) (map[string]
 	if c.getHealth != nil {
 		return c.getHealth(ctx)
 	}
+	panic("unexpected call")
+}
+
+func (c *routesShowTestControlPlane) ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error) {
+	panic("unexpected call")
+}
+
+func (c *routesShowTestControlPlane) CleanupOrphanedAttachments(context.Context, string, bool) (*domain.CleanupReport, error) {
 	panic("unexpected call")
 }
 
@@ -885,6 +895,35 @@ func TestRenderRoutesStatusSections_KeepsLocalErrorWhenAllRemotesFail(t *testing
 	assert.Contains(t, rendered, "dial tcp timeout")
 }
 
+func TestWriteRouteRemoveTextShowsCleanupReport(t *testing.T) {
+	var out bytes.Buffer
+	report := &domain.CleanupReport{
+		Domain: "app.example.com",
+		RemovedContainers: []domain.CleanupContainer{{
+			ID:   "1234567890abcdef",
+			Name: "gordon-app.example.com",
+		}},
+		PreservedAttachments: []domain.CleanupAttachment{{
+			Name:        "postgres",
+			ContainerID: "attachment-1",
+			Status:      "running",
+		}},
+		Warnings: []string{"volumes preserved"},
+		Hints:    []string{"run diagnose"},
+	}
+
+	err := writeRouteRemoveText(&out, "app.example.com", dto.CleanupReportFromDomain(report))
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.Contains(t, rendered, "Route removed: app.example.com")
+	assert.Contains(t, rendered, "Removed containers:")
+	assert.Contains(t, rendered, "gordon-app.example.com (1234567890ab)")
+	assert.Contains(t, rendered, "Preserved attachments:")
+	assert.Contains(t, rendered, "postgres (running)")
+	assert.Contains(t, rendered, "volumes preserved")
+	assert.Contains(t, rendered, "run diagnose")
+}
+
 func TestBuildRouteStatusTree_DeterministicAcrossInputOrder(t *testing.T) {
 	routes := []routeStatusItem{
 		{Domain: "zulu.example", Image: "zulu:v1", Network: "gordon-zulu", ContainerStatus: "running"},
@@ -900,4 +939,39 @@ func TestBuildRouteStatusTree_DeterministicAcrossInputOrder(t *testing.T) {
 	_, _ = outB.WriteString(stripANSI(buildRouteStatusTree(reordered).Render()))
 
 	assert.Equal(t, outA.String(), outB.String())
+}
+
+func TestAttachmentsForRouteDiagnosisUsesOwner(t *testing.T) {
+	attachments := []domain.CleanupAttachment{
+		{Name: "unexpected-name", Owner: "app.example.com", ContainerID: "match"},
+		{Name: "gordon-other-example-com-postgres", Owner: "other.example.com", ContainerID: "miss"},
+	}
+
+	matched := attachmentsForRouteDiagnosis(attachments, "app.example.com")
+
+	require.Len(t, matched, 1)
+	assert.Equal(t, "match", matched[0].ContainerID)
+}
+
+func TestRunRoutePurge_AttachmentsForceIsScopedToRoute(t *testing.T) {
+	cp := climocks.NewMockControlPlane(t)
+	orphanedAttachments := []domain.CleanupAttachment{
+		{ContainerID: "app-attachment", Owner: "app.example.com", Name: "postgres"},
+		{ContainerID: "other-attachment", Owner: "other.example.com", Name: "redis"},
+	}
+	cp.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil).Once()
+	cp.EXPECT().ListRoutesWithDetails(context.Background()).Return(nil, nil).Once()
+	cp.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
+	cp.EXPECT().ListVolumes(context.Background()).Return(nil, nil).Once()
+	cp.EXPECT().ListOrphanedAttachments(context.Background()).Return(orphanedAttachments, nil).Once()
+	cp.EXPECT().CleanupOrphanedAttachments(context.Background(), "app.example.com", true).Return(&domain.CleanupReport{
+		RemovedContainers: []domain.CleanupContainer{{ID: "app-attachment", Name: "postgres"}},
+	}, nil).Once()
+
+	report, err := runRoutePurge(context.Background(), cp, "app.example.com", routePurgeOptions{Force: true, Attachments: true})
+
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	require.Len(t, report.RemovedContainers, 1)
+	assert.Equal(t, "app-attachment", report.RemovedContainers[0].ID)
 }

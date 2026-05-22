@@ -134,6 +134,10 @@ func (m *Monitor) handleRunning(ctx context.Context, log zerowrap.Logger, domain
 	}
 
 	if hasHealthcheck && healthStatus == "unhealthy" {
+		if !m.isContainerStillTracked(domainName, containerID) {
+			log.Debug().Str("domain", domainName).Msg("monitor: container no longer tracked, skipping unhealthy restart")
+			return
+		}
 		log.Warn().Str("domain", domainName).Msg("monitor: container is unhealthy, restarting")
 		if err := m.service.runtime.RestartContainer(ctx, containerID); err != nil {
 			log.Warn().Err(err).Str("domain", domainName).Msg("monitor: failed to restart unhealthy container")
@@ -157,6 +161,13 @@ func (m *Monitor) handleRunning(ctx context.Context, log zerowrap.Logger, domain
 		}
 	}
 	m.mu.Unlock()
+}
+
+func (m *Monitor) isContainerStillTracked(domainName, containerID string) bool {
+	m.service.mu.RLock()
+	current := m.service.containers[domainName]
+	m.service.mu.RUnlock()
+	return current != nil && current.ID == containerID
 }
 
 func (m *Monitor) handleCrash(ctx context.Context, log zerowrap.Logger, domainName, containerID string, exitCode int, now time.Time) {
@@ -212,10 +223,7 @@ func (m *Monitor) handleCrash(ctx context.Context, log zerowrap.Logger, domainNa
 	m.mu.Unlock()
 
 	// Verify container ID still matches tracked state (deploy may have replaced it).
-	m.service.mu.RLock()
-	current := m.service.containers[domainName]
-	m.service.mu.RUnlock()
-	if current == nil || current.ID != containerID {
+	if !m.isContainerStillTracked(domainName, containerID) {
 		log.Debug().Str("domain", domainName).Msg("monitor: container replaced by deploy, skipping restart")
 		return
 	}

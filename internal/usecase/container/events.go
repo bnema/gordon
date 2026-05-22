@@ -117,8 +117,8 @@ func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) er
 	currentContainers := h.containerSvc.List(ctx)
 
 	activeRoutes := make(map[string]*domain.Container)
-	for _, container := range currentContainers {
-		if route, exists := container.Labels[domain.LabelRoute]; exists {
+	for domainName, container := range currentContainers {
+		if route := routeDomainForContainer(domainName, container); route != "" {
 			activeRoutes[route] = container
 		}
 	}
@@ -156,14 +156,10 @@ func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) er
 		log.Info().
 			Str("domain", route).
 			Str(zerowrap.FieldEntityID, container.ID).
-			Msg("route no longer configured, stopping container")
+			Msg("route no longer configured, reconciling removed route runtime state")
 
-		if err := h.containerSvc.Stop(ctx, container.ID); err != nil {
-			log.WrapErrWithFields(err, "failed to stop container", map[string]any{zerowrap.FieldEntityID: container.ID})
-		}
-
-		if err := h.containerSvc.Remove(ctx, container.ID, true); err != nil {
-			log.WrapErrWithFields(err, "failed to remove container", map[string]any{zerowrap.FieldEntityID: container.ID})
+		if _, err := h.containerSvc.ReconcileRemovedRoute(ctx, route); err != nil {
+			log.WrapErrWithFields(err, "failed to reconcile removed route runtime state", map[string]any{"domain": route, zerowrap.FieldEntityID: container.ID})
 		}
 	}
 
@@ -173,6 +169,21 @@ func (h *ConfigReloadHandler) Handle(ctx context.Context, event domain.Event) er
 // CanHandle returns whether this handler can handle the given event type.
 func (h *ConfigReloadHandler) CanHandle(eventType domain.EventType) bool {
 	return eventType == domain.EventConfigReload
+}
+
+func routeDomainForContainer(trackedDomain string, container *domain.Container) string {
+	if container == nil {
+		return ""
+	}
+	if container.Labels != nil {
+		if route := container.Labels[domain.LabelRoute]; route != "" {
+			return route
+		}
+		if route := container.Labels[domain.LabelDomain]; route != "" {
+			return route
+		}
+	}
+	return trackedDomain
 }
 
 // ManualDeployHandler handles manual.deploy events for specific routes.

@@ -229,16 +229,18 @@ type routeHandler func(w http.ResponseWriter, r *http.Request, path string)
 func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	// Exact match routes
 	exactRoutes := map[string]routeHandler{
-		"/networks":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
-		"/status":        func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
-		"/health":        func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
-		"/bootstrap":     func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
-		"/reload":        func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
-		"/config":        func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
-		"/auth/verify":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
-		"/volumes":       func(w http.ResponseWriter, r *http.Request, _ string) { h.handleListVolumes(w, r) },
-		"/volumes/prune": func(w http.ResponseWriter, r *http.Request, _ string) { h.handlePruneVolumes(w, r) },
-		"/tls/status":    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTLSStatus(w, r) },
+		"/networks":            func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
+		"/status":              func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
+		"/health":              func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
+		"/bootstrap":           func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
+		"/reload":              func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
+		"/config":              func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
+		"/auth/verify":         func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
+		"/volumes":             func(w http.ResponseWriter, r *http.Request, _ string) { h.handleListVolumes(w, r) },
+		"/volumes/prune":       func(w http.ResponseWriter, r *http.Request, _ string) { h.handlePruneVolumes(w, r) },
+		"/attachments/orphans": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAttachmentOrphans(w, r) },
+		"/attachments/prune":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAttachmentPrune(w, r) },
+		"/tls/status":          func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTLSStatus(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true
@@ -272,6 +274,62 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	}
 
 	return nil, false
+}
+
+func (h *Handler) handleAttachmentOrphans(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
+		return
+	}
+	if h.containerSvc == nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Msg("container service not available for orphaned attachment listing")
+		h.sendError(w, http.StatusInternalServerError, "container service not available")
+		return
+	}
+	attachments, err := h.containerSvc.ListOrphanedAttachments(ctx)
+	if err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Msg("failed to list orphaned attachments")
+		h.sendError(w, http.StatusInternalServerError, "failed to list orphaned attachments")
+		return
+	}
+	h.sendJSON(w, http.StatusOK, map[string]any{"attachments": attachments})
+}
+
+func (h *Handler) handleAttachmentPrune(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if r.Method != http.MethodPost {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+	if h.containerSvc == nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Msg("container service not available for orphaned attachment cleanup")
+		h.sendError(w, http.StatusInternalServerError, "container service not available")
+		return
+	}
+	stop := r.URL.Query().Get("stop") == "true"
+	owner := r.URL.Query().Get("owner")
+	var report *domain.CleanupReport
+	var err error
+	report, err = h.containerSvc.CleanupOrphanedAttachments(ctx, owner, stop)
+	if err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Str("owner", owner).Bool("stop", stop).Msg("failed to cleanup orphaned attachments")
+		h.sendError(w, http.StatusInternalServerError, "failed to cleanup orphaned attachments")
+		return
+	}
+	h.sendJSON(w, http.StatusOK, report)
 }
 
 // handleAttachmentsByImage handles GET /admin/attachments/by-image/{image} endpoint.
@@ -721,20 +779,33 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 	}
 
 	if err := h.configSvc.RemoveRoute(ctx, routeDomain); err != nil {
-		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to remove route")
 		switch {
 		case errors.Is(err, domain.ErrRouteNotFound):
-			h.sendError(w, http.StatusNotFound, "route not found")
+			log.Debug().Str("domain", routeDomain).Msg("route already absent, reconciling runtime state")
 		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid):
+			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to remove route")
 			h.sendError(w, http.StatusBadRequest, "invalid route domain")
+			return
 		default:
+			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to remove route")
 			h.sendError(w, http.StatusInternalServerError, "failed to remove route")
+			return
 		}
-		return
+	}
+
+	var cleanup *dto.CleanupReport
+	if h.containerSvc != nil {
+		report, err := h.containerSvc.ReconcileRemovedRoute(ctx, routeDomain)
+		if err != nil {
+			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to cleanup removed route runtime state")
+			h.sendError(w, http.StatusInternalServerError, "route removed but runtime cleanup failed")
+			return
+		}
+		cleanup = dto.CleanupReportFromDomain(report)
 	}
 
 	log.Info().Str("domain", routeDomain).Msg("route removed")
-	h.sendJSON(w, http.StatusOK, dto.RouteDeleteResponse{Status: "removed"})
+	h.sendJSON(w, http.StatusOK, dto.RouteDeleteResponse{Status: "removed", Cleanup: cleanup})
 }
 
 // handleRoutesByImage handles GET /admin/routes/by-image/{image} endpoint.

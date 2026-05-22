@@ -4418,3 +4418,345 @@ func TestService_BuildContainerConfig_SetsRestartPolicyAlways(t *testing.T) {
 
 	assert.Equal(t, domain.RestartPolicyAlways, cfg.RestartPolicy)
 }
+
+func TestService_ReconcileRemovedRoute_RemovesOnlyMainRouteContainers(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+
+	mainContainer := &domain.Container{
+		ID:     "route-container",
+		Name:   "gordon-app.example.com",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged: "true",
+			domain.LabelRoute:   "app.example.com",
+			domain.LabelDomain:  "app.example.com",
+		},
+	}
+	attachment := &domain.Container{
+		ID:     "attachment-container",
+		Name:   "gordon-app-example-com-postgres",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+		},
+	}
+
+	svc.mu.Lock()
+	svc.containers["app.example.com"] = mainContainer
+	svc.attachments["app.example.com"] = []string{attachment.ID}
+	svc.managedCount = 1
+	svc.mu.Unlock()
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{mainContainer, attachment}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, mainContainer.ID).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, mainContainer.ID, true).Return(nil).Once()
+
+	report, err := svc.ReconcileRemovedRoute(ctx, "app.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, report)
+
+	assert.Equal(t, "app.example.com", report.Domain)
+	require.Len(t, report.RemovedContainers, 1)
+	assert.Equal(t, mainContainer.ID, report.RemovedContainers[0].ID)
+	require.Len(t, report.PreservedAttachments, 1)
+	assert.Equal(t, attachment.ID, report.PreservedAttachments[0].ContainerID)
+	assert.Contains(t, report.Hints, "attachments preserved; remove or purge attachments explicitly if they are no longer needed")
+
+	_, exists := svc.Get(ctx, "app.example.com")
+	assert.False(t, exists, "removed route must be cleared from in-memory tracking so monitor cannot restart it")
+
+	svc.mu.RLock()
+	_, attachmentsTracked := svc.attachments["app.example.com"]
+	svc.mu.RUnlock()
+	assert.True(t, attachmentsTracked, "route cleanup preserves attachment tracking for follow-up cleanup")
+}
+
+func TestService_ReconcileRemovedRoute_IsIdempotentWhenNoContainerExists(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
+
+	report, err := svc.ReconcileRemovedRoute(ctx, "missing.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, report)
+
+	assert.Equal(t, "missing.example.com", report.Domain)
+	assert.Empty(t, report.RemovedContainers)
+	assert.Contains(t, report.Warnings, "no active route container found for removed route")
+}
+
+func TestService_ReconcileRemovedRoute_CanonicalizesDomainBeforeCleanup(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+
+	mainContainer := &domain.Container{
+		ID:     "route-container",
+		Name:   "gordon-app.example.com",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged: "true",
+			domain.LabelRoute:   "app.example.com",
+			domain.LabelDomain:  "app.example.com",
+		},
+	}
+	svc.mu.Lock()
+	svc.containers["app.example.com"] = mainContainer
+	svc.managedCount = 1
+	svc.mu.Unlock()
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{mainContainer}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, mainContainer.ID).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, mainContainer.ID, true).Return(nil).Once()
+
+	report, err := svc.ReconcileRemovedRoute(ctx, "App.EXAMPLE.com")
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, "app.example.com", report.Domain)
+	require.Len(t, report.RemovedContainers, 1)
+
+	_, exists := svc.Get(ctx, "app.example.com")
+	assert.False(t, exists)
+}
+
+func TestService_ReconcileRemovedRoute_StopsLogCollectionForRemovedContainer(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	logWriter := mocks.NewMockContainerLogWriter(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), logWriter, Config{}, nil)
+
+	mainContainer := &domain.Container{
+		ID:     "route-container",
+		Name:   "gordon-app.example.com",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged: "true",
+			domain.LabelRoute:   "app.example.com",
+		},
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{mainContainer}, nil).Once()
+	logWriter.EXPECT().StopLogging(mainContainer.ID).Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, mainContainer.ID).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, mainContainer.ID, true).Return(nil).Once()
+
+	_, err := svc.ReconcileRemovedRoute(ctx, "app.example.com")
+	require.NoError(t, err)
+}
+
+func TestService_ReconcileRemovedRoute_InvalidatesProxyCacheAndMetric(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
+	svc := NewService(runtime, nil, eventBus, nil, Config{}, nil)
+
+	metrics, reader := setupMetricsTest(t)
+	svc.SetMetrics(metrics)
+
+	mainContainer := &domain.Container{
+		ID:     "route-container",
+		Name:   "gordon-app.example.com",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged: "true",
+			domain.LabelRoute:   "app.example.com",
+		},
+	}
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil).Once()
+	svc.activateDeployedContainer(ctx, "app.example.com", mainContainer)
+	svc.SetProxyCacheInvalidator(cacheInvalidator)
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{mainContainer}, nil).Once()
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "app.example.com").Return().Once()
+	runtime.EXPECT().StopContainer(mock.Anything, mainContainer.ID).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, mainContainer.ID, true).Return(nil).Once()
+
+	_, err := svc.ReconcileRemovedRoute(ctx, "app.example.com")
+	require.NoError(t, err)
+
+	value, _, _ := managedMetricState(t, reader)
+	assert.Equal(t, int64(0), value)
+}
+
+func TestService_ListOrphanedAttachments_DetectsRunningAttachmentNoLongerConfigured(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), nil, Config{Attachments: map[string][]string{
+		"app.example.com": {"redis:7"},
+	}}, nil)
+
+	orphan := &domain.Container{
+		ID:     "postgres-1",
+		Name:   "gordon-app-example-com-postgres",
+		Image:  "postgres:16",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+			domain.LabelImage:      "postgres:16",
+		},
+	}
+	configured := &domain.Container{
+		ID:     "redis-1",
+		Name:   "gordon-app-example-com-redis",
+		Image:  "redis:7",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+			domain.LabelImage:      "redis:7",
+		},
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{orphan, configured}, nil).Once()
+
+	orphans, err := svc.ListOrphanedAttachments(ctx)
+	require.NoError(t, err)
+	require.Len(t, orphans, 1)
+	assert.Equal(t, orphan.ID, orphans[0].ContainerID)
+	assert.Equal(t, "postgres:16", orphans[0].Image)
+	assert.Contains(t, orphans[0].Reason, "no longer configured")
+}
+
+func TestService_CleanupOrphanedAttachments_DryRunPreservesRunningContainer(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+	orphan := &domain.Container{
+		ID:     "postgres-1",
+		Name:   "gordon-app-example-com-postgres",
+		Image:  "postgres:16",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+			domain.LabelImage:      "postgres:16",
+		},
+	}
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{orphan}, nil).Once()
+
+	report, err := svc.CleanupOrphanedAttachments(ctx, "", false)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	require.Len(t, report.PreservedAttachments, 1)
+	assert.Equal(t, orphan.ID, report.PreservedAttachments[0].ContainerID)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, orphan.ID)
+	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, orphan.ID, mock.Anything)
+}
+
+func TestService_CleanupOrphanedAttachments_StopRemovesContainerButPreservesData(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	logWriter := mocks.NewMockContainerLogWriter(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), logWriter, Config{}, nil)
+	orphan := &domain.Container{
+		ID:     "postgres-1",
+		Name:   "gordon-app-example-com-postgres",
+		Image:  "postgres:16",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+			domain.LabelImage:      "postgres:16",
+		},
+	}
+	svc.mu.Lock()
+	svc.attachments["app.example.com"] = []string{orphan.ID}
+	svc.mu.Unlock()
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{orphan}, nil).Once()
+	logWriter.EXPECT().StopLogging(orphan.ID).Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, orphan.ID).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, orphan.ID, true).Return(nil).Once()
+
+	report, err := svc.CleanupOrphanedAttachments(ctx, "", true)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	require.Len(t, report.RemovedContainers, 1)
+	assert.Equal(t, orphan.ID, report.RemovedContainers[0].ID)
+	assert.Contains(t, report.Hints, "attachment volumes and data were preserved")
+
+	svc.mu.RLock()
+	ids := svc.attachments["app.example.com"]
+	svc.mu.RUnlock()
+	assert.Empty(t, ids)
+}
+
+func TestService_ListOrphanedAttachments_IgnoresStoppedAttachments(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+	stopped := &domain.Container{
+		ID:     "postgres-1",
+		Name:   "gordon-app-example-com-postgres",
+		Image:  "postgres:16",
+		Status: string(domain.ContainerStatusExited),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+			domain.LabelImage:      "postgres:16",
+		},
+	}
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{stopped}, nil).Once()
+
+	orphans, err := svc.ListOrphanedAttachments(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, orphans)
+}
+
+func TestService_ListOrphanedAttachments_IncludesOwnerAndHonorsGroupConfig(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), nil, Config{
+		NetworkIsolation: true,
+		NetworkGroups: map[string][]string{
+			"backend": {"app.example.com"},
+		},
+		Attachments: map[string][]string{
+			"backend": {"postgres:16"},
+		},
+	}, nil)
+	configuredByGroup := &domain.Container{
+		ID:     "postgres-1",
+		Name:   "gordon-app-example-com-postgres",
+		Image:  "postgres:16",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+			domain.LabelImage:      "postgres:16",
+		},
+	}
+	orphan := &domain.Container{
+		ID:     "redis-1",
+		Name:   "gordon-app-example-com-redis",
+		Image:  "redis:7",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+			domain.LabelImage:      "redis:7",
+		},
+	}
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{configuredByGroup, orphan}, nil).Once()
+
+	orphans, err := svc.ListOrphanedAttachments(ctx)
+	require.NoError(t, err)
+	require.Len(t, orphans, 1)
+	assert.Equal(t, "redis-1", orphans[0].ContainerID)
+	assert.Equal(t, "app.example.com", orphans[0].Owner)
+}

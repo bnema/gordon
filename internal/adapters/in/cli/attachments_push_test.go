@@ -81,6 +81,14 @@ func (c *attachmentPushTestControlPlane) GetAttachmentsConfig(context.Context, s
 	panic("unexpected call")
 }
 
+func (c *attachmentPushTestControlPlane) ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error) {
+	panic("unexpected call")
+}
+
+func (c *attachmentPushTestControlPlane) CleanupOrphanedAttachments(context.Context, string, bool) (*domain.CleanupReport, error) {
+	panic("unexpected call")
+}
+
 func (c *attachmentPushTestControlPlane) FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error) {
 	if c.findAttachmentTargets != nil {
 		return c.findAttachmentTargets(ctx, imageName)

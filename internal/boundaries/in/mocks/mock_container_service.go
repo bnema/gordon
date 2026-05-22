@@ -95,6 +95,80 @@ func (_c *MockContainerService_AutoStart_Call) RunAndReturn(run func(ctx context
 	return _c
 }
 
+// CleanupOrphanedAttachments provides a mock function for the type MockContainerService
+func (_mock *MockContainerService) CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
+	ret := _mock.Called(ctx, owner, stop)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CleanupOrphanedAttachments")
+	}
+
+	var r0 *domain.CleanupReport
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, bool) (*domain.CleanupReport, error)); ok {
+		return returnFunc(ctx, owner, stop)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, bool) *domain.CleanupReport); ok {
+		r0 = returnFunc(ctx, owner, stop)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.CleanupReport)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, bool) error); ok {
+		r1 = returnFunc(ctx, owner, stop)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerService_CleanupOrphanedAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CleanupOrphanedAttachments'
+type MockContainerService_CleanupOrphanedAttachments_Call struct {
+	*mock.Call
+}
+
+// CleanupOrphanedAttachments is a helper method to define mock.On call
+//   - ctx context.Context
+//   - owner string
+//   - stop bool
+func (_e *MockContainerService_Expecter) CleanupOrphanedAttachments(ctx interface{}, owner interface{}, stop interface{}) *MockContainerService_CleanupOrphanedAttachments_Call {
+	return &MockContainerService_CleanupOrphanedAttachments_Call{Call: _e.mock.On("CleanupOrphanedAttachments", ctx, owner, stop)}
+}
+
+func (_c *MockContainerService_CleanupOrphanedAttachments_Call) Run(run func(ctx context.Context, owner string, stop bool)) *MockContainerService_CleanupOrphanedAttachments_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 bool
+		if args[2] != nil {
+			arg2 = args[2].(bool)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerService_CleanupOrphanedAttachments_Call) Return(cleanupReport *domain.CleanupReport, err error) *MockContainerService_CleanupOrphanedAttachments_Call {
+	_c.Call.Return(cleanupReport, err)
+	return _c
+}
+
+func (_c *MockContainerService_CleanupOrphanedAttachments_Call) RunAndReturn(run func(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error)) *MockContainerService_CleanupOrphanedAttachments_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Deploy provides a mock function for the type MockContainerService
 func (_mock *MockContainerService) Deploy(ctx context.Context, route domain.Route) (*domain.Container, error) {
 	ret := _mock.Called(ctx, route)
@@ -458,6 +532,68 @@ func (_c *MockContainerService_ListNetworks_Call) RunAndReturn(run func(ctx cont
 	return _c
 }
 
+// ListOrphanedAttachments provides a mock function for the type MockContainerService
+func (_mock *MockContainerService) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListOrphanedAttachments")
+	}
+
+	var r0 []domain.CleanupAttachment
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]domain.CleanupAttachment, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []domain.CleanupAttachment); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]domain.CleanupAttachment)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerService_ListOrphanedAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListOrphanedAttachments'
+type MockContainerService_ListOrphanedAttachments_Call struct {
+	*mock.Call
+}
+
+// ListOrphanedAttachments is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockContainerService_Expecter) ListOrphanedAttachments(ctx interface{}) *MockContainerService_ListOrphanedAttachments_Call {
+	return &MockContainerService_ListOrphanedAttachments_Call{Call: _e.mock.On("ListOrphanedAttachments", ctx)}
+}
+
+func (_c *MockContainerService_ListOrphanedAttachments_Call) Run(run func(ctx context.Context)) *MockContainerService_ListOrphanedAttachments_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerService_ListOrphanedAttachments_Call) Return(cleanupAttachments []domain.CleanupAttachment, err error) *MockContainerService_ListOrphanedAttachments_Call {
+	_c.Call.Return(cleanupAttachments, err)
+	return _c
+}
+
+func (_c *MockContainerService_ListOrphanedAttachments_Call) RunAndReturn(run func(ctx context.Context) ([]domain.CleanupAttachment, error)) *MockContainerService_ListOrphanedAttachments_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListRoutesWithDetails provides a mock function for the type MockContainerService
 func (_mock *MockContainerService) ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo {
 	ret := _mock.Called(ctx)
@@ -507,6 +643,74 @@ func (_c *MockContainerService_ListRoutesWithDetails_Call) Return(routeInfos []d
 }
 
 func (_c *MockContainerService_ListRoutesWithDetails_Call) RunAndReturn(run func(ctx context.Context) []domain.RouteInfo) *MockContainerService_ListRoutesWithDetails_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ReconcileRemovedRoute provides a mock function for the type MockContainerService
+func (_mock *MockContainerService) ReconcileRemovedRoute(ctx context.Context, domain1 string) (*domain.CleanupReport, error) {
+	ret := _mock.Called(ctx, domain1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReconcileRemovedRoute")
+	}
+
+	var r0 *domain.CleanupReport
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*domain.CleanupReport, error)); ok {
+		return returnFunc(ctx, domain1)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *domain.CleanupReport); ok {
+		r0 = returnFunc(ctx, domain1)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.CleanupReport)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, domain1)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerService_ReconcileRemovedRoute_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReconcileRemovedRoute'
+type MockContainerService_ReconcileRemovedRoute_Call struct {
+	*mock.Call
+}
+
+// ReconcileRemovedRoute is a helper method to define mock.On call
+//   - ctx context.Context
+//   - domain1 string
+func (_e *MockContainerService_Expecter) ReconcileRemovedRoute(ctx interface{}, domain1 interface{}) *MockContainerService_ReconcileRemovedRoute_Call {
+	return &MockContainerService_ReconcileRemovedRoute_Call{Call: _e.mock.On("ReconcileRemovedRoute", ctx, domain1)}
+}
+
+func (_c *MockContainerService_ReconcileRemovedRoute_Call) Run(run func(ctx context.Context, domain1 string)) *MockContainerService_ReconcileRemovedRoute_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerService_ReconcileRemovedRoute_Call) Return(cleanupReport *domain.CleanupReport, err error) *MockContainerService_ReconcileRemovedRoute_Call {
+	_c.Call.Return(cleanupReport, err)
+	return _c
+}
+
+func (_c *MockContainerService_ReconcileRemovedRoute_Call) RunAndReturn(run func(ctx context.Context, domain1 string) (*domain.CleanupReport, error)) *MockContainerService_ReconcileRemovedRoute_Call {
 	_c.Call.Return(run)
 	return _c
 }

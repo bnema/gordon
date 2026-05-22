@@ -52,3 +52,4 @@ packages:
   github.com/bnema/gordon/internal/adapters/in/cli:
     interfaces:
       pushImageOps:
+      ControlPlane:

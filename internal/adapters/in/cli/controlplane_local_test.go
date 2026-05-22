@@ -8,6 +8,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -110,6 +111,28 @@ func TestLocalControlPlane_ListTags(t *testing.T) {
 	require.Equal(t, []string{"v1.0.0", "latest"}, tags)
 }
 
+func TestLocalControlPlane_RemoveRoutePersistsConfigThenReconcilesRuntime(t *testing.T) {
+	t.Parallel()
+
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	report := &domain.CleanupReport{
+		Domain: "app.local",
+		RemovedContainers: []domain.CleanupContainer{{
+			ID:   "container-1",
+			Name: "gordon-app.local",
+		}},
+	}
+
+	removeCall := configSvc.EXPECT().RemoveRoute(mock.Anything, "app.local").Return(nil).Once()
+	cleanupCall := containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.local").Return(report, nil).Once()
+	mock.InOrder(removeCall, cleanupCall)
+
+	cp := &localControlPlane{configSvc: configSvc, containerSvc: containerSvc}
+	err := cp.RemoveRoute(context.Background(), "app.local")
+	require.NoError(t, err)
+}
+
 func TestLocalControlPlane_RestartWithAttachments(t *testing.T) {
 	t.Parallel()
 
@@ -191,4 +214,20 @@ func TestLocalControlPlane_GetContainerLogs(t *testing.T) {
 	lines, err := cp.GetContainerLogs(context.Background(), "app.local", 50)
 	require.NoError(t, err)
 	require.Equal(t, []string{"line1", "line2"}, lines)
+}
+
+func TestLocalControlPlane_RemoveRouteReconcilesRuntimeWhenRouteAlreadyMissing(t *testing.T) {
+	ctx := context.Background()
+	configSvc := inmocks.NewMockConfigService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	report := &domain.CleanupReport{Domain: "app.local"}
+
+	configSvc.EXPECT().RemoveRoute(mock.Anything, "app.local").Return(domain.ErrRouteNotFound).Once()
+	containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.local").Return(report, nil).Once()
+
+	cp := &localControlPlane{configSvc: configSvc, containerSvc: containerSvc}
+	resp, err := cp.RemoveRouteWithCleanup(ctx, "app.local")
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, dto.CleanupReportFromDomain(report), resp.Cleanup)
 }

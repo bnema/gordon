@@ -548,11 +548,21 @@ func (c *Client) UpdateRoute(ctx context.Context, route domain.Route) error {
 
 // RemoveRoute removes a route by domain.
 func (c *Client) RemoveRoute(ctx context.Context, routeDomain string) error {
+	_, err := c.RemoveRouteWithCleanup(ctx, routeDomain)
+	return err
+}
+
+// RemoveRouteWithCleanup removes a route and returns the server cleanup report.
+func (c *Client) RemoveRouteWithCleanup(ctx context.Context, routeDomain string) (*dto.RouteDeleteResponse, error) {
 	resp, err := c.request(ctx, http.MethodDelete, "/routes/"+url.PathEscape(routeDomain), nil)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("delete route %s failed: %w", routeDomain, err)
 	}
-	return parseResponse(resp, nil)
+	var result dto.RouteDeleteResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, fmt.Errorf("parse delete route %s response: %w", routeDomain, err)
+	}
+	return &result, nil
 }
 
 func (c *Client) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
@@ -1024,6 +1034,45 @@ func (c *Client) StreamContainerLogs(ctx context.Context, logDomain string, line
 }
 
 // Attachments Config API
+
+// ListOrphanedAttachments returns running attachment containers no longer configured.
+func (c *Client) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/attachments/orphans", nil)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Attachments []domain.CleanupAttachment `json:"attachments"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return result.Attachments, nil
+}
+
+// CleanupOrphanedAttachments optionally stops/removes orphaned attachment containers.
+func (c *Client) CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
+	path := "/attachments/prune"
+	params := url.Values{}
+	if stop {
+		params.Set("stop", "true")
+	}
+	if owner != "" {
+		params.Set("owner", owner)
+	}
+	if encoded := params.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	resp, err := c.request(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cleanup orphaned attachments failed: %w", err)
+	}
+	var result domain.CleanupReport
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, fmt.Errorf("parse orphaned attachment cleanup response: %w", err)
+	}
+	return &result, nil
+}
 
 // GetAllAttachmentsConfig returns all configured attachments.
 func (c *Client) GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error) {

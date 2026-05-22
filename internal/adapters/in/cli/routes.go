@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
@@ -127,6 +128,18 @@ type routeStatusSection struct {
 	Routes []routeStatusItem `json:"routes,omitempty"`
 }
 
+type routeDiagnosis struct {
+	Domain              string                     `json:"domain"`
+	Configured          bool                       `json:"configured"`
+	Route               *domain.Route              `json:"route,omitempty"`
+	Runtime             *remote.RouteInfo          `json:"runtime,omitempty"`
+	Health              *remote.RouteHealth        `json:"health,omitempty"`
+	Volumes             []dto.Volume               `json:"volumes,omitempty"`
+	OrphanedAttachments []domain.CleanupAttachment `json:"orphaned_attachments,omitempty"`
+	Warnings            []string                   `json:"warnings,omitempty"`
+	Hints               []string                   `json:"hints,omitempty"`
+}
+
 type routesListDeps struct {
 	explicitRemote func() (*remote.ResolvedRemote, bool, error)
 	loadLocal      func(context.Context, string) (routeListSection, error)
@@ -194,6 +207,8 @@ the local Gordon configuration.`,
 	cmd.AddCommand(newRoutesStatusCmd())
 
 	cmd.AddCommand(newRoutesShowCmd())
+	cmd.AddCommand(newRoutesDiagnoseCmd())
+	cmd.AddCommand(newRoutesPurgeCmd())
 	cmd.AddCommand(newRoutesAddCmd())
 	cmd.AddCommand(newRoutesRemoveCmd())
 
@@ -1078,7 +1093,287 @@ func writeRouteShowText(out io.Writer, domainName, image, containerStatus string
 	return nil
 }
 
-// newRoutesAddCmd creates the routes add command.
+// newRoutesDiagnoseCmd creates the routes diagnose command.
+func newRoutesDiagnoseCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "diagnose <domain>",
+		Short: "Diagnose route configuration, runtime state, and cleanup leftovers",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRouteDiagnosis(cmd.Context(), args[0], cmd.OutOrStdout(), jsonOut)
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
+}
+
+func runRouteDiagnosis(ctx context.Context, domainName string, out io.Writer, jsonOut bool) error {
+	handle, err := resolveControlPlaneForRouteDomain(ctx, domainName)
+	if err != nil {
+		return err
+	}
+	defer handle.close()
+	diag, err := buildRouteDiagnosis(ctx, handle.plane, domainName)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		return writeJSON(out, diag)
+	}
+	return writeRouteDiagnosisText(out, diag)
+}
+
+func buildRouteDiagnosis(ctx context.Context, cp ControlPlane, domainName string) (*routeDiagnosis, error) {
+	diag := &routeDiagnosis{Domain: domainName}
+	loadRouteDiagnosisConfig(ctx, cp, domainName, diag)
+	loadRouteDiagnosisRuntime(ctx, cp, domainName, diag)
+	loadRouteDiagnosisHealth(ctx, cp, domainName, diag)
+	loadRouteDiagnosisVolumes(ctx, cp, domainName, diag)
+	loadRouteDiagnosisOrphanedAttachments(ctx, cp, domainName, diag)
+	finalizeRouteDiagnosis(diag)
+	return diag, nil
+}
+
+func loadRouteDiagnosisConfig(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
+	route, err := cp.GetRoute(ctx, domainName)
+	if err == nil && route != nil {
+		diag.Configured = true
+		diag.Route = route
+		return
+	}
+	if err != nil && !errors.Is(err, domain.ErrRouteNotFound) {
+		diag.Warnings = append(diag.Warnings, "failed to load route config: "+err.Error())
+	}
+}
+
+func loadRouteDiagnosisRuntime(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
+	routes, err := cp.ListRoutesWithDetails(ctx)
+	if err != nil {
+		diag.Warnings = append(diag.Warnings, "failed to load route runtime details: "+err.Error())
+		return
+	}
+	for _, info := range routes {
+		if strings.EqualFold(info.Domain, domainName) {
+			copy := info
+			diag.Runtime = &copy
+			return
+		}
+	}
+}
+
+func loadRouteDiagnosisHealth(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
+	if health, err := cp.GetHealth(ctx); err == nil && health != nil {
+		diag.Health = health[domainName]
+	}
+}
+
+func loadRouteDiagnosisVolumes(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
+	if volumes, err := cp.ListVolumes(ctx); err == nil {
+		diag.Volumes = volumesForRouteDiagnosis(volumes, domainName)
+	}
+}
+
+func loadRouteDiagnosisOrphanedAttachments(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
+	lister, ok := cp.(interface {
+		ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error)
+	})
+	if !ok {
+		return
+	}
+	if attachments, err := lister.ListOrphanedAttachments(ctx); err == nil {
+		diag.OrphanedAttachments = attachmentsForRouteDiagnosis(attachments, domainName)
+	}
+}
+
+func finalizeRouteDiagnosis(diag *routeDiagnosis) {
+	if !diag.Configured && diag.Runtime != nil {
+		diag.Warnings = append(diag.Warnings, "route is not configured but runtime state still exists")
+	}
+	if len(diag.Volumes) > 0 {
+		diag.Hints = append(diag.Hints, "persistent volumes are preserved by default")
+	}
+	if len(diag.OrphanedAttachments) > 0 {
+		diag.Hints = append(diag.Hints, "run 'gordon attachments prune --stop' to stop orphaned attachment containers while preserving volumes")
+	}
+}
+
+func volumesForRouteDiagnosis(volumes []dto.Volume, domainName string) []dto.Volume {
+	needle := strings.ReplaceAll(strings.ToLower(domainName), ".", "-")
+	var out []dto.Volume
+	for _, volume := range volumes {
+		if strings.Contains(strings.ToLower(volume.Name), needle) {
+			out = append(out, volume)
+		}
+	}
+	return out
+}
+
+func attachmentsForRouteDiagnosis(attachments []domain.CleanupAttachment, domainName string) []domain.CleanupAttachment {
+	var out []domain.CleanupAttachment
+	for _, attachment := range attachments {
+		if strings.EqualFold(attachment.Owner, domainName) {
+			out = append(out, attachment)
+		}
+	}
+	return out
+}
+
+func writeRouteDiagnosisText(out io.Writer, diag *routeDiagnosis) error {
+	if err := cliWriteLine(out, cliRenderTitle("Route diagnosis: "+diag.Domain)); err != nil {
+		return err
+	}
+	if err := writeRouteDiagnosisSummary(out, diag); err != nil {
+		return err
+	}
+	if err := writeRouteDiagnosisLeftovers(out, diag); err != nil {
+		return err
+	}
+	return writeCleanupMessages(out, diag.Warnings, diag.Hints)
+}
+
+func writeRouteDiagnosisSummary(out io.Writer, diag *routeDiagnosis) error {
+	if diag.Configured && diag.Route != nil {
+		if err := cliWriteLine(out, cliRenderMeta("Image:", diag.Route.Image)); err != nil {
+			return err
+		}
+	} else if err := cliWriteLine(out, cliRenderWarning("Route is not configured")); err != nil {
+		return err
+	}
+	if diag.Runtime == nil {
+		return nil
+	}
+	return cliWriteLine(out, cliRenderMeta("Container:", diag.Runtime.ContainerStatus+" "+shortContainerID(diag.Runtime.ContainerID)))
+}
+
+func writeRouteDiagnosisLeftovers(out io.Writer, diag *routeDiagnosis) error {
+	for _, volume := range diag.Volumes {
+		if err := cliWriteLine(out, cliRenderMeta("Preserved volume:", volume.Name)); err != nil {
+			return err
+		}
+	}
+	for _, attachment := range diag.OrphanedAttachments {
+		if err := cliWriteLine(out, cliRenderWarning("Orphaned attachment: "+attachment.Name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newRoutesPurgeCmd() *cobra.Command {
+	var jsonOut bool
+	var force bool
+	var includeAttachments bool
+	var includeVolumes bool
+	cmd := &cobra.Command{
+		Use:   "purge <domain>",
+		Short: "Review or explicitly purge retained route resources",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRoutePurgeCommand(cmd.Context(), args[0], cmd.OutOrStdout(), routePurgeOptions{Force: force, Attachments: includeAttachments, Volumes: includeVolumes}, jsonOut)
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&force, "force", false, "Execute purge actions; default is dry-run")
+	cmd.Flags().BoolVar(&includeAttachments, "attachments", false, "Include orphaned attachment containers")
+	cmd.Flags().BoolVar(&includeVolumes, "volumes", false, "Include preserved volumes in the purge plan")
+	return cmd
+}
+
+type routePurgeOptions struct {
+	Force       bool
+	Attachments bool
+	Volumes     bool
+}
+
+func runRoutePurgeCommand(ctx context.Context, domainName string, out io.Writer, opts routePurgeOptions, jsonOut bool) error {
+	handle, err := resolveControlPlaneForRouteDomain(ctx, domainName)
+	if err != nil {
+		return err
+	}
+	defer handle.close()
+	report, err := runRoutePurge(ctx, handle.plane, domainName, opts)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		return writeJSON(out, report)
+	}
+	return writeRoutePurgeText(out, report, opts.Force)
+}
+
+func runRoutePurge(ctx context.Context, cp ControlPlane, domainName string, opts routePurgeOptions) (*domain.CleanupReport, error) {
+	diag, err := buildRouteDiagnosis(ctx, cp, domainName)
+	if err != nil {
+		return nil, err
+	}
+	report := &domain.CleanupReport{Domain: domainName}
+	if diag.Runtime != nil && diag.Runtime.ContainerID != "" {
+		report.OrphanedEntities = append(report.OrphanedEntities, domain.CleanupOrphanedEntity{Kind: "route_container", ID: diag.Runtime.ContainerID, Status: diag.Runtime.ContainerStatus, Reason: "route runtime state matched purge target"})
+	}
+	if opts.Volumes {
+		for _, volume := range diag.Volumes {
+			report.PreservedVolumes = append(report.PreservedVolumes, domain.CleanupVolume{Name: volume.Name, Reason: "volume purge requires explicit --volumes and runtime support"})
+		}
+	}
+	if !opts.Attachments || !opts.Force {
+		report.PreservedAttachments = append(report.PreservedAttachments, diag.OrphanedAttachments...)
+	}
+	if opts.Attachments && opts.Force {
+		cleaner, ok := cp.(interface {
+			CleanupOrphanedAttachments(context.Context, string, bool) (*domain.CleanupReport, error)
+		})
+		if !ok {
+			return nil, fmt.Errorf("attachment purge is unavailable")
+		}
+		attachmentReport, err := cleaner.CleanupOrphanedAttachments(ctx, domainName, true)
+		if err != nil {
+			return nil, err
+		}
+		report.RemovedContainers = append(report.RemovedContainers, attachmentReport.RemovedContainers...)
+		report.PreservedVolumes = append(report.PreservedVolumes, attachmentReport.PreservedVolumes...)
+		report.PreservedAttachments = append(report.PreservedAttachments, attachmentReport.PreservedAttachments...)
+		report.OrphanedEntities = append(report.OrphanedEntities, attachmentReport.OrphanedEntities...)
+		report.Warnings = append(report.Warnings, attachmentReport.Warnings...)
+		report.Hints = append(report.Hints, attachmentReport.Hints...)
+		report.PartialFailures = append(report.PartialFailures, attachmentReport.PartialFailures...)
+	}
+	if opts.Volumes {
+		report.Warnings = append(report.Warnings, "volume purge is not executed yet; preserved volumes are reported for manual review")
+	}
+	if !opts.Force {
+		report.Hints = append(report.Hints, "dry-run only; add --force with explicit category flags to execute supported purge actions")
+	}
+	return report, nil
+}
+
+func writeRoutePurgeText(out io.Writer, report *domain.CleanupReport, force bool) error {
+	mode := "Purge dry-run"
+	if force {
+		mode = "Purge completed"
+	}
+	if err := cliWriteLine(out, cliRenderTitle(mode+": "+report.Domain)); err != nil {
+		return err
+	}
+	if err := writePreservedAttachments(out, report.PreservedAttachments); err != nil {
+		return err
+	}
+	if err := writeRemovedContainers(out, report.RemovedContainers); err != nil {
+		return err
+	}
+	for _, entity := range report.OrphanedEntities {
+		if err := cliWriteLine(out, cliRenderWarning("Purge candidate: "+entity.Kind+" "+entity.ID)); err != nil {
+			return err
+		}
+	}
+	for _, volume := range report.PreservedVolumes {
+		if err := cliWriteLine(out, cliRenderMeta("Preserved volume:", volume.Name)); err != nil {
+			return err
+		}
+	}
+	return writeCleanupMessages(out, report.Warnings, report.Hints)
+}
+
 func newRoutesAddCmd() *cobra.Command {
 	var image string
 
@@ -1183,18 +1478,127 @@ Examples:
 				return err
 			}
 			defer handle.close()
-			if err := handle.plane.RemoveRoute(ctx, routeDomain); err != nil {
+			var cleanup *dto.CleanupReport
+			if remover, ok := handle.plane.(interface {
+				RemoveRouteWithCleanup(context.Context, string) (*dto.RouteDeleteResponse, error)
+			}); ok {
+				resp, err := remover.RemoveRouteWithCleanup(ctx, routeDomain)
+				if err != nil {
+					return fmt.Errorf("failed to remove route: %w", err)
+				}
+				if resp != nil {
+					cleanup = resp.Cleanup
+				}
+			} else if err := handle.plane.RemoveRoute(ctx, routeDomain); err != nil {
 				return fmt.Errorf("failed to remove route: %w", err)
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route removed: %s", routeDomain)))
-			return nil
+			return writeRouteRemoveText(cmd.OutOrStdout(), routeDomain, cleanup)
 		},
 	}
 
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation")
 
 	return cmd
+}
+
+func writeRouteRemoveText(out io.Writer, routeDomain string, cleanup *dto.CleanupReport) error {
+	if err := cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Route removed: %s", routeDomain))); err != nil {
+		return err
+	}
+	if cleanup == nil {
+		return nil
+	}
+	cleanupReport := cleanupReportDTOToDomain(cleanup)
+	if err := writeRemovedContainers(out, cleanupReport.RemovedContainers); err != nil {
+		return err
+	}
+	if err := writePreservedAttachments(out, cleanupReport.PreservedAttachments); err != nil {
+		return err
+	}
+	return writeCleanupMessages(out, cleanupReport.Warnings, cleanupReport.Hints)
+}
+
+func cleanupReportDTOToDomain(cleanup *dto.CleanupReport) *domain.CleanupReport {
+	if cleanup == nil {
+		return nil
+	}
+	out := &domain.CleanupReport{
+		Domain:   cleanup.Domain,
+		Warnings: append([]string(nil), cleanup.Warnings...),
+		Hints:    append([]string(nil), cleanup.Hints...),
+	}
+	for _, item := range cleanup.RemovedContainers {
+		out.RemovedContainers = append(out.RemovedContainers, domain.CleanupContainer(item))
+	}
+	for _, item := range cleanup.PreservedAttachments {
+		out.PreservedAttachments = append(out.PreservedAttachments, domain.CleanupAttachment(item))
+	}
+	return out
+}
+
+func writeRemovedContainers(out io.Writer, containers []domain.CleanupContainer) error {
+	if len(containers) == 0 {
+		return nil
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, styles.Theme.Bold.Render("Removed containers:")); err != nil {
+		return err
+	}
+	for _, c := range containers {
+		label := c.Name
+		if label == "" {
+			label = c.ID
+		}
+		if id := shortContainerID(c.ID); id != "" && id != label {
+			label = fmt.Sprintf("%s (%s)", label, id)
+		}
+		if err := cliWriteLine(out, "  "+label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writePreservedAttachments(out io.Writer, attachments []domain.CleanupAttachment) error {
+	if len(attachments) == 0 {
+		return nil
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, styles.Theme.Bold.Render("Preserved attachments:")); err != nil {
+		return err
+	}
+	for _, a := range attachments {
+		label := a.Name
+		if label == "" {
+			label = a.ContainerID
+		}
+		if a.Status != "" {
+			label = fmt.Sprintf("%s (%s)", label, a.Status)
+		}
+		if err := cliWriteLine(out, "  "+label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeCleanupMessages(out io.Writer, warnings, hints []string) error {
+	for _, warning := range warnings {
+		if err := cliWriteLine(out, cliRenderWarning(warning)); err != nil {
+			return err
+		}
+	}
+	for _, hint := range hints {
+		if err := cliWriteLine(out, cliRenderMuted("Hint: "+hint)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // newStatusCmd creates the status command.
