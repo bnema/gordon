@@ -452,6 +452,9 @@ func (l *localControlPlane) GetConfig(ctx context.Context) (*remote.Config, erro
 	cfg.AutoRoute.Enabled = l.configSvc.IsAutoRouteEnabled()
 	cfg.NetworkIsolation.Enabled = l.configSvc.IsNetworkIsolationEnabled()
 	cfg.NetworkIsolation.Prefix = l.configSvc.GetNetworkPrefix()
+	if volumeCfg, ok := any(l.configSvc).(interface{ GetVolumeConfig() (bool, string, bool) }); ok {
+		cfg.Volumes.AutoCreate, cfg.Volumes.Prefix, cfg.Volumes.Preserve = volumeCfg.GetVolumeConfig()
+	}
 	return cfg, nil
 }
 

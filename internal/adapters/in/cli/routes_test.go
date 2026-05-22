@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -897,6 +899,226 @@ func TestAttachmentsForRouteDiagnosisUsesOwner(t *testing.T) {
 
 	require.Len(t, matched, 1)
 	assert.Equal(t, "match", matched[0].ContainerID)
+}
+
+func TestBuildRouteDiagnosis_VolumesAreScopedToExactRouteContainers(t *testing.T) {
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "example.test").Return(&domain.Route{Domain: "example.test", Image: "site:latest"}, nil).Once()
+	cpMock.EXPECT().ListRoutesWithDetails(context.Background()).Return([]remote.RouteInfo{{
+		Domain:          "example.test",
+		ContainerID:     "route-1",
+		ContainerStatus: "running",
+	}}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListVolumes(context.Background()).Return([]dto.Volume{
+		{Name: "gordon-example-test-data-docs", Containers: []string{"gordon-example.test"}},
+		{Name: "gordon-api-example-test-cache", Containers: []string{"gordon-api.example.test"}},
+	}, nil).Once()
+	cpMock.EXPECT().GetConfig(context.Background()).Return(&remote.Config{}, nil).Once()
+	cpMock.EXPECT().ListOrphanedAttachments(context.Background()).Return(nil, nil).Once()
+
+	diag, err := buildRouteDiagnosis(context.Background(), cpMock, "example.test")
+
+	require.NoError(t, err)
+	require.Len(t, diag.Volumes, 1)
+	assert.Equal(t, "gordon-example-test-data-docs", diag.Volumes[0].Name)
+}
+
+func TestBuildRouteDiagnosis_UsesConfiguredVolumePrefixForPreservedVolumes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/routes/example.test":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes":
+			require.Equal(t, "detailed=true", r.URL.RawQuery)
+			_, _ = w.Write([]byte(`{"routes":[]}`))
+		case "/admin/health":
+			_, _ = w.Write([]byte(`{"health":{}}`))
+		case "/admin/volumes":
+			_, _ = w.Write([]byte(`[{"name":"custom-example-test-data-docs","containers":[]}]`))
+		case "/admin/attachments/orphans":
+			_, _ = w.Write([]byte(`{"attachments":[]}`))
+		case "/admin/config":
+			_, _ = w.Write([]byte(`{"server":{"port":80,"registry_port":5000,"registry_domain":"registry.example.test"},"auto_route":{"enabled":false},"network_isolation":{"enabled":true,"prefix":"custom-network"},"volumes":{"auto_create":true,"prefix":"custom","preserve":true},"routes":[],"external_routes":[]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cp := NewRemoteControlPlane(remote.NewClient(srv.URL))
+	diag, err := buildRouteDiagnosis(context.Background(), cp, "example.test")
+
+	require.NoError(t, err)
+	require.Len(t, diag.Volumes, 1)
+	assert.Equal(t, "custom-example-test-data-docs", diag.Volumes[0].Name)
+}
+
+func TestBuildRouteDiagnosis_IncludesAttachmentVolumesWithDoubleUnderscoreOwnerEncoding(t *testing.T) {
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "app.example.test").Return(&domain.Route{Domain: "app.example.test", Image: "app:latest"}, nil).Once()
+	cpMock.EXPECT().ListRoutesWithDetails(context.Background()).Return([]remote.RouteInfo{{
+		Domain:          "app.example.test",
+		ContainerID:     "route-1",
+		ContainerStatus: "running",
+		Attachments: []dto.Attachment{{
+			Name:        "postgres",
+			Image:       "postgres:16",
+			ContainerID: "attachment-1",
+			Status:      "running",
+		}},
+	}}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListVolumes(context.Background()).Return([]dto.Volume{
+		{Name: "gordon-gordon-app__example__test-postgres-var-lib-postgresql", Containers: []string{"gordon-app__example__test-postgres"}},
+	}, nil).Once()
+	cpMock.EXPECT().GetConfig(context.Background()).Return(&remote.Config{}, nil).Once()
+	cpMock.EXPECT().ListOrphanedAttachments(context.Background()).Return(nil, nil).Once()
+
+	diag, err := buildRouteDiagnosis(context.Background(), cpMock, "app.example.test")
+
+	require.NoError(t, err)
+	require.Len(t, diag.Volumes, 1)
+	assert.Equal(t, "gordon-gordon-app__example__test-postgres-var-lib-postgresql", diag.Volumes[0].Name)
+}
+
+func TestBuildRouteDiagnosis_RemoteMissingRouteDoesNotWarnOnExpectedNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/routes/missing.example.test":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes":
+			require.Equal(t, "detailed=true", r.URL.RawQuery)
+			_, _ = w.Write([]byte(`{"routes":[]}`))
+		case "/admin/health":
+			_, _ = w.Write([]byte(`{"health":{}}`))
+		case "/admin/volumes":
+			_, _ = w.Write([]byte(`[]`))
+		case "/admin/attachments/orphans":
+			_, _ = w.Write([]byte(`{"attachments":[]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cp := NewRemoteControlPlane(remote.NewClient(srv.URL))
+	diag, err := buildRouteDiagnosis(context.Background(), cp, "missing.example.test")
+
+	require.NoError(t, err)
+	assert.False(t, diag.Configured)
+	assert.Empty(t, diag.Warnings)
+}
+
+func TestRunRoutePurge_VolumesUsesConfiguredVolumePrefix(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/routes/example.test":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes":
+			require.Equal(t, "detailed=true", r.URL.RawQuery)
+			_, _ = w.Write([]byte(`{"routes":[]}`))
+		case "/admin/health":
+			_, _ = w.Write([]byte(`{"health":{}}`))
+		case "/admin/volumes":
+			_, _ = w.Write([]byte(`[{"name":"custom-example-test-data-docs","containers":[]}]`))
+		case "/admin/attachments/orphans":
+			_, _ = w.Write([]byte(`{"attachments":[]}`))
+		case "/admin/config":
+			_, _ = w.Write([]byte(`{"server":{"port":80,"registry_port":5000,"registry_domain":"registry.example.test"},"auto_route":{"enabled":false},"network_isolation":{"enabled":true,"prefix":"custom-network"},"volumes":{"auto_create":true,"prefix":"custom","preserve":true},"routes":[],"external_routes":[]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cp := NewRemoteControlPlane(remote.NewClient(srv.URL))
+	report, err := runRoutePurge(context.Background(), cp, "example.test", routePurgeOptions{Volumes: true})
+
+	require.NoError(t, err)
+	require.Len(t, report.PreservedVolumes, 1)
+	assert.Equal(t, "custom-example-test-data-docs", report.PreservedVolumes[0].Name)
+}
+
+func TestBuildRouteDiagnosis_UsesRouteScopedReviewHintForOrphanedAttachments(t *testing.T) {
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "app.example.test").Return(&domain.Route{Domain: "app.example.test", Image: "app:latest"}, nil).Once()
+	cpMock.EXPECT().ListRoutesWithDetails(context.Background()).Return([]remote.RouteInfo{{
+		Domain:          "app.example.test",
+		ContainerID:     "route-1",
+		ContainerStatus: "running",
+	}}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListVolumes(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListOrphanedAttachments(context.Background()).Return([]domain.CleanupAttachment{{
+		Name:        "old-postgres",
+		ContainerID: "attachment-1",
+		Owner:       "app.example.test",
+	}}, nil).Once()
+
+	diag, err := buildRouteDiagnosis(context.Background(), cpMock, "app.example.test")
+
+	require.NoError(t, err)
+	assert.Contains(t, diag.Hints, "run 'gordon routes purge app.example.test --attachments' to review orphaned attachment cleanup for this route")
+}
+
+func TestWriteRouteDiagnosisText_UsesNeutralVolumeLabelForConfiguredRoutes(t *testing.T) {
+	var out bytes.Buffer
+	diag := &routeDiagnosis{
+		Domain:     "app.example.test",
+		Configured: true,
+		Route:      &domain.Route{Domain: "app.example.test", Image: "app:latest"},
+		Runtime: &remote.RouteInfo{
+			Domain:          "app.example.test",
+			ContainerID:     "route-1",
+			ContainerStatus: "running",
+		},
+		Volumes: []dto.Volume{{Name: "gordon-app-example-test-data"}},
+	}
+
+	err := writeRouteDiagnosisText(&out, diag)
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.Contains(t, rendered, "Volume: gordon-app-example-test-data")
+	assert.NotContains(t, rendered, "Preserved volume:")
+}
+
+func TestWriteRouteDiagnosisText_ShowsActiveAttachmentsSeparatelyFromOrphans(t *testing.T) {
+	var out bytes.Buffer
+	diag := &routeDiagnosis{
+		Domain:     "app.example.test",
+		Configured: true,
+		Route:      &domain.Route{Domain: "app.example.test", Image: "app:latest"},
+		Runtime: &remote.RouteInfo{
+			Domain:          "app.example.test",
+			ContainerID:     "route-1",
+			ContainerStatus: "running",
+			Attachments: []dto.Attachment{{
+				Name:        "postgres",
+				Image:       "postgres:16",
+				ContainerID: "attachment-1",
+				Status:      "running",
+			}},
+		},
+		OrphanedAttachments: []domain.CleanupAttachment{{
+			Name:        "old-postgres",
+			ContainerID: "attachment-2",
+			Owner:       "app.example.test",
+		}},
+	}
+
+	err := writeRouteDiagnosisText(&out, diag)
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.Contains(t, rendered, "Active attachments:")
+	assert.Contains(t, rendered, "postgres (running)")
+	assert.Contains(t, rendered, "Orphaned attachment: old-postgres")
 }
 
 func TestRunRoutePurge_AttachmentsForceIsScopedToRoute(t *testing.T) {

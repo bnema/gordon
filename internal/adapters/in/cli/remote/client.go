@@ -504,6 +504,10 @@ func (c *Client) GetRoute(ctx context.Context, routeDomain string) (*domain.Rout
 
 	var route domain.Route
 	if err := parseResponse(resp, &route); err != nil {
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+			return nil, domain.ErrRouteNotFound
+		}
 		return nil, err
 	}
 
@@ -860,6 +864,11 @@ type Config struct {
 		Enabled bool   `json:"enabled"`
 		Prefix  string `json:"prefix"`
 	} `json:"network_isolation"`
+	Volumes struct {
+		AutoCreate bool   `json:"auto_create"`
+		Prefix     string `json:"prefix"`
+		Preserve   bool   `json:"preserve"`
+	} `json:"volumes"`
 	Routes         []domain.Route  `json:"routes"`
 	ExternalRoutes []ExternalRoute `json:"external_routes"`
 }
