@@ -9,6 +9,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
+	"github.com/bnema/gordon/internal/domain"
 
 	"github.com/spf13/cobra"
 )
@@ -32,6 +33,8 @@ the local Gordon configuration.`,
 	cmd.AddCommand(newAttachmentsListCmd())
 	cmd.AddCommand(newAttachmentsAddCmd())
 	cmd.AddCommand(newAttachmentsRemoveCmd())
+	cmd.AddCommand(newAttachmentsOrphansCmd())
+	cmd.AddCommand(newAttachmentsPruneCmd())
 	cmd.AddCommand(newAttachmentsPushCmd())
 
 	return cmd
@@ -275,6 +278,130 @@ func runAttachmentsListLocal(ctx context.Context, cfgPath string, target string,
 	}
 
 	return nil
+}
+
+func newAttachmentsOrphansCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "orphans",
+		Short: "List orphaned attachment containers",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			handle, err := resolveControlPlane(configPath)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			lister, ok := handle.plane.(interface {
+				ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error)
+			})
+			if !ok {
+				return fmt.Errorf("attachment orphan listing is unavailable")
+			}
+			attachments, err := lister.ListOrphanedAttachments(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("failed to list orphaned attachments: %w", err)
+			}
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), map[string]any{"attachments": attachments})
+			}
+			return writeAttachmentOrphansText(cmd.OutOrStdout(), attachments)
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
+}
+
+func newAttachmentsPruneCmd() *cobra.Command {
+	var jsonOut bool
+	var stop bool
+	cmd := &cobra.Command{
+		Use:   "prune",
+		Short: "Review or stop orphaned attachment containers",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			handle, err := resolveControlPlane(configPath)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			cleaner, ok := handle.plane.(interface {
+				CleanupOrphanedAttachments(context.Context, string, bool) (*domain.CleanupReport, error)
+			})
+			if !ok {
+				return fmt.Errorf("attachment orphan cleanup is unavailable")
+			}
+			report, err := cleaner.CleanupOrphanedAttachments(cmd.Context(), "", stop)
+			if err != nil {
+				return fmt.Errorf("failed to cleanup orphaned attachments: %w", err)
+			}
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), report)
+			}
+			return writeAttachmentPruneText(cmd.OutOrStdout(), report, stop)
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&stop, "stop", false, "Stop and remove orphaned attachment containers while preserving volumes")
+	return cmd
+}
+
+func writeAttachmentOrphansText(out io.Writer, attachments []domain.CleanupAttachment) error {
+	if len(attachments) == 0 {
+		return cliWriteLine(out, styles.Theme.Muted.Render("No orphaned attachments found"))
+	}
+	if err := cliWriteLine(out, cliRenderTitle("Orphaned attachments")); err != nil {
+		return err
+	}
+	for _, a := range attachments {
+		label := a.Name
+		if label == "" {
+			label = a.ContainerID
+		}
+		if a.Image != "" {
+			label += " -> " + a.Image
+		}
+		if err := cliWriteLine(out, "  "+label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeAttachmentPruneText(out io.Writer, report *domain.CleanupReport, stop bool) error {
+	if report == nil {
+		return nil
+	}
+	if !stop {
+		if err := writeAttachmentOrphansText(out, report.PreservedAttachments); err != nil {
+			return err
+		}
+		return writeCleanupMessages(out, report.Warnings, report.Hints)
+	}
+	if len(report.RemovedContainers) == 0 {
+		if err := cliWriteLine(out, styles.Theme.Muted.Render("No orphaned attachments removed")); err != nil {
+			return err
+		}
+	} else {
+		if err := cliWriteLine(out, cliRenderSuccess("Removed orphaned attachment containers:")); err != nil {
+			return err
+		}
+		for _, c := range report.RemovedContainers {
+			label := c.Name
+			if label == "" {
+				label = c.ID
+			}
+			if err := cliWriteLine(out, "  "+label); err != nil {
+				return err
+			}
+		}
+	}
+	for _, failure := range report.PartialFailures {
+		if err := cliWriteLine(out, cliRenderWarning(fmt.Sprintf("%s %s failed: %s", failure.Action, failure.Name, failure.Error))); err != nil {
+			return err
+		}
+	}
+	return writeCleanupMessages(out, report.Warnings, report.Hints)
 }
 
 // newAttachmentsAddCmd creates the attachments add command.

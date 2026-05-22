@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
@@ -885,6 +886,35 @@ func TestRenderRoutesStatusSections_KeepsLocalErrorWhenAllRemotesFail(t *testing
 	assert.Contains(t, rendered, "dial tcp timeout")
 }
 
+func TestWriteRouteRemoveTextShowsCleanupReport(t *testing.T) {
+	var out bytes.Buffer
+	report := &domain.CleanupReport{
+		Domain: "app.example.com",
+		RemovedContainers: []domain.CleanupContainer{{
+			ID:   "1234567890abcdef",
+			Name: "gordon-app.example.com",
+		}},
+		PreservedAttachments: []domain.CleanupAttachment{{
+			Name:        "postgres",
+			ContainerID: "attachment-1",
+			Status:      "running",
+		}},
+		Warnings: []string{"volumes preserved"},
+		Hints:    []string{"run diagnose"},
+	}
+
+	err := writeRouteRemoveText(&out, "app.example.com", report)
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.Contains(t, rendered, "Route removed: app.example.com")
+	assert.Contains(t, rendered, "Removed containers:")
+	assert.Contains(t, rendered, "gordon-app.example.com (1234567890ab)")
+	assert.Contains(t, rendered, "Preserved attachments:")
+	assert.Contains(t, rendered, "postgres (running)")
+	assert.Contains(t, rendered, "volumes preserved")
+	assert.Contains(t, rendered, "run diagnose")
+}
+
 func TestBuildRouteStatusTree_DeterministicAcrossInputOrder(t *testing.T) {
 	routes := []routeStatusItem{
 		{Domain: "zulu.example", Image: "zulu:v1", Network: "gordon-zulu", ContainerStatus: "running"},
@@ -900,4 +930,80 @@ func TestBuildRouteStatusTree_DeterministicAcrossInputOrder(t *testing.T) {
 	_, _ = outB.WriteString(stripANSI(buildRouteStatusTree(reordered).Render()))
 
 	assert.Equal(t, outA.String(), outB.String())
+}
+
+func TestAttachmentsForRouteDiagnosisUsesOwner(t *testing.T) {
+	attachments := []domain.CleanupAttachment{
+		{Name: "unexpected-name", Owner: "app.example.com", ContainerID: "match"},
+		{Name: "gordon-other-example-com-postgres", Owner: "other.example.com", ContainerID: "miss"},
+	}
+
+	matched := attachmentsForRouteDiagnosis(attachments, "app.example.com")
+
+	require.Len(t, matched, 1)
+	assert.Equal(t, "match", matched[0].ContainerID)
+}
+
+func TestRunRoutePurge_AttachmentsForceIsScopedToRoute(t *testing.T) {
+	cp := &routePurgeTestControlPlane{
+		route: &domain.Route{Domain: "app.example.com", Image: "app:latest"},
+		orphanedAttachments: []domain.CleanupAttachment{
+			{ContainerID: "app-attachment", Owner: "app.example.com", Name: "postgres"},
+			{ContainerID: "other-attachment", Owner: "other.example.com", Name: "redis"},
+		},
+	}
+
+	report, err := runRoutePurge(context.Background(), cp, "app.example.com", routePurgeOptions{Force: true, Attachments: true})
+
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	require.Len(t, cp.cleanedAttachments, 1)
+	assert.Equal(t, "app-attachment", cp.cleanedAttachments[0].ContainerID)
+	require.Len(t, report.RemovedContainers, 1)
+	assert.Equal(t, "app-attachment", report.RemovedContainers[0].ID)
+}
+
+type routePurgeTestControlPlane struct {
+	resolveFromImageTestControlPlane
+	route               *domain.Route
+	orphanedAttachments []domain.CleanupAttachment
+	cleanedAttachments  []domain.CleanupAttachment
+}
+
+func (c *routePurgeTestControlPlane) GetRoute(context.Context, string) (*domain.Route, error) {
+	if c.route == nil {
+		return nil, domain.ErrRouteNotFound
+	}
+	return c.route, nil
+}
+
+func (c *routePurgeTestControlPlane) ListRoutesWithDetails(context.Context) ([]remote.RouteInfo, error) {
+	return nil, nil
+}
+
+func (c *routePurgeTestControlPlane) GetHealth(context.Context) (map[string]*remote.RouteHealth, error) {
+	return nil, nil
+}
+
+func (c *routePurgeTestControlPlane) ListVolumes(context.Context) ([]dto.Volume, error) {
+	return nil, nil
+}
+
+func (c *routePurgeTestControlPlane) ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error) {
+	return c.orphanedAttachments, nil
+}
+
+func (c *routePurgeTestControlPlane) CleanupOrphanedAttachments(_ context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
+	if !stop {
+		return &domain.CleanupReport{}, nil
+	}
+	var report domain.CleanupReport
+	for _, attachment := range c.orphanedAttachments {
+		if attachment.Owner != owner {
+			continue
+		}
+		c.cleanedAttachments = append(c.cleanedAttachments, attachment)
+		report.RemovedContainers = append(report.RemovedContainers, domain.CleanupContainer{ID: attachment.ContainerID, Name: attachment.Name})
+	}
+	return &report, nil
 }

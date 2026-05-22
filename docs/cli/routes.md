@@ -275,9 +275,91 @@ gordon routes show myapp.example.com --remote https://gordon.mydomain.com --toke
 
 ---
 
+## gordon routes diagnose
+
+Diagnose route configuration, runtime state, preserved volumes, and orphaned attachment containers.
+
+```bash
+gordon routes diagnose <domain>
+gordon routes diagnose myapp.example.com --json
+```
+
+Use this after route deletion or failed deployment to see whether runtime state still exists and which safe cleanup commands to run next.
+
+### Output
+
+```text
+Route diagnosis: myapp.example.com
+Image: myapp:latest
+Container: running abc123def456
+Preserved volume: gordon-myapp-example-com-data
+Orphaned attachment: postgres
+Hint: persistent volumes are preserved by default
+Hint: run 'gordon attachments prune --stop' to stop orphaned attachment containers while preserving volumes
+```
+
+### JSON Output
+
+```json
+{
+  "domain": "myapp.example.com",
+  "configured": true,
+  "route": {"domain": "myapp.example.com", "image": "myapp:latest", "https": true},
+  "runtime": {"domain": "myapp.example.com", "container_id": "abc123def456", "container_status": "running"},
+  "volumes": [{"name": "gordon-myapp-example-com-data", "in_use": false}],
+  "orphaned_attachments": [{"container_id": "pg123", "name": "postgres", "image": "postgres:16", "status": "running", "owner": "myapp.example.com"}],
+  "hints": ["persistent volumes are preserved by default"]
+}
+```
+
+### Next Steps
+
+```bash
+gordon routes purge myapp.example.com          # dry-run retained resources
+gordon routes purge myapp.example.com --attachments --force
+```
+
+---
+
+## gordon routes purge
+
+Review retained resources for a route and execute supported explicit cleanup actions only when forced.
+
+```bash
+gordon routes purge myapp.example.com              # dry-run
+gordon routes purge myapp.example.com --attachments --force
+gordon routes purge myapp.example.com --volumes    # report preserved volumes for manual review
+```
+
+### Dry-run Output
+
+```text
+Purge dry-run: myapp.example.com
+Preserved attachments:
+  postgres (running)
+Purge candidate: route_container abc123def456
+Preserved volume: gordon-myapp-example-com-data
+Hint: dry-run only; add --force with explicit category flags to execute supported purge actions
+```
+
+### Forced Attachment Cleanup Output
+
+```text
+Purge completed: myapp.example.com
+Removed containers:
+  postgres
+Hint: attachment volumes and data were preserved
+```
+
+Purge is intentionally conservative. Volumes are reported and preserved unless a dedicated volume deletion flow supports safe targeted deletion.
+
+---
+
 ## gordon routes remove
 
 Remove a route.
+
+Route removal is safe by default. Gordon removes the route from configuration and reconciles the active route container so it is no longer served or restarted by Gordon's monitor. Stateful data is preserved. Volumes and attachment data are not deleted unless a separate explicit purge flow requests destructive cleanup.
 
 ```bash
 gordon routes remove <domain>
@@ -305,6 +387,15 @@ gordon routes remove myapp.example.com
 
 # Remote (override)
 gordon routes remove myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
+
+# Typical output
+Route removed: myapp.example.com
+
+Removed containers:
+  gordon-myapp.example.com (abc123def456)
+
+Preserved attachments:
+  postgres (running)
 ```
 
 ---

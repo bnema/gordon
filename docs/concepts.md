@@ -59,6 +59,28 @@ New Container:           [══════════════════
                          ↑ start    ↑ traffic routed
 ```
 
+## Deletion and Cleanup Lifecycle
+
+Gordon separates configuration removal from destructive data cleanup:
+
+- **configured** — an entity exists in Gordon configuration, such as a route in `gordon.toml`.
+- **active** — an entity has runtime state, such as a running Gordon-managed container.
+- **preserved** — state intentionally kept after configuration removal, such as volumes or attachment data.
+- **orphaned** — runtime state no longer referenced by configuration and requiring follow-up cleanup or diagnosis.
+- **purged** — state explicitly deleted by a destructive cleanup command.
+- **retained** — preserved state that Gordon reports so operators can decide whether to keep or purge it later.
+
+Safe deletion is the default. Removing a route reconciles active route containers so the app is no longer served or restarted by Gordon's monitor. Stateful data such as volumes and attachment data is preserved unless a later purge command explicitly requests deletion.
+
+Cleanup reports use additive-only JSON fields so humans and automation can rely on stable keys while Gordon adds more details over time.
+
+Current runtime cleanup capabilities are intentionally conservative:
+
+- Gordon can identify managed route and attachment containers by labels such as `gordon.managed`, `gordon.route`, and `gordon.attachment`.
+- Gordon can stop and remove containers.
+- Existing volume attribution is limited for older volumes; Gordon may need naming heuristics when labels do not identify owner, mount path, or category.
+- Updating runtime restart policy and relabeling existing volumes are runtime-dependent capabilities and should be treated as best-effort when added.
+
 ## Routes
 
 Routes map domains to container images:

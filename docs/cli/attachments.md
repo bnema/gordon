@@ -24,6 +24,8 @@ The CLI will warn you if you try to add an attachment without network isolation 
 | `add` | Add an attachment to a domain or network group |
 | `push` | Build or push attachment images to the Gordon registry |
 | `remove` | Remove an attachment from a domain or network group |
+| `orphans` | List running attachment containers no longer configured |
+| `prune` | Dry-run or stop orphaned attachment containers while preserving volumes |
 
 ### Alias
 
@@ -92,6 +94,71 @@ gordon attachments list --json
 | `--token` | Authentication token for remote |
 
 ---
+
+## gordon attachments orphans
+
+List running attachment containers that are no longer configured.
+
+```bash
+gordon attachments orphans
+gordon attachments orphans --json
+```
+
+### Output
+
+| Container ID | Name | Image | Status | Owner |
+|--------------|------|-------|--------|-------|
+| `pg123` | `postgres` | `postgres:16` | `running` | `myapp.example.com` |
+
+### JSON Output
+
+```json
+{
+  "attachments": [
+    {
+      "container_id": "pg123",
+      "name": "postgres",
+      "image": "postgres:16",
+      "status": "running",
+      "owner": "myapp.example.com"
+    }
+  ]
+}
+```
+
+## gordon attachments prune
+
+Lists orphaned attachments by default (dry-run). Use `--stop` to stop and remove the orphaned containers while preserving attachment volumes/data.
+
+```bash
+gordon attachments prune          # dry-run/report only
+gordon attachments prune --stop   # stop/remove orphaned containers, preserve volumes
+```
+
+### Output
+
+```text
+Orphaned attachments
+  postgres -> postgres:16
+Hint: orphaned attachments preserved; rerun with --stop to stop/remove containers while preserving volumes
+```
+
+### Output with `--stop`
+
+```text
+Removed orphaned attachment containers:
+  postgres
+Hint: attachment volumes and data were preserved
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--stop` | Stop and remove orphaned attachment containers while preserving volumes/data |
+| `--json` | Output the cleanup report as JSON |
+| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
+| `--token` | Authentication token for remote |
 
 ## gordon attachments add
 

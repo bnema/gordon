@@ -41,7 +41,12 @@ func (r *remoteControlPlane) UpdateRoute(ctx context.Context, route domain.Route
 }
 
 func (r *remoteControlPlane) RemoveRoute(ctx context.Context, routeDomain string) error {
-	return r.client.RemoveRoute(ctx, routeDomain)
+	_, err := r.RemoveRouteWithCleanup(ctx, routeDomain)
+	return err
+}
+
+func (r *remoteControlPlane) RemoveRouteWithCleanup(ctx context.Context, routeDomain string) (*dto.RouteDeleteResponse, error) {
+	return r.client.RemoveRouteWithCleanup(ctx, routeDomain)
 }
 
 func (r *remoteControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
@@ -66,6 +71,14 @@ func (r *remoteControlPlane) SetAttachmentSecrets(ctx context.Context, domainNam
 
 func (r *remoteControlPlane) DeleteAttachmentSecret(ctx context.Context, domainName, service, key string) error {
 	return r.client.DeleteAttachmentSecret(ctx, domainName, service, key)
+}
+
+func (r *remoteControlPlane) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
+	return r.client.ListOrphanedAttachments(ctx)
+}
+
+func (r *remoteControlPlane) CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
+	return r.client.CleanupOrphanedAttachments(ctx, owner, stop)
 }
 
 func (r *remoteControlPlane) GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error) {

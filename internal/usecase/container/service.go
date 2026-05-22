@@ -1159,6 +1159,165 @@ func (s *Service) Stop(ctx context.Context, containerID string) error {
 	return nil
 }
 
+// ReconcileRemovedRoute removes active runtime containers for a route that was
+// removed from configuration while preserving stateful resources for explicit
+// follow-up cleanup. It intentionally removes only main route containers, never
+// attachment containers or volumes.
+func (s *Service) ReconcileRemovedRoute(ctx context.Context, domainName string) (*domain.CleanupReport, error) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
+		return &domain.CleanupReport{Domain: domainName}, domain.ErrRouteDomainInvalid
+	}
+	domainName = canonicalDomain
+
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "ReconcileRemovedRoute",
+		"domain":              domainName,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	report := &domain.CleanupReport{Domain: domainName}
+
+	unlock, err := s.acquireDomainDeployLock(ctx, domainName)
+	if err != nil {
+		return report, err
+	}
+	defer unlock()
+
+	allContainers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return report, log.WrapErr(err, "failed to list containers for removed route cleanup")
+	}
+
+	routeContainers := routeContainersForDomain(allContainers, domainName)
+
+	// Clear in-memory state before stopping containers so the monitor cannot
+	// interpret the deliberate removal as a crash that should be restarted.
+	s.clearRouteContainerTracking(ctx, domainName)
+	if inv := s.proxyCacheInvalidator(); inv != nil {
+		inv.InvalidateTarget(ctx, domainName)
+	}
+
+	report.PreservedAttachments = preservedAttachmentsForDomain(allContainers, domainName)
+	if len(report.PreservedAttachments) > 0 {
+		report.Hints = append(report.Hints, "attachments preserved; remove or purge attachments explicitly if they are no longer needed")
+	}
+
+	if len(routeContainers) == 0 {
+		report.Warnings = append(report.Warnings, "no active route container found for removed route")
+		return report, nil
+	}
+
+	s.removeRouteContainersForCleanup(ctx, log, routeContainers, report)
+
+	if len(report.PartialFailures) > 0 {
+		report.Warnings = append(report.Warnings, "route cleanup completed with partial failures; manual follow-up may be required")
+	}
+
+	return report, nil
+}
+
+func routeContainersForDomain(containers []*domain.Container, domainName string) []*domain.Container {
+	var routeContainers []*domain.Container
+	for _, c := range containers {
+		if isManagedRouteContainerForDomain(c, domainName) {
+			routeContainers = append(routeContainers, c)
+		}
+	}
+	return routeContainers
+}
+
+func preservedAttachmentsForDomain(containers []*domain.Container, domainName string) []domain.CleanupAttachment {
+	var attachments []domain.CleanupAttachment
+	for _, c := range containers {
+		if isPreservedAttachmentForDomain(c, domainName) {
+			attachments = append(attachments, domain.CleanupAttachment{
+				Name:        c.Name,
+				Image:       c.Image,
+				ContainerID: c.ID,
+				Status:      c.Status,
+				Owner:       c.Labels[domain.LabelAttachedTo],
+				Reason:      "attachments are preserved by default; remove or purge them explicitly",
+			})
+		}
+	}
+	return attachments
+}
+
+func (s *Service) removeRouteContainersForCleanup(ctx context.Context, log zerowrap.Logger, containers []*domain.Container, report *domain.CleanupReport) {
+	for _, c := range containers {
+		s.stopRouteLogCollectionForCleanup(log, c, report)
+		s.stopRouteContainerForCleanup(ctx, log, c, report)
+		if err := s.runtime.RemoveContainer(ctx, c.ID, true); err != nil {
+			report.PartialFailures = append(report.PartialFailures, domain.CleanupFailure{Action: "remove", Kind: "container", ID: c.ID, Name: c.Name, Error: err.Error()})
+			log.Warn().Err(err).Str(zerowrap.FieldEntityID, c.ID).Msg("failed to remove removed route container")
+			continue
+		}
+		report.RemovedContainers = append(report.RemovedContainers, domain.CleanupContainer{ID: c.ID, Name: c.Name, Image: c.Image, Status: c.Status})
+	}
+}
+
+func (s *Service) stopRouteLogCollectionForCleanup(log zerowrap.Logger, c *domain.Container, report *domain.CleanupReport) {
+	if s.logWriter == nil {
+		return
+	}
+	if err := s.logWriter.StopLogging(c.ID); err != nil {
+		report.PartialFailures = append(report.PartialFailures, domain.CleanupFailure{Action: "stop_logging", Kind: "container", ID: c.ID, Name: c.Name, Error: err.Error()})
+		log.Warn().Err(err).Str(zerowrap.FieldEntityID, c.ID).Msg("failed to stop removed route log collection")
+	}
+}
+
+func (s *Service) stopRouteContainerForCleanup(ctx context.Context, log zerowrap.Logger, c *domain.Container, report *domain.CleanupReport) {
+	if c.Status != string(domain.ContainerStatusRunning) {
+		return
+	}
+	if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
+		report.PartialFailures = append(report.PartialFailures, domain.CleanupFailure{Action: "stop", Kind: "container", ID: c.ID, Name: c.Name, Error: err.Error()})
+		log.Warn().Err(err).Str(zerowrap.FieldEntityID, c.ID).Msg("failed to stop removed route container")
+	}
+}
+
+func isManagedRouteContainerForDomain(c *domain.Container, domainName string) bool {
+	if c == nil || c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
+		return false
+	}
+	if c.Labels[domain.LabelAttachment] == "true" {
+		return false
+	}
+	return c.Labels[domain.LabelRoute] == domainName || c.Labels[domain.LabelDomain] == domainName || c.Name == fmt.Sprintf("gordon-%s", domainName)
+}
+
+func isPreservedAttachmentForDomain(c *domain.Container, domainName string) bool {
+	if c == nil || c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
+		return false
+	}
+	return c.Labels[domain.LabelAttachment] == "true" && c.Labels[domain.LabelAttachedTo] == domainName
+}
+
+func (s *Service) proxyCacheInvalidator() out.ProxyCacheInvalidator {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cacheInvalidator
+}
+
+func (s *Service) clearRouteContainerTracking(ctx context.Context, domainName string) {
+	s.mu.Lock()
+	removed := false
+	if _, exists := s.containers[domainName]; exists {
+		delete(s.containers, domainName)
+		if s.managedCount > 0 {
+			s.managedCount--
+		}
+		removed = true
+	}
+	s.mu.Unlock()
+
+	if removed && s.metrics != nil {
+		s.metrics.ManagedContainers.Add(ctx, -1)
+	}
+}
+
 // Remove removes a container.
 func (s *Service) Remove(ctx context.Context, containerID string, force bool) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -1349,6 +1508,139 @@ func (s *Service) stripRegistryPrefix(image string) string {
 // ListAttachments returns attachments for a domain.
 func (s *Service) ListAttachments(ctx context.Context, domainName string) []domain.Attachment {
 	return s.getAttachmentsForDomain(ctx, domainName)
+}
+
+// ListOrphanedAttachments returns running attachment containers no longer configured.
+func (s *Service) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers with runtime for orphaned attachments: %w", err)
+	}
+	return s.orphanedAttachmentsFromContainers(containers), nil
+}
+
+// CleanupOrphanedAttachments optionally stops/removes orphaned attachment containers.
+// When owner is non-empty, cleanup is scoped to that attachment owner.
+func (s *Service) CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "CleanupOrphanedAttachments",
+		"owner":               owner,
+	})
+	log := zerowrap.FromCtx(ctx)
+	report := &domain.CleanupReport{Domain: owner}
+
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return report, fmt.Errorf("failed to list containers with runtime for orphaned attachment cleanup: %w", err)
+	}
+	orphans := filterAttachmentContainersByOwner(s.orphanedAttachmentContainers(containers), owner)
+	if !stop {
+		report.PreservedAttachments = cleanupAttachmentsFromContainers(orphans)
+		if len(report.PreservedAttachments) > 0 {
+			report.Hints = append(report.Hints, "orphaned attachments preserved; rerun with --stop to stop/remove containers while preserving volumes")
+		}
+		return report, nil
+	}
+
+	for _, c := range orphans {
+		s.stopRouteLogCollectionForCleanup(log, c, report)
+		s.stopRouteContainerForCleanup(ctx, log, c, report)
+		if err := s.runtime.RemoveContainer(ctx, c.ID, true); err != nil {
+			report.PartialFailures = append(report.PartialFailures, domain.CleanupFailure{Action: "remove", Kind: "attachment", ID: c.ID, Name: c.Name, Error: err.Error()})
+			log.Warn().Err(err).Str(zerowrap.FieldEntityID, c.ID).Msg("failed to remove orphaned attachment")
+			continue
+		}
+		report.RemovedContainers = append(report.RemovedContainers, domain.CleanupContainer{ID: c.ID, Name: c.Name, Image: attachmentImage(c), Status: c.Status})
+		s.untrackAttachmentContainer(c.Labels[domain.LabelAttachedTo], c.ID)
+	}
+	if len(report.RemovedContainers) > 0 {
+		report.Hints = append(report.Hints, "attachment volumes and data were preserved")
+	}
+	if len(report.PartialFailures) > 0 {
+		report.Warnings = append(report.Warnings, "attachment cleanup completed with partial failures; manual follow-up may be required")
+	}
+	return report, nil
+}
+
+func (s *Service) orphanedAttachmentsFromContainers(containers []*domain.Container) []domain.CleanupAttachment {
+	return cleanupAttachmentsFromContainers(s.orphanedAttachmentContainers(containers))
+}
+
+func (s *Service) orphanedAttachmentContainers(containers []*domain.Container) []*domain.Container {
+	var out []*domain.Container
+	for _, c := range containers {
+		if !isManagedAttachment(c) {
+			continue
+		}
+		owner := c.Labels[domain.LabelAttachedTo]
+		image := attachmentImage(c)
+		if owner == "" || image == "" || !s.isAttachmentConfiguredForOwner(owner, image) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func filterAttachmentContainersByOwner(containers []*domain.Container, owner string) []*domain.Container {
+	if owner == "" {
+		return containers
+	}
+	var out []*domain.Container
+	for _, c := range containers {
+		if c != nil && c.Labels != nil && strings.EqualFold(c.Labels[domain.LabelAttachedTo], owner) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func cleanupAttachmentsFromContainers(containers []*domain.Container) []domain.CleanupAttachment {
+	attachments := make([]domain.CleanupAttachment, 0, len(containers))
+	for _, c := range containers {
+		attachments = append(attachments, domain.CleanupAttachment{
+			Name:        c.Name,
+			Image:       attachmentImage(c),
+			ContainerID: c.ID,
+			Status:      c.Status,
+			Owner:       c.Labels[domain.LabelAttachedTo],
+			Reason:      "attachment container is no longer configured",
+		})
+	}
+	return attachments
+}
+
+func isManagedAttachment(c *domain.Container) bool {
+	return c != nil && c.Status == string(domain.ContainerStatusRunning) && c.Labels != nil && c.Labels[domain.LabelManaged] == "true" && c.Labels[domain.LabelAttachment] == "true"
+}
+
+func attachmentImage(c *domain.Container) string {
+	if c == nil {
+		return ""
+	}
+	if c.Labels != nil && c.Labels[domain.LabelImage] != "" {
+		return c.Labels[domain.LabelImage]
+	}
+	return c.Image
+}
+
+func (s *Service) isAttachmentConfiguredForOwner(owner, image string) bool {
+	return slices.Contains(s.resolveAttachmentsForDomain(owner), image)
+}
+
+func (s *Service) untrackAttachmentContainer(owner, containerID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := s.attachments[owner]
+	for i, id := range ids {
+		if id == containerID {
+			s.attachments[owner] = slices.Delete(ids, i, i+1)
+			break
+		}
+	}
+	if len(s.attachments[owner]) == 0 {
+		delete(s.attachments, owner)
+	}
 }
 
 // ListNetworks returns Gordon-managed networks.

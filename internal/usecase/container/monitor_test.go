@@ -127,6 +127,29 @@ func TestMonitor_RestartsUnhealthyContainer(t *testing.T) {
 	runtime.AssertExpectations(t)
 }
 
+func TestMonitor_SkipsUnhealthyRestartWhenContainerWasUntracked(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := newTestService(runtime)
+
+	tracked := &domain.Container{ID: "ctr-1", Image: "myapp:latest"}
+	svc.containers["app.example.com"] = tracked
+
+	runtime.EXPECT().InspectContainer(mock.Anything, "ctr-1").Run(func(context.Context, string) {
+		svc.mu.Lock()
+		delete(svc.containers, "app.example.com")
+		svc.mu.Unlock()
+	}).Return(&domain.Container{
+		ID:     "ctr-1",
+		Status: string(domain.ContainerStatusRunning),
+	}, nil)
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "ctr-1").Return("unhealthy", true, nil)
+
+	m := newMonitor(svc)
+	m.check(monitorTestContext())
+
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, "ctr-1")
+}
+
 func TestMonitor_CrashLoopBackoff(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	svc := newTestService(runtime)

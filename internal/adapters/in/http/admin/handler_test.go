@@ -721,6 +721,7 @@ func TestHandler_RoutesDelete_RequiresWriteScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wantStatus == http.StatusOK {
 				configSvc.EXPECT().RemoveRoute(mock.Anything, "app.example.com").Return(nil).Maybe()
+				containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.example.com").Return(&domain.CleanupReport{Domain: "app.example.com"}, nil).Maybe()
 			}
 
 			req := httptest.NewRequest("DELETE", "/admin/routes/app.example.com", nil)
@@ -732,6 +733,110 @@ func TestHandler_RoutesDelete_RequiresWriteScope(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, rec.Code)
 		})
 	}
+}
+
+func TestHandler_RoutesDelete_ReconcilesRuntimeWhenRouteAlreadyMissing(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	report := &domain.CleanupReport{Domain: "app.example.com"}
+
+	configSvc.EXPECT().RemoveRoute(mock.Anything, "app.example.com").Return(domain.ErrRouteNotFound).Once()
+	containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.example.com").Return(report, nil).Once()
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	req := httptest.NewRequest("DELETE", "/admin/routes/app.example.com", nil)
+	req = req.WithContext(ctxWithScopes("admin:routes:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp dto.RouteDeleteResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.NotNil(t, resp.Cleanup)
+	assert.Equal(t, "app.example.com", resp.Cleanup.Domain)
+}
+
+func TestHandler_RoutesDelete_ReturnsServerErrorWhenRuntimeCleanupFails(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	configSvc.EXPECT().RemoveRoute(mock.Anything, "app.example.com").Return(nil).Once()
+	containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.example.com").Return(nil, errors.New("boom")).Once()
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	req := httptest.NewRequest("DELETE", "/admin/routes/app.example.com", nil)
+	req = req.WithContext(ctxWithScopes("admin:routes:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, rec.Body.String(), "route removed but runtime cleanup failed")
+}
+
+func TestHandler_RoutesDelete_ReconcilesRuntimeAndReturnsCleanupReport(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	report := &domain.CleanupReport{
+		Domain: "app.example.com",
+		RemovedContainers: []domain.CleanupContainer{{
+			ID:   "container-1",
+			Name: "gordon-app.example.com",
+		}},
+		PreservedAttachments: []domain.CleanupAttachment{{
+			Name:        "postgres",
+			ContainerID: "attachment-1",
+			Status:      "running",
+		}},
+	}
+
+	removeCall := configSvc.EXPECT().RemoveRoute(mock.Anything, "app.example.com").Return(nil).Once()
+	cleanupCall := containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.example.com").Return(report, nil).Once()
+	mock.InOrder(removeCall, cleanupCall)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	req := httptest.NewRequest("DELETE", "/admin/routes/app.example.com", nil)
+	req = req.WithContext(ctxWithScopes("admin:routes:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp dto.RouteDeleteResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "removed", resp.Status)
+	require.NotNil(t, resp.Cleanup)
+	assert.Equal(t, "app.example.com", resp.Cleanup.Domain)
+	require.Len(t, resp.Cleanup.RemovedContainers, 1)
+	assert.Equal(t, "container-1", resp.Cleanup.RemovedContainers[0].ID)
+	require.Len(t, resp.Cleanup.PreservedAttachments, 1)
+	assert.Equal(t, "attachment-1", resp.Cleanup.PreservedAttachments[0].ContainerID)
 }
 
 // Secrets endpoint tests
@@ -2711,4 +2816,134 @@ func TestHandler_TLSStatus_POSTReturns405(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}
+
+func TestHandler_AttachmentOrphans_ReturnsOrphanedAttachments(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	attachments := []domain.CleanupAttachment{{ContainerID: "attachment-1", Name: "postgres", Owner: "app.example.com"}}
+	containerSvc.EXPECT().ListOrphanedAttachments(mock.Anything).Return(attachments, nil).Once()
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	req := httptest.NewRequest("GET", "/admin/attachments/orphans", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Attachments []domain.CleanupAttachment `json:"attachments"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Attachments, 1)
+	assert.Equal(t, "app.example.com", resp.Attachments[0].Owner)
+}
+
+func TestHandler_AttachmentPrune_StopsOnlyWhenRequested(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	report := &domain.CleanupReport{RemovedContainers: []domain.CleanupContainer{{ID: "attachment-1"}}}
+	containerSvc.EXPECT().CleanupOrphanedAttachments(mock.Anything, "", true).Return(report, nil).Once()
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	req := httptest.NewRequest("POST", "/admin/attachments/prune?stop=true", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got domain.CleanupReport
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	require.Len(t, got.RemovedContainers, 1)
+	assert.Equal(t, "attachment-1", got.RemovedContainers[0].ID)
+}
+
+func TestHandler_AttachmentOrphans_ReturnsServerErrorOnListFailure(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	containerSvc.EXPECT().ListOrphanedAttachments(mock.Anything).Return(nil, errors.New("boom")).Once()
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	req := httptest.NewRequest("GET", "/admin/attachments/orphans", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestHandler_AttachmentOrphans_PostReturns405(t *testing.T) {
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ContainerSvc = inmocks.NewMockContainerService(t)
+	})
+	req := httptest.NewRequest("POST", "/admin/attachments/orphans", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestHandler_AttachmentPrune_ReturnsServerErrorOnCleanupFailure(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	containerSvc.EXPECT().CleanupOrphanedAttachments(mock.Anything, "", true).Return(nil, errors.New("boom")).Once()
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	req := httptest.NewRequest("POST", "/admin/attachments/prune?stop=true", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestHandler_AttachmentPrune_GetReturns405(t *testing.T) {
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ContainerSvc = inmocks.NewMockContainerService(t)
+	})
+	req := httptest.NewRequest("GET", "/admin/attachments/prune", nil)
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
