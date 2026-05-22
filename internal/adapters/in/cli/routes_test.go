@@ -899,6 +899,87 @@ func TestAttachmentsForRouteDiagnosisUsesOwner(t *testing.T) {
 	assert.Equal(t, "match", matched[0].ContainerID)
 }
 
+func TestBuildRouteDiagnosis_VolumesAreScopedToExactRouteContainers(t *testing.T) {
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "example.test").Return(&domain.Route{Domain: "example.test", Image: "site:latest"}, nil).Once()
+	cpMock.EXPECT().ListRoutesWithDetails(context.Background()).Return([]remote.RouteInfo{{
+		Domain:          "example.test",
+		ContainerID:     "route-1",
+		ContainerStatus: "running",
+	}}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListVolumes(context.Background()).Return([]dto.Volume{
+		{Name: "gordon-example-test-data-docs", Containers: []string{"gordon-example.test"}},
+		{Name: "gordon-api-example-test-cache", Containers: []string{"gordon-api.example.test"}},
+	}, nil).Once()
+	cpMock.EXPECT().ListOrphanedAttachments(context.Background()).Return(nil, nil).Once()
+
+	diag, err := buildRouteDiagnosis(context.Background(), cpMock, "example.test")
+
+	require.NoError(t, err)
+	require.Len(t, diag.Volumes, 1)
+	assert.Equal(t, "gordon-example-test-data-docs", diag.Volumes[0].Name)
+}
+
+func TestBuildRouteDiagnosis_IncludesAttachmentVolumesWithDoubleUnderscoreOwnerEncoding(t *testing.T) {
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "app.example.test").Return(&domain.Route{Domain: "app.example.test", Image: "app:latest"}, nil).Once()
+	cpMock.EXPECT().ListRoutesWithDetails(context.Background()).Return([]remote.RouteInfo{{
+		Domain:          "app.example.test",
+		ContainerID:     "route-1",
+		ContainerStatus: "running",
+		Attachments: []dto.Attachment{{
+			Name:        "postgres",
+			Image:       "postgres:16",
+			ContainerID: "attachment-1",
+			Status:      "running",
+		}},
+	}}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListVolumes(context.Background()).Return([]dto.Volume{
+		{Name: "gordon-gordon-app__example__test-postgres-var-lib-postgresql", Containers: []string{"gordon-app__example__test-postgres"}},
+	}, nil).Once()
+	cpMock.EXPECT().ListOrphanedAttachments(context.Background()).Return(nil, nil).Once()
+
+	diag, err := buildRouteDiagnosis(context.Background(), cpMock, "app.example.test")
+
+	require.NoError(t, err)
+	require.Len(t, diag.Volumes, 1)
+	assert.Equal(t, "gordon-gordon-app__example__test-postgres-var-lib-postgresql", diag.Volumes[0].Name)
+}
+
+func TestWriteRouteDiagnosisText_ShowsActiveAttachmentsSeparatelyFromOrphans(t *testing.T) {
+	var out bytes.Buffer
+	diag := &routeDiagnosis{
+		Domain:     "app.example.test",
+		Configured: true,
+		Route:      &domain.Route{Domain: "app.example.test", Image: "app:latest"},
+		Runtime: &remote.RouteInfo{
+			Domain:          "app.example.test",
+			ContainerID:     "route-1",
+			ContainerStatus: "running",
+			Attachments: []dto.Attachment{{
+				Name:        "postgres",
+				Image:       "postgres:16",
+				ContainerID: "attachment-1",
+				Status:      "running",
+			}},
+		},
+		OrphanedAttachments: []domain.CleanupAttachment{{
+			Name:        "old-postgres",
+			ContainerID: "attachment-2",
+			Owner:       "app.example.test",
+		}},
+	}
+
+	err := writeRouteDiagnosisText(&out, diag)
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.Contains(t, rendered, "Active attachments:")
+	assert.Contains(t, rendered, "postgres (running)")
+	assert.Contains(t, rendered, "Orphaned attachment: old-postgres")
+}
+
 func TestRunRoutePurge_AttachmentsForceIsScopedToRoute(t *testing.T) {
 	cpMock := climocks.NewMockControlPlane(t)
 	orphanedAttachments := []domain.CleanupAttachment{

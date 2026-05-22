@@ -1125,8 +1125,8 @@ func buildRouteDiagnosis(ctx context.Context, cp ControlPlane, domainName string
 	loadRouteDiagnosisConfig(ctx, cp, domainName, diag)
 	loadRouteDiagnosisRuntime(ctx, cp, domainName, diag)
 	loadRouteDiagnosisHealth(ctx, cp, domainName, diag)
-	loadRouteDiagnosisVolumes(ctx, cp, domainName, diag)
 	loadRouteDiagnosisOrphanedAttachments(ctx, cp, domainName, diag)
+	loadRouteDiagnosisVolumes(ctx, cp, domainName, diag)
 	finalizeRouteDiagnosis(diag)
 	return diag, nil
 }
@@ -1166,7 +1166,8 @@ func loadRouteDiagnosisHealth(ctx context.Context, cp ControlPlane, domainName s
 
 func loadRouteDiagnosisVolumes(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
 	if volumes, err := cp.ListVolumes(ctx); err == nil {
-		diag.Volumes = volumesForRouteDiagnosis(volumes, domainName)
+		scope := newRouteResourceScope(domainName, diag.Runtime, diag.OrphanedAttachments)
+		diag.Volumes = volumesForRouteDiagnosis(volumes, scope)
 	}
 }
 
@@ -1194,15 +1195,73 @@ func finalizeRouteDiagnosis(diag *routeDiagnosis) {
 	}
 }
 
-func volumesForRouteDiagnosis(volumes []dto.Volume, domainName string) []dto.Volume {
-	needle := strings.ReplaceAll(strings.ToLower(domainName), ".", "-")
+type routeResourceScope struct {
+	containerNames map[string]struct{}
+	volumePrefixes []string
+}
+
+func newRouteResourceScope(domainName string, runtime *remote.RouteInfo, orphaned []domain.CleanupAttachment) routeResourceScope {
+	scope := routeResourceScope{
+		containerNames: make(map[string]struct{}),
+		volumePrefixes: []string{"gordon-" + strings.ReplaceAll(domainName, ".", "-") + "-"},
+	}
+	for _, name := range []string{
+		fmt.Sprintf("gordon-%s", domainName),
+		fmt.Sprintf("gordon-%s-new", domainName),
+		fmt.Sprintf("gordon-%s-next", domainName),
+	} {
+		scope.containerNames[name] = struct{}{}
+	}
+	if runtime != nil {
+		for _, attachment := range runtime.Attachments {
+			for _, name := range routeAttachmentContainerNameCandidates(domainName, attachment.Name) {
+				scope.containerNames[name] = struct{}{}
+				scope.volumePrefixes = append(scope.volumePrefixes, "gordon-"+name+"-")
+			}
+		}
+	}
+	for _, attachment := range orphaned {
+		if attachment.Name == "" {
+			continue
+		}
+		scope.containerNames[attachment.Name] = struct{}{}
+		scope.volumePrefixes = append(scope.volumePrefixes, "gordon-"+attachment.Name+"-")
+	}
+	return scope
+}
+
+func routeAttachmentContainerNameCandidates(domainName, serviceName string) []string {
+	if serviceName == "" {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("gordon-%s-%s", domain.SanitizeDomainForContainer(domainName), serviceName),
+		fmt.Sprintf("gordon-%s-%s", domain.SanitizeDomainForContainerLegacy(domainName), serviceName),
+	}
+}
+
+func volumesForRouteDiagnosis(volumes []dto.Volume, scope routeResourceScope) []dto.Volume {
 	var out []dto.Volume
 	for _, volume := range volumes {
-		if strings.Contains(strings.ToLower(volume.Name), needle) {
+		if scope.matchesVolume(volume) {
 			out = append(out, volume)
 		}
 	}
 	return out
+}
+
+func (s routeResourceScope) matchesVolume(volume dto.Volume) bool {
+	for _, containerName := range volume.Containers {
+		if _, ok := s.containerNames[containerName]; ok {
+			return true
+		}
+	}
+	for _, prefix := range s.volumePrefixes {
+		if strings.HasPrefix(volume.Name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func attachmentsForRouteDiagnosis(attachments []domain.CleanupAttachment, domainName string) []domain.CleanupAttachment {
@@ -1239,7 +1298,28 @@ func writeRouteDiagnosisSummary(out io.Writer, diag *routeDiagnosis) error {
 	if diag.Runtime == nil {
 		return nil
 	}
-	return cliWriteLine(out, cliRenderMeta("Container:", diag.Runtime.ContainerStatus+" "+shortContainerID(diag.Runtime.ContainerID)))
+	if err := cliWriteLine(out, cliRenderMeta("Container:", diag.Runtime.ContainerStatus+" "+shortContainerID(diag.Runtime.ContainerID))); err != nil {
+		return err
+	}
+	if len(diag.Runtime.Attachments) == 0 {
+		return nil
+	}
+	if err := cliWriteLine(out, cliRenderMeta("Active attachments:", "")); err != nil {
+		return err
+	}
+	for _, attachment := range diag.Runtime.Attachments {
+		label := attachment.Name
+		if label == "" {
+			label = attachment.ContainerID
+		}
+		if attachment.Status != "" {
+			label = fmt.Sprintf("%s (%s)", label, attachment.Status)
+		}
+		if err := cliWriteLine(out, "  "+label); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeRouteDiagnosisLeftovers(out io.Writer, diag *routeDiagnosis) error {
