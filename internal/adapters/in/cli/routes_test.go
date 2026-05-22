@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/bnema/gordon/internal/adapters/dto"
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
@@ -37,6 +37,14 @@ func (c *routesShowTestControlPlane) GetHealth(ctx context.Context) (map[string]
 	if c.getHealth != nil {
 		return c.getHealth(ctx)
 	}
+	panic("unexpected call")
+}
+
+func (c *routesShowTestControlPlane) ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error) {
+	panic("unexpected call")
+}
+
+func (c *routesShowTestControlPlane) CleanupOrphanedAttachments(context.Context, string, bool) (*domain.CleanupReport, error) {
 	panic("unexpected call")
 }
 
@@ -945,65 +953,24 @@ func TestAttachmentsForRouteDiagnosisUsesOwner(t *testing.T) {
 }
 
 func TestRunRoutePurge_AttachmentsForceIsScopedToRoute(t *testing.T) {
-	cp := &routePurgeTestControlPlane{
-		route: &domain.Route{Domain: "app.example.com", Image: "app:latest"},
-		orphanedAttachments: []domain.CleanupAttachment{
-			{ContainerID: "app-attachment", Owner: "app.example.com", Name: "postgres"},
-			{ContainerID: "other-attachment", Owner: "other.example.com", Name: "redis"},
-		},
+	cp := climocks.NewMockControlPlane(t)
+	orphanedAttachments := []domain.CleanupAttachment{
+		{ContainerID: "app-attachment", Owner: "app.example.com", Name: "postgres"},
+		{ContainerID: "other-attachment", Owner: "other.example.com", Name: "redis"},
 	}
+	cp.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil).Once()
+	cp.EXPECT().ListRoutesWithDetails(context.Background()).Return(nil, nil).Once()
+	cp.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
+	cp.EXPECT().ListVolumes(context.Background()).Return(nil, nil).Once()
+	cp.EXPECT().ListOrphanedAttachments(context.Background()).Return(orphanedAttachments, nil).Once()
+	cp.EXPECT().CleanupOrphanedAttachments(context.Background(), "app.example.com", true).Return(&domain.CleanupReport{
+		RemovedContainers: []domain.CleanupContainer{{ID: "app-attachment", Name: "postgres"}},
+	}, nil).Once()
 
 	report, err := runRoutePurge(context.Background(), cp, "app.example.com", routePurgeOptions{Force: true, Attachments: true})
 
 	require.NoError(t, err)
 	require.NotNil(t, report)
-	require.Len(t, cp.cleanedAttachments, 1)
-	assert.Equal(t, "app-attachment", cp.cleanedAttachments[0].ContainerID)
 	require.Len(t, report.RemovedContainers, 1)
 	assert.Equal(t, "app-attachment", report.RemovedContainers[0].ID)
-}
-
-type routePurgeTestControlPlane struct {
-	resolveFromImageTestControlPlane
-	route               *domain.Route
-	orphanedAttachments []domain.CleanupAttachment
-	cleanedAttachments  []domain.CleanupAttachment
-}
-
-func (c *routePurgeTestControlPlane) GetRoute(context.Context, string) (*domain.Route, error) {
-	if c.route == nil {
-		return nil, domain.ErrRouteNotFound
-	}
-	return c.route, nil
-}
-
-func (c *routePurgeTestControlPlane) ListRoutesWithDetails(context.Context) ([]remote.RouteInfo, error) {
-	return nil, nil
-}
-
-func (c *routePurgeTestControlPlane) GetHealth(context.Context) (map[string]*remote.RouteHealth, error) {
-	return nil, nil
-}
-
-func (c *routePurgeTestControlPlane) ListVolumes(context.Context) ([]dto.Volume, error) {
-	return nil, nil
-}
-
-func (c *routePurgeTestControlPlane) ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error) {
-	return c.orphanedAttachments, nil
-}
-
-func (c *routePurgeTestControlPlane) CleanupOrphanedAttachments(_ context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
-	if !stop {
-		return &domain.CleanupReport{}, nil
-	}
-	var report domain.CleanupReport
-	for _, attachment := range c.orphanedAttachments {
-		if attachment.Owner != owner {
-			continue
-		}
-		c.cleanedAttachments = append(c.cleanedAttachments, attachment)
-		report.RemovedContainers = append(report.RemovedContainers, domain.CleanupContainer{ID: attachment.ContainerID, Name: attachment.Name})
-	}
-	return &report, nil
 }
