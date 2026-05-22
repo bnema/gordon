@@ -1377,6 +1377,9 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 		Routes:         routeResponses,
 		ExternalRoutes: externalResponses,
 	}
+	if volumeCfg, ok := any(h.configSvc).(interface{ GetVolumeConfig() (bool, string, bool) }); ok {
+		config.Volumes.AutoCreate, config.Volumes.Prefix, config.Volumes.Preserve = volumeCfg.GetVolumeConfig()
+	}
 
 	h.sendJSON(w, http.StatusOK, config)
 }

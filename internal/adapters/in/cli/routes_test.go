@@ -914,6 +914,7 @@ func TestBuildRouteDiagnosis_VolumesAreScopedToExactRouteContainers(t *testing.T
 		{Name: "gordon-example-test-data-docs", Containers: []string{"gordon-example.test"}},
 		{Name: "gordon-api-example-test-cache", Containers: []string{"gordon-api.example.test"}},
 	}, nil).Once()
+	cpMock.EXPECT().GetConfig(context.Background()).Return(&remote.Config{}, nil).Once()
 	cpMock.EXPECT().ListOrphanedAttachments(context.Background()).Return(nil, nil).Once()
 
 	diag, err := buildRouteDiagnosis(context.Background(), cpMock, "example.test")
@@ -921,6 +922,38 @@ func TestBuildRouteDiagnosis_VolumesAreScopedToExactRouteContainers(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, diag.Volumes, 1)
 	assert.Equal(t, "gordon-example-test-data-docs", diag.Volumes[0].Name)
+}
+
+func TestBuildRouteDiagnosis_UsesConfiguredVolumePrefixForPreservedVolumes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/routes/example.test":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes":
+			require.Equal(t, "detailed=true", r.URL.RawQuery)
+			_, _ = w.Write([]byte(`{"routes":[]}`))
+		case "/admin/health":
+			_, _ = w.Write([]byte(`{"health":{}}`))
+		case "/admin/volumes":
+			_, _ = w.Write([]byte(`[{"name":"custom-example-test-data-docs","containers":[]}]`))
+		case "/admin/attachments/orphans":
+			_, _ = w.Write([]byte(`{"attachments":[]}`))
+		case "/admin/config":
+			_, _ = w.Write([]byte(`{"server":{"port":80,"registry_port":5000,"registry_domain":"registry.example.test"},"auto_route":{"enabled":false},"network_isolation":{"enabled":true,"prefix":"custom-network"},"volumes":{"auto_create":true,"prefix":"custom","preserve":true},"routes":[],"external_routes":[]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cp := NewRemoteControlPlane(remote.NewClient(srv.URL))
+	diag, err := buildRouteDiagnosis(context.Background(), cp, "example.test")
+
+	require.NoError(t, err)
+	require.Len(t, diag.Volumes, 1)
+	assert.Equal(t, "custom-example-test-data-docs", diag.Volumes[0].Name)
 }
 
 func TestBuildRouteDiagnosis_IncludesAttachmentVolumesWithDoubleUnderscoreOwnerEncoding(t *testing.T) {
@@ -941,6 +974,7 @@ func TestBuildRouteDiagnosis_IncludesAttachmentVolumesWithDoubleUnderscoreOwnerE
 	cpMock.EXPECT().ListVolumes(context.Background()).Return([]dto.Volume{
 		{Name: "gordon-gordon-app__example__test-postgres-var-lib-postgresql", Containers: []string{"gordon-app__example__test-postgres"}},
 	}, nil).Once()
+	cpMock.EXPECT().GetConfig(context.Background()).Return(&remote.Config{}, nil).Once()
 	cpMock.EXPECT().ListOrphanedAttachments(context.Background()).Return(nil, nil).Once()
 
 	diag, err := buildRouteDiagnosis(context.Background(), cpMock, "app.example.test")
@@ -978,6 +1012,38 @@ func TestBuildRouteDiagnosis_RemoteMissingRouteDoesNotWarnOnExpectedNotFound(t *
 	require.NoError(t, err)
 	assert.False(t, diag.Configured)
 	assert.Empty(t, diag.Warnings)
+}
+
+func TestRunRoutePurge_VolumesUsesConfiguredVolumePrefix(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/routes/example.test":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes":
+			require.Equal(t, "detailed=true", r.URL.RawQuery)
+			_, _ = w.Write([]byte(`{"routes":[]}`))
+		case "/admin/health":
+			_, _ = w.Write([]byte(`{"health":{}}`))
+		case "/admin/volumes":
+			_, _ = w.Write([]byte(`[{"name":"custom-example-test-data-docs","containers":[]}]`))
+		case "/admin/attachments/orphans":
+			_, _ = w.Write([]byte(`{"attachments":[]}`))
+		case "/admin/config":
+			_, _ = w.Write([]byte(`{"server":{"port":80,"registry_port":5000,"registry_domain":"registry.example.test"},"auto_route":{"enabled":false},"network_isolation":{"enabled":true,"prefix":"custom-network"},"volumes":{"auto_create":true,"prefix":"custom","preserve":true},"routes":[],"external_routes":[]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cp := NewRemoteControlPlane(remote.NewClient(srv.URL))
+	report, err := runRoutePurge(context.Background(), cp, "example.test", routePurgeOptions{Volumes: true})
+
+	require.NoError(t, err)
+	require.Len(t, report.PreservedVolumes, 1)
+	assert.Equal(t, "custom-example-test-data-docs", report.PreservedVolumes[0].Name)
 }
 
 func TestBuildRouteDiagnosis_UsesRouteScopedReviewHintForOrphanedAttachments(t *testing.T) {

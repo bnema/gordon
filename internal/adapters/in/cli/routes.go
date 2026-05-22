@@ -1166,9 +1166,21 @@ func loadRouteDiagnosisHealth(ctx context.Context, cp ControlPlane, domainName s
 
 func loadRouteDiagnosisVolumes(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
 	if volumes, err := cp.ListVolumes(ctx); err == nil {
-		scope := newRouteResourceScope(domainName, diag.Runtime, diag.OrphanedAttachments)
+		if len(volumes) == 0 {
+			return
+		}
+		scope := newRouteResourceScope(domainName, routeDiagnosisVolumePrefix(ctx, cp), diag.Runtime, diag.OrphanedAttachments)
 		diag.Volumes = volumesForRouteDiagnosis(volumes, scope)
 	}
+}
+
+func routeDiagnosisVolumePrefix(ctx context.Context, cp ControlPlane) string {
+	const defaultPrefix = "gordon"
+	cfg, err := cp.GetConfig(ctx)
+	if err != nil || cfg == nil || cfg.Volumes.Prefix == "" {
+		return defaultPrefix
+	}
+	return cfg.Volumes.Prefix
 }
 
 func loadRouteDiagnosisOrphanedAttachments(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
@@ -1200,10 +1212,13 @@ type routeResourceScope struct {
 	volumePrefixes []string
 }
 
-func newRouteResourceScope(domainName string, runtime *remote.RouteInfo, orphaned []domain.CleanupAttachment) routeResourceScope {
+func newRouteResourceScope(domainName, volumePrefix string, runtime *remote.RouteInfo, orphaned []domain.CleanupAttachment) routeResourceScope {
+	if volumePrefix == "" {
+		volumePrefix = "gordon"
+	}
 	scope := routeResourceScope{
 		containerNames: make(map[string]struct{}),
-		volumePrefixes: []string{"gordon-" + strings.ReplaceAll(domainName, ".", "-") + "-"},
+		volumePrefixes: []string{volumePrefix + "-" + strings.ReplaceAll(domainName, ".", "-") + "-"},
 	}
 	for _, name := range []string{
 		fmt.Sprintf("gordon-%s", domainName),
@@ -1216,7 +1231,7 @@ func newRouteResourceScope(domainName string, runtime *remote.RouteInfo, orphane
 		for _, attachment := range runtime.Attachments {
 			for _, name := range routeAttachmentContainerNameCandidates(domainName, attachment.Name) {
 				scope.containerNames[name] = struct{}{}
-				scope.volumePrefixes = append(scope.volumePrefixes, "gordon-"+name+"-")
+				scope.volumePrefixes = append(scope.volumePrefixes, volumePrefix+"-"+name+"-")
 			}
 		}
 	}
@@ -1225,7 +1240,7 @@ func newRouteResourceScope(domainName string, runtime *remote.RouteInfo, orphane
 			continue
 		}
 		scope.containerNames[attachment.Name] = struct{}{}
-		scope.volumePrefixes = append(scope.volumePrefixes, "gordon-"+attachment.Name+"-")
+		scope.volumePrefixes = append(scope.volumePrefixes, volumePrefix+"-"+attachment.Name+"-")
 	}
 	return scope
 }

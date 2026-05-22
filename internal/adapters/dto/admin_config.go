@@ -5,6 +5,7 @@ type ConfigResponse struct {
 	Server           ServerConfig           `json:"server"`
 	AutoRoute        AutoRouteConfig        `json:"auto_route"`
 	NetworkIsolation NetworkIsolationConfig `json:"network_isolation"`
+	Volumes          VolumesConfig          `json:"volumes"`
 	Routes           []Route                `json:"routes"`
 	ExternalRoutes   []ExternalRoute        `json:"external_routes"`
 }
@@ -26,6 +27,13 @@ type AutoRouteConfig struct {
 type NetworkIsolationConfig struct {
 	Enabled bool   `json:"enabled"`
 	Prefix  string `json:"prefix"`
+}
+
+// VolumesConfig represents volume settings relevant to runtime-managed volumes.
+type VolumesConfig struct {
+	AutoCreate bool   `json:"auto_create"`
+	Prefix     string `json:"prefix"`
+	Preserve   bool   `json:"preserve"`
 }
 
 // ExternalRoute represents an external route config entry.
