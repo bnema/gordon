@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -946,6 +948,36 @@ func TestBuildRouteDiagnosis_IncludesAttachmentVolumesWithDoubleUnderscoreOwnerE
 	require.NoError(t, err)
 	require.Len(t, diag.Volumes, 1)
 	assert.Equal(t, "gordon-gordon-app__example__test-postgres-var-lib-postgresql", diag.Volumes[0].Name)
+}
+
+func TestBuildRouteDiagnosis_RemoteMissingRouteDoesNotWarnOnExpectedNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/routes/missing.example.test":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes":
+			require.Equal(t, "detailed=true", r.URL.RawQuery)
+			_, _ = w.Write([]byte(`{"routes":[]}`))
+		case "/admin/health":
+			_, _ = w.Write([]byte(`{"health":{}}`))
+		case "/admin/volumes":
+			_, _ = w.Write([]byte(`[]`))
+		case "/admin/attachments/orphans":
+			_, _ = w.Write([]byte(`{"attachments":[]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cp := NewRemoteControlPlane(remote.NewClient(srv.URL))
+	diag, err := buildRouteDiagnosis(context.Background(), cp, "missing.example.test")
+
+	require.NoError(t, err)
+	assert.False(t, diag.Configured)
+	assert.Empty(t, diag.Warnings)
 }
 
 func TestWriteRouteDiagnosisText_ShowsActiveAttachmentsSeparatelyFromOrphans(t *testing.T) {

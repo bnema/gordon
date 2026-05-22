@@ -504,6 +504,10 @@ func (c *Client) GetRoute(ctx context.Context, routeDomain string) (*domain.Rout
 
 	var route domain.Route
 	if err := parseResponse(resp, &route); err != nil {
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+			return nil, domain.ErrRouteNotFound
+		}
 		return nil, err
 	}
 

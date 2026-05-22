@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -198,6 +199,22 @@ func TestClientFindAttachmentTargetsByImage(t *testing.T) {
 	targets, err := client.FindAttachmentTargetsByImage(context.Background(), "postgres:16")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"app.example.com", "workers"}, targets)
+}
+
+func TestClientGetRoute_Maps404ToDomainErrRouteNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/routes/missing.example.test", r.URL.Path)
+		require.Equal(t, http.MethodGet, r.Method)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"route not found"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	route, err := client.GetRoute(context.Background(), "missing.example.test")
+	require.Nil(t, route)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrRouteNotFound)
 }
 
 func TestClientFindAttachmentTargetsByImage_WithSlashContainingImage(t *testing.T) {
