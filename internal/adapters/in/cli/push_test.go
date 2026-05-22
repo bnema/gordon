@@ -11,192 +11,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bnema/gordon/internal/adapters/dto"
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
-
-type resolveFromImageTestControlPlane struct {
-	getRoute          func(context.Context, string) (*domain.Route, error)
-	findRoutesByImage func(context.Context, string) ([]domain.Route, error)
-}
-
-var _ ControlPlane = (*resolveFromImageTestControlPlane)(nil)
-
-func (c *resolveFromImageTestControlPlane) ListRoutesWithDetails(context.Context) ([]remote.RouteInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) GetHealth(context.Context) (map[string]*remote.RouteHealth, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) GetRoute(ctx context.Context, domainName string) (*domain.Route, error) {
-	if c.getRoute != nil {
-		return c.getRoute(ctx, domainName)
-	}
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
-	if c.findRoutesByImage != nil {
-		return c.findRoutesByImage(ctx, imageName)
-	}
-	return nil, nil
-}
-
-func (c *resolveFromImageTestControlPlane) AddRoute(context.Context, domain.Route) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) UpdateRoute(context.Context, domain.Route) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) RemoveRoute(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) Bootstrap(context.Context, dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) ListSecretsWithAttachments(context.Context, string) (*remote.SecretsListResult, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) SetSecrets(context.Context, string, map[string]string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) DeleteSecret(context.Context, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) SetAttachmentSecrets(context.Context, string, string, map[string]string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) DeleteAttachmentSecret(context.Context, string, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) GetAllAttachmentsConfig(context.Context) (map[string][]string, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) GetAttachmentsConfig(context.Context, string) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) CleanupOrphanedAttachments(context.Context, string, bool) (*domain.CleanupReport, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) FindAttachmentTargetsByImage(context.Context, string) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) AddAttachment(context.Context, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) RemoveAttachment(context.Context, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) GetAutoRouteAllowedDomains(context.Context) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) AddAutoRouteAllowedDomain(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) RemoveAutoRouteAllowedDomain(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) GetTLSStatus(context.Context) (*dto.TLSStatusResponse, error) {
-	return &dto.TLSStatusResponse{}, nil
-}
-
-func (c *resolveFromImageTestControlPlane) GetStatus(context.Context) (*remote.Status, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) Reload(context.Context) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) GetConfig(context.Context) (*remote.Config, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) DeployIntent(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) Deploy(context.Context, string) (*remote.DeployResult, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) Restart(context.Context, string, bool) (*remote.RestartResult, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) ListTags(context.Context, string) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) ListBackups(context.Context, string) ([]dto.BackupJob, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) BackupStatus(context.Context) ([]dto.BackupJob, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) RunBackup(context.Context, string, string) (*dto.BackupRunResponse, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) DetectDatabases(context.Context, string) ([]dto.DatabaseInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) GetProcessLogs(context.Context, int) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) GetContainerLogs(context.Context, string, int) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) StreamProcessLogs(context.Context, int) (<-chan string, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) StreamContainerLogs(context.Context, string, int) (<-chan string, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) ListVolumes(context.Context) ([]dto.Volume, error) {
-	panic("unexpected call")
-}
-
-func (c *resolveFromImageTestControlPlane) PruneVolumes(context.Context, dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
-	panic("unexpected call")
-}
 
 func TestValidateBuildArg(t *testing.T) {
 	tests := []struct {
@@ -631,13 +451,10 @@ func TestParseLabelPair(t *testing.T) {
 }
 
 func TestResolveFromImage_NoRouteSuggestsBootstrap(t *testing.T) {
-	cp := &resolveFromImageTestControlPlane{
-		findRoutesByImage: func(context.Context, string) ([]domain.Route, error) {
-			return nil, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().FindRoutesByImage(context.Background(), "myapp").Return(nil, nil).Once()
 
-	_, _, _, err := resolveFromImage(context.Background(), cp, "myapp", "Dockerfile")
+	_, _, _, err := resolveFromImage(context.Background(), cpMock, "myapp", "Dockerfile")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), `no route configured for image "myapp"`)
@@ -645,18 +462,10 @@ func TestResolveFromImage_NoRouteSuggestsBootstrap(t *testing.T) {
 }
 
 func TestResolveRoute_DottedBareImageUsesImageLookup(t *testing.T) {
-	cp := &resolveFromImageTestControlPlane{
-		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
-			assert.Equal(t, "my.app", imageName)
-			return []domain.Route{{Domain: "app.example.com", Image: "registry.example.com/my.app:latest"}}, nil
-		},
-		getRoute: func(context.Context, string) (*domain.Route, error) {
-			t.Fatalf("unexpected GetRoute call")
-			return nil, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().FindRoutesByImage(context.Background(), "my.app").Return([]domain.Route{{Domain: "app.example.com", Image: "registry.example.com/my.app:latest"}}, nil).Once()
 
-	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cp, "my.app", "", "Dockerfile")
+	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cpMock, "my.app", "", "Dockerfile")
 
 	assert.NoError(t, err)
 	assert.Equal(t, "registry.example.com", registry)
@@ -665,21 +474,12 @@ func TestResolveRoute_DottedBareImageUsesImageLookup(t *testing.T) {
 }
 
 func TestResolveRoute_DottedBareImageNoRoutesKeepsBootstrapError(t *testing.T) {
-	sawImageLookup := false
-	cp := &resolveFromImageTestControlPlane{
-		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
-			sawImageLookup = true
-			assert.Equal(t, "my.app", imageName)
-			return nil, nil
-		},
-		getRoute: func(_ context.Context, domainName string) (*domain.Route, error) {
-			assert.True(t, sawImageLookup, "expected image lookup before legacy domain lookup")
-			assert.Equal(t, "my.app", domainName)
-			return nil, domain.ErrRouteNotFound
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	imageLookup := cpMock.EXPECT().FindRoutesByImage(context.Background(), "my.app").Return(nil, nil).Once()
+	routeLookup := cpMock.EXPECT().GetRoute(context.Background(), "my.app").Return(nil, domain.ErrRouteNotFound).Once()
+	mock.InOrder(imageLookup, routeLookup)
 
-	_, _, _, err := resolveRoute(context.Background(), cp, "my.app", "", "Dockerfile")
+	_, _, _, err := resolveRoute(context.Background(), cpMock, "my.app", "", "Dockerfile")
 
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, domain.ErrNoRouteForImage))
@@ -696,21 +496,12 @@ func TestNoRouteForImageErrorWrapsSentinel(t *testing.T) {
 }
 
 func TestResolveRoute_DottedBareDomainFallsBackToLegacyLookup(t *testing.T) {
-	sawImageLookup := false
-	cp := &resolveFromImageTestControlPlane{
-		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
-			sawImageLookup = true
-			assert.Equal(t, "app.example.com", imageName)
-			return nil, nil
-		},
-		getRoute: func(_ context.Context, domainName string) (*domain.Route, error) {
-			assert.True(t, sawImageLookup, "expected image lookup before legacy domain lookup")
-			assert.Equal(t, "app.example.com", domainName)
-			return &domain.Route{Domain: domainName, Image: "registry.example.com/myapp:latest"}, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	imageLookup := cpMock.EXPECT().FindRoutesByImage(context.Background(), "app.example.com").Return(nil, nil).Once()
+	routeLookup := cpMock.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}, nil).Once()
+	mock.InOrder(imageLookup, routeLookup)
 
-	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cp, "app.example.com", "", "Dockerfile")
+	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cpMock, "app.example.com", "", "Dockerfile")
 
 	assert.NoError(t, err)
 	assert.Equal(t, "registry.example.com", registry)
@@ -719,14 +510,10 @@ func TestResolveRoute_DottedBareDomainFallsBackToLegacyLookup(t *testing.T) {
 }
 
 func TestResolveRoute_TaggedImageStripsTagBeforeLookup(t *testing.T) {
-	cp := &resolveFromImageTestControlPlane{
-		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
-			assert.Equal(t, "myapp", imageName)
-			return []domain.Route{{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}}, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().FindRoutesByImage(context.Background(), "myapp").Return([]domain.Route{{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}}, nil).Once()
 
-	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cp, "myapp:v1.2.3", "", "Dockerfile")
+	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cpMock, "myapp:v1.2.3", "", "Dockerfile")
 
 	assert.NoError(t, err)
 	assert.Equal(t, "registry.example.com", registry)
@@ -735,14 +522,10 @@ func TestResolveRoute_TaggedImageStripsTagBeforeLookup(t *testing.T) {
 }
 
 func TestResolveRoute_RegistryQualifiedTaggedImageUsesImageLookup(t *testing.T) {
-	cp := &resolveFromImageTestControlPlane{
-		findRoutesByImage: func(_ context.Context, imageName string) ([]domain.Route, error) {
-			assert.Equal(t, "registry.example.com/myapp", imageName)
-			return []domain.Route{{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}}, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().FindRoutesByImage(context.Background(), "registry.example.com/myapp").Return([]domain.Route{{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}}, nil).Once()
 
-	_, _, _, err := resolveRoute(context.Background(), cp, "registry.example.com/myapp:v1.2.3", "", "Dockerfile")
+	_, _, _, err := resolveRoute(context.Background(), cpMock, "registry.example.com/myapp:v1.2.3", "", "Dockerfile")
 
 	assert.NoError(t, err)
 }

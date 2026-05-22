@@ -23,32 +23,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type routesShowTestControlPlane struct {
-	resolveFromImageTestControlPlane
-	getHealth func(context.Context) (map[string]*remote.RouteHealth, error)
-}
-
-var _ ControlPlane = (*routesShowTestControlPlane)(nil)
-
-func (c *routesShowTestControlPlane) ListRoutesWithDetails(context.Context) ([]remote.RouteInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *routesShowTestControlPlane) GetHealth(ctx context.Context) (map[string]*remote.RouteHealth, error) {
-	if c.getHealth != nil {
-		return c.getHealth(ctx)
-	}
-	panic("unexpected call")
-}
-
-func (c *routesShowTestControlPlane) ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error) {
-	panic("unexpected call")
-}
-
-func (c *routesShowTestControlPlane) CleanupOrphanedAttachments(context.Context, string, bool) (*domain.CleanupReport, error) {
-	panic("unexpected call")
-}
-
 func TestTruncateImage(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -315,19 +289,12 @@ func TestRouteStatusTitle_PreservesProbeFailureError(t *testing.T) {
 }
 
 func TestRunRoutesShow_JSONIncludesHealthError(t *testing.T) {
-	fake := &routesShowTestControlPlane{
-		resolveFromImageTestControlPlane: resolveFromImageTestControlPlane{
-			getRoute: func(context.Context, string) (*domain.Route, error) {
-				return &domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil
-			},
-		},
-		getHealth: func(context.Context) (map[string]*remote.RouteHealth, error) {
-			return nil, errors.New("probe failed")
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(nil, errors.New("probe failed")).Once()
 
 	var out bytes.Buffer
-	err := runRoutesShow(context.Background(), fake, &out, "app.example.com", true)
+	err := runRoutesShow(context.Background(), cpMock, &out, "app.example.com", true)
 
 	require.NoError(t, err)
 
@@ -341,19 +308,12 @@ func TestRunRoutesShow_JSONIncludesHealthError(t *testing.T) {
 }
 
 func TestRunRoutesShow_TextIncludesHealthWarning(t *testing.T) {
-	fake := &routesShowTestControlPlane{
-		resolveFromImageTestControlPlane: resolveFromImageTestControlPlane{
-			getRoute: func(context.Context, string) (*domain.Route, error) {
-				return &domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil
-			},
-		},
-		getHealth: func(context.Context) (map[string]*remote.RouteHealth, error) {
-			return nil, errors.New("probe failed")
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(nil, errors.New("probe failed")).Once()
 
 	var out bytes.Buffer
-	err := runRoutesShow(context.Background(), fake, &out, "app.example.com", false)
+	err := runRoutesShow(context.Background(), cpMock, &out, "app.example.com", false)
 
 	require.NoError(t, err)
 
@@ -366,25 +326,18 @@ func TestRunRoutesShow_TextIncludesHealthWarning(t *testing.T) {
 }
 
 func TestRunRoutesShow_JSONIncludesRouteProbeFailureAndUnknownContainerStatus(t *testing.T) {
-	fake := &routesShowTestControlPlane{
-		resolveFromImageTestControlPlane: resolveFromImageTestControlPlane{
-			getRoute: func(context.Context, string) (*domain.Route, error) {
-				return &domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil
-			},
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(map[string]*remote.RouteHealth{
+		"app.example.com": {
+			HTTPStatus:      503,
+			ContainerStatus: "",
+			Error:           "probe failed",
 		},
-		getHealth: func(context.Context) (map[string]*remote.RouteHealth, error) {
-			return map[string]*remote.RouteHealth{
-				"app.example.com": {
-					HTTPStatus:      503,
-					ContainerStatus: "",
-					Error:           "probe failed",
-				},
-			}, nil
-		},
-	}
+	}, nil).Once()
 
 	var out bytes.Buffer
-	err := runRoutesShow(context.Background(), fake, &out, "app.example.com", true)
+	err := runRoutesShow(context.Background(), cpMock, &out, "app.example.com", true)
 
 	require.NoError(t, err)
 
@@ -398,25 +351,18 @@ func TestRunRoutesShow_JSONIncludesRouteProbeFailureAndUnknownContainerStatus(t 
 }
 
 func TestRunRoutesShow_TextIncludesRouteProbeFailureAndUnknownContainerStatus(t *testing.T) {
-	fake := &routesShowTestControlPlane{
-		resolveFromImageTestControlPlane: resolveFromImageTestControlPlane{
-			getRoute: func(context.Context, string) (*domain.Route, error) {
-				return &domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil
-			},
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(map[string]*remote.RouteHealth{
+		"app.example.com": {
+			HTTPStatus:      503,
+			ContainerStatus: "",
+			Error:           "probe failed",
 		},
-		getHealth: func(context.Context) (map[string]*remote.RouteHealth, error) {
-			return map[string]*remote.RouteHealth{
-				"app.example.com": {
-					HTTPStatus:      503,
-					ContainerStatus: "",
-					Error:           "probe failed",
-				},
-			}, nil
-		},
-	}
+	}, nil).Once()
 
 	var out bytes.Buffer
-	err := runRoutesShow(context.Background(), fake, &out, "app.example.com", false)
+	err := runRoutesShow(context.Background(), cpMock, &out, "app.example.com", false)
 
 	require.NoError(t, err)
 
@@ -954,21 +900,21 @@ func TestAttachmentsForRouteDiagnosisUsesOwner(t *testing.T) {
 }
 
 func TestRunRoutePurge_AttachmentsForceIsScopedToRoute(t *testing.T) {
-	cp := climocks.NewMockControlPlane(t)
+	cpMock := climocks.NewMockControlPlane(t)
 	orphanedAttachments := []domain.CleanupAttachment{
 		{ContainerID: "app-attachment", Owner: "app.example.com", Name: "postgres"},
 		{ContainerID: "other-attachment", Owner: "other.example.com", Name: "redis"},
 	}
-	cp.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil).Once()
-	cp.EXPECT().ListRoutesWithDetails(context.Background()).Return(nil, nil).Once()
-	cp.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
-	cp.EXPECT().ListVolumes(context.Background()).Return(nil, nil).Once()
-	cp.EXPECT().ListOrphanedAttachments(context.Background()).Return(orphanedAttachments, nil).Once()
-	cp.EXPECT().CleanupOrphanedAttachments(context.Background(), "app.example.com", true).Return(&domain.CleanupReport{
+	cpMock.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "app:latest"}, nil).Once()
+	cpMock.EXPECT().ListRoutesWithDetails(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListVolumes(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListOrphanedAttachments(context.Background()).Return(orphanedAttachments, nil).Once()
+	cpMock.EXPECT().CleanupOrphanedAttachments(context.Background(), "app.example.com", true).Return(&domain.CleanupReport{
 		RemovedContainers: []domain.CleanupContainer{{ID: "app-attachment", Name: "postgres"}},
 	}, nil).Once()
 
-	report, err := runRoutePurge(context.Background(), cp, "app.example.com", routePurgeOptions{Force: true, Attachments: true})
+	report, err := runRoutePurge(context.Background(), cpMock, "app.example.com", routePurgeOptions{Force: true, Attachments: true})
 
 	require.NoError(t, err)
 	require.NotNil(t, report)

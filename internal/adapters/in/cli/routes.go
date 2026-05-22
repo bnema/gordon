@@ -33,9 +33,7 @@ func truncateImage(image string, maxLen int) string {
 		return ""
 	}
 
-	if idx := strings.Index(image, "@sha256:"); idx != -1 {
-		name := image[:idx]
-		digest := image[idx+8:] // Skip "@sha256:"
+	if name, digest, ok := strings.Cut(image, "@sha256:"); ok {
 		if len(digest) > 12 {
 			digest = digest[:12]
 		}
@@ -349,17 +347,16 @@ func collectRoutesListAggregateSections(ctx context.Context, cfgPath string, dep
 	remoteSections := make([]routeListSection, len(names))
 	var wg sync.WaitGroup
 	for i, name := range names {
-		i, name := i, name
 		entry := remotes.entries[name]
 		wg.Add(1)
-		go func() {
+		go func(idx int, remoteName string, remoteEntry remote.RemoteEntry) {
 			defer wg.Done()
-			section, err := deps.loadRemote(ctx, name, entry)
+			section, err := deps.loadRemote(ctx, remoteName, remoteEntry)
 			if err != nil && section.Error == "" {
 				section.Error = err.Error()
 			}
-			remoteSections[i] = normalizeRouteListRemoteSection(section, name, entry)
-		}()
+			remoteSections[idx] = normalizeRouteListRemoteSection(section, remoteName, remoteEntry)
+		}(i, name, entry)
 	}
 	wg.Wait()
 
@@ -473,17 +470,16 @@ func collectRoutesStatusAggregateSections(ctx context.Context, cfgPath string, d
 	remoteSections := make([]routeStatusSection, len(names))
 	var wg sync.WaitGroup
 	for i, name := range names {
-		i, name := i, name
 		entry := remotes.entries[name]
 		wg.Add(1)
-		go func() {
+		go func(idx int, remoteName string, remoteEntry remote.RemoteEntry) {
 			defer wg.Done()
-			section, err := deps.loadRemote(ctx, name, entry)
+			section, err := deps.loadRemote(ctx, remoteName, remoteEntry)
 			if err != nil && section.Error == "" {
 				section.Error = err.Error()
 			}
-			remoteSections[i] = normalizeRouteStatusRemoteSection(section, name, entry)
-		}()
+			remoteSections[idx] = normalizeRouteStatusRemoteSection(section, remoteName, remoteEntry)
+		}(i, name, entry)
 	}
 	wg.Wait()
 
