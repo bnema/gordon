@@ -16,7 +16,7 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-type fakeImagesClient struct {
+type imagesClientMock struct {
 	listImagesResp []dto.Image
 	listImagesErr  error
 	pruneResp      *dto.ImagePruneResponse
@@ -27,7 +27,7 @@ type fakeImagesClient struct {
 	lastPruneOpts   dto.ImagePruneRequest
 }
 
-func (f *fakeImagesClient) ListImages(_ context.Context) ([]dto.Image, error) {
+func (f *imagesClientMock) ListImages(_ context.Context) ([]dto.Image, error) {
 	f.listImagesCalls++
 	if f.listImagesErr != nil {
 		return nil, f.listImagesErr
@@ -35,7 +35,7 @@ func (f *fakeImagesClient) ListImages(_ context.Context) ([]dto.Image, error) {
 	return f.listImagesResp, nil
 }
 
-func (f *fakeImagesClient) PruneImages(_ context.Context, req dto.ImagePruneRequest) (*dto.ImagePruneResponse, error) {
+func (f *imagesClientMock) PruneImages(_ context.Context, req dto.ImagePruneRequest) (*dto.ImagePruneResponse, error) {
 	f.pruneCalls++
 	f.lastPruneOpts = req
 	if f.pruneErr != nil {
@@ -50,7 +50,7 @@ func (f *fakeImagesClient) PruneImages(_ context.Context, req dto.ImagePruneRequ
 
 func TestRunImagesList_PrintsRowsAndSummary(t *testing.T) {
 	createdAt := time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		listImagesResp: []dto.Image{
 			{Repository: "registry.example.com/app", Tag: "latest", Size: 12_000_000, Created: createdAt, ID: "sha256:1111", Dangling: false},
 			{Repository: "<none>", Tag: "<none>", Size: 512_000, Created: createdAt, ID: "sha256:2222", Dangling: true},
@@ -71,7 +71,7 @@ func TestRunImagesList_PrintsRowsAndSummary(t *testing.T) {
 
 func TestRunImagesList_HeaderOrderAndSummaryLine(t *testing.T) {
 	createdAt := time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		listImagesResp: []dto.Image{
 			{Repository: "registry.example.com/app", Tag: "latest", Size: 12_000_000, Created: createdAt, ID: "sha256:1111", Dangling: false},
 		},
@@ -96,7 +96,7 @@ func TestRunImagesList_TruncatesLongValuesAndKeepsBoundedRowShape(t *testing.T) 
 	createdAt := time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
 	longRepository := "registry.example.com/team/this-is-a-very-long-service-name-with-extra-segments/and/more/segments/than/anyone/should/reasonably/use"
 	longImageID := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef-extra-suffix-for-overflow"
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		listImagesResp: []dto.Image{
 			{Repository: longRepository, Tag: "latest", Size: 12_000_000, Created: createdAt, ID: longImageID, Dangling: false},
 		},
@@ -138,7 +138,7 @@ func TestRunImagesList_LongDigestLikeValuesAndEmptyFormattedFields(t *testing.T)
 	longRepository := "registry.example.com/very/long/repository/path/with/deep/nesting/and-digest-like-ref@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef-extra"
 	longTag := "release-2026-02-12-build-metadata-with-a-very-very-long-tag-name"
 	longImageID := "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		listImagesResp: []dto.Image{
 			{Repository: longRepository, Tag: longTag, Size: 0, Created: time.Time{}, ID: longImageID, Dangling: true},
 		},
@@ -174,7 +174,7 @@ func TestRunImagesList_LongDigestLikeValuesAndEmptyFormattedFields(t *testing.T)
 }
 
 func TestRunImagesList_EmptyOutput(t *testing.T) {
-	client := &fakeImagesClient{listImagesResp: []dto.Image{}}
+	client := &imagesClientMock{listImagesResp: []dto.Image{}}
 
 	var out bytes.Buffer
 	err := runImagesList(context.Background(), client, &out, false)
@@ -192,7 +192,7 @@ func TestRunImagesList_EmptyOutput(t *testing.T) {
 
 func TestRunImagesPrune_DefaultScopeIsBothDanglingAndRegistry(t *testing.T) {
 	// No scope flags → both scopes enabled, keep-releases defaults to domain default.
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		pruneResp: &dto.ImagePruneResponse{
 			Runtime:  dto.RuntimePruneResult{DeletedCount: 1, SpaceReclaimed: 512},
 			Registry: dto.RegistryPruneResult{TagsRemoved: 2, BlobsRemoved: 1, SpaceReclaimed: 1024},
@@ -218,7 +218,7 @@ func TestRunImagesPrune_DefaultScopeIsBothDanglingAndRegistry(t *testing.T) {
 }
 
 func TestRunImagesPrune_DanglingOnlyScopeSkipsRegistry(t *testing.T) {
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		pruneResp: &dto.ImagePruneResponse{
 			Runtime: dto.RuntimePruneResult{DeletedCount: 3, SpaceReclaimed: 2048},
 		},
@@ -241,7 +241,7 @@ func TestRunImagesPrune_DanglingOnlyScopeSkipsRegistry(t *testing.T) {
 }
 
 func TestRunImagesPrune_RegistryOnlyScopeSkipsRuntime(t *testing.T) {
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		pruneResp: &dto.ImagePruneResponse{
 			Registry: dto.RegistryPruneResult{TagsRemoved: 4, BlobsRemoved: 2, SpaceReclaimed: 4096},
 		},
@@ -266,7 +266,7 @@ func TestRunImagesPrune_RegistryOnlyScopeSkipsRuntime(t *testing.T) {
 }
 
 func TestRunImagesPrune_BothScopeFlagsExplicit(t *testing.T) {
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		pruneResp: &dto.ImagePruneResponse{
 			Runtime:  dto.RuntimePruneResult{DeletedCount: 1, SpaceReclaimed: 100},
 			Registry: dto.RegistryPruneResult{TagsRemoved: 1, BlobsRemoved: 0, SpaceReclaimed: 200},
@@ -296,7 +296,7 @@ func TestRunImagesPrune_BothScopeFlagsExplicit(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunImagesPrune_DryRunBothScopes(t *testing.T) {
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		listImagesResp: []dto.Image{{Dangling: true}, {Dangling: false}, {Dangling: true}},
 	}
 
@@ -314,7 +314,7 @@ func TestRunImagesPrune_DryRunBothScopes(t *testing.T) {
 }
 
 func TestRunImagesPrune_DryRunDanglingOnlyScope(t *testing.T) {
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		listImagesResp: []dto.Image{{Dangling: true}},
 	}
 
@@ -330,7 +330,7 @@ func TestRunImagesPrune_DryRunDanglingOnlyScope(t *testing.T) {
 }
 
 func TestRunImagesPrune_DryRunRegistryOnlyScope(t *testing.T) {
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		listImagesResp: []dto.Image{{Dangling: true}, {Dangling: false}},
 	}
 
@@ -350,7 +350,7 @@ func TestRunImagesPrune_DryRunRegistryOnlyScope(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunImagesPrune_KeepReleasesControlsRetention(t *testing.T) {
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		pruneResp: &dto.ImagePruneResponse{
 			Runtime:  dto.RuntimePruneResult{DeletedCount: 0},
 			Registry: dto.RegistryPruneResult{TagsRemoved: 7, BlobsRemoved: 3, SpaceReclaimed: 9000},
@@ -367,7 +367,7 @@ func TestRunImagesPrune_KeepReleasesControlsRetention(t *testing.T) {
 }
 
 func TestRunImagesPrune_RejectsNegativeKeepReleases(t *testing.T) {
-	err := runImagesPrune(context.Background(), &fakeImagesClient{}, imagesPruneOptions{KeepReleases: -1}, &bytes.Buffer{})
+	err := runImagesPrune(context.Background(), &imagesClientMock{}, imagesPruneOptions{KeepReleases: -1}, &bytes.Buffer{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--keep-releases must be >= 0")
 }
@@ -385,7 +385,7 @@ func TestRunImagesPrune_NonDryRunCallsConfirm(t *testing.T) {
 	}
 	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
 
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		pruneResp: &dto.ImagePruneResponse{
 			Runtime:  dto.RuntimePruneResult{DeletedCount: 1},
 			Registry: dto.RegistryPruneResult{TagsRemoved: 1},
@@ -411,7 +411,7 @@ func TestRunImagesPrune_ConfirmPromptIncludesScopePreviewCounts(t *testing.T) {
 	}
 	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
 
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		listImagesResp: []dto.Image{
 			{Repository: "registry.example.com/app", Tag: "latest", Created: created},
 			{Repository: "registry.example.com/app", Tag: "v3", Created: created.Add(-1 * time.Hour)},
@@ -439,7 +439,7 @@ func TestRunImagesPrune_ConfirmRejectCancelsOperation(t *testing.T) {
 	}
 	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
 
-	client := &fakeImagesClient{pruneResp: &dto.ImagePruneResponse{}}
+	client := &imagesClientMock{pruneResp: &dto.ImagePruneResponse{}}
 
 	var out bytes.Buffer
 	opts := imagesPruneOptions{KeepReleases: domain.DefaultImagePruneKeepLast}
@@ -459,7 +459,7 @@ func TestRunImagesPrune_NoConfirmSkipsPrompt(t *testing.T) {
 	}
 	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
 
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		pruneResp: &dto.ImagePruneResponse{
 			Runtime: dto.RuntimePruneResult{DeletedCount: 1},
 		},
@@ -483,7 +483,7 @@ func TestRunImagesPrune_DryRunNeverPrompts(t *testing.T) {
 	}
 	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
 
-	client := &fakeImagesClient{
+	client := &imagesClientMock{
 		listImagesResp: []dto.Image{{Dangling: true}},
 	}
 
@@ -504,7 +504,7 @@ func TestRunImagesPrune_ReturnsRemoteErrors(t *testing.T) {
 	pruneConfirmFunc = func(_ string) (bool, error) { return true, nil }
 	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
 
-	client := &fakeImagesClient{pruneErr: errors.New("request failed")}
+	client := &imagesClientMock{pruneErr: errors.New("request failed")}
 
 	err := runImagesPrune(context.Background(), client, imagesPruneOptions{KeepReleases: 2}, &bytes.Buffer{})
 	require.Error(t, err)
@@ -516,7 +516,7 @@ func TestRunImagesPrune_RejectsEmptyResponse(t *testing.T) {
 	pruneConfirmFunc = func(_ string) (bool, error) { return true, nil }
 	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
 
-	client := &fakeImagesClient{pruneResp: nil}
+	client := &imagesClientMock{pruneResp: nil}
 	err := runImagesPrune(context.Background(), client, imagesPruneOptions{KeepReleases: 1}, &bytes.Buffer{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty response")
@@ -532,7 +532,7 @@ func stripANSI(value string) string {
 }
 
 func findHeaderLine(text string) string {
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if strings.Contains(line, "REPOSITORY") && strings.Contains(line, "DANGLING") {
 			return line
 		}
@@ -542,7 +542,7 @@ func findHeaderLine(text string) string {
 }
 
 func findImageListRowLine(text string, tag string) string {
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
@@ -562,7 +562,7 @@ func findImageListRowLine(text string, tag string) string {
 
 func findImageListRows(text string) [][]string {
 	rows := make([][]string, 0)
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue

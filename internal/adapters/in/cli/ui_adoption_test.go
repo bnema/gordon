@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 )
 
 var uiAdoptionHelperCalls = map[string]struct{}{
@@ -54,8 +55,8 @@ func TestPresentationHelpers(t *testing.T) {
 }
 
 func TestUIAdoption(t *testing.T) {
-	for _, expect := range uiAdoptionExpectations {
-		expect := expect
+	for i := range uiAdoptionExpectations {
+		expect := uiAdoptionExpectations[i]
 		t.Run(expect.family, func(t *testing.T) {
 			fset := token.NewFileSet()
 			fileNode, err := parser.ParseFile(fset, expect.file, nil, parser.AllErrors)
@@ -64,7 +65,6 @@ func TestUIAdoption(t *testing.T) {
 			}
 
 			for _, fnName := range expect.functions {
-				fnName := fnName
 				t.Run(fnName, func(t *testing.T) {
 					fn := findFuncDecl(fileNode, fnName)
 					if fn == nil {
@@ -150,26 +150,6 @@ func isForbiddenRawPrintCall(call *ast.CallExpr, sel *ast.SelectorExpr) bool {
 	return false
 }
 
-type imagesClientStub struct {
-	listResp  []dto.Image
-	pruneResp *dto.ImagePruneResponse
-	err       error
-}
-
-func (s imagesClientStub) ListImages(context.Context) ([]dto.Image, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	return s.listResp, nil
-}
-
-func (s imagesClientStub) PruneImages(context.Context, dto.ImagePruneRequest) (*dto.ImagePruneResponse, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	return s.pruneResp, nil
-}
-
 func TestUIAdoptionRuntimeSeams(t *testing.T) {
 	uiAdoptionSeamMu.Lock()
 	defer uiAdoptionSeamMu.Unlock()
@@ -201,13 +181,19 @@ func TestUIAdoptionRuntimeSeams(t *testing.T) {
 		t.Fatalf("version command execution failed: %v", err)
 	}
 
+	imagesMock := climocks.NewMockimagesClient(t)
+	imagesMock.EXPECT().ListImages(context.Background()).Return([]dto.Image{{Repository: "repo/app", Tag: "latest", ID: "sha256:abc", Size: 1}}, nil).Once()
+
 	imgBuf := new(bytes.Buffer)
-	if err := runImagesList(context.Background(), imagesClientStub{listResp: []dto.Image{{Repository: "repo/app", Tag: "latest", ID: "sha256:abc", Size: 1}}}, imgBuf, false); err != nil {
+	if err := runImagesList(context.Background(), imagesMock, imgBuf, false); err != nil {
 		t.Fatalf("runImagesList failed: %v", err)
 	}
 
+	pruneMock := climocks.NewMockimagesClient(t)
+	pruneMock.EXPECT().ListImages(context.Background()).Return([]dto.Image{}, nil).Once()
+
 	pruneBuf := new(bytes.Buffer)
-	if err := runImagesPrune(context.Background(), imagesClientStub{listResp: []dto.Image{}, pruneResp: &dto.ImagePruneResponse{}}, imagesPruneOptions{DryRun: true}, pruneBuf); err != nil {
+	if err := runImagesPrune(context.Background(), pruneMock, imagesPruneOptions{DryRun: true}, pruneBuf); err != nil {
 		t.Fatalf("runImagesPrune failed: %v", err)
 	}
 

@@ -53,3 +53,5 @@ packages:
     interfaces:
       pushImageOps:
       ControlPlane:
+      imagesClient:
+      volumesClient:

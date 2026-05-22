@@ -11,229 +11,47 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
-	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
-	"github.com/bnema/gordon/internal/domain"
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 )
-
-// tlsTestControlPlane implements ControlPlane for TLS tests.
-type tlsTestControlPlane struct {
-	getTLSStatus func(context.Context) (*dto.TLSStatusResponse, error)
-}
-
-var _ ControlPlane = (*tlsTestControlPlane)(nil)
-
-func (c *tlsTestControlPlane) ListRoutesWithDetails(context.Context) ([]remote.RouteInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) GetHealth(context.Context) (map[string]*remote.RouteHealth, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) GetRoute(context.Context, string) (*domain.Route, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) FindRoutesByImage(context.Context, string) ([]domain.Route, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) AddRoute(context.Context, domain.Route) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) UpdateRoute(context.Context, domain.Route) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) RemoveRoute(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) Bootstrap(context.Context, dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) ListSecretsWithAttachments(context.Context, string) (*remote.SecretsListResult, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) SetSecrets(context.Context, string, map[string]string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) DeleteSecret(context.Context, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) SetAttachmentSecrets(context.Context, string, string, map[string]string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) DeleteAttachmentSecret(context.Context, string, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) GetAllAttachmentsConfig(context.Context) (map[string][]string, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) GetAttachmentsConfig(context.Context, string) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) CleanupOrphanedAttachments(context.Context, string, bool) (*domain.CleanupReport, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) FindAttachmentTargetsByImage(context.Context, string) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) AddAttachment(context.Context, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) RemoveAttachment(context.Context, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) GetAutoRouteAllowedDomains(context.Context) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) AddAutoRouteAllowedDomain(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) RemoveAutoRouteAllowedDomain(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error) {
-	if c.getTLSStatus != nil {
-		return c.getTLSStatus(ctx)
-	}
-	return nil, nil
-}
-
-func (c *tlsTestControlPlane) GetStatus(context.Context) (*remote.Status, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) Reload(context.Context) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) GetConfig(context.Context) (*remote.Config, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) DeployIntent(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) Deploy(context.Context, string) (*remote.DeployResult, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) Restart(context.Context, string, bool) (*remote.RestartResult, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) ListTags(context.Context, string) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) ListBackups(context.Context, string) ([]dto.BackupJob, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) BackupStatus(context.Context) ([]dto.BackupJob, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) RunBackup(context.Context, string, string) (*dto.BackupRunResponse, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) DetectDatabases(context.Context, string) ([]dto.DatabaseInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) GetProcessLogs(context.Context, int) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) GetContainerLogs(context.Context, string, int) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) StreamProcessLogs(context.Context, int) (<-chan string, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) StreamContainerLogs(context.Context, string, int) (<-chan string, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) ListVolumes(context.Context) ([]dto.Volume, error) {
-	panic("unexpected call")
-}
-
-func (c *tlsTestControlPlane) PruneVolumes(context.Context, dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
-	panic("unexpected call")
-}
 
 func TestTLSStatus_HumanOutput(t *testing.T) {
 	notAfter := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
 
-	cp := &tlsTestControlPlane{
-		getTLSStatus: func(_ context.Context) (*dto.TLSStatusResponse, error) {
-			return &dto.TLSStatusResponse{
-				ACMEEnabled:     true,
-				ConfiguredMode:  "acme",
-				EffectiveMode:   "acme-staging",
-				SelectionReason: "configured",
-				TokenSource:     "env",
-				Certificates: []dto.TLSCertificateEntry{
-					{
-						ID:        "cert-abc123",
-						Names:     []string{"example.com", "www.example.com"},
-						Status:    "valid",
-						NotAfter:  notAfter,
-						LastError: "",
-					},
-				},
-				Routes: []dto.TLSRouteCoverage{
-					{
-						Domain:       "example.com",
-						Covered:      true,
-						CoveredBy:    "cert-abc123",
-						RequiredACME: true,
-					},
-					{
-						Domain:       "internal.local",
-						Covered:      false,
-						RequiredACME: false,
-						Error:        "self-signed cert",
-					},
-				},
-				Errors: []string{"route internal.local has no ACME cert"},
-			}, nil
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetTLSStatus(context.Background()).Return(&dto.TLSStatusResponse{
+		ACMEEnabled:     true,
+		ConfiguredMode:  "acme",
+		EffectiveMode:   "acme-staging",
+		SelectionReason: "configured",
+		TokenSource:     "env",
+		Certificates: []dto.TLSCertificateEntry{
+			{
+				ID:        "cert-abc123",
+				Names:     []string{"example.com", "www.example.com"},
+				Status:    "valid",
+				NotAfter:  notAfter,
+				LastError: "",
+			},
 		},
-	}
+		Routes: []dto.TLSRouteCoverage{
+			{
+				Domain:       "example.com",
+				Covered:      true,
+				CoveredBy:    "cert-abc123",
+				RequiredACME: true,
+			},
+			{
+				Domain:       "internal.local",
+				Covered:      false,
+				RequiredACME: false,
+				Error:        "self-signed cert",
+			},
+		},
+		Errors: []string{"route internal.local has no ACME cert"},
+	}, nil).Once()
 
 	var buf bytes.Buffer
-	err := runTLSStatusCmd(context.Background(), cp, &buf, false)
+	err := runTLSStatusCmd(context.Background(), cpMock, &buf, false)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -273,28 +91,25 @@ func TestTLSStatus_HumanOutput(t *testing.T) {
 func TestTLSStatus_JSONOutput(t *testing.T) {
 	notAfter := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
 
-	cp := &tlsTestControlPlane{
-		getTLSStatus: func(_ context.Context) (*dto.TLSStatusResponse, error) {
-			return &dto.TLSStatusResponse{
-				ACMEEnabled:    true,
-				ConfiguredMode: "acme",
-				EffectiveMode:  "acme-staging",
-				TokenSource:    "env",
-				Certificates: []dto.TLSCertificateEntry{
-					{
-						ID:        "cert-abc123",
-						Names:     []string{"example.com", "www.example.com"},
-						Status:    "valid",
-						NotAfter:  notAfter,
-						LastError: "",
-					},
-				},
-			}, nil
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetTLSStatus(context.Background()).Return(&dto.TLSStatusResponse{
+		ACMEEnabled:    true,
+		ConfiguredMode: "acme",
+		EffectiveMode:  "acme-staging",
+		TokenSource:    "env",
+		Certificates: []dto.TLSCertificateEntry{
+			{
+				ID:        "cert-abc123",
+				Names:     []string{"example.com", "www.example.com"},
+				Status:    "valid",
+				NotAfter:  notAfter,
+				LastError: "",
+			},
 		},
-	}
+	}, nil).Once()
 
 	var buf bytes.Buffer
-	err := runTLSStatusCmd(context.Background(), cp, &buf, true)
+	err := runTLSStatusCmd(context.Background(), cpMock, &buf, true)
 	require.NoError(t, err)
 
 	var result dto.TLSStatusResponse

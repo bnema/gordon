@@ -5,207 +5,19 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bnema/gordon/internal/adapters/dto"
 	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-type attachmentPushTestControlPlane struct {
-	findAttachmentTargets func(context.Context, string) ([]string, error)
-	getStatus             func(context.Context) (*remote.Status, error)
-}
-
-var _ ControlPlane = (*attachmentPushTestControlPlane)(nil)
-
-func (c *attachmentPushTestControlPlane) ListRoutesWithDetails(context.Context) ([]remote.RouteInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) GetHealth(context.Context) (map[string]*remote.RouteHealth, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) GetRoute(context.Context, string) (*domain.Route, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) FindRoutesByImage(context.Context, string) ([]domain.Route, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) AddRoute(context.Context, domain.Route) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) UpdateRoute(context.Context, domain.Route) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) RemoveRoute(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) Bootstrap(context.Context, dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) ListSecretsWithAttachments(context.Context, string) (*remote.SecretsListResult, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) SetSecrets(context.Context, string, map[string]string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) DeleteSecret(context.Context, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) SetAttachmentSecrets(context.Context, string, string, map[string]string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) DeleteAttachmentSecret(context.Context, string, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) GetAllAttachmentsConfig(context.Context) (map[string][]string, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) GetAttachmentsConfig(context.Context, string) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) CleanupOrphanedAttachments(context.Context, string, bool) (*domain.CleanupReport, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error) {
-	if c.findAttachmentTargets != nil {
-		return c.findAttachmentTargets(ctx, imageName)
-	}
-	return nil, nil
-}
-
-func (c *attachmentPushTestControlPlane) AddAttachment(context.Context, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) RemoveAttachment(context.Context, string, string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) GetAutoRouteAllowedDomains(context.Context) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) AddAutoRouteAllowedDomain(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) RemoveAutoRouteAllowedDomain(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) GetTLSStatus(context.Context) (*dto.TLSStatusResponse, error) {
-	return &dto.TLSStatusResponse{}, nil
-}
-
-func (c *attachmentPushTestControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {
-	if c.getStatus != nil {
-		return c.getStatus(ctx)
-	}
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) Reload(context.Context) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) GetConfig(context.Context) (*remote.Config, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) DeployIntent(context.Context, string) error {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) Deploy(context.Context, string) (*remote.DeployResult, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) Restart(context.Context, string, bool) (*remote.RestartResult, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) ListTags(context.Context, string) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) ListBackups(context.Context, string) ([]dto.BackupJob, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) BackupStatus(context.Context) ([]dto.BackupJob, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) RunBackup(context.Context, string, string) (*dto.BackupRunResponse, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) DetectDatabases(context.Context, string) ([]dto.DatabaseInfo, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) GetProcessLogs(context.Context, int) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) GetContainerLogs(context.Context, string, int) ([]string, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) StreamProcessLogs(context.Context, int) (<-chan string, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) StreamContainerLogs(context.Context, string, int) (<-chan string, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) ListVolumes(context.Context) ([]dto.Volume, error) {
-	panic("unexpected call")
-}
-
-func (c *attachmentPushTestControlPlane) PruneVolumes(context.Context, dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
-	panic("unexpected call")
-}
-
 func TestResolveAttachmentImage_OneTarget(t *testing.T) {
-	cp := &attachmentPushTestControlPlane{
-		findAttachmentTargets: func(context.Context, string) ([]string, error) {
-			return []string{"app.example.com"}, nil
-		},
-		getStatus: func(context.Context) (*remote.Status, error) {
-			return &remote.Status{RegistryDomain: "registry.example.com"}, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().FindAttachmentTargetsByImage(context.Background(), "postgres").Return([]string{"app.example.com"}, nil).Once()
+	cpMock.EXPECT().GetStatus(context.Background()).Return(&remote.Status{RegistryDomain: "registry.example.com"}, nil).Once()
 
-	registry, imageName, targets, err := resolveAttachmentImage(context.Background(), cp, "postgres")
+	registry, imageName, targets, err := resolveAttachmentImage(context.Background(), cpMock, "postgres")
 
 	require.NoError(t, err)
 	assert.Equal(t, "registry.example.com", registry)
@@ -214,16 +26,11 @@ func TestResolveAttachmentImage_OneTarget(t *testing.T) {
 }
 
 func TestResolveAttachmentImage_MultipleTargets(t *testing.T) {
-	cp := &attachmentPushTestControlPlane{
-		findAttachmentTargets: func(context.Context, string) ([]string, error) {
-			return []string{"app.example.com", "backend"}, nil
-		},
-		getStatus: func(context.Context) (*remote.Status, error) {
-			return &remote.Status{RegistryDomain: "registry.example.com"}, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().FindAttachmentTargetsByImage(context.Background(), "redis").Return([]string{"app.example.com", "backend"}, nil).Once()
+	cpMock.EXPECT().GetStatus(context.Background()).Return(&remote.Status{RegistryDomain: "registry.example.com"}, nil).Once()
 
-	registry, imageName, targets, err := resolveAttachmentImage(context.Background(), cp, "redis")
+	registry, imageName, targets, err := resolveAttachmentImage(context.Background(), cpMock, "redis")
 
 	require.NoError(t, err)
 	assert.Equal(t, "registry.example.com", registry)
@@ -232,13 +39,10 @@ func TestResolveAttachmentImage_MultipleTargets(t *testing.T) {
 }
 
 func TestResolveAttachmentImage_NotConfigured(t *testing.T) {
-	cp := &attachmentPushTestControlPlane{
-		findAttachmentTargets: func(context.Context, string) ([]string, error) {
-			return nil, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().FindAttachmentTargetsByImage(context.Background(), "postgres").Return(nil, nil).Once()
 
-	_, _, _, err := resolveAttachmentImage(context.Background(), cp, "postgres")
+	_, _, _, err := resolveAttachmentImage(context.Background(), cpMock, "postgres")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not configured as an attachment")
@@ -254,17 +58,12 @@ func TestAttachmentPushCmd_NoDeploy(t *testing.T) {
 		newImageOpsFn = origNewImageOps
 	})
 
-	cp := &attachmentPushTestControlPlane{
-		findAttachmentTargets: func(context.Context, string) ([]string, error) {
-			return []string{"app.example.com"}, nil
-		},
-		getStatus: func(context.Context) (*remote.Status, error) {
-			return &remote.Status{RegistryDomain: "registry.example.com"}, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().FindAttachmentTargetsByImage(context.Background(), "postgres").Return([]string{"app.example.com"}, nil).Once()
+	cpMock.EXPECT().GetStatus(context.Background()).Return(&remote.Status{RegistryDomain: "registry.example.com"}, nil).Once()
 
 	resolveControlPlaneFn = func(string) (*controlPlaneHandle, error) {
-		return &controlPlaneHandle{plane: cp}, nil
+		return &controlPlaneHandle{plane: cpMock}, nil
 	}
 	determineVersionFn = func(context.Context, string) string { return "v1.2.3" }
 	pushCalled := false
@@ -301,17 +100,12 @@ func TestAttachmentPushCmd_TaggedImageInputBuildsValidRefs(t *testing.T) {
 		newImageOpsFn = origNewImageOps
 	})
 
-	cp := &attachmentPushTestControlPlane{
-		findAttachmentTargets: func(context.Context, string) ([]string, error) {
-			return []string{"app.example.com"}, nil
-		},
-		getStatus: func(context.Context) (*remote.Status, error) {
-			return &remote.Status{RegistryDomain: "registry.example.com"}, nil
-		},
-	}
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().FindAttachmentTargetsByImage(context.Background(), "postgres:18").Return([]string{"app.example.com"}, nil).Once()
+	cpMock.EXPECT().GetStatus(context.Background()).Return(&remote.Status{RegistryDomain: "registry.example.com"}, nil).Once()
 
 	resolveControlPlaneFn = func(string) (*controlPlaneHandle, error) {
-		return &controlPlaneHandle{plane: cp}, nil
+		return &controlPlaneHandle{plane: cpMock}, nil
 	}
 	determineVersionFn = func(context.Context, string) string { return "v1.2.3" }
 

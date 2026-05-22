@@ -123,8 +123,7 @@ func isAuthError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var httpErr *remote.HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*remote.HTTPError](err); ok {
 		return httpErr.StatusCode == http.StatusUnauthorized
 	}
 	msg := err.Error()
