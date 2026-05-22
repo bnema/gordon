@@ -15,6 +15,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestValidateBuildArg(t *testing.T) {
@@ -474,8 +475,9 @@ func TestResolveRoute_DottedBareImageUsesImageLookup(t *testing.T) {
 
 func TestResolveRoute_DottedBareImageNoRoutesKeepsBootstrapError(t *testing.T) {
 	cpMock := climocks.NewMockControlPlane(t)
-	cpMock.EXPECT().FindRoutesByImage(context.Background(), "my.app").Return(nil, nil).Once()
-	cpMock.EXPECT().GetRoute(context.Background(), "my.app").Return(nil, domain.ErrRouteNotFound).Once()
+	imageLookup := cpMock.EXPECT().FindRoutesByImage(context.Background(), "my.app").Return(nil, nil).Once()
+	routeLookup := cpMock.EXPECT().GetRoute(context.Background(), "my.app").Return(nil, domain.ErrRouteNotFound).Once()
+	mock.InOrder(imageLookup, routeLookup)
 
 	_, _, _, err := resolveRoute(context.Background(), cpMock, "my.app", "", "Dockerfile")
 
@@ -495,8 +497,9 @@ func TestNoRouteForImageErrorWrapsSentinel(t *testing.T) {
 
 func TestResolveRoute_DottedBareDomainFallsBackToLegacyLookup(t *testing.T) {
 	cpMock := climocks.NewMockControlPlane(t)
-	cpMock.EXPECT().FindRoutesByImage(context.Background(), "app.example.com").Return(nil, nil).Once()
-	cpMock.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}, nil).Once()
+	imageLookup := cpMock.EXPECT().FindRoutesByImage(context.Background(), "app.example.com").Return(nil, nil).Once()
+	routeLookup := cpMock.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}, nil).Once()
+	mock.InOrder(imageLookup, routeLookup)
 
 	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cpMock, "app.example.com", "", "Dockerfile")
 

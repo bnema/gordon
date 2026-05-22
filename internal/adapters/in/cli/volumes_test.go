@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
@@ -45,8 +46,9 @@ func TestRunVolumesPrune_JSONExecutesActualPrune(t *testing.T) {
 		SpaceReclaimed: 1024,
 		Volumes:        []dto.Volume{{Name: "orphan1", Size: 1024}},
 	}
-	clientMock.EXPECT().PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: true}).Return(resp, nil).Once()
-	clientMock.EXPECT().PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: false}).Return(resp, nil).Once()
+	previewCall := clientMock.EXPECT().PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: true}).Return(resp, nil).Once()
+	pruneCall := clientMock.EXPECT().PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: false}).Return(resp, nil).Once()
+	mock.InOrder(previewCall, pruneCall)
 
 	var out bytes.Buffer
 	err := runVolumesPrune(context.Background(), clientMock, volumesPruneOptions{Json: true}, &out)
