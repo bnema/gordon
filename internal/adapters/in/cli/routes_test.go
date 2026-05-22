@@ -980,6 +980,49 @@ func TestBuildRouteDiagnosis_RemoteMissingRouteDoesNotWarnOnExpectedNotFound(t *
 	assert.Empty(t, diag.Warnings)
 }
 
+func TestBuildRouteDiagnosis_UsesRouteScopedReviewHintForOrphanedAttachments(t *testing.T) {
+	cpMock := climocks.NewMockControlPlane(t)
+	cpMock.EXPECT().GetRoute(context.Background(), "app.example.test").Return(&domain.Route{Domain: "app.example.test", Image: "app:latest"}, nil).Once()
+	cpMock.EXPECT().ListRoutesWithDetails(context.Background()).Return([]remote.RouteInfo{{
+		Domain:          "app.example.test",
+		ContainerID:     "route-1",
+		ContainerStatus: "running",
+	}}, nil).Once()
+	cpMock.EXPECT().GetHealth(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListVolumes(context.Background()).Return(nil, nil).Once()
+	cpMock.EXPECT().ListOrphanedAttachments(context.Background()).Return([]domain.CleanupAttachment{{
+		Name:        "old-postgres",
+		ContainerID: "attachment-1",
+		Owner:       "app.example.test",
+	}}, nil).Once()
+
+	diag, err := buildRouteDiagnosis(context.Background(), cpMock, "app.example.test")
+
+	require.NoError(t, err)
+	assert.Contains(t, diag.Hints, "run 'gordon routes purge app.example.test --attachments' to review orphaned attachment cleanup for this route")
+}
+
+func TestWriteRouteDiagnosisText_UsesNeutralVolumeLabelForConfiguredRoutes(t *testing.T) {
+	var out bytes.Buffer
+	diag := &routeDiagnosis{
+		Domain:     "app.example.test",
+		Configured: true,
+		Route:      &domain.Route{Domain: "app.example.test", Image: "app:latest"},
+		Runtime: &remote.RouteInfo{
+			Domain:          "app.example.test",
+			ContainerID:     "route-1",
+			ContainerStatus: "running",
+		},
+		Volumes: []dto.Volume{{Name: "gordon-app-example-test-data"}},
+	}
+
+	err := writeRouteDiagnosisText(&out, diag)
+	require.NoError(t, err)
+	rendered := stripANSI(out.String())
+	assert.Contains(t, rendered, "Volume: gordon-app-example-test-data")
+	assert.NotContains(t, rendered, "Preserved volume:")
+}
+
 func TestWriteRouteDiagnosisText_ShowsActiveAttachmentsSeparatelyFromOrphans(t *testing.T) {
 	var out bytes.Buffer
 	diag := &routeDiagnosis{

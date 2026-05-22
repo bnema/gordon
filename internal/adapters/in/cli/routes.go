@@ -1191,7 +1191,7 @@ func finalizeRouteDiagnosis(diag *routeDiagnosis) {
 		diag.Hints = append(diag.Hints, "persistent volumes are preserved by default")
 	}
 	if len(diag.OrphanedAttachments) > 0 {
-		diag.Hints = append(diag.Hints, "run 'gordon attachments prune --stop' to stop orphaned attachment containers while preserving volumes")
+		diag.Hints = append(diag.Hints, fmt.Sprintf("run 'gordon routes purge %s --attachments' to review orphaned attachment cleanup for this route", diag.Domain))
 	}
 }
 
@@ -1323,8 +1323,12 @@ func writeRouteDiagnosisSummary(out io.Writer, diag *routeDiagnosis) error {
 }
 
 func writeRouteDiagnosisLeftovers(out io.Writer, diag *routeDiagnosis) error {
+	volumeLabel := "Volume:"
+	if !diag.Configured {
+		volumeLabel = "Preserved volume:"
+	}
 	for _, volume := range diag.Volumes {
-		if err := cliWriteLine(out, cliRenderMeta("Preserved volume:", volume.Name)); err != nil {
+		if err := cliWriteLine(out, cliRenderMeta(volumeLabel, volume.Name)); err != nil {
 			return err
 		}
 	}
