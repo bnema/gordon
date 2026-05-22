@@ -346,16 +346,17 @@ func collectRoutesListAggregateSections(ctx context.Context, cfgPath string, dep
 	names := sortedRemoteNames(remotes.entries)
 	remoteSections := make([]routeListSection, len(names))
 	var wg sync.WaitGroup
-	for i := range names {
-		name := names[i]
+	for i, name := range names {
 		entry := remotes.entries[name]
-		wg.Go(func() {
-			section, err := deps.loadRemote(ctx, name, entry)
+		wg.Add(1)
+		go func(idx int, remoteName string, remoteEntry remote.RemoteEntry) {
+			defer wg.Done()
+			section, err := deps.loadRemote(ctx, remoteName, remoteEntry)
 			if err != nil && section.Error == "" {
 				section.Error = err.Error()
 			}
-			remoteSections[i] = normalizeRouteListRemoteSection(section, name, entry)
-		})
+			remoteSections[idx] = normalizeRouteListRemoteSection(section, remoteName, remoteEntry)
+		}(i, name, entry)
 	}
 	wg.Wait()
 
@@ -468,16 +469,17 @@ func collectRoutesStatusAggregateSections(ctx context.Context, cfgPath string, d
 	names := sortedRemoteNames(remotes.entries)
 	remoteSections := make([]routeStatusSection, len(names))
 	var wg sync.WaitGroup
-	for i := range names {
-		name := names[i]
+	for i, name := range names {
 		entry := remotes.entries[name]
-		wg.Go(func() {
-			section, err := deps.loadRemote(ctx, name, entry)
+		wg.Add(1)
+		go func(idx int, remoteName string, remoteEntry remote.RemoteEntry) {
+			defer wg.Done()
+			section, err := deps.loadRemote(ctx, remoteName, remoteEntry)
 			if err != nil && section.Error == "" {
 				section.Error = err.Error()
 			}
-			remoteSections[i] = normalizeRouteStatusRemoteSection(section, name, entry)
-		})
+			remoteSections[idx] = normalizeRouteStatusRemoteSection(section, remoteName, remoteEntry)
+		}(i, name, entry)
 	}
 	wg.Wait()
 
