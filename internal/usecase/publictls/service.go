@@ -38,6 +38,7 @@ const defaultObtainBatchSize = 1
 // Service manages public TLS certificates via ACME.
 type Service struct {
 	mu           sync.RWMutex
+	reconcileMu  sync.Mutex
 	cfg          Config
 	deps         ServiceDeps
 	log          zerowrap.Logger
@@ -131,6 +132,10 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		log.Debug().Msg("acme disabled, skipping reconcile")
 		return nil
 	}
+
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+
 	log.Debug().Msg("starting certificate reconciliation")
 
 	if s.deps.Store == nil {

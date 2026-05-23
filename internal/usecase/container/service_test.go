@@ -1277,6 +1277,33 @@ func TestService_SyncContainers(t *testing.T) {
 	assert.Contains(t, svc.containers, "app2.example.com")
 }
 
+func TestService_SyncContainers_KeepsRestartingManagedContainers(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
+	ctx := testContext()
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		{
+			ID:     "container-1",
+			Name:   "gordon-app1.example.com",
+			Status: "restarting",
+			Labels: map[string]string{
+				"gordon.domain":  "app1.example.com",
+				"gordon.managed": "true",
+			},
+		},
+	}, nil)
+
+	err := svc.SyncContainers(ctx)
+
+	assert.NoError(t, err)
+	assert.Len(t, svc.containers, 1)
+	assert.Contains(t, svc.containers, "app1.example.com")
+}
+
 func TestService_Shutdown(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
@@ -3566,6 +3593,27 @@ func TestService_Deploy_OrphanCleanup_NeverKillsRunningCanonical(t *testing.T) {
 	assert.Equal(t, "new-container", tracked.ID)
 }
 
+func TestService_CleanupOrphanedContainers_SkipsRestartingContainer(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
+	ctx := testContext()
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		{
+			ID:     "restarting-container",
+			Name:   "gordon-test.example.com",
+			Status: "restarting",
+		},
+	}, nil)
+
+	err := svc.cleanupOrphanedContainers(ctx, "test.example.com", "")
+
+	assert.NoError(t, err)
+}
+
 // TestService_Deploy_RollbackOnPostSwitchCrash verifies that if the new container crashes
 // during the post-switch stabilization window, traffic is automatically rolled back to the
 // old container: the old container is restored as tracked, the proxy cache is re-invalidated,
@@ -4491,6 +4539,55 @@ func TestService_ReconcileRemovedRoute_IsIdempotentWhenNoContainerExists(t *test
 	assert.Contains(t, report.Warnings, "no active route container found for removed route")
 }
 
+func TestService_PreviewRemovedRouteCleanup_ReportsRuntimeStateWithoutMutation(t *testing.T) {
+	ctx := testContext()
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+
+	mainContainer := &domain.Container{
+		ID:     "route-container",
+		Name:   "gordon-app.example.com",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged: "true",
+			domain.LabelRoute:   "app.example.com",
+			domain.LabelDomain:  "app.example.com",
+		},
+	}
+	attachment := &domain.Container{
+		ID:     "attachment-container",
+		Name:   "gordon-app-example-com-postgres",
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+		},
+	}
+
+	svc.mu.Lock()
+	svc.containers["app.example.com"] = mainContainer
+	svc.attachments["app.example.com"] = []string{attachment.ID}
+	svc.managedCount = 1
+	svc.mu.Unlock()
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{mainContainer, attachment}, nil).Once()
+
+	report, err := svc.PreviewRemovedRouteCleanup(ctx, "app.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, report)
+
+	require.Len(t, report.OrphanedEntities, 1)
+	assert.Equal(t, "route_container", report.OrphanedEntities[0].Kind)
+	assert.Equal(t, mainContainer.ID, report.OrphanedEntities[0].ID)
+	require.Len(t, report.PreservedAttachments, 1)
+	assert.Equal(t, attachment.ID, report.PreservedAttachments[0].ContainerID)
+	assert.Contains(t, report.Hints, "attachments preserved; remove or purge attachments explicitly if they are no longer needed")
+
+	_, exists := svc.Get(ctx, "app.example.com")
+	assert.True(t, exists, "preview should not clear route tracking")
+}
+
 func TestService_ReconcileRemovedRoute_CanonicalizesDomainBeforeCleanup(t *testing.T) {
 	ctx := testContext()
 	runtime := mocks.NewMockContainerRuntime(t)
@@ -4659,7 +4756,7 @@ func TestService_CleanupOrphanedAttachments_StopRemovesContainerButPreservesData
 	runtime := mocks.NewMockContainerRuntime(t)
 	logWriter := mocks.NewMockContainerLogWriter(t)
 	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), logWriter, Config{}, nil)
-	orphan := &domain.Container{
+	running := &domain.Container{
 		ID:     "postgres-1",
 		Name:   "gordon-app-example-com-postgres",
 		Image:  "postgres:16",
@@ -4671,20 +4768,35 @@ func TestService_CleanupOrphanedAttachments_StopRemovesContainerButPreservesData
 			domain.LabelImage:      "postgres:16",
 		},
 	}
+	stopped := &domain.Container{
+		ID:     "redis-1",
+		Name:   "gordon-app-example-com-redis",
+		Image:  "redis:7",
+		Status: string(domain.ContainerStatusExited),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: "app.example.com",
+			domain.LabelImage:      "redis:7",
+		},
+	}
 	svc.mu.Lock()
-	svc.attachments["app.example.com"] = []string{orphan.ID}
+	svc.attachments["app.example.com"] = []string{running.ID, stopped.ID}
 	svc.mu.Unlock()
 
-	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{orphan}, nil).Once()
-	logWriter.EXPECT().StopLogging(orphan.ID).Return(nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, orphan.ID).Return(nil).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, orphan.ID, true).Return(nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{running, stopped}, nil).Once()
+	logWriter.EXPECT().StopLogging(running.ID).Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, running.ID).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, running.ID, true).Return(nil).Once()
+	logWriter.EXPECT().StopLogging(stopped.ID).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, stopped.ID, true).Return(nil).Once()
 
 	report, err := svc.CleanupOrphanedAttachments(ctx, "", true)
 	require.NoError(t, err)
 	require.NotNil(t, report)
-	require.Len(t, report.RemovedContainers, 1)
-	assert.Equal(t, orphan.ID, report.RemovedContainers[0].ID)
+	require.Len(t, report.RemovedContainers, 2)
+	assert.Equal(t, running.ID, report.RemovedContainers[0].ID)
+	assert.Equal(t, stopped.ID, report.RemovedContainers[1].ID)
 	assert.Contains(t, report.Hints, "attachment volumes and data were preserved")
 
 	svc.mu.RLock()
@@ -4693,7 +4805,7 @@ func TestService_CleanupOrphanedAttachments_StopRemovesContainerButPreservesData
 	assert.Empty(t, ids)
 }
 
-func TestService_ListOrphanedAttachments_IgnoresStoppedAttachments(t *testing.T) {
+func TestService_ListOrphanedAttachments_IncludesStoppedAttachments(t *testing.T) {
 	ctx := testContext()
 	runtime := mocks.NewMockContainerRuntime(t)
 	svc := NewService(runtime, nil, mocks.NewMockEventPublisher(t), nil, Config{}, nil)
@@ -4713,7 +4825,9 @@ func TestService_ListOrphanedAttachments_IgnoresStoppedAttachments(t *testing.T)
 
 	orphans, err := svc.ListOrphanedAttachments(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, orphans)
+	require.Len(t, orphans, 1)
+	assert.Equal(t, stopped.ID, orphans[0].ContainerID)
+	assert.Equal(t, string(domain.ContainerStatusExited), orphans[0].Status)
 }
 
 func TestService_ListOrphanedAttachments_IncludesOwnerAndHonorsGroupConfig(t *testing.T) {

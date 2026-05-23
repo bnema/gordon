@@ -49,6 +49,10 @@ func (r *remoteControlPlane) RemoveRouteWithCleanup(ctx context.Context, routeDo
 	return r.client.RemoveRouteWithCleanup(ctx, routeDomain)
 }
 
+func (r *remoteControlPlane) GetRouteCleanupPreview(ctx context.Context, routeDomain string) (*domain.CleanupReport, error) {
+	return r.client.GetRouteCleanupPreview(ctx, routeDomain)
+}
+
 func (r *remoteControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
 	return r.client.Bootstrap(ctx, req)
 }

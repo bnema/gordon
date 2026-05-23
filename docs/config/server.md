@@ -48,14 +48,14 @@ The `port` setting controls where Gordon listens for HTTP traffic:
 
 ```toml
 [server]
-port = 8080  # Use 8080 for rootless containers with port forwarding
+port = 8088  # Default high port for rootless or forwarded setups
 ```
 
 For rootless containers, you'll typically use a high port and configure firewall port forwarding:
 
 ```bash
-# Forward port 80 to 8080
-sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8080
+# Forward port 80 to 8088
+sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
 ```
 
 ### Internal CA and TLS
@@ -115,7 +115,7 @@ HTTP-01 requires public access to port 80 for each hostname being validated. If 
 
 Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile run (default `1`) so enabling ACME on an existing multi-route server does not burst through every route and hit Let's Encrypt rate limits. Later reloads, restarts, or other explicit reconcile runs continue issuing remaining certificates.
 
-If the initial ACME reconcile fails (e.g. due to a transient network error or misconfiguration), Gordon logs the failure but still starts the renewal loop for already cached certificates. Operators should fix the underlying error and restart/reload Gordon to trigger a new obtain attempt for missing certificates.
+If the initial ACME reconcile fails (e.g. due to a transient network error or misconfiguration), Gordon logs the failure and keeps serving any existing certificates. The renewal loop retries reconcile work periodically, so missing certificates self-heal after the underlying issue is fixed without requiring a restart.
 
 For Cloudflare Full/Strict, Cloudflare terminates browser TLS at the edge and connects to Gordon over HTTPS. A public ACME certificate served by Gordon is the preferred origin certificate because Cloudflare Strict can validate it without custom origin trust. Cloudflare Flexible mode (HTTPS at the edge, HTTP to Gordon) is not end-to-end HTTPS.
 
@@ -412,7 +412,7 @@ HSTS headers are sent automatically on the HTTPS listener (when `r.TLS != nil`).
 
 ```toml
 [server]
-port = 8080
+port = 8088
 registry_port = 5000
 gordon_domain = "gordon.local"
 data_dir = "./dev-data"
@@ -422,7 +422,7 @@ data_dir = "./dev-data"
 
 ```toml
 [server]
-port = 8080
+port = 8088
 registry_port = 5000
 gordon_domain = "gordon.company.com"
 data_dir = "/var/lib/gordon"
@@ -432,14 +432,15 @@ data_dir = "/var/lib/gordon"
 
 ```toml
 [server]
-port = 8080      # High port for rootless
+port = 8088      # High port for rootless
 registry_port = 5000
 gordon_domain = "gordon.mydomain.com"
 ```
 
 With firewall port forwarding:
+
 ```bash
-sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8080
+sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
 sudo firewall-cmd --reload
 ```
 

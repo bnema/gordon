@@ -127,15 +127,16 @@ type routeStatusSection struct {
 }
 
 type routeDiagnosis struct {
-	Domain              string                     `json:"domain"`
-	Configured          bool                       `json:"configured"`
-	Route               *domain.Route              `json:"route,omitempty"`
-	Runtime             *remote.RouteInfo          `json:"runtime,omitempty"`
-	Health              *remote.RouteHealth        `json:"health,omitempty"`
-	Volumes             []dto.Volume               `json:"volumes,omitempty"`
-	OrphanedAttachments []domain.CleanupAttachment `json:"orphaned_attachments,omitempty"`
-	Warnings            []string                   `json:"warnings,omitempty"`
-	Hints               []string                   `json:"hints,omitempty"`
+	Domain              string                         `json:"domain"`
+	Configured          bool                           `json:"configured"`
+	Route               *domain.Route                  `json:"route,omitempty"`
+	Runtime             *remote.RouteInfo              `json:"runtime,omitempty"`
+	Health              *remote.RouteHealth            `json:"health,omitempty"`
+	Volumes             []dto.Volume                   `json:"volumes,omitempty"`
+	OrphanedAttachments []domain.CleanupAttachment     `json:"orphaned_attachments,omitempty"`
+	OrphanedEntities    []domain.CleanupOrphanedEntity `json:"orphaned_entities,omitempty"`
+	Warnings            []string                       `json:"warnings,omitempty"`
+	Hints               []string                       `json:"hints,omitempty"`
 }
 
 type routesListDeps struct {
@@ -787,13 +788,13 @@ func loadRoutesListLocalSection(ctx context.Context, cfgPath string) (routeListS
 func loadRoutesListRemoteSection(ctx context.Context, name string, entry remote.RemoteEntry) (routeListSection, error) {
 	section := routeListSection{Kind: "remote", Name: name, URL: entry.URL}
 	client := newRoutesTargetClient(name, entry)
-	routes, err := client.ListRoutesWithDetails(ctx)
+	routes, err := client.ListRoutes(ctx)
 	if err != nil {
 		section.Error = err.Error()
 		return section, nil
 	}
 
-	section.Routes = routeListItemsFromInfos(routes)
+	section.Routes = routeListItemsFromRoutes(routes)
 	return section, nil
 }
 
@@ -885,7 +886,7 @@ func routeStatusItemFromInfo(route remote.RouteInfo, routeHealth *remote.RouteHe
 	return item
 }
 
-func routeListItemsFromInfos(routes []remote.RouteInfo) []routeListItem {
+func routeListItemsFromRoutes(routes []domain.Route) []routeListItem {
 	items := make([]routeListItem, 0, len(routes))
 	for _, route := range routes {
 		items = append(items, routeListItem{Domain: route.Domain, Image: route.Image})
@@ -1105,7 +1106,7 @@ func newRoutesDiagnoseCmd() *cobra.Command {
 }
 
 func runRouteDiagnosis(ctx context.Context, domainName string, out io.Writer, jsonOut bool) error {
-	handle, err := resolveControlPlaneForRouteDomain(ctx, domainName)
+	handle, err := resolveControlPlaneForRouteCleanupDomain(ctx, domainName)
 	if err != nil {
 		return err
 	}
@@ -1123,6 +1124,7 @@ func runRouteDiagnosis(ctx context.Context, domainName string, out io.Writer, js
 func buildRouteDiagnosis(ctx context.Context, cp ControlPlane, domainName string) (*routeDiagnosis, error) {
 	diag := &routeDiagnosis{Domain: domainName}
 	loadRouteDiagnosisConfig(ctx, cp, domainName, diag)
+	loadRouteDiagnosisCleanupPreview(ctx, cp, domainName, diag)
 	loadRouteDiagnosisRuntime(ctx, cp, domainName, diag)
 	loadRouteDiagnosisHealth(ctx, cp, domainName, diag)
 	loadRouteDiagnosisOrphanedAttachments(ctx, cp, domainName, diag)
@@ -1141,6 +1143,39 @@ func loadRouteDiagnosisConfig(ctx context.Context, cp ControlPlane, domainName s
 	if err != nil && !errors.Is(err, domain.ErrRouteNotFound) {
 		diag.Warnings = append(diag.Warnings, "failed to load route config: "+err.Error())
 	}
+}
+
+func loadRouteDiagnosisCleanupPreview(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
+	if diag.Configured {
+		return
+	}
+	previewer, ok := cp.(interface {
+		GetRouteCleanupPreview(context.Context, string) (*domain.CleanupReport, error)
+	})
+	if !ok {
+		return
+	}
+
+	report, err := previewer.GetRouteCleanupPreview(ctx, domainName)
+	if err != nil {
+		if isRemoteNotFoundError(err) {
+			return
+		}
+		diag.Warnings = append(diag.Warnings, "failed to load route cleanup preview: "+err.Error())
+		return
+	}
+	if report == nil {
+		return
+	}
+	if len(diag.OrphanedAttachments) == 0 {
+		diag.OrphanedAttachments = append(diag.OrphanedAttachments, report.PreservedAttachments...)
+	}
+	if len(diag.Volumes) == 0 {
+		diag.Volumes = cleanupVolumesForDiagnosis(report.PreservedVolumes)
+	}
+	diag.OrphanedEntities = append(diag.OrphanedEntities, report.OrphanedEntities...)
+	diag.Warnings = append(diag.Warnings, report.Warnings...)
+	diag.Hints = append(diag.Hints, report.Hints...)
 }
 
 func loadRouteDiagnosisRuntime(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
@@ -1165,6 +1200,9 @@ func loadRouteDiagnosisHealth(ctx context.Context, cp ControlPlane, domainName s
 }
 
 func loadRouteDiagnosisVolumes(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
+	if len(diag.Volumes) > 0 {
+		return
+	}
 	if volumes, err := cp.ListVolumes(ctx); err == nil {
 		if len(volumes) == 0 {
 			return
@@ -1184,6 +1222,9 @@ func routeDiagnosisVolumePrefix(ctx context.Context, cp ControlPlane) string {
 }
 
 func loadRouteDiagnosisOrphanedAttachments(ctx context.Context, cp ControlPlane, domainName string, diag *routeDiagnosis) {
+	if len(diag.OrphanedAttachments) > 0 {
+		return
+	}
 	lister, ok := cp.(interface {
 		ListOrphanedAttachments(context.Context) ([]domain.CleanupAttachment, error)
 	})
@@ -1195,8 +1236,16 @@ func loadRouteDiagnosisOrphanedAttachments(ctx context.Context, cp ControlPlane,
 	}
 }
 
+func cleanupVolumesForDiagnosis(volumes []domain.CleanupVolume) []dto.Volume {
+	result := make([]dto.Volume, 0, len(volumes))
+	for _, volume := range volumes {
+		result = append(result, dto.Volume{Name: volume.Name})
+	}
+	return result
+}
+
 func finalizeRouteDiagnosis(diag *routeDiagnosis) {
-	if !diag.Configured && diag.Runtime != nil {
+	if !diag.Configured && (diag.Runtime != nil || hasRouteCleanupEntity(diag.OrphanedEntities, "route_container")) {
 		diag.Warnings = append(diag.Warnings, "route is not configured but runtime state still exists")
 	}
 	if len(diag.Volumes) > 0 {
@@ -1205,6 +1254,15 @@ func finalizeRouteDiagnosis(diag *routeDiagnosis) {
 	if len(diag.OrphanedAttachments) > 0 {
 		diag.Hints = append(diag.Hints, fmt.Sprintf("run 'gordon routes purge %s --attachments' to review orphaned attachment cleanup for this route", diag.Domain))
 	}
+}
+
+func hasRouteCleanupEntity(entities []domain.CleanupOrphanedEntity, kind string) bool {
+	for _, entity := range entities {
+		if entity.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 type routeResourceScope struct {
@@ -1338,6 +1396,21 @@ func writeRouteDiagnosisSummary(out io.Writer, diag *routeDiagnosis) error {
 }
 
 func writeRouteDiagnosisLeftovers(out io.Writer, diag *routeDiagnosis) error {
+	for _, entity := range diag.OrphanedEntities {
+		label := entity.Name
+		if label == "" {
+			label = entity.ID
+		}
+		if label == "" {
+			label = entity.Kind
+		}
+		if entity.Status != "" {
+			label = fmt.Sprintf("%s (%s)", label, entity.Status)
+		}
+		if err := cliWriteLine(out, cliRenderWarning("Orphaned "+strings.ReplaceAll(entity.Kind, "_", " ")+": "+label)); err != nil {
+			return err
+		}
+	}
 	volumeLabel := "Volume:"
 	if !diag.Configured {
 		volumeLabel = "Preserved volume:"
@@ -1382,7 +1455,7 @@ type routePurgeOptions struct {
 }
 
 func runRoutePurgeCommand(ctx context.Context, domainName string, out io.Writer, opts routePurgeOptions, jsonOut bool) error {
-	handle, err := resolveControlPlaneForRouteDomain(ctx, domainName)
+	handle, err := resolveControlPlaneForRouteCleanupDomain(ctx, domainName)
 	if err != nil {
 		return err
 	}
@@ -1406,6 +1479,7 @@ func runRoutePurge(ctx context.Context, cp ControlPlane, domainName string, opts
 	if diag.Runtime != nil && diag.Runtime.ContainerID != "" {
 		report.OrphanedEntities = append(report.OrphanedEntities, domain.CleanupOrphanedEntity{Kind: "route_container", ID: diag.Runtime.ContainerID, Status: diag.Runtime.ContainerStatus, Reason: "route runtime state matched purge target"})
 	}
+	report.OrphanedEntities = appendUniqueCleanupEntities(report.OrphanedEntities, diag.OrphanedEntities...)
 	if opts.Volumes {
 		for _, volume := range diag.Volumes {
 			report.PreservedVolumes = append(report.PreservedVolumes, domain.CleanupVolume{Name: volume.Name, Reason: "volume purge requires explicit --volumes and runtime support"})
@@ -1440,6 +1514,26 @@ func runRoutePurge(ctx context.Context, cp ControlPlane, domainName string, opts
 		report.Hints = append(report.Hints, "dry-run only; add --force with explicit category flags to execute supported purge actions")
 	}
 	return report, nil
+}
+
+func appendUniqueCleanupEntities(existing []domain.CleanupOrphanedEntity, candidates ...domain.CleanupOrphanedEntity) []domain.CleanupOrphanedEntity {
+	seen := make(map[string]struct{}, len(existing))
+	for _, entity := range existing {
+		seen[cleanupEntityKey(entity)] = struct{}{}
+	}
+	for _, entity := range candidates {
+		key := cleanupEntityKey(entity)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		existing = append(existing, entity)
+		seen[key] = struct{}{}
+	}
+	return existing
+}
+
+func cleanupEntityKey(entity domain.CleanupOrphanedEntity) string {
+	return entity.Kind + "|" + entity.ID + "|" + entity.Name
 }
 
 func writeRoutePurgeText(out io.Writer, report *domain.CleanupReport, force bool) error {
@@ -1485,7 +1579,7 @@ Examples:
   gordon --remote https://gordon.mydomain.com routes add api.mydomain.com api:v2`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			routeDomain := args[0]
 
 			// Resolve image from positional argument or flag
@@ -1511,7 +1605,10 @@ Examples:
 				Image:  image,
 			}
 
-			client, isRemote := GetRemoteClient()
+			client, isRemote, err := GetRemoteClient()
+			if err != nil {
+				return err
+			}
 			if isRemote {
 				if err := client.AddRoute(ctx, route); err != nil {
 					return fmt.Errorf("failed to add route: %w", err)
@@ -1526,8 +1623,7 @@ Examples:
 				}
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route configured: %s -> %s", routeDomain, image)))
-			return nil
+			return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Route configured: %s -> %s", routeDomain, image)))
 		},
 	}
 
@@ -1568,7 +1664,7 @@ Examples:
 				}
 			}
 
-			handle, err := resolveControlPlaneForRouteDomain(ctx, routeDomain)
+			handle, err := resolveControlPlaneForRouteCleanupDomain(ctx, routeDomain)
 			if err != nil {
 				return err
 			}

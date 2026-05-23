@@ -3,10 +3,33 @@
 
 [server]
 port = 8088
+tls_port = 8443
 registry_port = 5000
 gordon_domain = "gordon.example.com"
 # legacy_registry_domains = ["registry.example.com:5000"]
+# proxy_allowed_ips = ["173.245.48.0/20"]
+# registry_allowed_ips = []
+# registry_listen_address = ""
+# tls_cert_file = ""
+# tls_key_file = ""
+# force_https_redirect = false
 # data_dir = "~/.gordon"
+# max_blob_chunk_size = "95MB"
+# max_blob_size = "1GB"
+# max_proxy_body_size = "512MB"
+# max_proxy_response_size = "1GB"
+# max_concurrent_connections = 10000
+
+[dns]
+resolvers = ["1.1.1.1:53", "8.8.8.8:53"]
+propagation_timeout = "5m"
+polling_interval = "5s"
+
+[tls.acme]
+enabled = false
+email = ""
+challenge = "auto"
+obtain_batch_size = 1
 
 [auth]
 enabled = true
@@ -68,8 +91,42 @@ enabled = false
 level = "info"
 format = "console"
 
+[logging.file]
+enabled = false
+# path = "~/.gordon/logs/gordon.log"
+# max_size = 100
+# max_backups = 3
+# max_age = 28
+
 [logging.container_logs]
 enabled = true
+# dir = "~/.gordon/logs/containers"
+# max_size = 100
+# max_backups = 3
+# max_age = 28
+
+[logging.access_log]
+enabled = false
+format = "json"
+output = "stdout"
+# file_path = "~/.gordon/logs/access.log"
+max_size = 100
+max_backups = 3
+max_age = 28
+exclude_health_checks = true
+syslog_identifier = "gordon-access"
+
+[telemetry]
+enabled = false
+# endpoint = "http://localhost:4318"
+# auth_token = ""
+traces = true
+metrics = true
+logs = true
+trace_sample_rate = 1.0
+
+[env]
+# dir = "~/.gordon/env"
 
 [backups]
 enabled = false

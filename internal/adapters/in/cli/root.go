@@ -172,15 +172,18 @@ Commands are organized by where they run:
 
 // GetRemoteClient returns a remote client if targeting a remote instance,
 // or nil if running locally.
-func GetRemoteClient() (*remote.Client, bool) {
-	resolved, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
+func GetRemoteClient() (*remote.Client, bool, error) {
+	resolved, isRemote, err := remote.ResolveStrict(remoteFlag, tokenFlag, insecureTLSFlag)
+	if err != nil {
+		return nil, false, err
+	}
 	if !isRemote {
-		return nil, false
+		return nil, false, nil
 	}
 
 	opts := remoteClientOptions(resolved.Token, resolved.InsecureTLS)
 	client := remote.NewClient(resolved.URL, opts...)
-	return client, true
+	return client, true, nil
 }
 
 func remoteClientOptions(token string, insecureTLS bool) []remote.ClientOption {
@@ -196,8 +199,8 @@ func remoteClientOptions(token string, insecureTLS bool) []remote.ClientOption {
 
 // IsRemoteMode returns true if CLI is targeting a remote Gordon instance.
 func IsRemoteMode() bool {
-	_, isRemote := remote.Resolve(remoteFlag, tokenFlag, insecureTLSFlag)
-	return isRemote
+	_, isRemote, err := remote.ResolveStrict(remoteFlag, tokenFlag, insecureTLSFlag)
+	return err == nil && isRemote
 }
 
 // newReloadCmd creates the reload command.
@@ -211,7 +214,10 @@ a running container. Running containers are never restarted to ensure 100% uptim
 Use this command after editing config.toml to add new routes, or after pushing
 images to the registry when the route was not yet configured.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, isRemote := GetRemoteClient()
+			client, isRemote, err := GetRemoteClient()
+			if err != nil {
+				return err
+			}
 			if isRemote {
 				return runReloadRemote(cmd.Context(), client)
 			}
@@ -321,7 +327,10 @@ func runLogs(ctx context.Context, logsConfigPath, logDomain string, follow bool,
 		return runContainerLogs(ctx, handle.plane, logDomain, follow, lines, out)
 	}
 
-	client, isRemote := GetRemoteClient()
+	client, isRemote, err := GetRemoteClient()
+	if err != nil {
+		return err
+	}
 	if isRemote {
 		return runLogsRemote(ctx, client, logDomain, follow, lines, out)
 	}

@@ -1159,6 +1159,53 @@ func (s *Service) Stop(ctx context.Context, containerID string) error {
 	return nil
 }
 
+// PreviewRemovedRouteCleanup reports retained runtime state for a route that is
+// no longer configured, without mutating containers or in-memory tracking.
+func (s *Service) PreviewRemovedRouteCleanup(ctx context.Context, domainName string) (*domain.CleanupReport, error) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+	if !ok {
+		return &domain.CleanupReport{Domain: domainName}, domain.ErrRouteDomainInvalid
+	}
+	domainName = canonicalDomain
+
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "PreviewRemovedRouteCleanup",
+		"domain":              domainName,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	report := &domain.CleanupReport{Domain: domainName}
+
+	unlock, err := s.acquireDomainDeployLock(ctx, domainName)
+	if err != nil {
+		return report, err
+	}
+	defer unlock()
+
+	allContainers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return report, log.WrapErr(err, "failed to list containers for removed route cleanup preview")
+	}
+
+	routeContainers := routeContainersForDomain(allContainers, domainName)
+	report.PreservedAttachments = preservedAttachmentsForDomain(allContainers, domainName)
+	if len(report.PreservedAttachments) > 0 {
+		report.Hints = append(report.Hints, "attachments preserved; remove or purge attachments explicitly if they are no longer needed")
+	}
+	for _, c := range routeContainers {
+		report.OrphanedEntities = append(report.OrphanedEntities, domain.CleanupOrphanedEntity{
+			Kind:   "route_container",
+			ID:     c.ID,
+			Name:   c.Name,
+			Status: c.Status,
+			Reason: "route runtime state still exists after route removal",
+		})
+	}
+
+	return report, nil
+}
+
 // ReconcileRemovedRoute removes active runtime containers for a route that was
 // removed from configuration while preserving stateful resources for explicit
 // follow-up cleanup. It intentionally removes only main route containers, never
@@ -1510,7 +1557,7 @@ func (s *Service) ListAttachments(ctx context.Context, domainName string) []doma
 	return s.getAttachmentsForDomain(ctx, domainName)
 }
 
-// ListOrphanedAttachments returns running attachment containers no longer configured.
+// ListOrphanedAttachments returns managed attachment containers no longer configured.
 func (s *Service) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
 	containers, err := s.runtime.ListContainers(ctx, true)
 	if err != nil {
@@ -1611,7 +1658,7 @@ func cleanupAttachmentsFromContainers(containers []*domain.Container) []domain.C
 }
 
 func isManagedAttachment(c *domain.Container) bool {
-	return c != nil && c.Status == string(domain.ContainerStatusRunning) && c.Labels != nil && c.Labels[domain.LabelManaged] == "true" && c.Labels[domain.LabelAttachment] == "true"
+	return c != nil && c.Labels != nil && c.Labels[domain.LabelManaged] == "true" && c.Labels[domain.LabelAttachment] == "true"
 }
 
 func attachmentImage(c *domain.Container) string {
@@ -1694,6 +1741,10 @@ func (s *Service) HealthCheck(ctx context.Context) map[string]bool {
 }
 
 // SyncContainers synchronizes containers with runtime state.
+func isTrackedManagedContainerStatus(status string) bool {
+	return status == "" || status == string(domain.ContainerStatusRunning) || status == "restarting"
+}
+
 func (s *Service) SyncContainers(ctx context.Context) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -1712,7 +1763,7 @@ func (s *Service) SyncContainers(ctx context.Context) error {
 	managed := make(map[string]*domain.Container)
 	attachments := make(map[string][]string)
 	for _, c := range allContainers {
-		if c.Status != "" && c.Status != string(domain.ContainerStatusRunning) {
+		if !isTrackedManagedContainerStatus(c.Status) {
 			continue
 		}
 		if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
@@ -2580,15 +2631,16 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 
 	for _, c := range allContainers {
 		if (c.Name == expectedName || c.Name == expectedNewName || c.Name == expectedNextName) && c.ID != skipContainerID {
-			// Skip any running container regardless of name — a running
-			// temp container may be actively serving traffic while the
-			// new container stabilizes, or may be from a concurrent deploy.
-			if c.Status == "running" {
+			// Skip any container that is still active in the runtime, including
+			// restart backoff, regardless of name — a temp container may be
+			// serving traffic while the new container stabilizes, or may be from
+			// a concurrent deploy.
+			if c.Status == "running" || c.Status == "restarting" {
 				log.Debug().
 					Str(zerowrap.FieldEntityID, c.ID).
 					Str("container_name", c.Name).
 					Str(zerowrap.FieldStatus, c.Status).
-					Msg("skipping running container during orphan cleanup")
+					Msg("skipping active container during orphan cleanup")
 				continue
 			}
 

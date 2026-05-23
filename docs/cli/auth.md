@@ -90,12 +90,8 @@ gordon auth show-token | pbcopy  # copy to clipboard
 Remove the stored token for a remote.
 
 ```bash
-gordon auth logout [--remote <name>] [--revoke]
+gordon auth logout [--remote <name>]
 ```
-
-| Option | Description |
-|--------|-------------|
-| `--revoke` | Also revoke the token server-side (not yet implemented) |
 
 Use the global `--remote, -r` flag to target a specific remote. See [CLI Overview](./index.md).
 

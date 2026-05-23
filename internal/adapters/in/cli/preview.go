@@ -102,7 +102,10 @@ func newPreviewListCmd() *cobra.Command {
 			ctx := cmd.Context()
 			out := cmd.OutOrStdout()
 
-			client, isRemote := GetRemoteClient()
+			client, isRemote, err := GetRemoteClient()
+			if err != nil {
+				return err
+			}
 			if !isRemote {
 				return fmt.Errorf("preview list requires --remote (local preview listing is not yet supported)")
 			}
@@ -137,7 +140,10 @@ func newPreviewDeleteCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			name := args[0]
 
-			client, isRemote := GetRemoteClient()
+			client, isRemote, err := GetRemoteClient()
+			if err != nil {
+				return err
+			}
 			if !isRemote {
 				return fmt.Errorf("preview delete requires --remote (local preview deletion is not yet supported)")
 			}
@@ -162,7 +168,10 @@ func newPreviewExtendCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			name := args[0]
 
-			client, isRemote := GetRemoteClient()
+			client, isRemote, err := GetRemoteClient()
+			if err != nil {
+				return err
+			}
 			if !isRemote {
 				return fmt.Errorf("preview extend requires --remote (local preview extend is not yet supported)")
 			}
@@ -315,7 +324,10 @@ func waitForPreview(ctx context.Context, out io.Writer, name, ttl string, noData
 		return err
 	}
 
-	client, isRemote := GetRemoteClient()
+	client, isRemote, err := GetRemoteClient()
+	if err != nil {
+		return err
+	}
 	if !isRemote {
 		return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Push complete. Preview %q will be created by the server (use --remote to poll status).", name)))
 	}

@@ -137,8 +137,8 @@ See the [Deploy Action README](.github/actions/deploy/README.md) for multi-platf
 - Network isolation per application
 - Single binary, ~15MB RAM
 
-> [!WARNING]
-> Gordon does not handle TLS termination. Place it behind Cloudflare Proxy or any upstream reverse proxy that manages HTTPS certificates.
+> [!NOTE]
+> Gordon can terminate TLS directly via its internal CA (default `server.tls_port = 8443`), static certificates, or public ACME certificates. Cloudflare and upstream reverse proxies are optional deployment choices, not requirements.
 
 ## Documentation
 

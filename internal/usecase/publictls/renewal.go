@@ -68,8 +68,9 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 
 		log := zerowrap.FromCtx(loopCtx)
 
-		// Startup and reload paths reconcile routes; the periodic loop only renews
-		// due certificates to avoid repeated zone lookups and ACME ordering work.
+		// Startup and reload paths perform an immediate reconcile; the loop still
+		// renews due certificates right away so already-managed certs do not wait
+		// an extra interval before renewal.
 		if err := s.renewDueCertificates(loopCtx, time.Now()); err != nil {
 			log.Warn().Err(err).Msg("failed to renew due public TLS certificates")
 		}
@@ -79,6 +80,9 @@ func (s *Service) StartRenewalLoop(ctx context.Context, interval time.Duration) 
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
+				if err := s.Reconcile(loopCtx); err != nil {
+					log.Warn().Err(err).Msg("failed to reconcile public TLS certificates")
+				}
 				if err := s.renewDueCertificates(loopCtx, time.Now()); err != nil {
 					log.Warn().Err(err).Msg("failed to renew due public TLS certificates")
 				}

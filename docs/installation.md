@@ -249,16 +249,16 @@ Point your domains to your server:
 
 ## Cloudflare SSL Mode
 
-Gordon serves HTTP by default. Cloudflare must connect to your origin over HTTP unless you explicitly enable TLS.
+Gordon serves HTTP on `server.port` and HTTPS on `server.tls_port` by default. Choose the Cloudflare mode that matches how you want Cloudflare to reach your origin.
 
 | Mode | How it works | Use when |
 |------|-------------|----------|
-| **Flexible** | Cloudflare terminates TLS; connects to Gordon on HTTP | Gordon has no TLS cert (default setup) |
-| **Full (Strict)** | Cloudflare connects to Gordon over HTTPS with a valid cert | Set `server.tls_port` (default 8443) and provide a Cloudflare Origin CA cert via `server.tls_cert_file` and `server.tls_key_file` |
+| **Flexible** | Cloudflare terminates TLS; connects to Gordon on HTTP | You want edge HTTPS only, or you set `tls_port = 0` |
+| **Full (Strict)** | Cloudflare connects to Gordon over HTTPS with a valid cert | You want end-to-end HTTPS using Gordon's public ACME certs or a static cert (`tls_cert_file` / `tls_key_file`) |
 
 Wrong mode causes: **521** (Cloudflare can't connect) or **525** (TLS handshake failed).
 
-> **Important:** You must also set `proxy_allowed_ips` with Cloudflare edge IPs — see [Proxy Origin Allowlist](#proxy-origin-allowlist) below.
+> **Important:** When `tls_port != 0`, you must also set `proxy_allowed_ips` with Cloudflare edge IPs — see [Proxy Origin Allowlist](#proxy-origin-allowlist) below.
 
 > **Rootless note:** Unprivileged users can't bind port 80. Forward port 80→8088 (or your configured port) via firewall — see the firewall section above.
 
@@ -282,6 +282,18 @@ proxy_allowed_ips = [
 Without this setting, Cloudflare traffic receives `403 Forbidden: Only certificate onboarding is available over HTTP`.
 
 > **Note:** This is separate from `[api.rate_limit] trusted_proxies`, which controls IP extraction from `X-Forwarded-For`. Both should list your proxy IPs. See [Proxy Origin IP Allowlist](./config/server.md#proxy-origin-ip-allowlist) for details.
+
+## Installing a Specific Version or Pre-Release
+
+```bash
+# Install an exact version
+curl -fsSL https://gordon.bnema.dev/install | GORDON_VERSION=v2.30.1 bash
+
+# Install the latest pre-release instead of the latest stable release
+curl -fsSL https://gordon.bnema.dev/install | GORDON_PRERELEASE=1 bash
+```
+
+By default, the installer resolves `latest` to the newest stable release and verifies the downloaded checksum before installing.
 
 ## Verify Installation
 

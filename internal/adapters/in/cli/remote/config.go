@@ -241,15 +241,29 @@ func resolveInsecureForTarget(flagInsecure bool, name string, remotes *ClientCon
 // Token precedence: flag > GORDON_TOKEN env > named remote (pass > TOML token > token_env).
 // InsecureTLS precedence: flag > GORDON_INSECURE env > remote entry field.
 func Resolve(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, bool) {
-	remotes, _ := LoadRemotes("")
+	resolved, found, _ := ResolveStrict(flagRemote, flagToken, flagInsecure)
+	return resolved, found
+}
+
+// ResolveStrict resolves the remote target like Resolve, but returns an error
+// when an explicit remote selector is invalid instead of silently falling back
+// to local mode.
+func ResolveStrict(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, bool, error) {
+	remotes, err := LoadRemotes("")
+	if err != nil {
+		return nil, false, fmt.Errorf("loading remotes: %w", err)
+	}
 
 	name, url, found := resolveTarget(flagRemote, remotes)
-	if !found && flagRemote != "" && !strings.HasPrefix(flagRemote, "http://") && !strings.HasPrefix(flagRemote, "https://") {
-		return nil, false
+	if !found && flagRemote != "" {
+		return nil, false, fmt.Errorf("remote %q: %w", flagRemote, domain.ErrRemoteNotFound)
 	}
 	if !found {
 		if envRemote := os.Getenv("GORDON_REMOTE"); envRemote != "" {
 			name, url, found = resolveTarget(envRemote, remotes)
+			if !found {
+				return nil, false, fmt.Errorf("remote %q from GORDON_REMOTE: %w", envRemote, domain.ErrRemoteNotFound)
+			}
 		}
 	}
 	if !found && remotes != nil && remotes.Active != "" {
@@ -260,7 +274,7 @@ func Resolve(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, 
 		}
 	}
 	if !found {
-		return nil, false
+		return nil, false, nil
 	}
 
 	return &ResolvedRemote{
@@ -268,7 +282,7 @@ func Resolve(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, 
 		URL:         url,
 		Token:       resolveTokenForTarget(flagToken, name, remotes),
 		InsecureTLS: resolveInsecureForTarget(flagInsecure, name, remotes),
-	}, true
+	}, true, nil
 }
 
 // resolveTarget checks if value is a saved remote name or an ad-hoc URL.

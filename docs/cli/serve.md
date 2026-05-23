@@ -57,7 +57,7 @@ gordon serve --config /path/to/gordon.toml
 gordon serve -c ./my-config.toml
 
 # With environment override
-GORDON_SERVER_PORT=8080 gordon serve
+GORDON_SERVER_PORT=8088 gordon serve
 GORDON_LOGGING_LEVEL=debug gordon serve
 ```
 

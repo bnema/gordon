@@ -22,6 +22,13 @@ dir = "~/.gordon/logs/containers"
 max_size = 100
 max_backups = 3
 max_age = 28
+
+[logging.access_log]
+enabled = false
+format = "json"
+output = "stdout"
+exclude_health_checks = true
+syslog_identifier = "gordon-access"
 ```
 
 ## Options
@@ -55,6 +62,22 @@ The Admin API and `gordon logs` read from the process log file. Keep
 | `container_logs.max_size` | int | `100` | Max file size in MB |
 | `container_logs.max_backups` | int | `3` | Old files to keep |
 | `container_logs.max_age` | int | `28` | Days to keep files |
+
+### Access Log
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `access_log.enabled` | bool | `false` | Enable a dedicated HTTP access log |
+| `access_log.format` | string | `"json"` | Access log format: `json`, `clf`, `combined` |
+| `access_log.output` | string | `"stdout"` | Output sink: `stdout`, `file`, `journald` |
+| `access_log.file_path` | string | - | File path when `output = "file"` |
+| `access_log.max_size` | int | `100` | Max file size in MB for file output |
+| `access_log.max_backups` | int | `3` | Old files to keep for file output |
+| `access_log.max_age` | int | `28` | Days to keep file output |
+| `access_log.exclude_health_checks` | bool | `true` | Skip health and readiness checks |
+| `access_log.syslog_identifier` | string | `"gordon-access"` | Journald identifier |
+
+Use the access log for reverse-proxy traffic analysis, CrowdSec/fail2ban ingestion, or request auditing without mixing entries into the main process log.
 
 ## Log Levels
 
@@ -114,6 +137,13 @@ dir = "./logs/containers"
 max_size = 10
 max_backups = 2
 max_age = 7
+
+[logging.access_log]
+enabled = true
+format = "json"
+output = "file"
+file_path = "./logs/access.log"
+exclude_health_checks = true
 ```
 
 ### Production

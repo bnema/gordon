@@ -516,6 +516,7 @@ func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, 
 	}
 
 	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, nil, si.svc.eventBus, si.svc.publicTLSSvc, log)
+	si.registerReloadCoordinatorHooks()
 
 	si.initHandlers()
 
@@ -695,6 +696,21 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 }
 
 // initHandlers creates the auth, health, log, preview, and admin handlers.
+func (si *serviceInit) registerReloadCoordinatorHooks() {
+	if si.svc.reloadCoordinator == nil || si.svc.containerSvc == nil {
+		return
+	}
+
+	si.svc.reloadCoordinator.SetContainerConfigApplier(func(reloadCtx context.Context, reloadCfg Config) error {
+		containerCfg, err := buildContainerServiceConfig(reloadCtx, si.v, reloadCfg, si.svc, si.log)
+		if err != nil {
+			return err
+		}
+		si.svc.containerSvc.UpdateConfig(containerCfg)
+		return nil
+	})
+}
+
 func (si *serviceInit) initHandlers() {
 	if si.svc.authSvc != nil {
 		internalAuth := authhandler.InternalAuth{
@@ -1608,10 +1624,11 @@ type reloadCoordinator struct {
 	lastRun  time.Time
 	debounce time.Duration
 
-	configSvc      configReloader
-	v              *viper.Viper
-	proxySvc       proxyConfigUpdater
-	registryLimits interface {
+	configSvc            configReloader
+	v                    *viper.Viper
+	proxySvc             proxyConfigUpdater
+	applyContainerConfig func(context.Context, Config) error
+	registryLimits       interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
 	eventBus  out.EventPublisher
@@ -1640,6 +1657,12 @@ func (c *reloadCoordinator) SetRegistryLimits(limits interface {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.registryLimits = limits
+}
+
+func (c *reloadCoordinator) SetContainerConfigApplier(apply func(context.Context, Config) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.applyContainerConfig = apply
 }
 
 func (c *reloadCoordinator) Trigger(ctx context.Context) error {
@@ -1690,6 +1713,12 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 		return fmt.Errorf("failed to parse proxy config on reload: %w", err)
 	}
 
+	if c.applyContainerConfig != nil {
+		if err := c.applyContainerConfig(ctx, reloadCfg); err != nil {
+			c.log.Error().Err(err).Msg("failed to apply container config on reload")
+			return fmt.Errorf("failed to apply container config on reload: %w", err)
+		}
+	}
 	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
 	if c.registryLimits != nil {
 		c.registryLimits.UpdateBlobLimits(reloadedProxy.maxBlobChunkSize, reloadedProxy.maxBlobSize)
@@ -1813,23 +1842,21 @@ func buildDNSConfig(cfg Config) (publictls.DNSConfig, error) {
 	return dnsCfg, nil
 }
 
-// createContainerService creates the container service with configuration.
-func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (*container.Service, error) {
-	// Parse and validate container resource limits from config
+func buildContainerServiceConfig(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (container.Config, error) {
 	if cfg.Containers.CPULimit < 0 {
-		return nil, fmt.Errorf("containers.cpu_limit must be >= 0 (got %f)", cfg.Containers.CPULimit)
+		return container.Config{}, fmt.Errorf("containers.cpu_limit must be >= 0 (got %f)", cfg.Containers.CPULimit)
 	}
 	if cfg.Containers.PidsLimit < 0 {
-		return nil, fmt.Errorf("containers.pids_limit must be >= 0 (got %d)", cfg.Containers.PidsLimit)
+		return container.Config{}, fmt.Errorf("containers.pids_limit must be >= 0 (got %d)", cfg.Containers.PidsLimit)
 	}
 	var defaultMemoryLimit int64
 	if cfg.Containers.MemoryLimit != "" {
 		parsed, err := bytesize.Parse(cfg.Containers.MemoryLimit)
 		if err != nil {
-			return nil, fmt.Errorf("invalid containers.memory_limit %q: %w", cfg.Containers.MemoryLimit, err)
+			return container.Config{}, fmt.Errorf("invalid containers.memory_limit %q: %w", cfg.Containers.MemoryLimit, err)
 		}
 		if parsed <= 0 {
-			return nil, fmt.Errorf("containers.memory_limit must be positive (got %q)", cfg.Containers.MemoryLimit)
+			return container.Config{}, fmt.Errorf("containers.memory_limit must be positive (got %q)", cfg.Containers.MemoryLimit)
 		}
 		defaultMemoryLimit = parsed
 	}
@@ -1881,17 +1908,15 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 
 	if containerConfig.RegistryAuthEnabled {
 		if svc.authSvc == nil {
-			return nil, fmt.Errorf("authentication service unavailable: cannot generate registry service token")
+			return container.Config{}, fmt.Errorf("authentication service unavailable: cannot generate registry service token")
 		}
 		expiry, err := resolveServiceTokenExpiry(cfg)
 		if err != nil {
-			return nil, log.WrapErr(err, "failed to resolve service token expiry")
+			return container.Config{}, log.WrapErr(err, "failed to resolve service token expiry")
 		}
-		// Note: Service tokens are not auto-refreshed. If the token expires during
-		// container runtime, the container will need to be recreated to get a new token.
 		serviceToken, err := svc.authSvc.GenerateToken(ctx, serviceTokenSubject, []string{"pull"}, expiry)
 		if err != nil {
-			return nil, log.WrapErr(err, "failed to generate registry service token")
+			return container.Config{}, log.WrapErr(err, "failed to generate registry service token")
 		}
 		log.Info().
 			Str("subject", serviceTokenSubject).
@@ -1903,6 +1928,15 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 		log.Warn().Msg("registry auth disabled; container image pulls will use unauthenticated mode")
 	}
 
+	return containerConfig, nil
+}
+
+// createContainerService creates the container service with configuration.
+func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (*container.Service, error) {
+	containerConfig, err := buildContainerServiceConfig(ctx, v, cfg, svc, log)
+	if err != nil {
+		return nil, err
+	}
 	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig, svc.configSvc), nil
 }
 

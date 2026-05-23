@@ -809,6 +809,30 @@ func TestRenderRoutesListSections_HidesLocalErrorWhenRemoteIsUsable(t *testing.T
 	assert.Contains(t, rendered, "No routes configured")
 }
 
+func TestLoadRoutesListRemoteSection_UsesInventoryEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/admin/routes" && r.URL.RawQuery == "":
+			_, _ = w.Write([]byte(`{"routes":[{"domain":"app.example.com","image":"app:latest"}]}`))
+		case r.URL.Path == "/admin/routes" && r.URL.RawQuery == "detailed=true":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"detailed route status unavailable"}`))
+		default:
+			t.Fatalf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+	}))
+	defer srv.Close()
+
+	section, err := loadRoutesListRemoteSection(context.Background(), "prod", remote.RemoteEntry{URL: srv.URL})
+
+	require.NoError(t, err)
+	require.Empty(t, section.Error)
+	require.Len(t, section.Routes, 1)
+	assert.Equal(t, "app.example.com", section.Routes[0].Domain)
+	assert.Equal(t, "app:latest", section.Routes[0].Image)
+}
+
 func TestRenderRoutesStatusSections_HidesLocalErrorWhenRemoteIsUsable(t *testing.T) {
 	sections := []routeStatusSection{
 		{Kind: "local", Name: "local", Error: "failed to initialize local control plane"},
@@ -931,6 +955,8 @@ func TestBuildRouteDiagnosis_UsesConfiguredVolumePrefixForPreservedVolumes(t *te
 		case "/admin/routes/example.test":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes/example.test/cleanup":
+			_, _ = w.Write([]byte(`{"domain":"example.test","preserved_volumes":[{"name":"custom-example-test-data-docs"}]}`))
 		case "/admin/routes":
 			require.Equal(t, "detailed=true", r.URL.RawQuery)
 			_, _ = w.Write([]byte(`{"routes":[]}`))
@@ -984,6 +1010,40 @@ func TestBuildRouteDiagnosis_IncludesAttachmentVolumesWithDoubleUnderscoreOwnerE
 	assert.Equal(t, "gordon-gordon-app__example__test-postgres-var-lib-postgresql", diag.Volumes[0].Name)
 }
 
+func TestBuildRouteDiagnosis_UsesCleanupPreviewForRemovedRouteRuntimeState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admin/routes/example.test":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes/example.test/cleanup":
+			_, _ = w.Write([]byte(`{"domain":"example.test","orphaned_entities":[{"kind":"route_container","id":"ctr-1","name":"gordon-example.test","status":"running"}],"preserved_attachments":[{"name":"old-postgres","container_id":"att-1","owner":"example.test"}],"preserved_volumes":[{"name":"gordon-example-test-data"}]}`))
+		case "/admin/routes":
+			require.Equal(t, "detailed=true", r.URL.RawQuery)
+			_, _ = w.Write([]byte(`{"routes":[]}`))
+		case "/admin/health":
+			_, _ = w.Write([]byte(`{"health":{}}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cp := NewRemoteControlPlane(remote.NewClient(srv.URL))
+	diag, err := buildRouteDiagnosis(context.Background(), cp, "example.test")
+
+	require.NoError(t, err)
+	assert.False(t, diag.Configured)
+	require.Len(t, diag.OrphanedEntities, 1)
+	assert.Equal(t, "route_container", diag.OrphanedEntities[0].Kind)
+	require.Len(t, diag.OrphanedAttachments, 1)
+	assert.Equal(t, "old-postgres", diag.OrphanedAttachments[0].Name)
+	require.Len(t, diag.Volumes, 1)
+	assert.Equal(t, "gordon-example-test-data", diag.Volumes[0].Name)
+	assert.Contains(t, diag.Warnings, "route is not configured but runtime state still exists")
+}
+
 func TestBuildRouteDiagnosis_RemoteMissingRouteDoesNotWarnOnExpectedNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -991,6 +1051,8 @@ func TestBuildRouteDiagnosis_RemoteMissingRouteDoesNotWarnOnExpectedNotFound(t *
 		case "/admin/routes/missing.example.test":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes/missing.example.test/cleanup":
+			_, _ = w.Write([]byte(`{"domain":"missing.example.test"}`))
 		case "/admin/routes":
 			require.Equal(t, "detailed=true", r.URL.RawQuery)
 			_, _ = w.Write([]byte(`{"routes":[]}`))
@@ -1021,6 +1083,8 @@ func TestRunRoutePurge_VolumesUsesConfiguredVolumePrefix(t *testing.T) {
 		case "/admin/routes/example.test":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"route not found"}`))
+		case "/admin/routes/example.test/cleanup":
+			_, _ = w.Write([]byte(`{"domain":"example.test","preserved_volumes":[{"name":"custom-example-test-data-docs"}]}`))
 		case "/admin/routes":
 			require.Equal(t, "detailed=true", r.URL.RawQuery)
 			_, _ = w.Write([]byte(`{"routes":[]}`))

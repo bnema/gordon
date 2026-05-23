@@ -73,8 +73,9 @@ Edit `~/.config/gordon/gordon.toml`:
 
 ```toml
 [server]
-port = 8080                              # Proxy port (use with Cloudflare/rootless)
+port = 8088                              # HTTP proxy port (default)
 registry_port = 5000                     # Registry port
+tls_port = 8443                          # HTTPS listener (default)
 gordon_domain = "gordon.mydomain.com"    # Registry + Admin API domain
 
 [routes]
@@ -97,6 +98,8 @@ Why wildcard (`*`)?
 - You can add new domains in `[routes]` without creating DNS records one by one.
 
 If your DNS provider supports wildcard CNAME flattening (Cloudflare does), `* -> gordon.mydomain.com` is usually the cleanest option.
+
+> **Important for Cloudflare or other proxied setups:** when Gordon's internal CA is enabled (default `tls_port = 8443`), add your proxy edge IPs to `server.proxy_allowed_ips` or proxied HTTP traffic will get `403 Forbidden`. See [Installation](./installation.md#proxy-origin-allowlist). If you do not want Gordon to manage TLS at all, set `tls_port = 0`.
 
 ## 6. Start Gordon as a Service
 

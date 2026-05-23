@@ -70,7 +70,10 @@ Examples:
 				return runAttachmentsList(ctx, handle.plane, target, jsonOut, cmd.OutOrStdout())
 			}
 
-			client, isRemote := GetRemoteClient()
+			client, isRemote, err := GetRemoteClient()
+			if err != nil {
+				return err
+			}
 			if isRemote {
 				return runAttachmentsListRemote(ctx, client, target, jsonOut, cmd.OutOrStdout())
 			}

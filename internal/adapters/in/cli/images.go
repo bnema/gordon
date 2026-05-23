@@ -89,7 +89,10 @@ func newImagesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List runtime images and registry tags",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, isRemote := GetRemoteClient()
+			client, isRemote, err := GetRemoteClient()
+			if err != nil {
+				return err
+			}
 			if !isRemote {
 				return fmt.Errorf("images commands require a configured remote target")
 			}
@@ -114,7 +117,10 @@ func newImagesPruneCmd() *cobra.Command {
 By default both runtime and registry cleanup run, keeping latest + 3 previous
 release tags per repository. Use --dangling or --registry to restrict scope.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, isRemote := GetRemoteClient()
+			client, isRemote, err := GetRemoteClient()
+			if err != nil {
+				return err
+			}
 			if !isRemote {
 				return fmt.Errorf("images commands require a configured remote target")
 			}

@@ -13,6 +13,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type previewContainerService struct {
+	*inmocks.MockContainerService
+	preview func(context.Context, string) (*domain.CleanupReport, error)
+}
+
+func (s *previewContainerService) PreviewRemovedRouteCleanup(ctx context.Context, routeDomain string) (*domain.CleanupReport, error) {
+	if s.preview == nil {
+		return nil, nil
+	}
+	return s.preview(ctx, routeDomain)
+}
+
 func TestLocalControlPlane_GetStatus(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +226,22 @@ func TestLocalControlPlane_GetContainerLogs(t *testing.T) {
 	lines, err := cp.GetContainerLogs(context.Background(), "app.local", 50)
 	require.NoError(t, err)
 	require.Equal(t, []string{"line1", "line2"}, lines)
+}
+
+func TestLocalControlPlane_GetRouteCleanupPreview_ReturnsNilReportWithoutPanic(t *testing.T) {
+	ctx := context.Background()
+	volumeSvc := inmocks.NewMockVolumeService(t)
+	containerSvc := &previewContainerService{
+		MockContainerService: inmocks.NewMockContainerService(t),
+		preview: func(context.Context, string) (*domain.CleanupReport, error) {
+			return nil, nil
+		},
+	}
+	cp := &localControlPlane{containerSvc: containerSvc, volumeSvc: volumeSvc}
+
+	report, err := cp.GetRouteCleanupPreview(ctx, "app.local")
+	require.NoError(t, err)
+	assert.Nil(t, report)
 }
 
 func TestLocalControlPlane_RemoveRouteReconcilesRuntimeWhenRouteAlreadyMissing(t *testing.T) {

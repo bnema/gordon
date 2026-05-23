@@ -72,6 +72,31 @@ func inferRemoteForRouteDomain(ctx context.Context, routeDomain string) (*remote
 	})
 }
 
+func inferRemoteForRouteCleanupDomain(ctx context.Context, routeDomain string) (*remote.ResolvedRemote, error) {
+	return inferSavedRemote(ctx, "route cleanup", routeDomain, func(ctx context.Context, client *remote.Client) (bool, error) {
+		_, err := client.GetRoute(ctx, routeDomain)
+		if err == nil {
+			return true, nil
+		}
+		if !isRemoteNotFoundError(err) {
+			return false, err
+		}
+
+		preview, err := client.GetRouteCleanupPreview(ctx, routeDomain)
+		if err != nil {
+			return false, err
+		}
+		return routeCleanupReportHasEvidence(preview), nil
+	})
+}
+
+func routeCleanupReportHasEvidence(report *domain.CleanupReport) bool {
+	if report == nil {
+		return false
+	}
+	return len(report.PreservedVolumes) > 0 || len(report.PreservedAttachments) > 0 || len(report.OrphanedEntities) > 0
+}
+
 func inferRemoteForAttachmentImage(ctx context.Context, imageName string) (*remote.ResolvedRemote, error) {
 	return inferSavedRemote(ctx, "attachment image", imageName, func(ctx context.Context, client *remote.Client) (bool, error) {
 		targets, err := client.FindAttachmentTargetsByImage(ctx, imageName)
