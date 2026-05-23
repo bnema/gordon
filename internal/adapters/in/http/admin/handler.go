@@ -628,6 +628,15 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		return
 	}
 
+	if parentDomain, ok := strings.CutSuffix(routeDomain, "/cleanup"); ok {
+		if parentDomain == "" {
+			h.sendError(w, http.StatusBadRequest, "domain required in path")
+			return
+		}
+		h.handleRouteCleanupPreview(w, r, parentDomain)
+		return
+	}
+
 	if parentDomain, ok := strings.CutSuffix(routeDomain, "/attachments"); ok {
 		if parentDomain == "" {
 			h.sendError(w, http.StatusBadRequest, "domain required in path")
@@ -648,6 +657,151 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		return
 	}
 	h.sendJSON(w, http.StatusOK, toRouteResponse(*route))
+}
+
+func (h *Handler) handleRouteCleanupPreview(w http.ResponseWriter, r *http.Request, routeDomain string) {
+	ctx := r.Context()
+	log := zerowrap.FromCtx(ctx)
+
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
+		return
+	}
+	if !HasAccess(ctx, domain.AdminResourceVolumes, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for volumes:read")
+		return
+	}
+
+	previewer, ok := any(h.containerSvc).(interface {
+		PreviewRemovedRouteCleanup(context.Context, string) (*domain.CleanupReport, error)
+	})
+	if !ok {
+		log.Error().Str("domain", routeDomain).Msg("route cleanup preview unavailable")
+		h.sendError(w, http.StatusInternalServerError, "route cleanup preview unavailable")
+		return
+	}
+
+	report, err := previewer.PreviewRemovedRouteCleanup(ctx, routeDomain)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteDomainEmpty):
+			h.sendError(w, http.StatusBadRequest, "invalid route domain")
+		default:
+			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to inspect route cleanup state")
+			h.sendError(w, http.StatusInternalServerError, "failed to inspect route cleanup state")
+		}
+		return
+	}
+
+	if h.volumeSvc == nil {
+		log.Error().Str("domain", routeDomain).Msg("volume service not available for route cleanup preview")
+		h.sendError(w, http.StatusServiceUnavailable, "volume service not available")
+		return
+	}
+
+	volumes, err := h.volumeSvc.ListVolumes(ctx)
+	if err != nil {
+		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to list volumes for route cleanup preview")
+		h.sendError(w, http.StatusInternalServerError, "failed to inspect route cleanup state")
+		return
+	}
+	report.PreservedVolumes = append(
+		report.PreservedVolumes,
+		matchingRouteCleanupVolumes(routeDomain, h.routeCleanupVolumePrefix(), volumes, report.PreservedAttachments)...,
+	)
+
+	h.sendJSON(w, http.StatusOK, dto.CleanupReportFromDomain(report))
+}
+
+func (h *Handler) routeCleanupVolumePrefix() string {
+	const defaultPrefix = "gordon"
+	if h.configSvc == nil {
+		return defaultPrefix
+	}
+	if volumeCfg, ok := any(h.configSvc).(interface{ GetVolumeConfig() (bool, string, bool) }); ok {
+		_, prefix, _ := volumeCfg.GetVolumeConfig()
+		if prefix != "" {
+			return prefix
+		}
+	}
+	return defaultPrefix
+}
+
+type routeCleanupVolumeScope struct {
+	containerNames map[string]struct{}
+	volumePrefixes []string
+}
+
+func newRouteCleanupVolumeScope(routeDomain, volumePrefix string, attachments []domain.CleanupAttachment) routeCleanupVolumeScope {
+	if volumePrefix == "" {
+		volumePrefix = "gordon"
+	}
+	scope := routeCleanupVolumeScope{
+		containerNames: make(map[string]struct{}),
+		volumePrefixes: []string{volumePrefix + "-" + strings.ReplaceAll(routeDomain, ".", "-") + "-"},
+	}
+	for _, name := range []string{
+		fmt.Sprintf("gordon-%s", routeDomain),
+		fmt.Sprintf("gordon-%s-new", routeDomain),
+		fmt.Sprintf("gordon-%s-next", routeDomain),
+	} {
+		scope.containerNames[name] = struct{}{}
+	}
+	for _, attachment := range attachments {
+		if attachment.Name == "" {
+			continue
+		}
+		scope.containerNames[attachment.Name] = struct{}{}
+		scope.volumePrefixes = append(scope.volumePrefixes, volumePrefix+"-"+attachment.Name+"-")
+		for _, name := range routeAttachmentContainerNamesForCleanup(routeDomain, attachment.Name) {
+			scope.containerNames[name] = struct{}{}
+			scope.volumePrefixes = append(scope.volumePrefixes, volumePrefix+"-"+name+"-")
+		}
+	}
+	return scope
+}
+
+func routeAttachmentContainerNamesForCleanup(routeDomain, serviceName string) []string {
+	if serviceName == "" {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("gordon-%s-%s", domain.SanitizeDomainForContainer(routeDomain), serviceName),
+		fmt.Sprintf("gordon-%s-%s", domain.SanitizeDomainForContainerLegacy(routeDomain), serviceName),
+	}
+}
+
+func matchingRouteCleanupVolumes(routeDomain, volumePrefix string, volumes []*domain.VolumeInfo, attachments []domain.CleanupAttachment) []domain.CleanupVolume {
+	scope := newRouteCleanupVolumeScope(routeDomain, volumePrefix, attachments)
+	matched := make([]domain.CleanupVolume, 0)
+	for _, volume := range volumes {
+		if volume == nil || !scope.matches(volume) {
+			continue
+		}
+		matched = append(matched, domain.CleanupVolume{
+			Name:          volume.Name,
+			ContainerPath: "",
+			Reason:        "volume preserved for explicit cleanup review",
+		})
+	}
+	return matched
+}
+
+func (s routeCleanupVolumeScope) matches(volume *domain.VolumeInfo) bool {
+	if volume == nil {
+		return false
+	}
+	for _, containerName := range volume.Containers {
+		if _, ok := s.containerNames[containerName]; ok {
+			return true
+		}
+	}
+	for _, prefix := range s.volumePrefixes {
+		if strings.HasPrefix(volume.Name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
@@ -823,9 +977,15 @@ func (h *Handler) handleRoutesByImage(w http.ResponseWriter, r *http.Request, pa
 		return
 	}
 
-	imageName := strings.TrimPrefix(path, "/routes/by-image/")
-	if imageName == "" || imageName == "/routes/by-image" {
+	rawImageName := strings.TrimPrefix(path, "/routes/by-image/")
+	if rawImageName == "" || rawImageName == "/routes/by-image" {
 		h.sendError(w, http.StatusBadRequest, "image name required in path")
+		return
+	}
+
+	imageName, err := url.PathUnescape(rawImageName)
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid image name encoding")
 		return
 	}
 
@@ -1519,9 +1679,14 @@ func (h *Handler) handleTags(w http.ResponseWriter, r *http.Request, path string
 		return
 	}
 
-	repository := strings.TrimPrefix(path, "/tags/")
-	if repository == "" || repository == "/tags" {
+	rawRepository := strings.TrimPrefix(path, "/tags/")
+	if rawRepository == "" || rawRepository == "/tags" {
 		h.sendError(w, http.StatusBadRequest, "repository name required in path")
+		return
+	}
+	repository, err := url.PathUnescape(rawRepository)
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid repository name encoding")
 		return
 	}
 	if err := validation.ValidateRepositoryName(repository); err != nil {

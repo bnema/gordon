@@ -21,9 +21,9 @@ gordon status --remote https://gordon.mydomain.com --token $TOKEN
 ```
 Gordon Status
 
-Domain: registry.example.com
+Gordon Domain: gordon.example.com
 Registry Port: 5000
-Server Port: 8080
+Server Port: 8088
 Routes: 3
 Auto-Route: true
 Network Isolation: false
@@ -38,9 +38,9 @@ Container Status:
 
 | Field | Description |
 |-------|-------------|
-| Domain | Registry domain from configuration |
+| Gordon Domain | Public Gordon domain from configuration |
 | Registry Port | Docker registry port |
-| Server Port | Gordon admin API port |
+| Server Port | Gordon HTTP proxy port |
 | Routes | Total configured routes |
 | Auto-Route | Whether auto-routing is enabled |
 | Network Isolation | Whether network isolation is enabled |
@@ -51,6 +51,7 @@ Container Status:
 | State | Description |
 |-------|-------------|
 | running | Container is running and healthy |
+| restarting | Container is in runtime restart backoff or restart cycle |
 | stopped | Container was stopped |
 | exited | Container exited (check logs for errors) |
 | paused | Container is paused |

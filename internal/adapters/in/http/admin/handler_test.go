@@ -29,6 +29,18 @@ type stubImageService struct {
 	pruneFunc      func(context.Context, domain.ImagePruneOptions) (domain.ImagePruneReport, error)
 }
 
+type previewContainerService struct {
+	*inmocks.MockContainerService
+	preview func(context.Context, string) (*domain.CleanupReport, error)
+}
+
+func (s *previewContainerService) PreviewRemovedRouteCleanup(ctx context.Context, routeDomain string) (*domain.CleanupReport, error) {
+	if s.preview == nil {
+		return nil, nil
+	}
+	return s.preview(ctx, routeDomain)
+}
+
 type noopReloadTrigger struct{}
 
 func (noopReloadTrigger) Trigger(context.Context) error { return nil }
@@ -685,6 +697,34 @@ func TestHandler_AttachmentsByImageGet_RequiresReadScope(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.JSONEq(t, `{"error":"insufficient permissions for config:read"}`, rec.Body.String())
+}
+
+func TestHandler_RoutesByImageGet_URLDecodedImage(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+	})
+
+	configSvc.EXPECT().FindRoutesByImage(mock.Anything, "registry/org/image:tag").Return([]domain.Route{{
+		Domain: "app.example.com",
+		Image:  "registry/org/image:tag",
+	}}).Once()
+
+	req := httptest.NewRequest("GET", "/admin/routes/by-image/registry%2Forg%2Fimage:tag", nil)
+	req = req.WithContext(ctxWithScopes("admin:routes:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"image":"registry/org/image:tag","routes":[{"domain":"app.example.com","image":"registry/org/image:tag","https":false}]}`, rec.Body.String())
 }
 
 func TestHandler_RoutesDelete_RequiresWriteScope(t *testing.T) {
@@ -1566,6 +1606,58 @@ func TestHandler_RoutesGet_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
+func TestHandler_RouteCleanupPreview_RequiresRoutesConfigAndVolumesReadScopes(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	volumeSvc := inmocks.NewMockVolumeService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	containerMock := inmocks.NewMockContainerService(t)
+	containerSvc := &previewContainerService{
+		MockContainerService: containerMock,
+		preview: func(_ context.Context, routeDomain string) (*domain.CleanupReport, error) {
+			return &domain.CleanupReport{
+				Domain:           routeDomain,
+				OrphanedEntities: []domain.CleanupOrphanedEntity{{Kind: "route_container", ID: "ctr-1", Status: "running"}},
+			}, nil
+		},
+	}
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.VolumeSvc = volumeSvc
+		d.SecretSvc = secretSvc
+	})
+
+	volumeSvc.EXPECT().ListVolumes(mock.Anything).Return([]*domain.VolumeInfo{{Name: "gordon-app-example-com-data"}}, nil).Once()
+
+	req := httptest.NewRequest("GET", "/admin/routes/app.example.com/cleanup", nil)
+	req = req.WithContext(ctxWithScopes("admin:routes:read", "admin:config:read", "admin:volumes:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var report dto.CleanupReport
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&report))
+	require.Len(t, report.OrphanedEntities, 1)
+	assert.Equal(t, "route_container", report.OrphanedEntities[0].Kind)
+	require.Len(t, report.PreservedVolumes, 1)
+	assert.Equal(t, "gordon-app-example-com-data", report.PreservedVolumes[0].Name)
+
+	for _, scopes := range [][]string{
+		{"admin:routes:read", "admin:volumes:read"},
+		{"admin:routes:read", "admin:config:read"},
+	} {
+		req := httptest.NewRequest("GET", "/admin/routes/app.example.com/cleanup", nil)
+		req = req.WithContext(ctxWithScopes(scopes...))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	}
+}
+
 func TestHandler_RoutesPost_MissingFields(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -2091,6 +2183,33 @@ func TestHandler_Tags_Error(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "registry error")
+}
+
+func TestHandler_Tags_URLDecodedRepository(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	authSvc := inmocks.NewMockAuthService(t)
+	containerSvc := inmocks.NewMockContainerService(t)
+	secretSvc := inmocks.NewMockSecretService(t)
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.ConfigSvc = configSvc
+		d.AuthSvc = authSvc
+		d.ContainerSvc = containerSvc
+		d.SecretSvc = secretSvc
+		d.RegistrySvc = registrySvc
+	})
+
+	registrySvc.EXPECT().ListTags(mock.Anything, "repo/app").Return([]string{"latest"}, nil)
+
+	req := httptest.NewRequest("GET", "/admin/tags/repo%2Fapp", nil)
+	req = req.WithContext(ctxWithScopes("admin:status:read"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"repository":"repo/app","tags":["latest"]}`, rec.Body.String())
 }
 
 func TestHandler_AttachmentSecretsPost_RequiresWriteScope(t *testing.T) {

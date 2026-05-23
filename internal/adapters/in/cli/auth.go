@@ -236,7 +236,10 @@ Examples:
 }
 
 func resolveRequiredRemote(flagToken string) (*remote.ResolvedRemote, error) {
-	resolved, isRemote := remote.Resolve(remoteFlag, flagToken, insecureTLSFlag)
+	resolved, isRemote, err := remote.ResolveStrict(remoteFlag, flagToken, insecureTLSFlag)
+	if err != nil {
+		return nil, err
+	}
 	if !isRemote {
 		return nil, fmt.Errorf("no remote specified. Use --remote or 'gordon remotes use <name>'")
 	}

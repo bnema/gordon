@@ -13,7 +13,8 @@ Gordon uses a single TOML configuration file located at `~/.config/gordon/gordon
 
 ```toml
 [server]
-port = 8080
+port = 8088
+tls_port = 8443
 registry_port = 5000
 gordon_domain = "gordon.mydomain.com"
 
@@ -272,7 +273,7 @@ gordon reload
 Configuration values can be overridden with environment variables:
 
 ```bash
-GORDON_SERVER_PORT=8080 gordon serve
+GORDON_SERVER_PORT=8088 gordon serve
 GORDON_LOGGING_LEVEL=debug gordon serve
 ```
 

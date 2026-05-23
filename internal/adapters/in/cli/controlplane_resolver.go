@@ -25,7 +25,10 @@ func (h *controlPlaneHandle) close() {
 }
 
 func resolveControlPlane(configPath string) (*controlPlaneHandle, error) {
-	client, isRemote := GetRemoteClient()
+	client, isRemote, err := GetRemoteClient()
+	if err != nil {
+		return nil, err
+	}
 	if isRemote {
 		return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}, nil
 	}
@@ -41,6 +44,12 @@ func newRemoteControlPlaneHandle(target *remote.ResolvedRemote) *controlPlaneHan
 func resolveControlPlaneForRouteDomain(ctx context.Context, routeDomain string) (*controlPlaneHandle, error) {
 	return resolveControlPlaneWithInference(ctx, func(ctx context.Context) (*remote.ResolvedRemote, error) {
 		return inferRemoteForRouteDomain(ctx, routeDomain)
+	})
+}
+
+func resolveControlPlaneForRouteCleanupDomain(ctx context.Context, routeDomain string) (*controlPlaneHandle, error) {
+	return resolveControlPlaneWithInference(ctx, func(ctx context.Context) (*remote.ResolvedRemote, error) {
+		return inferRemoteForRouteCleanupDomain(ctx, routeDomain)
 	})
 }
 

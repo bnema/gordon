@@ -514,6 +514,21 @@ func (c *Client) GetRoute(ctx context.Context, routeDomain string) (*domain.Rout
 	return &route, nil
 }
 
+// GetRouteCleanupPreview returns retained cleanup state for a route that may no longer be configured.
+func (c *Client) GetRouteCleanupPreview(ctx context.Context, routeDomain string) (*domain.CleanupReport, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/routes/"+url.PathEscape(routeDomain)+"/cleanup", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var report domain.CleanupReport
+	if err := parseResponse(resp, &report); err != nil {
+		return nil, err
+	}
+
+	return &report, nil
+}
+
 // FindRoutesByImage returns all routes associated with the given image name.
 func (c *Client) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/routes/by-image/"+url.PathEscape(imageName), nil)

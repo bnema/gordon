@@ -2,6 +2,18 @@
 
 Roll back to previous versions when deployments fail.
 
+## Recommended: Use `gordon pin`
+
+`gordon pin` is the built-in rollback and roll-forward workflow for route images:
+
+```bash
+gordon pin app.example.com
+gordon pin app.example.com --tag v2.30.1
+gordon pin list app.example.com
+```
+
+Use it when the target image already exists in the Gordon registry and you want Gordon to update the route and redeploy it for you.
+
 ## Rollback Strategies
 
 ### 1. Config-Based Rollback

@@ -78,7 +78,8 @@ Gordon runs on your VPS and provides:
 - Linux VPS (Ubuntu/Debian recommended)
 - Docker or Podman runtime
 - Domain pointing to your server
-- Cloudflare account for HTTPS (free tier works)
+- Domain pointing to your server
+- Optional Cloudflare account or other reverse proxy for edge TLS
 
 > **Note:** Gordon can run behind Cloudflare/nginx, or terminate TLS directly via its internal CA (enabled by default on `server.tls_port`). Set `tls_port = 0` to disable.
 

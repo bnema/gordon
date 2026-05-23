@@ -406,7 +406,7 @@ docker inspect gordon-app-mydomain-com
 
 # Check connectivity
 curl -v http://localhost:5000/v2/
-curl -v http://localhost:8080/
+curl -v http://localhost:8088/
 ```
 
 ## Getting Help

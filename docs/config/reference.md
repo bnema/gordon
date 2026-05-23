@@ -38,7 +38,7 @@ polling_interval = "5s"                    # Interval between DNS-01 propagation
 enabled = true                               # Enable registry authentication (default: true)
 secrets_backend = "unsafe"                   # "pass", "sops", or "unsafe"
 token_secret = ""                            # Path in secrets backend to JWT signing key (REQUIRED)
-token_expiry = "720h"                        # Token expiry duration (720h = 30 days)
+token_expiry = "30d"                         # Token expiry duration
 access_token_ttl = "15m"                     # Ephemeral access token lifetime (default: 15m)
 
 # =============================================================================
@@ -80,6 +80,17 @@ dir = ""                                     # Log directory (default: {data_dir
 max_size = 100                               # Max size in MB before rotation
 max_backups = 3                              # Number of old files to keep
 max_age = 28                                 # Days to keep old files
+
+[logging.access_log]
+enabled = false                              # Dedicated HTTP access log for reverse-proxy traffic
+format = "json"                             # "json", "clf", or "combined"
+output = "stdout"                           # "stdout", "file", or "journald"
+file_path = ""                               # Required when output = "file"
+max_size = 100                               # Max size in MB before rotation (file output)
+max_backups = 3                              # Number of old files to keep (file output)
+max_age = 28                                 # Days to keep old files (file output)
+exclude_health_checks = true                 # Skip noisy readiness/liveness requests
+syslog_identifier = "gordon-access"         # Journald identifier when output = "journald"
 
 # =============================================================================
 # TELEMETRY (OpenTelemetry)
@@ -238,6 +249,14 @@ keep_last = 3                                # Keep N newest tags per repository
 | `logging.container_logs.max_size` | `100` | 100 MB |
 | `logging.container_logs.max_backups` | `3` | Keep 3 old files |
 | `logging.container_logs.max_age` | `28` | 28 days |
+| `logging.access_log.enabled` | `false` | Dedicated HTTP access log disabled |
+| `logging.access_log.format` | `"json"` | Access log format (`json`, `clf`, `combined`) |
+| `logging.access_log.output` | `"stdout"` | Access log sink (`stdout`, `file`, `journald`) |
+| `logging.access_log.max_size` | `100` | 100 MB for file output |
+| `logging.access_log.max_backups` | `3` | Keep 3 old files for file output |
+| `logging.access_log.max_age` | `28` | 28 days for file output |
+| `logging.access_log.exclude_health_checks` | `true` | Skip health-check requests |
+| `logging.access_log.syslog_identifier` | `"gordon-access"` | Journald identifier |
 | `telemetry.enabled` | `false` | Enable OTLP telemetry export |
 | `telemetry.endpoint` | `""` | OTLP HTTP endpoint URL |
 | `telemetry.auth_token` | `""` | Base64 `user:password` for Basic auth |
@@ -285,7 +304,7 @@ GORDON_<SECTION>_<KEY>=value
 
 Examples:
 ```bash
-GORDON_SERVER_PORT=8080
+GORDON_SERVER_PORT=8088
 GORDON_SERVER_GORDON_DOMAIN=gordon.example.com
 GORDON_AUTH_ENABLED=true
 GORDON_LOGGING_LEVEL=debug

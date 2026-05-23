@@ -153,6 +153,54 @@ func (l *localControlPlane) RemoveRouteWithCleanup(ctx context.Context, routeDom
 	return resp, nil
 }
 
+func (l *localControlPlane) GetRouteCleanupPreview(ctx context.Context, routeDomain string) (*domain.CleanupReport, error) {
+	previewer, ok := any(l.containerSvc).(interface {
+		PreviewRemovedRouteCleanup(context.Context, string) (*domain.CleanupReport, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("route cleanup preview unavailable")
+	}
+
+	report, err := previewer.PreviewRemovedRouteCleanup(ctx, routeDomain)
+	if err != nil {
+		return nil, err
+	}
+	if l.volumeSvc == nil {
+		return report, nil
+	}
+
+	volumes, err := l.ListVolumes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list volumes: %w", err)
+	}
+	if len(volumes) == 0 {
+		return report, nil
+	}
+
+	scope := newRouteResourceScope(routeDomain, l.routeCleanupVolumePrefix(), nil, report.PreservedAttachments)
+	for _, volume := range volumesForRouteDiagnosis(volumes, scope) {
+		report.PreservedVolumes = append(report.PreservedVolumes, domain.CleanupVolume{
+			Name:   volume.Name,
+			Reason: "volume preserved for explicit cleanup review",
+		})
+	}
+	return report, nil
+}
+
+func (l *localControlPlane) routeCleanupVolumePrefix() string {
+	const defaultPrefix = "gordon"
+	if l.configSvc == nil {
+		return defaultPrefix
+	}
+	if volumeCfg, ok := any(l.configSvc).(interface{ GetVolumeConfig() (bool, string, bool) }); ok {
+		_, prefix, _ := volumeCfg.GetVolumeConfig()
+		if prefix != "" {
+			return prefix
+		}
+	}
+	return defaultPrefix
+}
+
 func (l *localControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
 	registryDomain := ""
 	if l.configSvc != nil {

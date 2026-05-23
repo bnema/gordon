@@ -193,6 +193,101 @@ url = "`+staging.URL+`"
 	assert.Contains(t, err.Error(), `multiple saved remotes match route "app.example.com"`)
 }
 
+func TestInferRemoteForRouteCleanupDomain_UsesCleanupPreviewWhenRouteConfigMissing(t *testing.T) {
+	prod := newMultiAdminProbeTestServer(t, multiAdminProbeHandlers{
+		getRoute: func(domainName string) (*domain.Route, int) {
+			return nil, http.StatusNotFound
+		},
+		getRouteCleanup: func(domainName string) (*domain.CleanupReport, int) {
+			return &domain.CleanupReport{
+				Domain: domainName,
+				OrphanedEntities: []domain.CleanupOrphanedEntity{{
+					Kind:   "route_container",
+					ID:     "abc123",
+					Status: "running",
+				}},
+			}, http.StatusOK
+		},
+	})
+	staging := newMultiAdminProbeTestServer(t, multiAdminProbeHandlers{
+		getRoute: func(domainName string) (*domain.Route, int) {
+			return nil, http.StatusNotFound
+		},
+		getRouteCleanup: func(domainName string) (*domain.CleanupReport, int) {
+			return &domain.CleanupReport{Domain: domainName}, http.StatusOK
+		},
+	})
+
+	configurePushRemoteInferenceTestEnv(t, `
+[remotes.prod]
+url = "`+prod.URL+`"
+
+[remotes.staging]
+url = "`+staging.URL+`"
+`)
+
+	resolved, err := inferRemoteForRouteCleanupDomain(context.Background(), "app.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, resolved)
+	assert.Equal(t, "prod", resolved.Name)
+}
+
+func TestInferRemoteForRouteCleanupDomain_UsesCleanupPreviewVolumesWhenRouteConfigMissing(t *testing.T) {
+	prod := newMultiAdminProbeTestServer(t, multiAdminProbeHandlers{
+		getRoute: func(domainName string) (*domain.Route, int) {
+			return nil, http.StatusNotFound
+		},
+		getRouteCleanup: func(domainName string) (*domain.CleanupReport, int) {
+			return &domain.CleanupReport{
+				Domain:           domainName,
+				PreservedVolumes: []domain.CleanupVolume{{Name: "gordon-app-example-com-data"}},
+			}, http.StatusOK
+		},
+	})
+	staging := newMultiAdminProbeTestServer(t, multiAdminProbeHandlers{
+		getRoute: func(domainName string) (*domain.Route, int) {
+			return nil, http.StatusNotFound
+		},
+		getRouteCleanup: func(domainName string) (*domain.CleanupReport, int) {
+			return &domain.CleanupReport{Domain: domainName}, http.StatusOK
+		},
+	})
+
+	configurePushRemoteInferenceTestEnv(t, `
+[remotes.prod]
+url = "`+prod.URL+`"
+
+[remotes.staging]
+url = "`+staging.URL+`"
+`)
+
+	resolved, err := inferRemoteForRouteCleanupDomain(context.Background(), "app.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, resolved)
+	assert.Equal(t, "prod", resolved.Name)
+}
+
+func TestInferRemoteForRouteCleanupDomain_FailsSafeWhenCleanupPreviewProbeFails(t *testing.T) {
+	prod := newMultiAdminProbeTestServer(t, multiAdminProbeHandlers{
+		getRoute: func(domainName string) (*domain.Route, int) {
+			return nil, http.StatusNotFound
+		},
+		getRouteCleanup: func(domainName string) (*domain.CleanupReport, int) {
+			return nil, http.StatusForbidden
+		},
+	})
+
+	configurePushRemoteInferenceTestEnv(t, `
+[remotes.prod]
+url = "`+prod.URL+`"
+`)
+
+	resolved, err := inferRemoteForRouteCleanupDomain(context.Background(), "app.example.com")
+	require.Error(t, err)
+	assert.Nil(t, resolved)
+	assert.Contains(t, err.Error(), `could not safely infer remote for route cleanup "app.example.com"`)
+}
+
 func TestInferRemoteForAttachmentImage_UsesUniqueMatchingSavedRemote(t *testing.T) {
 	prod := newAttachmentTargetsByImageTestServer(t, func(image string) ([]string, int) {
 		return []string{"app.example.com"}, http.StatusOK
@@ -339,6 +434,7 @@ func newGetRouteTestServer(t *testing.T, handler func(domainName string) (*domai
 
 type multiAdminProbeHandlers struct {
 	getRoute             func(domainName string) (*domain.Route, int)
+	getRouteCleanup      func(domainName string) (*domain.CleanupReport, int)
 	getAttachmentsConfig func(target string) ([]string, int)
 	listTags             func(repository string) ([]string, int)
 	findAttachmentTarget func(image string) ([]string, int)
@@ -349,6 +445,8 @@ func newMultiAdminProbeTestServer(t *testing.T, handlers multiAdminProbeHandlers
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/cleanup") && strings.HasPrefix(r.URL.Path, "/admin/routes/"):
+			handleGetRouteCleanupProbe(t, w, r, handlers.getRouteCleanup)
 		case strings.HasPrefix(r.URL.Path, "/admin/routes/"):
 			handleGetRouteProbe(t, w, r, handlers.getRoute)
 		case strings.HasPrefix(r.URL.Path, "/admin/attachments/by-image/"):
@@ -402,6 +500,31 @@ func handleGetRouteProbe(t *testing.T, w http.ResponseWriter, r *http.Request, h
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if !assert.NoError(t, json.NewEncoder(w).Encode(route)) {
+		return
+	}
+}
+
+func handleGetRouteCleanupProbe(t *testing.T, w http.ResponseWriter, r *http.Request, handler func(domainName string) (*domain.CleanupReport, int)) {
+	t.Helper()
+	if handler == nil {
+		http.NotFound(w, r)
+		return
+	}
+	domainName, err := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/admin/routes/"), "/cleanup"))
+	if !assert.NoError(t, err) {
+		return
+	}
+	report, status := handler(domainName)
+	if status >= http.StatusBadRequest {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if !assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "boom"})) {
+			return
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if !assert.NoError(t, json.NewEncoder(w).Encode(report)) {
 		return
 	}
 }

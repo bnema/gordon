@@ -2,9 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -77,4 +80,25 @@ func TestPrintPinTags_ReturnsWriteError(t *testing.T) {
 	err := printPinTags(failingWriter{}, "myapp.example.com", "v1.2.0", []string{"v1.2.0"}, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "write failed")
+}
+
+func TestDeploySelectedTag_FormatsDeployFailureAfterRevert(t *testing.T) {
+	cp := climocks.NewMockControlPlane(t)
+	route := &domain.Route{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}
+	deployErr := &domain.DeployFailureError{
+		Summary: "failed to deploy",
+		Cause:   "health check failed",
+		Hint:    "check DATABASE_URL",
+	}
+
+	cp.EXPECT().UpdateRoute(context.Background(), domain.Route{Domain: "app.example.com", Image: "registry.example.com/myapp:v2"}).Return(nil).Once()
+	cp.EXPECT().Deploy(context.Background(), "app.example.com").Return(nil, deployErr).Once()
+	cp.EXPECT().UpdateRoute(context.Background(), domain.Route{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}).Return(nil).Once()
+
+	err := deploySelectedTag(context.Background(), cp, route, &bytes.Buffer{}, &bytes.Buffer{}, "app.example.com", "myapp", "v2")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to deploy")
+	assert.Contains(t, err.Error(), "Cause: health check failed")
+	assert.Contains(t, err.Error(), "Hint: check DATABASE_URL")
+	assert.Contains(t, err.Error(), "route reverted")
 }

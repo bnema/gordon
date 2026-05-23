@@ -97,6 +97,60 @@ Recommended rollout:
 
 During the transition, Gordon treats both the current and legacy hosts as its own registry for image matching and internal pulls, then saves canonical refs back to `gordon_domain`. Remote CLI and admin API traffic should use the new `gordon_domain`.
 
+### Breaking: `gordon rollback` Renamed to `gordon pin`
+
+If you have scripts or runbooks using `gordon rollback`, switch them to `gordon pin`:
+
+```bash
+gordon pin app.example.com
+gordon pin app.example.com --tag v2.30.1
+gordon pin list app.example.com
+```
+
+### Breaking-ish: `routes list` Is Inventory-Only
+
+`gordon routes list` now shows domain/image inventory only. Detailed runtime state, HTTP probe status, and attachment status moved to `gordon routes status`.
+
+If you have automation parsing status-like fields from `routes list`, migrate it to `routes status --json`.
+
+### New: Public ACME TLS
+
+Gordon can now obtain public certificates with `[tls.acme]` using either `http-01` or `cloudflare-dns-01`.
+
+- `server.tls_port` must stay enabled (`> 0`)
+- `http-01` needs public HTTP reachability for each hostname being validated
+- `cloudflare-dns-01` needs a Cloudflare token with zone-read and DNS-edit access for every zone used by HTTPS routes
+- `obtain_batch_size` limits new ACME orders per reconcile pass to reduce rate-limit spikes
+
+### New: DNS Resolver Settings for ACME DNS-01
+
+`[dns]` controls the recursive resolvers Gordon uses to verify public DNS propagation for ACME DNS-01.
+
+Add this if you need non-default resolvers, split-horizon-aware testing, or a slower propagation window:
+
+```toml
+[dns]
+resolvers = ["1.1.1.1:53", "8.8.8.8:53"]
+propagation_timeout = "5m"
+polling_interval = "5s"
+```
+
+### Runtime Change: Managed Containers Use Restart Policy `always`
+
+Newly created managed route containers now use the runtime restart policy `always`. Existing containers pick this up on redeploy/recreate.
+
+This improves crash recovery and keeps Docker/Podman behavior aligned with Gordon's startup reconciliation.
+
+### New: Saved Remote Inference for Targeted Commands
+
+When you do not pass `--remote`, Gordon can now infer a saved remote for some target-based commands when exactly one configured remote matches the route, image, attachment target, or repository.
+
+If multiple remotes match or probing fails, Gordon now stops and asks you to pass `--remote` explicitly instead of guessing.
+
+### New: Dedicated Access Log
+
+You can now enable `logging.access_log.*` for a dedicated HTTP access log separate from the main process log. This is useful for request auditing, GoAccess, CrowdSec, or fail2ban-style tooling.
+
 ## v2.16.0 to v2.30.0
 
 ### Breaking: Password Authentication Removed
@@ -116,7 +170,7 @@ Gordon v2.30.0 removes password-based authentication entirely. Only token-based 
 
 - `auth.access_token_ttl` configures the lifetime of ephemeral access tokens issued by `/auth/token` (default: `"15m"`)
 - `gordon auth show-token` prints the stored token for a remote
-- `gordon auth logout` removes the stored token (with optional `--revoke`)
+- `gordon auth logout` removes the stored token locally
 - Automatic token exchange: the CLI transparently exchanges long-lived tokens for ephemeral ones before API calls
 - Admin scopes (`admin:*:*`, `admin:routes:read`, etc.) allow fine-grained access control for remote CLI operations
 

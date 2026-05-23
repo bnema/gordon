@@ -617,6 +617,61 @@ func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 	assert.NotEmpty(t, stored[0].Certificate.Certificate)
 }
 
+func TestServiceReconcile_SerializesConcurrentRuns(t *testing.T) {
+	ctx := context.Background()
+	routes := &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}}
+	obtainStarted := make(chan struct{}, 2)
+	releaseObtain := make(chan struct{})
+
+	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
+		obtainStarted <- struct{}{}
+		<-releaseObtain
+		return defaultStoredCert(order)
+	}, nil)
+	store, _ := newMockCertificateStore(t)
+
+	cfg := Config{
+		Enabled:   true,
+		Email:     "admin@example.com",
+		Challenge: "http-01",
+		HTTPPort:  8088,
+		TLSPort:   8443,
+	}
+
+	svc := NewService(cfg, ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- svc.Reconcile(ctx) }()
+
+	select {
+	case <-obtainStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first reconcile did not start certificate obtain")
+	}
+
+	go func() { errCh <- svc.Reconcile(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	close(releaseObtain)
+
+	require.NoError(t, <-errCh)
+	require.NoError(t, <-errCh)
+	assert.Len(t, recorder.Orders(), 1)
+}
+
 func TestServiceReconcileResolvesMissingEffectiveChallenge(t *testing.T) {
 	ctx := context.Background()
 	routes := &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}}

@@ -14,6 +14,8 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 	"github.com/bnema/gordon/internal/domain"
+	cfgusecase "github.com/bnema/gordon/internal/usecase/config"
+	"github.com/bnema/gordon/internal/usecase/container"
 	"github.com/bnema/gordon/internal/usecase/proxy"
 )
 
@@ -112,6 +114,17 @@ func (r *registryLimitsRecorder) UpdateBlobLimits(maxBlobChunkSize, maxBlobSize 
 	r.maxBlobSize = maxBlobSize
 }
 
+type containerConfigApplyRecorder struct {
+	calls int
+	cfg   Config
+}
+
+func (r *containerConfigApplyRecorder) Apply(cfg Config) error {
+	r.calls++
+	r.cfg = cfg
+	return nil
+}
+
 type eventBusRecorder struct {
 	mu        sync.Mutex
 	calls     int
@@ -179,22 +192,30 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 	v.Set("server.max_blob_size", "8MB")
 	v.Set("server.max_proxy_response_size", "7MB")
 	v.Set("server.max_concurrent_connections", 99)
+	v.Set("server.legacy_registry_domains", []string{"old.example.com"})
+	v.Set("images.allowed_registries", []string{"docker.io"})
 
 	reloadSvc := &reloadRecorder{}
 	proxySvc := &proxyRecorder{}
 	events := &eventBusRecorder{}
+	containerCfg := &containerConfigApplyRecorder{}
 
 	registryLimits := &registryLimitsRecorder{}
 	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, nil, zerowrap.Default())
+	coord.SetContainerConfigApplier(containerCfg.Apply)
 	require.NoError(t, coord.ApplyLoadedConfig(ctx))
 
 	require.Equal(t, 0, reloadSvc.Calls())
 	require.Equal(t, 1, proxySvc.calls)
 	require.Equal(t, 1, events.Calls())
 	require.Equal(t, 1, registryLimits.calls)
+	require.Equal(t, 1, containerCfg.calls)
 	require.Equal(t, int64(6<<20), registryLimits.maxBlobChunkSize)
 	require.Equal(t, int64(8<<20), registryLimits.maxBlobSize)
 	require.Equal(t, domain.EventConfigReload, events.eventType)
+	require.Equal(t, "reload.example.com", containerCfg.cfg.Server.GordonDomain)
+	require.Equal(t, []string{"old.example.com"}, containerCfg.cfg.Server.LegacyRegistryDomains)
+	require.Equal(t, []string{"docker.io"}, containerCfg.cfg.Images.AllowedRegistries)
 	require.Equal(t, proxy.Config{
 		RegistryDomain:     "reload.example.com",
 		RegistryPort:       5000,
@@ -204,6 +225,39 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 	}, proxySvc.config)
 }
 
+func TestServiceInit_RegisterReloadCoordinatorHooks_WiresContainerConfigApplier(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "reload.example.com")
+	v.Set("server.registry_port", 5000)
+
+	configSvc := cfgusecase.NewService(v, nil)
+	require.NoError(t, configSvc.Load(ctx))
+
+	si := &serviceInit{
+		ctx: ctx,
+		v:   v,
+		cfg: Config{},
+		log: zerowrap.Default(),
+		svc: &services{
+			configSvc:         configSvc,
+			containerSvc:      container.NewService(nil, nil, nil, nil, container.Config{}, configSvc),
+			internalRegUser:   "gordon",
+			internalRegPass:   "secret",
+			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, zerowrap.Default()),
+		},
+	}
+
+	si.registerReloadCoordinatorHooks()
+	require.NotNil(t, si.svc.reloadCoordinator.applyContainerConfig)
+
+	reloadCfg := Config{}
+	reloadCfg.Server.GordonDomain = "reload.example.com"
+	reloadCfg.Server.RegistryPort = 5000
+	reloadCfg.Images.AllowedRegistries = []string{"docker.io"}
+
+	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(reloadCfg))
+}
 func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()

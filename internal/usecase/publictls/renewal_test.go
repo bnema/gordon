@@ -115,6 +115,48 @@ func TestRenewalLoopStops(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond, "renewal loop should stop after context cancel")
 }
 
+func TestRenewalLoop_ReconcilesMissingCertificatesOnTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Enabled:   true,
+		Email:     "admin@example.com",
+		Challenge: "http-01",
+		HTTPPort:  8088,
+		TLSPort:   8443,
+	}
+
+	routes := &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}}
+	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
+	store, _ := newMockCertificateStore(t)
+
+	svc := NewService(cfg, ServiceDeps{
+		Config:     cfg,
+		Routes:     routes,
+		Issuer:     issuer,
+		Store:      store,
+		Challenges: NewHTTP01Challenges(),
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+			TokenSource:    domain.ACMETokenSourceNone,
+			Reason:         "http-01 challenge selected",
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	done := svc.StartRenewalLoop(ctx, 10*time.Millisecond)
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	require.Eventually(t, func() bool {
+		return len(recorder.Orders()) > 0
+	}, 5*time.Second, 10*time.Millisecond, "renewal loop should retry missing certificate obtains")
+}
+
 // ---------------------------------------------------------------------------
 // RenewDueCertificates
 // ---------------------------------------------------------------------------
