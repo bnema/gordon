@@ -240,9 +240,9 @@ func deploySelectedTag(ctx context.Context, cp ControlPlane, route *domain.Route
 		route.Image = oldImage
 		if revertErr := cp.UpdateRoute(ctx, *route); revertErr != nil {
 			_ = cliWritef(ew, "WARNING: deploy failed and could not revert route: %v\n", revertErr)
-			return fmt.Errorf("failed to deploy; revert failed: %v; deploy error: %w", revertErr, formattedErr)
+			return fmt.Errorf("failed to deploy; revert failed: %w; deploy error: %v", revertErr, formattedErr)
 		}
-		return fmt.Errorf("%w\nroute reverted to previous image", formattedErr)
+		return fmt.Errorf("deploy failed; route reverted to previous image: %w", formattedErr)
 	}
 	containerID := shortContainerID(result.ContainerID)
 	return cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Pinned %s to %s (container: %s)", pinDomain, selectedTag, containerID)))

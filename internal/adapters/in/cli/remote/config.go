@@ -249,17 +249,20 @@ func Resolve(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, 
 // when an explicit remote selector is invalid instead of silently falling back
 // to local mode.
 func ResolveStrict(flagRemote, flagToken string, flagInsecure bool) (*ResolvedRemote, bool, error) {
-	remotes, _ := LoadRemotes("")
+	remotes, err := LoadRemotes("")
+	if err != nil {
+		return nil, false, fmt.Errorf("loading remotes: %w", err)
+	}
 
 	name, url, found := resolveTarget(flagRemote, remotes)
 	if !found && flagRemote != "" {
-		return nil, false, fmt.Errorf("remote %q not found", flagRemote)
+		return nil, false, fmt.Errorf("remote %q: %w", flagRemote, domain.ErrRemoteNotFound)
 	}
 	if !found {
 		if envRemote := os.Getenv("GORDON_REMOTE"); envRemote != "" {
 			name, url, found = resolveTarget(envRemote, remotes)
 			if !found {
-				return nil, false, fmt.Errorf("remote %q from GORDON_REMOTE not found", envRemote)
+				return nil, false, fmt.Errorf("remote %q from GORDON_REMOTE: %w", envRemote, domain.ErrRemoteNotFound)
 			}
 		}
 	}

@@ -1579,7 +1579,7 @@ Examples:
   gordon --remote https://gordon.mydomain.com routes add api.mydomain.com api:v2`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			routeDomain := args[0]
 
 			// Resolve image from positional argument or flag
@@ -1623,8 +1623,7 @@ Examples:
 				}
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Route configured: %s -> %s", routeDomain, image)))
-			return nil
+			return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Route configured: %s -> %s", routeDomain, image)))
 		},
 	}
 

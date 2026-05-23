@@ -1,10 +1,15 @@
 package remote
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestResolve_FlagNameLookup(t *testing.T) {
@@ -201,4 +206,33 @@ func TestResolve_UnknownNameReturnsNotFound(t *testing.T) {
 	resolved, ok := Resolve("nonexistent", "", false)
 	assert.False(t, ok)
 	assert.Nil(t, resolved)
+}
+
+func TestResolveStrict_UnknownFlagRemoteWrapsErrRemoteNotFound(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GORDON_REMOTE", "")
+	t.Setenv("GORDON_TOKEN", "")
+
+	resolved, ok, err := ResolveStrict("nonexistent", "", false)
+	require.Error(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, resolved)
+	assert.ErrorIs(t, err, domain.ErrRemoteNotFound)
+}
+
+func TestResolveStrict_LoadRemotesErrorIsReturned(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("GORDON_REMOTE", "")
+	t.Setenv("GORDON_TOKEN", "")
+
+	remotesPath := filepath.Join(configHome, "gordon", "remotes.toml")
+	require.NoError(t, os.MkdirAll(remotesPath, 0o755))
+
+	resolved, ok, err := ResolveStrict("", "", false)
+	require.Error(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, resolved)
+	assert.Contains(t, err.Error(), "loading remotes")
+	assert.False(t, errors.Is(err, domain.ErrRemoteNotFound))
 }

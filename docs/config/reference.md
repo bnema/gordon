@@ -232,7 +232,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `tls.acme.obtain_batch_size` | `1` | Maximum new ACME certificate orders per reconcile run |
 | `auth.enabled` | `true` | Enable authentication; when `false`, run local-only mode (loopback-only `/v2/*`, `/admin/*` disabled) |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
-| `auth.token_expiry` | `"720h"` | 30 days |
+| `auth.token_expiry` | `"30d"` | 30 days |
 | `auth.access_token_ttl` | `"15m"` | Ephemeral access token lifetime |
 | `api.rate_limit.enabled` | `true` | Enable rate limiting |
 | `api.rate_limit.global_rps` | `500` | Global requests/second |

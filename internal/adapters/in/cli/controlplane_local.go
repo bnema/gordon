@@ -165,6 +165,9 @@ func (l *localControlPlane) GetRouteCleanupPreview(ctx context.Context, routeDom
 	if err != nil {
 		return nil, err
 	}
+	if report == nil {
+		return nil, nil
+	}
 	if l.volumeSvc == nil {
 		return report, nil
 	}

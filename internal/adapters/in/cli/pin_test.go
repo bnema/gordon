@@ -100,5 +100,5 @@ func TestDeploySelectedTag_FormatsDeployFailureAfterRevert(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to deploy")
 	assert.Contains(t, err.Error(), "Cause: health check failed")
 	assert.Contains(t, err.Error(), "Hint: check DATABASE_URL")
-	assert.Contains(t, err.Error(), "route reverted")
+	assert.Contains(t, err.Error(), "route reverted to previous image")
 }
