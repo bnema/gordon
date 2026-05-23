@@ -116,11 +116,13 @@ func (r *registryLimitsRecorder) UpdateBlobLimits(maxBlobChunkSize, maxBlobSize 
 
 type containerConfigApplyRecorder struct {
 	calls int
+	ctx   context.Context
 	cfg   Config
 }
 
-func (r *containerConfigApplyRecorder) Apply(cfg Config) error {
+func (r *containerConfigApplyRecorder) Apply(ctx context.Context, cfg Config) error {
 	r.calls++
+	r.ctx = ctx
 	r.cfg = cfg
 	return nil
 }
@@ -256,7 +258,7 @@ func TestServiceInit_RegisterReloadCoordinatorHooks_WiresContainerConfigApplier(
 	reloadCfg.Server.RegistryPort = 5000
 	reloadCfg.Images.AllowedRegistries = []string{"docker.io"}
 
-	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(reloadCfg))
+	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg))
 }
 func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	ctx := context.Background()

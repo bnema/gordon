@@ -663,8 +663,12 @@ func TestServiceReconcile_SerializesConcurrentRuns(t *testing.T) {
 		t.Fatal("first reconcile did not start certificate obtain")
 	}
 
-	go func() { errCh <- svc.Reconcile(ctx) }()
-	time.Sleep(50 * time.Millisecond)
+	secondStarted := make(chan struct{})
+	go func() {
+		close(secondStarted)
+		errCh <- svc.Reconcile(ctx)
+	}()
+	<-secondStarted
 	close(releaseObtain)
 
 	require.NoError(t, <-errCh)

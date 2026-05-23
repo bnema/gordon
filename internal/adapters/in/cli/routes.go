@@ -1479,7 +1479,7 @@ func runRoutePurge(ctx context.Context, cp ControlPlane, domainName string, opts
 	if diag.Runtime != nil && diag.Runtime.ContainerID != "" {
 		report.OrphanedEntities = append(report.OrphanedEntities, domain.CleanupOrphanedEntity{Kind: "route_container", ID: diag.Runtime.ContainerID, Status: diag.Runtime.ContainerStatus, Reason: "route runtime state matched purge target"})
 	}
-	report.OrphanedEntities = append(report.OrphanedEntities, diag.OrphanedEntities...)
+	report.OrphanedEntities = appendUniqueCleanupEntities(report.OrphanedEntities, diag.OrphanedEntities...)
 	if opts.Volumes {
 		for _, volume := range diag.Volumes {
 			report.PreservedVolumes = append(report.PreservedVolumes, domain.CleanupVolume{Name: volume.Name, Reason: "volume purge requires explicit --volumes and runtime support"})
@@ -1514,6 +1514,26 @@ func runRoutePurge(ctx context.Context, cp ControlPlane, domainName string, opts
 		report.Hints = append(report.Hints, "dry-run only; add --force with explicit category flags to execute supported purge actions")
 	}
 	return report, nil
+}
+
+func appendUniqueCleanupEntities(existing []domain.CleanupOrphanedEntity, candidates ...domain.CleanupOrphanedEntity) []domain.CleanupOrphanedEntity {
+	seen := make(map[string]struct{}, len(existing))
+	for _, entity := range existing {
+		seen[cleanupEntityKey(entity)] = struct{}{}
+	}
+	for _, entity := range candidates {
+		key := cleanupEntityKey(entity)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		existing = append(existing, entity)
+		seen[key] = struct{}{}
+	}
+	return existing
+}
+
+func cleanupEntityKey(entity domain.CleanupOrphanedEntity) string {
+	return entity.Kind + "|" + entity.ID + "|" + entity.Name
 }
 
 func writeRoutePurgeText(out io.Writer, report *domain.CleanupReport, force bool) error {

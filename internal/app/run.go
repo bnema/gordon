@@ -701,8 +701,8 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 		return
 	}
 
-	si.svc.reloadCoordinator.SetContainerConfigApplier(func(reloadCfg Config) error {
-		containerCfg, err := buildContainerServiceConfig(si.ctx, si.v, reloadCfg, si.svc, si.log)
+	si.svc.reloadCoordinator.SetContainerConfigApplier(func(reloadCtx context.Context, reloadCfg Config) error {
+		containerCfg, err := buildContainerServiceConfig(reloadCtx, si.v, reloadCfg, si.svc, si.log)
 		if err != nil {
 			return err
 		}
@@ -1627,7 +1627,7 @@ type reloadCoordinator struct {
 	configSvc            configReloader
 	v                    *viper.Viper
 	proxySvc             proxyConfigUpdater
-	applyContainerConfig func(Config) error
+	applyContainerConfig func(context.Context, Config) error
 	registryLimits       interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
@@ -1659,7 +1659,7 @@ func (c *reloadCoordinator) SetRegistryLimits(limits interface {
 	c.registryLimits = limits
 }
 
-func (c *reloadCoordinator) SetContainerConfigApplier(apply func(Config) error) {
+func (c *reloadCoordinator) SetContainerConfigApplier(apply func(context.Context, Config) error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.applyContainerConfig = apply
@@ -1713,15 +1713,15 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 		return fmt.Errorf("failed to parse proxy config on reload: %w", err)
 	}
 
-	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
-	if c.registryLimits != nil {
-		c.registryLimits.UpdateBlobLimits(reloadedProxy.maxBlobChunkSize, reloadedProxy.maxBlobSize)
-	}
 	if c.applyContainerConfig != nil {
-		if err := c.applyContainerConfig(reloadCfg); err != nil {
+		if err := c.applyContainerConfig(ctx, reloadCfg); err != nil {
 			c.log.Error().Err(err).Msg("failed to apply container config on reload")
 			return fmt.Errorf("failed to apply container config on reload: %w", err)
 		}
+	}
+	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
+	if c.registryLimits != nil {
+		c.registryLimits.UpdateBlobLimits(reloadedProxy.maxBlobChunkSize, reloadedProxy.maxBlobSize)
 	}
 
 	if c.eventBus != nil {

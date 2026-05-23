@@ -438,6 +438,7 @@ gordon_domain = "gordon.mydomain.com"
 ```
 
 With firewall port forwarding:
+
 ```bash
 sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
 sudo firewall-cmd --reload
