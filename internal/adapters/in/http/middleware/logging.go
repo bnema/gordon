@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -163,6 +164,10 @@ func PanicRecovery(log zerowrap.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if err := recover(); err != nil {
+					if isAbortHandlerPanic(err) {
+						panic(http.ErrAbortHandler)
+					}
+
 					log.Error().
 						Str(zerowrap.FieldLayer, "adapter").
 						Str(zerowrap.FieldAdapter, "http").
@@ -181,6 +186,11 @@ func PanicRecovery(log zerowrap.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func isAbortHandlerPanic(v any) bool {
+	err, ok := v.(error)
+	return ok && errors.Is(err, http.ErrAbortHandler)
 }
 
 // CORS middleware adds permissive CORS headers.

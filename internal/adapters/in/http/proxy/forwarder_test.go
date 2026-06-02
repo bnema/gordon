@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,6 +20,12 @@ import (
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
 
 func TestForwardToTarget_H2CEndToEnd(t *testing.T) {
 	var h2cProtos http.Protocols
@@ -183,6 +190,35 @@ func TestForwardToTarget_RouteHostPreservedForManagedTarget(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "app.example.com", receivedHost)
 	assert.Equal(t, "app.example.com", receivedForwardedHost)
+}
+
+func TestForwardToTarget_ContextCanceled_Returns499(t *testing.T) {
+	proxySvc := inmocks.NewMockProxyService(t)
+
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
+	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+		Host:        "127.0.0.1",
+		Port:        8080,
+		ContainerID: "c-sse",
+		Scheme:      "http",
+	}, nil)
+	proxySvc.EXPECT().TrackInFlight("c-sse").Return(func() {})
+
+	handler := NewHandler(proxySvc, nil, zerowrap.Default())
+	handler.appTransport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.Canceled
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/api/notifications/sent-events", nil)
+	req.Host = "app.example.com"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, statusClientClosedRequest, w.Code)
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'", w.Header().Get("Content-Security-Policy"))
+	assert.Empty(t, w.Body.String())
 }
 
 func TestForwardToTarget_BackendDown_Returns503(t *testing.T) {
