@@ -2,6 +2,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -102,16 +103,15 @@ func (h *Handler) forwardToTarget(w http.ResponseWriter, r *http.Request, target
 		transport:     transport,
 		incomingReq:   r,
 		trustedNets:   h.trustedNets,
-		errorHandler: func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(proxyErr, &maxBytesErr) {
-				log.Warn().Err(proxyErr).Str("target", targetURL.String()).Msg("proxy error: request body too large")
-				proxyError(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
-				return
-			}
-			log.Error().Err(proxyErr).Str("target", targetURL.String()).Msg("proxy error: connection failed")
-			proxyError(w, "Service Unavailable", http.StatusServiceUnavailable)
-		},
+		errorHandler: newProxyErrorHandler(
+			log.WithField("target", targetURL.String()),
+			proxyErrorHandlerConfig{
+				requestTooLargeLog:  "proxy error: request body too large",
+				clientDisconnectLog: "proxy request canceled by client",
+				upstreamErrorLog:    "proxy error: connection failed",
+				upstreamErrorBody:   "Service Unavailable",
+			},
+		),
 		modifyResponse: modifyResponse(maxResponseSize),
 	})
 
@@ -152,16 +152,15 @@ func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, regi
 			pr.Out.Host = targetURL.Host
 		},
 		Transport: h.registryTransport,
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(proxyErr, &maxBytesErr) {
-				log.Warn().Err(proxyErr).Int("registry_port", registryPort).Msg("registry proxy error: request body too large")
-				proxyError(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
-				return
-			}
-			log.Error().Err(proxyErr).Int("registry_port", registryPort).Msg("registry proxy error")
-			proxyError(w, "Registry Unavailable", http.StatusServiceUnavailable)
-		},
+		ErrorHandler: newProxyErrorHandler(
+			log.WithField("registry_port", registryPort),
+			proxyErrorHandlerConfig{
+				requestTooLargeLog:  "registry proxy error: request body too large",
+				clientDisconnectLog: "registry proxy request canceled by client",
+				upstreamErrorLog:    "registry proxy error",
+				upstreamErrorBody:   "Registry Unavailable",
+			},
+		),
 		// Strip browser-oriented security headers from upstream registry responses
 		// to avoid conflicts with Gordon's own headers on browser-facing routes.
 		ModifyResponse: func(resp *http.Response) error {
@@ -179,6 +178,34 @@ func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, regi
 
 	log.Debug().Str("target", targetURL.String()).Msg("proxying request to registry")
 	proxy.ServeHTTP(w, r)
+}
+
+type proxyErrorHandlerConfig struct {
+	requestTooLargeLog  string
+	clientDisconnectLog string
+	upstreamErrorLog    string
+	upstreamErrorBody   string
+}
+
+func newProxyErrorHandler(log zerowrap.Logger, cfg proxyErrorHandlerConfig) func(http.ResponseWriter, *http.Request, error) {
+	return func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
+		switch {
+		case isRequestBodyTooLargeError(proxyErr):
+			log.Warn().Err(proxyErr).Msg(cfg.requestTooLargeLog)
+			proxyError(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+		case isClientDisconnectError(proxyErr):
+			log.Debug().Err(proxyErr).Msg(cfg.clientDisconnectLog)
+			clientClosedRequest(w)
+		default:
+			log.Error().Err(proxyErr).Msg(cfg.upstreamErrorLog)
+			proxyError(w, cfg.upstreamErrorBody, http.StatusServiceUnavailable)
+		}
+	}
+}
+
+func isRequestBodyTooLargeError(err error) bool {
+	_, ok := errors.AsType[*http.MaxBytesError](err)
+	return ok
 }
 
 type reverseProxyOptions struct {
@@ -305,10 +332,25 @@ func (l *limitedReadCloser) Close() error {
 	return l.ReadCloser.Close()
 }
 
+const statusClientClosedRequest = 499
+
+func isClientDisconnectError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, http.ErrAbortHandler)
+}
+
+func clientClosedRequest(w http.ResponseWriter) {
+	setProxyGeneratedResponseHeaders(w)
+	w.WriteHeader(statusClientClosedRequest)
+}
+
 // proxyError writes an error response with security headers appropriate for
 // proxy-generated error pages.
 func proxyError(w http.ResponseWriter, msg string, code int) {
+	setProxyGeneratedResponseHeaders(w)
+	http.Error(w, msg, code)
+}
+
+func setProxyGeneratedResponseHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 	w.Header().Set("Cache-Control", "no-store")
-	http.Error(w, msg, code)
 }
