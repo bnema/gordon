@@ -108,23 +108,23 @@ func (_c *MockBackupService_DetectDatabases_Call) RunAndReturn(run func(ctx cont
 }
 
 // ListBackups provides a mock function for the type MockBackupService
-func (_mock *MockBackupService) ListBackups(ctx context.Context, domainName string) ([]domain.BackupJob, error) {
+func (_mock *MockBackupService) ListBackups(ctx context.Context, domainName string) ([]domain.DatabaseBackupJob, error) {
 	ret := _mock.Called(ctx, domainName)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListBackups")
 	}
 
-	var r0 []domain.BackupJob
+	var r0 []domain.DatabaseBackupJob
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]domain.BackupJob, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]domain.DatabaseBackupJob, error)); ok {
 		return returnFunc(ctx, domainName)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []domain.BackupJob); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []domain.DatabaseBackupJob); ok {
 		r0 = returnFunc(ctx, domainName)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]domain.BackupJob)
+			r0 = ret.Get(0).([]domain.DatabaseBackupJob)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
@@ -165,12 +165,12 @@ func (_c *MockBackupService_ListBackups_Call) Run(run func(ctx context.Context, 
 	return _c
 }
 
-func (_c *MockBackupService_ListBackups_Call) Return(backupJobs []domain.BackupJob, err error) *MockBackupService_ListBackups_Call {
-	_c.Call.Return(backupJobs, err)
+func (_c *MockBackupService_ListBackups_Call) Return(vs []domain.DatabaseBackupJob, err error) *MockBackupService_ListBackups_Call {
+	_c.Call.Return(vs, err)
 	return _c
 }
 
-func (_c *MockBackupService_ListBackups_Call) RunAndReturn(run func(ctx context.Context, domainName string) ([]domain.BackupJob, error)) *MockBackupService_ListBackups_Call {
+func (_c *MockBackupService_ListBackups_Call) RunAndReturn(run func(ctx context.Context, domainName string) ([]domain.DatabaseBackupJob, error)) *MockBackupService_ListBackups_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -302,23 +302,23 @@ func (_c *MockBackupService_RestorePITR_Call) RunAndReturn(run func(ctx context.
 }
 
 // RunBackup provides a mock function for the type MockBackupService
-func (_mock *MockBackupService) RunBackup(ctx context.Context, domainName string, dbName string) (*domain.BackupResult, error) {
+func (_mock *MockBackupService) RunBackup(ctx context.Context, domainName string, dbName string) (*domain.DatabaseBackupResult, error) {
 	ret := _mock.Called(ctx, domainName, dbName)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RunBackup")
 	}
 
-	var r0 *domain.BackupResult
+	var r0 *domain.DatabaseBackupResult
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*domain.BackupResult, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*domain.DatabaseBackupResult, error)); ok {
 		return returnFunc(ctx, domainName, dbName)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *domain.BackupResult); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *domain.DatabaseBackupResult); ok {
 		r0 = returnFunc(ctx, domainName, dbName)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*domain.BackupResult)
+			r0 = ret.Get(0).(*domain.DatabaseBackupResult)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
@@ -365,34 +365,34 @@ func (_c *MockBackupService_RunBackup_Call) Run(run func(ctx context.Context, do
 	return _c
 }
 
-func (_c *MockBackupService_RunBackup_Call) Return(backupResult *domain.BackupResult, err error) *MockBackupService_RunBackup_Call {
-	_c.Call.Return(backupResult, err)
+func (_c *MockBackupService_RunBackup_Call) Return(v *domain.DatabaseBackupResult, err error) *MockBackupService_RunBackup_Call {
+	_c.Call.Return(v, err)
 	return _c
 }
 
-func (_c *MockBackupService_RunBackup_Call) RunAndReturn(run func(ctx context.Context, domainName string, dbName string) (*domain.BackupResult, error)) *MockBackupService_RunBackup_Call {
+func (_c *MockBackupService_RunBackup_Call) RunAndReturn(run func(ctx context.Context, domainName string, dbName string) (*domain.DatabaseBackupResult, error)) *MockBackupService_RunBackup_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Status provides a mock function for the type MockBackupService
-func (_mock *MockBackupService) Status(ctx context.Context) ([]domain.BackupJob, error) {
+func (_mock *MockBackupService) Status(ctx context.Context) ([]domain.DatabaseBackupJob, error) {
 	ret := _mock.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Status")
 	}
 
-	var r0 []domain.BackupJob
+	var r0 []domain.DatabaseBackupJob
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]domain.BackupJob, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]domain.DatabaseBackupJob, error)); ok {
 		return returnFunc(ctx)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context) []domain.BackupJob); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []domain.DatabaseBackupJob); ok {
 		r0 = returnFunc(ctx)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]domain.BackupJob)
+			r0 = ret.Get(0).([]domain.DatabaseBackupJob)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
@@ -427,12 +427,12 @@ func (_c *MockBackupService_Status_Call) Run(run func(ctx context.Context)) *Moc
 	return _c
 }
 
-func (_c *MockBackupService_Status_Call) Return(backupJobs []domain.BackupJob, err error) *MockBackupService_Status_Call {
-	_c.Call.Return(backupJobs, err)
+func (_c *MockBackupService_Status_Call) Return(vs []domain.DatabaseBackupJob, err error) *MockBackupService_Status_Call {
+	_c.Call.Return(vs, err)
 	return _c
 }
 
-func (_c *MockBackupService_Status_Call) RunAndReturn(run func(ctx context.Context) ([]domain.BackupJob, error)) *MockBackupService_Status_Call {
+func (_c *MockBackupService_Status_Call) RunAndReturn(run func(ctx context.Context) ([]domain.DatabaseBackupJob, error)) *MockBackupService_Status_Call {
 	_c.Call.Return(run)
 	return _c
 }

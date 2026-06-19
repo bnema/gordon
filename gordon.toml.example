@@ -128,16 +128,37 @@ trace_sample_rate = 1.0
 [env]
 # dir = "~/.gordon/env"
 
-[backups]
+[backups.databases]
 enabled = false
 schedule = "daily"
 storage_dir = ""
 
-[backups.retention]
+[backups.databases.retention]
 hourly = 0
 daily = 0
 weekly = 0
 monthly = 0
+
+[backups.volumes]
+enabled = false
+interval = "24h"
+compression = "gzip"
+timeout = "2h"
+max_concurrency = 2
+# Helper image must include tar and the selected compressor.
+helper_image = "alpine:3.20"
+
+[backups.volumes.s3]
+bucket = ""
+region = ""
+prefix = ""
+# endpoint = "https://s3.example.com"
+# path_style = false
+# sse_algorithm = "AES256"
+# sse_kms_key_id = ""
+
+[backups.volumes.retention]
+keep = 14
 
 [routes]
 # "app.example.com" = { image = "myapp:latest" }

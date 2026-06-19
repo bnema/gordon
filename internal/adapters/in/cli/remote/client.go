@@ -836,6 +836,58 @@ func (c *Client) DetectDatabases(ctx context.Context, backupDomain string) ([]dt
 	return result.Databases, nil
 }
 
+// ListVolumeBackups returns volume backups globally or for a domain.
+func (c *Client) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
+	path := "/backups/volumes"
+	if backupDomain != "" {
+		path += "/" + url.PathEscape(backupDomain)
+	}
+
+	resp, err := c.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.VolumeBackupsResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return result.Backups, nil
+}
+
+// VolumeBackupStatus returns aggregate volume backup status.
+func (c *Client) VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/backups/volumes/status", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.VolumeBackupsResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return result.Backups, nil
+}
+
+// RunVolumeBackups triggers volume backups.
+func (c *Client) RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error) {
+	path := "/backups/volumes"
+	if backupDomain != "" {
+		path += "/" + url.PathEscape(backupDomain)
+	}
+
+	resp, err := c.request(ctx, http.MethodPost, path, dto.VolumeBackupRunRequest{Volume: volumeName})
+	if err != nil {
+		return nil, err
+	}
+
+	var result dto.VolumeBackupRunResponse
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // GetHealth returns health status for all routes with HTTP probing.
 func (c *Client) GetHealth(ctx context.Context) (map[string]*RouteHealth, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/health", nil)

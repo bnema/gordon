@@ -169,6 +169,18 @@ func (r *remoteControlPlane) DetectDatabases(ctx context.Context, backupDomain s
 	return r.client.DetectDatabases(ctx, backupDomain)
 }
 
+func (r *remoteControlPlane) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
+	return r.client.ListVolumeBackups(ctx, backupDomain)
+}
+
+func (r *remoteControlPlane) VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob, error) {
+	return r.client.VolumeBackupStatus(ctx)
+}
+
+func (r *remoteControlPlane) RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error) {
+	return r.client.RunVolumeBackups(ctx, backupDomain, volumeName)
+}
+
 func (r *remoteControlPlane) GetProcessLogs(ctx context.Context, lines int) ([]string, error) {
 	return r.client.GetProcessLogs(ctx, lines)
 }

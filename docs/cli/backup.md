@@ -1,96 +1,63 @@
 # Backup Command
 
-Manage backups for database attachments.
+Manage database backups and volume backups.
 
-## gordon backups
+## gordon backups databases
+
+Database backups are logical PostgreSQL backups made with `pg_dump`.
 
 ```bash
-gordon backups <subcommand>
+gordon backups databases <subcommand>
 ```
 
 Subcommands:
 
-- `list [domain]` - List backups globally or for one domain
-- `run <domain> [--db <name>]` - Trigger an immediate backup
+- `list [domain]` - List database backups
+- `run <domain> [--db <name>]` - Trigger an immediate database backup
 - `detect <domain>` - Detect supported databases for a domain
-- `status` - Show backup status across domains
+- `status` - Show database backup status
 
-> Backup commands work both locally and remotely.
->
-> - Local mode (no `--remote`) executes backups through in-process services.
-> - Remote mode uses the admin API on the target instance.
->
-> `gordon backups run <domain>` auto-selects the database only when exactly one supported DB attachment is detected. If multiple DB attachments are present, pass `--db <name>`.
+Compatibility aliases remain available: `gordon backups list`, `run`, `detect`, and `status` map to database backups.
 
-In normal usage, configure remotes once (`gordon remotes ...`) and run backup commands without per-command remote flags.
+## gordon backups volumes
+
+Volume backups are best-effort filesystem archives of Gordon-managed named volumes, uploaded to S3.
+
+```bash
+gordon backups volumes <subcommand>
+```
+
+Subcommands:
+
+- `list [domain]` - List completed volume backup archives
+- `run [domain] [--volume <name>]` - Trigger volume backups now
+- `status` - Show completed archives plus current/recent in-memory job state
+
+Volume backups exclude bind mounts, tmpfs mounts, anonymous volumes, and non-Gordon volumes. Live archives are not application-consistent unless the application is quiesced or stopped.
 
 ## Examples
 
 ```bash
-# List all backups
-gordon backups list
-gordon backups list --json
+# Database backups
+gordon backups databases list
+gordon backups databases run app.example.com --db postgres
+gordon backups databases detect app.example.com
+gordon backups databases status
 
-# List backups for one domain
-gordon backups list app.example.com
-
-# Trigger backup (auto-detect when exactly one DB attachment exists)
-gordon backups run app.example.com
-
-# Trigger backup for specific attachment name
-gordon backups run app.example.com --db postgres
-
-# Detect DB attachments
-gordon backups detect app.example.com
-
-# Status summary
-gordon backups status
+# Volume backups
+gordon backups volumes list
+gordon backups volumes list app.example.com
+gordon backups volumes run
+gordon backups volumes run app.example.com --volume gordon-app-example-com-data
+gordon backups volumes status
 ```
 
 ## JSON Output
 
-`gordon backups list` supports `--json` for machine-readable output.
+Database and volume list commands support `--json`.
 
 ```bash
-gordon backups list --json
-```
-
-```json
-[
-  {
-    "domain": "app.example.com",
-    "db": "postgres",
-    "status": "completed",
-    "started_at": "2026-03-13T09:45:00Z",
-    "backup_id": "backup_20260313_094500"
-  }
-]
-```
-
-## Output Columns
-
-### list
-
-```text
-<domain>\t<db>\t<status>\t<started_at>\t<backup_id>
-```
-
-### detect
-
-```text
-<name>\t<type>\t<host>\t<port>\t<image>
-```
-
-### status
-
-```text
-<domain>\t<db>\t<status>\t<started_at>
-```
-
-### run
-
-```text
-<domain>\t<db>\t<status>\t<started_at>\t<backup_id>\t<size_bytes>
+gordon backups volumes list --json
 ```
 
 ## Required Permissions

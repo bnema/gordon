@@ -40,20 +40,21 @@ type reloadTrigger interface {
 
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
-	configSvc     in.ConfigService
-	authSvc       in.AuthService
-	containerSvc  in.ContainerService
-	backupSvc     in.BackupService
-	imageSvc      in.ImageService
-	healthSvc     in.HealthService
-	secretSvc     in.SecretService
-	logSvc        in.LogService
-	volumeSvc     in.VolumeService
-	registrySvc   registryDeployService
-	previewSvc    previewService
-	reloadTrigger reloadTrigger
-	publicTLSSvc  in.PublicTLSService
-	log           zerowrap.Logger
+	configSvc       in.ConfigService
+	authSvc         in.AuthService
+	containerSvc    in.ContainerService
+	backupSvc       in.BackupService
+	volumeBackupSvc in.VolumeBackupService
+	imageSvc        in.ImageService
+	healthSvc       in.HealthService
+	secretSvc       in.SecretService
+	logSvc          in.LogService
+	volumeSvc       in.VolumeService
+	registrySvc     registryDeployService
+	previewSvc      previewService
+	reloadTrigger   reloadTrigger
+	publicTLSSvc    in.PublicTLSService
+	log             zerowrap.Logger
 }
 
 // Type aliases for API responses using shared DTO types.
@@ -142,6 +143,36 @@ func toBackupJobResponse(job domain.BackupJob) dto.BackupJob {
 	}
 }
 
+func toVolumeBackupJobResponse(job domain.VolumeBackupJob) dto.VolumeBackupJob {
+	var startedAt *time.Time
+	if !job.StartedAt.IsZero() {
+		t := job.StartedAt
+		startedAt = &t
+	}
+	var completedAt *time.Time
+	if !job.CompletedAt.IsZero() {
+		t := job.CompletedAt
+		completedAt = &t
+	}
+
+	return dto.VolumeBackupJob{
+		ID:            job.ID,
+		Domain:        job.Domain,
+		ContainerName: job.ContainerName,
+		ContainerID:   job.ContainerID,
+		VolumeName:    job.VolumeName,
+		MountPath:     job.MountPath,
+		Compression:   job.Metadata["compression"],
+		Type:          string(job.Type),
+		Status:        string(job.Status),
+		StartedAt:     startedAt,
+		CompletedAt:   completedAt,
+		SizeBytes:     job.SizeBytes,
+		ArtifactRef:   job.ArtifactRef,
+		Error:         job.Error,
+	}
+}
+
 func toDatabaseInfoResponse(db domain.DBInfo) dto.DatabaseInfo {
 	return dto.DatabaseInfo{
 		Type:        string(db.Type),
@@ -156,39 +187,41 @@ func toDatabaseInfoResponse(db domain.DBInfo) dto.DatabaseInfo {
 
 // HandlerDeps contains all dependencies for the admin HTTP handler.
 type HandlerDeps struct {
-	ConfigSvc     in.ConfigService
-	AuthSvc       in.AuthService
-	ContainerSvc  in.ContainerService
-	HealthSvc     in.HealthService
-	SecretSvc     in.SecretService
-	LogSvc        in.LogService
-	RegistrySvc   registryDeployService
-	Log           zerowrap.Logger
-	BackupSvc     in.BackupService
-	PreviewSvc    previewService
-	ImageSvc      in.ImageService
-	VolumeSvc     in.VolumeService
-	ReloadTrigger reloadTrigger
-	PublicTLSSvc  in.PublicTLSService
+	ConfigSvc       in.ConfigService
+	AuthSvc         in.AuthService
+	ContainerSvc    in.ContainerService
+	HealthSvc       in.HealthService
+	SecretSvc       in.SecretService
+	LogSvc          in.LogService
+	RegistrySvc     registryDeployService
+	Log             zerowrap.Logger
+	BackupSvc       in.BackupService
+	VolumeBackupSvc in.VolumeBackupService
+	PreviewSvc      previewService
+	ImageSvc        in.ImageService
+	VolumeSvc       in.VolumeService
+	ReloadTrigger   reloadTrigger
+	PublicTLSSvc    in.PublicTLSService
 }
 
 // NewHandler creates a new admin HTTP handler.
 func NewHandler(deps HandlerDeps) *Handler {
 	return &Handler{
-		configSvc:     deps.ConfigSvc,
-		authSvc:       deps.AuthSvc,
-		containerSvc:  deps.ContainerSvc,
-		backupSvc:     deps.BackupSvc,
-		imageSvc:      deps.ImageSvc,
-		healthSvc:     deps.HealthSvc,
-		secretSvc:     deps.SecretSvc,
-		logSvc:        deps.LogSvc,
-		volumeSvc:     deps.VolumeSvc,
-		registrySvc:   deps.RegistrySvc,
-		previewSvc:    deps.PreviewSvc,
-		reloadTrigger: deps.ReloadTrigger,
-		publicTLSSvc:  deps.PublicTLSSvc,
-		log:           deps.Log,
+		configSvc:       deps.ConfigSvc,
+		authSvc:         deps.AuthSvc,
+		containerSvc:    deps.ContainerSvc,
+		backupSvc:       deps.BackupSvc,
+		volumeBackupSvc: deps.VolumeBackupSvc,
+		imageSvc:        deps.ImageSvc,
+		healthSvc:       deps.HealthSvc,
+		secretSvc:       deps.SecretSvc,
+		logSvc:          deps.LogSvc,
+		volumeSvc:       deps.VolumeSvc,
+		registrySvc:     deps.RegistrySvc,
+		previewSvc:      deps.PreviewSvc,
+		reloadTrigger:   deps.ReloadTrigger,
+		publicTLSSvc:    deps.PublicTLSSvc,
+		log:             deps.Log,
 	}
 }
 
@@ -1313,12 +1346,16 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleBackups handles /admin/backups endpoints.
 func (h *Handler) handleBackups(w http.ResponseWriter, r *http.Request, path string) {
+	path = strings.TrimSuffix(path, "/")
+	if path == "/backups/volumes" || strings.HasPrefix(path, "/backups/volumes/") {
+		h.handleVolumeBackups(w, r, path)
+		return
+	}
+
 	if h.backupSvc == nil {
 		h.sendError(w, http.StatusServiceUnavailable, "backup service not available")
 		return
 	}
-
-	path = strings.TrimSuffix(path, "/")
 
 	if path == "/backups" || path == "/backups/status" {
 		h.handleBackupsStatus(w, r)
@@ -1344,6 +1381,82 @@ func (h *Handler) handleBackups(w http.ResponseWriter, r *http.Request, path str
 	}
 
 	h.sendError(w, http.StatusNotFound, "route not found")
+}
+
+func (h *Handler) handleVolumeBackups(w http.ResponseWriter, r *http.Request, path string) {
+	if h.volumeBackupSvc == nil {
+		h.sendError(w, http.StatusServiceUnavailable, "volume backup service not available")
+		return
+	}
+	if path == "/backups/volumes/status" {
+		h.handleVolumeBackupsStatus(w, r)
+		return
+	}
+	if path == "/backups/volumes" {
+		h.handleVolumeBackupsDomain(w, r, "")
+		return
+	}
+	suffix := strings.TrimPrefix(path, "/backups/volumes/")
+	parts := strings.Split(suffix, "/")
+	if len(parts) != 1 || parts[0] == "" {
+		h.sendError(w, http.StatusNotFound, "route not found")
+		return
+	}
+	h.handleVolumeBackupsDomain(w, r, parts[0])
+}
+
+func (h *Handler) handleVolumeBackupsStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+	jobs, err := h.volumeBackupSvc.VolumeBackupStatus(ctx)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "failed to get volume backup status")
+		return
+	}
+	h.sendJSON(w, http.StatusOK, dto.VolumeBackupsResponse{Backups: mapVolumeBackupJobsResponse(jobs)})
+}
+
+func (h *Handler) handleVolumeBackupsDomain(w http.ResponseWriter, r *http.Request, backupDomain string) {
+	ctx := r.Context()
+	switch r.Method {
+	case http.MethodGet:
+		if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+			h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+			return
+		}
+		jobs, err := h.volumeBackupSvc.ListVolumeBackups(ctx, backupDomain)
+		if err != nil {
+			h.sendError(w, http.StatusInternalServerError, "failed to list volume backups")
+			return
+		}
+		h.sendJSON(w, http.StatusOK, dto.VolumeBackupsResponse{Backups: mapVolumeBackupJobsResponse(jobs)})
+	case http.MethodPost:
+		if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+			h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+			return
+		}
+		var req dto.VolumeBackupRunRequest
+		r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			h.sendError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		jobs, err := h.volumeBackupSvc.RunVolumeBackups(ctx, backupDomain, req.Volume)
+		if err != nil {
+			h.sendError(w, http.StatusInternalServerError, "failed to run volume backups")
+			return
+		}
+		h.sendJSON(w, http.StatusOK, dto.VolumeBackupRunResponse{Status: "ok", Backups: mapVolumeBackupJobsResponse(jobs)})
+	default:
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (h *Handler) handleBackupsStatus(w http.ResponseWriter, r *http.Request) {
@@ -1452,6 +1565,14 @@ func mapBackupJobsResponse(jobs []domain.BackupJob) []dto.BackupJob {
 	response := make([]dto.BackupJob, 0, len(jobs))
 	for _, job := range jobs {
 		response = append(response, toBackupJobResponse(job))
+	}
+	return response
+}
+
+func mapVolumeBackupJobsResponse(jobs []domain.VolumeBackupJob) []dto.VolumeBackupJob {
+	response := make([]dto.VolumeBackupJob, 0, len(jobs))
+	for _, job := range jobs {
+		response = append(response, toVolumeBackupJobResponse(job))
 	}
 	return response
 }

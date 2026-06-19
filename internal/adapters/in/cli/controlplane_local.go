@@ -16,16 +16,17 @@ import (
 )
 
 type localControlPlane struct {
-	configSvc    in.ConfigService
-	secretSvc    in.SecretService
-	containerSvc in.ContainerService
-	backupSvc    in.BackupService
-	registrySvc  in.RegistryService
-	deployCoord  in.DeployCoordinator
-	healthSvc    in.HealthService
-	logSvc       in.LogService
-	volumeSvc    in.VolumeService
-	publicTLSSvc in.PublicTLSService
+	configSvc       in.ConfigService
+	secretSvc       in.SecretService
+	containerSvc    in.ContainerService
+	backupSvc       in.BackupService
+	volumeBackupSvc in.VolumeBackupService
+	registrySvc     in.RegistryService
+	deployCoord     in.DeployCoordinator
+	healthSvc       in.HealthService
+	logSvc          in.LogService
+	volumeSvc       in.VolumeService
+	publicTLSSvc    in.PublicTLSService
 }
 
 func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
@@ -42,16 +43,17 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 	}
 
 	return &localControlPlane{
-		configSvc:    kernel.Config(),
-		secretSvc:    kernel.Secrets(),
-		containerSvc: kernel.Container(),
-		backupSvc:    kernel.Backup(),
-		registrySvc:  registrySvc,
-		deployCoord:  deployCoord,
-		healthSvc:    kernel.Health(),
-		logSvc:       kernel.Logs(),
-		volumeSvc:    kernel.Volumes(),
-		publicTLSSvc: kernel.PublicTLS(),
+		configSvc:       kernel.Config(),
+		secretSvc:       kernel.Secrets(),
+		containerSvc:    kernel.Container(),
+		backupSvc:       kernel.Backup(),
+		volumeBackupSvc: kernel.VolumeBackup(),
+		registrySvc:     registrySvc,
+		deployCoord:     deployCoord,
+		healthSvc:       kernel.Health(),
+		logSvc:          kernel.Logs(),
+		volumeSvc:       kernel.Volumes(),
+		publicTLSSvc:    kernel.PublicTLS(),
 	}
 }
 
@@ -629,6 +631,39 @@ func (l *localControlPlane) DetectDatabases(ctx context.Context, backupDomain st
 	return out, nil
 }
 
+func (l *localControlPlane) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
+	if l.volumeBackupSvc == nil {
+		return nil, fmt.Errorf("local volume backup service unavailable")
+	}
+	jobs, err := l.volumeBackupSvc.ListVolumeBackups(ctx, backupDomain)
+	if err != nil {
+		return nil, err
+	}
+	return toDTOVolumeBackupJobs(jobs), nil
+}
+
+func (l *localControlPlane) VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob, error) {
+	if l.volumeBackupSvc == nil {
+		return nil, fmt.Errorf("local volume backup service unavailable")
+	}
+	jobs, err := l.volumeBackupSvc.VolumeBackupStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return toDTOVolumeBackupJobs(jobs), nil
+}
+
+func (l *localControlPlane) RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error) {
+	if l.volumeBackupSvc == nil {
+		return nil, fmt.Errorf("local volume backup service unavailable")
+	}
+	jobs, err := l.volumeBackupSvc.RunVolumeBackups(ctx, backupDomain, volumeName)
+	if err != nil {
+		return nil, err
+	}
+	return &dto.VolumeBackupRunResponse{Status: "ok", Backups: toDTOVolumeBackupJobs(jobs)}, nil
+}
+
 func (l *localControlPlane) GetProcessLogs(ctx context.Context, lines int) ([]string, error) {
 	if l.logSvc == nil {
 		return nil, fmt.Errorf("local log service unavailable")
@@ -783,5 +818,43 @@ func toDTOBackupJob(job domain.BackupJob) dto.BackupJob {
 		CompletedAt: completedAt,
 		SizeBytes:   job.SizeBytes,
 		Error:       job.Error,
+	}
+}
+
+func toDTOVolumeBackupJobs(jobs []domain.VolumeBackupJob) []dto.VolumeBackupJob {
+	out := make([]dto.VolumeBackupJob, 0, len(jobs))
+	for _, job := range jobs {
+		out = append(out, toDTOVolumeBackupJob(job))
+	}
+	return out
+}
+
+func toDTOVolumeBackupJob(job domain.VolumeBackupJob) dto.VolumeBackupJob {
+	var startedAt *time.Time
+	if !job.StartedAt.IsZero() {
+		t := job.StartedAt
+		startedAt = &t
+	}
+	var completedAt *time.Time
+	if !job.CompletedAt.IsZero() {
+		t := job.CompletedAt
+		completedAt = &t
+	}
+
+	return dto.VolumeBackupJob{
+		ID:            job.ID,
+		Domain:        job.Domain,
+		ContainerName: job.ContainerName,
+		ContainerID:   job.ContainerID,
+		VolumeName:    job.VolumeName,
+		MountPath:     job.MountPath,
+		Compression:   job.Metadata["compression"],
+		Type:          string(job.Type),
+		Status:        string(job.Status),
+		StartedAt:     startedAt,
+		CompletedAt:   completedAt,
+		SizeBytes:     job.SizeBytes,
+		ArtifactRef:   job.ArtifactRef,
+		Error:         job.Error,
 	}
 }

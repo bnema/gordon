@@ -6,15 +6,25 @@ import "time"
 
 // Container represents a running container in the system.
 type Container struct {
-	ID       string
-	Image    string
-	ImageID  string // Docker image ID (sha256 digest) used to detect redundant deploys
-	Name     string
-	Status   string
-	ExitCode int
-	Ports    []int
-	Labels   map[string]string
-	Created  time.Time
+	ID           string
+	Image        string
+	ImageID      string // Docker image ID (sha256 digest) used to detect redundant deploys
+	Name         string
+	Status       string
+	ExitCode     int
+	Ports        []int
+	Labels       map[string]string
+	VolumeMounts []ContainerVolumeMount
+	Created      time.Time
+}
+
+// ContainerVolumeMount describes a mounted volume-like resource on a container.
+type ContainerVolumeMount struct {
+	Name        string
+	Type        string
+	Source      string
+	Destination string
+	ReadOnly    bool
 }
 
 // NetworkInfo represents network configuration and state.

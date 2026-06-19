@@ -17,17 +17,18 @@ import (
 //
 // It intentionally does not start HTTP servers or register signal handlers.
 type Kernel struct {
-	authEnabled  bool
-	configSvc    in.ConfigService
-	secretSvc    in.SecretService
-	containerSvc in.ContainerService
-	backupSvc    in.BackupService
-	registrySvc  in.RegistryService
-	healthSvc    in.HealthService
-	logSvc       in.LogService
-	volumeSvc    in.VolumeService
-	publicTLSSvc in.PublicTLSService
-	cleanup      func()
+	authEnabled     bool
+	configSvc       in.ConfigService
+	secretSvc       in.SecretService
+	containerSvc    in.ContainerService
+	backupSvc       in.BackupService
+	volumeBackupSvc in.VolumeBackupService
+	registrySvc     in.RegistryService
+	healthSvc       in.HealthService
+	logSvc          in.LogService
+	volumeSvc       in.VolumeService
+	publicTLSSvc    in.PublicTLSService
+	cleanup         func()
 }
 
 // NewKernel initializes local services without starting server listeners.
@@ -78,17 +79,18 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 		}
 
 		return &Kernel{
-			authEnabled:  cfg.Auth.Enabled,
-			configSvc:    svc.configSvc,
-			secretSvc:    svc.secretSvc,
-			containerSvc: svc.containerSvc,
-			backupSvc:    svc.backupSvc,
-			registrySvc:  svc.registrySvc,
-			healthSvc:    svc.healthSvc,
-			logSvc:       svc.logSvc,
-			volumeSvc:    svc.volumeSvc,
-			publicTLSSvc: svc.publicTLSSvc,
-			cleanup:      wrappedCleanup,
+			authEnabled:     cfg.Auth.Enabled,
+			configSvc:       svc.configSvc,
+			secretSvc:       svc.secretSvc,
+			containerSvc:    svc.containerSvc,
+			backupSvc:       svc.backupSvc,
+			volumeBackupSvc: svc.volumeBackupSvc,
+			registrySvc:     svc.registrySvc,
+			healthSvc:       svc.healthSvc,
+			logSvc:          svc.logSvc,
+			volumeSvc:       svc.volumeSvc,
+			publicTLSSvc:    svc.publicTLSSvc,
+			cleanup:         wrappedCleanup,
 		}, nil
 	} else {
 		log.Warn().Err(fullErr).Msg("local kernel running in minimal mode")
@@ -135,6 +137,8 @@ func (k *Kernel) Secrets() in.SecretService { return k.secretSvc }
 func (k *Kernel) Container() in.ContainerService { return k.containerSvc }
 
 func (k *Kernel) Backup() in.BackupService { return k.backupSvc }
+
+func (k *Kernel) VolumeBackup() in.VolumeBackupService { return k.volumeBackupSvc }
 
 func (k *Kernel) Registry() in.RegistryService { return k.registrySvc }
 

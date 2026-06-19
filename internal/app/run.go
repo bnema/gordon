@@ -39,6 +39,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/logwriter"
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	"github.com/bnema/gordon/internal/adapters/out/ratelimit"
+	s3storage "github.com/bnema/gordon/internal/adapters/out/s3"
 	"github.com/bnema/gordon/internal/adapters/out/secrets"
 	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
@@ -168,6 +169,7 @@ type Config struct {
 	} `mapstructure:"api"`
 
 	Backups struct {
+		// Legacy database backup keys. Prefer backups.databases.* for new configs.
 		Enabled    bool   `mapstructure:"enabled"`
 		Schedule   string `mapstructure:"schedule"`
 		StorageDir string `mapstructure:"storage_dir"`
@@ -177,6 +179,37 @@ type Config struct {
 			Weekly  int `mapstructure:"weekly"`
 			Monthly int `mapstructure:"monthly"`
 		} `mapstructure:"retention"`
+		Databases struct {
+			Enabled    bool   `mapstructure:"enabled"`
+			Schedule   string `mapstructure:"schedule"`
+			StorageDir string `mapstructure:"storage_dir"`
+			Retention  struct {
+				Hourly  int `mapstructure:"hourly"`
+				Daily   int `mapstructure:"daily"`
+				Weekly  int `mapstructure:"weekly"`
+				Monthly int `mapstructure:"monthly"`
+			} `mapstructure:"retention"`
+		} `mapstructure:"databases"`
+		Volumes struct {
+			Enabled        bool   `mapstructure:"enabled"`
+			Interval       string `mapstructure:"interval"`
+			Compression    string `mapstructure:"compression"`
+			Timeout        string `mapstructure:"timeout"`
+			MaxConcurrency int    `mapstructure:"max_concurrency"`
+			HelperImage    string `mapstructure:"helper_image"`
+			S3             struct {
+				Bucket       string `mapstructure:"bucket"`
+				Region       string `mapstructure:"region"`
+				Prefix       string `mapstructure:"prefix"`
+				Endpoint     string `mapstructure:"endpoint"`
+				PathStyle    bool   `mapstructure:"path_style"`
+				SSEAlgorithm string `mapstructure:"sse_algorithm"`
+				SSEKMSKeyID  string `mapstructure:"sse_kms_key_id"`
+			} `mapstructure:"s3"`
+			Retention struct {
+				Keep int `mapstructure:"keep"`
+			} `mapstructure:"retention"`
+		} `mapstructure:"volumes"`
 	} `mapstructure:"backups"`
 
 	Images struct {
@@ -221,6 +254,8 @@ type services struct {
 	blobStorage       *filesystem.BlobStorage
 	manifestStorage   *filesystem.ManifestStorage
 	backupStorage     *filesystem.BackupStorage
+	volumeBackupStore out.VolumeBackupStorage
+	volumeBackupCfg   domain.VolumeBackupConfig
 	envLoader         out.EnvLoader
 	logWriter         *logwriter.LogWriter
 	tokenStore        out.TokenStore
@@ -228,6 +263,7 @@ type services struct {
 	secretSvc         *secretsSvc.Service
 	containerSvc      *container.Service
 	backupSvc         *backup.Service
+	volumeBackupSvc   *backup.VolumeService
 	registrySvc       *registrySvc.Service
 	healthSvc         *health.Service
 	logSvc            *logs.Service
@@ -673,6 +709,9 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	if si.svc.backupStorage, si.svc.backupSvc, err = createBackupService(si.cfg, si.svc, si.log); err != nil {
 		return err
 	}
+	if si.svc.volumeBackupStore, si.svc.volumeBackupSvc, si.svc.volumeBackupCfg, err = createVolumeBackupService(si.ctx, si.cfg, si.svc, si.log); err != nil {
+		return err
+	}
 
 	si.svc.registrySvc = registrySvc.NewService(si.svc.blobStorage, si.svc.manifestStorage, si.svc.eventBus)
 	si.svc.imageSvc = images.NewService(si.svc.runtime, si.svc.manifestStorage, si.svc.blobStorage, si.log)
@@ -728,20 +767,21 @@ func (si *serviceInit) initHandlers() {
 	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
 
 	si.svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
-		ConfigSvc:     si.svc.configSvc,
-		AuthSvc:       si.svc.authSvc,
-		ContainerSvc:  si.svc.containerSvc,
-		HealthSvc:     si.svc.healthSvc,
-		SecretSvc:     si.svc.secretSvc,
-		LogSvc:        si.svc.logSvc,
-		RegistrySvc:   si.svc.registrySvc,
-		ReloadTrigger: si.svc.reloadCoordinator,
-		Log:           si.log,
-		BackupSvc:     si.svc.backupSvc,
-		PreviewSvc:    si.svc.previewService,
-		ImageSvc:      si.svc.imageSvc,
-		VolumeSvc:     si.svc.volumeSvc,
-		PublicTLSSvc:  si.svc.publicTLSSvc,
+		ConfigSvc:       si.svc.configSvc,
+		AuthSvc:         si.svc.authSvc,
+		ContainerSvc:    si.svc.containerSvc,
+		HealthSvc:       si.svc.healthSvc,
+		SecretSvc:       si.svc.secretSvc,
+		LogSvc:          si.svc.logSvc,
+		RegistrySvc:     si.svc.registrySvc,
+		ReloadTrigger:   si.svc.reloadCoordinator,
+		Log:             si.log,
+		BackupSvc:       si.svc.backupSvc,
+		VolumeBackupSvc: si.svc.volumeBackupSvc,
+		PreviewSvc:      si.svc.previewService,
+		ImageSvc:        si.svc.imageSvc,
+		VolumeSvc:       si.svc.volumeSvc,
+		PublicTLSSvc:    si.svc.publicTLSSvc,
 	})
 }
 
@@ -1940,12 +1980,69 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig, svc.configSvc), nil
 }
 
+type databaseBackupSettingsConfig struct {
+	Enabled    bool
+	Schedule   string
+	StorageDir string
+	Retention  struct {
+		Hourly  int
+		Daily   int
+		Weekly  int
+		Monthly int
+	}
+}
+
+func databaseBackupSettings(cfg Config) databaseBackupSettingsConfig {
+	out := databaseBackupSettingsConfig{
+		Enabled:    cfg.Backups.Databases.Enabled,
+		Schedule:   cfg.Backups.Databases.Schedule,
+		StorageDir: cfg.Backups.Databases.StorageDir,
+	}
+	out.Retention.Hourly = cfg.Backups.Databases.Retention.Hourly
+	out.Retention.Daily = cfg.Backups.Databases.Retention.Daily
+	out.Retention.Weekly = cfg.Backups.Databases.Retention.Weekly
+	out.Retention.Monthly = cfg.Backups.Databases.Retention.Monthly
+	// Legacy [backups] keys intentionally override new database defaults when
+	// backups.enabled is true, preserving existing working pg_dump schedules.
+	// Otherwise, prefer the already-populated backups.databases.* values.
+	if cfg.Backups.Enabled {
+		out.Enabled = true
+		if cfg.Backups.Schedule != "" {
+			out.Schedule = cfg.Backups.Schedule
+		}
+		if cfg.Backups.StorageDir != "" {
+			out.StorageDir = cfg.Backups.StorageDir
+		}
+	} else {
+		if out.Schedule == "" {
+			out.Schedule = cfg.Backups.Schedule
+		}
+		if out.StorageDir == "" {
+			out.StorageDir = cfg.Backups.StorageDir
+		}
+	}
+	if out.Retention.Hourly == 0 {
+		out.Retention.Hourly = cfg.Backups.Retention.Hourly
+	}
+	if out.Retention.Daily == 0 {
+		out.Retention.Daily = cfg.Backups.Retention.Daily
+	}
+	if out.Retention.Weekly == 0 {
+		out.Retention.Weekly = cfg.Backups.Retention.Weekly
+	}
+	if out.Retention.Monthly == 0 {
+		out.Retention.Monthly = cfg.Backups.Retention.Monthly
+	}
+	return out
+}
+
 func createBackupService(cfg Config, svc *services, log zerowrap.Logger) (*filesystem.BackupStorage, *backup.Service, error) {
-	if !cfg.Backups.Enabled {
+	dbCfg := databaseBackupSettings(cfg)
+	if !dbCfg.Enabled {
 		return nil, nil, nil
 	}
 
-	storageDir := cfg.Backups.StorageDir
+	storageDir := dbCfg.StorageDir
 	if storageDir == "" {
 		dataDir := resolveDataDir(cfg.Server.DataDir)
 		storageDir = filepath.Join(dataDir, "backups")
@@ -1962,7 +2059,7 @@ func createBackupService(cfg Config, svc *services, log zerowrap.Logger) (*files
 	}
 
 	backupCfg := domain.BackupConfig{
-		Enabled:    cfg.Backups.Enabled,
+		Enabled:    dbCfg.Enabled,
 		StorageDir: storageDir,
 		Retention:  retention,
 	}
@@ -1976,26 +2073,140 @@ func createBackupService(cfg Config, svc *services, log zerowrap.Logger) (*files
 	return backupStorage, backupSvc, nil
 }
 
+func createVolumeBackupService(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (out.VolumeBackupStorage, *backup.VolumeService, domain.VolumeBackupConfig, error) {
+	if !cfg.Backups.Volumes.Enabled {
+		return nil, nil, domain.VolumeBackupConfig{}, nil
+	}
+	volumeCfg, err := validateVolumeBackupConfig(cfg)
+	if err != nil {
+		return nil, nil, domain.VolumeBackupConfig{}, log.WrapErr(err, "invalid volume backup configuration")
+	}
+
+	storage, err := s3storage.NewVolumeBackupStorage(ctx, volumeCfg)
+	if err != nil {
+		return nil, nil, domain.VolumeBackupConfig{}, log.WrapErr(err, "failed to create volume backup storage")
+	}
+
+	volumeSvc := backup.NewVolumeService(svc.runtime, svc.runtime, storage, volumeCfg, log)
+	log.Info().
+		Str("bucket", volumeCfg.S3Bucket).
+		Str("prefix", volumeCfg.S3Prefix).
+		Msg("volume backup service initialized")
+
+	return storage, volumeSvc, volumeCfg, nil
+}
+
 func validateBackupRetention(cfg Config) (domain.RetentionPolicy, error) {
-	if cfg.Backups.Retention.Hourly < 0 {
-		return domain.RetentionPolicy{}, fmt.Errorf("backups.retention.hourly cannot be negative")
+	dbCfg := databaseBackupSettings(cfg)
+	if dbCfg.Retention.Hourly < 0 {
+		return domain.RetentionPolicy{}, fmt.Errorf("backups.databases.retention.hourly cannot be negative")
 	}
-	if cfg.Backups.Retention.Daily < 0 {
-		return domain.RetentionPolicy{}, fmt.Errorf("backups.retention.daily cannot be negative")
+	if dbCfg.Retention.Daily < 0 {
+		return domain.RetentionPolicy{}, fmt.Errorf("backups.databases.retention.daily cannot be negative")
 	}
-	if cfg.Backups.Retention.Weekly < 0 {
-		return domain.RetentionPolicy{}, fmt.Errorf("backups.retention.weekly cannot be negative")
+	if dbCfg.Retention.Weekly < 0 {
+		return domain.RetentionPolicy{}, fmt.Errorf("backups.databases.retention.weekly cannot be negative")
 	}
-	if cfg.Backups.Retention.Monthly < 0 {
-		return domain.RetentionPolicy{}, fmt.Errorf("backups.retention.monthly cannot be negative")
+	if dbCfg.Retention.Monthly < 0 {
+		return domain.RetentionPolicy{}, fmt.Errorf("backups.databases.retention.monthly cannot be negative")
 	}
 
 	return domain.RetentionPolicy{
-		Hourly:  cfg.Backups.Retention.Hourly,
-		Daily:   cfg.Backups.Retention.Daily,
-		Weekly:  cfg.Backups.Retention.Weekly,
-		Monthly: cfg.Backups.Retention.Monthly,
+		Hourly:  dbCfg.Retention.Hourly,
+		Daily:   dbCfg.Retention.Daily,
+		Weekly:  dbCfg.Retention.Weekly,
+		Monthly: dbCfg.Retention.Monthly,
 	}, nil
+}
+
+func validateVolumeBackupConfig(cfg Config) (domain.VolumeBackupConfig, error) {
+	volumeCfg := cfg.Backups.Volumes
+	interval, err := parsePositiveDurationDefault(volumeCfg.Interval, "24h", "backups.volumes.interval")
+	if err != nil {
+		return domain.VolumeBackupConfig{}, err
+	}
+	timeout, err := parsePositiveDurationDefault(volumeCfg.Timeout, "2h", "backups.volumes.timeout")
+	if err != nil {
+		return domain.VolumeBackupConfig{}, err
+	}
+	compression, err := parseVolumeBackupCompression(volumeCfg.Compression)
+	if err != nil {
+		return domain.VolumeBackupConfig{}, err
+	}
+	maxConcurrency := volumeCfg.MaxConcurrency
+	if maxConcurrency == 0 {
+		maxConcurrency = 2
+	}
+	helperImage := strings.TrimSpace(volumeCfg.HelperImage)
+	if helperImage == "" {
+		helperImage = "alpine:3.20"
+	}
+	if compression == domain.VolumeBackupCompressionZstd && helperImage == "alpine:3.20" {
+		return domain.VolumeBackupConfig{}, fmt.Errorf("backups.volumes.compression zstd requires a helper_image that provides zstd")
+	}
+	if err := validateVolumeBackupS3Settings(volumeCfg.Enabled, volumeCfg.Retention.Keep, maxConcurrency, volumeCfg.S3.Bucket, volumeCfg.S3.Region); err != nil {
+		return domain.VolumeBackupConfig{}, err
+	}
+	return domain.VolumeBackupConfig{
+		Enabled:        volumeCfg.Enabled,
+		Interval:       interval,
+		Compression:    compression,
+		Retention:      domain.VolumeBackupRetentionPolicy{Keep: volumeCfg.Retention.Keep},
+		Timeout:        timeout,
+		MaxConcurrency: maxConcurrency,
+		HelperImage:    helperImage,
+		VolumePrefix:   "gordon",
+		S3Bucket:       strings.TrimSpace(volumeCfg.S3.Bucket),
+		S3Region:       strings.TrimSpace(volumeCfg.S3.Region),
+		S3Prefix:       strings.TrimSpace(volumeCfg.S3.Prefix),
+		S3Endpoint:     strings.TrimSpace(volumeCfg.S3.Endpoint),
+		S3PathStyle:    volumeCfg.S3.PathStyle,
+		S3SSEAlgorithm: strings.TrimSpace(volumeCfg.S3.SSEAlgorithm),
+		S3SSEKMSKeyID:  strings.TrimSpace(volumeCfg.S3.SSEKMSKeyID),
+	}, nil
+}
+
+func parsePositiveDurationDefault(raw, defaultValue, field string) (time.Duration, error) {
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultValue
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", field)
+	}
+	return d, nil
+}
+
+func parseVolumeBackupCompression(raw string) (domain.VolumeBackupCompression, error) {
+	if strings.TrimSpace(raw) == "" {
+		raw = string(domain.VolumeBackupCompressionGzip)
+	}
+	compression := domain.VolumeBackupCompression(strings.ToLower(strings.TrimSpace(raw)))
+	switch compression {
+	case domain.VolumeBackupCompressionGzip, domain.VolumeBackupCompressionZstd:
+		return compression, nil
+	default:
+		return "", fmt.Errorf("backups.volumes.compression must be one of: gzip, zstd")
+	}
+}
+
+func validateVolumeBackupS3Settings(enabled bool, keep, maxConcurrency int, bucket, region string) error {
+	if keep < 0 {
+		return fmt.Errorf("backups.volumes.retention.keep cannot be negative")
+	}
+	if enabled && keep == 0 {
+		return fmt.Errorf("backups.volumes.retention.keep must be positive when volume backups are enabled")
+	}
+	if maxConcurrency < 1 {
+		return fmt.Errorf("backups.volumes.max_concurrency must be at least 1")
+	}
+	if enabled && strings.TrimSpace(bucket) == "" {
+		return fmt.Errorf("backups.volumes.s3.bucket is required when volume backups are enabled")
+	}
+	if enabled && strings.TrimSpace(region) == "" {
+		return fmt.Errorf("backups.volumes.s3.region is required when volume backups are enabled")
+	}
+	return nil
 }
 
 // registerEventHandlers registers all event handlers.
@@ -2643,7 +2854,7 @@ func waitForServerReady(ready <-chan struct{}, errChan <-chan error) error {
 }
 
 func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger, v *viper.Viper) (func(), error) {
-	schedulers := make([]*cronSvc.Scheduler, 0, 2)
+	schedulers := make([]*cronSvc.Scheduler, 0, 3)
 
 	backupScheduler, err := startBackupScheduler(ctx, cfg, svc, log)
 	if err != nil {
@@ -2651,6 +2862,14 @@ func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log
 	}
 	if backupScheduler != nil {
 		schedulers = append(schedulers, backupScheduler)
+	}
+
+	volumeBackupScheduler, err := startVolumeBackupScheduler(ctx, cfg, svc, log)
+	if err != nil {
+		return nil, err
+	}
+	if volumeBackupScheduler != nil {
+		schedulers = append(schedulers, volumeBackupScheduler)
 	}
 
 	imageScheduler, err := startImagePruneScheduler(ctx, cfg, svc, log, func() int {
@@ -2675,11 +2894,12 @@ func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log
 }
 
 func startBackupScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (*cronSvc.Scheduler, error) {
-	if !cfg.Backups.Enabled || svc == nil || svc.backupSvc == nil {
+	dbCfg := databaseBackupSettings(cfg)
+	if !dbCfg.Enabled || svc == nil || svc.backupSvc == nil {
 		return nil, nil
 	}
 
-	preset, err := resolveBackupSchedule(cfg.Backups.Schedule)
+	preset, err := resolveBackupSchedule(dbCfg.Schedule)
 	if err != nil {
 		return nil, err
 	}
@@ -2712,7 +2932,44 @@ func startBackupScheduler(ctx context.Context, cfg Config, svc *services, log ze
 }
 
 func resolveBackupSchedule(raw string) (domain.BackupSchedule, error) {
-	return resolveSchedulePreset(raw, "backups.schedule", domain.ScheduleDaily)
+	return resolveSchedulePreset(raw, "backups.databases.schedule", domain.ScheduleDaily)
+}
+
+func startVolumeBackupScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (*cronSvc.Scheduler, error) {
+	if !cfg.Backups.Volumes.Enabled || svc == nil || svc.volumeBackupSvc == nil {
+		return nil, nil
+	}
+
+	volumeCfg, err := validateVolumeBackupConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	scheduler := cronSvc.NewScheduler(log)
+	err = scheduler.Add(
+		"volume-backup-scheduler",
+		"Volume Backups",
+		domain.CronSchedule{Interval: volumeCfg.Interval},
+		func(jobCtx context.Context) error {
+			if _, err := svc.volumeBackupSvc.RunVolumeBackups(jobCtx, "", ""); err != nil {
+				return err
+			}
+			log.Info().
+				Dur("interval", volumeCfg.Interval).
+				Msg("scheduled volume backup run complete")
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to register volume backup schedule")
+	}
+
+	scheduler.Start(ctx)
+	log.Info().
+		Dur("interval", volumeCfg.Interval).
+		Msg("volume backup scheduler enabled")
+
+	return scheduler, nil
 }
 
 func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger, keepLastGetter func() int) (*cronSvc.Scheduler, error) {
@@ -3399,13 +3656,27 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
-	v.SetDefault("backups.enabled", false)
-	v.SetDefault("backups.schedule", string(domain.ScheduleDaily))
-	v.SetDefault("backups.storage_dir", "")
-	v.SetDefault("backups.retention.hourly", 0)
-	v.SetDefault("backups.retention.daily", 0)
-	v.SetDefault("backups.retention.weekly", 0)
-	v.SetDefault("backups.retention.monthly", 0)
+	v.SetDefault("backups.databases.enabled", false)
+	v.SetDefault("backups.databases.schedule", string(domain.ScheduleDaily))
+	v.SetDefault("backups.databases.storage_dir", "")
+	v.SetDefault("backups.databases.retention.hourly", 0)
+	v.SetDefault("backups.databases.retention.daily", 0)
+	v.SetDefault("backups.databases.retention.weekly", 0)
+	v.SetDefault("backups.databases.retention.monthly", 0)
+	v.SetDefault("backups.volumes.enabled", false)
+	v.SetDefault("backups.volumes.interval", "24h")
+	v.SetDefault("backups.volumes.compression", string(domain.VolumeBackupCompressionGzip))
+	v.SetDefault("backups.volumes.timeout", "2h")
+	v.SetDefault("backups.volumes.max_concurrency", 2)
+	v.SetDefault("backups.volumes.helper_image", "alpine:3.20")
+	v.SetDefault("backups.volumes.s3.bucket", "")
+	v.SetDefault("backups.volumes.s3.region", "")
+	v.SetDefault("backups.volumes.s3.prefix", "")
+	v.SetDefault("backups.volumes.s3.endpoint", "")
+	v.SetDefault("backups.volumes.s3.path_style", false)
+	v.SetDefault("backups.volumes.s3.sse_algorithm", "")
+	v.SetDefault("backups.volumes.s3.sse_kms_key_id", "")
+	v.SetDefault("backups.volumes.retention.keep", 14)
 	v.SetDefault("images.allowed_registries", []string{})
 	v.SetDefault("images.require_digest", false)
 	v.SetDefault("images.prune.enabled", false)

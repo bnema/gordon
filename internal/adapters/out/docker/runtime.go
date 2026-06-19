@@ -24,6 +24,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/strslice"
@@ -44,11 +45,13 @@ type Runtime struct {
 }
 
 var _ out.ContainerRuntime = (*Runtime)(nil)
+var _ out.VolumeArchiveExporter = (*Runtime)(nil)
 
 type pipeReadCloser struct {
 	pr       *io.PipeReader
 	pw       *io.PipeWriter
 	original io.Closer
+	cleanup  func() error
 	once     sync.Once
 }
 
@@ -72,6 +75,11 @@ func (p *pipeReadCloser) Close() error {
 		}
 		if p.original != nil {
 			if err := p.original.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
+		if p.cleanup != nil {
+			if err := p.cleanup(); err != nil && closeErr == nil {
 				closeErr = err
 			}
 		}
@@ -394,15 +402,27 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
 
+		volumeMounts := make([]domain.ContainerVolumeMount, 0, len(c.Mounts))
+		for _, m := range c.Mounts {
+			volumeMounts = append(volumeMounts, domain.ContainerVolumeMount{
+				Name:        m.Name,
+				Type:        string(m.Type),
+				Source:      m.Source,
+				Destination: m.Destination,
+				ReadOnly:    !m.RW,
+			})
+		}
+
 		result = append(result, &domain.Container{
-			ID:      c.ID,
-			Image:   c.Image,
-			ImageID: c.ImageID,
-			Name:    name,
-			Status:  c.State, // Use State (e.g., "running") not Status (e.g., "Up 2 days")
-			Ports:   ports,
-			Labels:  c.Labels,
-			Created: time.Unix(c.Created, 0),
+			ID:           c.ID,
+			Image:        c.Image,
+			ImageID:      c.ImageID,
+			Name:         name,
+			Status:       c.State, // Use State (e.g., "running") not Status (e.g., "Up 2 days")
+			Ports:        ports,
+			Labels:       c.Labels,
+			VolumeMounts: volumeMounts,
+			Created:      time.Unix(c.Created, 0),
 		})
 	}
 
@@ -442,17 +462,28 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	name := strings.TrimPrefix(resp.Name, "/")
 
 	created, _ := time.Parse(time.RFC3339Nano, resp.Created)
+	volumeMounts := make([]domain.ContainerVolumeMount, 0, len(resp.Mounts))
+	for _, m := range resp.Mounts {
+		volumeMounts = append(volumeMounts, domain.ContainerVolumeMount{
+			Name:        m.Name,
+			Type:        string(m.Type),
+			Source:      m.Source,
+			Destination: m.Destination,
+			ReadOnly:    !m.RW,
+		})
+	}
 
 	return &domain.Container{
-		ID:       resp.ID,
-		Image:    resp.Config.Image,
-		ImageID:  resp.Image,
-		Name:     name,
-		Status:   resp.State.Status,
-		ExitCode: resp.State.ExitCode,
-		Ports:    ports,
-		Labels:   resp.Config.Labels,
-		Created:  created,
+		ID:           resp.ID,
+		Image:        resp.Config.Image,
+		ImageID:      resp.Image,
+		Name:         name,
+		Status:       resp.State.Status,
+		ExitCode:     resp.State.ExitCode,
+		Ports:        ports,
+		Labels:       resp.Config.Labels,
+		VolumeMounts: volumeMounts,
+		Created:      created,
 	}, nil
 }
 
@@ -1202,6 +1233,165 @@ func (r *Runtime) ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error)
 	}
 
 	return result, nil
+}
+
+// ExportVolumeArchive exports a named volume as a compressed tar archive stream.
+func (r *Runtime) ExportVolumeArchive(ctx context.Context, req domain.VolumeArchiveRequest) (*domain.VolumeArchiveResult, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "ExportVolumeArchive",
+		"volume":              req.VolumeName,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	if err := validateVolumeArchiveRequest(req); err != nil {
+		return nil, err
+	}
+	if err := r.ensureVolumeArchiveHelperImage(ctx, req.HelperImage, log); err != nil {
+		return nil, err
+	}
+	created, cleanup, err := r.createVolumeArchiveHelper(ctx, req, log)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.client.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		_ = cleanup()
+		return nil, log.WrapErr(err, "failed to start volume archive helper container")
+	}
+
+	stream, err := r.attachVolumeArchiveStream(ctx, created.ID, cleanup, log)
+	if err != nil {
+		_ = cleanup()
+		return nil, err
+	}
+	return &domain.VolumeArchiveResult{Stream: stream}, nil
+}
+
+func validateVolumeArchiveRequest(req domain.VolumeArchiveRequest) error {
+	if strings.TrimSpace(req.VolumeName) == "" {
+		return fmt.Errorf("volume name is required")
+	}
+	if strings.TrimSpace(req.HelperImage) == "" {
+		return fmt.Errorf("helper image is required")
+	}
+	return nil
+}
+
+func (r *Runtime) ensureVolumeArchiveHelperImage(ctx context.Context, imageRef string, log zerowrap.Logger) error {
+	if _, err := r.client.ImageInspect(ctx, imageRef); err != nil {
+		if !cerrdefs.IsNotFound(err) {
+			return log.WrapErr(err, "failed to inspect volume archive helper image")
+		}
+		return r.PullImage(ctx, imageRef)
+	}
+	return nil
+}
+
+func (r *Runtime) createVolumeArchiveHelper(ctx context.Context, req domain.VolumeArchiveRequest, log zerowrap.Logger) (container.CreateResponse, func() error, error) {
+	cmd, err := volumeArchiveCommand(req.Compression)
+	if err != nil {
+		return container.CreateResponse{}, nil, err
+	}
+	created, err := r.client.ContainerCreate(ctx, volumeArchiveContainerConfig(req.HelperImage, cmd), volumeArchiveHostConfig(req.VolumeName), nil, nil, fmt.Sprintf("gordon-volume-backup-%d", time.Now().UTC().UnixNano()))
+	if err != nil {
+		return container.CreateResponse{}, nil, log.WrapErr(err, "failed to create volume archive helper container")
+	}
+	var cleanupOnce sync.Once
+	cleanup := func() error {
+		var cleanupErr error
+		cleanupOnce.Do(func() {
+			removeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cleanupErr = r.RemoveContainer(removeCtx, created.ID, true)
+		})
+		return cleanupErr
+	}
+	return created, cleanup, nil
+}
+
+func volumeArchiveContainerConfig(imageRef, cmd string) *container.Config {
+	return &container.Config{
+		Image:           imageRef,
+		Cmd:             []string{"sh", "-c", cmd},
+		AttachStdout:    true,
+		AttachStderr:    true,
+		NetworkDisabled: true,
+		Labels: map[string]string{
+			domain.LabelManaged: "true",
+			"gordon.purpose":    "volume-backup",
+		},
+	}
+}
+
+func volumeArchiveHostConfig(volumeName string) *container.HostConfig {
+	return &container.HostConfig{
+		AutoRemove: false,
+		Mounts: []mount.Mount{{
+			Type:     mount.TypeVolume,
+			Source:   volumeName,
+			Target:   "/volume",
+			ReadOnly: true,
+		}},
+	}
+}
+
+func (r *Runtime) attachVolumeArchiveStream(ctx context.Context, containerID string, cleanup func() error, log zerowrap.Logger) (io.ReadCloser, error) {
+	logs, err := r.client.ContainerLogs(ctx, containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
+	if err != nil {
+		return nil, log.WrapErr(err, "failed to attach volume archive stream")
+	}
+	statusCh, errCh := r.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	pr, pw := io.Pipe()
+	go streamVolumeArchiveLogs(logs, pw, statusCh, errCh, cleanup, log)
+	return &pipeReadCloser{pr: pr, pw: pw, original: logs, cleanup: cleanup}, nil
+}
+
+func streamVolumeArchiveLogs(logs io.ReadCloser, pw *io.PipeWriter, statusCh <-chan container.WaitResponse, errCh <-chan error, cleanup func() error, log zerowrap.Logger) {
+	defer logs.Close()
+	defer func() {
+		if err := cleanup(); err != nil {
+			log.Warn().Err(err).Msg("failed to clean up volume archive helper container")
+		}
+	}()
+
+	var stderr bytes.Buffer
+	_, copyErr := stdcopy.StdCopy(pw, &stderr, logs)
+	statusCode, waitErr := waitForVolumeArchiveContainer(statusCh, errCh)
+	closeVolumeArchivePipe(pw, copyErr, waitErr, statusCode, stderr.String())
+}
+
+func waitForVolumeArchiveContainer(statusCh <-chan container.WaitResponse, errCh <-chan error) (int64, error) {
+	select {
+	case err := <-errCh:
+		return 0, err
+	case status := <-statusCh:
+		return status.StatusCode, nil
+	}
+}
+
+func closeVolumeArchivePipe(pw *io.PipeWriter, copyErr, waitErr error, statusCode int64, stderr string) {
+	switch {
+	case copyErr != nil:
+		_ = pw.CloseWithError(copyErr)
+	case waitErr != nil:
+		_ = pw.CloseWithError(waitErr)
+	case statusCode != 0:
+		_ = pw.CloseWithError(fmt.Errorf("volume archive helper exited with code %d: %s", statusCode, strings.TrimSpace(stderr)))
+	default:
+		_ = pw.Close()
+	}
+}
+
+func volumeArchiveCommand(compression domain.VolumeBackupCompression) (string, error) {
+	switch compression {
+	case domain.VolumeBackupCompressionGzip:
+		return "cd /volume && tar -czf - .", nil
+	case domain.VolumeBackupCompressionZstd:
+		return "cd /volume && fifo=/tmp/gordon-volume-backup.tar && mkfifo $fifo && zstd -T0 -c $fifo & zstd_pid=$! && tar -cf $fifo .; tar_status=$?; wait $zstd_pid; zstd_status=$?; if [ $tar_status -ne 0 ]; then exit $tar_status; fi; exit $zstd_status", nil
+	default:
+		return "", fmt.Errorf("unsupported volume backup compression: %s", compression)
+	}
 }
 
 // InspectImageEnv gets the environment variables declared in the image.
