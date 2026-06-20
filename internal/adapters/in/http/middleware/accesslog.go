@@ -66,7 +66,7 @@ func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zero
 				BytesSent:  rw.BytesWritten(),
 				DurationMS: durationMS,
 				UserAgent:  r.UserAgent(),
-				Referer:    r.Referer(),
+				Referer:    sanitizeLoggedReferer(r.Referer()),
 				RequestID:  requestID,
 				Proto:      r.Proto,
 			}
@@ -87,6 +87,21 @@ func AccessLogger(writer out.AccessLogWriter, excludeHealthChecks bool, log zero
 	}
 }
 
+func sanitizeLoggedReferer(referer string) string {
+	if referer == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(referer)
+	if err != nil {
+		return "[INVALID_REFERER]"
+	}
+	parsed.User = nil
+	parsed.RawQuery = sanitizeLoggedQuery(parsed.RawQuery)
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
 func sanitizeLoggedQuery(rawQuery string) string {
 	if rawQuery == "" {
 		return ""
@@ -101,7 +116,10 @@ func sanitizeLoggedQuery(rawQuery string) string {
 		key, _, found := strings.Cut(part, "=")
 		decodedKey, err := url.QueryUnescape(key)
 		if err != nil {
-			decodedKey = key
+			if found {
+				parts[i] = key + "=[REDACTED]"
+			}
+			continue
 		}
 
 		if !isSensitiveQueryKey(decodedKey) {

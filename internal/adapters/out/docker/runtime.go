@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -1427,7 +1428,10 @@ func (r *Runtime) InspectImageEnv(ctx context.Context, imageRef string) ([]strin
 	}
 
 	if len(envVars) > 0 {
-		log.Debug().Strs("env_vars", envVars).Msg("found ENV directives in image")
+		log.Debug().
+			Int(zerowrap.FieldCount, len(envVars)).
+			Strs("env_keys", imageEnvKeys(envVars)).
+			Msg("found ENV directives in image")
 	} else {
 		log.Debug().Msg("no ENV directives found in image")
 	}
@@ -1436,6 +1440,20 @@ func (r *Runtime) InspectImageEnv(ctx context.Context, imageRef string) ([]strin
 }
 
 // GetImageLabels returns the labels defined on an image.
+func imageEnvKeys(envVars []string) []string {
+	keys := make([]string, 0, len(envVars))
+	for _, envVar := range envVars {
+		key, _, ok := strings.Cut(envVar, "=")
+		if !ok || key == "" {
+			keys = append(keys, "[malformed]")
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func (r *Runtime) GetImageLabels(ctx context.Context, imageRef string) (map[string]string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "adapter",
@@ -1492,9 +1510,7 @@ func (r *Runtime) CreateNetwork(ctx context.Context, name string, config domain.
 		driver = "bridge"
 	}
 	labels := make(map[string]string, len(config.Labels)+1)
-	for key, value := range config.Labels {
-		labels[key] = value
-	}
+	maps.Copy(labels, config.Labels)
 	labels[domain.LabelManaged] = "true"
 
 	createOptions := network.CreateOptions{

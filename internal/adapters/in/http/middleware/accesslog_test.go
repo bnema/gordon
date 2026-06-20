@@ -81,6 +81,56 @@ func TestAccessLogger_RedactsSensitiveQueryParams(t *testing.T) {
 	assert.Equal(t, "code=[REDACTED]&state=ok&token=[REDACTED]&api_key=[REDACTED]&session_id=[REDACTED]", mock.entries[0].Query)
 }
 
+func TestAccessLogger_RedactsSensitiveReferers(t *testing.T) {
+	tests := []struct {
+		name    string
+		referer string
+		want    string
+	}{
+		{
+			name:    "query params",
+			referer: "https://idp.example.com/callback?code=secret-code&state=ok&token=secret-token",
+			want:    "https://idp.example.com/callback?code=[REDACTED]&state=ok&token=[REDACTED]",
+		},
+		{
+			name:    "fragment removed",
+			referer: "https://idp.example.com/callback?state=ok#access_token=secret-token",
+			want:    "https://idp.example.com/callback?state=ok",
+		},
+		{
+			name:    "userinfo removed",
+			referer: "https://user:secret-password@idp.example.com/callback?code=secret-code",
+			want:    "https://idp.example.com/callback?code=[REDACTED]",
+		},
+		{
+			name:    "malformed query key redacted conservatively",
+			referer: "https://idp.example.com/callback?token%ZZ=secret-token&state=ok",
+			want:    "https://idp.example.com/callback?token%ZZ=[REDACTED]&state=ok",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockAccessLogWriter{}
+			log := testLogger()
+
+			handler := AccessLogger(mock, false, log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/target", nil)
+			req.Header.Set("Referer", tt.referer)
+			rw := httptest.NewRecorder()
+
+			handler.ServeHTTP(rw, req)
+
+			require.Len(t, mock.entries, 1)
+			assert.Equal(t, tt.want, mock.entries[0].Referer)
+			assert.NotContains(t, mock.entries[0].Referer, "secret")
+		})
+	}
+}
+
 func TestAccessLogger_RequestIDReused(t *testing.T) {
 	mock := &mockAccessLogWriter{}
 	log := testLogger()
