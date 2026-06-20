@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -13,7 +14,12 @@ import (
 	"github.com/bnema/gordon/pkg/bytesize"
 )
 
-var backupResolveControlPlane = resolveControlPlane
+var backupResolveControlPlane = func(ctx context.Context, configPath, domainName string) (*controlPlaneHandle, error) {
+	if domainName != "" {
+		return resolveControlPlaneForRouteDomain(ctx, domainName)
+	}
+	return resolveControlPlane(configPath)
+}
 
 // newBackupCmd creates the backup command group.
 func newBackupCmd() *cobra.Command {
@@ -145,7 +151,7 @@ func newVolumeBackupListCmd() *cobra.Command {
 			if len(args) == 1 {
 				domainName = args[0]
 			}
-			handle, err := backupResolveControlPlane(configPath)
+			handle, err := backupResolveControlPlane(cmd.Context(), configPath, domainName)
 			if err != nil {
 				return err
 			}
@@ -175,7 +181,7 @@ func newVolumeBackupRunCmd() *cobra.Command {
 			if len(args) == 1 {
 				domainName = args[0]
 			}
-			handle, err := backupResolveControlPlane(configPath)
+			handle, err := backupResolveControlPlane(cmd.Context(), configPath, domainName)
 			if err != nil {
 				return err
 			}
@@ -204,7 +210,7 @@ func newVolumeBackupStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show volume backup status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := backupResolveControlPlane(configPath)
+			handle, err := backupResolveControlPlane(cmd.Context(), configPath, "")
 			if err != nil {
 				return err
 			}

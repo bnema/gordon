@@ -45,7 +45,11 @@ func (s *VolumeService) ListVolumeBackups(ctx context.Context, domainName string
 		zerowrap.FieldUseCase: "ListVolumeBackups",
 		"domain":              domainName,
 	})
-	return s.storage.ListVolumeArchives(ctx, domainName)
+	jobs, err := s.storage.ListVolumeArchives(ctx, domainName)
+	if err != nil {
+		return nil, fmt.Errorf("list volume archives: %w", err)
+	}
+	return jobs, nil
 }
 
 // VolumeBackupStatus returns completed backup artifacts plus current/recent in-memory job state.
@@ -56,7 +60,7 @@ func (s *VolumeService) VolumeBackupStatus(ctx context.Context) ([]domain.Volume
 	})
 	jobs, err := s.storage.ListVolumeArchives(ctx, "")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list volume backup status: %w", err)
 	}
 
 	s.mu.Lock()

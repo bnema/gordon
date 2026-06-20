@@ -16,10 +16,29 @@ import (
 func withBackupControlPlane(t *testing.T, plane ControlPlane) {
 	t.Helper()
 	old := backupResolveControlPlane
-	backupResolveControlPlane = func(string) (*controlPlaneHandle, error) {
+	backupResolveControlPlane = func(context.Context, string, string) (*controlPlaneHandle, error) {
 		return &controlPlaneHandle{plane: plane}, nil
 	}
 	t.Cleanup(func() { backupResolveControlPlane = old })
+}
+
+func TestVolumeBackupRun_UsesDomainAwareResolver(t *testing.T) {
+	plane := climocks.NewMockControlPlane(t)
+	old := backupResolveControlPlane
+	var gotDomain string
+	backupResolveControlPlane = func(_ context.Context, _ string, domainName string) (*controlPlaneHandle, error) {
+		gotDomain = domainName
+		return &controlPlaneHandle{plane: plane}, nil
+	}
+	t.Cleanup(func() { backupResolveControlPlane = old })
+
+	plane.EXPECT().RunVolumeBackups(mock.Anything, "app.example.com", "").Return(&dto.VolumeBackupRunResponse{Status: "ok"}, nil)
+
+	cmd := newVolumeBackupRunCmd()
+	cmd.SetArgs([]string{"app.example.com"})
+
+	require.NoError(t, cmd.ExecuteContext(context.Background()))
+	require.Equal(t, "app.example.com", gotDomain)
 }
 
 func TestVolumeBackupRun_JSONFlag(t *testing.T) {

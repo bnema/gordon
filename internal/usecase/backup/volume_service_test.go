@@ -35,6 +35,7 @@ func (f fakeVolumeArchiveExporter) ExportVolumeArchive(context.Context, domain.V
 type fakeVolumeBackupStorage struct {
 	stored    []domain.VolumeBackupJob
 	retention []string
+	listErr   error
 }
 
 func (f *fakeVolumeBackupStorage) StoreVolumeArchive(_ context.Context, job domain.VolumeBackupJob, data io.Reader) (string, error) {
@@ -50,6 +51,9 @@ func (f *fakeVolumeBackupStorage) GetVolumeArchive(context.Context, string) (io.
 }
 
 func (f *fakeVolumeBackupStorage) ListVolumeArchives(context.Context, string) ([]domain.VolumeBackupJob, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return nil, nil
 }
 
@@ -126,6 +130,28 @@ func TestVolumeServiceRunVolumeBackupsReturnsPartialFailure(t *testing.T) {
 	assert.Equal(t, domain.BackupStatusFailed, jobs[0].Status)
 	assert.Contains(t, jobs[0].Error, "boom")
 	assert.Empty(t, storage.stored)
+}
+
+func TestVolumeServiceListVolumeBackupsWrapsStorageError(t *testing.T) {
+	storageErr := fmt.Errorf("s3 unavailable")
+	svc := NewVolumeService(outmocks.NewMockContainerRuntime(t), fakeVolumeArchiveExporter{}, &fakeVolumeBackupStorage{listErr: storageErr}, domain.VolumeBackupConfig{}, testLogger())
+
+	jobs, err := svc.ListVolumeBackups(context.Background(), "app.example.com")
+
+	require.ErrorIs(t, err, storageErr)
+	assert.Contains(t, err.Error(), "list volume archives")
+	assert.Nil(t, jobs)
+}
+
+func TestVolumeServiceStatusWrapsStorageError(t *testing.T) {
+	storageErr := fmt.Errorf("s3 unavailable")
+	svc := NewVolumeService(outmocks.NewMockContainerRuntime(t), fakeVolumeArchiveExporter{}, &fakeVolumeBackupStorage{listErr: storageErr}, domain.VolumeBackupConfig{}, testLogger())
+
+	jobs, err := svc.VolumeBackupStatus(context.Background())
+
+	require.ErrorIs(t, err, storageErr)
+	assert.Contains(t, err.Error(), "list volume backup status")
+	assert.Nil(t, jobs)
 }
 
 func TestVolumeServiceDisabledDoesNothing(t *testing.T) {
