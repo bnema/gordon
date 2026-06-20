@@ -8,7 +8,8 @@ import "time"
 // Timezone-aware scheduling is deferred until a timezone field is added.
 // When timezone support lands, host system timezone should be the default.
 type CronSchedule struct {
-	Preset BackupSchedule
+	Preset   BackupSchedule
+	Interval time.Duration
 }
 
 // CronEntry represents a registered cron job.

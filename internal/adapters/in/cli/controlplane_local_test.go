@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -109,6 +110,52 @@ func TestLocalControlPlane_Backups(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, dbs, 1)
 	require.Equal(t, "postgres", dbs[0].Name)
+}
+
+func TestLocalControlPlane_RunVolumeBackupsPreservesPartialJobs(t *testing.T) {
+	t.Parallel()
+
+	volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
+	ctx := context.Background()
+	runErr := errors.New("one volume failed")
+	jobs := []domain.VolumeBackupJob{{ID: "v1", Domain: "app.local", VolumeName: "gordon-app-data", Status: domain.BackupStatusCompleted}}
+	volumeBackupSvc.EXPECT().RunVolumeBackups(mock.Anything, "app.local", "").Return(jobs, runErr)
+
+	cp := &localControlPlane{volumeBackupSvc: volumeBackupSvc}
+	result, err := cp.RunVolumeBackups(ctx, "app.local", "")
+
+	require.ErrorIs(t, err, runErr)
+	require.NotNil(t, result)
+	assert.Equal(t, "partial", result.Status)
+	assert.Equal(t, runErr.Error(), result.Error)
+	require.Len(t, result.Backups, 1)
+	assert.Equal(t, "v1", result.Backups[0].ID)
+}
+
+func TestLocalControlPlane_RunVolumeBackupsMissingServiceUsesSentinel(t *testing.T) {
+	t.Parallel()
+
+	cp := &localControlPlane{}
+	result, err := cp.RunVolumeBackups(context.Background(), "app.local", "")
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrVolumeBackupUnavailable)
+}
+
+func TestLocalControlPlane_ListVolumeBackupsWrapsServiceError(t *testing.T) {
+	t.Parallel()
+
+	volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
+	wantErr := errors.New("store unavailable")
+	volumeBackupSvc.EXPECT().ListVolumeBackups(mock.Anything, "app.local").Return(nil, wantErr)
+
+	cp := &localControlPlane{volumeBackupSvc: volumeBackupSvc}
+	jobs, err := cp.ListVolumeBackups(context.Background(), "app.local")
+
+	require.ErrorIs(t, err, wantErr)
+	assert.Contains(t, err.Error(), "list volume backups")
+	assert.Nil(t, jobs)
 }
 
 func TestLocalControlPlane_ListTags(t *testing.T) {

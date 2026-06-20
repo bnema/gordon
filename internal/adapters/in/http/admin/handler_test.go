@@ -2409,6 +2409,50 @@ func TestHandler_BackupsRunDomain(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "completed")
 }
 
+func TestHandler_VolumeBackupsRunDomain_ReturnsPartialResults(t *testing.T) {
+	volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
+	runErr := errors.New("one volume failed")
+	jobs := []domain.VolumeBackupJob{{ID: "v1", Domain: "app.example.com", VolumeName: "gordon-app-data", Status: domain.BackupStatusCompleted}}
+	volumeBackupSvc.EXPECT().RunVolumeBackups(mock.Anything, "app.example.com", "gordon-app-data").Return(jobs, runErr)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.VolumeBackupSvc = volumeBackupSvc
+	})
+
+	body := bytes.NewBufferString(`{"volume":"gordon-app-data"}`)
+	req := httptest.NewRequest("POST", "/admin/backups/volumes/app.example.com", body)
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusPartialContent, rec.Code)
+	var result dto.VolumeBackupRunResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	assert.Equal(t, "partial", result.Status)
+	assert.Equal(t, runErr.Error(), result.Error)
+	require.Len(t, result.Backups, 1)
+	assert.Equal(t, "v1", result.Backups[0].ID)
+}
+
+func TestHandler_VolumeBackupsRunDomain_ReturnsServerErrorWithoutResults(t *testing.T) {
+	volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
+	volumeBackupSvc.EXPECT().RunVolumeBackups(mock.Anything, "app.example.com", "").Return(nil, errors.New("runtime unavailable"))
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.VolumeBackupSvc = volumeBackupSvc
+	})
+
+	req := httptest.NewRequest("POST", "/admin/backups/volumes/app.example.com", bytes.NewBufferString(`{}`))
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, rec.Body.String(), "failed to run volume backups")
+}
+
 func TestHandler_BackupsRunDomain_ChunkedBodyIsDecoded(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)

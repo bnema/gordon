@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -13,23 +14,58 @@ import (
 	"github.com/bnema/gordon/pkg/bytesize"
 )
 
+var backupResolveControlPlane = func(ctx context.Context, configPath, domainName string) (*controlPlaneHandle, error) {
+	if domainName != "" {
+		return resolveControlPlaneForRouteDomain(ctx, domainName)
+	}
+	return resolveControlPlane(configPath)
+}
+
 // newBackupCmd creates the backup command group.
 func newBackupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "backups",
 		Aliases: []string{"backup"},
-		Short:   "Manage database backups",
-		Long: `Manage database backups.
+		Short:   "Manage backups",
+		Long: `Manage backups.
 
 Runs locally via in-process services by default, or against a remote Gordon
 instance when --remote targeting is configured.`,
 	}
 
+	cmd.AddCommand(newBackupDatabasesCmd())
+	cmd.AddCommand(newBackupVolumesCmd())
+
+	// Compatibility aliases for the original database backup command shape.
 	cmd.AddCommand(newBackupListCmd())
 	cmd.AddCommand(newBackupRunCmd())
 	cmd.AddCommand(newBackupDetectCmd())
 	cmd.AddCommand(newBackupStatusCmd())
 
+	return cmd
+}
+
+func newBackupDatabasesCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "databases",
+		Aliases: []string{"database", "db"},
+		Short:   "Manage database backups",
+	}
+	cmd.AddCommand(newBackupListCmd())
+	cmd.AddCommand(newBackupRunCmd())
+	cmd.AddCommand(newBackupDetectCmd())
+	cmd.AddCommand(newBackupStatusCmd())
+	return cmd
+}
+
+func newBackupVolumesCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "volumes",
+		Short: "Manage volume backups",
+	}
+	cmd.AddCommand(newVolumeBackupListCmd())
+	cmd.AddCommand(newVolumeBackupRunCmd())
+	cmd.AddCommand(newVolumeBackupStatusCmd())
 	return cmd
 }
 
@@ -97,6 +133,119 @@ func printBackupJobs(out io.Writer, jobs []dto.BackupJob, jsonOut bool) error {
 
 	for _, job := range jobs {
 		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", job.Domain, job.DBName, job.Status, formatBackupTime(job.StartedAt), job.ID); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
+func newVolumeBackupListCmd() *cobra.Command {
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "list [domain]",
+		Short: "List volume backups",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			domainName := ""
+			if len(args) == 1 {
+				domainName = args[0]
+			}
+			handle, err := backupResolveControlPlane(cmd.Context(), configPath, domainName)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+
+			jobs, err := handle.plane.ListVolumeBackups(cmd.Context(), domainName)
+			if err != nil {
+				return fmt.Errorf("failed to list volume backups: %w", err)
+			}
+			return printVolumeBackupJobs(cmd.OutOrStdout(), jobs, jsonOut)
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
+}
+
+func newVolumeBackupRunCmd() *cobra.Command {
+	var volumeName string
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "run [domain]",
+		Short: "Run volume backups now",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			domainName := ""
+			if len(args) == 1 {
+				domainName = args[0]
+			}
+			handle, err := backupResolveControlPlane(cmd.Context(), configPath, domainName)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+
+			result, err := handle.plane.RunVolumeBackups(cmd.Context(), domainName, volumeName)
+			if err != nil {
+				if result != nil && len(result.Backups) > 0 {
+					if printErr := printVolumeBackupJobs(cmd.OutOrStdout(), result.Backups, jsonOut); printErr != nil {
+						return printErr
+					}
+				}
+				return fmt.Errorf("failed to run volume backups: %w", err)
+			}
+			return printVolumeBackupJobs(cmd.OutOrStdout(), result.Backups, jsonOut)
+		},
+	}
+	cmd.Flags().StringVar(&volumeName, "volume", "", "Volume name (optional)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
+}
+
+func newVolumeBackupStatusCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show volume backup status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			handle, err := backupResolveControlPlane(cmd.Context(), configPath, "")
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+
+			jobs, err := handle.plane.VolumeBackupStatus(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("failed to get volume backup status: %w", err)
+			}
+			return printVolumeBackupJobs(cmd.OutOrStdout(), jobs, jsonOut)
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
+}
+
+func printVolumeBackupJobs(out io.Writer, jobs []dto.VolumeBackupJob, jsonOut bool) error {
+	if len(jobs) == 0 {
+		if jsonOut {
+			return writeJSON(out, []dto.VolumeBackupJob{})
+		}
+		return cliWriteLine(out, cliRenderMuted("No volume backups found"))
+	}
+	if jsonOut {
+		return writeJSON(out, jobs)
+	}
+	if err := cliWriteLine(out, cliRenderTitle("Volume Backups")); err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(w, "DOMAIN\tVOLUME\tCONTAINER\tCOMPRESSION\tSTATUS\tSTARTED_AT\tSIZE\tARTIFACT"); err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", job.Domain, job.VolumeName, job.ContainerName, job.Compression, job.Status, formatBackupTime(job.StartedAt), bytesize.Format(job.SizeBytes), job.ArtifactRef); err != nil {
 			return err
 		}
 	}

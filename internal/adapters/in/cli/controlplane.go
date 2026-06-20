@@ -53,6 +53,9 @@ type ControlPlane interface {
 	BackupStatus(ctx context.Context) ([]dto.BackupJob, error)
 	RunBackup(ctx context.Context, backupDomain, dbName string) (*dto.BackupRunResponse, error)
 	DetectDatabases(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error)
+	ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error)
+	VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob, error)
+	RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error)
 
 	GetProcessLogs(ctx context.Context, lines int) ([]string, error)
 	GetContainerLogs(ctx context.Context, logDomain string, lines int) ([]string, error)

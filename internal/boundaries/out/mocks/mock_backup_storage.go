@@ -41,7 +41,7 @@ func (_m *MockBackupStorage) EXPECT() *MockBackupStorage_Expecter {
 }
 
 // ApplyRetention provides a mock function for the type MockBackupStorage
-func (_mock *MockBackupStorage) ApplyRetention(ctx context.Context, domainName string, policy domain.RetentionPolicy) (int, error) {
+func (_mock *MockBackupStorage) ApplyRetention(ctx context.Context, domainName string, policy domain.DatabaseBackupRetentionPolicy) (int, error) {
 	ret := _mock.Called(ctx, domainName, policy)
 
 	if len(ret) == 0 {
@@ -50,15 +50,15 @@ func (_mock *MockBackupStorage) ApplyRetention(ctx context.Context, domainName s
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, domain.RetentionPolicy) (int, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, domain.DatabaseBackupRetentionPolicy) (int, error)); ok {
 		return returnFunc(ctx, domainName, policy)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, domain.RetentionPolicy) int); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, domain.DatabaseBackupRetentionPolicy) int); ok {
 		r0 = returnFunc(ctx, domainName, policy)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, domain.RetentionPolicy) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, domain.DatabaseBackupRetentionPolicy) error); ok {
 		r1 = returnFunc(ctx, domainName, policy)
 	} else {
 		r1 = ret.Error(1)
@@ -74,12 +74,12 @@ type MockBackupStorage_ApplyRetention_Call struct {
 // ApplyRetention is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domainName string
-//   - policy domain.RetentionPolicy
+//   - policy domain.DatabaseBackupRetentionPolicy
 func (_e *MockBackupStorage_Expecter) ApplyRetention(ctx interface{}, domainName interface{}, policy interface{}) *MockBackupStorage_ApplyRetention_Call {
 	return &MockBackupStorage_ApplyRetention_Call{Call: _e.mock.On("ApplyRetention", ctx, domainName, policy)}
 }
 
-func (_c *MockBackupStorage_ApplyRetention_Call) Run(run func(ctx context.Context, domainName string, policy domain.RetentionPolicy)) *MockBackupStorage_ApplyRetention_Call {
+func (_c *MockBackupStorage_ApplyRetention_Call) Run(run func(ctx context.Context, domainName string, policy domain.DatabaseBackupRetentionPolicy)) *MockBackupStorage_ApplyRetention_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -89,9 +89,9 @@ func (_c *MockBackupStorage_ApplyRetention_Call) Run(run func(ctx context.Contex
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 domain.RetentionPolicy
+		var arg2 domain.DatabaseBackupRetentionPolicy
 		if args[2] != nil {
-			arg2 = args[2].(domain.RetentionPolicy)
+			arg2 = args[2].(domain.DatabaseBackupRetentionPolicy)
 		}
 		run(
 			arg0,
@@ -107,7 +107,7 @@ func (_c *MockBackupStorage_ApplyRetention_Call) Return(n int, err error) *MockB
 	return _c
 }
 
-func (_c *MockBackupStorage_ApplyRetention_Call) RunAndReturn(run func(ctx context.Context, domainName string, policy domain.RetentionPolicy) (int, error)) *MockBackupStorage_ApplyRetention_Call {
+func (_c *MockBackupStorage_ApplyRetention_Call) RunAndReturn(run func(ctx context.Context, domainName string, policy domain.DatabaseBackupRetentionPolicy) (int, error)) *MockBackupStorage_ApplyRetention_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -238,23 +238,23 @@ func (_c *MockBackupStorage_Get_Call) RunAndReturn(run func(ctx context.Context,
 }
 
 // List provides a mock function for the type MockBackupStorage
-func (_mock *MockBackupStorage) List(ctx context.Context, domainName string, schedule *domain.BackupSchedule) ([]domain.BackupJob, error) {
+func (_mock *MockBackupStorage) List(ctx context.Context, domainName string, schedule *domain.BackupSchedule) ([]domain.DatabaseBackupJob, error) {
 	ret := _mock.Called(ctx, domainName, schedule)
 
 	if len(ret) == 0 {
 		panic("no return value specified for List")
 	}
 
-	var r0 []domain.BackupJob
+	var r0 []domain.DatabaseBackupJob
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *domain.BackupSchedule) ([]domain.BackupJob, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *domain.BackupSchedule) ([]domain.DatabaseBackupJob, error)); ok {
 		return returnFunc(ctx, domainName, schedule)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *domain.BackupSchedule) []domain.BackupJob); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *domain.BackupSchedule) []domain.DatabaseBackupJob); ok {
 		r0 = returnFunc(ctx, domainName, schedule)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]domain.BackupJob)
+			r0 = ret.Get(0).([]domain.DatabaseBackupJob)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string, *domain.BackupSchedule) error); ok {
@@ -301,12 +301,12 @@ func (_c *MockBackupStorage_List_Call) Run(run func(ctx context.Context, domainN
 	return _c
 }
 
-func (_c *MockBackupStorage_List_Call) Return(backupJobs []domain.BackupJob, err error) *MockBackupStorage_List_Call {
-	_c.Call.Return(backupJobs, err)
+func (_c *MockBackupStorage_List_Call) Return(vs []domain.DatabaseBackupJob, err error) *MockBackupStorage_List_Call {
+	_c.Call.Return(vs, err)
 	return _c
 }
 
-func (_c *MockBackupStorage_List_Call) RunAndReturn(run func(ctx context.Context, domainName string, schedule *domain.BackupSchedule) ([]domain.BackupJob, error)) *MockBackupStorage_List_Call {
+func (_c *MockBackupStorage_List_Call) RunAndReturn(run func(ctx context.Context, domainName string, schedule *domain.BackupSchedule) ([]domain.DatabaseBackupJob, error)) *MockBackupStorage_List_Call {
 	_c.Call.Return(run)
 	return _c
 }

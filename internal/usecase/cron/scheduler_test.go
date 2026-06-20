@@ -51,6 +51,22 @@ func TestCalculateNextRunPresets(t *testing.T) {
 	}
 }
 
+func TestCalculateNextRunInterval(t *testing.T) {
+	now := time.Date(2026, 2, 7, 12, 34, 20, 0, time.UTC)
+
+	next, err := calculateNextRun(now, domain.CronSchedule{Interval: 6 * time.Hour})
+
+	require.NoError(t, err)
+	assert.Equal(t, now.Add(6*time.Hour), next)
+}
+
+func TestCalculateNextRunRejectsIntervalAndPreset(t *testing.T) {
+	_, err := calculateNextRun(time.Now(), domain.CronSchedule{Preset: domain.ScheduleDaily, Interval: time.Hour})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "both interval and preset")
+}
+
 func TestSchedulerAddListAndRunNow(t *testing.T) {
 	s := NewScheduler(zerowrap.Default())
 	now := time.Date(2026, 2, 7, 12, 0, 0, 0, time.UTC)

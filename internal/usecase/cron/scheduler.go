@@ -290,6 +290,12 @@ func (s *Scheduler) dueEntries(now time.Time) []*entry {
 // when no explicit timezone is configured.
 func calculateNextRun(now time.Time, schedule domain.CronSchedule) (time.Time, error) {
 	now = now.UTC()
+	if schedule.Interval > 0 && schedule.Preset != "" {
+		return time.Time{}, fmt.Errorf("cron schedule cannot set both interval and preset")
+	}
+	if schedule.Interval > 0 {
+		return now.Add(schedule.Interval), nil
+	}
 
 	switch schedule.Preset {
 	case domain.ScheduleHourly:

@@ -1,69 +1,86 @@
 # Backups Configuration
 
-Configure automatic PostgreSQL logical backups for attachment containers.
+Gordon has two backup flows:
 
-## Overview
+- **Database backups**: PostgreSQL logical dumps via `pg_dump`, stored on the local filesystem.
+- **Volume backups**: best-effort filesystem archives of Gordon-managed named volumes, uploaded to S3.
 
-When backups are enabled, Gordon detects PostgreSQL attachments for each route and can:
-
-- Run on-demand backups via `gordon backups run`
-- Store backup artifacts on the Gordon host filesystem
-- Apply retention policies per schedule tier
-
-Current scope:
-
-- PostgreSQL 17 and 18
-- Logical dumps (`pg_dump -Fc`)
-- Local filesystem storage
-
-## Configuration
+## Database backups
 
 ```toml
-[backups]
+[backups.databases]
 enabled = true
 schedule = "daily"
 storage_dir = "~/.gordon/backups"
 
-[backups.retention]
+[backups.databases.retention]
 hourly = 24
 daily = 7
 weekly = 4
 monthly = 12
 ```
 
-## Settings
+| Key | Default | Description |
+|---|---:|---|
+| `backups.databases.enabled` | `false` | Enables PostgreSQL backup service wiring |
+| `backups.databases.schedule` | `"daily"` | Scheduler preset: `hourly`, `daily`, `weekly`, `monthly` |
+| `backups.databases.storage_dir` | `""` | Root backup directory; defaults to `{server.data_dir}/backups` |
+| `backups.databases.retention.*` | `0` | Number of backups to keep per DB and schedule tier |
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `backups.enabled` | bool | `false` | Enables backup service wiring |
-| `backups.schedule` | string | `"daily"` | Scheduler preset: `hourly`, `daily`, `weekly`, `monthly` |
-| `backups.storage_dir` | string | `""` | Root backup directory. If empty, defaults to `{server.data_dir}/backups` |
-| `backups.retention.hourly` | int | `0` | Number of hourly backups to keep per DB |
-| `backups.retention.daily` | int | `0` | Number of daily backups to keep per DB |
-| `backups.retention.weekly` | int | `0` | Number of weekly backups to keep per DB |
-| `backups.retention.monthly` | int | `0` | Number of monthly backups to keep per DB |
+## Volume backups to S3
 
-## Storage Layout
+```toml
+[backups.volumes]
+enabled = true
+interval = "24h"
+compression = "gzip"
+timeout = "2h"
+max_concurrency = 2
+helper_image = "alpine:3.20"
 
-Backups are stored under:
+[backups.volumes.s3]
+bucket = "gordon-backups"
+region = "eu-west-3"
+prefix = "prod/gordon"
+# endpoint = "https://s3.example.com"
+# path_style = false
+# sse_algorithm = "AES256"
+# sse_kms_key_id = ""
 
-```text
-<storage_dir>/<domain>/<db>/<schedule>/<timestamp>.bak
+[backups.volumes.retention]
+keep = 14
 ```
 
-Example:
+| Key | Default | Description |
+|---|---:|---|
+| `backups.volumes.enabled` | `false` | Enables automatic volume archives |
+| `backups.volumes.interval` | `"24h"` | Interval between scheduled runs |
+| `backups.volumes.compression` | `"gzip"` | `gzip` or `zstd`; helper image must provide the tool |
+| `backups.volumes.timeout` | `"2h"` | Per-volume archive/upload timeout |
+| `backups.volumes.max_concurrency` | `2` | Maximum concurrent volume backups |
+| `backups.volumes.helper_image` | `"alpine:3.20"` | Helper container image used for tar/compression |
+| `backups.volumes.s3.bucket` | `""` | Required when volume backups are enabled |
+| `backups.volumes.s3.region` | `""` | Required when volume backups are enabled |
+| `backups.volumes.s3.prefix` | `""` | Object key prefix |
+| `backups.volumes.s3.endpoint` | `""` | Optional S3-compatible endpoint |
+| `backups.volumes.s3.path_style` | `false` | Use path-style addressing for S3-compatible storage |
+| `backups.volumes.retention.keep` | `14` | Completed archives to keep per domain + volume |
+
+Volume backup objects are stored under:
 
 ```text
-~/.gordon/backups/app.example.com/postgres/daily/20260207T110000Z.bak
+<prefix>/domains/<domain>/volumes/<volume>/<timestamp>-<id>.tar.gz   # gzip
+<prefix>/domains/<domain>/volumes/<volume>/<timestamp>-<id>.tar.zst  # zstd
 ```
 
 ## Notes
 
-- Backups require PostgreSQL attachment containers to be running.
-- Scheduled backups run only when `backups.enabled = true`.
-- The backup command executes inside the database container using Gordon runtime APIs.
-- Retention applies per database and per schedule.
-- `backups.retention.hourly`, `daily`, `weekly`, and `monthly` set to `0` means no backups are retained for that tier (new backups are immediately eligible for cleanup). For practical defaults, set at least `daily = 7`.
+- Volume backups include named volumes mounted by Gordon-managed route or attachment containers.
+- Bind mounts, tmpfs mounts, anonymous volumes, and non-Gordon volumes are excluded.
+- Live volume archives are best-effort; consistency requires application quiesce, pause, or stop.
+- Automated volume restore is not part of the MVP.
+- Snapshots are not generic across Docker/Podman volumes and require backend-specific support such as ZFS, Btrfs, LVM, EBS, or a snapshot-capable volume driver.
+- S3 credentials should come from the environment, shared config, instance role, or Gordon secret conventions. Use least-privilege IAM for the configured prefix.
 
 ## Related
 
