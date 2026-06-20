@@ -1,7 +1,9 @@
 package envloader
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -200,6 +202,84 @@ ALSO_VALID=another
 		assert.Len(t, envVars, 2)
 		assert.Contains(t, envVars, "VALID=value")
 		assert.Contains(t, envVars, "ALSO_VALID=another")
+	})
+}
+
+func TestFileLoader_LoadEnv_RedactsSecretBearingDiagnostics(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("invalid line warning omits raw line content", func(t *testing.T) {
+		var logs bytes.Buffer
+		log := zerowrap.New(zerowrap.Config{Level: "warn", Format: "json", Output: &logs})
+		loader, err := NewFileLoader(t.TempDir(), log)
+		require.NoError(t, err)
+		ctx := zerowrap.WithCtx(ctx, log)
+
+		envFile, err := loader.getEnvFilePath("app.example.com")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(envFile, []byte("valid line leaks super-secret-token\nVALID=value\n"), 0600))
+
+		envVars, err := loader.LoadEnv(ctx, "app.example.com")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"VALID=value"}, envVars)
+		assert.NotContains(t, logs.String(), "super-secret-token")
+		assert.NotContains(t, logs.String(), "valid line leaks")
+		assert.Contains(t, logs.String(), "line")
+	})
+
+	t.Run("secret resolution error omits unclosed raw value", func(t *testing.T) {
+		log := zerowrap.New(zerowrap.Config{Level: "fatal"})
+		loader, err := NewFileLoader(t.TempDir(), log)
+		require.NoError(t, err)
+
+		envFile, err := loader.getEnvFilePath("app.example.com")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(envFile, []byte("DATABASE_URL=postgres://user:${pass:db-password-super-secret\n"), 0600))
+
+		_, err = loader.LoadEnv(ctx, "app.example.com")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve secret")
+		assert.Contains(t, err.Error(), "DATABASE_URL")
+		assert.NotContains(t, err.Error(), "postgres://user")
+		assert.NotContains(t, err.Error(), "db-password-super-secret")
+	})
+
+	t.Run("secret resolution error omits malformed closed secret ref", func(t *testing.T) {
+		log := zerowrap.New(zerowrap.Config{Level: "fatal"})
+		loader, err := NewFileLoader(t.TempDir(), log)
+		require.NoError(t, err)
+
+		envFile, err := loader.getEnvFilePath("app.example.com")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(envFile, []byte("TOKEN=${db-password-super-secret}\n"), 0600))
+
+		_, err = loader.LoadEnv(ctx, "app.example.com")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve secret")
+		assert.Contains(t, err.Error(), "TOKEN")
+		assert.NotContains(t, err.Error(), "db-password-super-secret")
+	})
+
+	t.Run("secret resolution error omits provider error details", func(t *testing.T) {
+		log := zerowrap.New(zerowrap.Config{Level: "fatal"})
+		loader, err := NewFileLoader(t.TempDir(), log)
+		require.NoError(t, err)
+
+		mockPass := mocks.NewMockSecretProvider(t)
+		mockPass.EXPECT().Name().Return("pass")
+		mockPass.EXPECT().GetSecret(ctx, "db-password-super-secret").Return("", errors.New("backend leaked db-password-super-secret"))
+		loader.RegisterSecretProvider(mockPass)
+
+		envFile, err := loader.getEnvFilePath("app.example.com")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(envFile, []byte("TOKEN=${pass:db-password-super-secret}\n"), 0600))
+
+		_, err = loader.LoadEnv(ctx, "app.example.com")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve secret")
+		assert.Contains(t, err.Error(), "TOKEN")
+		assert.Contains(t, err.Error(), "provider pass")
+		assert.NotContains(t, err.Error(), "db-password-super-secret")
 	})
 }
 

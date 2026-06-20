@@ -99,7 +99,6 @@ func (l *FileLoader) LoadEnv(ctx context.Context, domain string) ([]string, erro
 		if len(parts) != 2 {
 			log.Warn().
 				Int("line", lineNum).
-				Str("content", line).
 				Msg("invalid env file line format, skipping")
 			continue
 		}
@@ -118,10 +117,14 @@ func (l *FileLoader) LoadEnv(ctx context.Context, domain string) ([]string, erro
 		// Resolve secrets if value contains secret syntax
 		resolvedValue, err := l.resolveSecrets(ctx, value)
 		if err != nil {
-			return nil, log.WrapErrWithFields(err, "failed to resolve secret", map[string]any{
-				"key":  key,
-				"line": lineNum,
-			})
+			return nil, log.WrapErrWithFields(
+				fmt.Errorf("key %s on line %d: %w", key, lineNum, err),
+				"failed to resolve secret",
+				map[string]any{
+					"key":  key,
+					"line": lineNum,
+				},
+			)
 		}
 
 		envVars = append(envVars, fmt.Sprintf("%s=%s", key, resolvedValue))
@@ -210,14 +213,14 @@ func (l *FileLoader) resolveSecrets(ctx context.Context, value string) (string, 
 
 		end := strings.Index(result[start:], "}")
 		if end == -1 {
-			return "", fmt.Errorf("unclosed secret syntax in value: %s", value)
+			return "", fmt.Errorf("unclosed secret syntax")
 		}
 		end += start
 
 		secretRef := result[start+2 : end]
 		parts := strings.SplitN(secretRef, ":", 2)
 		if len(parts) != 2 {
-			return "", fmt.Errorf("invalid secret syntax: expected 'provider:path', got '%s'", secretRef)
+			return "", fmt.Errorf("invalid secret syntax: expected 'provider:path'")
 		}
 
 		providerName := parts[0]
@@ -230,7 +233,7 @@ func (l *FileLoader) resolveSecrets(ctx context.Context, value string) (string, 
 
 		secretValue, err := provider.GetSecret(ctx, secretPath)
 		if err != nil {
-			return "", fmt.Errorf("failed to get secret from provider %s: %w", providerName, err)
+			return "", fmt.Errorf("failed to get secret from provider %s", providerName)
 		}
 
 		// Replace the secret reference with the actual value

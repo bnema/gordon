@@ -134,7 +134,7 @@ func RequestLogger(log zerowrap.Logger, trustedNets ...[]*net.IPNet) func(http.H
 				Str("query", sanitizeLoggedQuery(r.URL.RawQuery)).
 				Str(zerowrap.FieldHost, r.Host).
 				Str("user_agent", r.UserAgent()).
-				Str("referer", r.Referer()).
+				Str("referer", sanitizeLoggedReferer(r.Referer())).
 				Str(zerowrap.FieldClientIP, clientIP).
 				Int(zerowrap.FieldStatus, rw.StatusCode()).
 				Int("bytes", rw.BytesWritten()).
