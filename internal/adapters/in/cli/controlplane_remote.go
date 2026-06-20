@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
@@ -170,15 +171,27 @@ func (r *remoteControlPlane) DetectDatabases(ctx context.Context, backupDomain s
 }
 
 func (r *remoteControlPlane) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
-	return r.client.ListVolumeBackups(ctx, backupDomain)
+	jobs, err := r.client.ListVolumeBackups(ctx, backupDomain)
+	if err != nil {
+		return nil, fmt.Errorf("list volume backups: %w", err)
+	}
+	return jobs, nil
 }
 
 func (r *remoteControlPlane) VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob, error) {
-	return r.client.VolumeBackupStatus(ctx)
+	jobs, err := r.client.VolumeBackupStatus(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get volume backup status: %w", err)
+	}
+	return jobs, nil
 }
 
 func (r *remoteControlPlane) RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error) {
-	return r.client.RunVolumeBackups(ctx, backupDomain, volumeName)
+	result, err := r.client.RunVolumeBackups(ctx, backupDomain, volumeName)
+	if err != nil {
+		return result, fmt.Errorf("run volume backups: %w", err)
+	}
+	return result, nil
 }
 
 func (r *remoteControlPlane) GetProcessLogs(ctx context.Context, lines int) ([]string, error) {

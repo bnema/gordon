@@ -885,6 +885,12 @@ func (c *Client) RunVolumeBackups(ctx context.Context, backupDomain, volumeName 
 	if err := parseResponse(resp, &result); err != nil {
 		return nil, err
 	}
+	if resp.StatusCode == http.StatusPartialContent {
+		if result.Error == "" {
+			result.Error = "volume backup run partially failed"
+		}
+		return &result, fmt.Errorf("volume backup run partially failed: %s", result.Error)
+	}
 	return &result, nil
 }
 

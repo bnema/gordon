@@ -417,6 +417,31 @@ func TestParseErrorResponse_NonJSON(t *testing.T) {
 	assert.Equal(t, "plain text error", httpErr.Body)
 }
 
+func TestRunVolumeBackups_PartialContentReturnsResultAndError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/backups/volumes/app.example.com", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPartialContent)
+		require.NoError(t, json.NewEncoder(w).Encode(dto.VolumeBackupRunResponse{
+			Status:  "partial",
+			Backups: []dto.VolumeBackupJob{{ID: "v1", Domain: "app.example.com", VolumeName: "gordon-app-data", Status: "completed"}},
+			Error:   "one volume failed",
+		}))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	result, err := client.RunVolumeBackups(context.Background(), "app.example.com", "")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "one volume failed")
+	require.NotNil(t, result)
+	assert.Equal(t, "partial", result.Status)
+	require.Len(t, result.Backups, 1)
+	assert.Equal(t, "v1", result.Backups[0].ID)
+}
+
 func TestExchangeRegistryToken_AccessTokenFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

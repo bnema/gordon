@@ -1449,11 +1449,16 @@ func (h *Handler) handleVolumeBackupsDomain(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		jobs, err := h.volumeBackupSvc.RunVolumeBackups(ctx, backupDomain, req.Volume)
+		backups := mapVolumeBackupJobsResponse(jobs)
 		if err != nil {
+			if len(backups) > 0 {
+				h.sendJSON(w, http.StatusPartialContent, dto.VolumeBackupRunResponse{Status: "partial", Backups: backups, Error: err.Error()})
+				return
+			}
 			h.sendError(w, http.StatusInternalServerError, "failed to run volume backups")
 			return
 		}
-		h.sendJSON(w, http.StatusOK, dto.VolumeBackupRunResponse{Status: "ok", Backups: mapVolumeBackupJobsResponse(jobs)})
+		h.sendJSON(w, http.StatusOK, dto.VolumeBackupRunResponse{Status: "ok", Backups: backups})
 	default:
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

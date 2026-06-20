@@ -69,7 +69,8 @@ keep = 14
 Volume backup objects are stored under:
 
 ```text
-<prefix>/domains/<domain>/volumes/<volume>/<timestamp>-<id>.tar.gz
+<prefix>/domains/<domain>/volumes/<volume>/<timestamp>-<id>.tar.gz   # gzip
+<prefix>/domains/<domain>/volumes/<volume>/<timestamp>-<id>.tar.zst  # zstd
 ```
 
 ## Notes

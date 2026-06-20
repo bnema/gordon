@@ -80,4 +80,5 @@ type VolumeBackupRunRequest struct {
 type VolumeBackupRunResponse struct {
 	Status  string            `json:"status"`
 	Backups []VolumeBackupJob `json:"backups,omitempty"`
+	Error   string            `json:"error,omitempty"`
 }

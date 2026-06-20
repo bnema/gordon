@@ -40,11 +40,20 @@ func NewVolumeService(runtime out.ContainerRuntime, exporter out.VolumeArchiveEx
 
 // ListVolumeBackups lists completed volume backups for a domain, or all domains when empty.
 func (s *VolumeService) ListVolumeBackups(ctx context.Context, domainName string) ([]domain.VolumeBackupJob, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "ListVolumeBackups",
+		"domain":              domainName,
+	})
 	return s.storage.ListVolumeArchives(ctx, domainName)
 }
 
 // VolumeBackupStatus returns completed backup artifacts plus current/recent in-memory job state.
 func (s *VolumeService) VolumeBackupStatus(ctx context.Context) ([]domain.VolumeBackupJob, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "VolumeBackupStatus",
+	})
 	jobs, err := s.storage.ListVolumeArchives(ctx, "")
 	if err != nil {
 		return nil, err
@@ -69,6 +78,13 @@ func (s *VolumeService) VolumeBackupStatus(ctx context.Context) ([]domain.Volume
 
 // RunVolumeBackups runs volume backups for all eligible targets, optionally scoped to a domain and volume.
 func (s *VolumeService) RunVolumeBackups(ctx context.Context, domainName, volumeName string) ([]domain.VolumeBackupJob, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "RunVolumeBackups",
+		"domain":              domainName,
+		"volume":              volumeName,
+	})
+	log := zerowrap.FromCtx(ctx)
 	if !s.config.Enabled {
 		return []domain.VolumeBackupJob{}, nil
 	}
@@ -78,7 +94,7 @@ func (s *VolumeService) RunVolumeBackups(ctx context.Context, domainName, volume
 		return nil, fmt.Errorf("failed to list containers for volume backups: %w", err)
 	}
 	targets := SelectVolumeBackupTargetsForScope(containers, s.config.VolumePrefix, domainName, volumeName)
-	s.log.Info().
+	log.Info().
 		Str("domain", domainName).
 		Str("volume", volumeName).
 		Int("targets", len(targets)).
@@ -139,7 +155,8 @@ func (s *VolumeService) applyRetentionForSuccessfulVolumeBackups(ctx context.Con
 		if err != nil {
 			return fmt.Errorf("apply volume backup retention for %s: %w", domainName, err)
 		}
-		s.log.Info().
+		log := zerowrap.FromCtx(ctx)
+		log.Info().
 			Str("domain", domainName).
 			Int("deleted", deleted).
 			Msg("volume backup retention applied")
@@ -174,6 +191,13 @@ func volumeBackupResultDomains(results []domain.VolumeBackupJob) (map[string]str
 }
 
 func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.VolumeBackupTarget) domain.VolumeBackupJob {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		"domain":         target.Domain,
+		"volume":         target.VolumeName,
+		"container_name": target.ContainerName,
+		"mount_path":     target.MountPath,
+	})
+	log := zerowrap.FromCtx(ctx)
 	started := time.Now().UTC()
 	job := domain.VolumeBackupJob{
 		ID:            newBackupJobID(started),
@@ -205,25 +229,23 @@ func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.Volum
 		HelperImage: s.config.HelperImage,
 	})
 	if err != nil {
-		s.log.Error().Err(err).Str("domain", job.Domain).Str("volume", job.VolumeName).Msg("volume archive export failed")
-		return s.failJob(job, err)
+		log.Error().Err(err).Msg("volume archive export failed")
+		return s.failJob(ctx, job, err)
 	}
 	defer archive.Stream.Close()
 
 	counter := &byteCounter{}
 	artifactRef, err := s.storage.StoreVolumeArchive(exportCtx, job, io.TeeReader(archive.Stream, counter))
 	if err != nil {
-		s.log.Error().Err(err).Str("domain", job.Domain).Str("volume", job.VolumeName).Msg("volume archive upload failed")
-		return s.failJob(job, err)
+		log.Error().Err(err).Msg("volume archive upload failed")
+		return s.failJob(ctx, job, err)
 	}
 
 	job.Status = domain.BackupStatusCompleted
 	job.CompletedAt = time.Now().UTC()
 	job.SizeBytes = counter.n
 	job.ArtifactRef = artifactRef
-	s.log.Info().
-		Str("domain", job.Domain).
-		Str("volume", job.VolumeName).
+	log.Info().
 		Int64("size_bytes", job.SizeBytes).
 		Dur("duration", job.CompletedAt.Sub(job.StartedAt)).
 		Msg("volume backup completed")
@@ -231,11 +253,12 @@ func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.Volum
 	return job
 }
 
-func (s *VolumeService) failJob(job domain.VolumeBackupJob, err error) domain.VolumeBackupJob {
+func (s *VolumeService) failJob(ctx context.Context, job domain.VolumeBackupJob, err error) domain.VolumeBackupJob {
 	job.Status = domain.BackupStatusFailed
 	job.CompletedAt = time.Now().UTC()
 	job.Error = err.Error()
-	s.log.Error().Err(err).Str("domain", job.Domain).Str("volume", job.VolumeName).Msg("volume backup failed")
+	log := zerowrap.FromCtx(ctx)
+	log.Error().Err(err).Msg("volume backup failed")
 	s.remember(job)
 	return job
 }

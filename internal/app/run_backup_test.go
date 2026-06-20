@@ -123,6 +123,7 @@ func TestValidateVolumeBackupConfig(t *testing.T) {
 		assert.Equal(t, 0, volumeCfg.Retention.Keep)
 		assert.Equal(t, 2, volumeCfg.MaxConcurrency)
 		assert.Equal(t, "alpine:3.20", volumeCfg.HelperImage)
+		assert.Equal(t, "gordon", volumeCfg.VolumePrefix)
 	})
 
 	t.Run("enabled requires bucket and region", func(t *testing.T) {
@@ -148,6 +149,7 @@ func TestValidateVolumeBackupConfig(t *testing.T) {
 		cfg.Backups.Volumes.Compression = "gzip"
 		cfg.Backups.Volumes.MaxConcurrency = 3
 		cfg.Backups.Volumes.HelperImage = "example/helper:1"
+		cfg.Volumes.Prefix = "acme"
 		cfg.Backups.Volumes.S3.Bucket = "gordon-backups"
 		cfg.Backups.Volumes.S3.Region = "eu-west-3"
 		cfg.Backups.Volumes.S3.Prefix = "prod/gordon"
@@ -159,6 +161,7 @@ func TestValidateVolumeBackupConfig(t *testing.T) {
 		assert.Equal(t, domain.VolumeBackupCompressionGzip, volumeCfg.Compression)
 		assert.Equal(t, 7, volumeCfg.Retention.Keep)
 		assert.Equal(t, 3, volumeCfg.MaxConcurrency)
+		assert.Equal(t, "acme", volumeCfg.VolumePrefix)
 		assert.Equal(t, "prod/gordon", volumeCfg.S3Prefix)
 	})
 

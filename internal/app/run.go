@@ -148,6 +148,12 @@ type Config struct {
 		Dir string `mapstructure:"dir"`
 	} `mapstructure:"env"`
 
+	Volumes struct {
+		AutoCreate bool   `mapstructure:"auto_create"`
+		Prefix     string `mapstructure:"prefix"`
+		Preserve   bool   `mapstructure:"preserve"`
+	} `mapstructure:"volumes"`
+
 	Auth struct {
 		Enabled        bool   `mapstructure:"enabled"`
 		Type           string `mapstructure:"type"`            // only "token" is supported
@@ -2141,6 +2147,10 @@ func validateVolumeBackupConfig(cfg Config) (domain.VolumeBackupConfig, error) {
 	if helperImage == "" {
 		helperImage = "alpine:3.20"
 	}
+	volumePrefix := strings.TrimSpace(cfg.Volumes.Prefix)
+	if volumePrefix == "" {
+		volumePrefix = "gordon"
+	}
 	if compression == domain.VolumeBackupCompressionZstd && helperImage == "alpine:3.20" {
 		return domain.VolumeBackupConfig{}, fmt.Errorf("backups.volumes.compression zstd requires a helper_image that provides zstd")
 	}
@@ -2155,7 +2165,7 @@ func validateVolumeBackupConfig(cfg Config) (domain.VolumeBackupConfig, error) {
 		Timeout:        timeout,
 		MaxConcurrency: maxConcurrency,
 		HelperImage:    helperImage,
-		VolumePrefix:   "gordon",
+		VolumePrefix:   volumePrefix,
 		S3Bucket:       strings.TrimSpace(volumeCfg.S3.Bucket),
 		S3Region:       strings.TrimSpace(volumeCfg.S3.Region),
 		S3Prefix:       strings.TrimSpace(volumeCfg.S3.Prefix),

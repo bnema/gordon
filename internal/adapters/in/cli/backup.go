@@ -13,6 +13,8 @@ import (
 	"github.com/bnema/gordon/pkg/bytesize"
 )
 
+var backupResolveControlPlane = resolveControlPlane
+
 // newBackupCmd creates the backup command group.
 func newBackupCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -143,7 +145,7 @@ func newVolumeBackupListCmd() *cobra.Command {
 			if len(args) == 1 {
 				domainName = args[0]
 			}
-			handle, err := resolveControlPlane(configPath)
+			handle, err := backupResolveControlPlane(configPath)
 			if err != nil {
 				return err
 			}
@@ -162,6 +164,7 @@ func newVolumeBackupListCmd() *cobra.Command {
 
 func newVolumeBackupRunCmd() *cobra.Command {
 	var volumeName string
+	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "run [domain]",
@@ -172,7 +175,7 @@ func newVolumeBackupRunCmd() *cobra.Command {
 			if len(args) == 1 {
 				domainName = args[0]
 			}
-			handle, err := resolveControlPlane(configPath)
+			handle, err := backupResolveControlPlane(configPath)
 			if err != nil {
 				return err
 			}
@@ -180,21 +183,28 @@ func newVolumeBackupRunCmd() *cobra.Command {
 
 			result, err := handle.plane.RunVolumeBackups(cmd.Context(), domainName, volumeName)
 			if err != nil {
+				if result != nil && len(result.Backups) > 0 {
+					if printErr := printVolumeBackupJobs(cmd.OutOrStdout(), result.Backups, jsonOut); printErr != nil {
+						return printErr
+					}
+				}
 				return fmt.Errorf("failed to run volume backups: %w", err)
 			}
-			return printVolumeBackupJobs(cmd.OutOrStdout(), result.Backups, false)
+			return printVolumeBackupJobs(cmd.OutOrStdout(), result.Backups, jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&volumeName, "volume", "", "Volume name (optional)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 
 func newVolumeBackupStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show volume backup status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := resolveControlPlane(configPath)
+			handle, err := backupResolveControlPlane(configPath)
 			if err != nil {
 				return err
 			}
@@ -204,9 +214,11 @@ func newVolumeBackupStatusCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to get volume backup status: %w", err)
 			}
-			return printVolumeBackupJobs(cmd.OutOrStdout(), jobs, false)
+			return printVolumeBackupJobs(cmd.OutOrStdout(), jobs, jsonOut)
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
 }
 
 func printVolumeBackupJobs(out io.Writer, jobs []dto.VolumeBackupJob, jsonOut bool) error {

@@ -1362,12 +1362,24 @@ func streamVolumeArchiveLogs(logs io.ReadCloser, pw *io.PipeWriter, statusCh <-c
 }
 
 func waitForVolumeArchiveContainer(statusCh <-chan container.WaitResponse, errCh <-chan error) (int64, error) {
-	select {
-	case err := <-errCh:
-		return 0, err
-	case status := <-statusCh:
-		return status.StatusCode, nil
+	for statusCh != nil || errCh != nil {
+		select {
+		case err, ok := <-errCh:
+			if !ok {
+				errCh = nil
+				continue
+			}
+			if err != nil {
+				return 0, err
+			}
+		case status, ok := <-statusCh:
+			if !ok {
+				return 0, fmt.Errorf("volume archive helper container wait channel closed")
+			}
+			return status.StatusCode, nil
+		}
 	}
+	return 0, fmt.Errorf("volume archive helper container wait channels closed")
 }
 
 func closeVolumeArchivePipe(pw *io.PipeWriter, copyErr, waitErr error, statusCode int64, stderr string) {

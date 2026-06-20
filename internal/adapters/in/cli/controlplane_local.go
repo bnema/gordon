@@ -633,35 +633,43 @@ func (l *localControlPlane) DetectDatabases(ctx context.Context, backupDomain st
 
 func (l *localControlPlane) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
 	if l.volumeBackupSvc == nil {
-		return nil, fmt.Errorf("local volume backup service unavailable")
+		return nil, localVolumeBackupServiceUnavailable()
 	}
 	jobs, err := l.volumeBackupSvc.ListVolumeBackups(ctx, backupDomain)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list volume backups: %w", err)
 	}
 	return toDTOVolumeBackupJobs(jobs), nil
 }
 
 func (l *localControlPlane) VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob, error) {
 	if l.volumeBackupSvc == nil {
-		return nil, fmt.Errorf("local volume backup service unavailable")
+		return nil, localVolumeBackupServiceUnavailable()
 	}
 	jobs, err := l.volumeBackupSvc.VolumeBackupStatus(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get volume backup status: %w", err)
 	}
 	return toDTOVolumeBackupJobs(jobs), nil
 }
 
 func (l *localControlPlane) RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error) {
 	if l.volumeBackupSvc == nil {
-		return nil, fmt.Errorf("local volume backup service unavailable")
+		return nil, localVolumeBackupServiceUnavailable()
 	}
 	jobs, err := l.volumeBackupSvc.RunVolumeBackups(ctx, backupDomain, volumeName)
 	if err != nil {
-		return nil, err
+		if len(jobs) > 0 {
+			resp := &dto.VolumeBackupRunResponse{Status: "partial", Backups: toDTOVolumeBackupJobs(jobs), Error: err.Error()}
+			return resp, fmt.Errorf("run volume backups: %w", err)
+		}
+		return nil, fmt.Errorf("run volume backups: %w", err)
 	}
 	return &dto.VolumeBackupRunResponse{Status: "ok", Backups: toDTOVolumeBackupJobs(jobs)}, nil
+}
+
+func localVolumeBackupServiceUnavailable() error {
+	return fmt.Errorf("local volume backup service unavailable: %w", domain.ErrVolumeBackupUnavailable)
 }
 
 func (l *localControlPlane) GetProcessLogs(ctx context.Context, lines int) ([]string, error) {
