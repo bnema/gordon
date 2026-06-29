@@ -369,7 +369,7 @@ func TestTrafficGraphValidateBackendsAndL4Routers(t *testing.T) {
 			name:     "tls passthrough requires tcp network backend",
 			router:   TrafficRouter{Name: "tls", EntryPoint: "tls", Protocol: RouterProtocolTLSPassthrough, Rule: TrafficRule{SNI: "db.example.com"}, Service: "network_service:app:https"},
 			services: []TrafficService{{Name: "network_service:app:https", Backends: []TrafficBackend{{Name: "app", Port: 443, Protocol: NetworkProtocolUDP}}}},
-			wantErr:  "backend protocol udp does not match router protocol tcp",
+			wantErr:  "backend protocol udp does not match router protocol tls_passthrough",
 		},
 		{
 			name:     "l4 router rejects route ref",

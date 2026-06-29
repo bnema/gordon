@@ -507,7 +507,7 @@ func validateL4RouterService(router TrafficRouter, ref TrafficServiceRef, servic
 	}
 	backend := service.Backends[0]
 	if backend.Protocol != want {
-		return fmt.Errorf("backend protocol %s does not match router protocol %s for router %q", backend.Protocol, want, router.Name)
+		return fmt.Errorf("backend protocol %s does not match router protocol %s for router %q (expected backend protocol %s)", backend.Protocol, router.Protocol, router.Name, want)
 	}
 	return nil
 }
