@@ -38,6 +38,10 @@ type reloadTrigger interface {
 	Trigger(ctx context.Context) error
 }
 
+type trafficStatusService interface {
+	Status() domain.TrafficStatus
+}
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc       in.ConfigService
@@ -54,6 +58,7 @@ type Handler struct {
 	previewSvc      previewService
 	reloadTrigger   reloadTrigger
 	publicTLSSvc    in.PublicTLSService
+	trafficSvc      trafficStatusService
 	log             zerowrap.Logger
 }
 
@@ -202,6 +207,7 @@ type HandlerDeps struct {
 	VolumeSvc       in.VolumeService
 	ReloadTrigger   reloadTrigger
 	PublicTLSSvc    in.PublicTLSService
+	TrafficSvc      trafficStatusService
 }
 
 // NewHandler creates a new admin HTTP handler.
@@ -221,6 +227,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		previewSvc:      deps.PreviewSvc,
 		reloadTrigger:   deps.ReloadTrigger,
 		publicTLSSvc:    deps.PublicTLSSvc,
+		trafficSvc:      deps.TrafficSvc,
 		log:             deps.Log,
 	}
 }
@@ -274,6 +281,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		"/attachments/orphans": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAttachmentOrphans(w, r) },
 		"/attachments/prune":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAttachmentPrune(w, r) },
 		"/tls/status":          func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTLSStatus(w, r) },
+		"/traffic/status":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTrafficStatus(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true

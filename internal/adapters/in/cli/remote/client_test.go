@@ -117,6 +117,23 @@ func TestClientWithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestClientGetTrafficStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/traffic/status", r.URL.Path)
+		require.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"last_reload_status":"ok","counters":{"active_tcp_connections":1}}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	status, err := client.GetTrafficStatus(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.Equal(t, "ok", status.LastReloadStatus)
+	assert.Equal(t, int64(1), status.Counters.ActiveTCPConnections)
+}
+
 func TestClientGetTLSStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/admin/tls/status", r.URL.Path)

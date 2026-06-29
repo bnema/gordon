@@ -285,7 +285,7 @@ func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entry
 func routerStatuses(routers []domain.TrafficRouter, listeners map[string]*entryPointRuntime, udpListeners map[string]*udpEntryPointRuntime) []domain.TrafficRouterStatus {
 	statuses := make([]domain.TrafficRouterStatus, 0, len(routers))
 	for _, router := range routers {
-		status := domain.TrafficRouterStatus{Name: router.Name, EntryPoint: router.EntryPoint, Protocol: router.Protocol, Active: true}
+		status := domain.TrafficRouterStatus{Name: router.Name, EntryPoint: router.EntryPoint, Protocol: router.Protocol, Rule: router.Rule, Service: router.Service, Active: true}
 		if runtime := listeners[router.EntryPoint]; runtime != nil {
 			counters := runtime.counters.snapshot()
 			status.ActiveTCPConnections = counters.ActiveTCPConnections
@@ -315,7 +315,7 @@ func serviceStatuses(services []domain.TrafficService) []domain.TrafficServiceSt
 	for _, service := range services {
 		status := domain.TrafficServiceStatus{Name: service.Name, Active: true, Backends: make([]domain.TrafficBackendStatus, 0, len(service.Backends))}
 		for _, backend := range service.Backends {
-			status.Backends = append(status.Backends, domain.TrafficBackendStatus{Name: backend.Name, Active: true})
+			status.Backends = append(status.Backends, domain.TrafficBackendStatus{Name: backend.Name, Host: backend.Host, Port: backend.Port, Protocol: backend.Protocol, Active: true})
 		}
 		statuses = append(statuses, status)
 	}

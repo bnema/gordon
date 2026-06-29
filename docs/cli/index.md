@@ -42,6 +42,7 @@ Management commands run locally through in-process services by default. Add `--r
 | `gordon routes` | Manage routes | [routes](./routes.md) |
 | `gordon secrets` | Manage secrets | [secrets](./secrets.md) |
 | `gordon status` | Show Gordon server status | [status](./status.md) |
+| `gordon traffic` | Inspect traffic plane status | [traffic](./traffic.md) |
 | `gordon volumes` | Manage volumes | - |
 
 ## Client Commands
@@ -92,6 +93,10 @@ gordon logs myapp.example.com -f    # Follow container logs
 
 # Check version
 gordon version
+
+# Traffic plane
+gordon traffic status --remote prod
+gordon traffic status --remote prod --json
 
 # Backups
 gordon backups list

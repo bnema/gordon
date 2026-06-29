@@ -57,6 +57,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/http/onboarding"
 	proxyadapter "github.com/bnema/gordon/internal/adapters/in/http/proxy"
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
+	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
 
 	// Boundaries
 	"github.com/bnema/gordon/internal/boundaries/in"
@@ -296,6 +297,7 @@ type services struct {
 	reloadCoordinator *reloadCoordinator
 	publicTLSSvc      in.PublicTLSService
 	publicTLSRuntime  publicTLSRuntime
+	trafficManager    *trafficadapter.Manager
 	registryHandler   interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
@@ -558,7 +560,7 @@ func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, 
 		return nil, err
 	}
 
-	if err := si.initRuntimeAndProxy(); err != nil {
+	if err := si.initRuntimeProxyAndTraffic(); err != nil {
 		return nil, err
 	}
 
@@ -710,6 +712,17 @@ func (si *serviceInit) initSecrets() error {
 }
 
 // initRuntimeAndProxy creates container, backup, registry, image, volume, and proxy services.
+func (si *serviceInit) initRuntimeProxyAndTraffic() error {
+	if err := si.initRuntimeAndProxy(); err != nil {
+		return err
+	}
+	si.svc.trafficManager = trafficadapter.NewManager(si.log)
+	if err := applyTrafficRuntimeConfig(si.ctx, si.svc.trafficManager, si.cfg, si.svc.configSvc); err != nil {
+		return si.log.WrapErr(err, "failed to apply traffic configuration")
+	}
+	return nil
+}
+
 func (si *serviceInit) initRuntimeAndProxy() error {
 	var err error
 
@@ -756,6 +769,9 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 		if err != nil {
 			return err
 		}
+		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc); err != nil {
+			return err
+		}
 		si.svc.containerSvc.UpdateConfig(containerCfg)
 		return nil
 	})
@@ -776,6 +792,9 @@ func (si *serviceInit) initHandlers() {
 	si.svc.logSvc = logs.NewService(resolveLogFilePath(si.cfg), si.cfg.Logging.File.Enabled, si.svc.containerSvc, si.svc.runtime, si.log)
 
 	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
+	if si.svc.trafficManager == nil {
+		si.svc.trafficManager = trafficadapter.NewManager(si.log)
+	}
 
 	si.svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
 		ConfigSvc:       si.svc.configSvc,
@@ -793,6 +812,7 @@ func (si *serviceInit) initHandlers() {
 		ImageSvc:        si.svc.imageSvc,
 		VolumeSvc:       si.svc.volumeSvc,
 		PublicTLSSvc:    si.svc.publicTLSSvc,
+		TrafficSvc:      si.svc.trafficManager,
 	})
 }
 
@@ -2849,7 +2869,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, reload, svc.eventBus, log)
 	cleanupHandlers() // Stop debounce timers before draining containers
-	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, log)
+	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, log)
 	return nil
 }
 
@@ -3101,7 +3121,7 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, log zerowrap.Logger) {
+func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -3114,6 +3134,12 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 		}
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Warn().Err(err).Str("addr", srv.Addr).Msg("server shutdown error")
+		}
+	}
+
+	if trafficManager != nil {
+		if err := trafficManager.Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Msg("traffic manager shutdown error")
 		}
 	}
 

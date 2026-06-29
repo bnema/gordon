@@ -701,6 +701,21 @@ func (c *Client) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, erro
 	return &status, nil
 }
 
+// GetTrafficStatus returns the traffic plane status.
+func (c *Client) GetTrafficStatus(ctx context.Context) (*dto.TrafficStatusResponse, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/traffic/status", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var status dto.TrafficStatusResponse
+	if err := parseResponse(resp, &status); err != nil {
+		return nil, err
+	}
+
+	return &status, nil
+}
+
 // GetStatus returns the Gordon server status.
 func (c *Client) GetStatus(ctx context.Context) (*Status, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/status", nil)
@@ -1351,19 +1366,18 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 			// Process complete SSE events
 			for {
 				data := lineBuffer.String()
-				idx := strings.Index(data, "\n\n")
-				if idx == -1 {
+				event, remaining, ok := strings.Cut(data, "\n\n")
+				if !ok {
 					break
 				}
 
-				event := data[:idx]
 				lineBuffer.Reset()
-				lineBuffer.WriteString(data[idx+2:])
+				lineBuffer.WriteString(remaining)
 
 				// Parse SSE data lines
-				for _, line := range strings.Split(event, "\n") {
-					if strings.HasPrefix(line, "data: ") {
-						logLine := strings.TrimPrefix(line, "data: ")
+				for line := range strings.SplitSeq(event, "\n") {
+					logLine, ok := strings.CutPrefix(line, "data: ")
+					if ok {
 						select {
 						case ch <- logLine:
 						case <-ctx.Done():

@@ -117,6 +117,8 @@ type TrafficRouterStatus struct {
 	Name                 string
 	EntryPoint           string
 	Protocol             RouterProtocol
+	Rule                 TrafficRule
+	Service              string
 	Active               bool
 	ActiveTCPConnections int64
 	ActiveUDPSessions    int64
@@ -135,6 +137,9 @@ type TrafficServiceStatus struct {
 
 type TrafficBackendStatus struct {
 	Name                 string
+	Host                 string
+	Port                 int
+	Protocol             NetworkProtocol
 	Active               bool
 	ActiveTCPConnections int64
 	ActiveUDPSessions    int64
