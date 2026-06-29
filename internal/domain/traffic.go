@@ -437,6 +437,9 @@ func (s *routerValidationState) validateWildcardSNI(entryPoint string, sni strin
 	if s.wildSNI[entryPoint][sni] != "" {
 		return fmt.Errorf("ambiguous wildcard tls sni %q on entrypoint %q", sni, entryPoint)
 	}
+	if wildcard := overlappingWildcardSNI(sni, s.wildSNI[entryPoint]); wildcard != "" {
+		return fmt.Errorf("ambiguous wildcard tls sni %q overlaps %q on entrypoint %q", sni, wildcard, entryPoint)
+	}
 	if host := matchingHTTPHost(sni, s.httpHosts[entryPoint]); host != "" {
 		return fmt.Errorf("http host conflicts with wildcard tls passthrough sni %q on entrypoint %q for host %q", sni, entryPoint, host)
 	}
@@ -623,6 +626,24 @@ func matchingHTTPHost(wildcard string, hosts map[string]string) string {
 		}
 	}
 	return ""
+}
+
+func overlappingWildcardSNI(wildcard string, wildcards map[string]string) string {
+	for existing := range wildcards {
+		if wildcardSNIOverlap(wildcard, existing) {
+			return existing
+		}
+	}
+	return ""
+}
+
+func wildcardSNIOverlap(left string, right string) bool {
+	leftSuffix, leftOK := strings.CutPrefix(left, "*.")
+	rightSuffix, rightOK := strings.CutPrefix(right, "*.")
+	if !leftOK || !rightOK {
+		return false
+	}
+	return leftSuffix == rightSuffix || strings.HasSuffix(leftSuffix, "."+rightSuffix) || strings.HasSuffix(rightSuffix, "."+leftSuffix)
 }
 
 func hostMatchesWildcard(host string, wildcard string) bool {

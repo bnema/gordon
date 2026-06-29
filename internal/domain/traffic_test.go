@@ -264,10 +264,18 @@ func TestTrafficGraphValidateTLSRules(t *testing.T) {
 			},
 		},
 		{
-			name: "ambiguous wildcard sni overlaps rejected",
+			name: "duplicate wildcard sni rejected",
 			routers: []TrafficRouter{
 				{Name: "wild1", EntryPoint: "tls", Protocol: RouterProtocolTLSPassthrough, Rule: TrafficRule{SNI: "*.example.com"}, Service: "network_service:app:https"},
 				{Name: "wild2", EntryPoint: "tls", Protocol: RouterProtocolTLSPassthrough, Rule: TrafficRule{SNI: "*.example.com"}, Service: "network_service:app:https"},
+			},
+			wantErr: "ambiguous wildcard tls sni",
+		},
+		{
+			name: "nested wildcard sni overlap rejected",
+			routers: []TrafficRouter{
+				{Name: "wild1", EntryPoint: "tls", Protocol: RouterProtocolTLSPassthrough, Rule: TrafficRule{SNI: "*.example.com"}, Service: "network_service:app:https"},
+				{Name: "wild2", EntryPoint: "tls", Protocol: RouterProtocolTLSPassthrough, Rule: TrafficRule{SNI: "*.sub.example.com"}, Service: "network_service:app:https"},
 			},
 			wantErr: "ambiguous wildcard tls sni",
 		},
