@@ -25,9 +25,10 @@ const (
 type Manager struct {
 	log zerowrap.Logger
 
-	mu        sync.Mutex
-	snapshot  atomic.Pointer[domain.TrafficGraph]
-	listeners map[string]*entryPointRuntime
+	mu           sync.Mutex
+	snapshot     atomic.Pointer[domain.TrafficGraph]
+	listeners    map[string]*entryPointRuntime
+	udpListeners map[string]*udpEntryPointRuntime
 
 	lastReloadStatus string
 	lastReloadError  string
@@ -39,6 +40,7 @@ func NewManager(log zerowrap.Logger) *Manager {
 	manager := &Manager{
 		log:              log,
 		listeners:        map[string]*entryPointRuntime{},
+		udpListeners:     map[string]*udpEntryPointRuntime{},
 		lastReloadStatus: reloadStatusOK,
 	}
 	manager.tlsFallbacks.Store(tlsFallbacks{})
@@ -64,24 +66,48 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 		m.lastReloadError = err.Error()
 		return err
 	}
+	newUDPListeners, createdUDPListeners, err := m.prepareUDPListeners(ctx, &nextGraph)
+	if err != nil {
+		for _, runtime := range createdListeners {
+			runtime.stop(ctx, effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout)
+		}
+		m.lastReloadStatus = reloadStatusError
+		m.lastReloadError = err.Error()
+		return err
+	}
 
 	oldListeners := m.listeners
+	oldUDPListeners := m.udpListeners
 	m.listeners = newListeners
+	m.udpListeners = newUDPListeners
 	m.snapshot.Store(&nextGraph)
 	for _, runtime := range createdListeners {
+		runtime.start()
+	}
+	for _, runtime := range createdUDPListeners {
 		runtime.start()
 	}
 	m.lastReloadStatus = reloadStatusOK
 	m.lastReloadError = ""
 
-	drainTimeout := effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout
+	tcpDrainTimeout := effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout
 	for name, runtime := range oldListeners {
 		if newListeners[name] == runtime {
 			continue
 		}
 		if runtime.shouldStopWith(newListeners[name]) {
-			runtime.stop(ctx, drainTimeout)
+			runtime.stop(ctx, tcpDrainTimeout)
 		}
+	}
+	udpDrainTimeout := effectiveUDPOptions(snapshotUDPOptions(&nextGraph)).DrainTimeout
+	for name, runtime := range oldUDPListeners {
+		if newUDPListeners[name] == runtime {
+			if _, ok := runtime.resolveUDPBackend(); !ok {
+				runtime.drainSessionsAfter(udpDrainTimeout)
+			}
+			continue
+		}
+		runtime.stop(ctx, udpDrainTimeout)
 	}
 	return nil
 }
@@ -92,16 +118,23 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	defer m.mu.Unlock()
 
 	listeners := m.listeners
+	udpListeners := m.udpListeners
 	m.listeners = map[string]*entryPointRuntime{}
+	m.udpListeners = map[string]*udpEntryPointRuntime{}
 	graph := m.snapshot.Load()
 	m.snapshot.Store(nil)
 
-	drainTimeout := defaultTCPOptions().DrainTimeout
+	tcpDrainTimeout := defaultTCPOptions().DrainTimeout
+	udpDrainTimeout := defaultUDPOptions().DrainTimeout
 	if graph != nil {
-		drainTimeout = effectiveTCPOptions(graph.Options.TCP).DrainTimeout
+		tcpDrainTimeout = effectiveTCPOptions(graph.Options.TCP).DrainTimeout
+		udpDrainTimeout = effectiveUDPOptions(graph.Options.UDP).DrainTimeout
 	}
 	for _, runtime := range listeners {
-		runtime.stop(ctx, drainTimeout)
+		runtime.stop(ctx, tcpDrainTimeout)
+	}
+	for _, runtime := range udpListeners {
+		runtime.stop(ctx, udpDrainTimeout)
 	}
 	return nil
 }
@@ -113,6 +146,10 @@ func (m *Manager) Status() domain.TrafficStatus {
 	for name, runtime := range m.listeners {
 		listeners[name] = runtime
 	}
+	udpListeners := make(map[string]*udpEntryPointRuntime, len(m.udpListeners))
+	for name, runtime := range m.udpListeners {
+		udpListeners[name] = runtime
+	}
 	status := domain.TrafficStatus{LastReloadStatus: m.lastReloadStatus, LastReloadError: m.lastReloadError}
 	graph := m.snapshot.Load()
 	m.mu.Unlock()
@@ -121,8 +158,8 @@ func (m *Manager) Status() domain.TrafficStatus {
 		return status
 	}
 
-	status.EntryPoints = entryPointStatuses(graph.EntryPoints, listeners)
-	status.Routers = routerStatuses(graph.Routers, listeners)
+	status.EntryPoints = entryPointStatuses(graph.EntryPoints, listeners, udpListeners)
+	status.Routers = routerStatuses(graph.Routers, listeners, udpListeners)
 	status.Services = serviceStatuses(graph.Services)
 	status.Counters = aggregateCounters(status.EntryPoints)
 	return status
@@ -178,7 +215,44 @@ func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.Entry
 	return runtime, nil
 }
 
-func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entryPointRuntime) []domain.EntryPointStatus {
+func (m *Manager) prepareUDPListeners(ctx context.Context, graph *domain.TrafficGraph) (map[string]*udpEntryPointRuntime, []*udpEntryPointRuntime, error) {
+	current := make(map[string]*udpEntryPointRuntime, len(m.udpListeners))
+	for name, runtime := range m.udpListeners {
+		current[name] = runtime
+	}
+
+	next := make(map[string]*udpEntryPointRuntime, len(current))
+	created := []*udpEntryPointRuntime{}
+	for _, entryPoint := range graph.EntryPoints {
+		if entryPoint.Protocol != domain.EntryPointProtocolUDP {
+			continue
+		}
+		if runtime := current[entryPoint.Name]; runtime != nil && runtime.matches(entryPoint) {
+			next[entryPoint.Name] = runtime
+			continue
+		}
+		runtime, err := m.bindUDPEntryPoint(ctx, entryPoint)
+		if err != nil {
+			for _, createdRuntime := range created {
+				createdRuntime.stop(ctx, effectiveUDPOptions(graph.Options.UDP).DrainTimeout)
+			}
+			return nil, nil, err
+		}
+		next[entryPoint.Name] = runtime
+		created = append(created, runtime)
+	}
+	return next, created, nil
+}
+
+func (m *Manager) bindUDPEntryPoint(ctx context.Context, entryPoint domain.EntryPoint) (*udpEntryPointRuntime, error) {
+	packetConn, err := (&net.ListenConfig{}).ListenPacket(ctx, "udp", entryPoint.Address)
+	if err != nil {
+		return nil, fmt.Errorf("bind udp entrypoint %q on %s: %w", entryPoint.Name, entryPoint.Address, err)
+	}
+	return newUDPEntryPointRuntime(m, entryPoint, packetConn), nil
+}
+
+func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entryPointRuntime, udpListeners map[string]*udpEntryPointRuntime) []domain.EntryPointStatus {
 	statuses := make([]domain.EntryPointStatus, 0, len(entries))
 	for _, entry := range entries {
 		status := domain.EntryPointStatus{Name: entry.Name, Address: entry.Address, Protocol: entry.Protocol}
@@ -192,19 +266,38 @@ func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entry
 			status.BytesIn = counters.BytesIn
 			status.BytesOut = counters.BytesOut
 		}
+		if runtime := udpListeners[entry.Name]; runtime != nil {
+			counters := runtime.counters.snapshot()
+			status.Active = !runtime.isClosed()
+			status.ActiveUDPSessions = counters.ActiveUDPSessions
+			status.TotalAccepted = counters.TotalAccepted
+			status.TotalRefused = counters.TotalRefused
+			status.TotalErrors = counters.TotalErrors
+			status.BytesIn = counters.BytesIn
+			status.BytesOut = counters.BytesOut
+		}
 		statuses = append(statuses, status)
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].Name < statuses[j].Name })
 	return statuses
 }
 
-func routerStatuses(routers []domain.TrafficRouter, listeners map[string]*entryPointRuntime) []domain.TrafficRouterStatus {
+func routerStatuses(routers []domain.TrafficRouter, listeners map[string]*entryPointRuntime, udpListeners map[string]*udpEntryPointRuntime) []domain.TrafficRouterStatus {
 	statuses := make([]domain.TrafficRouterStatus, 0, len(routers))
 	for _, router := range routers {
 		status := domain.TrafficRouterStatus{Name: router.Name, EntryPoint: router.EntryPoint, Protocol: router.Protocol, Active: true}
 		if runtime := listeners[router.EntryPoint]; runtime != nil {
 			counters := runtime.counters.snapshot()
 			status.ActiveTCPConnections = counters.ActiveTCPConnections
+			status.TotalAccepted = counters.TotalAccepted
+			status.TotalRefused = counters.TotalRefused
+			status.TotalErrors = counters.TotalErrors
+			status.BytesIn = counters.BytesIn
+			status.BytesOut = counters.BytesOut
+		}
+		if runtime := udpListeners[router.EntryPoint]; runtime != nil {
+			counters := runtime.counters.snapshot()
+			status.ActiveUDPSessions = counters.ActiveUDPSessions
 			status.TotalAccepted = counters.TotalAccepted
 			status.TotalRefused = counters.TotalRefused
 			status.TotalErrors = counters.TotalErrors
@@ -262,8 +355,16 @@ func snapshotTCPOptions(graph *domain.TrafficGraph) domain.TCPOptions {
 	return graph.Options.TCP
 }
 
+func snapshotUDPOptions(graph *domain.TrafficGraph) domain.UDPOptions {
+	if graph == nil {
+		return domain.UDPOptions{}
+	}
+	return graph.Options.UDP
+}
+
 type trafficCounters struct {
 	activeTCPConnections atomic.Int64
+	activeUDPSessions    atomic.Int64
 	totalAccepted        atomic.Int64
 	totalRefused         atomic.Int64
 	totalErrors          atomic.Int64
@@ -274,6 +375,7 @@ type trafficCounters struct {
 func (c *trafficCounters) snapshot() domain.TrafficCounters {
 	return domain.TrafficCounters{
 		ActiveTCPConnections: c.activeTCPConnections.Load(),
+		ActiveUDPSessions:    c.activeUDPSessions.Load(),
 		TotalAccepted:        c.totalAccepted.Load(),
 		TotalRefused:         c.totalRefused.Load(),
 		TotalErrors:          c.totalErrors.Load(),
@@ -295,6 +397,21 @@ func effectiveTCPOptions(options domain.TCPOptions) domain.TCPOptions {
 	if options.DialTimeout == 0 {
 		options.DialTimeout = defaults.DialTimeout
 	}
+	if options.IdleTimeout == 0 {
+		options.IdleTimeout = defaults.IdleTimeout
+	}
+	if options.DrainTimeout == 0 {
+		options.DrainTimeout = defaults.DrainTimeout
+	}
+	return options
+}
+
+func defaultUDPOptions() domain.UDPOptions {
+	return domain.UDPOptions{IdleTimeout: 30 * time.Second, DrainTimeout: 30 * time.Second}
+}
+
+func effectiveUDPOptions(options domain.UDPOptions) domain.UDPOptions {
+	defaults := defaultUDPOptions()
 	if options.IdleTimeout == 0 {
 		options.IdleTimeout = defaults.IdleTimeout
 	}
