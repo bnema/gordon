@@ -84,6 +84,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/publictls"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
+	"github.com/bnema/gordon/internal/usecase/traffic"
 	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
 
 	// Pkg
@@ -173,6 +174,10 @@ type Config struct {
 			TrustedProxies []string `mapstructure:"trusted_proxies"`
 		} `mapstructure:"rate_limit"`
 	} `mapstructure:"api"`
+
+	EntryPoints     map[string]traffic.EntryPointConfig `mapstructure:"entrypoints"`
+	Traffic         traffic.Config                      `mapstructure:"traffic"`
+	NetworkServices []traffic.NetworkServiceConfig      `mapstructure:"network_services"`
 
 	Backups struct {
 		// Legacy database backup keys. Prefer backups.databases.* for new configs.
