@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,13 +89,79 @@ func (r *entryPointRuntime) handleTCPConn(client net.Conn) {
 	}
 	defer r.releaseConnection()
 
-	router, backend, ok := r.resolveTCPBackend()
+	tracked := &trackedTCPConn{client: client}
+	r.track(tracked)
+	defer r.untrack(tracked)
+
+	switch r.entryPoint.Protocol {
+	case domain.EntryPointProtocolTCP:
+		r.handlePlainTCP(tracked, options)
+	case domain.EntryPointProtocolTLSMux:
+		r.handleTLSMux(tracked, options)
+	default:
+		r.counters.totalRefused.Add(1)
+		_ = tracked.client.Close()
+	}
+}
+
+func (r *entryPointRuntime) handlePlainTCP(tracked *trackedTCPConn, options domain.TCPOptions) {
+	_, backend, ok := r.resolveTCPBackend()
 	if !ok {
 		r.counters.totalRefused.Add(1)
-		_ = client.Close()
+		_ = tracked.client.Close()
 		return
 	}
+	r.proxyToBackend(tracked, tracked.client, backend, options)
+}
 
+func (r *entryPointRuntime) handleTLSMux(tracked *trackedTCPConn, options domain.TCPOptions) {
+	peeked, err := r.peekTLSClientHello(tracked.client, options)
+	if err != nil {
+		r.counters.totalErrors.Add(1)
+		_ = tracked.client.Close()
+		return
+	}
+	if backend, ok := r.resolveTLSBackend(peeked.sni); ok {
+		r.proxyToBackend(tracked, peeked.conn, backend, options)
+		return
+	}
+	if fallback := r.manager.tlsFallback(r.entryPoint.Name); fallback != nil {
+		r.counters.totalAccepted.Add(1)
+		fallback(r.ctx, peeked.conn)
+		return
+	}
+	r.counters.totalRefused.Add(1)
+	_ = peeked.conn.Close()
+}
+
+func (r *entryPointRuntime) peekTLSClientHello(client net.Conn, options domain.TCPOptions) (peekedTLSConn, error) {
+	if err := client.SetReadDeadline(time.Now().Add(clientHelloTimeout(options))); err != nil {
+		return peekedTLSConn{}, err
+	}
+	sni, replayed, err := peekClientHelloSNI(client)
+	if clearErr := client.SetReadDeadline(time.Time{}); err == nil && clearErr != nil {
+		return peekedTLSConn{}, clearErr
+	}
+	if err != nil {
+		return peekedTLSConn{}, err
+	}
+	return peekedTLSConn{sni: sni, conn: replayed}, nil
+}
+
+func clientHelloTimeout(options domain.TCPOptions) time.Duration {
+	const maxTimeout = 5 * time.Second
+	if options.DialTimeout > 0 && options.DialTimeout < maxTimeout {
+		return options.DialTimeout
+	}
+	return maxTimeout
+}
+
+type peekedTLSConn struct {
+	sni  string
+	conn net.Conn
+}
+
+func (r *entryPointRuntime) proxyToBackend(tracked *trackedTCPConn, client net.Conn, backend domain.TrafficBackend, options domain.TCPOptions) {
 	dialCtx, cancel := context.WithTimeout(r.ctx, options.DialTimeout)
 	defer cancel()
 	backendConn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)))
@@ -104,12 +171,8 @@ func (r *entryPointRuntime) handleTCPConn(client net.Conn) {
 		return
 	}
 
-	tracked := &trackedTCPConn{client: client, backend: backendConn}
-	r.track(tracked)
-	defer r.untrack(tracked)
-
+	tracked.backend = backendConn
 	r.counters.totalAccepted.Add(1)
-	_ = router
 	r.proxyTCP(client, backendConn, options.IdleTimeout)
 }
 
@@ -141,6 +204,56 @@ func (r *entryPointRuntime) resolveTCPBackend() (domain.TrafficRouter, domain.Tr
 		return router, backend, true
 	}
 	return domain.TrafficRouter{}, domain.TrafficBackend{}, false
+}
+
+func (r *entryPointRuntime) resolveTLSBackend(sni string) (domain.TrafficBackend, bool) {
+	graph := r.manager.snapshot.Load()
+	if graph == nil || sni == "" {
+		return domain.TrafficBackend{}, false
+	}
+	if router, ok := r.findExactTLSRouter(graph, sni); ok {
+		return r.backendForRouter(graph, router)
+	}
+	if router, ok := r.findWildcardTLSRouter(graph, sni); ok {
+		return r.backendForRouter(graph, router)
+	}
+	return domain.TrafficBackend{}, false
+}
+
+func (r *entryPointRuntime) findExactTLSRouter(graph *domain.TrafficGraph, sni string) (domain.TrafficRouter, bool) {
+	for _, router := range graph.Routers {
+		if router.EntryPoint == r.entryPoint.Name && router.Protocol == domain.RouterProtocolTLSPassthrough && normalizeTLSName(router.Rule.SNI) == sni {
+			return router, true
+		}
+	}
+	return domain.TrafficRouter{}, false
+}
+
+func (r *entryPointRuntime) findWildcardTLSRouter(graph *domain.TrafficGraph, sni string) (domain.TrafficRouter, bool) {
+	for _, router := range graph.Routers {
+		wildcard := normalizeTLSName(router.Rule.SNI)
+		if router.EntryPoint == r.entryPoint.Name && router.Protocol == domain.RouterProtocolTLSPassthrough && hostMatchesTLSWildcard(sni, wildcard) {
+			return router, true
+		}
+	}
+	return domain.TrafficRouter{}, false
+}
+
+func (r *entryPointRuntime) backendForRouter(graph *domain.TrafficGraph, router domain.TrafficRouter) (domain.TrafficBackend, bool) {
+	for _, service := range graph.Services {
+		if service.Name == router.Service && len(service.Backends) == 1 && service.Backends[0].Protocol == domain.NetworkProtocolTCP {
+			return service.Backends[0], true
+		}
+	}
+	return domain.TrafficBackend{}, false
+}
+
+func hostMatchesTLSWildcard(host string, wildcard string) bool {
+	suffix, ok := strings.CutPrefix(wildcard, "*.")
+	if !ok || host == suffix {
+		return false
+	}
+	return strings.HasSuffix(host, "."+suffix)
 }
 
 func (r *entryPointRuntime) proxyTCP(client net.Conn, backend net.Conn, idleTimeout time.Duration) {
@@ -286,7 +399,9 @@ func (r *entryPointRuntime) closeActiveConns() {
 	defer r.mu.Unlock()
 	for conn := range r.activeConns {
 		_ = conn.client.Close()
-		_ = conn.backend.Close()
+		if conn.backend != nil {
+			_ = conn.backend.Close()
+		}
 	}
 }
 

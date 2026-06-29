@@ -31,15 +31,18 @@ type Manager struct {
 
 	lastReloadStatus string
 	lastReloadError  string
+	tlsFallbacks     atomic.Value
 }
 
 // NewManager creates a traffic manager.
 func NewManager(log zerowrap.Logger) *Manager {
-	return &Manager{
+	manager := &Manager{
 		log:              log,
 		listeners:        map[string]*entryPointRuntime{},
 		lastReloadStatus: reloadStatusOK,
 	}
+	manager.tlsFallbacks.Store(tlsFallbacks{})
+	return manager
 }
 
 // Apply validates and applies a new traffic graph snapshot.
@@ -142,7 +145,7 @@ func (m *Manager) prepareTCPListeners(ctx context.Context, graph *domain.Traffic
 	next := make(map[string]*entryPointRuntime, len(current))
 	created := []*entryPointRuntime{}
 	for _, entryPoint := range graph.EntryPoints {
-		if entryPoint.Protocol != domain.EntryPointProtocolTCP {
+		if !isTCPListenerProtocol(entryPoint.Protocol) {
 			continue
 		}
 		if runtime := current[entryPoint.Name]; runtime != nil && runtime.matches(entryPoint) {
@@ -160,6 +163,10 @@ func (m *Manager) prepareTCPListeners(ctx context.Context, graph *domain.Traffic
 		created = append(created, runtime)
 	}
 	return next, created, nil
+}
+
+func isTCPListenerProtocol(protocol domain.EntryPointProtocol) bool {
+	return protocol == domain.EntryPointProtocolTCP || protocol == domain.EntryPointProtocolTLSMux
 }
 
 func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.EntryPoint) (*entryPointRuntime, error) {
