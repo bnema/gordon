@@ -109,7 +109,7 @@ type MockContainerLogWriter_StartLogging_Call struct {
 //   - containerID string
 //   - domain string
 //   - logStream io.ReadCloser
-func (_e *MockContainerLogWriter_Expecter) StartLogging(ctx interface{}, containerID interface{}, domain interface{}, logStream interface{}) *MockContainerLogWriter_StartLogging_Call {
+func (_e *MockContainerLogWriter_Expecter) StartLogging(ctx any, containerID any, domain any, logStream any) *MockContainerLogWriter_StartLogging_Call {
 	return &MockContainerLogWriter_StartLogging_Call{Call: _e.mock.On("StartLogging", ctx, containerID, domain, logStream)}
 }
 
@@ -175,7 +175,7 @@ type MockContainerLogWriter_StopLogging_Call struct {
 
 // StopLogging is a helper method to define mock.On call
 //   - containerID string
-func (_e *MockContainerLogWriter_Expecter) StopLogging(containerID interface{}) *MockContainerLogWriter_StopLogging_Call {
+func (_e *MockContainerLogWriter_Expecter) StopLogging(containerID any) *MockContainerLogWriter_StopLogging_Call {
 	return &MockContainerLogWriter_StopLogging_Call{Call: _e.mock.On("StopLogging", containerID)}
 }
 

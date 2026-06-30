@@ -62,7 +62,7 @@ type MockEventBus_Publish_Call struct {
 // Publish is a helper method to define mock.On call
 //   - eventType domain.EventType
 //   - payload any
-func (_e *MockEventBus_Expecter) Publish(eventType interface{}, payload interface{}) *MockEventBus_Publish_Call {
+func (_e *MockEventBus_Expecter) Publish(eventType any, payload any) *MockEventBus_Publish_Call {
 	return &MockEventBus_Publish_Call{Call: _e.mock.On("Publish", eventType, payload)}
 }
 
@@ -206,7 +206,7 @@ type MockEventBus_Subscribe_Call struct {
 
 // Subscribe is a helper method to define mock.On call
 //   - handler out.EventHandler
-func (_e *MockEventBus_Expecter) Subscribe(handler interface{}) *MockEventBus_Subscribe_Call {
+func (_e *MockEventBus_Expecter) Subscribe(handler any) *MockEventBus_Subscribe_Call {
 	return &MockEventBus_Subscribe_Call{Call: _e.mock.On("Subscribe", handler)}
 }
 
@@ -257,7 +257,7 @@ type MockEventBus_Unsubscribe_Call struct {
 
 // Unsubscribe is a helper method to define mock.On call
 //   - handler out.EventHandler
-func (_e *MockEventBus_Expecter) Unsubscribe(handler interface{}) *MockEventBus_Unsubscribe_Call {
+func (_e *MockEventBus_Expecter) Unsubscribe(handler any) *MockEventBus_Unsubscribe_Call {
 	return &MockEventBus_Unsubscribe_Call{Call: _e.mock.On("Unsubscribe", handler)}
 }
 

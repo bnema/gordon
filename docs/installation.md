@@ -115,7 +115,7 @@ EOF
 
 ## Firewall Configuration
 
-Gordon needs ports accessible for the registry and proxy.
+Gordon needs ports accessible for the registry and the public edge entrypoint.
 
 ### Using firewalld
 
@@ -128,9 +128,10 @@ sudo systemctl enable --now firewalld
 sudo firewall-cmd --permanent --add-service=http
 sudo firewall-cmd --permanent --add-service=https
 
-# For rootless containers, redirect privileged ports
-sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
-sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=8443
+# For rootless services, bind entrypoints.edge.address to a high port (for example :9000)
+# and redirect the external TCP edge ports your deployment uses.
+sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=9000
+sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=9000
 
 # Apply changes
 sudo firewall-cmd --reload
@@ -165,9 +166,12 @@ Minimum required configuration:
 
 ```toml
 [server]
-port = 8088
 registry_port = 5000
 gordon_domain = "gordon.yourdomain.com"
+
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
 
 [routes]
 "app.yourdomain.com" = "myapp:latest"
@@ -249,22 +253,22 @@ Point your domains to your server:
 
 ## Cloudflare SSL Mode
 
-Gordon serves HTTP on `server.port` and HTTPS on `server.tls_port` by default. Choose the Cloudflare mode that matches how you want Cloudflare to reach your origin.
+Gordon serves public application traffic through HTTP-capable entrypoints such as `entrypoints.edge` with `protocol = "smart_tcp"`. Choose the Cloudflare mode that matches how you want Cloudflare to reach your origin.
 
 | Mode | How it works | Use when |
 |------|-------------|----------|
-| **Flexible** | Cloudflare terminates TLS; connects to Gordon on HTTP | You want edge HTTPS only, or you set `tls_port = 0` |
+| **Flexible** | Cloudflare terminates TLS; connects to Gordon with cleartext HTTP | You want edge HTTPS only |
 | **Full (Strict)** | Cloudflare connects to Gordon over HTTPS with a valid cert | You want end-to-end HTTPS using Gordon's public ACME certs or a static cert (`tls_cert_file` / `tls_key_file`) |
 
 Wrong mode causes: **521** (Cloudflare can't connect) or **525** (TLS handshake failed).
 
-> **Important:** When `tls_port != 0`, you must also set `proxy_allowed_ips` with Cloudflare edge IPs — see [Proxy Origin Allowlist](#proxy-origin-allowlist) below.
-
-> **Rootless note:** Unprivileged users can't bind port 80. Forward port 80→8088 (or your configured port) via firewall — see the firewall section above.
+> **Important:** For Cloudflare-proxied HTTP paths, set `proxy_allowed_ips` with Cloudflare edge IPs — see [Proxy Origin Allowlist](#proxy-origin-allowlist) below.
+>
+> **Rootless note:** Unprivileged users can't bind privileged ports. Bind `entrypoints.edge.address` to a high port (for example `:9000`) and forward/map external ports to it via firewall or container settings.
 
 ## Proxy Origin Allowlist
 
-When Gordon's internal CA is enabled (default: `tls_port = 8443`), HTTP requests from non-localhost IPs are restricted to certificate onboarding paths only. Cloudflare and other reverse proxies must be listed in `proxy_allowed_ips` to reach your applications.
+When Gordon serves HTTP paths through a smart TCP edge, direct non-localhost HTTP requests can be restricted to certificate onboarding paths. Cloudflare and other reverse proxies must be listed in `proxy_allowed_ips` to reach your applications.
 
 Add Cloudflare edge IPs to your `gordon.toml`:
 

@@ -75,7 +75,7 @@ type MockProxyService_GetTarget_Call struct {
 // GetTarget is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain1 string
-func (_e *MockProxyService_Expecter) GetTarget(ctx interface{}, domain1 interface{}) *MockProxyService_GetTarget_Call {
+func (_e *MockProxyService_Expecter) GetTarget(ctx any, domain1 any) *MockProxyService_GetTarget_Call {
 	return &MockProxyService_GetTarget_Call{Call: _e.mock.On("GetTarget", ctx, domain1)}
 }
 
@@ -132,7 +132,7 @@ type MockProxyService_IsKnownHost_Call struct {
 // IsKnownHost is a helper method to define mock.On call
 //   - ctx context.Context
 //   - host string
-func (_e *MockProxyService_Expecter) IsKnownHost(ctx interface{}, host interface{}) *MockProxyService_IsKnownHost_Call {
+func (_e *MockProxyService_Expecter) IsKnownHost(ctx any, host any) *MockProxyService_IsKnownHost_Call {
 	return &MockProxyService_IsKnownHost_Call{Call: _e.mock.On("IsKnownHost", ctx, host)}
 }
 
@@ -188,7 +188,7 @@ type MockProxyService_IsRegistryDomain_Call struct {
 
 // IsRegistryDomain is a helper method to define mock.On call
 //   - host string
-func (_e *MockProxyService_Expecter) IsRegistryDomain(host interface{}) *MockProxyService_IsRegistryDomain_Call {
+func (_e *MockProxyService_Expecter) IsRegistryDomain(host any) *MockProxyService_IsRegistryDomain_Call {
 	return &MockProxyService_IsRegistryDomain_Call{Call: _e.mock.On("IsRegistryDomain", host)}
 }
 
@@ -283,7 +283,7 @@ type MockProxyService_RefreshTargets_Call struct {
 
 // RefreshTargets is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockProxyService_Expecter) RefreshTargets(ctx interface{}) *MockProxyService_RefreshTargets_Call {
+func (_e *MockProxyService_Expecter) RefreshTargets(ctx any) *MockProxyService_RefreshTargets_Call {
 	return &MockProxyService_RefreshTargets_Call{Call: _e.mock.On("RefreshTargets", ctx)}
 }
 
@@ -336,7 +336,7 @@ type MockProxyService_RegisterTarget_Call struct {
 //   - ctx context.Context
 //   - domain1 string
 //   - target *domain.ProxyTarget
-func (_e *MockProxyService_Expecter) RegisterTarget(ctx interface{}, domain1 interface{}, target interface{}) *MockProxyService_RegisterTarget_Call {
+func (_e *MockProxyService_Expecter) RegisterTarget(ctx any, domain1 any, target any) *MockProxyService_RegisterTarget_Call {
 	return &MockProxyService_RegisterTarget_Call{Call: _e.mock.On("RegisterTarget", ctx, domain1, target)}
 }
 
@@ -432,7 +432,7 @@ type MockProxyService_TrackInFlight_Call struct {
 
 // TrackInFlight is a helper method to define mock.On call
 //   - containerID string
-func (_e *MockProxyService_Expecter) TrackInFlight(containerID interface{}) *MockProxyService_TrackInFlight_Call {
+func (_e *MockProxyService_Expecter) TrackInFlight(containerID any) *MockProxyService_TrackInFlight_Call {
 	return &MockProxyService_TrackInFlight_Call{Call: _e.mock.On("TrackInFlight", containerID)}
 }
 
@@ -517,7 +517,7 @@ type MockProxyService_UnregisterTarget_Call struct {
 // UnregisterTarget is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain1 string
-func (_e *MockProxyService_Expecter) UnregisterTarget(ctx interface{}, domain1 interface{}) *MockProxyService_UnregisterTarget_Call {
+func (_e *MockProxyService_Expecter) UnregisterTarget(ctx any, domain1 any) *MockProxyService_UnregisterTarget_Call {
 	return &MockProxyService_UnregisterTarget_Call{Call: _e.mock.On("UnregisterTarget", ctx, domain1)}
 }
 

@@ -63,7 +63,7 @@ type MockContainerService_AutoStart_Call struct {
 // AutoStart is a helper method to define mock.On call
 //   - ctx context.Context
 //   - routes []domain.Route
-func (_e *MockContainerService_Expecter) AutoStart(ctx interface{}, routes interface{}) *MockContainerService_AutoStart_Call {
+func (_e *MockContainerService_Expecter) AutoStart(ctx any, routes any) *MockContainerService_AutoStart_Call {
 	return &MockContainerService_AutoStart_Call{Call: _e.mock.On("AutoStart", ctx, routes)}
 }
 
@@ -132,7 +132,7 @@ type MockContainerService_CleanupOrphanedAttachments_Call struct {
 //   - ctx context.Context
 //   - owner string
 //   - stop bool
-func (_e *MockContainerService_Expecter) CleanupOrphanedAttachments(ctx interface{}, owner interface{}, stop interface{}) *MockContainerService_CleanupOrphanedAttachments_Call {
+func (_e *MockContainerService_Expecter) CleanupOrphanedAttachments(ctx any, owner any, stop any) *MockContainerService_CleanupOrphanedAttachments_Call {
 	return &MockContainerService_CleanupOrphanedAttachments_Call{Call: _e.mock.On("CleanupOrphanedAttachments", ctx, owner, stop)}
 }
 
@@ -205,7 +205,7 @@ type MockContainerService_Deploy_Call struct {
 // Deploy is a helper method to define mock.On call
 //   - ctx context.Context
 //   - route domain.Route
-func (_e *MockContainerService_Expecter) Deploy(ctx interface{}, route interface{}) *MockContainerService_Deploy_Call {
+func (_e *MockContainerService_Expecter) Deploy(ctx any, route any) *MockContainerService_Deploy_Call {
 	return &MockContainerService_Deploy_Call{Call: _e.mock.On("Deploy", ctx, route)}
 }
 
@@ -273,7 +273,7 @@ type MockContainerService_Get_Call struct {
 // Get is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain1 string
-func (_e *MockContainerService_Expecter) Get(ctx interface{}, domain1 interface{}) *MockContainerService_Get_Call {
+func (_e *MockContainerService_Expecter) Get(ctx any, domain1 any) *MockContainerService_Get_Call {
 	return &MockContainerService_Get_Call{Call: _e.mock.On("Get", ctx, domain1)}
 }
 
@@ -331,7 +331,7 @@ type MockContainerService_HealthCheck_Call struct {
 
 // HealthCheck is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerService_Expecter) HealthCheck(ctx interface{}) *MockContainerService_HealthCheck_Call {
+func (_e *MockContainerService_Expecter) HealthCheck(ctx any) *MockContainerService_HealthCheck_Call {
 	return &MockContainerService_HealthCheck_Call{Call: _e.mock.On("HealthCheck", ctx)}
 }
 
@@ -384,7 +384,7 @@ type MockContainerService_List_Call struct {
 
 // List is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerService_Expecter) List(ctx interface{}) *MockContainerService_List_Call {
+func (_e *MockContainerService_Expecter) List(ctx any) *MockContainerService_List_Call {
 	return &MockContainerService_List_Call{Call: _e.mock.On("List", ctx)}
 }
 
@@ -438,7 +438,7 @@ type MockContainerService_ListAttachments_Call struct {
 // ListAttachments is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain1 string
-func (_e *MockContainerService_Expecter) ListAttachments(ctx interface{}, domain1 interface{}) *MockContainerService_ListAttachments_Call {
+func (_e *MockContainerService_Expecter) ListAttachments(ctx any, domain1 any) *MockContainerService_ListAttachments_Call {
 	return &MockContainerService_ListAttachments_Call{Call: _e.mock.On("ListAttachments", ctx, domain1)}
 }
 
@@ -505,7 +505,7 @@ type MockContainerService_ListNetworks_Call struct {
 
 // ListNetworks is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerService_Expecter) ListNetworks(ctx interface{}) *MockContainerService_ListNetworks_Call {
+func (_e *MockContainerService_Expecter) ListNetworks(ctx any) *MockContainerService_ListNetworks_Call {
 	return &MockContainerService_ListNetworks_Call{Call: _e.mock.On("ListNetworks", ctx)}
 }
 
@@ -567,7 +567,7 @@ type MockContainerService_ListOrphanedAttachments_Call struct {
 
 // ListOrphanedAttachments is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerService_Expecter) ListOrphanedAttachments(ctx interface{}) *MockContainerService_ListOrphanedAttachments_Call {
+func (_e *MockContainerService_Expecter) ListOrphanedAttachments(ctx any) *MockContainerService_ListOrphanedAttachments_Call {
 	return &MockContainerService_ListOrphanedAttachments_Call{Call: _e.mock.On("ListOrphanedAttachments", ctx)}
 }
 
@@ -620,7 +620,7 @@ type MockContainerService_ListRoutesWithDetails_Call struct {
 
 // ListRoutesWithDetails is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerService_Expecter) ListRoutesWithDetails(ctx interface{}) *MockContainerService_ListRoutesWithDetails_Call {
+func (_e *MockContainerService_Expecter) ListRoutesWithDetails(ctx any) *MockContainerService_ListRoutesWithDetails_Call {
 	return &MockContainerService_ListRoutesWithDetails_Call{Call: _e.mock.On("ListRoutesWithDetails", ctx)}
 }
 
@@ -683,7 +683,7 @@ type MockContainerService_ReconcileRemovedRoute_Call struct {
 // ReconcileRemovedRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain1 string
-func (_e *MockContainerService_Expecter) ReconcileRemovedRoute(ctx interface{}, domain1 interface{}) *MockContainerService_ReconcileRemovedRoute_Call {
+func (_e *MockContainerService_Expecter) ReconcileRemovedRoute(ctx any, domain1 any) *MockContainerService_ReconcileRemovedRoute_Call {
 	return &MockContainerService_ReconcileRemovedRoute_Call{Call: _e.mock.On("ReconcileRemovedRoute", ctx, domain1)}
 }
 
@@ -741,7 +741,7 @@ type MockContainerService_Remove_Call struct {
 //   - ctx context.Context
 //   - containerID string
 //   - force bool
-func (_e *MockContainerService_Expecter) Remove(ctx interface{}, containerID interface{}, force interface{}) *MockContainerService_Remove_Call {
+func (_e *MockContainerService_Expecter) Remove(ctx any, containerID any, force any) *MockContainerService_Remove_Call {
 	return &MockContainerService_Remove_Call{Call: _e.mock.On("Remove", ctx, containerID, force)}
 }
 
@@ -804,7 +804,7 @@ type MockContainerService_Restart_Call struct {
 //   - ctx context.Context
 //   - domain1 string
 //   - withAttachments bool
-func (_e *MockContainerService_Expecter) Restart(ctx interface{}, domain1 interface{}, withAttachments interface{}) *MockContainerService_Restart_Call {
+func (_e *MockContainerService_Expecter) Restart(ctx any, domain1 any, withAttachments any) *MockContainerService_Restart_Call {
 	return &MockContainerService_Restart_Call{Call: _e.mock.On("Restart", ctx, domain1, withAttachments)}
 }
 
@@ -865,7 +865,7 @@ type MockContainerService_Shutdown_Call struct {
 
 // Shutdown is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerService_Expecter) Shutdown(ctx interface{}) *MockContainerService_Shutdown_Call {
+func (_e *MockContainerService_Expecter) Shutdown(ctx any) *MockContainerService_Shutdown_Call {
 	return &MockContainerService_Shutdown_Call{Call: _e.mock.On("Shutdown", ctx)}
 }
 
@@ -917,7 +917,7 @@ type MockContainerService_Stop_Call struct {
 // Stop is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerService_Expecter) Stop(ctx interface{}, containerID interface{}) *MockContainerService_Stop_Call {
+func (_e *MockContainerService_Expecter) Stop(ctx any, containerID any) *MockContainerService_Stop_Call {
 	return &MockContainerService_Stop_Call{Call: _e.mock.On("Stop", ctx, containerID)}
 }
 
@@ -973,7 +973,7 @@ type MockContainerService_SyncContainers_Call struct {
 
 // SyncContainers is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerService_Expecter) SyncContainers(ctx interface{}) *MockContainerService_SyncContainers_Call {
+func (_e *MockContainerService_Expecter) SyncContainers(ctx any) *MockContainerService_SyncContainers_Call {
 	return &MockContainerService_SyncContainers_Call{Call: _e.mock.On("SyncContainers", ctx)}
 }
 
@@ -1013,7 +1013,7 @@ type MockContainerService_UpdateAttachments_Call struct {
 
 // UpdateAttachments is a helper method to define mock.On call
 //   - attachments map[string][]string
-func (_e *MockContainerService_Expecter) UpdateAttachments(attachments interface{}) *MockContainerService_UpdateAttachments_Call {
+func (_e *MockContainerService_Expecter) UpdateAttachments(attachments any) *MockContainerService_UpdateAttachments_Call {
 	return &MockContainerService_UpdateAttachments_Call{Call: _e.mock.On("UpdateAttachments", attachments)}
 }
 

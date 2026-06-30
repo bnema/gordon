@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -19,9 +20,162 @@ import (
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	config "github.com/bnema/gordon/internal/usecase/config"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
+	"github.com/bnema/gordon/internal/usecase/publictls"
+	traffic "github.com/bnema/gordon/internal/usecase/traffic"
 	"github.com/bnema/zerowrap"
 )
+
+func TestPublicTLSReadinessAllowsDNS01WithoutEdgePort(t *testing.T) {
+	cfg := Config{}
+	cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeCloudflareDNS01)
+
+	require.NoError(t, validatePublicTLSReadiness(cfg))
+	assert.Equal(t, 0, effectivePublicTLSPort(cfg))
+}
+
+func TestPublicTLSReadinessRejectsAutoResolvedHTTP01WithoutBoundExternalPort80(t *testing.T) {
+	cfg := Config{}
+	cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeAuto)
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
+	effective := publictls.EffectiveChallenge{
+		ConfiguredMode: domain.ACMEChallengeAuto,
+		Mode:           domain.ACMEChallengeHTTP01,
+		TokenSource:    domain.ACMETokenSourceNone,
+		Reason:         "auto selected http-01 (no cloudflare token)",
+	}
+
+	err := validateEffectivePublicTLSReadiness(cfg, effective)
+	require.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
+}
+
+func TestEffectivePublicTLSPortPrefersTLSCapableEntrypointOverLegacyTLSPort(t *testing.T) {
+	cfg := Config{}
+	cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeCloudflareDNS01)
+	cfg.Server.TLSPort = 8443
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
+
+	assert.Equal(t, 443, effectivePublicTLSPort(cfg))
+}
+
+func TestEffectivePublicTLSPortPrefersDefaultEdgeWithMultipleTLSCapableEntrypoints(t *testing.T) {
+	cfg := Config{}
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+		"public":                          {Address: ":8443", Protocol: domain.EntryPointProtocolTLSMux},
+	}
+
+	for range 20 {
+		assert.Equal(t, 443, effectivePublicTLSPort(cfg))
+	}
+}
+
+func TestEffectivePublicTLSPortUsesSoleNonEdgeTLSCapableEntrypoint(t *testing.T) {
+	cfg := Config{}
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"public": {Address: ":8443", Protocol: domain.EntryPointProtocolTLSMux},
+		"ssh":    {Address: ":22", Protocol: domain.EntryPointProtocolTCP},
+	}
+
+	assert.Equal(t, 8443, effectivePublicTLSPort(cfg))
+}
+
+func TestEffectiveProxyPortsIgnoreLegacyServerPortsWithoutEntrypoints(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.Port = 8080
+	cfg.Server.TLSPort = 8443
+
+	assert.Equal(t, 0, effectiveProxyHTTPPort(cfg))
+	assert.Equal(t, 0, effectiveProxyTLSPort(cfg))
+}
+
+func TestEffectivePublicTLSPortReturnsZeroWhenAmbiguousWithoutEdge(t *testing.T) {
+	cfg := Config{}
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"public-a": {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+		"public-b": {Address: ":8443", Protocol: domain.EntryPointProtocolTLSMux},
+	}
+
+	for range 20 {
+		assert.Equal(t, 0, effectivePublicTLSPort(cfg))
+	}
+}
+
+func TestPublicTLSReadinessRequiresHTTP01ActuallyBoundExternalPort80(t *testing.T) {
+	t.Run("rejects http entrypoint when smart tcp suppresses standalone http", func(t *testing.T) {
+		cfg := Config{}
+		cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeHTTP01)
+		cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+			traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+			"web":                             {Address: ":80", Protocol: domain.EntryPointProtocolHTTP},
+		}
+
+		err := validatePublicTLSReadiness(cfg)
+		require.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
+	})
+
+	t.Run("allows smart tcp entrypoint on port 80", func(t *testing.T) {
+		cfg := Config{}
+		cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeHTTP01)
+		cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+			traffic.DefaultEdgeEntryPointName: {Address: ":80", Protocol: domain.EntryPointProtocolSmartTCP},
+		}
+
+		require.NoError(t, validatePublicTLSReadiness(cfg))
+		assert.Equal(t, 80, effectiveHTTP01Port(cfg))
+	})
+
+	t.Run("rejects legacy standalone http port 80 without explicit entrypoint", func(t *testing.T) {
+		cfg := Config{}
+		cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeHTTP01)
+		cfg.Server.Port = 80
+
+		err := validatePublicTLSReadiness(cfg)
+		require.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
+		assert.Equal(t, 0, effectiveHTTP01Port(cfg))
+	})
+
+	t.Run("rejects legacy port 80 when smart tcp suppresses standalone http", func(t *testing.T) {
+		cfg := Config{}
+		cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeHTTP01)
+		cfg.Server.Port = 80
+		cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+			traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+		}
+
+		err := validatePublicTLSReadiness(cfg)
+		require.ErrorIs(t, err, domain.ErrACMEChallengeInvalid)
+	})
+}
+
+func TestPKIInitializesForSmartTCPEvenWithoutLegacyTLSPort(t *testing.T) {
+	si := &serviceInit{
+		ctx: context.Background(),
+		log: zerowrap.Default(),
+		svc: &services{configSvc: cfgServiceForPKITest(t)},
+	}
+	si.cfg.Server.DataDir = t.TempDir()
+	si.cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
+
+	require.NoError(t, si.initPKI())
+	require.NotNil(t, si.svc.pkiSvc)
+	si.svc.pkiSvc.Stop()
+}
+
+func cfgServiceForPKITest(t *testing.T) *config.Service {
+	t.Helper()
+	v := viper.New()
+	svc := config.NewService(v, nil)
+	require.NoError(t, svc.Load(context.Background()))
+	return svc
+}
 
 // generateTestCert creates a self-signed certificate for the given hostnames.
 func generateTestCert(t *testing.T, hosts ...string) tls.Certificate {

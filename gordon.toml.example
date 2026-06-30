@@ -2,8 +2,6 @@
 # Copy this file to ~/.config/gordon/gordon.toml and adjust for your domain.
 
 [server]
-port = 8088
-tls_port = 8443
 registry_port = 5000
 gordon_domain = "gordon.example.com"
 # legacy_registry_domains = ["registry.example.com:5000"]
@@ -19,6 +17,16 @@ gordon_domain = "gordon.example.com"
 # max_proxy_body_size = "512MB"
 # max_proxy_response_size = "1GB"
 # max_concurrent_connections = 10000
+
+# "edge" is the conventional route-capable entrypoint name, but a single
+# custom smart_tcp or tls_mux entrypoint can also serve normal Gordon routes.
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
+# trusted_cidrs = []
+# raw_fallback = "ssh-fallback"
+# raw_fallback_trusted_cidrs = ["100.64.0.0/10"]
+# allow_public_raw_fallback = false
 
 [dns]
 resolvers = ["1.1.1.1:53", "8.8.8.8:53"]
@@ -165,6 +173,46 @@ keep = 14
 
 [external_routes]
 # "status.example.com" = "127.0.0.1:9000"
+
+# Gordon-managed standalone L4 services. Use service:<name>:<port> from
+# traffic routers to expose published loopback ports.
+# [[services]]
+# name = "rust"
+# image = "registry.example.com:5000/rust:latest"
+# enabled = true
+# env_file = "/srv/gordon/services/rust.env"
+#
+# [[services.ports]]
+# name = "game"
+# container = 28015
+# protocol = "udp"
+# publish = "127.0.0.1:38015"
+#
+# [[services.ports]]
+# name = "rcon"
+# container = 28016
+# protocol = "tcp"
+# publish = "127.0.0.1:38016"
+# trusted_cidrs = ["100.64.0.0/10"]
+#
+# [entrypoints.rust]
+# address = "0.0.0.0:28015"
+# protocol = "udp"
+#
+# [[traffic.udp.routers]]
+# name = "rust-game"
+# entrypoint = "rust"
+# service = "service:rust:game"
+#
+# [entrypoints.rcon]
+# address = "0.0.0.0:28016"
+# protocol = "tcp"
+# trusted_cidrs = ["100.64.0.0/10"]
+#
+# [[traffic.tcp.routers]]
+# name = "rust-rcon"
+# entrypoint = "rcon"
+# service = "service:rust:rcon"
 
 [network_groups]
 # "backend" = ["app.example.com", "api.example.com"]

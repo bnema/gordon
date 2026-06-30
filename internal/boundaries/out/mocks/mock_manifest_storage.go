@@ -62,7 +62,7 @@ type MockManifestStorage_DeleteManifest_Call struct {
 // DeleteManifest is a helper method to define mock.On call
 //   - name string
 //   - reference string
-func (_e *MockManifestStorage_Expecter) DeleteManifest(name interface{}, reference interface{}) *MockManifestStorage_DeleteManifest_Call {
+func (_e *MockManifestStorage_Expecter) DeleteManifest(name any, reference any) *MockManifestStorage_DeleteManifest_Call {
 	return &MockManifestStorage_DeleteManifest_Call{Call: _e.mock.On("DeleteManifest", name, reference)}
 }
 
@@ -136,7 +136,7 @@ type MockManifestStorage_GetManifest_Call struct {
 // GetManifest is a helper method to define mock.On call
 //   - name string
 //   - reference string
-func (_e *MockManifestStorage_Expecter) GetManifest(name interface{}, reference interface{}) *MockManifestStorage_GetManifest_Call {
+func (_e *MockManifestStorage_Expecter) GetManifest(name any, reference any) *MockManifestStorage_GetManifest_Call {
 	return &MockManifestStorage_GetManifest_Call{Call: _e.mock.On("GetManifest", name, reference)}
 }
 
@@ -202,7 +202,7 @@ type MockManifestStorage_GetManifestModTime_Call struct {
 // GetManifestModTime is a helper method to define mock.On call
 //   - name string
 //   - reference string
-func (_e *MockManifestStorage_Expecter) GetManifestModTime(name interface{}, reference interface{}) *MockManifestStorage_GetManifestModTime_Call {
+func (_e *MockManifestStorage_Expecter) GetManifestModTime(name any, reference any) *MockManifestStorage_GetManifestModTime_Call {
 	return &MockManifestStorage_GetManifestModTime_Call{Call: _e.mock.On("GetManifestModTime", name, reference)}
 }
 
@@ -324,7 +324,7 @@ type MockManifestStorage_ListTags_Call struct {
 
 // ListTags is a helper method to define mock.On call
 //   - name string
-func (_e *MockManifestStorage_Expecter) ListTags(name interface{}) *MockManifestStorage_ListTags_Call {
+func (_e *MockManifestStorage_Expecter) ListTags(name any) *MockManifestStorage_ListTags_Call {
 	return &MockManifestStorage_ListTags_Call{Call: _e.mock.On("ListTags", name)}
 }
 
@@ -378,7 +378,7 @@ type MockManifestStorage_PutManifest_Call struct {
 //   - reference string
 //   - contentType string
 //   - data []byte
-func (_e *MockManifestStorage_Expecter) PutManifest(name interface{}, reference interface{}, contentType interface{}, data interface{}) *MockManifestStorage_PutManifest_Call {
+func (_e *MockManifestStorage_Expecter) PutManifest(name any, reference any, contentType any, data any) *MockManifestStorage_PutManifest_Call {
 	return &MockManifestStorage_PutManifest_Call{Call: _e.mock.On("PutManifest", name, reference, contentType, data)}
 }
 

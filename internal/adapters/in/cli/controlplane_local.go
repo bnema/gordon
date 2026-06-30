@@ -445,6 +445,10 @@ func (l *localControlPlane) GetTLSStatus(ctx context.Context) (*dto.TLSStatusRes
 	return &result, nil
 }
 
+func (l *localControlPlane) GetTrafficStatus(_ context.Context) (*dto.TrafficStatusResponse, error) {
+	return nil, fmt.Errorf("local traffic status is unavailable from the in-process CLI control plane; query the running Gordon daemon with --remote or set GORDON_REMOTE to its admin URL: %w", domain.ErrTrafficStatusUnavailable)
+}
+
 func (l *localControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {
 	if l.configSvc == nil {
 		return nil, fmt.Errorf("local config service unavailable")

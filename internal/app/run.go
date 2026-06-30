@@ -57,6 +57,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/http/onboarding"
 	proxyadapter "github.com/bnema/gordon/internal/adapters/in/http/proxy"
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
+	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
 
 	// Boundaries
 	"github.com/bnema/gordon/internal/boundaries/in"
@@ -84,6 +85,8 @@ import (
 	"github.com/bnema/gordon/internal/usecase/publictls"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
+	servicecfg "github.com/bnema/gordon/internal/usecase/services"
+	"github.com/bnema/gordon/internal/usecase/traffic"
 	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
 
 	// Pkg
@@ -174,6 +177,11 @@ type Config struct {
 		} `mapstructure:"rate_limit"`
 	} `mapstructure:"api"`
 
+	EntryPoints     map[string]traffic.EntryPointConfig `mapstructure:"entrypoints"`
+	Traffic         traffic.Config                      `mapstructure:"traffic"`
+	NetworkServices []traffic.NetworkServiceConfig      `mapstructure:"network_services"`
+	Services        []servicecfg.Config                 `mapstructure:"services"`
+
 	Backups struct {
 		// Legacy database backup keys. Prefer backups.databases.* for new configs.
 		Enabled    bool   `mapstructure:"enabled"`
@@ -255,43 +263,50 @@ type Config struct {
 
 // services holds all the services used by the application.
 type services struct {
-	runtime           *docker.Runtime
-	eventBus          *eventbus.InMemory
-	blobStorage       *filesystem.BlobStorage
-	manifestStorage   *filesystem.ManifestStorage
-	backupStorage     *filesystem.BackupStorage
-	volumeBackupStore out.VolumeBackupStorage
-	volumeBackupCfg   domain.VolumeBackupConfig
-	envLoader         out.EnvLoader
-	logWriter         *logwriter.LogWriter
-	tokenStore        out.TokenStore
-	configSvc         *config.Service
-	secretSvc         *secretsSvc.Service
-	containerSvc      *container.Service
-	backupSvc         *backup.Service
-	volumeBackupSvc   *backup.VolumeService
-	registrySvc       *registrySvc.Service
-	healthSvc         *health.Service
-	logSvc            *logs.Service
-	imageSvc          *images.Service
-	volumeSvc         *volumesSvc.Service
-	proxySvc          *proxy.Service
-	authSvc           *auth.Service
-	authHandler       *authhandler.Handler
-	adminHandler      *admin.Handler
-	internalRegUser   string
-	internalRegPass   string
-	previewStore      *filesystem.PreviewStore
-	previewService    *preview.Service
-	envDir            string
-	maxBlobChunkSize  int64
-	maxBlobSize       int64
-	caAdapter         *pkiadapter.CA
-	pkiSvc            *pkiusecase.Service
-	reloadCoordinator *reloadCoordinator
-	publicTLSSvc      in.PublicTLSService
-	publicTLSRuntime  publicTLSRuntime
-	registryHandler   interface {
+	runtime               *docker.Runtime
+	eventBus              *eventbus.InMemory
+	blobStorage           *filesystem.BlobStorage
+	manifestStorage       *filesystem.ManifestStorage
+	backupStorage         *filesystem.BackupStorage
+	volumeBackupStore     out.VolumeBackupStorage
+	volumeBackupCfg       domain.VolumeBackupConfig
+	envLoader             out.EnvLoader
+	logWriter             *logwriter.LogWriter
+	tokenStore            out.TokenStore
+	configSvc             *config.Service
+	secretSvc             *secretsSvc.Service
+	containerSvc          *container.Service
+	backupSvc             *backup.Service
+	volumeBackupSvc       *backup.VolumeService
+	registrySvc           *registrySvc.Service
+	healthSvc             *health.Service
+	logSvc                *logs.Service
+	imageSvc              *images.Service
+	volumeSvc             *volumesSvc.Service
+	proxySvc              *proxy.Service
+	standaloneServiceSvc  in.StandaloneServiceService
+	serviceSecretProvider out.SecretProvider
+	authSvc               *auth.Service
+	authHandler           *authhandler.Handler
+	adminHandler          *admin.Handler
+	httpProxyHandler      http.Handler
+	httpsProxyHandler     http.Handler
+	internalRegUser       string
+	internalRegPass       string
+	previewStore          *filesystem.PreviewStore
+	previewService        *preview.Service
+	envDir                string
+	maxBlobChunkSize      int64
+	maxBlobSize           int64
+	caAdapter             *pkiadapter.CA
+	pkiSvc                *pkiusecase.Service
+	reloadCoordinator     *reloadCoordinator
+	publicTLSSvc          in.PublicTLSService
+	publicTLSRuntime      publicTLSRuntime
+	trafficManager        *trafficadapter.Manager
+	tlsHTTPEntryPoints    map[string]struct{}
+	smartHTTPEntryPoints  map[string]struct{}
+	registryHandler       interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
 }
@@ -553,7 +568,7 @@ func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, 
 		return nil, err
 	}
 
-	if err := si.initRuntimeAndProxy(); err != nil {
+	if err := si.initRuntimeProxyAndTraffic(); err != nil {
 		return nil, err
 	}
 
@@ -567,8 +582,8 @@ func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, 
 
 // initPKI initialises the internal CA and PKI service when TLS is enabled.
 func (si *serviceInit) initPKI() error {
-	if si.cfg.Server.TLSPort == 0 {
-		si.log.Info().Msg("internal CA disabled (server.tls_port=0)")
+	if !hasTLSCapableEntrypoint(si.cfg) {
+		si.log.Info().Msg("internal CA disabled (no TLS-capable entrypoint configured)")
 		return nil
 	}
 
@@ -591,8 +606,8 @@ func (si *serviceInit) initPublicTLS() error {
 		return nil
 	}
 
-	if si.cfg.Server.TLSPort == 0 {
-		return fmt.Errorf("%w: tls.acme.enabled requires server.tls_port > 0", domain.ErrACMEChallengeInvalid)
+	if err := validatePublicTLSReadiness(si.cfg); err != nil {
+		return err
 	}
 
 	ctx := si.ctx
@@ -607,8 +622,8 @@ func (si *serviceInit) initPublicTLS() error {
 		Enabled:         si.cfg.TLS.ACME.Enabled,
 		Email:           si.cfg.TLS.ACME.Email,
 		Challenge:       si.cfg.TLS.ACME.Challenge,
-		HTTPPort:        si.cfg.Server.Port,
-		TLSPort:         si.cfg.Server.TLSPort,
+		HTTPPort:        effectiveHTTP01Port(si.cfg),
+		TLSPort:         effectivePublicTLSPort(si.cfg),
 		DataDir:         resolveDataDir(si.cfg.Server.DataDir),
 		ObtainBatchSize: si.cfg.TLS.ACME.ObtainBatchSize,
 		DNS:             dnsCfg,
@@ -619,6 +634,9 @@ func (si *serviceInit) initPublicTLS() error {
 	effective, err := publictls.ResolveEffectiveChallenge(ctx, publicTLSCfg, tokenResolver)
 	if err != nil {
 		return log.WrapErr(err, "resolve ACME challenge")
+	}
+	if err := validateEffectivePublicTLSReadiness(si.cfg, effective); err != nil {
+		return err
 	}
 
 	store, err := acmestore.New(filepath.Join(resolveDataDir(si.cfg.Server.DataDir), "acme"))
@@ -700,11 +718,20 @@ func (si *serviceInit) initSecrets() error {
 		return err
 	}
 
+	si.svc.serviceSecretProvider = createStandaloneServiceSecretProvider(backend, resolveDataDir(si.cfg.Server.DataDir), si.log)
 	si.svc.secretSvc = secretsSvc.NewService(domainSecretStore, si.log, si.svc.eventBus)
 	return nil
 }
 
 // initRuntimeAndProxy creates container, backup, registry, image, volume, and proxy services.
+func (si *serviceInit) initRuntimeProxyAndTraffic() error {
+	if err := si.initRuntimeAndProxy(); err != nil {
+		return err
+	}
+	si.svc.trafficManager = trafficadapter.NewManager()
+	return nil
+}
+
 func (si *serviceInit) initRuntimeAndProxy() error {
 	var err error
 
@@ -732,6 +759,7 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
 	si.svc.maxBlobSize = proxyCfg.maxBlobSize
 	si.svc.proxySvc = proxy.NewService(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
+	si.svc.standaloneServiceSvc = servicecfg.NewServiceWithSecretProvider(si.svc.runtime, si.svc.serviceSecretProvider)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
 	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
@@ -749,6 +777,22 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 	si.svc.reloadCoordinator.SetContainerConfigApplier(func(reloadCtx context.Context, reloadCfg Config) error {
 		containerCfg, err := buildContainerServiceConfig(reloadCtx, si.v, reloadCfg, si.svc, si.log)
 		if err != nil {
+			return err
+		}
+		var tlsConfig *tls.Config
+		if hasTLSCapableEntrypoint(reloadCfg) && si.svc.httpsProxyHandler != nil {
+			var tlsErr error
+			tlsConfig, tlsErr = proxyTLSConfig(reloadCfg, si.svc.pkiSvc, si.svc.publicTLSSvc, si.log)
+			if tlsErr != nil {
+				return tlsErr
+			}
+		}
+		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc); err != nil {
+			return err
+		}
+		si.svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpsProxyHandler, tlsConfig, si.svc.tlsHTTPEntryPoints)
+		si.svc.smartHTTPEntryPoints = registerSmartTCPHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpProxyHandler, si.svc.httpsProxyHandler, tlsConfig, si.svc.smartHTTPEntryPoints)
+		if err := reconcileStandaloneServices(reloadCtx, si.svc.standaloneServiceSvc, reloadCfg); err != nil {
 			return err
 		}
 		si.svc.containerSvc.UpdateConfig(containerCfg)
@@ -771,6 +815,9 @@ func (si *serviceInit) initHandlers() {
 	si.svc.logSvc = logs.NewService(resolveLogFilePath(si.cfg), si.cfg.Logging.File.Enabled, si.svc.containerSvc, si.svc.runtime, si.log)
 
 	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
+	if si.svc.trafficManager == nil {
+		si.svc.trafficManager = trafficadapter.NewManager()
+	}
 
 	si.svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
 		ConfigSvc:       si.svc.configSvc,
@@ -788,6 +835,7 @@ func (si *serviceInit) initHandlers() {
 		ImageSvc:        si.svc.imageSvc,
 		VolumeSvc:       si.svc.volumeSvc,
 		PublicTLSSvc:    si.svc.publicTLSSvc,
+		TrafficSvc:      si.svc.trafficManager,
 	})
 }
 
@@ -1616,6 +1664,31 @@ func readFileBeneath(root, cleanedRelPath string) ([]byte, error) {
 	return nil, fmt.Errorf("invalid secret path: empty path")
 }
 
+type unsafeSecretProvider struct {
+	dataDir string
+}
+
+func (p unsafeSecretProvider) Name() string { return string(domain.SecretsBackendUnsafe) }
+
+func (p unsafeSecretProvider) IsAvailable() bool { return true }
+
+func (p unsafeSecretProvider) GetSecret(_ context.Context, path string) (string, error) {
+	return readUnsafeSecret(p.dataDir, path)
+}
+
+func createStandaloneServiceSecretProvider(backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) out.SecretProvider {
+	switch backend {
+	case domain.SecretsBackendPass:
+		return secrets.NewPassProvider(log)
+	case domain.SecretsBackendSops:
+		return secrets.NewSopsProvider(log)
+	case domain.SecretsBackendUnsafe:
+		return unsafeSecretProvider{dataDir: dataDir}
+	default:
+		return nil
+	}
+}
+
 func readUnsafeSecret(dataDir, secretPath string) (string, error) {
 	if filepath.IsAbs(secretPath) {
 		return "", fmt.Errorf("invalid secret path: absolute paths are not allowed")
@@ -2342,7 +2415,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
-		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.Port, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log, func(host string) bool {
+		middleware.HTTPSRedirect(proxyAllowedNets, effectiveProxyHTTPPort(cfg), effectiveProxyTLSPort(cfg), cfg.Server.ForceHTTPSRedirect, log, func(host string) bool {
 			return svc.proxySvc.IsKnownHost(context.Background(), host)
 		}),
 	}
@@ -2357,7 +2430,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 
 	// Build the onboarding handler once if internal CA is available and TLS is enabled.
 	var obHandler *onboarding.Handler
-	if svc.caAdapter != nil && cfg.Server.TLSPort != 0 {
+	if svc.caAdapter != nil && effectiveProxyTLSPort(cfg) != 0 {
 		mobileconfigBytes := pkiadapter.GenerateMobileconfig(
 			svc.caAdapter.RootCertificateDER(),
 			svc.caAdapter.RootCommonName(),
@@ -2366,8 +2439,8 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 			svc.caAdapter.RootCertificate(),
 			mobileconfigBytes,
 			svc.caAdapter.RootFingerprint(),
-			cfg.Server.Port,
-			cfg.Server.TLSPort,
+			effectiveProxyHTTPPort(cfg),
+			effectiveProxyTLSPort(cfg),
 		)
 	}
 
@@ -2433,6 +2506,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 		proxyOut = middleware.AccessLogger(accessWriter, excludeHC, log, trustedNets)(proxyOut)
 		httpsOut = middleware.AccessLogger(accessWriter, excludeHC, log, trustedNets)(httpsOut)
 	}
+	svc.httpsProxyHandler = httpsOut
 
 	return registryOut, proxyOut, httpsOut
 }
@@ -2780,6 +2854,8 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	errChan := make(chan error, 3)
 
 	registryHandler, httpProxyHandler, httpsProxyHandler := createHTTPHandlers(svc, cfg, log, accessWriter)
+	svc.httpProxyHandler = httpProxyHandler
+	svc.httpsProxyHandler = httpsProxyHandler
 
 	registryAddr := net.JoinHostPort(cfg.Server.RegistryListenAddr, strconv.Itoa(cfg.Server.RegistryPort))
 	registrySrv, registryReady := startServer(registryAddr, registryHandler, "registry", nil, errChan, log)
@@ -2798,33 +2874,25 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 		}
 	}
 
-	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, svc.publicTLSSvc, errChan, log)
+	proxySrv, proxyReady, tlsSrv, _, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, log)
 	if err != nil {
 		closeStarted(registrySrv)
 		return err
 	}
+	svc.tlsHTTPEntryPoints = tlsMuxHTTPServerNames(cfg)
+	svc.smartHTTPEntryPoints = smartTCPHTTPServerNames(cfg)
 
-	// Wait for all servers to bind their ports before auto-starting containers.
-	// This prevents the race where auto-start pulls from the registry before it's listening.
-	if err := waitForServerReady(registryReady, errChan); err != nil {
+	// Wait for the registry and HTTP proxy to bind before applying the traffic graph.
+	// This prevents auto-start races while keeping the TLS mux under one owner.
+	if err := waitForCoreProxyReadyAndApplyTraffic(ctx, cfg, svc, registryReady, proxyReady, errChan); err != nil {
 		closeStarted(registrySrv, proxySrv, tlsSrv)
 		return err
-	}
-	if err := waitForServerReady(proxyReady, errChan); err != nil {
-		closeStarted(registrySrv, proxySrv, tlsSrv)
-		return err
-	}
-	if tlsReady != nil {
-		if err := waitForServerReady(tlsReady, errChan); err != nil {
-			closeStarted(registrySrv, proxySrv, tlsSrv)
-			return err
-		}
 	}
 
 	logEvent := log.Info().
 		Int("proxy_port", cfg.Server.Port).
 		Int("registry_port", cfg.Server.RegistryPort)
-	if tlsSrv != nil {
+	if cfg.Server.TLSPort != 0 {
 		logEvent = logEvent.Int("tls_port", cfg.Server.TLSPort)
 	}
 	logEvent.Msg("Gordon is running")
@@ -2833,6 +2901,8 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 	schedulerCleanup, err := startOptionalSchedulers(ctx, cfg, svc, log, v)
 	if err != nil {
+		shutdownTrafficManagerForStartupCleanup(svc.trafficManager, log)
+		closeStarted(registrySrv, proxySrv, tlsSrv)
 		return err
 	}
 	if schedulerCleanup != nil {
@@ -2844,7 +2914,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 	waitForShutdown(ctx, errChan, reloadChan, deployChan, reload, svc.eventBus, log)
 	cleanupHandlers() // Stop debounce timers before draining containers
-	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, log)
+	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, log)
 	return nil
 }
 
@@ -2854,7 +2924,48 @@ func startPublicTLSRuntimeWithWarning(ctx context.Context, svc publicTLSRuntime,
 	}
 }
 
+func waitForCoreProxyReadyAndApplyTraffic(ctx context.Context, cfg Config, svc *services, registryReady <-chan struct{}, proxyReady <-chan struct{}, errChan <-chan error) error {
+	if err := waitForServerReady(registryReady, errChan); err != nil {
+		return err
+	}
+	if err := waitForServerReady(proxyReady, errChan); err != nil {
+		return err
+	}
+	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc); err != nil {
+		return err
+	}
+	return reconcileStandaloneServices(ctx, svc.standaloneServiceSvc, cfg)
+}
+
+func reconcileStandaloneServices(ctx context.Context, serviceSvc in.StandaloneServiceService, cfg Config) error {
+	if serviceSvc == nil {
+		return nil
+	}
+	standaloneServices, err := servicecfg.ToDomain(cfg.Services)
+	if err != nil {
+		return fmt.Errorf("convert standalone service config: %w", err)
+	}
+	if err := serviceSvc.Reconcile(ctx, standaloneServices); err != nil {
+		return fmt.Errorf("reconcile standalone services: %w", err)
+	}
+	return nil
+}
+
+func shutdownTrafficManagerForStartupCleanup(manager *trafficadapter.Manager, log zerowrap.Logger) {
+	if manager == nil {
+		return
+	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := manager.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("failed to shut down traffic manager during startup cleanup")
+	}
+}
+
 func waitForServerReady(ready <-chan struct{}, errChan <-chan error) error {
+	if ready == nil {
+		return nil
+	}
 	select {
 	case <-ready:
 		return nil
@@ -3096,7 +3207,7 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, log zerowrap.Logger) {
+func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -3109,6 +3220,12 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 		}
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Warn().Err(err).Str("addr", srv.Addr).Msg("server shutdown error")
+		}
+	}
+
+	if trafficManager != nil {
+		if err := trafficManager.Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Msg("traffic manager shutdown error")
 		}
 	}
 
@@ -3234,31 +3351,170 @@ func matchingStaticCert(certs []tls.Certificate, serverName string) *tls.Certifi
 	return matchingPreparedStaticCert(prepareStaticTLSCertificates(certs), serverName)
 }
 
-func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
-	// HTTP listener (Cloudflare proxy + onboarding for direct clients)
-	var httpProtos http.Protocols
-	httpProtos.SetHTTP1(true)
-	httpProtos.SetUnencryptedHTTP2(true)
-	httpSrv, httpReady := startServer(
-		fmt.Sprintf(":%d", cfg.Server.Port),
-		httpHandler,
-		"proxy-http",
-		&httpProtos,
-		errChan,
-		log,
-	)
+func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+	var httpSrv *http.Server
+	var httpReady <-chan struct{}
 
-	if cfg.Server.TLSPort == 0 {
+	needsTLS := hasTLSCapableEntrypoint(cfg)
+	if !hasSmartTCPEntrypoint(cfg) && !needsTLS {
 		return httpSrv, httpReady, nil, nil, nil
 	}
+	cleanupHTTP := func(err error) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+		return httpSrv, httpReady, nil, nil, err
+	}
 
-	// Load static cert into a local slice (not tls.Config.Certificates) so the
-	// certificate selector has full control over priority ordering.
+	var tlsConfig *tls.Config
+	if needsTLS {
+		var err error
+		tlsConfig, err = proxyTLSConfig(cfg, pkiSvc, publicTLS, log)
+		if err != nil {
+			return cleanupHTTP(err)
+		}
+	}
+	if trafficManager == nil {
+		return cleanupHTTP(fmt.Errorf("traffic manager is required when traffic entrypoints are enabled"))
+	}
+	registerTLSMuxHTTPServers(trafficManager, cfg, httpsHandler, tlsConfig, nil)
+	registerSmartTCPHTTPServers(trafficManager, cfg, httpHandler, httpsHandler, tlsConfig, nil)
+
+	return httpSrv, httpReady, nil, nil, nil
+}
+
+func hasSmartTCPEntrypoint(cfg Config) bool {
+	for _, entryPoint := range cfg.EntryPoints {
+		if entryPoint.Protocol == domain.EntryPointProtocolSmartTCP {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTLSCapableEntrypoint(cfg Config) bool {
+	for _, entryPoint := range cfg.EntryPoints {
+		switch entryPoint.Protocol {
+		case domain.EntryPointProtocolSmartTCP, domain.EntryPointProtocolTLSMux:
+			return true
+		}
+	}
+	return false
+}
+
+func effectivePublicTLSPort(cfg Config) int {
+	return effectiveEntrypointPort(cfg, tlsCapableEntryPoint)
+}
+
+func effectiveProxyTLSPort(cfg Config) int {
+	return effectivePublicTLSPort(cfg)
+}
+
+func effectiveProxyHTTPPort(cfg Config) int {
+	return effectiveEntrypointPort(cfg, func(protocol domain.EntryPointProtocol) bool {
+		return protocol == domain.EntryPointProtocolSmartTCP
+	})
+}
+
+func effectiveEntrypointPort(cfg Config, match func(domain.EntryPointProtocol) bool) int {
+	if entryPoint, ok := cfg.EntryPoints[traffic.DefaultEdgeEntryPointName]; ok && match(entryPoint.Protocol) {
+		if port := portFromAddress(entryPoint.Address); port > 0 {
+			return port
+		}
+	}
+
+	var candidatePort int
+	candidates := 0
+	for name, entryPoint := range cfg.EntryPoints {
+		if name == traffic.DefaultEdgeEntryPointName || !match(entryPoint.Protocol) {
+			continue
+		}
+		port := portFromAddress(entryPoint.Address)
+		if port == 0 {
+			continue
+		}
+		candidatePort = port
+		candidates++
+	}
+	if candidates == 1 {
+		return candidatePort
+	}
+	return 0
+}
+
+func tlsCapableEntryPoint(protocol domain.EntryPointProtocol) bool {
+	switch protocol {
+	case domain.EntryPointProtocolSmartTCP, domain.EntryPointProtocolTLSMux:
+		return true
+	default:
+		return false
+	}
+}
+
+func effectiveHTTP01Port(cfg Config) int {
+	if hasSmartTCPHTTP01Entrypoint(cfg) {
+		return 80
+	}
+	return 0
+}
+
+func validatePublicTLSReadiness(cfg Config) error {
+	mode, err := domain.ParseACMEChallengeMode(cfg.TLS.ACME.Challenge)
+	if err != nil {
+		return err
+	}
+	switch mode {
+	case domain.ACMEChallengeCloudflareDNS01, domain.ACMEChallengeAuto:
+		return nil
+	case domain.ACMEChallengeHTTP01:
+		return validateHTTP01ChallengeReadiness(cfg)
+	default:
+		return fmt.Errorf("%w: %q", domain.ErrACMEChallengeInvalid, mode)
+	}
+}
+
+func validateEffectivePublicTLSReadiness(cfg Config, effective publictls.EffectiveChallenge) error {
+	if effective.Mode != domain.ACMEChallengeHTTP01 {
+		return nil
+	}
+	return validateHTTP01ChallengeReadiness(cfg)
+}
+
+func validateHTTP01ChallengeReadiness(cfg Config) error {
+	if hasBoundHTTP01ChallengeListener(cfg) {
+		return nil
+	}
+	return fmt.Errorf("%w: http-01 requires an actually bound HTTP-01 challenge listener on external :80", domain.ErrACMEChallengeInvalid)
+}
+
+func hasBoundHTTP01ChallengeListener(cfg Config) bool {
+	return hasSmartTCPHTTP01Entrypoint(cfg)
+}
+
+func hasSmartTCPHTTP01Entrypoint(cfg Config) bool {
+	for _, entryPoint := range cfg.EntryPoints {
+		if entryPoint.Protocol == domain.EntryPointProtocolSmartTCP && portFromAddress(entryPoint.Address) == 80 {
+			return true
+		}
+	}
+	return false
+}
+
+func portFromAddress(address string) int {
+	_, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return 0
+	}
+	return port
+}
+
+func proxyTLSConfig(cfg Config, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, log zerowrap.Logger) (*tls.Config, error) {
 	var staticCerts []tls.Certificate
 	if cfg.Server.TLSCertFile != "" {
 		staticCert, err := tls.LoadX509KeyPair(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("load TLS keypair: %w", err)
+			return nil, fmt.Errorf("load TLS keypair: %w", err)
 		}
 		staticCerts = []tls.Certificate{staticCert}
 		log.Info().
@@ -3266,30 +3522,81 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 			Str("key", cfg.Server.TLSKeyFile).
 			Msg("loaded static TLS certificate (public ACME and internal CA handle remaining domains)")
 	}
-
 	selector := &certificateSelector{
 		staticCerts: prepareStaticTLSCertificates(staticCerts),
 		publicTLS:   publicTLS,
 		localPKI:    pkiSvc,
 	}
-
-	// HTTPS listener — static cert (if provided) takes priority by SNI match via
-	// certificateSelector, then public ACME TLS, then on-demand internal CA certs.
-	tlsConfig := &tls.Config{
+	return &tls.Config{
 		MinVersion:     tls.VersionTLS12,
 		GetCertificate: selector.GetCertificate,
 		NextProtos:     []string{"h2", "http/1.1"},
-	}
-	tlsSrv, tlsReady := startTLSServerWithConfig(
-		fmt.Sprintf(":%d", cfg.Server.TLSPort),
-		httpsHandler,
-		"proxy-tls",
-		tlsConfig,
-		errChan,
-		log,
-	)
+	}, nil
+}
 
-	return httpSrv, httpReady, tlsSrv, tlsReady, nil
+func registerSmartTCPHTTPServers(manager *trafficadapter.Manager, cfg Config, httpHandler, httpsHandler http.Handler, tlsConfig *tls.Config, previous map[string]struct{}) map[string]struct{} {
+	if manager == nil {
+		return previous
+	}
+	next := smartTCPHTTPServerNames(cfg)
+	for name := range previous {
+		if _, ok := next[name]; !ok {
+			manager.SetSmartTCPHTTPServer(name, nil, nil)
+			manager.SetSmartTCPTLSServer(name, nil, nil)
+		}
+	}
+	var httpProtos http.Protocols
+	httpProtos.SetHTTP1(true)
+	httpProtos.SetUnencryptedHTTP2(true)
+	for name := range next {
+		if httpHandler != nil {
+			manager.SetSmartTCPHTTPServer(name, httpHandler, &httpProtos)
+		}
+		if httpsHandler != nil && tlsConfig != nil {
+			manager.SetSmartTCPTLSServer(name, httpsHandler, tlsConfig)
+		}
+	}
+	return next
+}
+
+func smartTCPHTTPServerNames(cfg Config) map[string]struct{} {
+	names := map[string]struct{}{}
+	for name, entryPoint := range cfg.EntryPoints {
+		if entryPoint.Protocol == domain.EntryPointProtocolSmartTCP {
+			names[name] = struct{}{}
+		}
+	}
+	return names
+}
+
+func registerTLSMuxHTTPServers(manager *trafficadapter.Manager, cfg Config, httpsHandler http.Handler, tlsConfig *tls.Config, previous map[string]struct{}) map[string]struct{} {
+	if manager == nil {
+		return previous
+	}
+	next := tlsMuxHTTPServerNames(cfg)
+	for name := range previous {
+		if _, ok := next[name]; !ok {
+			manager.SetTLSHTTPServer(name, nil, nil)
+		}
+	}
+	if httpsHandler == nil || tlsConfig == nil {
+		return next
+	}
+	for name := range next {
+		manager.SetTLSHTTPServer(name, httpsHandler, tlsConfig)
+	}
+	return next
+}
+
+func tlsMuxHTTPServerNames(cfg Config) map[string]struct{} {
+	names := map[string]struct{}{}
+	for name, entryPoint := range cfg.EntryPoints {
+		domainEntryPoint := domain.EntryPoint{Name: name, Protocol: entryPoint.Protocol}
+		if trafficManagerOwnsEntryPoint(domainEntryPoint) && domainEntryPoint.Protocol == domain.EntryPointProtocolTLSMux {
+			names[name] = struct{}{}
+		}
+	}
+	return names
 }
 
 // startServer starts an HTTP server, returning the server instance and a channel
@@ -3327,39 +3634,6 @@ func startServer(addr string, handler http.Handler, name string, protocols *http
 	}()
 
 	return server, ready
-}
-
-// startTLSServerWithConfig starts an HTTPS server using a pre-built tls.Config
-// (e.g. with GetCertificate for on-demand issuance via the internal CA).
-// Returns the server instance and a channel that closes once the port is bound.
-func startTLSServerWithConfig(addr string, handler http.Handler, name string, tlsCfg *tls.Config, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		TLSConfig:         tlsCfg,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       5 * time.Minute,
-		WriteTimeout:      5 * time.Minute,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
-	}
-
-	ready := make(chan struct{})
-	go func() {
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			errChan <- fmt.Errorf("%s listen: %w", name, err)
-			return
-		}
-		tlsLn := tls.NewListener(ln, tlsCfg)
-		log.Info().Str("addr", addr).Str("name", name).Msg("TLS server starting")
-		close(ready)
-		if err := srv.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
-			errChan <- fmt.Errorf("%s: %w", name, err)
-		}
-	}()
-
-	return srv, ready
 }
 
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.
@@ -3613,10 +3887,8 @@ func isProcessAlive(pid int) bool {
 
 // loadConfig loads configuration from file and sets defaults.
 func loadConfig(v *viper.Viper, configPath string) error {
-	v.SetDefault("server.port", 8088)
 	v.SetDefault("server.registry_port", 5000)
 	v.SetDefault("server.legacy_registry_domains", []string{})
-	v.SetDefault("server.tls_port", 8443)
 	v.SetDefault("server.tls_cert_file", "")
 	v.SetDefault("server.tls_key_file", "")
 	v.SetDefault("tls.acme.enabled", false)

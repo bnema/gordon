@@ -62,7 +62,7 @@ type MockpushImageOps_Build_Call struct {
 // Build is a helper method to define mock.On call
 //   - ctx context.Context
 //   - args []string
-func (_e *MockpushImageOps_Expecter) Build(ctx interface{}, args interface{}) *MockpushImageOps_Build_Call {
+func (_e *MockpushImageOps_Expecter) Build(ctx any, args any) *MockpushImageOps_Build_Call {
 	return &MockpushImageOps_Build_Call{Call: _e.mock.On("Build", ctx, args)}
 }
 
@@ -128,7 +128,7 @@ type MockpushImageOps_Exists_Call struct {
 // Exists is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageRef string
-func (_e *MockpushImageOps_Expecter) Exists(ctx interface{}, imageRef interface{}) *MockpushImageOps_Exists_Call {
+func (_e *MockpushImageOps_Expecter) Exists(ctx any, imageRef any) *MockpushImageOps_Exists_Call {
 	return &MockpushImageOps_Exists_Call{Call: _e.mock.On("Exists", ctx, imageRef)}
 }
 
@@ -185,7 +185,7 @@ type MockpushImageOps_Push_Call struct {
 // Push is a helper method to define mock.On call
 //   - ctx context.Context
 //   - ref string
-func (_e *MockpushImageOps_Expecter) Push(ctx interface{}, ref interface{}) *MockpushImageOps_Push_Call {
+func (_e *MockpushImageOps_Expecter) Push(ctx any, ref any) *MockpushImageOps_Push_Call {
 	return &MockpushImageOps_Push_Call{Call: _e.mock.On("Push", ctx, ref)}
 }
 
@@ -243,7 +243,7 @@ type MockpushImageOps_Tag_Call struct {
 //   - ctx context.Context
 //   - sourceRef string
 //   - targetRef string
-func (_e *MockpushImageOps_Expecter) Tag(ctx interface{}, sourceRef interface{}, targetRef interface{}) *MockpushImageOps_Tag_Call {
+func (_e *MockpushImageOps_Expecter) Tag(ctx any, sourceRef any, targetRef any) *MockpushImageOps_Tag_Call {
 	return &MockpushImageOps_Tag_Call{Call: _e.mock.On("Tag", ctx, sourceRef, targetRef)}
 }
 

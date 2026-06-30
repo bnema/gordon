@@ -110,7 +110,7 @@ type MockRouteChecker_GetRoutes_Call struct {
 
 // GetRoutes is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockRouteChecker_Expecter) GetRoutes(ctx interface{}) *MockRouteChecker_GetRoutes_Call {
+func (_e *MockRouteChecker_Expecter) GetRoutes(ctx any) *MockRouteChecker_GetRoutes_Call {
 	return &MockRouteChecker_GetRoutes_Call{Call: _e.mock.On("GetRoutes", ctx)}
 }
 

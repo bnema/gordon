@@ -73,7 +73,7 @@ type MockCertificateStore_LoadAccount_Call struct {
 
 // LoadAccount is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockCertificateStore_Expecter) LoadAccount(ctx interface{}) *MockCertificateStore_LoadAccount_Call {
+func (_e *MockCertificateStore_Expecter) LoadAccount(ctx any) *MockCertificateStore_LoadAccount_Call {
 	return &MockCertificateStore_LoadAccount_Call{Call: _e.mock.On("LoadAccount", ctx)}
 }
 
@@ -135,7 +135,7 @@ type MockCertificateStore_LoadAll_Call struct {
 
 // LoadAll is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockCertificateStore_Expecter) LoadAll(ctx interface{}) *MockCertificateStore_LoadAll_Call {
+func (_e *MockCertificateStore_Expecter) LoadAll(ctx any) *MockCertificateStore_LoadAll_Call {
 	return &MockCertificateStore_LoadAll_Call{Call: _e.mock.On("LoadAll", ctx)}
 }
 
@@ -195,7 +195,7 @@ type MockCertificateStore_LoadState_Call struct {
 
 // LoadState is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockCertificateStore_Expecter) LoadState(ctx interface{}) *MockCertificateStore_LoadState_Call {
+func (_e *MockCertificateStore_Expecter) LoadState(ctx any) *MockCertificateStore_LoadState_Call {
 	return &MockCertificateStore_LoadState_Call{Call: _e.mock.On("LoadState", ctx)}
 }
 
@@ -257,7 +257,7 @@ type MockCertificateStore_Lock_Call struct {
 
 // Lock is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockCertificateStore_Expecter) Lock(ctx interface{}) *MockCertificateStore_Lock_Call {
+func (_e *MockCertificateStore_Expecter) Lock(ctx any) *MockCertificateStore_Lock_Call {
 	return &MockCertificateStore_Lock_Call{Call: _e.mock.On("Lock", ctx)}
 }
 
@@ -309,7 +309,7 @@ type MockCertificateStore_Save_Call struct {
 // Save is a helper method to define mock.On call
 //   - ctx context.Context
 //   - cert out.StoredCertificate
-func (_e *MockCertificateStore_Expecter) Save(ctx interface{}, cert interface{}) *MockCertificateStore_Save_Call {
+func (_e *MockCertificateStore_Expecter) Save(ctx any, cert any) *MockCertificateStore_Save_Call {
 	return &MockCertificateStore_Save_Call{Call: _e.mock.On("Save", ctx, cert)}
 }
 
@@ -366,7 +366,7 @@ type MockCertificateStore_SaveAccount_Call struct {
 // SaveAccount is a helper method to define mock.On call
 //   - ctx context.Context
 //   - account out.ACMEAccount
-func (_e *MockCertificateStore_Expecter) SaveAccount(ctx interface{}, account interface{}) *MockCertificateStore_SaveAccount_Call {
+func (_e *MockCertificateStore_Expecter) SaveAccount(ctx any, account any) *MockCertificateStore_SaveAccount_Call {
 	return &MockCertificateStore_SaveAccount_Call{Call: _e.mock.On("SaveAccount", ctx, account)}
 }
 
@@ -423,7 +423,7 @@ type MockCertificateStore_SaveState_Call struct {
 // SaveState is a helper method to define mock.On call
 //   - ctx context.Context
 //   - state out.CertificateStoreState
-func (_e *MockCertificateStore_Expecter) SaveState(ctx interface{}, state interface{}) *MockCertificateStore_SaveState_Call {
+func (_e *MockCertificateStore_Expecter) SaveState(ctx any, state any) *MockCertificateStore_SaveState_Call {
 	return &MockCertificateStore_SaveState_Call{Call: _e.mock.On("SaveState", ctx, state)}
 }
 

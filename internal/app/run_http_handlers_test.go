@@ -21,7 +21,9 @@ import (
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	out "github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
+	traffic "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
 func newNotFoundProxyService(t *testing.T) *proxyusecase.Service {
@@ -126,6 +128,9 @@ func newOnboardingConfig() Config {
 	cfg.Server.Port = 8088
 	cfg.Server.TLSPort = 8443
 	cfg.Server.ProxyAllowedIPs = []string{"173.245.48.0/20"} // Cloudflare sample
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":8443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
 	return cfg
 }
 
@@ -238,6 +243,52 @@ func TestCreateHTTPHandlers_ForceHTTPSRedirect_DoesNotBypassDirectOnboarding(t *
 	// Direct onboarding must win over force_https_redirect.
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Trust CA Certificate")
+}
+
+func TestCreateHTTPHandlers_RedirectUsesSelectedEntrypointPorts(t *testing.T) {
+	t.Parallel()
+	cfg := Config{}
+	cfg.Server.Port = 8088
+	cfg.Server.TLSPort = 8443
+	cfg.Server.ForceHTTPSRedirect = true
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":9443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com"}, nil)
+	svc := &services{proxySvc: proxyusecase.NewService(nil, nil, configSvc, proxyusecase.Config{})}
+
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/path", nil)
+	req.RemoteAddr = directAddr
+	req.Host = "app.example.com:9443"
+	rec := httptest.NewRecorder()
+	httpHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusPermanentRedirect, rec.Code)
+	assert.Equal(t, "https://app.example.com:9443/path", rec.Header().Get("Location"))
+}
+
+func TestCreateHTTPHandlers_OnboardingUsesSelectedEntrypointPorts(t *testing.T) {
+	t.Parallel()
+	ca := newTestCA(t)
+	cfg := newOnboardingConfig()
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"public": {Address: ":9443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
+	svc := &services{caAdapter: ca}
+
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/", nil)
+	req.RemoteAddr = directAddr
+	req.Host = "o2.bnema.dev:9443"
+	rec := httptest.NewRecorder()
+	httpHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "https://o2.bnema.dev:9443/")
 }
 
 func TestCreateHTTPHandlers_HTTPSOnboarding_RemainsAvailableOnGordonDomain(t *testing.T) {
@@ -401,7 +452,7 @@ func TestCreateHTTPHandlers_TLSDisabled_DoesNotServeHTTPOnboarding(t *testing.T)
 	t.Parallel()
 	ca := newTestCA(t)
 	cfg := newOnboardingConfig()
-	cfg.Server.TLSPort = 0 // TLS disabled
+	cfg.EntryPoints = nil // TLS disabled: no TLS-capable traffic entrypoint
 	svc := &services{caAdapter: ca}
 
 	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
@@ -473,7 +524,9 @@ func TestCreateHTTPHandlers_TLSConfiguredWithoutCA_FailsStartup(t *testing.T) {
 		log: zerowrap.Default(),
 		svc: &services{},
 	}
-	si.cfg.Server.TLSPort = 8443
+	si.cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
 	dataDir := t.TempDir()
 	blockingPath := filepath.Join(dataDir, "not-a-directory")
 	require.NoError(t, os.WriteFile(blockingPath, []byte("blocking file"), 0600))

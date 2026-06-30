@@ -71,7 +71,7 @@ type MockSecretProvider_GetSecret_Call struct {
 // GetSecret is a helper method to define mock.On call
 //   - ctx context.Context
 //   - key string
-func (_e *MockSecretProvider_Expecter) GetSecret(ctx interface{}, key interface{}) *MockSecretProvider_GetSecret_Call {
+func (_e *MockSecretProvider_Expecter) GetSecret(ctx any, key any) *MockSecretProvider_GetSecret_Call {
 	return &MockSecretProvider_GetSecret_Call{Call: _e.mock.On("GetSecret", ctx, key)}
 }
 

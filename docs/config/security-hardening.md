@@ -56,6 +56,35 @@ require_digest = true
 - `require_digest = true` requires allowlisted external images to use `@sha256:<64 hex chars>`.
 - Include ports in allowlist entries when the registry uses a non-default port.
 
+## Smart TCP Raw Fallback
+
+Raw TCP fallback on a `smart_tcp` edge entrypoint is disabled by default. Unknown non-HTTP/non-TLS bytes reach a backend only when the entrypoint explicitly sets `raw_fallback` to a TCP router and the fallback source policy allows the peer.
+
+```toml
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
+raw_fallback = "ssh-fallback"
+raw_fallback_trusted_cidrs = ["100.64.0.0/10"]
+```
+
+Use `raw_fallback_trusted_cidrs` for private raw fallback. Public raw fallback requires an explicit acknowledgement:
+
+```toml
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
+raw_fallback = "public-raw"
+allow_public_raw_fallback = true
+```
+
+Security behavior:
+
+- PROXY protocol v1 and v2 prefixes are rejected; Gordon does not trust or parse PROXY headers on smart TCP entrypoints.
+- `trusted_cidrs` and `raw_fallback_trusted_cidrs` use the peer socket IP, not `X-Forwarded-For`.
+- HTTP-looking or TLS-looking malformed traffic is rejected and never bypasses to raw fallback.
+- Entry-point-wide `trusted_cidrs` applies before sniffing to all protocols; raw fallback has its own narrower policy for private fallback exposure.
+
 ## Docker network isolation
 
 Per-app Docker networks are enabled by default. To block direct external egress from isolated networks, opt into Docker internal networks:

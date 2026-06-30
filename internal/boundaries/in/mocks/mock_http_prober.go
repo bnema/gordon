@@ -77,7 +77,7 @@ type MockHTTPProber_Probe_Call struct {
 // Probe is a helper method to define mock.On call
 //   - ctx context.Context
 //   - url string
-func (_e *MockHTTPProber_Expecter) Probe(ctx interface{}, url interface{}) *MockHTTPProber_Probe_Call {
+func (_e *MockHTTPProber_Expecter) Probe(ctx any, url any) *MockHTTPProber_Probe_Call {
 	return &MockHTTPProber_Probe_Call{Call: _e.mock.On("Probe", ctx, url)}
 }
 

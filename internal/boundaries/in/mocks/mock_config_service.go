@@ -64,7 +64,7 @@ type MockConfigService_AddAttachment_Call struct {
 //   - ctx context.Context
 //   - domainOrGroup string
 //   - image string
-func (_e *MockConfigService_Expecter) AddAttachment(ctx interface{}, domainOrGroup interface{}, image interface{}) *MockConfigService_AddAttachment_Call {
+func (_e *MockConfigService_Expecter) AddAttachment(ctx any, domainOrGroup any, image any) *MockConfigService_AddAttachment_Call {
 	return &MockConfigService_AddAttachment_Call{Call: _e.mock.On("AddAttachment", ctx, domainOrGroup, image)}
 }
 
@@ -126,7 +126,7 @@ type MockConfigService_AddAutoRouteAllowedDomain_Call struct {
 // AddAutoRouteAllowedDomain is a helper method to define mock.On call
 //   - ctx context.Context
 //   - pattern string
-func (_e *MockConfigService_Expecter) AddAutoRouteAllowedDomain(ctx interface{}, pattern interface{}) *MockConfigService_AddAutoRouteAllowedDomain_Call {
+func (_e *MockConfigService_Expecter) AddAutoRouteAllowedDomain(ctx any, pattern any) *MockConfigService_AddAutoRouteAllowedDomain_Call {
 	return &MockConfigService_AddAutoRouteAllowedDomain_Call{Call: _e.mock.On("AddAutoRouteAllowedDomain", ctx, pattern)}
 }
 
@@ -183,7 +183,7 @@ type MockConfigService_AddRoute_Call struct {
 // AddRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - route domain.Route
-func (_e *MockConfigService_Expecter) AddRoute(ctx interface{}, route interface{}) *MockConfigService_AddRoute_Call {
+func (_e *MockConfigService_Expecter) AddRoute(ctx any, route any) *MockConfigService_AddRoute_Call {
 	return &MockConfigService_AddRoute_Call{Call: _e.mock.On("AddRoute", ctx, route)}
 }
 
@@ -242,7 +242,7 @@ type MockConfigService_FindAttachmentTargetsByImage_Call struct {
 // FindAttachmentTargetsByImage is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageName string
-func (_e *MockConfigService_Expecter) FindAttachmentTargetsByImage(ctx interface{}, imageName interface{}) *MockConfigService_FindAttachmentTargetsByImage_Call {
+func (_e *MockConfigService_Expecter) FindAttachmentTargetsByImage(ctx any, imageName any) *MockConfigService_FindAttachmentTargetsByImage_Call {
 	return &MockConfigService_FindAttachmentTargetsByImage_Call{Call: _e.mock.On("FindAttachmentTargetsByImage", ctx, imageName)}
 }
 
@@ -301,7 +301,7 @@ type MockConfigService_FindRoutesByImage_Call struct {
 // FindRoutesByImage is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageName string
-func (_e *MockConfigService_Expecter) FindRoutesByImage(ctx interface{}, imageName interface{}) *MockConfigService_FindRoutesByImage_Call {
+func (_e *MockConfigService_Expecter) FindRoutesByImage(ctx any, imageName any) *MockConfigService_FindRoutesByImage_Call {
 	return &MockConfigService_FindRoutesByImage_Call{Call: _e.mock.On("FindRoutesByImage", ctx, imageName)}
 }
 
@@ -359,7 +359,7 @@ type MockConfigService_GetAllAttachments_Call struct {
 
 // GetAllAttachments is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockConfigService_Expecter) GetAllAttachments(ctx interface{}) *MockConfigService_GetAllAttachments_Call {
+func (_e *MockConfigService_Expecter) GetAllAttachments(ctx any) *MockConfigService_GetAllAttachments_Call {
 	return &MockConfigService_GetAllAttachments_Call{Call: _e.mock.On("GetAllAttachments", ctx)}
 }
 
@@ -468,7 +468,7 @@ type MockConfigService_GetAttachmentsFor_Call struct {
 // GetAttachmentsFor is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domainOrGroup string
-func (_e *MockConfigService_Expecter) GetAttachmentsFor(ctx interface{}, domainOrGroup interface{}) *MockConfigService_GetAttachmentsFor_Call {
+func (_e *MockConfigService_Expecter) GetAttachmentsFor(ctx any, domainOrGroup any) *MockConfigService_GetAttachmentsFor_Call {
 	return &MockConfigService_GetAttachmentsFor_Call{Call: _e.mock.On("GetAttachmentsFor", ctx, domainOrGroup)}
 }
 
@@ -535,7 +535,7 @@ type MockConfigService_GetAutoRouteAllowedDomains_Call struct {
 
 // GetAutoRouteAllowedDomains is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockConfigService_Expecter) GetAutoRouteAllowedDomains(ctx interface{}) *MockConfigService_GetAutoRouteAllowedDomains_Call {
+func (_e *MockConfigService_Expecter) GetAutoRouteAllowedDomains(ctx any) *MockConfigService_GetAutoRouteAllowedDomains_Call {
 	return &MockConfigService_GetAutoRouteAllowedDomains_Call{Call: _e.mock.On("GetAutoRouteAllowedDomains", ctx)}
 }
 
@@ -910,7 +910,7 @@ type MockConfigService_GetRoute_Call struct {
 // GetRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain1 string
-func (_e *MockConfigService_Expecter) GetRoute(ctx interface{}, domain1 interface{}) *MockConfigService_GetRoute_Call {
+func (_e *MockConfigService_Expecter) GetRoute(ctx any, domain1 any) *MockConfigService_GetRoute_Call {
 	return &MockConfigService_GetRoute_Call{Call: _e.mock.On("GetRoute", ctx, domain1)}
 }
 
@@ -968,7 +968,7 @@ type MockConfigService_GetRoutes_Call struct {
 
 // GetRoutes is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockConfigService_Expecter) GetRoutes(ctx interface{}) *MockConfigService_GetRoutes_Call {
+func (_e *MockConfigService_Expecter) GetRoutes(ctx any) *MockConfigService_GetRoutes_Call {
 	return &MockConfigService_GetRoutes_Call{Call: _e.mock.On("GetRoutes", ctx)}
 }
 
@@ -1239,7 +1239,7 @@ type MockConfigService_Load_Call struct {
 
 // Load is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockConfigService_Expecter) Load(ctx interface{}) *MockConfigService_Load_Call {
+func (_e *MockConfigService_Expecter) Load(ctx any) *MockConfigService_Load_Call {
 	return &MockConfigService_Load_Call{Call: _e.mock.On("Load", ctx)}
 }
 
@@ -1290,7 +1290,7 @@ type MockConfigService_Reload_Call struct {
 
 // Reload is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockConfigService_Expecter) Reload(ctx interface{}) *MockConfigService_Reload_Call {
+func (_e *MockConfigService_Expecter) Reload(ctx any) *MockConfigService_Reload_Call {
 	return &MockConfigService_Reload_Call{Call: _e.mock.On("Reload", ctx)}
 }
 
@@ -1343,7 +1343,7 @@ type MockConfigService_RemoveAttachment_Call struct {
 //   - ctx context.Context
 //   - domainOrGroup string
 //   - image string
-func (_e *MockConfigService_Expecter) RemoveAttachment(ctx interface{}, domainOrGroup interface{}, image interface{}) *MockConfigService_RemoveAttachment_Call {
+func (_e *MockConfigService_Expecter) RemoveAttachment(ctx any, domainOrGroup any, image any) *MockConfigService_RemoveAttachment_Call {
 	return &MockConfigService_RemoveAttachment_Call{Call: _e.mock.On("RemoveAttachment", ctx, domainOrGroup, image)}
 }
 
@@ -1405,7 +1405,7 @@ type MockConfigService_RemoveAutoRouteAllowedDomain_Call struct {
 // RemoveAutoRouteAllowedDomain is a helper method to define mock.On call
 //   - ctx context.Context
 //   - pattern string
-func (_e *MockConfigService_Expecter) RemoveAutoRouteAllowedDomain(ctx interface{}, pattern interface{}) *MockConfigService_RemoveAutoRouteAllowedDomain_Call {
+func (_e *MockConfigService_Expecter) RemoveAutoRouteAllowedDomain(ctx any, pattern any) *MockConfigService_RemoveAutoRouteAllowedDomain_Call {
 	return &MockConfigService_RemoveAutoRouteAllowedDomain_Call{Call: _e.mock.On("RemoveAutoRouteAllowedDomain", ctx, pattern)}
 }
 
@@ -1462,7 +1462,7 @@ type MockConfigService_RemoveRoute_Call struct {
 // RemoveRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain1 string
-func (_e *MockConfigService_Expecter) RemoveRoute(ctx interface{}, domain1 interface{}) *MockConfigService_RemoveRoute_Call {
+func (_e *MockConfigService_Expecter) RemoveRoute(ctx any, domain1 any) *MockConfigService_RemoveRoute_Call {
 	return &MockConfigService_RemoveRoute_Call{Call: _e.mock.On("RemoveRoute", ctx, domain1)}
 }
 
@@ -1518,7 +1518,7 @@ type MockConfigService_Save_Call struct {
 
 // Save is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockConfigService_Expecter) Save(ctx interface{}) *MockConfigService_Save_Call {
+func (_e *MockConfigService_Expecter) Save(ctx any) *MockConfigService_Save_Call {
 	return &MockConfigService_Save_Call{Call: _e.mock.On("Save", ctx)}
 }
 
@@ -1570,7 +1570,7 @@ type MockConfigService_UpdateRoute_Call struct {
 // UpdateRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - route domain.Route
-func (_e *MockConfigService_Expecter) UpdateRoute(ctx interface{}, route interface{}) *MockConfigService_UpdateRoute_Call {
+func (_e *MockConfigService_Expecter) UpdateRoute(ctx any, route any) *MockConfigService_UpdateRoute_Call {
 	return &MockConfigService_UpdateRoute_Call{Call: _e.mock.On("UpdateRoute", ctx, route)}
 }
 
@@ -1627,7 +1627,7 @@ type MockConfigService_Watch_Call struct {
 // Watch is a helper method to define mock.On call
 //   - ctx context.Context
 //   - onChange func()
-func (_e *MockConfigService_Expecter) Watch(ctx interface{}, onChange interface{}) *MockConfigService_Watch_Call {
+func (_e *MockConfigService_Expecter) Watch(ctx any, onChange any) *MockConfigService_Watch_Call {
 	return &MockConfigService_Watch_Call{Call: _e.mock.On("Watch", ctx, onChange)}
 }
 

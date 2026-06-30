@@ -9,10 +9,8 @@ Complete configuration reference with all options and their default values.
 # SERVER
 # =============================================================================
 [server]
-port = 8088                                  # HTTP proxy port
 registry_port = 5000                         # Container registry port
-tls_port = 8443                              # HTTPS proxy port (0 = disabled, no internal CA)
-tls_cert_file = ""                           # PEM cert path (optional, for static TLS alongside internal CA)
+tls_cert_file = ""                           # PEM cert path (optional, for static TLS fallback)
 tls_key_file = ""                            # PEM key path (optional, must be set with tls_cert_file)
 force_https_redirect = false                 # Redirect all HTTP traffic to HTTPS (for direct-access setups)
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
@@ -20,8 +18,19 @@ data_dir = "~/.gordon"                       # Data directory (varies by install
 max_blob_chunk_size = "95MB"                 # Max size per registry blob upload chunk
 max_blob_size = "1GB"                        # Max cumulative size per registry blob/layer upload
 registry_allowed_ips = []                    # IPs or CIDR ranges allowed to access the registry (empty = allow all)
-proxy_allowed_ips = []                       # IPs or CIDR ranges allowed to reach the proxy (empty = allow all, e.g. Cloudflare IPs)
+proxy_allowed_ips = []                       # IPs or CIDR ranges allowed to reach HTTP proxy paths (empty = allow all, e.g. Cloudflare IPs)
 registry_listen_address = ""                 # Bind address for registry (empty = all interfaces, "127.0.0.1" = loopback only)
+
+# =============================================================================
+# ENTRYPOINTS
+# =============================================================================
+[entrypoints.edge]
+address = ":443"                             # Deployment-selected public TCP socket
+protocol = "smart_tcp"                       # Sniff HTTP, h2c, TLS, passthrough, or explicit raw fallback
+trusted_cidrs = []                            # Peer socket IP allowlist for all traffic on this entrypoint
+# raw_fallback = "ssh-fallback"              # Optional TCP router for unknown non-HTTP/non-TLS bytes
+# raw_fallback_trusted_cidrs = ["100.64.0.0/10"]
+# allow_public_raw_fallback = false
 
 # =============================================================================
 # DNS
@@ -45,7 +54,7 @@ access_token_ttl = "15m"                     # Ephemeral access token lifetime (
 # PUBLIC TLS / ACME
 # =============================================================================
 [tls.acme]
-enabled = false                              # Enable public ACME certificates (requires server.tls_port > 0)
+enabled = false                              # Enable public ACME certificates (requires HTTPS fallback on a TLS-capable entrypoint)
 email = ""                                   # ACME account email when enabled
 challenge = "auto"                           # "auto", "http-01", or "cloudflare-dns-01"
 obtain_batch_size = 1                         # New certificate orders per reconcile run
@@ -165,6 +174,28 @@ preserve = true                              # Keep volumes when containers are 
 # "domain.com" = "host:port"                 # Proxy to non-container services
 
 # =============================================================================
+# STANDALONE SERVICES
+# =============================================================================
+# [[services]]
+# name = "rust"
+# image = "registry.example.com:5000/rust:latest"
+# enabled = true
+# env_file = "/srv/gordon/services/rust.env"
+#
+# [[services.ports]]
+# name = "game"
+# container = 28015
+# protocol = "udp"
+# publish = "127.0.0.1:38015"
+#
+# [[services.ports]]
+# name = "rcon"
+# container = 28016
+# protocol = "tcp"
+# publish = "127.0.0.1:38016"
+# trusted_cidrs = ["100.64.0.0/10"]
+
+# =============================================================================
 # NETWORK GROUPS
 # =============================================================================
 [network_groups]
@@ -210,9 +241,7 @@ keep_last = 3                                # Keep N newest tags per repository
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `server.port` | `8088` | HTTP proxy port |
 | `server.registry_port` | `5000` | Container registry port |
-| `server.tls_port` | `8443` | HTTPS listener port (0 = disabled) |
 | `server.tls_cert_file` | `""` | PEM cert path for static TLS (optional) |
 | `server.tls_key_file` | `""` | PEM key path for static TLS (optional) |
 | `server.force_https_redirect` | `false` | Redirect all HTTP to HTTPS (for direct-access setups) |
@@ -223,10 +252,16 @@ keep_last = 3                                # Keep N newest tags per repository
 | `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `server.proxy_allowed_ips` | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
 | `server.registry_listen_address` | `""` | Bind address for registry (empty = all interfaces) |
+| `entrypoints.<name>.address` | none | Deployment-selected listen address; `edge` is conventional for route-capable entrypoints but is not required when exactly one `smart_tcp` or `tls_mux` entrypoint exists |
+| `entrypoints.<name>.protocol` | none | Entrypoint protocol: `smart_tcp`, `tls_mux`, `tcp`, or `udp` |
+| `entrypoints.<name>.trusted_cidrs` | `[]` | Peer socket IP allowlist for all traffic on the entrypoint |
+| `entrypoints.<name>.raw_fallback` | `""` | TCP router used by smart TCP for unknown non-HTTP/non-TLS bytes |
+| `entrypoints.<name>.raw_fallback_trusted_cidrs` | `[]` | Peer socket IP allowlist for smart TCP raw fallback |
+| `entrypoints.<name>.allow_public_raw_fallback` | `false` | Explicit acknowledgement for public raw fallback exposure |
 | `dns.resolvers` | `["1.1.1.1:53", "8.8.8.8:53"]` | Recursive resolvers used for public DNS visibility checks, including ACME DNS-01 propagation |
 | `dns.propagation_timeout` | `"5m"` | Maximum time to wait for DNS-01 TXT records to become visible through configured recursive resolvers |
 | `dns.polling_interval` | `"5s"` | Interval between DNS-01 propagation checks |
-| `tls.acme.enabled` | `false` | Enable public ACME certificates (requires `server.tls_port > 0`) |
+| `tls.acme.enabled` | `false` | Enable public ACME certificates (requires HTTPS fallback on a TLS-capable entrypoint) |
 | `tls.acme.email` | `""` | ACME account email when enabled |
 | `tls.acme.challenge` | `"auto"` | ACME challenge mode: `auto`, `http-01`, or `cloudflare-dns-01` |
 | `tls.acme.obtain_batch_size` | `1` | Maximum new ACME certificate orders per reconcile run |
@@ -279,6 +314,27 @@ keep_last = 3                                # Keep N newest tags per repository
 | `volumes.auto_create` | `true` | Auto-create volumes |
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
+| `services[].name` | none | Standalone service name used by `service:<service>:<port-name>` traffic refs |
+| `services[].image` | none | Container image for enabled standalone services |
+| `services[].enabled` | `false` | Whether Gordon creates, starts, and reconciles the service container |
+| `services[].env` | `[]` | Inline `KEY=value` environment entries |
+| `services[].env_file` | `""` | Env file loaded before inline entries |
+| `services[].ports[].name` | none | Port name used by traffic service refs |
+| `services[].ports[].container` | none | Container port number |
+| `services[].ports[].protocol` | none | `tcp` or `udp` |
+| `services[].ports[].publish` | `""` | Host-side bind address, usually loopback, that the traffic manager dials |
+| `services[].ports[].private` | `false` | Require matching service and entrypoint `trusted_cidrs` for this port |
+| `services[].ports[].public` | `false` | Explicit public opt-out for admin port names such as `rcon` |
+| `services[].ports[].trusted_cidrs` | `[]` | CIDRs allowed for private port routing; must match the target entrypoint |
+| `services[].volumes[].source` | `""` | Explicit named volume or bind source; omitted service volumes use image `VOLUME` metadata |
+| `services[].volumes[].target` | none | Absolute container mount path |
+| `services[].volumes[].read_only` | `false` | Mount explicit volume read-only |
+| `services[].readiness.type` | `"none"` | `none`, `tcp`, or `log` |
+| `services[].readiness.path` | `""` | Log readiness path inside the container |
+| `services[].readiness.contains` | `""` | Text required in the readiness log |
+| `services[].readiness.timeout` | default wait | Positive readiness timeout when set |
+| `services[].cleanup.preserve_volumes` | `true` | Preserve managed image-discovered volumes on cleanup |
+| `services[].cleanup.remove_container` | `true` | Remove old, disabled, or removed service containers |
 | `backups.enabled` | `false` | Backup service disabled |
 | `backups.schedule` | `"daily"` | Backup scheduler preset |
 | `backups.storage_dir` | `""` | Uses `{server.data_dir}/backups` when empty |
@@ -364,4 +420,5 @@ gordon serve
 - [Telemetry](./telemetry.md)
 - [Network Isolation](./network-isolation.md)
 - [Volumes](./volumes.md)
+- [Standalone Services](./services.md)
 - [Images](./images.md)

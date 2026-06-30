@@ -2,6 +2,14 @@
 
 Inspect public TLS/ACME certificate status.
 
+Gordon serves normal HTTPS fallback on TLS-capable entrypoints such as `entrypoints.edge` with `protocol = "smart_tcp"`. Certificate priority is static certificates first, then public ACME certificates, then Gordon's internal CA.
+
+ACME challenge notes:
+
+- DNS-01 (`cloudflare-dns-01`) does not require a special external port 80 edge.
+- HTTP-01 requires an HTTP-capable smart TCP entrypoint reachable on external port 80 for every hostname being validated.
+- TLS-ALPN-01 is not supported.
+
 Remote targeting uses client config or an active remote by default.
 Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 

@@ -49,6 +49,8 @@ var (
 	ErrPreviewNotFound = errors.New("preview not found")
 
 	// Config errors
+	ErrTrafficGraphRequired = errors.New("traffic graph is required")
+	ErrClientHelloTooLarge  = errors.New("client hello exceeds maximum")
 	ErrConfigNotFound       = errors.New("configuration not found")
 	ErrInvalidConfig        = errors.New("invalid configuration")
 	ErrConfigLoadFailed     = errors.New("failed to load configuration")
@@ -104,4 +106,7 @@ var (
 	ErrRouteSourceRequired       = errors.New("route source required")
 	ErrHTTPChallengeSinkRequired = errors.New("http challenge sink required")
 	ErrTLSRouteNotCovered        = errors.New("tls route not covered by public certificate")
+
+	// Traffic errors
+	ErrTrafficStatusUnavailable = errors.New("traffic status unavailable")
 )

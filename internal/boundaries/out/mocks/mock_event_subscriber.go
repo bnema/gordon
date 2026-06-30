@@ -60,7 +60,7 @@ type MockEventSubscriber_Subscribe_Call struct {
 
 // Subscribe is a helper method to define mock.On call
 //   - handler out.EventHandler
-func (_e *MockEventSubscriber_Expecter) Subscribe(handler interface{}) *MockEventSubscriber_Subscribe_Call {
+func (_e *MockEventSubscriber_Expecter) Subscribe(handler any) *MockEventSubscriber_Subscribe_Call {
 	return &MockEventSubscriber_Subscribe_Call{Call: _e.mock.On("Subscribe", handler)}
 }
 
@@ -111,7 +111,7 @@ type MockEventSubscriber_Unsubscribe_Call struct {
 
 // Unsubscribe is a helper method to define mock.On call
 //   - handler out.EventHandler
-func (_e *MockEventSubscriber_Expecter) Unsubscribe(handler interface{}) *MockEventSubscriber_Unsubscribe_Call {
+func (_e *MockEventSubscriber_Expecter) Unsubscribe(handler any) *MockEventSubscriber_Unsubscribe_Call {
 	return &MockEventSubscriber_Unsubscribe_Call{Call: _e.mock.On("Unsubscribe", handler)}
 }
 

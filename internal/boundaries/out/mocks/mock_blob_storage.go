@@ -75,7 +75,7 @@ type MockBlobStorage_AppendBlobChunk_Call struct {
 //   - data io.Reader
 //   - contentLength int64
 //   - maxBlobSize int64
-func (_e *MockBlobStorage_Expecter) AppendBlobChunk(name interface{}, uuid interface{}, data interface{}, contentLength interface{}, maxBlobSize interface{}) *MockBlobStorage_AppendBlobChunk_Call {
+func (_e *MockBlobStorage_Expecter) AppendBlobChunk(name any, uuid any, data any, contentLength any, maxBlobSize any) *MockBlobStorage_AppendBlobChunk_Call {
 	return &MockBlobStorage_AppendBlobChunk_Call{Call: _e.mock.On("AppendBlobChunk", name, uuid, data, contentLength, maxBlobSize)}
 }
 
@@ -146,7 +146,7 @@ type MockBlobStorage_BlobExists_Call struct {
 
 // BlobExists is a helper method to define mock.On call
 //   - digest string
-func (_e *MockBlobStorage_Expecter) BlobExists(digest interface{}) *MockBlobStorage_BlobExists_Call {
+func (_e *MockBlobStorage_Expecter) BlobExists(digest any) *MockBlobStorage_BlobExists_Call {
 	return &MockBlobStorage_BlobExists_Call{Call: _e.mock.On("BlobExists", digest)}
 }
 
@@ -197,7 +197,7 @@ type MockBlobStorage_CancelBlobUpload_Call struct {
 
 // CancelBlobUpload is a helper method to define mock.On call
 //   - uuid string
-func (_e *MockBlobStorage_Expecter) CancelBlobUpload(uuid interface{}) *MockBlobStorage_CancelBlobUpload_Call {
+func (_e *MockBlobStorage_Expecter) CancelBlobUpload(uuid any) *MockBlobStorage_CancelBlobUpload_Call {
 	return &MockBlobStorage_CancelBlobUpload_Call{Call: _e.mock.On("CancelBlobUpload", uuid)}
 }
 
@@ -263,7 +263,7 @@ type MockBlobStorage_CleanupStaleUploads_Call struct {
 
 // CleanupStaleUploads is a helper method to define mock.On call
 //   - maxAge time.Duration
-func (_e *MockBlobStorage_Expecter) CleanupStaleUploads(maxAge interface{}) *MockBlobStorage_CleanupStaleUploads_Call {
+func (_e *MockBlobStorage_Expecter) CleanupStaleUploads(maxAge any) *MockBlobStorage_CleanupStaleUploads_Call {
 	return &MockBlobStorage_CleanupStaleUploads_Call{Call: _e.mock.On("CleanupStaleUploads", maxAge)}
 }
 
@@ -323,7 +323,7 @@ type MockBlobStorage_DeleteBlob_Call struct {
 
 // DeleteBlob is a helper method to define mock.On call
 //   - digest string
-func (_e *MockBlobStorage_Expecter) DeleteBlob(digest interface{}) *MockBlobStorage_DeleteBlob_Call {
+func (_e *MockBlobStorage_Expecter) DeleteBlob(digest any) *MockBlobStorage_DeleteBlob_Call {
 	return &MockBlobStorage_DeleteBlob_Call{Call: _e.mock.On("DeleteBlob", digest)}
 }
 
@@ -375,7 +375,7 @@ type MockBlobStorage_FinishBlobUpload_Call struct {
 // FinishBlobUpload is a helper method to define mock.On call
 //   - uuid string
 //   - digest string
-func (_e *MockBlobStorage_Expecter) FinishBlobUpload(uuid interface{}, digest interface{}) *MockBlobStorage_FinishBlobUpload_Call {
+func (_e *MockBlobStorage_Expecter) FinishBlobUpload(uuid any, digest any) *MockBlobStorage_FinishBlobUpload_Call {
 	return &MockBlobStorage_FinishBlobUpload_Call{Call: _e.mock.On("FinishBlobUpload", uuid, digest)}
 }
 
@@ -442,7 +442,7 @@ type MockBlobStorage_GetBlob_Call struct {
 
 // GetBlob is a helper method to define mock.On call
 //   - digest string
-func (_e *MockBlobStorage_Expecter) GetBlob(digest interface{}) *MockBlobStorage_GetBlob_Call {
+func (_e *MockBlobStorage_Expecter) GetBlob(digest any) *MockBlobStorage_GetBlob_Call {
 	return &MockBlobStorage_GetBlob_Call{Call: _e.mock.On("GetBlob", digest)}
 }
 
@@ -502,7 +502,7 @@ type MockBlobStorage_GetBlobPath_Call struct {
 
 // GetBlobPath is a helper method to define mock.On call
 //   - digest string
-func (_e *MockBlobStorage_Expecter) GetBlobPath(digest interface{}) *MockBlobStorage_GetBlobPath_Call {
+func (_e *MockBlobStorage_Expecter) GetBlobPath(digest any) *MockBlobStorage_GetBlobPath_Call {
 	return &MockBlobStorage_GetBlobPath_Call{Call: _e.mock.On("GetBlobPath", digest)}
 }
 
@@ -564,7 +564,7 @@ type MockBlobStorage_GetBlobUpload_Call struct {
 
 // GetBlobUpload is a helper method to define mock.On call
 //   - uuid string
-func (_e *MockBlobStorage_Expecter) GetBlobUpload(uuid interface{}) *MockBlobStorage_GetBlobUpload_Call {
+func (_e *MockBlobStorage_Expecter) GetBlobUpload(uuid any) *MockBlobStorage_GetBlobUpload_Call {
 	return &MockBlobStorage_GetBlobUpload_Call{Call: _e.mock.On("GetBlobUpload", uuid)}
 }
 
@@ -672,7 +672,7 @@ type MockBlobStorage_PutBlob_Call struct {
 //   - digest string
 //   - data io.Reader
 //   - size int64
-func (_e *MockBlobStorage_Expecter) PutBlob(digest interface{}, data interface{}, size interface{}) *MockBlobStorage_PutBlob_Call {
+func (_e *MockBlobStorage_Expecter) PutBlob(digest any, data any, size any) *MockBlobStorage_PutBlob_Call {
 	return &MockBlobStorage_PutBlob_Call{Call: _e.mock.On("PutBlob", digest, data, size)}
 }
 
@@ -742,7 +742,7 @@ type MockBlobStorage_StartBlobUpload_Call struct {
 
 // StartBlobUpload is a helper method to define mock.On call
 //   - name string
-func (_e *MockBlobStorage_Expecter) StartBlobUpload(name interface{}) *MockBlobStorage_StartBlobUpload_Call {
+func (_e *MockBlobStorage_Expecter) StartBlobUpload(name any) *MockBlobStorage_StartBlobUpload_Call {
 	return &MockBlobStorage_StartBlobUpload_Call{Call: _e.mock.On("StartBlobUpload", name)}
 }
 

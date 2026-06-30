@@ -47,6 +47,7 @@ Gordon runs on your VPS and provides:
 - [Configuration Overview](./config/index.md) - All configuration options
 - [Server Settings](./config/server.md) - Ports, domains, and runtime
 - [Routes](./config/routes.md) - Domain to container mapping
+- [Traffic Plane](./config/traffic.md) - TCP, UDP, and TLS passthrough entrypoints
 - [Authentication](./config/auth.md) - Registry auth plus remote CLI login/token workflows
 - [Secrets](./config/secrets.md) - Secure credential storage
 - [Network Isolation](./config/network-isolation.md) - Per-app network isolation
@@ -80,7 +81,7 @@ Gordon runs on your VPS and provides:
 - Domain pointing to your server
 - Optional Cloudflare account or other reverse proxy for edge TLS
 
-> **Note:** Gordon can run behind Cloudflare/nginx, or terminate TLS directly via its internal CA (enabled by default on `server.tls_port`). Set `tls_port = 0` to disable.
+> **Note:** Gordon can run behind Cloudflare/nginx, or terminate TLS directly on a smart TCP edge entrypoint via static certificates, public ACME certificates, or its internal CA.
 
 ## Related
 
