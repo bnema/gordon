@@ -7,6 +7,92 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTrafficGraphSmartTCPAllowsHTTPTLSPassthroughAndExplicitRawFallback(t *testing.T) {
+	graph := TrafficGraph{
+		EntryPoints: []EntryPoint{{
+			Name:                    "edge",
+			Address:                 ":443",
+			Protocol:                EntryPointProtocolSmartTCP,
+			RawFallback:             "ssh-fallback",
+			RawFallbackTrustedCIDRs: []string{"100.64.0.0/10"},
+		}},
+		Routers: []TrafficRouter{
+			{Name: "route:app.example.com", EntryPoint: "edge", Protocol: RouterProtocolHTTP, Rule: TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"},
+			{Name: "raw-tls", EntryPoint: "edge", Protocol: RouterProtocolTLSPassthrough, Rule: TrafficRule{SNI: "raw.example.com"}, Service: "network_service:raw:tls"},
+			{Name: "ssh-fallback", EntryPoint: "edge", Protocol: RouterProtocolTCP, Service: "network_service:ssh:ssh"},
+		},
+		Services: []TrafficService{
+			{Name: "route:app.example.com"},
+			{Name: "network_service:raw:tls", Backends: []TrafficBackend{{Name: "raw:tls", Host: "raw", Port: 443, Protocol: NetworkProtocolTCP}}},
+			{Name: "network_service:ssh:ssh", Backends: []TrafficBackend{{Name: "ssh:ssh", Host: "ssh", Port: 22, Protocol: NetworkProtocolTCP}}},
+		},
+	}
+	require.NoError(t, graph.Validate())
+}
+
+func TestTrafficGraphSmartTCPRawFallbackValidation(t *testing.T) {
+	baseServices := []TrafficService{
+		{Name: "route:app.example.com"},
+		{Name: "network_service:ssh:ssh", Backends: []TrafficBackend{{Name: "ssh:ssh", Host: "ssh", Port: 22, Protocol: NetworkProtocolTCP}}},
+	}
+
+	tests := []struct {
+		name       string
+		entryPoint EntryPoint
+		routers    []TrafficRouter
+		wantErr    string
+	}{
+		{
+			name:       "public raw fallback rejected by default",
+			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolSmartTCP, RawFallback: "ssh-fallback"},
+			routers:    []TrafficRouter{{Name: "ssh-fallback", EntryPoint: "edge", Protocol: RouterProtocolTCP, Service: "network_service:ssh:ssh"}},
+			wantErr:    "raw fallback",
+		},
+		{
+			name:       "missing raw fallback router rejected",
+			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolSmartTCP, RawFallback: "missing", RawFallbackTrustedCIDRs: []string{"10.0.0.0/8"}},
+			routers:    nil,
+			wantErr:    "raw fallback",
+		},
+		{
+			name:       "raw fallback must reference tcp router",
+			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolSmartTCP, RawFallback: "route:app.example.com", RawFallbackTrustedCIDRs: []string{"10.0.0.0/8"}},
+			routers: []TrafficRouter{
+				{Name: "route:app.example.com", EntryPoint: "edge", Protocol: RouterProtocolHTTP, Rule: TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"},
+			},
+			wantErr: "raw fallback",
+		},
+		{
+			name:       "invalid raw fallback trusted cidr rejected",
+			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolSmartTCP, RawFallback: "ssh-fallback", RawFallbackTrustedCIDRs: []string{"not-a-cidr"}},
+			routers:    []TrafficRouter{{Name: "ssh-fallback", EntryPoint: "edge", Protocol: RouterProtocolTCP, Service: "network_service:ssh:ssh"}},
+			wantErr:    "invalid raw_fallback_trusted_cidrs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graph := TrafficGraph{EntryPoints: []EntryPoint{tt.entryPoint}, Routers: tt.routers, Services: baseServices}
+			require.ErrorContains(t, graph.Validate(), tt.wantErr)
+		})
+	}
+}
+
+func TestTrafficGraphSmartTCPRejectsHTTPHostAndTLSSNIConflict(t *testing.T) {
+	graph := TrafficGraph{
+		EntryPoints: []EntryPoint{{Name: "edge", Address: ":443", Protocol: EntryPointProtocolSmartTCP}},
+		Routers: []TrafficRouter{
+			{Name: "route:app.example.com", EntryPoint: "edge", Protocol: RouterProtocolHTTP, Rule: TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"},
+			{Name: "raw-tls", EntryPoint: "edge", Protocol: RouterProtocolTLSPassthrough, Rule: TrafficRule{SNI: "app.example.com"}, Service: "network_service:raw:tls"},
+		},
+		Services: []TrafficService{
+			{Name: "route:app.example.com"},
+			{Name: "network_service:raw:tls", Backends: []TrafficBackend{{Name: "raw:tls", Host: "raw", Port: 443, Protocol: NetworkProtocolTCP}}},
+		},
+	}
+	require.ErrorContains(t, graph.Validate(), "http host conflicts with tls passthrough sni")
+}
+
 func TestTrafficGraphValidateEntryPoints(t *testing.T) {
 	tests := []struct {
 		name    string

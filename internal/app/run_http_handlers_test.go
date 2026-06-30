@@ -21,7 +21,9 @@ import (
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	out "github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
+	traffic "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
 func newNotFoundProxyService(t *testing.T) *proxyusecase.Service {
@@ -473,7 +475,9 @@ func TestCreateHTTPHandlers_TLSConfiguredWithoutCA_FailsStartup(t *testing.T) {
 		log: zerowrap.Default(),
 		svc: &services{},
 	}
-	si.cfg.Server.TLSPort = 8443
+	si.cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
 	dataDir := t.TempDir()
 	blockingPath := filepath.Join(dataDir, "not-a-directory")
 	require.NoError(t, os.WriteFile(blockingPath, []byte("blocking file"), 0600))

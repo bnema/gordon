@@ -11,10 +11,11 @@ import (
 type EntryPointProtocol string
 
 const (
-	EntryPointProtocolHTTP   EntryPointProtocol = "http"
-	EntryPointProtocolTLSMux EntryPointProtocol = "tls_mux"
-	EntryPointProtocolTCP    EntryPointProtocol = "tcp"
-	EntryPointProtocolUDP    EntryPointProtocol = "udp"
+	EntryPointProtocolHTTP     EntryPointProtocol = "http"
+	EntryPointProtocolTLSMux   EntryPointProtocol = "tls_mux"
+	EntryPointProtocolSmartTCP EntryPointProtocol = "smart_tcp"
+	EntryPointProtocolTCP      EntryPointProtocol = "tcp"
+	EntryPointProtocolUDP      EntryPointProtocol = "udp"
 )
 
 type RouterProtocol string
@@ -59,10 +60,13 @@ type UDPOptions struct {
 }
 
 type EntryPoint struct {
-	Name         string
-	Address      string
-	Protocol     EntryPointProtocol
-	TrustedCIDRs []string
+	Name                    string
+	Address                 string
+	Protocol                EntryPointProtocol
+	TrustedCIDRs            []string
+	RawFallback             string
+	RawFallbackTrustedCIDRs []string
+	AllowPublicRawFallback  bool
 }
 
 type TrafficRouter struct {
@@ -111,6 +115,7 @@ type EntryPointStatus struct {
 	TotalErrors          int64
 	BytesIn              int64
 	BytesOut             int64
+	SmartTCP             SmartTCPCounters
 }
 
 type TrafficRouterStatus struct {
@@ -144,6 +149,22 @@ type TrafficCounters struct {
 	TotalErrors          int64
 	BytesIn              int64
 	BytesOut             int64
+	SmartTCP             SmartTCPCounters
+}
+
+type SmartTCPCounters struct {
+	HTTPAccepted             int64
+	H2CAccepted              int64
+	HTTPSFallbackAccepted    int64
+	TLSPassthroughAccepted   int64
+	RawFallbackAccepted      int64
+	EntrypointCIDRRefused    int64
+	RawFallbackCIDRRefused   int64
+	PROXYRefused             int64
+	UnknownNoFallbackRefused int64
+	MalformedRejected        int64
+	SniffTimeout             int64
+	ClientHelloTooLarge      int64
 }
 
 type TrafficServiceRefKind string
@@ -330,26 +351,28 @@ func (g TrafficGraph) validateRouters(entryPoints map[string]EntryPoint, service
 			return err
 		}
 	}
-	return nil
+	return validateRawFallbackRouters(entryPoints, state.routersByName)
 }
 
 type routerValidationState struct {
-	routerNames map[string]struct{}
-	exactSNI    map[string]map[string]string
-	wildSNI     map[string]map[string]string
-	httpHosts   map[string]map[string]string
-	tcpRouters  map[string]string
-	udpRouters  map[string]string
+	routerNames   map[string]struct{}
+	routersByName map[string]TrafficRouter
+	exactSNI      map[string]map[string]string
+	wildSNI       map[string]map[string]string
+	httpHosts     map[string]map[string]string
+	tcpRouters    map[string]string
+	udpRouters    map[string]string
 }
 
 func newRouterValidationState() *routerValidationState {
 	return &routerValidationState{
-		routerNames: map[string]struct{}{},
-		exactSNI:    map[string]map[string]string{},
-		wildSNI:     map[string]map[string]string{},
-		httpHosts:   map[string]map[string]string{},
-		tcpRouters:  map[string]string{},
-		udpRouters:  map[string]string{},
+		routerNames:   map[string]struct{}{},
+		routersByName: map[string]TrafficRouter{},
+		exactSNI:      map[string]map[string]string{},
+		wildSNI:       map[string]map[string]string{},
+		httpHosts:     map[string]map[string]string{},
+		tcpRouters:    map[string]string{},
+		udpRouters:    map[string]string{},
 	}
 }
 
@@ -381,6 +404,7 @@ func (s *routerValidationState) validateRouterName(router TrafficRouter) error {
 		return fmt.Errorf("duplicate traffic router name %q", router.Name)
 	}
 	s.routerNames[router.Name] = struct{}{}
+	s.routersByName[router.Name] = router
 	return nil
 }
 
@@ -492,11 +516,11 @@ func validateRouterEntryPointProtocol(router TrafficRouter, entryPoint EntryPoin
 	compatible := false
 	switch router.Protocol {
 	case RouterProtocolHTTP:
-		compatible = entryPoint.Protocol == EntryPointProtocolHTTP || entryPoint.Protocol == EntryPointProtocolTLSMux
+		compatible = entryPoint.Protocol == EntryPointProtocolHTTP || entryPoint.Protocol == EntryPointProtocolTLSMux || entryPoint.Protocol == EntryPointProtocolSmartTCP
 	case RouterProtocolTLSPassthrough:
-		compatible = entryPoint.Protocol == EntryPointProtocolTLSMux
+		compatible = entryPoint.Protocol == EntryPointProtocolTLSMux || entryPoint.Protocol == EntryPointProtocolSmartTCP
 	case RouterProtocolTCP:
-		compatible = entryPoint.Protocol == EntryPointProtocolTCP
+		compatible = entryPoint.Protocol == EntryPointProtocolTCP || (entryPoint.Protocol == EntryPointProtocolSmartTCP && entryPoint.RawFallback == router.Name)
 	case RouterProtocolUDP:
 		compatible = entryPoint.Protocol == EntryPointProtocolUDP
 	}
@@ -561,12 +585,39 @@ func validateTrustedCIDRs(entryPoint EntryPoint) error {
 			return fmt.Errorf("invalid trusted_cidrs entry %q for entrypoint %q: %w", cidr, entryPoint.Name, err)
 		}
 	}
+	for _, cidr := range entryPoint.RawFallbackTrustedCIDRs {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+			return fmt.Errorf("invalid raw_fallback_trusted_cidrs entry %q for entrypoint %q: %w", cidr, entryPoint.Name, err)
+		}
+	}
+	if entryPoint.RawFallback != "" && len(entryPoint.RawFallbackTrustedCIDRs) == 0 && !entryPoint.AllowPublicRawFallback {
+		return fmt.Errorf("raw fallback %q on entrypoint %q requires raw_fallback_trusted_cidrs or allow_public_raw_fallback", entryPoint.RawFallback, entryPoint.Name)
+	}
+	return nil
+}
+
+func validateRawFallbackRouters(entryPoints map[string]EntryPoint, routers map[string]TrafficRouter) error {
+	for _, entryPoint := range entryPoints {
+		if entryPoint.RawFallback == "" {
+			continue
+		}
+		router, ok := routers[entryPoint.RawFallback]
+		if !ok {
+			return fmt.Errorf("raw fallback %q on entrypoint %q references unknown router", entryPoint.RawFallback, entryPoint.Name)
+		}
+		if router.EntryPoint != entryPoint.Name {
+			return fmt.Errorf("raw fallback %q on entrypoint %q references router on entrypoint %q", entryPoint.RawFallback, entryPoint.Name, router.EntryPoint)
+		}
+		if router.Protocol != RouterProtocolTCP {
+			return fmt.Errorf("raw fallback %q on entrypoint %q must reference tcp router", entryPoint.RawFallback, entryPoint.Name)
+		}
+	}
 	return nil
 }
 
 func validateEntryPointProtocol(protocol EntryPointProtocol) error {
 	switch protocol {
-	case EntryPointProtocolHTTP, EntryPointProtocolTLSMux, EntryPointProtocolTCP, EntryPointProtocolUDP:
+	case EntryPointProtocolHTTP, EntryPointProtocolTLSMux, EntryPointProtocolSmartTCP, EntryPointProtocolTCP, EntryPointProtocolUDP:
 		return nil
 	default:
 		return fmt.Errorf("%q", protocol)

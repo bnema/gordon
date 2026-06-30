@@ -15,10 +15,6 @@ func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Mana
 		return nil
 	}
 	graph, err := trafficbuilder.Build(trafficbuilder.Input{
-		Server: trafficbuilder.ServerConfig{
-			Port:    cfg.Server.Port,
-			TLSPort: cfg.Server.TLSPort,
-		},
 		EntryPoints:     cfg.EntryPoints,
 		Traffic:         cfg.Traffic,
 		Routes:          configSvc.GetRoutes(ctx),
@@ -78,7 +74,7 @@ func trafficManagerRouterProtocol(protocol domain.RouterProtocol) bool {
 
 func trafficManagerOwnsEntryPoint(entryPoint domain.EntryPoint) bool {
 	switch entryPoint.Protocol {
-	case domain.EntryPointProtocolTLSMux, domain.EntryPointProtocolTCP, domain.EntryPointProtocolUDP:
+	case domain.EntryPointProtocolTLSMux, domain.EntryPointProtocolSmartTCP, domain.EntryPointProtocolTCP, domain.EntryPointProtocolUDP:
 		return true
 	default:
 		return false

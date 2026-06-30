@@ -39,13 +39,28 @@ type entryPointRuntime struct {
 	tlsHTTPListener  *tlsHTTPListener
 	tlsHTTPServer    *http.Server
 	tlsHTTPDone      chan struct{}
+
+	smartHTTPReplaceMu sync.Mutex
+	smartHTTPListener  *tlsHTTPListener
+	smartHTTPServer    *http.Server
+	smartHTTPDone      chan struct{}
+
+	smartTLSReplaceMu sync.Mutex
+	smartTLSListener  *tlsHTTPListener
+	smartTLSServer    *http.Server
+	smartTLSDone      chan struct{}
+
+	rawFallbackTrusted []*net.IPNet
 }
 
 type trackedTCPConn struct {
-	mu      sync.Mutex
-	client  net.Conn
-	backend net.Conn
-	closing bool
+	mu              sync.Mutex
+	client          net.Conn
+	backend         net.Conn
+	closing         bool
+	onDone          func()
+	doneOnce        sync.Once
+	rawFallbackName string
 }
 
 func (c *trackedTCPConn) setBackend(backend net.Conn) {
@@ -71,17 +86,39 @@ func (c *trackedTCPConn) close() {
 	}
 }
 
+func (c *trackedTCPConn) complete() {
+	c.doneOnce.Do(func() {
+		if c.onDone != nil {
+			c.onDone()
+		}
+	})
+}
+
+func (c *trackedTCPConn) markRawFallback(name string) {
+	c.mu.Lock()
+	c.rawFallbackName = name
+	c.mu.Unlock()
+}
+
+func (c *trackedTCPConn) rawFallback() (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rawFallbackName, c.rawFallbackName != ""
+}
+
 func newEntryPointRuntime(parentCtx context.Context, manager *Manager, entryPoint domain.EntryPoint, listener net.Listener, trusted []*net.IPNet) *entryPointRuntime {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parentCtx))
+	rawTrusted, _ := parseTrustedCIDRs(entryPoint.RawFallbackTrustedCIDRs)
 	return &entryPointRuntime{
-		manager:     manager,
-		entryPoint:  entryPoint,
-		listener:    listener,
-		trusted:     trusted,
-		ctx:         ctx,
-		cancel:      cancel,
-		acceptDone:  make(chan struct{}),
-		activeConns: map[*trackedTCPConn]struct{}{},
+		manager:            manager,
+		entryPoint:         entryPoint,
+		listener:           listener,
+		trusted:            trusted,
+		rawFallbackTrusted: rawTrusted,
+		ctx:                ctx,
+		cancel:             cancel,
+		acceptDone:         make(chan struct{}),
+		activeConns:        map[*trackedTCPConn]struct{}{},
 	}
 }
 
@@ -91,6 +128,7 @@ func (r *entryPointRuntime) start() {
 	}
 	entryPoint := r.entryPointSnapshot()
 	r.startTLSHTTPServer(entryPoint)
+	r.startSmartTCPHTTPServers(entryPoint)
 	trafficInfo(r.ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("started tcp traffic entrypoint")
 	go r.acceptLoop()
 }
@@ -166,14 +204,28 @@ func (r *entryPointRuntime) routeToHTTPS(tracked *trackedTCPConn, conn net.Conn)
 	r.mu.Lock()
 	listener := r.tlsHTTPListener
 	r.mu.Unlock()
+	return r.routeToHTTPListener(tracked, conn, listener)
+}
+
+func (r *entryPointRuntime) routeToSmartHTTP(tracked *trackedTCPConn, conn net.Conn) bool {
+	r.mu.Lock()
+	listener := r.smartHTTPListener
+	r.mu.Unlock()
+	return r.routeToHTTPListener(tracked, conn, listener)
+}
+
+func (r *entryPointRuntime) routeToSmartHTTPS(tracked *trackedTCPConn, conn net.Conn) bool {
+	r.mu.Lock()
+	listener := r.smartTLSListener
+	r.mu.Unlock()
+	return r.routeToHTTPListener(tracked, conn, listener)
+}
+
+func (r *entryPointRuntime) routeToHTTPListener(tracked *trackedTCPConn, conn net.Conn, listener *tlsHTTPListener) bool {
 	if listener == nil {
 		return false
 	}
-	if listener.serve(&trackedHTTPConn{Conn: conn, onClose: func() { r.untrack(tracked) }}) {
-		return true
-	}
-	_ = conn.Close()
-	return true
+	return listener.serve(&trackedHTTPConn{Conn: conn, onClose: tracked.complete})
 }
 
 type trackedHTTPConn struct {
@@ -211,6 +263,9 @@ func (r *entryPointRuntime) acceptLoop() {
 		}
 		if !trustedRemoteAddr(r.trustedSnapshot(), conn.RemoteAddr()) {
 			r.counters.totalRefused.Add(1)
+			if r.entryPointSnapshot().Protocol == domain.EntryPointProtocolSmartTCP {
+				r.counters.smartTCP.entrypointCIDRRefused.Add(1)
+			}
 			_ = conn.Close()
 			continue
 		}
@@ -220,22 +275,25 @@ func (r *entryPointRuntime) acceptLoop() {
 }
 
 func (r *entryPointRuntime) handleTCPConn(client net.Conn) {
-	defer r.activeWG.Done()
-
 	options := effectiveTCPOptions(snapshotTCPOptions(r.manager.snapshot.Load()))
 	if !r.reserveConnection(options.MaxConnections) {
 		r.counters.totalRefused.Add(1)
 		_ = client.Close()
+		r.activeWG.Done()
 		return
 	}
-	defer r.releaseConnection()
 
 	tracked := &trackedTCPConn{client: client}
+	tracked.onDone = func() {
+		r.untrack(tracked)
+		r.releaseConnection()
+		r.activeWG.Done()
+	}
 	r.track(tracked)
-	untrackOnReturn := true
+	completeOnReturn := true
 	defer func() {
-		if untrackOnReturn {
-			r.untrack(tracked)
+		if completeOnReturn {
+			tracked.complete()
 		}
 	}()
 
@@ -244,7 +302,11 @@ func (r *entryPointRuntime) handleTCPConn(client net.Conn) {
 		r.handlePlainTCP(tracked, options)
 	case domain.EntryPointProtocolTLSMux:
 		if r.handleTLSMux(tracked, options) {
-			untrackOnReturn = false
+			completeOnReturn = false
+		}
+	case domain.EntryPointProtocolSmartTCP:
+		if r.handleSmartTCP(tracked, options) {
+			completeOnReturn = false
 		}
 	default:
 		r.counters.totalRefused.Add(1)
@@ -260,6 +322,98 @@ func (r *entryPointRuntime) handlePlainTCP(tracked *trackedTCPConn, options doma
 		return
 	}
 	r.proxyToBackend(tracked, tracked.client, backend, options)
+}
+
+func (r *entryPointRuntime) handleSmartTCP(tracked *trackedTCPConn, options domain.TCPOptions) bool {
+	result, err := sniffSmartTCP(tracked.client, clientHelloTimeout(options))
+	if err != nil {
+		r.counters.totalErrors.Add(1)
+		_ = tracked.client.Close()
+		return false
+	}
+	switch result.kind {
+	case dispatchHTTP, dispatchH2C:
+		return r.handleSmartTCPHTTP(tracked, result)
+	case dispatchTLS:
+		return r.handleSmartTCPTLS(tracked, result.conn, options)
+	case dispatchUnknown:
+		return r.handleSmartTCPUnknown(tracked, result.conn, options)
+	case dispatchRejectPROXY:
+		return r.refuseSmartTCP(result.conn, r.counters.smartTCP.proxyRefused.Add)
+	case dispatchSniffTimeout:
+		return r.refuseSmartTCP(result.conn, r.counters.smartTCP.sniffTimeout.Add)
+	case dispatchReject:
+		return r.refuseSmartTCP(result.conn, r.counters.smartTCP.malformedRejected.Add)
+	case dispatchRejectLarge:
+		return r.refuseSmartTCP(result.conn, r.counters.smartTCP.clientHelloTooLarge.Add)
+	default:
+		return r.refuseSmartTCP(result.conn, nil)
+	}
+}
+
+func (r *entryPointRuntime) handleSmartTCPHTTP(tracked *trackedTCPConn, result smartTCPSniffResult) bool {
+	if !r.routeToSmartHTTP(tracked, result.conn) {
+		return r.refuseSmartTCP(result.conn, nil)
+	}
+	r.counters.totalAccepted.Add(1)
+	if result.kind == dispatchH2C {
+		r.counters.smartTCP.h2cAccepted.Add(1)
+	} else {
+		r.counters.smartTCP.httpAccepted.Add(1)
+	}
+	return true
+}
+
+func (r *entryPointRuntime) handleSmartTCPTLS(tracked *trackedTCPConn, conn net.Conn, options domain.TCPOptions) bool {
+	peeked, err := r.peekTLSClientHello(conn, options)
+	if err != nil {
+		return r.handleSmartTCPTLSPeekError(conn, err)
+	}
+	if backend, ok := r.resolveTLSBackend(peeked.sni); ok {
+		r.counters.smartTCP.tlsPassthroughAccepted.Add(1)
+		r.proxyToBackend(tracked, peeked.conn, backend, options)
+		return false
+	}
+	if r.routeToSmartHTTPS(tracked, peeked.conn) {
+		r.counters.totalAccepted.Add(1)
+		r.counters.smartTCP.httpsFallbackAccepted.Add(1)
+		return true
+	}
+	return r.refuseSmartTCP(peeked.conn, nil)
+}
+
+func (r *entryPointRuntime) handleSmartTCPTLSPeekError(conn net.Conn, err error) bool {
+	if isClientHelloTooLargeError(err) {
+		r.counters.totalRefused.Add(1)
+		r.counters.smartTCP.clientHelloTooLarge.Add(1)
+	} else {
+		r.counters.totalErrors.Add(1)
+	}
+	_ = conn.Close()
+	return false
+}
+
+func (r *entryPointRuntime) handleSmartTCPUnknown(tracked *trackedTCPConn, conn net.Conn, options domain.TCPOptions) bool {
+	backend, rawFallbackName, ok, rawCIDRRefused := r.resolveRawFallbackBackendDetailed(conn.RemoteAddr())
+	if ok {
+		tracked.markRawFallback(rawFallbackName)
+		r.counters.smartTCP.rawFallbackAccepted.Add(1)
+		r.proxyToBackend(tracked, conn, backend, options)
+		return false
+	}
+	if rawCIDRRefused {
+		return r.refuseSmartTCP(conn, r.counters.smartTCP.rawFallbackCIDRRefused.Add)
+	}
+	return r.refuseSmartTCP(conn, r.counters.smartTCP.unknownNoFallbackRefused.Add)
+}
+
+func (r *entryPointRuntime) refuseSmartTCP(conn net.Conn, increment func(int64) int64) bool {
+	r.counters.totalRefused.Add(1)
+	if increment != nil {
+		increment(1)
+	}
+	_ = conn.Close()
+	return false
 }
 
 func (r *entryPointRuntime) handleTLSMux(tracked *trackedTCPConn, options domain.TCPOptions) bool {
@@ -296,6 +450,10 @@ func (r *entryPointRuntime) peekTLSClientHello(client net.Conn, options domain.T
 	return peekedTLSConn{sni: sni, conn: replayed}, nil
 }
 
+func isClientHelloTooLargeError(err error) bool {
+	return strings.Contains(err.Error(), "client hello exceeds")
+}
+
 func clientHelloTimeout(options domain.TCPOptions) time.Duration {
 	const maxTimeout = 5 * time.Second
 	if options.DialTimeout > 0 && options.DialTimeout < maxTimeout {
@@ -309,19 +467,44 @@ type peekedTLSConn struct {
 	conn net.Conn
 }
 
-func (r *entryPointRuntime) proxyToBackend(tracked *trackedTCPConn, client net.Conn, backend domain.TrafficBackend, options domain.TCPOptions) {
+func (r *entryPointRuntime) proxyToBackend(tracked *trackedTCPConn, client net.Conn, backend domain.TrafficBackend, options domain.TCPOptions) bool {
 	dialCtx, cancel := context.WithTimeout(r.ctx, options.DialTimeout)
 	defer cancel()
 	backendConn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)))
 	if err != nil {
 		r.counters.totalErrors.Add(1)
 		_ = client.Close()
-		return
+		return false
 	}
 
 	r.setBackend(tracked, backendConn)
 	r.counters.totalAccepted.Add(1)
 	r.proxyTCP(client, backendConn, options.IdleTimeout)
+	return true
+}
+
+func (r *entryPointRuntime) resolveRawFallbackBackendDetailed(remote net.Addr) (domain.TrafficBackend, string, bool, bool) {
+	graph := r.manager.snapshot.Load()
+	if graph == nil {
+		return domain.TrafficBackend{}, "", false, false
+	}
+	entryPoint := r.entryPointSnapshot()
+	if entryPoint.RawFallback == "" {
+		return domain.TrafficBackend{}, "", false, false
+	}
+	if !entryPoint.AllowPublicRawFallback {
+		trusted := r.rawFallbackTrustedSnapshot()
+		if len(trusted) == 0 || !trustedRemoteAddr(trusted, remote) {
+			return domain.TrafficBackend{}, "", false, true
+		}
+	}
+	for _, router := range graph.Routers {
+		if router.Name == entryPoint.RawFallback && router.EntryPoint == entryPoint.Name && router.Protocol == domain.RouterProtocolTCP {
+			backend, ok := r.backendForRouter(graph, router)
+			return backend, entryPoint.RawFallback, ok, false
+		}
+	}
+	return domain.TrafficBackend{}, "", false, false
 }
 
 func (r *entryPointRuntime) resolveTCPBackend() (domain.TrafficRouter, domain.TrafficBackend, bool) {
@@ -536,6 +719,8 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 		return
 	}
 	r.stopTLSHTTPServer(ctx, drainTimeout)
+	r.stopSmartTCPHTTPServer(ctx, drainTimeout)
+	r.stopSmartTCPTLSServer(ctx, drainTimeout)
 	if r.waitActive(ctx, drainTimeout) {
 		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped tcp traffic entrypoint")
 		return
@@ -621,32 +806,40 @@ func (r *entryPointRuntime) closeActiveConns() {
 
 func (r *entryPointRuntime) matches(entryPoint domain.EntryPoint) bool {
 	current := r.entryPointSnapshot()
-	return current.Name == entryPoint.Name && current.Address == entryPoint.Address && current.Protocol == entryPoint.Protocol && trustedCIDRsEqual(current.TrustedCIDRs, entryPoint.TrustedCIDRs)
+	return current.Name == entryPoint.Name && current.Address == entryPoint.Address && current.Protocol == entryPoint.Protocol && trustedCIDRsEqual(current.TrustedCIDRs, entryPoint.TrustedCIDRs) && current.RawFallback == entryPoint.RawFallback && trustedCIDRsEqual(current.RawFallbackTrustedCIDRs, entryPoint.RawFallbackTrustedCIDRs) && current.AllowPublicRawFallback == entryPoint.AllowPublicRawFallback
 }
 
 func (r *entryPointRuntime) sameAddress(entryPoint domain.EntryPoint) bool {
 	return r.entryPointSnapshot().Address == entryPoint.Address
 }
 
-func (r *entryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, trusted []*net.IPNet) {
+func (r *entryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, trusted []*net.IPNet, rawTrusted []*net.IPNet) {
 	r.mu.Lock()
 	previousName := r.entryPoint.Name
 	previousProtocol := r.entryPoint.Protocol
 	r.entryPoint = entryPoint
 	r.trusted = trusted
+	r.rawFallbackTrusted = rawTrusted
 	stale := make([]*trackedTCPConn, 0)
 	for conn := range r.activeConns {
-		if !trustedRemoteAddr(trusted, conn.client.RemoteAddr()) {
+		if !trustedRemoteAddr(trusted, conn.client.RemoteAddr()) || rawFallbackConnStale(conn, entryPoint, rawTrusted) {
 			stale = append(stale, conn)
 		}
 	}
 	r.mu.Unlock()
 	for _, conn := range stale {
 		conn.close()
-		r.untrack(conn)
 	}
 	if previousProtocol == domain.EntryPointProtocolTLSMux && entryPoint.Protocol != domain.EntryPointProtocolTLSMux {
 		r.stopTLSHTTPServer(r.ctx, 0)
+	}
+	if previousProtocol == domain.EntryPointProtocolSmartTCP && entryPoint.Protocol != domain.EntryPointProtocolSmartTCP {
+		r.stopSmartTCPHTTPServer(r.ctx, 0)
+		r.stopSmartTCPTLSServer(r.ctx, 0)
+	}
+	if entryPoint.Protocol == domain.EntryPointProtocolSmartTCP {
+		r.refreshSmartTCPHTTPServer(entryPoint.Name)
+		r.refreshSmartTCPTLSServer(entryPoint.Name)
 	}
 	if entryPoint.Protocol == domain.EntryPointProtocolTLSMux {
 		if previousProtocol == domain.EntryPointProtocolTLSMux && previousName != entryPoint.Name {
@@ -655,6 +848,20 @@ func (r *entryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, trust
 		}
 		r.startTLSHTTPServer(entryPoint)
 	}
+}
+
+func rawFallbackConnStale(conn *trackedTCPConn, entryPoint domain.EntryPoint, rawTrusted []*net.IPNet) bool {
+	rawFallbackName, ok := conn.rawFallback()
+	if !ok {
+		return false
+	}
+	if entryPoint.Protocol != domain.EntryPointProtocolSmartTCP || entryPoint.RawFallback == "" || entryPoint.RawFallback != rawFallbackName {
+		return true
+	}
+	if entryPoint.AllowPublicRawFallback {
+		return false
+	}
+	return len(rawTrusted) == 0 || !trustedRemoteAddr(rawTrusted, conn.client.RemoteAddr())
 }
 
 func (r *entryPointRuntime) entryPointSnapshot() domain.EntryPoint {
@@ -667,6 +874,12 @@ func (r *entryPointRuntime) trustedSnapshot() []*net.IPNet {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.trusted
+}
+
+func (r *entryPointRuntime) rawFallbackTrustedSnapshot() []*net.IPNet {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rawFallbackTrusted
 }
 
 func (r *entryPointRuntime) isClosed() bool {

@@ -11,14 +11,10 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-const (
-	DefaultHTTPEntryPointName = "web"
-	DefaultTLSEntryPointName  = "websecure"
-)
+const DefaultEdgeEntryPointName = "edge"
 
 // Input is the complete, usecase-level input used to build a validated traffic graph.
 type Input struct {
-	Server          ServerConfig
 	EntryPoints     map[string]EntryPointConfig
 	Traffic         Config
 	Routes          []domain.Route
@@ -26,15 +22,13 @@ type Input struct {
 	NetworkServices []NetworkServiceConfig
 }
 
-type ServerConfig struct {
-	Port    int `mapstructure:"port"`
-	TLSPort int `mapstructure:"tls_port"`
-}
-
 type EntryPointConfig struct {
-	Address      string                    `mapstructure:"address"`
-	Protocol     domain.EntryPointProtocol `mapstructure:"protocol"`
-	TrustedCIDRs []string                  `mapstructure:"trusted_cidrs"`
+	Address                 string                    `mapstructure:"address"`
+	Protocol                domain.EntryPointProtocol `mapstructure:"protocol"`
+	TrustedCIDRs            []string                  `mapstructure:"trusted_cidrs"`
+	RawFallback             string                    `mapstructure:"raw_fallback"`
+	RawFallbackTrustedCIDRs []string                  `mapstructure:"raw_fallback_trusted_cidrs"`
+	AllowPublicRawFallback  bool                      `mapstructure:"allow_public_raw_fallback"`
 }
 
 // Config holds traffic router and option configuration.
@@ -125,16 +119,18 @@ type builder struct {
 }
 
 func (b *builder) buildEntryPoints() []domain.EntryPoint {
-	entries := make([]domain.EntryPoint, 0, len(b.input.EntryPoints)+2)
-	if b.input.Server.Port != 0 {
-		entries = append(entries, domain.EntryPoint{Name: DefaultHTTPEntryPointName, Address: portAddress(b.input.Server.Port), Protocol: domain.EntryPointProtocolHTTP})
-	}
-	if b.input.Server.TLSPort != 0 {
-		entries = append(entries, domain.EntryPoint{Name: DefaultTLSEntryPointName, Address: portAddress(b.input.Server.TLSPort), Protocol: domain.EntryPointProtocolTLSMux})
-	}
+	entries := make([]domain.EntryPoint, 0, len(b.input.EntryPoints))
 	for _, name := range sortedKeys(b.input.EntryPoints) {
 		cfg := b.input.EntryPoints[name]
-		entries = append(entries, domain.EntryPoint{Name: name, Address: cfg.Address, Protocol: cfg.Protocol, TrustedCIDRs: append([]string{}, cfg.TrustedCIDRs...)})
+		entries = append(entries, domain.EntryPoint{
+			Name:                    name,
+			Address:                 cfg.Address,
+			Protocol:                cfg.Protocol,
+			TrustedCIDRs:            append([]string(nil), cfg.TrustedCIDRs...),
+			RawFallback:             cfg.RawFallback,
+			RawFallbackTrustedCIDRs: append([]string(nil), cfg.RawFallbackTrustedCIDRs...),
+			AllowPublicRawFallback:  cfg.AllowPublicRawFallback,
+		})
 	}
 	return entries
 }
@@ -143,10 +139,7 @@ func (b *builder) addHTTPRoutes(graph *domain.TrafficGraph) error {
 	routes := append([]domain.Route{}, b.input.Routes...)
 	sort.Slice(routes, func(i, j int) bool { return routes[i].Domain < routes[j].Domain })
 	for _, route := range routes {
-		entryPoint := DefaultHTTPEntryPointName
-		if route.HTTPS {
-			entryPoint = DefaultTLSEntryPointName
-		}
+		entryPoint := DefaultEdgeEntryPointName
 		serviceName := string(domain.TrafficServiceRefRoute) + ":" + route.Domain
 		b.addService(domain.TrafficService{Name: serviceName})
 		graph.Routers = append(graph.Routers, domain.TrafficRouter{Name: "route:" + route.Domain, EntryPoint: entryPoint, Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: route.Domain}, Service: serviceName})
@@ -163,7 +156,7 @@ func (b *builder) addExternalRoutes(graph *domain.TrafficGraph) error {
 		}
 		serviceName := string(domain.TrafficServiceRefExternalRoute) + ":" + hostName
 		b.addService(domain.TrafficService{Name: serviceName, Backends: []domain.TrafficBackend{{Name: hostName, Host: host, Port: port, Protocol: domain.NetworkProtocolTCP}}})
-		graph.Routers = append(graph.Routers, domain.TrafficRouter{Name: "external_route:" + hostName, EntryPoint: DefaultHTTPEntryPointName, Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: hostName}, Service: serviceName})
+		graph.Routers = append(graph.Routers, domain.TrafficRouter{Name: "external_route:" + hostName, EntryPoint: DefaultEdgeEntryPointName, Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: hostName}, Service: serviceName})
 	}
 	return nil
 }
@@ -353,10 +346,6 @@ func parseBackendAddress(value string) (string, int, error) {
 		return "", 0, fmt.Errorf("host and valid port are required")
 	}
 	return host, port, nil
-}
-
-func portAddress(port int) string {
-	return ":" + strconv.Itoa(port)
 }
 
 func sortedKeys[V any](m map[string]V) []string {

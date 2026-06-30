@@ -55,6 +55,8 @@ type Manager struct {
 	lastReloadStatus string
 	lastReloadError  string
 	tlsHTTPServers   atomic.Value
+	smartHTTPServers atomic.Value
+	smartTLSServers  atomic.Value
 }
 
 // NewManager creates a traffic manager.
@@ -65,6 +67,8 @@ func NewManager() *Manager {
 		lastReloadStatus: reloadStatusOK,
 	}
 	manager.tlsHTTPServers.Store(tlsHTTPServers{})
+	manager.smartHTTPServers.Store(smartHTTPServers{})
+	manager.smartTLSServers.Store(smartTLSServers{})
 	return manager
 }
 
@@ -101,7 +105,7 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	}
 
 	for _, update := range tcpUpdates {
-		update.runtime.updateEntryPoint(update.entryPoint, update.trusted)
+		update.runtime.updateEntryPoint(update.entryPoint, update.trusted, update.rawTrusted)
 	}
 	for _, update := range udpUpdates {
 		update.runtime.updateEntryPoint(update.entryPoint, update.trusted)
@@ -252,6 +256,7 @@ type tcpRuntimeUpdate struct {
 	runtime    *entryPointRuntime
 	entryPoint domain.EntryPoint
 	trusted    []*net.IPNet
+	rawTrusted []*net.IPNet
 }
 
 type udpRuntimeUpdate struct {
@@ -282,8 +287,13 @@ func (m *Manager) prepareTCPListeners(ctx context.Context, graph *domain.Traffic
 				stopTCPRuntimes(ctx, created, effectiveTCPOptions(graph.Options.TCP).DrainTimeout)
 				return nil, nil, nil, fmt.Errorf("parse trusted cidrs for tcp entrypoint %q: %w", entryPoint.Name, err)
 			}
+			rawTrusted, err := parseTrustedCIDRs(entryPoint.RawFallbackTrustedCIDRs)
+			if err != nil {
+				stopTCPRuntimes(ctx, created, effectiveTCPOptions(graph.Options.TCP).DrainTimeout)
+				return nil, nil, nil, fmt.Errorf("parse raw fallback trusted cidrs for tcp entrypoint %q: %w", entryPoint.Name, err)
+			}
 			trafficDebug(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Msg("reusing tcp traffic listener for same-address entrypoint update")
-			updates = append(updates, tcpRuntimeUpdate{runtime: runtime, entryPoint: entryPoint, trusted: trusted})
+			updates = append(updates, tcpRuntimeUpdate{runtime: runtime, entryPoint: entryPoint, trusted: trusted, rawTrusted: rawTrusted})
 			next[entryPoint.Name] = runtime
 			delete(current, runtime.entryPointSnapshot().Name)
 			continue
@@ -312,7 +322,7 @@ func stopUDPRuntimes(ctx context.Context, runtimes []*udpEntryPointRuntime, drai
 }
 
 func isTCPListenerProtocol(protocol domain.EntryPointProtocol) bool {
-	return protocol == domain.EntryPointProtocolTCP || protocol == domain.EntryPointProtocolTLSMux
+	return protocol == domain.EntryPointProtocolTCP || protocol == domain.EntryPointProtocolTLSMux || protocol == domain.EntryPointProtocolSmartTCP
 }
 
 func conflictingTCPRuntime(current map[string]*entryPointRuntime, entryPoint domain.EntryPoint) *entryPointRuntime {
@@ -333,6 +343,10 @@ func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.Entry
 	if err != nil {
 		_ = listener.Close()
 		return nil, fmt.Errorf("parse trusted cidrs for tcp entrypoint %q: %w", entryPoint.Name, err)
+	}
+	if _, err := parseTrustedCIDRs(entryPoint.RawFallbackTrustedCIDRs); err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("parse raw fallback trusted cidrs for tcp entrypoint %q: %w", entryPoint.Name, err)
 	}
 	trafficInfo(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("bound tcp traffic entrypoint")
 	runtime := newEntryPointRuntime(ctx, m, entryPoint, listener, trusted)
@@ -472,6 +486,7 @@ func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entry
 			status.TotalErrors = counters.TotalErrors
 			status.BytesIn = counters.BytesIn
 			status.BytesOut = counters.BytesOut
+			status.SmartTCP = counters.SmartTCP
 		}
 		if runtime := udpListeners[entry.Name]; runtime != nil {
 			counters := runtime.counters.snapshot()
@@ -526,6 +541,18 @@ func aggregateCounters(entries []domain.EntryPointStatus) domain.TrafficCounters
 		counters.TotalErrors += entry.TotalErrors
 		counters.BytesIn += entry.BytesIn
 		counters.BytesOut += entry.BytesOut
+		counters.SmartTCP.HTTPAccepted += entry.SmartTCP.HTTPAccepted
+		counters.SmartTCP.H2CAccepted += entry.SmartTCP.H2CAccepted
+		counters.SmartTCP.HTTPSFallbackAccepted += entry.SmartTCP.HTTPSFallbackAccepted
+		counters.SmartTCP.TLSPassthroughAccepted += entry.SmartTCP.TLSPassthroughAccepted
+		counters.SmartTCP.RawFallbackAccepted += entry.SmartTCP.RawFallbackAccepted
+		counters.SmartTCP.EntrypointCIDRRefused += entry.SmartTCP.EntrypointCIDRRefused
+		counters.SmartTCP.RawFallbackCIDRRefused += entry.SmartTCP.RawFallbackCIDRRefused
+		counters.SmartTCP.PROXYRefused += entry.SmartTCP.PROXYRefused
+		counters.SmartTCP.UnknownNoFallbackRefused += entry.SmartTCP.UnknownNoFallbackRefused
+		counters.SmartTCP.MalformedRejected += entry.SmartTCP.MalformedRejected
+		counters.SmartTCP.SniffTimeout += entry.SmartTCP.SniffTimeout
+		counters.SmartTCP.ClientHelloTooLarge += entry.SmartTCP.ClientHelloTooLarge
 	}
 	return counters
 }
@@ -535,6 +562,7 @@ func cloneTrafficGraph(graph domain.TrafficGraph) domain.TrafficGraph {
 	clone.EntryPoints = append([]domain.EntryPoint{}, graph.EntryPoints...)
 	for i := range clone.EntryPoints {
 		clone.EntryPoints[i].TrustedCIDRs = append([]string(nil), graph.EntryPoints[i].TrustedCIDRs...)
+		clone.EntryPoints[i].RawFallbackTrustedCIDRs = append([]string(nil), graph.EntryPoints[i].RawFallbackTrustedCIDRs...)
 	}
 	clone.Routers = append([]domain.TrafficRouter{}, graph.Routers...)
 	clone.Services = append([]domain.TrafficService{}, graph.Services...)
@@ -566,6 +594,22 @@ type trafficCounters struct {
 	totalErrors          atomic.Int64
 	bytesIn              atomic.Int64
 	bytesOut             atomic.Int64
+	smartTCP             smartTCPCounterSet
+}
+
+type smartTCPCounterSet struct {
+	httpAccepted             atomic.Int64
+	h2cAccepted              atomic.Int64
+	httpsFallbackAccepted    atomic.Int64
+	tlsPassthroughAccepted   atomic.Int64
+	rawFallbackAccepted      atomic.Int64
+	entrypointCIDRRefused    atomic.Int64
+	rawFallbackCIDRRefused   atomic.Int64
+	proxyRefused             atomic.Int64
+	unknownNoFallbackRefused atomic.Int64
+	malformedRejected        atomic.Int64
+	sniffTimeout             atomic.Int64
+	clientHelloTooLarge      atomic.Int64
 }
 
 func (c *trafficCounters) snapshot() domain.TrafficCounters {
@@ -577,6 +621,20 @@ func (c *trafficCounters) snapshot() domain.TrafficCounters {
 		TotalErrors:          c.totalErrors.Load(),
 		BytesIn:              c.bytesIn.Load(),
 		BytesOut:             c.bytesOut.Load(),
+		SmartTCP: domain.SmartTCPCounters{
+			HTTPAccepted:             c.smartTCP.httpAccepted.Load(),
+			H2CAccepted:              c.smartTCP.h2cAccepted.Load(),
+			HTTPSFallbackAccepted:    c.smartTCP.httpsFallbackAccepted.Load(),
+			TLSPassthroughAccepted:   c.smartTCP.tlsPassthroughAccepted.Load(),
+			RawFallbackAccepted:      c.smartTCP.rawFallbackAccepted.Load(),
+			EntrypointCIDRRefused:    c.smartTCP.entrypointCIDRRefused.Load(),
+			RawFallbackCIDRRefused:   c.smartTCP.rawFallbackCIDRRefused.Load(),
+			PROXYRefused:             c.smartTCP.proxyRefused.Load(),
+			UnknownNoFallbackRefused: c.smartTCP.unknownNoFallbackRefused.Load(),
+			MalformedRejected:        c.smartTCP.malformedRejected.Load(),
+			SniffTimeout:             c.smartTCP.sniffTimeout.Load(),
+			ClientHelloTooLarge:      c.smartTCP.clientHelloTooLarge.Load(),
+		},
 	}
 }
 

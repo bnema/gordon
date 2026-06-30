@@ -9,18 +9,55 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+func TestBuildSmartTCPRoutesDefaultToEdge(t *testing.T) {
+	graph, err := Build(Input{
+		EntryPoints: map[string]EntryPointConfig{"edge": {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP}},
+		Routes:      []domain.Route{{Domain: "app.example.com"}},
+	})
+	require.NoError(t, err)
+	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "route:app.example.com", EntryPoint: "edge", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"})
+}
+
+func TestBuildRawFallbackConfigMapsToEntryPoint(t *testing.T) {
+	graph, err := Build(Input{
+		EntryPoints: map[string]EntryPointConfig{"edge": {
+			Address:                 ":443",
+			Protocol:                domain.EntryPointProtocolSmartTCP,
+			RawFallback:             "ssh-fallback",
+			RawFallbackTrustedCIDRs: []string{"100.64.0.0/10"},
+			AllowPublicRawFallback:  true,
+		}},
+		Traffic:         Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "ssh-fallback", EntryPoint: "edge", Service: "network_service:ssh:ssh"}}}},
+		NetworkServices: []NetworkServiceConfig{{Name: "ssh", Ports: []PortConfig{{Name: "ssh", Container: 22, Protocol: domain.NetworkProtocolTCP}}}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []domain.EntryPoint{{
+		Name:                    "edge",
+		Address:                 ":443",
+		Protocol:                domain.EntryPointProtocolSmartTCP,
+		RawFallback:             "ssh-fallback",
+		RawFallbackTrustedCIDRs: []string{"100.64.0.0/10"},
+		AllowPublicRawFallback:  true,
+	}}, graph.EntryPoints)
+}
+
+func TestBuildSmartTCPRoutesRequireCompatibleEdge(t *testing.T) {
+	_, err := Build(Input{Routes: []domain.Route{{Domain: "app.example.com"}}})
+	require.ErrorContains(t, err, "entrypoint")
+}
+
 func TestBuildDefaultsAndHTTPRoutes(t *testing.T) {
 	graph, err := Build(Input{
-		Server:         ServerConfig{Port: 80, TLSPort: 443},
+		EntryPoints:    map[string]EntryPointConfig{"edge": {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP}},
 		Routes:         []domain.Route{{Domain: "app.example.com"}, {Domain: "secure.example.com", HTTPS: true}},
 		ExternalRoutes: map[string]string{"ext.example.com": "backend.local:8080"},
 	})
 	require.NoError(t, err)
 
-	require.Contains(t, graph.EntryPoints, domain.EntryPoint{Name: "web", Address: ":80", Protocol: domain.EntryPointProtocolHTTP})
-	require.Contains(t, graph.EntryPoints, domain.EntryPoint{Name: "websecure", Address: ":443", Protocol: domain.EntryPointProtocolTLSMux})
-	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "route:app.example.com", EntryPoint: "web", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"})
-	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "route:secure.example.com", EntryPoint: "websecure", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "secure.example.com"}, Service: "route:secure.example.com"})
+	require.Equal(t, []domain.EntryPoint{{Name: "edge", Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP}}, graph.EntryPoints)
+	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "route:app.example.com", EntryPoint: "edge", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"})
+	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "route:secure.example.com", EntryPoint: "edge", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "secure.example.com"}, Service: "route:secure.example.com"})
+	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "external_route:ext.example.com", EntryPoint: "edge", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "ext.example.com"}, Service: "external_route:ext.example.com"})
 	require.Contains(t, graph.Services, domain.TrafficService{Name: "external_route:ext.example.com", Backends: []domain.TrafficBackend{{Name: "ext.example.com", Host: "backend.local", Port: 8080, Protocol: domain.NetworkProtocolTCP}}})
 }
 
@@ -64,9 +101,9 @@ func TestBuildRejectsStaticServiceRef(t *testing.T) {
 
 func TestBuildRejectsTLSHTTPRouteConflict(t *testing.T) {
 	_, err := Build(Input{
-		Server:          ServerConfig{TLSPort: 443},
+		EntryPoints:     map[string]EntryPointConfig{"edge": {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP}},
 		Routes:          []domain.Route{{Domain: "app.example.com", HTTPS: true}},
-		Traffic:         Config{TLS: TLSConfig{Routers: []RouterConfig{{Name: "passthrough", EntryPoint: "websecure", SNI: "app.example.com", Service: "network_service:app:https"}}}},
+		Traffic:         Config{TLS: TLSConfig{Routers: []RouterConfig{{Name: "passthrough", EntryPoint: "edge", SNI: "app.example.com", Service: "network_service:app:https"}}}},
 		NetworkServices: []NetworkServiceConfig{{Name: "app", Ports: []PortConfig{{Name: "https", Container: 443, Protocol: domain.NetworkProtocolTCP}}}},
 	})
 	require.ErrorContains(t, err, "http host conflicts")

@@ -60,9 +60,13 @@ func (m *Manager) loadTLSHTTPServers() tlsHTTPServers {
 }
 
 func peekClientHelloSNI(conn net.Conn) (string, net.Conn, error) {
+	return peekClientHelloSNIWithLimit(conn, maxClientHelloBytes)
+}
+
+func peekClientHelloSNIWithLimit(conn net.Conn, maxBytes int) (string, net.Conn, error) {
 	buf := make([]byte, 0, 4096)
 	tmp := make([]byte, 1024)
-	for len(buf) < maxClientHelloBytes {
+	for len(buf) < maxBytes {
 		n, err := conn.Read(tmp)
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)
@@ -78,7 +82,7 @@ func peekClientHelloSNI(conn net.Conn) (string, net.Conn, error) {
 			return "", nil, fmt.Errorf("read client hello: %w", err)
 		}
 	}
-	return "", nil, fmt.Errorf("client hello exceeds %d bytes", maxClientHelloBytes)
+	return "", nil, fmt.Errorf("client hello exceeds %d bytes", maxBytes)
 }
 
 func parseClientHelloSNI(data []byte) (string, bool, error) {
