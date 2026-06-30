@@ -85,6 +85,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/publictls"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
+	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	"github.com/bnema/gordon/internal/usecase/traffic"
 	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
 
@@ -179,6 +180,7 @@ type Config struct {
 	EntryPoints     map[string]traffic.EntryPointConfig `mapstructure:"entrypoints"`
 	Traffic         traffic.Config                      `mapstructure:"traffic"`
 	NetworkServices []traffic.NetworkServiceConfig      `mapstructure:"network_services"`
+	Services        []servicecfg.Config                 `mapstructure:"services"`
 
 	Backups struct {
 		// Legacy database backup keys. Prefer backups.databases.* for new configs.
