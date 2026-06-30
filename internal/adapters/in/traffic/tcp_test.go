@@ -618,7 +618,7 @@ func TestRouteToHTTPListenerServeFailureReturnsFalseAndLeavesTrackedForCaller(t 
 	require.NoError(t, err)
 	defer listener.Close()
 
-	runtime := newEntryPointRuntime(context.Background(), NewManager(), domain.EntryPoint{Name: "edge"}, listener, nil)
+	runtime := newEntryPointRuntime(context.Background(), NewManager(), domain.EntryPoint{Name: "edge"}, listener, nil, nil)
 	httpListener := newTLSHTTPListener(listener.Addr())
 	require.NoError(t, httpListener.Close())
 
@@ -748,7 +748,7 @@ func TestTCPRuntimeDoesNotPublishTLSHTTPServerAfterClose(t *testing.T) {
 	require.NoError(t, err)
 	defer listener.Close()
 	manager := NewManager()
-	runtime := newEntryPointRuntime(context.Background(), manager, domain.EntryPoint{Name: "websecure", Address: listener.Addr().String(), Protocol: domain.EntryPointProtocolTLSMux}, listener, nil)
+	runtime := newEntryPointRuntime(context.Background(), manager, domain.EntryPoint{Name: "websecure", Address: listener.Addr().String(), Protocol: domain.EntryPointProtocolTLSMux}, listener, nil, nil)
 	runtime.closed.Store(true)
 
 	runtime.replaceTLSHTTPServer(runtime.entryPointSnapshot(), TLSHTTPServerConfig{

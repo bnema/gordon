@@ -591,6 +591,12 @@ func l4BackendProtocol(protocol RouterProtocol) (NetworkProtocol, bool) {
 
 func validateRawFallbackEntrypoint(entryPoint EntryPoint) error {
 	if entryPoint.Protocol == EntryPointProtocolSmartTCP {
+		if entryPoint.RawFallback == "" && len(entryPoint.RawFallbackTrustedCIDRs) > 0 {
+			return fmt.Errorf("raw_fallback_trusted_cidrs on entrypoint %q requires raw_fallback", entryPoint.Name)
+		}
+		if entryPoint.RawFallback == "" && entryPoint.AllowPublicRawFallback {
+			return fmt.Errorf("allow_public_raw_fallback on entrypoint %q requires raw_fallback", entryPoint.Name)
+		}
 		return nil
 	}
 	if entryPoint.RawFallback != "" {

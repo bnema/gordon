@@ -107,6 +107,21 @@ func TestService_ReconcileRemovesDuplicateMatchingServiceContainers(t *testing.T
 	require.NoError(t, err)
 }
 
+func TestService_ReconcileKeepsRunningDuplicateBeforeLowerStaleID(t *testing.T) {
+	rt := outmocks.NewMockContainerRuntime(t)
+	svc := sampleService()
+	hash, err := serviceConfigHash(svc)
+	require.NoError(t, err)
+	staleLowerID := managedContainer("existing-1", svc.Name, hash, "exited")
+	runningPrimary := managedContainer("existing-2", svc.Name, hash, "running")
+	rt.On("ListContainers", mock.Anything, true).Return([]*domain.Container{staleLowerID, runningPrimary}, nil).Once()
+	rt.On("RemoveContainer", mock.Anything, "existing-1", true).Return(nil).Once()
+
+	err = NewService(rt).Reconcile(context.Background(), []domain.StandaloneService{svc})
+
+	require.NoError(t, err)
+}
+
 func TestService_ReconcileStopsAndRemovesDisabledService(t *testing.T) {
 	rt := outmocks.NewMockContainerRuntime(t)
 	svc := sampleService()
@@ -230,6 +245,24 @@ func TestServiceEnvLoadsEnvFileAndMergesInlineEnv(t *testing.T) {
 	assert.Equal(t, []string{"FROM_FILE=file", "INLINE=value", "OVERRIDE=inline"}, env)
 }
 
+func TestServiceConfigHashIncludesResolvedEnvFileAndSecretValues(t *testing.T) {
+	envFile := writeTempEnvFile(t, "FROM_FILE=one\n")
+	provider := outmocks.NewMockSecretProvider(t)
+	svc := sampleService()
+	svc.EnvFile = envFile
+	svc.Secrets = []domain.StandaloneServiceSecretRef{{Name: "rcon", Key: "RCON_PASSWORD"}}
+	provider.On("GetSecret", mock.Anything, "service/game/rcon").Return("secret-one", nil).Once()
+	first, err := NewServiceWithSecretProvider(nil, provider).serviceConfigHash(context.Background(), svc)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(envFile, []byte("FROM_FILE=two\n"), 0o600))
+	provider.On("GetSecret", mock.Anything, "service/game/rcon").Return("secret-two", nil).Once()
+	second, err := NewServiceWithSecretProvider(nil, provider).serviceConfigHash(context.Background(), svc)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, first, second)
+}
+
 func TestServiceEnvResolvesServiceScopedSecretsWithoutLeakingValues(t *testing.T) {
 	rt := outmocks.NewMockContainerRuntime(t)
 	provider := outmocks.NewMockSecretProvider(t)
@@ -267,6 +300,16 @@ func TestServiceEnvUsesExplicitProviderSecretPaths(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, env, "RCON_PASSWORD=secret-value")
+}
+
+func TestTCPReadinessAddressMapsIPv6WildcardToIPv6Loopback(t *testing.T) {
+	svc := sampleService()
+	svc.Ports = []domain.StandaloneServicePort{{Name: "admin", Container: 28016, Protocol: domain.NetworkProtocolTCP, Publish: "[::]:38016"}}
+
+	address, err := tcpReadinessAddress(svc)
+
+	require.NoError(t, err)
+	assert.Equal(t, "[::1]:38016", address)
 }
 
 func TestWaitTCPReadinessDialsResolvedLoopbackPublish(t *testing.T) {

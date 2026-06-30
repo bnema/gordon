@@ -303,7 +303,7 @@ func validateStandaloneServices(services []domain.StandaloneService) error {
 		}
 		seen[service.Name] = struct{}{}
 		if err := service.Validate(); err != nil {
-			return err
+			return fmt.Errorf("standalone service %q: %w", service.Name, err)
 		}
 	}
 	return nil

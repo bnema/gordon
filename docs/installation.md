@@ -263,7 +263,7 @@ Gordon serves public application traffic through HTTP-capable entrypoints such a
 Wrong mode causes: **521** (Cloudflare can't connect) or **525** (TLS handshake failed).
 
 > **Important:** For Cloudflare-proxied HTTP paths, set `proxy_allowed_ips` with Cloudflare edge IPs — see [Proxy Origin Allowlist](#proxy-origin-allowlist) below.
-
+>
 > **Rootless note:** Unprivileged users can't bind privileged ports. Bind `entrypoints.edge.address` to a high port (for example `:9000`) and forward/map external ports to it via firewall or container settings.
 
 ## Proxy Origin Allowlist

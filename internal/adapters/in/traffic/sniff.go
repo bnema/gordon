@@ -41,8 +41,10 @@ func sniffSmartTCP(conn net.Conn, timeout time.Duration) (smartTCPSniffResult, e
 	}
 
 	buf := make([]byte, 0, 32)
-	tmp := make([]byte, 1)
 	for len(buf) < maxSmartTCPSniffBytes {
+		remaining := maxSmartTCPSniffBytes - len(buf)
+		readSize := min(32, remaining)
+		tmp := make([]byte, readSize)
 		n, err := conn.Read(tmp)
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)

@@ -20,6 +20,17 @@ func TestToDomainRejectsDuplicateServiceNames(t *testing.T) {
 	require.ErrorContains(t, err, "duplicate service name")
 }
 
+func TestToDomainRejectsServiceNamesWithDuplicateRuntimeIdentifier(t *testing.T) {
+	configs := []Config{
+		{Name: "cache.api", Image: "redis:7", Enabled: true},
+		{Name: "cache_api", Image: "redis:7", Enabled: true},
+	}
+
+	_, err := ToDomain(configs)
+
+	require.ErrorContains(t, err, "runtime identifier")
+}
+
 func TestConfigToDomainRejectsNonPositiveReadinessTimeout(t *testing.T) {
 	for _, timeout := range []string{"0s", "-1s"} {
 		t.Run(timeout, func(t *testing.T) {

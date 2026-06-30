@@ -15,6 +15,19 @@ func TestStandaloneServiceValidateRequiresNameAndImageWhenEnabled(t *testing.T) 
 	require.ErrorContains(t, svc.Validate(), "image")
 }
 
+func TestStandaloneServiceValidateRejectsPaddedNames(t *testing.T) {
+	svc := StandaloneService{Name: " cache ", Image: "redis:7", Enabled: true}
+	require.ErrorContains(t, svc.Validate(), "leading or trailing whitespace")
+
+	svc = StandaloneService{
+		Name:    "cache",
+		Image:   "redis:7",
+		Enabled: true,
+		Ports:   []StandaloneServicePort{{Name: " admin ", Container: 6379, Protocol: NetworkProtocolTCP}},
+	}
+	require.ErrorContains(t, svc.Validate(), "leading or trailing whitespace")
+}
+
 func TestStandaloneServiceValidateAllowsDisabledServiceWithoutImage(t *testing.T) {
 	svc := StandaloneService{Name: "cache", Enabled: false}
 	require.NoError(t, svc.Validate())
@@ -47,6 +60,10 @@ func TestStandaloneServiceValidatePorts(t *testing.T) {
 	conflictingVisibility := valid
 	conflictingVisibility.Ports = []StandaloneServicePort{{Name: "rcon", Container: 28016, Protocol: NetworkProtocolTCP, Private: true, Public: true}}
 	require.ErrorContains(t, conflictingVisibility.Validate(), "cannot be both private and public")
+
+	privateNonLoopback := valid
+	privateNonLoopback.Ports = []StandaloneServicePort{{Name: "rcon", Container: 28016, Protocol: NetworkProtocolTCP, Private: true, Publish: "0.0.0.0:28016"}}
+	require.ErrorContains(t, privateNonLoopback.Validate(), "must be loopback")
 }
 
 func TestStandaloneServiceValidateVolumesAndEnvFile(t *testing.T) {

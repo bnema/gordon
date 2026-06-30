@@ -49,6 +49,16 @@ func TestTrafficGraphSmartTCPRawFallbackValidation(t *testing.T) {
 			wantErr:    "raw fallback",
 		},
 		{
+			name:       "raw fallback cidrs require raw fallback on smart tcp",
+			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolSmartTCP, RawFallbackTrustedCIDRs: []string{"10.0.0.0/8"}},
+			wantErr:    "requires raw_fallback",
+		},
+		{
+			name:       "public raw fallback flag requires raw fallback on smart tcp",
+			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolSmartTCP, AllowPublicRawFallback: true},
+			wantErr:    "requires raw_fallback",
+		},
+		{
 			name:       "missing raw fallback router rejected",
 			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolSmartTCP, RawFallback: "missing", RawFallbackTrustedCIDRs: []string{"10.0.0.0/8"}},
 			routers:    nil,

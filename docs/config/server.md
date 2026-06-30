@@ -116,7 +116,7 @@ The defaults avoid relying on host-local DNS. This matters on hosts using Tailsc
 
 Because Gordon's ACME challenge mode is global, `cloudflare-dns-01` requires a Cloudflare token that can read zones and edit DNS records for every zone used by configured HTTPS routes. If that is not desirable, use `http-01` until Gordon supports per-route or per-zone challenge policy.
 
-#### Direct HTTP Onboarding
+#### Direct HTTP CA onboarding paths (`/.well-known/gordon/ca`)
 
 When Gordon is serving TLS-capable edge traffic, direct cleartext HTTP clients (those not arriving through a trusted proxy) are restricted to CA onboarding paths only:
 

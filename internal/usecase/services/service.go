@@ -94,14 +94,21 @@ func (s *Service) reconcileOne(ctx context.Context, svc domain.StandaloneService
 	if !svc.Enabled {
 		return s.stopDisabled(ctx, svc.Name, cleanup, existing)
 	}
-	hash, err := serviceConfigHash(svc)
+	hash, err := s.serviceConfigHash(ctx, svc)
 	if err != nil {
 		return fmt.Errorf("hash standalone service %q config: %w", svc.Name, err)
 	}
 	if len(existing) == 0 {
 		return s.createAndStart(ctx, svc, hash)
 	}
-	sort.SliceStable(existing, func(i, j int) bool { return existing[i].ID < existing[j].ID })
+	sort.SliceStable(existing, func(i, j int) bool {
+		leftRunning := containerStatus(existing[i]) == domain.ContainerStatusRunning
+		rightRunning := containerStatus(existing[j]) == domain.ContainerStatusRunning
+		if leftRunning != rightRunning {
+			return leftRunning
+		}
+		return existing[i].ID < existing[j].ID
+	})
 	current := existing[0]
 	if current.Labels[domain.LabelServiceConfigHash] != hash {
 		if err := s.recreate(ctx, svc, cleanup, existing, hash); err != nil {
@@ -339,17 +346,22 @@ func portPublishes(svc domain.StandaloneService) ([]domain.ContainerPortPublish,
 }
 
 func serviceConfigHash(svc domain.StandaloneService) (string, error) {
+	return NewService(nil).serviceConfigHash(context.Background(), svc)
+}
+
+func (s *Service) serviceConfigHash(ctx context.Context, svc domain.StandaloneService) (string, error) {
+	resolvedEnv, err := s.serviceEnv(ctx, svc)
+	if err != nil {
+		return "", err
+	}
 	payload := struct {
-		Image     string
-		Env       []string
-		EnvFile   string
-		Secrets   []domain.StandaloneServiceSecretRef
-		Readiness domain.StandaloneServiceReadiness
-		Ports     []domain.StandaloneServicePort
-		Volumes   []domain.StandaloneServiceVolume
-		Cleanup   domain.StandaloneServiceCleanup
-	}{svc.Image, append([]string(nil), svc.Env...), svc.EnvFile, append([]domain.StandaloneServiceSecretRef(nil), svc.Secrets...), svc.Readiness, append([]domain.StandaloneServicePort(nil), svc.Ports...), append([]domain.StandaloneServiceVolume(nil), svc.Volumes...), normalizeCleanup(svc.Cleanup)}
-	sort.Strings(payload.Env)
+		Image       string
+		ResolvedEnv []string
+		Readiness   domain.StandaloneServiceReadiness
+		Ports       []domain.StandaloneServicePort
+		Volumes     []domain.StandaloneServiceVolume
+		Cleanup     domain.StandaloneServiceCleanup
+	}{svc.Image, resolvedEnv, svc.Readiness, append([]domain.StandaloneServicePort(nil), svc.Ports...), append([]domain.StandaloneServiceVolume(nil), svc.Volumes...), normalizeCleanup(svc.Cleanup)}
 	bytes, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -496,7 +508,10 @@ func tcpReadinessAddress(svc domain.StandaloneService) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("parse standalone service %q tcp readiness publish: %w", svc.Name, err)
 		}
-		if host == "0.0.0.0" || host == "::" || host == "" {
+		switch host {
+		case "::":
+			host = "::1"
+		case "0.0.0.0", "":
 			host = "127.0.0.1"
 		}
 		return net.JoinHostPort(host, hostPort), nil

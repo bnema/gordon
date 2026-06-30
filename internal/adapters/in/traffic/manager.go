@@ -96,10 +96,8 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	if err != nil {
 		m.lastReloadStatus = reloadStatusError
 		m.lastReloadError = err.Error()
+		stopTCPRuntimes(ctx, createdListeners, effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout)
 		m.mu.Unlock()
-		for _, runtime := range createdListeners {
-			runtime.stop(ctx, effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout)
-		}
 		trafficWarn(ctx).Err(err).Msg("failed to prepare udp traffic listeners")
 		return err
 	}
@@ -346,12 +344,13 @@ func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.Entry
 		_ = listener.Close()
 		return nil, fmt.Errorf("parse trusted cidrs for tcp entrypoint %q: %w", entryPoint.Name, err)
 	}
-	if _, err := parseTrustedCIDRs(entryPoint.RawFallbackTrustedCIDRs); err != nil {
+	rawTrusted, err := parseTrustedCIDRs(entryPoint.RawFallbackTrustedCIDRs)
+	if err != nil {
 		_ = listener.Close()
 		return nil, fmt.Errorf("parse raw fallback trusted cidrs for tcp entrypoint %q: %w", entryPoint.Name, err)
 	}
 	trafficInfo(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("bound tcp traffic entrypoint")
-	runtime := newEntryPointRuntime(ctx, m, entryPoint, listener, trusted)
+	runtime := newEntryPointRuntime(ctx, m, entryPoint, listener, trusted, rawTrusted)
 	return runtime, nil
 }
 

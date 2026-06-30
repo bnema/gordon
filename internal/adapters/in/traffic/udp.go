@@ -171,13 +171,6 @@ func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options 
 		_ = backendConn.Close()
 		return existing, true
 	}
-	r.mu.Unlock()
-	if options.MaxSessions > 0 && r.sessionCount() >= options.MaxSessions {
-		_ = backendConn.Close()
-		r.counters.totalRefused.Add(1)
-		return nil, false
-	}
-	r.mu.Lock()
 	if options.MaxSessions > 0 && len(r.sessions) >= options.MaxSessions {
 		r.mu.Unlock()
 		_ = backendConn.Close()
@@ -191,12 +184,6 @@ func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options 
 	r.counters.totalAccepted.Add(1)
 	go r.backendLoop(key, session)
 	return session, true
-}
-
-func (r *udpEntryPointRuntime) sessionCount() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.sessions)
 }
 
 func trafficBackendEqual(left domain.TrafficBackend, right domain.TrafficBackend) bool {

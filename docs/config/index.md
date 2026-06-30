@@ -177,7 +177,7 @@ keep_last = 3
 | `[auto_route]` | Automatic route creation | [Auto Route](./auto-route.md) |
 | `[routes]` | Domain to image mapping | [Routes](./routes.md) |
 | `[external_routes]` | Non-containerized service proxying | [External Routes](./external-routes.md) |
-| `[entrypoints]`, `[traffic]`, `[[network_services]]` | L4 and TLS passthrough traffic plane | [Traffic](./traffic.md) |
+| `[entrypoints]`, `[traffic]`, `[[network_services]]`, `[[services]]` | L4 and TLS passthrough traffic plane | [Traffic](./traffic.md) |
 | `[network_groups]` | Shared service networks | [Network Groups](./network-groups.md) |
 | `[attachments]` | Service dependencies | [Attachments](./attachments.md) |
 | `[backups]` | Database backups | [Backups](./backups.md) |

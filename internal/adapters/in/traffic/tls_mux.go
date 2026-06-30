@@ -9,11 +9,15 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 )
 
-const maxClientHelloBytes = 64 << 10
+const (
+	maxClientHelloBytes    = 64 << 10
+	clientHelloReadTimeout = 250 * time.Millisecond
+)
 
 // TLSHTTPServerConfig describes the HTTPS server attached to a tls_mux entrypoint.
 type TLSHTTPServerConfig struct {
@@ -66,9 +70,16 @@ func peekClientHelloSNI(conn net.Conn) (string, net.Conn, error) {
 }
 
 func peekClientHelloSNIWithLimit(conn net.Conn, maxBytes int) (string, net.Conn, error) {
+	if err := conn.SetReadDeadline(time.Now().Add(clientHelloReadTimeout)); err != nil {
+		return "", nil, fmt.Errorf("set client hello read deadline: %w", err)
+	}
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+
 	buf := make([]byte, 0, 4096)
-	tmp := make([]byte, 1024)
 	for len(buf) < maxBytes {
+		remaining := maxBytes - len(buf)
+		readSize := min(1024, remaining)
+		tmp := make([]byte, readSize)
 		n, err := conn.Read(tmp)
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)

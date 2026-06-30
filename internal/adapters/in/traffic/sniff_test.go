@@ -234,7 +234,6 @@ func TestSniffSmartTCPDoesNotTreatClosedPipeAsSuccess(t *testing.T) {
 	client, server := net.Pipe()
 	_ = client.Close()
 	_, err := sniffSmartTCP(server, time.Second)
-	if err == nil && !errors.Is(err, net.ErrClosed) {
-		t.Fatal("expected closed connection to return an error")
-	}
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe), "expected closed connection error, got %v", err)
 }

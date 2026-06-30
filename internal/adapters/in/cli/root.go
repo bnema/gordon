@@ -154,11 +154,11 @@ Commands are organized by where they run:
 	tlsCmd.GroupID = groupManage
 	rootCmd.AddCommand(tlsCmd)
 
-	// Client-only commands (no server needed)
 	trafficCmd := newTrafficCmd()
-	trafficCmd.GroupID = groupClient
+	trafficCmd.GroupID = groupManage
 	rootCmd.AddCommand(trafficCmd)
 
+	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
 	remotesCmd.GroupID = groupClient
 	rootCmd.AddCommand(remotesCmd)

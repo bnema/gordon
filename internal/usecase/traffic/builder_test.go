@@ -286,6 +286,21 @@ func TestBuildRejectsInvalidStandaloneServiceRefs(t *testing.T) {
 	})
 }
 
+func TestBuildWrapsStandaloneServiceValidationErrorsWithServiceName(t *testing.T) {
+	_, err := Build(Input{
+		EntryPoints: map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP}},
+		Services: []domain.StandaloneService{{
+			Name:    "rust",
+			Image:   "localhost/rust:latest",
+			Enabled: true,
+			Ports:   []domain.StandaloneServicePort{{Name: " admin ", Container: 28016, Protocol: domain.NetworkProtocolTCP}},
+		}},
+	})
+
+	require.ErrorContains(t, err, "standalone service \"rust\"")
+	require.ErrorContains(t, err, "leading or trailing whitespace")
+}
+
 func TestBuildEnforcesPrivateStandaloneServicePortRouting(t *testing.T) {
 	base := func() Input {
 		return Input{

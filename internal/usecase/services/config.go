@@ -64,6 +64,7 @@ type CleanupConfig struct {
 func ToDomain(configs []Config) ([]domain.StandaloneService, error) {
 	services := make([]domain.StandaloneService, 0, len(configs))
 	seenNames := make(map[string]struct{}, len(configs))
+	seenRuntimeNames := make(map[string]string, len(configs))
 	for i, cfg := range configs {
 		svc, err := cfg.ToDomain()
 		if err != nil {
@@ -73,7 +74,12 @@ func ToDomain(configs []Config) ([]domain.StandaloneService, error) {
 		if _, ok := seenNames[name]; ok {
 			return nil, fmt.Errorf("service config %d: duplicate service name %q", i, name)
 		}
+		runtimeName := serviceRuntimeIdentifier(name)
+		if previous, ok := seenRuntimeNames[runtimeName]; ok {
+			return nil, fmt.Errorf("service config %d: duplicate service name %q normalizes to same runtime identifier as %q", i, name, previous)
+		}
 		seenNames[name] = struct{}{}
+		seenRuntimeNames[runtimeName] = name
 		services = append(services, svc)
 	}
 	return services, nil
@@ -199,4 +205,8 @@ func ManagedServiceVolumeName(prefix, serviceName, volumePath string) string {
 		prefix,
 		strings.ReplaceAll(serviceName, ".", "-"),
 		strings.ReplaceAll(strings.Trim(volumePath, "/"), "/", "-"))
+}
+
+func serviceRuntimeIdentifier(name string) string {
+	return strings.NewReplacer(".", "-", "_", "-", "/", "-").Replace(name)
 }

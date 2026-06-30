@@ -106,9 +106,8 @@ func (c *trackedTCPConn) rawFallback() (string, bool) {
 	return c.rawFallbackName, c.rawFallbackName != ""
 }
 
-func newEntryPointRuntime(parentCtx context.Context, manager *Manager, entryPoint domain.EntryPoint, listener net.Listener, trusted []*net.IPNet) *entryPointRuntime {
+func newEntryPointRuntime(parentCtx context.Context, manager *Manager, entryPoint domain.EntryPoint, listener net.Listener, trusted []*net.IPNet, rawTrusted []*net.IPNet) *entryPointRuntime {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parentCtx))
-	rawTrusted, _ := parseTrustedCIDRs(entryPoint.RawFallbackTrustedCIDRs)
 	return &entryPointRuntime{
 		manager:            manager,
 		entryPoint:         entryPoint,
@@ -166,7 +165,6 @@ func (r *entryPointRuntime) refreshTLSHTTPServer(entryPointName string) {
 func (r *entryPointRuntime) replaceTLSHTTPServer(entryPoint domain.EntryPoint, config TLSHTTPServerConfig) {
 	r.tlsHTTPReplaceMu.Lock()
 	defer r.tlsHTTPReplaceMu.Unlock()
-	r.stopTLSHTTPServerLocked(r.ctx, 0)
 	if r.isClosed() {
 		return
 	}
@@ -182,6 +180,9 @@ func (r *entryPointRuntime) replaceTLSHTTPServer(entryPoint domain.EntryPoint, c
 	done := make(chan struct{})
 
 	r.mu.Lock()
+	oldListener := r.tlsHTTPListener
+	oldServer := r.tlsHTTPServer
+	oldDone := r.tlsHTTPDone
 	if r.isClosed() {
 		r.mu.Unlock()
 		_ = listener.Close()
@@ -198,6 +199,7 @@ func (r *entryPointRuntime) replaceTLSHTTPServer(entryPoint domain.EntryPoint, c
 			trafficWarn(r.ctx).Err(err).Str("entrypoint", entryPoint.Name).Msg("tls mux https server stopped with error")
 		}
 	}()
+	stopTLSHTTPServer(r.ctx, entryPoint.Name, oldListener, oldServer, oldDone, 0)
 }
 
 func (r *entryPointRuntime) routeToHTTPS(tracked *trackedTCPConn, conn net.Conn) bool {
@@ -289,7 +291,12 @@ func (r *entryPointRuntime) handleTCPConn(client net.Conn) {
 		r.releaseConnection()
 		r.activeWG.Done()
 	}
-	r.track(tracked)
+	if !r.track(tracked) {
+		r.releaseConnection()
+		_ = client.Close()
+		r.activeWG.Done()
+		return
+	}
 	completeOnReturn := true
 	defer func() {
 		if completeOnReturn {
@@ -689,10 +696,14 @@ func (r *entryPointRuntime) releaseConnection() {
 	r.counters.activeTCPConnections.Add(-1)
 }
 
-func (r *entryPointRuntime) track(conn *trackedTCPConn) {
+func (r *entryPointRuntime) track(conn *trackedTCPConn) bool {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.isClosed() {
+		return false
+	}
 	r.activeConns[conn] = struct{}{}
-	r.mu.Unlock()
+	return true
 }
 
 func (r *entryPointRuntime) setBackend(conn *trackedTCPConn, backend net.Conn) {
@@ -759,6 +770,10 @@ func (r *entryPointRuntime) stopTLSHTTPServerLocked(ctx context.Context, drainTi
 	r.tlsHTTPDone = nil
 	r.mu.Unlock()
 
+	stopTLSHTTPServer(ctx, r.entryPointSnapshot().Name, listener, server, done, drainTimeout)
+}
+
+func stopTLSHTTPServer(ctx context.Context, entryPointName string, listener *tlsHTTPListener, server *http.Server, done chan struct{}, drainTimeout time.Duration) {
 	if listener == nil || server == nil || done == nil {
 		return
 	}
@@ -769,7 +784,7 @@ func (r *entryPointRuntime) stopTLSHTTPServerLocked(ctx context.Context, drainTi
 	shutdownCtx, cancel := context.WithTimeout(ctx, drainTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		trafficDebug(ctx).Err(err).Str("entrypoint", r.entryPointSnapshot().Name).Msg("forcing tls mux https server close")
+		trafficDebug(ctx).Err(err).Str("entrypoint", entryPointName).Msg("forcing tls mux https server close")
 		_ = server.Close()
 	}
 	select {

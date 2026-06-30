@@ -87,8 +87,12 @@ func (c StandaloneServiceCleanup) WithDefaults() StandaloneServiceCleanup {
 
 func (s StandaloneService) Validate() error {
 	s = s.WithDefaults()
-	if strings.TrimSpace(s.Name) == "" {
+	name := strings.TrimSpace(s.Name)
+	if name == "" {
 		return fmt.Errorf("standalone service name is required")
+	}
+	if s.Name != name {
+		return fmt.Errorf("standalone service name %q must not include leading or trailing whitespace", s.Name)
 	}
 	if s.Enabled && strings.TrimSpace(s.Image) == "" {
 		return fmt.Errorf("standalone service %q image is required when enabled", s.Name)
@@ -114,33 +118,56 @@ func (s StandaloneService) Validate() error {
 func validateStandaloneServicePorts(s StandaloneService) error {
 	seen := make(map[string]struct{}, len(s.Ports))
 	for i, port := range s.Ports {
-		name := strings.TrimSpace(port.Name)
-		if name == "" {
-			return fmt.Errorf("standalone service %q port %d name is required", s.Name, i)
+		name, err := validateStandaloneServicePort(s.Name, i, port)
+		if err != nil {
+			return err
 		}
 		if _, ok := seen[name]; ok {
 			return fmt.Errorf("standalone service %q duplicate port name %q", s.Name, name)
 		}
 		seen[name] = struct{}{}
-		if port.Container <= 0 || port.Container > 65535 {
-			return fmt.Errorf("standalone service %q port %q container port must be 1-65535", s.Name, name)
+	}
+	return nil
+}
+
+func validateStandaloneServicePort(serviceName string, index int, port StandaloneServicePort) (string, error) {
+	name := strings.TrimSpace(port.Name)
+	if name == "" {
+		return "", fmt.Errorf("standalone service %q port %d name is required", serviceName, index)
+	}
+	if port.Name != name {
+		return "", fmt.Errorf("standalone service %q port %q name must not include leading or trailing whitespace", serviceName, port.Name)
+	}
+	if port.Container <= 0 || port.Container > 65535 {
+		return "", fmt.Errorf("standalone service %q port %q container port must be 1-65535", serviceName, name)
+	}
+	if port.Protocol != NetworkProtocolTCP && port.Protocol != NetworkProtocolUDP {
+		return "", fmt.Errorf("standalone service %q port %q protocol must be tcp or udp", serviceName, name)
+	}
+	if port.Private && port.Public {
+		return "", fmt.Errorf("standalone service %q port %q cannot be both private and public", serviceName, name)
+	}
+	if err := validateStandaloneServicePublish(serviceName, name, port.Publish); err != nil {
+		return "", err
+	}
+	if port.Private && port.Publish != "" {
+		if err := validatePrivateStandaloneServicePublish(serviceName, name, port.Publish); err != nil {
+			return "", err
 		}
-		if port.Protocol != NetworkProtocolTCP && port.Protocol != NetworkProtocolUDP {
-			return fmt.Errorf("standalone service %q port %q protocol must be tcp or udp", s.Name, name)
+	}
+	if err := validateStandaloneServiceTrustedCIDRs(serviceName, name, port.TrustedCIDRs); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func validateStandaloneServiceTrustedCIDRs(serviceName, portName string, cidrs []string) error {
+	for _, cidr := range cidrs {
+		if strings.TrimSpace(cidr) == "" {
+			return fmt.Errorf("standalone service %q port %q trusted_cidrs must not contain empty values", serviceName, portName)
 		}
-		if port.Private && port.Public {
-			return fmt.Errorf("standalone service %q port %q cannot be both private and public", s.Name, name)
-		}
-		if err := validateStandaloneServicePublish(s.Name, name, port.Publish); err != nil {
-			return err
-		}
-		for _, cidr := range port.TrustedCIDRs {
-			if strings.TrimSpace(cidr) == "" {
-				return fmt.Errorf("standalone service %q port %q trusted_cidrs must not contain empty values", s.Name, name)
-			}
-			if _, _, err := net.ParseCIDR(cidr); err != nil {
-				return fmt.Errorf("standalone service %q port %q trusted_cidr %q is invalid: %w", s.Name, name, cidr, err)
-			}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("standalone service %q port %q trusted_cidr %q is invalid: %w", serviceName, portName, cidr, err)
 		}
 	}
 	return nil
@@ -160,6 +187,18 @@ func validateStandaloneServicePublish(serviceName, portName, publish string) err
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
 		return fmt.Errorf("standalone service %q port %q publish address %q must include a valid port", serviceName, portName, publish)
+	}
+	return nil
+}
+
+func validatePrivateStandaloneServicePublish(serviceName, portName, publish string) error {
+	host, _, err := net.SplitHostPort(publish)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("standalone service %q private port %q publish host %q must be loopback", serviceName, portName, host)
 	}
 	return nil
 }
