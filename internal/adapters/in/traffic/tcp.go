@@ -39,8 +39,8 @@ type trackedTCPConn struct {
 	backend net.Conn
 }
 
-func newEntryPointRuntime(manager *Manager, entryPoint domain.EntryPoint, listener net.Listener) *entryPointRuntime {
-	ctx, cancel := context.WithCancel(context.Background())
+func newEntryPointRuntime(parentCtx context.Context, manager *Manager, entryPoint domain.EntryPoint, listener net.Listener) *entryPointRuntime {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parentCtx))
 	return &entryPointRuntime{
 		manager:     manager,
 		entryPoint:  entryPoint,
@@ -56,6 +56,7 @@ func (r *entryPointRuntime) start() {
 	if !r.started.CompareAndSwap(false, true) {
 		return
 	}
+	trafficInfo(r.ctx).Str("entrypoint", r.entryPoint.Name).Str("address", r.entryPoint.Address).Str("protocol", string(r.entryPoint.Protocol)).Msg("started tcp traffic entrypoint")
 	go r.acceptLoop()
 }
 
@@ -71,6 +72,7 @@ func (r *entryPointRuntime) acceptLoop() {
 			if temporary, ok := err.(interface{ Temporary() bool }); ok && temporary.Temporary() {
 				continue
 			}
+			trafficWarn(r.ctx).Err(err).Str("entrypoint", r.entryPoint.Name).Msg("tcp traffic accept loop stopped")
 			return
 		}
 		r.activeWG.Add(1)
@@ -346,6 +348,7 @@ func (r *entryPointRuntime) untrack(conn *trackedTCPConn) {
 
 func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration) {
 	if r.closed.CompareAndSwap(false, true) {
+		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Str("address", r.entryPoint.Address).Msg("stopping tcp traffic entrypoint")
 		r.cancel()
 		_ = r.listener.Close()
 		if !r.started.Load() {
@@ -358,11 +361,14 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 		return
 	}
 	if r.waitActive(ctx, drainTimeout) {
+		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Msg("stopped tcp traffic entrypoint")
 		return
 	}
+	trafficDebug(ctx).Str("entrypoint", r.entryPoint.Name).Dur("drain_timeout", drainTimeout).Msg("forcing tcp traffic entrypoint drain")
 	r.closeActiveConns()
 	select {
 	case <-r.activeDone():
+		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Msg("stopped tcp traffic entrypoint")
 	case <-ctx.Done():
 	}
 }

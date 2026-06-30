@@ -40,8 +40,8 @@ type udpSession struct {
 	once       sync.Once
 }
 
-func newUDPEntryPointRuntime(manager *Manager, entryPoint domain.EntryPoint, packetConn net.PacketConn) *udpEntryPointRuntime {
-	ctx, cancel := context.WithCancel(context.Background())
+func newUDPEntryPointRuntime(parentCtx context.Context, manager *Manager, entryPoint domain.EntryPoint, packetConn net.PacketConn) *udpEntryPointRuntime {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parentCtx))
 	return &udpEntryPointRuntime{
 		manager:    manager,
 		entryPoint: entryPoint,
@@ -57,6 +57,7 @@ func (r *udpEntryPointRuntime) start() {
 	if !r.started.CompareAndSwap(false, true) {
 		return
 	}
+	trafficInfo(r.ctx).Str("entrypoint", r.entryPoint.Name).Str("address", r.entryPoint.Address).Str("protocol", string(r.entryPoint.Protocol)).Msg("started udp traffic entrypoint")
 	go r.readLoop()
 	go r.expireLoop()
 }
@@ -234,6 +235,7 @@ func (r *udpEntryPointRuntime) resolveUDPBackend() (domain.TrafficBackend, bool)
 
 func (r *udpEntryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration) {
 	if r.closed.CompareAndSwap(false, true) {
+		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Str("address", r.entryPoint.Address).Msg("stopping udp traffic entrypoint")
 		r.cancel()
 		_ = r.packetConn.Close()
 		if !r.started.Load() {
@@ -246,16 +248,20 @@ func (r *udpEntryPointRuntime) stop(ctx context.Context, drainTimeout time.Durat
 		return
 	}
 	if r.waitSessions(ctx, drainTimeout) {
+		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Msg("stopped udp traffic entrypoint")
 		return
 	}
+	trafficDebug(ctx).Str("entrypoint", r.entryPoint.Name).Dur("drain_timeout", drainTimeout).Msg("forcing udp traffic entrypoint drain")
 	r.closeSessions()
 	select {
 	case <-r.sessionsDone():
+		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Msg("stopped udp traffic entrypoint")
 	case <-ctx.Done():
 	}
 }
 
 func (r *udpEntryPointRuntime) drainSessionsAfter(drainTimeout time.Duration) {
+	trafficDebug(r.ctx).Str("entrypoint", r.entryPoint.Name).Dur("drain_timeout", drainTimeout).Msg("scheduled udp session drain after router removal")
 	go func() {
 		if drainTimeout <= 0 {
 			drainTimeout = defaultUDPOptions().DrainTimeout

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,7 +15,7 @@ import (
 func TestUDPPassthroughEcho(t *testing.T) {
 	backend := startUDPEchoServer(t)
 	graph := udpGraph(t, freeUDPAddress(t), backend.address)
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -28,7 +27,7 @@ func TestUDPPassthroughEcho(t *testing.T) {
 func TestUDPTwoClientsGetIsolatedSessions(t *testing.T) {
 	backend := startUDPEchoServer(t)
 	graph := udpGraph(t, freeUDPAddress(t), backend.address)
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -45,7 +44,7 @@ func TestUDPIdleSessionExpires(t *testing.T) {
 	backend := startUDPEchoServer(t)
 	graph := udpGraph(t, freeUDPAddress(t), backend.address)
 	graph.Options.UDP.IdleTimeout = 40 * time.Millisecond
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -59,7 +58,7 @@ func TestUDPMaxSessionsRejectsOverflow(t *testing.T) {
 	backend := startUDPEchoServer(t)
 	graph := udpGraph(t, freeUDPAddress(t), backend.address)
 	graph.Options.UDP.MaxSessions = 1
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -82,7 +81,7 @@ func TestUDPRemovedRouterWithRetainedEntryPointDrainsSession(t *testing.T) {
 	backend := startUDPEchoServer(t)
 	graph := udpGraph(t, freeUDPAddress(t), backend.address)
 	graph.Options.UDP.DrainTimeout = 50 * time.Millisecond
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -108,7 +107,7 @@ func TestUDPRemovedRouterDrainsThenClosesSessions(t *testing.T) {
 	backend := startUDPEchoServer(t)
 	graph := udpGraph(t, freeUDPAddress(t), backend.address)
 	graph.Options.UDP.DrainTimeout = 50 * time.Millisecond
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -127,7 +126,7 @@ func TestUDPRemovedRouterDrainsThenClosesSessions(t *testing.T) {
 func TestUDPShutdownClosesSocket(t *testing.T) {
 	backend := startUDPEchoServer(t)
 	graph := udpGraph(t, freeUDPAddress(t), backend.address)
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	require.NoError(t, manager.Shutdown(context.Background()))
 
@@ -144,7 +143,7 @@ func TestUDPShutdownClosesSocket(t *testing.T) {
 func TestUDPStatusCountersTrackDatagrams(t *testing.T) {
 	backend := startUDPEchoServer(t)
 	graph := udpGraph(t, freeUDPAddress(t), backend.address)
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 

@@ -5,14 +5,12 @@ import (
 	"fmt"
 
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
+	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 	trafficbuilder "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
-func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Manager, cfg Config, configSvc interface {
-	GetRoutes(context.Context) []domain.Route
-	GetExternalRoutes() map[string]string
-}) error {
+func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Manager, cfg Config, configSvc in.ConfigService) error {
 	if manager == nil || configSvc == nil {
 		return nil
 	}

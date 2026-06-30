@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -18,7 +17,7 @@ import (
 func TestTCPManagerLifecycle(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
@@ -39,7 +38,7 @@ func TestTCPManagerLifecycle(t *testing.T) {
 func TestTCPManagerRejectsInvalidGraphWithoutReplacingSnapshot(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -60,7 +59,7 @@ func TestTCPManagerRejectsInvalidGraphWithoutReplacingSnapshot(t *testing.T) {
 func TestTCPPassthroughEcho(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -73,7 +72,7 @@ func TestTCPPassthroughUnknownRouterCloses(t *testing.T) {
 	graph := tcpGraph(t, freeTCPAddress(t), freeTCPAddress(t))
 	graph.Routers = nil
 	graph.Services = nil
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -89,7 +88,7 @@ func TestTCPPassthroughUnknownRouterCloses(t *testing.T) {
 func TestTCPPassthroughBackendDialFailure(t *testing.T) {
 	graph := tcpGraph(t, freeTCPAddress(t), freeTCPAddress(t))
 	graph.Options.TCP.DialTimeout = 50 * time.Millisecond
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -105,7 +104,7 @@ func TestTCPPassthroughBackendDialFailure(t *testing.T) {
 func TestTCPPassthroughShutdownStopsAccepting(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 
 	require.NoError(t, manager.Shutdown(context.Background()))
@@ -117,7 +116,7 @@ func TestTCPPassthroughIdleTimeoutClosesConnection(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
 	graph.Options.TCP.IdleTimeout = 50 * time.Millisecond
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -132,7 +131,7 @@ func TestTCPPassthroughMaxConnectionsRejectsOverflow(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
 	graph.Options.TCP.MaxConnections = 1
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -154,7 +153,7 @@ func TestTCPPassthroughDrainWaitsForActiveConnectionThenTimesOut(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
 	graph.Options.TCP.DrainTimeout = 50 * time.Millisecond
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -179,7 +178,7 @@ func TestTCPPassthroughStatusCountersTrackAcceptedRefusedErrorsAndBytes(t *testi
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
 	graph.Options.TCP.MaxConnections = 1
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 

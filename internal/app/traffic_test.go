@@ -5,11 +5,11 @@ import (
 	"net"
 	"testing"
 
-	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/traffic"
 )
@@ -53,7 +53,7 @@ func TestTrafficRuntimeGraphRejectsL4RouterOnLegacyEntrypoint(t *testing.T) {
 }
 
 func TestApplyTrafficRuntimeConfigAppliesCustomL4Entrypoint(t *testing.T) {
-	manager := trafficadapter.NewManager(zerowrap.Default())
+	manager := trafficadapter.NewManager()
 	defer func() { require.NoError(t, manager.Shutdown(context.Background())) }()
 	cfg := Config{
 		EntryPoints: map[string]traffic.EntryPointConfig{
@@ -66,17 +66,16 @@ func TestApplyTrafficRuntimeConfigAppliesCustomL4Entrypoint(t *testing.T) {
 	}
 	cfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "postgres", EntryPoint: "postgres", Service: "network_service:postgres:db"}}
 
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, fakeTrafficConfigService{}))
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
+	configSvc.EXPECT().GetExternalRoutes().Return(nil)
+
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
 	status := manager.Status()
 	require.Len(t, status.EntryPoints, 1)
 	assert.Equal(t, "postgres", status.EntryPoints[0].Name)
 	assert.True(t, status.EntryPoints[0].Active)
 }
-
-type fakeTrafficConfigService struct{}
-
-func (fakeTrafficConfigService) GetRoutes(context.Context) []domain.Route { return nil }
-func (fakeTrafficConfigService) GetExternalRoutes() map[string]string     { return nil }
 
 func freeTCPAddress(t *testing.T) string {
 	t.Helper()

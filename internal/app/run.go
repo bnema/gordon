@@ -716,7 +716,7 @@ func (si *serviceInit) initRuntimeProxyAndTraffic() error {
 	if err := si.initRuntimeAndProxy(); err != nil {
 		return err
 	}
-	si.svc.trafficManager = trafficadapter.NewManager(si.log)
+	si.svc.trafficManager = trafficadapter.NewManager()
 	if err := applyTrafficRuntimeConfig(si.ctx, si.svc.trafficManager, si.cfg, si.svc.configSvc); err != nil {
 		return si.log.WrapErr(err, "failed to apply traffic configuration")
 	}
@@ -793,7 +793,7 @@ func (si *serviceInit) initHandlers() {
 
 	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
 	if si.svc.trafficManager == nil {
-		si.svc.trafficManager = trafficadapter.NewManager(si.log)
+		si.svc.trafficManager = trafficadapter.NewManager()
 	}
 
 	si.svc.adminHandler = admin.NewHandler(admin.HandlerDeps{

@@ -9,23 +9,22 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
-type fakeTrafficStatusService struct{ status domain.TrafficStatus }
-
-func (f fakeTrafficStatusService) Status() domain.TrafficStatus { return f.status }
-
 func TestHandler_TrafficStatus(t *testing.T) {
+	trafficSvc := inmocks.NewMockTrafficStatusService(t)
+	trafficSvc.EXPECT().Status().Return(domain.TrafficStatus{
+		LastReloadStatus: "ok",
+		EntryPoints: []domain.EntryPointStatus{{
+			Name: "postgres", Address: "127.0.0.1:5432", Protocol: domain.EntryPointProtocolTCP,
+			Active: true, ActiveTCPConnections: 2, TotalAccepted: 3, BytesIn: 11, BytesOut: 22,
+		}},
+		Counters: domain.TrafficCounters{ActiveTCPConnections: 2, TotalAccepted: 3, BytesIn: 11, BytesOut: 22},
+	})
 	handler := newTestHandler(t, func(d *HandlerDeps) {
-		d.TrafficSvc = fakeTrafficStatusService{status: domain.TrafficStatus{
-			LastReloadStatus: "ok",
-			EntryPoints: []domain.EntryPointStatus{{
-				Name: "postgres", Address: "127.0.0.1:5432", Protocol: domain.EntryPointProtocolTCP,
-				Active: true, ActiveTCPConnections: 2, TotalAccepted: 3, BytesIn: 11, BytesOut: 22,
-			}},
-			Counters: domain.TrafficCounters{ActiveTCPConnections: 2, TotalAccepted: 3, BytesIn: 11, BytesOut: 22},
-		}}
+		d.TrafficSvc = trafficSvc
 	})
 	server := newScopedTestServer(t, handler, "admin:status:read")
 
@@ -44,7 +43,8 @@ func TestHandler_TrafficStatus(t *testing.T) {
 }
 
 func TestHandler_TrafficStatusRequiresStatusRead(t *testing.T) {
-	handler := newTestHandler(t, func(d *HandlerDeps) { d.TrafficSvc = fakeTrafficStatusService{} })
+	trafficSvc := inmocks.NewMockTrafficStatusService(t)
+	handler := newTestHandler(t, func(d *HandlerDeps) { d.TrafficSvc = trafficSvc })
 	server := newScopedTestServer(t, handler, "admin:config:read")
 
 	resp, err := http.Get(server.URL + "/admin/traffic/status")

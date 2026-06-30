@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"github.com/rs/zerolog"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -21,10 +22,30 @@ const (
 	reloadStatusError = "error"
 )
 
+func trafficLog(ctx context.Context) zerowrap.Logger {
+	return zerowrap.FromCtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "traffic",
+	})
+}
+
+func trafficInfo(ctx context.Context) *zerolog.Event {
+	log := trafficLog(ctx)
+	return log.Info()
+}
+
+func trafficDebug(ctx context.Context) *zerolog.Event {
+	log := trafficLog(ctx)
+	return log.Debug()
+}
+
+func trafficWarn(ctx context.Context) *zerolog.Event {
+	log := trafficLog(ctx)
+	return log.Warn()
+}
+
 // Manager owns runtime entrypoints for the traffic plane.
 type Manager struct {
-	log zerowrap.Logger
-
 	mu           sync.Mutex
 	snapshot     atomic.Pointer[domain.TrafficGraph]
 	listeners    map[string]*entryPointRuntime
@@ -36,9 +57,8 @@ type Manager struct {
 }
 
 // NewManager creates a traffic manager.
-func NewManager(log zerowrap.Logger) *Manager {
+func NewManager() *Manager {
 	manager := &Manager{
-		log:              log,
 		listeners:        map[string]*entryPointRuntime{},
 		udpListeners:     map[string]*udpEntryPointRuntime{},
 		lastReloadStatus: reloadStatusOK,
@@ -50,11 +70,12 @@ func NewManager(log zerowrap.Logger) *Manager {
 // Apply validates and applies a new traffic graph snapshot.
 func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	if graph == nil {
-		return m.recordReloadError(errors.New("traffic graph is required"))
+		return m.recordReloadError(ctx, errors.New("traffic graph is required"))
 	}
 	if err := graph.Validate(); err != nil {
-		return m.recordReloadError(err)
+		return m.recordReloadError(ctx, err)
 	}
+	trafficDebug(ctx).Int("entrypoints", len(graph.EntryPoints)).Int("routers", len(graph.Routers)).Int("services", len(graph.Services)).Msg("applying traffic graph")
 
 	nextGraph := cloneTrafficGraph(*graph)
 	m.mu.Lock()
@@ -64,6 +85,7 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	if err != nil {
 		m.lastReloadStatus = reloadStatusError
 		m.lastReloadError = err.Error()
+		trafficWarn(ctx).Err(err).Msg("failed to prepare tcp traffic listeners")
 		return err
 	}
 	newUDPListeners, createdUDPListeners, err := m.prepareUDPListeners(ctx, &nextGraph)
@@ -73,6 +95,7 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 		}
 		m.lastReloadStatus = reloadStatusError
 		m.lastReloadError = err.Error()
+		trafficWarn(ctx).Err(err).Msg("failed to prepare udp traffic listeners")
 		return err
 	}
 
@@ -91,15 +114,18 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	m.lastReloadError = ""
 
 	tcpDrainTimeout := effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout
+	stoppedTCP := 0
 	for name, runtime := range oldListeners {
 		if newListeners[name] == runtime {
 			continue
 		}
 		if runtime.shouldStopWith(newListeners[name]) {
+			stoppedTCP++
 			runtime.stop(ctx, tcpDrainTimeout)
 		}
 	}
 	udpDrainTimeout := effectiveUDPOptions(snapshotUDPOptions(&nextGraph)).DrainTimeout
+	stoppedUDP := 0
 	for name, runtime := range oldUDPListeners {
 		if newUDPListeners[name] == runtime {
 			if _, ok := runtime.resolveUDPBackend(); !ok {
@@ -107,13 +133,39 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 			}
 			continue
 		}
+		stoppedUDP++
 		runtime.stop(ctx, udpDrainTimeout)
 	}
+	logAppliedTrafficGraph(ctx, newListeners, newUDPListeners, createdListeners, createdUDPListeners, stoppedTCP, stoppedUDP)
 	return nil
 }
 
 // Shutdown stops all listeners and active TCP streams.
+func logAppliedTrafficGraph(
+	ctx context.Context,
+	newListeners map[string]*entryPointRuntime,
+	newUDPListeners map[string]*udpEntryPointRuntime,
+	createdListeners []*entryPointRuntime,
+	createdUDPListeners []*udpEntryPointRuntime,
+	stoppedTCP int,
+	stoppedUDP int,
+) {
+	logEvent := trafficInfo(ctx)
+	if len(newListeners) == 0 && len(newUDPListeners) == 0 && stoppedTCP == 0 && stoppedUDP == 0 {
+		logEvent = trafficDebug(ctx)
+	}
+	logEvent.
+		Int("tcp_listeners", len(newListeners)).
+		Int("udp_listeners", len(newUDPListeners)).
+		Int("created_tcp_listeners", len(createdListeners)).
+		Int("created_udp_listeners", len(createdUDPListeners)).
+		Int("stopped_tcp_listeners", stoppedTCP).
+		Int("stopped_udp_listeners", stoppedUDP).
+		Msg("traffic graph applied")
+}
+
 func (m *Manager) Shutdown(ctx context.Context) error {
+	trafficInfo(ctx).Msg("shutting down traffic manager")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -136,6 +188,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	for _, runtime := range udpListeners {
 		runtime.stop(ctx, udpDrainTimeout)
 	}
+	trafficInfo(ctx).Int("tcp_listeners", len(listeners)).Int("udp_listeners", len(udpListeners)).Msg("traffic manager shut down")
 	return nil
 }
 
@@ -165,11 +218,12 @@ func (m *Manager) Status() domain.TrafficStatus {
 	return status
 }
 
-func (m *Manager) recordReloadError(err error) error {
+func (m *Manager) recordReloadError(ctx context.Context, err error) error {
 	m.mu.Lock()
 	m.lastReloadStatus = reloadStatusError
 	m.lastReloadError = err.Error()
 	m.mu.Unlock()
+	trafficWarn(ctx).Err(err).Msg("traffic graph rejected")
 	return err
 }
 
@@ -211,7 +265,8 @@ func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.Entry
 	if err != nil {
 		return nil, fmt.Errorf("bind tcp entrypoint %q on %s: %w", entryPoint.Name, entryPoint.Address, err)
 	}
-	runtime := newEntryPointRuntime(m, entryPoint, listener)
+	trafficInfo(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("bound tcp traffic entrypoint")
+	runtime := newEntryPointRuntime(ctx, m, entryPoint, listener)
 	return runtime, nil
 }
 
@@ -249,7 +304,8 @@ func (m *Manager) bindUDPEntryPoint(ctx context.Context, entryPoint domain.Entry
 	if err != nil {
 		return nil, fmt.Errorf("bind udp entrypoint %q on %s: %w", entryPoint.Name, entryPoint.Address, err)
 	}
-	return newUDPEntryPointRuntime(m, entryPoint, packetConn), nil
+	trafficInfo(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("bound udp traffic entrypoint")
+	return newUDPEntryPointRuntime(ctx, m, entryPoint, packetConn), nil
 }
 
 func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entryPointRuntime, udpListeners map[string]*udpEntryPointRuntime) []domain.EntryPointStatus {

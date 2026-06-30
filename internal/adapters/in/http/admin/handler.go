@@ -38,10 +38,6 @@ type reloadTrigger interface {
 	Trigger(ctx context.Context) error
 }
 
-type trafficStatusService interface {
-	Status() domain.TrafficStatus
-}
-
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc       in.ConfigService
@@ -58,7 +54,7 @@ type Handler struct {
 	previewSvc      previewService
 	reloadTrigger   reloadTrigger
 	publicTLSSvc    in.PublicTLSService
-	trafficSvc      trafficStatusService
+	trafficSvc      in.TrafficStatusService
 	log             zerowrap.Logger
 }
 
@@ -207,7 +203,7 @@ type HandlerDeps struct {
 	VolumeSvc       in.VolumeService
 	ReloadTrigger   reloadTrigger
 	PublicTLSSvc    in.PublicTLSService
-	TrafficSvc      trafficStatusService
+	TrafficSvc      in.TrafficStatusService
 }
 
 // NewHandler creates a new admin HTTP handler.

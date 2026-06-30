@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -80,7 +79,7 @@ func TestTLSPassthrough(t *testing.T) {
 		{name: "wild", sni: "*.example.com", service: "wild", backend: backendB.address},
 		{name: "exact", sni: "api.example.com", service: "exact", backend: backendExact.address},
 	})
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -92,7 +91,7 @@ func TestTLSPassthrough(t *testing.T) {
 func TestTLSPassthroughUnknownCloses(t *testing.T) {
 	backend := startTLSGreetingServer(t, "backend", "backend\n")
 	graph := tlsGraph(t, freeTCPAddress(t), []tlsRoute{{name: "raw", sni: "raw.example.com", service: "raw", backend: backend.address}})
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
@@ -106,7 +105,7 @@ func TestTLSMuxIncompleteClientHelloDoesNotHangShutdown(t *testing.T) {
 		Options:     domain.TrafficOptions{TCP: domain.TCPOptions{DialTimeout: time.Second, IdleTimeout: time.Minute, DrainTimeout: 50 * time.Millisecond}},
 		EntryPoints: []domain.EntryPoint{{Name: "websecure", Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTLSMux}},
 	}
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 
 	conn := dialTCP(t, graph.EntryPoints[0].Address)
@@ -124,7 +123,7 @@ func TestTLSMuxIncompleteClientHelloDoesNotHangShutdown(t *testing.T) {
 func TestTLSMuxHTTPSFallback(t *testing.T) {
 	backend := startTLSGreetingServer(t, "raw-backend", "raw\n")
 	graph := tlsGraph(t, freeTCPAddress(t), []tlsRoute{{name: "raw", sni: "raw.example.com", service: "raw", backend: backend.address}})
-	manager := NewManager(zerowrap.Default())
+	manager := NewManager()
 	fallbackCert := testTLSConfig(t, "fallback.example.com")
 	manager.SetTLSFallback("websecure", func(ctx context.Context, conn net.Conn) {
 		_ = ServeHTTPSFallback(ctx, conn, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
