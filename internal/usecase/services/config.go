@@ -27,6 +27,7 @@ type PortConfig struct {
 	Protocol     domain.NetworkProtocol `mapstructure:"protocol"`
 	Publish      string                 `mapstructure:"publish"`
 	Private      bool                   `mapstructure:"private"`
+	Public       bool                   `mapstructure:"public"`
 	TrustedCIDRs []string               `mapstructure:"trusted_cidrs"`
 }
 
@@ -141,6 +142,7 @@ func portsToDomain(configs []PortConfig) []domain.StandaloneServicePort {
 			Protocol:     cfg.Protocol,
 			Publish:      cfg.Publish,
 			Private:      cfg.Private,
+			Public:       cfg.Public,
 			TrustedCIDRs: append([]string(nil), cfg.TrustedCIDRs...),
 		})
 	}

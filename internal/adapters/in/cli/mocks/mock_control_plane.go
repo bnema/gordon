@@ -1532,6 +1532,68 @@ func (_c *MockControlPlane_GetTLSStatus_Call) RunAndReturn(run func(ctx context.
 	return _c
 }
 
+// GetTrafficStatus provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) GetTrafficStatus(ctx context.Context) (*dto.TrafficStatusResponse, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetTrafficStatus")
+	}
+
+	var r0 *dto.TrafficStatusResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) (*dto.TrafficStatusResponse, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) *dto.TrafficStatusResponse); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.TrafficStatusResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_GetTrafficStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetTrafficStatus'
+type MockControlPlane_GetTrafficStatus_Call struct {
+	*mock.Call
+}
+
+// GetTrafficStatus is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockControlPlane_Expecter) GetTrafficStatus(ctx any) *MockControlPlane_GetTrafficStatus_Call {
+	return &MockControlPlane_GetTrafficStatus_Call{Call: _e.mock.On("GetTrafficStatus", ctx)}
+}
+
+func (_c *MockControlPlane_GetTrafficStatus_Call) Run(run func(ctx context.Context)) *MockControlPlane_GetTrafficStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_GetTrafficStatus_Call) Return(trafficStatusResponse *dto.TrafficStatusResponse, err error) *MockControlPlane_GetTrafficStatus_Call {
+	_c.Call.Return(trafficStatusResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_GetTrafficStatus_Call) RunAndReturn(run func(ctx context.Context) (*dto.TrafficStatusResponse, error)) *MockControlPlane_GetTrafficStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListBackups provides a mock function for the type MockControlPlane
 func (_mock *MockControlPlane) ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error) {
 	ret := _mock.Called(ctx, backupDomain)

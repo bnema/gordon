@@ -173,6 +173,7 @@ const (
 	TrafficServiceRefRoute          TrafficServiceRefKind = "route"
 	TrafficServiceRefExternalRoute  TrafficServiceRefKind = "external_route"
 	TrafficServiceRefNetworkService TrafficServiceRefKind = "network_service"
+	TrafficServiceRefService        TrafficServiceRefKind = "service"
 	TrafficServiceRefStatic         TrafficServiceRefKind = "static"
 )
 
@@ -200,6 +201,12 @@ func ParseTrafficServiceRef(value string) (TrafficServiceRef, error) {
 			return TrafficServiceRef{}, fmt.Errorf("invalid network service ref %q", value)
 		}
 		return TrafficServiceRef{Kind: TrafficServiceRefNetworkService, Name: name, PortName: portName}, nil
+	case TrafficServiceRefService:
+		name, portName, ok := strings.Cut(rest, ":")
+		if !ok || name == "" || portName == "" || strings.Contains(portName, ":") {
+			return TrafficServiceRef{}, fmt.Errorf("invalid service ref %q", value)
+		}
+		return TrafficServiceRef{Kind: TrafficServiceRefService, Name: name, PortName: portName}, nil
 	case TrafficServiceRefStatic:
 		return TrafficServiceRef{Kind: TrafficServiceRefStatic, Name: rest, Reserved: true}, nil
 	default:
@@ -550,11 +557,11 @@ func validateL4RouterService(router TrafficRouter, ref TrafficServiceRef, servic
 	if !ok {
 		return nil
 	}
-	if ref.Kind != TrafficServiceRefNetworkService {
+	if ref.Kind != TrafficServiceRefNetworkService && ref.Kind != TrafficServiceRefService {
 		if ref.Kind == TrafficServiceRefStatic {
 			return fmt.Errorf("static traffic service ref %q is unsupported in traffic graph validation", router.Service)
 		}
-		return fmt.Errorf("l4 router %q requires network_service service ref", router.Name)
+		return fmt.Errorf("l4 router %q requires network_service or service service ref", router.Name)
 	}
 	if len(service.Backends) != 1 {
 		return fmt.Errorf("l4 router service must have exactly one backend for router %q", router.Name)

@@ -483,7 +483,7 @@ func TestTrafficGraphValidateBackendsAndL4Routers(t *testing.T) {
 			name:     "l4 router rejects route ref",
 			router:   TrafficRouter{Name: "tcp", EntryPoint: "tcp", Protocol: RouterProtocolTCP, Service: "route:app.example.com"},
 			services: []TrafficService{{Name: "route:app.example.com", Backends: []TrafficBackend{{Name: "app", Host: "10.0.0.2", Port: 443, Protocol: NetworkProtocolTCP}}}},
-			wantErr:  "requires network_service service ref",
+			wantErr:  "requires network_service or service service ref",
 		},
 		{
 			name:     "static ref parses but graph validation rejects unsupported",
@@ -509,6 +509,49 @@ func TestTrafficGraphValidateBackendsAndL4Routers(t *testing.T) {
 	}
 }
 
+func TestTrafficGraphValidateL4ServiceRefs(t *testing.T) {
+	tests := []struct {
+		name           string
+		routerProtocol RouterProtocol
+		entryPoint     EntryPoint
+		backend        TrafficBackend
+	}{
+		{
+			name:           "tcp allows service ref with tcp backend",
+			routerProtocol: RouterProtocolTCP,
+			entryPoint:     EntryPoint{Name: "tcp", Address: ":25565", Protocol: EntryPointProtocolTCP},
+			backend:        TrafficBackend{Name: "rust", Host: "10.0.0.2", Port: 25565, Protocol: NetworkProtocolTCP},
+		},
+		{
+			name:           "udp allows service ref with udp backend",
+			routerProtocol: RouterProtocolUDP,
+			entryPoint:     EntryPoint{Name: "udp", Address: ":25565", Protocol: EntryPointProtocolUDP},
+			backend:        TrafficBackend{Name: "rust", Host: "10.0.0.2", Port: 25565, Protocol: NetworkProtocolUDP},
+		},
+		{
+			name:           "tls passthrough allows service ref with tcp backend",
+			routerProtocol: RouterProtocolTLSPassthrough,
+			entryPoint:     EntryPoint{Name: "tls", Address: ":443", Protocol: EntryPointProtocolTLSMux},
+			backend:        TrafficBackend{Name: "rust", Host: "10.0.0.2", Port: 443, Protocol: NetworkProtocolTCP},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := TrafficRouter{Name: "router", EntryPoint: tt.entryPoint.Name, Protocol: tt.routerProtocol, Service: "service:rust:game"}
+			if tt.routerProtocol == RouterProtocolTLSPassthrough {
+				router.Rule = TrafficRule{SNI: "rust.example.com"}
+			}
+			graph := TrafficGraph{
+				EntryPoints: []EntryPoint{tt.entryPoint},
+				Routers:     []TrafficRouter{router},
+				Services:    []TrafficService{{Name: "service:rust:game", Backends: []TrafficBackend{tt.backend}}},
+			}
+			require.NoError(t, graph.Validate())
+		})
+	}
+}
+
 func TestTrafficGraphValidateHTTPServiceRefs(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -518,6 +561,7 @@ func TestTrafficGraphValidateHTTPServiceRefs(t *testing.T) {
 		{name: "http allows route", service: "route:app.example.com"},
 		{name: "http allows external_route", service: "external_route:api.example.com"},
 		{name: "http rejects network_service", service: "network_service:app:http", wantErr: "does not support service ref kind network_service"},
+		{name: "http rejects service", service: "service:app:http", wantErr: "does not support service ref kind service"},
 		{name: "http rejects static", service: "static:maintenance", wantErr: "static traffic service ref \"static:maintenance\" is unsupported"},
 	}
 
@@ -575,6 +619,7 @@ func TestParseTrafficServiceRef(t *testing.T) {
 		{input: "network_service:postgres:db", want: TrafficServiceRef{Kind: TrafficServiceRefNetworkService, Name: "postgres", PortName: "db"}},
 		{input: "network_service:web:http", want: TrafficServiceRef{Kind: TrafficServiceRefNetworkService, Name: "web", PortName: "http"}},
 		{input: "network_service:game:game", want: TrafficServiceRef{Kind: TrafficServiceRefNetworkService, Name: "game", PortName: "game"}},
+		{input: "service:rust:game", want: TrafficServiceRef{Kind: TrafficServiceRefService, Name: "rust", PortName: "game"}},
 		{input: "static:maintenance", want: TrafficServiceRef{Kind: TrafficServiceRefStatic, Name: "maintenance", Reserved: true}},
 	}
 
@@ -586,7 +631,7 @@ func TestParseTrafficServiceRef(t *testing.T) {
 		})
 	}
 
-	invalid := []string{"", "route:", "external_route:", "network_service:", "network_service:postgres", "network_service:postgres:", "network_service::db", "network_service:postgres:db:extra", "static:", "unknown:value"}
+	invalid := []string{"", "route:", "external_route:", "network_service:", "network_service:postgres", "network_service:postgres:", "network_service::db", "network_service:postgres:db:extra", "service:", "service:rust", "service:rust:", "service::game", "service:rust:game:extra", "static:", "unknown:value"}
 	for _, input := range invalid {
 		t.Run("invalid "+input, func(t *testing.T) {
 			_, err := ParseTrafficServiceRef(input)

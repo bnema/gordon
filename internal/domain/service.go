@@ -42,6 +42,7 @@ type StandaloneServicePort struct {
 	Protocol     NetworkProtocol
 	Publish      string
 	Private      bool
+	Public       bool
 	TrustedCIDRs []string
 }
 
@@ -123,6 +124,9 @@ func validateStandaloneServicePorts(s StandaloneService) error {
 		}
 		if port.Protocol != NetworkProtocolTCP && port.Protocol != NetworkProtocolUDP {
 			return fmt.Errorf("standalone service %q port %q protocol must be tcp or udp", s.Name, name)
+		}
+		if port.Private && port.Public {
+			return fmt.Errorf("standalone service %q port %q cannot be both private and public", s.Name, name)
 		}
 		if err := validateStandaloneServicePublish(s.Name, name, port.Publish); err != nil {
 			return err

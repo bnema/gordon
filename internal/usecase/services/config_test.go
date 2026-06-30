@@ -41,6 +41,27 @@ func TestConfigToDomainRejectsNonPositiveReadinessTimeout(t *testing.T) {
 	}
 }
 
+func TestConfigToDomainMapsExplicitPublicPorts(t *testing.T) {
+	cfg := Config{
+		Name:    "game",
+		Image:   "game:latest",
+		Enabled: true,
+		Ports: []PortConfig{{
+			Name:      "rcon",
+			Container: 28016,
+			Protocol:  domain.NetworkProtocolTCP,
+			Publish:   "127.0.0.1:38016",
+			Public:    true,
+		}},
+	}
+
+	svc, err := cfg.ToDomain()
+
+	require.NoError(t, err)
+	require.Len(t, svc.Ports, 1)
+	assert.True(t, svc.Ports[0].Public)
+}
+
 func TestResolveVolumeMountsUsesExplicitVolumesAsIs(t *testing.T) {
 	explicit := []domain.StandaloneServiceVolume{
 		{Source: "rust-data", Target: "/steamcmd/rust", ReadOnly: false},

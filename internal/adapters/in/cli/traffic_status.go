@@ -11,28 +11,28 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 )
 
+var trafficResolveControlPlane = resolveControlPlane
+
 func newTrafficStatusCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show remote traffic entrypoint, router, and counter status",
+		Short: "Show traffic entrypoint, router, and counter status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTrafficStatus(cmd.Context(), cmd.OutOrStdout(), jsonOut)
+			handle, err := trafficResolveControlPlane(configPath)
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			return runTrafficStatus(cmd.Context(), handle.plane, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output JSON")
 	return cmd
 }
 
-func runTrafficStatus(ctx context.Context, out io.Writer, jsonOut bool) error {
-	client, isRemote, err := GetRemoteClient()
-	if err != nil {
-		return fmt.Errorf("create remote client: %w", err)
-	}
-	if !isRemote {
-		return fmt.Errorf("traffic status currently requires --remote")
-	}
-	status, err := client.GetTrafficStatus(ctx)
+func runTrafficStatus(ctx context.Context, cp ControlPlane, out io.Writer, jsonOut bool) error {
+	status, err := cp.GetTrafficStatus(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch traffic status: %w", err)
 	}

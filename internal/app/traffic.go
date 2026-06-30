@@ -7,6 +7,7 @@ import (
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
+	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	trafficbuilder "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
@@ -14,12 +15,17 @@ func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Mana
 	if manager == nil || configSvc == nil {
 		return nil
 	}
+	standaloneServices, err := servicecfg.ToDomain(cfg.Services)
+	if err != nil {
+		return fmt.Errorf("convert standalone service config: %w", err)
+	}
 	graph, err := trafficbuilder.Build(trafficbuilder.Input{
 		EntryPoints:     cfg.EntryPoints,
 		Traffic:         cfg.Traffic,
 		Routes:          configSvc.GetRoutes(ctx),
 		ExternalRoutes:  configSvc.GetExternalRoutes(),
 		NetworkServices: cfg.NetworkServices,
+		Services:        standaloneServices,
 	})
 	if err != nil {
 		return fmt.Errorf("build traffic graph: %w", err)

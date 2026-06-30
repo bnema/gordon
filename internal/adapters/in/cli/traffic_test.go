@@ -2,13 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -67,4 +71,54 @@ func TestTrafficStatusJSONOutput(t *testing.T) {
 	assert.Equal(t, "ok", got.LastReloadStatus)
 	assert.Equal(t, int64(3), got.Counters.ActiveUDPSessions)
 	assert.Equal(t, int64(1), got.Counters.SmartTCP.SniffTimeout)
+}
+
+func TestRunTrafficStatusUsesControlPlane(t *testing.T) {
+	status := &dto.TrafficStatusResponse{LastReloadStatus: "ok"}
+	cp := &trafficStatusPlane{status: status}
+
+	var buf bytes.Buffer
+	require.NoError(t, runTrafficStatus(context.Background(), cp, &buf, true))
+
+	assert.True(t, cp.called)
+	assert.Contains(t, buf.String(), `"last_reload_status": "ok"`)
+}
+
+func TestRemoteTrafficStatusControlPlaneStillRenders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/traffic/status", r.URL.Path)
+		_, err := w.Write([]byte(`{"last_reload_status":"ok","counters":{"active_udp_sessions":3}}`))
+		require.NoError(t, err)
+	}))
+	defer srv.Close()
+
+	cp := NewRemoteControlPlane(remote.NewClient(srv.URL))
+	var buf bytes.Buffer
+	require.NoError(t, runTrafficStatus(context.Background(), cp, &buf, false))
+
+	output := buf.String()
+	assert.Contains(t, output, "Traffic Status")
+	assert.Contains(t, output, "Reload")
+	assert.Contains(t, output, "ok")
+	assert.Contains(t, output, "udp=3")
+}
+
+func TestLocalTrafficStatusReturnsActionableDaemonGuidance(t *testing.T) {
+	_, err := (&localControlPlane{}).GetTrafficStatus(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "in-process CLI control plane")
+	assert.Contains(t, err.Error(), "running Gordon daemon")
+	assert.Contains(t, err.Error(), "--remote")
+	assert.Contains(t, err.Error(), "GORDON_REMOTE")
+}
+
+type trafficStatusPlane struct {
+	ControlPlane
+	status *dto.TrafficStatusResponse
+	called bool
+}
+
+func (p *trafficStatusPlane) GetTrafficStatus(context.Context) (*dto.TrafficStatusResponse, error) {
+	p.called = true
+	return p.status, nil
 }

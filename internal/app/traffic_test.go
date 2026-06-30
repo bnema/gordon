@@ -11,6 +11,7 @@ import (
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	"github.com/bnema/gordon/internal/usecase/traffic"
 )
 
@@ -117,6 +118,33 @@ func TestApplyTrafficRuntimeConfigAppliesSmartTCPEntrypointWithRawFallbackPolicy
 	assert.Equal(t, domain.EntryPointProtocolSmartTCP, status.EntryPoints[0].Protocol)
 }
 
+func TestApplyTrafficRuntimeConfigPassesStandaloneServicesToBuilder(t *testing.T) {
+	manager := trafficadapter.NewManager()
+	defer func() { require.NoError(t, manager.Shutdown(context.Background())) }()
+	cfg := Config{
+		EntryPoints: map[string]traffic.EntryPointConfig{
+			"rust": {Address: freeUDPAddress(t), Protocol: domain.EntryPointProtocolUDP},
+		},
+		Services: []servicecfg.Config{{
+			Name:    "rust",
+			Image:   "localhost/rust:latest",
+			Enabled: true,
+			Ports:   []servicecfg.PortConfig{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolUDP, Publish: "127.0.0.1:38015"}},
+		}},
+	}
+	cfg.Traffic.UDP.Routers = []traffic.RouterConfig{{Name: "rust-game", EntryPoint: "rust", Service: "service:rust:game"}}
+
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
+	configSvc.EXPECT().GetExternalRoutes().Return(nil)
+
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	status := manager.Status()
+	require.Len(t, status.EntryPoints, 1)
+	assert.Equal(t, "rust", status.EntryPoints[0].Name)
+	assert.True(t, status.EntryPoints[0].Active)
+}
+
 func TestApplyTrafficRuntimeConfigAppliesCustomL4Entrypoint(t *testing.T) {
 	manager := trafficadapter.NewManager()
 	defer func() { require.NoError(t, manager.Shutdown(context.Background())) }()
@@ -172,5 +200,14 @@ func freeTCPAddress(t *testing.T) string {
 	require.NoError(t, err)
 	address := listener.Addr().String()
 	require.NoError(t, listener.Close())
+	return address
+}
+
+func freeUDPAddress(t *testing.T) string {
+	t.Helper()
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := packetConn.LocalAddr().String()
+	require.NoError(t, packetConn.Close())
 	return address
 }

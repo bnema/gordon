@@ -43,6 +43,10 @@ func TestStandaloneServiceValidatePorts(t *testing.T) {
 	badPublish := valid
 	badPublish.Ports = []StandaloneServicePort{{Name: "game", Container: 28015, Protocol: NetworkProtocolUDP, Publish: "127.0.0.1:not-a-port"}}
 	require.ErrorContains(t, badPublish.Validate(), "valid port")
+
+	conflictingVisibility := valid
+	conflictingVisibility.Ports = []StandaloneServicePort{{Name: "rcon", Container: 28016, Protocol: NetworkProtocolTCP, Private: true, Public: true}}
+	require.ErrorContains(t, conflictingVisibility.Validate(), "cannot be both private and public")
 }
 
 func TestStandaloneServiceValidateVolumesAndEnvFile(t *testing.T) {

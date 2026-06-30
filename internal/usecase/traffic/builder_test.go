@@ -207,6 +207,150 @@ func TestBuildRejectsAmbiguousNetworkServices(t *testing.T) {
 	})
 }
 
+func TestBuildResolvesStandaloneServiceBackend(t *testing.T) {
+	graph, err := Build(Input{
+		EntryPoints: map[string]EntryPointConfig{"udp": {Address: ":28015", Protocol: domain.EntryPointProtocolUDP}},
+		Traffic:     Config{UDP: UDPConfig{Routers: []RouterConfig{{Name: "rust-game", EntryPoint: "udp", Service: "service:rust:game"}}}},
+		Services: []domain.StandaloneService{{
+			Name:    "rust",
+			Image:   "localhost/rust:latest",
+			Enabled: true,
+			Ports:   []domain.StandaloneServicePort{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolUDP, Publish: "127.0.0.1:38015"}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Contains(t, graph.Services, domain.TrafficService{Name: "service:rust:game", Backends: []domain.TrafficBackend{{Name: "rust:game", Host: "127.0.0.1", Port: 38015, Protocol: domain.NetworkProtocolUDP}}})
+}
+
+func TestBuildRejectsInvalidStandaloneServiceRefs(t *testing.T) {
+	base := Input{
+		EntryPoints: map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP}},
+		Services: []domain.StandaloneService{{
+			Name:    "rust",
+			Image:   "localhost/rust:latest",
+			Enabled: true,
+			Ports:   []domain.StandaloneServicePort{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolUDP, Publish: "127.0.0.1:38015"}, {Name: "rcon", Container: 28016, Protocol: domain.NetworkProtocolTCP, Publish: "127.0.0.1:38016", Private: true, TrustedCIDRs: []string{"100.64.0.0/10"}}},
+		}},
+	}
+
+	t.Run("unknown service", func(t *testing.T) {
+		input := base
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:missing:rcon"}}}}
+		_, err := Build(input)
+		require.ErrorContains(t, err, "router \"bad\": unknown service \"missing\"")
+	})
+
+	t.Run("unknown port", func(t *testing.T) {
+		input := base
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:missing"}}}}
+		_, err := Build(input)
+		require.ErrorContains(t, err, "unknown port \"missing\" on service \"rust\"")
+	})
+
+	t.Run("protocol mismatch", func(t *testing.T) {
+		input := base
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:game"}}}}
+		_, err := Build(input)
+		require.ErrorContains(t, err, "service \"rust\" port \"game\" protocol udp does not match router protocol tcp")
+	})
+
+	t.Run("missing publish", func(t *testing.T) {
+		input := base
+		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP, TrustedCIDRs: []string{"100.64.0.0/10"}}}
+		input.Services[0].Ports[1].Publish = ""
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:rcon"}}}}
+		_, err := Build(input)
+		require.ErrorContains(t, err, "service \"rust\" port \"rcon\" publish address")
+	})
+
+	t.Run("invalid publish", func(t *testing.T) {
+		input := base
+		input.Services[0].Ports[1].Publish = "127.0.0.1:notaport"
+		_, err := Build(input)
+		require.ErrorContains(t, err, "publish address")
+	})
+}
+
+func TestBuildEnforcesPrivateStandaloneServicePortRouting(t *testing.T) {
+	base := func() Input {
+		return Input{
+			EntryPoints: map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP, TrustedCIDRs: []string{"100.64.0.0/10"}}},
+			Traffic:     Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "rust-rcon", EntryPoint: "tcp", Service: "service:rust:rcon"}}}},
+			Services: []domain.StandaloneService{{
+				Name:    "rust",
+				Image:   "localhost/rust:latest",
+				Enabled: true,
+				Ports:   []domain.StandaloneServicePort{{Name: "rcon", Container: 28016, Protocol: domain.NetworkProtocolTCP, Publish: "127.0.0.1:38016", TrustedCIDRs: []string{"100.64.0.0/10"}}},
+			}},
+		}
+	}
+
+	t.Run("rcon defaults private and allows exact trusted cidrs", func(t *testing.T) {
+		_, err := Build(base())
+		require.NoError(t, err)
+	})
+
+	t.Run("private port rejects service port without trusted cidrs", func(t *testing.T) {
+		input := base()
+		input.Services[0].Ports[0].TrustedCIDRs = nil
+		_, err := Build(input)
+		require.ErrorContains(t, err, "requires non-empty service port trusted_cidrs")
+	})
+
+	t.Run("rcon rejects both service and entrypoint without trusted cidrs", func(t *testing.T) {
+		input := base()
+		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP}}
+		input.Services[0].Ports[0].TrustedCIDRs = nil
+		_, err := Build(input)
+		require.ErrorContains(t, err, "requires non-empty service port trusted_cidrs")
+	})
+
+	t.Run("explicit private non-rcon rejects service port without trusted cidrs", func(t *testing.T) {
+		input := base()
+		input.Services[0].Ports[0].Name = "admin"
+		input.Services[0].Ports[0].Private = true
+		input.Services[0].Ports[0].TrustedCIDRs = nil
+		input.Traffic.TCP.Routers[0].Service = "service:rust:admin"
+		_, err := Build(input)
+		require.ErrorContains(t, err, "requires non-empty service port trusted_cidrs")
+	})
+
+	t.Run("private port rejects entrypoint without trusted cidrs", func(t *testing.T) {
+		input := base()
+		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP}}
+		_, err := Build(input)
+		require.ErrorContains(t, err, "entrypoint \"tcp\" requires non-empty trusted_cidrs")
+	})
+
+	t.Run("private port rejects non-matching trusted cidrs", func(t *testing.T) {
+		input := base()
+		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP, TrustedCIDRs: []string{"10.0.0.0/8"}}}
+		_, err := Build(input)
+		require.ErrorContains(t, err, "must exactly match")
+	})
+
+	t.Run("explicit public rcon is allowed without trusted cidrs", func(t *testing.T) {
+		input := base()
+		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP}}
+		input.Services[0].Ports[0].Public = true
+		input.Services[0].Ports[0].TrustedCIDRs = nil
+		_, err := Build(input)
+		require.NoError(t, err)
+	})
+
+	t.Run("explicit public non-rcon is allowed without trusted cidrs", func(t *testing.T) {
+		input := base()
+		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP}}
+		input.Services[0].Ports[0].Name = "admin"
+		input.Services[0].Ports[0].Private = false
+		input.Services[0].Ports[0].Public = true
+		input.Services[0].Ports[0].TrustedCIDRs = nil
+		input.Traffic.TCP.Routers[0].Service = "service:rust:admin"
+		_, err := Build(input)
+		require.NoError(t, err)
+	})
+}
+
 func TestBuildRejectsInvalidServiceRefs(t *testing.T) {
 	base := Input{
 		EntryPoints:     map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP}},
