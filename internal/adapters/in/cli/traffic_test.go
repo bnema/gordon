@@ -31,6 +31,7 @@ func TestTrafficStatusHumanOutput(t *testing.T) {
 		EntryPoints: []dto.TrafficEntryPointStatus{{
 			Name: "postgres", Address: "127.0.0.1:5432", Protocol: domain.EntryPointProtocolTCP,
 			Active: true, ActiveTCPConnections: 1, TotalAccepted: 2, BytesIn: 10, BytesOut: 20,
+			SmartTCP: dto.SmartTCPCounters{HTTPAccepted: 1, PROXYRefused: 1},
 		}},
 		Routers: []dto.TrafficRouterStatus{{
 			Name: "pg-router", EntryPoint: "postgres", Protocol: domain.RouterProtocolTCP,
@@ -40,7 +41,7 @@ func TestTrafficStatusHumanOutput(t *testing.T) {
 			Name: "network_service:postgres:db", Active: true,
 			Backends: []dto.TrafficBackendStatus{{Name: "postgres:db", Host: "127.0.0.1", Port: 5432, Protocol: domain.NetworkProtocolTCP, Active: true}},
 		}},
-		Counters: dto.TrafficCounters{ActiveTCPConnections: 1, TotalAccepted: 2, BytesIn: 10, BytesOut: 20},
+		Counters: dto.TrafficCounters{ActiveTCPConnections: 1, TotalAccepted: 2, BytesIn: 10, BytesOut: 20, SmartTCP: dto.SmartTCPCounters{HTTPAccepted: 1, PROXYRefused: 1}},
 	}
 	var buf bytes.Buffer
 	require.NoError(t, renderTrafficStatus(&buf, status, false))
@@ -52,14 +53,18 @@ func TestTrafficStatusHumanOutput(t *testing.T) {
 	assert.Contains(t, output, "network_service:postgres:db")
 	assert.Contains(t, output, "tcp://127.0.0.1:5432")
 	assert.Contains(t, output, "accepted=2")
+	assert.Contains(t, output, "smart_tcp")
+	assert.Contains(t, output, "http_accepted=1")
+	assert.Contains(t, output, "proxy_refused=1")
 }
 
 func TestTrafficStatusJSONOutput(t *testing.T) {
-	status := &dto.TrafficStatusResponse{LastReloadStatus: "ok", Counters: dto.TrafficCounters{ActiveUDPSessions: 3}}
+	status := &dto.TrafficStatusResponse{LastReloadStatus: "ok", Counters: dto.TrafficCounters{ActiveUDPSessions: 3, SmartTCP: dto.SmartTCPCounters{SniffTimeout: 1}}}
 	var buf bytes.Buffer
 	require.NoError(t, renderTrafficStatus(&buf, status, true))
 	var got dto.TrafficStatusResponse
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &got))
 	assert.Equal(t, "ok", got.LastReloadStatus)
 	assert.Equal(t, int64(3), got.Counters.ActiveUDPSessions)
+	assert.Equal(t, int64(1), got.Counters.SmartTCP.SniffTimeout)
 }

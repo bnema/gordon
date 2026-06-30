@@ -46,35 +46,11 @@ func renderTrafficStatus(out io.Writer, status *dto.TrafficStatusResponse, jsonO
 	if jsonOut {
 		return writeJSON(out, status)
 	}
-	if err := cliWriteLine(out, cliRenderTitle("Traffic Status")); err != nil {
+	if err := renderTrafficStatusHeader(out, status); err != nil {
 		return err
 	}
-	if err := cliWriteLine(out, cliRenderMeta("Reload", status.LastReloadStatus)); err != nil {
+	if err := renderTrafficEntryPoints(out, status.EntryPoints); err != nil {
 		return err
-	}
-	if status.LastReloadError != "" {
-		if err := cliWriteLine(out, cliRenderWarning("Last reload error: "+status.LastReloadError)); err != nil {
-			return err
-		}
-	}
-	if err := cliWriteLine(out, ""); err != nil {
-		return err
-	}
-	if err := cliWriteLine(out, "Entrypoints:"); err != nil {
-		return err
-	}
-	if len(status.EntryPoints) == 0 {
-		if err := cliWriteLine(out, cliRenderMuted("  none")); err != nil {
-			return err
-		}
-	} else {
-		for _, entry := range status.EntryPoints {
-			if err := cliWritef(out, "  %s  %s  %s  active=%t tcp=%d udp=%d accepted=%d refused=%d errors=%d\n",
-				entry.Name, entry.Protocol, entry.Address, entry.Active, entry.ActiveTCPConnections, entry.ActiveUDPSessions,
-				entry.TotalAccepted, entry.TotalRefused, entry.TotalErrors); err != nil {
-				return err
-			}
-		}
 	}
 	if err := renderTrafficRouters(out, status.Routers); err != nil {
 		return err
@@ -82,12 +58,78 @@ func renderTrafficStatus(out io.Writer, status *dto.TrafficStatusResponse, jsonO
 	if err := renderTrafficServices(out, status.Services); err != nil {
 		return err
 	}
+	return renderTrafficTotals(out, status.Counters)
+}
+
+func renderTrafficStatusHeader(out io.Writer, status *dto.TrafficStatusResponse) error {
+	if err := cliWriteLine(out, cliRenderTitle("Traffic Status")); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, cliRenderMeta("Reload", status.LastReloadStatus)); err != nil {
+		return err
+	}
+	if status.LastReloadError == "" {
+		return nil
+	}
+	return cliWriteLine(out, cliRenderWarning("Last reload error: "+status.LastReloadError))
+}
+
+func renderTrafficEntryPoints(out io.Writer, entries []dto.TrafficEntryPointStatus) error {
 	if err := cliWriteLine(out, ""); err != nil {
 		return err
 	}
-	return cliWritef(out, "Totals: tcp=%d udp=%d accepted=%d refused=%d errors=%d bytes_in=%d bytes_out=%d\n",
-		status.Counters.ActiveTCPConnections, status.Counters.ActiveUDPSessions, status.Counters.TotalAccepted,
-		status.Counters.TotalRefused, status.Counters.TotalErrors, status.Counters.BytesIn, status.Counters.BytesOut)
+	if err := cliWriteLine(out, "Entrypoints:"); err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return cliWriteLine(out, cliRenderMuted("  none"))
+	}
+	for _, entry := range entries {
+		if err := renderTrafficEntryPoint(out, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderTrafficEntryPoint(out io.Writer, entry dto.TrafficEntryPointStatus) error {
+	if err := cliWritef(out, "  %s  %s  %s  active=%t tcp=%d udp=%d accepted=%d refused=%d errors=%d\n",
+		entry.Name, entry.Protocol, entry.Address, entry.Active, entry.ActiveTCPConnections, entry.ActiveUDPSessions,
+		entry.TotalAccepted, entry.TotalRefused, entry.TotalErrors); err != nil {
+		return err
+	}
+	if hasSmartTCPCounters(entry.SmartTCP) {
+		return renderSmartTCPCounters(out, "    smart_tcp", entry.SmartTCP)
+	}
+	return nil
+}
+
+func renderTrafficTotals(out io.Writer, counters dto.TrafficCounters) error {
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if err := cliWritef(out, "Totals: tcp=%d udp=%d accepted=%d refused=%d errors=%d bytes_in=%d bytes_out=%d\n",
+		counters.ActiveTCPConnections, counters.ActiveUDPSessions, counters.TotalAccepted,
+		counters.TotalRefused, counters.TotalErrors, counters.BytesIn, counters.BytesOut); err != nil {
+		return err
+	}
+	if hasSmartTCPCounters(counters.SmartTCP) {
+		return renderSmartTCPCounters(out, "Smart TCP totals", counters.SmartTCP)
+	}
+	return nil
+}
+
+func hasSmartTCPCounters(c dto.SmartTCPCounters) bool {
+	return c.HTTPAccepted != 0 || c.H2CAccepted != 0 || c.HTTPSFallbackAccepted != 0 || c.TLSPassthroughAccepted != 0 ||
+		c.RawFallbackAccepted != 0 || c.EntrypointCIDRRefused != 0 || c.RawFallbackCIDRRefused != 0 || c.PROXYRefused != 0 ||
+		c.UnknownNoFallbackRefused != 0 || c.MalformedRejected != 0 || c.SniffTimeout != 0 || c.ClientHelloTooLarge != 0
+}
+
+func renderSmartTCPCounters(out io.Writer, label string, c dto.SmartTCPCounters) error {
+	return cliWritef(out, "%s: http_accepted=%d h2c_accepted=%d https_fallback_accepted=%d tls_passthrough_accepted=%d raw_fallback_accepted=%d entrypoint_cidr_refused=%d raw_fallback_cidr_refused=%d proxy_refused=%d unknown_no_fallback_refused=%d malformed_rejected=%d sniff_timeout=%d client_hello_too_large=%d\n",
+		label, c.HTTPAccepted, c.H2CAccepted, c.HTTPSFallbackAccepted, c.TLSPassthroughAccepted, c.RawFallbackAccepted,
+		c.EntrypointCIDRRefused, c.RawFallbackCIDRRefused, c.PROXYRefused, c.UnknownNoFallbackRefused, c.MalformedRejected,
+		c.SniffTimeout, c.ClientHelloTooLarge)
 }
 
 func renderTrafficRouters(out io.Writer, routers []dto.TrafficRouterStatus) error {

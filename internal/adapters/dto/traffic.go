@@ -23,6 +23,7 @@ type TrafficEntryPointStatus struct {
 	TotalErrors          int64                     `json:"total_errors"`
 	BytesIn              int64                     `json:"bytes_in"`
 	BytesOut             int64                     `json:"bytes_out"`
+	SmartTCP             SmartTCPCounters          `json:"smart_tcp"`
 }
 
 type TrafficRouterStatus struct {
@@ -54,13 +55,29 @@ type TrafficBackendStatus struct {
 }
 
 type TrafficCounters struct {
-	ActiveTCPConnections int64 `json:"active_tcp_connections"`
-	ActiveUDPSessions    int64 `json:"active_udp_sessions"`
-	TotalAccepted        int64 `json:"total_accepted"`
-	TotalRefused         int64 `json:"total_refused"`
-	TotalErrors          int64 `json:"total_errors"`
-	BytesIn              int64 `json:"bytes_in"`
-	BytesOut             int64 `json:"bytes_out"`
+	ActiveTCPConnections int64            `json:"active_tcp_connections"`
+	ActiveUDPSessions    int64            `json:"active_udp_sessions"`
+	TotalAccepted        int64            `json:"total_accepted"`
+	TotalRefused         int64            `json:"total_refused"`
+	TotalErrors          int64            `json:"total_errors"`
+	BytesIn              int64            `json:"bytes_in"`
+	BytesOut             int64            `json:"bytes_out"`
+	SmartTCP             SmartTCPCounters `json:"smart_tcp"`
+}
+
+type SmartTCPCounters struct {
+	HTTPAccepted             int64 `json:"http_accepted"`
+	H2CAccepted              int64 `json:"h2c_accepted"`
+	HTTPSFallbackAccepted    int64 `json:"https_fallback_accepted"`
+	TLSPassthroughAccepted   int64 `json:"tls_passthrough_accepted"`
+	RawFallbackAccepted      int64 `json:"raw_fallback_accepted"`
+	EntrypointCIDRRefused    int64 `json:"entrypoint_cidr_refused"`
+	RawFallbackCIDRRefused   int64 `json:"raw_fallback_cidr_refused"`
+	PROXYRefused             int64 `json:"proxy_refused"`
+	UnknownNoFallbackRefused int64 `json:"unknown_no_fallback_refused"`
+	MalformedRejected        int64 `json:"malformed_rejected"`
+	SniffTimeout             int64 `json:"sniff_timeout"`
+	ClientHelloTooLarge      int64 `json:"client_hello_too_large"`
 }
 
 func TrafficStatusFromDomain(status domain.TrafficStatus) TrafficStatusResponse {
@@ -81,7 +98,7 @@ func trafficEntryPointsFromDomain(values []domain.EntryPointStatus) []TrafficEnt
 			Name: value.Name, Address: value.Address, Protocol: value.Protocol, Active: value.Active,
 			ActiveTCPConnections: value.ActiveTCPConnections, ActiveUDPSessions: value.ActiveUDPSessions,
 			TotalAccepted: value.TotalAccepted, TotalRefused: value.TotalRefused, TotalErrors: value.TotalErrors,
-			BytesIn: value.BytesIn, BytesOut: value.BytesOut,
+			BytesIn: value.BytesIn, BytesOut: value.BytesOut, SmartTCP: smartTCPCountersFromDomain(value.SmartTCP),
 		})
 	}
 	return out
@@ -125,5 +142,23 @@ func trafficCountersFromDomain(value domain.TrafficCounters) TrafficCounters {
 		TotalErrors:          value.TotalErrors,
 		BytesIn:              value.BytesIn,
 		BytesOut:             value.BytesOut,
+		SmartTCP:             smartTCPCountersFromDomain(value.SmartTCP),
+	}
+}
+
+func smartTCPCountersFromDomain(value domain.SmartTCPCounters) SmartTCPCounters {
+	return SmartTCPCounters{
+		HTTPAccepted:             value.HTTPAccepted,
+		H2CAccepted:              value.H2CAccepted,
+		HTTPSFallbackAccepted:    value.HTTPSFallbackAccepted,
+		TLSPassthroughAccepted:   value.TLSPassthroughAccepted,
+		RawFallbackAccepted:      value.RawFallbackAccepted,
+		EntrypointCIDRRefused:    value.EntrypointCIDRRefused,
+		RawFallbackCIDRRefused:   value.RawFallbackCIDRRefused,
+		PROXYRefused:             value.PROXYRefused,
+		UnknownNoFallbackRefused: value.UnknownNoFallbackRefused,
+		MalformedRejected:        value.MalformedRejected,
+		SniffTimeout:             value.SniffTimeout,
+		ClientHelloTooLarge:      value.ClientHelloTooLarge,
 	}
 }

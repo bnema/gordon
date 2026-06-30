@@ -18,10 +18,11 @@ func TestHandler_TrafficStatus(t *testing.T) {
 	trafficSvc.EXPECT().Status().Return(domain.TrafficStatus{
 		LastReloadStatus: "ok",
 		EntryPoints: []domain.EntryPointStatus{{
-			Name: "postgres", Address: "127.0.0.1:5432", Protocol: domain.EntryPointProtocolTCP,
+			Name: "edge", Address: "127.0.0.1:8443", Protocol: domain.EntryPointProtocolSmartTCP,
 			Active: true, ActiveTCPConnections: 2, TotalAccepted: 3, BytesIn: 11, BytesOut: 22,
+			SmartTCP: domain.SmartTCPCounters{HTTPAccepted: 1, PROXYRefused: 1},
 		}},
-		Counters: domain.TrafficCounters{ActiveTCPConnections: 2, TotalAccepted: 3, BytesIn: 11, BytesOut: 22},
+		Counters: domain.TrafficCounters{ActiveTCPConnections: 2, TotalAccepted: 3, BytesIn: 11, BytesOut: 22, SmartTCP: domain.SmartTCPCounters{HTTPAccepted: 1, PROXYRefused: 1}},
 	})
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.TrafficSvc = trafficSvc
@@ -37,9 +38,11 @@ func TestHandler_TrafficStatus(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, "ok", body.LastReloadStatus)
 	require.Len(t, body.EntryPoints, 1)
-	assert.Equal(t, "postgres", body.EntryPoints[0].Name)
+	assert.Equal(t, "edge", body.EntryPoints[0].Name)
 	assert.Equal(t, int64(2), body.Counters.ActiveTCPConnections)
 	assert.Equal(t, int64(22), body.Counters.BytesOut)
+	assert.Equal(t, int64(1), body.EntryPoints[0].SmartTCP.HTTPAccepted)
+	assert.Equal(t, int64(1), body.Counters.SmartTCP.PROXYRefused)
 }
 
 func TestHandler_TrafficStatusRequiresStatusRead(t *testing.T) {
