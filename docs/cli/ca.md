@@ -12,7 +12,7 @@ Manage Gordon's internal Certificate Authority.
 | `info` | Show CA status (root CN, fingerprint, intermediate expiry) |
 | `install` | Install/uninstall the root CA in system trust stores |
 
-All subcommands require `server.tls_port` to be non-zero in the Gordon configuration.
+All subcommands require Gordon to have TLS-capable HTTPS fallback configured on an entrypoint such as `entrypoints.edge` with `protocol = "smart_tcp"`.
 
 ---
 
@@ -120,5 +120,5 @@ Visit `http://<gordon-host>/.well-known/gordon/ca` from the device browser. The 
 
 ## Related
 
-- [Server Configuration](../config/server.md) — `tls_port`, `force_https_redirect`, and internal CA settings
+- [Server Configuration](../config/server.md) — `force_https_redirect`, smart TCP edge, and internal CA settings
 - [CLI Commands](./index.md)

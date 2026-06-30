@@ -39,7 +39,21 @@ gordon traffic status --remote https://gordon.example.com --json
       "total_refused": 0,
       "total_errors": 0,
       "bytes_in": 4096,
-      "bytes_out": 8192
+      "bytes_out": 8192,
+      "smart_tcp": {
+        "http_accepted": 0,
+        "h2c_accepted": 0,
+        "https_fallback_accepted": 0,
+        "tls_passthrough_accepted": 0,
+        "raw_fallback_accepted": 0,
+        "entrypoint_cidr_refused": 0,
+        "raw_fallback_cidr_refused": 0,
+        "proxy_refused": 0,
+        "unknown_no_fallback_refused": 0,
+        "malformed_rejected": 0,
+        "sniff_timeout": 0,
+        "client_hello_too_large": 0
+      }
     }
   ],
   "routers": [],
@@ -51,7 +65,21 @@ gordon traffic status --remote https://gordon.example.com --json
     "total_refused": 0,
     "total_errors": 0,
     "bytes_in": 4096,
-    "bytes_out": 8192
+    "bytes_out": 8192,
+    "smart_tcp": {
+      "http_accepted": 0,
+      "h2c_accepted": 0,
+      "https_fallback_accepted": 0,
+      "tls_passthrough_accepted": 0,
+      "raw_fallback_accepted": 0,
+      "entrypoint_cidr_refused": 0,
+      "raw_fallback_cidr_refused": 0,
+      "proxy_refused": 0,
+      "unknown_no_fallback_refused": 0,
+      "malformed_rejected": 0,
+      "sniff_timeout": 0,
+      "client_hello_too_large": 0
+    }
   }
 }
 ```

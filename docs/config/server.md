@@ -6,29 +6,29 @@ Core server settings for Gordon.
 
 ```toml
 [server]
-port = 8088                              # HTTP proxy port
 registry_port = 5000                     # Container registry port
-tls_port = 8443                          # HTTPS listener port (0 = disabled)
+gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
 # tls_cert_file = ""                       # Optional: PEM certificate for static TLS
 # tls_key_file = ""                        # Optional: PEM key for static TLS
-# force_https_redirect = false             # Redirect all HTTP traffic to HTTPS
-gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
+# force_https_redirect = false             # Redirect cleartext HTTP requests to HTTPS
 # legacy_registry_domains = ["registry.example.com:5000"]
 # data_dir = "~/.gordon"                 # Data storage directory (default)
 max_blob_chunk_size = "95MB"             # Max registry blob upload chunk
 max_blob_size = "1GB"                    # Max cumulative registry blob/layer upload
+
+[entrypoints.edge]
+address = ":443"                         # Deployment-selected public TCP socket
+protocol = "smart_tcp"
 ```
 
 ## Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `port` | int | `8088` | HTTP proxy port for routing traffic to containers |
 | `registry_port` | int | `5000` | Docker registry port for image push/pull |
-| `tls_port` | int | `8443` | HTTPS listener port with internal CA. Set to `0` to disable TLS entirely |
-| `tls_cert_file` | string | `""` | Path to PEM certificate file. When set (with `tls_key_file`), this cert is served for matching SNI domains; unmatched domains fall through to the internal CA |
+| `tls_cert_file` | string | `""` | Path to PEM certificate file. When set with `tls_key_file`, matching SNI domains use this static cert before ACME or internal CA certs |
 | `tls_key_file` | string | `""` | Path to PEM private key file. Must be set together with `tls_cert_file` |
-| `force_https_redirect` | bool | `false` | Redirect all HTTP requests to the HTTPS port. For direct-access setups without a TLS-terminating proxy |
+| `force_https_redirect` | bool | `false` | Redirect cleartext HTTP requests to HTTPS on HTTP-capable edge entrypoints |
 | `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
 | `registry_domain` | string | - | Deprecated migration key. Set `gordon_domain` instead. |
 | `legacy_registry_domains` | []string | `[]` | Additional Gordon registry hosts treated as aliases during staged migration. See [Upgrading: Staged Registry Host Rename](../upgrading.md#staged-registry-host-rename). |
@@ -37,46 +37,33 @@ max_blob_size = "1GB"                    # Max cumulative registry blob/layer up
 | `max_blob_chunk_size` | string | `"95MB"` | Maximum request body size for a single registry blob upload chunk |
 | `max_blob_size` | string | `"1GB"` | Maximum cumulative size for one registry blob/layer upload |
 | `registry_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
-| `proxy_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
+| `proxy_allowed_ips` | []string | `[]` | IPs or CIDR ranges allowed to reach HTTP proxy paths (empty = allow all) |
 | `registry_listen_address` | string | `""` | Bind address for registry (empty = all interfaces) |
 
-## Port Configuration
-
-### Proxy Port
-
-The `port` setting controls where Gordon listens for HTTP traffic:
+Public application traffic is configured under `[entrypoints]`. The standard edge listener is a `smart_tcp` socket:
 
 ```toml
-[server]
-port = 8088  # Default high port for rootless or forwarded setups
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
 ```
 
-For rootless containers, you'll typically use a high port and configure firewall port forwarding:
+`entrypoints.edge.address` is not an HTTP or HTTPS port. It is the TCP address Gordon sniffs for cleartext HTTP, h2c, TLS passthrough, normal HTTPS fallback, or explicit raw TCP fallback. Gordon does not provide a built-in default public port; choose `:443`, a high port such as `:9000`, or container/firewall mappings to match your deployment.
 
-```bash
-# Forward port 80 to 8088
-sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
-```
+## Internal CA and TLS
 
-### Internal CA and TLS
+Gordon includes an internal certificate authority that issues on-demand TLS certificates for proxied domains served through HTTPS fallback on a TLS-capable entrypoint such as `smart_tcp`.
 
-Gordon includes an internal certificate authority that issues on-demand TLS certificates for proxied domains. The HTTPS listener is enabled by default on `tls_port` (8443).
-
-```toml
-[server]
-tls_port = 8443   # Default. Set to 0 to disable TLS entirely.
-```
-
-With TLS enabled:
+With TLS-capable edge traffic:
 - Gordon runs an internal CA (root + intermediate) stored in `{data_dir}/pki/`
 - Leaf certificates are issued on-demand per domain (SNI-based) and cached in memory
 - The intermediate CA auto-renews before expiry
-- An onboarding page at `https://<gordon-host>:<tls_port>/.well-known/gordon/` lets clients download the root CA certificate
+- An onboarding page at `https://<gordon-host>/.well-known/gordon/` lets clients download the root CA certificate
 - The root CA is stable across restarts (generated once, persisted to disk)
 
 #### Custom certificates
 
-To use your own certificate (e.g. from Tailscale, Let's Encrypt, or a corporate CA) alongside the internal CA:
+To use your own certificate (e.g. from Tailscale, Let's Encrypt, or a corporate CA) alongside ACME/internal CA fallback:
 
 ```toml
 [server]
@@ -84,15 +71,16 @@ tls_cert_file = "/etc/gordon/tls/cert.pem"
 tls_key_file = "/etc/gordon/tls/key.pem"
 ```
 
-The static certificate is served for SNI-matching domains (including wildcards). All other domains get on-demand certs from the internal CA.
+Certificate priority for normal HTTPS fallback is: static certificates first, then public ACME certificates, then Gordon's internal CA.
 
 #### Public ACME certificates
 
-Gordon can obtain public certificates through Let's Encrypt-compatible ACME when `[tls.acme]` is enabled. The HTTPS listener must also be enabled (`server.tls_port > 0`).
+Gordon can obtain public certificates through Let's Encrypt-compatible ACME when `[tls.acme]` is enabled. Normal HTTPS fallback must be available on a TLS-capable entrypoint.
 
 ```toml
-[server]
-tls_port = 8443
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
 
 [dns]
 resolvers = ["1.1.1.1:53", "8.8.8.8:53"]
@@ -107,11 +95,12 @@ obtain_batch_size = 1    # maximum new certificate orders per reconcile run
 ```
 
 Challenge behavior:
-- `http-01` serves `/.well-known/acme-challenge/<token>` on the HTTP proxy port.
-- `cloudflare-dns-01` uses a Cloudflare API token from `pass`, `GORDON_CLOUDFLARE_API_TOKEN_FILE`, or `GORDON_CLOUDFLARE_API_TOKEN`.
+- `cloudflare-dns-01` uses a Cloudflare API token from `pass`, `GORDON_CLOUDFLARE_API_TOKEN_FILE`, or `GORDON_CLOUDFLARE_API_TOKEN`; it does not need a special public port 80 edge.
+- `http-01` serves `/.well-known/acme-challenge/<token>` through Gordon's HTTP handler and requires an HTTP-capable `smart_tcp` entrypoint reachable on external port 80 for each hostname being validated.
 - `auto` selects Cloudflare DNS-01 when a token is available, otherwise falls back to HTTP-01.
+- `tls-alpn-01` is not supported.
 
-HTTP-01 requires public access to port 80 for each hostname being validated. If you use Cloudflare in DNS-only/gray-cloud mode, your firewall/NAT must allow direct public traffic to Gordon's HTTP proxy port. A firewall rule that only allows Cloudflare source IPs on port 80 is compatible with orange-cloud proxying, but it blocks gray-cloud HTTP-01 validation; use DNS-01 or temporarily open port 80 for direct validation.
+HTTP-01 requires public access to external port 80 for each hostname being validated. If you use Cloudflare in DNS-only/gray-cloud mode, your firewall/NAT must allow direct public traffic to the HTTP-capable smart TCP entrypoint. A firewall rule that only allows Cloudflare source IPs on port 80 is compatible with orange-cloud proxying, but it blocks gray-cloud HTTP-01 validation; use DNS-01 or temporarily open port 80 for direct validation.
 
 Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile run (default `1`) so enabling ACME on an existing multi-route server does not burst through every route and hit Let's Encrypt rate limits. Later reloads, restarts, or other explicit reconcile runs continue issuing remaining certificates.
 
@@ -129,7 +118,7 @@ Because Gordon's ACME challenge mode is global, `cloudflare-dns-01` requires a C
 
 #### Direct HTTP Onboarding
 
-When `tls_port` is non-zero, direct HTTP clients (those not arriving through a trusted proxy) are restricted to CA onboarding paths only:
+When Gordon is serving TLS-capable edge traffic, direct cleartext HTTP clients (those not arriving through a trusted proxy) are restricted to CA onboarding paths only:
 
 - `/.well-known/gordon/`, `/.well-known/gordon/ca`, `/.well-known/gordon/ca.crt`, `/.well-known/gordon/ca.mobileconfig` — serve the onboarding page and CA certificate downloads
 - `/.well-known/acme-challenge/*` — serves ACME HTTP-01 challenges when public ACME HTTP-01 is enabled, otherwise returns `404 Not Found`
@@ -141,7 +130,7 @@ On HTTPS, onboarding paths are served only on `server.gordon_domain`; app hosts 
 
 #### HTTP to HTTPS redirect
 
-When clients connect directly (no Cloudflare or reverse proxy in front), enable `force_https_redirect` to redirect all HTTP traffic to the HTTPS port. Direct HTTP onboarding paths are still served even with this flag enabled.
+When clients connect directly (no Cloudflare or reverse proxy in front), enable `force_https_redirect` to redirect cleartext HTTP traffic to HTTPS on the same smart TCP edge.
 
 ```toml
 [server]
@@ -150,40 +139,22 @@ force_https_redirect = true
 
 When `proxy_allowed_ips` is configured, non-proxy clients are redirected automatically even without this flag — trusted proxy IPs pass through to serve Cloudflare-proxied traffic.
 
-#### Disabling TLS
+#### Firewall and Container Port Mapping
 
-For setups where TLS is handled entirely by an external proxy (Cloudflare, nginx, etc.):
+Choose the bind address in `[entrypoints.edge]` and map external ports to it as needed. For example, a rootless service can bind a high port while the firewall exposes 443:
 
 ```toml
-[server]
-tls_port = 0   # No HTTPS listener, no internal CA generated
+[entrypoints.edge]
+address = ":9000"
+protocol = "smart_tcp"
 ```
-
-#### Firewall port forwarding
-
-For rootless user services, forward 443 to the high port at the firewall:
 
 ```bash
-# Forward 443 -> 8443
-sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=8443
+sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=9000
 sudo firewall-cmd --reload
 ```
 
-With firewalld and Tailscale:
-
-```bash
-# Verify tailscale0 is in trusted zone
-sudo firewall-cmd --get-zone-of-interface=tailscale0
-
-# If needed, place tailscale0 in trusted
-sudo firewall-cmd --permanent --zone=trusted --add-interface=tailscale0
-sudo firewall-cmd --reload
-
-# Forward 443 -> 8443 permanently (IPv4 + IPv6)
-sudo firewall-cmd --permanent --zone=trusted --add-rich-rule='rule family=ipv4 forward-port port=443 protocol=tcp to-port=8443'
-sudo firewall-cmd --permanent --zone=trusted --add-rich-rule='rule family=ipv6 forward-port port=443 protocol=tcp to-port=8443'
-sudo firewall-cmd --reload
-```
+`:443`, `:9000`, and container `-p 443:9000` mappings are deployment choices, not protocol modes.
 
 ### Registry Port
 
@@ -223,11 +194,11 @@ For a staged rename, set `gordon_domain` to the new public host and add any old 
 
 Without this migration, a Host/remote-target mismatch can break routing or remote CLI token exchange.
 
-When requests arrive on the proxy port with this domain as the Host header, Gordon routes them to the backend services (registry and admin API).
+When requests arrive on an HTTP-capable edge entrypoint with this domain as the Host header, Gordon routes them to the backend services (registry and admin API).
 
 Security note:
 - Direct access to `/admin/*` on `registry_port` is blocked for non-loopback clients.
-- Admin API traffic should go through the main proxy listener (`server.port`/`server.tls_port`).
+- Admin API traffic should go through an HTTP-capable edge entrypoint such as `entrypoints.edge` with `protocol = "smart_tcp"`.
 
 > **Note:** `registry_domain` is a deprecated migration key; use `gordon_domain` for new and upgraded configs.
 
@@ -404,7 +375,7 @@ registry_listen_address = "127.0.0.1"  # Loopback only
 
 ## HSTS
 
-HSTS headers are sent automatically on the HTTPS listener (when `r.TLS != nil`). When Gordon runs behind a TLS-terminating proxy (Cloudflare, Tailscale) and only receives plain HTTP, HSTS is not sent — the edge proxy is expected to handle it.
+HSTS headers are sent automatically on TLS requests (when `r.TLS != nil`). When Gordon runs behind a TLS-terminating proxy (Cloudflare, Tailscale) and only receives plain HTTP, HSTS is not sent — the edge proxy is expected to handle it.
 
 ## Examples
 
@@ -412,35 +383,44 @@ HSTS headers are sent automatically on the HTTPS listener (when `r.TLS != nil`).
 
 ```toml
 [server]
-port = 8088
 registry_port = 5000
 gordon_domain = "gordon.local"
 data_dir = "./dev-data"
+
+[entrypoints.edge]
+address = ":9000"
+protocol = "smart_tcp"
 ```
 
 ### Production Configuration
 
 ```toml
 [server]
-port = 8088
 registry_port = 5000
 gordon_domain = "gordon.company.com"
 data_dir = "/var/lib/gordon"
+
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
 ```
 
 ### Rootless Container Setup
 
 ```toml
 [server]
-port = 8088      # High port for rootless
 registry_port = 5000
 gordon_domain = "gordon.mydomain.com"
+
+[entrypoints.edge]
+address = ":9000"      # High port for rootless
+protocol = "smart_tcp"
 ```
 
 With firewall port forwarding:
 
 ```bash
-sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
+sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=9000
 sudo firewall-cmd --reload
 ```
 

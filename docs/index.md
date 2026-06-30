@@ -81,7 +81,7 @@ Gordon runs on your VPS and provides:
 - Domain pointing to your server
 - Optional Cloudflare account or other reverse proxy for edge TLS
 
-> **Note:** Gordon can run behind Cloudflare/nginx, or terminate TLS directly via its internal CA (enabled by default on `server.tls_port`). Set `tls_port = 0` to disable.
+> **Note:** Gordon can run behind Cloudflare/nginx, or terminate TLS directly on a smart TCP edge entrypoint via static certificates, public ACME certificates, or its internal CA.
 
 ## Related
 

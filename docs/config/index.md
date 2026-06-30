@@ -13,10 +13,12 @@ Gordon uses a single TOML configuration file located at `~/.config/gordon/gordon
 
 ```toml
 [server]
-port = 8088
-tls_port = 8443
 registry_port = 5000
 gordon_domain = "gordon.mydomain.com"
+
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
 
 [routes]
 "app.mydomain.com" = "myapp:latest"
@@ -35,10 +37,13 @@ For a complete list of all configuration options with their default values, see 
 ```toml
 # Server settings
 [server]
-port = 8088                              # HTTP proxy port (default: 8088)
 registry_port = 5000                     # Registry port (default: 5000)
 gordon_domain = "gordon.mydomain.com"    # Required: Gordon domain (registry + API)
 # data_dir = "~/.gordon"                 # Default for user installations
+
+[entrypoints.edge]
+address = ":443"                         # Deployment-selected public TCP socket
+protocol = "smart_tcp"
 
 # Authentication (includes secrets backend)
 [auth]
@@ -183,7 +188,6 @@ keep_last = 3
 
 | Setting | Default |
 |---------|---------|
-| `server.port` | `8088` |
 | `server.registry_port` | `5000` |
 | `server.data_dir` | `~/.gordon` |
 | `server.max_blob_chunk_size` | `"95MB"` |
@@ -258,7 +262,7 @@ gordon reload
 
 | Setting |
 |---------|
-| `server.port` |
+| `entrypoints.edge.address` |
 | `server.data_dir` |
 | `server.max_blob_chunk_size` |
 | `server.max_blob_size` |

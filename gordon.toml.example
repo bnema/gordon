@@ -2,8 +2,6 @@
 # Copy this file to ~/.config/gordon/gordon.toml and adjust for your domain.
 
 [server]
-port = 8088
-tls_port = 8443
 registry_port = 5000
 gordon_domain = "gordon.example.com"
 # legacy_registry_domains = ["registry.example.com:5000"]
@@ -19,6 +17,14 @@ gordon_domain = "gordon.example.com"
 # max_proxy_body_size = "512MB"
 # max_proxy_response_size = "1GB"
 # max_concurrent_connections = 10000
+
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
+# trusted_cidrs = []
+# raw_fallback = "ssh-fallback"
+# raw_fallback_trusted_cidrs = ["100.64.0.0/10"]
+# allow_public_raw_fallback = false
 
 [dns]
 resolvers = ["1.1.1.1:53", "8.8.8.8:53"]

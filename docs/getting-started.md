@@ -6,7 +6,7 @@ Deploy your first app with Gordon in under 5 minutes.
 
 - A Linux VPS with Docker or Podman installed
 - A domain pointing to your VPS (DNS A record)
-- HTTPS setup: Cloudflare proxy, Tailscale, or Gordon's internal CA (`server.tls_port = 8443`)
+- A public TCP edge address for Gordon (for example external `:443`, mapped to your chosen `entrypoints.edge.address`)
 - [pass](https://www.passwordstore.org/) (password manager) with GPG key initialized
 
 ## 1. Install Gordon
@@ -73,10 +73,12 @@ Edit `~/.config/gordon/gordon.toml`:
 
 ```toml
 [server]
-port = 8088                              # HTTP proxy port (default)
 registry_port = 5000                     # Registry port
-tls_port = 8443                          # HTTPS listener (default)
 gordon_domain = "gordon.mydomain.com"    # Registry + Admin API domain
+
+[entrypoints.edge]
+address = ":443"                         # Public smart TCP edge (choose your bind/mapping)
+protocol = "smart_tcp"
 
 [routes]
 "app.mydomain.com" = "myapp:latest"      # Domain → Image mapping
@@ -99,7 +101,7 @@ Why wildcard (`*`)?
 
 If your DNS provider supports wildcard CNAME flattening (Cloudflare does), `* -> gordon.mydomain.com` is usually the cleanest option.
 
-> **Important for Cloudflare or other proxied setups:** when Gordon's internal CA is enabled (default `tls_port = 8443`), add your proxy edge IPs to `server.proxy_allowed_ips` or proxied HTTP traffic will get `403 Forbidden`. See [Installation](./installation.md#proxy-origin-allowlist). If you do not want Gordon to manage TLS at all, set `tls_port = 0`.
+> **Important for Cloudflare or other proxied setups:** when Gordon serves HTTP paths behind Cloudflare or another proxy, add your proxy edge IPs to `server.proxy_allowed_ips` or proxied HTTP traffic can get `403 Forbidden`. See [Installation](./installation.md#proxy-origin-allowlist).
 
 ## 6. Start Gordon as a Service
 

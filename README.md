@@ -127,7 +127,7 @@ See the [Deploy Action README](.github/actions/deploy/README.md) for multi-platf
 ## Features
 
 - Private Docker registry on your VPS
-- Domain-to-container routing via HTTP reverse proxy
+- Domain-to-container routing through a smart TCP edge reverse proxy
 - Automatic deployment on image push
 - Auto-routing from image labels
 - Remote CLI management
@@ -138,7 +138,7 @@ See the [Deploy Action README](.github/actions/deploy/README.md) for multi-platf
 - Single binary, ~15MB RAM
 
 > [!NOTE]
-> Gordon can terminate TLS directly via its internal CA (default `server.tls_port = 8443`), static certificates, or public ACME certificates. Cloudflare and upstream reverse proxies are optional deployment choices, not requirements.
+> Gordon exposes public traffic through entrypoints such as `[entrypoints.edge]` with `protocol = "smart_tcp"`. It can terminate TLS via static certificates, public ACME certificates, or its internal CA. Cloudflare and upstream reverse proxies are optional deployment choices, not requirements.
 
 ## Documentation
 

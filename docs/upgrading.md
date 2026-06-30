@@ -6,6 +6,59 @@ This guide covers breaking changes and migration steps between major versions.
 
 Route keys must be plain hostnames. Use inline tables like `"app.example.com" = { image = "myapp:latest" }`. Gordon still reads legacy `http://...` route entries for backward compatibility and rewrites them on the next save. Update `[routes]`, CLI commands, and automation that reference the old values.
 
+## Next major: Unified smart TCP entrypoints
+
+### Breaking: `server.port` / `server.tls_port` no longer define public listeners
+
+Public application traffic is configured entrypoint-first. Migrate old HTTP/HTTPS listener settings to a smart TCP edge entrypoint.
+
+**Before:**
+
+```toml
+[server]
+port = 8088
+tls_port = 8443
+registry_port = 5000
+gordon_domain = "gordon.example.com"
+```
+
+**After:**
+
+```toml
+[server]
+registry_port = 5000
+gordon_domain = "gordon.example.com"
+
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
+```
+
+`edge` is the conventional route default, but it has no built-in port. `address = ":443"`, `address = ":9000"`, firewall forwarding, and container mappings such as `-p 443:9000` are deployment choices, not protocol modes. The `smart_tcp` protocol accepts TCP, sniffs HTTP/h2c/TLS, routes TLS passthrough by SNI when configured, and otherwise uses normal Gordon HTTPS fallback.
+
+If you run rootless and cannot bind 443 directly, bind a high port and map external ports to it:
+
+```toml
+[entrypoints.edge]
+address = ":9000"
+protocol = "smart_tcp"
+```
+
+```bash
+sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=9000
+sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=9000
+sudo firewall-cmd --reload
+```
+
+Keep `server.registry_port` for Docker/Podman push and pull traffic; it is separate from public app entrypoints.
+
+### ACME migration notes
+
+- DNS-01 (`cloudflare-dns-01`) does not require a special external port 80 edge.
+- HTTP-01 requires an HTTP-capable `smart_tcp` entrypoint reachable on external port 80 for each hostname being validated.
+- TLS-ALPN-01 is unsupported.
+- Normal HTTPS fallback certificate priority is static certificates, then public ACME certificates, then Gordon's internal CA.
+
 ## v2.30.0 to v2.31.0
 
 ### Breaking: Default Port Changes
@@ -117,9 +170,9 @@ If you have automation parsing status-like fields from `routes list`, migrate it
 
 Gordon can now obtain public certificates with `[tls.acme]` using either `http-01` or `cloudflare-dns-01`.
 
-- `server.tls_port` must stay enabled (`> 0`)
-- `http-01` needs public HTTP reachability for each hostname being validated
-- `cloudflare-dns-01` needs a Cloudflare token with zone-read and DNS-edit access for every zone used by HTTPS routes
+- Normal HTTPS fallback must be available on a TLS-capable entrypoint
+- `http-01` needs an HTTP-capable smart TCP entrypoint reachable on external port 80 for each hostname being validated
+- `cloudflare-dns-01` needs a Cloudflare token with zone-read and DNS-edit access for every zone used by HTTPS routes and does not require a special port-80 edge
 - `obtain_batch_size` limits new ACME orders per reconcile pass to reduce rate-limit spikes
 
 ### New: DNS Resolver Settings for ACME DNS-01
