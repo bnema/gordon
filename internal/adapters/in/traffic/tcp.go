@@ -919,6 +919,9 @@ func backendFromAddress(name string, address string) (domain.TrafficBackend, err
 	if err != nil {
 		return domain.TrafficBackend{}, fmt.Errorf("parse backend port %q from address %q: %w", portValue, address, err)
 	}
+	if port < 1 || port > 65535 {
+		return domain.TrafficBackend{}, fmt.Errorf("backend port %q from address %q is outside 1-65535", portValue, address)
+	}
 	return domain.TrafficBackend{Name: name, Host: host, Port: port, Protocol: domain.NetworkProtocolTCP}, nil
 }
 

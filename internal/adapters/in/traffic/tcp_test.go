@@ -25,6 +25,12 @@ func TestTrafficRuntimeDefaultsApplySafeLimits(t *testing.T) {
 	assert.Equal(t, 4096, effectiveUDPOptions(domain.UDPOptions{}).MaxSessions)
 }
 
+func TestBackendFromAddressRejectsOutOfRangePort(t *testing.T) {
+	_, err := backendFromAddress("bad:tcp", "127.0.0.1:70000")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside 1-65535")
+}
+
 func TestSmartTCPDispatch(t *testing.T) {
 	t.Run("cleartext HTTP request reaches HTTP handler", func(t *testing.T) {
 		manager, graph, hits := startSmartTCP(t, nil, nil)

@@ -128,6 +128,9 @@ func newOnboardingConfig() Config {
 	cfg.Server.Port = 8088
 	cfg.Server.TLSPort = 8443
 	cfg.Server.ProxyAllowedIPs = []string{"173.245.48.0/20"} // Cloudflare sample
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":8443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
 	return cfg
 }
 
@@ -449,7 +452,7 @@ func TestCreateHTTPHandlers_TLSDisabled_DoesNotServeHTTPOnboarding(t *testing.T)
 	t.Parallel()
 	ca := newTestCA(t)
 	cfg := newOnboardingConfig()
-	cfg.Server.TLSPort = 0 // TLS disabled
+	cfg.EntryPoints = nil // TLS disabled: no TLS-capable traffic entrypoint
 	svc := &services{caAdapter: ca}
 
 	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)

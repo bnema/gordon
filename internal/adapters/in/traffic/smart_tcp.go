@@ -257,6 +257,6 @@ func stopInternalHTTPServer(ctx context.Context, listener *tlsHTTPListener, serv
 	}
 	select {
 	case <-done:
-	case <-ctx.Done():
+	case <-shutdownCtx.Done():
 	}
 }

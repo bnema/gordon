@@ -73,6 +73,9 @@ func TestStandaloneServiceValidateVolumesAndEnvFile(t *testing.T) {
 	svc.Volumes = []StandaloneServiceVolume{{Source: "cache-data", Target: "var/lib/redis"}}
 	require.ErrorContains(t, svc.Validate(), "absolute")
 
+	svc.Volumes = []StandaloneServiceVolume{{Source: "cache-data", Target: `C:\\data`}}
+	require.ErrorContains(t, svc.Validate(), "absolute")
+
 	svc.Volumes = nil
 	svc.EnvFile = "   "
 	require.ErrorContains(t, svc.Validate(), "env_file")

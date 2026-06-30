@@ -314,7 +314,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `volumes.auto_create` | `true` | Auto-create volumes |
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
-| `services[].name` | none | Standalone service name used by `service:<name>:<port>` traffic refs |
+| `services[].name` | none | Standalone service name used by `service:<service>:<port-name>` traffic refs |
 | `services[].image` | none | Container image for enabled standalone services |
 | `services[].enabled` | `false` | Whether Gordon creates, starts, and reconciles the service container |
 | `services[].env` | `[]` | Inline `KEY=value` environment entries |
@@ -322,7 +322,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `services[].ports[].name` | none | Port name used by traffic service refs |
 | `services[].ports[].container` | none | Container port number |
 | `services[].ports[].protocol` | none | `tcp` or `udp` |
-| `services[].ports[].publish` | `""` | Host-side publish address, usually loopback for traffic-manager reachability |
+| `services[].ports[].publish` | `""` | Host-side bind address, usually loopback, that the traffic manager dials |
 | `services[].ports[].private` | `false` | Require matching service and entrypoint `trusted_cidrs` for this port |
 | `services[].ports[].public` | `false` | Explicit public opt-out for admin port names such as `rcon` |
 | `services[].ports[].trusted_cidrs` | `[]` | CIDRs allowed for private port routing; must match the target entrypoint |

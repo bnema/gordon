@@ -33,11 +33,11 @@ publish = "127.0.0.1:38016"
 trusted_cidrs = ["100.64.0.0/10"]
 ```
 
-The `publish` address is the host-side loopback address that Gordon's traffic manager dials. Expose it through `[traffic]` routers instead of binding the service container directly to a public interface.
+The `publish` address is the host-side bind address that Gordon's traffic manager dials; use loopback for private backends. Expose services through `[traffic]` routers instead of binding service containers directly to a public interface.
 
 ## Traffic routing
 
-Use `service:<service-name>:<port-name>` from TCP, UDP, or TLS passthrough routers:
+Use `service:<service>:<port-name>` from TCP, UDP, or TLS passthrough routers:
 
 ```toml
 [entrypoints.rust]

@@ -28,7 +28,7 @@ type smartTCPSniffResult struct {
 }
 
 const (
-	maxSmartTCPSniffBytes = 128
+	maxSmartTCPSniffBytes = 4096
 	h2cPreface            = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 	proxyV2Signature      = "\r\n\r\n\x00\r\nQUIT\n"
 )

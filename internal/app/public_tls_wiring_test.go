@@ -32,7 +32,7 @@ func TestPublicTLSReadinessAllowsDNS01WithoutEdgePort(t *testing.T) {
 	cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeCloudflareDNS01)
 
 	require.NoError(t, validatePublicTLSReadiness(cfg))
-	assert.Equal(t, 443, effectivePublicTLSPort(cfg))
+	assert.Equal(t, 0, effectivePublicTLSPort(cfg))
 }
 
 func TestPublicTLSReadinessRejectsAutoResolvedHTTP01WithoutBoundExternalPort80(t *testing.T) {
@@ -63,7 +63,7 @@ func TestEffectivePublicTLSPortPrefersTLSCapableEntrypointOverLegacyTLSPort(t *t
 	assert.Equal(t, 443, effectivePublicTLSPort(cfg))
 }
 
-func TestEffectivePublicTLSPortDeterministicWithMultipleTLSCapableEntrypoints(t *testing.T) {
+func TestEffectivePublicTLSPortPrefersDefaultEdgeWithMultipleTLSCapableEntrypoints(t *testing.T) {
 	cfg := Config{}
 	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
 		traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
@@ -85,7 +85,16 @@ func TestEffectivePublicTLSPortUsesSoleNonEdgeTLSCapableEntrypoint(t *testing.T)
 	assert.Equal(t, 8443, effectivePublicTLSPort(cfg))
 }
 
-func TestEffectivePublicTLSPortFallsBackWhenAmbiguousWithoutEdge(t *testing.T) {
+func TestEffectiveProxyPortsIgnoreLegacyServerPortsWithoutEntrypoints(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.Port = 8080
+	cfg.Server.TLSPort = 8443
+
+	assert.Equal(t, 0, effectiveProxyHTTPPort(cfg))
+	assert.Equal(t, 0, effectiveProxyTLSPort(cfg))
+}
+
+func TestEffectivePublicTLSPortReturnsZeroWhenAmbiguousWithoutEdge(t *testing.T) {
 	cfg := Config{}
 	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
 		"public-a": {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
@@ -93,7 +102,7 @@ func TestEffectivePublicTLSPortFallsBackWhenAmbiguousWithoutEdge(t *testing.T) {
 	}
 
 	for range 20 {
-		assert.Equal(t, 443, effectivePublicTLSPort(cfg))
+		assert.Equal(t, 0, effectivePublicTLSPort(cfg))
 	}
 }
 

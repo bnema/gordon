@@ -97,6 +97,15 @@ func (r *udpEntryPointRuntime) readLoop() {
 			r.counters.totalRefused.Add(1)
 			continue
 		}
+		select {
+		case <-r.ctx.Done():
+			return
+		default:
+		}
+		if len(r.datagrams) >= cap(r.datagrams) {
+			r.counters.totalRefused.Add(1)
+			continue
+		}
 		packet := append([]byte(nil), buf[:n]...)
 		select {
 		case r.datagrams <- udpDatagram{clientAddr: clientAddr, packet: packet}:
@@ -114,6 +123,11 @@ func (r *udpEntryPointRuntime) datagramWorker() {
 		case <-r.ctx.Done():
 			return
 		case datagram := <-r.datagrams:
+			select {
+			case <-r.ctx.Done():
+				return
+			default:
+			}
 			r.handleDatagram(datagram.clientAddr, datagram.packet)
 		}
 	}

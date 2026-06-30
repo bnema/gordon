@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,18 +109,18 @@ func TestSniffSmartTCPUnknownIsImmediate(t *testing.T) {
 	defer client.Close()
 
 	start := time.Now()
-	done := make(chan smartTCPSniffResult, 1)
+	done := make(chan sniffOutcome, 1)
 	go func() {
 		result, err := sniffSmartTCP(server, time.Second)
-		require.NoError(t, err)
-		done <- result
+		done <- sniffOutcome{result: result, err: err}
 	}()
 
 	_, err := client.Write([]byte{0})
 	require.NoError(t, err)
 	select {
-	case result := <-done:
-		assert.Equal(t, dispatchUnknown, result.kind)
+	case outcome := <-done:
+		require.NoError(t, outcome.err)
+		assert.Equal(t, dispatchUnknown, outcome.result.kind)
 		assert.Less(t, time.Since(start), 500*time.Millisecond)
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("sniff did not classify unknown bytes immediately")
@@ -152,15 +153,16 @@ func TestSniffSmartTCPReplayReturnsSniffedBytesBeforeUnderlyingBytes(t *testing.
 	client, server := net.Pipe()
 	defer client.Close()
 
-	done := make(chan smartTCPSniffResult, 1)
+	done := make(chan sniffOutcome, 1)
 	go func() {
 		result, err := sniffSmartTCP(server, time.Second)
-		require.NoError(t, err)
-		done <- result
+		done <- sniffOutcome{result: result, err: err}
 	}()
 	_, err := client.Write([]byte("GET / HTTP/1.1\r\n"))
 	require.NoError(t, err)
-	result := <-done
+	outcome := <-done
+	require.NoError(t, outcome.err)
+	result := outcome.result
 	writeDone := make(chan error, 1)
 	go func() {
 		_, err := client.Write([]byte("Host: example.com\r\n\r\n"))
@@ -171,6 +173,23 @@ func TestSniffSmartTCPReplayReturnsSniffedBytesBeforeUnderlyingBytes(t *testing.
 	_, err = io.ReadFull(result.conn, buf)
 	require.NoError(t, err)
 	assert.Equal(t, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", string(buf))
+	require.NoError(t, <-writeDone)
+}
+
+func TestSniffSmartTCPHandlesLongHTTPRequestLine(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	longRequest := "GET /" + strings.Repeat("a", 512) + " HTTP/1.1\r\n"
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := client.Write([]byte(longRequest))
+		writeDone <- err
+	}()
+	result, err := sniffSmartTCP(server, time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, dispatchHTTP, result.kind)
+	assertReplayPrefix(t, result.conn, []byte(longRequest))
 	require.NoError(t, <-writeDone)
 }
 
@@ -213,6 +232,11 @@ func assertReplayPrefix(t *testing.T, conn net.Conn, want []byte) {
 	_, err := io.ReadFull(conn, buf)
 	require.NoError(t, err)
 	assert.Equal(t, want, buf)
+}
+
+type sniffOutcome struct {
+	result smartTCPSniffResult
+	err    error
 }
 
 type deadlineConn struct {

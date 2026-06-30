@@ -359,6 +359,13 @@ func TestBuildEnforcesPrivateStandaloneServicePortRouting(t *testing.T) {
 		require.ErrorContains(t, err, "must exactly match")
 	})
 
+	t.Run("private port compares canonical trusted cidrs", func(t *testing.T) {
+		input := base()
+		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP, TrustedCIDRs: []string{"100.64.0.1/10"}}}
+		_, err := Build(input)
+		require.NoError(t, err)
+	})
+
 	t.Run("explicit public rcon is allowed without trusted cidrs", func(t *testing.T) {
 		input := base()
 		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP}}

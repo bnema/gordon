@@ -91,6 +91,25 @@ func TestService_ReconcileRecreatesStaleService(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestService_ReconcileRecreateDoesNotRemoveManagedVolumes(t *testing.T) {
+	rt := outmocks.NewMockContainerRuntime(t)
+	svc := sampleService()
+	svc.Cleanup = domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}
+	old := managedContainer("old-1", svc.Name, "old-hash", "running")
+	old.Labels[domain.LabelServiceManagedVolumes] = "gordon-service-game-data"
+	old.VolumeMounts = []domain.ContainerVolumeMount{{Name: "gordon-service-game-data", Type: "volume", Destination: "/data"}}
+	rt.On("ListContainers", mock.Anything, true).Return([]*domain.Container{old}, nil).Once()
+	rt.On("StopContainer", mock.Anything, "old-1").Return(nil).Once()
+	rt.On("RemoveContainer", mock.Anything, "old-1", true).Return(nil).Once()
+	rt.On("InspectImageVolumes", mock.Anything, svc.Image).Return([]string{}, nil).Once()
+	rt.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{ID: "new-1"}, nil).Once()
+	rt.On("StartContainer", mock.Anything, "new-1").Return(nil).Once()
+
+	err := NewService(rt).Reconcile(context.Background(), []domain.StandaloneService{svc})
+
+	require.NoError(t, err)
+}
+
 func TestService_ReconcileRemovesDuplicateMatchingServiceContainers(t *testing.T) {
 	rt := outmocks.NewMockContainerRuntime(t)
 	svc := sampleService()
@@ -263,6 +282,28 @@ func TestServiceConfigHashIncludesResolvedEnvFileAndSecretValues(t *testing.T) {
 	assert.NotEqual(t, first, second)
 }
 
+func TestService_ReconcileResolvesSecretEnvOnceForHashAndContainer(t *testing.T) {
+	rt := outmocks.NewMockContainerRuntime(t)
+	provider := outmocks.NewMockSecretProvider(t)
+	svc := sampleService()
+	svc.Secrets = []domain.StandaloneServiceSecretRef{{Name: "rcon", Key: "RCON_PASSWORD"}}
+	var created *domain.ContainerConfig
+	provider.On("GetSecret", mock.Anything, "service/game/rcon").Return("secret-value", nil).Once()
+	rt.On("ListContainers", mock.Anything, true).Return([]*domain.Container{}, nil).Once()
+	rt.On("InspectImageVolumes", mock.Anything, svc.Image).Return([]string{}, nil).Once()
+	rt.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Run(func(args mock.Arguments) {
+		created = args.Get(1).(*domain.ContainerConfig)
+	}).Return(&domain.Container{ID: "created-1"}, nil).Once()
+	rt.On("StartContainer", mock.Anything, "created-1").Return(nil).Once()
+
+	err := NewServiceWithSecretProvider(rt, provider).Reconcile(context.Background(), []domain.StandaloneService{svc})
+
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	assert.Contains(t, created.Env, "RCON_PASSWORD=secret-value")
+	assert.NotEmpty(t, created.Labels[domain.LabelServiceConfigHash])
+}
+
 func TestServiceEnvResolvesServiceScopedSecretsWithoutLeakingValues(t *testing.T) {
 	rt := outmocks.NewMockContainerRuntime(t)
 	provider := outmocks.NewMockSecretProvider(t)
@@ -356,6 +397,20 @@ func TestWaitReadinessHonorsContextTimeout(t *testing.T) {
 	err := NewService(nil).waitReadiness(ctx, "container-1", svc)
 
 	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestWaitLogReadinessPreservesLastReadErrorOnTimeout(t *testing.T) {
+	rt := outmocks.NewMockContainerRuntime(t)
+	svc := sampleService()
+	svc.Readiness = domain.StandaloneServiceReadiness{Type: domain.StandaloneServiceReadinessLog, Path: "/logs/server.log", Contains: "ready", Timeout: 25 * time.Millisecond}
+	readErr := errors.New("copy failed")
+	rt.On("CopyFromContainer", mock.Anything, "container-1", "/logs/server.log").Return(nil, readErr)
+
+	err := NewService(rt).waitReadiness(context.Background(), "container-1", svc)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, readErr)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 

@@ -3,6 +3,7 @@ package traffic
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -419,16 +420,33 @@ func sameCIDRSet(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	left := append([]string(nil), a...)
-	right := append([]string(nil), b...)
-	sort.Strings(left)
-	sort.Strings(right)
+	left, ok := canonicalCIDRs(a)
+	if !ok {
+		return false
+	}
+	right, ok := canonicalCIDRs(b)
+	if !ok {
+		return false
+	}
 	for i := range left {
 		if left[i] != right[i] {
 			return false
 		}
 	}
 	return true
+}
+
+func canonicalCIDRs(values []string) ([]string, bool) {
+	canonical := make([]string, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, false
+		}
+		canonical = append(canonical, prefix.Masked().String())
+	}
+	sort.Strings(canonical)
+	return canonical, true
 }
 
 func (b *builder) addService(service domain.TrafficService) {

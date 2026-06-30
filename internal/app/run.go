@@ -787,12 +787,12 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 				return tlsErr
 			}
 		}
+		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc); err != nil {
+			return err
+		}
 		si.svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpsProxyHandler, tlsConfig, si.svc.tlsHTTPEntryPoints)
 		si.svc.smartHTTPEntryPoints = registerSmartTCPHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpProxyHandler, si.svc.httpsProxyHandler, tlsConfig, si.svc.smartHTTPEntryPoints)
 		if err := reconcileStandaloneServices(reloadCtx, si.svc.standaloneServiceSvc, reloadCfg); err != nil {
-			return err
-		}
-		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc); err != nil {
 			return err
 		}
 		si.svc.containerSvc.UpdateConfig(containerCfg)
@@ -2931,10 +2931,10 @@ func waitForCoreProxyReadyAndApplyTraffic(ctx context.Context, cfg Config, svc *
 	if err := waitForServerReady(proxyReady, errChan); err != nil {
 		return err
 	}
-	if err := reconcileStandaloneServices(ctx, svc.standaloneServiceSvc, cfg); err != nil {
+	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc); err != nil {
 		return err
 	}
-	return applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc)
+	return reconcileStandaloneServices(ctx, svc.standaloneServiceSvc, cfg)
 }
 
 func reconcileStandaloneServices(ctx context.Context, serviceSvc in.StandaloneServiceService, cfg Config) error {
@@ -3400,40 +3400,21 @@ func hasTLSCapableEntrypoint(cfg Config) bool {
 }
 
 func effectivePublicTLSPort(cfg Config) int {
-	if entryPoint, ok := cfg.EntryPoints[traffic.DefaultEdgeEntryPointName]; ok && tlsCapableEntryPoint(entryPoint.Protocol) {
-		if port := portFromAddress(entryPoint.Address); port > 0 {
-			return port
-		}
-	}
-
-	var candidatePort int
-	candidates := 0
-	for name, entryPoint := range cfg.EntryPoints {
-		if name == traffic.DefaultEdgeEntryPointName || !tlsCapableEntryPoint(entryPoint.Protocol) {
-			continue
-		}
-		port := portFromAddress(entryPoint.Address)
-		if port == 0 {
-			continue
-		}
-		candidatePort = port
-		candidates++
-	}
-	if candidates == 1 {
-		return candidatePort
-	}
-	return 443
+	return effectiveEntrypointPort(cfg, tlsCapableEntryPoint)
 }
 
 func effectiveProxyTLSPort(cfg Config) int {
-	if hasTLSCapableEntrypoint(cfg) {
-		return effectivePublicTLSPort(cfg)
-	}
-	return cfg.Server.TLSPort
+	return effectivePublicTLSPort(cfg)
 }
 
 func effectiveProxyHTTPPort(cfg Config) int {
-	if entryPoint, ok := cfg.EntryPoints[traffic.DefaultEdgeEntryPointName]; ok && entryPoint.Protocol == domain.EntryPointProtocolSmartTCP {
+	return effectiveEntrypointPort(cfg, func(protocol domain.EntryPointProtocol) bool {
+		return protocol == domain.EntryPointProtocolSmartTCP
+	})
+}
+
+func effectiveEntrypointPort(cfg Config, match func(domain.EntryPointProtocol) bool) int {
+	if entryPoint, ok := cfg.EntryPoints[traffic.DefaultEdgeEntryPointName]; ok && match(entryPoint.Protocol) {
 		if port := portFromAddress(entryPoint.Address); port > 0 {
 			return port
 		}
@@ -3442,7 +3423,7 @@ func effectiveProxyHTTPPort(cfg Config) int {
 	var candidatePort int
 	candidates := 0
 	for name, entryPoint := range cfg.EntryPoints {
-		if name == traffic.DefaultEdgeEntryPointName || entryPoint.Protocol != domain.EntryPointProtocolSmartTCP {
+		if name == traffic.DefaultEdgeEntryPointName || !match(entryPoint.Protocol) {
 			continue
 		}
 		port := portFromAddress(entryPoint.Address)
@@ -3455,7 +3436,7 @@ func effectiveProxyHTTPPort(cfg Config) int {
 	if candidates == 1 {
 		return candidatePort
 	}
-	return cfg.Server.Port
+	return 0
 }
 
 func tlsCapableEntryPoint(protocol domain.EntryPointProtocol) bool {

@@ -382,7 +382,7 @@ func TestStandaloneServiceSecretProviderUnsafeBackendReconcilesServiceSecrets(t 
 	assert.True(t, sawSecretEnv)
 }
 
-func TestServiceInit_RegisterReloadCoordinatorHooks_ReconcilesStandaloneServicesBeforeTrafficApply(t *testing.T) {
+func TestServiceInit_RegisterReloadCoordinatorHooks_AppliesTrafficBeforeStandaloneServices(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()
 	v.Set("server.gordon_domain", "reload.example.com")
@@ -394,7 +394,7 @@ func TestServiceInit_RegisterReloadCoordinatorHooks_ReconcilesStandaloneServices
 	defer func() { require.NoError(t, manager.Shutdown(ctx)) }()
 
 	reconciler := &standaloneServiceRecorder{onReconcile: func() {
-		assert.Empty(t, manager.Status().EntryPoints, "traffic graph applied before standalone services reconciled")
+		assert.NotEmpty(t, manager.Status().EntryPoints, "traffic graph should apply before standalone services reconcile")
 	}}
 	si := &serviceInit{
 		ctx: ctx,
@@ -428,7 +428,7 @@ func TestServiceInit_RegisterReloadCoordinatorHooks_ReconcilesStandaloneServices
 	assert.NotEmpty(t, manager.Status().EntryPoints)
 }
 
-func TestWaitForCoreProxyReadyAndApplyTraffic_ReconcilesStandaloneServicesBeforeTrafficApply(t *testing.T) {
+func TestWaitForCoreProxyReadyAndApplyTraffic_AppliesTrafficBeforeStandaloneServices(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()
 	configSvc := cfgusecase.NewService(v, nil)
@@ -437,7 +437,7 @@ func TestWaitForCoreProxyReadyAndApplyTraffic_ReconcilesStandaloneServicesBefore
 	defer func() { require.NoError(t, manager.Shutdown(ctx)) }()
 
 	reconciler := &standaloneServiceRecorder{onReconcile: func() {
-		assert.Empty(t, manager.Status().EntryPoints, "traffic graph applied before standalone services reconciled")
+		assert.NotEmpty(t, manager.Status().EntryPoints, "traffic graph should apply before standalone services reconcile")
 	}}
 	cfg := Config{}
 	cfg.Services = []servicecfg.Config{{Name: "game", Image: "game:latest", Enabled: true}}

@@ -94,12 +94,16 @@ func (s *Service) reconcileOne(ctx context.Context, svc domain.StandaloneService
 	if !svc.Enabled {
 		return s.stopDisabled(ctx, svc.Name, cleanup, existing)
 	}
-	hash, err := s.serviceConfigHash(ctx, svc)
+	env, err := s.serviceEnv(ctx, svc)
+	if err != nil {
+		return fmt.Errorf("resolve standalone service %q environment: %w", svc.Name, err)
+	}
+	hash, err := serviceConfigHashWithEnv(svc, env)
 	if err != nil {
 		return fmt.Errorf("hash standalone service %q config: %w", svc.Name, err)
 	}
 	if len(existing) == 0 {
-		return s.createAndStart(ctx, svc, hash)
+		return s.createAndStart(ctx, svc, hash, env)
 	}
 	sort.SliceStable(existing, func(i, j int) bool {
 		leftRunning := containerStatus(existing[i]) == domain.ContainerStatusRunning
@@ -111,7 +115,7 @@ func (s *Service) reconcileOne(ctx context.Context, svc domain.StandaloneService
 	})
 	current := existing[0]
 	if current.Labels[domain.LabelServiceConfigHash] != hash {
-		if err := s.recreate(ctx, svc, cleanup, existing, hash); err != nil {
+		if err := s.recreate(ctx, svc, cleanup, existing, hash, env); err != nil {
 			return err
 		}
 		return nil
@@ -132,7 +136,7 @@ func (s *Service) reconcileOne(ctx context.Context, svc domain.StandaloneService
 	return nil
 }
 
-func (s *Service) recreate(ctx context.Context, svc domain.StandaloneService, cleanup domain.StandaloneServiceCleanup, existing []*domain.Container, hash string) error {
+func (s *Service) recreate(ctx context.Context, svc domain.StandaloneService, cleanup domain.StandaloneServiceCleanup, existing []*domain.Container, hash string, env []string) error {
 	for _, container := range existing {
 		if containerStatus(container) == domain.ContainerStatusRunning {
 			if err := s.runtime.StopContainer(ctx, container.ID); err != nil {
@@ -144,11 +148,8 @@ func (s *Service) recreate(ctx context.Context, svc domain.StandaloneService, cl
 				return fmt.Errorf("remove stale standalone service %q container: %w", svc.Name, err)
 			}
 		}
-		if err := s.removeManagedVolumes(ctx, svc.Name, cleanup, container); err != nil {
-			return err
-		}
 	}
-	return s.createAndStart(ctx, svc, hash)
+	return s.createAndStart(ctx, svc, hash, env)
 }
 
 func (s *Service) stopDisabled(ctx context.Context, name string, cleanup domain.StandaloneServiceCleanup, existing []*domain.Container) error {
@@ -234,8 +235,8 @@ func cleanupFromLabels(labels map[string]string) domain.StandaloneServiceCleanup
 	return cleanup
 }
 
-func (s *Service) createAndStart(ctx context.Context, svc domain.StandaloneService, hash string) error {
-	config, err := s.containerConfig(ctx, svc, hash)
+func (s *Service) createAndStart(ctx context.Context, svc domain.StandaloneService, hash string, env []string) error {
+	config, err := s.containerConfig(ctx, svc, hash, env)
 	if err != nil {
 		return err
 	}
@@ -252,7 +253,7 @@ func (s *Service) createAndStart(ctx context.Context, svc domain.StandaloneServi
 	return nil
 }
 
-func (s *Service) containerConfig(ctx context.Context, svc domain.StandaloneService, hash string) (*domain.ContainerConfig, error) {
+func (s *Service) containerConfig(ctx context.Context, svc domain.StandaloneService, hash string, env []string) (*domain.ContainerConfig, error) {
 	var imageVolumes []string
 	if len(svc.Volumes) == 0 {
 		var err error
@@ -276,10 +277,6 @@ func (s *Service) containerConfig(ctx context.Context, svc domain.StandaloneServ
 		volumes[mount.Target] = mount.Source
 	}
 	publishes, err := portPublishes(svc)
-	if err != nil {
-		return nil, err
-	}
-	env, err := s.serviceEnv(ctx, svc)
 	if err != nil {
 		return nil, err
 	}
@@ -354,6 +351,10 @@ func (s *Service) serviceConfigHash(ctx context.Context, svc domain.StandaloneSe
 	if err != nil {
 		return "", err
 	}
+	return serviceConfigHashWithEnv(svc, resolvedEnv)
+}
+
+func serviceConfigHashWithEnv(svc domain.StandaloneService, resolvedEnv []string) (string, error) {
 	payload := struct {
 		Image       string
 		ResolvedEnv []string
@@ -361,7 +362,7 @@ func (s *Service) serviceConfigHash(ctx context.Context, svc domain.StandaloneSe
 		Ports       []domain.StandaloneServicePort
 		Volumes     []domain.StandaloneServiceVolume
 		Cleanup     domain.StandaloneServiceCleanup
-	}{svc.Image, resolvedEnv, svc.Readiness, append([]domain.StandaloneServicePort(nil), svc.Ports...), append([]domain.StandaloneServiceVolume(nil), svc.Volumes...), normalizeCleanup(svc.Cleanup)}
+	}{svc.Image, append([]string(nil), resolvedEnv...), svc.Readiness, append([]domain.StandaloneServicePort(nil), svc.Ports...), append([]domain.StandaloneServiceVolume(nil), svc.Volumes...), normalizeCleanup(svc.Cleanup)}
 	bytes, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -522,21 +523,32 @@ func tcpReadinessAddress(svc domain.StandaloneService) (string, error) {
 func (s *Service) waitLogReadiness(ctx context.Context, containerID string, svc domain.StandaloneService) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
+	var lastErr error
 	for {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("standalone service %q log readiness timed out: %w", svc.Name, err)
+			return logReadinessTimeoutError(svc.Name, err, lastErr)
 		}
 		found, err := s.logContains(ctx, containerID, svc.Readiness.Path, svc.Readiness.Contains)
 		if err == nil && found {
 			return nil
 		}
+		if err != nil {
+			lastErr = err
+		}
 		// Continue polling until timeout; many services create the log after start.
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("standalone service %q log readiness timed out: %w", svc.Name, ctx.Err())
+			return logReadinessTimeoutError(svc.Name, ctx.Err(), lastErr)
 		case <-ticker.C:
 		}
 	}
+}
+
+func logReadinessTimeoutError(serviceName string, timeoutErr, lastErr error) error {
+	if lastErr != nil {
+		return fmt.Errorf("standalone service %q log readiness timed out: %w; last read error: %w", serviceName, timeoutErr, lastErr)
+	}
+	return fmt.Errorf("standalone service %q log readiness timed out: %w", serviceName, timeoutErr)
 }
 
 func (s *Service) logContains(ctx context.Context, containerID, path, contains string) (bool, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -92,6 +93,7 @@ func TestRunTrafficStatusUsesControlPlane(t *testing.T) {
 func TestRemoteTrafficStatusControlPlaneStillRenders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/admin/traffic/status", r.URL.Path)
+		require.Equal(t, http.MethodGet, r.Method)
 		_, err := w.Write([]byte(`{"last_reload_status":"ok","counters":{"active_udp_sessions":3}}`))
 		require.NoError(t, err)
 	}))
@@ -111,6 +113,7 @@ func TestRemoteTrafficStatusControlPlaneStillRenders(t *testing.T) {
 func TestLocalTrafficStatusReturnsActionableDaemonGuidance(t *testing.T) {
 	_, err := (&localControlPlane{}).GetTrafficStatus(context.Background())
 	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrTrafficStatusUnavailable))
 	assert.Contains(t, err.Error(), "in-process CLI control plane")
 	assert.Contains(t, err.Error(), "running Gordon daemon")
 	assert.Contains(t, err.Error(), "--remote")

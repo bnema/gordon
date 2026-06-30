@@ -302,7 +302,16 @@ func newTLSHTTPListener(addr net.Addr) *tlsHTTPListener {
 
 func (l *tlsHTTPListener) Accept() (net.Conn, error) {
 	select {
+	case <-l.done:
+		return nil, net.ErrClosed
+	default:
+	}
+	select {
 	case conn := <-l.conns:
+		if l.isClosed() {
+			_ = conn.Close()
+			return nil, net.ErrClosed
+		}
 		return conn, nil
 	case <-l.done:
 		return nil, net.ErrClosed
@@ -315,6 +324,14 @@ func (l *tlsHTTPListener) Close() error {
 		l.closed = true
 		l.mu.Unlock()
 		close(l.done)
+		for {
+			select {
+			case conn := <-l.conns:
+				_ = conn.Close()
+			default:
+				return
+			}
+		}
 	})
 	return nil
 }
@@ -333,4 +350,10 @@ func (l *tlsHTTPListener) serve(conn net.Conn) bool {
 	default:
 		return false
 	}
+}
+
+func (l *tlsHTTPListener) isClosed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closed
 }

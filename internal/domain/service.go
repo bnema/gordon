@@ -3,7 +3,7 @@ package domain
 import (
 	"fmt"
 	"net"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -210,7 +210,7 @@ func validateStandaloneServiceVolumes(s StandaloneService) error {
 		if target == "" {
 			return fmt.Errorf("standalone service %q volume %d target is required", s.Name, i)
 		}
-		if !filepath.IsAbs(target) {
+		if !path.IsAbs(target) {
 			return fmt.Errorf("standalone service %q volume %d target %q must be an absolute container path", s.Name, i, volume.Target)
 		}
 		if _, ok := seenTargets[target]; ok {

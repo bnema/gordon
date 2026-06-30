@@ -106,4 +106,7 @@ var (
 	ErrRouteSourceRequired       = errors.New("route source required")
 	ErrHTTPChallengeSinkRequired = errors.New("http challenge sink required")
 	ErrTLSRouteNotCovered        = errors.New("tls route not covered by public certificate")
+
+	// Traffic errors
+	ErrTrafficStatusUnavailable = errors.New("traffic status unavailable")
 )

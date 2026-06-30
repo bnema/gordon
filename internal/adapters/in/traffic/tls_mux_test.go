@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -213,6 +214,20 @@ func TestTLSHTTPListenerServeRejectsAfterClose(t *testing.T) {
 	}
 }
 
+func TestTLSHTTPListenerCloseDrainsQueuedConnections(t *testing.T) {
+	addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:443")
+	require.NoError(t, err)
+	listener := newTLSHTTPListener(addr)
+	client, server := net.Pipe()
+	defer client.Close()
+	require.True(t, listener.serve(server))
+	require.NoError(t, listener.Close())
+	_, err = listener.Accept()
+	require.ErrorIs(t, err, net.ErrClosed)
+	_, err = server.Write([]byte("closed"))
+	require.Error(t, err)
+}
+
 func TestTLSMuxHTTPSRoute(t *testing.T) {
 	backend := startTLSGreetingServer(t, "raw-backend", "raw\n")
 	graph := tlsGraph(t, freeTCPAddress(t), []tlsRoute{{name: "raw", sni: "raw.example.com", service: "raw", backend: backend.address}})
@@ -378,11 +393,11 @@ func testTLSConfig(t *testing.T, commonName string) *tls.Config {
 func testCertificate(commonName string) (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return tls.Certificate{}, err
+		return tls.Certificate{}, fmt.Errorf("generate test certificate key: %w", err)
 	}
 	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
 	if err != nil {
-		return tls.Certificate{}, err
+		return tls.Certificate{}, fmt.Errorf("generate test certificate serial: %w", err)
 	}
 	template := x509.Certificate{
 		SerialNumber: serial,
@@ -395,15 +410,19 @@ func testCertificate(commonName string) (tls.Certificate, error) {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {
-		return tls.Certificate{}, err
+		return tls.Certificate{}, fmt.Errorf("create test certificate: %w", err)
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyBytes, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
-		return tls.Certificate{}, err
+		return tls.Certificate{}, fmt.Errorf("marshal test certificate key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
-	return tls.X509KeyPair(certPEM, keyPEM)
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("parse test certificate key pair: %w", err)
+	}
+	return cert, nil
 }
 
 func TestHostMatchesTLSWildcard(t *testing.T) {
