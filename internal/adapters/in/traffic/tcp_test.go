@@ -200,6 +200,21 @@ func TestSmartTCPDispatch(t *testing.T) {
 	})
 }
 
+func TestSetSmartTCPHTTPServerCopiesProtocols(t *testing.T) {
+	manager := NewManager()
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	manager.SetSmartTCPHTTPServer("edge", http.NotFoundHandler(), protocols)
+
+	protocols.SetHTTP1(false)
+	protocols.SetUnencryptedHTTP2(true)
+
+	config, ok := manager.smartHTTPServer("edge")
+	require.True(t, ok)
+	assert.True(t, config.Protocols.HTTP1())
+	assert.False(t, config.Protocols.UnencryptedHTTP2())
+}
+
 func TestSmartTCPStatusCounters(t *testing.T) {
 	t.Run("HTTP accepted", func(t *testing.T) {
 		manager, graph, _ := startSmartTCP(t, nil, nil)
@@ -248,6 +263,16 @@ func TestSmartTCPStatusCounters(t *testing.T) {
 		defer conn.Close()
 		assertRoundTrip(t, conn, "raw")
 		assertSmartTCPStatus(t, manager, func(c domain.SmartTCPCounters) bool { return c.RawFallbackAccepted == 1 })
+	})
+
+	t.Run("raw fallback backend dial failure is not accepted", func(t *testing.T) {
+		manager, graph, _ := startSmartTCP(t, nil, &smartTCPRoute{backendAddress: freeTCPAddress(t), allowPublic: true})
+		defer shutdownManager(t, manager)
+		assertSmartTCPWriteRejected(t, graph.EntryPoints[0].Address, []byte{0})
+		assertSmartTCPStatus(t, manager, func(c domain.SmartTCPCounters) bool { return c.RawFallbackAccepted == 0 })
+		assert.Eventually(t, func() bool {
+			return manager.Status().Counters.TotalAccepted == 0 && manager.Status().Counters.TotalErrors == 1
+		}, time.Second, 10*time.Millisecond)
 	})
 
 	t.Run("refused and rejected classes", func(t *testing.T) {
@@ -339,6 +364,7 @@ func TestSmartTCPLifecycleHardening(t *testing.T) {
 		graph := smartTCPGraph(t, freeTCPAddress(t), nil, nil)
 		graph.Options.TCP.MaxConnections = 1
 		hijacked := make(chan struct{})
+		hijackedClosed := &atomic.Bool{}
 		manager.SetSmartTCPHTTPServer("edge", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			hj, ok := w.(http.Hijacker)
 			require.True(t, ok)
@@ -347,7 +373,9 @@ func TestSmartTCPLifecycleHardening(t *testing.T) {
 			defer conn.Close()
 			_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nready\n")
 			_ = rw.Flush()
-			close(hijacked)
+			if hijackedClosed.CompareAndSwap(false, true) {
+				close(hijacked)
+			}
 			_, _ = rw.ReadString('\n')
 		}), nil)
 		manager.SetSmartTCPTLSServer("edge", http.NotFoundHandler(), testTLSConfig(t, "app.example.com"))

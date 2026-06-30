@@ -370,8 +370,9 @@ func (r *entryPointRuntime) handleSmartTCPTLS(tracked *trackedTCPConn, conn net.
 		return r.handleSmartTCPTLSPeekError(conn, err)
 	}
 	if backend, ok := r.resolveTLSBackend(peeked.sni); ok {
-		r.counters.smartTCP.tlsPassthroughAccepted.Add(1)
-		r.proxyToBackend(tracked, peeked.conn, backend, options)
+		r.proxyToBackendAfterDial(tracked, peeked.conn, backend, options, func() {
+			r.counters.smartTCP.tlsPassthroughAccepted.Add(1)
+		})
 		return false
 	}
 	if r.routeToSmartHTTPS(tracked, peeked.conn) {
@@ -397,8 +398,9 @@ func (r *entryPointRuntime) handleSmartTCPUnknown(tracked *trackedTCPConn, conn 
 	backend, rawFallbackName, ok, rawCIDRRefused := r.resolveRawFallbackBackendDetailed(conn.RemoteAddr())
 	if ok {
 		tracked.markRawFallback(rawFallbackName)
-		r.counters.smartTCP.rawFallbackAccepted.Add(1)
-		r.proxyToBackend(tracked, conn, backend, options)
+		r.proxyToBackendAfterDial(tracked, conn, backend, options, func() {
+			r.counters.smartTCP.rawFallbackAccepted.Add(1)
+		})
 		return false
 	}
 	if rawCIDRRefused {
@@ -451,7 +453,7 @@ func (r *entryPointRuntime) peekTLSClientHello(client net.Conn, options domain.T
 }
 
 func isClientHelloTooLargeError(err error) bool {
-	return strings.Contains(err.Error(), "client hello exceeds")
+	return errors.Is(err, domain.ErrClientHelloTooLarge)
 }
 
 func clientHelloTimeout(options domain.TCPOptions) time.Duration {
@@ -468,6 +470,10 @@ type peekedTLSConn struct {
 }
 
 func (r *entryPointRuntime) proxyToBackend(tracked *trackedTCPConn, client net.Conn, backend domain.TrafficBackend, options domain.TCPOptions) bool {
+	return r.proxyToBackendAfterDial(tracked, client, backend, options, nil)
+}
+
+func (r *entryPointRuntime) proxyToBackendAfterDial(tracked *trackedTCPConn, client net.Conn, backend domain.TrafficBackend, options domain.TCPOptions, afterDial func()) bool {
 	dialCtx, cancel := context.WithTimeout(r.ctx, options.DialTimeout)
 	defer cancel()
 	backendConn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)))
@@ -479,6 +485,9 @@ func (r *entryPointRuntime) proxyToBackend(tracked *trackedTCPConn, client net.C
 
 	r.setBackend(tracked, backendConn)
 	r.counters.totalAccepted.Add(1)
+	if afterDial != nil {
+		afterDial()
+	}
 	r.proxyTCP(client, backendConn, options.IdleTimeout)
 	return true
 }

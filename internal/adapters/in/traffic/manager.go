@@ -139,7 +139,9 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	stoppedUDP := 0
 	for _, runtime := range oldUDPListeners {
 		if udpRuntimeRetained(newUDPListeners, runtime) {
-			if _, ok := runtime.resolveUDPBackend(); !ok {
+			if backend, ok := runtime.resolveUDPBackend(); ok {
+				runtime.drainSessionsNotMatchingAfter(backend, udpDrainTimeout)
+			} else {
 				runtime.drainSessionsAfter(udpDrainTimeout)
 			}
 			continue
@@ -507,8 +509,14 @@ func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entry
 func routerStatuses(routers []domain.TrafficRouter, listeners map[string]*entryPointRuntime, udpListeners map[string]*udpEntryPointRuntime) []domain.TrafficRouterStatus {
 	statuses := make([]domain.TrafficRouterStatus, 0, len(routers))
 	for _, router := range routers {
-		_, tcpActive := listeners[router.EntryPoint]
-		_, udpActive := udpListeners[router.EntryPoint]
+		tcpActive := false
+		if runtime := listeners[router.EntryPoint]; runtime != nil {
+			tcpActive = !runtime.isClosed()
+		}
+		udpActive := false
+		if runtime := udpListeners[router.EntryPoint]; runtime != nil {
+			udpActive = !runtime.isClosed()
+		}
 		statuses = append(statuses, domain.TrafficRouterStatus{
 			Name: router.Name, EntryPoint: router.EntryPoint, Protocol: router.Protocol,
 			Rule: router.Rule, Service: router.Service, Active: tcpActive || udpActive,

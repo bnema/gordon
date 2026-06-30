@@ -242,6 +242,52 @@ func TestCreateHTTPHandlers_ForceHTTPSRedirect_DoesNotBypassDirectOnboarding(t *
 	assert.Contains(t, rec.Body.String(), "Trust CA Certificate")
 }
 
+func TestCreateHTTPHandlers_RedirectUsesSelectedEntrypointPorts(t *testing.T) {
+	t.Parallel()
+	cfg := Config{}
+	cfg.Server.Port = 8088
+	cfg.Server.TLSPort = 8443
+	cfg.Server.ForceHTTPSRedirect = true
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":9443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com"}, nil)
+	svc := &services{proxySvc: proxyusecase.NewService(nil, nil, configSvc, proxyusecase.Config{})}
+
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/path", nil)
+	req.RemoteAddr = directAddr
+	req.Host = "app.example.com:9443"
+	rec := httptest.NewRecorder()
+	httpHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusPermanentRedirect, rec.Code)
+	assert.Equal(t, "https://app.example.com:9443/path", rec.Header().Get("Location"))
+}
+
+func TestCreateHTTPHandlers_OnboardingUsesSelectedEntrypointPorts(t *testing.T) {
+	t.Parallel()
+	ca := newTestCA(t)
+	cfg := newOnboardingConfig()
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"public": {Address: ":9443", Protocol: domain.EntryPointProtocolSmartTCP},
+	}
+	svc := &services{caAdapter: ca}
+
+	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/", nil)
+	req.RemoteAddr = directAddr
+	req.Host = "o2.bnema.dev:9443"
+	rec := httptest.NewRecorder()
+	httpHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "https://o2.bnema.dev:9443/")
+}
+
 func TestCreateHTTPHandlers_HTTPSOnboarding_RemainsAvailableOnGordonDomain(t *testing.T) {
 	t.Parallel()
 	ca := newTestCA(t)

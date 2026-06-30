@@ -41,6 +41,22 @@ func TestConfigToDomainRejectsNonPositiveReadinessTimeout(t *testing.T) {
 	}
 }
 
+func TestConfigToDomainRejectsExplicitNoCleanupAction(t *testing.T) {
+	preserveVolumes := false
+	removeContainer := false
+	cfg := Config{
+		Name:    "cache",
+		Image:   "redis:7",
+		Enabled: true,
+		Cleanup: CleanupConfig{PreserveVolumes: &preserveVolumes, RemoveContainer: &removeContainer},
+	}
+
+	_, err := cfg.ToDomain()
+
+	require.ErrorContains(t, err, "preserve_volumes=false")
+	require.ErrorContains(t, err, "remove_container=false")
+}
+
 func TestConfigToDomainMapsExplicitPublicPorts(t *testing.T) {
 	cfg := Config{
 		Name:    "game",

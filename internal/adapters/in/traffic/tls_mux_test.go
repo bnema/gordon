@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -23,6 +24,18 @@ import (
 
 	"github.com/bnema/gordon/internal/domain"
 )
+
+func TestClientHelloTooLargeUsesDomainSentinel(t *testing.T) {
+	client, server := net.Pipe()
+	go func() {
+		_, _ = client.Write(clientHelloBytes(t, "large.example.com"))
+		_ = client.Close()
+	}()
+	_, _, err := peekClientHelloSNIWithLimit(server, 1)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrClientHelloTooLarge))
+	_ = server.Close()
+}
 
 func TestClientHelloPeek(t *testing.T) {
 	t.Run("valid sni returns replayable bytes", func(t *testing.T) {

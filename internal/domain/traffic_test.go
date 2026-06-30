@@ -68,6 +68,22 @@ func TestTrafficGraphSmartTCPRawFallbackValidation(t *testing.T) {
 			routers:    []TrafficRouter{{Name: "ssh-fallback", EntryPoint: "edge", Protocol: RouterProtocolTCP, Service: "network_service:ssh:ssh"}},
 			wantErr:    "invalid raw_fallback_trusted_cidrs",
 		},
+		{
+			name:       "raw fallback rejected on tcp entrypoint",
+			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolTCP, RawFallback: "ssh-fallback", RawFallbackTrustedCIDRs: []string{"10.0.0.0/8"}},
+			routers:    []TrafficRouter{{Name: "ssh-fallback", EntryPoint: "edge", Protocol: RouterProtocolTCP, Service: "network_service:ssh:ssh"}},
+			wantErr:    "raw_fallback is only supported on smart_tcp",
+		},
+		{
+			name:       "raw fallback cidrs rejected on tls mux entrypoint",
+			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolTLSMux, RawFallbackTrustedCIDRs: []string{"10.0.0.0/8"}},
+			wantErr:    "raw_fallback_trusted_cidrs is only supported on smart_tcp",
+		},
+		{
+			name:       "public raw fallback flag rejected on udp entrypoint",
+			entryPoint: EntryPoint{Name: "edge", Address: ":443", Protocol: EntryPointProtocolUDP, AllowPublicRawFallback: true},
+			wantErr:    "allow_public_raw_fallback is only supported on smart_tcp",
+		},
 	}
 
 	for _, tt := range tests {

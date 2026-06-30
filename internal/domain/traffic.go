@@ -299,6 +299,9 @@ func validateTrafficEntryPoint(entryPoint EntryPoint, existing map[string]EntryP
 	if err := validateEntryPointProtocol(entryPoint.Protocol); err != nil {
 		return fmt.Errorf("invalid entrypoint protocol for %q: %w", entryPoint.Name, err)
 	}
+	if err := validateRawFallbackEntrypoint(entryPoint); err != nil {
+		return err
+	}
 	if err := validateTrustedCIDRs(entryPoint); err != nil {
 		return err
 	}
@@ -584,6 +587,22 @@ func l4BackendProtocol(protocol RouterProtocol) (NetworkProtocol, bool) {
 	default:
 		return "", false
 	}
+}
+
+func validateRawFallbackEntrypoint(entryPoint EntryPoint) error {
+	if entryPoint.Protocol == EntryPointProtocolSmartTCP {
+		return nil
+	}
+	if entryPoint.RawFallback != "" {
+		return fmt.Errorf("raw_fallback is only supported on smart_tcp entrypoint %q", entryPoint.Name)
+	}
+	if len(entryPoint.RawFallbackTrustedCIDRs) > 0 {
+		return fmt.Errorf("raw_fallback_trusted_cidrs is only supported on smart_tcp entrypoint %q", entryPoint.Name)
+	}
+	if entryPoint.AllowPublicRawFallback {
+		return fmt.Errorf("allow_public_raw_fallback is only supported on smart_tcp entrypoint %q", entryPoint.Name)
+	}
+	return nil
 }
 
 func validateTrustedCIDRs(entryPoint EntryPoint) error {

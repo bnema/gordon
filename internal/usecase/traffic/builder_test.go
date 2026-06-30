@@ -247,6 +247,15 @@ func TestBuildRejectsInvalidStandaloneServiceRefs(t *testing.T) {
 		require.ErrorContains(t, err, "unknown port \"missing\" on service \"rust\"")
 	})
 
+	t.Run("disabled service", func(t *testing.T) {
+		input := base
+		input.Services = append([]domain.StandaloneService(nil), base.Services...)
+		input.Services[0].Enabled = false
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:rcon"}}}}
+		_, err := Build(input)
+		require.ErrorContains(t, err, "unknown service \"rust\"")
+	})
+
 	t.Run("protocol mismatch", func(t *testing.T) {
 		input := base
 		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:game"}}}}
@@ -257,6 +266,8 @@ func TestBuildRejectsInvalidStandaloneServiceRefs(t *testing.T) {
 	t.Run("missing publish", func(t *testing.T) {
 		input := base
 		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP, TrustedCIDRs: []string{"100.64.0.0/10"}}}
+		input.Services = append([]domain.StandaloneService(nil), base.Services...)
+		input.Services[0].Ports = append([]domain.StandaloneServicePort(nil), base.Services[0].Ports...)
 		input.Services[0].Ports[1].Publish = ""
 		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:rcon"}}}}
 		_, err := Build(input)
@@ -265,7 +276,11 @@ func TestBuildRejectsInvalidStandaloneServiceRefs(t *testing.T) {
 
 	t.Run("invalid publish", func(t *testing.T) {
 		input := base
+		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP, TrustedCIDRs: []string{"100.64.0.0/10"}}}
+		input.Services = append([]domain.StandaloneService(nil), base.Services...)
+		input.Services[0].Ports = append([]domain.StandaloneServicePort(nil), base.Services[0].Ports...)
 		input.Services[0].Ports[1].Publish = "127.0.0.1:notaport"
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:rcon"}}}}
 		_, err := Build(input)
 		require.ErrorContains(t, err, "publish address")
 	})

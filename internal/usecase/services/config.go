@@ -80,6 +80,9 @@ func ToDomain(configs []Config) ([]domain.StandaloneService, error) {
 }
 
 func (c Config) ToDomain() (domain.StandaloneService, error) {
+	if err := c.Cleanup.validate(); err != nil {
+		return domain.StandaloneService{}, err
+	}
 	readiness, err := c.readinessToDomain()
 	if err != nil {
 		return domain.StandaloneService{}, err
@@ -131,6 +134,16 @@ func (c CleanupConfig) toDomain() domain.StandaloneServiceCleanup {
 		cleanup.RemoveContainer = *c.RemoveContainer
 	}
 	return cleanup
+}
+
+func (c CleanupConfig) validate() error {
+	if c.PreserveVolumes == nil || c.RemoveContainer == nil {
+		return nil
+	}
+	if !*c.PreserveVolumes && !*c.RemoveContainer {
+		return fmt.Errorf("cleanup cannot set preserve_volumes=false with remove_container=false")
+	}
+	return nil
 }
 
 func portsToDomain(configs []PortConfig) []domain.StandaloneServicePort {

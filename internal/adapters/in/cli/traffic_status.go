@@ -18,6 +18,7 @@ func newTrafficStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show traffic entrypoint, router, and counter status",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := trafficResolveControlPlane(configPath)
 			if err != nil {

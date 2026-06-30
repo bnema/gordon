@@ -76,6 +76,17 @@ func TestSniffSmartTCPRejectsMalformedHTTPLookingRequestLine(t *testing.T) {
 	assertReplayPrefix(t, result.conn, data)
 }
 
+func TestSniffSmartTCPClassifiesTokenSpacePlaintextAsUnknown(t *testing.T) {
+	for _, data := range [][]byte{
+		[]byte("USER anonymous\r\n"),
+		[]byte("MAIL FROM:<a@example.com>\r\n"),
+	} {
+		result := sniffBytes(t, data, time.Second)
+		assert.Equal(t, dispatchUnknown, result.kind)
+		assertReplayPrefix(t, result.conn, data)
+	}
+}
+
 func TestSniffSmartTCPRejectsPROXY(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -91,6 +91,22 @@ func TestService_ReconcileRecreatesStaleService(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestService_ReconcileRemovesDuplicateMatchingServiceContainers(t *testing.T) {
+	rt := outmocks.NewMockContainerRuntime(t)
+	svc := sampleService()
+	hash, err := serviceConfigHash(svc)
+	require.NoError(t, err)
+	older := managedContainer("existing-1", svc.Name, hash, "running")
+	duplicate := managedContainer("existing-2", svc.Name, hash, "running")
+	rt.On("ListContainers", mock.Anything, true).Return([]*domain.Container{duplicate, older}, nil).Once()
+	rt.On("StopContainer", mock.Anything, "existing-2").Return(nil).Once()
+	rt.On("RemoveContainer", mock.Anything, "existing-2", true).Return(nil).Once()
+
+	err = NewService(rt).Reconcile(context.Background(), []domain.StandaloneService{svc})
+
+	require.NoError(t, err)
+}
+
 func TestService_ReconcileStopsAndRemovesDisabledService(t *testing.T) {
 	rt := outmocks.NewMockContainerRuntime(t)
 	svc := sampleService()
@@ -173,7 +189,6 @@ func TestService_ReconcileUsesExplicitReadOnlyVolumes(t *testing.T) {
 	svc.Volumes = []domain.StandaloneServiceVolume{{Source: "cfg", Target: "/cfg", ReadOnly: true}}
 	var created *domain.ContainerConfig
 	rt.On("ListContainers", mock.Anything, true).Return([]*domain.Container{}, nil).Once()
-	rt.On("InspectImageVolumes", mock.Anything, svc.Image).Return([]string{"/ignored"}, nil).Once()
 	rt.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Run(func(args mock.Arguments) {
 		created = args.Get(1).(*domain.ContainerConfig)
 	}).Return(&domain.Container{ID: "created-1"}, nil).Once()

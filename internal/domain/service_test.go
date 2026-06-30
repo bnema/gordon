@@ -91,4 +91,25 @@ func TestStandaloneServiceWithDefaultsCleanup(t *testing.T) {
 	require.True(t, svc.Cleanup.PreserveVolumes)
 	require.True(t, svc.Cleanup.RemoveContainer)
 	require.NoError(t, svc.Validate())
+
+	svc = StandaloneService{Name: "game", Image: "game:latest", Enabled: true, Cleanup: StandaloneServiceCleanup{RemoveContainer: true}}.WithDefaults()
+	require.False(t, svc.Cleanup.PreserveVolumes)
+	require.True(t, svc.Cleanup.RemoveContainer)
+
+	svc = StandaloneService{Name: "game", Image: "game:latest", Enabled: true, Cleanup: StandaloneServiceCleanup{PreserveVolumes: true}}.WithDefaults()
+	require.True(t, svc.Cleanup.PreserveVolumes)
+	require.False(t, svc.Cleanup.RemoveContainer)
+}
+
+func TestStandaloneServiceValidateRejectsDuplicateVolumeTargets(t *testing.T) {
+	svc := StandaloneService{
+		Name:    "cache",
+		Image:   "redis:7",
+		Enabled: true,
+		Volumes: []StandaloneServiceVolume{
+			{Source: "cache-data", Target: "/data"},
+			{Source: "cache-other", Target: "/data"},
+		},
+	}
+	require.ErrorContains(t, svc.Validate(), "duplicate volume target")
 }

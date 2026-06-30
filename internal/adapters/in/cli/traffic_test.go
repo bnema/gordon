@@ -29,6 +29,11 @@ func TestTrafficCommandExists(t *testing.T) {
 	assert.Equal(t, "status", status.Name())
 }
 
+func TestTrafficStatusRejectsArgs(t *testing.T) {
+	cmd := newTrafficStatusCmd()
+	require.Error(t, cmd.Args(cmd, []string{"extra"}))
+}
+
 func TestTrafficStatusHumanOutput(t *testing.T) {
 	status := &dto.TrafficStatusResponse{
 		LastReloadStatus: "ok",

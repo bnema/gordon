@@ -160,7 +160,16 @@ func isMalformedHTTPLookingPrefix(buf []byte) bool {
 		return false
 	}
 	method, _, _ := bytes.Cut(lineBytes, []byte(" "))
-	return isHTTPToken(string(method))
+	return isKnownHTTPMethod(string(method))
+}
+
+func isKnownHTTPMethod(method string) bool {
+	switch method {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PROPFIND", "MKCOL":
+		return true
+	default:
+		return false
+	}
 }
 
 func couldBecomeHTTPRequest(buf []byte) bool {

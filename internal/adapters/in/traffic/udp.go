@@ -134,25 +134,18 @@ func (r *udpEntryPointRuntime) handleDatagram(clientAddr net.Addr, packet []byte
 }
 
 func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options domain.UDPOptions) (*udpSession, bool) {
+	r.mu.Lock()
+	if session := r.sessions[key]; session != nil {
+		session.touch()
+		r.mu.Unlock()
+		return session, true
+	}
+	r.mu.Unlock()
+
 	backend, ok := r.resolveUDPBackend()
 	if !ok {
 		r.counters.totalRefused.Add(1)
 		return nil, false
-	}
-
-	r.mu.Lock()
-	if session := r.sessions[key]; session != nil {
-		if trafficBackendEqual(session.backendRef, backend) {
-			session.touch()
-			r.mu.Unlock()
-			return session, true
-		}
-		delete(r.sessions, key)
-		r.mu.Unlock()
-		session.close()
-		r.counters.activeUDPSessions.Add(-1)
-	} else {
-		r.mu.Unlock()
 	}
 
 	r.mu.Lock()
@@ -174,18 +167,11 @@ func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options 
 
 	r.mu.Lock()
 	if existing := r.sessions[key]; existing != nil {
-		if trafficBackendEqual(existing.backendRef, backend) {
-			r.mu.Unlock()
-			_ = backendConn.Close()
-			return existing, true
-		}
-		delete(r.sessions, key)
 		r.mu.Unlock()
-		existing.close()
-		r.counters.activeUDPSessions.Add(-1)
-	} else {
-		r.mu.Unlock()
+		_ = backendConn.Close()
+		return existing, true
 	}
+	r.mu.Unlock()
 	if options.MaxSessions > 0 && r.sessionCount() >= options.MaxSessions {
 		_ = backendConn.Close()
 		r.counters.totalRefused.Add(1)
@@ -350,13 +336,22 @@ func (r *udpEntryPointRuntime) stop(ctx context.Context, drainTimeout time.Durat
 
 func (r *udpEntryPointRuntime) drainSessionsAfter(drainTimeout time.Duration) {
 	trafficDebug(r.ctx).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("scheduled udp session drain after router removal")
+	r.drainSessionsMatchingAfter(func(*udpSession) bool { return true }, drainTimeout)
+}
+
+func (r *udpEntryPointRuntime) drainSessionsNotMatchingAfter(backend domain.TrafficBackend, drainTimeout time.Duration) {
+	trafficDebug(r.ctx).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("scheduled stale udp session drain after backend update")
+	r.drainSessionsMatchingAfter(func(session *udpSession) bool { return !trafficBackendEqual(session.backendRef, backend) }, drainTimeout)
+}
+
+func (r *udpEntryPointRuntime) drainSessionsMatchingAfter(match func(*udpSession) bool, drainTimeout time.Duration) {
 	go func() {
 		if drainTimeout <= 0 {
 			drainTimeout = defaultUDPOptions().DrainTimeout
 		}
 		select {
 		case <-time.After(drainTimeout):
-			r.closeSessions()
+			r.closeSessionsMatching(match)
 		case <-r.ctx.Done():
 		}
 	}()
@@ -398,10 +393,16 @@ func (r *udpEntryPointRuntime) sessionsDone() <-chan struct{} {
 }
 
 func (r *udpEntryPointRuntime) closeSessions() {
+	r.closeSessionsMatching(func(*udpSession) bool { return true })
+}
+
+func (r *udpEntryPointRuntime) closeSessionsMatching(match func(*udpSession) bool) {
 	r.mu.Lock()
 	keys := make([]string, 0, len(r.sessions))
-	for key := range r.sessions {
-		keys = append(keys, key)
+	for key, session := range r.sessions {
+		if match(session) {
+			keys = append(keys, key)
+		}
 	}
 	r.mu.Unlock()
 	for _, key := range keys {

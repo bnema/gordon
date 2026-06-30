@@ -101,12 +101,18 @@ func (s *Service) reconcileOne(ctx context.Context, svc domain.StandaloneService
 	if len(existing) == 0 {
 		return s.createAndStart(ctx, svc, hash)
 	}
+	sort.SliceStable(existing, func(i, j int) bool { return existing[i].ID < existing[j].ID })
 	current := existing[0]
 	if current.Labels[domain.LabelServiceConfigHash] != hash {
 		if err := s.recreate(ctx, svc, cleanup, existing, hash); err != nil {
 			return err
 		}
 		return nil
+	}
+	for _, duplicate := range existing[1:] {
+		if err := s.cleanupContainer(ctx, svc.Name, "duplicate", cleanup, duplicate); err != nil {
+			return err
+		}
 	}
 	if containerStatus(current) != domain.ContainerStatusRunning {
 		if err := s.runtime.StartContainer(ctx, current.ID); err != nil {
@@ -240,9 +246,13 @@ func (s *Service) createAndStart(ctx context.Context, svc domain.StandaloneServi
 }
 
 func (s *Service) containerConfig(ctx context.Context, svc domain.StandaloneService, hash string) (*domain.ContainerConfig, error) {
-	imageVolumes, err := s.runtime.InspectImageVolumes(ctx, svc.Image)
-	if err != nil {
-		return nil, fmt.Errorf("inspect standalone service %q image volumes: %w", svc.Name, err)
+	var imageVolumes []string
+	if len(svc.Volumes) == 0 {
+		var err error
+		imageVolumes, err = s.runtime.InspectImageVolumes(ctx, svc.Image)
+		if err != nil {
+			return nil, fmt.Errorf("inspect standalone service %q image volumes: %w", svc.Name, err)
+		}
 	}
 	mounts := ResolveVolumeMounts(s.volumePrefix, svc.Name, svc.Volumes, imageVolumes)
 	volumes := make(map[string]string)

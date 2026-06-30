@@ -33,7 +33,7 @@ func (m *Manager) SetSmartTCPHTTPServer(entryPoint string, handler http.Handler,
 	if handler == nil {
 		delete(next, entryPoint)
 	} else {
-		next[entryPoint] = SmartTCPHTTPServerConfig{Handler: handler, Protocols: protocols}
+		next[entryPoint] = SmartTCPHTTPServerConfig{Handler: handler, Protocols: cloneHTTPProtocols(protocols)}
 	}
 	m.smartHTTPServers.Store(next)
 	runtimes := m.smartTCPRuntimesLocked(entryPoint)
@@ -41,6 +41,14 @@ func (m *Manager) SetSmartTCPHTTPServer(entryPoint string, handler http.Handler,
 	for _, runtime := range runtimes {
 		runtime.refreshSmartTCPHTTPServer(entryPoint)
 	}
+}
+
+func cloneHTTPProtocols(protocols *http.Protocols) *http.Protocols {
+	if protocols == nil {
+		return nil
+	}
+	clone := *protocols
+	return &clone
 }
 
 func (m *Manager) SetSmartTCPTLSServer(entryPoint string, handler http.Handler, tlsConfig *tls.Config) {
@@ -139,7 +147,6 @@ func (r *entryPointRuntime) refreshSmartTCPTLSServer(entryPointName string) {
 func (r *entryPointRuntime) replaceSmartTCPHTTPServer(entryPoint domain.EntryPoint, config SmartTCPHTTPServerConfig) {
 	r.smartHTTPReplaceMu.Lock()
 	defer r.smartHTTPReplaceMu.Unlock()
-	r.stopSmartTCPHTTPServerLocked(r.ctx, 0)
 	if r.isClosed() {
 		return
 	}
@@ -147,6 +154,9 @@ func (r *entryPointRuntime) replaceSmartTCPHTTPServer(entryPoint domain.EntryPoi
 	server := &http.Server{Handler: config.Handler, Protocols: config.Protocols, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 	done := make(chan struct{})
 	r.mu.Lock()
+	oldListener := r.smartHTTPListener
+	oldServer := r.smartHTTPServer
+	oldDone := r.smartHTTPDone
 	if r.isClosed() {
 		r.mu.Unlock()
 		_ = listener.Close()
@@ -162,12 +172,12 @@ func (r *entryPointRuntime) replaceSmartTCPHTTPServer(entryPoint domain.EntryPoi
 			trafficWarn(r.ctx).Err(err).Str("entrypoint", entryPoint.Name).Msg("smart tcp http server stopped with error")
 		}
 	}()
+	stopInternalHTTPServer(r.ctx, oldListener, oldServer, oldDone, 0)
 }
 
 func (r *entryPointRuntime) replaceSmartTCPTLSServer(entryPoint domain.EntryPoint, config SmartTCPTLSServerConfig) {
 	r.smartTLSReplaceMu.Lock()
 	defer r.smartTLSReplaceMu.Unlock()
-	r.stopSmartTCPTLSServerLocked(r.ctx, 0)
 	if r.isClosed() {
 		return
 	}
@@ -175,6 +185,9 @@ func (r *entryPointRuntime) replaceSmartTCPTLSServer(entryPoint domain.EntryPoin
 	server := &http.Server{Handler: config.Handler, TLSConfig: config.TLSConfig.Clone(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 	done := make(chan struct{})
 	r.mu.Lock()
+	oldListener := r.smartTLSListener
+	oldServer := r.smartTLSServer
+	oldDone := r.smartTLSDone
 	if r.isClosed() {
 		r.mu.Unlock()
 		_ = listener.Close()
@@ -190,6 +203,7 @@ func (r *entryPointRuntime) replaceSmartTCPTLSServer(entryPoint domain.EntryPoin
 			trafficWarn(r.ctx).Err(err).Str("entrypoint", entryPoint.Name).Msg("smart tcp https server stopped with error")
 		}
 	}()
+	stopInternalHTTPServer(r.ctx, oldListener, oldServer, oldDone, 0)
 }
 
 func (r *entryPointRuntime) stopSmartTCPHTTPServer(ctx context.Context, drainTimeout time.Duration) {

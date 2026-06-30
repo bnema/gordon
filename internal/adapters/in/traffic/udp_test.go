@@ -98,7 +98,12 @@ func TestUDPReloadReplacesSessionWhenBackendChanges(t *testing.T) {
 	updated.Services[0].Backends = []domain.TrafficBackend{backend}
 	require.NoError(t, manager.Apply(context.Background(), &updated))
 
-	assertUDPRoundTripWant(t, conn, "second", "b:second")
+	assertUDPRoundTripWant(t, conn, "second", "a:second")
+	assert.Eventually(t, func() bool { return manager.Status().Counters.ActiveUDPSessions == 0 }, time.Second, 10*time.Millisecond)
+
+	newConn := dialUDP(t, graph.EntryPoints[0].Address)
+	defer newConn.Close()
+	assertUDPRoundTripWant(t, newConn, "third", "b:third")
 }
 
 func assertUDPRejected(t *testing.T, manager *Manager, address string, refused int64) {
@@ -183,6 +188,7 @@ func TestUDPRemovedRouterWithRetainedEntryPointDrainsSession(t *testing.T) {
 	next.Routers = nil
 	next.Services = nil
 	require.NoError(t, manager.Apply(context.Background(), &next))
+	assertUDPRoundTrip(t, conn, "during-drain")
 	assert.Eventually(t, func() bool { return manager.Status().Counters.ActiveUDPSessions == 0 }, time.Second, 10*time.Millisecond)
 
 	_, err := conn.Write([]byte("after"))
@@ -191,6 +197,30 @@ func TestUDPRemovedRouterWithRetainedEntryPointDrainsSession(t *testing.T) {
 	buf := make([]byte, 32)
 	_, err = conn.Read(buf)
 	require.Error(t, err)
+}
+
+func TestUDPBackendChangeDrainsExistingSession(t *testing.T) {
+	oldBackend := startUDPEchoServerWithPrefix(t, "old:")
+	newBackend := startUDPEchoServerWithPrefix(t, "new:")
+	graph := udpGraph(t, freeUDPAddress(t), oldBackend.address)
+	graph.Options.UDP.DrainTimeout = 50 * time.Millisecond
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	oldConn := dialUDP(t, graph.EntryPoints[0].Address)
+	defer oldConn.Close()
+	assertUDPRoundTripWant(t, oldConn, "held", "old:held")
+
+	next := udpGraph(t, graph.EntryPoints[0].Address, newBackend.address)
+	next.Options = graph.Options
+	require.NoError(t, manager.Apply(context.Background(), &next))
+	assertUDPRoundTripWant(t, oldConn, "during-drain", "old:during-drain")
+	assert.Eventually(t, func() bool { return manager.Status().Counters.ActiveUDPSessions == 0 }, time.Second, 10*time.Millisecond)
+
+	newConn := dialUDP(t, graph.EntryPoints[0].Address)
+	defer newConn.Close()
+	assertUDPRoundTripWant(t, newConn, "after", "new:after")
 }
 
 func TestUDPRemovedRouterDrainsThenClosesSessions(t *testing.T) {

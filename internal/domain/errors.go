@@ -50,6 +50,7 @@ var (
 
 	// Config errors
 	ErrTrafficGraphRequired = errors.New("traffic graph is required")
+	ErrClientHelloTooLarge  = errors.New("client hello exceeds maximum")
 	ErrConfigNotFound       = errors.New("configuration not found")
 	ErrInvalidConfig        = errors.New("invalid configuration")
 	ErrConfigLoadFailed     = errors.New("failed to load configuration")

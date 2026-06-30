@@ -63,6 +63,40 @@ func TestEffectivePublicTLSPortPrefersTLSCapableEntrypointOverLegacyTLSPort(t *t
 	assert.Equal(t, 443, effectivePublicTLSPort(cfg))
 }
 
+func TestEffectivePublicTLSPortDeterministicWithMultipleTLSCapableEntrypoints(t *testing.T) {
+	cfg := Config{}
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+		"public":                          {Address: ":8443", Protocol: domain.EntryPointProtocolTLSMux},
+	}
+
+	for range 20 {
+		assert.Equal(t, 443, effectivePublicTLSPort(cfg))
+	}
+}
+
+func TestEffectivePublicTLSPortUsesSoleNonEdgeTLSCapableEntrypoint(t *testing.T) {
+	cfg := Config{}
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"public": {Address: ":8443", Protocol: domain.EntryPointProtocolTLSMux},
+		"ssh":    {Address: ":22", Protocol: domain.EntryPointProtocolTCP},
+	}
+
+	assert.Equal(t, 8443, effectivePublicTLSPort(cfg))
+}
+
+func TestEffectivePublicTLSPortFallsBackWhenAmbiguousWithoutEdge(t *testing.T) {
+	cfg := Config{}
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"public-a": {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+		"public-b": {Address: ":8443", Protocol: domain.EntryPointProtocolTLSMux},
+	}
+
+	for range 20 {
+		assert.Equal(t, 443, effectivePublicTLSPort(cfg))
+	}
+}
+
 func TestPublicTLSReadinessRequiresHTTP01ActuallyBoundExternalPort80(t *testing.T) {
 	t.Run("rejects http entrypoint when smart tcp suppresses standalone http", func(t *testing.T) {
 		cfg := Config{}

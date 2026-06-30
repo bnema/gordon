@@ -270,7 +270,7 @@ func (b *builder) resolveNetworkService(refValue string, ref domain.TrafficServi
 
 func (b *builder) resolveStandaloneService(router RouterConfig, ref domain.TrafficServiceRef, protocol domain.NetworkProtocol) (domain.TrafficService, error) {
 	svc, ok := b.standaloneService(ref.Name)
-	if !ok {
+	if !ok || !svc.Enabled {
 		return domain.TrafficService{}, fmt.Errorf("unknown service %q", ref.Name)
 	}
 	port, ok := standaloneServicePort(svc, ref.PortName)

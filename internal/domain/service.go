@@ -79,7 +79,10 @@ func (s StandaloneService) WithDefaults() StandaloneService {
 }
 
 func (c StandaloneServiceCleanup) WithDefaults() StandaloneServiceCleanup {
-	return StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: true}
+	if !c.PreserveVolumes && !c.RemoveContainer {
+		return StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: true}
+	}
+	return c
 }
 
 func (s StandaloneService) Validate() error {
@@ -162,13 +165,19 @@ func validateStandaloneServicePublish(serviceName, portName, publish string) err
 }
 
 func validateStandaloneServiceVolumes(s StandaloneService) error {
+	seenTargets := make(map[string]struct{}, len(s.Volumes))
 	for i, volume := range s.Volumes {
-		if strings.TrimSpace(volume.Target) == "" {
+		target := strings.TrimSpace(volume.Target)
+		if target == "" {
 			return fmt.Errorf("standalone service %q volume %d target is required", s.Name, i)
 		}
-		if !filepath.IsAbs(volume.Target) {
+		if !filepath.IsAbs(target) {
 			return fmt.Errorf("standalone service %q volume %d target %q must be an absolute container path", s.Name, i, volume.Target)
 		}
+		if _, ok := seenTargets[target]; ok {
+			return fmt.Errorf("standalone service %q duplicate volume target %q", s.Name, target)
+		}
+		seenTargets[target] = struct{}{}
 	}
 	return nil
 }

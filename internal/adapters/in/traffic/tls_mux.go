@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 const maxClientHelloBytes = 64 << 10
@@ -82,7 +84,7 @@ func peekClientHelloSNIWithLimit(conn net.Conn, maxBytes int) (string, net.Conn,
 			return "", nil, fmt.Errorf("read client hello: %w", err)
 		}
 	}
-	return "", nil, fmt.Errorf("client hello exceeds %d bytes", maxBytes)
+	return "", nil, fmt.Errorf("%w: %d bytes", domain.ErrClientHelloTooLarge, maxBytes)
 }
 
 func parseClientHelloSNI(data []byte) (string, bool, error) {

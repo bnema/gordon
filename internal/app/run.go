@@ -2415,7 +2415,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
-		middleware.HTTPSRedirect(proxyAllowedNets, cfg.Server.Port, cfg.Server.TLSPort, cfg.Server.ForceHTTPSRedirect, log, func(host string) bool {
+		middleware.HTTPSRedirect(proxyAllowedNets, effectiveProxyHTTPPort(cfg), effectiveProxyTLSPort(cfg), cfg.Server.ForceHTTPSRedirect, log, func(host string) bool {
 			return svc.proxySvc.IsKnownHost(context.Background(), host)
 		}),
 	}
@@ -2430,7 +2430,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 
 	// Build the onboarding handler once if internal CA is available and TLS is enabled.
 	var obHandler *onboarding.Handler
-	if svc.caAdapter != nil && cfg.Server.TLSPort != 0 {
+	if svc.caAdapter != nil && effectiveProxyTLSPort(cfg) != 0 {
 		mobileconfigBytes := pkiadapter.GenerateMobileconfig(
 			svc.caAdapter.RootCertificateDER(),
 			svc.caAdapter.RootCommonName(),
@@ -2439,8 +2439,8 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 			svc.caAdapter.RootCertificate(),
 			mobileconfigBytes,
 			svc.caAdapter.RootFingerprint(),
-			cfg.Server.Port,
-			cfg.Server.TLSPort,
+			effectiveProxyHTTPPort(cfg),
+			effectiveProxyTLSPort(cfg),
 		)
 	}
 
@@ -3400,15 +3400,71 @@ func hasTLSCapableEntrypoint(cfg Config) bool {
 }
 
 func effectivePublicTLSPort(cfg Config) int {
-	for _, entryPoint := range cfg.EntryPoints {
-		switch entryPoint.Protocol {
-		case domain.EntryPointProtocolSmartTCP, domain.EntryPointProtocolTLSMux:
-			if port := portFromAddress(entryPoint.Address); port > 0 {
-				return port
-			}
+	if entryPoint, ok := cfg.EntryPoints[traffic.DefaultEdgeEntryPointName]; ok && tlsCapableEntryPoint(entryPoint.Protocol) {
+		if port := portFromAddress(entryPoint.Address); port > 0 {
+			return port
 		}
 	}
+
+	var candidatePort int
+	candidates := 0
+	for name, entryPoint := range cfg.EntryPoints {
+		if name == traffic.DefaultEdgeEntryPointName || !tlsCapableEntryPoint(entryPoint.Protocol) {
+			continue
+		}
+		port := portFromAddress(entryPoint.Address)
+		if port == 0 {
+			continue
+		}
+		candidatePort = port
+		candidates++
+	}
+	if candidates == 1 {
+		return candidatePort
+	}
 	return 443
+}
+
+func effectiveProxyTLSPort(cfg Config) int {
+	if hasTLSCapableEntrypoint(cfg) {
+		return effectivePublicTLSPort(cfg)
+	}
+	return cfg.Server.TLSPort
+}
+
+func effectiveProxyHTTPPort(cfg Config) int {
+	if entryPoint, ok := cfg.EntryPoints[traffic.DefaultEdgeEntryPointName]; ok && entryPoint.Protocol == domain.EntryPointProtocolSmartTCP {
+		if port := portFromAddress(entryPoint.Address); port > 0 {
+			return port
+		}
+	}
+
+	var candidatePort int
+	candidates := 0
+	for name, entryPoint := range cfg.EntryPoints {
+		if name == traffic.DefaultEdgeEntryPointName || entryPoint.Protocol != domain.EntryPointProtocolSmartTCP {
+			continue
+		}
+		port := portFromAddress(entryPoint.Address)
+		if port == 0 {
+			continue
+		}
+		candidatePort = port
+		candidates++
+	}
+	if candidates == 1 {
+		return candidatePort
+	}
+	return cfg.Server.Port
+}
+
+func tlsCapableEntryPoint(protocol domain.EntryPointProtocol) bool {
+	switch protocol {
+	case domain.EntryPointProtocolSmartTCP, domain.EntryPointProtocolTLSMux:
+		return true
+	default:
+		return false
+	}
 }
 
 func effectiveHTTP01Port(cfg Config) int {
