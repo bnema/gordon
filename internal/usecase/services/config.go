@@ -40,6 +40,7 @@ type ResolvedVolumeMount struct {
 	Source   string
 	Target   string
 	ReadOnly bool
+	Managed  bool
 }
 
 type SecretRefConfig struct {
@@ -173,7 +174,7 @@ func ResolveVolumeMounts(prefix, serviceName string, explicitVolumes []domain.St
 
 	mounts := make([]ResolvedVolumeMount, 0, len(imageVolumePaths))
 	for _, path := range imageVolumePaths {
-		mounts = append(mounts, ResolvedVolumeMount{Source: ManagedServiceVolumeName(prefix, serviceName, path), Target: path})
+		mounts = append(mounts, ResolvedVolumeMount{Source: ManagedServiceVolumeName(prefix, serviceName, path), Target: path, Managed: true})
 	}
 	return mounts
 }

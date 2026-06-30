@@ -28,6 +28,14 @@ type StandaloneService struct {
 	Volumes   []StandaloneServiceVolume
 }
 
+type StandaloneServiceStatus struct {
+	Name          string
+	ContainerID   string
+	ContainerName string
+	Status        ContainerStatus
+	ConfigHash    string
+}
+
 type StandaloneServicePort struct {
 	Name         string
 	Container    int

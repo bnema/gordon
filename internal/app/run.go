@@ -263,48 +263,50 @@ type Config struct {
 
 // services holds all the services used by the application.
 type services struct {
-	runtime              *docker.Runtime
-	eventBus             *eventbus.InMemory
-	blobStorage          *filesystem.BlobStorage
-	manifestStorage      *filesystem.ManifestStorage
-	backupStorage        *filesystem.BackupStorage
-	volumeBackupStore    out.VolumeBackupStorage
-	volumeBackupCfg      domain.VolumeBackupConfig
-	envLoader            out.EnvLoader
-	logWriter            *logwriter.LogWriter
-	tokenStore           out.TokenStore
-	configSvc            *config.Service
-	secretSvc            *secretsSvc.Service
-	containerSvc         *container.Service
-	backupSvc            *backup.Service
-	volumeBackupSvc      *backup.VolumeService
-	registrySvc          *registrySvc.Service
-	healthSvc            *health.Service
-	logSvc               *logs.Service
-	imageSvc             *images.Service
-	volumeSvc            *volumesSvc.Service
-	proxySvc             *proxy.Service
-	authSvc              *auth.Service
-	authHandler          *authhandler.Handler
-	adminHandler         *admin.Handler
-	httpProxyHandler     http.Handler
-	httpsProxyHandler    http.Handler
-	internalRegUser      string
-	internalRegPass      string
-	previewStore         *filesystem.PreviewStore
-	previewService       *preview.Service
-	envDir               string
-	maxBlobChunkSize     int64
-	maxBlobSize          int64
-	caAdapter            *pkiadapter.CA
-	pkiSvc               *pkiusecase.Service
-	reloadCoordinator    *reloadCoordinator
-	publicTLSSvc         in.PublicTLSService
-	publicTLSRuntime     publicTLSRuntime
-	trafficManager       *trafficadapter.Manager
-	tlsHTTPEntryPoints   map[string]struct{}
-	smartHTTPEntryPoints map[string]struct{}
-	registryHandler      interface {
+	runtime               *docker.Runtime
+	eventBus              *eventbus.InMemory
+	blobStorage           *filesystem.BlobStorage
+	manifestStorage       *filesystem.ManifestStorage
+	backupStorage         *filesystem.BackupStorage
+	volumeBackupStore     out.VolumeBackupStorage
+	volumeBackupCfg       domain.VolumeBackupConfig
+	envLoader             out.EnvLoader
+	logWriter             *logwriter.LogWriter
+	tokenStore            out.TokenStore
+	configSvc             *config.Service
+	secretSvc             *secretsSvc.Service
+	containerSvc          *container.Service
+	backupSvc             *backup.Service
+	volumeBackupSvc       *backup.VolumeService
+	registrySvc           *registrySvc.Service
+	healthSvc             *health.Service
+	logSvc                *logs.Service
+	imageSvc              *images.Service
+	volumeSvc             *volumesSvc.Service
+	proxySvc              *proxy.Service
+	standaloneServiceSvc  in.StandaloneServiceService
+	serviceSecretProvider out.SecretProvider
+	authSvc               *auth.Service
+	authHandler           *authhandler.Handler
+	adminHandler          *admin.Handler
+	httpProxyHandler      http.Handler
+	httpsProxyHandler     http.Handler
+	internalRegUser       string
+	internalRegPass       string
+	previewStore          *filesystem.PreviewStore
+	previewService        *preview.Service
+	envDir                string
+	maxBlobChunkSize      int64
+	maxBlobSize           int64
+	caAdapter             *pkiadapter.CA
+	pkiSvc                *pkiusecase.Service
+	reloadCoordinator     *reloadCoordinator
+	publicTLSSvc          in.PublicTLSService
+	publicTLSRuntime      publicTLSRuntime
+	trafficManager        *trafficadapter.Manager
+	tlsHTTPEntryPoints    map[string]struct{}
+	smartHTTPEntryPoints  map[string]struct{}
+	registryHandler       interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
 }
@@ -716,6 +718,7 @@ func (si *serviceInit) initSecrets() error {
 		return err
 	}
 
+	si.svc.serviceSecretProvider = createStandaloneServiceSecretProvider(backend, resolveDataDir(si.cfg.Server.DataDir), si.log)
 	si.svc.secretSvc = secretsSvc.NewService(domainSecretStore, si.log, si.svc.eventBus)
 	return nil
 }
@@ -756,6 +759,7 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
 	si.svc.maxBlobSize = proxyCfg.maxBlobSize
 	si.svc.proxySvc = proxy.NewService(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
+	si.svc.standaloneServiceSvc = servicecfg.NewServiceWithSecretProvider(si.svc.runtime, si.svc.serviceSecretProvider)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
 	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
@@ -785,6 +789,9 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 		}
 		si.svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpsProxyHandler, tlsConfig, si.svc.tlsHTTPEntryPoints)
 		si.svc.smartHTTPEntryPoints = registerSmartTCPHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpProxyHandler, si.svc.httpsProxyHandler, tlsConfig, si.svc.smartHTTPEntryPoints)
+		if err := reconcileStandaloneServices(reloadCtx, si.svc.standaloneServiceSvc, reloadCfg); err != nil {
+			return err
+		}
 		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc); err != nil {
 			return err
 		}
@@ -1655,6 +1662,31 @@ func readFileBeneath(root, cleanedRelPath string) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("invalid secret path: empty path")
+}
+
+type unsafeSecretProvider struct {
+	dataDir string
+}
+
+func (p unsafeSecretProvider) Name() string { return string(domain.SecretsBackendUnsafe) }
+
+func (p unsafeSecretProvider) IsAvailable() bool { return true }
+
+func (p unsafeSecretProvider) GetSecret(_ context.Context, path string) (string, error) {
+	return readUnsafeSecret(p.dataDir, path)
+}
+
+func createStandaloneServiceSecretProvider(backend domain.SecretsBackend, dataDir string, log zerowrap.Logger) out.SecretProvider {
+	switch backend {
+	case domain.SecretsBackendPass:
+		return secrets.NewPassProvider(log)
+	case domain.SecretsBackendSops:
+		return secrets.NewSopsProvider(log)
+	case domain.SecretsBackendUnsafe:
+		return unsafeSecretProvider{dataDir: dataDir}
+	default:
+		return nil
+	}
 }
 
 func readUnsafeSecret(dataDir, secretPath string) (string, error) {
@@ -2899,7 +2931,24 @@ func waitForCoreProxyReadyAndApplyTraffic(ctx context.Context, cfg Config, svc *
 	if err := waitForServerReady(proxyReady, errChan); err != nil {
 		return err
 	}
+	if err := reconcileStandaloneServices(ctx, svc.standaloneServiceSvc, cfg); err != nil {
+		return err
+	}
 	return applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc)
+}
+
+func reconcileStandaloneServices(ctx context.Context, serviceSvc in.StandaloneServiceService, cfg Config) error {
+	if serviceSvc == nil {
+		return nil
+	}
+	standaloneServices, err := servicecfg.ToDomain(cfg.Services)
+	if err != nil {
+		return fmt.Errorf("convert standalone service config: %w", err)
+	}
+	if err := serviceSvc.Reconcile(ctx, standaloneServices); err != nil {
+		return fmt.Errorf("reconcile standalone services: %w", err)
+	}
+	return nil
 }
 
 func shutdownTrafficManagerForStartupCleanup(manager *trafficadapter.Manager, log zerowrap.Logger) {

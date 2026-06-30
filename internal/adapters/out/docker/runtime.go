@@ -160,6 +160,17 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 			},
 		}
 	}
+	for _, publish := range config.PortPublishes {
+		if publish.Protocol != domain.NetworkProtocolTCP && publish.Protocol != domain.NetworkProtocolUDP {
+			return nil, fmt.Errorf("unsupported container port publish protocol %q", publish.Protocol)
+		}
+		containerPort := nat.Port(fmt.Sprintf("%d/%s", publish.ContainerPort, publish.Protocol))
+		exposedPorts[containerPort] = struct{}{}
+		portBindings[containerPort] = append(portBindings[containerPort], nat.PortBinding{
+			HostIP:   publish.HostIP,
+			HostPort: strconv.Itoa(publish.HostPort),
+		})
+	}
 
 	// Convert volumes to Docker format
 	var binds []string

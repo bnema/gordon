@@ -63,12 +63,21 @@ type RouteInfo struct {
 	Attachments     []Attachment
 }
 
+// ContainerPortPublish describes an explicit host port binding for a container port.
+type ContainerPortPublish struct {
+	HostIP        string
+	HostPort      int
+	ContainerPort int
+	Protocol      NetworkProtocol
+}
+
 // ContainerConfig holds configuration for creating a container.
 type ContainerConfig struct {
 	Image           string
 	Name            string
 	Env             []string
 	Ports           []int
+	PortPublishes   []ContainerPortPublish
 	Labels          map[string]string
 	WorkingDir      string
 	Cmd             []string

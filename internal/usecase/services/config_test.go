@@ -59,8 +59,8 @@ func TestResolveVolumeMountsUsesImageDiscoveredVolumesWhenExplicitOmitted(t *tes
 	mounts := ResolveVolumeMounts("gordon", "rust.example.com", nil, []string{"/steamcmd/rust", "/var/lib/data"})
 
 	assert.Equal(t, []ResolvedVolumeMount{
-		{Source: "gordon-rust-example-com-steamcmd-rust", Target: "/steamcmd/rust"},
-		{Source: "gordon-rust-example-com-var-lib-data", Target: "/var/lib/data"},
+		{Source: "gordon-rust-example-com-steamcmd-rust", Target: "/steamcmd/rust", Managed: true},
+		{Source: "gordon-rust-example-com-var-lib-data", Target: "/var/lib/data", Managed: true},
 	}, mounts)
 }
 

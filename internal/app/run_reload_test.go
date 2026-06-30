@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,14 +16,17 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	cfgusecase "github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
 	"github.com/bnema/gordon/internal/usecase/proxy"
+	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	traffic "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
@@ -130,6 +136,37 @@ func (r *containerConfigApplyRecorder) Apply(ctx context.Context, cfg Config) er
 	r.ctx = ctx
 	r.cfg = cfg
 	return nil
+}
+
+type standaloneServiceRecorder struct {
+	mu          sync.Mutex
+	calls       int
+	services    []domain.StandaloneService
+	err         error
+	onReconcile func()
+}
+
+func (r *standaloneServiceRecorder) Reconcile(_ context.Context, services []domain.StandaloneService) error {
+	r.mu.Lock()
+	r.calls++
+	r.services = append([]domain.StandaloneService(nil), services...)
+	err := r.err
+	onReconcile := r.onReconcile
+	r.mu.Unlock()
+	if onReconcile != nil {
+		onReconcile()
+	}
+	return err
+}
+
+func (r *standaloneServiceRecorder) Status(context.Context) ([]domain.StandaloneServiceStatus, error) {
+	return nil, nil
+}
+
+func (r *standaloneServiceRecorder) Calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
 }
 
 type eventBusRecorder struct {
@@ -316,6 +353,114 @@ func TestServiceInit_RegisterReloadCoordinatorHooks_WiresContainerConfigApplier(
 
 	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg))
 }
+func TestStandaloneServiceSecretProviderUnsafeBackendReconcilesServiceSecrets(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	secretPath := "service/game/rcon"
+	require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "secrets", "service", "game"), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "secrets", secretPath), []byte("test-secret-value"), 0600))
+
+	rt := outmocks.NewMockContainerRuntime(t)
+	var sawSecretEnv bool
+	rt.On("ListContainers", mock.Anything, true).Return([]*domain.Container{}, nil).Once()
+	rt.On("InspectImageVolumes", mock.Anything, "game:latest").Return([]string(nil), nil).Once()
+	rt.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Run(func(args mock.Arguments) {
+		config := args.Get(1).(*domain.ContainerConfig)
+		for _, entry := range config.Env {
+			if strings.HasPrefix(entry, "RCON_PASSWORD=") {
+				sawSecretEnv = true
+			}
+		}
+	}).Return(&domain.Container{ID: "created-1"}, nil).Once()
+	rt.On("StartContainer", mock.Anything, "created-1").Return(nil).Once()
+
+	provider := createStandaloneServiceSecretProvider(domain.SecretsBackendUnsafe, dataDir, zerowrap.Default())
+	reconciler := servicecfg.NewServiceWithSecretProvider(rt, provider)
+	err := reconciler.Reconcile(ctx, []domain.StandaloneService{{Name: "game", Image: "game:latest", Enabled: true, Secrets: []domain.StandaloneServiceSecretRef{{Name: "rcon", Key: "RCON_PASSWORD"}}}})
+
+	require.NoError(t, err)
+	assert.True(t, sawSecretEnv)
+}
+
+func TestServiceInit_RegisterReloadCoordinatorHooks_ReconcilesStandaloneServicesBeforeTrafficApply(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "reload.example.com")
+	v.Set("server.registry_port", 5000)
+
+	configSvc := cfgusecase.NewService(v, nil)
+	require.NoError(t, configSvc.Load(ctx))
+	manager := trafficadapter.NewManager()
+	defer func() { require.NoError(t, manager.Shutdown(ctx)) }()
+
+	reconciler := &standaloneServiceRecorder{onReconcile: func() {
+		assert.Empty(t, manager.Status().EntryPoints, "traffic graph applied before standalone services reconciled")
+	}}
+	si := &serviceInit{
+		ctx: ctx,
+		v:   v,
+		cfg: Config{},
+		log: zerowrap.Default(),
+		svc: &services{
+			configSvc:            configSvc,
+			containerSvc:         container.NewService(nil, nil, nil, nil, container.Config{}, configSvc),
+			internalRegUser:      "gordon",
+			internalRegPass:      "secret",
+			reloadCoordinator:    newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, zerowrap.Default()),
+			trafficManager:       manager,
+			standaloneServiceSvc: reconciler,
+		},
+	}
+	si.registerReloadCoordinatorHooks()
+
+	reloadCfg := Config{}
+	reloadCfg.Server.GordonDomain = "reload.example.com"
+	reloadCfg.Server.RegistryPort = 5000
+	reloadCfg.Services = []servicecfg.Config{{Name: "game", Image: "game:latest", Enabled: true}}
+	reloadCfg.EntryPoints = map[string]traffic.EntryPointConfig{"game": {Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTCP}}
+	reloadCfg.NetworkServices = []traffic.NetworkServiceConfig{{Name: "game", Ports: []traffic.PortConfig{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolTCP}}}}
+	reloadCfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "game", EntryPoint: "game", Service: "network_service:game:game"}}
+
+	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg))
+	require.Equal(t, 1, reconciler.Calls())
+	require.Len(t, reconciler.services, 1)
+	assert.Equal(t, "game", reconciler.services[0].Name)
+	assert.NotEmpty(t, manager.Status().EntryPoints)
+}
+
+func TestWaitForCoreProxyReadyAndApplyTraffic_ReconcilesStandaloneServicesBeforeTrafficApply(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	configSvc := cfgusecase.NewService(v, nil)
+	require.NoError(t, configSvc.Load(ctx))
+	manager := trafficadapter.NewManager()
+	defer func() { require.NoError(t, manager.Shutdown(ctx)) }()
+
+	reconciler := &standaloneServiceRecorder{onReconcile: func() {
+		assert.Empty(t, manager.Status().EntryPoints, "traffic graph applied before standalone services reconciled")
+	}}
+	cfg := Config{}
+	cfg.Services = []servicecfg.Config{{Name: "game", Image: "game:latest", Enabled: true}}
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{"game": {Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTCP}}
+	cfg.NetworkServices = []traffic.NetworkServiceConfig{{Name: "game", Ports: []traffic.PortConfig{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolTCP}}}}
+	cfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "game", EntryPoint: "game", Service: "network_service:game:game"}}
+
+	ready := make(chan struct{})
+	close(ready)
+	svc := &services{configSvc: configSvc, trafficManager: manager, standaloneServiceSvc: reconciler}
+	require.NoError(t, waitForCoreProxyReadyAndApplyTraffic(ctx, cfg, svc, ready, ready, nil))
+	require.Equal(t, 1, reconciler.Calls())
+	assert.NotEmpty(t, manager.Status().EntryPoints)
+}
+
+func TestReconcileStandaloneServices_ConfigConversionErrorIsClear(t *testing.T) {
+	reconciler := &standaloneServiceRecorder{}
+	err := reconcileStandaloneServices(context.Background(), reconciler, Config{Services: []servicecfg.Config{{Name: "broken", Image: "", Enabled: true}}})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "convert standalone service config")
+	assert.Equal(t, 0, reconciler.Calls())
+}
+
 func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()

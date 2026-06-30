@@ -15,6 +15,14 @@ const (
 	// exposing secret values.
 	LabelEnvHash = "gordon.env-hash"
 
+	// Standalone service labels identify Gordon-managed L4 service containers.
+	LabelService                       = "gordon.service"
+	LabelServiceName                   = "gordon.service.name"
+	LabelServiceConfigHash             = "gordon.service.config-hash"
+	LabelServiceManagedVolumes         = "gordon.service.managed-volumes"
+	LabelServiceCleanupPreserveVolumes = "gordon.service.cleanup.preserve-volumes"
+	LabelServiceCleanupRemoveContainer = "gordon.service.cleanup.remove-container"
+
 	// LabelProxyPort specifies the container port to proxy HTTP traffic to.
 	LabelProxyPort = "gordon.proxy.port"
 
