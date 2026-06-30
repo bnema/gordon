@@ -141,53 +141,11 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Convert ports to Docker format
-	exposedPorts := make(nat.PortSet)
-	portBindings := make(nat.PortMap)
-
-	for _, port := range config.Ports {
-		containerPort := nat.Port(fmt.Sprintf("%d/tcp", port))
-		exposedPorts[containerPort] = struct{}{}
-
-		// Bind to random available port on localhost only.
-		// SECURITY: Using 127.0.0.1 prevents direct access from the network,
-		// forcing all traffic through Gordon's reverse proxy where auth,
-		// rate limiting, and security headers are applied.
-		portBindings[containerPort] = []nat.PortBinding{
-			{
-				HostIP:   "127.0.0.1",
-				HostPort: "0", // Docker will assign a random available port
-			},
-		}
+	exposedPorts, portBindings, err := buildPortBindings(config)
+	if err != nil {
+		return nil, err
 	}
-	for _, publish := range config.PortPublishes {
-		if publish.Protocol != domain.NetworkProtocolTCP && publish.Protocol != domain.NetworkProtocolUDP {
-			return nil, fmt.Errorf("unsupported container port publish protocol %q", publish.Protocol)
-		}
-		containerPort := nat.Port(fmt.Sprintf("%d/%s", publish.ContainerPort, publish.Protocol))
-		exposedPorts[containerPort] = struct{}{}
-		portBindings[containerPort] = append(portBindings[containerPort], nat.PortBinding{
-			HostIP:   publish.HostIP,
-			HostPort: strconv.Itoa(publish.HostPort),
-		})
-	}
-
-	// Convert volumes to Docker format
-	var binds []string
-	if config.Volumes != nil {
-		for containerPath, volumeName := range config.Volumes {
-			bind := fmt.Sprintf("%s:%s", volumeName, containerPath)
-			binds = append(binds, bind)
-			log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding volume mount")
-		}
-	}
-	if config.ReadOnlyVolumes != nil {
-		for containerPath, volumeName := range config.ReadOnlyVolumes {
-			bind := fmt.Sprintf("%s:%s:ro", volumeName, containerPath)
-			binds = append(binds, bind)
-			log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding read-only volume mount")
-		}
-	}
+	binds := buildVolumeBinds(config, log)
 
 	// Create container configuration
 	containerConfig := &container.Config{
@@ -259,6 +217,59 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 
 	// Inspect the created container to get full details
 	return r.InspectContainer(ctx, resp.ID)
+}
+
+func buildPortBindings(config *domain.ContainerConfig) (nat.PortSet, nat.PortMap, error) {
+	exposedPorts := make(nat.PortSet)
+	portBindings := make(nat.PortMap)
+	addLegacyPortBindings(config.Ports, exposedPorts, portBindings)
+	if err := addExplicitPortBindings(config.PortPublishes, exposedPorts, portBindings); err != nil {
+		return nil, nil, err
+	}
+	return exposedPorts, portBindings, nil
+}
+
+func addLegacyPortBindings(ports []int, exposedPorts nat.PortSet, portBindings nat.PortMap) {
+	for _, port := range ports {
+		containerPort := nat.Port(fmt.Sprintf("%d/tcp", port))
+		exposedPorts[containerPort] = struct{}{}
+
+		// Bind to random available port on localhost only.
+		// SECURITY: Using 127.0.0.1 prevents direct access from the network,
+		// forcing all traffic through Gordon's reverse proxy where auth,
+		// rate limiting, and security headers are applied.
+		portBindings[containerPort] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}}
+	}
+}
+
+func addExplicitPortBindings(publishes []domain.ContainerPortPublish, exposedPorts nat.PortSet, portBindings nat.PortMap) error {
+	for _, publish := range publishes {
+		if publish.Protocol != domain.NetworkProtocolTCP && publish.Protocol != domain.NetworkProtocolUDP {
+			return fmt.Errorf("unsupported container port publish protocol %q", publish.Protocol)
+		}
+		containerPort := nat.Port(fmt.Sprintf("%d/%s", publish.ContainerPort, publish.Protocol))
+		exposedPorts[containerPort] = struct{}{}
+		portBindings[containerPort] = append(portBindings[containerPort], nat.PortBinding{
+			HostIP:   publish.HostIP,
+			HostPort: strconv.Itoa(publish.HostPort),
+		})
+	}
+	return nil
+}
+
+func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) []string {
+	binds := make([]string, 0, len(config.Volumes)+len(config.ReadOnlyVolumes))
+	for containerPath, volumeName := range config.Volumes {
+		bind := fmt.Sprintf("%s:%s", volumeName, containerPath)
+		binds = append(binds, bind)
+		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding volume mount")
+	}
+	for containerPath, volumeName := range config.ReadOnlyVolumes {
+		bind := fmt.Sprintf("%s:%s:ro", volumeName, containerPath)
+		binds = append(binds, bind)
+		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding read-only volume mount")
+	}
+	return binds
 }
 
 // StartContainer starts a container.

@@ -196,22 +196,22 @@ func ParseTrafficServiceRef(value string) (TrafficServiceRef, error) {
 	case TrafficServiceRefExternalRoute:
 		return TrafficServiceRef{Kind: TrafficServiceRefExternalRoute, Domain: rest}, nil
 	case TrafficServiceRefNetworkService:
-		name, portName, ok := strings.Cut(rest, ":")
-		if !ok || name == "" || portName == "" || strings.Contains(portName, ":") {
-			return TrafficServiceRef{}, fmt.Errorf("invalid network service ref %q", value)
-		}
-		return TrafficServiceRef{Kind: TrafficServiceRefNetworkService, Name: name, PortName: portName}, nil
+		return parseNamedPortServiceRef(value, rest, TrafficServiceRefNetworkService, "network service")
 	case TrafficServiceRefService:
-		name, portName, ok := strings.Cut(rest, ":")
-		if !ok || name == "" || portName == "" || strings.Contains(portName, ":") {
-			return TrafficServiceRef{}, fmt.Errorf("invalid service ref %q", value)
-		}
-		return TrafficServiceRef{Kind: TrafficServiceRefService, Name: name, PortName: portName}, nil
+		return parseNamedPortServiceRef(value, rest, TrafficServiceRefService, "service")
 	case TrafficServiceRefStatic:
 		return TrafficServiceRef{Kind: TrafficServiceRefStatic, Name: rest, Reserved: true}, nil
 	default:
 		return TrafficServiceRef{}, fmt.Errorf("invalid traffic service ref kind %q", kind)
 	}
+}
+
+func parseNamedPortServiceRef(value, rest string, kind TrafficServiceRefKind, label string) (TrafficServiceRef, error) {
+	name, portName, ok := strings.Cut(rest, ":")
+	if !ok || name == "" || portName == "" || strings.Contains(portName, ":") {
+		return TrafficServiceRef{}, fmt.Errorf("invalid %s ref %q", label, value)
+	}
+	return TrafficServiceRef{Kind: kind, Name: name, PortName: portName}, nil
 }
 
 func (g TrafficGraph) Validate() error {

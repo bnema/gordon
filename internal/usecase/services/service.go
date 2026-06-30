@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -506,9 +505,7 @@ func (s *Service) waitLogReadiness(ctx context.Context, containerID string, svc 
 		if err == nil && found {
 			return nil
 		}
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			// Continue polling until timeout; many services create the log after start.
-		}
+		// Continue polling until timeout; many services create the log after start.
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("standalone service %q log readiness timed out: %w", svc.Name, ctx.Err())
