@@ -61,7 +61,7 @@ type MockEventPublisher_Publish_Call struct {
 // Publish is a helper method to define mock.On call
 //   - eventType domain.EventType
 //   - payload any
-func (_e *MockEventPublisher_Expecter) Publish(eventType interface{}, payload interface{}) *MockEventPublisher_Publish_Call {
+func (_e *MockEventPublisher_Expecter) Publish(eventType any, payload any) *MockEventPublisher_Publish_Call {
 	return &MockEventPublisher_Publish_Call{Call: _e.mock.On("Publish", eventType, payload)}
 }
 

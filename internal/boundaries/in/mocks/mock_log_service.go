@@ -74,7 +74,7 @@ type MockLogService_FollowContainerLogs_Call struct {
 //   - ctx context.Context
 //   - domain string
 //   - initialLines int
-func (_e *MockLogService_Expecter) FollowContainerLogs(ctx interface{}, domain interface{}, initialLines interface{}) *MockLogService_FollowContainerLogs_Call {
+func (_e *MockLogService_Expecter) FollowContainerLogs(ctx any, domain any, initialLines any) *MockLogService_FollowContainerLogs_Call {
 	return &MockLogService_FollowContainerLogs_Call{Call: _e.mock.On("FollowContainerLogs", ctx, domain, initialLines)}
 }
 
@@ -147,7 +147,7 @@ type MockLogService_FollowProcessLogs_Call struct {
 // FollowProcessLogs is a helper method to define mock.On call
 //   - ctx context.Context
 //   - initialLines int
-func (_e *MockLogService_Expecter) FollowProcessLogs(ctx interface{}, initialLines interface{}) *MockLogService_FollowProcessLogs_Call {
+func (_e *MockLogService_Expecter) FollowProcessLogs(ctx any, initialLines any) *MockLogService_FollowProcessLogs_Call {
 	return &MockLogService_FollowProcessLogs_Call{Call: _e.mock.On("FollowProcessLogs", ctx, initialLines)}
 }
 
@@ -216,7 +216,7 @@ type MockLogService_GetContainerLogs_Call struct {
 //   - ctx context.Context
 //   - domain string
 //   - lines int
-func (_e *MockLogService_Expecter) GetContainerLogs(ctx interface{}, domain interface{}, lines interface{}) *MockLogService_GetContainerLogs_Call {
+func (_e *MockLogService_Expecter) GetContainerLogs(ctx any, domain any, lines any) *MockLogService_GetContainerLogs_Call {
 	return &MockLogService_GetContainerLogs_Call{Call: _e.mock.On("GetContainerLogs", ctx, domain, lines)}
 }
 
@@ -289,7 +289,7 @@ type MockLogService_GetProcessLogs_Call struct {
 // GetProcessLogs is a helper method to define mock.On call
 //   - ctx context.Context
 //   - lines int
-func (_e *MockLogService_Expecter) GetProcessLogs(ctx interface{}, lines interface{}) *MockLogService_GetProcessLogs_Call {
+func (_e *MockLogService_Expecter) GetProcessLogs(ctx any, lines any) *MockLogService_GetProcessLogs_Call {
 	return &MockLogService_GetProcessLogs_Call{Call: _e.mock.On("GetProcessLogs", ctx, lines)}
 }
 

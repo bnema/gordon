@@ -62,7 +62,7 @@ type MockEventHandler_CanHandle_Call struct {
 
 // CanHandle is a helper method to define mock.On call
 //   - eventType domain.EventType
-func (_e *MockEventHandler_Expecter) CanHandle(eventType interface{}) *MockEventHandler_CanHandle_Call {
+func (_e *MockEventHandler_Expecter) CanHandle(eventType any) *MockEventHandler_CanHandle_Call {
 	return &MockEventHandler_CanHandle_Call{Call: _e.mock.On("CanHandle", eventType)}
 }
 
@@ -114,7 +114,7 @@ type MockEventHandler_Handle_Call struct {
 // Handle is a helper method to define mock.On call
 //   - ctx context.Context
 //   - event domain.Event
-func (_e *MockEventHandler_Expecter) Handle(ctx interface{}, event interface{}) *MockEventHandler_Handle_Call {
+func (_e *MockEventHandler_Expecter) Handle(ctx any, event any) *MockEventHandler_Handle_Call {
 	return &MockEventHandler_Handle_Call{Call: _e.mock.On("Handle", ctx, event)}
 }
 

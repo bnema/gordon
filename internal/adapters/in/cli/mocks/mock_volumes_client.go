@@ -73,7 +73,7 @@ type MockvolumesClient_ListVolumes_Call struct {
 
 // ListVolumes is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockvolumesClient_Expecter) ListVolumes(ctx interface{}) *MockvolumesClient_ListVolumes_Call {
+func (_e *MockvolumesClient_Expecter) ListVolumes(ctx any) *MockvolumesClient_ListVolumes_Call {
 	return &MockvolumesClient_ListVolumes_Call{Call: _e.mock.On("ListVolumes", ctx)}
 }
 
@@ -136,7 +136,7 @@ type MockvolumesClient_PruneVolumes_Call struct {
 // PruneVolumes is a helper method to define mock.On call
 //   - ctx context.Context
 //   - req dto.VolumePruneRequest
-func (_e *MockvolumesClient_Expecter) PruneVolumes(ctx interface{}, req interface{}) *MockvolumesClient_PruneVolumes_Call {
+func (_e *MockvolumesClient_Expecter) PruneVolumes(ctx any, req any) *MockvolumesClient_PruneVolumes_Call {
 	return &MockvolumesClient_PruneVolumes_Call{Call: _e.mock.On("PruneVolumes", ctx, req)}
 }
 

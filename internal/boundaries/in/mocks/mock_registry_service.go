@@ -77,7 +77,7 @@ type MockRegistryService_AppendBlobChunk_Call struct {
 //   - data io.Reader
 //   - contentLength int64
 //   - maxBlobSize int64
-func (_e *MockRegistryService_Expecter) AppendBlobChunk(ctx interface{}, name interface{}, uuid interface{}, data interface{}, contentLength interface{}, maxBlobSize interface{}) *MockRegistryService_AppendBlobChunk_Call {
+func (_e *MockRegistryService_Expecter) AppendBlobChunk(ctx any, name any, uuid any, data any, contentLength any, maxBlobSize any) *MockRegistryService_AppendBlobChunk_Call {
 	return &MockRegistryService_AppendBlobChunk_Call{Call: _e.mock.On("AppendBlobChunk", ctx, name, uuid, data, contentLength, maxBlobSize)}
 }
 
@@ -154,7 +154,7 @@ type MockRegistryService_BlobExists_Call struct {
 // BlobExists is a helper method to define mock.On call
 //   - ctx context.Context
 //   - digest string
-func (_e *MockRegistryService_Expecter) BlobExists(ctx interface{}, digest interface{}) *MockRegistryService_BlobExists_Call {
+func (_e *MockRegistryService_Expecter) BlobExists(ctx any, digest any) *MockRegistryService_BlobExists_Call {
 	return &MockRegistryService_BlobExists_Call{Call: _e.mock.On("BlobExists", ctx, digest)}
 }
 
@@ -211,7 +211,7 @@ type MockRegistryService_CancelUpload_Call struct {
 // CancelUpload is a helper method to define mock.On call
 //   - ctx context.Context
 //   - uuid string
-func (_e *MockRegistryService_Expecter) CancelUpload(ctx interface{}, uuid interface{}) *MockRegistryService_CancelUpload_Call {
+func (_e *MockRegistryService_Expecter) CancelUpload(ctx any, uuid any) *MockRegistryService_CancelUpload_Call {
 	return &MockRegistryService_CancelUpload_Call{Call: _e.mock.On("CancelUpload", ctx, uuid)}
 }
 
@@ -269,7 +269,7 @@ type MockRegistryService_DeleteManifest_Call struct {
 //   - ctx context.Context
 //   - name string
 //   - reference string
-func (_e *MockRegistryService_Expecter) DeleteManifest(ctx interface{}, name interface{}, reference interface{}) *MockRegistryService_DeleteManifest_Call {
+func (_e *MockRegistryService_Expecter) DeleteManifest(ctx any, name any, reference any) *MockRegistryService_DeleteManifest_Call {
 	return &MockRegistryService_DeleteManifest_Call{Call: _e.mock.On("DeleteManifest", ctx, name, reference)}
 }
 
@@ -332,7 +332,7 @@ type MockRegistryService_FinishUpload_Call struct {
 //   - ctx context.Context
 //   - uuid string
 //   - digest string
-func (_e *MockRegistryService_Expecter) FinishUpload(ctx interface{}, uuid interface{}, digest interface{}) *MockRegistryService_FinishUpload_Call {
+func (_e *MockRegistryService_Expecter) FinishUpload(ctx any, uuid any, digest any) *MockRegistryService_FinishUpload_Call {
 	return &MockRegistryService_FinishUpload_Call{Call: _e.mock.On("FinishUpload", ctx, uuid, digest)}
 }
 
@@ -405,7 +405,7 @@ type MockRegistryService_GetBlob_Call struct {
 // GetBlob is a helper method to define mock.On call
 //   - ctx context.Context
 //   - digest string
-func (_e *MockRegistryService_Expecter) GetBlob(ctx interface{}, digest interface{}) *MockRegistryService_GetBlob_Call {
+func (_e *MockRegistryService_Expecter) GetBlob(ctx any, digest any) *MockRegistryService_GetBlob_Call {
 	return &MockRegistryService_GetBlob_Call{Call: _e.mock.On("GetBlob", ctx, digest)}
 }
 
@@ -471,7 +471,7 @@ type MockRegistryService_GetBlobPath_Call struct {
 // GetBlobPath is a helper method to define mock.On call
 //   - ctx context.Context
 //   - digest string
-func (_e *MockRegistryService_Expecter) GetBlobPath(ctx interface{}, digest interface{}) *MockRegistryService_GetBlobPath_Call {
+func (_e *MockRegistryService_Expecter) GetBlobPath(ctx any, digest any) *MockRegistryService_GetBlobPath_Call {
 	return &MockRegistryService_GetBlobPath_Call{Call: _e.mock.On("GetBlobPath", ctx, digest)}
 }
 
@@ -540,7 +540,7 @@ type MockRegistryService_GetManifest_Call struct {
 //   - ctx context.Context
 //   - name string
 //   - reference string
-func (_e *MockRegistryService_Expecter) GetManifest(ctx interface{}, name interface{}, reference interface{}) *MockRegistryService_GetManifest_Call {
+func (_e *MockRegistryService_Expecter) GetManifest(ctx any, name any, reference any) *MockRegistryService_GetManifest_Call {
 	return &MockRegistryService_GetManifest_Call{Call: _e.mock.On("GetManifest", ctx, name, reference)}
 }
 
@@ -612,7 +612,7 @@ type MockRegistryService_ListRepositories_Call struct {
 
 // ListRepositories is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockRegistryService_Expecter) ListRepositories(ctx interface{}) *MockRegistryService_ListRepositories_Call {
+func (_e *MockRegistryService_Expecter) ListRepositories(ctx any) *MockRegistryService_ListRepositories_Call {
 	return &MockRegistryService_ListRepositories_Call{Call: _e.mock.On("ListRepositories", ctx)}
 }
 
@@ -675,7 +675,7 @@ type MockRegistryService_ListTags_Call struct {
 // ListTags is a helper method to define mock.On call
 //   - ctx context.Context
 //   - name string
-func (_e *MockRegistryService_Expecter) ListTags(ctx interface{}, name interface{}) *MockRegistryService_ListTags_Call {
+func (_e *MockRegistryService_Expecter) ListTags(ctx any, name any) *MockRegistryService_ListTags_Call {
 	return &MockRegistryService_ListTags_Call{Call: _e.mock.On("ListTags", ctx, name)}
 }
 
@@ -734,7 +734,7 @@ type MockRegistryService_PutBlob_Call struct {
 //   - digest string
 //   - data io.Reader
 //   - size int64
-func (_e *MockRegistryService_Expecter) PutBlob(ctx interface{}, digest interface{}, data interface{}, size interface{}) *MockRegistryService_PutBlob_Call {
+func (_e *MockRegistryService_Expecter) PutBlob(ctx any, digest any, data any, size any) *MockRegistryService_PutBlob_Call {
 	return &MockRegistryService_PutBlob_Call{Call: _e.mock.On("PutBlob", ctx, digest, data, size)}
 }
 
@@ -810,7 +810,7 @@ type MockRegistryService_PutManifest_Call struct {
 // PutManifest is a helper method to define mock.On call
 //   - ctx context.Context
 //   - manifest *domain.Manifest
-func (_e *MockRegistryService_Expecter) PutManifest(ctx interface{}, manifest interface{}) *MockRegistryService_PutManifest_Call {
+func (_e *MockRegistryService_Expecter) PutManifest(ctx any, manifest any) *MockRegistryService_PutManifest_Call {
 	return &MockRegistryService_PutManifest_Call{Call: _e.mock.On("PutManifest", ctx, manifest)}
 }
 
@@ -876,7 +876,7 @@ type MockRegistryService_StartUpload_Call struct {
 // StartUpload is a helper method to define mock.On call
 //   - ctx context.Context
 //   - name string
-func (_e *MockRegistryService_Expecter) StartUpload(ctx interface{}, name interface{}) *MockRegistryService_StartUpload_Call {
+func (_e *MockRegistryService_Expecter) StartUpload(ctx any, name any) *MockRegistryService_StartUpload_Call {
 	return &MockRegistryService_StartUpload_Call{Call: _e.mock.On("StartUpload", ctx, name)}
 }
 

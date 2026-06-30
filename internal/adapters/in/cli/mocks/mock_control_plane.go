@@ -66,7 +66,7 @@ type MockControlPlane_AddAttachment_Call struct {
 //   - ctx context.Context
 //   - domainOrGroup string
 //   - image string
-func (_e *MockControlPlane_Expecter) AddAttachment(ctx interface{}, domainOrGroup interface{}, image interface{}) *MockControlPlane_AddAttachment_Call {
+func (_e *MockControlPlane_Expecter) AddAttachment(ctx any, domainOrGroup any, image any) *MockControlPlane_AddAttachment_Call {
 	return &MockControlPlane_AddAttachment_Call{Call: _e.mock.On("AddAttachment", ctx, domainOrGroup, image)}
 }
 
@@ -128,7 +128,7 @@ type MockControlPlane_AddAutoRouteAllowedDomain_Call struct {
 // AddAutoRouteAllowedDomain is a helper method to define mock.On call
 //   - ctx context.Context
 //   - pattern string
-func (_e *MockControlPlane_Expecter) AddAutoRouteAllowedDomain(ctx interface{}, pattern interface{}) *MockControlPlane_AddAutoRouteAllowedDomain_Call {
+func (_e *MockControlPlane_Expecter) AddAutoRouteAllowedDomain(ctx any, pattern any) *MockControlPlane_AddAutoRouteAllowedDomain_Call {
 	return &MockControlPlane_AddAutoRouteAllowedDomain_Call{Call: _e.mock.On("AddAutoRouteAllowedDomain", ctx, pattern)}
 }
 
@@ -185,7 +185,7 @@ type MockControlPlane_AddRoute_Call struct {
 // AddRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - route domain.Route
-func (_e *MockControlPlane_Expecter) AddRoute(ctx interface{}, route interface{}) *MockControlPlane_AddRoute_Call {
+func (_e *MockControlPlane_Expecter) AddRoute(ctx any, route any) *MockControlPlane_AddRoute_Call {
 	return &MockControlPlane_AddRoute_Call{Call: _e.mock.On("AddRoute", ctx, route)}
 }
 
@@ -252,7 +252,7 @@ type MockControlPlane_BackupStatus_Call struct {
 
 // BackupStatus is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) BackupStatus(ctx interface{}) *MockControlPlane_BackupStatus_Call {
+func (_e *MockControlPlane_Expecter) BackupStatus(ctx any) *MockControlPlane_BackupStatus_Call {
 	return &MockControlPlane_BackupStatus_Call{Call: _e.mock.On("BackupStatus", ctx)}
 }
 
@@ -315,7 +315,7 @@ type MockControlPlane_Bootstrap_Call struct {
 // Bootstrap is a helper method to define mock.On call
 //   - ctx context.Context
 //   - req dto.BootstrapRequest
-func (_e *MockControlPlane_Expecter) Bootstrap(ctx interface{}, req interface{}) *MockControlPlane_Bootstrap_Call {
+func (_e *MockControlPlane_Expecter) Bootstrap(ctx any, req any) *MockControlPlane_Bootstrap_Call {
 	return &MockControlPlane_Bootstrap_Call{Call: _e.mock.On("Bootstrap", ctx, req)}
 }
 
@@ -384,7 +384,7 @@ type MockControlPlane_CleanupOrphanedAttachments_Call struct {
 //   - ctx context.Context
 //   - owner string
 //   - stop bool
-func (_e *MockControlPlane_Expecter) CleanupOrphanedAttachments(ctx interface{}, owner interface{}, stop interface{}) *MockControlPlane_CleanupOrphanedAttachments_Call {
+func (_e *MockControlPlane_Expecter) CleanupOrphanedAttachments(ctx any, owner any, stop any) *MockControlPlane_CleanupOrphanedAttachments_Call {
 	return &MockControlPlane_CleanupOrphanedAttachments_Call{Call: _e.mock.On("CleanupOrphanedAttachments", ctx, owner, stop)}
 }
 
@@ -448,7 +448,7 @@ type MockControlPlane_DeleteAttachmentSecret_Call struct {
 //   - domain1 string
 //   - service string
 //   - key string
-func (_e *MockControlPlane_Expecter) DeleteAttachmentSecret(ctx interface{}, domain1 interface{}, service interface{}, key interface{}) *MockControlPlane_DeleteAttachmentSecret_Call {
+func (_e *MockControlPlane_Expecter) DeleteAttachmentSecret(ctx any, domain1 any, service any, key any) *MockControlPlane_DeleteAttachmentSecret_Call {
 	return &MockControlPlane_DeleteAttachmentSecret_Call{Call: _e.mock.On("DeleteAttachmentSecret", ctx, domain1, service, key)}
 }
 
@@ -516,7 +516,7 @@ type MockControlPlane_DeleteSecret_Call struct {
 //   - ctx context.Context
 //   - secretDomain string
 //   - key string
-func (_e *MockControlPlane_Expecter) DeleteSecret(ctx interface{}, secretDomain interface{}, key interface{}) *MockControlPlane_DeleteSecret_Call {
+func (_e *MockControlPlane_Expecter) DeleteSecret(ctx any, secretDomain any, key any) *MockControlPlane_DeleteSecret_Call {
 	return &MockControlPlane_DeleteSecret_Call{Call: _e.mock.On("DeleteSecret", ctx, secretDomain, key)}
 }
 
@@ -589,7 +589,7 @@ type MockControlPlane_Deploy_Call struct {
 // Deploy is a helper method to define mock.On call
 //   - ctx context.Context
 //   - deployDomain string
-func (_e *MockControlPlane_Expecter) Deploy(ctx interface{}, deployDomain interface{}) *MockControlPlane_Deploy_Call {
+func (_e *MockControlPlane_Expecter) Deploy(ctx any, deployDomain any) *MockControlPlane_Deploy_Call {
 	return &MockControlPlane_Deploy_Call{Call: _e.mock.On("Deploy", ctx, deployDomain)}
 }
 
@@ -646,7 +646,7 @@ type MockControlPlane_DeployIntent_Call struct {
 // DeployIntent is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageName string
-func (_e *MockControlPlane_Expecter) DeployIntent(ctx interface{}, imageName interface{}) *MockControlPlane_DeployIntent_Call {
+func (_e *MockControlPlane_Expecter) DeployIntent(ctx any, imageName any) *MockControlPlane_DeployIntent_Call {
 	return &MockControlPlane_DeployIntent_Call{Call: _e.mock.On("DeployIntent", ctx, imageName)}
 }
 
@@ -714,7 +714,7 @@ type MockControlPlane_DetectDatabases_Call struct {
 // DetectDatabases is a helper method to define mock.On call
 //   - ctx context.Context
 //   - backupDomain string
-func (_e *MockControlPlane_Expecter) DetectDatabases(ctx interface{}, backupDomain interface{}) *MockControlPlane_DetectDatabases_Call {
+func (_e *MockControlPlane_Expecter) DetectDatabases(ctx any, backupDomain any) *MockControlPlane_DetectDatabases_Call {
 	return &MockControlPlane_DetectDatabases_Call{Call: _e.mock.On("DetectDatabases", ctx, backupDomain)}
 }
 
@@ -782,7 +782,7 @@ type MockControlPlane_FindAttachmentTargetsByImage_Call struct {
 // FindAttachmentTargetsByImage is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageName string
-func (_e *MockControlPlane_Expecter) FindAttachmentTargetsByImage(ctx interface{}, imageName interface{}) *MockControlPlane_FindAttachmentTargetsByImage_Call {
+func (_e *MockControlPlane_Expecter) FindAttachmentTargetsByImage(ctx any, imageName any) *MockControlPlane_FindAttachmentTargetsByImage_Call {
 	return &MockControlPlane_FindAttachmentTargetsByImage_Call{Call: _e.mock.On("FindAttachmentTargetsByImage", ctx, imageName)}
 }
 
@@ -850,7 +850,7 @@ type MockControlPlane_FindRoutesByImage_Call struct {
 // FindRoutesByImage is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageName string
-func (_e *MockControlPlane_Expecter) FindRoutesByImage(ctx interface{}, imageName interface{}) *MockControlPlane_FindRoutesByImage_Call {
+func (_e *MockControlPlane_Expecter) FindRoutesByImage(ctx any, imageName any) *MockControlPlane_FindRoutesByImage_Call {
 	return &MockControlPlane_FindRoutesByImage_Call{Call: _e.mock.On("FindRoutesByImage", ctx, imageName)}
 }
 
@@ -917,7 +917,7 @@ type MockControlPlane_GetAllAttachmentsConfig_Call struct {
 
 // GetAllAttachmentsConfig is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) GetAllAttachmentsConfig(ctx interface{}) *MockControlPlane_GetAllAttachmentsConfig_Call {
+func (_e *MockControlPlane_Expecter) GetAllAttachmentsConfig(ctx any) *MockControlPlane_GetAllAttachmentsConfig_Call {
 	return &MockControlPlane_GetAllAttachmentsConfig_Call{Call: _e.mock.On("GetAllAttachmentsConfig", ctx)}
 }
 
@@ -980,7 +980,7 @@ type MockControlPlane_GetAttachmentsConfig_Call struct {
 // GetAttachmentsConfig is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domainOrGroup string
-func (_e *MockControlPlane_Expecter) GetAttachmentsConfig(ctx interface{}, domainOrGroup interface{}) *MockControlPlane_GetAttachmentsConfig_Call {
+func (_e *MockControlPlane_Expecter) GetAttachmentsConfig(ctx any, domainOrGroup any) *MockControlPlane_GetAttachmentsConfig_Call {
 	return &MockControlPlane_GetAttachmentsConfig_Call{Call: _e.mock.On("GetAttachmentsConfig", ctx, domainOrGroup)}
 }
 
@@ -1047,7 +1047,7 @@ type MockControlPlane_GetAutoRouteAllowedDomains_Call struct {
 
 // GetAutoRouteAllowedDomains is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) GetAutoRouteAllowedDomains(ctx interface{}) *MockControlPlane_GetAutoRouteAllowedDomains_Call {
+func (_e *MockControlPlane_Expecter) GetAutoRouteAllowedDomains(ctx any) *MockControlPlane_GetAutoRouteAllowedDomains_Call {
 	return &MockControlPlane_GetAutoRouteAllowedDomains_Call{Call: _e.mock.On("GetAutoRouteAllowedDomains", ctx)}
 }
 
@@ -1109,7 +1109,7 @@ type MockControlPlane_GetConfig_Call struct {
 
 // GetConfig is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) GetConfig(ctx interface{}) *MockControlPlane_GetConfig_Call {
+func (_e *MockControlPlane_Expecter) GetConfig(ctx any) *MockControlPlane_GetConfig_Call {
 	return &MockControlPlane_GetConfig_Call{Call: _e.mock.On("GetConfig", ctx)}
 }
 
@@ -1173,7 +1173,7 @@ type MockControlPlane_GetContainerLogs_Call struct {
 //   - ctx context.Context
 //   - logDomain string
 //   - lines int
-func (_e *MockControlPlane_Expecter) GetContainerLogs(ctx interface{}, logDomain interface{}, lines interface{}) *MockControlPlane_GetContainerLogs_Call {
+func (_e *MockControlPlane_Expecter) GetContainerLogs(ctx any, logDomain any, lines any) *MockControlPlane_GetContainerLogs_Call {
 	return &MockControlPlane_GetContainerLogs_Call{Call: _e.mock.On("GetContainerLogs", ctx, logDomain, lines)}
 }
 
@@ -1245,7 +1245,7 @@ type MockControlPlane_GetHealth_Call struct {
 
 // GetHealth is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) GetHealth(ctx interface{}) *MockControlPlane_GetHealth_Call {
+func (_e *MockControlPlane_Expecter) GetHealth(ctx any) *MockControlPlane_GetHealth_Call {
 	return &MockControlPlane_GetHealth_Call{Call: _e.mock.On("GetHealth", ctx)}
 }
 
@@ -1308,7 +1308,7 @@ type MockControlPlane_GetProcessLogs_Call struct {
 // GetProcessLogs is a helper method to define mock.On call
 //   - ctx context.Context
 //   - lines int
-func (_e *MockControlPlane_Expecter) GetProcessLogs(ctx interface{}, lines interface{}) *MockControlPlane_GetProcessLogs_Call {
+func (_e *MockControlPlane_Expecter) GetProcessLogs(ctx any, lines any) *MockControlPlane_GetProcessLogs_Call {
 	return &MockControlPlane_GetProcessLogs_Call{Call: _e.mock.On("GetProcessLogs", ctx, lines)}
 }
 
@@ -1376,7 +1376,7 @@ type MockControlPlane_GetRoute_Call struct {
 // GetRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - routeDomain string
-func (_e *MockControlPlane_Expecter) GetRoute(ctx interface{}, routeDomain interface{}) *MockControlPlane_GetRoute_Call {
+func (_e *MockControlPlane_Expecter) GetRoute(ctx any, routeDomain any) *MockControlPlane_GetRoute_Call {
 	return &MockControlPlane_GetRoute_Call{Call: _e.mock.On("GetRoute", ctx, routeDomain)}
 }
 
@@ -1443,7 +1443,7 @@ type MockControlPlane_GetStatus_Call struct {
 
 // GetStatus is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) GetStatus(ctx interface{}) *MockControlPlane_GetStatus_Call {
+func (_e *MockControlPlane_Expecter) GetStatus(ctx any) *MockControlPlane_GetStatus_Call {
 	return &MockControlPlane_GetStatus_Call{Call: _e.mock.On("GetStatus", ctx)}
 }
 
@@ -1505,7 +1505,7 @@ type MockControlPlane_GetTLSStatus_Call struct {
 
 // GetTLSStatus is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) GetTLSStatus(ctx interface{}) *MockControlPlane_GetTLSStatus_Call {
+func (_e *MockControlPlane_Expecter) GetTLSStatus(ctx any) *MockControlPlane_GetTLSStatus_Call {
 	return &MockControlPlane_GetTLSStatus_Call{Call: _e.mock.On("GetTLSStatus", ctx)}
 }
 
@@ -1568,7 +1568,7 @@ type MockControlPlane_ListBackups_Call struct {
 // ListBackups is a helper method to define mock.On call
 //   - ctx context.Context
 //   - backupDomain string
-func (_e *MockControlPlane_Expecter) ListBackups(ctx interface{}, backupDomain interface{}) *MockControlPlane_ListBackups_Call {
+func (_e *MockControlPlane_Expecter) ListBackups(ctx any, backupDomain any) *MockControlPlane_ListBackups_Call {
 	return &MockControlPlane_ListBackups_Call{Call: _e.mock.On("ListBackups", ctx, backupDomain)}
 }
 
@@ -1635,7 +1635,7 @@ type MockControlPlane_ListNetworks_Call struct {
 
 // ListNetworks is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) ListNetworks(ctx interface{}) *MockControlPlane_ListNetworks_Call {
+func (_e *MockControlPlane_Expecter) ListNetworks(ctx any) *MockControlPlane_ListNetworks_Call {
 	return &MockControlPlane_ListNetworks_Call{Call: _e.mock.On("ListNetworks", ctx)}
 }
 
@@ -1697,7 +1697,7 @@ type MockControlPlane_ListOrphanedAttachments_Call struct {
 
 // ListOrphanedAttachments is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) ListOrphanedAttachments(ctx interface{}) *MockControlPlane_ListOrphanedAttachments_Call {
+func (_e *MockControlPlane_Expecter) ListOrphanedAttachments(ctx any) *MockControlPlane_ListOrphanedAttachments_Call {
 	return &MockControlPlane_ListOrphanedAttachments_Call{Call: _e.mock.On("ListOrphanedAttachments", ctx)}
 }
 
@@ -1759,7 +1759,7 @@ type MockControlPlane_ListRoutesWithDetails_Call struct {
 
 // ListRoutesWithDetails is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) ListRoutesWithDetails(ctx interface{}) *MockControlPlane_ListRoutesWithDetails_Call {
+func (_e *MockControlPlane_Expecter) ListRoutesWithDetails(ctx any) *MockControlPlane_ListRoutesWithDetails_Call {
 	return &MockControlPlane_ListRoutesWithDetails_Call{Call: _e.mock.On("ListRoutesWithDetails", ctx)}
 }
 
@@ -1822,7 +1822,7 @@ type MockControlPlane_ListSecretsWithAttachments_Call struct {
 // ListSecretsWithAttachments is a helper method to define mock.On call
 //   - ctx context.Context
 //   - secretDomain string
-func (_e *MockControlPlane_Expecter) ListSecretsWithAttachments(ctx interface{}, secretDomain interface{}) *MockControlPlane_ListSecretsWithAttachments_Call {
+func (_e *MockControlPlane_Expecter) ListSecretsWithAttachments(ctx any, secretDomain any) *MockControlPlane_ListSecretsWithAttachments_Call {
 	return &MockControlPlane_ListSecretsWithAttachments_Call{Call: _e.mock.On("ListSecretsWithAttachments", ctx, secretDomain)}
 }
 
@@ -1890,7 +1890,7 @@ type MockControlPlane_ListTags_Call struct {
 // ListTags is a helper method to define mock.On call
 //   - ctx context.Context
 //   - repository string
-func (_e *MockControlPlane_Expecter) ListTags(ctx interface{}, repository interface{}) *MockControlPlane_ListTags_Call {
+func (_e *MockControlPlane_Expecter) ListTags(ctx any, repository any) *MockControlPlane_ListTags_Call {
 	return &MockControlPlane_ListTags_Call{Call: _e.mock.On("ListTags", ctx, repository)}
 }
 
@@ -1958,7 +1958,7 @@ type MockControlPlane_ListVolumeBackups_Call struct {
 // ListVolumeBackups is a helper method to define mock.On call
 //   - ctx context.Context
 //   - backupDomain string
-func (_e *MockControlPlane_Expecter) ListVolumeBackups(ctx interface{}, backupDomain interface{}) *MockControlPlane_ListVolumeBackups_Call {
+func (_e *MockControlPlane_Expecter) ListVolumeBackups(ctx any, backupDomain any) *MockControlPlane_ListVolumeBackups_Call {
 	return &MockControlPlane_ListVolumeBackups_Call{Call: _e.mock.On("ListVolumeBackups", ctx, backupDomain)}
 }
 
@@ -2025,7 +2025,7 @@ type MockControlPlane_ListVolumes_Call struct {
 
 // ListVolumes is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) ListVolumes(ctx interface{}) *MockControlPlane_ListVolumes_Call {
+func (_e *MockControlPlane_Expecter) ListVolumes(ctx any) *MockControlPlane_ListVolumes_Call {
 	return &MockControlPlane_ListVolumes_Call{Call: _e.mock.On("ListVolumes", ctx)}
 }
 
@@ -2088,7 +2088,7 @@ type MockControlPlane_PruneVolumes_Call struct {
 // PruneVolumes is a helper method to define mock.On call
 //   - ctx context.Context
 //   - req dto.VolumePruneRequest
-func (_e *MockControlPlane_Expecter) PruneVolumes(ctx interface{}, req interface{}) *MockControlPlane_PruneVolumes_Call {
+func (_e *MockControlPlane_Expecter) PruneVolumes(ctx any, req any) *MockControlPlane_PruneVolumes_Call {
 	return &MockControlPlane_PruneVolumes_Call{Call: _e.mock.On("PruneVolumes", ctx, req)}
 }
 
@@ -2144,7 +2144,7 @@ type MockControlPlane_Reload_Call struct {
 
 // Reload is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) Reload(ctx interface{}) *MockControlPlane_Reload_Call {
+func (_e *MockControlPlane_Expecter) Reload(ctx any) *MockControlPlane_Reload_Call {
 	return &MockControlPlane_Reload_Call{Call: _e.mock.On("Reload", ctx)}
 }
 
@@ -2197,7 +2197,7 @@ type MockControlPlane_RemoveAttachment_Call struct {
 //   - ctx context.Context
 //   - domainOrGroup string
 //   - image string
-func (_e *MockControlPlane_Expecter) RemoveAttachment(ctx interface{}, domainOrGroup interface{}, image interface{}) *MockControlPlane_RemoveAttachment_Call {
+func (_e *MockControlPlane_Expecter) RemoveAttachment(ctx any, domainOrGroup any, image any) *MockControlPlane_RemoveAttachment_Call {
 	return &MockControlPlane_RemoveAttachment_Call{Call: _e.mock.On("RemoveAttachment", ctx, domainOrGroup, image)}
 }
 
@@ -2259,7 +2259,7 @@ type MockControlPlane_RemoveAutoRouteAllowedDomain_Call struct {
 // RemoveAutoRouteAllowedDomain is a helper method to define mock.On call
 //   - ctx context.Context
 //   - pattern string
-func (_e *MockControlPlane_Expecter) RemoveAutoRouteAllowedDomain(ctx interface{}, pattern interface{}) *MockControlPlane_RemoveAutoRouteAllowedDomain_Call {
+func (_e *MockControlPlane_Expecter) RemoveAutoRouteAllowedDomain(ctx any, pattern any) *MockControlPlane_RemoveAutoRouteAllowedDomain_Call {
 	return &MockControlPlane_RemoveAutoRouteAllowedDomain_Call{Call: _e.mock.On("RemoveAutoRouteAllowedDomain", ctx, pattern)}
 }
 
@@ -2316,7 +2316,7 @@ type MockControlPlane_RemoveRoute_Call struct {
 // RemoveRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - routeDomain string
-func (_e *MockControlPlane_Expecter) RemoveRoute(ctx interface{}, routeDomain interface{}) *MockControlPlane_RemoveRoute_Call {
+func (_e *MockControlPlane_Expecter) RemoveRoute(ctx any, routeDomain any) *MockControlPlane_RemoveRoute_Call {
 	return &MockControlPlane_RemoveRoute_Call{Call: _e.mock.On("RemoveRoute", ctx, routeDomain)}
 }
 
@@ -2385,7 +2385,7 @@ type MockControlPlane_Restart_Call struct {
 //   - ctx context.Context
 //   - restartDomain string
 //   - withAttachments bool
-func (_e *MockControlPlane_Expecter) Restart(ctx interface{}, restartDomain interface{}, withAttachments interface{}) *MockControlPlane_Restart_Call {
+func (_e *MockControlPlane_Expecter) Restart(ctx any, restartDomain any, withAttachments any) *MockControlPlane_Restart_Call {
 	return &MockControlPlane_Restart_Call{Call: _e.mock.On("Restart", ctx, restartDomain, withAttachments)}
 }
 
@@ -2459,7 +2459,7 @@ type MockControlPlane_RunBackup_Call struct {
 //   - ctx context.Context
 //   - backupDomain string
 //   - dbName string
-func (_e *MockControlPlane_Expecter) RunBackup(ctx interface{}, backupDomain interface{}, dbName interface{}) *MockControlPlane_RunBackup_Call {
+func (_e *MockControlPlane_Expecter) RunBackup(ctx any, backupDomain any, dbName any) *MockControlPlane_RunBackup_Call {
 	return &MockControlPlane_RunBackup_Call{Call: _e.mock.On("RunBackup", ctx, backupDomain, dbName)}
 }
 
@@ -2533,7 +2533,7 @@ type MockControlPlane_RunVolumeBackups_Call struct {
 //   - ctx context.Context
 //   - backupDomain string
 //   - volumeName string
-func (_e *MockControlPlane_Expecter) RunVolumeBackups(ctx interface{}, backupDomain interface{}, volumeName interface{}) *MockControlPlane_RunVolumeBackups_Call {
+func (_e *MockControlPlane_Expecter) RunVolumeBackups(ctx any, backupDomain any, volumeName any) *MockControlPlane_RunVolumeBackups_Call {
 	return &MockControlPlane_RunVolumeBackups_Call{Call: _e.mock.On("RunVolumeBackups", ctx, backupDomain, volumeName)}
 }
 
@@ -2597,7 +2597,7 @@ type MockControlPlane_SetAttachmentSecrets_Call struct {
 //   - domain1 string
 //   - service string
 //   - secrets map[string]string
-func (_e *MockControlPlane_Expecter) SetAttachmentSecrets(ctx interface{}, domain1 interface{}, service interface{}, secrets interface{}) *MockControlPlane_SetAttachmentSecrets_Call {
+func (_e *MockControlPlane_Expecter) SetAttachmentSecrets(ctx any, domain1 any, service any, secrets any) *MockControlPlane_SetAttachmentSecrets_Call {
 	return &MockControlPlane_SetAttachmentSecrets_Call{Call: _e.mock.On("SetAttachmentSecrets", ctx, domain1, service, secrets)}
 }
 
@@ -2665,7 +2665,7 @@ type MockControlPlane_SetSecrets_Call struct {
 //   - ctx context.Context
 //   - secretDomain string
 //   - secrets map[string]string
-func (_e *MockControlPlane_Expecter) SetSecrets(ctx interface{}, secretDomain interface{}, secrets interface{}) *MockControlPlane_SetSecrets_Call {
+func (_e *MockControlPlane_Expecter) SetSecrets(ctx any, secretDomain any, secrets any) *MockControlPlane_SetSecrets_Call {
 	return &MockControlPlane_SetSecrets_Call{Call: _e.mock.On("SetSecrets", ctx, secretDomain, secrets)}
 }
 
@@ -2739,7 +2739,7 @@ type MockControlPlane_StreamContainerLogs_Call struct {
 //   - ctx context.Context
 //   - logDomain string
 //   - lines int
-func (_e *MockControlPlane_Expecter) StreamContainerLogs(ctx interface{}, logDomain interface{}, lines interface{}) *MockControlPlane_StreamContainerLogs_Call {
+func (_e *MockControlPlane_Expecter) StreamContainerLogs(ctx any, logDomain any, lines any) *MockControlPlane_StreamContainerLogs_Call {
 	return &MockControlPlane_StreamContainerLogs_Call{Call: _e.mock.On("StreamContainerLogs", ctx, logDomain, lines)}
 }
 
@@ -2812,7 +2812,7 @@ type MockControlPlane_StreamProcessLogs_Call struct {
 // StreamProcessLogs is a helper method to define mock.On call
 //   - ctx context.Context
 //   - lines int
-func (_e *MockControlPlane_Expecter) StreamProcessLogs(ctx interface{}, lines interface{}) *MockControlPlane_StreamProcessLogs_Call {
+func (_e *MockControlPlane_Expecter) StreamProcessLogs(ctx any, lines any) *MockControlPlane_StreamProcessLogs_Call {
 	return &MockControlPlane_StreamProcessLogs_Call{Call: _e.mock.On("StreamProcessLogs", ctx, lines)}
 }
 
@@ -2869,7 +2869,7 @@ type MockControlPlane_UpdateRoute_Call struct {
 // UpdateRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - route domain.Route
-func (_e *MockControlPlane_Expecter) UpdateRoute(ctx interface{}, route interface{}) *MockControlPlane_UpdateRoute_Call {
+func (_e *MockControlPlane_Expecter) UpdateRoute(ctx any, route any) *MockControlPlane_UpdateRoute_Call {
 	return &MockControlPlane_UpdateRoute_Call{Call: _e.mock.On("UpdateRoute", ctx, route)}
 }
 
@@ -2936,7 +2936,7 @@ type MockControlPlane_VolumeBackupStatus_Call struct {
 
 // VolumeBackupStatus is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockControlPlane_Expecter) VolumeBackupStatus(ctx interface{}) *MockControlPlane_VolumeBackupStatus_Call {
+func (_e *MockControlPlane_Expecter) VolumeBackupStatus(ctx any) *MockControlPlane_VolumeBackupStatus_Call {
 	return &MockControlPlane_VolumeBackupStatus_Call{Call: _e.mock.On("VolumeBackupStatus", ctx)}
 }
 

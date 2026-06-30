@@ -64,7 +64,7 @@ type MockSecretService_Delete_Call struct {
 //   - ctx context.Context
 //   - domain string
 //   - key string
-func (_e *MockSecretService_Expecter) Delete(ctx interface{}, domain interface{}, key interface{}) *MockSecretService_Delete_Call {
+func (_e *MockSecretService_Expecter) Delete(ctx any, domain any, key any) *MockSecretService_Delete_Call {
 	return &MockSecretService_Delete_Call{Call: _e.mock.On("Delete", ctx, domain, key)}
 }
 
@@ -128,7 +128,7 @@ type MockSecretService_DeleteAttachment_Call struct {
 //   - domain string
 //   - service string
 //   - key string
-func (_e *MockSecretService_Expecter) DeleteAttachment(ctx interface{}, domain interface{}, service interface{}, key interface{}) *MockSecretService_DeleteAttachment_Call {
+func (_e *MockSecretService_Expecter) DeleteAttachment(ctx any, domain any, service any, key any) *MockSecretService_DeleteAttachment_Call {
 	return &MockSecretService_DeleteAttachment_Call{Call: _e.mock.On("DeleteAttachment", ctx, domain, service, key)}
 }
 
@@ -206,7 +206,7 @@ type MockSecretService_GetAll_Call struct {
 // GetAll is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain string
-func (_e *MockSecretService_Expecter) GetAll(ctx interface{}, domain interface{}) *MockSecretService_GetAll_Call {
+func (_e *MockSecretService_Expecter) GetAll(ctx any, domain any) *MockSecretService_GetAll_Call {
 	return &MockSecretService_GetAll_Call{Call: _e.mock.On("GetAll", ctx, domain)}
 }
 
@@ -274,7 +274,7 @@ type MockSecretService_ListKeys_Call struct {
 // ListKeys is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain string
-func (_e *MockSecretService_Expecter) ListKeys(ctx interface{}, domain interface{}) *MockSecretService_ListKeys_Call {
+func (_e *MockSecretService_Expecter) ListKeys(ctx any, domain any) *MockSecretService_ListKeys_Call {
 	return &MockSecretService_ListKeys_Call{Call: _e.mock.On("ListKeys", ctx, domain)}
 }
 
@@ -350,7 +350,7 @@ type MockSecretService_ListKeysWithAttachments_Call struct {
 // ListKeysWithAttachments is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain string
-func (_e *MockSecretService_Expecter) ListKeysWithAttachments(ctx interface{}, domain interface{}) *MockSecretService_ListKeysWithAttachments_Call {
+func (_e *MockSecretService_Expecter) ListKeysWithAttachments(ctx any, domain any) *MockSecretService_ListKeysWithAttachments_Call {
 	return &MockSecretService_ListKeysWithAttachments_Call{Call: _e.mock.On("ListKeysWithAttachments", ctx, domain)}
 }
 
@@ -408,7 +408,7 @@ type MockSecretService_Set_Call struct {
 //   - ctx context.Context
 //   - domain string
 //   - secrets map[string]string
-func (_e *MockSecretService_Expecter) Set(ctx interface{}, domain interface{}, secrets interface{}) *MockSecretService_Set_Call {
+func (_e *MockSecretService_Expecter) Set(ctx any, domain any, secrets any) *MockSecretService_Set_Call {
 	return &MockSecretService_Set_Call{Call: _e.mock.On("Set", ctx, domain, secrets)}
 }
 
@@ -472,7 +472,7 @@ type MockSecretService_SetAttachment_Call struct {
 //   - domain string
 //   - service string
 //   - secrets map[string]string
-func (_e *MockSecretService_Expecter) SetAttachment(ctx interface{}, domain interface{}, service interface{}, secrets interface{}) *MockSecretService_SetAttachment_Call {
+func (_e *MockSecretService_Expecter) SetAttachment(ctx any, domain any, service any, secrets any) *MockSecretService_SetAttachment_Call {
 	return &MockSecretService_SetAttachment_Call{Call: _e.mock.On("SetAttachment", ctx, domain, service, secrets)}
 }
 

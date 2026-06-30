@@ -63,7 +63,7 @@ type MockTokenStore_DeleteToken_Call struct {
 // DeleteToken is a helper method to define mock.On call
 //   - ctx context.Context
 //   - subject string
-func (_e *MockTokenStore_Expecter) DeleteToken(ctx interface{}, subject interface{}) *MockTokenStore_DeleteToken_Call {
+func (_e *MockTokenStore_Expecter) DeleteToken(ctx any, subject any) *MockTokenStore_DeleteToken_Call {
 	return &MockTokenStore_DeleteToken_Call{Call: _e.mock.On("DeleteToken", ctx, subject)}
 }
 
@@ -137,7 +137,7 @@ type MockTokenStore_GetToken_Call struct {
 // GetToken is a helper method to define mock.On call
 //   - ctx context.Context
 //   - subject string
-func (_e *MockTokenStore_Expecter) GetToken(ctx interface{}, subject interface{}) *MockTokenStore_GetToken_Call {
+func (_e *MockTokenStore_Expecter) GetToken(ctx any, subject any) *MockTokenStore_GetToken_Call {
 	return &MockTokenStore_GetToken_Call{Call: _e.mock.On("GetToken", ctx, subject)}
 }
 
@@ -203,7 +203,7 @@ type MockTokenStore_IsRevoked_Call struct {
 // IsRevoked is a helper method to define mock.On call
 //   - ctx context.Context
 //   - tokenID string
-func (_e *MockTokenStore_Expecter) IsRevoked(ctx interface{}, tokenID interface{}) *MockTokenStore_IsRevoked_Call {
+func (_e *MockTokenStore_Expecter) IsRevoked(ctx any, tokenID any) *MockTokenStore_IsRevoked_Call {
 	return &MockTokenStore_IsRevoked_Call{Call: _e.mock.On("IsRevoked", ctx, tokenID)}
 }
 
@@ -270,7 +270,7 @@ type MockTokenStore_ListTokens_Call struct {
 
 // ListTokens is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockTokenStore_Expecter) ListTokens(ctx interface{}) *MockTokenStore_ListTokens_Call {
+func (_e *MockTokenStore_Expecter) ListTokens(ctx any) *MockTokenStore_ListTokens_Call {
 	return &MockTokenStore_ListTokens_Call{Call: _e.mock.On("ListTokens", ctx)}
 }
 
@@ -322,7 +322,7 @@ type MockTokenStore_Revoke_Call struct {
 // Revoke is a helper method to define mock.On call
 //   - ctx context.Context
 //   - tokenID string
-func (_e *MockTokenStore_Expecter) Revoke(ctx interface{}, tokenID interface{}) *MockTokenStore_Revoke_Call {
+func (_e *MockTokenStore_Expecter) Revoke(ctx any, tokenID any) *MockTokenStore_Revoke_Call {
 	return &MockTokenStore_Revoke_Call{Call: _e.mock.On("Revoke", ctx, tokenID)}
 }
 
@@ -380,7 +380,7 @@ type MockTokenStore_SaveToken_Call struct {
 //   - ctx context.Context
 //   - token *domain.Token
 //   - jwt string
-func (_e *MockTokenStore_Expecter) SaveToken(ctx interface{}, token interface{}, jwt interface{}) *MockTokenStore_SaveToken_Call {
+func (_e *MockTokenStore_Expecter) SaveToken(ctx any, token any, jwt any) *MockTokenStore_SaveToken_Call {
 	return &MockTokenStore_SaveToken_Call{Call: _e.mock.On("SaveToken", ctx, token, jwt)}
 }
 
@@ -443,7 +443,7 @@ type MockTokenStore_UpdateTokenExpiry_Call struct {
 //   - ctx context.Context
 //   - token *domain.Token
 //   - newJWT string
-func (_e *MockTokenStore_Expecter) UpdateTokenExpiry(ctx interface{}, token interface{}, newJWT interface{}) *MockTokenStore_UpdateTokenExpiry_Call {
+func (_e *MockTokenStore_Expecter) UpdateTokenExpiry(ctx any, token any, newJWT any) *MockTokenStore_UpdateTokenExpiry_Call {
 	return &MockTokenStore_UpdateTokenExpiry_Call{Call: _e.mock.On("UpdateTokenExpiry", ctx, token, newJWT)}
 }
 

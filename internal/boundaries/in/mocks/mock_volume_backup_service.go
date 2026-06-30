@@ -74,7 +74,7 @@ type MockVolumeBackupService_ListVolumeBackups_Call struct {
 // ListVolumeBackups is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domainName string
-func (_e *MockVolumeBackupService_Expecter) ListVolumeBackups(ctx interface{}, domainName interface{}) *MockVolumeBackupService_ListVolumeBackups_Call {
+func (_e *MockVolumeBackupService_Expecter) ListVolumeBackups(ctx any, domainName any) *MockVolumeBackupService_ListVolumeBackups_Call {
 	return &MockVolumeBackupService_ListVolumeBackups_Call{Call: _e.mock.On("ListVolumeBackups", ctx, domainName)}
 }
 
@@ -143,7 +143,7 @@ type MockVolumeBackupService_RunVolumeBackups_Call struct {
 //   - ctx context.Context
 //   - domainName string
 //   - volumeName string
-func (_e *MockVolumeBackupService_Expecter) RunVolumeBackups(ctx interface{}, domainName interface{}, volumeName interface{}) *MockVolumeBackupService_RunVolumeBackups_Call {
+func (_e *MockVolumeBackupService_Expecter) RunVolumeBackups(ctx any, domainName any, volumeName any) *MockVolumeBackupService_RunVolumeBackups_Call {
 	return &MockVolumeBackupService_RunVolumeBackups_Call{Call: _e.mock.On("RunVolumeBackups", ctx, domainName, volumeName)}
 }
 
@@ -215,7 +215,7 @@ type MockVolumeBackupService_VolumeBackupStatus_Call struct {
 
 // VolumeBackupStatus is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockVolumeBackupService_Expecter) VolumeBackupStatus(ctx interface{}) *MockVolumeBackupService_VolumeBackupStatus_Call {
+func (_e *MockVolumeBackupService_Expecter) VolumeBackupStatus(ctx any) *MockVolumeBackupService_VolumeBackupStatus_Call {
 	return &MockVolumeBackupService_VolumeBackupStatus_Call{Call: _e.mock.On("VolumeBackupStatus", ctx)}
 }
 

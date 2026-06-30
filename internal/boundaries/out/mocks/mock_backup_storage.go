@@ -75,7 +75,7 @@ type MockBackupStorage_ApplyRetention_Call struct {
 //   - ctx context.Context
 //   - domainName string
 //   - policy domain.DatabaseBackupRetentionPolicy
-func (_e *MockBackupStorage_Expecter) ApplyRetention(ctx interface{}, domainName interface{}, policy interface{}) *MockBackupStorage_ApplyRetention_Call {
+func (_e *MockBackupStorage_Expecter) ApplyRetention(ctx any, domainName any, policy any) *MockBackupStorage_ApplyRetention_Call {
 	return &MockBackupStorage_ApplyRetention_Call{Call: _e.mock.On("ApplyRetention", ctx, domainName, policy)}
 }
 
@@ -137,7 +137,7 @@ type MockBackupStorage_Delete_Call struct {
 // Delete is a helper method to define mock.On call
 //   - ctx context.Context
 //   - path string
-func (_e *MockBackupStorage_Expecter) Delete(ctx interface{}, path interface{}) *MockBackupStorage_Delete_Call {
+func (_e *MockBackupStorage_Expecter) Delete(ctx any, path any) *MockBackupStorage_Delete_Call {
 	return &MockBackupStorage_Delete_Call{Call: _e.mock.On("Delete", ctx, path)}
 }
 
@@ -205,7 +205,7 @@ type MockBackupStorage_Get_Call struct {
 // Get is a helper method to define mock.On call
 //   - ctx context.Context
 //   - path string
-func (_e *MockBackupStorage_Expecter) Get(ctx interface{}, path interface{}) *MockBackupStorage_Get_Call {
+func (_e *MockBackupStorage_Expecter) Get(ctx any, path any) *MockBackupStorage_Get_Call {
 	return &MockBackupStorage_Get_Call{Call: _e.mock.On("Get", ctx, path)}
 }
 
@@ -274,7 +274,7 @@ type MockBackupStorage_List_Call struct {
 //   - ctx context.Context
 //   - domainName string
 //   - schedule *domain.BackupSchedule
-func (_e *MockBackupStorage_Expecter) List(ctx interface{}, domainName interface{}, schedule interface{}) *MockBackupStorage_List_Call {
+func (_e *MockBackupStorage_Expecter) List(ctx any, domainName any, schedule any) *MockBackupStorage_List_Call {
 	return &MockBackupStorage_List_Call{Call: _e.mock.On("List", ctx, domainName, schedule)}
 }
 
@@ -349,7 +349,7 @@ type MockBackupStorage_Store_Call struct {
 //   - schedule domain.BackupSchedule
 //   - timestamp time.Time
 //   - data io.Reader
-func (_e *MockBackupStorage_Expecter) Store(ctx interface{}, domainName interface{}, dbName interface{}, schedule interface{}, timestamp interface{}, data interface{}) *MockBackupStorage_Store_Call {
+func (_e *MockBackupStorage_Expecter) Store(ctx any, domainName any, dbName any, schedule any, timestamp any, data any) *MockBackupStorage_Store_Call {
 	return &MockBackupStorage_Store_Call{Call: _e.mock.On("Store", ctx, domainName, dbName, schedule, timestamp, data)}
 }
 

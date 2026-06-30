@@ -61,7 +61,7 @@ type MockDomainSecretStore_Delete_Call struct {
 // Delete is a helper method to define mock.On call
 //   - domain string
 //   - key string
-func (_e *MockDomainSecretStore_Expecter) Delete(domain interface{}, key interface{}) *MockDomainSecretStore_Delete_Call {
+func (_e *MockDomainSecretStore_Expecter) Delete(domain any, key any) *MockDomainSecretStore_Delete_Call {
 	return &MockDomainSecretStore_Delete_Call{Call: _e.mock.On("Delete", domain, key)}
 }
 
@@ -118,7 +118,7 @@ type MockDomainSecretStore_DeleteAttachment_Call struct {
 // DeleteAttachment is a helper method to define mock.On call
 //   - containerName string
 //   - key string
-func (_e *MockDomainSecretStore_Expecter) DeleteAttachment(containerName interface{}, key interface{}) *MockDomainSecretStore_DeleteAttachment_Call {
+func (_e *MockDomainSecretStore_Expecter) DeleteAttachment(containerName any, key any) *MockDomainSecretStore_DeleteAttachment_Call {
 	return &MockDomainSecretStore_DeleteAttachment_Call{Call: _e.mock.On("DeleteAttachment", containerName, key)}
 }
 
@@ -185,7 +185,7 @@ type MockDomainSecretStore_GetAll_Call struct {
 
 // GetAll is a helper method to define mock.On call
 //   - domain string
-func (_e *MockDomainSecretStore_Expecter) GetAll(domain interface{}) *MockDomainSecretStore_GetAll_Call {
+func (_e *MockDomainSecretStore_Expecter) GetAll(domain any) *MockDomainSecretStore_GetAll_Call {
 	return &MockDomainSecretStore_GetAll_Call{Call: _e.mock.On("GetAll", domain)}
 }
 
@@ -247,7 +247,7 @@ type MockDomainSecretStore_GetAllAttachment_Call struct {
 
 // GetAllAttachment is a helper method to define mock.On call
 //   - containerName string
-func (_e *MockDomainSecretStore_Expecter) GetAllAttachment(containerName interface{}) *MockDomainSecretStore_GetAllAttachment_Call {
+func (_e *MockDomainSecretStore_Expecter) GetAllAttachment(containerName any) *MockDomainSecretStore_GetAllAttachment_Call {
 	return &MockDomainSecretStore_GetAllAttachment_Call{Call: _e.mock.On("GetAllAttachment", containerName)}
 }
 
@@ -309,7 +309,7 @@ type MockDomainSecretStore_ListAttachmentKeys_Call struct {
 
 // ListAttachmentKeys is a helper method to define mock.On call
 //   - domain string
-func (_e *MockDomainSecretStore_Expecter) ListAttachmentKeys(domain interface{}) *MockDomainSecretStore_ListAttachmentKeys_Call {
+func (_e *MockDomainSecretStore_Expecter) ListAttachmentKeys(domain any) *MockDomainSecretStore_ListAttachmentKeys_Call {
 	return &MockDomainSecretStore_ListAttachmentKeys_Call{Call: _e.mock.On("ListAttachmentKeys", domain)}
 }
 
@@ -371,7 +371,7 @@ type MockDomainSecretStore_ListKeys_Call struct {
 
 // ListKeys is a helper method to define mock.On call
 //   - domain string
-func (_e *MockDomainSecretStore_Expecter) ListKeys(domain interface{}) *MockDomainSecretStore_ListKeys_Call {
+func (_e *MockDomainSecretStore_Expecter) ListKeys(domain any) *MockDomainSecretStore_ListKeys_Call {
 	return &MockDomainSecretStore_ListKeys_Call{Call: _e.mock.On("ListKeys", domain)}
 }
 
@@ -423,7 +423,7 @@ type MockDomainSecretStore_Set_Call struct {
 // Set is a helper method to define mock.On call
 //   - domain string
 //   - secrets map[string]string
-func (_e *MockDomainSecretStore_Expecter) Set(domain interface{}, secrets interface{}) *MockDomainSecretStore_Set_Call {
+func (_e *MockDomainSecretStore_Expecter) Set(domain any, secrets any) *MockDomainSecretStore_Set_Call {
 	return &MockDomainSecretStore_Set_Call{Call: _e.mock.On("Set", domain, secrets)}
 }
 
@@ -480,7 +480,7 @@ type MockDomainSecretStore_SetAttachment_Call struct {
 // SetAttachment is a helper method to define mock.On call
 //   - containerName string
 //   - secrets map[string]string
-func (_e *MockDomainSecretStore_Expecter) SetAttachment(containerName interface{}, secrets interface{}) *MockDomainSecretStore_SetAttachment_Call {
+func (_e *MockDomainSecretStore_Expecter) SetAttachment(containerName any, secrets any) *MockDomainSecretStore_SetAttachment_Call {
 	return &MockDomainSecretStore_SetAttachment_Call{Call: _e.mock.On("SetAttachment", containerName, secrets)}
 }
 

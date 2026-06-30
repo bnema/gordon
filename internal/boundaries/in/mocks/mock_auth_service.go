@@ -73,7 +73,7 @@ type MockAuthService_ExtendToken_Call struct {
 // ExtendToken is a helper method to define mock.On call
 //   - ctx context.Context
 //   - tokenString string
-func (_e *MockAuthService_Expecter) ExtendToken(ctx interface{}, tokenString interface{}) *MockAuthService_ExtendToken_Call {
+func (_e *MockAuthService_Expecter) ExtendToken(ctx any, tokenString any) *MockAuthService_ExtendToken_Call {
 	return &MockAuthService_ExtendToken_Call{Call: _e.mock.On("ExtendToken", ctx, tokenString)}
 }
 
@@ -141,7 +141,7 @@ type MockAuthService_GenerateAccessToken_Call struct {
 //   - subject string
 //   - scopes []string
 //   - expiry time.Duration
-func (_e *MockAuthService_Expecter) GenerateAccessToken(ctx interface{}, subject interface{}, scopes interface{}, expiry interface{}) *MockAuthService_GenerateAccessToken_Call {
+func (_e *MockAuthService_Expecter) GenerateAccessToken(ctx any, subject any, scopes any, expiry any) *MockAuthService_GenerateAccessToken_Call {
 	return &MockAuthService_GenerateAccessToken_Call{Call: _e.mock.On("GenerateAccessToken", ctx, subject, scopes, expiry)}
 }
 
@@ -219,7 +219,7 @@ type MockAuthService_GenerateToken_Call struct {
 //   - subject string
 //   - scopes []string
 //   - expiry time.Duration
-func (_e *MockAuthService_Expecter) GenerateToken(ctx interface{}, subject interface{}, scopes interface{}, expiry interface{}) *MockAuthService_GenerateToken_Call {
+func (_e *MockAuthService_Expecter) GenerateToken(ctx any, subject any, scopes any, expiry any) *MockAuthService_GenerateToken_Call {
 	return &MockAuthService_GenerateToken_Call{Call: _e.mock.On("GenerateToken", ctx, subject, scopes, expiry)}
 }
 
@@ -340,7 +340,7 @@ type MockAuthService_GetAuthStatus_Call struct {
 
 // GetAuthStatus is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockAuthService_Expecter) GetAuthStatus(ctx interface{}) *MockAuthService_GetAuthStatus_Call {
+func (_e *MockAuthService_Expecter) GetAuthStatus(ctx any) *MockAuthService_GetAuthStatus_Call {
 	return &MockAuthService_GetAuthStatus_Call{Call: _e.mock.On("GetAuthStatus", ctx)}
 }
 
@@ -490,7 +490,7 @@ type MockAuthService_ListTokens_Call struct {
 
 // ListTokens is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockAuthService_Expecter) ListTokens(ctx interface{}) *MockAuthService_ListTokens_Call {
+func (_e *MockAuthService_Expecter) ListTokens(ctx any) *MockAuthService_ListTokens_Call {
 	return &MockAuthService_ListTokens_Call{Call: _e.mock.On("ListTokens", ctx)}
 }
 
@@ -550,7 +550,7 @@ type MockAuthService_RevokeAllTokens_Call struct {
 
 // RevokeAllTokens is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockAuthService_Expecter) RevokeAllTokens(ctx interface{}) *MockAuthService_RevokeAllTokens_Call {
+func (_e *MockAuthService_Expecter) RevokeAllTokens(ctx any) *MockAuthService_RevokeAllTokens_Call {
 	return &MockAuthService_RevokeAllTokens_Call{Call: _e.mock.On("RevokeAllTokens", ctx)}
 }
 
@@ -602,7 +602,7 @@ type MockAuthService_RevokeToken_Call struct {
 // RevokeToken is a helper method to define mock.On call
 //   - ctx context.Context
 //   - tokenID string
-func (_e *MockAuthService_Expecter) RevokeToken(ctx interface{}, tokenID interface{}) *MockAuthService_RevokeToken_Call {
+func (_e *MockAuthService_Expecter) RevokeToken(ctx any, tokenID any) *MockAuthService_RevokeToken_Call {
 	return &MockAuthService_RevokeToken_Call{Call: _e.mock.On("RevokeToken", ctx, tokenID)}
 }
 
@@ -670,7 +670,7 @@ type MockAuthService_ValidateToken_Call struct {
 // ValidateToken is a helper method to define mock.On call
 //   - ctx context.Context
 //   - tokenString string
-func (_e *MockAuthService_Expecter) ValidateToken(ctx interface{}, tokenString interface{}) *MockAuthService_ValidateToken_Call {
+func (_e *MockAuthService_Expecter) ValidateToken(ctx any, tokenString any) *MockAuthService_ValidateToken_Call {
 	return &MockAuthService_ValidateToken_Call{Call: _e.mock.On("ValidateToken", ctx, tokenString)}
 }
 

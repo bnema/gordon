@@ -75,7 +75,7 @@ type MockBackupService_DetectDatabases_Call struct {
 // DetectDatabases is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domainName string
-func (_e *MockBackupService_Expecter) DetectDatabases(ctx interface{}, domainName interface{}) *MockBackupService_DetectDatabases_Call {
+func (_e *MockBackupService_Expecter) DetectDatabases(ctx any, domainName any) *MockBackupService_DetectDatabases_Call {
 	return &MockBackupService_DetectDatabases_Call{Call: _e.mock.On("DetectDatabases", ctx, domainName)}
 }
 
@@ -143,7 +143,7 @@ type MockBackupService_ListBackups_Call struct {
 // ListBackups is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domainName string
-func (_e *MockBackupService_Expecter) ListBackups(ctx interface{}, domainName interface{}) *MockBackupService_ListBackups_Call {
+func (_e *MockBackupService_Expecter) ListBackups(ctx any, domainName any) *MockBackupService_ListBackups_Call {
 	return &MockBackupService_ListBackups_Call{Call: _e.mock.On("ListBackups", ctx, domainName)}
 }
 
@@ -201,7 +201,7 @@ type MockBackupService_Restore_Call struct {
 //   - ctx context.Context
 //   - domainName string
 //   - backupID string
-func (_e *MockBackupService_Expecter) Restore(ctx interface{}, domainName interface{}, backupID interface{}) *MockBackupService_Restore_Call {
+func (_e *MockBackupService_Expecter) Restore(ctx any, domainName any, backupID any) *MockBackupService_Restore_Call {
 	return &MockBackupService_Restore_Call{Call: _e.mock.On("Restore", ctx, domainName, backupID)}
 }
 
@@ -264,7 +264,7 @@ type MockBackupService_RestorePITR_Call struct {
 //   - ctx context.Context
 //   - domainName string
 //   - targetTime time.Time
-func (_e *MockBackupService_Expecter) RestorePITR(ctx interface{}, domainName interface{}, targetTime interface{}) *MockBackupService_RestorePITR_Call {
+func (_e *MockBackupService_Expecter) RestorePITR(ctx any, domainName any, targetTime any) *MockBackupService_RestorePITR_Call {
 	return &MockBackupService_RestorePITR_Call{Call: _e.mock.On("RestorePITR", ctx, domainName, targetTime)}
 }
 
@@ -338,7 +338,7 @@ type MockBackupService_RunBackup_Call struct {
 //   - ctx context.Context
 //   - domainName string
 //   - dbName string
-func (_e *MockBackupService_Expecter) RunBackup(ctx interface{}, domainName interface{}, dbName interface{}) *MockBackupService_RunBackup_Call {
+func (_e *MockBackupService_Expecter) RunBackup(ctx any, domainName any, dbName any) *MockBackupService_RunBackup_Call {
 	return &MockBackupService_RunBackup_Call{Call: _e.mock.On("RunBackup", ctx, domainName, dbName)}
 }
 
@@ -410,7 +410,7 @@ type MockBackupService_Status_Call struct {
 
 // Status is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockBackupService_Expecter) Status(ctx interface{}) *MockBackupService_Status_Call {
+func (_e *MockBackupService_Expecter) Status(ctx any) *MockBackupService_Status_Call {
 	return &MockBackupService_Status_Call{Call: _e.mock.On("Status", ctx)}
 }
 

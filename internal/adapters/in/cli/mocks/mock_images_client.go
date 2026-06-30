@@ -73,7 +73,7 @@ type MockimagesClient_ListImages_Call struct {
 
 // ListImages is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockimagesClient_Expecter) ListImages(ctx interface{}) *MockimagesClient_ListImages_Call {
+func (_e *MockimagesClient_Expecter) ListImages(ctx any) *MockimagesClient_ListImages_Call {
 	return &MockimagesClient_ListImages_Call{Call: _e.mock.On("ListImages", ctx)}
 }
 
@@ -136,7 +136,7 @@ type MockimagesClient_PruneImages_Call struct {
 // PruneImages is a helper method to define mock.On call
 //   - ctx context.Context
 //   - req dto.ImagePruneRequest
-func (_e *MockimagesClient_Expecter) PruneImages(ctx interface{}, req interface{}) *MockimagesClient_PruneImages_Call {
+func (_e *MockimagesClient_Expecter) PruneImages(ctx any, req any) *MockimagesClient_PruneImages_Call {
 	return &MockimagesClient_PruneImages_Call{Call: _e.mock.On("PruneImages", ctx, req)}
 }
 

@@ -62,7 +62,7 @@ type MockEnvLoader_CreateEnvFile_Call struct {
 // CreateEnvFile is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain string
-func (_e *MockEnvLoader_Expecter) CreateEnvFile(ctx interface{}, domain interface{}) *MockEnvLoader_CreateEnvFile_Call {
+func (_e *MockEnvLoader_Expecter) CreateEnvFile(ctx any, domain any) *MockEnvLoader_CreateEnvFile_Call {
 	return &MockEnvLoader_CreateEnvFile_Call{Call: _e.mock.On("CreateEnvFile", ctx, domain)}
 }
 
@@ -127,7 +127,7 @@ type MockEnvLoader_EnvFileExists_Call struct {
 
 // EnvFileExists is a helper method to define mock.On call
 //   - domain string
-func (_e *MockEnvLoader_Expecter) EnvFileExists(domain interface{}) *MockEnvLoader_EnvFileExists_Call {
+func (_e *MockEnvLoader_Expecter) EnvFileExists(domain any) *MockEnvLoader_EnvFileExists_Call {
 	return &MockEnvLoader_EnvFileExists_Call{Call: _e.mock.On("EnvFileExists", domain)}
 }
 
@@ -190,7 +190,7 @@ type MockEnvLoader_LoadEnv_Call struct {
 // LoadEnv is a helper method to define mock.On call
 //   - ctx context.Context
 //   - domain string
-func (_e *MockEnvLoader_Expecter) LoadEnv(ctx interface{}, domain interface{}) *MockEnvLoader_LoadEnv_Call {
+func (_e *MockEnvLoader_Expecter) LoadEnv(ctx any, domain any) *MockEnvLoader_LoadEnv_Call {
 	return &MockEnvLoader_LoadEnv_Call{Call: _e.mock.On("LoadEnv", ctx, domain)}
 }
 

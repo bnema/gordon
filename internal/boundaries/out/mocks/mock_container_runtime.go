@@ -66,7 +66,7 @@ type MockContainerRuntime_ConnectContainerToNetwork_Call struct {
 //   - ctx context.Context
 //   - containerName string
 //   - networkName string
-func (_e *MockContainerRuntime_Expecter) ConnectContainerToNetwork(ctx interface{}, containerName interface{}, networkName interface{}) *MockContainerRuntime_ConnectContainerToNetwork_Call {
+func (_e *MockContainerRuntime_Expecter) ConnectContainerToNetwork(ctx any, containerName any, networkName any) *MockContainerRuntime_ConnectContainerToNetwork_Call {
 	return &MockContainerRuntime_ConnectContainerToNetwork_Call{Call: _e.mock.On("ConnectContainerToNetwork", ctx, containerName, networkName)}
 }
 
@@ -140,7 +140,7 @@ type MockContainerRuntime_CopyFromContainer_Call struct {
 //   - ctx context.Context
 //   - containerID string
 //   - srcPath string
-func (_e *MockContainerRuntime_Expecter) CopyFromContainer(ctx interface{}, containerID interface{}, srcPath interface{}) *MockContainerRuntime_CopyFromContainer_Call {
+func (_e *MockContainerRuntime_Expecter) CopyFromContainer(ctx any, containerID any, srcPath any) *MockContainerRuntime_CopyFromContainer_Call {
 	return &MockContainerRuntime_CopyFromContainer_Call{Call: _e.mock.On("CopyFromContainer", ctx, containerID, srcPath)}
 }
 
@@ -213,7 +213,7 @@ type MockContainerRuntime_CreateContainer_Call struct {
 // CreateContainer is a helper method to define mock.On call
 //   - ctx context.Context
 //   - config *domain.ContainerConfig
-func (_e *MockContainerRuntime_Expecter) CreateContainer(ctx interface{}, config interface{}) *MockContainerRuntime_CreateContainer_Call {
+func (_e *MockContainerRuntime_Expecter) CreateContainer(ctx any, config any) *MockContainerRuntime_CreateContainer_Call {
 	return &MockContainerRuntime_CreateContainer_Call{Call: _e.mock.On("CreateContainer", ctx, config)}
 }
 
@@ -271,7 +271,7 @@ type MockContainerRuntime_CreateNetwork_Call struct {
 //   - ctx context.Context
 //   - name string
 //   - config domain.NetworkConfig
-func (_e *MockContainerRuntime_Expecter) CreateNetwork(ctx interface{}, name interface{}, config interface{}) *MockContainerRuntime_CreateNetwork_Call {
+func (_e *MockContainerRuntime_Expecter) CreateNetwork(ctx any, name any, config any) *MockContainerRuntime_CreateNetwork_Call {
 	return &MockContainerRuntime_CreateNetwork_Call{Call: _e.mock.On("CreateNetwork", ctx, name, config)}
 }
 
@@ -333,7 +333,7 @@ type MockContainerRuntime_CreateVolume_Call struct {
 // CreateVolume is a helper method to define mock.On call
 //   - ctx context.Context
 //   - volumeName string
-func (_e *MockContainerRuntime_Expecter) CreateVolume(ctx interface{}, volumeName interface{}) *MockContainerRuntime_CreateVolume_Call {
+func (_e *MockContainerRuntime_Expecter) CreateVolume(ctx any, volumeName any) *MockContainerRuntime_CreateVolume_Call {
 	return &MockContainerRuntime_CreateVolume_Call{Call: _e.mock.On("CreateVolume", ctx, volumeName)}
 }
 
@@ -391,7 +391,7 @@ type MockContainerRuntime_DisconnectContainerFromNetwork_Call struct {
 //   - ctx context.Context
 //   - containerName string
 //   - networkName string
-func (_e *MockContainerRuntime_Expecter) DisconnectContainerFromNetwork(ctx interface{}, containerName interface{}, networkName interface{}) *MockContainerRuntime_DisconnectContainerFromNetwork_Call {
+func (_e *MockContainerRuntime_Expecter) DisconnectContainerFromNetwork(ctx any, containerName any, networkName any) *MockContainerRuntime_DisconnectContainerFromNetwork_Call {
 	return &MockContainerRuntime_DisconnectContainerFromNetwork_Call{Call: _e.mock.On("DisconnectContainerFromNetwork", ctx, containerName, networkName)}
 }
 
@@ -465,7 +465,7 @@ type MockContainerRuntime_ExecInContainer_Call struct {
 //   - ctx context.Context
 //   - containerID string
 //   - cmd []string
-func (_e *MockContainerRuntime_Expecter) ExecInContainer(ctx interface{}, containerID interface{}, cmd interface{}) *MockContainerRuntime_ExecInContainer_Call {
+func (_e *MockContainerRuntime_Expecter) ExecInContainer(ctx any, containerID any, cmd any) *MockContainerRuntime_ExecInContainer_Call {
 	return &MockContainerRuntime_ExecInContainer_Call{Call: _e.mock.On("ExecInContainer", ctx, containerID, cmd)}
 }
 
@@ -538,7 +538,7 @@ type MockContainerRuntime_GetContainerExposedPorts_Call struct {
 // GetContainerExposedPorts is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) GetContainerExposedPorts(ctx interface{}, containerID interface{}) *MockContainerRuntime_GetContainerExposedPorts_Call {
+func (_e *MockContainerRuntime_Expecter) GetContainerExposedPorts(ctx any, containerID any) *MockContainerRuntime_GetContainerExposedPorts_Call {
 	return &MockContainerRuntime_GetContainerExposedPorts_Call{Call: _e.mock.On("GetContainerExposedPorts", ctx, containerID)}
 }
 
@@ -610,7 +610,7 @@ type MockContainerRuntime_GetContainerHealthStatus_Call struct {
 // GetContainerHealthStatus is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) GetContainerHealthStatus(ctx interface{}, containerID interface{}) *MockContainerRuntime_GetContainerHealthStatus_Call {
+func (_e *MockContainerRuntime_Expecter) GetContainerHealthStatus(ctx any, containerID any) *MockContainerRuntime_GetContainerHealthStatus_Call {
 	return &MockContainerRuntime_GetContainerHealthStatus_Call{Call: _e.mock.On("GetContainerHealthStatus", ctx, containerID)}
 }
 
@@ -679,7 +679,7 @@ type MockContainerRuntime_GetContainerLogs_Call struct {
 //   - ctx context.Context
 //   - containerID string
 //   - follow bool
-func (_e *MockContainerRuntime_Expecter) GetContainerLogs(ctx interface{}, containerID interface{}, follow interface{}) *MockContainerRuntime_GetContainerLogs_Call {
+func (_e *MockContainerRuntime_Expecter) GetContainerLogs(ctx any, containerID any, follow any) *MockContainerRuntime_GetContainerLogs_Call {
 	return &MockContainerRuntime_GetContainerLogs_Call{Call: _e.mock.On("GetContainerLogs", ctx, containerID, follow)}
 }
 
@@ -750,7 +750,7 @@ type MockContainerRuntime_GetContainerNetwork_Call struct {
 // GetContainerNetwork is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) GetContainerNetwork(ctx interface{}, containerID interface{}) *MockContainerRuntime_GetContainerNetwork_Call {
+func (_e *MockContainerRuntime_Expecter) GetContainerNetwork(ctx any, containerID any) *MockContainerRuntime_GetContainerNetwork_Call {
 	return &MockContainerRuntime_GetContainerNetwork_Call{Call: _e.mock.On("GetContainerNetwork", ctx, containerID)}
 }
 
@@ -822,7 +822,7 @@ type MockContainerRuntime_GetContainerNetworkInfo_Call struct {
 // GetContainerNetworkInfo is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) GetContainerNetworkInfo(ctx interface{}, containerID interface{}) *MockContainerRuntime_GetContainerNetworkInfo_Call {
+func (_e *MockContainerRuntime_Expecter) GetContainerNetworkInfo(ctx any, containerID any) *MockContainerRuntime_GetContainerNetworkInfo_Call {
 	return &MockContainerRuntime_GetContainerNetworkInfo_Call{Call: _e.mock.On("GetContainerNetworkInfo", ctx, containerID)}
 }
 
@@ -889,7 +889,7 @@ type MockContainerRuntime_GetContainerPort_Call struct {
 //   - ctx context.Context
 //   - containerID string
 //   - internalPort int
-func (_e *MockContainerRuntime_Expecter) GetContainerPort(ctx interface{}, containerID interface{}, internalPort interface{}) *MockContainerRuntime_GetContainerPort_Call {
+func (_e *MockContainerRuntime_Expecter) GetContainerPort(ctx any, containerID any, internalPort any) *MockContainerRuntime_GetContainerPort_Call {
 	return &MockContainerRuntime_GetContainerPort_Call{Call: _e.mock.On("GetContainerPort", ctx, containerID, internalPort)}
 }
 
@@ -962,7 +962,7 @@ type MockContainerRuntime_GetImageExposedPorts_Call struct {
 // GetImageExposedPorts is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageRef string
-func (_e *MockContainerRuntime_Expecter) GetImageExposedPorts(ctx interface{}, imageRef interface{}) *MockContainerRuntime_GetImageExposedPorts_Call {
+func (_e *MockContainerRuntime_Expecter) GetImageExposedPorts(ctx any, imageRef any) *MockContainerRuntime_GetImageExposedPorts_Call {
 	return &MockContainerRuntime_GetImageExposedPorts_Call{Call: _e.mock.On("GetImageExposedPorts", ctx, imageRef)}
 }
 
@@ -1028,7 +1028,7 @@ type MockContainerRuntime_GetImageID_Call struct {
 // GetImageID is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageRef string
-func (_e *MockContainerRuntime_Expecter) GetImageID(ctx interface{}, imageRef interface{}) *MockContainerRuntime_GetImageID_Call {
+func (_e *MockContainerRuntime_Expecter) GetImageID(ctx any, imageRef any) *MockContainerRuntime_GetImageID_Call {
 	return &MockContainerRuntime_GetImageID_Call{Call: _e.mock.On("GetImageID", ctx, imageRef)}
 }
 
@@ -1096,7 +1096,7 @@ type MockContainerRuntime_GetImageLabels_Call struct {
 // GetImageLabels is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageRef string
-func (_e *MockContainerRuntime_Expecter) GetImageLabels(ctx interface{}, imageRef interface{}) *MockContainerRuntime_GetImageLabels_Call {
+func (_e *MockContainerRuntime_Expecter) GetImageLabels(ctx any, imageRef any) *MockContainerRuntime_GetImageLabels_Call {
 	return &MockContainerRuntime_GetImageLabels_Call{Call: _e.mock.On("GetImageLabels", ctx, imageRef)}
 }
 
@@ -1164,7 +1164,7 @@ type MockContainerRuntime_InspectContainer_Call struct {
 // InspectContainer is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) InspectContainer(ctx interface{}, containerID interface{}) *MockContainerRuntime_InspectContainer_Call {
+func (_e *MockContainerRuntime_Expecter) InspectContainer(ctx any, containerID any) *MockContainerRuntime_InspectContainer_Call {
 	return &MockContainerRuntime_InspectContainer_Call{Call: _e.mock.On("InspectContainer", ctx, containerID)}
 }
 
@@ -1232,7 +1232,7 @@ type MockContainerRuntime_InspectImageEnv_Call struct {
 // InspectImageEnv is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageRef string
-func (_e *MockContainerRuntime_Expecter) InspectImageEnv(ctx interface{}, imageRef interface{}) *MockContainerRuntime_InspectImageEnv_Call {
+func (_e *MockContainerRuntime_Expecter) InspectImageEnv(ctx any, imageRef any) *MockContainerRuntime_InspectImageEnv_Call {
 	return &MockContainerRuntime_InspectImageEnv_Call{Call: _e.mock.On("InspectImageEnv", ctx, imageRef)}
 }
 
@@ -1300,7 +1300,7 @@ type MockContainerRuntime_InspectImageVolumes_Call struct {
 // InspectImageVolumes is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageRef string
-func (_e *MockContainerRuntime_Expecter) InspectImageVolumes(ctx interface{}, imageRef interface{}) *MockContainerRuntime_InspectImageVolumes_Call {
+func (_e *MockContainerRuntime_Expecter) InspectImageVolumes(ctx any, imageRef any) *MockContainerRuntime_InspectImageVolumes_Call {
 	return &MockContainerRuntime_InspectImageVolumes_Call{Call: _e.mock.On("InspectImageVolumes", ctx, imageRef)}
 }
 
@@ -1366,7 +1366,7 @@ type MockContainerRuntime_IsContainerRunning_Call struct {
 // IsContainerRunning is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) IsContainerRunning(ctx interface{}, containerID interface{}) *MockContainerRuntime_IsContainerRunning_Call {
+func (_e *MockContainerRuntime_Expecter) IsContainerRunning(ctx any, containerID any) *MockContainerRuntime_IsContainerRunning_Call {
 	return &MockContainerRuntime_IsContainerRunning_Call{Call: _e.mock.On("IsContainerRunning", ctx, containerID)}
 }
 
@@ -1434,7 +1434,7 @@ type MockContainerRuntime_ListContainers_Call struct {
 // ListContainers is a helper method to define mock.On call
 //   - ctx context.Context
 //   - all bool
-func (_e *MockContainerRuntime_Expecter) ListContainers(ctx interface{}, all interface{}) *MockContainerRuntime_ListContainers_Call {
+func (_e *MockContainerRuntime_Expecter) ListContainers(ctx any, all any) *MockContainerRuntime_ListContainers_Call {
 	return &MockContainerRuntime_ListContainers_Call{Call: _e.mock.On("ListContainers", ctx, all)}
 }
 
@@ -1501,7 +1501,7 @@ type MockContainerRuntime_ListImages_Call struct {
 
 // ListImages is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerRuntime_Expecter) ListImages(ctx interface{}) *MockContainerRuntime_ListImages_Call {
+func (_e *MockContainerRuntime_Expecter) ListImages(ctx any) *MockContainerRuntime_ListImages_Call {
 	return &MockContainerRuntime_ListImages_Call{Call: _e.mock.On("ListImages", ctx)}
 }
 
@@ -1563,7 +1563,7 @@ type MockContainerRuntime_ListNetworks_Call struct {
 
 // ListNetworks is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerRuntime_Expecter) ListNetworks(ctx interface{}) *MockContainerRuntime_ListNetworks_Call {
+func (_e *MockContainerRuntime_Expecter) ListNetworks(ctx any) *MockContainerRuntime_ListNetworks_Call {
 	return &MockContainerRuntime_ListNetworks_Call{Call: _e.mock.On("ListNetworks", ctx)}
 }
 
@@ -1625,7 +1625,7 @@ type MockContainerRuntime_ListVolumes_Call struct {
 
 // ListVolumes is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerRuntime_Expecter) ListVolumes(ctx interface{}) *MockContainerRuntime_ListVolumes_Call {
+func (_e *MockContainerRuntime_Expecter) ListVolumes(ctx any) *MockContainerRuntime_ListVolumes_Call {
 	return &MockContainerRuntime_ListVolumes_Call{Call: _e.mock.On("ListVolumes", ctx)}
 }
 
@@ -1686,7 +1686,7 @@ type MockContainerRuntime_NetworkExists_Call struct {
 // NetworkExists is a helper method to define mock.On call
 //   - ctx context.Context
 //   - name string
-func (_e *MockContainerRuntime_Expecter) NetworkExists(ctx interface{}, name interface{}) *MockContainerRuntime_NetworkExists_Call {
+func (_e *MockContainerRuntime_Expecter) NetworkExists(ctx any, name any) *MockContainerRuntime_NetworkExists_Call {
 	return &MockContainerRuntime_NetworkExists_Call{Call: _e.mock.On("NetworkExists", ctx, name)}
 }
 
@@ -1742,7 +1742,7 @@ type MockContainerRuntime_Ping_Call struct {
 
 // Ping is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerRuntime_Expecter) Ping(ctx interface{}) *MockContainerRuntime_Ping_Call {
+func (_e *MockContainerRuntime_Expecter) Ping(ctx any) *MockContainerRuntime_Ping_Call {
 	return &MockContainerRuntime_Ping_Call{Call: _e.mock.On("Ping", ctx)}
 }
 
@@ -1794,7 +1794,7 @@ type MockContainerRuntime_PullImage_Call struct {
 // PullImage is a helper method to define mock.On call
 //   - ctx context.Context
 //   - image string
-func (_e *MockContainerRuntime_Expecter) PullImage(ctx interface{}, image interface{}) *MockContainerRuntime_PullImage_Call {
+func (_e *MockContainerRuntime_Expecter) PullImage(ctx any, image any) *MockContainerRuntime_PullImage_Call {
 	return &MockContainerRuntime_PullImage_Call{Call: _e.mock.On("PullImage", ctx, image)}
 }
 
@@ -1853,7 +1853,7 @@ type MockContainerRuntime_PullImageWithAuth_Call struct {
 //   - image string
 //   - username string
 //   - password string
-func (_e *MockContainerRuntime_Expecter) PullImageWithAuth(ctx interface{}, image interface{}, username interface{}, password interface{}) *MockContainerRuntime_PullImageWithAuth_Call {
+func (_e *MockContainerRuntime_Expecter) PullImageWithAuth(ctx any, image any, username any, password any) *MockContainerRuntime_PullImageWithAuth_Call {
 	return &MockContainerRuntime_PullImageWithAuth_Call{Call: _e.mock.On("PullImageWithAuth", ctx, image, username, password)}
 }
 
@@ -1921,7 +1921,7 @@ type MockContainerRuntime_RemoveContainer_Call struct {
 //   - ctx context.Context
 //   - containerID string
 //   - force bool
-func (_e *MockContainerRuntime_Expecter) RemoveContainer(ctx interface{}, containerID interface{}, force interface{}) *MockContainerRuntime_RemoveContainer_Call {
+func (_e *MockContainerRuntime_Expecter) RemoveContainer(ctx any, containerID any, force any) *MockContainerRuntime_RemoveContainer_Call {
 	return &MockContainerRuntime_RemoveContainer_Call{Call: _e.mock.On("RemoveContainer", ctx, containerID, force)}
 }
 
@@ -1984,7 +1984,7 @@ type MockContainerRuntime_RemoveImage_Call struct {
 //   - ctx context.Context
 //   - image string
 //   - force bool
-func (_e *MockContainerRuntime_Expecter) RemoveImage(ctx interface{}, image interface{}, force interface{}) *MockContainerRuntime_RemoveImage_Call {
+func (_e *MockContainerRuntime_Expecter) RemoveImage(ctx any, image any, force any) *MockContainerRuntime_RemoveImage_Call {
 	return &MockContainerRuntime_RemoveImage_Call{Call: _e.mock.On("RemoveImage", ctx, image, force)}
 }
 
@@ -2046,7 +2046,7 @@ type MockContainerRuntime_RemoveNetwork_Call struct {
 // RemoveNetwork is a helper method to define mock.On call
 //   - ctx context.Context
 //   - name string
-func (_e *MockContainerRuntime_Expecter) RemoveNetwork(ctx interface{}, name interface{}) *MockContainerRuntime_RemoveNetwork_Call {
+func (_e *MockContainerRuntime_Expecter) RemoveNetwork(ctx any, name any) *MockContainerRuntime_RemoveNetwork_Call {
 	return &MockContainerRuntime_RemoveNetwork_Call{Call: _e.mock.On("RemoveNetwork", ctx, name)}
 }
 
@@ -2104,7 +2104,7 @@ type MockContainerRuntime_RemoveVolume_Call struct {
 //   - ctx context.Context
 //   - volumeName string
 //   - force bool
-func (_e *MockContainerRuntime_Expecter) RemoveVolume(ctx interface{}, volumeName interface{}, force interface{}) *MockContainerRuntime_RemoveVolume_Call {
+func (_e *MockContainerRuntime_Expecter) RemoveVolume(ctx any, volumeName any, force any) *MockContainerRuntime_RemoveVolume_Call {
 	return &MockContainerRuntime_RemoveVolume_Call{Call: _e.mock.On("RemoveVolume", ctx, volumeName, force)}
 }
 
@@ -2167,7 +2167,7 @@ type MockContainerRuntime_RenameContainer_Call struct {
 //   - ctx context.Context
 //   - containerID string
 //   - newName string
-func (_e *MockContainerRuntime_Expecter) RenameContainer(ctx interface{}, containerID interface{}, newName interface{}) *MockContainerRuntime_RenameContainer_Call {
+func (_e *MockContainerRuntime_Expecter) RenameContainer(ctx any, containerID any, newName any) *MockContainerRuntime_RenameContainer_Call {
 	return &MockContainerRuntime_RenameContainer_Call{Call: _e.mock.On("RenameContainer", ctx, containerID, newName)}
 }
 
@@ -2229,7 +2229,7 @@ type MockContainerRuntime_RestartContainer_Call struct {
 // RestartContainer is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) RestartContainer(ctx interface{}, containerID interface{}) *MockContainerRuntime_RestartContainer_Call {
+func (_e *MockContainerRuntime_Expecter) RestartContainer(ctx any, containerID any) *MockContainerRuntime_RestartContainer_Call {
 	return &MockContainerRuntime_RestartContainer_Call{Call: _e.mock.On("RestartContainer", ctx, containerID)}
 }
 
@@ -2286,7 +2286,7 @@ type MockContainerRuntime_StartContainer_Call struct {
 // StartContainer is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) StartContainer(ctx interface{}, containerID interface{}) *MockContainerRuntime_StartContainer_Call {
+func (_e *MockContainerRuntime_Expecter) StartContainer(ctx any, containerID any) *MockContainerRuntime_StartContainer_Call {
 	return &MockContainerRuntime_StartContainer_Call{Call: _e.mock.On("StartContainer", ctx, containerID)}
 }
 
@@ -2343,7 +2343,7 @@ type MockContainerRuntime_StopContainer_Call struct {
 // StopContainer is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) StopContainer(ctx interface{}, containerID interface{}) *MockContainerRuntime_StopContainer_Call {
+func (_e *MockContainerRuntime_Expecter) StopContainer(ctx any, containerID any) *MockContainerRuntime_StopContainer_Call {
 	return &MockContainerRuntime_StopContainer_Call{Call: _e.mock.On("StopContainer", ctx, containerID)}
 }
 
@@ -2401,7 +2401,7 @@ type MockContainerRuntime_TagImage_Call struct {
 //   - ctx context.Context
 //   - sourceRef string
 //   - targetRef string
-func (_e *MockContainerRuntime_Expecter) TagImage(ctx interface{}, sourceRef interface{}, targetRef interface{}) *MockContainerRuntime_TagImage_Call {
+func (_e *MockContainerRuntime_Expecter) TagImage(ctx any, sourceRef any, targetRef any) *MockContainerRuntime_TagImage_Call {
 	return &MockContainerRuntime_TagImage_Call{Call: _e.mock.On("TagImage", ctx, sourceRef, targetRef)}
 }
 
@@ -2463,7 +2463,7 @@ type MockContainerRuntime_UntagImage_Call struct {
 // UntagImage is a helper method to define mock.On call
 //   - ctx context.Context
 //   - imageRef string
-func (_e *MockContainerRuntime_Expecter) UntagImage(ctx interface{}, imageRef interface{}) *MockContainerRuntime_UntagImage_Call {
+func (_e *MockContainerRuntime_Expecter) UntagImage(ctx any, imageRef any) *MockContainerRuntime_UntagImage_Call {
 	return &MockContainerRuntime_UntagImage_Call{Call: _e.mock.On("UntagImage", ctx, imageRef)}
 }
 
@@ -2528,7 +2528,7 @@ type MockContainerRuntime_Version_Call struct {
 
 // Version is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockContainerRuntime_Expecter) Version(ctx interface{}) *MockContainerRuntime_Version_Call {
+func (_e *MockContainerRuntime_Expecter) Version(ctx any) *MockContainerRuntime_Version_Call {
 	return &MockContainerRuntime_Version_Call{Call: _e.mock.On("Version", ctx)}
 }
 
@@ -2589,7 +2589,7 @@ type MockContainerRuntime_VolumeExists_Call struct {
 // VolumeExists is a helper method to define mock.On call
 //   - ctx context.Context
 //   - volumeName string
-func (_e *MockContainerRuntime_Expecter) VolumeExists(ctx interface{}, volumeName interface{}) *MockContainerRuntime_VolumeExists_Call {
+func (_e *MockContainerRuntime_Expecter) VolumeExists(ctx any, volumeName any) *MockContainerRuntime_VolumeExists_Call {
 	return &MockContainerRuntime_VolumeExists_Call{Call: _e.mock.On("VolumeExists", ctx, volumeName)}
 }
 

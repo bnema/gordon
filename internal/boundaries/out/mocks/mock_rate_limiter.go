@@ -62,7 +62,7 @@ type MockRateLimiter_Allow_Call struct {
 // Allow is a helper method to define mock.On call
 //   - ctx context.Context
 //   - key string
-func (_e *MockRateLimiter_Expecter) Allow(ctx interface{}, key interface{}) *MockRateLimiter_Allow_Call {
+func (_e *MockRateLimiter_Expecter) Allow(ctx any, key any) *MockRateLimiter_Allow_Call {
 	return &MockRateLimiter_Allow_Call{Call: _e.mock.On("Allow", ctx, key)}
 }
 
@@ -120,7 +120,7 @@ type MockRateLimiter_AllowN_Call struct {
 //   - ctx context.Context
 //   - key string
 //   - n int
-func (_e *MockRateLimiter_Expecter) AllowN(ctx interface{}, key interface{}, n interface{}) *MockRateLimiter_AllowN_Call {
+func (_e *MockRateLimiter_Expecter) AllowN(ctx any, key any, n any) *MockRateLimiter_AllowN_Call {
 	return &MockRateLimiter_AllowN_Call{Call: _e.mock.On("AllowN", ctx, key, n)}
 }
 

@@ -64,7 +64,7 @@ type MockHealthService_CheckAllRoutes_Call struct {
 
 // CheckAllRoutes is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockHealthService_Expecter) CheckAllRoutes(ctx interface{}) *MockHealthService_CheckAllRoutes_Call {
+func (_e *MockHealthService_Expecter) CheckAllRoutes(ctx any) *MockHealthService_CheckAllRoutes_Call {
 	return &MockHealthService_CheckAllRoutes_Call{Call: _e.mock.On("CheckAllRoutes", ctx)}
 }
 
@@ -118,7 +118,7 @@ type MockHealthService_CheckRoute_Call struct {
 // CheckRoute is a helper method to define mock.On call
 //   - ctx context.Context
 //   - route domain.Route
-func (_e *MockHealthService_Expecter) CheckRoute(ctx interface{}, route interface{}) *MockHealthService_CheckRoute_Call {
+func (_e *MockHealthService_Expecter) CheckRoute(ctx any, route any) *MockHealthService_CheckRoute_Call {
 	return &MockHealthService_CheckRoute_Call{Call: _e.mock.On("CheckRoute", ctx, route)}
 }
 
