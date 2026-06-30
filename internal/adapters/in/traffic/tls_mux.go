@@ -24,8 +24,6 @@ type tlsHTTPServers map[string]TLSHTTPServerConfig
 // SetTLSHTTPServer installs or removes the HTTPS server for a tls_mux entrypoint.
 func (m *Manager) SetTLSHTTPServer(entryPoint string, handler http.Handler, tlsConfig *tls.Config) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	current := m.loadTLSHTTPServers()
 	next := make(tlsHTTPServers, len(current)+1)
 	maps.Copy(next, current)
@@ -35,6 +33,17 @@ func (m *Manager) SetTLSHTTPServer(entryPoint string, handler http.Handler, tlsC
 		next[entryPoint] = TLSHTTPServerConfig{Handler: handler, TLSConfig: tlsConfig.Clone()}
 	}
 	m.tlsHTTPServers.Store(next)
+	runtimes := make([]*entryPointRuntime, 0, len(m.listeners))
+	for _, runtime := range m.listeners {
+		if runtime.entryPointSnapshot().Name == entryPoint {
+			runtimes = append(runtimes, runtime)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, runtime := range runtimes {
+		runtime.refreshTLSHTTPServer(entryPoint)
+	}
 }
 
 func (m *Manager) tlsHTTPServer(entryPoint string) (TLSHTTPServerConfig, bool) {
@@ -262,10 +271,12 @@ func (c replayConn) Read(p []byte) (int, error) {
 }
 
 type tlsHTTPListener struct {
-	addr  net.Addr
-	conns chan net.Conn
-	done  chan struct{}
-	once  sync.Once
+	addr   net.Addr
+	conns  chan net.Conn
+	done   chan struct{}
+	once   sync.Once
+	mu     sync.Mutex
+	closed bool
 }
 
 func newTLSHTTPListener(addr net.Addr) *tlsHTTPListener {
@@ -282,17 +293,27 @@ func (l *tlsHTTPListener) Accept() (net.Conn, error) {
 }
 
 func (l *tlsHTTPListener) Close() error {
-	l.once.Do(func() { close(l.done) })
+	l.once.Do(func() {
+		l.mu.Lock()
+		l.closed = true
+		l.mu.Unlock()
+		close(l.done)
+	})
 	return nil
 }
 
 func (l *tlsHTTPListener) Addr() net.Addr { return l.addr }
 
 func (l *tlsHTTPListener) serve(conn net.Conn) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return false
+	}
 	select {
 	case l.conns <- conn:
 		return true
-	case <-l.done:
+	default:
 		return false
 	}
 }

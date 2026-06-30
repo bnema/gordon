@@ -3292,6 +3292,14 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 	if cfg.Server.TLSPort == 0 {
 		return httpSrv, httpReady, nil, nil, nil
 	}
+	cleanupHTTP := func(err error) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if shutdownErr := httpSrv.Shutdown(shutdownCtx); shutdownErr != nil {
+			log.Error().Err(shutdownErr).Msg("failed to shut down proxy-http server during startup cleanup")
+		}
+		return httpSrv, httpReady, nil, nil, err
+	}
 
 	// Load static cert into a local slice (not tls.Config.Certificates) so the
 	// certificate selector has full control over priority ordering.
@@ -3299,7 +3307,7 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 	if cfg.Server.TLSCertFile != "" {
 		staticCert, err := tls.LoadX509KeyPair(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("load TLS keypair: %w", err)
+			return cleanupHTTP(fmt.Errorf("load TLS keypair: %w", err))
 		}
 		staticCerts = []tls.Certificate{staticCert}
 		log.Info().
@@ -3322,9 +3330,15 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 		NextProtos:     []string{"h2", "http/1.1"},
 	}
 	if trafficManager == nil {
-		return nil, nil, nil, nil, fmt.Errorf("traffic manager is required when server.tls_port is enabled")
+		return cleanupHTTP(fmt.Errorf("traffic manager is required when server.tls_port is enabled"))
 	}
 	trafficManager.SetTLSHTTPServer(traffic.DefaultTLSEntryPointName, httpsHandler, tlsConfig)
+	for name, entryPoint := range cfg.EntryPoints {
+		domainEntryPoint := domain.EntryPoint{Name: name, Protocol: entryPoint.Protocol}
+		if trafficManagerOwnsEntryPoint(domainEntryPoint) && domainEntryPoint.Protocol == domain.EntryPointProtocolTLSMux {
+			trafficManager.SetTLSHTTPServer(name, httpsHandler, tlsConfig)
+		}
+	}
 
 	return httpSrv, httpReady, nil, nil, nil
 }

@@ -123,6 +123,24 @@ func TestTCPManagerSameAddressProtocolChangeStopsTLSHTTPServer(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTrackedTCPConnClosesLateBackendAfterStaleClose(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	backendA, backendB := net.Pipe()
+	defer clientA.Close()
+	defer backendB.Close()
+
+	conn := &trackedTCPConn{client: clientB}
+	conn.close()
+	conn.setBackend(backendA)
+
+	_, err := backendB.Write([]byte("late backend"))
+	if err == nil {
+		_ = backendA.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		_, err = backendA.Read(make([]byte, 1))
+	}
+	require.Error(t, err)
+}
+
 func TestTCPPassthroughRejectsUntrustedCIDR(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)

@@ -21,6 +21,7 @@ import (
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
+	traffic "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
 func TestStartProxyServers_ConfiguresTrafficManagerHTTPSRoute(t *testing.T) {
@@ -56,6 +57,82 @@ func TestStartProxyServers_ConfiguresTrafficManagerHTTPSRoute(t *testing.T) {
 
 	body := httpsGetForTest(t, cfg.Server.TLSPort, "app.example.com")
 	require.Contains(t, body, "secure")
+}
+
+func TestStartProxyServers_ConfiguresCustomTLSMuxHTTPSRoute(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.Port = freeTCPPort(t)
+	cfg.Server.TLSPort = freeTCPPort(t)
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"custom-secure": {Address: fmt.Sprintf("127.0.0.1:%d", freeTCPPort(t)), Protocol: domain.EntryPointProtocolTLSMux},
+	}
+	cfg.Traffic.TLS.Routers = []traffic.RouterConfig{{Name: "raw", EntryPoint: "custom-secure", SNI: "raw.example.com", Service: "network_service:raw:tls"}}
+	cfg.NetworkServices = []traffic.NetworkServiceConfig{{Name: "raw", Ports: []traffic.PortConfig{{Name: "tls", Container: 443, Protocol: domain.NetworkProtocolTCP}}}}
+
+	manager := trafficadapter.NewManager()
+	defer func() { require.NoError(t, manager.Shutdown(context.Background())) }()
+	pkiSvc := newTestPKIService(t)
+	errChan := make(chan error, 4)
+
+	httpSrv, httpReady, tlsSrv, tlsReady, err := startProxyServers(
+		cfg,
+		http.NotFoundHandler(),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("custom secure")) }),
+		pkiSvc,
+		nil,
+		manager,
+		errChan,
+		zerowrap.Default(),
+	)
+	require.NoError(t, err)
+	defer shutdownHTTPServer(t, httpSrv)
+	require.Nil(t, tlsSrv)
+	require.Nil(t, tlsReady)
+	waitReadyForTest(t, httpReady, errChan)
+
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
+	configSvc.EXPECT().GetExternalRoutes().Return(nil)
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+
+	_, customPort, err := net.SplitHostPort(cfg.EntryPoints["custom-secure"].Address)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(customPort)
+	require.NoError(t, err)
+	body := httpsGetForTest(t, port, "app.example.com")
+	require.Contains(t, body, "custom secure")
+}
+
+func TestStartProxyServers_TLSSetupFailureStopsHTTPServer(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.Port = freeTCPPort(t)
+	cfg.Server.TLSPort = freeTCPPort(t)
+	cfg.Server.TLSCertFile = "/path/that/does/not/exist.crt"
+	cfg.Server.TLSKeyFile = "/path/that/does/not/exist.key"
+
+	httpSrv, httpReady, tlsSrv, tlsReady, err := startProxyServers(
+		cfg,
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+		newTestPKIService(t),
+		nil,
+		trafficadapter.NewManager(),
+		make(chan error, 4),
+		zerowrap.Default(),
+	)
+	require.ErrorContains(t, err, "load TLS keypair")
+	require.Nil(t, tlsSrv)
+	require.Nil(t, tlsReady)
+	if httpReady != nil {
+		select {
+		case <-httpReady:
+		case <-time.After(time.Second):
+		}
+	}
+	if httpSrv != nil {
+		_, err = net.DialTimeout("tcp", httpSrv.Addr, 100*time.Millisecond)
+		require.Error(t, err)
+	}
 }
 
 func TestStartProxyServers_TLSRequiresTrafficManager(t *testing.T) {

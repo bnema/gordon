@@ -169,6 +169,37 @@ func TestTLSMuxIncompleteClientHelloDoesNotHangShutdown(t *testing.T) {
 	_ = conn.Close()
 }
 
+func TestTLSMuxHTTPServerRefreshesActiveRuntime(t *testing.T) {
+	graph := tlsGraph(t, freeTCPAddress(t), nil)
+	manager := NewManager()
+	manager.SetTLSHTTPServer("websecure", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("before"))
+	}), testTLSConfig(t, "app.example.com"))
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+	assertHTTPSBody(t, graph.EntryPoints[0].Address, "app.example.com", "before")
+
+	manager.SetTLSHTTPServer("websecure", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("after"))
+	}), testTLSConfig(t, "app.example.com"))
+
+	assertHTTPSBody(t, graph.EntryPoints[0].Address, "app.example.com", "after")
+}
+
+func TestTLSHTTPListenerServeRejectsAfterClose(t *testing.T) {
+	for range 1000 {
+		addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:443")
+		require.NoError(t, err)
+		listener := newTLSHTTPListener(addr)
+		require.NoError(t, listener.Close())
+		client, server := net.Pipe()
+		accepted := listener.serve(server)
+		_ = client.Close()
+		_ = server.Close()
+		require.False(t, accepted)
+	}
+}
+
 func TestTLSMuxHTTPSRoute(t *testing.T) {
 	backend := startTLSGreetingServer(t, "raw-backend", "raw\n")
 	graph := tlsGraph(t, freeTCPAddress(t), []tlsRoute{{name: "raw", sni: "raw.example.com", service: "raw", backend: backend.address}})
