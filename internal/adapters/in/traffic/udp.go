@@ -19,6 +19,7 @@ type udpEntryPointRuntime struct {
 	entryPoint domain.EntryPoint
 	packetConn net.PacketConn
 	counters   trafficCounters
+	trusted    []*net.IPNet
 
 	started atomic.Bool
 	closed  atomic.Bool
@@ -40,12 +41,13 @@ type udpSession struct {
 	once       sync.Once
 }
 
-func newUDPEntryPointRuntime(parentCtx context.Context, manager *Manager, entryPoint domain.EntryPoint, packetConn net.PacketConn) *udpEntryPointRuntime {
+func newUDPEntryPointRuntime(parentCtx context.Context, manager *Manager, entryPoint domain.EntryPoint, packetConn net.PacketConn, trusted []*net.IPNet) *udpEntryPointRuntime {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parentCtx))
 	return &udpEntryPointRuntime{
 		manager:    manager,
 		entryPoint: entryPoint,
 		packetConn: packetConn,
+		trusted:    trusted,
 		ctx:        ctx,
 		cancel:     cancel,
 		done:       make(chan struct{}),
@@ -72,6 +74,10 @@ func (r *udpEntryPointRuntime) readLoop() {
 				return
 			}
 			r.counters.totalErrors.Add(1)
+			continue
+		}
+		if !trustedRemoteAddr(r.trusted, clientAddr) {
+			r.counters.totalRefused.Add(1)
 			continue
 		}
 		packet := append([]byte(nil), buf[:n]...)

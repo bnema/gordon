@@ -20,6 +20,7 @@ type entryPointRuntime struct {
 	entryPoint domain.EntryPoint
 	listener   net.Listener
 	counters   trafficCounters
+	trusted    []*net.IPNet
 
 	started atomic.Bool
 	closed  atomic.Bool
@@ -39,12 +40,13 @@ type trackedTCPConn struct {
 	backend net.Conn
 }
 
-func newEntryPointRuntime(parentCtx context.Context, manager *Manager, entryPoint domain.EntryPoint, listener net.Listener) *entryPointRuntime {
+func newEntryPointRuntime(parentCtx context.Context, manager *Manager, entryPoint domain.EntryPoint, listener net.Listener, trusted []*net.IPNet) *entryPointRuntime {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parentCtx))
 	return &entryPointRuntime{
 		manager:     manager,
 		entryPoint:  entryPoint,
 		listener:    listener,
+		trusted:     trusted,
 		ctx:         ctx,
 		cancel:      cancel,
 		acceptDone:  make(chan struct{}),
@@ -74,6 +76,11 @@ func (r *entryPointRuntime) acceptLoop() {
 			}
 			trafficWarn(r.ctx).Err(err).Str("entrypoint", r.entryPoint.Name).Msg("tcp traffic accept loop stopped")
 			return
+		}
+		if !trustedRemoteAddr(r.trusted, conn.RemoteAddr()) {
+			r.counters.totalRefused.Add(1)
+			_ = conn.Close()
+			continue
 		}
 		r.activeWG.Add(1)
 		go r.handleTCPConn(conn)

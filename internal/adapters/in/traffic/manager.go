@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -243,6 +244,11 @@ func (m *Manager) prepareTCPListeners(ctx context.Context, graph *domain.Traffic
 			next[entryPoint.Name] = runtime
 			continue
 		}
+		if runtime := conflictingTCPRuntime(current, entryPoint); runtime != nil {
+			trafficInfo(ctx).Str("entrypoint", runtime.entryPoint.Name).Str("address", runtime.entryPoint.Address).Msg("stopping tcp traffic entrypoint before same-address replacement")
+			runtime.stop(ctx, effectiveTCPOptions(graph.Options.TCP).DrainTimeout)
+			delete(current, runtime.entryPoint.Name)
+		}
 		runtime, err := m.bindTCPEntryPoint(ctx, entryPoint)
 		if err != nil {
 			for _, createdRuntime := range created {
@@ -260,13 +266,27 @@ func isTCPListenerProtocol(protocol domain.EntryPointProtocol) bool {
 	return protocol == domain.EntryPointProtocolTCP || protocol == domain.EntryPointProtocolTLSMux
 }
 
+func conflictingTCPRuntime(current map[string]*entryPointRuntime, entryPoint domain.EntryPoint) *entryPointRuntime {
+	for _, runtime := range current {
+		if runtime.entryPoint.Address == entryPoint.Address {
+			return runtime
+		}
+	}
+	return nil
+}
+
 func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.EntryPoint) (*entryPointRuntime, error) {
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", entryPoint.Address)
 	if err != nil {
 		return nil, fmt.Errorf("bind tcp entrypoint %q on %s: %w", entryPoint.Name, entryPoint.Address, err)
 	}
+	trusted, err := parseTrustedCIDRs(entryPoint.TrustedCIDRs)
+	if err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("parse trusted cidrs for tcp entrypoint %q: %w", entryPoint.Name, err)
+	}
 	trafficInfo(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("bound tcp traffic entrypoint")
-	runtime := newEntryPointRuntime(ctx, m, entryPoint, listener)
+	runtime := newEntryPointRuntime(ctx, m, entryPoint, listener, trusted)
 	return runtime, nil
 }
 
@@ -286,6 +306,11 @@ func (m *Manager) prepareUDPListeners(ctx context.Context, graph *domain.Traffic
 			next[entryPoint.Name] = runtime
 			continue
 		}
+		if runtime := conflictingUDPRuntime(current, entryPoint); runtime != nil {
+			trafficInfo(ctx).Str("entrypoint", runtime.entryPoint.Name).Str("address", runtime.entryPoint.Address).Msg("stopping udp traffic entrypoint before same-address replacement")
+			runtime.stop(ctx, effectiveUDPOptions(graph.Options.UDP).DrainTimeout)
+			delete(current, runtime.entryPoint.Name)
+		}
 		runtime, err := m.bindUDPEntryPoint(ctx, entryPoint)
 		if err != nil {
 			for _, createdRuntime := range created {
@@ -299,13 +324,62 @@ func (m *Manager) prepareUDPListeners(ctx context.Context, graph *domain.Traffic
 	return next, created, nil
 }
 
+func conflictingUDPRuntime(current map[string]*udpEntryPointRuntime, entryPoint domain.EntryPoint) *udpEntryPointRuntime {
+	for _, runtime := range current {
+		if runtime.entryPoint.Address == entryPoint.Address {
+			return runtime
+		}
+	}
+	return nil
+}
+
 func (m *Manager) bindUDPEntryPoint(ctx context.Context, entryPoint domain.EntryPoint) (*udpEntryPointRuntime, error) {
 	packetConn, err := (&net.ListenConfig{}).ListenPacket(ctx, "udp", entryPoint.Address)
 	if err != nil {
 		return nil, fmt.Errorf("bind udp entrypoint %q on %s: %w", entryPoint.Name, entryPoint.Address, err)
 	}
+	trusted, err := parseTrustedCIDRs(entryPoint.TrustedCIDRs)
+	if err != nil {
+		_ = packetConn.Close()
+		return nil, fmt.Errorf("parse trusted cidrs for udp entrypoint %q: %w", entryPoint.Name, err)
+	}
 	trafficInfo(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("bound udp traffic entrypoint")
-	return newUDPEntryPointRuntime(ctx, m, entryPoint, packetConn), nil
+	return newUDPEntryPointRuntime(ctx, m, entryPoint, packetConn, trusted), nil
+}
+
+func parseTrustedCIDRs(values []string) ([]*net.IPNet, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	trusted := make([]*net.IPNet, 0, len(values))
+	for _, value := range values {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(value))
+		if err != nil {
+			return nil, err
+		}
+		trusted = append(trusted, network)
+	}
+	return trusted, nil
+}
+
+func trustedRemoteAddr(trusted []*net.IPNet, addr net.Addr) bool {
+	if len(trusted) == 0 {
+		return true
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, network := range trusted {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entryPointRuntime, udpListeners map[string]*udpEntryPointRuntime) []domain.EntryPointStatus {
@@ -442,9 +516,10 @@ func (c *trafficCounters) snapshot() domain.TrafficCounters {
 
 func defaultTCPOptions() domain.TCPOptions {
 	return domain.TCPOptions{
-		DialTimeout:  10 * time.Second,
-		IdleTimeout:  5 * time.Minute,
-		DrainTimeout: 30 * time.Second,
+		DialTimeout:    10 * time.Second,
+		IdleTimeout:    5 * time.Minute,
+		DrainTimeout:   30 * time.Second,
+		MaxConnections: 1024,
 	}
 }
 
@@ -459,11 +534,14 @@ func effectiveTCPOptions(options domain.TCPOptions) domain.TCPOptions {
 	if options.DrainTimeout == 0 {
 		options.DrainTimeout = defaults.DrainTimeout
 	}
+	if options.MaxConnections <= 0 {
+		options.MaxConnections = defaults.MaxConnections
+	}
 	return options
 }
 
 func defaultUDPOptions() domain.UDPOptions {
-	return domain.UDPOptions{IdleTimeout: 30 * time.Second, DrainTimeout: 30 * time.Second}
+	return domain.UDPOptions{IdleTimeout: 30 * time.Second, DrainTimeout: 30 * time.Second, MaxSessions: 4096}
 }
 
 func effectiveUDPOptions(options domain.UDPOptions) domain.UDPOptions {
@@ -473,6 +551,9 @@ func effectiveUDPOptions(options domain.UDPOptions) domain.UDPOptions {
 	}
 	if options.DrainTimeout == 0 {
 		options.DrainTimeout = defaults.DrainTimeout
+	}
+	if options.MaxSessions <= 0 {
+		options.MaxSessions = defaults.MaxSessions
 	}
 	return options
 }

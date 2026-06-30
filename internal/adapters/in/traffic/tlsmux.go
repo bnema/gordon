@@ -79,14 +79,10 @@ func parseClientHelloSNI(data []byte) (string, bool, error) {
 	if data[0] != 22 {
 		return "", false, fmt.Errorf("tls record is not a handshake")
 	}
-	recordLen := int(data[3])<<8 | int(data[4])
-	if recordLen <= 0 {
-		return "", false, fmt.Errorf("tls handshake record is empty")
+	record, consumed, complete, err := tlsRecordPayload(data, 0)
+	if err != nil || !complete {
+		return "", complete, err
 	}
-	if len(data) < 5+recordLen {
-		return "", false, nil
-	}
-	record := data[5 : 5+recordLen]
 	if len(record) < 4 {
 		return "", true, fmt.Errorf("tls handshake is truncated")
 	}
@@ -94,11 +90,35 @@ func parseClientHelloSNI(data []byte) (string, bool, error) {
 		return "", true, fmt.Errorf("tls handshake is not client hello")
 	}
 	handshakeLen := int(record[1])<<16 | int(record[2])<<8 | int(record[3])
-	if handshakeLen > len(record)-4 {
-		return "", false, nil
+	handshake := append([]byte(nil), record[4:]...)
+	for len(handshake) < handshakeLen {
+		if len(data) < consumed+5 {
+			return "", false, nil
+		}
+		next, nextConsumed, nextComplete, err := tlsRecordPayload(data, consumed)
+		if err != nil || !nextComplete {
+			return "", nextComplete, err
+		}
+		handshake = append(handshake, next...)
+		consumed = nextConsumed
 	}
-	sni, err := parseClientHelloExtensions(record[4 : 4+handshakeLen])
+	sni, err := parseClientHelloExtensions(handshake[:handshakeLen])
 	return sni, true, err
+}
+
+func tlsRecordPayload(data []byte, offset int) ([]byte, int, bool, error) {
+	if data[offset] != 22 {
+		return nil, offset, false, fmt.Errorf("tls record is not a handshake")
+	}
+	recordLen := int(data[offset+3])<<8 | int(data[offset+4])
+	if recordLen <= 0 {
+		return nil, offset, false, fmt.Errorf("tls handshake record is empty")
+	}
+	end := offset + 5 + recordLen
+	if len(data) < end {
+		return nil, offset, false, nil
+	}
+	return data[offset+5 : end], end, true, nil
 }
 
 func parseClientHelloExtensions(body []byte) (string, error) {

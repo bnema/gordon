@@ -50,7 +50,7 @@ Service references use:
 dial_timeout = "10s"
 idle_timeout = "5m"
 drain_timeout = "30s"
-max_connections = 0
+max_connections = 1024
 
 [[traffic.tcp.routers]]
 name = "postgres"
@@ -58,7 +58,7 @@ entrypoint = "postgres"
 service = "network_service:postgres:db"
 ```
 
-A plain TCP entrypoint supports one TCP router.
+A plain TCP entrypoint supports one TCP router. If `max_connections` is omitted or set to `0`, Gordon applies the safe runtime default of `1024` active connections per entrypoint.
 
 ## UDP Routers
 
@@ -66,7 +66,7 @@ A plain TCP entrypoint supports one TCP router.
 [traffic.udp]
 idle_timeout = "30s"
 drain_timeout = "30s"
-max_sessions = 0
+max_sessions = 4096
 
 [[traffic.udp.routers]]
 name = "game"
@@ -74,7 +74,7 @@ entrypoint = "game"
 service = "network_service:game:game"
 ```
 
-UDP sessions are keyed by client address and expire after `idle_timeout`.
+UDP sessions are keyed by client address and expire after `idle_timeout`. If `max_sessions` is omitted or set to `0`, Gordon applies the safe runtime default of `4096` active sessions per entrypoint.
 
 ## TLS Passthrough
 

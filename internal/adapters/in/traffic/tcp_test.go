@@ -14,6 +14,11 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+func TestTrafficRuntimeDefaultsApplySafeLimits(t *testing.T) {
+	assert.Equal(t, 1024, effectiveTCPOptions(domain.TCPOptions{}).MaxConnections)
+	assert.Equal(t, 4096, effectiveUDPOptions(domain.UDPOptions{}).MaxSessions)
+}
+
 func TestTCPManagerLifecycle(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
@@ -54,6 +59,42 @@ func TestTCPManagerRejectsInvalidGraphWithoutReplacingSnapshot(t *testing.T) {
 	conn := dialTCP(t, graph.EntryPoints[0].Address)
 	defer conn.Close()
 	assertRoundTrip(t, conn, "still works")
+}
+
+func TestTCPManagerReplacesSameAddressEntrypoint(t *testing.T) {
+	backend := startTCPEchoServer(t, 0)
+	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	replacement := graph
+	replacement.EntryPoints = []domain.EntryPoint{{Name: "postgres-tls", Address: graph.EntryPoints[0].Address, Protocol: domain.EntryPointProtocolTLSMux}}
+	replacement.Routers = nil
+	replacement.Services = nil
+	require.NoError(t, manager.Apply(context.Background(), &replacement))
+
+	status := manager.Status()
+	require.Len(t, status.EntryPoints, 1)
+	assert.Equal(t, "postgres-tls", status.EntryPoints[0].Name)
+	assert.Equal(t, domain.EntryPointProtocolTLSMux, status.EntryPoints[0].Protocol)
+}
+
+func TestTCPPassthroughRejectsUntrustedCIDR(t *testing.T) {
+	backend := startTCPEchoServer(t, 0)
+	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
+	graph.EntryPoints[0].TrustedCIDRs = []string{"192.0.2.0/24"}
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	conn := dialTCP(t, graph.EntryPoints[0].Address)
+	defer conn.Close()
+	_, err := conn.Write([]byte("blocked"))
+	require.NoError(t, err)
+	_, err = bufio.NewReader(conn).ReadByte()
+	require.Error(t, err)
+	assert.Eventually(t, func() bool { return manager.Status().Counters.TotalRefused == 1 }, time.Second, 10*time.Millisecond)
 }
 
 func TestTCPPassthroughEcho(t *testing.T) {

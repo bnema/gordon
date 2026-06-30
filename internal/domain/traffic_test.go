@@ -74,6 +74,13 @@ func TestTrafficGraphValidateEntryPoints(t *testing.T) {
 				{Name: "udp", Address: ":53", Protocol: EntryPointProtocolUDP},
 			}},
 		},
+		{
+			name: "invalid trusted cidr rejected",
+			graph: TrafficGraph{EntryPoints: []EntryPoint{
+				{Name: "tcp", Address: ":5432", Protocol: EntryPointProtocolTCP, TrustedCIDRs: []string{"not-a-cidr"}},
+			}},
+			wantErr: "invalid trusted_cidrs",
+		},
 	}
 
 	for _, tt := range tests {
@@ -278,6 +285,13 @@ func TestTrafficGraphValidateTLSRules(t *testing.T) {
 				{Name: "wild2", EntryPoint: "tls", Protocol: RouterProtocolTLSPassthrough, Rule: TrafficRule{SNI: "*.sub.example.com"}, Service: "network_service:app:https"},
 			},
 			wantErr: "ambiguous wildcard tls sni",
+		},
+		{
+			name: "tls passthrough requires sni",
+			routers: []TrafficRouter{
+				{Name: "pass", EntryPoint: "tls", Protocol: RouterProtocolTLSPassthrough, Service: "network_service:app:https"},
+			},
+			wantErr: "requires sni",
 		},
 		{
 			name: "http host and tls passthrough sni conflict rejected",

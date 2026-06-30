@@ -67,6 +67,40 @@ func TestClientHelloPeek(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, hello, buf)
 	})
+
+	t.Run("client_hello_across_multiple_tls_records", func(t *testing.T) {
+		hello := splitClientHelloAcrossRecords(t, clientHelloBytes(t, "multi-record.example.com"))
+		client, server := net.Pipe()
+		go func() {
+			_, _ = client.Write(hello)
+			_ = client.Close()
+		}()
+		sni, replayed, err := peekClientHelloSNI(server)
+		require.NoError(t, err)
+		assert.Equal(t, "multi-record.example.com", sni)
+		buf := make([]byte, len(hello))
+		_, err = io.ReadFull(replayed, buf)
+		require.NoError(t, err)
+		assert.Equal(t, hello, buf)
+	})
+}
+
+func splitClientHelloAcrossRecords(t *testing.T, hello []byte) []byte {
+	t.Helper()
+	require.GreaterOrEqual(t, len(hello), 15)
+	require.Equal(t, byte(22), hello[0])
+	recordLen := int(hello[3])<<8 | int(hello[4])
+	require.Greater(t, recordLen, 10)
+	firstPayloadLen := 10
+	first := append([]byte{}, hello[:5]...)
+	first[3] = byte(firstPayloadLen >> 8)
+	first[4] = byte(firstPayloadLen)
+	first = append(first, hello[5:5+firstPayloadLen]...)
+	remainingPayloadLen := recordLen - firstPayloadLen
+	second := append([]byte{22, hello[1], hello[2], byte(remainingPayloadLen >> 8), byte(remainingPayloadLen)}, hello[5+firstPayloadLen:5+recordLen]...)
+	out := append(first, second...)
+	out = append(out, hello[5+recordLen:]...)
+	return out
 }
 
 func TestTLSPassthrough(t *testing.T) {

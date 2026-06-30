@@ -24,6 +24,25 @@ func TestUDPPassthroughEcho(t *testing.T) {
 	assertUDPRoundTrip(t, conn, "hello udp")
 }
 
+func TestUDPRejectsUntrustedCIDR(t *testing.T) {
+	backend := startUDPEchoServer(t)
+	graph := udpGraph(t, freeUDPAddress(t), backend.address)
+	graph.EntryPoints[0].TrustedCIDRs = []string{"192.0.2.0/24"}
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	conn := dialUDP(t, graph.EntryPoints[0].Address)
+	defer conn.Close()
+	_, err := conn.Write([]byte("blocked"))
+	require.NoError(t, err)
+	_ = conn.SetReadDeadline(time.Now().Add(80 * time.Millisecond))
+	buf := make([]byte, 32)
+	_, err = conn.Read(buf)
+	require.Error(t, err)
+	assert.Eventually(t, func() bool { return manager.Status().Counters.TotalRefused == 1 }, time.Second, 10*time.Millisecond)
+}
+
 func TestUDPTwoClientsGetIsolatedSessions(t *testing.T) {
 	backend := startUDPEchoServer(t)
 	graph := udpGraph(t, freeUDPAddress(t), backend.address)

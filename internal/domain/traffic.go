@@ -250,6 +250,9 @@ func validateTrafficEntryPoint(entryPoint EntryPoint, existing map[string]EntryP
 	if err := validateEntryPointProtocol(entryPoint.Protocol); err != nil {
 		return fmt.Errorf("invalid entrypoint protocol for %q: %w", entryPoint.Name, err)
 	}
+	if err := validateTrustedCIDRs(entryPoint); err != nil {
+		return err
+	}
 	addr, err := parseListenAddress(entryPoint.Address)
 	if err != nil {
 		return fmt.Errorf("invalid entrypoint address for %q: %w", entryPoint.Name, err)
@@ -423,8 +426,11 @@ func (s *routerValidationState) validateHTTPRuleTLSConflicts(entryPoint string, 
 }
 
 func (s *routerValidationState) validateTLSPassthroughRule(router TrafficRouter, entryPoint EntryPoint) error {
-	if router.Protocol != RouterProtocolTLSPassthrough || router.Rule.SNI == "" {
+	if router.Protocol != RouterProtocolTLSPassthrough {
 		return nil
+	}
+	if strings.TrimSpace(router.Rule.SNI) == "" {
+		return fmt.Errorf("tls passthrough router %q requires sni", router.Name)
 	}
 	sni := normalizeHost(router.Rule.SNI)
 	if strings.HasPrefix(sni, "*.") {
@@ -523,6 +529,15 @@ func l4BackendProtocol(protocol RouterProtocol) (NetworkProtocol, bool) {
 	default:
 		return "", false
 	}
+}
+
+func validateTrustedCIDRs(entryPoint EntryPoint) error {
+	for _, cidr := range entryPoint.TrustedCIDRs {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+			return fmt.Errorf("invalid trusted_cidrs entry %q for entrypoint %q: %w", cidr, entryPoint.Name, err)
+		}
+	}
+	return nil
 }
 
 func validateEntryPointProtocol(protocol EntryPointProtocol) error {
