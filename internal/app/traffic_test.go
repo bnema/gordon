@@ -17,17 +17,14 @@ import (
 func TestTrafficRuntimeGraphKeepsSmartTCPHTTPAndTLSPassthroughRouters(t *testing.T) {
 	graph := domain.TrafficGraph{
 		EntryPoints: []domain.EntryPoint{
-			{Name: "web", Address: "127.0.0.1:8080", Protocol: domain.EntryPointProtocolHTTP},
 			{Name: traffic.DefaultEdgeEntryPointName, Address: "127.0.0.1:8443", Protocol: domain.EntryPointProtocolSmartTCP, RawFallback: "ssh", RawFallbackTrustedCIDRs: []string{"127.0.0.0/8"}},
 		},
 		Routers: []domain.TrafficRouter{
-			{Name: "legacy-http", EntryPoint: "web", Protocol: domain.RouterProtocolHTTP, Service: "route:legacy.example.com"},
 			{Name: "app", EntryPoint: traffic.DefaultEdgeEntryPointName, Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"},
 			{Name: "tls-raw", EntryPoint: traffic.DefaultEdgeEntryPointName, Protocol: domain.RouterProtocolTLSPassthrough, Rule: domain.TrafficRule{SNI: "raw.example.com"}, Service: "network_service:raw:tls"},
 			{Name: "ssh", EntryPoint: traffic.DefaultEdgeEntryPointName, Protocol: domain.RouterProtocolTCP, Service: "network_service:ssh:ssh"},
 		},
 		Services: []domain.TrafficService{
-			{Name: "route:legacy.example.com"},
 			{Name: "route:app.example.com"},
 			{Name: "network_service:raw:tls", Backends: []domain.TrafficBackend{{Name: "raw:tls", Host: "127.0.0.1", Port: 443, Protocol: domain.NetworkProtocolTCP}}},
 			{Name: "network_service:ssh:ssh", Backends: []domain.TrafficBackend{{Name: "ssh:ssh", Host: "127.0.0.1", Port: 22, Protocol: domain.NetworkProtocolTCP}}},
@@ -41,27 +38,23 @@ func TestTrafficRuntimeGraphKeepsSmartTCPHTTPAndTLSPassthroughRouters(t *testing
 	assert.ElementsMatch(t, []string{"route:app.example.com", "network_service:raw:tls", "network_service:ssh:ssh"}, serviceNames(filtered.Services))
 }
 
-func TestTrafficRuntimeGraphRejectsHTTPRouterOnlyWhenItTargetsManagerProtocolEntryPointThatIsNotOwned(t *testing.T) {
+func TestTrafficRuntimeGraphHTTPEntrypointIsInvalidRatherThanSilentlyFiltered(t *testing.T) {
 	graph := domain.TrafficGraph{
 		EntryPoints: []domain.EntryPoint{{Name: "edge", Address: "127.0.0.1:8443", Protocol: domain.EntryPointProtocolHTTP}},
 		Routers:     []domain.TrafficRouter{{Name: "app", EntryPoint: "edge", Protocol: domain.RouterProtocolHTTP, Service: "route:app.example.com"}},
 		Services:    []domain.TrafficService{{Name: "route:app.example.com"}},
 	}
 
-	filtered, err := trafficRuntimeGraph(graph)
-	require.NoError(t, err)
-	assert.Empty(t, filtered.Routers)
+	require.ErrorContains(t, graph.Validate(), "unsupported traffic entrypoint protocol \"http\"")
 }
 
 func TestTrafficRuntimeGraphKeepsDefaultTLSEntrypoint(t *testing.T) {
 	graph := domain.TrafficGraph{
 		EntryPoints: []domain.EntryPoint{
-			{Name: "web", Address: "127.0.0.1:8080", Protocol: domain.EntryPointProtocolHTTP},
 			{Name: "websecure", Address: "127.0.0.1:8443", Protocol: domain.EntryPointProtocolTLSMux},
 			{Name: "postgres", Address: "127.0.0.1:15432", Protocol: domain.EntryPointProtocolTCP},
 		},
 		Routers: []domain.TrafficRouter{
-			{Name: "app", EntryPoint: "web", Protocol: domain.RouterProtocolHTTP, Service: "route:app.example.com"},
 			{Name: "app-secure", EntryPoint: "websecure", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"},
 			{Name: "postgres", EntryPoint: "postgres", Protocol: domain.RouterProtocolTCP, Service: "network_service:postgres:db"},
 		},

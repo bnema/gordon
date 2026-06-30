@@ -137,9 +137,15 @@ func (b *builder) buildEntryPoints() []domain.EntryPoint {
 
 func (b *builder) addHTTPRoutes(graph *domain.TrafficGraph) error {
 	routes := append([]domain.Route{}, b.input.Routes...)
+	if len(routes) == 0 {
+		return nil
+	}
+	entryPoint, err := b.routeEntryPoint()
+	if err != nil {
+		return err
+	}
 	sort.Slice(routes, func(i, j int) bool { return routes[i].Domain < routes[j].Domain })
 	for _, route := range routes {
-		entryPoint := DefaultEdgeEntryPointName
 		serviceName := string(domain.TrafficServiceRefRoute) + ":" + route.Domain
 		b.addService(domain.TrafficService{Name: serviceName})
 		graph.Routers = append(graph.Routers, domain.TrafficRouter{Name: "route:" + route.Domain, EntryPoint: entryPoint, Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: route.Domain}, Service: serviceName})
@@ -148,7 +154,15 @@ func (b *builder) addHTTPRoutes(graph *domain.TrafficGraph) error {
 }
 
 func (b *builder) addExternalRoutes(graph *domain.TrafficGraph) error {
-	for _, hostName := range sortedKeys(b.input.ExternalRoutes) {
+	hostNames := sortedKeys(b.input.ExternalRoutes)
+	if len(hostNames) == 0 {
+		return nil
+	}
+	entryPoint, err := b.routeEntryPoint()
+	if err != nil {
+		return err
+	}
+	for _, hostName := range hostNames {
 		target := b.input.ExternalRoutes[hostName]
 		host, port, err := parseBackendAddress(target)
 		if err != nil {
@@ -156,9 +170,39 @@ func (b *builder) addExternalRoutes(graph *domain.TrafficGraph) error {
 		}
 		serviceName := string(domain.TrafficServiceRefExternalRoute) + ":" + hostName
 		b.addService(domain.TrafficService{Name: serviceName, Backends: []domain.TrafficBackend{{Name: hostName, Host: host, Port: port, Protocol: domain.NetworkProtocolTCP}}})
-		graph.Routers = append(graph.Routers, domain.TrafficRouter{Name: "external_route:" + hostName, EntryPoint: DefaultEdgeEntryPointName, Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: hostName}, Service: serviceName})
+		graph.Routers = append(graph.Routers, domain.TrafficRouter{Name: "external_route:" + hostName, EntryPoint: entryPoint, Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: hostName}, Service: serviceName})
 	}
 	return nil
+}
+
+func (b *builder) routeEntryPoint() (string, error) {
+	if cfg, ok := b.input.EntryPoints[DefaultEdgeEntryPointName]; ok && routeCapableEntryPoint(cfg.Protocol) {
+		return DefaultEdgeEntryPointName, nil
+	}
+
+	candidates := make([]string, 0)
+	for _, name := range sortedKeys(b.input.EntryPoints) {
+		if routeCapableEntryPoint(b.input.EntryPoints[name].Protocol) {
+			candidates = append(candidates, name)
+		}
+	}
+	switch len(candidates) {
+	case 0:
+		return DefaultEdgeEntryPointName, nil
+	case 1:
+		return candidates[0], nil
+	default:
+		return "", fmt.Errorf("multiple route-capable entrypoints configured without %q: %s", DefaultEdgeEntryPointName, strings.Join(candidates, ", "))
+	}
+}
+
+func routeCapableEntryPoint(protocol domain.EntryPointProtocol) bool {
+	switch protocol {
+	case domain.EntryPointProtocolSmartTCP, domain.EntryPointProtocolTLSMux:
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *builder) addExplicitRouters(graph *domain.TrafficGraph) error {

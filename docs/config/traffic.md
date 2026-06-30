@@ -4,7 +4,7 @@ Gordon models network listeners as a traffic graph: entrypoints receive packets 
 
 ## Smart TCP Edge Entrypoint
 
-Public application traffic is normally exposed with a `smart_tcp` entrypoint. The conventional name is `edge`, but Gordon does not assign a built-in public port. Choose the address that matches your deployment, firewall, and container mapping:
+Public application traffic is normally exposed with a `smart_tcp` entrypoint. The conventional route-capable entrypoint name is `edge`, but Gordon does not require that name or assign a built-in public port. When exactly one route-capable `smart_tcp` or `tls_mux` entrypoint exists, normal Gordon routes use it even if it has a custom name. Choose the address that matches your deployment, firewall, and container mapping:
 
 ```toml
 [entrypoints.edge]
@@ -15,7 +15,7 @@ trusted_cidrs = []
 
 Do not treat `entrypoints.edge.address` as an HTTP port or an HTTPS port. It is one TCP socket that sniffs each new connection and dispatches the original byte stream.
 
-Supported entrypoint protocols are `smart_tcp`, `http`, `tls_mux`, `tcp`, and `udp`. `smart_tcp` is the primary public edge model; `tcp` and `udp` are for explicit L4 services, and UDP remains separate from the TCP entrypoint.
+Supported entrypoint protocols are `smart_tcp`, `tls_mux`, `tcp`, and `udp`. `smart_tcp` is the primary public edge model; `tls_mux` can also serve normal Gordon routes through TLS fallback, `tcp` and `udp` are for explicit L4 services, and UDP remains separate from the TCP entrypoint.
 
 ## Smart TCP Dispatch Order
 

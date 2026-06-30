@@ -230,8 +230,8 @@ keep_last = 3                                # Keep N newest tags per repository
 | `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `server.proxy_allowed_ips` | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
 | `server.registry_listen_address` | `""` | Bind address for registry (empty = all interfaces) |
-| `entrypoints.<name>.address` | none | Deployment-selected listen address; `edge` is conventional but has no built-in port |
-| `entrypoints.<name>.protocol` | none | Entrypoint protocol: `smart_tcp`, `http`, `tls_mux`, `tcp`, or `udp` |
+| `entrypoints.<name>.address` | none | Deployment-selected listen address; `edge` is conventional for route-capable entrypoints but is not required when exactly one `smart_tcp` or `tls_mux` entrypoint exists |
+| `entrypoints.<name>.protocol` | none | Entrypoint protocol: `smart_tcp`, `tls_mux`, `tcp`, or `udp` |
 | `entrypoints.<name>.trusted_cidrs` | `[]` | Peer socket IP allowlist for all traffic on the entrypoint |
 | `entrypoints.<name>.raw_fallback` | `""` | TCP router used by smart TCP for unknown non-HTTP/non-TLS bytes |
 | `entrypoints.<name>.raw_fallback_trusted_cidrs` | `[]` | Peer socket IP allowlist for smart TCP raw fallback |

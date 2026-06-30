@@ -18,6 +18,47 @@ func TestBuildSmartTCPRoutesDefaultToEdge(t *testing.T) {
 	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "route:app.example.com", EntryPoint: "edge", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"})
 }
 
+func TestBuildManagedRoutesUseOnlyCustomSmartTCPEntrypoint(t *testing.T) {
+	graph, err := Build(Input{
+		EntryPoints: map[string]EntryPointConfig{"public": {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP}},
+		Routes:      []domain.Route{{Domain: "app.example.com", HTTPS: true}},
+	})
+	require.NoError(t, err)
+	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "route:app.example.com", EntryPoint: "public", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"})
+}
+
+func TestBuildRouteEntrypointPrefersEdge(t *testing.T) {
+	graph, err := Build(Input{
+		EntryPoints: map[string]EntryPointConfig{
+			"edge":   {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+			"public": {Address: ":8443", Protocol: domain.EntryPointProtocolSmartTCP},
+		},
+		Routes: []domain.Route{{Domain: "app.example.com", HTTPS: true}},
+	})
+	require.NoError(t, err)
+	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "route:app.example.com", EntryPoint: "edge", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"})
+}
+
+func TestBuildRoutesRejectAmbiguousRouteEntrypoints(t *testing.T) {
+	_, err := Build(Input{
+		EntryPoints: map[string]EntryPointConfig{
+			"public-a": {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
+			"public-b": {Address: ":8443", Protocol: domain.EntryPointProtocolTLSMux},
+		},
+		Routes: []domain.Route{{Domain: "app.example.com", HTTPS: true}},
+	})
+	require.ErrorContains(t, err, "multiple route-capable entrypoints")
+}
+
+func TestBuildExternalRoutesUseResolvedRouteEntryPoint(t *testing.T) {
+	graph, err := Build(Input{
+		EntryPoints:    map[string]EntryPointConfig{"public": {Address: ":443", Protocol: domain.EntryPointProtocolTLSMux}},
+		ExternalRoutes: map[string]string{"ext.example.com": "backend.local:8080"},
+	})
+	require.NoError(t, err)
+	require.Contains(t, graph.Routers, domain.TrafficRouter{Name: "external_route:ext.example.com", EntryPoint: "public", Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "ext.example.com"}, Service: "external_route:ext.example.com"})
+}
+
 func TestBuildRawFallbackConfigMapsToEntryPoint(t *testing.T) {
 	graph, err := Build(Input{
 		EntryPoints: map[string]EntryPointConfig{"edge": {

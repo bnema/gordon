@@ -18,6 +18,8 @@ gordon_domain = "gordon.example.com"
 # max_proxy_response_size = "1GB"
 # max_concurrent_connections = 10000
 
+# "edge" is the conventional route-capable entrypoint name, but a single
+# custom smart_tcp or tls_mux entrypoint can also serve normal Gordon routes.
 [entrypoints.edge]
 address = ":443"
 protocol = "smart_tcp"

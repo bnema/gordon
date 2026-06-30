@@ -617,10 +617,10 @@ func validateRawFallbackRouters(entryPoints map[string]EntryPoint, routers map[s
 
 func validateEntryPointProtocol(protocol EntryPointProtocol) error {
 	switch protocol {
-	case EntryPointProtocolHTTP, EntryPointProtocolTLSMux, EntryPointProtocolSmartTCP, EntryPointProtocolTCP, EntryPointProtocolUDP:
+	case EntryPointProtocolTLSMux, EntryPointProtocolSmartTCP, EntryPointProtocolTCP, EntryPointProtocolUDP:
 		return nil
 	default:
-		return fmt.Errorf("%q", protocol)
+		return fmt.Errorf("unsupported traffic entrypoint protocol %q", protocol)
 	}
 }
 

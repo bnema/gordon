@@ -102,24 +102,31 @@ func TestTrafficGraphValidateEntryPoints(t *testing.T) {
 		{
 			name: "duplicate entrypoint names",
 			graph: TrafficGraph{EntryPoints: []EntryPoint{
-				{Name: "web", Address: ":80", Protocol: EntryPointProtocolHTTP},
-				{Name: "web", Address: ":81", Protocol: EntryPointProtocolHTTP},
+				{Name: "web", Address: ":80", Protocol: EntryPointProtocolTLSMux},
+				{Name: "web", Address: ":81", Protocol: EntryPointProtocolTLSMux},
 			}},
 			wantErr: "duplicate entrypoint name",
 		},
 		{
 			name: "invalid entrypoint address",
 			graph: TrafficGraph{EntryPoints: []EntryPoint{
-				{Name: "web", Address: "not-a-listen-address", Protocol: EntryPointProtocolHTTP},
+				{Name: "web", Address: "not-a-listen-address", Protocol: EntryPointProtocolTLSMux},
 			}},
 			wantErr: "invalid entrypoint address",
+		},
+		{
+			name: "http entrypoint protocol is unsupported",
+			graph: TrafficGraph{EntryPoints: []EntryPoint{
+				{Name: "web", Address: ":80", Protocol: EntryPointProtocolHTTP},
+			}},
+			wantErr: "unsupported traffic entrypoint protocol \"http\"",
 		},
 		{
 			name: "invalid entrypoint protocol",
 			graph: TrafficGraph{EntryPoints: []EntryPoint{
 				{Name: "web", Address: ":80", Protocol: EntryPointProtocol("smtp")},
 			}},
-			wantErr: "invalid entrypoint protocol",
+			wantErr: "unsupported traffic entrypoint protocol \"smtp\"",
 		},
 		{
 			name: "duplicate tcp address rejected",
@@ -188,7 +195,6 @@ func TestTrafficGraphValidateRouterEntryPointProtocolCompatibility(t *testing.T)
 		entryProtocol  EntryPointProtocol
 		wantErr        bool
 	}{
-		{name: "http router accepts http entrypoint", routerProtocol: RouterProtocolHTTP, entryProtocol: EntryPointProtocolHTTP},
 		{name: "http router accepts tls mux entrypoint", routerProtocol: RouterProtocolHTTP, entryProtocol: EntryPointProtocolTLSMux},
 		{name: "tls passthrough router accepts tls mux entrypoint", routerProtocol: RouterProtocolTLSPassthrough, entryProtocol: EntryPointProtocolTLSMux},
 		{name: "tcp router accepts tcp entrypoint", routerProtocol: RouterProtocolTCP, entryProtocol: EntryPointProtocolTCP},
@@ -196,12 +202,9 @@ func TestTrafficGraphValidateRouterEntryPointProtocolCompatibility(t *testing.T)
 		{name: "http router rejects udp entrypoint", routerProtocol: RouterProtocolHTTP, entryProtocol: EntryPointProtocolUDP, wantErr: true},
 		{name: "http router rejects tcp entrypoint", routerProtocol: RouterProtocolHTTP, entryProtocol: EntryPointProtocolTCP, wantErr: true},
 		{name: "udp router rejects tcp entrypoint", routerProtocol: RouterProtocolUDP, entryProtocol: EntryPointProtocolTCP, wantErr: true},
-		{name: "udp router rejects http entrypoint", routerProtocol: RouterProtocolUDP, entryProtocol: EntryPointProtocolHTTP, wantErr: true},
 		{name: "udp router rejects tls mux entrypoint", routerProtocol: RouterProtocolUDP, entryProtocol: EntryPointProtocolTLSMux, wantErr: true},
 		{name: "tcp router rejects udp entrypoint", routerProtocol: RouterProtocolTCP, entryProtocol: EntryPointProtocolUDP, wantErr: true},
-		{name: "tcp router rejects http entrypoint", routerProtocol: RouterProtocolTCP, entryProtocol: EntryPointProtocolHTTP, wantErr: true},
 		{name: "tcp router rejects tls mux entrypoint", routerProtocol: RouterProtocolTCP, entryProtocol: EntryPointProtocolTLSMux, wantErr: true},
-		{name: "tls passthrough router rejects http entrypoint", routerProtocol: RouterProtocolTLSPassthrough, entryProtocol: EntryPointProtocolHTTP, wantErr: true},
 		{name: "tls passthrough router rejects udp entrypoint", routerProtocol: RouterProtocolTLSPassthrough, entryProtocol: EntryPointProtocolUDP, wantErr: true},
 		{name: "tls passthrough router rejects tcp entrypoint per tls mux spec", routerProtocol: RouterProtocolTLSPassthrough, entryProtocol: EntryPointProtocolTCP, wantErr: true},
 	}
@@ -261,7 +264,7 @@ func TestTrafficGraphValidateRouterNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			graph := TrafficGraph{
-				EntryPoints: []EntryPoint{{Name: "web", Address: ":80", Protocol: EntryPointProtocolHTTP}},
+				EntryPoints: []EntryPoint{{Name: "web", Address: ":443", Protocol: EntryPointProtocolTLSMux}},
 				Routers:     tt.routers,
 				Services:    []TrafficService{service},
 			}
@@ -277,7 +280,6 @@ func TestTrafficGraphValidateDuplicateHTTPHosts(t *testing.T) {
 		entryProtocol EntryPointProtocol
 		entryAddress  string
 	}{
-		{name: "http entrypoint", entryProtocol: EntryPointProtocolHTTP, entryAddress: ":80"},
 		{name: "tls mux entrypoint", entryProtocol: EntryPointProtocolTLSMux, entryAddress: ":443"},
 	}
 
@@ -522,7 +524,7 @@ func TestTrafficGraphValidateHTTPServiceRefs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			graph := TrafficGraph{
-				EntryPoints: []EntryPoint{{Name: "web", Address: ":80", Protocol: EntryPointProtocolHTTP}},
+				EntryPoints: []EntryPoint{{Name: "web", Address: ":443", Protocol: EntryPointProtocolTLSMux}},
 				Routers:     []TrafficRouter{{Name: "web", EntryPoint: "web", Protocol: RouterProtocolHTTP, Rule: TrafficRule{Host: "app.example.com"}, Service: tt.service}},
 				Services:    []TrafficService{{Name: tt.service, Backends: []TrafficBackend{{Name: "app", Host: "10.0.0.2", Port: 8080, Protocol: NetworkProtocolTCP}}}},
 			}
