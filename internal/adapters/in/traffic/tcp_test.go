@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -211,6 +212,44 @@ func TestTCPPassthroughReloadAppliesTrustedCIDRChange(t *testing.T) {
 	updated.EntryPoints[0].TrustedCIDRs = []string{"192.0.2.0/24"}
 	require.NoError(t, manager.Apply(context.Background(), &updated))
 	assertTCPRejected(t, manager, graph.EntryPoints[0].Address, 1)
+}
+
+func TestTLSMuxReloadClosesActiveUntrustedHTTPSFallbackConnections(t *testing.T) {
+	graph := domain.TrafficGraph{
+		Options:     domain.TrafficOptions{TCP: domain.TCPOptions{DialTimeout: time.Second, IdleTimeout: time.Minute, DrainTimeout: time.Second}},
+		EntryPoints: []domain.EntryPoint{{Name: "websecure", Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTLSMux, TrustedCIDRs: []string{"127.0.0.0/8"}}},
+	}
+	manager := NewManager()
+	manager.SetTLSHTTPServer("websecure", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body := "secure"
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		_, _ = w.Write([]byte(body))
+	}), testTLSConfig(t, "app.example.com"))
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", graph.EntryPoints[0].Address, &tls.Config{ServerName: "app.example.com", InsecureSkipVerify: true})
+	require.NoError(t, err)
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	_, err = conn.Write([]byte("GET / HTTP/1.1\r\nHost: app.example.com\r\nConnection: keep-alive\r\n\r\n"))
+	require.NoError(t, err)
+	resp, err := http.ReadResponse(reader, nil)
+	require.NoError(t, err)
+	_, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	updated := graph
+	updated.EntryPoints[0].TrustedCIDRs = []string{"192.0.2.0/24"}
+	require.NoError(t, manager.Apply(context.Background(), &updated))
+
+	_, err = conn.Write([]byte("GET / HTTP/1.1\r\nHost: app.example.com\r\nConnection: close\r\n\r\n"))
+	if err == nil {
+		_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		_, err = http.ReadResponse(reader, nil)
+	}
+	require.Error(t, err)
 }
 
 func TestTCPPassthroughReloadClosesActiveUntrustedConnections(t *testing.T) {

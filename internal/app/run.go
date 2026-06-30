@@ -261,44 +261,46 @@ type Config struct {
 
 // services holds all the services used by the application.
 type services struct {
-	runtime           *docker.Runtime
-	eventBus          *eventbus.InMemory
-	blobStorage       *filesystem.BlobStorage
-	manifestStorage   *filesystem.ManifestStorage
-	backupStorage     *filesystem.BackupStorage
-	volumeBackupStore out.VolumeBackupStorage
-	volumeBackupCfg   domain.VolumeBackupConfig
-	envLoader         out.EnvLoader
-	logWriter         *logwriter.LogWriter
-	tokenStore        out.TokenStore
-	configSvc         *config.Service
-	secretSvc         *secretsSvc.Service
-	containerSvc      *container.Service
-	backupSvc         *backup.Service
-	volumeBackupSvc   *backup.VolumeService
-	registrySvc       *registrySvc.Service
-	healthSvc         *health.Service
-	logSvc            *logs.Service
-	imageSvc          *images.Service
-	volumeSvc         *volumesSvc.Service
-	proxySvc          *proxy.Service
-	authSvc           *auth.Service
-	authHandler       *authhandler.Handler
-	adminHandler      *admin.Handler
-	internalRegUser   string
-	internalRegPass   string
-	previewStore      *filesystem.PreviewStore
-	previewService    *preview.Service
-	envDir            string
-	maxBlobChunkSize  int64
-	maxBlobSize       int64
-	caAdapter         *pkiadapter.CA
-	pkiSvc            *pkiusecase.Service
-	reloadCoordinator *reloadCoordinator
-	publicTLSSvc      in.PublicTLSService
-	publicTLSRuntime  publicTLSRuntime
-	trafficManager    *trafficadapter.Manager
-	registryHandler   interface {
+	runtime            *docker.Runtime
+	eventBus           *eventbus.InMemory
+	blobStorage        *filesystem.BlobStorage
+	manifestStorage    *filesystem.ManifestStorage
+	backupStorage      *filesystem.BackupStorage
+	volumeBackupStore  out.VolumeBackupStorage
+	volumeBackupCfg    domain.VolumeBackupConfig
+	envLoader          out.EnvLoader
+	logWriter          *logwriter.LogWriter
+	tokenStore         out.TokenStore
+	configSvc          *config.Service
+	secretSvc          *secretsSvc.Service
+	containerSvc       *container.Service
+	backupSvc          *backup.Service
+	volumeBackupSvc    *backup.VolumeService
+	registrySvc        *registrySvc.Service
+	healthSvc          *health.Service
+	logSvc             *logs.Service
+	imageSvc           *images.Service
+	volumeSvc          *volumesSvc.Service
+	proxySvc           *proxy.Service
+	authSvc            *auth.Service
+	authHandler        *authhandler.Handler
+	adminHandler       *admin.Handler
+	httpsProxyHandler  http.Handler
+	internalRegUser    string
+	internalRegPass    string
+	previewStore       *filesystem.PreviewStore
+	previewService     *preview.Service
+	envDir             string
+	maxBlobChunkSize   int64
+	maxBlobSize        int64
+	caAdapter          *pkiadapter.CA
+	pkiSvc             *pkiusecase.Service
+	reloadCoordinator  *reloadCoordinator
+	publicTLSSvc       in.PublicTLSService
+	publicTLSRuntime   publicTLSRuntime
+	trafficManager     *trafficadapter.Manager
+	tlsHTTPEntryPoints map[string]struct{}
+	registryHandler    interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
 }
@@ -766,6 +768,15 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 		if err != nil {
 			return err
 		}
+		var tlsConfig *tls.Config
+		if reloadCfg.Server.TLSPort != 0 && si.svc.httpsProxyHandler != nil {
+			var tlsErr error
+			tlsConfig, tlsErr = proxyTLSConfig(reloadCfg, si.svc.pkiSvc, si.svc.publicTLSSvc, si.log)
+			if tlsErr != nil {
+				return tlsErr
+			}
+		}
+		si.svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpsProxyHandler, tlsConfig, si.svc.tlsHTTPEntryPoints)
 		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc); err != nil {
 			return err
 		}
@@ -2455,6 +2466,7 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 		proxyOut = middleware.AccessLogger(accessWriter, excludeHC, log, trustedNets)(proxyOut)
 		httpsOut = middleware.AccessLogger(accessWriter, excludeHC, log, trustedNets)(httpsOut)
 	}
+	svc.httpsProxyHandler = httpsOut
 
 	return registryOut, proxyOut, httpsOut
 }
@@ -2825,6 +2837,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 		closeStarted(registrySrv)
 		return err
 	}
+	svc.tlsHTTPEntryPoints = tlsMuxHTTPServerNames(cfg)
 
 	// Wait for the registry and HTTP proxy to bind before applying the traffic graph.
 	// This prevents auto-start races while keeping the TLS mux under one owner.
@@ -3301,13 +3314,24 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 		return httpSrv, httpReady, nil, nil, err
 	}
 
-	// Load static cert into a local slice (not tls.Config.Certificates) so the
-	// certificate selector has full control over priority ordering.
+	tlsConfig, err := proxyTLSConfig(cfg, pkiSvc, publicTLS, log)
+	if err != nil {
+		return cleanupHTTP(err)
+	}
+	if trafficManager == nil {
+		return cleanupHTTP(fmt.Errorf("traffic manager is required when server.tls_port is enabled"))
+	}
+	registerTLSMuxHTTPServers(trafficManager, cfg, httpsHandler, tlsConfig, nil)
+
+	return httpSrv, httpReady, nil, nil, nil
+}
+
+func proxyTLSConfig(cfg Config, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, log zerowrap.Logger) (*tls.Config, error) {
 	var staticCerts []tls.Certificate
 	if cfg.Server.TLSCertFile != "" {
 		staticCert, err := tls.LoadX509KeyPair(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 		if err != nil {
-			return cleanupHTTP(fmt.Errorf("load TLS keypair: %w", err))
+			return nil, fmt.Errorf("load TLS keypair: %w", err)
 		}
 		staticCerts = []tls.Certificate{staticCert}
 		log.Info().
@@ -3315,32 +3339,50 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 			Str("key", cfg.Server.TLSKeyFile).
 			Msg("loaded static TLS certificate (public ACME and internal CA handle remaining domains)")
 	}
-
 	selector := &certificateSelector{
 		staticCerts: prepareStaticTLSCertificates(staticCerts),
 		publicTLS:   publicTLS,
 		localPKI:    pkiSvc,
 	}
-
-	// HTTPS listener — static cert (if provided) takes priority by SNI match via
-	// certificateSelector, then public ACME TLS, then on-demand internal CA certs.
-	tlsConfig := &tls.Config{
+	return &tls.Config{
 		MinVersion:     tls.VersionTLS12,
 		GetCertificate: selector.GetCertificate,
 		NextProtos:     []string{"h2", "http/1.1"},
+	}, nil
+}
+
+func registerTLSMuxHTTPServers(manager *trafficadapter.Manager, cfg Config, httpsHandler http.Handler, tlsConfig *tls.Config, previous map[string]struct{}) map[string]struct{} {
+	if manager == nil {
+		return previous
 	}
-	if trafficManager == nil {
-		return cleanupHTTP(fmt.Errorf("traffic manager is required when server.tls_port is enabled"))
+	next := tlsMuxHTTPServerNames(cfg)
+	for name := range previous {
+		if _, ok := next[name]; !ok {
+			manager.SetTLSHTTPServer(name, nil, nil)
+		}
 	}
-	trafficManager.SetTLSHTTPServer(traffic.DefaultTLSEntryPointName, httpsHandler, tlsConfig)
+	if cfg.Server.TLSPort == 0 || httpsHandler == nil || tlsConfig == nil {
+		return next
+	}
+	for name := range next {
+		manager.SetTLSHTTPServer(name, httpsHandler, tlsConfig)
+	}
+	return next
+}
+
+func tlsMuxHTTPServerNames(cfg Config) map[string]struct{} {
+	names := map[string]struct{}{}
+	if cfg.Server.TLSPort == 0 {
+		return names
+	}
+	names[traffic.DefaultTLSEntryPointName] = struct{}{}
 	for name, entryPoint := range cfg.EntryPoints {
 		domainEntryPoint := domain.EntryPoint{Name: name, Protocol: entryPoint.Protocol}
 		if trafficManagerOwnsEntryPoint(domainEntryPoint) && domainEntryPoint.Protocol == domain.EntryPointProtocolTLSMux {
-			trafficManager.SetTLSHTTPServer(name, httpsHandler, tlsConfig)
+			names[name] = struct{}{}
 		}
 	}
-
-	return httpSrv, httpReady, nil, nil, nil
+	return names
 }
 
 // startServer starts an HTTP server, returning the server instance and a channel

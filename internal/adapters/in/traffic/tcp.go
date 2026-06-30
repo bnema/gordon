@@ -162,18 +162,30 @@ func (r *entryPointRuntime) replaceTLSHTTPServer(entryPoint domain.EntryPoint, c
 	}()
 }
 
-func (r *entryPointRuntime) routeToHTTPS(conn net.Conn) bool {
+func (r *entryPointRuntime) routeToHTTPS(tracked *trackedTCPConn, conn net.Conn) bool {
 	r.mu.Lock()
 	listener := r.tlsHTTPListener
 	r.mu.Unlock()
 	if listener == nil {
 		return false
 	}
-	if listener.serve(conn) {
+	if listener.serve(&trackedHTTPConn{Conn: conn, onClose: func() { r.untrack(tracked) }}) {
 		return true
 	}
 	_ = conn.Close()
 	return true
+}
+
+type trackedHTTPConn struct {
+	net.Conn
+	once    sync.Once
+	onClose func()
+}
+
+func (c *trackedHTTPConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.onClose)
+	return err
 }
 
 func (r *entryPointRuntime) acceptLoop() {
@@ -220,13 +232,20 @@ func (r *entryPointRuntime) handleTCPConn(client net.Conn) {
 
 	tracked := &trackedTCPConn{client: client}
 	r.track(tracked)
-	defer r.untrack(tracked)
+	untrackOnReturn := true
+	defer func() {
+		if untrackOnReturn {
+			r.untrack(tracked)
+		}
+	}()
 
 	switch r.entryPointSnapshot().Protocol {
 	case domain.EntryPointProtocolTCP:
 		r.handlePlainTCP(tracked, options)
 	case domain.EntryPointProtocolTLSMux:
-		r.handleTLSMux(tracked, options)
+		if r.handleTLSMux(tracked, options) {
+			untrackOnReturn = false
+		}
 	default:
 		r.counters.totalRefused.Add(1)
 		_ = tracked.client.Close()
@@ -243,23 +262,24 @@ func (r *entryPointRuntime) handlePlainTCP(tracked *trackedTCPConn, options doma
 	r.proxyToBackend(tracked, tracked.client, backend, options)
 }
 
-func (r *entryPointRuntime) handleTLSMux(tracked *trackedTCPConn, options domain.TCPOptions) {
+func (r *entryPointRuntime) handleTLSMux(tracked *trackedTCPConn, options domain.TCPOptions) bool {
 	peeked, err := r.peekTLSClientHello(tracked.client, options)
 	if err != nil {
 		r.counters.totalErrors.Add(1)
 		_ = tracked.client.Close()
-		return
+		return false
 	}
 	if backend, ok := r.resolveTLSBackend(peeked.sni); ok {
 		r.proxyToBackend(tracked, peeked.conn, backend, options)
-		return
+		return false
 	}
-	if r.routeToHTTPS(peeked.conn) {
+	if r.routeToHTTPS(tracked, peeked.conn) {
 		r.counters.totalAccepted.Add(1)
-		return
+		return true
 	}
 	r.counters.totalRefused.Add(1)
 	_ = peeked.conn.Close()
+	return false
 }
 
 func (r *entryPointRuntime) peekTLSClientHello(client net.Conn, options domain.TCPOptions) (peekedTLSConn, error) {
@@ -623,6 +643,7 @@ func (r *entryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, trust
 	r.mu.Unlock()
 	for _, conn := range stale {
 		conn.close()
+		r.untrack(conn)
 	}
 	if previousProtocol == domain.EntryPointProtocolTLSMux && entryPoint.Protocol != domain.EntryPointProtocolTLSMux {
 		r.stopTLSHTTPServer(r.ctx, 0)

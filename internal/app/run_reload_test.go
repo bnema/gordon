@@ -3,6 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -13,10 +16,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
+	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
 	"github.com/bnema/gordon/internal/domain"
 	cfgusecase "github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
 	"github.com/bnema/gordon/internal/usecase/proxy"
+	traffic "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
 type watchRecorder struct {
@@ -225,6 +230,57 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 		MaxResponseSize:    7 << 20,
 		MaxConcurrentConns: 99,
 	}, proxySvc.config)
+}
+
+func TestServiceInit_ReloadRegistersCustomTLSMuxHTTPSFallback(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "reload.example.com")
+	v.Set("server.registry_port", 5000)
+
+	configSvc := cfgusecase.NewService(v, nil)
+	require.NoError(t, configSvc.Load(ctx))
+	manager := trafficadapter.NewManager()
+	defer func() { require.NoError(t, manager.Shutdown(ctx)) }()
+	httpsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("reload secure"))
+	})
+	pkiSvc := newTestPKIService(t)
+
+	customAddress := freeTCPAddress(t)
+	si := &serviceInit{
+		ctx: ctx,
+		v:   v,
+		cfg: Config{},
+		log: zerowrap.Default(),
+		svc: &services{
+			configSvc:         configSvc,
+			containerSvc:      container.NewService(nil, nil, nil, nil, container.Config{}, configSvc),
+			internalRegUser:   "gordon",
+			internalRegPass:   "secret",
+			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, zerowrap.Default()),
+			trafficManager:    manager,
+			httpsProxyHandler: httpsHandler,
+			pkiSvc:            pkiSvc,
+		},
+	}
+	si.registerReloadCoordinatorHooks()
+
+	reloadCfg := Config{}
+	reloadCfg.Server.GordonDomain = "reload.example.com"
+	reloadCfg.Server.RegistryPort = 5000
+	reloadCfg.Server.TLSPort = freeTCPPort(t)
+	reloadCfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"custom-secure": {Address: customAddress, Protocol: domain.EntryPointProtocolTLSMux},
+	}
+
+	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg))
+	_, portValue, err := net.SplitHostPort(customAddress)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portValue)
+	require.NoError(t, err)
+	body := httpsGetForTest(t, port, "app.example.com")
+	require.Contains(t, body, "reload secure")
 }
 
 func TestServiceInit_RegisterReloadCoordinatorHooks_WiresContainerConfigApplier(t *testing.T) {
