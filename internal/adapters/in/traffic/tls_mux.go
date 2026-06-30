@@ -59,14 +59,14 @@ func peekClientHelloSNI(conn net.Conn) (string, net.Conn, error) {
 			buf = append(buf, tmp[:n]...)
 			sni, complete, parseErr := parseClientHelloSNI(buf)
 			if parseErr != nil {
-				return "", nil, parseErr
+				return "", nil, fmt.Errorf("parse client hello sni: %w", parseErr)
 			}
 			if complete {
 				return sni, replayConn{Conn: conn, reader: bytes.NewReader(buf)}, nil
 			}
 		}
 		if err != nil {
-			return "", nil, err
+			return "", nil, fmt.Errorf("read client hello: %w", err)
 		}
 	}
 	return "", nil, fmt.Errorf("client hello exceeds %d bytes", maxClientHelloBytes)
@@ -83,15 +83,8 @@ func parseClientHelloSNI(data []byte) (string, bool, error) {
 	if err != nil || !complete {
 		return "", complete, err
 	}
-	if len(record) < 4 {
-		return "", true, fmt.Errorf("tls handshake is truncated")
-	}
-	if record[0] != 1 {
-		return "", true, fmt.Errorf("tls handshake is not client hello")
-	}
-	handshakeLen := int(record[1])<<16 | int(record[2])<<8 | int(record[3])
-	handshake := append([]byte(nil), record[4:]...)
-	for len(handshake) < handshakeLen {
+	handshake := append([]byte(nil), record...)
+	for len(handshake) < 4 {
 		if len(data) < consumed+5 {
 			return "", false, nil
 		}
@@ -102,7 +95,22 @@ func parseClientHelloSNI(data []byte) (string, bool, error) {
 		handshake = append(handshake, next...)
 		consumed = nextConsumed
 	}
-	sni, err := parseClientHelloExtensions(handshake[:handshakeLen])
+	if handshake[0] != 1 {
+		return "", true, fmt.Errorf("tls handshake is not client hello")
+	}
+	handshakeLen := int(handshake[1])<<16 | int(handshake[2])<<8 | int(handshake[3])
+	for len(handshake)-4 < handshakeLen {
+		if len(data) < consumed+5 {
+			return "", false, nil
+		}
+		next, nextConsumed, nextComplete, err := tlsRecordPayload(data, consumed)
+		if err != nil || !nextComplete {
+			return "", nextComplete, err
+		}
+		handshake = append(handshake, next...)
+		consumed = nextConsumed
+	}
+	sni, err := parseClientHelloExtensions(handshake[4 : 4+handshakeLen])
 	return sni, true, err
 }
 
@@ -255,9 +263,15 @@ func (c replayConn) Read(p []byte) (int, error) {
 
 // ServeHTTPSFallback serves a single TLS connection with the provided HTTP handler.
 func ServeHTTPSFallback(ctx context.Context, conn net.Conn, handler http.Handler, tlsConfig *tls.Config) error {
+	if handler == nil {
+		return fmt.Errorf("https fallback handler is required")
+	}
+	if tlsConfig == nil {
+		return fmt.Errorf("https fallback tls config is required")
+	}
 	tracked := newTrackedCloseConn(tls.Server(conn, tlsConfig))
 	listener := newSingleConnListener(tracked)
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.Serve(listener) }()
 

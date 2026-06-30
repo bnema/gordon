@@ -2823,7 +2823,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 		}
 	}
 
-	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, svc.publicTLSSvc, errChan, log)
+	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, errChan, log)
 	if err != nil {
 		closeStarted(registrySrv)
 		return err
@@ -3265,7 +3265,7 @@ func matchingStaticCert(certs []tls.Certificate, serverName string) *tls.Certifi
 	return matchingPreparedStaticCert(prepareStaticTLSCertificates(certs), serverName)
 }
 
-func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
 	// HTTP listener (Cloudflare proxy + onboarding for direct clients)
 	var httpProtos http.Protocols
 	httpProtos.SetHTTP1(true)
@@ -3311,6 +3311,14 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 		GetCertificate: selector.GetCertificate,
 		NextProtos:     []string{"h2", "http/1.1"},
 	}
+	if trafficManager != nil {
+		trafficManager.SetTLSFallback(traffic.DefaultTLSEntryPointName, func(ctx context.Context, conn net.Conn) {
+			if err := trafficadapter.ServeHTTPSFallback(ctx, conn, httpsHandler, tlsConfig.Clone()); err != nil {
+				log.Warn().Err(err).Msg("https fallback connection failed")
+			}
+		})
+	}
+
 	tlsSrv, tlsReady := startTLSServerWithConfig(
 		fmt.Sprintf(":%d", cfg.Server.TLSPort),
 		httpsHandler,

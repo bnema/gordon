@@ -3,7 +3,6 @@ package traffic
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -71,33 +70,40 @@ func NewManager() *Manager {
 // Apply validates and applies a new traffic graph snapshot.
 func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	if graph == nil {
-		return m.recordReloadError(ctx, errors.New("traffic graph is required"))
+		return m.recordReloadError(ctx, fmt.Errorf("%w: traffic graph is required", domain.ErrTrafficGraphRequired))
 	}
 	if err := graph.Validate(); err != nil {
-		return m.recordReloadError(ctx, err)
+		return m.recordReloadError(ctx, fmt.Errorf("validate traffic graph: %w", err))
 	}
 	trafficDebug(ctx).Int("entrypoints", len(graph.EntryPoints)).Int("routers", len(graph.Routers)).Int("services", len(graph.Services)).Msg("applying traffic graph")
 
 	nextGraph := cloneTrafficGraph(*graph)
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	newListeners, createdListeners, err := m.prepareTCPListeners(ctx, &nextGraph)
+	newListeners, createdListeners, tcpUpdates, err := m.prepareTCPListeners(ctx, &nextGraph)
 	if err != nil {
 		m.lastReloadStatus = reloadStatusError
 		m.lastReloadError = err.Error()
+		m.mu.Unlock()
 		trafficWarn(ctx).Err(err).Msg("failed to prepare tcp traffic listeners")
 		return err
 	}
-	newUDPListeners, createdUDPListeners, err := m.prepareUDPListeners(ctx, &nextGraph)
+	newUDPListeners, createdUDPListeners, udpUpdates, err := m.prepareUDPListeners(ctx, &nextGraph)
 	if err != nil {
+		m.lastReloadStatus = reloadStatusError
+		m.lastReloadError = err.Error()
+		m.mu.Unlock()
 		for _, runtime := range createdListeners {
 			runtime.stop(ctx, effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout)
 		}
-		m.lastReloadStatus = reloadStatusError
-		m.lastReloadError = err.Error()
 		trafficWarn(ctx).Err(err).Msg("failed to prepare udp traffic listeners")
 		return err
+	}
+
+	for _, update := range tcpUpdates {
+		update.runtime.updateEntryPoint(update.entryPoint, update.trusted)
+	}
+	for _, update := range udpUpdates {
+		update.runtime.updateEntryPoint(update.entryPoint, update.trusted)
 	}
 
 	oldListeners := m.listeners
@@ -113,22 +119,21 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	}
 	m.lastReloadStatus = reloadStatusOK
 	m.lastReloadError = ""
+	m.mu.Unlock()
 
 	tcpDrainTimeout := effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout
 	stoppedTCP := 0
-	for name, runtime := range oldListeners {
-		if newListeners[name] == runtime {
+	for _, runtime := range oldListeners {
+		if tcpRuntimeRetained(newListeners, runtime) {
 			continue
 		}
-		if runtime.shouldStopWith(newListeners[name]) {
-			stoppedTCP++
-			runtime.stop(ctx, tcpDrainTimeout)
-		}
+		stoppedTCP++
+		runtime.stop(ctx, tcpDrainTimeout)
 	}
 	udpDrainTimeout := effectiveUDPOptions(snapshotUDPOptions(&nextGraph)).DrainTimeout
 	stoppedUDP := 0
-	for name, runtime := range oldUDPListeners {
-		if newUDPListeners[name] == runtime {
+	for _, runtime := range oldUDPListeners {
+		if udpRuntimeRetained(newUDPListeners, runtime) {
 			if _, ok := runtime.resolveUDPBackend(); !ok {
 				runtime.drainSessionsAfter(udpDrainTimeout)
 			}
@@ -141,7 +146,24 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	return nil
 }
 
-// Shutdown stops all listeners and active TCP streams.
+func tcpRuntimeRetained(listeners map[string]*entryPointRuntime, runtime *entryPointRuntime) bool {
+	for _, candidate := range listeners {
+		if candidate == runtime {
+			return true
+		}
+	}
+	return false
+}
+
+func udpRuntimeRetained(listeners map[string]*udpEntryPointRuntime, runtime *udpEntryPointRuntime) bool {
+	for _, candidate := range listeners {
+		if candidate == runtime {
+			return true
+		}
+	}
+	return false
+}
+
 func logAppliedTrafficGraph(
 	ctx context.Context,
 	newListeners map[string]*entryPointRuntime,
@@ -165,6 +187,7 @@ func logAppliedTrafficGraph(
 		Msg("traffic graph applied")
 }
 
+// Shutdown stops all listeners and active TCP streams.
 func (m *Manager) Shutdown(ctx context.Context) error {
 	trafficInfo(ctx).Msg("shutting down traffic manager")
 	m.mu.Lock()
@@ -228,7 +251,19 @@ func (m *Manager) recordReloadError(ctx context.Context, err error) error {
 	return err
 }
 
-func (m *Manager) prepareTCPListeners(ctx context.Context, graph *domain.TrafficGraph) (map[string]*entryPointRuntime, []*entryPointRuntime, error) {
+type tcpRuntimeUpdate struct {
+	runtime    *entryPointRuntime
+	entryPoint domain.EntryPoint
+	trusted    []*net.IPNet
+}
+
+type udpRuntimeUpdate struct {
+	runtime    *udpEntryPointRuntime
+	entryPoint domain.EntryPoint
+	trusted    []*net.IPNet
+}
+
+func (m *Manager) prepareTCPListeners(ctx context.Context, graph *domain.TrafficGraph) (map[string]*entryPointRuntime, []*entryPointRuntime, []tcpRuntimeUpdate, error) {
 	current := make(map[string]*entryPointRuntime, len(m.listeners))
 	for name, runtime := range m.listeners {
 		current[name] = runtime
@@ -236,30 +271,49 @@ func (m *Manager) prepareTCPListeners(ctx context.Context, graph *domain.Traffic
 
 	next := make(map[string]*entryPointRuntime, len(current))
 	created := []*entryPointRuntime{}
+	updates := []tcpRuntimeUpdate{}
 	for _, entryPoint := range graph.EntryPoints {
 		if !isTCPListenerProtocol(entryPoint.Protocol) {
 			continue
 		}
 		if runtime := current[entryPoint.Name]; runtime != nil && runtime.matches(entryPoint) {
 			next[entryPoint.Name] = runtime
+			delete(current, entryPoint.Name)
 			continue
 		}
 		if runtime := conflictingTCPRuntime(current, entryPoint); runtime != nil {
-			trafficInfo(ctx).Str("entrypoint", runtime.entryPoint.Name).Str("address", runtime.entryPoint.Address).Msg("stopping tcp traffic entrypoint before same-address replacement")
-			runtime.stop(ctx, effectiveTCPOptions(graph.Options.TCP).DrainTimeout)
-			delete(current, runtime.entryPoint.Name)
+			trusted, err := parseTrustedCIDRs(entryPoint.TrustedCIDRs)
+			if err != nil {
+				stopTCPRuntimes(ctx, created, effectiveTCPOptions(graph.Options.TCP).DrainTimeout)
+				return nil, nil, nil, fmt.Errorf("parse trusted cidrs for tcp entrypoint %q: %w", entryPoint.Name, err)
+			}
+			trafficDebug(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Msg("reusing tcp traffic listener for same-address entrypoint update")
+			updates = append(updates, tcpRuntimeUpdate{runtime: runtime, entryPoint: entryPoint, trusted: trusted})
+			next[entryPoint.Name] = runtime
+			delete(current, runtime.entryPointSnapshot().Name)
+			continue
 		}
 		runtime, err := m.bindTCPEntryPoint(ctx, entryPoint)
 		if err != nil {
-			for _, createdRuntime := range created {
-				createdRuntime.stop(ctx, effectiveTCPOptions(graph.Options.TCP).DrainTimeout)
-			}
-			return nil, nil, err
+			stopTCPRuntimes(ctx, created, effectiveTCPOptions(graph.Options.TCP).DrainTimeout)
+			return nil, nil, nil, err
 		}
 		next[entryPoint.Name] = runtime
 		created = append(created, runtime)
 	}
-	return next, created, nil
+	return next, created, updates, nil
+}
+
+func stopTCPRuntimes(ctx context.Context, runtimes []*entryPointRuntime, drainTimeout time.Duration) {
+	for _, runtime := range runtimes {
+		runtime.stop(ctx, drainTimeout)
+	}
+}
+
+func stopUDPRuntimes(ctx context.Context, runtimes []*udpEntryPointRuntime, drainTimeout time.Duration) {
+	for _, runtime := range runtimes {
+		runtime.stop(ctx, drainTimeout)
+	}
 }
 
 func isTCPListenerProtocol(protocol domain.EntryPointProtocol) bool {
@@ -268,7 +322,7 @@ func isTCPListenerProtocol(protocol domain.EntryPointProtocol) bool {
 
 func conflictingTCPRuntime(current map[string]*entryPointRuntime, entryPoint domain.EntryPoint) *entryPointRuntime {
 	for _, runtime := range current {
-		if runtime.entryPoint.Address == entryPoint.Address {
+		if runtime.sameAddress(entryPoint) {
 			return runtime
 		}
 	}
@@ -290,7 +344,7 @@ func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.Entry
 	return runtime, nil
 }
 
-func (m *Manager) prepareUDPListeners(ctx context.Context, graph *domain.TrafficGraph) (map[string]*udpEntryPointRuntime, []*udpEntryPointRuntime, error) {
+func (m *Manager) prepareUDPListeners(ctx context.Context, graph *domain.TrafficGraph) (map[string]*udpEntryPointRuntime, []*udpEntryPointRuntime, []udpRuntimeUpdate, error) {
 	current := make(map[string]*udpEntryPointRuntime, len(m.udpListeners))
 	for name, runtime := range m.udpListeners {
 		current[name] = runtime
@@ -298,35 +352,42 @@ func (m *Manager) prepareUDPListeners(ctx context.Context, graph *domain.Traffic
 
 	next := make(map[string]*udpEntryPointRuntime, len(current))
 	created := []*udpEntryPointRuntime{}
+	updates := []udpRuntimeUpdate{}
 	for _, entryPoint := range graph.EntryPoints {
 		if entryPoint.Protocol != domain.EntryPointProtocolUDP {
 			continue
 		}
 		if runtime := current[entryPoint.Name]; runtime != nil && runtime.matches(entryPoint) {
 			next[entryPoint.Name] = runtime
+			delete(current, entryPoint.Name)
 			continue
 		}
 		if runtime := conflictingUDPRuntime(current, entryPoint); runtime != nil {
-			trafficInfo(ctx).Str("entrypoint", runtime.entryPoint.Name).Str("address", runtime.entryPoint.Address).Msg("stopping udp traffic entrypoint before same-address replacement")
-			runtime.stop(ctx, effectiveUDPOptions(graph.Options.UDP).DrainTimeout)
-			delete(current, runtime.entryPoint.Name)
+			trusted, err := parseTrustedCIDRs(entryPoint.TrustedCIDRs)
+			if err != nil {
+				stopUDPRuntimes(ctx, created, effectiveUDPOptions(graph.Options.UDP).DrainTimeout)
+				return nil, nil, nil, fmt.Errorf("parse trusted cidrs for udp entrypoint %q: %w", entryPoint.Name, err)
+			}
+			trafficDebug(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Msg("reusing udp traffic listener for same-address entrypoint update")
+			updates = append(updates, udpRuntimeUpdate{runtime: runtime, entryPoint: entryPoint, trusted: trusted})
+			next[entryPoint.Name] = runtime
+			delete(current, runtime.entryPointSnapshot().Name)
+			continue
 		}
 		runtime, err := m.bindUDPEntryPoint(ctx, entryPoint)
 		if err != nil {
-			for _, createdRuntime := range created {
-				createdRuntime.stop(ctx, effectiveUDPOptions(graph.Options.UDP).DrainTimeout)
-			}
-			return nil, nil, err
+			stopUDPRuntimes(ctx, created, effectiveUDPOptions(graph.Options.UDP).DrainTimeout)
+			return nil, nil, nil, err
 		}
 		next[entryPoint.Name] = runtime
 		created = append(created, runtime)
 	}
-	return next, created, nil
+	return next, created, updates, nil
 }
 
 func conflictingUDPRuntime(current map[string]*udpEntryPointRuntime, entryPoint domain.EntryPoint) *udpEntryPointRuntime {
 	for _, runtime := range current {
-		if runtime.entryPoint.Address == entryPoint.Address {
+		if runtime.sameAddress(entryPoint) {
 			return runtime
 		}
 	}
@@ -438,26 +499,12 @@ func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entry
 func routerStatuses(routers []domain.TrafficRouter, listeners map[string]*entryPointRuntime, udpListeners map[string]*udpEntryPointRuntime) []domain.TrafficRouterStatus {
 	statuses := make([]domain.TrafficRouterStatus, 0, len(routers))
 	for _, router := range routers {
-		status := domain.TrafficRouterStatus{Name: router.Name, EntryPoint: router.EntryPoint, Protocol: router.Protocol, Rule: router.Rule, Service: router.Service, Active: true}
-		if runtime := listeners[router.EntryPoint]; runtime != nil {
-			counters := runtime.counters.snapshot()
-			status.ActiveTCPConnections = counters.ActiveTCPConnections
-			status.TotalAccepted = counters.TotalAccepted
-			status.TotalRefused = counters.TotalRefused
-			status.TotalErrors = counters.TotalErrors
-			status.BytesIn = counters.BytesIn
-			status.BytesOut = counters.BytesOut
-		}
-		if runtime := udpListeners[router.EntryPoint]; runtime != nil {
-			counters := runtime.counters.snapshot()
-			status.ActiveUDPSessions = counters.ActiveUDPSessions
-			status.TotalAccepted = counters.TotalAccepted
-			status.TotalRefused = counters.TotalRefused
-			status.TotalErrors = counters.TotalErrors
-			status.BytesIn = counters.BytesIn
-			status.BytesOut = counters.BytesOut
-		}
-		statuses = append(statuses, status)
+		_, tcpActive := listeners[router.EntryPoint]
+		_, udpActive := udpListeners[router.EntryPoint]
+		statuses = append(statuses, domain.TrafficRouterStatus{
+			Name: router.Name, EntryPoint: router.EntryPoint, Protocol: router.Protocol,
+			Rule: router.Rule, Service: router.Service, Active: tcpActive || udpActive,
+		})
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].Name < statuses[j].Name })
 	return statuses
@@ -493,6 +540,9 @@ func aggregateCounters(entries []domain.EntryPointStatus) domain.TrafficCounters
 func cloneTrafficGraph(graph domain.TrafficGraph) domain.TrafficGraph {
 	clone := graph
 	clone.EntryPoints = append([]domain.EntryPoint{}, graph.EntryPoints...)
+	for i := range clone.EntryPoints {
+		clone.EntryPoints[i].TrustedCIDRs = append([]string(nil), graph.EntryPoints[i].TrustedCIDRs...)
+	}
 	clone.Routers = append([]domain.TrafficRouter{}, graph.Routers...)
 	clone.Services = append([]domain.TrafficService{}, graph.Services...)
 	for i := range clone.Services {

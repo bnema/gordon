@@ -113,6 +113,20 @@ func TestBuildRejectsAmbiguousNetworkServices(t *testing.T) {
 		}})
 		require.ErrorContains(t, err, "duplicate port")
 	})
+
+	t.Run("unused invalid port rejected", func(t *testing.T) {
+		_, err := Build(Input{NetworkServices: []NetworkServiceConfig{
+			{Name: "db", Ports: []PortConfig{{Name: "unused", Container: 0, Protocol: domain.NetworkProtocolTCP}}},
+		}})
+		require.ErrorContains(t, err, "invalid container port")
+	})
+
+	t.Run("unused invalid protocol rejected", func(t *testing.T) {
+		_, err := Build(Input{NetworkServices: []NetworkServiceConfig{
+			{Name: "db", Ports: []PortConfig{{Name: "unused", Container: 5432, Protocol: domain.NetworkProtocol("sctp")}}},
+		}})
+		require.ErrorContains(t, err, "invalid protocol")
+	})
 }
 
 func TestBuildRejectsInvalidServiceRefs(t *testing.T) {

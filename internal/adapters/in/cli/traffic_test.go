@@ -34,7 +34,7 @@ func TestTrafficStatusHumanOutput(t *testing.T) {
 		}},
 		Routers: []dto.TrafficRouterStatus{{
 			Name: "pg-router", EntryPoint: "postgres", Protocol: domain.RouterProtocolTCP,
-			Service: "network_service:postgres:db", Active: true, TotalAccepted: 2,
+			Service: "network_service:postgres:db", Active: true,
 		}},
 		Services: []dto.TrafficServiceStatus{{
 			Name: "network_service:postgres:db", Active: true,

@@ -52,3 +52,17 @@ func TestHandler_TrafficStatusRequiresStatusRead(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
+
+func TestHandler_TrafficStatusUnavailableWithoutService(t *testing.T) {
+	handler := newTestHandler(t, func(d *HandlerDeps) { d.TrafficSvc = nil })
+	server := newScopedTestServer(t, handler, "admin:status:read")
+
+	resp, err := http.Get(server.URL + "/admin/traffic/status")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body dto.TrafficStatusResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "unavailable", body.LastReloadStatus)
+}

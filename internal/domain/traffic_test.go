@@ -347,54 +347,60 @@ func TestTrafficGraphValidateBackendsAndL4Routers(t *testing.T) {
 		wantErr  string
 	}{
 		{
+			name:     "backend host required",
+			router:   TrafficRouter{Name: "tcp", EntryPoint: "tcp", Protocol: RouterProtocolTCP, Service: "network_service:app:db"},
+			services: []TrafficService{{Name: "network_service:app:db", Backends: []TrafficBackend{{Name: "app", Port: 5432, Protocol: NetworkProtocolTCP}}}},
+			wantErr:  "backend host is required",
+		},
+		{
 			name:     "backend ports outside range rejected low",
 			router:   TrafficRouter{Name: "tcp", EntryPoint: "tcp", Protocol: RouterProtocolTCP, Service: "network_service:app:db"},
-			services: []TrafficService{{Name: "network_service:app:db", Backends: []TrafficBackend{{Name: "app", Port: 0, Protocol: NetworkProtocolTCP}}}},
+			services: []TrafficService{{Name: "network_service:app:db", Backends: []TrafficBackend{{Name: "app", Host: "10.0.0.2", Port: 0, Protocol: NetworkProtocolTCP}}}},
 			wantErr:  "invalid backend port",
 		},
 		{
 			name:     "backend ports outside range rejected high",
 			router:   TrafficRouter{Name: "tcp", EntryPoint: "tcp", Protocol: RouterProtocolTCP, Service: "network_service:app:db"},
-			services: []TrafficService{{Name: "network_service:app:db", Backends: []TrafficBackend{{Name: "app", Port: 65536, Protocol: NetworkProtocolTCP}}}},
+			services: []TrafficService{{Name: "network_service:app:db", Backends: []TrafficBackend{{Name: "app", Host: "10.0.0.2", Port: 65536, Protocol: NetworkProtocolTCP}}}},
 			wantErr:  "invalid backend port",
 		},
 		{
 			name:   "l4 routers reject services with more than one backend",
 			router: TrafficRouter{Name: "tcp", EntryPoint: "tcp", Protocol: RouterProtocolTCP, Service: "network_service:app:db"},
 			services: []TrafficService{{Name: "network_service:app:db", Backends: []TrafficBackend{
-				{Name: "app", Port: 5432, Protocol: NetworkProtocolTCP},
-				{Name: "app2", Port: 5432, Protocol: NetworkProtocolTCP},
+				{Name: "app", Host: "10.0.0.2", Port: 5432, Protocol: NetworkProtocolTCP},
+				{Name: "app2", Host: "10.0.0.3", Port: 5432, Protocol: NetworkProtocolTCP},
 			}}},
 			wantErr: "l4 router service must have exactly one backend",
 		},
 		{
 			name:     "tcp router requires tcp network backend",
 			router:   TrafficRouter{Name: "tcp", EntryPoint: "tcp", Protocol: RouterProtocolTCP, Service: "network_service:app:db"},
-			services: []TrafficService{{Name: "network_service:app:db", Backends: []TrafficBackend{{Name: "app", Port: 53, Protocol: NetworkProtocolUDP}}}},
+			services: []TrafficService{{Name: "network_service:app:db", Backends: []TrafficBackend{{Name: "app", Host: "10.0.0.2", Port: 53, Protocol: NetworkProtocolUDP}}}},
 			wantErr:  "backend protocol udp does not match router protocol tcp",
 		},
 		{
 			name:     "udp router requires udp network backend",
 			router:   TrafficRouter{Name: "udp", EntryPoint: "udp", Protocol: RouterProtocolUDP, Service: "network_service:app:game"},
-			services: []TrafficService{{Name: "network_service:app:game", Backends: []TrafficBackend{{Name: "app", Port: 53, Protocol: NetworkProtocolTCP}}}},
+			services: []TrafficService{{Name: "network_service:app:game", Backends: []TrafficBackend{{Name: "app", Host: "10.0.0.2", Port: 53, Protocol: NetworkProtocolTCP}}}},
 			wantErr:  "backend protocol tcp does not match router protocol udp",
 		},
 		{
 			name:     "tls passthrough requires tcp network backend",
 			router:   TrafficRouter{Name: "tls", EntryPoint: "tls", Protocol: RouterProtocolTLSPassthrough, Rule: TrafficRule{SNI: "db.example.com"}, Service: "network_service:app:https"},
-			services: []TrafficService{{Name: "network_service:app:https", Backends: []TrafficBackend{{Name: "app", Port: 443, Protocol: NetworkProtocolUDP}}}},
+			services: []TrafficService{{Name: "network_service:app:https", Backends: []TrafficBackend{{Name: "app", Host: "10.0.0.2", Port: 443, Protocol: NetworkProtocolUDP}}}},
 			wantErr:  "backend protocol udp does not match router protocol tls_passthrough",
 		},
 		{
 			name:     "l4 router rejects route ref",
 			router:   TrafficRouter{Name: "tcp", EntryPoint: "tcp", Protocol: RouterProtocolTCP, Service: "route:app.example.com"},
-			services: []TrafficService{{Name: "route:app.example.com", Backends: []TrafficBackend{{Name: "app", Port: 443, Protocol: NetworkProtocolTCP}}}},
+			services: []TrafficService{{Name: "route:app.example.com", Backends: []TrafficBackend{{Name: "app", Host: "10.0.0.2", Port: 443, Protocol: NetworkProtocolTCP}}}},
 			wantErr:  "requires network_service service ref",
 		},
 		{
 			name:     "static ref parses but graph validation rejects unsupported",
 			router:   TrafficRouter{Name: "tcp", EntryPoint: "tcp", Protocol: RouterProtocolTCP, Service: "static:maintenance"},
-			services: []TrafficService{{Name: "static:maintenance", Backends: []TrafficBackend{{Name: "maintenance", Port: 443, Protocol: NetworkProtocolTCP}}}},
+			services: []TrafficService{{Name: "static:maintenance", Backends: []TrafficBackend{{Name: "maintenance", Host: "10.0.0.2", Port: 443, Protocol: NetworkProtocolTCP}}}},
 			wantErr:  "static traffic service ref \"static:maintenance\" is unsupported",
 		},
 	}
@@ -517,14 +523,14 @@ func TestTrafficDomainTypesMatchSpecFields(t *testing.T) {
 		LastReloadStatus: "ok",
 		LastReloadError:  "",
 		EntryPoints:      []EntryPointStatus{{Name: "tcp", ActiveTCPConnections: 1, ActiveUDPSessions: 2, TotalAccepted: 3, TotalRefused: 4, TotalErrors: 5, BytesIn: 6, BytesOut: 7}},
-		Routers:          []TrafficRouterStatus{{Name: "tcp", ActiveTCPConnections: 1, ActiveUDPSessions: 2, TotalAccepted: 3, TotalRefused: 4, TotalErrors: 5, BytesIn: 6, BytesOut: 7}},
-		Services:         []TrafficServiceStatus{{Name: "network_service:app:game", Backends: []TrafficBackendStatus{{Name: "app", ActiveTCPConnections: 1, ActiveUDPSessions: 2, TotalAccepted: 3, TotalRefused: 4, TotalErrors: 5, BytesIn: 6, BytesOut: 7}}}},
+		Routers:          []TrafficRouterStatus{{Name: "tcp", EntryPoint: "tcp", Protocol: RouterProtocolTCP, Service: "network_service:app:game", Active: true}},
+		Services:         []TrafficServiceStatus{{Name: "network_service:app:game", Backends: []TrafficBackendStatus{{Name: "app", Host: "10.0.0.2", Port: 1234, Protocol: NetworkProtocolTCP, Active: true}}}},
 		Counters:         TrafficCounters{ActiveTCPConnections: 1, ActiveUDPSessions: 2, TotalAccepted: 3, TotalRefused: 4, TotalErrors: 5, BytesIn: 6, BytesOut: 7},
 	}
 	require.Equal(t, "ok", status.LastReloadStatus)
 	require.Empty(t, status.LastReloadError)
 	require.Equal(t, int64(7), status.EntryPoints[0].BytesOut)
-	require.Equal(t, int64(7), status.Routers[0].BytesOut)
-	require.Equal(t, int64(7), status.Services[0].Backends[0].BytesOut)
+	require.True(t, status.Routers[0].Active)
+	require.True(t, status.Services[0].Backends[0].Active)
 	require.Equal(t, int64(7), status.Counters.BytesOut)
 }

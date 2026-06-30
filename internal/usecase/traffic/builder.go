@@ -90,22 +90,22 @@ func Build(input Input) (domain.TrafficGraph, error) {
 
 	options, err := buildOptions(input.Traffic)
 	if err != nil {
-		return domain.TrafficGraph{}, err
+		return domain.TrafficGraph{}, fmt.Errorf("build traffic options: %w", err)
 	}
 	if err := validateNetworkServices(input.NetworkServices); err != nil {
-		return domain.TrafficGraph{}, err
+		return domain.TrafficGraph{}, fmt.Errorf("validate network services: %w", err)
 	}
 	graph.Options = options
 	graph.EntryPoints = b.buildEntryPoints()
 
 	if err := b.addHTTPRoutes(&graph); err != nil {
-		return domain.TrafficGraph{}, err
+		return domain.TrafficGraph{}, fmt.Errorf("add HTTP routes: %w", err)
 	}
 	if err := b.addExternalRoutes(&graph); err != nil {
-		return domain.TrafficGraph{}, err
+		return domain.TrafficGraph{}, fmt.Errorf("add external routes: %w", err)
 	}
 	if err := b.addExplicitRouters(&graph); err != nil {
-		return domain.TrafficGraph{}, err
+		return domain.TrafficGraph{}, fmt.Errorf("add explicit traffic routers: %w", err)
 	}
 
 	graph.Services = make([]domain.TrafficService, 0, len(b.services))
@@ -114,7 +114,7 @@ func Build(input Input) (domain.TrafficGraph, error) {
 	}
 	sort.Slice(graph.Services, func(i, j int) bool { return graph.Services[i].Name < graph.Services[j].Name })
 	if err := graph.Validate(); err != nil {
-		return domain.TrafficGraph{}, err
+		return domain.TrafficGraph{}, fmt.Errorf("validate traffic graph: %w", err)
 	}
 	return graph, nil
 }
@@ -246,9 +246,24 @@ func validateNetworkServicePorts(service NetworkServiceConfig) error {
 		if _, exists := seen[port.Name]; exists {
 			return fmt.Errorf("duplicate port %q on network service %q", port.Name, service.Name)
 		}
+		if port.Container < 1 || port.Container > 65535 {
+			return fmt.Errorf("invalid container port %d on network service %q port %q", port.Container, service.Name, port.Name)
+		}
+		if err := validateNetworkServicePortProtocol(port.Protocol); err != nil {
+			return fmt.Errorf("invalid protocol for network service %q port %q: %w", service.Name, port.Name, err)
+		}
 		seen[port.Name] = struct{}{}
 	}
 	return nil
+}
+
+func validateNetworkServicePortProtocol(protocol domain.NetworkProtocol) error {
+	switch protocol {
+	case domain.NetworkProtocolTCP, domain.NetworkProtocolUDP:
+		return nil
+	default:
+		return fmt.Errorf("%q", protocol)
+	}
 }
 
 func (b *builder) networkService(name string) (NetworkServiceConfig, bool) {
@@ -276,27 +291,38 @@ func (b *builder) addService(service domain.TrafficService) {
 }
 
 func buildOptions(cfg Config) (domain.TrafficOptions, error) {
-	tcpDial, err := parseDurationDefault(cfg.TCP.DialTimeout, 10*time.Second, "traffic.tcp.dial_timeout")
+	tcpDial, err := parsePositiveDurationDefault(cfg.TCP.DialTimeout, 10*time.Second, "traffic.tcp.dial_timeout")
 	if err != nil {
 		return domain.TrafficOptions{}, err
 	}
-	tcpIdle, err := parseDurationDefault(cfg.TCP.IdleTimeout, 5*time.Minute, "traffic.tcp.idle_timeout")
+	tcpIdle, err := parsePositiveDurationDefault(cfg.TCP.IdleTimeout, 5*time.Minute, "traffic.tcp.idle_timeout")
 	if err != nil {
 		return domain.TrafficOptions{}, err
 	}
-	tcpDrain, err := parseDurationDefault(cfg.TCP.DrainTimeout, 30*time.Second, "traffic.tcp.drain_timeout")
+	tcpDrain, err := parsePositiveDurationDefault(cfg.TCP.DrainTimeout, 30*time.Second, "traffic.tcp.drain_timeout")
 	if err != nil {
 		return domain.TrafficOptions{}, err
 	}
-	udpIdle, err := parseDurationDefault(cfg.UDP.IdleTimeout, 30*time.Second, "traffic.udp.idle_timeout")
+	udpIdle, err := parsePositiveDurationDefault(cfg.UDP.IdleTimeout, 30*time.Second, "traffic.udp.idle_timeout")
 	if err != nil {
 		return domain.TrafficOptions{}, err
 	}
-	udpDrain, err := parseDurationDefault(cfg.UDP.DrainTimeout, 30*time.Second, "traffic.udp.drain_timeout")
+	udpDrain, err := parsePositiveDurationDefault(cfg.UDP.DrainTimeout, 30*time.Second, "traffic.udp.drain_timeout")
 	if err != nil {
 		return domain.TrafficOptions{}, err
 	}
 	return domain.TrafficOptions{TCP: domain.TCPOptions{DialTimeout: tcpDial, IdleTimeout: tcpIdle, DrainTimeout: tcpDrain, MaxConnections: cfg.TCP.MaxConnections}, UDP: domain.UDPOptions{IdleTimeout: udpIdle, DrainTimeout: udpDrain, MaxSessions: cfg.UDP.MaxSessions}}, nil
+}
+
+func parsePositiveDurationDefault(value string, fallback time.Duration, field string) (time.Duration, error) {
+	d, err := parseDurationDefault(value, fallback, field)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid %s: must be positive", field)
+	}
+	return d, nil
 }
 
 func parseDurationDefault(value string, fallback time.Duration, field string) (time.Duration, error) {

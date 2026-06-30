@@ -3,6 +3,7 @@ package traffic
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -113,10 +114,11 @@ func assertTCPRejected(t *testing.T, manager *Manager, address string, refused i
 	t.Helper()
 	conn := dialTCP(t, address)
 	defer conn.Close()
-	_, err := conn.Write([]byte("blocked"))
-	require.NoError(t, err)
-	_, err = bufio.NewReader(conn).ReadByte()
-	require.Error(t, err)
+	_, writeErr := conn.Write([]byte("blocked"))
+	if writeErr == nil {
+		_, readErr := bufio.NewReader(conn).ReadByte()
+		require.Error(t, readErr)
+	}
 	assert.Eventually(t, func() bool { return manager.Status().Counters.TotalRefused == refused }, time.Second, 10*time.Millisecond)
 }
 
@@ -142,10 +144,11 @@ func TestTCPPassthroughUnknownRouterCloses(t *testing.T) {
 
 	conn := dialTCP(t, graph.EntryPoints[0].Address)
 	defer conn.Close()
-	_, err := conn.Write([]byte("hello"))
-	require.NoError(t, err)
-	_, err = bufio.NewReader(conn).ReadByte()
-	require.Error(t, err)
+	_, writeErr := conn.Write([]byte("hello"))
+	if writeErr == nil {
+		_, readErr := bufio.NewReader(conn).ReadByte()
+		require.Error(t, readErr)
+	}
 	assert.Eventually(t, func() bool { return manager.Status().Counters.TotalRefused == 1 }, time.Second, 10*time.Millisecond)
 }
 
@@ -158,10 +161,11 @@ func TestTCPPassthroughBackendDialFailure(t *testing.T) {
 
 	conn := dialTCP(t, graph.EntryPoints[0].Address)
 	defer conn.Close()
-	_, err := conn.Write([]byte("hello"))
-	require.NoError(t, err)
-	_, err = bufio.NewReader(conn).ReadByte()
-	require.Error(t, err)
+	_, writeErr := conn.Write([]byte("hello"))
+	if writeErr == nil {
+		_, readErr := bufio.NewReader(conn).ReadByte()
+		require.Error(t, readErr)
+	}
 	assert.Eventually(t, func() bool { return manager.Status().Counters.TotalErrors == 1 }, time.Second, 10*time.Millisecond)
 }
 
@@ -186,9 +190,13 @@ func TestTCPPassthroughIdleTimeoutClosesConnection(t *testing.T) {
 
 	conn := dialTCP(t, graph.EntryPoints[0].Address)
 	defer conn.Close()
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(250*time.Millisecond)))
+	started := time.Now()
 	_, err := bufio.NewReader(conn).ReadByte()
 	require.Error(t, err)
+	var netErr net.Error
+	require.False(t, errors.As(err, &netErr) && netErr.Timeout(), "read hit the client deadline instead of the proxy idle timeout")
+	assert.Less(t, time.Since(started), 250*time.Millisecond)
 }
 
 func TestTCPPassthroughMaxConnectionsRejectsOverflow(t *testing.T) {

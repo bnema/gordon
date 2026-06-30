@@ -58,7 +58,8 @@ func (r *entryPointRuntime) start() {
 	if !r.started.CompareAndSwap(false, true) {
 		return
 	}
-	trafficInfo(r.ctx).Str("entrypoint", r.entryPoint.Name).Str("address", r.entryPoint.Address).Str("protocol", string(r.entryPoint.Protocol)).Msg("started tcp traffic entrypoint")
+	entryPoint := r.entryPointSnapshot()
+	trafficInfo(r.ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("started tcp traffic entrypoint")
 	go r.acceptLoop()
 }
 
@@ -71,13 +72,19 @@ func (r *entryPointRuntime) acceptLoop() {
 				return
 			}
 			r.counters.totalErrors.Add(1)
-			if temporary, ok := err.(interface{ Temporary() bool }); ok && temporary.Temporary() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				continue
 			}
-			trafficWarn(r.ctx).Err(err).Str("entrypoint", r.entryPoint.Name).Msg("tcp traffic accept loop stopped")
-			return
+			trafficWarn(r.ctx).Err(err).Str("entrypoint", r.entryPointSnapshot().Name).Msg("tcp traffic accept failed; retrying")
+			select {
+			case <-time.After(100 * time.Millisecond):
+			case <-r.ctx.Done():
+				return
+			}
+			continue
 		}
-		if !trustedRemoteAddr(r.trusted, conn.RemoteAddr()) {
+		if !trustedRemoteAddr(r.trustedSnapshot(), conn.RemoteAddr()) {
 			r.counters.totalRefused.Add(1)
 			_ = conn.Close()
 			continue
@@ -102,7 +109,7 @@ func (r *entryPointRuntime) handleTCPConn(client net.Conn) {
 	r.track(tracked)
 	defer r.untrack(tracked)
 
-	switch r.entryPoint.Protocol {
+	switch r.entryPointSnapshot().Protocol {
 	case domain.EntryPointProtocolTCP:
 		r.handlePlainTCP(tracked, options)
 	case domain.EntryPointProtocolTLSMux:
@@ -134,7 +141,7 @@ func (r *entryPointRuntime) handleTLSMux(tracked *trackedTCPConn, options domain
 		r.proxyToBackend(tracked, peeked.conn, backend, options)
 		return
 	}
-	if fallback := r.manager.tlsFallback(r.entryPoint.Name); fallback != nil {
+	if fallback := r.manager.tlsFallback(r.entryPointSnapshot().Name); fallback != nil {
 		r.counters.totalAccepted.Add(1)
 		fallback(r.ctx, peeked.conn)
 		return
@@ -145,14 +152,14 @@ func (r *entryPointRuntime) handleTLSMux(tracked *trackedTCPConn, options domain
 
 func (r *entryPointRuntime) peekTLSClientHello(client net.Conn, options domain.TCPOptions) (peekedTLSConn, error) {
 	if err := client.SetReadDeadline(time.Now().Add(clientHelloTimeout(options))); err != nil {
-		return peekedTLSConn{}, err
+		return peekedTLSConn{}, fmt.Errorf("set client hello read deadline for %s: %w", client.RemoteAddr(), err)
 	}
 	sni, replayed, err := peekClientHelloSNI(client)
 	if clearErr := client.SetReadDeadline(time.Time{}); err == nil && clearErr != nil {
-		return peekedTLSConn{}, clearErr
+		return peekedTLSConn{}, fmt.Errorf("clear client hello read deadline for %s: %w", client.RemoteAddr(), clearErr)
 	}
 	if err != nil {
-		return peekedTLSConn{}, err
+		return peekedTLSConn{}, fmt.Errorf("peek client hello from %s: %w", client.RemoteAddr(), err)
 	}
 	return peekedTLSConn{sni: sni, conn: replayed}, nil
 }
@@ -180,7 +187,7 @@ func (r *entryPointRuntime) proxyToBackend(tracked *trackedTCPConn, client net.C
 		return
 	}
 
-	tracked.backend = backendConn
+	r.setBackend(tracked, backendConn)
 	r.counters.totalAccepted.Add(1)
 	r.proxyTCP(client, backendConn, options.IdleTimeout)
 }
@@ -190,9 +197,10 @@ func (r *entryPointRuntime) resolveTCPBackend() (domain.TrafficRouter, domain.Tr
 	if graph == nil {
 		return domain.TrafficRouter{}, domain.TrafficBackend{}, false
 	}
+	entryPoint := r.entryPointSnapshot()
 	var router domain.TrafficRouter
 	for _, candidate := range graph.Routers {
-		if candidate.EntryPoint == r.entryPoint.Name && candidate.Protocol == domain.RouterProtocolTCP {
+		if candidate.EntryPoint == entryPoint.Name && candidate.Protocol == domain.RouterProtocolTCP {
 			if router.Name != "" {
 				return domain.TrafficRouter{}, domain.TrafficBackend{}, false
 			}
@@ -217,6 +225,7 @@ func (r *entryPointRuntime) resolveTCPBackend() (domain.TrafficRouter, domain.Tr
 
 func (r *entryPointRuntime) resolveTLSBackend(sni string) (domain.TrafficBackend, bool) {
 	graph := r.manager.snapshot.Load()
+	sni = normalizeTLSName(sni)
 	if graph == nil || sni == "" {
 		return domain.TrafficBackend{}, false
 	}
@@ -230,8 +239,9 @@ func (r *entryPointRuntime) resolveTLSBackend(sni string) (domain.TrafficBackend
 }
 
 func (r *entryPointRuntime) findExactTLSRouter(graph *domain.TrafficGraph, sni string) (domain.TrafficRouter, bool) {
+	entryPoint := r.entryPointSnapshot()
 	for _, router := range graph.Routers {
-		if router.EntryPoint == r.entryPoint.Name && router.Protocol == domain.RouterProtocolTLSPassthrough && normalizeTLSName(router.Rule.SNI) == sni {
+		if router.EntryPoint == entryPoint.Name && router.Protocol == domain.RouterProtocolTLSPassthrough && normalizeTLSName(router.Rule.SNI) == sni {
 			return router, true
 		}
 	}
@@ -239,9 +249,10 @@ func (r *entryPointRuntime) findExactTLSRouter(graph *domain.TrafficGraph, sni s
 }
 
 func (r *entryPointRuntime) findWildcardTLSRouter(graph *domain.TrafficGraph, sni string) (domain.TrafficRouter, bool) {
+	entryPoint := r.entryPointSnapshot()
 	for _, router := range graph.Routers {
 		wildcard := normalizeTLSName(router.Rule.SNI)
-		if router.EntryPoint == r.entryPoint.Name && router.Protocol == domain.RouterProtocolTLSPassthrough && hostMatchesTLSWildcard(sni, wildcard) {
+		if router.EntryPoint == entryPoint.Name && router.Protocol == domain.RouterProtocolTLSPassthrough && hostMatchesTLSWildcard(sni, wildcard) {
 			return router, true
 		}
 	}
@@ -262,7 +273,8 @@ func hostMatchesTLSWildcard(host string, wildcard string) bool {
 	if !ok || host == suffix {
 		return false
 	}
-	return strings.HasSuffix(host, "."+suffix)
+	prefix, ok := strings.CutSuffix(host, "."+suffix)
+	return ok && prefix != "" && !strings.Contains(prefix, ".")
 }
 
 func (r *entryPointRuntime) proxyTCP(client net.Conn, backend net.Conn, idleTimeout time.Duration) {
@@ -296,7 +308,7 @@ func copyWithIdleTimeout(dst net.Conn, src net.Conn, idleTimeout time.Duration) 
 	if idleTimeout <= 0 {
 		return io.Copy(dst, src)
 	}
-	return io.Copy(dst, idleConn{Conn: src, idleTimeout: idleTimeout})
+	return io.Copy(deadlineWriter{Conn: dst, idleTimeout: idleTimeout}, idleConn{Conn: src, idleTimeout: idleTimeout})
 }
 
 type idleConn struct {
@@ -309,6 +321,18 @@ func (c idleConn) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return c.Conn.Read(p)
+}
+
+type deadlineWriter struct {
+	net.Conn
+	idleTimeout time.Duration
+}
+
+func (c deadlineWriter) Write(p []byte) (int, error) {
+	if err := c.SetWriteDeadline(time.Now().Add(c.idleTimeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(p)
 }
 
 func closeWrite(conn net.Conn) {
@@ -347,6 +371,12 @@ func (r *entryPointRuntime) track(conn *trackedTCPConn) {
 	r.mu.Unlock()
 }
 
+func (r *entryPointRuntime) setBackend(conn *trackedTCPConn, backend net.Conn) {
+	r.mu.Lock()
+	conn.backend = backend
+	r.mu.Unlock()
+}
+
 func (r *entryPointRuntime) untrack(conn *trackedTCPConn) {
 	r.mu.Lock()
 	delete(r.activeConns, conn)
@@ -355,7 +385,8 @@ func (r *entryPointRuntime) untrack(conn *trackedTCPConn) {
 
 func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration) {
 	if r.closed.CompareAndSwap(false, true) {
-		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Str("address", r.entryPoint.Address).Msg("stopping tcp traffic entrypoint")
+		entryPoint := r.entryPointSnapshot()
+		trafficInfo(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Msg("stopping tcp traffic entrypoint")
 		r.cancel()
 		_ = r.listener.Close()
 		if !r.started.Load() {
@@ -368,14 +399,14 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 		return
 	}
 	if r.waitActive(ctx, drainTimeout) {
-		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Msg("stopped tcp traffic entrypoint")
+		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped tcp traffic entrypoint")
 		return
 	}
-	trafficDebug(ctx).Str("entrypoint", r.entryPoint.Name).Dur("drain_timeout", drainTimeout).Msg("forcing tcp traffic entrypoint drain")
+	trafficDebug(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("forcing tcp traffic entrypoint drain")
 	r.closeActiveConns()
 	select {
 	case <-r.activeDone():
-		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Msg("stopped tcp traffic entrypoint")
+		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped tcp traffic entrypoint")
 	case <-ctx.Done():
 	}
 }
@@ -419,11 +450,31 @@ func (r *entryPointRuntime) closeActiveConns() {
 }
 
 func (r *entryPointRuntime) matches(entryPoint domain.EntryPoint) bool {
-	return r.entryPoint.Name == entryPoint.Name && r.entryPoint.Address == entryPoint.Address && r.entryPoint.Protocol == entryPoint.Protocol && trustedCIDRsEqual(r.entryPoint.TrustedCIDRs, entryPoint.TrustedCIDRs)
+	current := r.entryPointSnapshot()
+	return current.Name == entryPoint.Name && current.Address == entryPoint.Address && current.Protocol == entryPoint.Protocol && trustedCIDRsEqual(current.TrustedCIDRs, entryPoint.TrustedCIDRs)
 }
 
-func (r *entryPointRuntime) shouldStopWith(next *entryPointRuntime) bool {
-	return next == nil || next != r
+func (r *entryPointRuntime) sameAddress(entryPoint domain.EntryPoint) bool {
+	return r.entryPointSnapshot().Address == entryPoint.Address
+}
+
+func (r *entryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, trusted []*net.IPNet) {
+	r.mu.Lock()
+	r.entryPoint = entryPoint
+	r.trusted = trusted
+	r.mu.Unlock()
+}
+
+func (r *entryPointRuntime) entryPointSnapshot() domain.EntryPoint {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.entryPoint
+}
+
+func (r *entryPointRuntime) trustedSnapshot() []*net.IPNet {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.trusted
 }
 
 func (r *entryPointRuntime) isClosed() bool {
@@ -433,11 +484,11 @@ func (r *entryPointRuntime) isClosed() bool {
 func backendFromAddress(name string, address string) (domain.TrafficBackend, error) {
 	host, portValue, err := net.SplitHostPort(address)
 	if err != nil {
-		return domain.TrafficBackend{}, err
+		return domain.TrafficBackend{}, fmt.Errorf("split backend address %q: %w", address, err)
 	}
 	port, err := strconv.Atoi(portValue)
 	if err != nil {
-		return domain.TrafficBackend{}, err
+		return domain.TrafficBackend{}, fmt.Errorf("parse backend port %q from address %q: %w", portValue, address, err)
 	}
 	return domain.TrafficBackend{Name: name, Host: host, Port: port, Protocol: domain.NetworkProtocolTCP}, nil
 }

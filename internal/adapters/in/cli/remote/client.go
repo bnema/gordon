@@ -705,12 +705,12 @@ func (c *Client) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, erro
 func (c *Client) GetTrafficStatus(ctx context.Context) (*dto.TrafficStatusResponse, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/traffic/status", nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("request traffic status: %w", err)
 	}
 
 	var status dto.TrafficStatusResponse
 	if err := parseResponse(resp, &status); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse traffic status response: %w", err)
 	}
 
 	return &status, nil

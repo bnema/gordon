@@ -114,19 +114,12 @@ type EntryPointStatus struct {
 }
 
 type TrafficRouterStatus struct {
-	Name                 string
-	EntryPoint           string
-	Protocol             RouterProtocol
-	Rule                 TrafficRule
-	Service              string
-	Active               bool
-	ActiveTCPConnections int64
-	ActiveUDPSessions    int64
-	TotalAccepted        int64
-	TotalRefused         int64
-	TotalErrors          int64
-	BytesIn              int64
-	BytesOut             int64
+	Name       string
+	EntryPoint string
+	Protocol   RouterProtocol
+	Rule       TrafficRule
+	Service    string
+	Active     bool
 }
 
 type TrafficServiceStatus struct {
@@ -136,18 +129,11 @@ type TrafficServiceStatus struct {
 }
 
 type TrafficBackendStatus struct {
-	Name                 string
-	Host                 string
-	Port                 int
-	Protocol             NetworkProtocol
-	Active               bool
-	ActiveTCPConnections int64
-	ActiveUDPSessions    int64
-	TotalAccepted        int64
-	TotalRefused         int64
-	TotalErrors          int64
-	BytesIn              int64
-	BytesOut             int64
+	Name     string
+	Host     string
+	Port     int
+	Protocol NetworkProtocol
+	Active   bool
 }
 
 type TrafficCounters struct {
@@ -290,6 +276,9 @@ func validateTrafficService(service TrafficService, existing map[string]TrafficS
 }
 
 func validateTrafficBackend(serviceName string, backend TrafficBackend) error {
+	if strings.TrimSpace(backend.Host) == "" {
+		return fmt.Errorf("backend host is required for service %q", serviceName)
+	}
 	if backend.Port < 1 || backend.Port > 65535 {
 		return fmt.Errorf("invalid backend port %d for service %q", backend.Port, serviceName)
 	}

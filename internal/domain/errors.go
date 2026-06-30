@@ -49,6 +49,7 @@ var (
 	ErrPreviewNotFound = errors.New("preview not found")
 
 	// Config errors
+	ErrTrafficGraphRequired = errors.New("traffic graph is required")
 	ErrConfigNotFound       = errors.New("configuration not found")
 	ErrInvalidConfig        = errors.New("invalid configuration")
 	ErrConfigLoadFailed     = errors.New("failed to load configuration")

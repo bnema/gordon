@@ -26,13 +26,16 @@ func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Mana
 		NetworkServices: cfg.NetworkServices,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("build traffic graph: %w", err)
 	}
 	owned, err := trafficRuntimeGraph(graph)
 	if err != nil {
-		return err
+		return fmt.Errorf("filter traffic graph for runtime ownership: %w", err)
 	}
-	return manager.Apply(ctx, &owned)
+	if err := manager.Apply(ctx, &owned); err != nil {
+		return fmt.Errorf("apply traffic graph: %w", err)
+	}
+	return nil
 }
 
 func trafficRuntimeGraph(graph domain.TrafficGraph) (domain.TrafficGraph, error) {

@@ -4,7 +4,7 @@ Gordon models network listeners as a traffic graph: entrypoints receive connecti
 
 ## Entrypoints
 
-`server.port` creates the default HTTP entrypoint `web`. `server.tls_port` creates the default TLS multiplexer entrypoint `websecure` when non-zero.
+`server.port` creates the default HTTP entrypoint `web`. `server.tls_port` creates `websecure`, the default TLS entrypoint used by Gordon's legacy HTTPS termination path. L4 TLS passthrough must use a custom traffic-manager-owned `tls_mux` entrypoint instead of `websecure`.
 
 Custom entrypoints use the top-level `entrypoints` table:
 
@@ -78,7 +78,7 @@ UDP sessions are keyed by client address and expire after `idle_timeout`. If `ma
 
 ## TLS Passthrough
 
-TLS passthrough routers run on traffic-manager-owned `tls_mux` entrypoints and route by ClientHello SNI without terminating TLS. The default `websecure` entrypoint is reserved for Gordon's legacy HTTPS listener until full HTTP/HTTPS traffic-manager ownership is enabled; use a custom `tls_mux` entrypoint for passthrough.
+TLS passthrough routers run on traffic-manager-owned `tls_mux` entrypoints and route by ClientHello SNI without terminating TLS. The `websecure` entrypoint created by `server.tls_port` is reserved for Gordon's legacy HTTPS listener until full HTTP/HTTPS traffic-manager ownership is enabled; use a custom `tls_mux` entrypoint for passthrough.
 
 ```toml
 [entrypoints.rawtls]

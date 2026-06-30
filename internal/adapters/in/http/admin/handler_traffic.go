@@ -9,12 +9,12 @@ import (
 
 func (h *Handler) handleTrafficStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if r.Method != http.MethodGet {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
 	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
 		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if h.trafficSvc == nil {

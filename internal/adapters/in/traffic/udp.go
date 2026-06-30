@@ -12,7 +12,11 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-const udpBufferSize = 64 << 10
+const (
+	udpBufferSize      = 64 << 10
+	udpWorkerCount     = 16
+	udpDatagramBacklog = 1024
+)
 
 type udpEntryPointRuntime struct {
 	manager    *Manager
@@ -29,8 +33,15 @@ type udpEntryPointRuntime struct {
 	done     chan struct{}
 	doneOnce sync.Once
 
+	datagrams chan udpDatagram
+
 	mu       sync.Mutex
 	sessions map[string]*udpSession
+}
+
+type udpDatagram struct {
+	clientAddr net.Addr
+	packet     []byte
 }
 
 type udpSession struct {
@@ -51,6 +62,7 @@ func newUDPEntryPointRuntime(parentCtx context.Context, manager *Manager, entryP
 		ctx:        ctx,
 		cancel:     cancel,
 		done:       make(chan struct{}),
+		datagrams:  make(chan udpDatagram, udpDatagramBacklog),
 		sessions:   map[string]*udpSession{},
 	}
 }
@@ -59,7 +71,11 @@ func (r *udpEntryPointRuntime) start() {
 	if !r.started.CompareAndSwap(false, true) {
 		return
 	}
-	trafficInfo(r.ctx).Str("entrypoint", r.entryPoint.Name).Str("address", r.entryPoint.Address).Str("protocol", string(r.entryPoint.Protocol)).Msg("started udp traffic entrypoint")
+	entryPoint := r.entryPointSnapshot()
+	trafficInfo(r.ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("started udp traffic entrypoint")
+	for i := 0; i < udpWorkerCount; i++ {
+		go r.datagramWorker()
+	}
 	go r.readLoop()
 	go r.expireLoop()
 }
@@ -76,12 +92,29 @@ func (r *udpEntryPointRuntime) readLoop() {
 			r.counters.totalErrors.Add(1)
 			continue
 		}
-		if !trustedRemoteAddr(r.trusted, clientAddr) {
+		if !trustedRemoteAddr(r.trustedSnapshot(), clientAddr) {
 			r.counters.totalRefused.Add(1)
 			continue
 		}
 		packet := append([]byte(nil), buf[:n]...)
-		r.handleDatagram(clientAddr, packet)
+		select {
+		case r.datagrams <- udpDatagram{clientAddr: clientAddr, packet: packet}:
+		case <-r.ctx.Done():
+			return
+		default:
+			r.counters.totalRefused.Add(1)
+		}
+	}
+}
+
+func (r *udpEntryPointRuntime) datagramWorker() {
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case datagram := <-r.datagrams:
+			r.handleDatagram(datagram.clientAddr, datagram.packet)
+		}
 	}
 }
 
@@ -91,7 +124,6 @@ func (r *udpEntryPointRuntime) handleDatagram(clientAddr net.Addr, packet []byte
 	if !ok {
 		return
 	}
-	session.touch()
 	n, err := session.backend.Write(packet)
 	r.counters.bytesIn.Add(int64(n))
 	if err != nil {
@@ -103,6 +135,7 @@ func (r *udpEntryPointRuntime) handleDatagram(clientAddr net.Addr, packet []byte
 func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options domain.UDPOptions) (*udpSession, bool) {
 	r.mu.Lock()
 	if session := r.sessions[key]; session != nil {
+		session.touch()
 		r.mu.Unlock()
 		return session, true
 	}
@@ -118,7 +151,9 @@ func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options 
 		r.counters.totalRefused.Add(1)
 		return nil, false
 	}
-	backendConn, err := net.Dial("udp", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)))
+	dialCtx, cancel := context.WithTimeout(r.ctx, udpDialTimeout(options))
+	backendConn, err := (&net.Dialer{}).DialContext(dialCtx, "udp", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)))
+	cancel()
 	if err != nil {
 		r.counters.totalErrors.Add(1)
 		return nil, false
@@ -145,6 +180,13 @@ func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options 
 	r.counters.totalAccepted.Add(1)
 	go r.backendLoop(key, session)
 	return session, true
+}
+
+func udpDialTimeout(options domain.UDPOptions) time.Duration {
+	if options.IdleTimeout > 0 && options.IdleTimeout < 5*time.Second {
+		return options.IdleTimeout
+	}
+	return 5 * time.Second
 }
 
 func (r *udpEntryPointRuntime) backendLoop(key string, session *udpSession) {
@@ -187,16 +229,18 @@ func (r *udpEntryPointRuntime) expireIdleSessions(idleTimeout time.Duration) {
 		idleTimeout = defaultUDPOptions().IdleTimeout
 	}
 	cutoff := time.Now().Add(-idleTimeout).UnixNano()
+	expired := []*udpSession{}
 	r.mu.Lock()
-	keys := make([]string, 0)
 	for key, session := range r.sessions {
 		if session.lastSeen.Load() <= cutoff {
-			keys = append(keys, key)
+			delete(r.sessions, key)
+			expired = append(expired, session)
 		}
 	}
 	r.mu.Unlock()
-	for _, key := range keys {
-		r.removeSession(key)
+	for _, session := range expired {
+		session.close()
+		r.counters.activeUDPSessions.Add(-1)
 	}
 }
 
@@ -219,9 +263,10 @@ func (r *udpEntryPointRuntime) resolveUDPBackend() (domain.TrafficBackend, bool)
 	if graph == nil {
 		return domain.TrafficBackend{}, false
 	}
+	entryPoint := r.entryPointSnapshot()
 	var router domain.TrafficRouter
 	for _, candidate := range graph.Routers {
-		if candidate.EntryPoint == r.entryPoint.Name && candidate.Protocol == domain.RouterProtocolUDP {
+		if candidate.EntryPoint == entryPoint.Name && candidate.Protocol == domain.RouterProtocolUDP {
 			if router.Name != "" {
 				return domain.TrafficBackend{}, false
 			}
@@ -241,7 +286,8 @@ func (r *udpEntryPointRuntime) resolveUDPBackend() (domain.TrafficBackend, bool)
 
 func (r *udpEntryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration) {
 	if r.closed.CompareAndSwap(false, true) {
-		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Str("address", r.entryPoint.Address).Msg("stopping udp traffic entrypoint")
+		entryPoint := r.entryPointSnapshot()
+		trafficInfo(ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Msg("stopping udp traffic entrypoint")
 		r.cancel()
 		_ = r.packetConn.Close()
 		if !r.started.Load() {
@@ -251,23 +297,24 @@ func (r *udpEntryPointRuntime) stop(ctx context.Context, drainTimeout time.Durat
 	select {
 	case <-r.done:
 	case <-ctx.Done():
+		r.closeSessions()
 		return
 	}
 	if r.waitSessions(ctx, drainTimeout) {
-		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Msg("stopped udp traffic entrypoint")
+		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped udp traffic entrypoint")
 		return
 	}
-	trafficDebug(ctx).Str("entrypoint", r.entryPoint.Name).Dur("drain_timeout", drainTimeout).Msg("forcing udp traffic entrypoint drain")
+	trafficDebug(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("forcing udp traffic entrypoint drain")
 	r.closeSessions()
 	select {
 	case <-r.sessionsDone():
-		trafficInfo(ctx).Str("entrypoint", r.entryPoint.Name).Msg("stopped udp traffic entrypoint")
+		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped udp traffic entrypoint")
 	case <-ctx.Done():
 	}
 }
 
 func (r *udpEntryPointRuntime) drainSessionsAfter(drainTimeout time.Duration) {
-	trafficDebug(r.ctx).Str("entrypoint", r.entryPoint.Name).Dur("drain_timeout", drainTimeout).Msg("scheduled udp session drain after router removal")
+	trafficDebug(r.ctx).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("scheduled udp session drain after router removal")
 	go func() {
 		if drainTimeout <= 0 {
 			drainTimeout = defaultUDPOptions().DrainTimeout
@@ -328,7 +375,31 @@ func (r *udpEntryPointRuntime) closeSessions() {
 }
 
 func (r *udpEntryPointRuntime) matches(entryPoint domain.EntryPoint) bool {
-	return r.entryPoint.Name == entryPoint.Name && r.entryPoint.Address == entryPoint.Address && r.entryPoint.Protocol == entryPoint.Protocol && trustedCIDRsEqual(r.entryPoint.TrustedCIDRs, entryPoint.TrustedCIDRs)
+	current := r.entryPointSnapshot()
+	return current.Name == entryPoint.Name && current.Address == entryPoint.Address && current.Protocol == entryPoint.Protocol && trustedCIDRsEqual(current.TrustedCIDRs, entryPoint.TrustedCIDRs)
+}
+
+func (r *udpEntryPointRuntime) sameAddress(entryPoint domain.EntryPoint) bool {
+	return r.entryPointSnapshot().Address == entryPoint.Address
+}
+
+func (r *udpEntryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, trusted []*net.IPNet) {
+	r.mu.Lock()
+	r.entryPoint = entryPoint
+	r.trusted = trusted
+	r.mu.Unlock()
+}
+
+func (r *udpEntryPointRuntime) entryPointSnapshot() domain.EntryPoint {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.entryPoint
+}
+
+func (r *udpEntryPointRuntime) trustedSnapshot() []*net.IPNet {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.trusted
 }
 
 func (r *udpEntryPointRuntime) isClosed() bool { return r.closed.Load() }

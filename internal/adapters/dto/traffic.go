@@ -26,19 +26,12 @@ type TrafficEntryPointStatus struct {
 }
 
 type TrafficRouterStatus struct {
-	Name                 string                `json:"name"`
-	EntryPoint           string                `json:"entrypoint"`
-	Protocol             domain.RouterProtocol `json:"protocol"`
-	Rule                 TrafficRule           `json:"rule"`
-	Service              string                `json:"service"`
-	Active               bool                  `json:"active"`
-	ActiveTCPConnections int64                 `json:"active_tcp_connections"`
-	ActiveUDPSessions    int64                 `json:"active_udp_sessions"`
-	TotalAccepted        int64                 `json:"total_accepted"`
-	TotalRefused         int64                 `json:"total_refused"`
-	TotalErrors          int64                 `json:"total_errors"`
-	BytesIn              int64                 `json:"bytes_in"`
-	BytesOut             int64                 `json:"bytes_out"`
+	Name       string                `json:"name"`
+	EntryPoint string                `json:"entrypoint"`
+	Protocol   domain.RouterProtocol `json:"protocol"`
+	Rule       TrafficRule           `json:"rule"`
+	Service    string                `json:"service"`
+	Active     bool                  `json:"active"`
 }
 
 type TrafficServiceStatus struct {
@@ -53,18 +46,11 @@ type TrafficRule struct {
 }
 
 type TrafficBackendStatus struct {
-	Name                 string                 `json:"name"`
-	Host                 string                 `json:"host"`
-	Port                 int                    `json:"port"`
-	Protocol             domain.NetworkProtocol `json:"protocol"`
-	Active               bool                   `json:"active"`
-	ActiveTCPConnections int64                  `json:"active_tcp_connections"`
-	ActiveUDPSessions    int64                  `json:"active_udp_sessions"`
-	TotalAccepted        int64                  `json:"total_accepted"`
-	TotalRefused         int64                  `json:"total_refused"`
-	TotalErrors          int64                  `json:"total_errors"`
-	BytesIn              int64                  `json:"bytes_in"`
-	BytesOut             int64                  `json:"bytes_out"`
+	Name     string                 `json:"name"`
+	Host     string                 `json:"host"`
+	Port     int                    `json:"port"`
+	Protocol domain.NetworkProtocol `json:"protocol"`
+	Active   bool                   `json:"active"`
 }
 
 type TrafficCounters struct {
@@ -105,10 +91,8 @@ func trafficRoutersFromDomain(values []domain.TrafficRouterStatus) []TrafficRout
 	out := make([]TrafficRouterStatus, 0, len(values))
 	for _, value := range values {
 		out = append(out, TrafficRouterStatus{
-			Name: value.Name, EntryPoint: value.EntryPoint, Protocol: value.Protocol, Rule: TrafficRule{Host: value.Rule.Host, SNI: value.Rule.SNI}, Service: value.Service, Active: value.Active,
-			ActiveTCPConnections: value.ActiveTCPConnections, ActiveUDPSessions: value.ActiveUDPSessions,
-			TotalAccepted: value.TotalAccepted, TotalRefused: value.TotalRefused, TotalErrors: value.TotalErrors,
-			BytesIn: value.BytesIn, BytesOut: value.BytesOut,
+			Name: value.Name, EntryPoint: value.EntryPoint, Protocol: value.Protocol,
+			Rule: TrafficRule{Host: value.Rule.Host, SNI: value.Rule.SNI}, Service: value.Service, Active: value.Active,
 		})
 	}
 	return out
@@ -127,9 +111,6 @@ func trafficBackendsFromDomain(values []domain.TrafficBackendStatus) []TrafficBa
 	for _, value := range values {
 		out = append(out, TrafficBackendStatus{
 			Name: value.Name, Host: value.Host, Port: value.Port, Protocol: value.Protocol, Active: value.Active,
-			ActiveTCPConnections: value.ActiveTCPConnections, ActiveUDPSessions: value.ActiveUDPSessions,
-			TotalAccepted: value.TotalAccepted, TotalRefused: value.TotalRefused, TotalErrors: value.TotalErrors,
-			BytesIn: value.BytesIn, BytesOut: value.BytesOut,
 		})
 	}
 	return out

@@ -69,7 +69,7 @@ func TestClientHelloPeek(t *testing.T) {
 	})
 
 	t.Run("client_hello_across_multiple_tls_records", func(t *testing.T) {
-		hello := splitClientHelloAcrossRecords(t, clientHelloBytes(t, "multi-record.example.com"))
+		hello := splitClientHelloAcrossRecords(t, clientHelloBytes(t, "multi-record.example.com"), 10)
 		client, server := net.Pipe()
 		go func() {
 			_, _ = client.Write(hello)
@@ -83,15 +83,30 @@ func TestClientHelloPeek(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, hello, buf)
 	})
+
+	t.Run("client_hello_header_across_multiple_tls_records", func(t *testing.T) {
+		hello := splitClientHelloAcrossRecords(t, clientHelloBytes(t, "split-header.example.com"), 2)
+		client, server := net.Pipe()
+		go func() {
+			_, _ = client.Write(hello)
+			_ = client.Close()
+		}()
+		sni, replayed, err := peekClientHelloSNI(server)
+		require.NoError(t, err)
+		assert.Equal(t, "split-header.example.com", sni)
+		buf := make([]byte, len(hello))
+		_, err = io.ReadFull(replayed, buf)
+		require.NoError(t, err)
+		assert.Equal(t, hello, buf)
+	})
 }
 
-func splitClientHelloAcrossRecords(t *testing.T, hello []byte) []byte {
+func splitClientHelloAcrossRecords(t *testing.T, hello []byte, firstPayloadLen int) []byte {
 	t.Helper()
 	require.GreaterOrEqual(t, len(hello), 15)
 	require.Equal(t, byte(22), hello[0])
 	recordLen := int(hello[3])<<8 | int(hello[4])
-	require.Greater(t, recordLen, 10)
-	firstPayloadLen := 10
+	require.Greater(t, recordLen, firstPayloadLen)
 	first := append([]byte{}, hello[:5]...)
 	first[3] = byte(firstPayloadLen >> 8)
 	first[4] = byte(firstPayloadLen)
@@ -319,6 +334,7 @@ func testCertificate(commonName string) (tls.Certificate, error) {
 func TestHostMatchesTLSWildcard(t *testing.T) {
 	assert.True(t, hostMatchesTLSWildcard("api.example.com", "*.example.com"))
 	assert.False(t, hostMatchesTLSWildcard("example.com", "*.example.com"))
+	assert.False(t, hostMatchesTLSWildcard("v1.api.example.com", "*.example.com"))
 	assert.False(t, hostMatchesTLSWildcard("api.other.com", "*.example.com"))
 	assert.True(t, strings.EqualFold(normalizeTLSName("API.EXAMPLE.COM."), "api.example.com"))
 }
