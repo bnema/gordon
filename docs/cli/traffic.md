@@ -15,6 +15,8 @@ gordon traffic status --remote prod
 gordon traffic status --remote https://gordon.example.com --json
 ```
 
+Remote mode queries the running Gordon admin API. Local mode does not synthesize runtime traffic state from a fresh config load; use a configured remote target for authoritative counters and reload status.
+
 ## Flags
 
 | Flag | Description |
@@ -87,4 +89,5 @@ gordon traffic status --remote https://gordon.example.com --json
 ## Related
 
 - [Traffic configuration](../config/traffic.md)
+- [Standalone services](../config/services.md)
 - [Server status](./status.md)

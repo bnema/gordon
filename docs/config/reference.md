@@ -174,6 +174,28 @@ preserve = true                              # Keep volumes when containers are 
 # "domain.com" = "host:port"                 # Proxy to non-container services
 
 # =============================================================================
+# STANDALONE SERVICES
+# =============================================================================
+# [[services]]
+# name = "rust"
+# image = "registry.example.com:5000/rust:latest"
+# enabled = true
+# env_file = "/srv/gordon/services/rust.env"
+#
+# [[services.ports]]
+# name = "game"
+# container = 28015
+# protocol = "udp"
+# publish = "127.0.0.1:38015"
+#
+# [[services.ports]]
+# name = "rcon"
+# container = 28016
+# protocol = "tcp"
+# publish = "127.0.0.1:38016"
+# trusted_cidrs = ["100.64.0.0/10"]
+
+# =============================================================================
 # NETWORK GROUPS
 # =============================================================================
 [network_groups]
@@ -292,6 +314,27 @@ keep_last = 3                                # Keep N newest tags per repository
 | `volumes.auto_create` | `true` | Auto-create volumes |
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
+| `services[].name` | none | Standalone service name used by `service:<name>:<port>` traffic refs |
+| `services[].image` | none | Container image for enabled standalone services |
+| `services[].enabled` | `false` | Whether Gordon creates, starts, and reconciles the service container |
+| `services[].env` | `[]` | Inline `KEY=value` environment entries |
+| `services[].env_file` | `""` | Env file loaded before inline entries |
+| `services[].ports[].name` | none | Port name used by traffic service refs |
+| `services[].ports[].container` | none | Container port number |
+| `services[].ports[].protocol` | none | `tcp` or `udp` |
+| `services[].ports[].publish` | `""` | Host-side publish address, usually loopback for traffic-manager reachability |
+| `services[].ports[].private` | `false` | Require matching service and entrypoint `trusted_cidrs` for this port |
+| `services[].ports[].public` | `false` | Explicit public opt-out for admin port names such as `rcon` |
+| `services[].ports[].trusted_cidrs` | `[]` | CIDRs allowed for private port routing; must match the target entrypoint |
+| `services[].volumes[].source` | `""` | Explicit named volume or bind source; omitted service volumes use image `VOLUME` metadata |
+| `services[].volumes[].target` | none | Absolute container mount path |
+| `services[].volumes[].read_only` | `false` | Mount explicit volume read-only |
+| `services[].readiness.type` | `"none"` | `none`, `tcp`, or `log` |
+| `services[].readiness.path` | `""` | Log readiness path inside the container |
+| `services[].readiness.contains` | `""` | Text required in the readiness log |
+| `services[].readiness.timeout` | default wait | Positive readiness timeout when set |
+| `services[].cleanup.preserve_volumes` | `true` | Preserve managed image-discovered volumes on cleanup |
+| `services[].cleanup.remove_container` | `true` | Remove old, disabled, or removed service containers |
 | `backups.enabled` | `false` | Backup service disabled |
 | `backups.schedule` | `"daily"` | Backup scheduler preset |
 | `backups.storage_dir` | `""` | Uses `{server.data_dir}/backups` when empty |
@@ -377,4 +420,5 @@ gordon serve
 - [Telemetry](./telemetry.md)
 - [Network Isolation](./network-isolation.md)
 - [Volumes](./volumes.md)
+- [Standalone Services](./services.md)
 - [Images](./images.md)

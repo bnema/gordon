@@ -429,3 +429,5 @@ sudo firewall-cmd --reload
 - [Configuration Overview](./index.md)
 - [Installation Guide](../installation.md)
 - [Routes Configuration](./routes.md)
+- [Standalone Services](./services.md)
+- [Traffic Plane Configuration](./traffic.md)

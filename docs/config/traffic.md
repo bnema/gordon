@@ -33,9 +33,33 @@ For each accepted connection on a `smart_tcp` entrypoint Gordon:
 
 Malformed HTTP-looking or TLS-looking traffic is rejected instead of bypassing to raw fallback.
 
-## Network Services
+## Standalone and Network Services
 
-Network services describe non-HTTP backends that L4 routers can target.
+Standalone services are Gordon-managed containers that L4 routers can target with `service:<service>:<port-name>`. Define them under `[[services]]` when Gordon should own the container lifecycle.
+
+```toml
+[[services]]
+name = "rust"
+image = "registry.example.com:5000/rust:latest"
+enabled = true
+
+[[services.ports]]
+name = "game"
+container = 28015
+protocol = "udp"
+publish = "127.0.0.1:38015"
+
+[entrypoints.rust]
+address = "0.0.0.0:28015"
+protocol = "udp"
+
+[[traffic.udp.routers]]
+name = "rust-game"
+entrypoint = "rust"
+service = "service:rust:game"
+```
+
+Network services describe manually managed non-HTTP backends that L4 routers can target.
 
 ```toml
 [[network_services]]
@@ -51,7 +75,8 @@ Service references use:
 
 - `route:<domain>` for configured HTTP routes
 - `external_route:<domain>` for configured external HTTP routes
-- `network_service:<service>:<port-name>` for TCP, UDP, and TLS passthrough
+- `network_service:<service>:<port-name>` for manually managed TCP, UDP, and TLS passthrough backends
+- `service:<service>:<port-name>` for Gordon-managed standalone service backends
 
 `static:<name>` is reserved and currently unsupported.
 
@@ -152,4 +177,5 @@ UDP sessions are keyed by client address and expire after `idle_timeout`. If `ma
 
 - [Server Settings](./server.md)
 - [Routes](./routes.md)
+- [Standalone Services](./services.md)
 - [CLI traffic status](../cli/traffic.md)
