@@ -88,13 +88,36 @@ func TestTCPPassthroughRejectsUntrustedCIDR(t *testing.T) {
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
+	assertTCPRejected(t, manager, graph.EntryPoints[0].Address, 1)
+}
+
+func TestTCPPassthroughReloadAppliesTrustedCIDRChange(t *testing.T) {
+	backend := startTCPEchoServer(t, 0)
+	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
+	graph.EntryPoints[0].TrustedCIDRs = []string{"127.0.0.0/8"}
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
 	conn := dialTCP(t, graph.EntryPoints[0].Address)
+	assertRoundTrip(t, conn, "allowed")
+	require.NoError(t, conn.Close())
+
+	updated := graph
+	updated.EntryPoints[0].TrustedCIDRs = []string{"192.0.2.0/24"}
+	require.NoError(t, manager.Apply(context.Background(), &updated))
+	assertTCPRejected(t, manager, graph.EntryPoints[0].Address, 1)
+}
+
+func assertTCPRejected(t *testing.T, manager *Manager, address string, refused int64) {
+	t.Helper()
+	conn := dialTCP(t, address)
 	defer conn.Close()
 	_, err := conn.Write([]byte("blocked"))
 	require.NoError(t, err)
 	_, err = bufio.NewReader(conn).ReadByte()
 	require.Error(t, err)
-	assert.Eventually(t, func() bool { return manager.Status().Counters.TotalRefused == 1 }, time.Second, 10*time.Millisecond)
+	assert.Eventually(t, func() bool { return manager.Status().Counters.TotalRefused == refused }, time.Second, 10*time.Millisecond)
 }
 
 func TestTCPPassthroughEcho(t *testing.T) {

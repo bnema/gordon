@@ -419,7 +419,7 @@ func (r *entryPointRuntime) closeActiveConns() {
 }
 
 func (r *entryPointRuntime) matches(entryPoint domain.EntryPoint) bool {
-	return r.entryPoint.Name == entryPoint.Name && r.entryPoint.Address == entryPoint.Address && r.entryPoint.Protocol == entryPoint.Protocol
+	return r.entryPoint.Name == entryPoint.Name && r.entryPoint.Address == entryPoint.Address && r.entryPoint.Protocol == entryPoint.Protocol && trustedCIDRsEqual(r.entryPoint.TrustedCIDRs, entryPoint.TrustedCIDRs)
 }
 
 func (r *entryPointRuntime) shouldStopWith(next *entryPointRuntime) bool {

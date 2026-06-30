@@ -362,6 +362,29 @@ func parseTrustedCIDRs(values []string) ([]*net.IPNet, error) {
 	return trusted, nil
 }
 
+func trustedCIDRsEqual(left []string, right []string) bool {
+	left = normalizedCIDRs(left)
+	right = normalizedCIDRs(right)
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizedCIDRs(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, strings.TrimSpace(value))
+	}
+	sort.Strings(out)
+	return out
+}
+
 func trustedRemoteAddr(trusted []*net.IPNet, addr net.Addr) bool {
 	if len(trusted) == 0 {
 		return true
