@@ -102,6 +102,49 @@ func TestTCPManagerSameAddressProtocolChangeStartsTLSHTTPServer(t *testing.T) {
 	assertHTTPSBody(t, graph.EntryPoints[0].Address, "app.example.com", "secure")
 }
 
+func TestTCPManagerSameAddressTLSMuxRenameRefreshesHTTPSRoute(t *testing.T) {
+	address := freeTCPAddress(t)
+	manager := NewManager()
+	manager.SetTLSHTTPServer("old-secure", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("old"))
+	}), testTLSConfig(t, "app.example.com"))
+	manager.SetTLSHTTPServer("new-secure", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("new"))
+	}), testTLSConfig(t, "app.example.com"))
+	graph := domain.TrafficGraph{
+		Options:     domain.TrafficOptions{TCP: domain.TCPOptions{DialTimeout: time.Second, IdleTimeout: time.Minute, DrainTimeout: time.Second}},
+		EntryPoints: []domain.EntryPoint{{Name: "old-secure", Address: address, Protocol: domain.EntryPointProtocolTLSMux}},
+	}
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+	assertHTTPSBody(t, address, "app.example.com", "old")
+
+	renamed := graph
+	renamed.EntryPoints[0].Name = "new-secure"
+	require.NoError(t, manager.Apply(context.Background(), &renamed))
+
+	assertHTTPSBody(t, address, "app.example.com", "new")
+}
+
+func TestTCPRuntimeDoesNotPublishTLSHTTPServerAfterClose(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	manager := NewManager()
+	runtime := newEntryPointRuntime(context.Background(), manager, domain.EntryPoint{Name: "websecure", Address: listener.Addr().String(), Protocol: domain.EntryPointProtocolTLSMux}, listener, nil)
+	runtime.closed.Store(true)
+
+	runtime.replaceTLSHTTPServer(runtime.entryPointSnapshot(), TLSHTTPServerConfig{
+		Handler:   http.NotFoundHandler(),
+		TLSConfig: testTLSConfig(t, "app.example.com"),
+	})
+
+	runtime.mu.Lock()
+	server := runtime.tlsHTTPServer
+	runtime.mu.Unlock()
+	require.Nil(t, server)
+}
+
 func TestTCPManagerSameAddressProtocolChangeStopsTLSHTTPServer(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := domain.TrafficGraph{

@@ -35,9 +35,10 @@ type entryPointRuntime struct {
 	mu          sync.Mutex
 	activeConns map[*trackedTCPConn]struct{}
 
-	tlsHTTPListener *tlsHTTPListener
-	tlsHTTPServer   *http.Server
-	tlsHTTPDone     chan struct{}
+	tlsHTTPReplaceMu sync.Mutex
+	tlsHTTPListener  *tlsHTTPListener
+	tlsHTTPServer    *http.Server
+	tlsHTTPDone      chan struct{}
 }
 
 type trackedTCPConn struct {
@@ -125,7 +126,12 @@ func (r *entryPointRuntime) refreshTLSHTTPServer(entryPointName string) {
 }
 
 func (r *entryPointRuntime) replaceTLSHTTPServer(entryPoint domain.EntryPoint, config TLSHTTPServerConfig) {
-	r.stopTLSHTTPServer(r.ctx, 0)
+	r.tlsHTTPReplaceMu.Lock()
+	defer r.tlsHTTPReplaceMu.Unlock()
+	r.stopTLSHTTPServerLocked(r.ctx, 0)
+	if r.isClosed() {
+		return
+	}
 	listener := newTLSHTTPListener(r.listener.Addr())
 	server := &http.Server{
 		Handler:           config.Handler,
@@ -138,6 +144,11 @@ func (r *entryPointRuntime) replaceTLSHTTPServer(entryPoint domain.EntryPoint, c
 	done := make(chan struct{})
 
 	r.mu.Lock()
+	if r.isClosed() {
+		r.mu.Unlock()
+		_ = listener.Close()
+		return
+	}
 	r.tlsHTTPListener = listener
 	r.tlsHTTPServer = server
 	r.tlsHTTPDone = done
@@ -519,6 +530,12 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 }
 
 func (r *entryPointRuntime) stopTLSHTTPServer(ctx context.Context, drainTimeout time.Duration) {
+	r.tlsHTTPReplaceMu.Lock()
+	defer r.tlsHTTPReplaceMu.Unlock()
+	r.stopTLSHTTPServerLocked(ctx, drainTimeout)
+}
+
+func (r *entryPointRuntime) stopTLSHTTPServerLocked(ctx context.Context, drainTimeout time.Duration) {
 	r.mu.Lock()
 	listener := r.tlsHTTPListener
 	server := r.tlsHTTPServer
@@ -593,6 +610,7 @@ func (r *entryPointRuntime) sameAddress(entryPoint domain.EntryPoint) bool {
 
 func (r *entryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, trusted []*net.IPNet) {
 	r.mu.Lock()
+	previousName := r.entryPoint.Name
 	previousProtocol := r.entryPoint.Protocol
 	r.entryPoint = entryPoint
 	r.trusted = trusted
@@ -610,6 +628,10 @@ func (r *entryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, trust
 		r.stopTLSHTTPServer(r.ctx, 0)
 	}
 	if entryPoint.Protocol == domain.EntryPointProtocolTLSMux {
+		if previousProtocol == domain.EntryPointProtocolTLSMux && previousName != entryPoint.Name {
+			r.refreshTLSHTTPServer(entryPoint.Name)
+			return
+		}
 		r.startTLSHTTPServer(entryPoint)
 	}
 }
