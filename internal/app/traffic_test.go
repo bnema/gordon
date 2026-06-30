@@ -14,7 +14,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/traffic"
 )
 
-func TestTrafficRuntimeGraphFiltersLegacyHTTPEntrypoints(t *testing.T) {
+func TestTrafficRuntimeGraphKeepsDefaultTLSEntrypoint(t *testing.T) {
 	graph := domain.TrafficGraph{
 		EntryPoints: []domain.EntryPoint{
 			{Name: traffic.DefaultHTTPEntryPointName, Address: "127.0.0.1:8080", Protocol: domain.EntryPointProtocolHTTP},
@@ -23,6 +23,7 @@ func TestTrafficRuntimeGraphFiltersLegacyHTTPEntrypoints(t *testing.T) {
 		},
 		Routers: []domain.TrafficRouter{
 			{Name: "app", EntryPoint: traffic.DefaultHTTPEntryPointName, Protocol: domain.RouterProtocolHTTP, Service: "route:app.example.com"},
+			{Name: "app-secure", EntryPoint: traffic.DefaultTLSEntryPointName, Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: "app.example.com"}, Service: "route:app.example.com"},
 			{Name: "postgres", EntryPoint: "postgres", Protocol: domain.RouterProtocolTCP, Service: "network_service:postgres:db"},
 		},
 		Services: []domain.TrafficService{
@@ -33,23 +34,24 @@ func TestTrafficRuntimeGraphFiltersLegacyHTTPEntrypoints(t *testing.T) {
 
 	filtered, err := trafficRuntimeGraph(graph)
 	require.NoError(t, err)
-	require.Len(t, filtered.EntryPoints, 1)
-	assert.Equal(t, "postgres", filtered.EntryPoints[0].Name)
-	require.Len(t, filtered.Routers, 1)
-	assert.Equal(t, "postgres", filtered.Routers[0].Name)
-	require.Len(t, filtered.Services, 1)
-	assert.Equal(t, "network_service:postgres:db", filtered.Services[0].Name)
+	assert.ElementsMatch(t, []string{traffic.DefaultTLSEntryPointName, "postgres"}, entryPointNames(filtered.EntryPoints))
+	assert.ElementsMatch(t, []string{"app-secure", "postgres"}, routerNames(filtered.Routers))
+	assert.ElementsMatch(t, []string{"route:app.example.com", "network_service:postgres:db"}, serviceNames(filtered.Services))
 }
 
-func TestTrafficRuntimeGraphRejectsL4RouterOnLegacyEntrypoint(t *testing.T) {
+func TestTrafficRuntimeGraphAllowsTLSPassthroughOnDefaultTLS(t *testing.T) {
 	graph := domain.TrafficGraph{
 		EntryPoints: []domain.EntryPoint{{Name: traffic.DefaultTLSEntryPointName, Address: "127.0.0.1:8443", Protocol: domain.EntryPointProtocolTLSMux}},
 		Routers:     []domain.TrafficRouter{{Name: "raw", EntryPoint: traffic.DefaultTLSEntryPointName, Protocol: domain.RouterProtocolTLSPassthrough, Rule: domain.TrafficRule{SNI: "raw.example.com"}, Service: "network_service:raw:tls"}},
 		Services:    []domain.TrafficService{{Name: "network_service:raw:tls", Backends: []domain.TrafficBackend{{Name: "raw:tls", Host: "127.0.0.1", Port: 443, Protocol: domain.NetworkProtocolTCP}}}},
 	}
 
-	_, err := trafficRuntimeGraph(graph)
-	require.ErrorContains(t, err, "not owned by the traffic manager")
+	filtered, err := trafficRuntimeGraph(graph)
+	require.NoError(t, err)
+	require.Len(t, filtered.EntryPoints, 1)
+	assert.Equal(t, traffic.DefaultTLSEntryPointName, filtered.EntryPoints[0].Name)
+	require.Len(t, filtered.Routers, 1)
+	assert.Equal(t, "raw", filtered.Routers[0].Name)
 }
 
 func TestApplyTrafficRuntimeConfigAppliesCustomL4Entrypoint(t *testing.T) {
@@ -75,6 +77,30 @@ func TestApplyTrafficRuntimeConfigAppliesCustomL4Entrypoint(t *testing.T) {
 	require.Len(t, status.EntryPoints, 1)
 	assert.Equal(t, "postgres", status.EntryPoints[0].Name)
 	assert.True(t, status.EntryPoints[0].Active)
+}
+
+func entryPointNames(entries []domain.EntryPoint) []string {
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name)
+	}
+	return names
+}
+
+func routerNames(routers []domain.TrafficRouter) []string {
+	names := make([]string, 0, len(routers))
+	for _, router := range routers {
+		names = append(names, router.Name)
+	}
+	return names
+}
+
+func serviceNames(services []domain.TrafficService) []string {
+	names := make([]string, 0, len(services))
+	for _, service := range services {
+		names = append(names, service.Name)
+	}
+	return names
 }
 
 func freeTCPAddress(t *testing.T) string {

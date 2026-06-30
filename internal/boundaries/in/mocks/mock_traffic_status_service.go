@@ -5,8 +5,9 @@
 package mocks
 
 import (
-	"github.com/bnema/gordon/internal/domain"
 	mock "github.com/stretchr/testify/mock"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // NewMockTrafficStatusService creates a new instance of MockTrafficStatusService. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.

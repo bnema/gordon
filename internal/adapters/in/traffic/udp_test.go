@@ -53,6 +53,54 @@ func TestUDPReloadAppliesTrustedCIDRChange(t *testing.T) {
 	assertUDPRejected(t, manager, graph.EntryPoints[0].Address, 1)
 }
 
+func TestUDPReloadClosesActiveUntrustedSessions(t *testing.T) {
+	backend := startUDPEchoServer(t)
+	graph := udpGraph(t, freeUDPAddress(t), backend.address)
+	graph.EntryPoints[0].TrustedCIDRs = []string{"127.0.0.0/8"}
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	conn := dialUDP(t, graph.EntryPoints[0].Address)
+	defer conn.Close()
+	assertUDPRoundTrip(t, conn, "before")
+	require.Eventually(t, func() bool { return manager.Status().Counters.ActiveUDPSessions == 1 }, time.Second, 10*time.Millisecond)
+
+	updated := graph
+	updated.EntryPoints[0].TrustedCIDRs = []string{"192.0.2.0/24"}
+	require.NoError(t, manager.Apply(context.Background(), &updated))
+
+	assert.Eventually(t, func() bool { return manager.Status().Counters.ActiveUDPSessions == 0 }, time.Second, 10*time.Millisecond)
+	_, err := conn.Write([]byte("after"))
+	require.NoError(t, err)
+	_ = conn.SetReadDeadline(time.Now().Add(80 * time.Millisecond))
+	buf := make([]byte, 32)
+	_, err = conn.Read(buf)
+	require.Error(t, err)
+}
+
+func TestUDPReloadReplacesSessionWhenBackendChanges(t *testing.T) {
+	backendA := startUDPEchoServerWithPrefix(t, "a:")
+	backendB := startUDPEchoServerWithPrefix(t, "b:")
+	graph := udpGraph(t, freeUDPAddress(t), backendA.address)
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	conn := dialUDP(t, graph.EntryPoints[0].Address)
+	defer conn.Close()
+	assertUDPRoundTripWant(t, conn, "first", "a:first")
+
+	updated := graph
+	backend, err := backendFromAddress("echo:udp", backendB.address)
+	require.NoError(t, err)
+	backend.Protocol = domain.NetworkProtocolUDP
+	updated.Services[0].Backends = []domain.TrafficBackend{backend}
+	require.NoError(t, manager.Apply(context.Background(), &updated))
+
+	assertUDPRoundTripWant(t, conn, "second", "b:second")
+}
+
 func assertUDPRejected(t *testing.T, manager *Manager, address string, refused int64) {
 	t.Helper()
 	conn := dialUDP(t, address)
@@ -238,18 +286,28 @@ func dialUDP(t *testing.T, address string) *net.UDPConn {
 
 func assertUDPRoundTrip(t *testing.T, conn *net.UDPConn, message string) {
 	t.Helper()
+	assertUDPRoundTripWant(t, conn, message, message)
+}
+
+func assertUDPRoundTripWant(t *testing.T, conn *net.UDPConn, message string, want string) {
+	t.Helper()
 	_, err := conn.Write([]byte(message))
 	require.NoError(t, err)
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 	buf := make([]byte, 128)
 	n, err := conn.Read(buf)
 	require.NoError(t, err)
-	assert.Equal(t, message, string(buf[:n]))
+	assert.Equal(t, want, string(buf[:n]))
 }
 
 type udpEchoServer struct{ address string }
 
 func startUDPEchoServer(t *testing.T) udpEchoServer {
+	t.Helper()
+	return startUDPEchoServerWithPrefix(t, "")
+}
+
+func startUDPEchoServerWithPrefix(t *testing.T, prefix string) udpEchoServer {
 	t.Helper()
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -262,7 +320,7 @@ func startUDPEchoServer(t *testing.T) udpEchoServer {
 			if err != nil {
 				return
 			}
-			_, _ = conn.WriteTo(buf[:n], addr)
+			_, _ = conn.WriteTo(append([]byte(prefix), buf[:n]...), addr)
 		}
 	}()
 	t.Cleanup(func() {

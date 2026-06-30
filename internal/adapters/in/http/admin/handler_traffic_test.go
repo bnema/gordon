@@ -65,4 +65,7 @@ func TestHandler_TrafficStatusUnavailableWithoutService(t *testing.T) {
 	var body dto.TrafficStatusResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, "unavailable", body.LastReloadStatus)
+	assert.NotNil(t, body.EntryPoints)
+	assert.NotNil(t, body.Routers)
+	assert.NotNil(t, body.Services)
 }

@@ -3,9 +3,11 @@ package traffic
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -81,6 +83,46 @@ func TestTCPManagerReplacesSameAddressEntrypoint(t *testing.T) {
 	assert.Equal(t, domain.EntryPointProtocolTLSMux, status.EntryPoints[0].Protocol)
 }
 
+func TestTCPManagerSameAddressProtocolChangeStartsTLSHTTPServer(t *testing.T) {
+	backend := startTCPEchoServer(t, 0)
+	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	manager.SetTLSHTTPServer("websecure", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("secure"))
+	}), testTLSConfig(t, "app.example.com"))
+	replacement := domain.TrafficGraph{
+		Options:     graph.Options,
+		EntryPoints: []domain.EntryPoint{{Name: "websecure", Address: graph.EntryPoints[0].Address, Protocol: domain.EntryPointProtocolTLSMux}},
+	}
+	require.NoError(t, manager.Apply(context.Background(), &replacement))
+
+	assertHTTPSBody(t, graph.EntryPoints[0].Address, "app.example.com", "secure")
+}
+
+func TestTCPManagerSameAddressProtocolChangeStopsTLSHTTPServer(t *testing.T) {
+	backend := startTCPEchoServer(t, 0)
+	graph := domain.TrafficGraph{
+		Options:     domain.TrafficOptions{TCP: domain.TCPOptions{DialTimeout: time.Second, IdleTimeout: time.Minute, DrainTimeout: time.Second}},
+		EntryPoints: []domain.EntryPoint{{Name: "websecure", Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTLSMux}},
+	}
+	manager := NewManager()
+	manager.SetTLSHTTPServer("websecure", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("secure"))
+	}), testTLSConfig(t, "app.example.com"))
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+	assertHTTPSBody(t, graph.EntryPoints[0].Address, "app.example.com", "secure")
+
+	replacement := tcpGraph(t, graph.EntryPoints[0].Address, backend.address)
+	require.NoError(t, manager.Apply(context.Background(), &replacement))
+
+	_, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", graph.EntryPoints[0].Address, &tls.Config{ServerName: "app.example.com", InsecureSkipVerify: true})
+	require.Error(t, err)
+}
+
 func TestTCPPassthroughRejectsUntrustedCIDR(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
@@ -108,6 +150,33 @@ func TestTCPPassthroughReloadAppliesTrustedCIDRChange(t *testing.T) {
 	updated.EntryPoints[0].TrustedCIDRs = []string{"192.0.2.0/24"}
 	require.NoError(t, manager.Apply(context.Background(), &updated))
 	assertTCPRejected(t, manager, graph.EntryPoints[0].Address, 1)
+}
+
+func TestTCPPassthroughReloadClosesActiveUntrustedConnections(t *testing.T) {
+	backend := startTCPEchoServer(t, 0)
+	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
+	graph.EntryPoints[0].TrustedCIDRs = []string{"127.0.0.0/8"}
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	conn := dialTCP(t, graph.EntryPoints[0].Address)
+	defer conn.Close()
+	assertRoundTrip(t, conn, "before")
+
+	updated := graph
+	updated.EntryPoints[0].TrustedCIDRs = []string{"192.0.2.0/24"}
+	require.NoError(t, manager.Apply(context.Background(), &updated))
+
+	assert.Eventually(t, func() bool {
+		_, writeErr := conn.Write([]byte("after"))
+		if writeErr != nil {
+			return true
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+		_, readErr := bufio.NewReader(conn).ReadByte()
+		return readErr != nil
+	}, time.Second, 10*time.Millisecond)
 }
 
 func assertTCPRejected(t *testing.T, manager *Manager, address string, refused int64) {

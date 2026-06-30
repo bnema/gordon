@@ -78,10 +78,8 @@ func trafficManagerRouterProtocol(protocol domain.RouterProtocol) bool {
 
 func trafficManagerOwnsEntryPoint(entryPoint domain.EntryPoint) bool {
 	switch entryPoint.Protocol {
-	case domain.EntryPointProtocolTCP, domain.EntryPointProtocolUDP:
+	case domain.EntryPointProtocolTLSMux, domain.EntryPointProtocolTCP, domain.EntryPointProtocolUDP:
 		return true
-	case domain.EntryPointProtocolTLSMux:
-		return entryPoint.Name != trafficbuilder.DefaultTLSEntryPointName
 	default:
 		return false
 	}

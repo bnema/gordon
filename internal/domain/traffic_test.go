@@ -507,6 +507,30 @@ func TestParseTrafficServiceRef(t *testing.T) {
 	}
 }
 
+func TestTrafficGraphValidateRejectsInvalidOptions(t *testing.T) {
+	base := TrafficGraph{}
+	tests := []struct {
+		name    string
+		mutate  func(*TrafficGraph)
+		wantErr string
+	}{
+		{name: "negative tcp dial timeout", mutate: func(g *TrafficGraph) { g.Options.TCP.DialTimeout = -time.Second }, wantErr: "traffic.tcp.dial_timeout must be positive"},
+		{name: "negative tcp idle timeout", mutate: func(g *TrafficGraph) { g.Options.TCP.IdleTimeout = -time.Second }, wantErr: "traffic.tcp.idle_timeout must be positive"},
+		{name: "negative tcp drain timeout", mutate: func(g *TrafficGraph) { g.Options.TCP.DrainTimeout = -time.Second }, wantErr: "traffic.tcp.drain_timeout must be positive"},
+		{name: "negative tcp max connections", mutate: func(g *TrafficGraph) { g.Options.TCP.MaxConnections = -1 }, wantErr: "traffic.tcp.max_connections must be non-negative"},
+		{name: "negative udp idle timeout", mutate: func(g *TrafficGraph) { g.Options.UDP.IdleTimeout = -time.Second }, wantErr: "traffic.udp.idle_timeout must be positive"},
+		{name: "negative udp drain timeout", mutate: func(g *TrafficGraph) { g.Options.UDP.DrainTimeout = -time.Second }, wantErr: "traffic.udp.drain_timeout must be positive"},
+		{name: "negative udp max sessions", mutate: func(g *TrafficGraph) { g.Options.UDP.MaxSessions = -1 }, wantErr: "traffic.udp.max_sessions must be non-negative"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graph := base
+			tt.mutate(&graph)
+			require.ErrorContains(t, graph.Validate(), tt.wantErr)
+		})
+	}
+}
+
 func TestTrafficDomainTypesMatchSpecFields(t *testing.T) {
 	graph := TrafficGraph{
 		Options: TrafficOptions{

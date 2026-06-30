@@ -18,7 +18,7 @@ func (h *Handler) handleTrafficStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.trafficSvc == nil {
-		h.sendJSON(w, http.StatusOK, dto.TrafficStatusResponse{LastReloadStatus: "unavailable"})
+		h.sendJSON(w, http.StatusOK, dto.TrafficStatusFromDomain(domain.TrafficStatus{LastReloadStatus: "unavailable"}))
 		return
 	}
 	h.sendJSON(w, http.StatusOK, dto.TrafficStatusFromDomain(h.trafficSvc.Status()))

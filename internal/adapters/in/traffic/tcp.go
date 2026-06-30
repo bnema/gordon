@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,10 @@ type entryPointRuntime struct {
 
 	mu          sync.Mutex
 	activeConns map[*trackedTCPConn]struct{}
+
+	tlsHTTPListener *tlsHTTPListener
+	tlsHTTPServer   *http.Server
+	tlsHTTPDone     chan struct{}
 }
 
 type trackedTCPConn struct {
@@ -59,8 +64,62 @@ func (r *entryPointRuntime) start() {
 		return
 	}
 	entryPoint := r.entryPointSnapshot()
+	r.startTLSHTTPServer(entryPoint)
 	trafficInfo(r.ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("started tcp traffic entrypoint")
 	go r.acceptLoop()
+}
+
+func (r *entryPointRuntime) startTLSHTTPServer(entryPoint domain.EntryPoint) {
+	if entryPoint.Protocol != domain.EntryPointProtocolTLSMux {
+		return
+	}
+	config, ok := r.manager.tlsHTTPServer(entryPoint.Name)
+	if !ok || config.Handler == nil || config.TLSConfig == nil {
+		return
+	}
+	r.mu.Lock()
+	alreadyStarted := r.tlsHTTPServer != nil
+	r.mu.Unlock()
+	if alreadyStarted {
+		return
+	}
+	listener := newTLSHTTPListener(r.listener.Addr())
+	server := &http.Server{
+		Handler:           config.Handler,
+		TLSConfig:         config.TLSConfig.Clone(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+	done := make(chan struct{})
+
+	r.mu.Lock()
+	r.tlsHTTPListener = listener
+	r.tlsHTTPServer = server
+	r.tlsHTTPDone = done
+	r.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		if err := server.ServeTLS(listener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			trafficWarn(r.ctx).Err(err).Str("entrypoint", entryPoint.Name).Msg("tls mux https server stopped with error")
+		}
+	}()
+}
+
+func (r *entryPointRuntime) routeToHTTPS(conn net.Conn) bool {
+	r.mu.Lock()
+	listener := r.tlsHTTPListener
+	r.mu.Unlock()
+	if listener == nil {
+		return false
+	}
+	if listener.serve(conn) {
+		return true
+	}
+	_ = conn.Close()
+	return true
 }
 
 func (r *entryPointRuntime) acceptLoop() {
@@ -141,9 +200,8 @@ func (r *entryPointRuntime) handleTLSMux(tracked *trackedTCPConn, options domain
 		r.proxyToBackend(tracked, peeked.conn, backend, options)
 		return
 	}
-	if fallback := r.manager.tlsFallback(r.entryPointSnapshot().Name); fallback != nil {
+	if r.routeToHTTPS(peeked.conn) {
 		r.counters.totalAccepted.Add(1)
-		fallback(r.ctx, peeked.conn)
 		return
 	}
 	r.counters.totalRefused.Add(1)
@@ -398,6 +456,7 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 	case <-ctx.Done():
 		return
 	}
+	r.stopTLSHTTPServer(ctx, drainTimeout)
 	if r.waitActive(ctx, drainTimeout) {
 		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped tcp traffic entrypoint")
 		return
@@ -407,6 +466,35 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 	select {
 	case <-r.activeDone():
 		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped tcp traffic entrypoint")
+	case <-ctx.Done():
+	}
+}
+
+func (r *entryPointRuntime) stopTLSHTTPServer(ctx context.Context, drainTimeout time.Duration) {
+	r.mu.Lock()
+	listener := r.tlsHTTPListener
+	server := r.tlsHTTPServer
+	done := r.tlsHTTPDone
+	r.tlsHTTPListener = nil
+	r.tlsHTTPServer = nil
+	r.tlsHTTPDone = nil
+	r.mu.Unlock()
+
+	if listener == nil || server == nil || done == nil {
+		return
+	}
+	_ = listener.Close()
+	if drainTimeout <= 0 {
+		drainTimeout = defaultTCPOptions().DrainTimeout
+	}
+	shutdownCtx, cancel := context.WithTimeout(ctx, drainTimeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		trafficDebug(ctx).Err(err).Str("entrypoint", r.entryPointSnapshot().Name).Msg("forcing tls mux https server close")
+		_ = server.Close()
+	}
+	select {
+	case <-done:
 	case <-ctx.Done():
 	}
 }
@@ -460,9 +548,28 @@ func (r *entryPointRuntime) sameAddress(entryPoint domain.EntryPoint) bool {
 
 func (r *entryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, trusted []*net.IPNet) {
 	r.mu.Lock()
+	previousProtocol := r.entryPoint.Protocol
 	r.entryPoint = entryPoint
 	r.trusted = trusted
+	stale := make([]*trackedTCPConn, 0)
+	for conn := range r.activeConns {
+		if !trustedRemoteAddr(trusted, conn.client.RemoteAddr()) {
+			stale = append(stale, conn)
+		}
+	}
 	r.mu.Unlock()
+	for _, conn := range stale {
+		_ = conn.client.Close()
+		if conn.backend != nil {
+			_ = conn.backend.Close()
+		}
+	}
+	if previousProtocol == domain.EntryPointProtocolTLSMux && entryPoint.Protocol != domain.EntryPointProtocolTLSMux {
+		r.stopTLSHTTPServer(r.ctx, 0)
+	}
+	if entryPoint.Protocol == domain.EntryPointProtocolTLSMux {
+		r.startTLSHTTPServer(entryPoint)
+	}
 }
 
 func (r *entryPointRuntime) entryPointSnapshot() domain.EntryPoint {

@@ -2,52 +2,52 @@ package traffic
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 )
 
 const maxClientHelloBytes = 64 << 10
 
-// TLSFallback handles tls_mux connections that do not match a passthrough router.
-type TLSFallback func(context.Context, net.Conn)
+// TLSHTTPServerConfig describes the HTTPS server attached to a tls_mux entrypoint.
+type TLSHTTPServerConfig struct {
+	Handler   http.Handler
+	TLSConfig *tls.Config
+}
 
-type tlsFallbacks map[string]TLSFallback
+type tlsHTTPServers map[string]TLSHTTPServerConfig
 
-// SetTLSFallback installs or removes an HTTPS fallback for a tls_mux entrypoint.
-func (m *Manager) SetTLSFallback(entryPoint string, fallback TLSFallback) {
+// SetTLSHTTPServer installs or removes the HTTPS server for a tls_mux entrypoint.
+func (m *Manager) SetTLSHTTPServer(entryPoint string, handler http.Handler, tlsConfig *tls.Config) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	current := m.loadTLSFallbacks()
-	next := make(tlsFallbacks, len(current)+1)
-	for name, value := range current {
-		next[name] = value
-	}
-	if fallback == nil {
+	current := m.loadTLSHTTPServers()
+	next := make(tlsHTTPServers, len(current)+1)
+	maps.Copy(next, current)
+	if handler == nil || tlsConfig == nil {
 		delete(next, entryPoint)
 	} else {
-		next[entryPoint] = fallback
+		next[entryPoint] = TLSHTTPServerConfig{Handler: handler, TLSConfig: tlsConfig.Clone()}
 	}
-	m.tlsFallbacks.Store(next)
+	m.tlsHTTPServers.Store(next)
 }
 
-func (m *Manager) tlsFallback(entryPoint string) TLSFallback {
-	return m.loadTLSFallbacks()[entryPoint]
+func (m *Manager) tlsHTTPServer(entryPoint string) (TLSHTTPServerConfig, bool) {
+	config, ok := m.loadTLSHTTPServers()[entryPoint]
+	return config, ok
 }
 
-func (m *Manager) loadTLSFallbacks() tlsFallbacks {
-	value := m.tlsFallbacks.Load()
+func (m *Manager) loadTLSHTTPServers() tlsHTTPServers {
+	value := m.tlsHTTPServers.Load()
 	if value == nil {
-		return tlsFallbacks{}
+		return tlsHTTPServers{}
 	}
-	return value.(tlsFallbacks)
+	return value.(tlsHTTPServers)
 }
 
 func peekClientHelloSNI(conn net.Conn) (string, net.Conn, error) {
@@ -234,7 +234,7 @@ func readLength(reader *bytes.Reader, size int) (int, error) {
 		return 0, fmt.Errorf("client hello length is truncated")
 	}
 	value := 0
-	for i := 0; i < size; i++ {
+	for range size {
 		b, _ := reader.ReadByte()
 		value = value<<8 | int(b)
 	}
@@ -261,79 +261,38 @@ func (c replayConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-// ServeHTTPSFallback serves a single TLS connection with the provided HTTP handler.
-func ServeHTTPSFallback(ctx context.Context, conn net.Conn, handler http.Handler, tlsConfig *tls.Config) error {
-	if handler == nil {
-		return fmt.Errorf("https fallback handler is required")
-	}
-	if tlsConfig == nil {
-		return fmt.Errorf("https fallback tls config is required")
-	}
-	tracked := newTrackedCloseConn(tls.Server(conn, tlsConfig))
-	listener := newSingleConnListener(tracked)
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
-	errCh := make(chan error, 1)
-	go func() { errCh <- server.Serve(listener) }()
+type tlsHTTPListener struct {
+	addr  net.Addr
+	conns chan net.Conn
+	done  chan struct{}
+	once  sync.Once
+}
 
+func newTLSHTTPListener(addr net.Addr) *tlsHTTPListener {
+	return &tlsHTTPListener{addr: addr, conns: make(chan net.Conn, 128), done: make(chan struct{})}
+}
+
+func (l *tlsHTTPListener) Accept() (net.Conn, error) {
 	select {
-	case <-tracked.done:
-		_ = server.Close()
-		err := <-errCh
-		if errors.Is(err, net.ErrClosed) || errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	case <-ctx.Done():
-		_ = server.Close()
-		_ = tracked.Close()
-		<-errCh
-		return ctx.Err()
-	}
-}
-
-type singleConnListener struct {
-	conn net.Conn
-	once sync.Once
-	done chan struct{}
-}
-
-func newSingleConnListener(conn net.Conn) *singleConnListener {
-	return &singleConnListener{conn: conn, done: make(chan struct{})}
-}
-
-func (l *singleConnListener) Accept() (net.Conn, error) {
-	var conn net.Conn
-	l.once.Do(func() { conn = l.conn })
-	if conn != nil {
+	case conn := <-l.conns:
 		return conn, nil
+	case <-l.done:
+		return nil, net.ErrClosed
 	}
-	<-l.done
-	return nil, net.ErrClosed
 }
 
-func (l *singleConnListener) Close() error {
-	select {
-	case <-l.done:
-	default:
-		close(l.done)
-	}
+func (l *tlsHTTPListener) Close() error {
+	l.once.Do(func() { close(l.done) })
 	return nil
 }
 
-func (l *singleConnListener) Addr() net.Addr { return l.conn.LocalAddr() }
+func (l *tlsHTTPListener) Addr() net.Addr { return l.addr }
 
-type trackedCloseConn struct {
-	net.Conn
-	done chan struct{}
-	once sync.Once
-}
-
-func newTrackedCloseConn(conn net.Conn) *trackedCloseConn {
-	return &trackedCloseConn{Conn: conn, done: make(chan struct{})}
-}
-
-func (c *trackedCloseConn) Close() error {
-	err := c.Conn.Close()
-	c.once.Do(func() { close(c.done) })
-	return err
+func (l *tlsHTTPListener) serve(conn net.Conn) bool {
+	select {
+	case l.conns <- conn:
+		return true
+	case <-l.done:
+		return false
+	}
 }

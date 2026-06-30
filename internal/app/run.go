@@ -717,9 +717,6 @@ func (si *serviceInit) initRuntimeProxyAndTraffic() error {
 		return err
 	}
 	si.svc.trafficManager = trafficadapter.NewManager()
-	if err := applyTrafficRuntimeConfig(si.ctx, si.svc.trafficManager, si.cfg, si.svc.configSvc); err != nil {
-		return si.log.WrapErr(err, "failed to apply traffic configuration")
-	}
 	return nil
 }
 
@@ -2823,33 +2820,23 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 		}
 	}
 
-	proxySrv, proxyReady, tlsSrv, tlsReady, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, errChan, log)
+	proxySrv, proxyReady, tlsSrv, _, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, errChan, log)
 	if err != nil {
 		closeStarted(registrySrv)
 		return err
 	}
 
-	// Wait for all servers to bind their ports before auto-starting containers.
-	// This prevents the race where auto-start pulls from the registry before it's listening.
-	if err := waitForServerReady(registryReady, errChan); err != nil {
+	// Wait for the registry and HTTP proxy to bind before applying the traffic graph.
+	// This prevents auto-start races while keeping the TLS mux under one owner.
+	if err := waitForCoreProxyReadyAndApplyTraffic(ctx, cfg, svc, registryReady, proxyReady, errChan); err != nil {
 		closeStarted(registrySrv, proxySrv, tlsSrv)
 		return err
-	}
-	if err := waitForServerReady(proxyReady, errChan); err != nil {
-		closeStarted(registrySrv, proxySrv, tlsSrv)
-		return err
-	}
-	if tlsReady != nil {
-		if err := waitForServerReady(tlsReady, errChan); err != nil {
-			closeStarted(registrySrv, proxySrv, tlsSrv)
-			return err
-		}
 	}
 
 	logEvent := log.Info().
 		Int("proxy_port", cfg.Server.Port).
 		Int("registry_port", cfg.Server.RegistryPort)
-	if tlsSrv != nil {
+	if cfg.Server.TLSPort != 0 {
 		logEvent = logEvent.Int("tls_port", cfg.Server.TLSPort)
 	}
 	logEvent.Msg("Gordon is running")
@@ -2858,6 +2845,8 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 	schedulerCleanup, err := startOptionalSchedulers(ctx, cfg, svc, log, v)
 	if err != nil {
+		shutdownTrafficManagerForStartupCleanup(svc.trafficManager, log)
+		closeStarted(registrySrv, proxySrv, tlsSrv)
 		return err
 	}
 	if schedulerCleanup != nil {
@@ -2876,6 +2865,27 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 func startPublicTLSRuntimeWithWarning(ctx context.Context, svc publicTLSRuntime, log zerowrap.Logger) {
 	if err := startPublicTLSRuntime(ctx, svc, log); err != nil {
 		log.Warn().Err(err).Msg("initial public ACME reconcile failed, continuing with renewal loop")
+	}
+}
+
+func waitForCoreProxyReadyAndApplyTraffic(ctx context.Context, cfg Config, svc *services, registryReady <-chan struct{}, proxyReady <-chan struct{}, errChan <-chan error) error {
+	if err := waitForServerReady(registryReady, errChan); err != nil {
+		return err
+	}
+	if err := waitForServerReady(proxyReady, errChan); err != nil {
+		return err
+	}
+	return applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc)
+}
+
+func shutdownTrafficManagerForStartupCleanup(manager *trafficadapter.Manager, log zerowrap.Logger) {
+	if manager == nil {
+		return
+	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := manager.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("failed to shut down traffic manager during startup cleanup")
 	}
 }
 
@@ -3311,24 +3321,12 @@ func startProxyServers(cfg Config, httpHandler, httpsHandler http.Handler, pkiSv
 		GetCertificate: selector.GetCertificate,
 		NextProtos:     []string{"h2", "http/1.1"},
 	}
-	if trafficManager != nil {
-		trafficManager.SetTLSFallback(traffic.DefaultTLSEntryPointName, func(ctx context.Context, conn net.Conn) {
-			if err := trafficadapter.ServeHTTPSFallback(ctx, conn, httpsHandler, tlsConfig.Clone()); err != nil {
-				log.Warn().Err(err).Msg("https fallback connection failed")
-			}
-		})
+	if trafficManager == nil {
+		return nil, nil, nil, nil, fmt.Errorf("traffic manager is required when server.tls_port is enabled")
 	}
+	trafficManager.SetTLSHTTPServer(traffic.DefaultTLSEntryPointName, httpsHandler, tlsConfig)
 
-	tlsSrv, tlsReady := startTLSServerWithConfig(
-		fmt.Sprintf(":%d", cfg.Server.TLSPort),
-		httpsHandler,
-		"proxy-tls",
-		tlsConfig,
-		errChan,
-		log,
-	)
-
-	return httpSrv, httpReady, tlsSrv, tlsReady, nil
+	return httpSrv, httpReady, nil, nil, nil
 }
 
 // startServer starts an HTTP server, returning the server instance and a channel
@@ -3366,39 +3364,6 @@ func startServer(addr string, handler http.Handler, name string, protocols *http
 	}()
 
 	return server, ready
-}
-
-// startTLSServerWithConfig starts an HTTPS server using a pre-built tls.Config
-// (e.g. with GetCertificate for on-demand issuance via the internal CA).
-// Returns the server instance and a channel that closes once the port is bound.
-func startTLSServerWithConfig(addr string, handler http.Handler, name string, tlsCfg *tls.Config, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		TLSConfig:         tlsCfg,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       5 * time.Minute,
-		WriteTimeout:      5 * time.Minute,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
-	}
-
-	ready := make(chan struct{})
-	go func() {
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			errChan <- fmt.Errorf("%s listen: %w", name, err)
-			return
-		}
-		tlsLn := tls.NewListener(ln, tlsCfg)
-		log.Info().Str("addr", addr).Str("name", name).Msg("TLS server starting")
-		close(ready)
-		if err := srv.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
-			errChan <- fmt.Errorf("%s: %w", name, err)
-		}
-	}()
-
-	return srv, ready
 }
 
 // SendReloadSignal sends SIGUSR1 to the running Gordon process.

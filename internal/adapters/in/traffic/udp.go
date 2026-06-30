@@ -47,6 +47,7 @@ type udpDatagram struct {
 type udpSession struct {
 	clientAddr net.Addr
 	backend    net.Conn
+	backendRef domain.TrafficBackend
 	lastSeen   atomic.Int64
 	done       chan struct{}
 	once       sync.Once
@@ -73,7 +74,7 @@ func (r *udpEntryPointRuntime) start() {
 	}
 	entryPoint := r.entryPointSnapshot()
 	trafficInfo(r.ctx).Str("entrypoint", entryPoint.Name).Str("address", entryPoint.Address).Str("protocol", string(entryPoint.Protocol)).Msg("started udp traffic entrypoint")
-	for i := 0; i < udpWorkerCount; i++ {
+	for range udpWorkerCount {
 		go r.datagramWorker()
 	}
 	go r.readLoop()
@@ -133,24 +134,34 @@ func (r *udpEntryPointRuntime) handleDatagram(clientAddr net.Addr, packet []byte
 }
 
 func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options domain.UDPOptions) (*udpSession, bool) {
+	backend, ok := r.resolveUDPBackend()
+	if !ok {
+		r.counters.totalRefused.Add(1)
+		return nil, false
+	}
+
 	r.mu.Lock()
 	if session := r.sessions[key]; session != nil {
-		session.touch()
+		if trafficBackendEqual(session.backendRef, backend) {
+			session.touch()
+			r.mu.Unlock()
+			return session, true
+		}
+		delete(r.sessions, key)
 		r.mu.Unlock()
-		return session, true
+		session.close()
+		r.counters.activeUDPSessions.Add(-1)
+	} else {
+		r.mu.Unlock()
 	}
+
+	r.mu.Lock()
 	if options.MaxSessions > 0 && len(r.sessions) >= options.MaxSessions {
 		r.mu.Unlock()
 		r.counters.totalRefused.Add(1)
 		return nil, false
 	}
 	r.mu.Unlock()
-
-	backend, ok := r.resolveUDPBackend()
-	if !ok {
-		r.counters.totalRefused.Add(1)
-		return nil, false
-	}
 	dialCtx, cancel := context.WithTimeout(r.ctx, udpDialTimeout(options))
 	backendConn, err := (&net.Dialer{}).DialContext(dialCtx, "udp", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)))
 	cancel()
@@ -158,15 +169,29 @@ func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options 
 		r.counters.totalErrors.Add(1)
 		return nil, false
 	}
-	session := &udpSession{clientAddr: clientAddr, backend: backendConn, done: make(chan struct{})}
+	session := &udpSession{clientAddr: clientAddr, backend: backendConn, backendRef: backend, done: make(chan struct{})}
 	session.touch()
 
 	r.mu.Lock()
 	if existing := r.sessions[key]; existing != nil {
+		if trafficBackendEqual(existing.backendRef, backend) {
+			r.mu.Unlock()
+			_ = backendConn.Close()
+			return existing, true
+		}
+		delete(r.sessions, key)
 		r.mu.Unlock()
-		_ = backendConn.Close()
-		return existing, true
+		existing.close()
+		r.counters.activeUDPSessions.Add(-1)
+	} else {
+		r.mu.Unlock()
 	}
+	if options.MaxSessions > 0 && r.sessionCount() >= options.MaxSessions {
+		_ = backendConn.Close()
+		r.counters.totalRefused.Add(1)
+		return nil, false
+	}
+	r.mu.Lock()
 	if options.MaxSessions > 0 && len(r.sessions) >= options.MaxSessions {
 		r.mu.Unlock()
 		_ = backendConn.Close()
@@ -180,6 +205,16 @@ func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options 
 	r.counters.totalAccepted.Add(1)
 	go r.backendLoop(key, session)
 	return session, true
+}
+
+func (r *udpEntryPointRuntime) sessionCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sessions)
+}
+
+func trafficBackendEqual(left domain.TrafficBackend, right domain.TrafficBackend) bool {
+	return left.Name == right.Name && left.Host == right.Host && left.Port == right.Port && left.Protocol == right.Protocol
 }
 
 func udpDialTimeout(options domain.UDPOptions) time.Duration {
@@ -387,7 +422,16 @@ func (r *udpEntryPointRuntime) updateEntryPoint(entryPoint domain.EntryPoint, tr
 	r.mu.Lock()
 	r.entryPoint = entryPoint
 	r.trusted = trusted
+	stale := make([]string, 0)
+	for key, session := range r.sessions {
+		if !trustedRemoteAddr(trusted, session.clientAddr) {
+			stale = append(stale, key)
+		}
+	}
 	r.mu.Unlock()
+	for _, key := range stale {
+		r.removeSession(key)
+	}
 }
 
 func (r *udpEntryPointRuntime) entryPointSnapshot() domain.EntryPoint {

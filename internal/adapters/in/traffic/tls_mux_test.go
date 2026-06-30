@@ -137,7 +137,7 @@ func TestTLSPassthrough(t *testing.T) {
 	assertTLSGreeting(t, graph.EntryPoints[0].Address, "api.example.com", "backend-exact\n")
 }
 
-func TestTLSPassthroughUnknownCloses(t *testing.T) {
+func TestTLSMuxUnknownClosesWithoutHTTPSRoute(t *testing.T) {
 	backend := startTLSGreetingServer(t, "backend", "backend\n")
 	graph := tlsGraph(t, freeTCPAddress(t), []tlsRoute{{name: "raw", sni: "raw.example.com", service: "raw", backend: backend.address}})
 	manager := NewManager()
@@ -169,28 +169,39 @@ func TestTLSMuxIncompleteClientHelloDoesNotHangShutdown(t *testing.T) {
 	_ = conn.Close()
 }
 
-func TestTLSMuxHTTPSFallback(t *testing.T) {
+func TestTLSMuxHTTPSRoute(t *testing.T) {
 	backend := startTLSGreetingServer(t, "raw-backend", "raw\n")
 	graph := tlsGraph(t, freeTCPAddress(t), []tlsRoute{{name: "raw", sni: "raw.example.com", service: "raw", backend: backend.address}})
 	manager := NewManager()
-	fallbackCert := testTLSConfig(t, "fallback.example.com")
-	manager.SetTLSFallback("websecure", func(ctx context.Context, conn net.Conn) {
-		_ = ServeHTTPSFallback(ctx, conn, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte("fallback"))
-		}), fallbackCert)
-	})
+	manager.SetTLSHTTPServer("websecure", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("https route"))
+	}), testTLSConfig(t, "app.example.com"))
 	require.NoError(t, manager.Apply(context.Background(), &graph))
 	defer shutdownManager(t, manager)
 
 	assertTLSGreeting(t, graph.EntryPoints[0].Address, "raw.example.com", "raw\n")
-	assertHTTPSFallback(t, graph.EntryPoints[0].Address, "app.example.com", "fallback")
-	assertHTTPSFallback(t, graph.EntryPoints[0].Address, "", "fallback")
+	assertHTTPSBody(t, graph.EntryPoints[0].Address, "app.example.com", "https route")
+	assertHTTPSBodyNoSNI(t, graph.EntryPoints[0].Address, "https route")
 
 	conn := dialTCP(t, graph.EntryPoints[0].Address)
 	_, err := conn.Write([]byte("malformed"))
 	require.NoError(t, err)
 	_ = conn.Close()
 	assert.Eventually(t, func() bool { return manager.Status().Counters.TotalErrors >= 1 }, time.Second, 10*time.Millisecond)
+}
+
+func TestTLSMuxHTTP2Route(t *testing.T) {
+	graph := tlsGraph(t, freeTCPAddress(t), nil)
+	manager := NewManager()
+	tlsConfig := testTLSConfig(t, "app.example.com")
+	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
+	manager.SetTLSHTTPServer("websecure", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.Proto))
+	}), tlsConfig)
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	defer shutdownManager(t, manager)
+
+	assertHTTPSBody(t, graph.EntryPoints[0].Address, "app.example.com", "HTTP/2.0")
 }
 
 func peekHelloFromTLSClient(t *testing.T, serverName string) (string, net.Conn) {
@@ -254,9 +265,29 @@ func assertTLSGreeting(t *testing.T, address string, serverName string, want str
 	assert.Equal(t, want, line)
 }
 
-func assertHTTPSFallback(t *testing.T, address string, serverName string, wantBody string) {
+func assertHTTPSBody(t *testing.T, address string, serverName string, wantBody string) {
 	t.Helper()
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", address, &tls.Config{ServerName: serverName, InsecureSkipVerify: true})
+	transport := &http.Transport{
+		TLSClientConfig:   &tls.Config{ServerName: serverName, InsecureSkipVerify: true},
+		ForceAttemptHTTP2: true,
+	}
+	client := &http.Client{Transport: transport, Timeout: time.Second}
+	defer transport.CloseIdleConnections()
+
+	req, err := http.NewRequest(http.MethodGet, "https://"+address+"/", nil)
+	require.NoError(t, err)
+	req.Host = serverName
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), wantBody)
+}
+
+func assertHTTPSBodyNoSNI(t *testing.T, address string, wantBody string) {
+	t.Helper()
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", address, &tls.Config{InsecureSkipVerify: true})
 	require.NoError(t, err)
 	defer conn.Close()
 	_, err = conn.Write([]byte("GET / HTTP/1.1\r\nHost: app.example.com\r\nConnection: close\r\n\r\n"))

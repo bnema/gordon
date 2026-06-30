@@ -4,6 +4,7 @@ package traffic
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"sort"
 	"strings"
@@ -53,7 +54,7 @@ type Manager struct {
 
 	lastReloadStatus string
 	lastReloadError  string
-	tlsFallbacks     atomic.Value
+	tlsHTTPServers   atomic.Value
 }
 
 // NewManager creates a traffic manager.
@@ -63,7 +64,7 @@ func NewManager() *Manager {
 		udpListeners:     map[string]*udpEntryPointRuntime{},
 		lastReloadStatus: reloadStatusOK,
 	}
-	manager.tlsFallbacks.Store(tlsFallbacks{})
+	manager.tlsHTTPServers.Store(tlsHTTPServers{})
 	return manager
 }
 
@@ -220,13 +221,9 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 func (m *Manager) Status() domain.TrafficStatus {
 	m.mu.Lock()
 	listeners := make(map[string]*entryPointRuntime, len(m.listeners))
-	for name, runtime := range m.listeners {
-		listeners[name] = runtime
-	}
+	maps.Copy(listeners, m.listeners)
 	udpListeners := make(map[string]*udpEntryPointRuntime, len(m.udpListeners))
-	for name, runtime := range m.udpListeners {
-		udpListeners[name] = runtime
-	}
+	maps.Copy(udpListeners, m.udpListeners)
 	status := domain.TrafficStatus{LastReloadStatus: m.lastReloadStatus, LastReloadError: m.lastReloadError}
 	graph := m.snapshot.Load()
 	m.mu.Unlock()
@@ -265,9 +262,7 @@ type udpRuntimeUpdate struct {
 
 func (m *Manager) prepareTCPListeners(ctx context.Context, graph *domain.TrafficGraph) (map[string]*entryPointRuntime, []*entryPointRuntime, []tcpRuntimeUpdate, error) {
 	current := make(map[string]*entryPointRuntime, len(m.listeners))
-	for name, runtime := range m.listeners {
-		current[name] = runtime
-	}
+	maps.Copy(current, m.listeners)
 
 	next := make(map[string]*entryPointRuntime, len(current))
 	created := []*entryPointRuntime{}
@@ -346,9 +341,7 @@ func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.Entry
 
 func (m *Manager) prepareUDPListeners(ctx context.Context, graph *domain.TrafficGraph) (map[string]*udpEntryPointRuntime, []*udpEntryPointRuntime, []udpRuntimeUpdate, error) {
 	current := make(map[string]*udpEntryPointRuntime, len(m.udpListeners))
-	for name, runtime := range m.udpListeners {
-		current[name] = runtime
-	}
+	maps.Copy(current, m.udpListeners)
 
 	next := make(map[string]*udpEntryPointRuntime, len(current))
 	created := []*udpEntryPointRuntime{}

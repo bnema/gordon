@@ -187,6 +187,9 @@ func ParseTrafficServiceRef(value string) (TrafficServiceRef, error) {
 }
 
 func (g TrafficGraph) Validate() error {
+	if err := validateTrafficOptions(g.Options); err != nil {
+		return err
+	}
 	entryPoints, err := validateTrafficEntryPoints(g.EntryPoints)
 	if err != nil {
 		return err
@@ -196,6 +199,38 @@ func (g TrafficGraph) Validate() error {
 		return err
 	}
 	return g.validateRouters(entryPoints, services)
+}
+
+func validateTrafficOptions(options TrafficOptions) error {
+	if err := validateOptionalPositiveDuration(options.TCP.DialTimeout, "traffic.tcp.dial_timeout"); err != nil {
+		return err
+	}
+	if err := validateOptionalPositiveDuration(options.TCP.IdleTimeout, "traffic.tcp.idle_timeout"); err != nil {
+		return err
+	}
+	if err := validateOptionalPositiveDuration(options.TCP.DrainTimeout, "traffic.tcp.drain_timeout"); err != nil {
+		return err
+	}
+	if options.TCP.MaxConnections < 0 {
+		return fmt.Errorf("traffic.tcp.max_connections must be non-negative")
+	}
+	if err := validateOptionalPositiveDuration(options.UDP.IdleTimeout, "traffic.udp.idle_timeout"); err != nil {
+		return err
+	}
+	if err := validateOptionalPositiveDuration(options.UDP.DrainTimeout, "traffic.udp.drain_timeout"); err != nil {
+		return err
+	}
+	if options.UDP.MaxSessions < 0 {
+		return fmt.Errorf("traffic.udp.max_sessions must be non-negative")
+	}
+	return nil
+}
+
+func validateOptionalPositiveDuration(value time.Duration, name string) error {
+	if value < 0 {
+		return fmt.Errorf("%s must be positive", name)
+	}
+	return nil
 }
 
 func validateTrafficEntryPoints(entries []EntryPoint) (map[string]EntryPoint, error) {
