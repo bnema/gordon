@@ -101,8 +101,9 @@ func (c DeployRouteCommand) Validate() error {
 // RestartRouteCommand asks the runtime to restart the container backing one route.
 type RestartRouteCommand struct {
 	RuntimeCommandIdentity
-	Domain string
-	Reason string
+	Domain          string
+	Reason          string
+	WithAttachments bool
 }
 
 // Validate checks RestartRouteCommand invariants.
@@ -140,6 +141,7 @@ type ReconcileRuntimeCommand struct {
 	Reason              string
 	ExpectedRouteCount  int
 	DesiredStateVersion string
+	DesiredRoutes       []Route
 }
 
 // Validate checks ReconcileRuntimeCommand invariants.
@@ -149,6 +151,17 @@ func (c ReconcileRuntimeCommand) Validate() error {
 	}
 	if c.ExpectedRouteCount < 0 {
 		return fmt.Errorf("%w: expected route count must be non-negative", ErrInvalidRuntimeCommand)
+	}
+	if c.ExpectedRouteCount != len(c.DesiredRoutes) {
+		return fmt.Errorf("%w: desired routes count does not match expected route count", ErrInvalidRuntimeCommand)
+	}
+	for _, route := range c.DesiredRoutes {
+		if !IsValidRouteDomain(route.Domain) {
+			return fmt.Errorf("%w: desired route domain is invalid", ErrInvalidRuntimeCommand)
+		}
+		if strings.TrimSpace(route.Image) == "" {
+			return fmt.Errorf("%w: desired route image is required", ErrInvalidRuntimeCommand)
+		}
 	}
 	return nil
 }

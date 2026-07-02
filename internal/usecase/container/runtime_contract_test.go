@@ -65,10 +65,11 @@ func TestRuntimeContractDeployConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "network isolation on uses selected network",
+			name: "network isolation on uses selected network and route target alias",
 			assert: func(t *testing.T, got *domain.ContainerConfig) {
 				assert.Equal(t, "gordon-app-example-com", got.NetworkMode)
 				assert.Equal(t, "app.example.com", got.Hostname)
+				assert.Equal(t, []string{"gordon-target-app-example-com"}, got.Aliases)
 			},
 		},
 		{

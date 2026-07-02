@@ -283,6 +283,7 @@ func (s *Service) buildContainerConfig(in containerConfigInput) *domain.Containe
 		Volumes:       in.Volumes,
 		NetworkMode:   in.NetworkName,
 		Hostname:      in.Domain,
+		Aliases:       routeTargetAliases(in.Domain),
 		Labels:        labels,
 		AutoRemove:    false,
 		RestartPolicy: domain.RestartPolicyAlways,

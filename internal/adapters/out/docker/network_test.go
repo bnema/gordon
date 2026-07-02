@@ -9,7 +9,35 @@ import (
 
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestRuntime_ListNetworksIncludesEndpointNames(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1.41/networks", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{
+				"Id":"net1",
+				"Name":"gordon-net",
+				"Driver":"bridge",
+				"Labels":{"gordon.managed":"true"},
+				"Containers":{
+					"abc123":{"Name":"gordon-app.example.com","EndpointID":"ep1"}
+				}
+			}
+		]`))
+	}))
+	defer server.Close()
+
+	runtime := newTestRuntime(t, server)
+	networks, err := runtime.ListNetworks(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, networks, 1)
+	assert.ElementsMatch(t, []string{"abc123", "gordon-app.example.com"}, networks[0].Containers)
+}
 
 func TestRuntime_GetContainerNetwork(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -104,15 +132,17 @@ func TestRuntime_GetContainerNetwork_NilNetworkSettings(t *testing.T) {
 	}))
 	defer server.Close()
 
-	host := strings.TrimPrefix(server.URL, "http://")
-	cli, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
-	if err != nil {
-		t.Fatalf("failed to create docker client: %v", err)
-	}
-
-	runtime := NewRuntimeWithClient(cli)
+	runtime := newTestRuntime(t, server)
 	network, err := runtime.GetContainerNetwork(context.Background(), "abc123")
 
 	assert.NoError(t, err)
 	assert.Equal(t, "bridge", network)
+}
+
+func newTestRuntime(t *testing.T, server *httptest.Server) *Runtime {
+	t.Helper()
+	host := strings.TrimPrefix(server.URL, "http://")
+	cli, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	return NewRuntimeWithClient(cli)
 }

@@ -1590,8 +1590,11 @@ func (r *Runtime) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, erro
 	var result []*domain.NetworkInfo
 	for _, net := range networks {
 		var containers []string
-		for containerID := range net.Containers {
+		for containerID, endpoint := range net.Containers {
 			containers = append(containers, containerID)
+			if endpoint.Name != "" && endpoint.Name != containerID {
+				containers = append(containers, endpoint.Name)
+			}
 		}
 
 		result = append(result, &domain.NetworkInfo{

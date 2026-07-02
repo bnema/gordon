@@ -65,6 +65,11 @@ func TestRuntimeRouteCommandValidation(t *testing.T) {
 	require.NoError(t, reconcile.Validate())
 	reconcile.ExpectedRouteCount = -1
 	require.ErrorIs(t, reconcile.Validate(), ErrInvalidRuntimeCommand)
+
+	reconcile = ReconcileRuntimeCommand{RuntimeCommandIdentity: identity, ExpectedRouteCount: 1, DesiredRoutes: []Route{{Domain: "example.com", Image: "app:latest"}}}
+	require.NoError(t, reconcile.Validate())
+	reconcile.DesiredRoutes = nil
+	require.ErrorIs(t, reconcile.Validate(), ErrInvalidRuntimeCommand)
 }
 
 func TestRuntimeSelfUpdateCommandValidateRequiresComponentLifecyclePolicy(t *testing.T) {
